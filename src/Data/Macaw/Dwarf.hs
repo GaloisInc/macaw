@@ -136,14 +136,8 @@ lookupDIE m k =
 resolveDieIDAttribute :: Map DieID v -> DW_ATVAL -> Parser v
 resolveDieIDAttribute m v = lookupDIE m =<< attributeAsDieID v
 
-maybeToEither :: String -> Maybe a -> Parser a
-maybeToEither _ (Just r) = pure r
-maybeToEither msg Nothing = fail msg
-
 attributeAsLang :: DW_ATVAL -> Parser DW_LANG
-attributeAsLang v = do
-  u <- attributeAsUInt v
-  maybeToEither "Could not parse lang" (get_dw_lang u)
+attributeAsLang v = DW_LANG <$> attributeAsUInt v
 
 parseGet :: BS.ByteString -> Get a -> Parser a
 parseGet bs m =
