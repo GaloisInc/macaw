@@ -650,6 +650,8 @@ instance Pretty Location where
 
 data Variable = Variable { varDieID    :: !DieID
                          , varName     :: !String
+                         , varDecl     :: !Bool
+                           -- ^ Indicates if this variable is just a declaration
                          , varDeclLoc  :: !DeclLoc
                          , varType     :: !Type
                          , varLocation :: !(Maybe Location)
@@ -698,15 +700,12 @@ parseVariable file_vec typeMap d = runDIEParser "parseVariable" d $ do
              DW_ATVAL_INT  w  -> pure $! ConstInt  w
              DW_ATVAL_UINT w  -> pure $! ConstUInt w
              _ -> fail $ "Could not interpret const value."
-  _decl <- getMaybeAttribute DW_AT_declaration $ attributeAsBool
+  decl <- fmap (fromMaybe False) $ getMaybeAttribute DW_AT_declaration $ attributeAsBool
   _exte <- getMaybeAttribute DW_AT_external    $ attributeAsBool
-
---  ignoreAttribute DW_AT_const_value
---  ignoreAttribute DW_AT_declaration
---  ignoreAttribute DW_AT_external
 
   pure $! Variable { varDieID    = dieId d
                    , varName     = name
+                   , varDecl     = decl
                    , varDeclLoc  = declLoc
                    , varType     = var_type
                    , varLocation = mloc
