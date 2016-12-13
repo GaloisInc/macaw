@@ -8,8 +8,25 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Dwarf
-  ( loadDwarf
+  ( dwarfInfoFromElf
   , dwarfGlobals
+  , CompileUnit(..)
+  , Variable(..)
+  , Location(..)
+  , DeclLoc(..)
+    -- * Type information
+  , Type(..)
+  , TypeF(..)
+  , BaseType(..)
+  , StructDecl(..)
+  , UnionDecl(..)
+  , Member(..)
+  , EnumDecl(..)
+  , SubroutineTypeDecl(..)
+  , Subrange
+    -- * Re-exports
+  , Dwarf.DieID
+  , Dwarf.DW_OP(..)
   ) where
 
 import           Control.Lens
@@ -20,7 +37,6 @@ import           Control.Monad.State
 import           Data.Binary.Get
 import qualified Data.ByteString as BS
 import           Data.Dwarf as Dwarf
-import           Data.Either
 import qualified Data.ElfEdit as Elf
 import           Data.Foldable
 import           Data.Int
@@ -308,6 +324,7 @@ parseEnumerator d = runDIEParser "parseEnumerator" d $ do
 ------------------------------------------------------------------------
 -- Subrange
 
+-- | Identifies a rrange
 data Subrange tp = Subrange { subrangeType :: tp
                             , subrangeUpperBound :: [DW_OP]
                             }
@@ -345,6 +362,12 @@ parseSubrange d = runDIEParser "parseSubrange" d $ do
 ------------------------------------------------------------------------
 -- Type
 
+data BaseType = BaseTypeDef { baseSize     :: !Word64
+                            , baseEncoding :: !DW_ATE
+                            , baseName     :: !String
+                            }
+  deriving (Show)
+
 data Member tp = Member { memberName :: !String
                         , memberDeclLoc  :: !DeclLoc
                         , memberLoc      :: !(Maybe Word64)
@@ -352,11 +375,11 @@ data Member tp = Member { memberName :: !String
                         }
   deriving (Show)
 
-data Struct tp = Struct { structName     :: !String
-                        , structByteSize :: !Word64
-                        , structLoc      :: !DeclLoc
-                        , structMembers  :: ![Member tp]
-                        }
+data StructDecl tp = StructDecl { structName     :: !String
+                                , structByteSize :: !Word64
+                                , structLoc      :: !DeclLoc
+                                , structMembers  :: ![Member tp]
+                                }
   deriving (Show)
 
 data UnionDecl tp = UnionDecl { unionName     :: !String
@@ -364,18 +387,6 @@ data UnionDecl tp = UnionDecl { unionName     :: !String
                               , unionLoc      :: !DeclLoc
                               , unionMembers  :: ![Member tp]
                               }
-  deriving (Show)
-
-data Typedef tp = Typedef { typedefName :: !String
-                          , typedefLoc  :: !DeclLoc
-                          , typedefType :: tp
-                          }
-  deriving (Show)
-
-data BaseType = BaseTypeDef { baseSize     :: !Word64
-                            , baseEncoding :: !DW_ATE
-                            , baseName     :: !String
-                            }
   deriving (Show)
 
 data EnumDecl = EnumDecl { enumDeclName :: Maybe String
@@ -390,25 +401,31 @@ data SubroutineTypeDecl = SubroutineTypeDecl { fntypePrototyped :: !Bool
                                              }
   deriving (Show)
 
+data Typedef tp = Typedef { typedefName :: !String
+                          , typedefLoc  :: !DeclLoc
+                          , typedefType :: tp
+                          }
+  deriving (Show)
+
+
+
 data TypeF tp
    = BaseType !BaseType
+   | ArrayType tp ![Subrange tp]
    | ConstType tp
    | EmptyConstType
    | VolatileType tp
    | PointerType (Maybe tp) !Word64
-   | StructType !(Struct tp)
+   | StructType !(StructDecl tp)
      -- ^ Denotes a C struct
    | UnionType !(UnionDecl tp)
      -- ^ Denotes a C union
    | EnumType !EnumDecl
    | SubroutineType !SubroutineTypeDecl
    | TypedefType !(Typedef tp)
-   | ArrayType tp ![Subrange tp]
-   | UnknownType !DIE
-
   deriving (Show)
 
-structMembersLens :: Lens (Struct a) (Struct b) [Member a] [Member b]
+structMembersLens :: Lens (StructDecl a) (StructDecl b) [Member a] [Member b]
 structMembersLens = lens structMembers (\s v -> s { structMembers = v })
 
 unionMembersLens :: Lens (UnionDecl a) (UnionDecl b) [Member a] [Member b]
@@ -434,7 +451,6 @@ traverseSubtypes f tf =
     TypedefType tp -> TypedefType <$> typedefTypeLens f tp
     ArrayType etp d -> ArrayType <$> f etp <*> (traverse . subrangeTypeLens) f  d
     SubroutineType d -> pure (SubroutineType d)
-    UnknownType d -> pure (UnknownType d)
     BaseType tp -> pure (BaseType tp)
 
 parseMember :: V.Vector FilePath -> DIE -> Parser (Member DieID)
@@ -496,11 +512,11 @@ parseStructureType file_vec = do
 
   members <- parseChildrenList DW_TAG_member (parseMember file_vec)
 
-  let struct = Struct { structName     = name
-                      , structByteSize = byte_size
-                      , structLoc      = declLoc
-                      , structMembers  = members
-                      }
+  let struct = StructDecl { structName     = name
+                          , structByteSize = byte_size
+                          , structLoc      = declLoc
+                          , structMembers  = members
+                          }
   pure $! StructType struct
 
 parseUnionType :: TypeParser
@@ -607,7 +623,6 @@ ppType (Type tf) =
     TypedefType d -> text "typedef" <+> text (typedefName d)
     ArrayType etp l -> text "array" <+> ppType etp <+> text (show l)
     SubroutineType d -> text "subroutine" <+> text (show d)
-    UnknownType d -> text "unknown" <+> text (show d)
 
 resolveTypeMap :: [(DieID, TypeF DieID)] -> Map DieID Type
 resolveTypeMap m = r
@@ -896,6 +911,7 @@ data CompileUnit = CompileUnit { cuProducer    :: String
                                , cuSubprograms :: ![Subprogram]
                                , cuInlinedSubprograms :: ![InlinedSubprogram]
                                , cuVariables   :: ![Variable]
+                                 -- ^ Global variables defined in compile unit
                                , cuRanges      :: ![Dwarf.Range]
                                , cuLNE         :: ![DW_LNE]
                                }
@@ -1014,41 +1030,53 @@ parseCompileUnit contents (ctx,d) =
 ------------------------------------------------------------------------
 -- loadDwarf
 
-tryGetElfSection :: String -> Elf.Elf v -> Either String BS.ByteString
+tryGetElfSection :: String -> Elf.Elf v -> State [String] BS.ByteString
 tryGetElfSection nm e =
   case Elf.findSectionByName nm e of
-    [s] -> pure $ Elf.elfSectionData s
-    [] -> Left $ "Could not find " ++ show nm ++ " section."
-    _  -> Left $ "Found multiple " ++ show nm ++ " sections."
+    [] -> do
+      let msg = "Could not find " ++ show nm ++ " section."
+      modify $ (:) msg
+      pure $ BS.empty
+    s:r  -> do
+      when (not (null r)) $ do
+        let msg = "Found multiple " ++ show nm ++ " sections."
+        modify $ (:) msg
+      pure $ Elf.elfSectionData s
 
-loadDwarf :: Elf.Elf v -> Either String ([String], [CompileUnit])
-loadDwarf e =
-    case go of
-      Left msg -> Left msg
-      Right l ->
-        let warnings = concat (snd <$> l)
-            (errs, cus) = partitionEithers (fst <$> l)
-         in Right (errs ++ warnings, cus)
-  where end =
-          case Elf.elfData e of
-            Elf.ELFDATA2LSB -> LittleEndian
-            Elf.ELFDATA2MSB -> BigEndian
-        go :: Either String [(Either String CompileUnit, [String])]
-        go = do
-          debug_abbrev <- tryGetElfSection ".debug_abbrev" e
-          debug_info   <- tryGetElfSection ".debug_info"   e
-          debug_lines  <- tryGetElfSection ".debug_line"   e
-          debug_ranges <- tryGetElfSection ".debug_ranges" e
-          debug_str    <- tryGetElfSection ".debug_str"    e
-          let sections = Sections { dsInfoSection   = debug_info
-                                  , dsAbbrevSection = debug_abbrev
-                                  , dsStrSection    = debug_str
-                                  }
-          let (cuDies, _m) = parseInfo end sections
-          let contents = SecContents { debugLine   = debug_lines
-                                     , debugRanges = debug_ranges
-                                     }
-          pure $ parseCompileUnit contents <$> cuDies
+-- | Return dwarf information out of an Elf file.
+dwarfInfoFromElf :: Elf.Elf v -> ([String], [CompileUnit])
+dwarfInfoFromElf e = do
+  case Elf.findSectionByName ".debug_info" e of
+    [] -> ([], [])
+    _ -> flip evalState [] $ do
+      debug_info   <- tryGetElfSection ".debug_info"   e
+      debug_abbrev <- tryGetElfSection ".debug_abbrev" e
+      debug_lines  <- tryGetElfSection ".debug_line"   e
+      debug_ranges <- tryGetElfSection ".debug_ranges" e
+      debug_str    <- tryGetElfSection ".debug_str"    e
+      let sections = Sections { dsInfoSection   = debug_info
+                              , dsAbbrevSection = debug_abbrev
+                              , dsStrSection    = debug_str
+                              }
+      let end =
+            case Elf.elfData e of
+              Elf.ELFDATA2LSB -> LittleEndian
+              Elf.ELFDATA2MSB -> BigEndian
+      let (cuDies, _m) = parseInfo end sections
+      let contents = SecContents { debugLine   = debug_lines
+                                 , debugRanges = debug_ranges
+                                 }
+      mdies <- forM cuDies $ \cuPair -> do
+        let (mr, warnings) = parseCompileUnit contents cuPair
+        case mr of
+          Left msg -> do
+            modify $ ((msg:warnings) ++)
+            pure Nothing
+          Right cu -> do
+            modify $ (warnings ++)
+            pure $ Just cu
+      warnings <- get
+      pure (reverse warnings, catMaybes mdies)
 
 dwarfGlobals :: [CompileUnit] -> [Variable]
 dwarfGlobals units = fmap snd (sortOn fst l)
