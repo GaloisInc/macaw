@@ -147,12 +147,14 @@ memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
 
 type MemLoader v w = StateT (MemLoaderState v w) (Except String)
 
-overMemory :: StateT (Memory w) (Except String) a
-           -> MemLoader v w a
-overMemory m =
+insertMemSegment' :: MemWidth w => String -> MemSegment w -> MemLoader v w ()
+insertMemSegment' nm seg =
   StateT $ \mls -> do
-    (r,mem') <- runStateT m (mls^.mlsMemory)
-    pure (r, mls & mlsMemory .~ mem')
+  case insertMemSegment seg (mls^.mlsMemory) of
+    Left e ->
+      throwError $ nm ++ " " ++ showInsertError e
+    Right mem' -> do
+      pure ((), mls & mlsMemory .~ mem')
 
 -- | Maps file offsets to the elf section
 type ElfFileSectionMap v = IntervalMap v (ElfSection v)
@@ -169,7 +171,7 @@ insertElfSegment shdrMap contents phdr = do
       idx <- use mlsIndex
       mlsIndex .= idx + 1
       let seg = memSegmentForElfSegment idx contents phdr
-      overMemory $ insertMemSegment seg
+      insertMemSegment' "Segment" seg
       let phdr_offset = fromFileOffset (phdrFileStart phdr)
       let phdr_end = phdr_offset + phdrFileSize phdr
       let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdr_offset phdr_end)
@@ -216,7 +218,7 @@ insertElfSection sec =
     idx <- use mlsIndex
     mlsIndex .= idx + 1
     let seg = memSegmentForElfSection idx sec
-    overMemory $ insertMemSegment seg
+    insertMemSegment' "Section" seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
     let pair = (SegmentedAddr seg 0, sec)
     mlsIndexMap %= Map.insert elfIdx pair

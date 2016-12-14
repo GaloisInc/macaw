@@ -17,6 +17,8 @@ module Data.Macaw.Memory
   , Memory
   , memWidth
   , emptyMemory
+  , InsertError(..)
+  , showInsertError
   , insertMemSegment
   , lookupSegment
   , memSegments
@@ -54,8 +56,6 @@ module Data.Macaw.Memory
 
 import           Control.Exception (assert)
 import           Control.Lens
-import           Control.Monad
-import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as Fold
@@ -388,11 +388,14 @@ addrContentsAfter addr =
 ------------------------------------------------------------------------
 -- Memory
 
+type AbsoluteSegmentMap w = Map.Map (MemWord w) (MemSegment w)
+
+type AllSegmentMap w = Map.Map SegmentIndex (MemSegment w)
 
 -- | The state of the memory.
 data Memory w = Memory { memWidth :: !(NatRepr w)
-                       , memAbsoluteSegments :: !(Map.Map (MemWord w) (MemSegment w))
-                       , memAllSegments      :: !(Map.Map SegmentIndex (MemSegment w))
+                       , memAbsoluteSegments :: !(AbsoluteSegmentMap w)
+                       , memAllSegments      :: !(AllSegmentMap w)
                        }
 
 instance MemWidth w => Show (Memory w) where
@@ -400,9 +403,9 @@ instance MemWidth w => Show (Memory w) where
 
 -- | A memory with no segments.
 emptyMemory :: NatRepr w -> Memory w
-emptyMemory w = Memory { memWidth = w
+emptyMemory w = Memory { memWidth            = w
                        , memAbsoluteSegments = Map.empty
-                       , memAllSegments = Map.empty
+                       , memAllSegments      = Map.empty
                        }
 
 -- | Get memory segments.
@@ -494,34 +497,56 @@ readAddr mem end addr = do
     _ | otherwise ->
         Left (AccessViolation addr)
 
+data InsertError w
+   = OverlapSegment (MemWord w) (MemSegment w)
+     -- ^ The inserted segment overlaps with the given segment.
+   | IndexAlreadyUsed (MemSegment w)
+     -- ^ The segment index has already been added to this memory object.
+
+showInsertError :: Integral (MemWord w) => InsertError w -> String
+showInsertError (OverlapSegment _base _seg) =
+  "overlaps with memory segment."
+showInsertError (IndexAlreadyUsed seg) =
+  "has the same index as another segment (" ++ show (segmentIndex seg) ++ ")."
+
+
+insertAbsoluteSegmentMap :: MemWidth w
+                         => MemSegment w
+                         -> AbsoluteSegmentMap w
+                         -> Either (InsertError w) (AbsoluteSegmentMap w)
+insertAbsoluteSegmentMap seg m =
+  case segmentBase seg of
+    Nothing -> Right m
+    Just base ->
+      case Map.lookupGE base m of
+        Just (next,old) | next < base + segmentSize seg ->
+          Left (OverlapSegment base old)
+        _ ->
+          Right (Map.insert base seg m)
+
+insertAllSegmentMap :: MemWidth w
+                    => MemSegment w
+                    -> AllSegmentMap w
+                    -> Either (InsertError w) (AllSegmentMap w)
+insertAllSegmentMap seg m =
+  case Map.lookup (segmentIndex seg) m of
+    Nothing ->
+      Right (Map.insert (segmentIndex seg) seg m)
+    Just old ->
+      Left (IndexAlreadyUsed old)
+
 -- | Insert segment into memory or fail if this overlaps with another
 -- segment in memory.
-insertMemSegment :: (MemWidth w, MonadState (Memory w) m)
-                 => MemSegment w -> m ()
-insertMemSegment seg = do
-  -- Update memAbsoluteSegments
-  case segmentBase seg of
-    Nothing -> pure ()
-    Just base -> do
-      mem <- get
-      let m = memAbsoluteSegments mem
-      case Map.lookupGE base m of
-        Just (next,_) | next <= base + segmentSize seg -> do
-          fail "Overlapping loadable segments."
-        _ -> do
-          put $ mem { memAbsoluteSegments = Map.insert base seg m }
-  -- Update memAllSegments
-  do mem <- get
-     let m = memAllSegments mem
-     when (Map.member (segmentIndex seg) m) $ do
-       fail $ "Segment with given index already defined"
-     put $ mem { memAllSegments = Map.insert (segmentIndex seg) seg m }
-
-{-
--- | Returns segment at given address if any.
-findSegment :: Ord w => w -> Memory w -> Maybe (MemSegment w)
-findSegment w (Memory m) = snd <$> listToMaybe (IMap.search w m)
--}
+insertMemSegment :: MemWidth w
+                 => MemSegment w
+                 -> Memory w
+                 -> Either (InsertError w) (Memory w)
+insertMemSegment seg mem = do
+  absMap <- insertAbsoluteSegmentMap seg (memAbsoluteSegments mem)
+  allMap <- insertAllSegmentMap      seg (memAllSegments mem)
+  pure $ mem { memAbsoluteSegments = absMap
+             , memAllSegments      = allMap
+             }
 
 -- | Return segment if range is entirely contained within a single segment
 -- and 'Nothing' otherwise.
