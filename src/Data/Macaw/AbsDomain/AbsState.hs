@@ -140,8 +140,11 @@ data AbsValue w (tp :: Type)
   | forall n n'
     . ((n + 1) <= n', tp ~ BVType n')
     => SubValue !(NatRepr n) !(AbsValue w (BVType n))
-    -- ^ A sub-value about which we know only some bits.
-    -- (e.g., we know that the lower 8 bits are < 10)
+    -- ^ A sub-value about which we know something about the low order bits.
+    --
+    --e.g., when tp = BVType 16, and n = 8, and the abs value argument is @av@, we
+    --know that the lower 8-bits of the value are in @av@, but the upper bits may
+    -- be arbitrary.
   | TopV
     -- ^ Any value
   | (tp ~ BVType w) => ReturnAddr
@@ -444,17 +447,14 @@ joinAbsValue' x y = do
 -------------------------------------------------------------------------------
 -- Abstract value operations
 
-member :: Integer -> AbsValue w tp -> Bool
-member = undefined
-{-
-member _ TopV = True
-member n (FinSet s) = Set.member n s
-member n (CodePointers s b) | 0 <= n && n <= toInteger (maxBound :: Word64) =
-  b && (n == 0) || Set.member (fromInteger n) s
-member n (StridedInterval si) = SI.member n si
-member n (SubValue _n' v) = member n v
-member _n _v = False
--}
+-- | Return true if the integer value may be an a member of
+mayBeMember :: Integer -> AbsValue w (BVType n) -> Bool
+mayBeMember _ TopV = True
+mayBeMember n (FinSet s) = Set.member n s
+mayBeMember 0 (CodePointers _ b) = b
+mayBeMember n (StridedInterval si) = SI.member n si
+mayBeMember n (SubValue n' v) = mayBeMember (n .&. maxUnsigned n') v
+mayBeMember _n _v = True
 
 -- | Returns true if this value represents the empty set.
 isBottom :: AbsValue w tp -> Bool
@@ -520,9 +520,9 @@ meet' v v'
         NatCaseEQ          -> subValue n (meet av av')
         NatCaseGT LeqProof -> subValue n' av' -- FIXME
   | SubValue n av <- v, IsFin s <- asFinSet "meet" v' =
-      FinSet $ Set.filter (\x -> (toUnsigned n x) `member` av) s
+      FinSet $ Set.filter (\x -> (x .&. maxUnsigned n) `mayBeMember` av) s
   | SubValue n av <- v', IsFin s <- asFinSet "meet" v =
-      FinSet $ Set.filter (\x -> (toUnsigned n x) `member` av) s
+      FinSet $ Set.filter (\x -> (x .&. maxUnsigned n) `mayBeMember` av) s
   | SubValue _ _ <- v, StridedInterval _ <- v' = v' -- FIXME: ?
   | StridedInterval _ <- v, SubValue _ _ <- v' = v -- FIXME: ?
 
