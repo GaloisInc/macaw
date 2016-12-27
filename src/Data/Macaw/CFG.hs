@@ -725,7 +725,7 @@ class ( OrdF r
 newtype AssignId (ids :: *) (tp :: Type) = AssignId (Nonce ids tp)
 
 ppAssignId :: AssignId ids tp -> Doc
-ppAssignId (AssignId w) = text ("r" ++ show w)
+ppAssignId (AssignId w) = text ("r" ++ show (indexValue w))
 
 instance TestEquality (AssignId ids) where
   testEquality (AssignId id1) (AssignId id2) = testEquality id1 id2
@@ -820,8 +820,10 @@ $(pure [])
 -- Pretty print Assign, AssignRhs, Value operations
 
 ppLit :: NatRepr n -> Integer -> Doc
-ppLit w i =
+ppLit w i
+  | i >= 0 =
   text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
+  | otherwise = error "ppLit given negative value"
 
 -- | Pretty print a value.
 ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
@@ -1070,16 +1072,14 @@ class PrettyRegValue r (f :: Type -> *) where
   -- should be printed, and Nothing if the contents should be ignored.
   ppValueEq :: r tp -> f tp -> Maybe Doc
 
-instance ( OrdF r
-         , PrettyRegValue r f
+instance ( PrettyRegValue r f
          )
       => Pretty (RegState r f) where
   pretty (RegState m) = bracketsep $ catMaybes (f <$> MapF.toList m)
     where f :: MapF.Pair r f -> Maybe Doc
           f (MapF.Pair r v) = ppValueEq r v
 
-instance ( OrdF r
-         , PrettyRegValue r f
+instance ( PrettyRegValue r f
          )
       => Show (RegState r f) where
   show s = show (pretty s)
@@ -1145,8 +1145,6 @@ data TermStmt arch ids
 
 instance ( OrdF (ArchReg arch)
          , ShowF (ArchReg arch)
-         , Integral (ArchAddr arch)
-         , Show (ArchAddr arch)
          )
       => Pretty (TermStmt arch ids) where
   pretty (FetchAndExecute s) =
@@ -1168,16 +1166,12 @@ data Block arch ids =
   Block { blockLabel :: !(ArchLabel arch)
         , blockStmts :: !([Stmt arch ids])
           -- ^ List of statements in the block.
---        , blockCache :: !(MapF (App (Value arch ids)) (Assignment arch ids))
-          -- ^ This maps applications to the associated assignment.
         , blockTerm :: !(TermStmt arch ids)
           -- ^ The last statement in the block.
         }
 
 instance ( OrdF  (ArchReg arch)
          , ShowF (ArchReg arch)
-         , Integral (ArchAddr arch)
-         , Show     (ArchAddr arch)
          , PrettyFF  (ArchFn arch)
          , PrettyF   (ArchStmt arch)
          )
@@ -1216,8 +1210,7 @@ cfgBlockEnds g = Set.fromList (Map.elems (_cfgBlockRanges g))
 -}
 
 -- | Return block with given label.
-findBlock :: Ord (ArchAddr arch) => CFG arch ids -> ArchLabel arch ->
-             Maybe (Block arch ids)
+findBlock :: CFG arch ids -> ArchLabel arch -> Maybe (Block arch ids)
 findBlock g l = _cfgBlocks g ^. at l
 
 insertBlock :: ( Integral (ArchAddr arch)
@@ -1234,8 +1227,7 @@ insertBlock b c = do
     Nothing -> c { _cfgBlocks = Map.insert (blockLabel b) b (_cfgBlocks c) }
 
 -- | Inserts blocks for a contiguous region of code.
-insertBlocksForCode :: ( Ord (ArchAddr arch)
-                       , Integral (ArchAddr arch)
+insertBlocksForCode :: ( Integral (ArchAddr arch)
                        , Show     (ArchAddr arch)
                        )
                     => ArchSegmentedAddr arch -- ^ Start of block

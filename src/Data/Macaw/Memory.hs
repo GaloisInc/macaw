@@ -43,15 +43,20 @@ module Data.Macaw.Memory
   , ppMemSegment
   , segmentSize
   , SegmentRange(..)
+  , SymbolRef(..)
+  , SymbolVersion(..)
 --  , contentsFromList
     -- * Address and offset.
   , MemWord
+  , memWord32
+  , memWord64
   , SegmentedAddr(..)
   , addrOffset
   , addrContentsAfter
   , addrBase
   , addrValue
   , MemoryError(..)
+  , IsAddr(..)
   ) where
 
 import           Control.Exception (assert)
@@ -63,7 +68,6 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Word
 import           GHC.TypeLits
-import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Parameterized.NatRepr
@@ -76,9 +80,11 @@ data Endianness = BigEndian | LittleEndian
 -- Utilities
 
 -- | Split a bytestring into an equivalent list of byte strings with a given size.
+--
+-- This drops the last bits if the total length is not a multiple of the size.
 regularChunks :: Int -> BS.ByteString -> [BS.ByteString]
 regularChunks sz bs
-  | BS.null bs = []
+  | BS.length bs < sz = []
   | otherwise = BS.take sz bs : regularChunks sz (BS.drop sz bs)
 
 
@@ -124,12 +130,12 @@ bsWord64le bs
 ------------------------------------------------------------------------
 -- MemBase
 
-
 newtype MemWord (n :: Nat) = MemWord Word64
 -- ^ A value in memory.
 
 instance Show (MemWord w) where
-  show (MemWord w) = showHex w ""
+  showsPrec _ (MemWord w) | w >= 0 = shows w
+                          | otherwise = error "show MemWord"
 
 instance Eq (MemWord w) where
   MemWord x == MemWord y = x == y
@@ -185,38 +191,58 @@ instance Integral (MemWord 64) where
     where (q,r) = x `quotRem` y
   toInteger (MemWord x) = toInteger x
 
-
 -- | A unique identifier for a segment.
 type SegmentIndex = Int
 
 class IsAddr w where
   addrSize :: p w -> MemWord w
-  addrRead :: Endianness -> BS.ByteString -> MemWord w
+  addrRead :: Endianness -> BS.ByteString -> Maybe (MemWord w)
 
 instance IsAddr 32 where
   addrSize _ = 4
-  addrRead BigEndian    = MemWord . fromIntegral . bsWord32be
-  addrRead LittleEndian = MemWord . fromIntegral . bsWord32le
+  addrRead e s
+    | BS.length s < 4 = Nothing
+    | otherwise =
+      case e of
+        BigEndian -> Just $ MemWord $ fromIntegral $ bsWord32be s
+        LittleEndian -> Just $ MemWord $ fromIntegral $ bsWord32le s
 
 
 instance IsAddr 64 where
   addrSize _ = 8
-  addrRead BigEndian    = MemWord . bsWord64be
-  addrRead LittleEndian = MemWord . bsWord64le
+  addrRead e s
+    | BS.length s < 8 = Nothing
+    | otherwise =
+      case e of
+        BigEndian    -> Just $ MemWord $ fromIntegral $ bsWord64be s
+        LittleEndian -> Just $ MemWord $ fromIntegral $ bsWord64le s
 
 type MemWidth w = (IsAddr w, Integral (MemWord w))
 
 ------------------------------------------------------------------------
 -- SegmentRange
 
+-- | Version information for a symbol
+data SymbolVersion = SymbolVersion { symbolVersionFile :: !BS.ByteString
+                                   , symbolVersionName :: !BS.ByteString
+                                   }
+
+-- | The name of a symbol along with optional version information.
+data SymbolRef = SymbolRef { symbolName :: !BS.ByteString
+                           , symbolVersion :: !(Maybe SymbolVersion)
+                           }
+
+
 -- | Defines a portion of a segment.
 data SegmentRange w
    = ByteRegion !BS.ByteString
    | RelocatableAddr !SegmentIndex !(MemWord w)
+   | SymbolicRef !SymbolRef
 
 rangeSize :: MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
 rangeSize (RelocatableAddr _ w) = addrSize w
+rangeSize (SymbolicRef _) = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
 
 ------------------------------------------------------------------------
 -- SegmentContents
@@ -262,6 +288,7 @@ contentsAfter off (SegmentContents m) = do
           let v = ByteRegion (BS.drop (fromIntegral (off - pre_off)) bs)
            in Just $ v : Map.elems post
         Just ((_, RelocatableAddr{}),_) -> Nothing
+        Just ((_, SymbolicRef{}),_) -> Nothing
 
 contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsList (SegmentContents m) = Map.toList m
@@ -272,15 +299,17 @@ contentsList (SegmentContents m) = Map.toList m
 -- | Describes a memory segment.
 --
 -- Memory segments are non-overlapping regions of memory.
-data MemSegment w = MemSegment { segmentIndex :: !SegmentIndex
-                                 -- ^ Unique index for this segment
-                               , segmentBase  :: !(Maybe (MemWord w))
-                                 -- ^ Base for this segment
-                               , segmentFlags :: !Perm.Flags
-                                 -- ^ Permisison flags
-                               , segmentContents :: !(SegmentContents w)
-                                 -- ^ Map from offsets to the contents of the segment.
-                               }
+data MemSegment w
+   = MemSegment { segmentIndex :: !SegmentIndex
+                                  -- ^ Unique index for this segment
+                , segmentBase  :: !(Maybe (MemWord w))
+                                  -- ^ Base for this segment
+                , segmentFlags :: !Perm.Flags
+                                  -- ^ Permisison flags
+                , segmentContents :: !(SegmentContents w)
+                                     -- ^ Map from offsets to the contents of
+                                     -- the segment.
+                }
 
 -- | Create a memory segment with the given values.
 memSegment :: MemWidth w
@@ -430,7 +459,7 @@ memAsAddrPairs mem end = do
   case r of
     ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
       w <- regularChunks (fromIntegral sz) bs
-      let val = addrRead end w
+      let Just val = addrRead end w
       case Map.lookupLE val (memAbsoluteSegments mem) of
         Just (base, value_seg) | val <= base + segmentSize value_seg -> do
           let seg_val =  SegmentedAddr value_seg (val - base)
@@ -440,12 +469,8 @@ memAsAddrPairs mem end = do
       case lookupSegment mem idx of
         Just value_seg -> [(addr, SegmentedAddr value_seg value_offset)]
         Nothing -> error "memAsAddrPairs found segment without valid index."
-
-{-
--- | Return list of words in the memory
-memAsWord64le :: Integral w => Memory w -> [Word64]
-memAsWord64le m = concatMap segmentAsWord64le (memSegments m)
--}
+    SymbolicRef _symref ->
+      error "memAsAddrPairs does not support SymbolicRef."
 
 -- | Get executable segments.
 executableSegments :: Memory w -> [MemSegment w]
@@ -476,7 +501,7 @@ readAddr mem end addr = do
     Just (MemWord offset, ByteRegion bs)
       | offset + sz >= offset                           -- Check for no overfow
       , offset + sz < fromIntegral (BS.length bs) -> do -- Check length
-        let val = addrRead end (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
+        let Just val = addrRead end (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
         case Map.lookupLE val (memAbsoluteSegments mem) of
           Just (base, seg) | val <= base + segmentSize seg -> Right $
             SegmentedAddr { addrSegment = seg
@@ -503,7 +528,7 @@ data InsertError w
    | IndexAlreadyUsed (MemSegment w)
      -- ^ The segment index has already been added to this memory object.
 
-showInsertError :: Integral (MemWord w) => InsertError w -> String
+showInsertError :: InsertError w -> String
 showInsertError (OverlapSegment _base _seg) =
   "overlaps with memory segment."
 showInsertError (IndexAlreadyUsed seg) =
@@ -524,8 +549,7 @@ insertAbsoluteSegmentMap seg m =
         _ ->
           Right (Map.insert base seg m)
 
-insertAllSegmentMap :: MemWidth w
-                    => MemSegment w
+insertAllSegmentMap :: MemSegment w
                     -> AllSegmentMap w
                     -> Either (InsertError w) (AllSegmentMap w)
 insertAllSegmentMap seg m =
@@ -567,13 +591,6 @@ addrPermissions addr mem =
     Just (base, seg) | addr < base + segmentSize seg -> segmentFlags seg
     _ -> Perm.none
 
-{-
-
--- | Return true if address satisfies permissions check.
-addrHasPermissions :: Ord w => w -> ElfSegmentFlags -> Memory w -> Bool
-addrHasPermissions w req m = addrPermissions w m `hasPermissions` req
--}
-
 -- | Indicates if address is a code pointer.
 isCodeAddr :: MemWidth w => Memory w -> MemWord w -> Bool
 isCodeAddr mem val = addrPermissions val mem `Perm.hasPerm` Perm.execute
@@ -582,12 +599,6 @@ isCodeAddr mem val = addrPermissions val mem `Perm.hasPerm` Perm.execute
 isCodeAddrOrNull :: MemWidth w => Memory w -> MemWord w -> Bool
 isCodeAddrOrNull _ (MemWord 0) = True
 isCodeAddrOrNull mem a = isCodeAddr mem a
-
-{-
--- | Return true if this is a read only address.
-isReadonlyAddr :: Ord w => Memory w -> MemWord w -> Bool
-isReadonlyAddr mem val = isReadonly (addrPermissions val mem)
--}
 
 ------------------------------------------------------------------------
 -- MemoryError

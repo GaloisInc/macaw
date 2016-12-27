@@ -356,8 +356,7 @@ recordWriteStmt lbl regs stmt = do
       | Just Refl <- testEquality (typeRepr v) (BVTypeRepr addrWidth) -> do
           mem <- gets memory
           recordFunctionAddrs lbl mem (transferValue regs v)
-    _ ->
-      return ()
+    _ -> return ()
 
 transferStmts :: ( HasRepr      (ArchReg arch) TypeRepr
                  , RegisterInfo (ArchReg arch)

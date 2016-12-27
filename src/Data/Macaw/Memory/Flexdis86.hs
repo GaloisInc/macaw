@@ -75,6 +75,9 @@ instance Num (MemWord w) => ByteReader (MemoryByteReader w) where
       [] -> MBR $ throwError $ AccessViolation (msAddr ms)
       RelocatableAddr{}:_ -> do
         MBR $ throwError $ UnalignedRelocation (msAddr ms)
+      -- Throw error if we try to read a relocation as a symbolic reference
+      SymbolicRef{}:_ -> do
+        MBR $ throwError $ UnalignedRelocation (msAddr ms)
       ByteRegion bs:rest -> do
         if BS.null bs then do
           MBR $ throwError $ AccessViolation (msAddr ms)

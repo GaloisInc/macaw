@@ -4,6 +4,7 @@ Maintainer       : Simon Winwood <sjw@galois.com>
 
 Provides utilities for logging debug messages to stderr.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE ImplicitParams #-}
 module Data.Macaw.DebugLogging
        ( DebugClass(..)
@@ -24,10 +25,14 @@ module Data.Macaw.DebugLogging
 import Data.IORef
 import Data.List
 import Debug.Trace
-import GHC.SrcLoc
-import GHC.Stack
 import System.IO.Unsafe -- For debugKeys
 import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+#if MIN_VERSION_base(4,9,0)
+import GHC.Stack
+#else
+import GHC.SrcLoc
+import GHC.Stack
+#endif
 
 {-# NOINLINE debugKeys #-}
 debugKeys :: IORef [DebugClass]

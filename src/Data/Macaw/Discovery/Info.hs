@@ -90,7 +90,8 @@ lookupAbsBlock :: ( Integral addr
                   => addr
                   -> Map addr (AbsBlockState r)
                   -> AbsBlockState r
-lookupAbsBlock addr s = fromMaybe (error msg) (Map.lookup addr s)
+lookupAbsBlock addr s | addr >= 0 = fromMaybe (error msg) (Map.lookup addr s)
+                      | otherwise = error "lookupAbsBlock given negative addr"
   where msg = "Could not find block " ++ showHex addr "."
 
 ------------------------------------------------------------------------
@@ -104,8 +105,7 @@ data BlockRegion arch ids
                  }
 
 -- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupBlock :: Ord (ArchAddr arch)
-            => Map (ArchSegmentedAddr arch) (Maybe (BlockRegion arch ids))
+lookupBlock :: Map (ArchSegmentedAddr arch) (Maybe (BlockRegion arch ids))
             -> ArchLabel arch
             -> Maybe (Block arch ids)
 lookupBlock m lbl = do
@@ -144,7 +144,8 @@ data GlobalDataInfo w
 
 instance (Integral w, Show w) => Show (GlobalDataInfo w) where
   show (JumpTable Nothing) = "unbound jump table"
-  show (JumpTable (Just w)) = "jump table end " ++ showHex w ""
+  show (JumpTable (Just w)) | w >= 0 = "jump table end " ++ showHex w ""
+                            | otherwise = error "jump table with negative offset given"
   show ReferencedValue = "global addr"
 
 ------------------------------------------------------------------------
@@ -307,8 +308,7 @@ getFunctionEntryPoint addr s = do
 -- | Returns the guess on the entry point of the given function.
 --
 -- Note. This code assumes that a block address is associated with at most one function.
-getFunctionEntryPoint' :: Ord (ArchAddr a)
-                       => ArchSegmentedAddr a
+getFunctionEntryPoint' :: ArchSegmentedAddr a
                        -> DiscoveryInfo a ids
                        -> Maybe (ArchSegmentedAddr a)
 getFunctionEntryPoint' addr s = Set.lookupLE addr (s^.functionEntries)
@@ -361,7 +361,6 @@ asLiteralAddr _ _ = Nothing
 --
 -- This can also return Nothing if the call is not supported.
 identifyCall :: ( ArchConstraint a ids
-                , RegisterInfo (ArchReg a)
                 , MemWidth (ArchAddrWidth a)
                 )
              => Memory (ArchAddrWidth a)

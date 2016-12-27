@@ -13,7 +13,7 @@ library
     binary,
 --    bv,
     bytestring,
-    containers,
+    containers >= 0.5.8.1,
 --    data-binary-ieee754,
 --    dwarf-tools,
     elf-edit >= 0.28,

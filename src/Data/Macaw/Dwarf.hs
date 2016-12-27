@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -177,8 +178,8 @@ attributeAsFilename v val = do
 -- Range
 
 ppRange :: Range -> Doc
-ppRange (Range x y) = do
-  text "low:" <+> text (showHex x "") <+> text "high:" <+> text (showHex y "")
+ppRange (Range x y) =
+    text "low:" <+> text (showHex x "") <+> text "high:" <+> text (showHex y "")
 
 ------------------------------------------------------------------------
 -- DIEParser
@@ -293,7 +294,7 @@ parseDeclLoc file_vec = do
 -- DW_OP operations
 
 ppOp :: DW_OP -> Doc
-ppOp (DW_OP_addr w) = text (showHex w "")
+ppOp (DW_OP_addr w) | w >= 0 = text (showHex w "")
 ppOp o = text (show o)
 
 ppOps :: [DW_OP] -> Doc
@@ -1029,7 +1030,7 @@ parseCompileUnit contents (ctx,d) =
 ------------------------------------------------------------------------
 -- loadDwarf
 
-tryGetElfSection :: String -> Elf.Elf v -> State [String] BS.ByteString
+tryGetElfSection :: BS.ByteString -> Elf.Elf v -> State [String] BS.ByteString
 tryGetElfSection nm e =
   case Elf.findSectionByName nm e of
     [] -> do

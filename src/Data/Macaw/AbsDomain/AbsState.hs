@@ -243,7 +243,7 @@ instance Pretty (AbsValue w tp) where
     text "sub" <> parens (integer (natValue n) <> comma <+> pretty av)
   pretty (StackOffset a s) = ppSet (ppv <$> Set.toList s)
     where ppv v' | v' >= 0   = text $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
-                 | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate v') ""
+                 | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
 
   pretty (SomeStackOffset a) = text $ "rsp_" ++ show a ++ " + ?"
   pretty TopV = text "top"
@@ -254,7 +254,8 @@ ppSet = encloseSep lbrace rbrace comma
 
 ppIntegerSet :: (Integral w, Show w) => Set w -> Doc
 ppIntegerSet s = ppSet (ppv <$> Set.toList s)
-  where ppv v' = assert (v' >= 0) $ text (showHex v' "")
+  where ppv v' | v' >= 0 = text (showHex v' "")
+               | otherwise = error "ppIntegerSet given negative value"
 
 -- | Returns a set of concrete integers that this value may be.
 -- This function will neither return the complete set or an
@@ -891,9 +892,13 @@ absStackJoinD y x = do
   z <- mapM entryLeq (Map.toList y)
   return $! Map.fromList (catMaybes z)
 
+showSignedHex :: Integer -> ShowS
+showSignedHex x | x < 0 = showString "-0x" . showHex (negate x)
+                | otherwise = showString "0x" . showHex x
+
 ppAbsStack :: AbsBlockStack w -> Doc
 ppAbsStack m = vcat (pp <$> Map.toDescList m)
-  where pp (o,StackEntry _ v) = text (showHex o " :=") <+> pretty v
+  where pp (o,StackEntry _ v) = text (showSignedHex (toInteger o) " :=") <+> pretty v
 
 ------------------------------------------------------------------------
 -- AbsBlockState
@@ -956,8 +961,7 @@ instance ( RegisterInfo r
                                 ++ show x ++ "\n" ++ show y) $
               zs
 
-instance ( OrdF r
-         , ShowF r
+instance ( ShowF r
          ) => Pretty (AbsBlockState r) where
   pretty s =
       text "registers:" <$$>
@@ -968,8 +972,8 @@ instance ( OrdF r
                   | otherwise = text "stack:" <$$>
                                 indent 2 (ppAbsStack stack)
 
-instance (OrdF r, ShowF r) => Show (AbsBlockState r) where
-  show s = show (pretty s)
+instance ShowF r => Show (AbsBlockState r) where
+  show = show . pretty
 
 -- | Update the block state to point to a specific IP address.
 setAbsIP :: RegisterInfo r
@@ -1022,18 +1026,17 @@ absAssignments = lens _absAssignments (\s v -> s { _absAssignments = v })
 curAbsStack :: Simple Lens (AbsProcessorState r ids) (AbsBlockStack (RegAddrWidth r))
 curAbsStack = lens _curAbsStack (\s v -> s { _curAbsStack = v })
 
-instance (OrdF r, ShowF r)
+instance ShowF r
       => Show (AbsProcessorState r ids) where
   show = show . pretty
 
 -- FIXME
-instance (OrdF r, ShowF r)
+instance (ShowF r)
       => Pretty (AbsProcessorState r ids) where
   pretty regs = pretty (AbsBlockState { _absRegState   = regs ^. absInitialRegs
                                       , _startAbsStack = regs ^. curAbsStack })
 
-initAbsProcessorState :: (Num (RegAddr r), Ord (RegAddr r))
-                      => NatRepr (RegAddrWidth r)
+initAbsProcessorState :: NatRepr (RegAddrWidth r)
                       -> Memory (RegAddrWidth r)
                          -- ^ Current state of memory in the processor.
                          --
@@ -1110,15 +1113,13 @@ transferValue' code_width is_code amap aregs v =
    BVValue w i
      | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
      | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
-   RelocatableValue{} -> error $ "Relocatable values are not supported."
+   RelocatableValue _ a ->
+       CodePointers (Set.singleton a) False
    -- Invariant: v is in m
    AssignedValue a ->
      fromMaybe (error $ "Missing assignment for " ++ show (assignId a))
                (MapF.lookup (assignId a) amap)
-   Initial r
---     | Just Refl <- testEquality r N.rsp -> do
---       StackOffset (Set.singleton 0)
-     | otherwise -> aregs ^. boundValue r
+   Initial r -> aregs ^. boundValue r
 
 -- | Compute abstract value from value and current registers.
 transferValue :: ( OrdF (ArchReg a)
