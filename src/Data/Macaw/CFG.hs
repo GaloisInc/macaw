@@ -27,7 +27,6 @@ module Data.Macaw.CFG
   ( CFG
   , emptyCFG
   , cfgBlocks
---  , cfgBlockEnds
   , insertBlocksForCode
   , traverseBlocks
   , traverseBlockAndChildren
@@ -1142,6 +1141,12 @@ data TermStmt arch ids
     -- application perspective, the semantics will depend on the operating
     -- system.
   | Syscall !(RegState (ArchReg arch) (Value arch ids))
+    -- | The block ended prematurely due to an error in instruction
+    -- decoding or translation.
+    --
+    -- This contains the state of the registers when the translation error
+    -- occured and the error message recorded.
+  | TranslateError !(RegState (ArchReg arch) (Value arch ids)) !Text
 
 instance ( OrdF (ArchReg arch)
          , ShowF (ArchReg arch)
@@ -1154,6 +1159,9 @@ instance ( OrdF (ArchReg arch)
     text "branch" <+> ppValue 0 c <+> pretty x <+> pretty y
   pretty (Syscall s) =
     text "syscall" <$$>
+    indent 2 (pretty s)
+  pretty (TranslateError s msg) =
+    text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
 
 ------------------------------------------------------------------------

@@ -68,6 +68,7 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Word
 import           GHC.TypeLits
+import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Parameterized.NatRepr
@@ -134,8 +135,7 @@ newtype MemWord (n :: Nat) = MemWord Word64
 -- ^ A value in memory.
 
 instance Show (MemWord w) where
-  showsPrec _ (MemWord w) | w >= 0 = shows w
-                          | otherwise = error "show MemWord"
+  showsPrec _ (MemWord w) = showString "0x" . showHex w
 
 instance Eq (MemWord w) where
   MemWord x == MemWord y = x == y
@@ -445,8 +445,9 @@ memSegments m = Map.elems (memAllSegments m)
 lookupSegment :: Memory w -> SegmentIndex -> Maybe (MemSegment w)
 lookupSegment m i = Map.lookup i (memAllSegments m)
 
--- | Return list of address values in memory.  Each address includes the value
--- and the base.
+-- | Return list of segmented address values in memory.
+--
+-- Each address includes the value and the base.
 memAsAddrPairs :: MemWidth w
                => Memory w
                -> Endianness
@@ -469,8 +470,7 @@ memAsAddrPairs mem end = do
       case lookupSegment mem idx of
         Just value_seg -> [(addr, SegmentedAddr value_seg value_offset)]
         Nothing -> error "memAsAddrPairs found segment without valid index."
-    SymbolicRef _symref ->
-      error "memAsAddrPairs does not support SymbolicRef."
+    SymbolicRef{} -> []
 
 -- | Get executable segments.
 executableSegments :: Memory w -> [MemSegment w]

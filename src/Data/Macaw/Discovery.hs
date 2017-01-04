@@ -24,8 +24,7 @@ interleaved abstract interpretation.
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.Discovery
-       ( mkCFG
-       , cfgFromAddrs
+       ( cfgFromAddrs
        , assignmentAbsValues
        ) where
 
@@ -44,11 +43,10 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
-import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Word
 import           Numeric
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+--import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.AbsDomain.Refine
@@ -149,10 +147,6 @@ deleteMapLessThan k m =
     (_, Nothing, hm) -> hm
     (_, Just v, hm) -> Map.insert k v hm
 
-maybeSetInsert :: Ord a => Maybe a -> Set a -> Set a
-maybeSetInsert (Just k) s = Set.insert k s
-maybeSetInsert Nothing  s = s
-
 ------------------------------------------------------------------------
 -- Memory utilities
 
@@ -200,22 +194,61 @@ runCFGM arch_info mem symbols sysp m = do
     let init_info = emptyDiscoveryInfo nonce_gen mem symbols sysp arch_info
     Some <$> execStateT (unCFGM m) init_info
 
-{-
-blockOverlaps :: ArchSegmentedAddr arch
-              -> ArchSegmentedAddr arch
-              -> Maybe (BlockRegion arch ids)
-              -> Bool
-blockOverlaps _ start Nothing = segmentIndex (addrSegment a) == segmentIndex (addrSegment a)
-blockOverlaps a (Just br) = a < brEnd br
--}
+printAddrBacktrace :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
+                   -> CodeAddrReason (ArchAddrWidth arch)
+                   -> [String]
+printAddrBacktrace m rsn = do
+  let prev addr =
+        case Map.lookup addr m of
+          Just br -> printAddrBacktrace m (brReason br)
+          Nothing -> error $ "Unknown reason for address " ++ show addr
+  case rsn of
+    InWrite src ->
+      ["Written to memory in block at address " ++ show src ++ "."]
+      ++ prev src
+    NextIP src ->
+      ["Target IP for " ++ show src ++ "."]
+      ++ prev src
+    CallTarget src ->
+      ["Target IP of call at " ++ show src ++ "."]
+      ++ prev src
+
+    InitAddr -> ["Initial entry point"]
+    CodePointerInMem src -> ["Memory address " ++ show src ++ " contained code."]
+    SplitAt src -> ["Split from read of " ++ show src ++ "."] ++ prev src
+
+-- | Return true if this address was added because of the contents of a global address
+-- in memory initially.
+--
+-- This heuristic is not very accurate, so we avoid printing errors when it leads to
+-- issues.
+cameFromInitialMemoryContents :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
+                              -> CodeAddrReason (ArchAddrWidth arch)
+                              -> Bool
+cameFromInitialMemoryContents m rsn = do
+  let prev addr =
+        case Map.lookup addr m of
+          Just br -> cameFromInitialMemoryContents m (brReason br)
+          Nothing -> error $ "Unknown reason for address " ++ show addr
+  case rsn of
+    InWrite src -> prev src
+    NextIP src  -> prev src
+    CallTarget src -> prev src
+    SplitAt src -> prev src
+    InitAddr -> False
+    CodePointerInMem{} -> True
 
 -- | This is the worker for getBlock, in the case that we have not already
 -- read the block.
 tryDisassembleAddr :: PrettyCFGConstraints arch
-                   => ArchSegmentedAddr arch
+                   => CodeAddrReason (ArchAddrWidth arch)
+                       -- ^ Reason we are trying to disassemble starting from given address
+                   -> ArchSegmentedAddr arch
+                      -- ^ Address to disassemble
                    -> AbsBlockState (ArchReg arch)
+                      -- ^ Abstract state at beginning of block
                    -> CFGM arch ids ()
-tryDisassembleAddr addr ab = do
+tryDisassembleAddr rsn addr ab = do
   s0 <- get
   -- Attempt to disassemble block.
   -- Get memory so that we can decode from it.
@@ -226,51 +259,59 @@ tryDisassembleAddr addr ab = do
   let not_at_block = (`Map.notMember` block_addrs)
   let mem = memory s0
   nonce_gen <- nonceGen <$> get
-  res <- liftST $ disassembleFn (archInfo s0) nonce_gen mem not_at_block addr ab
+  (bs, next_ip, maybeError) <- liftST $ disassembleFn (archInfo s0) nonce_gen mem not_at_block addr ab
   -- Build state for exploring this.
-  case res of
-    Left e ->
-      debugM DCFG ("Failed to disassemble block at " ++ show addr ++ " " ++ show e) >>
-      put $ (s0 & blocks %~ Map.insert addr Nothing)
-    Right (bs, next_ip) -> do
-      assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
-      assert (next_ip^.addrOffset > addr^.addrOffset) $ do
-      debugM DCFG (show $ vcat $ map pretty bs)
-      let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-      -- Add block region to blocks.
-      let br = BlockRegion { brSize = next_ip^.addrOffset - addr^.addrOffset
-                           , brBlocks = block_map
-                           }
-      put $ (s0 & blocks %~ Map.insert addr (Just $! br))
+  case maybeError of
+    Just e -> do
+      when (not (cameFromInitialMemoryContents block_addrs rsn)) $ do
+          error $ "Failed to disassemble " ++ show e ++ "\n"
+            ++ unlines (printAddrBacktrace block_addrs rsn)
+--      debugM DCFG ("Failed to disassemble block at " ++ show addr ++ " " ++ show e) >>
+--      put $ (s0 & blocks %~ Map.insert addr Nothing)
+    Nothing -> do
+      pure ()
+  assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
+  assert (next_ip^.addrOffset > addr^.addrOffset) $ do
+  let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
+  -- Add block region to blocks.
+  let br = BlockRegion { brReason = rsn
+                       , brSize = next_ip^.addrOffset - addr^.addrOffset
+                       , brBlocks = block_map
+                       }
+  put $ s0 & blocks %~ Map.insert addr br
 
--- | Mark address as the start of a block.
-markBlockStart :: PrettyCFGConstraints arch
-               => ArchSegmentedAddr arch
-               -> AbsBlockState (ArchReg arch)
-               -> CFGM arch ids ()
-markBlockStart addr ab = do
+-- | Mark address as the start of a code block.
+markCodeAddrBlock :: PrettyCFGConstraints arch
+                  => CodeAddrReason (ArchAddrWidth arch)
+                      -- ^ Reason we are trying to disassemble starting from given address
+                  -> ArchSegmentedAddr arch
+                     -- ^ Address to start disassembling
+                  -> AbsBlockState (ArchReg arch)
+                     -- ^ Abstract block state at start of disassembly
+                  -> CFGM arch ids ()
+markCodeAddrBlock rsn addr ab = do
   s <- get
   -- Lookup block just before this address
   case Map.lookupLT addr (s^.blocks) of
     -- If that block overlaps with the address
-    Just (l,mbr)
+    Just (l, br)
       | segmentIndex (addrSegment addr) == segmentIndex (addrSegment l)
-      , case mbr of
-          Nothing -> True
-          Just br -> addr^.addrOffset < l^.addrOffset + brSize br -> do
-      let l_start = getFunctionEntryPoint l s
-          a_start = getFunctionEntryPoint addr s
+      , addr^.addrOffset < l^.addrOffset + brSize br -> do
       -- Get block for addr
-      tryDisassembleAddr addr ab
+      tryDisassembleAddr rsn addr ab
       -- Get block for old block
       let Just old_ab = Map.lookup l (s^.absState)
-      tryDisassembleAddr l old_ab
+      tryDisassembleAddr (brReason br) l old_ab
       -- Add function starts to split to frontier
       -- This will result in us re-exploring l_start and a_start
       -- once the current function is done.
-      modify $ \s0 -> s0 & function_frontier %~ Set.insert l_start . Set.insert a_start
+      let l_start = getFunctionEntryPoint l s
+          a_start = getFunctionEntryPoint addr s
+      when (l_start /= a_start) $ do
+        error $ "Blocks changed functions " ++ show l_start ++ " and " ++ show a_start ++ "."
+--      modify $ \s0 -> s0 & function_frontier %~ Map.insert l_start (SplitAt a_start) . Map.insert a_start rsn
     _ ->
-      tryDisassembleAddr addr ab
+      tryDisassembleAddr rsn addr ab
 
 -- | Returns a block at the given location, if at all possible.  This
 -- will disassemble the binary if the block hasn't been seen before.
@@ -281,8 +322,7 @@ getBlock :: ArchSegmentedAddr arch
 getBlock addr = do
   m_b <- use blocks
   case Map.lookup addr m_b of
-    Just mbr ->
-      return $! Map.lookup 0 . brBlocks =<< mbr
+    Just br -> return $! Map.lookup 0 (brBlocks br)
     -- We haven't tried to get this block.
     Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
 
@@ -312,9 +352,10 @@ instance Show HexWord where
 
 -- | Mark a escaped code pointer as a function entry.
 markAddrAsFunction :: PrettyCFGConstraints arch
-                   => ArchSegmentedAddr arch
+                   => CodeAddrReason (ArchAddrWidth arch)
+                   -> ArchSegmentedAddr arch
                    -> CFGM arch ids ()
-markAddrAsFunction addr = do
+markAddrAsFunction rsn addr = do
   s <- get
   when (not (Set.member addr (s^.functionEntries))) $ do
     debugM DCFG ("Found function entry " ++ show addr ++ ".")
@@ -323,39 +364,32 @@ markAddrAsFunction addr = do
     let _high = Set.lookupGT addr (s^.functionEntries)
     -- Get abstract state associated with function begining at address
     let abstState = fnBlockStateFn (archInfo s) mem addr
-    markBlockStart addr abstState
+    markCodeAddrBlock rsn addr abstState
     modify $ \s0 -> s0 & absState          %~ Map.insert addr abstState
                        & functionEntries   %~ Set.insert addr
-                       & function_frontier %~ maybeSetInsert low . Set.insert addr
+                       & function_frontier %~ maybeMapInsert low (SplitAt addr) . Map.insert addr rsn
 
-recordFunctionAddrs :: ( PrettyCFGConstraints arch
-                       , MemWidth (ArchAddrWidth arch)
-                       )
-                    => BlockLabel (ArchAddrWidth arch)
-                    -> Memory (ArchAddrWidth arch)
-                    -> ArchAbsValue arch (BVType (ArchAddrWidth arch))
-                    -> CFGM arch ids ()
-recordFunctionAddrs lbl mem av = do
-  let addrs = concretizeAbsCodePointers mem av
-  debugM DCFG (show lbl ++ ": Adding function entries "
-               ++ intercalate ", " (map show addrs))
-  mapM_ markAddrAsFunction addrs
+maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
+maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
 
+-- | Mark addresses written to memory that point to code as function entry points.
 recordWriteStmt :: ( PrettyCFGConstraints arch
                    , HasRepr (ArchReg arch) TypeRepr
                    , MemWidth (ArchAddrWidth arch)
                    )
-                => BlockLabel (ArchAddrWidth arch)
+                => SegmentedAddr (ArchAddrWidth arch)
+                   -- ^ Start of block containing write
                 -> AbsProcessorState (ArchReg arch) ids
                 -> Stmt arch ids
                 -> CFGM arch ids ()
-recordWriteStmt lbl regs stmt = do
+recordWriteStmt src regs stmt = do
   addrWidth <- gets $ addrWidthNatRepr . archAddrWidth . archInfo
   case stmt of
     WriteMem _addr v
       | Just Refl <- testEquality (typeRepr v) (BVTypeRepr addrWidth) -> do
           mem <- gets memory
-          recordFunctionAddrs lbl mem (transferValue regs v)
+          let addrs = concretizeAbsCodePointers mem (transferValue regs v)
+          mapM_ (markAddrAsFunction (InWrite src)) addrs
     _ -> return ()
 
 transferStmts :: ( HasRepr      (ArchReg arch) TypeRepr
@@ -410,6 +444,7 @@ assignmentAbsValues info mem g absm =
                 m
             FetchAndExecute _ -> m
             Syscall _ -> m
+            TranslateError{} -> m
 
 ------------------------------------------------------------------------
 -- Transfer functions
@@ -431,12 +466,13 @@ mergeIntraJump src ab _tgt
   , debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) False
   = error "Unexpected mergeIntraJump"
 mergeIntraJump src ab tgt = do
+  let rsn = NextIP (labelAddr src)
   -- Associate a new abstract state with the code region.
   let upd new s = do
         -- Add reverse edge
         s & reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src))
           & absState %~ Map.insert tgt new
-          & frontier %~ Map.insert tgt (NextIP src)
+          & frontier %~ Map.insert tgt rsn
   s0 <- get
   case Map.lookup tgt (s0^.absState) of
     -- We have seen this block before, so need to join and see if
@@ -446,8 +482,9 @@ mergeIntraJump src ab tgt = do
         Nothing  -> return ()
         Just new -> modify $ upd new
     -- We haven't seen this block before
-    Nothing -> do modify $ upd ab
-                  markBlockStart tgt ab
+    Nothing -> do
+      modify $ upd ab
+      markCodeAddrBlock rsn tgt ab
 
 -- -----------------------------------------------------------------------------
 -- Refining an abstract state based upon a condition
@@ -510,6 +547,7 @@ fetchAndExecute :: forall arch ids
                 -> CFGM arch ids ()
 fetchAndExecute b regs' s' = do
   let lbl = blockLabel b
+  let src = labelAddr lbl
   mem <- gets memory :: CFGM arch ids (Memory (ArchAddrWidth arch))
   arch_info <- gets archInfo
   -- See if next statement appears to end with a call.
@@ -520,16 +558,17 @@ fetchAndExecute b regs' s' = do
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
     _ | Just (prev_stmts, ret) <- identifyCall mem (blockStmts b) s' -> do
-        Fold.mapM_ (recordWriteStmt lbl regs') prev_stmts
+        Fold.mapM_ (recordWriteStmt src regs') prev_stmts
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
         mergeIntraJump lbl (postCallAbsStateFn arch_info abst ret) ret
         -- Look for new ips.
-        recordFunctionAddrs lbl mem (abst^.absRegState^.curIP)
+        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+        mapM_ (markAddrAsFunction (CallTarget src)) addrs
     -- This block ends with a return.
       | Just _ <- identifyReturn s' (callStackDelta arch_info) -> do
-        mapM_ (recordWriteStmt lbl regs') (blockStmts b)
+        mapM_ (recordWriteStmt src regs') (blockStmts b)
 
         let ip_val = s'^.boundValue ip_reg
         case transferValue regs' ip_val of
@@ -546,7 +585,7 @@ fetchAndExecute b regs' s' = do
           let abst = finalAbsBlockState regs' s'
           seq abst $ do
           -- Try to check for a tail call.
-          this_fn <- gets $ getFunctionEntryPoint (labelAddr lbl)
+          this_fn <- gets $ getFunctionEntryPoint src
           tgt_fn  <- gets $ getFunctionEntryPoint tgt_addr
           -- When the jump appears to go to another function, this could be a tail
           -- call or it could be dead code.
@@ -555,7 +594,7 @@ fetchAndExecute b regs' s' = do
             -- tail call when go to the right place.
             -- TODO: Add check to ensure stack height is correct.
             debug DCFG ("Found jump to concrete address after function " ++ show tgt_fn ++ ".") $ do
-            markAddrAsFunction tgt_addr
+            markAddrAsFunction (error "Concrete code address") tgt_addr
             -- Check top of stack points to return value.
             let sp_val = s'^.boundValue sp_reg
             let ptrType = BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
@@ -586,7 +625,7 @@ fetchAndExecute b regs' s' = do
       , Just (base, jump_idx) <- matchJumpTable mem ptr -> do
             debug DCFG ("Found jump table at " ++ show lbl) $ do
 
-            mapM_ (recordWriteStmt lbl regs') (blockStmts b)
+            mapM_ (recordWriteStmt src regs') (blockStmts b)
 
             -- Try to compute jump table bounds
             let mread_end = getJumpTableBounds regs' base jump_idx
@@ -613,7 +652,7 @@ fetchAndExecute b regs' s' = do
                   case readAddr mem LittleEndian read_addr of
                     Right tgt_addr
                       | Perm.isReadonly (segmentFlags (addrSegment read_addr))
-                      , inSameFunction (labelAddr lbl) tgt_addr interpState -> do
+                      , inSameFunction src tgt_addr interpState -> do
                         let flags = segmentFlags (addrSegment tgt_addr)
                         assert (flags `Perm.hasPerm` Perm.execute) $ do
                         let abst' = abst & setAbsIP tgt_addr
@@ -630,9 +669,14 @@ fetchAndExecute b regs' s' = do
           -- We have a jump that we do not understand.
           -- This could be a tail call.
       | otherwise -> debug DCFG "Uninterpretable jump" $ do
-        mapM_ (recordWriteStmt lbl regs') (blockStmts b)
+        mapM_ (recordWriteStmt src regs') (blockStmts b)
         let abst = finalAbsBlockState regs' s'
-        recordFunctionAddrs lbl mem (abst^.absRegState^.curIP)
+        -- Get potential addresses for next IP
+        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+        -- Mark entry points as the start of functions
+        mapM_ (markAddrAsFunction (error "Uninterpretable jump reason"))  addrs
+
+
 
 type TransferConstraints arch
    = ( PrettyCFGConstraints arch
@@ -641,12 +685,16 @@ type TransferConstraints arch
      , MemWidth (ArchAddrWidth arch)
      )
 
+-- | This evalutes the statements in a block to expand the information known
+-- about control flow targets of this block.
 transferBlock :: TransferConstraints arch
               => Block arch ids -- ^ Block to start from
-              -> AbsProcessorState (ArchReg arch) ids -- ^ Registers at this block
+              -> AbsProcessorState (ArchReg arch) ids
+                 -- ^ Abstract state describing machine state when block is encountered.
               -> CFGM arch ids ()
 transferBlock b regs = do
   let lbl = blockLabel b
+  let src = labelAddr lbl
   debugM DCFG ("transferBlock " ++ show lbl)
   mem <- gets memory
   arch_info <- gets archInfo
@@ -654,7 +702,7 @@ transferBlock b regs = do
   -- FIXME: we should propagate c back to the initial block, not just b
   case blockTerm b of
     Branch c lb rb -> do
-      mapM_ (recordWriteStmt lbl regs') (blockStmts b)
+      mapM_ (recordWriteStmt src regs') (blockStmts b)
       Just l <- uses blocks (`lookupBlock` lb)
       let  l_regs = refineProcState c absTrue regs'
       Just r <- uses blocks (`lookupBlock` rb)
@@ -668,7 +716,7 @@ transferBlock b regs = do
       transferBlock r (transferStmts arch_info r_regs (blockStmts b))
 
     Syscall s' -> do
-      mapM_ (recordWriteStmt lbl regs') (blockStmts b)
+      mapM_ (recordWriteStmt src regs') (blockStmts b)
       let abst = finalAbsBlockState regs' s'
       let ips = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
       -- Merge system call result with possible next IPs.
@@ -677,6 +725,9 @@ transferBlock b regs = do
 
     FetchAndExecute s' -> do
       fetchAndExecute b regs' s'
+    -- Do nothing when this block ends in a translation error.
+    TranslateError _ _ ->
+      pure ()
 
 transfer :: TransferConstraints arch
          => ArchSegmentedAddr arch
@@ -698,26 +749,18 @@ transfer addr = do
 ------------------------------------------------------------------------
 -- Main loop
 
-mkCFG :: Integral (ArchAddr arch)
-      => Map (ArchSegmentedAddr arch) (Maybe (BlockRegion arch ids))
-      -> CFG arch ids
-mkCFG m = Map.foldlWithKey' go emptyCFG m
-  where go g addr (Just br) = insertBlocksForCode addr (brSize br) l g
-          where l = Map.elems (brBlocks br)
-        go g _ Nothing = g
-
 explore_frontier :: TransferConstraints arch
                  => CFGM arch ids ()
 explore_frontier = do
   st <- get
   case Map.minViewWithKey (st^.frontier) of
     Nothing ->
-      case Set.minView (st^.function_frontier) of
+      case Map.minViewWithKey (st^.function_frontier) of
         Nothing -> return ()
-        Just (addr, next_roots) -> do
+        Just ((addr,rsn), next_roots) -> do
           let high = Set.lookupGT addr (st^.functionEntries)
               st' = st & function_frontier .~ next_roots
-                       & frontier .~ Map.singleton addr StartAddr
+                       & frontier .~ Map.singleton addr rsn
                          -- Delete any entries we previously discovered for function.
                        & reverseEdges    %~ deleteMapRange (Just addr) high
                          -- Delete any entries we previously discovered for function.
@@ -734,13 +777,6 @@ memIsDataCodePointer :: Memory w -> SegmentedAddr w -> SegmentedAddr w -> Bool
 memIsDataCodePointer _ a v
   =  segmentFlags (addrSegment v) `Perm.hasPerm` Perm.execute
   && segmentFlags (addrSegment a) `Perm.hasPerm` Perm.write
-
-markFunctionAddrs :: TransferConstraints arch
-                  => [ArchSegmentedAddr arch]
-                  -> CFGM arch ids ()
-markFunctionAddrs addrs = do
-  mapM_ markAddrAsFunction addrs
-  explore_frontier
 
 -- | Construct a discovery info by starting with exploring from a given set of
 -- function entry points.
@@ -765,7 +801,8 @@ cfgFromAddrs :: forall arch
 cfgFromAddrs arch_info mem symbols sysp init_addrs mem_words =
   runCFGM arch_info mem symbols sysp $ do
     -- Set abstract state for initial functions
-    markFunctionAddrs init_addrs
+    mapM_ (markAddrAsFunction InitAddr) init_addrs
+    explore_frontier
     -- Add in code pointers from memory.
     let notAlreadyFunction s a v
             | Set.member v (s^.functionEntries) = False
@@ -777,8 +814,8 @@ cfgFromAddrs arch_info mem symbols sysp init_addrs mem_words =
                         "Found function entry from memory" ++ show v ++ " at " ++ show a ++ "."
     s <- get
     let mem_addrs =
-          fmap snd $
           filter (uncurry (notAlreadyFunction s)) $
           filter (uncurry (memIsDataCodePointer mem)) $
           mem_words
-    markFunctionAddrs mem_addrs
+    mapM_ (\(src,val) -> markAddrAsFunction (CodePointerInMem src) val) mem_addrs
+    explore_frontier
