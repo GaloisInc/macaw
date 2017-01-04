@@ -110,7 +110,7 @@ lookupBlock m lbl = do
 -- | This describes why an address was marked as containing code.
 data CodeAddrReason w
 --   = LabelAddr     !(SegmentedAddr w)
-     -- ^ Segmented address with start of block
+     -- Segmented address with start of block
    = InWrite       !(SegmentedAddr w)
      -- ^ Exploring because the given block writes it to memory.
 --   | ReturnAddress !(BlockLabel w)
