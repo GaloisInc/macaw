@@ -1,10 +1,11 @@
 {-|
-Module           : Data.Macaw.CFG
 Copyright        : (c) Galois, Inc 2015-2016
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
-Defines data types needed to represent control flow graphs from
-machine code.
+Defines data types needed to represent control flow graphs from machine code.
+
+This is a low-level CFG representation where the entire program is a single CFG.
+
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
