@@ -758,6 +758,9 @@ data Value arch ids tp
 
 type BVValue arch ids w = Value arch ids (BVType w)
 
+-- | A address value for a specific architecture
+type ArchAddrValue arch ids = BVValue arch ids (ArchAddrWidth arch)
+
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
 data Assignment arch ids tp =
@@ -778,7 +781,7 @@ data AssignRhs (arch :: *) ids tp where
                -> AssignRhs arch ids tp
 
   -- Read memory at given location.
-  ReadMem :: !(Value arch ids (BVType (ArchAddrWidth arch)))
+  ReadMem :: !(ArchAddrValue arch ids)
           -> !(TypeRepr tp)
           -> AssignRhs arch ids tp
 
@@ -1100,7 +1103,7 @@ instance ( OrdF r
 -- | A statement in our control flow graph language.
 data Stmt arch ids
    = forall tp . AssignStmt !(Assignment arch ids tp)
-   | forall tp . WriteMem !(BVValue arch ids (ArchAddrWidth arch)) !(Value arch ids tp)
+   | forall tp . WriteMem !(ArchAddrValue arch ids) !(Value arch ids tp)
     -- ^ Write to memory at the given location
    | PlaceHolderStmt !([Some (Value arch ids)]) !String
    | Comment !Text

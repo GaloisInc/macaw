@@ -23,6 +23,7 @@ module Data.Macaw.Discovery.Info
     -- * The interpreter state
   , DiscoveryInfo
   , emptyDiscoveryInfo
+  , syscallPersonality
   , nonceGen
   , archInfo
   , memory
@@ -31,6 +32,7 @@ module Data.Macaw.Discovery.Info
   , functionEntries
   , reverseEdges
   , globalDataMap
+  , tryGetStaticSyscallNo
   , classifyBlock
     -- * Frontier
   , CodeAddrReason(..)
@@ -46,7 +48,6 @@ module Data.Macaw.Discovery.Info
   , identifyCall
   , identifyReturn
   , asLiteralAddr
-  , getClassifyBlock
   )  where
 
 import           Control.Lens
@@ -56,7 +57,6 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
-import           Data.Parameterized.Some
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Set (Set)
@@ -65,13 +65,11 @@ import           Data.Text (Text)
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen (Pretty(..))
 
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.Architecture.Syscall
 import           Data.Macaw.CFG
-import           Data.Macaw.DebugLogging
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
@@ -109,13 +107,8 @@ lookupBlock m lbl = do
 
 -- | This describes why an address was marked as containing code.
 data CodeAddrReason w
---   = LabelAddr     !(SegmentedAddr w)
-     -- ^ Segmented address with start of block
    = InWrite       !(SegmentedAddr w)
      -- ^ Exploring because the given block writes it to memory.
---   | ReturnAddress !(BlockLabel w)
-     -- ^ Exploring because the given block stores address as a
-     -- return address.
    | NextIP !(SegmentedAddr w)
      -- ^ Exploring because the given block jumps here.
    | CallTarget !(SegmentedAddr w)
@@ -158,24 +151,21 @@ data ParsedTermStmt arch ids
                 -- /\ Function to call.  If it is statically known,
                 -- then we get Left, otherwise Right
                 !(Maybe (ArchSegmentedAddr arch))
-                -- ^ Return location, Nothing if a tail call.
-     -- | A jump within a block
+    -- ^ A call with the current register values, statements lessed pushed return value
+    -- function to call, and location to return to (Nothing) if this is a tail call.
    | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentedAddr arch)
-     -- | A lookup table that branches to the given locations.
+     -- ^ A jump within a block
    | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
                        !(BVValue arch ids (ArchAddrWidth arch))
                        !(V.Vector (ArchSegmentedAddr arch))
-     -- | A tail cthat branches to the given locations.
+     -- ^ A lookup table that branches to the given locations.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids)) !(Seq (Stmt arch ids))
-     -- | A branch (i.e., BlockTerm is Branch)
+     -- ^ A return with the given registers.
    | ParsedBranch !(Value arch ids BoolType) !(ArchLabel arch) !(ArchLabel arch)
+     -- ^ A branch (i.e., BlockTerm is Branch)
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
                    !(ArchSegmentedAddr arch)
-                   !(ArchAddr arch)
-                   !String
-                   !String
-                   ![ArchReg arch (BVType (ArchAddrWidth arch))]
-                   ![Some (ArchReg arch)]
+     -- ^ A system call with the registers prior to call and given return address.
    | ParsedTranslateError !Text
      -- ^ An error occured in translating the block
 
@@ -197,7 +187,7 @@ data DiscoveryInfo arch ids
                    , symbolNames :: !(Map (ArchSegmentedAddr arch) BS.ByteString)
                      -- ^ The set of symbol names (not necessarily complete)
                    , syscallPersonality :: !(SyscallPersonality arch)
-                     -- ^ Syscall personailty, mainly used by getClassifyBlock etc.
+                     -- ^ Syscall personality, mainly used by classifyBlock etc.
                    , archInfo :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
                    , _blocks   :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
@@ -287,11 +277,6 @@ absState = lens _absState (\s v -> s { _absState = v })
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
 
-{-
--- | Constraint on architecture addresses needed by code exploration.
-type AddrConstraint a = (Ord a, Integral a, Show a, Num a)
--}
-
 -- | Returns the guess on the entry point of the given function.
 --
 -- Note. This code assumes that a block address is associated with at most one function.
@@ -325,23 +310,7 @@ type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)
 
 -- | Constraint on architecture so that we can do code exploration.
 type ArchConstraint a ids = ( RegConstraint (ArchReg a)
---                            , HasRepr (ArchFn a ids) TypeRepr
                             )
-
-{-
--- | @isWriteTo stmt add tpr@ returns 'Just v' if @stmt@ writes 'v'
--- to @addr@ with a write having the given type 'tpr',  and 'Nothing' otherwise.
-isWriteTo :: ArchConstraint a ids
-          => Stmt a ids
-          -> BVValue a ids (ArchAddrWidth a)
-          -> TypeRepr tp
-          -> Maybe (Value a ids tp)
-isWriteTo (WriteMem a val) expected tp
-  | Just _ <- testEquality a expected
-  , Just Refl <- testEquality (typeRepr val) tp =
-    Just val
-isWriteTo _ _ _ = Nothing
--}
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
@@ -458,6 +427,23 @@ identifyJumpTable s enclosingFun (AssignedValue (Assignment _ (ReadMem ptr _)))
       | otherwise = Nothing
 identifyJumpTable _ _ _ = Nothing
 
+tryGetStaticSyscallNo :: ArchConstraint arch ids
+                      => DiscoveryInfo arch ids
+                         -- ^ Discovery information
+                      -> ArchSegmentedAddr arch
+                         -- ^ Address of this block
+                      -> RegState (ArchReg arch) (Value arch ids)
+                         -- ^ State of processor
+                      -> Maybe Integer
+tryGetStaticSyscallNo interp_state block_addr proc_state
+  | BVValue _ call_no <- proc_state^.boundValue syscall_num_reg =
+    Just call_no
+  | Initial r <- proc_state^.boundValue syscall_num_reg
+  , Just absSt <- Map.lookup block_addr (interp_state ^. absState) =
+    asConcreteSingleton (absSt ^. absRegState ^. boundValue r)
+  | otherwise =
+    Nothing
+
 -- | Classifies the terminal statement in a block using discovered information.
 classifyBlock :: forall arch ids
               .  (ArchConstraint arch ids, MemWidth (ArchAddrWidth arch))
@@ -513,75 +499,9 @@ classifyBlock b interp_state =
 
     -- rax is concrete in the first case, so we don't need to propagate it etc.
     Syscall proc_state
-      | Just next_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg)
-      , BVValue _ call_no   <- proc_state^.boundValue syscall_num_reg
-      , Just (name, _rettype, argtypes) <-
-          Map.lookup (fromInteger call_no) (spTypeInfo sysp) -> do
-         let syscallRegs :: [ArchReg arch (BVType (ArchAddrWidth arch))]
-             syscallRegs = syscallArgumentRegs
-         let result =
-               ParsedSyscall
-                 proc_state
-                 next_addr
-                 (fromInteger call_no)
-                 (spName sysp)
-                 name
-                 (take (length argtypes) syscallRegs)
-                 (spResultRegisters sysp)
-         case () of
-           _ | any ((/=) WordArgType) argtypes -> error "Got a non-word arg type"
-           _ | length argtypes > length syscallRegs ->
-                  debug DUrgent ("Got more than register args calling " ++ name
-                                 ++ " in block " ++ show (blockLabel b))
-                                result
-           _ -> result
-
-        -- FIXME: Should subsume the above ...
-        -- FIXME: only works if rax is an initial register
-      | Just next_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg)
-      , Initial r <- proc_state^.boundValue syscall_num_reg
-      , Just absSt <- Map.lookup (labelAddr $ blockLabel b) (interp_state ^. absState)
-      , Just call_no <-
-          asConcreteSingleton (absSt ^. absRegState ^. boundValue r)
-      , Just (name, _rettype, argtypes) <-
-          Map.lookup (fromInteger call_no) (spTypeInfo sysp) -> do
-         let syscallRegs :: [ArchReg arch (BVType (ArchAddrWidth arch))]
-             syscallRegs = syscallArgumentRegs
-         let result =
-               ParsedSyscall
-                 proc_state
-                 next_addr
-                 (fromInteger call_no)
-                 (spName sysp)
-                 name
-                 (take (length argtypes) syscallRegs)
-                 (spResultRegisters sysp)
-         case () of
-           _ | any ((/=) WordArgType) argtypes -> error "Got a non-word arg type"
-           _ | length argtypes > length syscallRegs ->
-                 debug DUrgent ("Got more than register args calling " ++ name
-                                ++ " in block " ++ show (blockLabel b))
-                       result
-           _ -> result
-
-
       | Just next_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg) ->
-          debug DUrgent ("Unknown syscall in block " ++ show (blockLabel b)
-                         ++ " syscall number is "
-                         ++ show (pretty $ proc_state^.boundValue syscall_num_reg)
-                        )
-          ParsedSyscall proc_state next_addr 0 (spName sysp) "unknown"
-                        syscallArgumentRegs
-                       (spResultRegisters sysp)
+        ParsedSyscall proc_state next_addr
+
       | otherwise -> error "shouldn't get here"
   where
     mem = memory interp_state
-    sysp = syscallPersonality interp_state
-
-getClassifyBlock :: (ArchConstraint arch ids, MemWidth (ArchAddrWidth arch))
-                 => ArchLabel arch
-                 -> DiscoveryInfo arch ids
-                 -> Maybe (Block arch ids, ParsedTermStmt arch ids)
-getClassifyBlock lbl interp_state = do
-  b <- lookupBlock (interp_state ^. blocks) lbl
-  return (b, classifyBlock b interp_state)
