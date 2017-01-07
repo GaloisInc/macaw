@@ -20,7 +20,7 @@ library
 --    fingertree,
     flexdis86 >= 0.1.1,
     galois-dwarf,
-    IntervalMap,
+    IntervalMap >= 0.5,
     lens >= 4.7,
 --    llvm-pretty,
     mtl,
