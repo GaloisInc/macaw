@@ -6,6 +6,7 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -15,6 +16,7 @@ module Data.Macaw.Memory
   ( SomeMemory(..)
   , MemWidth
   , Memory
+  , memAddrWidth
   , memWidth
   , emptyMemory
   , InsertError(..)
@@ -24,7 +26,6 @@ module Data.Macaw.Memory
   , memSegments
   , executableSegments
   , readonlySegments
-  , Endianness(..)
   , readAddr
   , segmentOfRange
   , addrPermissions
@@ -32,6 +33,12 @@ module Data.Macaw.Memory
   , isCodeAddrOrNull
   , absoluteAddrSegment
   , memAsAddrPairs
+    -- * AddrWidthRepr
+  , AddrWidthRepr(..)
+  , addrWidthNatRepr
+  , addrWidthByteSize
+    -- * Endianness
+  , Endianness(..)
     -- * MemSegment operations
   , MemSegment
   , memSegment
@@ -45,7 +52,6 @@ module Data.Macaw.Memory
   , SegmentRange(..)
   , SymbolRef(..)
   , SymbolVersion(..)
---  , contentsFromList
     -- * Address and offset.
   , MemWord
   , memWord32
@@ -75,6 +81,30 @@ import           Data.Parameterized.NatRepr
 
 import qualified Data.Macaw.Memory.Permissions as Perm
 
+
+------------------------------------------------------------------------
+-- AddrWidthRepr
+
+-- | An address width
+data AddrWidthRepr w
+   = (w ~ 32) => Addr32
+     -- ^ A 32-bit address
+   | (w ~ 64) => Addr64
+     -- ^ A 64-bit address
+
+-- | The nat representation of this address.
+addrWidthNatRepr :: AddrWidthRepr w -> NatRepr w
+addrWidthNatRepr Addr32 = knownNat
+addrWidthNatRepr Addr64 = knownNat
+
+-- | Number of bytes in an address
+addrWidthByteSize :: AddrWidthRepr w -> Integer
+addrWidthByteSize Addr32 = 4
+addrWidthByteSize Addr64 = 8
+
+------------------------------------------------------------------------
+-- Endianness
+
 data Endianness = BigEndian | LittleEndian
 
 ------------------------------------------------------------------------
@@ -87,15 +117,6 @@ regularChunks :: Int -> BS.ByteString -> [BS.ByteString]
 regularChunks sz bs
   | BS.length bs < sz = []
   | otherwise = BS.take sz bs : regularChunks sz (BS.drop sz bs)
-
-
-{-
-bsWord16le :: BS.ByteString -> Word16
-bsWord16le bs | BS.length bs /= 2 = error "bsWord16le given bytestring with bad length."
-              | otherwise         = w0 .|. w1
-  where w0 = fromIntegral (BS.index bs 0)
-        w1 = fromIntegral (BS.index bs 1) `shiftL` 8
--}
 
 bsWord32be :: BS.ByteString -> Word32
 bsWord32be bs | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
@@ -124,9 +145,6 @@ bsWord64le bs
     | BS.length bs /= 8 = error "bsWord64le given bytestring with bad length."
     | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3 .|. w 4 .|. w 5 .|. w 6 .|. w 7
   where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
-
-
-
 
 ------------------------------------------------------------------------
 -- MemBase
@@ -351,31 +369,6 @@ ppMemSegment s =
 instance MemWidth w => Show (MemSegment w) where
   show = show . ppMemSegment
 
-{-
--- | Return list of aligned word 64s in the memory segments.
-segmentAsWord64le :: Integral w => MemSegment w -> [Word64]
-segmentAsWord64le s | len <= base = [] -- Degenerate case to handle very small segments.
-                    | otherwise = go (memBytes s) cnt
-  where base :: Int
-        base = fromIntegral (memBase s) .&. 0x7
-        len = BS.length (memBytes s)
-        cnt = (len - base) `shiftR` 3
-        go _ 0 = []
-        go b c = assert (BS.length s' == 8) $ bsWord64le s' : go b' (c-1)
-          where (s',b') = BS.splitAt 8 b
--}
-
-{-
--- | Returns an interval representing the range of addresses for the segment
--- if it is non-empty.
-memSegmentInterval :: (Eq w, Num w) => MemSegment w -> Maybe (IMap.Interval w)
-memSegmentInterval s
-    | sz == 0 = Nothing
-    | otherwise = Just $ IMap.Interval base (base + sz - 1)
-  where base = memBase s
-        sz = fromIntegral $ BS.length (memBytes s)
--}
-
 ------------------------------------------------------------------------
 -- SegmentedAddr
 
@@ -422,17 +415,22 @@ type AbsoluteSegmentMap w = Map.Map (MemWord w) (MemSegment w)
 type AllSegmentMap w = Map.Map SegmentIndex (MemSegment w)
 
 -- | The state of the memory.
-data Memory w = Memory { memWidth :: !(NatRepr w)
+data Memory w = Memory { memAddrWidth :: !(AddrWidthRepr w)
+                         -- ^ Return the address width of the memory
                        , memAbsoluteSegments :: !(AbsoluteSegmentMap w)
                        , memAllSegments      :: !(AllSegmentMap w)
                        }
+
+-- | Return nat repr associated with memory.
+memWidth :: Memory w -> NatRepr w
+memWidth = addrWidthNatRepr . memAddrWidth
 
 instance MemWidth w => Show (Memory w) where
   show m = show (Fold.toList (memAllSegments m))
 
 -- | A memory with no segments.
-emptyMemory :: NatRepr w -> Memory w
-emptyMemory w = Memory { memWidth            = w
+emptyMemory :: AddrWidthRepr w -> Memory w
+emptyMemory w = Memory { memAddrWidth        = w
                        , memAbsoluteSegments = Map.empty
                        , memAllSegments      = Map.empty
                        }

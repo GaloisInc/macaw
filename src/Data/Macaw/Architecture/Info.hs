@@ -8,15 +8,12 @@ This defines the architecture-specific information needed for code discovery.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.Architecture.Info
-  ( AddrWidthRepr(..)
-  , addrWidthNatRepr
-  , ArchitectureInfo(..)
+  ( ArchitectureInfo(..)
   , ReadAddrFn
   , DisassembleFn
   ) where
 
 import Control.Monad.ST
-import Data.Parameterized.NatRepr
 import Data.Parameterized.Nonce
 
 import Data.Macaw.AbsDomain.AbsState
@@ -57,14 +54,6 @@ type DisassembleFn arch
       --
       -- This is used for things like the height of the x87 stack.
    -> ST ids ([Block arch ids], SegmentedAddr (ArchAddrWidth arch), Maybe String)
-
-data AddrWidthRepr w
-   = (w ~ 32) => Addr32
-   | (w ~ 64) => Addr64
-
-addrWidthNatRepr :: AddrWidthRepr w -> NatRepr w
-addrWidthNatRepr Addr32 = knownNat
-addrWidthNatRepr Addr64 = knownNat
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch

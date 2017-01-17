@@ -33,7 +33,6 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-import           Data.Parameterized.NatRepr
 import qualified Data.Vector as V
 import           System.IO
 
@@ -156,15 +155,15 @@ mlsMemory = lens _mlsMemory (\s v -> s { _mlsMemory = v })
 mlsIndexMap :: Simple Lens (MemLoaderState v w) (SectionIndexMap v w)
 mlsIndexMap = lens _mlsIndexMap (\s v -> s { _mlsIndexMap = v })
 
-initState :: forall w . RelaWidth w -> MemLoaderState (ElfWordType w) w
-initState rw = MLS { _mlsIndex = 0
-                   , _mlsMemory = emptyMemory w
-                   , _mlsIndexMap = Map.empty
-                   }
-  where w :: NatRepr w
-        w = case rw of
-              Rela32 -> knownNat
-              Rela64 -> knownNat
+relaWidthOfAddr :: AddrWidthRepr w -> RelaWidth w
+relaWidthOfAddr Addr32 = Rela32
+relaWidthOfAddr Addr64 = Rela64
+
+initState :: forall w . AddrWidthRepr w -> MemLoaderState (ElfWordType w) w
+initState w = MLS { _mlsIndex = 0
+                  , _mlsMemory = emptyMemory w
+                  , _mlsIndexMap = Map.empty
+                  }
 
 memLoaderPair :: MemLoaderState v w -> (SectionIndexMap v w, Memory w)
 memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
@@ -314,7 +313,7 @@ insertElfSegment shdrMap contents relocMap phdr = do
 -- | Load an elf file into memory.  This uses the Elf segments for loading.
 memoryForElfSegments :: forall w
                      .  (Integral (ElfWordType w), MemWidth w)
-                     => RelaWidth w
+                     => AddrWidthRepr w
                      -> Elf (ElfWordType w)
                      -> Either String (SectionIndexMap (ElfWordType w) w, Memory w)
 memoryForElfSegments w e =
@@ -330,7 +329,7 @@ memoryForElfSegments w e =
         [] -> pure Map.empty
         [dynPhdr] ->
           let dynContents = sliceL (phdrFileRange dynPhdr) contents
-           in relocMapOfDynamic d w (elfMachine e) virtMap dynContents
+           in relocMapOfDynamic d (relaWidthOfAddr w) (elfMachine e) virtMap dynContents
         _ -> throwError "Multiple dynamic sections"
 
     let intervals :: ElfFileSectionMap (ElfWordType w)
@@ -365,7 +364,7 @@ insertElfSection sec =
 -- Normally, Elf uses segments for loading, but the segment information
 -- tends to be more precise.
 memoryForElfSections :: (Integral (ElfWordType w), Bits (ElfWordType w), MemWidth w)
-                     => RelaWidth w
+                     => AddrWidthRepr w
                      -> Elf (ElfWordType w)
                      -> Either String (SectionIndexMap (ElfWordType w) w, Memory w)
 memoryForElfSections w e =
@@ -405,13 +404,13 @@ loadExecutable path = do
   se <- readElf path
   case se of
     Elf64 e -> either fail (return . Memory64 . snd) $
-      memoryForElfSegments Rela64 e
+      memoryForElfSegments Addr64 e
     Elf32 e -> either fail (return . Memory32 . snd) $
-      memoryForElfSegments Rela32 e
+      memoryForElfSegments Addr32 e
 
 loadElfBySection :: FilePath -> IO SomeMemory
 loadElfBySection path = do
   se <- readElf path
   case se of
-    Elf64 e -> either fail (return . Memory64 . snd) $ memoryForElfSections Rela64 e
-    Elf32 e -> either fail (return . Memory32 . snd) $ memoryForElfSections Rela32 e
+    Elf64 e -> either fail (return . Memory64 . snd) $ memoryForElfSections Addr64 e
+    Elf32 e -> either fail (return . Memory32 . snd) $ memoryForElfSections Addr32 e

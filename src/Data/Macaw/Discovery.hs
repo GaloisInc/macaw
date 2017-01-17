@@ -501,7 +501,8 @@ matchJumpTable mem read_addr
   | Just (BVAdd _ offset base_val) <- valueAsApp read_addr
   , Just base <- asLiteralAddr mem base_val
     -- Turn the offset into a multiple by an index.
-  , Just (BVMul _ (BVValue _ 8) jump_index) <- valueAsApp offset
+  , Just (BVMul _ (BVValue _ mul) jump_index) <- valueAsApp offset
+  , mul == addrWidthByteSize (memAddrWidth mem)
   , Perm.isReadonly (segmentFlags (addrSegment base)) = do
     Just (base, jump_index)
 matchJumpTable _ _ =
@@ -533,7 +534,7 @@ getJumpTableBounds regs base jump_index
       Just $! fromInteger index_end
 getJumpTableBounds _ _ _ = Nothing
 
--- | This
+-- | This explores a block that ends with a fetch and execute.
 fetchAndExecute :: forall arch ids
                 .  ( RegisterInfo (ArchReg arch)
                    , ArchConstraint arch ids
