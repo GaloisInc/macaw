@@ -146,19 +146,18 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 data ParsedTermStmt arch ids
    = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
                 !(Seq (Stmt arch ids))
-                -- /\ Statements less the pushed return value, if any
-                !(Either (ArchSegmentedAddr arch) (BVValue arch ids (ArchAddrWidth arch)))
-                -- /\ Function to call.  If it is statically known,
-                -- then we get Left, otherwise Right
                 !(Maybe (ArchSegmentedAddr arch))
     -- ^ A call with the current register values, statements lessed pushed return value
     -- function to call, and location to return to (Nothing) if this is a tail call.
    | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentedAddr arch)
-     -- ^ A jump within a block
+     -- ^ A jump to an explicit address within a block.
    | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
                        !(BVValue arch ids (ArchAddrWidth arch))
                        !(V.Vector (ArchSegmentedAddr arch))
-     -- ^ A lookup table that branches to the given locations.
+     -- ^ A lookup table that branches to one of a vector of addresses.
+     --
+     -- The registers store the registers, the value contains the index to jump
+     -- to, and the possible addresses.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids)) !(Seq (Stmt arch ids))
      -- ^ A return with the given registers.
    | ParsedBranch !(Value arch ids BoolType) !(ArchLabel arch) !(ArchLabel arch)
@@ -168,6 +167,8 @@ data ParsedTermStmt arch ids
      -- ^ A system call with the registers prior to call and given return address.
    | ParsedTranslateError !Text
      -- ^ An error occured in translating the block
+   | ClassifyFailure !String
+     -- ^ The classifier failed to identity the block.
 
 deriving instance
   ( PrettyCFGConstraints arch
@@ -456,17 +457,13 @@ classifyBlock b interp_state =
     Branch c x y -> ParsedBranch c x y
     FetchAndExecute proc_state
         -- The last statement was a call.
-      | Just (prev_stmts, ret_addr) <- identifyCall mem (blockStmts b) proc_state -> do
-          let ip = proc_state^.boundValue ip_reg
-          let fptr = case asLiteralAddr mem ip of
-                       Just ip_addr -> Left ip_addr
-                       Nothing      -> Right ip
-          ParsedCall proc_state prev_stmts fptr (Just ret_addr)
+      | Just (prev_stmts, ret_addr) <- identifyCall mem stmts proc_state ->
+        ParsedCall proc_state prev_stmts (Just ret_addr)
 
       -- Jump to concrete offset.
       | Just tgt_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg)
       , inSameFunction (labelAddr (blockLabel b)) tgt_addr interp_state ->
-           ParsedJump proc_state tgt_addr
+        ParsedJump proc_state tgt_addr
 
       -- Return
       | Just asgn <- identifyReturn proc_state (callStackDelta (archInfo interp_state)) ->
@@ -475,33 +472,26 @@ classifyBlock b interp_state =
                 AssignStmt asgn'
                   | Just Refl <- testEquality (assignId asgn) (assignId  asgn') -> True
                 _ -> False
-            nonret_stmts = Seq.fromList $ filter (not . isRetLoad) (blockStmts b)
-
+            nonret_stmts = Seq.fromList $ filter (not . isRetLoad) stmts
         in ParsedReturn proc_state nonret_stmts
 
-      -- Tail calls to a concrete address (or, nop pads after a non-returning call)
-      | Just tgt_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg) ->
-        ParsedCall proc_state (Seq.fromList $ blockStmts b) (Left tgt_addr) Nothing
-
-      | Just (idx, nexts) <- identifyJumpTable interp_state
-                                               (getFunctionEntryPoint
-                                                (labelAddr (blockLabel b))
-                                                interp_state)
-                                               (proc_state^.boundValue ip_reg) ->
+        -- Jump table
+      | let entry = getFunctionEntryPoint (labelAddr (blockLabel b)) interp_state
+      , let cur_ip = proc_state^.boundValue ip_reg
+      , Just (idx, nexts) <- identifyJumpTable interp_state entry cur_ip ->
           ParsedLookupTable proc_state idx nexts
 
       -- Finally, we just assume that this is a tail call through a pointer
       -- FIXME: probably unsound.
-      | otherwise -> ParsedCall proc_state
-                                (Seq.fromList $ blockStmts b)
-                                (Right $ proc_state^.boundValue ip_reg)
-                                Nothing
+      | otherwise ->
+        ParsedCall proc_state (Seq.fromList stmts) Nothing
 
     -- rax is concrete in the first case, so we don't need to propagate it etc.
     Syscall proc_state
       | Just next_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg) ->
         ParsedSyscall proc_state next_addr
 
-      | otherwise -> error "shouldn't get here"
+      | otherwise -> ClassifyFailure "System call with non-literal return address."
   where
+    stmts = blockStmts b
     mem = memory interp_state
