@@ -6,4 +6,7 @@ packages:
 - 'deps/galois-dwarf'
 - 'deps/parameterized-utils'
 extra-deps:
+- containers-0.5.8.1
+- kan-extensions-5.0.1
+- lens-4.15.1
 resolver: lts-6.23
