@@ -64,7 +64,7 @@ module Data.Macaw.CFG
   , foldApp
   , traverseApp
   -- * RegState
-  , RegState(..)
+  , RegState
   , boundValue
   , cmpRegState
   , curIP
@@ -750,7 +750,7 @@ data Value arch ids tp
      -- ^ A constant bitvector
    | ( tp ~ BVType (ArchAddrWidth arch))
    => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchSegmentedAddr arch)
-     -- ^ A value that can be relocated.
+     -- ^ A given memory address.
    | AssignedValue !(Assignment arch ids tp)
      -- ^ Value from an assignment statement.
    | Initial !(ArchReg arch tp)
@@ -995,13 +995,14 @@ asBaseOffset x
 ------------------------------------------------------------------------
 -- RegState
 
--- | This represents the state of the processor registers after some
--- execution.
-newtype RegState (r :: k -> *) (f :: k -> *)   = RegState (MapF.MapF r f)
---  deriving (FunctorF, FoldableF)
+-- | This represents the state of the processor registers.
+newtype RegState (r :: k -> *) (f :: k -> *) = RegState (MapF.MapF r f)
 
-deriving instance FunctorF (RegState r)
+deriving instance (OrdF r, EqF f) => Eq (RegState r f)
+
+deriving instance FunctorF  (RegState r)
 deriving instance FoldableF (RegState r)
+
 instance TraversableF (RegState r) where
   traverseF f (RegState m) = RegState <$> traverseF f m
 
@@ -1024,11 +1025,11 @@ boundValue r = lens getter setter
             Nothing -> error "internal error in boundValue given unexpected reg"
         setter (RegState m) v = RegState (MapF.insert r v m)
 
-instance (OrdF r, EqF f) => Eq (RegState r f) where
-  s == s' = cmpRegState eqF s s'
 
+-- | Compares if two register states are equal.
 cmpRegState :: OrdF r
             => (forall u. f u -> g u -> Bool)
+               -- ^ Function for checking if two values are equal.
             -> RegState r f
             -> RegState r g
             -> Bool

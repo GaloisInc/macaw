@@ -52,10 +52,10 @@ import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.AbsDomain.Refine
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
-import           Data.Macaw.Architecture.Syscall
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.Info
+--import           Data.Macaw.Discovery.JumpBounds
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
@@ -184,14 +184,12 @@ runCFGM :: ArchitectureInfo arch
            -- ^ Memory to use when decoding instructions.
         -> Map (ArchSegmentedAddr arch) BS.ByteString
            -- ^ Names for (some) function entry points
-        -> SyscallPersonality arch
-           -- ^ Syscall personality
         -> (forall ids . CFGM arch ids ())
            -- ^ Computation to run.
         -> Some (DiscoveryInfo arch)
-runCFGM arch_info mem symbols sysp m = do
+runCFGM arch_info mem symbols m = do
   withGlobalSTNonceGenerator $ \nonce_gen -> do
-    let init_info = emptyDiscoveryInfo nonce_gen mem symbols sysp arch_info
+    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
     Some <$> execStateT (unCFGM m) init_info
 
 printAddrBacktrace :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
@@ -300,8 +298,8 @@ markCodeAddrBlock rsn addr ab = do
       -- Get block for addr
       tryDisassembleAddr rsn addr ab
       -- Get block for old block
-      let Just old_ab = Map.lookup l (s^.absState)
-      tryDisassembleAddr (brReason br) l old_ab
+      let Just old_code_info = Map.lookup l (s^.codeInfoMap)
+      tryDisassembleAddr (brReason br) l (old_code_info^.addrAbsBlockState)
       -- Add function starts to split to frontier
       -- This will result in us re-exploring l_start and a_start
       -- once the current function is done.
@@ -365,9 +363,12 @@ markAddrAsFunction rsn addr = do
     -- Get abstract state associated with function begining at address
     let abstState = fnBlockStateFn (archInfo s) mem addr
     markCodeAddrBlock rsn addr abstState
-    modify $ \s0 -> s0 & absState          %~ Map.insert addr abstState
+    let cInfo = CodeInfo { _addrAbsBlockState = abstState
+                         }
+    modify $ \s0 -> s0 & codeInfoMap       %~ Map.insert addr cInfo
                        & functionEntries   %~ Set.insert addr
-                       & function_frontier %~ maybeMapInsert low (SplitAt addr) . Map.insert addr rsn
+                       & function_frontier %~ maybeMapInsert low (SplitAt addr)
+                                           .  Map.insert addr rsn
 
 maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
 maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
@@ -412,7 +413,7 @@ assignmentAbsValues :: forall arch ids
                     => ArchitectureInfo arch
                     -> Memory (ArchAddrWidth arch)
                     -> CFG arch ids
-                    -> AbsStateMap arch
+                    -> Map (ArchSegmentedAddr arch) (CodeInfo arch)
                     -> MapF (AssignId ids) (ArchAbsValue arch)
 assignmentAbsValues info mem g absm =
      foldl' go MapF.empty (Map.elems (g^.cfgBlocks))
@@ -422,10 +423,12 @@ assignmentAbsValues info mem g absm =
         go m0 b =
           case blockLabel b of
             GeneratedBlock a 0 -> do
-              let w = addrWidthNatRepr (archAddrWidth info)
-              let Just ab = Map.lookup a absm
-              let abs_state = initAbsProcessorState w mem ab
-              insBlock b abs_state m0
+              case Map.lookup a absm of
+                Nothing -> do
+                  error $ "assignmentAbsValues could not find code infomation for block " ++ show a
+                Just codeInfo -> do
+                  let abs_state = initAbsProcessorState mem (codeInfo^.addrAbsBlockState)
+                  insBlock b abs_state m0
             _ -> m0
 
         insBlock :: Block arch ids
@@ -471,19 +474,21 @@ mergeIntraJump src ab tgt = do
   let upd new s = do
         -- Add reverse edge
         s & reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src))
-          & absState %~ Map.insert tgt new
-          & frontier %~ Map.insert tgt rsn
+          & codeInfoMap  %~ Map.insert tgt new
+          & frontier     %~ Map.insert tgt rsn
   s0 <- get
-  case Map.lookup tgt (s0^.absState) of
+  let cinfo_new = CodeInfo { _addrAbsBlockState = ab
+                           }
+  case Map.lookup tgt (s0^.codeInfoMap) of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
-    Just ab_old ->
-      case joinD ab_old ab of
+    Just cinfo_old ->
+      case unionCodeInfo cinfo_old cinfo_new of
         Nothing  -> return ()
         Just new -> modify $ upd new
     -- We haven't seen this block before
     Nothing -> do
-      modify $ upd ab
+      modify $ upd cinfo_new
       markCodeAddrBlock rsn tgt ab
 
 -- -----------------------------------------------------------------------------
@@ -563,7 +568,7 @@ fetchAndExecute b regs' s' = do
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
-        mergeIntraJump lbl (postCallAbsStateFn arch_info abst ret) ret
+        mergeIntraJump lbl (archPostCallAbsState arch_info abst ret) ret
         -- Look for new ips.
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         mapM_ (markAddrAsFunction (CallTarget src)) addrs
@@ -629,7 +634,10 @@ fetchAndExecute b regs' s' = do
             mapM_ (recordWriteStmt src regs') (blockStmts b)
 
             -- Try to compute jump table bounds
-            let mread_end = getJumpTableBounds regs' base jump_idx
+            read_end <-
+              case getJumpTableBounds regs' base jump_idx of
+                Just e -> pure e
+                Nothing -> error $ "Could not compute jump bounds."
 
             let abst :: AbsBlockState (ArchReg arch)
                 abst = finalAbsBlockState regs' s'
@@ -644,7 +652,7 @@ fetchAndExecute b regs' s' = do
                             -> ArchAddr arch
                                -- /\ Current index
                             -> CFGM arch ids [ArchSegmentedAddr arch]
-                resolveJump prev idx | Just idx == mread_end = do
+                resolveJump prev idx | idx == read_end = do
                   -- Stop jump table when we have reached computed bounds.
                   return (reverse prev)
                 resolveJump prev idx = do
@@ -660,7 +668,7 @@ fetchAndExecute b regs' s' = do
                         mergeIntraJump lbl abst' tgt_addr
                         resolveJump (tgt_addr:prev) (idx+1)
                     _ -> do
-                      debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show mread_end) $ do
+                      debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
                       return (reverse prev)
             read_addrs <- resolveJump [] 0
             let last_index = fromIntegral (length read_addrs)
@@ -696,7 +704,6 @@ transferBlock :: TransferConstraints arch
 transferBlock b regs = do
   let lbl = blockLabel b
   let src = labelAddr lbl
-  debugM DCFG ("transferBlock " ++ show lbl)
   mem <- gets memory
   arch_info <- gets archInfo
   let regs' = transferStmts arch_info regs (blockStmts b)
@@ -722,7 +729,7 @@ transferBlock b regs = do
       let ips = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
       -- Merge system call result with possible next IPs.
       Fold.forM_ ips $ \addr -> do
-        mergeIntraJump lbl (postSyscallFn arch_info abst addr)  addr
+        mergeIntraJump lbl (archPostSyscallAbsState arch_info abst addr)  addr
 
     FetchAndExecute s' -> do
       fetchAndExecute b regs' s'
@@ -739,13 +746,12 @@ transfer addr = do
   case mroot of
     Nothing -> return ()
     Just root -> do
-      addrWidth <- gets $ addrWidthNatRepr . archAddrWidth . archInfo
-      mab <- uses absState $ Map.lookup addr
-      case mab of
+      minfo <- use $ codeInfoMap . at addr
+      case minfo of
         Nothing -> error $ "Could not find block " ++ show addr ++ "."
-        Just ab -> do
+        Just info -> do
           transferBlock root $
-            initAbsProcessorState addrWidth mem ab
+            initAbsProcessorState mem (info^.addrAbsBlockState)
 
 ------------------------------------------------------------------------
 -- Main loop
@@ -765,7 +771,7 @@ explore_frontier = do
                          -- Delete any entries we previously discovered for function.
                        & reverseEdges    %~ deleteMapRange (Just addr) high
                          -- Delete any entries we previously discovered for function.
-                       & absState        %~ deleteMapRange (Just addr) high
+                       & codeInfoMap     %~ deleteMapRange (Just addr) high
           put st'
           explore_frontier
     Just ((addr,_rsn), next_roots) -> do
@@ -789,8 +795,6 @@ cfgFromAddrs :: forall arch
                 -- ^ Memory to use when decoding instructions.
              -> Map (ArchSegmentedAddr arch) BS.ByteString
                 -- ^ Names for (some) function entry points
-             -> SyscallPersonality arch
-                -- ^ Syscall personality
              -> [ArchSegmentedAddr arch]
                 -- ^ Initial function entry points.
              -> [(ArchSegmentedAddr arch, ArchSegmentedAddr arch)]
@@ -799,8 +803,8 @@ cfgFromAddrs :: forall arch
                 --
                 -- Each entry contains an address and the value stored in it.
              -> Some (DiscoveryInfo arch)
-cfgFromAddrs arch_info mem symbols sysp init_addrs mem_words =
-  runCFGM arch_info mem symbols sysp $ do
+cfgFromAddrs arch_info mem symbols init_addrs mem_words =
+  runCFGM arch_info mem symbols $ do
     -- Set abstract state for initial functions
     mapM_ (markAddrAsFunction InitAddr) init_addrs
     explore_frontier

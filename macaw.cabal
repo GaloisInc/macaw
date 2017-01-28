@@ -43,6 +43,7 @@ library
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.Info
+    Data.Macaw.Discovery.JumpBounds
     Data.Macaw.Dwarf
     Data.Macaw.Memory
     Data.Macaw.Memory.ElfLoader

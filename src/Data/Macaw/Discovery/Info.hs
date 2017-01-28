@@ -23,7 +23,6 @@ module Data.Macaw.Discovery.Info
     -- * The interpreter state
   , DiscoveryInfo
   , emptyDiscoveryInfo
-  , syscallPersonality
   , nonceGen
   , archInfo
   , memory
@@ -39,8 +38,10 @@ module Data.Macaw.Discovery.Info
   , frontier
   , function_frontier
     -- ** Abstract state information
-  , absState
-  , AbsStateMap
+  , CodeInfo(..)
+  , addrAbsBlockState
+  , codeInfoMap
+  , unionCodeInfo
     -- ** DiscoveryInfo utilities
   , getFunctionEntryPoint
   , inSameFunction
@@ -57,18 +58,17 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
-import           Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
+import           Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
 
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
-import           Data.Macaw.Architecture.Syscall
 import           Data.Macaw.CFG
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
@@ -77,8 +77,29 @@ import           Data.Macaw.Types
 ------------------------------------------------------------------------
 -- AbsStateMap
 
+-- | All information specifc about a discovered code address.
+data CodeInfo arch = CodeInfo
+  { _addrAbsBlockState :: !(AbsBlockState (ArchReg arch))
+  }
+
+-- | The abstract state at the beginning of the code block.
+addrAbsBlockState :: Simple Lens (CodeInfo arch) (AbsBlockState (ArchReg arch))
+addrAbsBlockState = lens _addrAbsBlockState (\s v -> s { _addrAbsBlockState = v })
+
+-- | 'joinCodeInfo x y' returns 'Nothing' if all states represented by 'y' are
+-- also in 'x', and 'Just z' where 'z' represents an overapproximation
+-- of the union of the states 'x' and 'y'.
+unionCodeInfo :: RegisterInfo (ArchReg arch)
+              => CodeInfo arch
+              -> CodeInfo arch
+              -> Maybe (CodeInfo arch)
+unionCodeInfo x y =
+  case joinD (x^.addrAbsBlockState) (y^.addrAbsBlockState) of
+    Just z -> Just CodeInfo { _addrAbsBlockState = z }
+    Nothing -> Nothing
+
 -- | Maps each code address to a set of abstract states
-type AbsStateMap arch = Map (ArchSegmentedAddr arch) (AbsBlockState (ArchReg arch))
+--type AbsStateMap arch = Map (ArchSegmentedAddr arch) (CodeInfo arch))
 
 ------------------------------------------------------------------------
 -- BlockRegion
@@ -187,8 +208,6 @@ data DiscoveryInfo arch ids
                      -- ^ The initial memory when disassembly started.
                    , symbolNames :: !(Map (ArchSegmentedAddr arch) BS.ByteString)
                      -- ^ The set of symbol names (not necessarily complete)
-                   , syscallPersonality :: !(SyscallPersonality arch)
-                     -- ^ Syscall personality, mainly used by classifyBlock etc.
                    , archInfo :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
                    , _blocks   :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
@@ -205,14 +224,14 @@ data DiscoveryInfo arch ids
                      -- inferred about it.
                    , _frontier :: !(Map (ArchSegmentedAddr arch)
                                         (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ Set of addresses to explore next.
+                     -- ^ Addresses to explore next.
                      --
-                     -- This is a map so that we can associate a reason why a code address
-                     -- was added to the frontier.
+                     -- This is a map so that we can associate a reason why a code
+                     -- address was added to the frontier.
                    , _function_frontier :: !(Map (ArchSegmentedAddr arch)
                                                  (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ Set of functions to explore next.
-                   , _absState :: !(AbsStateMap arch)
+                   , _codeInfoMap :: !(Map (ArchSegmentedAddr arch) (CodeInfo arch))
                      -- ^ Map from code addresses to the abstract state at the start of
                      -- the block.
                    }
@@ -221,15 +240,13 @@ data DiscoveryInfo arch ids
 emptyDiscoveryInfo :: NonceGenerator (ST ids) ids
                    -> Memory (ArchAddrWidth arch)
                    -> Map (ArchSegmentedAddr arch) BS.ByteString
-                   -> SyscallPersonality arch
                    -> ArchitectureInfo arch
-                      -- ^ Stack delta
+                      -- ^ architecture/OS specific information
                    -> DiscoveryInfo arch ids
-emptyDiscoveryInfo ng mem symbols sysp info = DiscoveryInfo
+emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       { nonceGen           = ng
       , memory             = mem
       , symbolNames        = symbols
-      , syscallPersonality = sysp
       , archInfo           = info
       , _blocks            = Map.empty
       , _functionEntries   = Set.empty
@@ -237,7 +254,7 @@ emptyDiscoveryInfo ng mem symbols sysp info = DiscoveryInfo
       , _globalDataMap     = Map.empty
       , _frontier          = Map.empty
       , _function_frontier = Map.empty
-      , _absState          = Map.empty
+      , _codeInfoMap       = Map.empty
       }
 
 blocks :: Simple Lens (DiscoveryInfo arch ids)
@@ -272,8 +289,9 @@ function_frontier :: Simple Lens (DiscoveryInfo arch ids)
                                       (CodeAddrReason (ArchAddrWidth arch)))
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
 
-absState :: Simple Lens (DiscoveryInfo arch ids) (AbsStateMap arch)
-absState = lens _absState (\s v -> s { _absState = v })
+codeInfoMap :: Simple Lens (DiscoveryInfo arch ids)
+                        (Map (ArchSegmentedAddr arch) (CodeInfo arch))
+codeInfoMap = lens _codeInfoMap (\s v -> s { _codeInfoMap = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
@@ -440,8 +458,8 @@ tryGetStaticSyscallNo interp_state block_addr proc_state
   | BVValue _ call_no <- proc_state^.boundValue syscall_num_reg =
     Just call_no
   | Initial r <- proc_state^.boundValue syscall_num_reg
-  , Just absSt <- Map.lookup block_addr (interp_state ^. absState) =
-    asConcreteSingleton (absSt ^. absRegState ^. boundValue r)
+  , Just absSt <- interp_state^.codeInfoMap^.at block_addr =
+    asConcreteSingleton (absSt^.addrAbsBlockState^.absRegState^.boundValue r)
   | otherwise =
     Nothing
 

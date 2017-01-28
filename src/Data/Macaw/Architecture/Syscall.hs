@@ -25,7 +25,6 @@ data SyscallArgType = VoidArgType | WordArgType
 type SyscallTypeInfo = (String, SyscallArgType, [SyscallArgType])
 
 data SyscallPersonality arch =
-  SyscallPersonality { spName     :: String
-                     , spTypeInfo :: Map.Map Word64 SyscallTypeInfo
+  SyscallPersonality { spTypeInfo :: Map.Map Word64 SyscallTypeInfo
                      , spResultRegisters :: [Some (ArchReg arch)]
                      }
