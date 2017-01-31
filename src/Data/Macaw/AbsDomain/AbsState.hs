@@ -1208,7 +1208,7 @@ finalAbsBlockState c s =
       transferReg r = transferValue c (s^.boundValue r)
    in AbsBlockState { _absRegState = mkRegState transferReg
                     , _startAbsStack = c^.curAbsStack
-                    , _initIndexBounds = nextBlockBounds s (c^.indexBounds)
+                    , _initIndexBounds = nextBlockBounds (c^.indexBounds) s
                     }
 
 ------------------------------------------------------------------------

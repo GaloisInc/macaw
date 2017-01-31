@@ -65,6 +65,7 @@ module Data.Macaw.CFG
   , traverseApp
   -- * RegState
   , RegState
+  , regStateMap
   , boundValue
   , cmpRegState
   , curIP
@@ -1005,6 +1006,10 @@ deriving instance FoldableF (RegState r)
 
 instance TraversableF (RegState r) where
   traverseF f (RegState m) = RegState <$> traverseF f m
+
+-- | Return underlying map of register state.
+regStateMap :: RegState r f -> MapF.MapF r f
+regStateMap (RegState m) = m
 
 -- | Traverse the register state with the name of each register and value.
 traverseRegsWith :: Applicative m
