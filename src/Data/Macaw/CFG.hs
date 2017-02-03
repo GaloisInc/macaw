@@ -95,6 +95,12 @@ module Data.Macaw.CFG
   , RegAddrWidth
     -- ** Classes
   , RegisterInfo(..)
+    -- * References
+  , StmtHasRefs(..)
+  , FnHasRefs(..)
+  , refsInValue
+  , refsInApp
+  , refsInAssignRhs
     -- ** Synonyms
   , ArchAddrWidth
   , ArchLabel
@@ -121,6 +127,8 @@ import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableF
+import           Data.Set (Set)
+import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import           Data.Word
@@ -1173,6 +1181,34 @@ instance ( OrdF (ArchReg arch)
   pretty (TranslateError s msg) =
     text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
+
+------------------------------------------------------------------------
+-- References
+
+-- | Return refernces in a stmt type.
+class StmtHasRefs f where
+  refsInStmt :: f ids -> Set (Some (AssignId ids))
+
+-- | Return refernces in a function type.
+class FnHasRefs (f :: * -> Type -> *) where
+  refsInFn  :: f ids tp -> Set (Some (AssignId ids))
+
+refsInValue :: Value arch ids tp -> Set (Some (AssignId ids))
+refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
+refsInValue _                                = Set.empty
+
+refsInApp :: App (Value arch ids) tp -> Set (Some (AssignId ids))
+refsInApp app = foldApp refsInValue app
+
+refsInAssignRhs :: FnHasRefs (ArchFn arch)
+                => AssignRhs arch ids tp
+                -> Set (Some (AssignId ids))
+refsInAssignRhs rhs =
+  case rhs of
+    EvalApp v      -> refsInApp v
+    SetUndefined _ -> Set.empty
+    ReadMem v _    -> refsInValue v
+    EvalArchFn f _ -> refsInFn f
 
 ------------------------------------------------------------------------
 -- Block

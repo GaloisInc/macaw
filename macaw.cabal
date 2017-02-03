@@ -8,26 +8,18 @@ cabal-version: >= 1.9.2
 library
   build-depends:
     base >= 4,
---    aeson,
     ansi-wl-pprint,
     binary,
---    bv,
     bytestring,
     containers >= 0.5.8.1,
---    data-binary-ieee754,
---    dwarf-tools,
     elf-edit >= 0.28,
---    fingertree,
     flexdis86 >= 0.1.1,
     galois-dwarf,
     IntervalMap >= 0.5,
     lens >= 4.7,
---    llvm-pretty,
     mtl,
     parameterized-utils >= 0.1.6,
---    random,
     text,
---    transformers,
     vector,
     QuickCheck >= 2.7
 

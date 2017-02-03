@@ -105,6 +105,7 @@ addrWidthByteSize Addr64 = 8
 ------------------------------------------------------------------------
 -- Endianness
 
+-- | Indicates whether bytes are stored in big or little endian representation.
 data Endianness = BigEndian | LittleEndian
 
 ------------------------------------------------------------------------

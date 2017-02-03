@@ -24,7 +24,8 @@ interleaved abstract interpretation.
 {-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.Discovery
-       ( cfgFromAddrs
+       ( DiscoveryConstraints
+       , cfgFromAddrs
        , assignmentAbsValues
        ) where
 
@@ -687,7 +688,7 @@ fetchAndExecute b regs' s' = do
 
 
 
-type TransferConstraints arch
+type DiscoveryConstraints arch
    = ( PrettyCFGConstraints arch
      , RegisterInfo (ArchReg arch)
      , HasRepr (ArchReg arch)  TypeRepr
@@ -696,7 +697,7 @@ type TransferConstraints arch
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlock :: TransferConstraints arch
+transferBlock :: DiscoveryConstraints arch
               => Block arch ids -- ^ Block to start from
               -> AbsProcessorState (ArchReg arch) ids
                  -- ^ Abstract state describing machine state when block is encountered.
@@ -737,7 +738,7 @@ transferBlock b regs = do
     TranslateError _ _ ->
       pure ()
 
-transfer :: TransferConstraints arch
+transfer :: DiscoveryConstraints arch
          => ArchSegmentedAddr arch
          -> CFGM arch ids ()
 transfer addr = do
@@ -756,7 +757,7 @@ transfer addr = do
 ------------------------------------------------------------------------
 -- Main loop
 
-explore_frontier :: TransferConstraints arch
+explore_frontier :: DiscoveryConstraints arch
                  => CFGM arch ids ()
 explore_frontier = do
   st <- get
@@ -788,7 +789,7 @@ memIsDataCodePointer _ a v
 -- | Construct a discovery info by starting with exploring from a given set of
 -- function entry points.
 cfgFromAddrs :: forall arch
-             .  TransferConstraints arch
+             .  DiscoveryConstraints arch
              => ArchitectureInfo arch
                 -- ^ Architecture-specific information needed for doing control-flow exploration.
              -> Memory (ArchAddrWidth arch)
