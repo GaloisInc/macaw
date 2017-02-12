@@ -126,21 +126,22 @@ lookupBlock m lbl = do
 ------------------------------------------------------------------------
 -- CodeAddrReason
 
--- | This describes why an address was marked as containing code.
+-- | This describes the source of an address that was marked as containing code.
 data CodeAddrReason w
    = InWrite       !(SegmentedAddr w)
      -- ^ Exploring because the given block writes it to memory.
    | NextIP !(SegmentedAddr w)
      -- ^ Exploring because the given block jumps here.
    | CallTarget !(SegmentedAddr w)
-     -- ^ Exploring because address terminates with a call that
-     -- jumps here.
+     -- ^ Exploring because address terminates with a call that jumps here.
    | InitAddr
      -- ^ Identified as an entry point from initial information
    | CodePointerInMem !(SegmentedAddr w)
      -- ^ A code pointer that was stored at the given address.
    | SplitAt !(SegmentedAddr w)
      -- ^ Added because the address split this block after it had been disassembled.
+   | InterProcedureJump !(SegmentedAddr w)
+     -- ^ A jump from an address in another function.
   deriving (Show)
 
 ------------------------------------------------------------------------
@@ -211,6 +212,9 @@ data DiscoveryInfo arch ids
                    , archInfo :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
                    , _blocks   :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
+                   , _codeInfoMap :: !(Map (ArchSegmentedAddr arch) (CodeInfo arch))
+                     -- ^ Map from code addresses to the abstract state at the start of
+                     -- the block.
                      -- ^ Maps an address to the code associated with that address.
                    , _functionEntries :: !(Set (ArchSegmentedAddr arch))
                       -- ^ Maps addresses that are marked as the start of a function
@@ -231,9 +235,6 @@ data DiscoveryInfo arch ids
                    , _function_frontier :: !(Map (ArchSegmentedAddr arch)
                                                  (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ Set of functions to explore next.
-                   , _codeInfoMap :: !(Map (ArchSegmentedAddr arch) (CodeInfo arch))
-                     -- ^ Map from code addresses to the abstract state at the start of
-                     -- the block.
                    }
 
 -- | Empty interpreter state.

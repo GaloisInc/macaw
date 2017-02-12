@@ -215,6 +215,7 @@ printAddrBacktrace m rsn = do
     InitAddr -> ["Initial entry point"]
     CodePointerInMem src -> ["Memory address " ++ show src ++ " contained code."]
     SplitAt src -> ["Split from read of " ++ show src ++ "."] ++ prev src
+    InterProcedureJump src -> ["Reference from external address " ++ show src ++ "."] ++ prev src
 
 -- | Return true if this address was added because of the contents of a global address
 -- in memory initially.
@@ -236,6 +237,7 @@ cameFromInitialMemoryContents m rsn = do
     SplitAt src -> prev src
     InitAddr -> False
     CodePointerInMem{} -> True
+    InterProcedureJump src -> prev src
 
 -- | This is the worker for getBlock, in the case that we have not already
 -- read the block.
@@ -277,7 +279,8 @@ tryDisassembleAddr rsn addr ab = do
                        , brSize = next_ip^.addrOffset - addr^.addrOffset
                        , brBlocks = block_map
                        }
-  put $ s0 & blocks %~ Map.insert addr br
+  put $ s0 & blocks      %~ Map.insert addr br
+           & codeInfoMap %~ Map.insert addr  (CodeInfo { _addrAbsBlockState = ab })
 
 -- | Mark address as the start of a code block.
 markCodeAddrBlock :: PrettyCFGConstraints arch
@@ -309,7 +312,7 @@ markCodeAddrBlock rsn addr ab = do
       when (l_start /= a_start) $ do
         error $ "Blocks changed functions " ++ show l_start ++ " and " ++ show a_start ++ "."
 --      modify $ \s0 -> s0 & function_frontier %~ Map.insert l_start (SplitAt a_start) . Map.insert a_start rsn
-    _ ->
+    _ -> do
       tryDisassembleAddr rsn addr ab
 
 -- | Returns a block at the given location, if at all possible.  This
@@ -364,12 +367,8 @@ markAddrAsFunction rsn addr = do
     -- Get abstract state associated with function begining at address
     let abstState = fnBlockStateFn (archInfo s) mem addr
     markCodeAddrBlock rsn addr abstState
-    let cInfo = CodeInfo { _addrAbsBlockState = abstState
-                         }
-    modify $ \s0 -> s0 & codeInfoMap       %~ Map.insert addr cInfo
-                       & functionEntries   %~ Set.insert addr
-                       & function_frontier %~ maybeMapInsert low (SplitAt addr)
-                                           .  Map.insert addr rsn
+    modify $ (functionEntries   %~ Set.insert addr)
+           . (function_frontier %~ (maybeMapInsert low (SplitAt addr) .  Map.insert addr rsn))
 
 maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
 maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
@@ -472,25 +471,24 @@ mergeIntraJump src ab _tgt
 mergeIntraJump src ab tgt = do
   let rsn = NextIP (labelAddr src)
   -- Associate a new abstract state with the code region.
-  let upd new s = do
-        -- Add reverse edge
-        s & reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src))
-          & codeInfoMap  %~ Map.insert tgt new
-          & frontier     %~ Map.insert tgt rsn
   s0 <- get
-  let cinfo_new = CodeInfo { _addrAbsBlockState = ab
-                           }
   case Map.lookup tgt (s0^.codeInfoMap) of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
-    Just cinfo_old ->
+    Just cinfo_old -> do
+      let cinfo_new = CodeInfo { _addrAbsBlockState = ab }
       case unionCodeInfo cinfo_old cinfo_new of
         Nothing  -> return ()
-        Just new -> modify $ upd new
+        Just new ->
+          modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
+                 . (codeInfoMap  %~ Map.insert tgt new)
+                 . (frontier     %~ Map.insert tgt rsn)
     -- We haven't seen this block before
     Nothing -> do
-      modify $ upd cinfo_new
       markCodeAddrBlock rsn tgt ab
+      modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
+             . (frontier     %~ Map.insert tgt rsn)
+
 
 -- -----------------------------------------------------------------------------
 -- Refining an abstract state based upon a condition
@@ -601,7 +599,7 @@ fetchAndExecute b regs' s' = do
             -- tail call when go to the right place.
             -- TODO: Add check to ensure stack height is correct.
             debug DCFG ("Found jump to concrete address after function " ++ show tgt_fn ++ ".") $ do
-            markAddrAsFunction (error "Concrete code address") tgt_addr
+            markAddrAsFunction (InterProcedureJump src) tgt_addr
             -- Check top of stack points to return value.
             let sp_val = s'^.boundValue sp_reg
             let ptrType = BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
@@ -771,6 +769,7 @@ explore_frontier = do
                        & frontier .~ Map.singleton addr rsn
                          -- Delete any entries we previously discovered for function.
                        & reverseEdges    %~ deleteMapRange (Just addr) high
+                       & blocks          %~ deleteMapRange (Just addr) high
                          -- Delete any entries we previously discovered for function.
                        & codeInfoMap     %~ deleteMapRange (Just addr) high
           put st'

@@ -69,6 +69,7 @@ import           Control.Exception (assert)
 import           Control.Lens
 import           Data.Bits
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as Fold
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -262,6 +263,18 @@ rangeSize :: MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
 rangeSize (RelocatableAddr _ w) = addrSize w
 rangeSize (SymbolicRef _) = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
+
+
+instance Show (SegmentRange w) where
+  showsPrec _ (ByteRegion bs) = \s -> foldr ppByte s (BS.unpack bs)
+    where ppByte w | w < 16    = showChar '0' . showHex w
+                   | otherwise = showHex w
+  showsPrec _ (RelocatableAddr i o)  =
+    showString "(seg: " . shows i . showString ", off: " . shows o . showChar ')'
+  showsPrec _ (SymbolicRef s) = shows (BSC.unpack (symbolName s))
+
+  showList [] = id
+  showList (h : r) = showsPrec 10 h . showList r
 
 ------------------------------------------------------------------------
 -- SegmentContents
@@ -604,7 +617,10 @@ isCodeAddrOrNull mem a = isCodeAddr mem a
 
 -- | Type of errors that may occur when reading memory.
 data MemoryError w
-   = UserMemoryError String
+   = UserMemoryError (SegmentedAddr w) !String
+     -- ^ the memory reader threw an unspecified error at the given location.
+   | InvalidInstruction (SegmentedAddr w) ![SegmentRange w]
+     -- ^ The memory reader could not parse the value starting at the given address.
    | AccessViolation (SegmentedAddr w)
      -- ^ Memory could not be read, because it was not defined.
    | PermissionsError (SegmentedAddr w)
@@ -615,7 +631,9 @@ data MemoryError w
      -- ^ The data at the given address did not refer to a valid memory location.
 
 instance Show (MemoryError w) where
-  show (UserMemoryError msg) = msg
+  show (UserMemoryError _ msg) = msg
+  show (InvalidInstruction start contents) =
+    "Invalid instruction at " ++ show start ++ ": " ++ showList contents ""
   show (AccessViolation a)   =
     "Access violation at " ++ show a ++ "."
   show (PermissionsError a)  =
