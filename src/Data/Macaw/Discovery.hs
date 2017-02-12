@@ -278,9 +278,9 @@ tryDisassembleAddr rsn addr ab = do
   let br = BlockRegion { brReason = rsn
                        , brSize = next_ip^.addrOffset - addr^.addrOffset
                        , brBlocks = block_map
+                       , brAbsInitState = ab
                        }
   put $ s0 & blocks      %~ Map.insert addr br
-           & codeInfoMap %~ Map.insert addr  (CodeInfo { _addrAbsBlockState = ab })
 
 -- | Mark address as the start of a code block.
 markCodeAddrBlock :: PrettyCFGConstraints arch
@@ -302,8 +302,7 @@ markCodeAddrBlock rsn addr ab = do
       -- Get block for addr
       tryDisassembleAddr rsn addr ab
       -- Get block for old block
-      let Just old_code_info = Map.lookup l (s^.codeInfoMap)
-      tryDisassembleAddr (brReason br) l (old_code_info^.addrAbsBlockState)
+      tryDisassembleAddr (brReason br) l (brAbsInitState br)
       -- Add function starts to split to frontier
       -- This will result in us re-exploring l_start and a_start
       -- once the current function is done.
@@ -413,7 +412,8 @@ assignmentAbsValues :: forall arch ids
                     => ArchitectureInfo arch
                     -> Memory (ArchAddrWidth arch)
                     -> CFG arch ids
-                    -> Map (ArchSegmentedAddr arch) (CodeInfo arch)
+                    -> Map (ArchSegmentedAddr arch) (AbsBlockState (ArchReg arch))
+                       -- ^ Maps addresses to the initial state at that address.
                     -> MapF (AssignId ids) (ArchAbsValue arch)
 assignmentAbsValues info mem g absm =
      foldl' go MapF.empty (Map.elems (g^.cfgBlocks))
@@ -426,8 +426,8 @@ assignmentAbsValues info mem g absm =
               case Map.lookup a absm of
                 Nothing -> do
                   error $ "assignmentAbsValues could not find code infomation for block " ++ show a
-                Just codeInfo -> do
-                  let abs_state = initAbsProcessorState mem (codeInfo^.addrAbsBlockState)
+                Just blockState -> do
+                  let abs_state = initAbsProcessorState mem blockState
                   insBlock b abs_state m0
             _ -> m0
 
@@ -472,16 +472,16 @@ mergeIntraJump src ab tgt = do
   let rsn = NextIP (labelAddr src)
   -- Associate a new abstract state with the code region.
   s0 <- get
-  case Map.lookup tgt (s0^.codeInfoMap) of
+  case Map.lookup tgt (s0^.blocks) of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
-    Just cinfo_old -> do
-      let cinfo_new = CodeInfo { _addrAbsBlockState = ab }
-      case unionCodeInfo cinfo_old cinfo_new of
+    Just old_block -> do
+      case joinD (brAbsInitState old_block) ab of
         Nothing  -> return ()
-        Just new ->
-          modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
-                 . (codeInfoMap  %~ Map.insert tgt new)
+        Just new -> do
+          let new_block = old_block { brAbsInitState = new }
+          modify $ (blocks       %~ Map.insert tgt new_block)
+                 . (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
                  . (frontier     %~ Map.insert tgt rsn)
     -- We haven't seen this block before
     Nothing -> do
@@ -745,12 +745,12 @@ transfer addr = do
   case mroot of
     Nothing -> return ()
     Just root -> do
-      minfo <- use $ codeInfoMap . at addr
+      minfo <- use $ blocks . at addr
       case minfo of
         Nothing -> error $ "Could not find block " ++ show addr ++ "."
-        Just info -> do
+        Just br -> do
           transferBlock root $
-            initAbsProcessorState mem (info^.addrAbsBlockState)
+            initAbsProcessorState mem (brAbsInitState br)
 
 ------------------------------------------------------------------------
 -- Main loop
@@ -770,8 +770,6 @@ explore_frontier = do
                          -- Delete any entries we previously discovered for function.
                        & reverseEdges    %~ deleteMapRange (Just addr) high
                        & blocks          %~ deleteMapRange (Just addr) high
-                         -- Delete any entries we previously discovered for function.
-                       & codeInfoMap     %~ deleteMapRange (Just addr) high
           put st'
           explore_frontier
     Just ((addr,_rsn), next_roots) -> do

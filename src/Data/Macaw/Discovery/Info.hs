@@ -37,11 +37,6 @@ module Data.Macaw.Discovery.Info
   , CodeAddrReason(..)
   , frontier
   , function_frontier
-    -- ** Abstract state information
-  , CodeInfo(..)
-  , addrAbsBlockState
-  , codeInfoMap
-  , unionCodeInfo
     -- ** DiscoveryInfo utilities
   , getFunctionEntryPoint
   , inSameFunction
@@ -75,33 +70,6 @@ import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------
--- AbsStateMap
-
--- | All information specifc about a discovered code address.
-data CodeInfo arch = CodeInfo
-  { _addrAbsBlockState :: !(AbsBlockState (ArchReg arch))
-  }
-
--- | The abstract state at the beginning of the code block.
-addrAbsBlockState :: Simple Lens (CodeInfo arch) (AbsBlockState (ArchReg arch))
-addrAbsBlockState = lens _addrAbsBlockState (\s v -> s { _addrAbsBlockState = v })
-
--- | 'joinCodeInfo x y' returns 'Nothing' if all states represented by 'y' are
--- also in 'x', and 'Just z' where 'z' represents an overapproximation
--- of the union of the states 'x' and 'y'.
-unionCodeInfo :: RegisterInfo (ArchReg arch)
-              => CodeInfo arch
-              -> CodeInfo arch
-              -> Maybe (CodeInfo arch)
-unionCodeInfo x y =
-  case joinD (x^.addrAbsBlockState) (y^.addrAbsBlockState) of
-    Just z -> Just CodeInfo { _addrAbsBlockState = z }
-    Nothing -> Nothing
-
--- | Maps each code address to a set of abstract states
---type AbsStateMap arch = Map (ArchSegmentedAddr arch) (CodeInfo arch))
-
-------------------------------------------------------------------------
 -- BlockRegion
 
 -- | A contiguous region of instructions in memory.
@@ -113,6 +81,8 @@ data BlockRegion arch ids
                    -- ^ The size of the region of memory covered by this.
                  , brBlocks :: !(Map Word64 (Block arch ids))
                    -- ^ Map from labelIndex to associated block.
+                 , brAbsInitState :: !(AbsBlockState (ArchReg arch))
+                   -- ^ The abstract state at the start of this block.
                  }
 
 -- | Does a simple lookup in the cfg at a given DecompiledBlock address.
@@ -212,9 +182,6 @@ data DiscoveryInfo arch ids
                    , archInfo :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
                    , _blocks   :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
-                   , _codeInfoMap :: !(Map (ArchSegmentedAddr arch) (CodeInfo arch))
-                     -- ^ Map from code addresses to the abstract state at the start of
-                     -- the block.
                      -- ^ Maps an address to the code associated with that address.
                    , _functionEntries :: !(Set (ArchSegmentedAddr arch))
                       -- ^ Maps addresses that are marked as the start of a function
@@ -255,7 +222,6 @@ emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       , _globalDataMap     = Map.empty
       , _frontier          = Map.empty
       , _function_frontier = Map.empty
-      , _codeInfoMap       = Map.empty
       }
 
 blocks :: Simple Lens (DiscoveryInfo arch ids)
@@ -289,10 +255,6 @@ function_frontier :: Simple Lens (DiscoveryInfo arch ids)
                                  (Map (ArchSegmentedAddr arch)
                                       (CodeAddrReason (ArchAddrWidth arch)))
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
-
-codeInfoMap :: Simple Lens (DiscoveryInfo arch ids)
-                        (Map (ArchSegmentedAddr arch) (CodeInfo arch))
-codeInfoMap = lens _codeInfoMap (\s v -> s { _codeInfoMap = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
@@ -459,8 +421,8 @@ tryGetStaticSyscallNo interp_state block_addr proc_state
   | BVValue _ call_no <- proc_state^.boundValue syscall_num_reg =
     Just call_no
   | Initial r <- proc_state^.boundValue syscall_num_reg
-  , Just absSt <- interp_state^.codeInfoMap^.at block_addr =
-    asConcreteSingleton (absSt^.addrAbsBlockState^.absRegState^.boundValue r)
+  , Just b <- interp_state^.blocks^.at block_addr =
+    asConcreteSingleton (brAbsInitState b^.absRegState^.boundValue r)
   | otherwise =
     Nothing
 
