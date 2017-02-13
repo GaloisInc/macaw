@@ -267,8 +267,6 @@ tryDisassembleAddr rsn addr ab = do
       when (not (cameFromInitialMemoryContents block_addrs rsn)) $ do
           error $ "Failed to disassemble " ++ show e ++ "\n"
             ++ unlines (printAddrBacktrace block_addrs rsn)
---      debugM DCFG ("Failed to disassemble block at " ++ show addr ++ " " ++ show e) >>
---      put $ (s0 & blocks %~ Map.insert addr Nothing)
     Nothing -> do
       pure ()
   assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
@@ -280,7 +278,7 @@ tryDisassembleAddr rsn addr ab = do
                        , brBlocks = block_map
                        , brAbsInitState = ab
                        }
-  put $ s0 & blocks      %~ Map.insert addr br
+  put $ s0 & blocks %~ Map.insert addr br
 
 -- | Mark address as the start of a code block.
 markCodeAddrBlock :: PrettyCFGConstraints arch
@@ -303,29 +301,12 @@ markCodeAddrBlock rsn addr ab = do
       tryDisassembleAddr rsn addr ab
       -- Get block for old block
       tryDisassembleAddr (brReason br) l (brAbsInitState br)
-      -- Add function starts to split to frontier
-      -- This will result in us re-exploring l_start and a_start
-      -- once the current function is done.
-      let l_start = getFunctionEntryPoint l s
-          a_start = getFunctionEntryPoint addr s
-      when (l_start /= a_start) $ do
-        error $ "Blocks changed functions " ++ show l_start ++ " and " ++ show a_start ++ "."
---      modify $ \s0 -> s0 & function_frontier %~ Map.insert l_start (SplitAt a_start) . Map.insert a_start rsn
+      -- It's possible this will cause the current block to be broken, or cause a function to
+      -- boundaries.  However, we don't think this should cause the need automatically to
+      -- re-evaluate a block as any information discovered should be strictly less than
+      -- the longer block.
     _ -> do
       tryDisassembleAddr rsn addr ab
-
--- | Returns a block at the given location, if at all possible.  This
--- will disassemble the binary if the block hasn't been seen before.
--- In particular, this ensures that a block and all its children are
--- present in the cfg (assuming successful disassembly)
-getBlock :: ArchSegmentedAddr arch
-         -> CFGM arch ids (Maybe (Block arch ids))
-getBlock addr = do
-  m_b <- use blocks
-  case Map.lookup addr m_b of
-    Just br -> return $! Map.lookup 0 (brBlocks br)
-    -- We haven't tried to get this block.
-    Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
 
 ------------------------------------------------------------------------
 -- Transfer stmts
@@ -365,9 +346,9 @@ markAddrAsFunction rsn addr = do
     let _high = Set.lookupGT addr (s^.functionEntries)
     -- Get abstract state associated with function begining at address
     let abstState = fnBlockStateFn (archInfo s) mem addr
-    markCodeAddrBlock rsn addr abstState
     modify $ (functionEntries   %~ Set.insert addr)
            . (function_frontier %~ (maybeMapInsert low (SplitAt addr) .  Map.insert addr rsn))
+    markCodeAddrBlock rsn addr abstState
 
 maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
 maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
@@ -485,9 +466,9 @@ mergeIntraJump src ab tgt = do
                  . (frontier     %~ Map.insert tgt rsn)
     -- We haven't seen this block before
     Nothing -> do
-      markCodeAddrBlock rsn tgt ab
       modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
              . (frontier     %~ Map.insert tgt rsn)
+      markCodeAddrBlock rsn tgt ab
 
 
 -- -----------------------------------------------------------------------------
@@ -684,8 +665,6 @@ fetchAndExecute b regs' s' = do
         -- Mark entry points as the start of functions
         mapM_ (markAddrAsFunction (error "Uninterpretable jump reason"))  addrs
 
-
-
 type DiscoveryConstraints arch
    = ( PrettyCFGConstraints arch
      , RegisterInfo (ArchReg arch)
@@ -693,14 +672,33 @@ type DiscoveryConstraints arch
      , MemWidth (ArchAddrWidth arch)
      )
 
+tryLookupBlock :: String
+               -> ArchSegmentedAddr arch
+               -> Map Word64 (Block arch ids)
+               -> ArchLabel arch
+               -> Block arch ids
+tryLookupBlock ctx base block_map lbl =
+  if labelAddr lbl /= base then
+    error $ "internal error: tryLookupBlock " ++ ctx ++ " given invalid addr " ++ show (labelAddr lbl)
+  else
+    case Map.lookup (labelIndex lbl) block_map of
+      Nothing ->
+        error $ "internal error: tryLookupBlock " ++ ctx ++ " " ++ show base
+             ++ " given invalid index " ++ show (labelIndex lbl)
+      Just b -> b
+
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
 transferBlock :: DiscoveryConstraints arch
-              => Block arch ids -- ^ Block to start from
+              => Map Word64 (Block arch ids)
+                 -- ^ Map for this sequence of blocks.
+                 -- We keep this map independent of the blocks entry in the DiscoveryInfo, as it may be
+                 -- invalidated in tryDisassembleAddr.
+              -> Block arch ids -- ^ Block to start from
               -> AbsProcessorState (ArchReg arch) ids
                  -- ^ Abstract state describing machine state when block is encountered.
               -> CFGM arch ids ()
-transferBlock b regs = do
+transferBlock block_map b regs = do
   let lbl = blockLabel b
   let src = labelAddr lbl
   mem <- gets memory
@@ -710,17 +708,17 @@ transferBlock b regs = do
   case blockTerm b of
     Branch c lb rb -> do
       mapM_ (recordWriteStmt src regs') (blockStmts b)
-      Just l <- uses blocks (`lookupBlock` lb)
-      let  l_regs = refineProcState c absTrue regs'
-      Just r <- uses blocks (`lookupBlock` rb)
+      let l = tryLookupBlock "left branch" (labelAddr (blockLabel b))  block_map lb
+      let l_regs = refineProcState c absTrue regs'
+      let r = tryLookupBlock "right branch" (labelAddr (blockLabel b)) block_map rb
       let r_regs = refineProcState c absFalse regs'
       -- We re-transfer the stmts to propagate any changes from
       -- the above refineProcState.  This could be more efficient by
       -- tracking what (if anything) changed.  We also might
       -- need to keep going back and forth until we reach a
       -- fixpoint
-      transferBlock l (transferStmts arch_info l_regs (blockStmts b))
-      transferBlock r (transferStmts arch_info r_regs (blockStmts b))
+      transferBlock block_map l (transferStmts arch_info l_regs (blockStmts b))
+      transferBlock block_map r (transferStmts arch_info r_regs (blockStmts b))
 
     Syscall s' -> do
       mapM_ (recordWriteStmt src regs') (blockStmts b)
@@ -741,16 +739,18 @@ transfer :: DiscoveryConstraints arch
          -> CFGM arch ids ()
 transfer addr = do
   mem <- gets memory
-  mroot <- getBlock addr
-  case mroot of
-    Nothing -> return ()
-    Just root -> do
-      minfo <- use $ blocks . at addr
-      case minfo of
-        Nothing -> error $ "Could not find block " ++ show addr ++ "."
-        Just br -> do
-          transferBlock root $
+
+  mbr <- use $ blocks . at addr
+  case mbr of
+    Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
+
+    Just br -> do
+      case Map.lookup 0 (brBlocks br) of
+        Just root -> do
+          transferBlock (brBlocks br) root $
             initAbsProcessorState mem (brAbsInitState br)
+        Nothing -> do
+          error $ "getBlock given block with empty blocks list."
 
 ------------------------------------------------------------------------
 -- Main loop
@@ -761,6 +761,7 @@ explore_frontier = do
   st <- get
   case Map.minViewWithKey (st^.frontier) of
     Nothing ->
+      -- If local block frontier is empty, then try function frontier.
       case Map.minViewWithKey (st^.function_frontier) of
         Nothing -> return ()
         Just ((addr,rsn), next_roots) -> do
@@ -772,6 +773,7 @@ explore_frontier = do
                        & blocks          %~ deleteMapRange (Just addr) high
           put st'
           explore_frontier
+
     Just ((addr,_rsn), next_roots) -> do
       put $ st & frontier .~ next_roots
       transfer addr
