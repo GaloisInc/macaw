@@ -11,6 +11,7 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Memory
   ( SomeMemory(..)
@@ -54,6 +55,8 @@ module Data.Macaw.Memory
   , SymbolVersion(..)
     -- * Address and offset.
   , MemWord
+  , MemoryAddrWidth
+  , memWord
   , memWord32
   , memWord64
   , SegmentedAddr(..)
@@ -73,6 +76,7 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as Fold
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import           Data.Proxy
 import           Data.Word
 import           GHC.TypeLits
 import           Numeric (showHex)
@@ -174,6 +178,42 @@ instance Num (MemWord 32) where
   fromInteger = memWord32 . fromInteger
   negate (MemWord x) = memWord32 (negate x)
   signum (MemWord x) = memWord32 (signum x)
+
+-- | Typeclass for legal memory widths
+class MemoryAddrWidth w where
+  addrWidthMod :: p w -> Word64
+  addrRotate :: MemWord w -> Int -> MemWord w
+  addrBitSize :: p w -> Int
+
+instance MemoryAddrWidth 32 where
+  addrWidthMod _ = 0xffffffff
+  addrRotate (MemWord w) i = MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
+  addrBitSize _ = 32
+
+instance MemoryAddrWidth 64 where
+  addrWidthMod _ = 0xffffffffffffffff
+  addrRotate (MemWord w) i = MemWord (w `rotate` i)
+  addrBitSize _ = 64
+
+memWord :: forall w . MemoryAddrWidth w => Word64 -> MemWord w
+memWord x = MemWord (x .&. addrWidthMod p)
+  where p :: Proxy w
+        p = Proxy
+
+instance MemoryAddrWidth w => Bits (MemWord w) where
+
+  MemWord x .&. MemWord y = memWord (x .&. y)
+  MemWord x .|. MemWord y = memWord (x .|. y)
+  MemWord x `xor` MemWord y = memWord (x `xor` y)
+  complement (MemWord x) = memWord (complement x)
+  MemWord x `shift` i = memWord (x `shift` i)
+  x `rotate` i = addrRotate x i
+  bitSize = addrBitSize
+  bitSizeMaybe x = Just (addrBitSize x)
+  isSigned _ = False
+  MemWord x `testBit` i = x `testBit` i
+  bit i = memWord (bit i)
+  popCount (MemWord x) = popCount x
 
 memWord64 :: Word64 -> MemWord 64
 memWord64 = MemWord
@@ -641,7 +681,7 @@ instance Show (MemoryError w) where
   show (UnalignedRelocation a)   =
     "Attempt to read an offset of a relocation entry at " ++ show a ++ "."
   show (InvalidAddr a)   =
-    "Attempt to read an offset of a relocation entry at " ++ show a ++ "."
+    "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
 -- SomeMemory
