@@ -112,7 +112,7 @@ instance Num (MemWord w) => ByteReader (MemoryByteReader w) where
         MBR $ throwError $ UnalignedRelocation (msAddr ms)
       ByteRegion bs:rest -> do
         if BS.null bs then do
-          MBR $ throwError $ AccessViolation (msAddr ms)
+          throwError $ AccessViolation (msAddr ms)
          else do
           let v = BS.head bs
           let ms' = ms { msPrev   = consByte v (msPrev ms)

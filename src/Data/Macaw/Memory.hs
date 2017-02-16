@@ -155,7 +155,7 @@ bsWord64le bs
 ------------------------------------------------------------------------
 -- MemBase
 
-newtype MemWord (n :: Nat) = MemWord Word64
+newtype MemWord (n :: Nat) = MemWord { memWordValue :: Word64 }
 -- ^ A value in memory.
 
 instance Show (MemWord w) where
@@ -445,11 +445,16 @@ addrValue :: Num (MemWord w) => SegmentedAddr w -> MemWord w
 addrValue addr = addrBase addr + addr^.addrOffset
 
 instance Show (SegmentedAddr w) where
-  showsPrec p a = showParen (p > 6) $
-    showString "segment"
-    . shows (segmentIndex (addrSegment a))
-    . showString "+"
-    . shows (a^.addrOffset)
+  showsPrec p a =
+    case segmentBase (addrSegment a) of
+      Just b ->
+        showString "0x" . showHex (memWordValue b + memWordValue (a^.addrOffset))
+      Nothing ->
+        showParen (p > 6)
+        $ showString "segment"
+        . shows (segmentIndex (addrSegment a))
+        . showString "+"
+        . shows (a^.addrOffset)
 
 -- | Return contents starting from location or throw a memory error if there
 -- is an unaligned relocation.

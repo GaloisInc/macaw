@@ -17,9 +17,11 @@ discovery.
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Discovery.Info
   ( BlockRegion(..)
+  , FoundAddr(..)
   , lookupBlock
   , GlobalDataInfo(..)
   , ParsedTermStmt(..)
+  , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryInfo
   , emptyDiscoveryInfo
@@ -27,6 +29,7 @@ module Data.Macaw.Discovery.Info
   , archInfo
   , memory
   , symbolNames
+  , foundAddrs
   , blocks
   , functionEntries
   , reverseEdges
@@ -49,6 +52,7 @@ module Data.Macaw.Discovery.Info
 import           Control.Lens
 import           Control.Monad.ST
 import qualified Data.ByteString as BS
+import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
@@ -69,36 +73,35 @@ import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
+
+------------------------------------------------------------------------
+-- FoundAddr
+
+-- | An address that has been found to be reachable.
+data FoundAddr arch
+   = FoundAddr { foundReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                 -- ^ The reason the address was found to be containing code.
+               , foundAbstractState :: !(AbsBlockState (ArchReg arch))
+                 -- ^ The abstract state formed from post-states that reach this address.
+               }
+
 ------------------------------------------------------------------------
 -- BlockRegion
 
 -- | A contiguous region of instructions in memory.
 data BlockRegion arch ids
-   = BlockRegion { brReason :: !(CodeAddrReason (ArchAddrWidth arch))
-                   -- ^ The reason the start address was marked as
-                   -- containing code.
-                 , brSize :: !(ArchAddr arch)
+   = BlockRegion { brSize :: !(ArchAddr arch)
                    -- ^ The size of the region of memory covered by this.
                  , brBlocks :: !(Map Word64 (Block arch ids))
                    -- ^ Map from labelIndex to associated block.
-                 , brAbsInitState :: !(AbsBlockState (ArchReg arch))
-                   -- ^ The abstract state at the start of this block.
                  }
-
--- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupBlock :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
-            -> ArchLabel arch
-            -> Maybe (Block arch ids)
-lookupBlock m lbl = do
-  br <- Map.lookup (labelAddr lbl) m
-  Map.lookup (labelIndex lbl) (brBlocks br)
 
 ------------------------------------------------------------------------
 -- CodeAddrReason
 
 -- | This describes the source of an address that was marked as containing code.
 data CodeAddrReason w
-   = InWrite       !(SegmentedAddr w)
+   = InWrite !(SegmentedAddr w)
      -- ^ Exploring because the given block writes it to memory.
    | NextIP !(SegmentedAddr w)
      -- ^ Exploring because the given block jumps here.
@@ -137,12 +140,10 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 -- interpreted.
 data ParsedTermStmt arch ids
    = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
-                !(Seq (Stmt arch ids))
                 !(Maybe (ArchSegmentedAddr arch))
-    -- ^ A call with the current register values, statements lessed pushed return value
-    -- function to call, and location to return to (Nothing) if this is a tail call.
+    -- ^ A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
    | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentedAddr arch)
-     -- ^ A jump to an explicit address within a block.
+     -- ^ A jump to an explicit address within a function.
    | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
                        !(BVValue arch ids (ArchAddrWidth arch))
                        !(V.Vector (ArchSegmentedAddr arch))
@@ -150,9 +151,9 @@ data ParsedTermStmt arch ids
      --
      -- The registers store the registers, the value contains the index to jump
      -- to, and the possible addresses.
-   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids)) !(Seq (Stmt arch ids))
+   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
      -- ^ A return with the given registers.
-   | ParsedBranch !(Value arch ids BoolType) !(ArchLabel arch) !(ArchLabel arch)
+   | ParsedBranch !(Value arch ids BoolType) !Word64 !Word64
      -- ^ A branch (i.e., BlockTerm is Branch)
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
                    !(ArchSegmentedAddr arch)
@@ -169,19 +170,32 @@ deriving instance
   => Show (ParsedTermStmt arch ids)
 
 ------------------------------------------------------------------------
+-- ParsedBlock
+
+data ParsedBlock arch ids
+   = ParsedBlock { pblockLabel :: !Word64
+                 , pblockStmts :: !([Stmt arch ids])
+                 , pblockState :: !(AbsProcessorState (ArchReg arch) ids)
+                   -- ^ State of processor prior to term statement.
+                 , pblockTerm  :: !(ParsedTermStmt arch ids)
+                 }
+
+------------------------------------------------------------------------
 -- DiscoveryInfo
 
 -- | The state of the interpreter
 data DiscoveryInfo arch ids
-   = DiscoveryInfo { nonceGen :: !(NonceGenerator (ST ids) ids)
+   = DiscoveryInfo { nonceGen    :: !(NonceGenerator (ST ids) ids)
                      -- ^ Generator for creating fresh ids.
-                   , memory   :: !(Memory (ArchAddrWidth arch))
+                   , memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
                    , symbolNames :: !(Map (ArchSegmentedAddr arch) BS.ByteString)
                      -- ^ The set of symbol names (not necessarily complete)
-                   , archInfo :: !(ArchitectureInfo arch)
+                   , archInfo    :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
-                   , _blocks   :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
+                   , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
+                     -- ^ Maps fopund address to the pre-state for that block.
+                   , _blocks     :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
                      -- ^ Maps an address to the code associated with that address.
                    , _functionEntries :: !(Set (ArchSegmentedAddr arch))
                       -- ^ Maps addresses that are marked as the start of a function
@@ -216,6 +230,7 @@ emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       , memory             = mem
       , symbolNames        = symbols
       , archInfo           = info
+      , _foundAddrs        = Map.empty
       , _blocks            = Map.empty
       , _functionEntries   = Set.empty
       , _reverseEdges      = Map.empty
@@ -223,6 +238,9 @@ emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       , _frontier          = Map.empty
       , _function_frontier = Map.empty
       }
+
+foundAddrs :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (FoundAddr arch))
+foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
 
 blocks :: Simple Lens (DiscoveryInfo arch ids)
                       (Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
@@ -255,6 +273,15 @@ function_frontier :: Simple Lens (DiscoveryInfo arch ids)
                                  (Map (ArchSegmentedAddr arch)
                                       (CodeAddrReason (ArchAddrWidth arch)))
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
+
+
+-- | Does a simple lookup in the cfg at a given DecompiledBlock address.
+lookupBlock :: DiscoveryInfo arch ids
+            -> ArchLabel arch
+            -> Maybe (Block arch ids)
+lookupBlock info lbl = do
+  br <- Map.lookup (labelAddr lbl) (info^.blocks)
+  Map.lookup (labelIndex lbl) (brBlocks br)
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
@@ -421,8 +448,8 @@ tryGetStaticSyscallNo interp_state block_addr proc_state
   | BVValue _ call_no <- proc_state^.boundValue syscall_num_reg =
     Just call_no
   | Initial r <- proc_state^.boundValue syscall_num_reg
-  , Just b <- interp_state^.blocks^.at block_addr =
-    asConcreteSingleton (brAbsInitState b^.absRegState^.boundValue r)
+  , Just info <- interp_state^.foundAddrs^.at block_addr =
+    asConcreteSingleton (foundAbstractState info^.absRegState^.boundValue r)
   | otherwise =
     Nothing
 
@@ -431,20 +458,26 @@ classifyBlock :: forall arch ids
               .  (ArchConstraint arch ids, MemWidth (ArchAddrWidth arch))
               => Block arch ids
               -> DiscoveryInfo arch ids
-              -> ParsedTermStmt arch ids
-classifyBlock b interp_state =
+              -> ([Stmt arch ids], ParsedTermStmt arch ids)
+classifyBlock b interp_state = do
+  let stmts = blockStmts b
+      mem = memory interp_state
+
   case blockTerm b of
-    TranslateError _ msg -> ParsedTranslateError msg
-    Branch c x y -> ParsedBranch c x y
+    TranslateError _ msg -> (stmts, ParsedTranslateError msg)
+    Branch c x y
+      | labelAddr x /= labelAddr (blockLabel b) -> error "Branch with bad child"
+      | labelAddr y /= labelAddr (blockLabel b) -> error "Branch with bad child"
+      | otherwise -> (stmts, ParsedBranch c (labelIndex x) (labelIndex y))
     FetchAndExecute proc_state
         -- The last statement was a call.
       | Just (prev_stmts, ret_addr) <- identifyCall mem stmts proc_state ->
-        ParsedCall proc_state prev_stmts (Just ret_addr)
+        (toList prev_stmts, ParsedCall proc_state (Just ret_addr))
 
       -- Jump to concrete offset.
       | Just tgt_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg)
       , inSameFunction (labelAddr (blockLabel b)) tgt_addr interp_state ->
-        ParsedJump proc_state tgt_addr
+        (stmts, ParsedJump proc_state tgt_addr)
 
       -- Return
       | Just asgn <- identifyReturn proc_state (callStackDelta (archInfo interp_state)) ->
@@ -453,26 +486,23 @@ classifyBlock b interp_state =
                 AssignStmt asgn'
                   | Just Refl <- testEquality (assignId asgn) (assignId  asgn') -> True
                 _ -> False
-            nonret_stmts = Seq.fromList $ filter (not . isRetLoad) stmts
-        in ParsedReturn proc_state nonret_stmts
+            nonret_stmts = filter (not . isRetLoad) stmts
+        in (nonret_stmts, ParsedReturn proc_state)
 
         -- Jump table
       | let entry = getFunctionEntryPoint (labelAddr (blockLabel b)) interp_state
       , let cur_ip = proc_state^.boundValue ip_reg
       , Just (idx, nexts) <- identifyJumpTable interp_state entry cur_ip ->
-          ParsedLookupTable proc_state idx nexts
+          (stmts, ParsedLookupTable proc_state idx nexts)
 
       -- Finally, we just assume that this is a tail call through a pointer
       -- FIXME: probably unsound.
       | otherwise ->
-        ParsedCall proc_state (Seq.fromList stmts) Nothing
+        (stmts, ParsedCall proc_state Nothing)
 
     -- rax is concrete in the first case, so we don't need to propagate it etc.
     Syscall proc_state
       | Just next_addr <- asLiteralAddr mem (proc_state^.boundValue ip_reg) ->
-        ParsedSyscall proc_state next_addr
+        (stmts, ParsedSyscall proc_state next_addr)
 
-      | otherwise -> ClassifyFailure "System call with non-literal return address."
-  where
-    stmts = blockStmts b
-    mem = memory interp_state
+      | otherwise -> (stmts, ClassifyFailure "System call with non-literal return address.")

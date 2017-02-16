@@ -27,6 +27,7 @@ library
 
   exposed-modules:
     Data.Macaw.AbsDomain.AbsState
+    Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval
     Data.Macaw.Architecture.Info
@@ -35,7 +36,6 @@ library
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.Info
-    Data.Macaw.Discovery.JumpBounds
     Data.Macaw.Dwarf
     Data.Macaw.Memory
     Data.Macaw.Memory.ElfLoader

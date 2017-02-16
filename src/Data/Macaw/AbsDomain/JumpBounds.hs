@@ -2,14 +2,17 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Data.Macaw.Discovery.JumpBounds
+{-# LANGUAGE StandaloneDeriving #-}
+module Data.Macaw.AbsDomain.JumpBounds
   ( InitialIndexBounds
   , arbitraryInitialBounds
   , joinInitialBounds
   , IndexBounds
   , mkIndexBounds
+  , UpperBound(..)
   , addUpperBound
-  , lookupUpperBound
+  , assertPred
+  , unsignedUpperBound
   , nextBlockBounds
   ) where
 
@@ -20,6 +23,7 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr (maxUnsigned)
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
@@ -36,6 +40,8 @@ instance MapF.EqF UpperBound where
 instance Ord (UpperBound tp) where
   compare (IntegerUpperBound x) (IntegerUpperBound y) = compare x y
 
+deriving instance Show (UpperBound tp)
+
 -- | Bounds for a function as the start of a block.
 data InitialIndexBounds r
    = InitialIndexBounds { initialRegUpperBound :: !(MapF r UpperBound)
@@ -43,6 +49,11 @@ data InitialIndexBounds r
 
 instance MapF.TestEquality r => Eq (InitialIndexBounds r) where
    x == y = initialRegUpperBound x == initialRegUpperBound y
+
+instance ShowF r => Pretty (InitialIndexBounds r) where
+  pretty r = vcat $ ppPair <$> MapF.toList (initialRegUpperBound r)
+    where ppPair :: MapF.Pair r UpperBound -> Doc
+          ppPair (MapF.Pair k (IntegerUpperBound b)) = text (showF k) <+> text "<=" <+> text (show b)
 
 -- | Create initial index bounds that can represent any system state.
 arbitraryInitialBounds :: InitialIndexBounds reg
@@ -104,9 +115,10 @@ mkIndexBounds i = IndexBounds { _regBounds = initialRegUpperBound i
                               , _assignUpperBound = MapF.empty
                               }
 
+-- | Add a inclusive upper bound to a value.
 addUpperBound :: ( MapF.OrdF (ArchReg arch)
-                  , HasRepr (ArchReg arch) TypeRepr
-                  )
+                 , HasRepr (ArchReg arch) TypeRepr
+                 )
                => BVValue arch ids w
                -> Integer -- ^ Upper bound as an unsigned number
                -> IndexBounds (ArchReg arch) ids
@@ -121,18 +133,48 @@ addUpperBound v u bnds
                 | otherwise -> Left "Constant given upper bound that is statically less than given bounds"
     RelocatableValue{} -> Left "Relocatable value does not have upper bounds."
     AssignedValue a ->
-      Right $ bnds & assignUpperBound %~ MapF.insertWith min (assignId a) (IntegerUpperBound u)
+      case assignRhs a of
+        EvalApp (UExt x _) -> addUpperBound x u bnds
+        EvalApp (Trunc x w) ->
+          if u < maxUnsigned w then
+            addUpperBound x u bnds
+           else
+            Right $ bnds
+        _ ->
+          Right $ bnds & assignUpperBound %~ MapF.insertWith min (assignId a) (IntegerUpperBound u)
     Initial r ->
       Right $ bnds & regBounds %~ MapF.insertWith min r (IntegerUpperBound u)
 
+
+-- | Assert a predice is true and update bounds.
+assertPred :: ( OrdF (ArchReg arch)
+              , HasRepr (ArchReg arch) TypeRepr
+              )
+           => Value arch ids BoolType -- ^ Value represnting predicate
+           -> Bool -- ^ Controls whether predicate is true or false
+           -> IndexBounds (ArchReg arch) ids -- ^ Current index bounds
+           -> Either String (IndexBounds (ArchReg arch) ids)
+assertPred (AssignedValue a) isTrue bnds =
+  case assignRhs a of
+    -- Given x < c), assert x <= c-1
+    EvalApp (BVUnsignedLt x (BVValue _ c)) | isTrue     -> addUpperBound x (c-1) bnds
+    -- Given not (c < y), assert y <= c
+    EvalApp (BVUnsignedLt (BVValue _ c) y) | not isTrue -> addUpperBound y c bnds
+    -- Given x <= c, assert x <= c
+    EvalApp (BVUnsignedLe x (BVValue _ c)) | isTrue     -> addUpperBound x c bnds
+    -- Given not (c <= y), assert y <= (c-1)
+    EvalApp (BVUnsignedLe (BVValue _ c) y) | not isTrue -> addUpperBound y (c-1) bnds
+    _ -> Right bnds
+assertPred _ _ bnds = Right bnds
+
 -- | Lookup an upper bound or return analysis for why it is not defined.
-lookupUpperBound :: ( MapF.OrdF (ArchReg arch)
+unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
                     , MapF.ShowF (ArchReg arch)
                     )
                   => IndexBounds (ArchReg arch) ids
                   -> Value arch ids tp
                   -> Either String (UpperBound tp)
-lookupUpperBound bnds v =
+unsignedUpperBound bnds v =
   case v of
     BVValue _ i -> Right (IntegerUpperBound i)
     RelocatableValue{} ->
@@ -140,12 +182,25 @@ lookupUpperBound bnds v =
     AssignedValue a ->
       case MapF.lookup (assignId a) (bnds^.assignUpperBound) of
         Just bnd -> Right bnd
-        Nothing -> Left $ "Could not find upper bounds for " ++ show (assignId a) ++ "."
+        Nothing ->
+          case assignRhs a of
+            EvalApp (BVAnd _ x y) -> do
+              case (unsignedUpperBound bnds x,  unsignedUpperBound bnds y) of
+                (Right (IntegerUpperBound xb), Right (IntegerUpperBound yb)) ->
+                  Right (IntegerUpperBound (min xb yb))
+                (Right xb, Left{}) -> Right xb
+                (Left{}, yb)       -> yb
+            EvalApp (UExt x _) -> do
+              IntegerUpperBound r <- unsignedUpperBound bnds x
+              pure (IntegerUpperBound r)
+            EvalApp (Trunc x w) -> do
+              IntegerUpperBound xr <- unsignedUpperBound bnds x
+              pure $! IntegerUpperBound (min xr (maxUnsigned w))
+            _ -> Left $ "Could not find upper bounds for " ++ show (assignId a) ++ "."
     Initial r ->
       case MapF.lookup r (bnds^.regBounds) of
         Just bnd -> Right bnd
-        Nothing -> Left $ "Could not find upper bounds for " ++ showF r ++ "."
-
+        Nothing -> Left $ "No upper bounds for " ++ showF r ++ "."
 
 eitherToMaybe :: Either a b -> Maybe b
 eitherToMaybe (Right v) = Just v
@@ -163,6 +218,6 @@ nextBlockBounds :: forall arch ids
                 -> InitialIndexBounds (ArchReg arch)
 nextBlockBounds bnds regs =
   let m = regStateMap regs
-      nextBounds = MapF.mapMaybe (eitherToMaybe . lookupUpperBound bnds) m
+      nextBounds = MapF.mapMaybe (eitherToMaybe . unsignedUpperBound bnds) m
    in InitialIndexBounds { initialRegUpperBound = nextBounds
                          }

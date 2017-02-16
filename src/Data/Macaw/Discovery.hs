@@ -45,21 +45,24 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import qualified Data.Set as Set
+import qualified Data.Vector as V
 import           Data.Word
 import           Numeric
 --import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.AbsState
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.AbsDomain.Refine
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.Info
---import           Data.Macaw.Discovery.JumpBounds
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
+
+import Debug.Trace
 
 transferRHS :: forall a ids tp
             .  ( OrdF (ArchReg a)
@@ -193,45 +196,40 @@ runCFGM arch_info mem symbols m = do
     let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
     Some <$> execStateT (unCFGM m) init_info
 
-printAddrBacktrace :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
+printAddrBacktrace :: Map (ArchSegmentedAddr arch) (FoundAddr arch)
+                   -> ArchSegmentedAddr arch
                    -> CodeAddrReason (ArchAddrWidth arch)
                    -> [String]
-printAddrBacktrace m rsn = do
-  let prev addr =
-        case Map.lookup addr m of
-          Just br -> printAddrBacktrace m (brReason br)
-          Nothing -> error $ "Unknown reason for address " ++ show addr
+printAddrBacktrace found_map addr rsn = do
+  let pp msg = show addr ++ ": " ++ msg
+  let prev prev_addr =
+        case Map.lookup prev_addr found_map of
+          Just found_info -> printAddrBacktrace found_map prev_addr (foundReason found_info)
+          Nothing -> error $ "Unknown reason for address " ++ show prev_addr
   case rsn of
-    InWrite src ->
-      ["Written to memory in block at address " ++ show src ++ "."]
-      ++ prev src
-    NextIP src ->
-      ["Target IP for " ++ show src ++ "."]
-      ++ prev src
-    CallTarget src ->
-      ["Target IP of call at " ++ show src ++ "."]
-      ++ prev src
-
-    InitAddr -> ["Initial entry point"]
-    CodePointerInMem src -> ["Memory address " ++ show src ++ " contained code."]
-    SplitAt src -> ["Split from read of " ++ show src ++ "."] ++ prev src
-    InterProcedureJump src -> ["Reference from external address " ++ show src ++ "."] ++ prev src
+    InWrite src            -> pp ("Written to memory in block at address " ++ show src ++ ".") : prev src
+    NextIP src             -> pp ("Target IP for " ++ show src ++ ".") : prev src
+    CallTarget src         -> pp ("Target IP of call at " ++ show src ++ ".") : prev src
+    InitAddr               -> [pp "Initial entry point."]
+    CodePointerInMem src   -> [pp ("Memory address " ++ show src ++ " contained code.")]
+    SplitAt src            -> pp ("Split from read of " ++ show src ++ ".") : prev src
+    InterProcedureJump src -> pp ("Reference from external address " ++ show src ++ ".") : prev src
 
 -- | Return true if this address was added because of the contents of a global address
 -- in memory initially.
 --
 -- This heuristic is not very accurate, so we avoid printing errors when it leads to
 -- issues.
-cameFromInitialMemoryContents :: Map (ArchSegmentedAddr arch) (BlockRegion arch ids)
-                              -> CodeAddrReason (ArchAddrWidth arch)
-                              -> Bool
-cameFromInitialMemoryContents m rsn = do
+cameFromUnsoundReason :: Map (ArchSegmentedAddr arch) (FoundAddr arch)
+                      -> CodeAddrReason (ArchAddrWidth arch)
+                      -> Bool
+cameFromUnsoundReason found_map rsn = do
   let prev addr =
-        case Map.lookup addr m of
-          Just br -> cameFromInitialMemoryContents m (brReason br)
+        case Map.lookup addr found_map of
+          Just info -> cameFromUnsoundReason found_map (foundReason info)
           Nothing -> error $ "Unknown reason for address " ++ show addr
   case rsn of
-    InWrite src -> prev src
+    InWrite{} -> True
     NextIP src  -> prev src
     CallTarget src -> prev src
     SplitAt src -> prev src
@@ -264,21 +262,23 @@ tryDisassembleAddr rsn addr ab = do
   -- Build state for exploring this.
   case maybeError of
     Just e -> do
-      when (not (cameFromInitialMemoryContents block_addrs rsn)) $ do
+      when (not (cameFromUnsoundReason (s0^.foundAddrs) rsn)) $ do
           error $ "Failed to disassemble " ++ show e ++ "\n"
-            ++ unlines (printAddrBacktrace block_addrs rsn)
+            ++ unlines (printAddrBacktrace (s0^.foundAddrs) addr rsn)
     Nothing -> do
       pure ()
   assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
   assert (next_ip^.addrOffset > addr^.addrOffset) $ do
   let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
   -- Add block region to blocks.
-  let br = BlockRegion { brReason = rsn
-                       , brSize = next_ip^.addrOffset - addr^.addrOffset
+  let found_info = FoundAddr { foundReason = rsn
+                             , foundAbstractState = ab
+                             }
+  let br = BlockRegion { brSize = next_ip^.addrOffset - addr^.addrOffset
                        , brBlocks = block_map
-                       , brAbsInitState = ab
                        }
-  put $ s0 & blocks %~ Map.insert addr br
+  put $! s0 & foundAddrs %~ Map.insert addr found_info
+            & blocks     %~ Map.insert addr br
 
 -- | Mark address as the start of a code block.
 markCodeAddrBlock :: PrettyCFGConstraints arch
@@ -300,7 +300,9 @@ markCodeAddrBlock rsn addr ab = do
       -- Get block for addr
       tryDisassembleAddr rsn addr ab
       -- Get block for old block
-      tryDisassembleAddr (brReason br) l (brAbsInitState br)
+      case Map.lookup l (s^.foundAddrs) of
+        Just info -> tryDisassembleAddr (foundReason info) l (foundAbstractState info)
+        Nothing -> error $ "Internal mark code addr as block saved but no reason information stored."
       -- It's possible this will cause the current block to be broken, or cause a function to
       -- boundaries.  However, we don't think this should cause the need automatically to
       -- re-evaluate a block as any information discovered should be strictly less than
@@ -325,7 +327,6 @@ transferStmt info stmt =
     WriteMem addr v -> do
       modify $ \r -> addMemWrite (r^.absInitialRegs^.curIP) addr v r
     _ -> return ()
-
 
 newtype HexWord = HexWord Word64
 
@@ -353,6 +354,7 @@ markAddrAsFunction rsn addr = do
 maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
 maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
 
+{-
 -- | Mark addresses written to memory that point to code as function entry points.
 recordWriteStmt :: ( PrettyCFGConstraints arch
                    , HasRepr (ArchReg arch) TypeRepr
@@ -372,6 +374,7 @@ recordWriteStmt src regs stmt = do
           let addrs = concretizeAbsCodePointers mem (transferValue regs v)
           mapM_ (markAddrAsFunction (InWrite src)) addrs
     _ -> return ()
+-}
 
 transferStmts :: ( HasRepr      (ArchReg arch) TypeRepr
                  , RegisterInfo (ArchReg arch)
@@ -438,7 +441,7 @@ assignmentAbsValues info mem g absm =
 mergeIntraJump  :: ( PrettyCFGConstraints arch
                    , RegisterInfo (ArchReg arch)
                    )
-                => BlockLabel (ArchAddrWidth arch)
+                => ArchSegmentedAddr arch
                   -- ^ Source label that we are jumping from.
                 -> AbsBlockState (ArchReg arch)
                    -- ^ Block state after executing instructions.
@@ -450,23 +453,23 @@ mergeIntraJump src ab _tgt
   , debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) False
   = error "Unexpected mergeIntraJump"
 mergeIntraJump src ab tgt = do
-  let rsn = NextIP (labelAddr src)
+  let rsn = NextIP src
   -- Associate a new abstract state with the code region.
   s0 <- get
-  case Map.lookup tgt (s0^.blocks) of
+  case Map.lookup tgt (s0^.foundAddrs) of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
-    Just old_block -> do
-      case joinD (brAbsInitState old_block) ab of
+    Just old_info -> do
+      case joinD (foundAbstractState old_info) ab of
         Nothing  -> return ()
         Just new -> do
-          let new_block = old_block { brAbsInitState = new }
-          modify $ (blocks       %~ Map.insert tgt new_block)
-                 . (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
+          let new_info = old_info { foundAbstractState = new }
+          modify $ (foundAddrs   %~ Map.insert tgt new_info)
+                 . (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
                  . (frontier     %~ Map.insert tgt rsn)
     -- We haven't seen this block before
     Nothing -> do
-      modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton (labelAddr src)))
+      modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
              . (frontier     %~ Map.insert tgt rsn)
       markCodeAddrBlock rsn tgt ab
 
@@ -498,27 +501,38 @@ matchJumpTable _ _ =
 getJumpTableBounds :: ( OrdF (ArchReg a)
                       , ShowF (ArchReg a)
                       , MemWidth (ArchAddrWidth a)
+                      , PrettyArch a
                       )
-                   => AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
+                   => ArchitectureInfo a
+                   -> ArchSegmentedAddr a
+                   -> AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
                    -> ArchSegmentedAddr a -- ^ Base
                    -> BVValue a ids (ArchAddrWidth a) -- ^ Index in jump table
                    -> Maybe (ArchAddr a)
                    -- ^ One past last index in jump table or nothing
-getJumpTableBounds regs base jump_index
-    -- Get range for the index.
-  | let abs_value = transferValue regs jump_index
-  , StridedInterval index_interval  <- abs_value
-    -- Check that relevant interval is completely contained within a read-only
-    -- read only range in the memory.
-  , SI.StridedInterval _ index_base index_range index_stride <-
-        debug DCFG "getJumpTable3" $ index_interval
-  , index_end <- index_base + (index_range + 1) * index_stride
-  , rangeInReadonlySegment base (8 * fromInteger index_end) =
-    -- Get the addresses associated.
-    debug DCFG ("Fixed table " ++ show base ++ " [" ++ shows jump_index "]") $
-      Just $! fromInteger index_end
-getJumpTableBounds _ _ _ = Nothing
+getJumpTableBounds arch addr regs base jump_index = do
+  let abs_value = transferValue regs jump_index
+  case abs_value  of
+    StridedInterval (SI.StridedInterval _ index_base index_range index_stride) -> do
+      let index_end = index_base + (index_range + 1) * index_stride
+      if rangeInReadonlySegment base (jumpTableEntrySize arch * fromInteger index_end) then
+        case Jmp.unsignedUpperBound (regs^.indexBounds) jump_index of
+          Right (Jmp.IntegerUpperBound bnd) | bnd == index_range -> Just $! fromInteger index_end
+          Right bnd ->
+            trace ("Upper bound mismatch at " ++ show addr ++ ":\n"
+                   ++ "  JumpBounds:" ++ show bnd
+                   ++ "  Domain:" ++ show index_range)
+              Nothing
+          Left msg ->
+            trace ("Could not find  jump table at " ++ show addr ++ ": " ++ msg ++ "\n"
+                   ++ show (ppValueAssignments jump_index))
+              Nothing -- error $ "Could not compute upper bound on jump table: " ++ msg
+       else
+        error $ "Jump table range is not in readonly memory"
+    TopV -> Nothing
+    _ -> error $ "Index interval is not a stride " ++ show abs_value
 
+{-
 -- | This explores a block that ends with a fetch and execute.
 fetchAndExecute :: forall arch ids
                 .  ( RegisterInfo (ArchReg arch)
@@ -548,7 +562,7 @@ fetchAndExecute b regs' s' = do
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
-        mergeIntraJump lbl (archPostCallAbsState arch_info abst ret) ret
+        mergeIntraJump src (archPostCallAbsState arch_info abst ret) ret
         -- Look for new ips.
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         mapM_ (markAddrAsFunction (CallTarget src)) addrs
@@ -602,22 +616,16 @@ fetchAndExecute b regs' s' = do
               assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
               -- Merge block state.
               let abst' = abst & setAbsIP tgt_addr
-              mergeIntraJump lbl abst' tgt_addr
+              mergeIntraJump src abst' tgt_addr
 
       -- Block ends with what looks like a jump table.
-      | AssignedValue (Assignment _ (ReadMem ptr _))
-          <- debug DCFG "try jump table" $ s'^.curIP
+      | AssignedValue (Assignment _ (ReadMem ptr _)) <- debug DCFG "try jump table" $ s'^.curIP
         -- Attempt to compute interval of addresses interval is over.
-      , Just (base, jump_idx) <- matchJumpTable mem ptr -> do
-            debug DCFG ("Found jump table at " ++ show lbl) $ do
-
+      , Just (base, jump_idx) <- matchJumpTable mem ptr
+      , Just read_end <- getJumpTableBounds arch_info src regs' base jump_idx -> do
             mapM_ (recordWriteStmt src regs') (blockStmts b)
 
-            -- Try to compute jump table bounds
-            read_end <-
-              case getJumpTableBounds regs' base jump_idx of
-                Just e -> pure e
-                Nothing -> error $ "Could not compute jump bounds."
+          -- Try to compute jump table bounds
 
             let abst :: AbsBlockState (ArchReg arch)
                 abst = finalAbsBlockState regs' s'
@@ -645,7 +653,7 @@ fetchAndExecute b regs' s' = do
                         let flags = segmentFlags (addrSegment tgt_addr)
                         assert (flags `Perm.hasPerm` Perm.execute) $ do
                         let abst' = abst & setAbsIP tgt_addr
-                        mergeIntraJump lbl abst' tgt_addr
+                        mergeIntraJump src abst' tgt_addr
                         resolveJump (tgt_addr:prev) (idx+1)
                     _ -> do
                       debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
@@ -664,6 +672,7 @@ fetchAndExecute b regs' s' = do
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         -- Mark entry points as the start of functions
         mapM_ (markAddrAsFunction (error "Uninterpretable jump reason"))  addrs
+-}
 
 type DiscoveryConstraints arch
    = ( PrettyCFGConstraints arch
@@ -687,6 +696,301 @@ tryLookupBlock ctx base block_map lbl =
              ++ " given invalid index " ++ show (labelIndex lbl)
       Just b -> b
 
+refineProcStateBounds :: ( OrdF (ArchReg arch)
+                         , HasRepr (ArchReg arch) TypeRepr
+                         )
+                      => Value arch ids BoolType
+                      -> Bool
+                      -> AbsProcessorState (ArchReg arch) ids
+                      -> AbsProcessorState (ArchReg arch) ids
+refineProcStateBounds v isTrue ps =
+  case indexBounds (Jmp.assertPred v isTrue) ps of
+    Left{}    -> ps
+    Right ps' -> ps'
+
+data ParseState arch ids = ParseState { _pblockMap :: !(Map Word64 (ParsedBlock arch ids))
+                                        -- ^ Block m ap
+                                      , _writtenCodeAddrs :: ![ArchSegmentedAddr arch]
+                                        -- ^ Addresses marked executable that were written to memory.
+                                      , _intraJumpTargets :: ![(ArchSegmentedAddr arch, AbsBlockState (ArchReg arch))]
+                                      , _newFunctionAddrs :: ![ArchSegmentedAddr arch]
+                                      }
+
+pblockMap :: Simple Lens (ParseState arch ids) (Map Word64 (ParsedBlock arch ids))
+pblockMap = lens _pblockMap (\s v -> s { _pblockMap = v })
+
+writtenCodeAddrs :: Simple Lens (ParseState arch ids) [ArchSegmentedAddr arch]
+writtenCodeAddrs = lens _writtenCodeAddrs (\s v -> s { _writtenCodeAddrs = v })
+
+intraJumpTargets :: Simple Lens (ParseState arch ids) [(ArchSegmentedAddr arch, AbsBlockState (ArchReg arch))]
+intraJumpTargets = lens _intraJumpTargets (\s v -> s { _intraJumpTargets = v })
+
+newFunctionAddrs :: Simple Lens (ParseState arch ids) [ArchSegmentedAddr arch]
+newFunctionAddrs = lens _newFunctionAddrs (\s v -> s { _newFunctionAddrs = v })
+
+
+-- | Mark addresses written to memory that point to code as function entry points.
+recordWriteStmt' :: ( HasRepr (ArchReg arch) TypeRepr
+                    , Integral (MemWord (RegAddrWidth (ArchReg arch)))
+                    , IsAddr (ArchAddrWidth arch)
+                    , OrdF (ArchReg arch)
+                    , ShowF (ArchReg arch)
+                    )
+                 => Memory (ArchAddrWidth arch)
+                 -> AbsProcessorState (ArchReg arch) ids
+                 -> Stmt arch ids
+                 -> State (ParseState arch ids) ()
+recordWriteStmt' mem regs stmt = do
+  let addrWidth = addrWidthNatRepr $ memAddrWidth mem
+  case stmt of
+    WriteMem _addr v
+      | Just Refl <- testEquality (typeRepr v) (BVTypeRepr addrWidth) -> do
+          let addrs = concretizeAbsCodePointers mem (transferValue regs v)
+          writtenCodeAddrs %= (addrs ++)
+    _ -> return ()
+
+data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
+                                          , pctxArchInfo :: !(ArchitectureInfo arch)
+                                          , pctxAddr     :: !(ArchSegmentedAddr arch)
+                                          , pctxBlockMap :: !(Map Word64 (Block arch ids))
+                                          }
+
+-- | This explores a block that ends with a fetch and execute.
+fetchAndExecute' :: forall arch ids
+                 .  ( Integral (MemWord (ArchAddrWidth arch))
+                    , OrdF (ArchReg arch)
+                    , HasRepr (ArchReg arch) TypeRepr
+                    , IsAddr (ArchAddrWidth arch)
+                    , RegisterInfo (ArchReg arch)
+                    , PrettyArch arch
+                    )
+                 => ParseContext arch ids
+                 -> Block arch ids
+                 -> AbsProcessorState (ArchReg arch) ids
+                    -- ^ Registers at this block after statements executed
+                 -> RegState (ArchReg arch) (Value arch ids)
+                 -> State (ParseState arch ids) (ParsedBlock arch ids)
+fetchAndExecute' ctx b regs s' = do
+  let lbl = blockLabel b
+  let src = labelAddr lbl
+  let lbl_idx = labelIndex lbl
+  let mem = pctxMemory ctx
+  let arch_info = pctxArchInfo ctx
+  -- See if next statement appears to end with a call.
+  -- We define calls as statements that end with a write that
+  -- stores the pc to an address.
+  let regs' = transferStmts arch_info regs (blockStmts b)
+  case () of
+    -- The last statement was a call.
+    -- Note that in some cases the call is known not to return, and thus
+    -- this code will never jump to the return value.
+    _ | Just (prev_stmts, ret) <- identifyCall mem (blockStmts b) s' -> do
+        Fold.mapM_ (recordWriteStmt' mem regs') prev_stmts
+        let abst = finalAbsBlockState regs' s'
+        seq abst $ do
+        -- Merge caller return information
+        intraJumpTargets %= ((ret, archPostCallAbsState arch_info abst ret):)
+        -- Look for new ips.
+        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+        newFunctionAddrs %= (++ addrs)
+        pure ParsedBlock { pblockLabel = lbl_idx
+                         , pblockStmts = Fold.toList prev_stmts
+                         , pblockState = regs'
+                         , pblockTerm  = ParsedCall s' (Just ret)
+                         }
+
+    -- This block ends with a return.
+      | Just asgn' <- identifyReturn s' (callStackDelta arch_info) -> do
+
+        let isRetLoad s =
+              case s of
+                AssignStmt asgn
+                  | Just Refl <- testEquality (assignId asgn) (assignId  asgn') -> True
+                _ -> False
+            nonret_stmts = filter (not . isRetLoad) (blockStmts b)
+
+        mapM_ (recordWriteStmt' mem regs') nonret_stmts
+
+        let ip_val = s'^.boundValue ip_reg
+        case transferValue regs' ip_val of
+          ReturnAddr -> return ()
+          -- The return_val is bad.
+          -- This could indicate an imprecision in analysis or maybe unreachable/bad code.
+          rv ->
+            debug DCFG ("return_val is bad at " ++ show lbl ++ ": " ++ show rv) $
+                  return ()
+        pure ParsedBlock { pblockLabel = lbl_idx
+                         , pblockStmts = nonret_stmts
+                         , pblockState = regs'
+                         , pblockTerm = ParsedReturn s'
+                         }
+      -- Check for tail call (anything where we are right at stack height
+      | ptrType    <- BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
+      , sp_val     <-  s'^.boundValue sp_reg
+      , ReturnAddr <- transferRHS arch_info regs' (ReadMem sp_val ptrType) -> do
+
+        mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+
+        pure ParsedBlock { pblockLabel = lbl_idx
+                         , pblockStmts = blockStmts b
+                         , pblockState = regs'
+                         , pblockTerm  = ParsedCall s' Nothing
+                         }
+
+      -- Jump to concrete offset.
+      | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg) -> do
+         assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
+         mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+         -- Merge block state.
+         let abst = finalAbsBlockState regs' s'
+         let abst' = abst & setAbsIP tgt_addr
+         intraJumpTargets %= ((tgt_addr, abst'):)
+         pure ParsedBlock { pblockLabel = lbl_idx
+                          , pblockStmts = blockStmts b
+                          , pblockState = regs'
+                          , pblockTerm  = ParsedJump s' tgt_addr
+                          }
+      -- Block ends with what looks like a jump table.
+      | AssignedValue (Assignment _ (ReadMem ptr _)) <- debug DCFG "try jump table" $ s'^.curIP
+        -- Attempt to compute interval of addresses interval is over.
+      , Just (base, jump_idx) <- matchJumpTable mem ptr
+      , Just read_end <- getJumpTableBounds arch_info src regs' base jump_idx -> do
+
+          mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+
+          -- Try to compute jump table bounds
+
+          let abst :: AbsBlockState (ArchReg arch)
+              abst = finalAbsBlockState regs' s'
+          seq abst $ do
+          -- This function resolves jump table entries.
+          -- It is a recursive function that has an index into the jump table.
+          -- If the current index can be interpreted as a intra-procedural jump,
+          -- then it will add that to the current procedure.
+          -- This returns the last address read.
+          let resolveJump :: [ArchSegmentedAddr arch]
+                             -- /\ Addresses in jump table in reverse order
+                          -> ArchAddr arch
+                             -- /\ Current index
+                          -> State (ParseState arch ids) [ArchSegmentedAddr arch]
+              resolveJump prev idx | idx == read_end = do
+                -- Stop jump table when we have reached computed bounds.
+                return (reverse prev)
+              resolveJump prev idx = do
+                  let read_addr = base & addrOffset +~ 8 * idx
+                  case readAddr mem LittleEndian read_addr of
+                    Right tgt_addr
+                      | Perm.isReadonly (segmentFlags (addrSegment read_addr)) -> do
+                        let flags = segmentFlags (addrSegment tgt_addr)
+                        assert (flags `Perm.hasPerm` Perm.execute) $ do
+                        let abst' = abst & setAbsIP tgt_addr
+                        intraJumpTargets %= ((tgt_addr, abst'):)
+                        resolveJump (tgt_addr:prev) (idx+1)
+                    _ -> do
+                      debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
+                      return (reverse prev)
+          read_addrs <- resolveJump [] 0
+          pure ParsedBlock { pblockLabel = lbl_idx
+                           , pblockStmts = blockStmts b
+                           , pblockState = regs'
+                           , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
+                           }
+      -- Block that ends with some unknown
+      | otherwise -> do
+          trace ("Could not classify " ++ show lbl) $ do
+          mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+          pure ParsedBlock { pblockLabel = lbl_idx
+                           , pblockStmts = blockStmts b
+                           , pblockState = regs'
+                           , pblockTerm  = ClassifyFailure "Could not classify block type."
+                           }
+
+type ParseConstraints arch = ( RegisterInfo (ArchReg arch)
+                             , PrettyArch arch
+                             , HasRepr (ArchReg arch) TypeRepr
+                             , IsAddr (RegAddrWidth (ArchReg arch))
+                             )
+
+-- | This evalutes the statements in a block to expand the information known
+-- about control flow targets of this block.
+parseBlocks :: ParseConstraints arch
+            => ParseContext arch ids
+               -- ^ Context for parsing blocks.
+            -> [(Block arch ids, AbsProcessorState (ArchReg arch) ids)]
+               -- ^ Queue of blocks to travese
+            -> State (ParseState arch ids) ()
+parseBlocks _ct [] = pure ()
+parseBlocks ctx ((b,regs):rest) = do
+  let mem       = pctxMemory ctx
+  let arch_info = pctxArchInfo ctx
+  let lbl = blockLabel b
+  let idx = labelIndex lbl
+  let src = pctxAddr ctx
+  let block_map = pctxBlockMap ctx
+  -- FIXME: we should propagate c back to the initial block, not just b
+  case blockTerm b of
+    Branch c lb rb -> do
+      let regs' = transferStmts arch_info regs (blockStmts b)
+      mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+
+      let l = tryLookupBlock "left branch"  src block_map lb
+      let l_regs = refineProcStateBounds c True $ refineProcState c absTrue regs'
+      let r = tryLookupBlock "right branch" src block_map rb
+      let r_regs = refineProcStateBounds c False $ refineProcState c absFalse regs'
+      -- We re-transfer the stmts to propagate any changes from
+      -- the above refineProcState.  This could be more efficient by
+      -- tracking what (if anything) changed.  We also might
+      -- need to keep going back and forth until we reach a
+      -- fixpoint
+      let l_regs' = transferStmts arch_info l_regs (blockStmts b)
+      let r_regs' = transferStmts arch_info r_regs (blockStmts b)
+
+
+      let pb = ParsedBlock { pblockLabel = idx
+                           , pblockStmts = blockStmts b
+                           , pblockState = regs'
+                           , pblockTerm  = ParsedBranch c (labelIndex lb) (labelIndex rb)
+                           }
+      pblockMap %= Map.insert idx pb
+
+      parseBlocks ctx ((l, l_regs'):(r, r_regs'):rest)
+
+    Syscall s' -> do
+      let regs' = transferStmts arch_info regs (blockStmts b)
+      mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+      let abst = finalAbsBlockState regs' s'
+      case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
+        [] -> error "Could not identify concrete system call address"
+        [addr] -> do
+          -- Merge system call result with possible next IPs.
+          let post = archPostSyscallAbsState arch_info abst addr
+
+          intraJumpTargets %= ((addr, post):)
+          let pb = ParsedBlock { pblockLabel = idx
+                               , pblockStmts = blockStmts b
+                               , pblockState = regs'
+                               , pblockTerm  = ParsedSyscall s' addr
+                               }
+          pblockMap %= Map.insert idx pb
+          parseBlocks ctx rest
+        _ -> error "Multiple system call addresses."
+
+
+    FetchAndExecute s' -> do
+      pb <- fetchAndExecute' ctx b regs s'
+      pblockMap %= Map.insert idx pb
+
+    -- Do nothing when this block ends in a translation error.
+    TranslateError _ msg -> do
+      let regs' = transferStmts arch_info regs (blockStmts b)
+      let pb = ParsedBlock { pblockLabel = idx
+                           , pblockStmts = blockStmts b
+                           , pblockState = regs'
+                           , pblockTerm = ParsedTranslateError msg
+                           }
+      pblockMap %= Map.insert idx pb
+
+
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
 transferBlock :: DiscoveryConstraints arch
@@ -699,40 +1003,24 @@ transferBlock :: DiscoveryConstraints arch
                  -- ^ Abstract state describing machine state when block is encountered.
               -> CFGM arch ids ()
 transferBlock block_map b regs = do
+  s <- get
   let lbl = blockLabel b
   let src = labelAddr lbl
-  mem <- gets memory
-  arch_info <- gets archInfo
-  let regs' = transferStmts arch_info regs (blockStmts b)
-  -- FIXME: we should propagate c back to the initial block, not just b
-  case blockTerm b of
-    Branch c lb rb -> do
-      mapM_ (recordWriteStmt src regs') (blockStmts b)
-      let l = tryLookupBlock "left branch" (labelAddr (blockLabel b))  block_map lb
-      let l_regs = refineProcState c absTrue regs'
-      let r = tryLookupBlock "right branch" (labelAddr (blockLabel b)) block_map rb
-      let r_regs = refineProcState c absFalse regs'
-      -- We re-transfer the stmts to propagate any changes from
-      -- the above refineProcState.  This could be more efficient by
-      -- tracking what (if anything) changed.  We also might
-      -- need to keep going back and forth until we reach a
-      -- fixpoint
-      transferBlock block_map l (transferStmts arch_info l_regs (blockStmts b))
-      transferBlock block_map r (transferStmts arch_info r_regs (blockStmts b))
-
-    Syscall s' -> do
-      mapM_ (recordWriteStmt src regs') (blockStmts b)
-      let abst = finalAbsBlockState regs' s'
-      let ips = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
-      -- Merge system call result with possible next IPs.
-      Fold.forM_ ips $ \addr -> do
-        mergeIntraJump lbl (archPostSyscallAbsState arch_info abst addr)  addr
-
-    FetchAndExecute s' -> do
-      fetchAndExecute b regs' s'
-    -- Do nothing when this block ends in a translation error.
-    TranslateError _ _ ->
-      pure ()
+  let ctx = ParseContext { pctxMemory   = memory s
+                         , pctxArchInfo = archInfo s
+                         , pctxAddr     = src
+                         , pctxBlockMap = block_map
+                         }
+  let ps0 = ParseState { _pblockMap = Map.empty
+                       , _writtenCodeAddrs = []
+                       , _intraJumpTargets = []
+                       , _newFunctionAddrs = []
+                       }
+  let ps = execState (parseBlocks ctx [(b,regs)]) ps0
+  pblockMapx
+  mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
+  mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
+  mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 transfer :: DiscoveryConstraints arch
          => ArchSegmentedAddr arch
@@ -740,17 +1028,21 @@ transfer :: DiscoveryConstraints arch
 transfer addr = do
   mem <- gets memory
 
+  mfinfo <- use $ foundAddrs . at addr
   mbr <- use $ blocks . at addr
-  case mbr of
-    Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
+  case mfinfo of
+    Nothing -> error $ "getBlock called on unfound address " ++ show addr ++ "."
+    Just finfo ->
+      case mbr of
+        Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
 
-    Just br -> do
-      case Map.lookup 0 (brBlocks br) of
-        Just root -> do
-          transferBlock (brBlocks br) root $
-            initAbsProcessorState mem (brAbsInitState br)
-        Nothing -> do
-          error $ "getBlock given block with empty blocks list."
+        Just br -> do
+          case Map.lookup 0 (brBlocks br) of
+            Just root -> do
+              transferBlock (brBlocks br) root $
+                initAbsProcessorState mem (foundAbstractState finfo)
+            Nothing -> do
+              error $ "getBlock given block with empty blocks list."
 
 ------------------------------------------------------------------------
 -- Main loop
