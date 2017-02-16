@@ -993,34 +993,38 @@ parseBlocks ctx ((b,regs):rest) = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlock :: DiscoveryConstraints arch
-              => Map Word64 (Block arch ids)
-                 -- ^ Map for this sequence of blocks.
-                 -- We keep this map independent of the blocks entry in the DiscoveryInfo, as it may be
-                 -- invalidated in tryDisassembleAddr.
-              -> Block arch ids -- ^ Block to start from
-              -> AbsProcessorState (ArchReg arch) ids
-                 -- ^ Abstract state describing machine state when block is encountered.
+transferBlocks :: DiscoveryConstraints arch
+               => BlockRegion arch ids
+               -- ^ Input block regions
+               -> AbsProcessorState (ArchReg arch) ids
+               -- ^ Abstract state describing machine state when block is encountered.
               -> CFGM arch ids ()
-transferBlock block_map b regs = do
-  s <- get
-  let lbl = blockLabel b
-  let src = labelAddr lbl
-  let ctx = ParseContext { pctxMemory   = memory s
-                         , pctxArchInfo = archInfo s
-                         , pctxAddr     = src
-                         , pctxBlockMap = block_map
-                         }
-  let ps0 = ParseState { _pblockMap = Map.empty
-                       , _writtenCodeAddrs = []
-                       , _intraJumpTargets = []
-                       , _newFunctionAddrs = []
-                       }
-  let ps = execState (parseBlocks ctx [(b,regs)]) ps0
-  pblockMapx
-  mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
-  mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
-  mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
+transferBlocks br regs =
+  case Map.lookup 0 (brBlocks br) of
+    Nothing -> do
+      error $ "transferBlocks given empty blockRegion."
+    Just b -> do
+      s <- get
+      let src = labelAddr (blockLabel b)
+      let ctx = ParseContext { pctxMemory   = memory s
+                             , pctxArchInfo = archInfo s
+                             , pctxAddr     = src
+                             , pctxBlockMap = brBlocks br
+                             }
+      let ps0 = ParseState { _pblockMap = Map.empty
+                           , _writtenCodeAddrs = []
+                           , _intraJumpTargets = []
+                           , _newFunctionAddrs = []
+                           }
+      let ps = execState (parseBlocks ctx [(b,regs)]) ps0
+      let pb = ParsedBlockRegion { regionAddr = src
+                                 , regionSize = brSize br
+                                 , regionBlockMap = ps^.pblockMap
+                                 }
+      parsedBlocks %= Map.insert src pb
+      mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
+      mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
+      mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 transfer :: DiscoveryConstraints arch
          => ArchSegmentedAddr arch
@@ -1035,14 +1039,7 @@ transfer addr = do
     Just finfo ->
       case mbr of
         Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
-
-        Just br -> do
-          case Map.lookup 0 (brBlocks br) of
-            Just root -> do
-              transferBlock (brBlocks br) root $
-                initAbsProcessorState mem (foundAbstractState finfo)
-            Nothing -> do
-              error $ "getBlock given block with empty blocks list."
+        Just br -> transferBlocks br $ initAbsProcessorState mem (foundAbstractState finfo)
 
 ------------------------------------------------------------------------
 -- Main loop
