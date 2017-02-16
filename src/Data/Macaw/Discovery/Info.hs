@@ -43,8 +43,6 @@ module Data.Macaw.Discovery.Info
   , frontier
   , function_frontier
     -- ** DiscoveryInfo utilities
-  , getFunctionEntryPoint
-  , inSameFunction
   , ArchConstraint
   , identifyCall
   , identifyReturn
@@ -182,6 +180,11 @@ data ParsedBlock arch ids
                  , pblockTerm  :: !(ParsedTermStmt arch ids)
                  }
 
+deriving instance (PrettyCFGConstraints arch
+                  , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
+                  )
+  => Show (ParsedBlock arch ids)
+
 ------------------------------------------------------------------------
 -- ParsedBlockRegion
 
@@ -193,6 +196,10 @@ data ParsedBlockRegion arch ids
                        , regionBlockMap :: !(Map Word64 (ParsedBlock arch ids))
                        -- ^ Map from labelIndex to associated block.
                        }
+deriving instance (PrettyCFGConstraints arch
+                  , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
+                  )
+  => Show (ParsedBlockRegion arch ids)
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo
@@ -313,36 +320,6 @@ lookupParsedBlock info lbl = do
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
-
--- | Returns the guess on the entry point of the given function.
---
--- Note. This code assumes that a block address is associated with at most one function.
-getFunctionEntryPoint :: ArchSegmentedAddr a
-                      -> DiscoveryInfo a ids
-                      -> ArchSegmentedAddr a
-getFunctionEntryPoint addr s = do
-  case Set.lookupLE addr (s^.functionEntries) of
-    Just a -> a
-    Nothing -> error $ "Could not find address of " ++ show addr ++ "."
-
-{-
--- | Returns the guess on the entry point of the given function.
---
--- Note. This code assumes that a block address is associated with at most one function.
-getFunctionEntryPoint' :: ArchSegmentedAddr a
-                       -> DiscoveryInfo a ids
-                       -> Maybe (ArchSegmentedAddr a)
-getFunctionEntryPoint' addr s = Set.lookupLE addr (s^.functionEntries)
--}
-
--- | Return true if the two addresses look like they are in the same
-inSameFunction :: ArchSegmentedAddr a
-               -> ArchSegmentedAddr a
-               -> DiscoveryInfo a ids
-               -> Bool
-inSameFunction x y s = xf == yf
-  where Just xf = Set.lookupLE x (s^.functionEntries)
-        Just yf = Set.lookupLE y (s^.functionEntries)
 
 -- | Constraint on architecture register values needed by code exploration.
 type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)

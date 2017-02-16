@@ -532,148 +532,6 @@ getJumpTableBounds arch addr regs base jump_index = do
     TopV -> Nothing
     _ -> error $ "Index interval is not a stride " ++ show abs_value
 
-{-
--- | This explores a block that ends with a fetch and execute.
-fetchAndExecute :: forall arch ids
-                .  ( RegisterInfo (ArchReg arch)
-                   , ArchConstraint arch ids
-                   , PrettyCFGConstraints arch
-                   , MemWidth (ArchAddrWidth arch)
-                   )
-                => Block arch ids
-                -> AbsProcessorState (ArchReg arch) ids
-                   -- ^ Registers at this block after statements executed
-                -> RegState (ArchReg arch) (Value arch ids)
-                -> CFGM arch ids ()
-fetchAndExecute b regs' s' = do
-  let lbl = blockLabel b
-  let src = labelAddr lbl
-  mem <- gets memory :: CFGM arch ids (Memory (ArchAddrWidth arch))
-  arch_info <- gets archInfo
-  -- See if next statement appears to end with a call.
-  -- We define calls as statements that end with a write that
-  -- stores the pc to an address.
-  case () of
-    -- The last statement was a call.
-    -- Note that in some cases the call is known not to return, and thus
-    -- this code will never jump to the return value.
-    _ | Just (prev_stmts, ret) <- identifyCall mem (blockStmts b) s' -> do
-        Fold.mapM_ (recordWriteStmt src regs') prev_stmts
-        let abst = finalAbsBlockState regs' s'
-        seq abst $ do
-        -- Merge caller return information
-        mergeIntraJump src (archPostCallAbsState arch_info abst ret) ret
-        -- Look for new ips.
-        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
-        mapM_ (markAddrAsFunction (CallTarget src)) addrs
-    -- This block ends with a return.
-      | Just _ <- identifyReturn s' (callStackDelta arch_info) -> do
-        mapM_ (recordWriteStmt src regs') (blockStmts b)
-
-        let ip_val = s'^.boundValue ip_reg
-        case transferValue regs' ip_val of
-              ReturnAddr -> return ()
-              -- The return_val is bad.
-              -- This could indicate an imprecision in analysis or that the
-              -- function will never return, and hence never was provided
-              -- with an address to return to.
-              rv ->
-                debug DCFG ("return_val is bad at " ++ show lbl ++ ": " ++ show rv) $
-                  return ()
-      -- Jump to concrete offset.
-      | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg) -> do
-          let abst = finalAbsBlockState regs' s'
-          seq abst $ do
-          -- Try to check for a tail call.
-          this_fn <- gets $ getFunctionEntryPoint src
-          tgt_fn  <- gets $ getFunctionEntryPoint tgt_addr
-          -- When the jump appears to go to another function, this could be a tail
-          -- call or it could be dead code.
-          if (this_fn /= tgt_fn) then do
-            -- Check that the current stack height is correct so that a
-            -- tail call when go to the right place.
-            -- TODO: Add check to ensure stack height is correct.
-            debug DCFG ("Found jump to concrete address after function " ++ show tgt_fn ++ ".") $ do
-            markAddrAsFunction (InterProcedureJump src) tgt_addr
-            -- Check top of stack points to return value.
-            let sp_val = s'^.boundValue sp_reg
-            let ptrType = BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
-            let ret_val = transferRHS arch_info regs' (ReadMem sp_val ptrType)
-            case ret_val of
-              ReturnAddr ->
-                debug DCFG ("tail_ret_val is correct " ++ show lbl) $
-                  return ()
-              TopV ->
-                debug DCFG ("tail_ret_val is top at " ++ show lbl) $
-                  return ()
-              rv ->
-                -- The return_val is bad.
-                -- This could indicate that the caller knows that the function does
-                -- not return, and hence will not provide a reutrn value.
-                debug DCFG ("tail_ret_val is bad at " ++ show lbl ++ ": " ++ show rv) $
-                  return ()
-           else do
-              assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
-              -- Merge block state.
-              let abst' = abst & setAbsIP tgt_addr
-              mergeIntraJump src abst' tgt_addr
-
-      -- Block ends with what looks like a jump table.
-      | AssignedValue (Assignment _ (ReadMem ptr _)) <- debug DCFG "try jump table" $ s'^.curIP
-        -- Attempt to compute interval of addresses interval is over.
-      , Just (base, jump_idx) <- matchJumpTable mem ptr
-      , Just read_end <- getJumpTableBounds arch_info src regs' base jump_idx -> do
-            mapM_ (recordWriteStmt src regs') (blockStmts b)
-
-          -- Try to compute jump table bounds
-
-            let abst :: AbsBlockState (ArchReg arch)
-                abst = finalAbsBlockState regs' s'
-            seq abst $ do
-            -- This function resolves jump table entries.
-            -- It is a recursive function that has an index into the jump table.
-            -- If the current index can be interpreted as a intra-procedural jump,
-            -- then it will add that to the current procedure.
-            -- This returns the last address read.
-            let resolveJump :: [ArchSegmentedAddr arch]
-                               -- /\ Addresses in jump table in reverse order
-                            -> ArchAddr arch
-                               -- /\ Current index
-                            -> CFGM arch ids [ArchSegmentedAddr arch]
-                resolveJump prev idx | idx == read_end = do
-                  -- Stop jump table when we have reached computed bounds.
-                  return (reverse prev)
-                resolveJump prev idx = do
-                  let read_addr = base & addrOffset +~ 8 * idx
-                  interpState <- get
-                  case readAddr mem LittleEndian read_addr of
-                    Right tgt_addr
-                      | Perm.isReadonly (segmentFlags (addrSegment read_addr))
-                      , inSameFunction src tgt_addr interpState -> do
-                        let flags = segmentFlags (addrSegment tgt_addr)
-                        assert (flags `Perm.hasPerm` Perm.execute) $ do
-                        let abst' = abst & setAbsIP tgt_addr
-                        mergeIntraJump src abst' tgt_addr
-                        resolveJump (tgt_addr:prev) (idx+1)
-                    _ -> do
-                      debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
-                      return (reverse prev)
-            read_addrs <- resolveJump [] 0
-            let last_index = fromIntegral (length read_addrs)
-            let last_addr = Just $! base & addrOffset +~ 8 * last_index
-            globalDataMap %= Map.insert base (JumpTable $! last_addr)
-
-          -- We have a jump that we do not understand.
-          -- This could be a tail call.
-      | otherwise -> debug DCFG "Uninterpretable jump" $ do
-        mapM_ (recordWriteStmt src regs') (blockStmts b)
-        let abst = finalAbsBlockState regs' s'
-        -- Get potential addresses for next IP
-        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
-        -- Mark entry points as the start of functions
-        mapM_ (markAddrAsFunction (error "Uninterpretable jump reason"))  addrs
--}
-
 type DiscoveryConstraints arch
    = ( PrettyCFGConstraints arch
      , RegisterInfo (ArchReg arch)
@@ -979,6 +837,7 @@ parseBlocks ctx ((b,regs):rest) = do
     FetchAndExecute s' -> do
       pb <- fetchAndExecute' ctx b regs s'
       pblockMap %= Map.insert idx pb
+      parseBlocks ctx rest
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg -> do
@@ -989,6 +848,7 @@ parseBlocks ctx ((b,regs):rest) = do
                            , pblockTerm = ParsedTranslateError msg
                            }
       pblockMap %= Map.insert idx pb
+      parseBlocks ctx rest
 
 
 -- | This evalutes the statements in a block to expand the information known
