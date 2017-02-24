@@ -760,7 +760,7 @@ fetchAndExecute' ctx b regs s' = do
           pure ParsedBlock { pblockLabel = lbl_idx
                            , pblockStmts = blockStmts b
                            , pblockState = regs'
-                           , pblockTerm  = ClassifyFailure "Could not classify block type."
+                           , pblockTerm  = ClassifyFailure s'
                            }
 
 type ParseConstraints arch = ( RegisterInfo (ArchReg arch)

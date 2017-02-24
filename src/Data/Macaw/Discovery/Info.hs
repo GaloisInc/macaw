@@ -160,7 +160,7 @@ data ParsedTermStmt arch ids
      -- ^ A system call with the registers prior to call and given return address.
    | ParsedTranslateError !Text
      -- ^ An error occured in translating the block
-   | ClassifyFailure !String
+   | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
      -- ^ The classifier failed to identity the block.
 
 deriving instance
