@@ -215,6 +215,7 @@ printAddrBacktrace found_map addr rsn = do
     SplitAt src            -> pp ("Split from read of " ++ show src ++ ".") : prev src
     InterProcedureJump src -> pp ("Reference from external address " ++ show src ++ ".") : prev src
 
+
 -- | Return true if this address was added because of the contents of a global address
 -- in memory initially.
 --
@@ -263,10 +264,11 @@ tryDisassembleAddr rsn addr ab = do
   case maybeError of
     Just e -> do
       when (not (cameFromUnsoundReason (s0^.foundAddrs) rsn)) $ do
-          error $ "Failed to disassemble " ++ show e ++ "\n"
-            ++ unlines (printAddrBacktrace (s0^.foundAddrs) addr rsn)
+          trace ("Failed to disassemble " ++ show e ++ "\n"
+            ++ unlines (printAddrBacktrace (s0^.foundAddrs) addr rsn)) $ pure ()
     Nothing -> do
       pure ()
+
   assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
   assert (next_ip^.addrOffset > addr^.addrOffset) $ do
   let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
