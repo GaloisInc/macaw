@@ -103,6 +103,7 @@ module Data.Macaw.CFG
     -- ** Synonyms
   , ArchAddrWidth
   , ArchLabel
+  , ArchAddrValue
   , Data.Macaw.Memory.SegmentedAddr
   ) where
 

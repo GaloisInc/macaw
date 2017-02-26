@@ -397,7 +397,6 @@ joinAbsValue' (StackOffset a_old old) (StackOffset b_old new)
     | Set.size r > maxSetSize = return $ Just TopV
     | otherwise = return $ Just (StackOffset a_old r)
   where r = Set.union old new
-
 -- Intervals
 joinAbsValue' v v'
     | StridedInterval si_old <- v, StridedInterval si_new <- v'
@@ -411,13 +410,16 @@ joinAbsValue' v v'
       addWords s
       let (wordSet, _) = partitionAbsoluteAddrs s b
       return $ go si (SI.fromFoldable (SI.typ si) wordSet)
-    | StridedInterval si <- v', FinSet s <- v =
+    | FinSet s <- v, StridedInterval si <- v' =
       return $ go si (SI.fromFoldable (SI.typ si) s)
     | StridedInterval si <- v', CodePointers s b <- v = do
       addWords s
       let (wordSet, _) = partitionAbsoluteAddrs s b
       return $ go si (SI.fromFoldable (SI.typ si) wordSet)
-  where go si1 si2 = Just $ stridedInterval (SI.lub si1 si2)
+  where go si1 si2
+           | SI.range si > 10 = Just TopV -- Give up on stride
+           | otherwise = Just $ stridedInterval si
+          where si = SI.lub si1 si2
 
 -- Sub values
 joinAbsValue' (SubValue n av) (SubValue n' av') =
@@ -827,7 +829,6 @@ abstractULeq tp x y
   | Just u_y <- hasMaximum tp y
   , Just l_x <- hasMinimum tp x
   , BVTypeRepr n <- tp =
-    -- trace' ("abstractLeq " ++ show (pretty x) ++ " " ++ show (pretty y) ++ " -> ")
     ( meet x (stridedInterval $ SI.mkStridedInterval n False 0 u_y 1)
     , meet y (stridedInterval $ SI.mkStridedInterval n False l_x
                                                      (maxUnsigned n) 1))
@@ -893,7 +894,11 @@ absStackJoinD y x = do
                 return $ Just (o, StackEntry y_tp z_v)
           _ -> do
             case y_v of
-              ReturnAddr -> debug DAbsInt ("absStackJoinD dropping return value:\nOld state: " ++ show (ppAbsStack y) ++ "\nNew state: " ++ show (ppAbsStack x)) $ return ()
+              ReturnAddr ->
+                debug DAbsInt ("absStackJoinD dropping return value:"
+                               ++ "\nOld state: " ++ show (ppAbsStack y)
+                               ++ "\nNew state: " ++ show (ppAbsStack x)) $
+                return ()
               _ -> return ()
             _1 .= True
             _2 %= Set.union (codePointerSet y_v)

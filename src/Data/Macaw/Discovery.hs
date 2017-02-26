@@ -48,7 +48,8 @@ import qualified Data.Set as Set
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric
---import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+
+import           Debug.Trace
 
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -61,8 +62,6 @@ import           Data.Macaw.Discovery.Info
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
-
-import Debug.Trace
 
 transferRHS :: forall a ids tp
             .  ( OrdF (ArchReg a)
@@ -411,7 +410,7 @@ assignmentAbsValues info mem g absm =
             GeneratedBlock a 0 -> do
               case Map.lookup a absm of
                 Nothing -> do
-                  error $ "assignmentAbsValues could not find code infomation for block " ++ show a
+                  error $ "internal: assignmentAbsValues could not find code infomation for block " ++ show a
                 Just blockState -> do
                   let abs_state = initAbsProcessorState mem blockState
                   insBlock b abs_state m0
@@ -453,7 +452,7 @@ mergeIntraJump  :: ( PrettyCFGConstraints arch
 mergeIntraJump src ab _tgt
   | not (absStackHasReturnAddr ab)
   , debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) False
-  = error "Unexpected mergeIntraJump"
+  = error "internal: Unexpected mergeIntraJump"
 mergeIntraJump src ab tgt = do
   let rsn = NextIP src
   -- Associate a new abstract state with the code region.
@@ -498,41 +497,51 @@ matchJumpTable mem read_addr
 matchJumpTable _ _ =
     Nothing
 
+data JumpTableBoundsError arch ids
+   = CouldNotInterpretAbsValue !(AbsValue (ArchAddrWidth arch) (BVType (ArchAddrWidth arch)))
+   | UpperBoundMismatch !(Jmp.UpperBound (BVType (ArchAddrWidth arch))) !Integer
+   | CouldNotFindBound String !(ArchAddrValue arch ids)
+
+showJumpTableBoundsError :: PrettyArch arch => JumpTableBoundsError arch ids -> String
+showJumpTableBoundsError err =
+  case err of
+    CouldNotInterpretAbsValue val ->
+      "Index interval is not a stride " ++ show val
+    UpperBoundMismatch bnd index_range ->
+      "Upper bound mismatch at jumpbounds "
+                ++ show bnd
+                ++ " domain "
+                ++ show index_range
+    CouldNotFindBound msg jump_index ->
+      show "Could not find  jump table: " ++ msg ++ "\n"
+      ++ show (ppValueAssignments jump_index)
+
 -- Returns the index bounds for a jump table of 'Nothing' if this is not a block
 -- table.
 getJumpTableBounds :: ( OrdF (ArchReg a)
                       , ShowF (ArchReg a)
                       , MemWidth (ArchAddrWidth a)
-                      , PrettyArch a
                       )
                    => ArchitectureInfo a
-                   -> ArchSegmentedAddr a
                    -> AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
                    -> ArchSegmentedAddr a -- ^ Base
                    -> BVValue a ids (ArchAddrWidth a) -- ^ Index in jump table
-                   -> Maybe (ArchAddr a)
+                   -> Either (JumpTableBoundsError a ids) (ArchAddr a)
                    -- ^ One past last index in jump table or nothing
-getJumpTableBounds arch addr regs base jump_index = do
-  let abs_value = transferValue regs jump_index
-  case abs_value  of
+getJumpTableBounds arch regs base jump_index =
+  case transferValue regs jump_index of
     StridedInterval (SI.StridedInterval _ index_base index_range index_stride) -> do
       let index_end = index_base + (index_range + 1) * index_stride
       if rangeInReadonlySegment base (jumpTableEntrySize arch * fromInteger index_end) then
         case Jmp.unsignedUpperBound (regs^.indexBounds) jump_index of
-          Right (Jmp.IntegerUpperBound bnd) | bnd == index_range -> Just $! fromInteger index_end
-          Right bnd ->
-            trace ("Upper bound mismatch at " ++ show addr ++ ":\n"
-                   ++ "  JumpBounds:" ++ show bnd
-                   ++ "  Domain:" ++ show index_range)
-              Nothing
-          Left msg ->
-            trace ("Could not find  jump table at " ++ show addr ++ ": " ++ msg ++ "\n"
-                   ++ show (ppValueAssignments jump_index))
-              Nothing -- error $ "Could not compute upper bound on jump table: " ++ msg
+          Right (Jmp.IntegerUpperBound bnd) | bnd == index_range -> Right $! fromInteger index_end
+          Right bnd -> Left (UpperBoundMismatch bnd index_range)
+          Left  msg -> Left (CouldNotFindBound  msg jump_index)
        else
         error $ "Jump table range is not in readonly memory"
-    TopV -> Nothing
-    _ -> error $ "Index interval is not a stride " ++ show abs_value
+--    TopV -> Left UpperBoundUndefined
+    abs_value -> Left (CouldNotInterpretAbsValue abs_value)
+
 
 type DiscoveryConstraints arch
    = ( PrettyCFGConstraints arch
@@ -713,48 +722,56 @@ fetchAndExecute' ctx b regs s' = do
       -- Block ends with what looks like a jump table.
       | AssignedValue (Assignment _ (ReadMem ptr _)) <- debug DCFG "try jump table" $ s'^.curIP
         -- Attempt to compute interval of addresses interval is over.
-      , Just (base, jump_idx) <- matchJumpTable mem ptr
-      , Just read_end <- getJumpTableBounds arch_info src regs' base jump_idx -> do
+      , Just (base, jump_idx) <- matchJumpTable mem ptr ->
+        case getJumpTableBounds arch_info regs' base jump_idx of
+          Left err ->
+            trace (show src ++ ": Could not compute bounds: " ++ showJumpTableBoundsError err) $ do
+            mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+            pure ParsedBlock { pblockLabel = lbl_idx
+                             , pblockStmts = blockStmts b
+                             , pblockState = regs'
+                             , pblockTerm  = ClassifyFailure s'
+                             }
+          Right read_end -> do
+            mapM_ (recordWriteStmt' mem regs') (blockStmts b)
 
-          mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+            -- Try to compute jump table bounds
 
-          -- Try to compute jump table bounds
-
-          let abst :: AbsBlockState (ArchReg arch)
-              abst = finalAbsBlockState regs' s'
-          seq abst $ do
-          -- This function resolves jump table entries.
-          -- It is a recursive function that has an index into the jump table.
-          -- If the current index can be interpreted as a intra-procedural jump,
-          -- then it will add that to the current procedure.
-          -- This returns the last address read.
-          let resolveJump :: [ArchSegmentedAddr arch]
-                             -- /\ Addresses in jump table in reverse order
-                          -> ArchAddr arch
-                             -- /\ Current index
-                          -> State (ParseState arch ids) [ArchSegmentedAddr arch]
-              resolveJump prev idx | idx == read_end = do
-                -- Stop jump table when we have reached computed bounds.
-                return (reverse prev)
-              resolveJump prev idx = do
+            let abst :: AbsBlockState (ArchReg arch)
+                abst = finalAbsBlockState regs' s'
+            seq abst $ do
+            -- This function resolves jump table entries.
+            -- It is a recursive function that has an index into the jump table.
+            -- If the current index can be interpreted as a intra-procedural jump,
+            -- then it will add that to the current procedure.
+            -- This returns the last address read.
+            let resolveJump :: [ArchSegmentedAddr arch]
+                               -- /\ Addresses in jump table in reverse order
+                            -> ArchAddr arch
+                               -- /\ Current index
+                            -> State (ParseState arch ids) [ArchSegmentedAddr arch]
+                resolveJump prev idx | idx == read_end = do
+                  -- Stop jump table when we have reached computed bounds.
+                  return (reverse prev)
+                resolveJump prev idx = do
                   let read_addr = base & addrOffset +~ 8 * idx
                   case readAddr mem LittleEndian read_addr of
-                    Right tgt_addr
-                      | Perm.isReadonly (segmentFlags (addrSegment read_addr)) -> do
-                        let flags = segmentFlags (addrSegment tgt_addr)
-                        assert (flags `Perm.hasPerm` Perm.execute) $ do
-                        let abst' = abst & setAbsIP tgt_addr
-                        intraJumpTargets %= ((tgt_addr, abst'):)
-                        resolveJump (tgt_addr:prev) (idx+1)
-                    _ -> do
-                      debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
-                      return (reverse prev)
-          read_addrs <- resolveJump [] 0
-          pure ParsedBlock { pblockLabel = lbl_idx
-                           , pblockStmts = blockStmts b
-                           , pblockState = regs'
-                           , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
-                           }
+                      Right tgt_addr
+                        | Perm.isReadonly (segmentFlags (addrSegment read_addr)) -> do
+                          let flags = segmentFlags (addrSegment tgt_addr)
+                          assert (flags `Perm.hasPerm` Perm.execute) $ do
+                          let abst' = abst & setAbsIP tgt_addr
+                          intraJumpTargets %= ((tgt_addr, abst'):)
+                          resolveJump (tgt_addr:prev) (idx+1)
+                      _ -> do
+                        debug DCFG ("Stop jump table: " ++ show idx ++ " " ++ show read_end) $ do
+                          return (reverse prev)
+            read_addrs <- resolveJump [] 0
+            pure ParsedBlock { pblockLabel = lbl_idx
+                             , pblockStmts = blockStmts b
+                             , pblockState = regs'
+                             , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
+                             }
       -- Block that ends with some unknown
       | otherwise -> do
           trace ("Could not classify " ++ show lbl) $ do
