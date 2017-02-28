@@ -214,7 +214,6 @@ printAddrBacktrace found_map addr rsn = do
     SplitAt src            -> pp ("Split from read of " ++ show src ++ ".") : prev src
     InterProcedureJump src -> pp ("Reference from external address " ++ show src ++ ".") : prev src
 
-
 -- | Return true if this address was added because of the contents of a global address
 -- in memory initially.
 --
@@ -467,11 +466,11 @@ mergeIntraJump src ab tgt = do
           let new_info = old_info { foundAbstractState = new }
           modify $ (foundAddrs   %~ Map.insert tgt new_info)
                  . (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
-                 . (frontier     %~ Map.insert tgt rsn)
+                 . (frontier     %~ Set.insert tgt)
     -- We haven't seen this block before
     Nothing -> do
       modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
-             . (frontier     %~ Map.insert tgt rsn)
+             . (frontier     %~ Set.insert tgt)
       markCodeAddrBlock rsn tgt ab
 
 
@@ -927,22 +926,25 @@ explore_frontier :: DiscoveryConstraints arch
                  => CFGM arch ids ()
 explore_frontier = do
   st <- get
-  case Map.minViewWithKey (st^.frontier) of
+  case Set.minView (st^.frontier) of
     Nothing ->
       -- If local block frontier is empty, then try function frontier.
       case Map.minViewWithKey (st^.function_frontier) of
         Nothing -> return ()
-        Just ((addr,rsn), next_roots) -> do
+        Just ((addr,_rsn), next_roots) ->
+          trace ("explore function " ++ show addr ++ " " ++ show (Map.size next_roots)) $ do
           let high = Set.lookupGT addr (st^.functionEntries)
               st' = st & function_frontier .~ next_roots
-                       & frontier .~ Map.singleton addr rsn
+                       & frontier          .~ Set.empty
                          -- Delete any entries we previously discovered for function.
-                       & reverseEdges    %~ deleteMapRange (Just addr) high
-                       & blocks          %~ deleteMapRange (Just addr) high
+                       & reverseEdges      %~ deleteMapRange (Just addr) high
+                       & blocks            %~ deleteMapRange (Just addr) high
           put st'
+          transfer addr
           explore_frontier
 
-    Just ((addr,_rsn), next_roots) -> do
+    Just (addr, next_roots) -> do
+      trace ("explore frontier" ++ show addr ++ " " ++ show (Set.size next_roots)) $ do
       put $ st & frontier .~ next_roots
       transfer addr
       explore_frontier

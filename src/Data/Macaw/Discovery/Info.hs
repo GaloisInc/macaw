@@ -230,8 +230,7 @@ data DiscoveryInfo arch ids
                                              (GlobalDataInfo (ArchSegmentedAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-                   , _frontier :: !(Map (ArchSegmentedAddr arch)
-                                        (CodeAddrReason (ArchAddrWidth arch)))
+                   , _frontier :: !(Set (ArchSegmentedAddr arch))
                      -- ^ Addresses to explore next.
                      --
                      -- This is a map so that we can associate a reason why a code
@@ -259,7 +258,7 @@ emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       , _functionEntries   = Set.empty
       , _reverseEdges      = Map.empty
       , _globalDataMap     = Map.empty
-      , _frontier          = Map.empty
+      , _frontier          = Set.empty
       , _function_frontier = Map.empty
       }
 
@@ -292,7 +291,7 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 -- This is a map so that we can associate a reason why a code address
 -- was added to the frontier.
 frontier :: Simple Lens (DiscoveryInfo arch ids)
-                        (Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
+                        (Set (ArchSegmentedAddr arch))
 frontier = lens _frontier (\s v -> s { _frontier = v })
 
 -- | Set of functions to explore next.
