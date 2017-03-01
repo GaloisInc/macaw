@@ -341,7 +341,6 @@ markAddrAsFunction :: PrettyCFGConstraints arch
 markAddrAsFunction rsn addr = do
   s <- get
   when (not (Set.member addr (s^.functionEntries))) $ do
-    debugM DCFG ("Found function entry " ++ show addr ++ ".")
     let mem = memory s
     let low = Set.lookupLT addr (s^.functionEntries)
     let _high = Set.lookupGT addr (s^.functionEntries)
@@ -931,8 +930,7 @@ explore_frontier = do
       -- If local block frontier is empty, then try function frontier.
       case Map.minViewWithKey (st^.function_frontier) of
         Nothing -> return ()
-        Just ((addr,_rsn), next_roots) ->
-          trace ("explore function " ++ show addr ++ " " ++ show (Map.size next_roots)) $ do
+        Just ((addr,_rsn), next_roots) -> do
           let high = Set.lookupGT addr (st^.functionEntries)
               st' = st & function_frontier .~ next_roots
                        & frontier          .~ Set.empty
@@ -944,7 +942,6 @@ explore_frontier = do
           explore_frontier
 
     Just (addr, next_roots) -> do
-      trace ("explore frontier" ++ show addr ++ " " ++ show (Set.size next_roots)) $ do
       put $ st & frontier .~ next_roots
       transfer addr
       explore_frontier
