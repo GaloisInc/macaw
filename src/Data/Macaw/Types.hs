@@ -14,6 +14,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ConstraintKinds #-}
@@ -132,6 +133,8 @@ data FloatInfoRepr (flt::FloatInfo) where
   X86_80FloatRepr       :: FloatInfoRepr X86_80Float
   QuadFloatRepr         :: FloatInfoRepr QuadFloat
   HalfFloatRepr         :: FloatInfoRepr HalfFloat
+
+deriving instance Show (FloatInfoRepr tp)
 
 instance TestEquality FloatInfoRepr where
   testEquality x y = orderingF_refl (compareF x y)
