@@ -18,7 +18,6 @@ discovery.
 module Data.Macaw.Discovery.Info
   ( BlockRegion(..)
   , FoundAddr(..)
-  , lookupBlock
   , lookupParsedBlock
   , GlobalDataInfo(..)
   , ParsedTermStmt(..)
@@ -39,7 +38,6 @@ module Data.Macaw.Discovery.Info
   , functionEntries
   , funInfo
   , function_frontier
-  , blocks
 
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo
@@ -324,10 +322,6 @@ data DiscoveryInfo arch ids
                    , _function_frontier :: !(Map (ArchSegmentedAddr arch)
                                                  (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ Set of functions to explore next.
-
-                     -- * legacy information to move to DiscoveryFunInfo
-                   , _blocks     :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
-                     -- ^ Maps an address to the code associated with that address.
                    }
 
 ppDiscoveryInfoBlocks :: (OrdF (ArchReg arch), PrettyArch arch)
@@ -351,8 +345,6 @@ emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
       , _functionEntries   = Set.empty
       , _funInfo           = Map.empty
       , _function_frontier = Map.empty
-
-      , _blocks            = Map.empty
       }
 
 
@@ -376,17 +368,6 @@ funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 -- | Addresses that start each function.
 functionEntries :: Simple Lens (DiscoveryInfo arch ids) (Set (ArchSegmentedAddr arch))
 functionEntries = lens _functionEntries (\s v -> s { _functionEntries = v })
-
-blocks :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
-blocks = lens _blocks (\s v -> s { _blocks = v })
-
--- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupBlock :: DiscoveryInfo arch ids
-            -> ArchLabel arch
-            -> Maybe (Block arch ids)
-lookupBlock info lbl = do
-  br <- Map.lookup (labelAddr lbl) (info^.blocks)
-  Map.lookup (labelIndex lbl) (brBlocks br)
 
 -- | Does a simple lookup in the cfg at a given DecompiledBlock address.
 lookupParsedBlock :: DiscoveryFunInfo arch ids

@@ -1099,14 +1099,7 @@ cfgFromAddrs arch_info mem symbols init_addrs mem_words =
     mapM_ (markAddrAsFunction InitAddr) init_addrs
     explore_frontier
     -- Add in code pointers from memory.
-    let notAlreadyFunction s a v
-            | Set.member v (s^.functionEntries) = False
-            | otherwise = debug DCFG msg True
-          where msg | Map.member v (s^.blocks) =
-                        "Identified function entry "
-                        ++ show v ++ " due to global store at " ++ show a ++ "."
-                    | otherwise =
-                        "Found function entry from memory" ++ show v ++ " at " ++ show a ++ "."
+    let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
     s <- get
     let mem_addrs =
           filter (uncurry (notAlreadyFunction s)) $
