@@ -1253,11 +1253,6 @@ cfgBlocks = lens _cfgBlocks (\s v -> s { _cfgBlocks = v })
 cfgBlockRanges :: Simple Lens (CFG arch ids) (Map (ArchSegmentedAddr arch) (ArchAddr arch))
 cfgBlockRanges = lens _cfgBlockRanges (\s v -> s { _cfgBlockRanges = v })
 
-{-
-cfgBlockEnds :: CFG arch ids -> Set (ArchAddr arch)
-cfgBlockEnds g = Set.fromList (Map.elems (_cfgBlockRanges g))
--}
-
 -- | Return block with given label.
 findBlock :: CFG arch ids -> ArchLabel arch -> Maybe (Block arch ids)
 findBlock g l = _cfgBlocks g ^. at l

@@ -44,6 +44,9 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
+import           Data.Sequence (Seq)
+import qualified Data.Sequence as Seq
+import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import           Data.Word
@@ -125,76 +128,7 @@ concretizeAbsCodePointers _mem StridedInterval{} = [] -- FIXME: this case doesn'
   -- filter (isCodeAddr mem) $ fromInteger <$> SI.toList s
 concretizeAbsCodePointers _mem _ = []
 
--- | @deleteMapRange l h m@ deletes all entries with keys greater than @l@ and
--- less than @h@.
-deleteMapRange :: Ord k => Maybe k -> Maybe k -> Map k v -> Map k v
-deleteMapRange (Just l) (Just h) m =
-  case Map.splitLookup l m of
-    (lm, Nothing, hm) -> Map.union lm (deleteMapLessThan h hm)
-    (lm, Just v,  hm) -> Map.union (Map.insert l v lm) (deleteMapLessThan h hm)
-deleteMapRange (Just l) Nothing  m = deleteMapGreaterThan l m
-deleteMapRange Nothing  (Just h) m = deleteMapLessThan h m
-deleteMapRange Nothing  Nothing  m = m
-
--- | @deleteMapGreaterThan k m@ returns a map with all keys greater than @k@ in @m@ deleted.
-deleteMapGreaterThan :: Ord k => k -> Map k v -> Map k v
-deleteMapGreaterThan k m =
-  case Map.splitLookup k m of
-    (lm, Nothing, _) -> lm
-    (lm, Just v, _)  -> Map.insert k v lm
-
--- | @deleteMapLessThan k m@ returns a map with all keys less than @k@ in @m@ deleted.
-deleteMapLessThan :: Ord k => k -> Map k v -> Map k v
-deleteMapLessThan k m =
-  case Map.splitLookup k m of
-    (_, Nothing, hm) -> hm
-    (_, Just v, hm) -> Map.insert k v hm
-
-------------------------------------------------------------------------
--- Memory utilities
-
--- | Return true if range is entirely contained within a single read only segment.Q
-rangeInReadonlySegment :: MemWidth w
-                       => SegmentedAddr w -- ^ Start of range
-                       -> MemWord w -- ^ The size of the range
-                       -> Bool
-rangeInReadonlySegment base size
-    = base^.addrOffset + size <= segmentSize seg
-    && Perm.isReadonly (segmentFlags seg)
-  where seg = addrSegment base
-
-
-------------------------------------------------------------------------
--- Block discovery
-
--- | The CFG-building monad: includes a state component with a 'DiscoveryInfo'
--- and a 'NonceGenerator', layered on top of the 'ST' monad
-newtype CFGM arch ids a =
-    CFGM { unCFGM :: StateT (DiscoveryInfo arch ids) (ST ids) a }
-  deriving ( Functor
-           , Applicative
-           , Monad
-           , MonadState (DiscoveryInfo arch ids)
-           )
-
-liftST :: ST ids a -> CFGM arch ids a
-liftST = CFGM . lift
-
--- | Run a CFGM at the top level
-runCFGM :: ArchitectureInfo arch
-           -- ^ Architecture-specific information needed for doing control-flow exploration.
-        -> Memory (ArchAddrWidth arch)
-           -- ^ Memory to use when decoding instructions.
-        -> Map (ArchSegmentedAddr arch) BS.ByteString
-           -- ^ Names for (some) function entry points
-        -> (forall ids . CFGM arch ids ())
-           -- ^ Computation to run.
-        -> Some (DiscoveryInfo arch)
-runCFGM arch_info mem symbols m = do
-  withGlobalSTNonceGenerator $ \nonce_gen -> do
-    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
-    Some <$> execStateT (unCFGM m) init_info
-
+{-
 printAddrBacktrace :: Map (ArchSegmentedAddr arch) (FoundAddr arch)
                    -> ArchSegmentedAddr arch
                    -> CodeAddrReason (ArchAddrWidth arch)
@@ -235,18 +169,98 @@ cameFromUnsoundReason found_map rsn = do
     InitAddr -> False
     CodePointerInMem{} -> True
     InterProcedureJump src -> prev src
+-}
 
+------------------------------------------------------------------------
+-- Memory utilities
+
+-- | Return true if range is entirely contained within a single read only segment.Q
+rangeInReadonlySegment :: MemWidth w
+                       => SegmentedAddr w -- ^ Start of range
+                       -> MemWord w -- ^ The size of the range
+                       -> Bool
+rangeInReadonlySegment base size
+    = base^.addrOffset + size <= segmentSize seg
+    && Perm.isReadonly (segmentFlags seg)
+  where seg = addrSegment base
+
+
+------------------------------------------------------------------------
+-- CFGM
+
+-- | The CFG-building monad: includes a state component with a 'DiscoveryInfo'
+-- and a 'NonceGenerator', layered on top of the 'ST' monad
+newtype CFGM arch ids a =
+    CFGM { unCFGM :: StateT (DiscoveryInfo arch ids) (ST ids) a }
+  deriving ( Functor
+           , Applicative
+           , Monad
+           , MonadState (DiscoveryInfo arch ids)
+           )
+
+-- | Run a CFGM at the top level
+runCFGM :: ArchitectureInfo arch
+           -- ^ Architecture-specific information needed for doing control-flow exploration.
+        -> Memory (ArchAddrWidth arch)
+           -- ^ Memory to use when decoding instructions.
+        -> Map (ArchSegmentedAddr arch) BS.ByteString
+           -- ^ Names for (some) function entry points
+        -> (forall ids . CFGM arch ids ())
+           -- ^ Computation to run.
+        -> Some (DiscoveryInfo arch)
+runCFGM arch_info mem symbols m = do
+  withGlobalSTNonceGenerator $ \nonce_gen -> do
+    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
+    Some <$> execStateT (unCFGM m) init_info
+
+------------------------------------------------------------------------
+-- FunM
+
+data FunState arch ids
+   = FunState {  _curFunInfo :: !(DiscoveryFunInfo arch ids)
+                 -- ^ Information about current function we are working on
+              , _frontier :: !(Set (ArchSegmentedAddr arch))
+                 -- ^ Addresses to explore next.
+              }
+
+-- | Information about current function we are working on
+curFunInfo :: Simple Lens (FunState arch ids)  (DiscoveryFunInfo arch ids)
+curFunInfo = lens _curFunInfo (\s v -> s { _curFunInfo = v })
+
+-- | Set of addresses to explore next.
+--
+-- This is a map so that we can associate a reason why a code address
+-- was added to the frontier.
+frontier :: Simple Lens (FunState arch ids)  (Set (ArchSegmentedAddr arch))
+frontier = lens _frontier (\s v -> s { _frontier = v })
+
+-- | A newtype around a function
+newtype FunM arch ids a = FunM { unFunM :: StateT (FunState arch ids) (CFGM arch ids) a }
+  deriving (Functor, Applicative, Monad)
+
+instance MonadState (FunState arch ids) (FunM arch ids) where
+  get = FunM $ get
+  put s = FunM $ put s
+
+liftCFG :: CFGM arch ids a -> FunM arch ids a
+liftCFG m = FunM (lift m)
+
+liftST :: ST ids a -> CFGM arch ids a
+liftST = CFGM . lift
+
+------------------------------------------------------------------------
+-- Block discovery
+
+{-
 -- | This is the worker for getBlock, in the case that we have not already
 -- read the block.
 tryDisassembleAddr :: PrettyCFGConstraints arch
-                   => CodeAddrReason (ArchAddrWidth arch)
-                       -- ^ Reason we are trying to disassemble starting from given address
-                   -> ArchSegmentedAddr arch
+                   => ArchSegmentedAddr arch
                       -- ^ Address to disassemble
                    -> AbsBlockState (ArchReg arch)
                       -- ^ Abstract state at beginning of block
                    -> CFGM arch ids ()
-tryDisassembleAddr rsn addr ab = do
+tryDisassembleAddr addr ab = do
   s0 <- get
   -- Attempt to disassemble block.
   -- Get memory so that we can decode from it.
@@ -256,14 +270,12 @@ tryDisassembleAddr rsn addr ab = do
   -- that is part of a new block.
   let not_at_block = (`Map.notMember` block_addrs)
   let mem = memory s0
-  nonce_gen <- nonceGen <$> get
+  let nonce_gen = nonceGen s0
   (bs, next_ip, maybeError) <- liftST $ disassembleFn (archInfo s0) nonce_gen mem not_at_block addr ab
   -- Build state for exploring this.
   case maybeError of
     Just e -> do
-      when (not (cameFromUnsoundReason (s0^.foundAddrs) rsn)) $ do
-          trace ("Failed to disassemble " ++ show e ++ "\n"
-            ++ unlines (printAddrBacktrace (s0^.foundAddrs) addr rsn)) $ pure ()
+      trace ("Failed to disassemble " ++ show e) $ pure ()
     Nothing -> do
       pure ()
 
@@ -271,15 +283,13 @@ tryDisassembleAddr rsn addr ab = do
   assert (next_ip^.addrOffset > addr^.addrOffset) $ do
   let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
   -- Add block region to blocks.
-  let found_info = FoundAddr { foundReason = rsn
-                             , foundAbstractState = ab
-                             }
   let br = BlockRegion { brSize = next_ip^.addrOffset - addr^.addrOffset
                        , brBlocks = block_map
                        }
-  put $! s0 & foundAddrs %~ Map.insert addr found_info
-            & blocks     %~ Map.insert addr br
+  put $! s0 & blocks     %~ Map.insert addr br
+-}
 
+{-
 -- | Mark address as the start of a code block.
 markCodeAddrBlock :: PrettyCFGConstraints arch
                   => CodeAddrReason (ArchAddrWidth arch)
@@ -298,17 +308,19 @@ markCodeAddrBlock rsn addr ab = do
       | segmentIndex (addrSegment addr) == segmentIndex (addrSegment l)
       , addr^.addrOffset < l^.addrOffset + brSize br -> do
       -- Get block for addr
-      tryDisassembleAddr rsn addr ab
+      tryDisassembleAddr addr ab
       -- Get block for old block
       case Map.lookup l (s^.foundAddrs) of
-        Just info -> tryDisassembleAddr (foundReason info) l (foundAbstractState info)
+        Just info ->
+          tryDisassembleAddr l (foundAbstractState info)
         Nothing -> error $ "Internal mark code addr as block saved but no reason information stored."
       -- It's possible this will cause the current block to be broken, or cause a function to
       -- boundaries.  However, we don't think this should cause the need automatically to
       -- re-evaluate a block as any information discovered should be strictly less than
       -- the longer block.
     _ -> do
-      tryDisassembleAddr rsn addr ab
+      tryDisassembleAddr addr ab
+-}
 
 ------------------------------------------------------------------------
 -- Transfer stmts
@@ -341,17 +353,22 @@ markAddrAsFunction :: PrettyCFGConstraints arch
 markAddrAsFunction rsn addr = do
   s <- get
   when (not (Set.member addr (s^.functionEntries))) $ do
-    let mem = memory s
-    let low = Set.lookupLT addr (s^.functionEntries)
+--    let mem = memory s
+--    let low = Set.lookupLT addr (s^.functionEntries)
     let _high = Set.lookupGT addr (s^.functionEntries)
     -- Get abstract state associated with function begining at address
-    let abstState = fnBlockStateFn (archInfo s) mem addr
+--    let abstState = fnBlockStateFn (archInfo s) mem addr
     modify $ (functionEntries   %~ Set.insert addr)
-           . (function_frontier %~ (maybeMapInsert low (SplitAt addr) .  Map.insert addr rsn))
-    markCodeAddrBlock rsn addr abstState
+           . (function_frontier %~ Map.insert addr rsn)
+--    markCodeAddrBlock rsn addr abstState
+--    let found_info = FoundAddr { foundReason = rsn
+--                               , foundAbstractState = abstState
+--                               }
+--    put $! s0 & foundAddrs %~ Map.insert addr found_info
 
-maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
-maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
+
+--maybeMapInsert :: Ord a => Maybe a -> b -> Map a b -> Map a b
+--maybeMapInsert mk v = maybe id (\k -> Map.insert k v) mk
 
 {-
 -- | Mark addresses written to memory that point to code as function entry points.
@@ -446,7 +463,7 @@ mergeIntraJump  :: ( PrettyCFGConstraints arch
                    -- ^ Block state after executing instructions.
                 -> ArchSegmentedAddr arch
                    -- ^ Address we are trying to reach.
-                -> CFGM arch ids ()
+                -> FunM arch ids ()
 mergeIntraJump src ab _tgt
   | not (absStackHasReturnAddr ab)
   , debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) False
@@ -454,7 +471,7 @@ mergeIntraJump src ab _tgt
 mergeIntraJump src ab tgt = do
   let rsn = NextIP src
   -- Associate a new abstract state with the code region.
-  s0 <- get
+  s0 <- use curFunInfo
   case Map.lookup tgt (s0^.foundAddrs) of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
@@ -463,15 +480,18 @@ mergeIntraJump src ab tgt = do
         Nothing  -> return ()
         Just new -> do
           let new_info = old_info { foundAbstractState = new }
-          modify $ (foundAddrs   %~ Map.insert tgt new_info)
-                 . (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
-                 . (frontier     %~ Set.insert tgt)
+          curFunInfo . foundAddrs   %= Map.insert tgt new_info
+          curFunInfo . reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
+          frontier %= Set.insert tgt
     -- We haven't seen this block before
     Nothing -> do
-      modify $ (reverseEdges %~ Map.insertWith Set.union tgt (Set.singleton src))
-             . (frontier     %~ Set.insert tgt)
-      markCodeAddrBlock rsn tgt ab
-
+      curFunInfo . reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
+      frontier     %= Set.insert tgt
+--      liftCFG $ markCodeAddrBlock rsn tgt ab
+      let found_info = FoundAddr { foundReason = rsn
+                                 , foundAbstractState = ab
+                                 }
+      curFunInfo . foundAddrs %= Map.insert tgt found_info
 
 -- -----------------------------------------------------------------------------
 -- Refining an abstract state based upon a condition
@@ -616,6 +636,66 @@ recordWriteStmt' mem regs stmt = do
           writtenCodeAddrs %= (addrs ++)
     _ -> return ()
 
+-- | Attempt to identify the write to a stack return address, returning
+-- instructions prior to that write and return  values.
+--
+-- This can also return Nothing if the call is not supported.
+identifyCall :: ( ArchConstraint a ids
+                , MemWidth (ArchAddrWidth a)
+                )
+             => Memory (ArchAddrWidth a)
+             -> [Stmt a ids]
+             -> RegState (ArchReg a) (Value a ids)
+             -> Maybe (Seq (Stmt a ids), ArchSegmentedAddr a)
+identifyCall mem stmts0 s = go (Seq.fromList stmts0)
+  where -- Get value of stack pointer
+        next_sp = s^.boundValue sp_reg
+        -- Recurse on statements.
+        go stmts =
+          case Seq.viewr stmts of
+            Seq.EmptyR -> Nothing
+            prev Seq.:> stmt
+              -- Check for a call statement by determining if the last statement
+              -- writes an executable address to the stack pointer.
+              | WriteMem a val <- stmt
+              , Just _ <- testEquality a next_sp
+                -- Check this is the right length.
+              , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
+                -- Check if value is a valid literal address
+              , Just val_a <- asLiteralAddr mem val
+                -- Check if segment of address is marked as executable.
+              , Perm.isExecutable (segmentFlags (addrSegment val_a)) ->
+
+                Just (prev, val_a)
+                -- Stop if we hit any architecture specific instructions prior to
+                -- identifying return address since they may have side effects.
+              | ExecArchStmt _ <- stmt -> Nothing
+                -- Otherwise skip over this instruction.
+              | otherwise -> go prev
+
+
+-- | This is designed to detect returns from the register state representation.
+--
+-- It pattern matches on a 'RegState' to detect if it read its instruction
+-- pointer from an address that is 8 below the stack pointer.
+--
+-- Note that this assumes the stack decrements as values are pushed, so we will
+-- need to fix this on other architectures.
+identifyReturn :: ArchConstraint arch ids
+               => RegState (ArchReg arch) (Value arch ids)
+               -> Integer
+                  -- ^ How stack pointer moves when a call is made
+               -> Maybe (Assignment arch ids (BVType (ArchAddrWidth arch)))
+identifyReturn s stack_adj = do
+  let next_ip = s^.boundValue ip_reg
+      next_sp = s^.boundValue sp_reg
+  case next_ip of
+    AssignedValue asgn@(Assignment _ (ReadMem ip_addr _))
+      | let (ip_base, ip_off) = asBaseOffset ip_addr
+      , let (sp_base, sp_off) = asBaseOffset next_sp
+      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) -> Just asgn
+    _ -> Nothing
+
 data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
                                           , pctxArchInfo :: !(ArchitectureInfo arch)
                                           , pctxAddr     :: !(ArchSegmentedAddr arch)
@@ -691,24 +771,12 @@ fetchAndExecute' ctx b regs s' = do
                          , pblockState = regs'
                          , pblockTerm = ParsedReturn s'
                          }
-      -- Check for tail call (anything where we are right at stack height
-      | ptrType    <- BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
-      , sp_val     <-  s'^.boundValue sp_reg
-      , ReturnAddr <- transferRHS arch_info regs' (ReadMem sp_val ptrType) -> do
-
-        mapM_ (recordWriteStmt' mem regs') (blockStmts b)
-
-        pure ParsedBlock { pblockLabel = lbl_idx
-                         , pblockStmts = blockStmts b
-                         , pblockState = regs'
-                         , pblockTerm  = ParsedCall s' Nothing
-                         }
 
       -- Jump to concrete offset.
       | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg) -> do
          assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
          mapM_ (recordWriteStmt' mem regs') (blockStmts b)
-         -- Merge block state.
+         -- Merge block state and add intra jump target.
          let abst = finalAbsBlockState regs' s'
          let abst' = abst & setAbsIP tgt_addr
          intraJumpTargets %= ((tgt_addr, abst'):)
@@ -770,6 +838,29 @@ fetchAndExecute' ctx b regs s' = do
                              , pblockState = regs'
                              , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
                              }
+
+      -- Check for tail call (anything where we are right at stack height
+      | ptrType    <- BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
+      , sp_val     <-  s'^.boundValue sp_reg
+      , ReturnAddr <- transferRHS arch_info regs' (ReadMem sp_val ptrType) -> do
+
+        mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+
+        -- Compute fina lstate
+        let abst = finalAbsBlockState regs' s'
+        seq abst $ do
+
+        -- Look for new instruction pointers
+        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+        newFunctionAddrs %= (++ addrs)
+
+
+        pure ParsedBlock { pblockLabel = lbl_idx
+                         , pblockStmts = blockStmts b
+                         , pblockState = regs'
+                         , pblockTerm  = ParsedCall s' Nothing
+                         }
+
       -- Block that ends with some unknown
       | otherwise -> do
           trace ("Could not classify " ++ show lbl) $ do
@@ -875,13 +966,13 @@ transferBlocks :: DiscoveryConstraints arch
                -- ^ Input block regions
                -> AbsProcessorState (ArchReg arch) ids
                -- ^ Abstract state describing machine state when block is encountered.
-              -> CFGM arch ids ()
+              -> FunM arch ids ()
 transferBlocks br regs =
   case Map.lookup 0 (brBlocks br) of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
-      s <- get
+      s <- liftCFG get
       let src = labelAddr (blockLabel b)
       let ctx = ParseContext { pctxMemory   = memory s
                              , pctxArchInfo = archInfo s
@@ -898,52 +989,84 @@ transferBlocks br regs =
                                  , regionSize = brSize br
                                  , regionBlockMap = ps^.pblockMap
                                  }
-      parsedBlocks %= Map.insert src pb
-      mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
-      mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
+      curFunInfo . parsedBlocks %= Map.insert src pb
+      liftCFG $ mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
+      liftCFG $ mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 transfer :: DiscoveryConstraints arch
          => ArchSegmentedAddr arch
-         -> CFGM arch ids ()
+         -> FunM arch ids ()
 transfer addr = do
-  mem <- gets memory
-
-  mfinfo <- use $ foundAddrs . at addr
-  mbr <- use $ blocks . at addr
+  mfinfo <- use $ curFunInfo . foundAddrs . at addr
   case mfinfo of
     Nothing -> error $ "getBlock called on unfound address " ++ show addr ++ "."
-    Just finfo ->
-      case mbr of
-        Nothing -> error $ "getBlock called on block " ++ show addr ++ " we have not seen."
-        Just br -> transferBlocks br $ initAbsProcessorState mem (foundAbstractState finfo)
+    Just finfo -> do
+      info      <- liftCFG $ gets archInfo
+      nonce_gen <- liftCFG $ gets nonceGen
+      mem       <- liftCFG $ gets memory
+      -- Attempt to disassemble block.
+      -- Get memory so that we can decode from it.
+      -- Returns true if we are not at the start of a block.
+      -- This is used to stop the disassembler when we reach code
+      -- that is part of a new block.
+      prev_block_map <- use $ curFunInfo . parsedBlocks
+      let not_at_block = (`Map.notMember` prev_block_map)
+      let ab = foundAbstractState finfo
+      (bs, next_ip, maybeError) <- liftCFG $ liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
+      -- Build state for exploring this.
+      case maybeError of
+        Just e -> do
+          trace ("Failed to disassemble " ++ show e) $ pure ()
+        Nothing -> do
+          pure ()
+
+      assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
+      assert (next_ip^.addrOffset > addr^.addrOffset) $ do
+      let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
+      let br = BlockRegion { brSize = next_ip^.addrOffset - addr^.addrOffset
+                           , brBlocks = block_map
+                           }
+      transferBlocks br $ initAbsProcessorState mem (foundAbstractState finfo)
 
 ------------------------------------------------------------------------
 -- Main loop
+
+-- | Explore a specific function
+explore_fun_loop :: DiscoveryConstraints arch => FunM arch ids ()
+explore_fun_loop = do
+  st <- FunM get
+  case Set.minView (st^.frontier) of
+    Nothing -> return ()
+    Just (addr, next_roots) -> do
+      FunM $ put $ st & frontier .~ next_roots
+      transfer addr
+      explore_fun_loop
+
+explore_fun :: DiscoveryConstraints arch
+            => ArchSegmentedAddr arch
+            -> CodeAddrReason (ArchAddrWidth arch)
+            -> CFGM arch ids ()
+explore_fun addr rsn = do
+  info <- gets archInfo
+  mem  <- gets memory
+
+  let fs0 = FunState { _curFunInfo = initDiscoveryFunInfo info mem addr rsn
+                     , _frontier = Set.singleton addr
+                     }
+  fs <- execStateT (unFunM explore_fun_loop) fs0
+  funInfo %= Map.insert addr (fs^.curFunInfo)
 
 explore_frontier :: DiscoveryConstraints arch
                  => CFGM arch ids ()
 explore_frontier = do
   st <- get
-  case Set.minView (st^.frontier) of
-    Nothing ->
-      -- If local block frontier is empty, then try function frontier.
-      case Map.minViewWithKey (st^.function_frontier) of
-        Nothing -> return ()
-        Just ((addr,_rsn), next_roots) -> do
-          let high = Set.lookupGT addr (st^.functionEntries)
-              st' = st & function_frontier .~ next_roots
-                       & frontier          .~ Set.empty
-                         -- Delete any entries we previously discovered for function.
-                       & reverseEdges      %~ deleteMapRange (Just addr) high
-                       & blocks            %~ deleteMapRange (Just addr) high
-          put st'
-          transfer addr
-          explore_frontier
-
-    Just (addr, next_roots) -> do
-      put $ st & frontier .~ next_roots
-      transfer addr
+  -- If local block frontier is empty, then try function frontier.
+  case Map.minViewWithKey (st^.function_frontier) of
+    Nothing -> return ()
+    Just ((addr, rsn), next_roots) -> do
+      put $! st & function_frontier .~ next_roots
+      explore_fun addr rsn
       explore_frontier
 
 -- | This returns true if the address is writable and value, and points to code.
