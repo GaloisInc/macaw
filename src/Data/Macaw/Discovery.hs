@@ -217,7 +217,8 @@ runCFGM arch_info mem symbols m = do
 -- FunM
 
 data FunState arch ids
-   = FunState {  _curFunInfo :: !(DiscoveryFunInfo arch ids)
+   = FunState {  curFunAddr :: !(ArchSegmentedAddr arch)
+              , _curFunInfo :: !(DiscoveryFunInfo arch ids)
                  -- ^ Information about current function we are working on
               , _frontier :: !(Set (ArchSegmentedAddr arch))
                  -- ^ Addresses to explore next.
@@ -698,27 +699,29 @@ identifyReturn s stack_adj = do
 
 data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
                                           , pctxArchInfo :: !(ArchitectureInfo arch)
+                                          , pctxFunAddr  :: !(ArchSegmentedAddr arch)
+                                            -- ^ Address of function this block is being parsed as
                                           , pctxAddr     :: !(ArchSegmentedAddr arch)
                                           , pctxBlockMap :: !(Map Word64 (Block arch ids))
                                           }
 
--- | This explores a block that ends with a fetch and execute.
-fetchAndExecute' :: forall arch ids
-                 .  ( Integral (MemWord (ArchAddrWidth arch))
-                    , OrdF (ArchReg arch)
-                    , HasRepr (ArchReg arch) TypeRepr
-                    , IsAddr (ArchAddrWidth arch)
-                    , RegisterInfo (ArchReg arch)
-                    , PrettyArch arch
-                    )
-                 => ParseContext arch ids
-                 -> Block arch ids
-                 -> AbsProcessorState (ArchReg arch) ids
-                    -- ^ Registers at this block after statements executed
-                 -> RegState (ArchReg arch) (Value arch ids)
-                 -> State (ParseState arch ids) (ParsedBlock arch ids)
-fetchAndExecute' ctx b regs s' = do
-  let lbl = blockLabel b
+-- | This parses a block that ended with a fetch and execute instruction.
+parseFetchAndExecute :: forall arch ids
+                     .  ( Integral (MemWord (ArchAddrWidth arch))
+                        , OrdF (ArchReg arch)
+                        , HasRepr (ArchReg arch) TypeRepr
+                        , IsAddr (ArchAddrWidth arch)
+                        , RegisterInfo (ArchReg arch)
+                        , PrettyArch arch
+                        )
+                     => ParseContext arch ids
+                     -> ArchLabel arch
+                     -> [Stmt arch ids]
+                     -> AbsProcessorState (ArchReg arch) ids
+                     -- ^ Registers at this block after statements executed
+                     -> RegState (ArchReg arch) (Value arch ids)
+                     -> State (ParseState arch ids) (ParsedBlock arch ids)
+parseFetchAndExecute ctx lbl stmts regs s' = do
   let src = labelAddr lbl
   let lbl_idx = labelIndex lbl
   let mem = pctxMemory ctx
@@ -726,12 +729,12 @@ fetchAndExecute' ctx b regs s' = do
   -- See if next statement appears to end with a call.
   -- We define calls as statements that end with a write that
   -- stores the pc to an address.
-  let regs' = transferStmts arch_info regs (blockStmts b)
+  let regs' = transferStmts arch_info regs stmts
   case () of
     -- The last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
-    _ | Just (prev_stmts, ret) <- identifyCall mem (blockStmts b) s' -> do
+    _ | Just (prev_stmts, ret) <- identifyCall mem stmts s' -> do
         Fold.mapM_ (recordWriteStmt' mem regs') prev_stmts
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
@@ -754,7 +757,7 @@ fetchAndExecute' ctx b regs s' = do
                 AssignStmt asgn
                   | Just Refl <- testEquality (assignId asgn) (assignId  asgn') -> True
                 _ -> False
-            nonret_stmts = filter (not . isRetLoad) (blockStmts b)
+            nonret_stmts = filter (not . isRetLoad) stmts
 
         mapM_ (recordWriteStmt' mem regs') nonret_stmts
 
@@ -773,15 +776,19 @@ fetchAndExecute' ctx b regs s' = do
                          }
 
       -- Jump to concrete offset.
-      | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg) -> do
+      --
+      -- Note, we disallow jumps back to function entry point thus forcing them to be treated
+      -- as tail calls or unclassified if the stack has changed size.
+      | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg)
+      , tgt_addr /= pctxFunAddr ctx -> do
          assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
-         mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+         mapM_ (recordWriteStmt' mem regs') stmts
          -- Merge block state and add intra jump target.
          let abst = finalAbsBlockState regs' s'
          let abst' = abst & setAbsIP tgt_addr
          intraJumpTargets %= ((tgt_addr, abst'):)
          pure ParsedBlock { pblockLabel = lbl_idx
-                          , pblockStmts = blockStmts b
+                          , pblockStmts = stmts
                           , pblockState = regs'
                           , pblockTerm  = ParsedJump s' tgt_addr
                           }
@@ -792,14 +799,14 @@ fetchAndExecute' ctx b regs s' = do
         case getJumpTableBounds arch_info regs' base jump_idx of
           Left err ->
             trace (show src ++ ": Could not compute bounds: " ++ showJumpTableBoundsError err) $ do
-            mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+            mapM_ (recordWriteStmt' mem regs') stmts
             pure ParsedBlock { pblockLabel = lbl_idx
-                             , pblockStmts = blockStmts b
+                             , pblockStmts = stmts
                              , pblockState = regs'
                              , pblockTerm  = ClassifyFailure s'
                              }
           Right read_end -> do
-            mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+            mapM_ (recordWriteStmt' mem regs') stmts
 
             -- Try to compute jump table bounds
 
@@ -834,7 +841,7 @@ fetchAndExecute' ctx b regs s' = do
                           return (reverse prev)
             read_addrs <- resolveJump [] 0
             pure ParsedBlock { pblockLabel = lbl_idx
-                             , pblockStmts = blockStmts b
+                             , pblockStmts = stmts
                              , pblockState = regs'
                              , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
                              }
@@ -844,7 +851,7 @@ fetchAndExecute' ctx b regs s' = do
       , sp_val     <-  s'^.boundValue sp_reg
       , ReturnAddr <- transferRHS arch_info regs' (ReadMem sp_val ptrType) -> do
 
-        mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+        mapM_ (recordWriteStmt' mem regs') stmts
 
         -- Compute fina lstate
         let abst = finalAbsBlockState regs' s'
@@ -856,7 +863,7 @@ fetchAndExecute' ctx b regs s' = do
 
 
         pure ParsedBlock { pblockLabel = lbl_idx
-                         , pblockStmts = blockStmts b
+                         , pblockStmts = stmts
                          , pblockState = regs'
                          , pblockTerm  = ParsedCall s' Nothing
                          }
@@ -864,9 +871,9 @@ fetchAndExecute' ctx b regs s' = do
       -- Block that ends with some unknown
       | otherwise -> do
           trace ("Could not classify " ++ show lbl) $ do
-          mapM_ (recordWriteStmt' mem regs') (blockStmts b)
+          mapM_ (recordWriteStmt' mem regs') stmts
           pure ParsedBlock { pblockLabel = lbl_idx
-                           , pblockStmts = blockStmts b
+                           , pblockStmts = stmts
                            , pblockState = regs'
                            , pblockTerm  = ClassifyFailure s'
                            }
@@ -890,6 +897,8 @@ parseBlocks ctx ((b,regs):rest) = do
   let mem       = pctxMemory ctx
   let arch_info = pctxArchInfo ctx
   let lbl = blockLabel b
+  -- Assert we are still in source block.
+  assert (pctxAddr ctx == labelAddr lbl) $ do
   let idx = labelIndex lbl
   let src = pctxAddr ctx
   let block_map = pctxBlockMap ctx
@@ -943,7 +952,7 @@ parseBlocks ctx ((b,regs):rest) = do
 
 
     FetchAndExecute s' -> do
-      pb <- fetchAndExecute' ctx b regs s'
+      pb <- parseFetchAndExecute ctx (blockLabel b) (blockStmts b) regs s'
       pblockMap %= Map.insert idx pb
       parseBlocks ctx rest
 
@@ -972,10 +981,12 @@ transferBlocks br regs =
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
+      funAddr <- gets curFunAddr
       s <- liftCFG get
       let src = labelAddr (blockLabel b)
       let ctx = ParseContext { pctxMemory   = memory s
                              , pctxArchInfo = archInfo s
+                             , pctxFunAddr  = funAddr
                              , pctxAddr     = src
                              , pctxBlockMap = brBlocks br
                              }
@@ -1051,7 +1062,8 @@ explore_fun addr rsn = do
   info <- gets archInfo
   mem  <- gets memory
 
-  let fs0 = FunState { _curFunInfo = initDiscoveryFunInfo info mem addr rsn
+  let fs0 = FunState { curFunAddr = addr
+                     , _curFunInfo = initDiscoveryFunInfo info mem addr rsn
                      , _frontier = Set.singleton addr
                      }
   fs <- execStateT (unFunM explore_fun_loop) fs0
