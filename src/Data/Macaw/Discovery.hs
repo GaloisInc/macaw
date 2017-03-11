@@ -1059,11 +1059,13 @@ explore_fun :: DiscoveryConstraints arch
             -> CodeAddrReason (ArchAddrWidth arch)
             -> CFGM arch ids ()
 explore_fun addr rsn = do
-  info <- gets archInfo
-  mem  <- gets memory
+  s <- get
+  let info = archInfo s
+  let mem  = memory s
 
+  let initFunInfo = initDiscoveryFunInfo info mem (symbolNames s) addr rsn
   let fs0 = FunState { curFunAddr = addr
-                     , _curFunInfo = initDiscoveryFunInfo info mem addr rsn
+                     , _curFunInfo = initFunInfo
                      , _frontier = Set.singleton addr
                      }
   fs <- execStateT (unFunM explore_fun_loop) fs0

@@ -42,6 +42,7 @@ module Data.Macaw.Discovery.Info
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo
   , initDiscoveryFunInfo
+  , discoveredFunName
   , foundAddrs
   , parsedBlocks
   , reverseEdges
@@ -55,9 +56,10 @@ module Data.Macaw.Discovery.Info
 
 import           Control.Lens
 import           Control.Monad.ST
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe (fromMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
 import           Data.Set (Set)
@@ -252,7 +254,9 @@ type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr
 
 -- | Information discovered about a particular
 data DiscoveryFunInfo arch ids
-   = DiscoveryFunInfo { _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
+   = DiscoveryFunInfo { discoveredFunName :: !BSC.ByteString
+                        -- ^ Name of function
+                      , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
                         -- ^ Maps fopund address to the pre-state for that block.
                       , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
                         -- ^ Maps an address to the blocks associated with that address.
@@ -274,27 +278,28 @@ initDiscoveryFunInfo :: ArchitectureInfo arch
                         -- ^ Architecture information
                      -> Memory (ArchAddrWidth arch)
                         -- ^ Contents of memory for initializing abstract state.
+                     -> Map (ArchSegmentedAddr arch) BSC.ByteString
+                        -- ^ The symbol map for computing the name
                      -> ArchSegmentedAddr arch
                         -- ^ Address of this function
                      -> CodeAddrReason (ArchAddrWidth arch)
                         -- ^ Reason this function was discovered
                      -> DiscoveryFunInfo arch ids
-initDiscoveryFunInfo info mem addr rsn =
-  let faddr = FoundAddr { foundReason = rsn
+initDiscoveryFunInfo info mem symMap addr rsn =
+  let nm = fromMaybe (BSC.pack (show addr)) (Map.lookup addr symMap)
+      faddr = FoundAddr { foundReason = rsn
                         , foundAbstractState = fnBlockStateFn info mem addr
                         }
-   in DiscoveryFunInfo { _foundAddrs = Map.singleton addr faddr
+   in DiscoveryFunInfo { discoveredFunName = nm
+                       , _foundAddrs = Map.singleton addr faddr
                        , _parsedBlocks = Map.empty
                        , _reverseEdges = Map.empty
                        }
 
-ppFunInfo :: (OrdF (ArchReg arch), PrettyArch arch)
-          => ArchSegmentedAddr arch
-          -> DiscoveryFunInfo arch ids
-          -> Doc
-ppFunInfo addr info =
-  text "function" <+> text (show addr) <$$>
-  vcat (pretty <$> Map.elems (info^.parsedBlocks))
+instance (OrdF (ArchReg arch), PrettyArch arch) => Pretty (DiscoveryFunInfo arch ids) where
+  pretty info =
+    text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
+    vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo
@@ -305,8 +310,8 @@ data DiscoveryInfo arch ids
                      -- ^ Generator for creating fresh ids.
                    , memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
-                   , symbolNames :: !(Map (ArchSegmentedAddr arch) BS.ByteString)
-                     -- ^ The set of symbol names (not necessarily complete)
+                   , symbolNames :: !(Map (ArchSegmentedAddr arch) BSC.ByteString)
+                     -- ^ Map addresses to known symbol names
                    , archInfo    :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
                    , _globalDataMap :: !(Map (ArchSegmentedAddr arch)
@@ -326,12 +331,12 @@ data DiscoveryInfo arch ids
 
 ppDiscoveryInfoBlocks :: (OrdF (ArchReg arch), PrettyArch arch)
                       => DiscoveryInfo arch ids -> Doc
-ppDiscoveryInfoBlocks info = vcat (uncurry ppFunInfo <$> Map.toList (info^.funInfo))
+ppDiscoveryInfoBlocks info = vcat (pretty <$> Map.elems (info^.funInfo))
 
 -- | Empty interpreter state.
 emptyDiscoveryInfo :: NonceGenerator (ST ids) ids
                    -> Memory (ArchAddrWidth arch)
-                   -> Map (ArchSegmentedAddr arch) BS.ByteString
+                   -> Map (ArchSegmentedAddr arch) BSC.ByteString
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
                    -> DiscoveryInfo arch ids
