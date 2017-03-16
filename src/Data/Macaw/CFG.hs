@@ -176,12 +176,12 @@ bracketsep (h:l) = vcat $
 ------------------------------------------------------------------------
 -- BlockLabel
 
--- | A label used to identify a block.
+-- | A label used to identify a block within a function.
 --
 -- The field is the address width.
 data BlockLabel w
-     -- | A block that came from an address in the code.
    = GeneratedBlock { labelAddr   :: !(SegmentedAddr w)
+                      -- ^ Address of function label
                     , labelIndex  :: {-# UNPACK #-} !Word64
                     -- ^ A unique identifier for a generated block.
                     }

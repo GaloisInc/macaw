@@ -33,7 +33,8 @@ import           Control.Exception
 import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
-import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
+import           Data.Char (isDigit)
 import qualified Data.Foldable as Fold
 import           Data.List
 import           Data.Map.Strict (Map)
@@ -203,7 +204,7 @@ runCFGM :: ArchitectureInfo arch
            -- ^ Architecture-specific information needed for doing control-flow exploration.
         -> Memory (ArchAddrWidth arch)
            -- ^ Memory to use when decoding instructions.
-        -> Map (ArchSegmentedAddr arch) BS.ByteString
+        -> Map (ArchSegmentedAddr arch) BSC.ByteString
            -- ^ Names for (some) function entry points
         -> (forall ids . CFGM arch ids ())
            -- ^ Computation to run.
@@ -1089,6 +1090,25 @@ memIsDataCodePointer _ a v
   =  segmentFlags (addrSegment v) `Perm.hasPerm` Perm.execute
   && segmentFlags (addrSegment a) `Perm.hasPerm` Perm.write
 
+-- | Map from addresses to the associated symbol name.
+type SymbolNameMap w = Map (SegmentedAddr w) BSC.ByteString
+
+
+-- | This checks the symbol name map for correctness of the symbol names.
+--
+-- It returns either an error message or (Right ()) if no error is found.
+checkSymbolMap :: SymbolNameMap w -> Either String ()
+checkSymbolMap symbols = do
+  let symbol_names :: Set BSC.ByteString
+      symbol_names = Set.fromList (Map.elems symbols)
+  when (Set.size symbol_names /= Map.size symbols) $ do
+    Left "The symbol name map contains duplicate symbol names"
+  forM_ (Map.elems symbols) $ \sym_nm -> do
+    case BSC.unpack sym_nm of
+      [] -> Left "Empty symbol name"
+      (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
+            | otherwise -> Right ()
+
 -- | Construct a discovery info by starting with exploring from a given set of
 -- function entry points.
 cfgFromAddrs :: forall arch
@@ -1097,8 +1117,8 @@ cfgFromAddrs :: forall arch
                 -- ^ Architecture-specific information needed for doing control-flow exploration.
              -> Memory (ArchAddrWidth arch)
                 -- ^ Memory to use when decoding instructions.
-             -> Map (ArchSegmentedAddr arch) BS.ByteString
-                -- ^ Names for (some) function entry points
+             -> SymbolNameMap (ArchAddrWidth arch)
+                -- ^ Map from addresses to the associated symbol name.
              -> [ArchSegmentedAddr arch]
                 -- ^ Initial function entry points.
              -> [(ArchSegmentedAddr arch, ArchSegmentedAddr arch)]
@@ -1109,6 +1129,9 @@ cfgFromAddrs :: forall arch
              -> Some (DiscoveryInfo arch)
 cfgFromAddrs arch_info mem symbols init_addrs mem_words =
   runCFGM arch_info mem symbols $ do
+    case checkSymbolMap symbols of
+      Left msg -> error $ "interna error in cfgFromAddrs:" ++ msg
+      Right () -> pure ()
     -- Set abstract state for initial functions
     mapM_ (markAddrAsFunction InitAddr) init_addrs
     explore_frontier

@@ -254,8 +254,9 @@ type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr
 
 -- | Information discovered about a particular
 data DiscoveryFunInfo arch ids
-   = DiscoveryFunInfo { discoveredFunName :: !BSC.ByteString
-                        -- ^ Name of function
+   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
+                      , discoveredFunName :: !BSC.ByteString
+                        -- ^ Name of function should be unique for program
                       , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
                         -- ^ Maps fopund address to the pre-state for that block.
                       , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
@@ -290,7 +291,8 @@ initDiscoveryFunInfo info mem symMap addr rsn =
       faddr = FoundAddr { foundReason = rsn
                         , foundAbstractState = fnBlockStateFn info mem addr
                         }
-   in DiscoveryFunInfo { discoveredFunName = nm
+   in DiscoveryFunInfo { discoveredFunAddr = addr
+                       , discoveredFunName = nm
                        , _foundAddrs = Map.singleton addr faddr
                        , _parsedBlocks = Map.empty
                        , _reverseEdges = Map.empty
@@ -340,7 +342,8 @@ emptyDiscoveryInfo :: NonceGenerator (ST ids) ids
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
                    -> DiscoveryInfo arch ids
-emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
+emptyDiscoveryInfo ng mem symbols info =
+  DiscoveryInfo
       { nonceGen           = ng
       , memory             = mem
       , symbolNames        = symbols
