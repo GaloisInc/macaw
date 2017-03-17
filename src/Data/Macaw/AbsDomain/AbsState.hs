@@ -1088,15 +1088,15 @@ assignLens ass = lens (fromMaybe TopV . MapF.lookup ass)
 
 deleteRange :: Int64 -> Int64 -> AbsBlockStack w -> AbsBlockStack w
 deleteRange l h m
-  | h < l = m
+  | h <= l = m
   | otherwise =
     case Map.lookupGE l m of
       Just (k,v)
-        | k <= h
+        | k < h
         , StackEntry _ ReturnAddr <- v ->
-          debug DAbsInt ("Deleting return address at offset " ++ show (k,l,h))
-                (deleteRange (k+1) h (Map.delete k m))
-        | k <= h ->
+          debug DAbsInt ("Failing to delete return address at offset " ++ show (k,l,h))
+                (deleteRange (k+1) h m)
+        | k < h ->
           deleteRange (k+1) h (Map.delete k m)
       _ -> m
 
@@ -1193,16 +1193,18 @@ addMemWrite cur_ip a v r =
              ++ " via " ++ show (pretty a)
              ++" in SomeStackOffset case") $
       r & curAbsStack %~ pruneStack
-    (StackOffset _ s, _) | Set.size s > 1 ->
-      let w = valueByteSize v
-      in  r & curAbsStack %~ flip (Set.fold (\o m -> deleteRange o (o+w-1) m)) s
-    (StackOffset _ s, TopV) | [o] <- Set.toList s ->
-      let w = valueByteSize v
-       in r & curAbsStack %~ deleteRange o (o+w-1)
-    (StackOffset _ s, v_abs) | [o] <- Set.toList s ->
+    (StackOffset _ s, v_abs) ->
       let w = valueByteSize v
           e = StackEntry (typeRepr v) v_abs
-       in r & curAbsStack %~ Map.insert o e . deleteRange o (o+w-1)
+          stk0 = r^.curAbsStack
+          -- Delete information about old assignment
+          stk1 = Set.fold (\o m -> deleteRange o (o+w) m) stk0 s
+          -- Add information about new assignment
+          stk2 =
+            case Set.toList s of
+              [o] | v_abs /= TopV -> Map.insert o e stk1
+              _ -> stk1
+       in r & curAbsStack .~ stk2
     -- FIXME: nuke stack on an unknown address or Top?
     _ -> r
 

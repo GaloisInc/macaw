@@ -18,7 +18,6 @@ discovery.
 module Data.Macaw.Discovery.Info
   ( BlockRegion(..)
   , FoundAddr(..)
-  , lookupBlock
   , lookupParsedBlock
   , GlobalDataInfo(..)
   , ParsedTermStmt(..)
@@ -26,51 +25,56 @@ module Data.Macaw.Discovery.Info
   , ParsedBlockRegion(..)
     -- * The interpreter state
   , DiscoveryInfo
+  , ppDiscoveryInfoBlocks
+
   , emptyDiscoveryInfo
   , nonceGen
-  , archInfo
   , memory
   , symbolNames
-  , foundAddrs
-  , blocks
-  , parsedBlocks
-  , functionEntries
-  , reverseEdges
+  , archInfo
+
   , globalDataMap
-  , tryGetStaticSyscallNo
-    -- * Frontier
-  , CodeAddrReason(..)
-  , frontier
+
+  , functionEntries
+  , funInfo
   , function_frontier
+
+    -- * DiscoveryFunInfo
+  , DiscoveryFunInfo
+  , initDiscoveryFunInfo
+  , discoveredFunName
+  , foundAddrs
+  , parsedBlocks
+  , reverseEdges
+    -- * CodeAddrRegion
+  , CodeAddrReason(..)
     -- ** DiscoveryInfo utilities
   , ArchConstraint
-  , identifyCall
-  , identifyReturn
   , asLiteralAddr
+  , tryGetStaticSyscallNo
   )  where
 
 import           Control.Lens
 import           Control.Monad.ST
-import qualified Data.ByteString as BS
---import           Data.Foldable
+import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe (fromMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
-import           Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
+import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
+import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.Memory
-import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
 
@@ -169,6 +173,34 @@ deriving instance
   )
   => Show (ParsedTermStmt arch ids)
 
+instance (OrdF (ArchReg arch), ShowF (ArchReg arch)) => Pretty (ParsedTermStmt arch ids) where
+  pretty (ParsedCall s Nothing) =
+    text "tail call" <$$>
+    indent 2 (pretty s)
+  pretty (ParsedCall s (Just next)) =
+    text "call and return to" <+> text (show next) <$$>
+    indent 2 (pretty s)
+  pretty (ParsedJump s addr) =
+    text "jump" <+> text (show addr) <$$>
+    indent 2 (pretty s)
+  pretty (ParsedLookupTable s idx entries) =
+    text "ijump" <+> pretty idx <$$>
+    indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v)) (V.toList entries))) <$$>
+    indent 2 (pretty s)
+  pretty (ParsedReturn s) =
+    text "return" <$$>
+    indent 2 (pretty s)
+  pretty (ParsedBranch c t f) =
+    text "branch" <+> pretty c <+> text (show t) <+> text (show f)
+  pretty (ParsedSyscall s addr) =
+    text "syscall, return to" <+> text (show addr) <$$>
+    indent 2 (pretty s)
+  pretty (ParsedTranslateError msg) =
+    text "translation error" <+> text (Text.unpack msg)
+  pretty (ClassifyFailure s) =
+    text "unknown transfer" <$$>
+    indent 2 (pretty s)
+
 ------------------------------------------------------------------------
 -- ParsedBlock
 
@@ -184,6 +216,16 @@ deriving instance (PrettyCFGConstraints arch
                   , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
                   )
   => Show (ParsedBlock arch ids)
+
+
+ppParsedBlock :: (PrettyArch arch,  OrdF (ArchReg arch))
+              => ArchSegmentedAddr arch
+              -> ParsedBlock arch ids
+              -> Doc
+ppParsedBlock a b =
+  pretty (GeneratedBlock a (pblockLabel b)) PP.<> text ":" <$$>
+  indent 2 (vcat (pretty <$> pblockStmts b) <$$>
+            pretty (pblockTerm b))
 
 ------------------------------------------------------------------------
 -- ParsedBlockRegion
@@ -201,99 +243,124 @@ deriving instance (PrettyCFGConstraints arch
                   )
   => Show (ParsedBlockRegion arch ids)
 
+instance (OrdF (ArchReg arch), PrettyArch arch)
+      => Pretty (ParsedBlockRegion arch ids) where
+  pretty r = vcat $ ppParsedBlock (regionAddr r) <$> Map.elems (regionBlockMap r)
+
+------------------------------------------------------------------------
+-- DiscoveryFunInfo
+
+type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch)))
+
+-- | Information discovered about a particular
+data DiscoveryFunInfo arch ids
+   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
+                      , discoveredFunName :: !BSC.ByteString
+                        -- ^ Name of function should be unique for program
+                      , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
+                        -- ^ Maps fopund address to the pre-state for that block.
+                      , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+                        -- ^ Maps an address to the blocks associated with that address.
+                      , _reverseEdges :: !(ReverseEdgeMap arch)
+                       -- ^ Maps each code address to the list of predecessors that
+                       -- affected its abstract state.
+                      }
+
+foundAddrs :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (FoundAddr arch))
+foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
+
+parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
+
+reverseEdges :: Simple Lens (DiscoveryFunInfo arch ids) (ReverseEdgeMap arch)
+reverseEdges = lens _reverseEdges (\s v -> s { _reverseEdges = v })
+
+initDiscoveryFunInfo :: ArchitectureInfo arch
+                        -- ^ Architecture information
+                     -> Memory (ArchAddrWidth arch)
+                        -- ^ Contents of memory for initializing abstract state.
+                     -> Map (ArchSegmentedAddr arch) BSC.ByteString
+                        -- ^ The symbol map for computing the name
+                     -> ArchSegmentedAddr arch
+                        -- ^ Address of this function
+                     -> CodeAddrReason (ArchAddrWidth arch)
+                        -- ^ Reason this function was discovered
+                     -> DiscoveryFunInfo arch ids
+initDiscoveryFunInfo info mem symMap addr rsn =
+  let nm = fromMaybe (BSC.pack (show addr)) (Map.lookup addr symMap)
+      faddr = FoundAddr { foundReason = rsn
+                        , foundAbstractState = fnBlockStateFn info mem addr
+                        }
+   in DiscoveryFunInfo { discoveredFunAddr = addr
+                       , discoveredFunName = nm
+                       , _foundAddrs = Map.singleton addr faddr
+                       , _parsedBlocks = Map.empty
+                       , _reverseEdges = Map.empty
+                       }
+
+instance (OrdF (ArchReg arch), PrettyArch arch) => Pretty (DiscoveryFunInfo arch ids) where
+  pretty info =
+    text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
+    vcat (pretty <$> Map.elems (info^.parsedBlocks))
+
 ------------------------------------------------------------------------
 -- DiscoveryInfo
 
--- | The state of the interpreter
+-- | Information discovered about the program
 data DiscoveryInfo arch ids
    = DiscoveryInfo { nonceGen    :: !(NonceGenerator (ST ids) ids)
                      -- ^ Generator for creating fresh ids.
                    , memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
-                   , symbolNames :: !(Map (ArchSegmentedAddr arch) BS.ByteString)
-                     -- ^ The set of symbol names (not necessarily complete)
+                   , symbolNames :: !(Map (ArchSegmentedAddr arch) BSC.ByteString)
+                     -- ^ Map addresses to known symbol names
                    , archInfo    :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
-                   , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
-                     -- ^ Maps fopund address to the pre-state for that block.
-                   , _blocks     :: !(Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
-                     -- ^ Maps an address to the code associated with that address.
-                   , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
-                     -- ^ Maps an address to the blocks associated with that address.
-                   , _functionEntries :: !(Set (ArchSegmentedAddr arch))
-                      -- ^ Maps addresses that are marked as the start of a function
-                   , _reverseEdges :: !(Map (ArchSegmentedAddr arch)
-                                            (Set (ArchSegmentedAddr arch)))
-                     -- ^ Maps each code address to the list of predecessors that
-                     -- affected its abstract state.
                    , _globalDataMap :: !(Map (ArchSegmentedAddr arch)
                                              (GlobalDataInfo (ArchSegmentedAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-                   , _frontier :: !(Map (ArchSegmentedAddr arch)
-                                        (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ Addresses to explore next.
-                     --
-                     -- This is a map so that we can associate a reason why a code
-                     -- address was added to the frontier.
+
+                   , _functionEntries :: !(Set (ArchSegmentedAddr arch))
+                      -- ^ Maps addresses that are marked as the start of a function
+                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (DiscoveryFunInfo arch ids))
+                     -- ^ Map from function addresses to discovered information about function
+
                    , _function_frontier :: !(Map (ArchSegmentedAddr arch)
                                                  (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ Set of functions to explore next.
                    }
 
+ppDiscoveryInfoBlocks :: (OrdF (ArchReg arch), PrettyArch arch)
+                      => DiscoveryInfo arch ids -> Doc
+ppDiscoveryInfoBlocks info = vcat (pretty <$> Map.elems (info^.funInfo))
+
 -- | Empty interpreter state.
 emptyDiscoveryInfo :: NonceGenerator (ST ids) ids
                    -> Memory (ArchAddrWidth arch)
-                   -> Map (ArchSegmentedAddr arch) BS.ByteString
+                   -> Map (ArchSegmentedAddr arch) BSC.ByteString
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
                    -> DiscoveryInfo arch ids
-emptyDiscoveryInfo ng mem symbols info = DiscoveryInfo
+emptyDiscoveryInfo ng mem symbols info =
+  DiscoveryInfo
       { nonceGen           = ng
       , memory             = mem
       , symbolNames        = symbols
       , archInfo           = info
-      , _foundAddrs        = Map.empty
-      , _blocks            = Map.empty
-      , _parsedBlocks      = Map.empty
-      , _functionEntries   = Set.empty
-      , _reverseEdges      = Map.empty
       , _globalDataMap     = Map.empty
-      , _frontier          = Map.empty
+
+      , _functionEntries   = Set.empty
+      , _funInfo           = Map.empty
       , _function_frontier = Map.empty
       }
 
-foundAddrs :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (FoundAddr arch))
-foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
-
-blocks :: Simple Lens (DiscoveryInfo arch ids)
-                      (Map (ArchSegmentedAddr arch) (BlockRegion arch ids))
-blocks = lens _blocks (\s v -> s { _blocks = v })
-
-parsedBlocks :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
-parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
-
--- | Addresses that start each function.
-functionEntries :: Simple Lens (DiscoveryInfo arch ids) (Set (ArchSegmentedAddr arch))
-functionEntries = lens _functionEntries (\s v -> s { _functionEntries = v })
-
-reverseEdges :: Simple Lens (DiscoveryInfo arch ids)
-                            (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch)))
-reverseEdges = lens _reverseEdges (\s v -> s { _reverseEdges = v })
 
 -- | Map each jump table start to the address just after the end.
 globalDataMap :: Simple Lens (DiscoveryInfo arch ids)
                              (Map (ArchSegmentedAddr arch)
                                   (GlobalDataInfo (ArchSegmentedAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
-
--- | Set of addresses to explore next.
---
--- This is a map so that we can associate a reason why a code address
--- was added to the frontier.
-frontier :: Simple Lens (DiscoveryInfo arch ids)
-                        (Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
-frontier = lens _frontier (\s v -> s { _frontier = v })
 
 -- | Set of functions to explore next.
 function_frontier :: Simple Lens (DiscoveryInfo arch ids)
@@ -302,16 +369,16 @@ function_frontier :: Simple Lens (DiscoveryInfo arch ids)
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
 
 
--- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupBlock :: DiscoveryInfo arch ids
-            -> ArchLabel arch
-            -> Maybe (Block arch ids)
-lookupBlock info lbl = do
-  br <- Map.lookup (labelAddr lbl) (info^.blocks)
-  Map.lookup (labelIndex lbl) (brBlocks br)
+-- | Get information for specific functions
+funInfo :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (DiscoveryFunInfo arch ids))
+funInfo = lens _funInfo (\s v -> s { _funInfo = v })
+
+-- | Addresses that start each function.
+functionEntries :: Simple Lens (DiscoveryInfo arch ids) (Set (ArchSegmentedAddr arch))
+functionEntries = lens _functionEntries (\s v -> s { _functionEntries = v })
 
 -- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupParsedBlock :: DiscoveryInfo arch ids
+lookupParsedBlock :: DiscoveryFunInfo arch ids
                   -> ArchLabel arch
                   -> Maybe (ParsedBlock arch ids)
 lookupParsedBlock info lbl = do
@@ -339,68 +406,9 @@ asLiteralAddr mem (BVValue _ val) =
 asLiteralAddr _   (RelocatableValue _ a) = Just a
 asLiteralAddr _ _ = Nothing
 
--- | Attempt to identify the write to a stack return address, returning
--- instructions prior to that write and return  values.
---
--- This can also return Nothing if the call is not supported.
-identifyCall :: ( ArchConstraint a ids
-                , MemWidth (ArchAddrWidth a)
-                )
-             => Memory (ArchAddrWidth a)
-             -> [Stmt a ids]
-             -> RegState (ArchReg a) (Value a ids)
-             -> Maybe (Seq (Stmt a ids), ArchSegmentedAddr a)
-identifyCall mem stmts0 s = go (Seq.fromList stmts0)
-  where -- Get value of stack pointer
-        next_sp = s^.boundValue sp_reg
-        -- Recurse on statements.
-        go stmts =
-          case Seq.viewr stmts of
-            Seq.EmptyR -> Nothing
-            prev Seq.:> stmt
-              -- Check for a call statement by determining if the last statement
-              -- writes an executable address to the stack pointer.
-              | WriteMem a val <- stmt
-              , Just _ <- testEquality a next_sp
-                -- Check this is the right length.
-              , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
-                -- Check if value is a valid literal address
-              , Just val_a <- asLiteralAddr mem val
-                -- Check if segment of address is marked as executable.
-              , Perm.isExecutable (segmentFlags (addrSegment val_a)) ->
-
-                Just (prev, val_a)
-                -- Stop if we hit any architecture specific instructions prior to
-                -- identifying return address since they may have side effects.
-              | ExecArchStmt _ <- stmt -> Nothing
-                -- Otherwise skip over this instruction.
-              | otherwise -> go prev
-
--- | This is designed to detect returns from the register state representation.
---
--- It pattern matches on a 'RegState' to detect if it read its instruction
--- pointer from an address that is 8 below the stack pointer.
---
--- Note that this assumes the stack decrements as values are pushed, so we will
--- need to fix this on other architectures.
-identifyReturn :: ArchConstraint arch ids
-               => RegState (ArchReg arch) (Value arch ids)
-               -> Integer
-                  -- ^ How stack pointer moves when a call is made
-               -> Maybe (Assignment arch ids (BVType (ArchAddrWidth arch)))
-identifyReturn s stack_adj = do
-  let next_ip = s^.boundValue ip_reg
-      next_sp = s^.boundValue sp_reg
-  case next_ip of
-    AssignedValue asgn@(Assignment _ (ReadMem ip_addr _))
-      | let (ip_base, ip_off) = asBaseOffset ip_addr
-      , let (sp_base, sp_off) = asBaseOffset next_sp
-      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) -> Just asgn
-    _ -> Nothing
-
 tryGetStaticSyscallNo :: ArchConstraint arch ids
-                      => DiscoveryInfo arch ids
-                         -- ^ Discovery information
+                      => DiscoveryFunInfo arch ids
+                         -- ^ Discovery information about a function
                       -> ArchSegmentedAddr arch
                          -- ^ Address of this block
                       -> RegState (ArchReg arch) (Value arch ids)

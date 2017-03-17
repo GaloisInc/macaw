@@ -62,6 +62,7 @@ module Data.Macaw.CFG
   , appWidth
   , mapApp
   , foldApp
+  , foldAppl
   , traverseApp
   -- * RegState
   , RegState
@@ -175,12 +176,12 @@ bracketsep (h:l) = vcat $
 ------------------------------------------------------------------------
 -- BlockLabel
 
--- | A label used to identify a block.
+-- | A label used to identify a block within a function.
 --
 -- The field is the address width.
 data BlockLabel w
-     -- | A block that came from an address in the code.
    = GeneratedBlock { labelAddr   :: !(SegmentedAddr w)
+                      -- ^ Address of function label
                     , labelIndex  :: {-# UNPACK #-} !Word64
                     -- ^ A unique identifier for a generated block.
                     }
@@ -430,8 +431,10 @@ data App (f :: Type -> *) (tp :: Type) where
        -> App f BoolType
 
   FPCvt :: !(FloatInfoRepr flt)
+           -- ^ Input float type
         -> !(f (FloatType flt))
         -> !(FloatInfoRepr flt')
+           -- ^ Output float type
         -> App f (FloatType flt')
 
   FPCvtRoundsUp :: !(FloatInfoRepr flt)
@@ -496,6 +499,23 @@ mapApp f m = runIdentity $ traverseApp (return . f) m
 
 foldApp :: Monoid m => (forall u. f u -> m) -> App f tp -> m
 foldApp f m = getConst (traverseApp (\f_u -> Const $ f f_u) m)
+
+newtype FoldFn s a = FoldFn { getFoldFn :: s -> s }
+
+
+instance Functor (FoldFn s) where
+  fmap _ (FoldFn g) = FoldFn g
+
+instance Applicative (FoldFn s) where
+  pure _ = FoldFn id
+  FoldFn g <*> FoldFn h = FoldFn (\s -> h (g s))
+
+-- | Left-fold over all values in the app
+foldAppl :: forall f s tp . (forall u . s -> f u -> s) -> s -> App f tp -> s
+foldAppl f s0 a = getFoldFn (traverseApp go a) s0
+  where go :: f u -> FoldFn s (f u)
+        go v = FoldFn (\s -> f s v)
+
 
 ------------------------------------------------------------------------
 -- App pretty printing
@@ -1232,11 +1252,6 @@ cfgBlocks = lens _cfgBlocks (\s v -> s { _cfgBlocks = v })
 
 cfgBlockRanges :: Simple Lens (CFG arch ids) (Map (ArchSegmentedAddr arch) (ArchAddr arch))
 cfgBlockRanges = lens _cfgBlockRanges (\s v -> s { _cfgBlockRanges = v })
-
-{-
-cfgBlockEnds :: CFG arch ids -> Set (ArchAddr arch)
-cfgBlockEnds g = Set.fromList (Map.elems (_cfgBlockRanges g))
--}
 
 -- | Return block with given label.
 findBlock :: CFG arch ids -> ArchLabel arch -> Maybe (Block arch ids)
