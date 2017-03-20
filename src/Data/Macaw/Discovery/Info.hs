@@ -42,6 +42,7 @@ module Data.Macaw.Discovery.Info
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo
   , initDiscoveryFunInfo
+  , discoveredFunAddr
   , discoveredFunName
   , foundAddrs
   , parsedBlocks
@@ -51,7 +52,6 @@ module Data.Macaw.Discovery.Info
     -- ** DiscoveryInfo utilities
   , ArchConstraint
   , asLiteralAddr
-  , tryGetStaticSyscallNo
   )  where
 
 import           Control.Lens
@@ -255,6 +255,7 @@ type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr
 -- | Information discovered about a particular
 data DiscoveryFunInfo arch ids
    = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
+                        -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
                       , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
@@ -405,20 +406,3 @@ asLiteralAddr mem (BVValue _ val) =
   absoluteAddrSegment mem (fromInteger val)
 asLiteralAddr _   (RelocatableValue _ a) = Just a
 asLiteralAddr _ _ = Nothing
-
-tryGetStaticSyscallNo :: ArchConstraint arch ids
-                      => DiscoveryFunInfo arch ids
-                         -- ^ Discovery information about a function
-                      -> ArchSegmentedAddr arch
-                         -- ^ Address of this block
-                      -> RegState (ArchReg arch) (Value arch ids)
-                         -- ^ State of processor
-                      -> Maybe Integer
-tryGetStaticSyscallNo interp_state block_addr proc_state
-  | BVValue _ call_no <- proc_state^.boundValue syscall_num_reg =
-    Just call_no
-  | Initial r <- proc_state^.boundValue syscall_num_reg
-  , Just info <- interp_state^.foundAddrs^.at block_addr =
-    asConcreteSingleton (foundAbstractState info^.absRegState^.boundValue r)
-  | otherwise =
-    Nothing
