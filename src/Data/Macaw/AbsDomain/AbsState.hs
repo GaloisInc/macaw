@@ -1127,6 +1127,7 @@ pruneStack = Map.filter f
 transferValue' :: ( OrdF (ArchReg a)
                   , ShowF (ArchReg a)
                   , Num (ArchAddr a)
+                  , Integral (MemWord (RegAddrWidth (ArchReg a)))
                   )
                => NatRepr (ArchAddrWidth a)
                   -- ^ Width of a code pointer
@@ -1141,8 +1142,9 @@ transferValue' code_width is_code amap aregs v =
    BVValue w i
      | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
      | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
-   RelocatableValue _ a ->
-       CodePointers (Set.singleton a) False
+   RelocatableValue w i
+     | 0 <= i && toInteger i <= maxUnsigned w -> abstractSingleton code_width is_code w (toInteger i)
+     | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v, maxUnsigned w)
    -- Invariant: v is in m
    AssignedValue a ->
      fromMaybe (error $ "Missing assignment for " ++ show (assignId a))

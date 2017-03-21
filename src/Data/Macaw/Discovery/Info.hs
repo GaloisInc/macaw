@@ -404,5 +404,6 @@ asLiteralAddr :: MemWidth (ArchAddrWidth arch)
               -> Maybe (ArchSegmentedAddr arch)
 asLiteralAddr mem (BVValue _ val) =
   absoluteAddrSegment mem (fromInteger val)
-asLiteralAddr _   (RelocatableValue _ a) = Just a
+asLiteralAddr mem (RelocatableValue _ i) =
+  absoluteAddrSegment mem (fromIntegral i)
 asLiteralAddr _ _ = Nothing

@@ -774,7 +774,7 @@ data Value arch ids tp
    => BVValue !(NatRepr n) !Integer
      -- ^ A constant bitvector
    | ( tp ~ BVType (ArchAddrWidth arch))
-   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchSegmentedAddr arch)
+   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(MemWord (ArchAddrWidth arch))
      -- ^ A given memory address.
    | AssignedValue !(Assignment arch ids tp)
      -- ^ Value from an assignment statement.
