@@ -47,5 +47,5 @@ Implementing support for an architecture is more involved and requires implement
 * ABI information regarding registers and calling conventions
 * A transfer function for architecture-specific features not represented in the common IR
 
-.. _elf_edit: https://github.com/GaloisInc/elf-edit
+.. _elf-edit: https://github.com/GaloisInc/elf-edit
 .. _flexdis86: https://github.com/GaloisInc/flexdis86
