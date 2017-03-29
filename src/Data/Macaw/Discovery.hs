@@ -1098,11 +1098,13 @@ type SymbolNameMap w = Map (SegmentedAddr w) BSC.ByteString
 --
 -- It returns either an error message or (Right ()) if no error is found.
 checkSymbolMap :: SymbolNameMap w -> Either String ()
+checkSymbolMap symbols
+  | (Set.size symbol_names /= Map.size symbols)
+  , debug DCFG ("WARNING: The symbol name map contains duplicate symbol names") False
+  = error "internal: duplicate symbol names in symbol name map"
+  where symbol_names :: Set BSC.ByteString
+        symbol_names = Set.fromList (Map.elems symbols)
 checkSymbolMap symbols = do
-  let symbol_names :: Set BSC.ByteString
-      symbol_names = Set.fromList (Map.elems symbols)
-  when (Set.size symbol_names /= Map.size symbols) $ do
-    Left "The symbol name map contains duplicate symbol names"
   forM_ (Map.elems symbols) $ \sym_nm -> do
     case BSC.unpack sym_nm of
       [] -> Left "Empty symbol name"
