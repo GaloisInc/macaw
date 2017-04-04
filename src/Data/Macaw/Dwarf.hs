@@ -15,6 +15,8 @@ module Data.Macaw.Dwarf
   , Variable(..)
   , Location(..)
   , DeclLoc(..)
+  , Subprogram(..)
+  , SubprogramDef(..)
     -- * Type information
   , Type(..)
   , TypeF(..)
@@ -28,6 +30,7 @@ module Data.Macaw.Dwarf
     -- * Re-exports
   , Dwarf.DieID
   , Dwarf.DW_OP(..)
+  , Dwarf.Range(..)
   ) where
 
 import           Control.Lens
