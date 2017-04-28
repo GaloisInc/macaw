@@ -124,6 +124,7 @@ data CodeAddrReason w
 ------------------------------------------------------------------------
 -- GlobalDataInfo
 
+-- | Information about a region of memory.
 data GlobalDataInfo w
      -- | A jump table that appears to end just before the given address.
    = JumpTable !(Maybe w)
