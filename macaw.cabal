@@ -13,7 +13,6 @@ library
     bytestring,
     containers >= 0.5.8.1,
     elf-edit >= 0.28,
-    flexdis86 >= 0.1.1,
     galois-dwarf,
     IntervalMap >= 0.5,
     lens >= 4.7,
@@ -39,7 +38,6 @@ library
     Data.Macaw.Dwarf
     Data.Macaw.Memory
     Data.Macaw.Memory.ElfLoader
-    Data.Macaw.Memory.Flexdis86
     Data.Macaw.Memory.Permissions
     Data.Macaw.Types
 

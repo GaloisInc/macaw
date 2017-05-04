@@ -1,4 +1,9 @@
-The macaw library implements architecture-independent binary code discovery.  Support for specific architectures is provided by implementing the semantics of that architecture.  The library is written in terms of an abstract interface to memory, for which an ELF backend is provided (via the elf-edit_ library).  There is also a dependency on flexdis86_, which is an x86_64 disassembler, but that does not tie the discovery algorithm to x86_64.  The basic code discovery is based on a variant of Value Set Analysis (VSA).
+The macaw library implements architecture-independent binary code
+discovery.  Support for specific architectures is provided by
+implementing the semantics of that architecture.  The library is
+written in terms of an abstract interface to memory, for which an ELF
+backend is provided (via the elf-edit_ library).  The basic code
+discovery is based on a variant of Value Set Analysis (VSA).
 
 The most important user-facing abstractions are:
 
@@ -6,6 +11,8 @@ The most important user-facing abstractions are:
 * The ``memoryForElfSegments`` function is a useful helper to produce a ``Memory`` from an ELF file.
 * The ``cfgFromAddrs`` function, defined in ``Data.Macaw.Discovery``, which performs code discovery on a ``Memory`` given some initial parameters (semantics to use via ``ArchitectureInfo`` and some entry points.
 * The ``DiscoveryInfo`` type, which is the result of ``cfgFromAddrs``; it contains a collection of ``DiscoveryFunInfo`` records, each of which represents a discovered function.  Every basic block is assigned to at least one function.
+
+Architecture-specific code goes into separate libraries.  X86-specific code is in the macaw-x86 repo.
 
 An abbreviated example of using macaw on an ELF file looks like::
 
