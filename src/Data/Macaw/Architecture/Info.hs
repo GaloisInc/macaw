@@ -4,6 +4,7 @@ Maintainer : jhendrix@galois.com
 
 This defines the architecture-specific information needed for code discovery.
 -}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}

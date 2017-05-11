@@ -32,7 +32,6 @@ module Data.Macaw.CFG
   , traverseBlocks
   , traverseBlockAndChildren
   , findBlock
-  , PrettyCFGConstraints
     -- * Block level declarations
   , BlockLabel(..)
   , isRootBlockLabel
@@ -83,7 +82,7 @@ module Data.Macaw.CFG
   , sexpr
   , sexprA
   , PrettyF(..)
-  , PrettyArch(..)
+  , ArchConstraints(..)
   , PrettyRegValue(..)
     -- * Architecture type families
   , ArchAddr
@@ -93,7 +92,7 @@ module Data.Macaw.CFG
   , ArchStmt
   , RegAddr
   , RegAddrWidth
-    -- ** Classes
+    -- ** Classqes
   , RegisterInfo(..)
     -- * References
   , StmtHasRefs(..)
@@ -137,7 +136,7 @@ import           GHC.TypeLits
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
-import           Data.Macaw.Memory (MemWord, SegmentedAddr(..))
+import           Data.Macaw.Memory (MemWord, MemWidth, SegmentedAddr(..))
 import           Data.Macaw.Types
 
 -- Note:
@@ -710,36 +709,6 @@ type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 
 type ArchLabel arch = BlockLabel (ArchAddrWidth arch)
 
--- | Operations on a Arch
-class (ShowF (ArchReg arch), PrettyF  (ArchStmt arch))  => PrettyArch arch where
-  -- | A function for pretty printing an archFn of a given type.
-  ppArchFn :: Applicative m
-           => (forall u . Value arch ids u -> m Doc)
-              -- ^ Function for pretty printing vlaue.
-           -> ArchFn arch ids tp
-           -> m Doc
-
--- | This class provides access to information about registers.
-class ( OrdF r
-      , ShowF r
-      , Integral (MemWord (RegAddrWidth r))
-      ) => RegisterInfo r where
-
-  -- | List of all arch registers.
-  archRegs :: [Some r]
-
-  -- | The stack pointer register
-  sp_reg :: r (BVType (RegAddrWidth r))
-
-  -- | The instruction pointer register
-  ip_reg :: r (BVType (RegAddrWidth r))
-
-  -- | The register used to store system call numbers.
-  syscall_num_reg :: r (BVType (RegAddrWidth r))
-
-  -- | Registers used for passing system call arguments
-  syscallArgumentRegs :: [r (BVType (RegAddrWidth r))]
-
 ------------------------------------------------------------------------
 -- AssignId
 
@@ -841,102 +810,6 @@ valueWidth :: ( HasRepr (ArchReg arch) TypeRepr
 valueWidth v =
   case typeRepr v of
     BVTypeRepr n -> n
-
-$(pure [])
-
-------------------------------------------------------------------------
--- Pretty print Assign, AssignRhs, Value operations
-
-ppLit :: NatRepr n -> Integer -> Doc
-ppLit w i
-  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
-  | otherwise = error "ppLit given negative value"
-
--- | Pretty print a value.
-ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
-ppValue p (BVValue w i)     = assert (i >= 0) $ parenIf (p > colonPrec) $ ppLit w i
-ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
-ppValue _ (AssignedValue a) = ppAssignId (assignId a)
-ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
-
-instance ShowF (ArchReg arch) => PrettyPrec (Value arch ids tp) where
-  prettyPrec = ppValue
-
-instance ShowF (ArchReg arch) => Pretty (Value arch ids tp) where
-  pretty = ppValue 0
-
-instance ShowF (ArchReg arch) => Show (Value arch ids tp) where
-  show = show . pretty
-
--- | Pretty print an assignment right-hand side using operations parameterized
--- over an application to allow side effects.
-ppAssignRhs :: (Applicative m, PrettyArch arch)
-            => (forall u . Value arch ids u -> m Doc)
-               -- ^ Function for pretty printing value.
-            -> AssignRhs arch ids tp
-            -> m Doc
-ppAssignRhs pp (EvalApp a) = ppAppA pp a
-ppAssignRhs _  (SetUndefined w) = pure $ text "undef ::" <+> brackets (text (show w))
-ppAssignRhs pp (ReadMem a _) = (\d -> text "*" PP.<> d) <$> pp a
-ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
-
-instance PrettyArch arch => Pretty (AssignRhs arch ids tp) where
-  pretty = runIdentity . ppAssignRhs (Identity . ppValue 10)
-
-instance PrettyArch arch => Pretty (Assignment arch ids tp) where
-  pretty (Assignment lhs rhs) = ppAssignId lhs <+> text ":=" <+> pretty rhs
-
-$(pure [])
-
-------------------------------------------------------------------------
--- Pretty print a value assignment
-
--- | Helper type to wrap up a 'Doc' with a dummy type argument; used to put
--- 'Doc's into heterogenous maps in the below
-newtype DocF (a :: Type) = DocF Doc
-
--- | This pretty prints a value's representation while saving the pretty
--- printed repreentation of subvalues in a map.
-collectValueRep :: forall arch ids tp
-                .  PrettyArch arch
-                => Prec
-                -> Value arch ids tp
-                -> State (MapF (AssignId ids) DocF) Doc
-collectValueRep _ (AssignedValue a :: Value arch ids tp) = do
-  let lhs = assignId a
-  mr <- gets $ MapF.lookup lhs
-  when (isNothing mr) $ do
-    let ppVal :: forall u . Value arch ids u ->
-                 State (MapF (AssignId ids) DocF) Doc
-        ppVal = collectValueRep 10
-    rhs <- ppAssignRhs ppVal (assignRhs a)
-    let d = ppAssignId lhs <+> text ":=" <+> rhs
-    modify $ MapF.insert lhs (DocF d)
-    return ()
-  return $! ppAssignId lhs
-collectValueRep p v = return $ ppValue p v
-
--- | This pretty prints all the history used to create a value.
-ppValueAssignments' :: State (MapF (AssignId ids) DocF) Doc -> Doc
-ppValueAssignments' m =
-  case MapF.elems bindings of
-    [] -> rhs
-    (Some (DocF h):r) ->
-      let first               = text "let" PP.<+> h
-          f (Some (DocF b))   = text "    " PP.<> b
-       in vcat (first:fmap f r) <$$>
-          text " in" PP.<+> rhs
-  where (rhs, bindings) = runState m MapF.empty
-
--- | This pretty prints all the history used to create a value.
-ppValueAssignments :: PrettyArch arch => Value arch ids tp -> Doc
-ppValueAssignments v = ppValueAssignments' (collectValueRep 0 v)
-
-ppValueAssignmentList :: PrettyArch arch => [Value arch ids tp] -> Doc
-ppValueAssignmentList vals =
-  ppValueAssignments' $ do
-    docs <- mapM (collectValueRep 0) vals
-    return $ brackets $ hcat (punctuate comma docs)
 
 $(pure [])
 
@@ -1062,6 +935,32 @@ cmpRegState p (RegState x) (RegState y) = go (MapF.toList x) (MapF.toList y)
             Nothing -> False
             Just Refl -> p xv yv && go xr yr
 
+------------------------------------------------------------------------
+-- RegisterInfo
+
+-- | This class provides access to information about registers.
+class ( OrdF r
+      , ShowF r
+      , MemWidth (RegAddrWidth r)
+      , HasRepr r  TypeRepr
+      ) => RegisterInfo r where
+
+  -- | List of all arch registers.
+  archRegs :: [Some r]
+
+  -- | The stack pointer register
+  sp_reg :: r (BVType (RegAddrWidth r))
+
+  -- | The instruction pointer register
+  ip_reg :: r (BVType (RegAddrWidth r))
+
+  -- | The register used to store system call numbers.
+  syscall_num_reg :: r (BVType (RegAddrWidth r))
+
+  -- | Registers used for passing system call arguments
+  syscallArgumentRegs :: [r (BVType (RegAddrWidth r))]
+
+
 --  The value of the current instruction pointer.
 curIP :: RegisterInfo r
       => Simple Lens (RegState r f) (f (BVType (RegAddrWidth r)))
@@ -1085,6 +984,112 @@ zipWithRegState :: RegisterInfo r
                 -> RegState r g
                 -> RegState r h
 zipWithRegState f x y = mkRegState (\r -> f (x ^. boundValue r) (y ^. boundValue r))
+
+------------------------------------------------------------------------
+-- Pretty print Assign, AssignRhs, Value operations
+
+ppLit :: NatRepr n -> Integer -> Doc
+ppLit w i
+  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
+  | otherwise = error "ppLit given negative value"
+
+-- | Pretty print a value.
+ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
+ppValue p (BVValue w i)     = assert (i >= 0) $ parenIf (p > colonPrec) $ ppLit w i
+ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
+ppValue _ (AssignedValue a) = ppAssignId (assignId a)
+ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
+
+instance ShowF (ArchReg arch) => PrettyPrec (Value arch ids tp) where
+  prettyPrec = ppValue
+
+instance ShowF (ArchReg arch) => Pretty (Value arch ids tp) where
+  pretty = ppValue 0
+
+instance ShowF (ArchReg arch) => Show (Value arch ids tp) where
+  show = show . pretty
+
+class ( RegisterInfo (ArchReg arch)
+      , PrettyF  (ArchStmt arch)
+      )  => ArchConstraints arch where
+  -- | A function for pretty printing an archFn of a given type.
+  ppArchFn :: Applicative m
+           => (forall u . Value arch ids u -> m Doc)
+              -- ^ Function for pretty printing vlaue.
+           -> ArchFn arch ids tp
+           -> m Doc
+
+-- | Pretty print an assignment right-hand side using operations parameterized
+-- over an application to allow side effects.
+ppAssignRhs :: (Applicative m, ArchConstraints arch)
+            => (forall u . Value arch ids u -> m Doc)
+               -- ^ Function for pretty printing value.
+            -> AssignRhs arch ids tp
+            -> m Doc
+ppAssignRhs pp (EvalApp a) = ppAppA pp a
+ppAssignRhs _  (SetUndefined w) = pure $ text "undef ::" <+> brackets (text (show w))
+ppAssignRhs pp (ReadMem a _) = (\d -> text "*" PP.<> d) <$> pp a
+ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
+
+instance ArchConstraints arch => Pretty (AssignRhs arch ids tp) where
+  pretty = runIdentity . ppAssignRhs (Identity . ppValue 10)
+
+instance ArchConstraints arch => Pretty (Assignment arch ids tp) where
+  pretty (Assignment lhs rhs) = ppAssignId lhs <+> text ":=" <+> pretty rhs
+
+$(pure [])
+
+------------------------------------------------------------------------
+-- Pretty print a value assignment
+
+-- | Helper type to wrap up a 'Doc' with a dummy type argument; used to put
+-- 'Doc's into heterogenous maps in the below
+newtype DocF (a :: Type) = DocF Doc
+
+-- | This pretty prints a value's representation while saving the pretty
+-- printed repreentation of subvalues in a map.
+collectValueRep :: forall arch ids tp
+                .  ArchConstraints arch
+                => Prec
+                -> Value arch ids tp
+                -> State (MapF (AssignId ids) DocF) Doc
+collectValueRep _ (AssignedValue a :: Value arch ids tp) = do
+  let lhs = assignId a
+  mr <- gets $ MapF.lookup lhs
+  when (isNothing mr) $ do
+    let ppVal :: forall u . Value arch ids u ->
+                 State (MapF (AssignId ids) DocF) Doc
+        ppVal = collectValueRep 10
+    rhs <- ppAssignRhs ppVal (assignRhs a)
+    let d = ppAssignId lhs <+> text ":=" <+> rhs
+    modify $ MapF.insert lhs (DocF d)
+    return ()
+  return $! ppAssignId lhs
+collectValueRep p v = return $ ppValue p v
+
+-- | This pretty prints all the history used to create a value.
+ppValueAssignments' :: State (MapF (AssignId ids) DocF) Doc -> Doc
+ppValueAssignments' m =
+  case MapF.elems bindings of
+    [] -> rhs
+    (Some (DocF h):r) ->
+      let first               = text "let" PP.<+> h
+          f (Some (DocF b))   = text "    " PP.<> b
+       in vcat (first:fmap f r) <$$>
+          text " in" PP.<+> rhs
+  where (rhs, bindings) = runState m MapF.empty
+
+-- | This pretty prints all the history used to create a value.
+ppValueAssignments :: ArchConstraints arch => Value arch ids tp -> Doc
+ppValueAssignments v = ppValueAssignments' (collectValueRep 0 v)
+
+ppValueAssignmentList :: ArchConstraints arch => [Value arch ids tp] -> Doc
+ppValueAssignmentList vals =
+  ppValueAssignments' $ do
+    docs <- mapM (collectValueRep 0) vals
+    return $ brackets $ hcat (punctuate comma docs)
+
+$(pure [])
 
 ------------------------------------------------------------------------
 -- Pretty printing RegState
@@ -1131,7 +1136,7 @@ data Stmt arch ids
    | ExecArchStmt (ArchStmt arch ids)
      -- ^ Execute an architecture specific statement
 
-instance PrettyArch arch => Pretty (Stmt arch ids) where
+instance ArchConstraints arch => Pretty (Stmt arch ids) where
   pretty (AssignStmt a) = pretty a
   pretty (WriteMem a rhs) = text "*" PP.<> prettyPrec 11 a <+> text ":=" <+> ppValue 0 rhs
   pretty (PlaceHolderStmt vals name) = text ("PLACEHOLDER: " ++ name)
@@ -1141,7 +1146,7 @@ instance PrettyArch arch => Pretty (Stmt arch ids) where
   pretty (ExecArchStmt s) = prettyF s
 
 
-instance PrettyArch arch => Show (Stmt arch ids) where
+instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . pretty
 
 ------------------------------------------------------------------------
@@ -1221,10 +1226,7 @@ data Block arch ids
              -- ^ The last statement in the block.
            }
 
-instance ( OrdF  (ArchReg arch)
-         , PrettyArch arch
-         )
-      => Pretty (Block arch ids) where
+instance ArchConstraints arch => Pretty (Block arch ids) where
   pretty b = do
     pretty (blockLabel b) PP.<> text ":" <$$>
       indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
@@ -1283,16 +1285,7 @@ insertBlocksForCode start size bs cfg =
   let cfg' = cfg & cfgBlockRanges %~ Map.insert start size
    in foldl' (flip insertBlock) cfg' bs
 
--- | Constraints for pretty printing a 'CFG'.
-type PrettyCFGConstraints arch
-   = ( OrdF (ArchReg arch)
-     , Integral (ArchAddr arch)
-     , Show     (ArchAddr arch)
-     , PrettyArch arch
-     )
-
-instance PrettyCFGConstraints arch
-      => Pretty (CFG arch ids) where
+instance ArchConstraints arch => Pretty (CFG arch ids) where
   pretty g = vcat (pretty <$> Map.elems (_cfgBlocks g))
 
 -- FIXME: refactor to be more efficient

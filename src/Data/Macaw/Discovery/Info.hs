@@ -50,7 +50,7 @@ module Data.Macaw.Discovery.Info
     -- * CodeAddrRegion
   , CodeAddrReason(..)
     -- ** DiscoveryInfo utilities
-  , ArchConstraint
+  , RegConstraint
   , asLiteralAddr
   )  where
 
@@ -168,11 +168,7 @@ data ParsedTermStmt arch ids
    | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
      -- ^ The classifier failed to identity the block.
 
-deriving instance
-  ( PrettyCFGConstraints arch
-  , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
-  )
-  => Show (ParsedTermStmt arch ids)
+deriving instance ArchConstraints arch => Show (ParsedTermStmt arch ids)
 
 instance (OrdF (ArchReg arch), ShowF (ArchReg arch)) => Pretty (ParsedTermStmt arch ids) where
   pretty (ParsedCall s Nothing) =
@@ -213,13 +209,11 @@ data ParsedBlock arch ids
                  , pblockTerm  :: !(ParsedTermStmt arch ids)
                  }
 
-deriving instance (PrettyCFGConstraints arch
-                  , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
-                  )
+deriving instance ArchConstraints arch
   => Show (ParsedBlock arch ids)
 
 
-ppParsedBlock :: (PrettyArch arch,  OrdF (ArchReg arch))
+ppParsedBlock :: ArchConstraints arch
               => ArchSegmentedAddr arch
               -> ParsedBlock arch ids
               -> Doc
@@ -239,12 +233,10 @@ data ParsedBlockRegion arch ids
                        , regionBlockMap :: !(Map Word64 (ParsedBlock arch ids))
                        -- ^ Map from labelIndex to associated block.
                        }
-deriving instance (PrettyCFGConstraints arch
-                  , Show (ArchReg arch (BVType (ArchAddrWidth arch)))
-                  )
+deriving instance ArchConstraints arch
   => Show (ParsedBlockRegion arch ids)
 
-instance (OrdF (ArchReg arch), PrettyArch arch)
+instance ArchConstraints arch
       => Pretty (ParsedBlockRegion arch ids) where
   pretty r = vcat $ ppParsedBlock (regionAddr r) <$> Map.elems (regionBlockMap r)
 
@@ -300,7 +292,7 @@ initDiscoveryFunInfo info mem symMap addr rsn =
                        , _reverseEdges = Map.empty
                        }
 
-instance (OrdF (ArchReg arch), PrettyArch arch) => Pretty (DiscoveryFunInfo arch ids) where
+instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
     text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
     vcat (pretty <$> Map.elems (info^.parsedBlocks))
@@ -333,8 +325,9 @@ data DiscoveryInfo arch ids
                      -- ^ Set of functions to explore next.
                    }
 
-ppDiscoveryInfoBlocks :: (OrdF (ArchReg arch), PrettyArch arch)
-                      => DiscoveryInfo arch ids -> Doc
+ppDiscoveryInfoBlocks :: ArchConstraints arch
+                      => DiscoveryInfo arch ids
+                      -> Doc
 ppDiscoveryInfoBlocks info = vcat (pretty <$> Map.elems (info^.funInfo))
 
 -- | Empty interpreter state.
@@ -392,10 +385,6 @@ lookupParsedBlock info lbl = do
 
 -- | Constraint on architecture register values needed by code exploration.
 type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)
-
--- | Constraint on architecture so that we can do code exploration.
-type ArchConstraint a ids = ( RegConstraint (ArchReg a)
-                            )
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.

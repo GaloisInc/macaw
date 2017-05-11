@@ -11,12 +11,12 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Memory
-  ( SomeMemory(..)
-  , MemWidth
-  , Memory
+  ( Memory
   , memAddrWidth
   , memWidth
   , emptyMemory
@@ -37,7 +37,7 @@ module Data.Macaw.Memory
     -- * AddrWidthRepr
   , AddrWidthRepr(..)
   , addrWidthNatRepr
-  , addrWidthByteSize
+  , addrWidthClass
     -- * Endianness
   , Endianness(..)
     -- * MemSegment operations
@@ -54,18 +54,15 @@ module Data.Macaw.Memory
   , SymbolRef(..)
   , SymbolVersion(..)
     -- * Address and offset.
+  , MemWidth(..)
   , MemWord
-  , MemoryAddrWidth
   , memWord
-  , memWord32
-  , memWord64
   , SegmentedAddr(..)
   , addrOffset
   , addrContentsAfter
   , addrBase
   , addrValue
   , MemoryError(..)
-  , IsAddr(..)
   ) where
 
 import           Control.Exception (assert)
@@ -101,11 +98,6 @@ data AddrWidthRepr w
 addrWidthNatRepr :: AddrWidthRepr w -> NatRepr w
 addrWidthNatRepr Addr32 = knownNat
 addrWidthNatRepr Addr64 = knownNat
-
--- | Number of bytes in an address
-addrWidthByteSize :: AddrWidthRepr w -> Integer
-addrWidthByteSize Addr32 = 4
-addrWidthByteSize Addr64 = 8
 
 ------------------------------------------------------------------------
 -- Endianness
@@ -167,40 +159,39 @@ instance Eq (MemWord w) where
 instance Ord (MemWord w) where
   compare (MemWord x) (MemWord y) = compare x y
 
-memWord32 :: Word64 -> MemWord 32
-memWord32 x = MemWord (x .&. 0xffffffff)
-
-instance Num (MemWord 32) where
-  MemWord x + MemWord y = memWord32 $ x + y
-  MemWord x - MemWord y = memWord32 $ x - y
-  MemWord x * MemWord y = memWord32 $ x * y
-  abs = id
-  fromInteger = memWord32 . fromInteger
-  negate (MemWord x) = memWord32 (negate x)
-  signum (MemWord x) = memWord32 (signum x)
-
 -- | Typeclass for legal memory widths
-class MemoryAddrWidth w where
+class MemWidth w where
+  -- | @addrWidthMod w@ returns @2^addrBitSize w - 1@.
   addrWidthMod :: p w -> Word64
+
+   -- | Returns number of bytes in addr.
+  addrSize :: p w -> Int
+
+  -- Rotates the value by the given index.
   addrRotate :: MemWord w -> Int -> MemWord w
-  addrBitSize :: p w -> Int
 
-instance MemoryAddrWidth 32 where
-  addrWidthMod _ = 0xffffffff
-  addrRotate (MemWord w) i = MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
-  addrBitSize _ = 32
+  -- | Read an address with the given endianess.
+  addrRead :: Endianness -> BS.ByteString -> Maybe (MemWord w)
 
-instance MemoryAddrWidth 64 where
-  addrWidthMod _ = 0xffffffffffffffff
-  addrRotate (MemWord w) i = MemWord (w `rotate` i)
-  addrBitSize _ = 64
+-- | Returns add
+addrBitSize :: MemWidth w => p w -> Int
+addrBitSize w = 8 * addrSize w
 
-memWord :: forall w . MemoryAddrWidth w => Word64 -> MemWord w
+memWord :: forall w . MemWidth w => Word64 -> MemWord w
 memWord x = MemWord (x .&. addrWidthMod p)
   where p :: Proxy w
         p = Proxy
 
-instance MemoryAddrWidth w => Bits (MemWord w) where
+instance MemWidth w => Num (MemWord w) where
+  MemWord x + MemWord y = memWord $ x + y
+  MemWord x - MemWord y = memWord $ x - y
+  MemWord x * MemWord y = memWord $ x * y
+  abs = id
+  fromInteger = memWord . fromInteger
+  negate (MemWord x) = memWord (negate x)
+  signum (MemWord x) = memWord (signum x)
+
+instance MemWidth w => Bits (MemWord w) where
 
   MemWord x .&. MemWord y = memWord (x .&. y)
   MemWord x .|. MemWord y = memWord (x .|. y)
@@ -215,50 +206,22 @@ instance MemoryAddrWidth w => Bits (MemWord w) where
   bit i = memWord (bit i)
   popCount (MemWord x) = popCount x
 
-memWord64 :: Word64 -> MemWord 64
-memWord64 = MemWord
-
-instance Num (MemWord 64) where
-  MemWord x + MemWord y = memWord64 $ x + y
-  MemWord x - MemWord y = memWord64 $ x - y
-  MemWord x * MemWord y = memWord64 $ x * y
-  abs = id
-  fromInteger = memWord64 . fromInteger
-  negate (MemWord x) = memWord64 (negate x)
-  signum (MemWord x) = memWord64 (signum x)
-
-instance Enum (MemWord 32) where
-  toEnum = memWord32 . fromIntegral
+instance MemWidth w => Enum (MemWord w) where
+  toEnum = memWord . fromIntegral
   fromEnum (MemWord x) = fromIntegral x
 
-instance Enum (MemWord 64) where
-  toEnum = memWord64 . fromIntegral
-  fromEnum (MemWord x) = fromIntegral x
-
-instance Real (MemWord 32) where
+instance MemWidth w => Real (MemWord w) where
   toRational (MemWord x) = toRational x
 
-instance Real (MemWord 64) where
-  toRational (MemWord x) = toRational x
-
-instance Integral (MemWord 32) where
+instance MemWidth w => Integral (MemWord w) where
   MemWord x `quotRem` MemWord y = (MemWord q, MemWord r)
     where (q,r) = x `quotRem` y
   toInteger (MemWord x) = toInteger x
 
-instance Integral (MemWord 64) where
-  MemWord x `quotRem` MemWord y = (MemWord q, MemWord r)
-    where (q,r) = x `quotRem` y
-  toInteger (MemWord x) = toInteger x
 
--- | A unique identifier for a segment.
-type SegmentIndex = Int
-
-class IsAddr w where
-  addrSize :: p w -> MemWord w
-  addrRead :: Endianness -> BS.ByteString -> Maybe (MemWord w)
-
-instance IsAddr 32 where
+instance MemWidth 32 where
+  addrWidthMod _ = 0xffffffff
+  addrRotate (MemWord w) i = MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
   addrSize _ = 4
   addrRead e s
     | BS.length s < 4 = Nothing
@@ -267,8 +230,9 @@ instance IsAddr 32 where
         BigEndian -> Just $ MemWord $ fromIntegral $ bsWord32be s
         LittleEndian -> Just $ MemWord $ fromIntegral $ bsWord32le s
 
-
-instance IsAddr 64 where
+instance MemWidth 64 where
+  addrWidthMod _ = 0xffffffffffffffff
+  addrRotate (MemWord w) i = MemWord (w `rotate` i)
   addrSize _ = 8
   addrRead e s
     | BS.length s < 8 = Nothing
@@ -277,7 +241,15 @@ instance IsAddr 64 where
         BigEndian    -> Just $ MemWord $ fromIntegral $ bsWord64be s
         LittleEndian -> Just $ MemWord $ fromIntegral $ bsWord64le s
 
-type MemWidth w = (IsAddr w, Integral (MemWord w))
+-- | Number of bytes in an address
+addrWidthClass :: AddrWidthRepr w -> (MemWidth w => a) -> a
+addrWidthClass Addr32 x = x
+addrWidthClass Addr64 x = x
+
+$(pure [])
+
+-- | A unique identifier for a segment.
+type SegmentIndex = Int
 
 ------------------------------------------------------------------------
 -- SegmentRange
@@ -292,17 +264,16 @@ data SymbolRef = SymbolRef { symbolName :: !BS.ByteString
                            , symbolVersion :: !(Maybe SymbolVersion)
                            }
 
-
 -- | Defines a portion of a segment.
 data SegmentRange w
    = ByteRegion !BS.ByteString
    | RelocatableAddr !SegmentIndex !(MemWord w)
    | SymbolicRef !SymbolRef
 
-rangeSize :: MemWidth w => SegmentRange w -> MemWord w
+rangeSize :: forall w . MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
-rangeSize (RelocatableAddr _ w) = addrSize w
-rangeSize (SymbolicRef _) = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
+rangeSize (RelocatableAddr _ w) = fromIntegral (addrSize w)
+rangeSize (SymbolicRef _) = fromIntegral (addrSize (error "rangeSize nat evaluated" :: NatRepr w))
 
 
 instance Show (SegmentRange w) where
@@ -334,7 +305,7 @@ contentsSize (SegmentContents m) =
     Just ((start, c),_) -> start + rangeSize c
 
 -- | Read an address from the value in the segment or report a memory error.
-lookupRange :: Num (MemWord w)
+lookupRange :: MemWidth w
             => MemWord w
             -> SegmentContents w
             -> Maybe (MemWord w, SegmentRange w)
@@ -344,10 +315,10 @@ lookupRange i (SegmentContents m) = do
 
 -- | Return list of contents from given word or 'Nothing' if this can't be done
 -- due to a relocation.
-contentsAfter :: Integral (MemWord w)
-             => MemWord w
-             -> SegmentContents w
-             -> Maybe [SegmentRange w]
+contentsAfter :: MemWidth w
+              => MemWord w
+              -> SegmentContents w
+              -> Maybe [SegmentRange w]
 contentsAfter off (SegmentContents m) = do
   let (premap,mv,post) = Map.splitLookup off m
   case mv of
@@ -437,11 +408,11 @@ addrOffset :: Simple Lens (SegmentedAddr w) (MemWord w)
 addrOffset = lens _addrOffset (\s v -> s { _addrOffset = v })
 
 -- | Return the base value of an address or 0 if undefined.
-addrBase :: Num (MemWord w) => SegmentedAddr w -> MemWord w
+addrBase :: MemWidth w => SegmentedAddr w -> MemWord w
 addrBase addr = fromMaybe 0 (segmentBase (addrSegment addr))
 
 -- | Return the offset of the address after adding the base segment value if defined.
-addrValue :: Num (MemWord w) => SegmentedAddr w -> MemWord w
+addrValue :: MemWidth w => SegmentedAddr w -> MemWord w
 addrValue addr = addrBase addr + addr^.addrOffset
 
 instance Show (SegmentedAddr w) where
@@ -458,7 +429,7 @@ instance Show (SegmentedAddr w) where
 
 -- | Return contents starting from location or throw a memory error if there
 -- is an unaligned relocation.
-addrContentsAfter :: Integral (MemWord w)
+addrContentsAfter :: MemWidth w
                   => SegmentedAddr w
                   -> Either (MemoryError w) [SegmentRange w]
 addrContentsAfter addr =
@@ -513,7 +484,7 @@ memAsAddrPairs mem end = do
   seg <- memSegments mem
   (contents_offset,r) <- contentsList (segmentContents seg)
   let addr = SegmentedAddr seg contents_offset
-  let MemWord sz = addrSize mem
+  let sz = addrSize mem
   case r of
     ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
       w <- regularChunks (fromIntegral sz) bs
@@ -553,7 +524,7 @@ readAddr :: MemWidth w
          -> SegmentedAddr w
          -> Either (MemoryError w) (SegmentedAddr w)
 readAddr mem end addr = do
-  let MemWord sz = addrSize addr
+  let sz = fromIntegral (addrSize addr)
   case lookupRange (addr^.addrOffset) (segmentContents (addrSegment addr)) of
     Just (MemWord offset, ByteRegion bs)
       | offset + sz >= offset                           -- Check for no overfow
@@ -687,10 +658,3 @@ instance Show (MemoryError w) where
     "Attempt to read an offset of a relocation entry at " ++ show a ++ "."
   show (InvalidAddr a)   =
     "Attempt to interpret an invalid address: " ++ show a ++ "."
-
-------------------------------------------------------------------------
--- SomeMemory
-
-data SomeMemory
-   = Memory32 !(Memory 32)
-   | Memory64 !(Memory 64)

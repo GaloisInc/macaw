@@ -169,7 +169,7 @@ data SomeFinSet tp where
 
 -- | Given a segmented addr and flag indicating if zero is contained return the underlying
 -- integer set and the set of addresses that had no base.
-partitionAbsoluteAddrs :: Integral (MemWord w)
+partitionAbsoluteAddrs :: MemWidth w
                         => Set (SegmentedAddr w)
                         -> Bool
                         -> (Set Integer, Set (SegmentedAddr w))
@@ -184,7 +184,7 @@ partitionAbsoluteAddrs addrSet b = foldl' f (s0, Set.empty) addrSet
                where badSet' = Set.insert addr badSet
 
 asFinSet :: forall w tp
-         .  Integral (MemWord w)
+         .  MemWidth w
          => String
          -> AbsValue w tp
          -> SomeFinSet tp
@@ -271,7 +271,7 @@ ppIntegerSet s = ppSet (ppv <$> Set.toList s)
 -- | Returns a set of concrete integers that this value may be.
 -- This function will neither return the complete set or an
 -- known under-approximation.
-concretize :: Integral (MemWord w) => AbsValue w tp -> Maybe (Set Integer)
+concretize :: MemWidth w => AbsValue w tp -> Maybe (Set Integer)
 concretize (FinSet s) = Just s
 concretize (CodePointers s b) = Just $ Set.fromList $
   [ toInteger base + toInteger (addr^.addrOffset)
@@ -294,7 +294,7 @@ absValueSize (StackOffset _ s) = Just $ fromIntegral (Set.size s)
 absValueSize _ = Nothing
 
 -- | Return single value is the abstract value can only take on one value.
-asConcreteSingleton :: Integral (MemWord w) => AbsValue w tp -> Maybe Integer
+asConcreteSingleton :: MemWidth w => AbsValue w tp -> Maybe Integer
 asConcreteSingleton v = do
   sz <- absValueSize v
   guard (sz == 1)
@@ -334,7 +334,7 @@ ppSegAddrSet s =  ppSet (text . show <$> Set.toList s)
 -- | Join the old and new states and return the updated state iff
 -- the result is larger than the old state.
 -- This also returns any addresses that are discarded during joining.
-joinAbsValue :: Integral (MemWord w)
+joinAbsValue :: MemWidth w
              => AbsValue w tp
              -> AbsValue w tp
              -> Maybe (AbsValue w tp)
@@ -350,7 +350,7 @@ addWords s = modify $ Set.union s
 -- | Join the old and new states and return the updated state iff
 -- the result is larger than the old state.
 -- This also returns any addresses that are discarded during joining.
-joinAbsValue' :: Integral (MemWord w)
+joinAbsValue' :: MemWidth w
               => AbsValue w tp
               -> AbsValue w tp
               -> State (Set (SegmentedAddr w)) (Maybe (AbsValue w tp))
@@ -478,7 +478,7 @@ isBottom ReturnAddr = False
 -- Currently the only case we care about is where v' is an interval
 
 -- @meet x y@ returns an over-approximation of the values in @x@ and @y@.
-meet :: Integral (MemWord w)
+meet :: MemWidth w
      => AbsValue w tp
      -> AbsValue w tp
      -> AbsValue w tp
@@ -490,7 +490,7 @@ meet x y
   | otherwise = m
   where m = meet' x y
 
-meet' :: Integral (MemWord w) => AbsValue w tp -> AbsValue w tp -> AbsValue w tp
+meet' :: MemWidth w => AbsValue w tp -> AbsValue w tp -> AbsValue w tp
 meet' TopV x = x
 meet' x TopV = x
 -- FIXME: reuse an old value if possible?
@@ -537,7 +537,7 @@ meet' x _ = x -- Arbitrarily pick one.
 -------------------------------------------------------------------------------
 -- Operations
 
-trunc :: (Integral (MemWord w), v+1 <= u)
+trunc :: (MemWidth w, v+1 <= u)
       => AbsValue w (BVType u)
       -> NatRepr v
       -> AbsValue w (BVType v)
@@ -556,7 +556,7 @@ trunc ReturnAddr _ = TopV
 trunc TopV _ = TopV
 
 uext :: forall u v w
-     .  (u+1 <= v, Integral (MemWord w))
+     .  (u+1 <= v, MemWidth w)
      => AbsValue w (BVType u) -> NatRepr v -> AbsValue w (BVType v)
 uext (FinSet s) _ = FinSet s
 uext (CodePointers s b) _ = FinSet wordSet
@@ -579,7 +579,7 @@ uext ReturnAddr _ = TopV
 uext TopV _ = TopV
 
 bvadd :: forall w u
-      .  Integral (MemWord w)
+      .  MemWidth w
       => NatRepr u
       -> AbsValue w (BVType u)
       -> AbsValue w (BVType u)
@@ -688,7 +688,7 @@ bvsub _ _ _ (SomeStackOffset _) = TopV
 bvsub _ _ _ _ = TopV -- Keep the pattern checker happy
 
 bvmul :: forall w u
-      .  Integral (MemWord w)
+      .  MemWidth w
       => NatRepr u
       -> AbsValue w (BVType u)
       -> AbsValue w (BVType u)
@@ -712,7 +712,7 @@ bvmul w v v'
 bvmul _ _ _ = TopV
 
 -- FIXME: generalise
-bvand :: Integral (MemWord w)
+bvand :: MemWidth w
       => NatRepr u
       -> AbsValue w (BVType u)
       -> AbsValue w  (BVType u)
@@ -722,7 +722,7 @@ bvand _w (asConcreteSingleton -> Just v) (asFinSet "bvand" -> IsFin s) = FinSet 
 bvand _ _ _ = TopV
 
 -- FIXME: generalise
-bitop :: Integral (MemWord w)
+bitop :: MemWidth w
       => (Integer -> Integer -> Integer)
       -> NatRepr u
       -> AbsValue w (BVType u)
@@ -752,7 +752,7 @@ absFalse = FinSet (Set.singleton 0)
 
 -- | This returns the smallest abstract value that contains the
 -- given unsigned integer.
-abstractSingleton :: (Num (MemWord w))
+abstractSingleton :: MemWidth w
                   => NatRepr w
                      -- ^ Width of code pointer
                   -> (MemWord w -> Maybe (SegmentedAddr w))
@@ -801,7 +801,7 @@ hasMinimum _tp v =
 -- For example, given {2, 3} and {2, 3, 4}, we know (only) that
 -- {2, 3} and {3, 4} because we may pick any element from either set.
 
-abstractULt :: Integral (MemWord w)
+abstractULt :: MemWidth w
             => TypeRepr tp
             -> AbsValue w tp
             -> AbsValue w tp
@@ -819,7 +819,7 @@ abstractULt tp x y
 abstractULt _tp x y = (x, y)
 
 -- | @abstractULeq x y@ refines x and y with the knowledge that @x <= y@
-abstractULeq :: Integral (MemWord w)
+abstractULeq :: MemWidth w
              => TypeRepr tp
                -> AbsValue w tp
                -> AbsValue w tp
@@ -864,7 +864,7 @@ type AbsBlockStack w = Map Int64 (StackEntry w)
 -- values in @y@ and @x@.  It sets the first state parameter to true if @z@
 -- is different from @y@ and adds and escaped code pointers to the second
 -- parameter.
-absStackJoinD :: Integral (MemWord w)
+absStackJoinD :: MemWidth w
               => AbsBlockStack w
               -> AbsBlockStack w
               -> State (Bool,Set (SegmentedAddr w)) (AbsBlockStack w)
@@ -1127,7 +1127,7 @@ pruneStack = Map.filter f
 transferValue' :: ( OrdF (ArchReg a)
                   , ShowF (ArchReg a)
                   , Num (ArchAddr a)
-                  , Integral (MemWord (RegAddrWidth (ArchReg a)))
+                  , MemWidth (RegAddrWidth (ArchReg a))
                   )
                => NatRepr (ArchAddrWidth a)
                   -- ^ Width of a code pointer
