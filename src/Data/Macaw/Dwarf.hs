@@ -456,9 +456,8 @@ data TypeF tp
      -- ^ A 1-byte signed character.
 
    | ArrayType tp ![Subrange tp]
-   | PointerType (Maybe tp)
-     -- ^ A pointer with the given byte size
-     -- (TODO: Add check to confirm number of bytes matches expectation)
+   | PointerType !(Maybe tp)
+     -- ^ A pointer with the given type (or 'Nothing') to indicate this is a void pointer.
    | StructType !(StructDecl tp)
      -- ^ Denotes a C struct
    | UnionType !(UnionDecl tp)
@@ -686,19 +685,19 @@ instance Show Type where
 ppTypeF :: TypeF Type -> Doc
 ppTypeF tp =
   case tp of
-    BoolType          -> text "bool"
-    UnsignedIntType w -> text "unsignedt<" <+> text (show (8*w)) <+> ">"
-    SignedIntType w   -> text "signed<" <+> text (show (8*w)) <+> ">"
-    FloatType         -> text "float"
-    DoubleType        -> text "double"
-    UnsignedCharType  -> text "uchar"
-    SignedCharType    -> text "schar"
-    PointerType x -> text "pointer" <+> maybe (text "unknown") ppType x
-    StructType s -> text "struct" <+> text (structName s)
-    UnionType  u -> text "union"  <+> text (unionName  u)
-    EnumType e   -> text "enum" <+> text (show e)
-    TypedefType d -> text "typedef" <+> text (typedefName d)
-    ArrayType etp l -> text "array" <+> ppType etp <+> text (show l)
+    BoolType            -> text "bool"
+    UnsignedIntType w   -> text "unsignedt<" <> text (show (8*w)) <> ">"
+    SignedIntType w     -> text "signed<"    <> text (show (8*w)) <> ">"
+    FloatType           -> text "float"
+    DoubleType          -> text "double"
+    UnsignedCharType    -> text "uchar"
+    SignedCharType      -> text "schar"
+    PointerType x       -> text "pointer" <+> maybe (text "unknown") ppType x
+    StructType s        -> text "struct"  <+> text (structName s)
+    UnionType  u        -> text "union"   <+> text (unionName  u)
+    EnumType e          -> text "enum"        <+> text (show e)
+    TypedefType d       -> text "typedef"     <+> text (typedefName d)
+    ArrayType etp l     -> text "array"       <+> ppType etp <+> text (show l)
     SubroutinePtrType d -> text "subroutine*" <+> text (show d)
 
 ppType :: Type -> Doc
@@ -738,10 +737,10 @@ resolveTypeMap m = r
         g d = fromMaybe (error $ "Could not find die ID " ++ show d) $
               Map.lookup d r
 
-
 ------------------------------------------------------------------------
 -- Variable
 
+-- | Provides a way of computing the location of a variable.
 data Location
    = ComputedLoc [DW_OP]
    | OffsetLoc Word64
