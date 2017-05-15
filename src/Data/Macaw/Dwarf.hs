@@ -1,10 +1,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -61,8 +63,12 @@ hasAttribute a d = any (\p -> fst p == a) (dieAttributes d)
 ------------------------------------------------------------------------
 -- WarnMonad
 
+-- A monad that allows one to collect warnings with a given type during execution.
 class Monad m => WarnMonad s m | m -> s where
+  -- Emit the given warning
   warn :: s -> m ()
+  -- Run a computation in a context where all warnings are transformed by the given
+  -- function.
   runInContext :: (s -> s) -> m r -> m r
 
 instance WarnMonad s m => WarnMonad s (ReaderT r m) where
@@ -73,16 +79,13 @@ instance WarnMonad s m => WarnMonad s (ReaderT r m) where
 ------------------------------------------------------------------------
 -- WarnT
 
--- | A computation that may report warnings or fail.
+-- | A monad transformer that adds the ability to collect a list of string messages
+-- (called "warnings") and throw a string exception.  Fail is overridden
+-- to generate
+--
+-- The warnings are strings,
 newtype WarnT m r = WarnT { unWarnT :: ExceptT String (StateT [String] m) r }
-  deriving ( Functor )
-
-instance Applicative m => Applicative (WarnT m) where
-  mf <*> mh = WarnT $ ExceptT $ StateT $ \s ->
-      g <$> runStateT (runExceptT (unWarnT mf)) s
-        <*> runStateT (runExceptT (unWarnT mh)) []
-    where g (x,sx) (y,sy) = (($) <$> x <*> y, sy ++ sx)
-  pure v = WarnT $ ExceptT $ StateT $ \s -> pure (Right v, s)
+  deriving ( Functor, Applicative )
 
 instance Monad m => Monad (WarnT m) where
   m >>= h = WarnT $ unWarnT m >>= unWarnT . h
@@ -102,17 +105,24 @@ instance Monad m => WarnMonad String (WarnT m) where
 ------------------------------------------------------------------------
 -- Parser
 
-newtype Parser r = Parser { unParser :: ReaderT Dwarf.Reader (WarnT Identity) r }
+data ParserState = ParserState { expectedPointerWidth :: !Word64
+                                 -- ^ Number of bytes a pointer is expected to have.
+                               , readerInfo :: !Dwarf.Reader
+                               }
+
+newtype Parser r = Parser { unParser :: ReaderT ParserState (WarnT Identity) r }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadReader Dwarf.Reader
            , WarnMonad String
            )
 
 
-runParser :: Dwarf.Reader -> Parser r -> (Either String r, [String])
-runParser dr p = runIdentity (runWarnT (runReaderT (unParser p) dr))
+runParser :: Word64 -> Dwarf.Reader -> Parser r -> (Either String r, [String])
+runParser w dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
+  where s = ParserState { expectedPointerWidth = w
+                        , readerInfo = dr
+                        }
 
 ------------------------------------------------------------------------
 -- Parser functions
@@ -189,9 +199,20 @@ ppRange (Range x y) =
 
 data DIEParserState = DPS { dpsDIE :: DIE
                           , dpsAttributeMap :: Map DW_AT [DW_ATVAL]
+                            -- ^ Maps attributes to the set of values with that attribute.
                           , _dpsSeenAttributes :: Set DW_AT
+                            -- ^ Set of attributes that a parser has searched for.
+                            --
+                            -- Used so that we can flag when a DIE contains an attribute
+                            -- we have not considered.
                           , dpsChildrenMap     :: Map DW_TAG [DIE]
+                            -- ^ Maps tags to the set of child die nodes with that tag.
                           , _dpsSeenChildren   :: Set DW_TAG
+                            -- ^ Set of tags for children that we have attempted to
+                            -- parse.
+                            --
+                            -- Used so that we can flag when a DIE contains a child tag
+                            -- we have not considered.
                           }
 
 dpsSeenAttributes :: Simple Lens DIEParserState (Set DW_AT)
@@ -208,7 +229,8 @@ taggedError nm msg =
 
 runDIEParser :: String -> DIE -> DIEParser r -> Parser r
 runDIEParser ctx d act = runInContext (taggedError (ctx ++ " " ++ show (dieId d) ++ " " ++ show (dieTag d))) $ do
-  let childMap = foldr' (\d' -> Map.insertWith (++) (dieTag d') [d']) Map.empty (dieChildren d)
+  let childMap :: Map DW_TAG [DIE]
+      childMap = foldr' (\d' -> Map.insertWith (++) (dieTag d') [d']) Map.empty (dieChildren d)
       attrMap  = foldr' (\(k,v) -> Map.insertWith (++) k [v])     Map.empty (dieAttributes d)
       s0 = DPS { dpsDIE = d
                , dpsAttributeMap = attrMap
@@ -219,7 +241,9 @@ runDIEParser ctx d act = runInContext (taggedError (ctx ++ " " ++ show (dieId d)
   (r, s1) <- runStateT act s0
   do let missingTags = Map.keysSet childMap `Set.difference` (s1^.dpsSeenChildren)
      when (not (Set.null missingTags)) $ do
-       warn $ "Unexpected children: " ++ show (Set.toList missingTags) ++ "\n" ++ show d
+       forM_ (dieChildren d) $ \child -> do
+         when (not (Set.member (dieTag child) (s1^.dpsSeenChildren))) $ do
+           warn $ "Unexpected child for " ++ ctx ++ ": " ++ show child
   do let missingAttrs = Map.keysSet attrMap `Set.difference` (s1^.dpsSeenAttributes)
      when (not (Set.null missingAttrs)) $ do
        warn $ "Unexpected attributes: " ++ show (Set.toList missingAttrs) ++ "\n" ++ show d
@@ -305,7 +329,7 @@ ppOps l = hsep (ppOp <$> l)
 
 parseDwarfExpr :: BS.ByteString -> Parser [DW_OP]
 parseDwarfExpr bs = do
-  dr <- ask
+  dr <- Parser $ asks readerInfo
   parseGet bs (getWhileNotEmpty (getDW_OP dr))
 
 ------------------------------------------------------------------------
@@ -350,7 +374,7 @@ getWhileNotEmpty act = go []
 
 parseSubrange :: DIE -> Parser (Subrange DieID)
 parseSubrange d = runDIEParser "parseSubrange" d $ do
-  dr <- ask
+  dr <- lift $ Parser $ asks readerInfo
   tp    <- getSingleAttribute DW_AT_type attributeAsDieID
   upper <- getSingleAttribute DW_AT_upper_bound $ \case
     DW_ATVAL_UINT w ->
@@ -414,18 +438,33 @@ data Typedef tp = Typedef { typedefName :: !String
 
 
 data TypeF tp
-   = BaseType !BaseType
+   = BoolType
+     -- ^ A 1-byte boolean value (0 is false, nonzero is true)
+   | UnsignedIntType !Int
+     -- ^ An unsigned integer with the given number of bytes (should be positive)
+     -- The byte order is platform defined.
+   | SignedIntType !Int
+     -- ^ An signed integer with the given number of bytes (should be positive)
+     -- The byte order is platform defined.
+   | FloatType
+     -- ^ An IEEE single precision floating point value.
+   | DoubleType
+     -- ^ An IEEE double precision floating point value.
+   | UnsignedCharType
+     -- ^ A 1-byte unsigned character.
+   | SignedCharType
+     -- ^ A 1-byte signed character.
+
    | ArrayType tp ![Subrange tp]
-   | ConstType tp
-   | EmptyConstType
-   | VolatileType tp
-   | PointerType (Maybe tp) !Word64
+   | PointerType (Maybe tp)
+     -- ^ A pointer with the given byte size
+     -- (TODO: Add check to confirm number of bytes matches expectation)
    | StructType !(StructDecl tp)
      -- ^ Denotes a C struct
    | UnionType !(UnionDecl tp)
      -- ^ Denotes a C union
    | EnumType !EnumDecl
-   | SubroutineType !SubroutineTypeDecl
+   | SubroutinePtrType !SubroutineTypeDecl
    | TypedefType !(Typedef tp)
   deriving (Show)
 
@@ -445,17 +484,20 @@ typedefTypeLens = lens typedefType (\s v -> s { typedefType = v })
 traverseSubtypes :: Traversal (TypeF a) (TypeF b) a b
 traverseSubtypes f tf =
   case tf of
-    ConstType tp -> ConstType <$> f tp
-    EmptyConstType -> pure EmptyConstType
-    VolatileType tp -> VolatileType <$> f tp
-    PointerType tp w -> (`PointerType` w) <$> traverse f tp
+    BoolType          -> pure BoolType
+    UnsignedIntType w -> pure (UnsignedIntType w)
+    SignedIntType w   -> pure (SignedIntType w)
+    FloatType         -> pure FloatType
+    DoubleType        -> pure DoubleType
+    UnsignedCharType  -> pure UnsignedCharType
+    SignedCharType    -> pure SignedCharType
+    ArrayType etp d -> ArrayType <$> f etp <*> (traverse . subrangeTypeLens) f d
+    PointerType tp -> PointerType <$> traverse f tp
     StructType s -> StructType <$> (structMembersLens . traverse . memberTypeLens) f s
     UnionType  u -> UnionType  <$> (unionMembersLens . traverse . memberTypeLens) f u
     EnumType e -> pure (EnumType e)
+    SubroutinePtrType d -> pure (SubroutinePtrType d)
     TypedefType tp -> TypedefType <$> typedefTypeLens f tp
-    ArrayType etp d -> ArrayType <$> f etp <*> (traverse . subrangeTypeLens) f  d
-    SubroutineType d -> pure (SubroutineType d)
-    BaseType tp -> pure (BaseType tp)
 
 parseMember :: V.Vector FilePath -> DIE -> Parser (Member DieID)
 parseMember file_vec d = runDIEParser "parseMember" d $ do
@@ -478,34 +520,59 @@ attributeAsBaseTypeEncoding v = do
     Just r -> pure r
     Nothing -> fail $ "Could not parser attribute encoding 0x" ++ showHex u "."
 
-type TypeParser = V.Vector FilePath -> DIEParser (TypeF DieID)
+data PreType
+   = PreTypeF !(TypeF DieID)
+   | EmptyConst
+     -- ^ Denotes an const die with no attributes
+   | ConstTypeF !DieID
+     -- ^ A const value with the given die ID.
+   | VolatileTypeF !DieID
+   | SubroutineTypeF !SubroutineTypeDecl
+
+-- | A type parser takes the file vector and returns either a `TypeF` or `Nothing`.
+--
+-- The nothing value is returned, because `DW_TAG_const_type` with no `DW_AT_type`
+-- attribute.
+type TypeParser = V.Vector FilePath -> DIEParser PreType
 
 parseBaseType :: TypeParser
 parseBaseType _ = do
-  size <- getSingleAttribute DW_AT_byte_size attributeAsUInt
-  enc  <- getSingleAttribute DW_AT_encoding  attributeAsBaseTypeEncoding
   name <- getSingleAttribute DW_AT_name      attributeAsString
+  enc  <- getSingleAttribute DW_AT_encoding  attributeAsBaseTypeEncoding
+  size <- getSingleAttribute DW_AT_byte_size attributeAsUInt
+  case (name, enc,size) of
+    (_, DW_ATE_boolean, 1) -> pure $ PreTypeF BoolType
 
-  let def = BaseTypeDef { baseSize = size
-                        , baseEncoding = enc
-                        , baseName = name
-                        }
-  pure $! BaseType def
+    (_, DW_ATE_signed,   _) | size >= 1 -> pure $ PreTypeF $ SignedIntType (fromIntegral size)
+    (_, DW_ATE_unsigned, _) | size >= 1 -> pure $ PreTypeF $ UnsignedIntType (fromIntegral size)
+
+    (_, DW_ATE_float,    4) -> pure $ PreTypeF $ FloatType
+    (_, DW_ATE_float,    8) -> pure $ PreTypeF $ DoubleType
+
+    (_, DW_ATE_signed_char, 1)   -> pure $ PreTypeF $ SignedCharType
+    (_, DW_ATE_unsigned_char, 1) -> pure $ PreTypeF $ UnsignedCharType
+    _ -> fail ("Unsupported base type " ++ show name ++ " " ++ show enc ++ " " ++ show size)
 
 parseConstType :: TypeParser
 parseConstType _ = do
-  maybe EmptyConstType ConstType <$>
-    getMaybeAttribute DW_AT_type attributeAsDieID
+  ma <- getMaybeAttribute DW_AT_type attributeAsDieID
+  case ma of
+    Just a  -> pure $ ConstTypeF a
+    Nothing -> pure $ EmptyConst
+
 
 parseVolatileType :: TypeParser
 parseVolatileType _ = do
-  VolatileType <$> getSingleAttribute DW_AT_type attributeAsDieID
+  VolatileTypeF <$> getSingleAttribute DW_AT_type attributeAsDieID
 
 parsePointerType :: TypeParser
 parsePointerType _ = do
+  expected <- lift $ Parser $ asks expectedPointerWidth
   mtp <- getMaybeAttribute DW_AT_type attributeAsDieID
   w <- getSingleAttribute DW_AT_byte_size attributeAsUInt
-  pure $! PointerType mtp w
+  when (w /= expected) $ do
+    fail $ "Found pointer width of " ++ show w ++ " when " ++ show expected ++ " expected."
+  pure $ PreTypeF $ PointerType mtp
 
 parseStructureType :: TypeParser
 parseStructureType file_vec = do
@@ -521,7 +588,7 @@ parseStructureType file_vec = do
                           , structLoc      = declLoc
                           , structMembers  = members
                           }
-  pure $! StructType struct
+  pure $ PreTypeF $ StructType struct
 
 parseUnionType :: TypeParser
 parseUnionType file_vec = do
@@ -537,7 +604,7 @@ parseUnionType file_vec = do
                     , unionLoc      = declLoc
                     , unionMembers  = members
                     }
-  pure $! UnionType u
+  pure $ PreTypeF $ UnionType u
 
 parseTypedefType :: TypeParser
 parseTypedefType file_vec = do
@@ -549,14 +616,14 @@ parseTypedefType file_vec = do
                    , typedefLoc  = declLoc
                    , typedefType = tp
                    }
-  pure $! TypedefType td
+  pure $ PreTypeF $ TypedefType td
 
 parseArrayType :: TypeParser
 parseArrayType _ = do
   eltType <- getSingleAttribute DW_AT_type attributeAsDieID
   ignoreAttribute DW_AT_sibling
   sr <- parseChildrenList DW_TAG_subrange_type parseSubrange
-  pure $! ArrayType eltType sr
+  pure $ PreTypeF $ ArrayType eltType sr
 
 parseEnumerationType :: TypeParser
 parseEnumerationType file_vec = do
@@ -571,7 +638,7 @@ parseEnumerationType file_vec = do
                    , enumDeclLoc      = declLoc
                    , enumDeclCases    = cases
                    }
-  pure $! EnumType e
+  pure $ PreTypeF $ EnumType e
 
 parseSubroutineType :: TypeParser
 parseSubroutineType _ = do
@@ -581,7 +648,7 @@ parseSubroutineType _ = do
   let sub = SubroutineTypeDecl { fntypePrototyped = proto
                                , fntypeFormals   = formals
                                }
-  pure $! SubroutineType sub
+  pure $ SubroutineTypeF sub
 
 typeParsers :: Map DW_TAG TypeParser
 typeParsers = Map.fromList
@@ -597,9 +664,9 @@ typeParsers = Map.fromList
   , (,) DW_TAG_subroutine_type  parseSubroutineType
   ]
 
-parseTypeMap' :: V.Vector FilePath -> DIEParser (Map DieID Type)
-parseTypeMap' file_vec = do
-  let go :: (DW_TAG, TypeParser) -> DIEParser [(DieID, TypeF DieID)]
+parseTypeMap :: V.Vector FilePath -> DIEParser (Map DieID Type)
+parseTypeMap file_vec = do
+  let go :: (DW_TAG, TypeParser) -> DIEParser [(DieID, PreType)]
       go (tag, act) = do
         parseChildrenList tag $ \d ->
           (\tf -> (dieId d, tf)) <$> runDIEParser "parseTypeF" d (act file_vec)
@@ -608,32 +675,64 @@ parseTypeMap' file_vec = do
 ------------------------------------------------------------------------
 -- Type
 
-newtype Type = Type (TypeF Type)
+data Type = Type { typeF :: !(TypeF Type)
+                 , typeIsConst :: !Bool
+                 , typeIsVolatile :: !Bool
+                 }
 
 instance Show Type where
   show = show . ppType
 
-ppType :: Type -> Doc
-ppType (Type tf) =
-  case tf of
-    BaseType b -> text (baseName b)
-    ConstType x   -> text "const" <+> ppType x
-    EmptyConstType -> text "emptyconst"
-    VolatileType x -> text "volatile" <+> ppType x
-    PointerType x w -> text "pointer" <+> maybe (text "unknown") ppType x <+> text (show w)
+ppTypeF :: TypeF Type -> Doc
+ppTypeF tp =
+  case tp of
+    BoolType          -> text "bool"
+    UnsignedIntType w -> text "unsignedt<" <+> text (show (8*w)) <+> ">"
+    SignedIntType w   -> text "signed<" <+> text (show (8*w)) <+> ">"
+    FloatType         -> text "float"
+    DoubleType        -> text "double"
+    UnsignedCharType  -> text "uchar"
+    SignedCharType    -> text "schar"
+    PointerType x -> text "pointer" <+> maybe (text "unknown") ppType x
     StructType s -> text "struct" <+> text (structName s)
     UnionType  u -> text "union"  <+> text (unionName  u)
     EnumType e   -> text "enum" <+> text (show e)
     TypedefType d -> text "typedef" <+> text (typedefName d)
     ArrayType etp l -> text "array" <+> ppType etp <+> text (show l)
-    SubroutineType d -> text "subroutine" <+> text (show d)
+    SubroutinePtrType d -> text "subroutine*" <+> text (show d)
 
-resolveTypeMap :: [(DieID, TypeF DieID)] -> Map DieID Type
+ppType :: Type -> Doc
+ppType tp =  (if typeIsConst tp then text "const " else empty)
+          <> (if typeIsVolatile tp then text "volatile " else empty)
+          <> ppTypeF (typeF tp)
+
+-- | Resolve pretype to map from die identifiers to type.
+resolveTypeMap :: [(DieID, PreType)] -> Map DieID Type
 resolveTypeMap m = r
-  where r = Map.fromList
-          [ (d, Type (tf & traverseSubtypes %~ g))
-          | (d, tf) <- m
+  where premap :: Map DieID PreType
+        premap = Map.fromList m
+        r = Map.fromAscList
+          [ (d, tp)
+          | (d, tf) <- Map.toAscList premap
+          , Just tp <- [resolve tf]
           ]
+
+        resolve :: PreType -> Maybe Type
+        resolve (PreTypeF (PointerType (Just d)))
+          | Just (SubroutineTypeF decl) <- Map.lookup d premap =
+              Just $ Type { typeF = SubroutinePtrType decl
+                          , typeIsConst = False
+                          , typeIsVolatile = False
+                          }
+
+        resolve (PreTypeF tf) = Just $ Type { typeF = tf & traverseSubtypes %~ g
+                                            , typeIsConst = False
+                                            , typeIsVolatile = False
+                                            }
+        resolve EmptyConst = Nothing
+        resolve (ConstTypeF d) = Just $ (g d) { typeIsConst = True }
+        resolve (VolatileTypeF d) = Just $ (g d) { typeIsVolatile = True }
+        resolve (SubroutineTypeF _) = Nothing
 
         g :: DieID -> Type
         g d = fromMaybe (error $ "Could not find die ID " ++ show d) $
@@ -728,7 +827,7 @@ attributeAsLocation = \case
 parseInlineVariable :: Map DieID Variable
                     -> DIE
                     -> Parser InlineVariable
-parseInlineVariable varMap d = runDIEParser "parseVariable" d $ do
+parseInlineVariable varMap d = runDIEParser "parseInlineVariable" d $ do
   checkTag DW_TAG_variable
 
   origin <- getSingleAttribute DW_AT_abstract_origin (resolveDieIDAttribute varMap)
@@ -829,7 +928,7 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
      else
       Just <$> parseDeclLoc file_vec
 
-  typeMap' <- Map.union typeMap <$> parseTypeMap' file_vec
+  typeMap' <- Map.union typeMap <$> parseTypeMap file_vec
 
   vars <- parseChildrenList DW_TAG_variable (parseVariable file_vec typeMap')
 
@@ -960,11 +1059,12 @@ getAddressRangeTable end enc bs = parseGet bs (go [])
            else
             pure $! reverse prev
 
-parseCompileUnit :: SectionContents
+parseCompileUnit :: Word64 -- ^ Expected number of bytes in a pointer.
+                 -> SectionContents
                  -> (CUContext, DIE)
                  -> (Either String CompileUnit, [String])
-parseCompileUnit contents (ctx,d) =
- runParser (cuReader ctx) $ runDIEParser "parseCompileUnit" d $ do
+parseCompileUnit w contents (ctx,d) =
+ runParser w (cuReader ctx) $ runDIEParser "parseCompileUnit" d $ do
   checkTag DW_TAG_compile_unit
   let dr = cuReader ctx
   let end = drEndianess dr
@@ -1005,7 +1105,7 @@ parseCompileUnit contents (ctx,d) =
 
   gnuMacros <- getMaybeAttribute DW_AT_GNU_macros attributeAsUInt
   -- Type map for children
-  typeMap <- parseTypeMap' file_vec
+  typeMap <- parseTypeMap file_vec
 
 
   (inlinedDies, subprogramDies) <-
@@ -1061,6 +1161,9 @@ dwarfInfoFromElf e = do
                               , dsAbbrevSection = debug_abbrev
                               , dsStrSection    = debug_str
                               }
+      let w = case Elf.elfClass e of
+                Elf.ELFCLASS32 -> 4
+                Elf.ELFCLASS64 -> 8
       let end =
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian
@@ -1070,7 +1173,7 @@ dwarfInfoFromElf e = do
                                  , debugRanges = debug_ranges
                                  }
       mdies <- forM cuDies $ \cuPair -> do
-        let (mr, warnings) = parseCompileUnit contents cuPair
+        let (mr, warnings) = parseCompileUnit w contents cuPair
         case mr of
           Left msg -> do
             modify $ ((msg:warnings) ++)
