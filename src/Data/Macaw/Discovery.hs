@@ -66,6 +66,21 @@ import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
+-- Get the absolute value associated with an address.
+transferReadMem :: (OrdF (ArchReg a), ShowF (ArchReg a), MemWidth (RegAddrWidth (ArchReg a)))
+                => AbsProcessorState (ArchReg a) ids
+                -> ArchAddrValue a ids
+                -> MemRepr tp
+                   -- ^ Information about the memory layout for the value.
+                -> ArchAbsValue a tp
+transferReadMem r a tp
+  | StackOffset _ s <- transferValue r a
+  , [o] <- Set.toList s
+  , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
+  , Just Refl <- testEquality tp v_tp = v
+  | otherwise = TopV
+
+-- | Get the abstract domain for the right-hand side of an assignment.
 transferRHS :: forall a ids tp
             .  ( OrdF (ArchReg a)
                , ShowF (ArchReg a)
@@ -79,13 +94,7 @@ transferRHS info r rhs =
   case rhs of
     EvalApp app    -> transferApp r app
     SetUndefined _ -> TopV
-    ReadMem a tp
-      | StackOffset _ s <- transferValue r a
-      , [o] <- Set.toList s
-      , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
-      , Just Refl <- testEquality tp v_tp ->
-         v
-      | otherwise -> TopV
+    ReadMem a tp   -> transferReadMem r a tp
     EvalArchFn f _ -> absEvalArchFn info r f
 
 -- | Merge in the value of the assignment.
@@ -337,8 +346,8 @@ transferStmt info stmt =
   case stmt of
     AssignStmt a -> do
       modify $ addAssignment info a
-    WriteMem addr v -> do
-      modify $ \r -> addMemWrite (r^.absInitialRegs^.curIP) addr v r
+    WriteMem addr memRepr v -> do
+      modify $ \r -> addMemWrite (r^.absInitialRegs^.curIP) addr memRepr v r
     _ -> return ()
 
 newtype HexWord = HexWord Word64
@@ -578,15 +587,15 @@ recordWriteStmt :: ( HasRepr (ArchReg arch) TypeRepr
                     , OrdF  (ArchReg arch)
                     , ShowF (ArchReg arch)
                     )
-                 => Memory (ArchAddrWidth arch)
+                 => ArchitectureInfo arch
+                 -> Memory (ArchAddrWidth arch)
                  -> AbsProcessorState (ArchReg arch) ids
                  -> Stmt arch ids
                  -> State (ParseState arch ids) ()
-recordWriteStmt mem regs stmt = do
-  let addrWidth = addrWidthNatRepr $ memAddrWidth mem
+recordWriteStmt arch_info mem regs stmt = do
   case stmt of
-    WriteMem _addr v
-      | Just Refl <- testEquality (typeRepr v) (BVTypeRepr addrWidth) -> do
+    WriteMem _addr repr v
+      | Just Refl <- testEquality repr (addrMemRepr arch_info) -> do
           let addrs = concretizeAbsCodePointers mem (transferValue regs v)
           writtenCodeAddrs %= (addrs ++)
     _ -> return ()
@@ -612,7 +621,7 @@ identifyCall mem stmts0 s = go (Seq.fromList stmts0)
             prev Seq.:> stmt
               -- Check for a call statement by determining if the last statement
               -- writes an executable address to the stack pointer.
-              | WriteMem a val <- stmt
+              | WriteMem a _repr val <- stmt
               , Just _ <- testEquality a next_sp
                 -- Check this is the right length.
               , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
@@ -620,14 +629,12 @@ identifyCall mem stmts0 s = go (Seq.fromList stmts0)
               , Just val_a <- asLiteralAddr mem val
                 -- Check if segment of address is marked as executable.
               , Perm.isExecutable (segmentFlags (addrSegment val_a)) ->
-
                 Just (prev, val_a)
                 -- Stop if we hit any architecture specific instructions prior to
                 -- identifying return address since they may have side effects.
               | ExecArchStmt _ <- stmt -> Nothing
                 -- Otherwise skip over this instruction.
               | otherwise -> go prev
-
 
 -- | This is designed to detect returns from the register state representation.
 --
@@ -659,6 +666,12 @@ data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWi
                                           , pctxBlockMap :: !(Map Word64 (Block arch ids))
                                           }
 
+addrMemRepr :: ArchitectureInfo arch -> MemRepr (BVType (RegAddrWidth (ArchReg arch)))
+addrMemRepr arch_info =
+  case archAddrWidth arch_info of
+    Addr32 -> BVMemRepr n4 (archEndianness arch_info)
+    Addr64 -> BVMemRepr n8 (archEndianness arch_info)
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ArchConstraints arch
@@ -683,7 +696,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
     _ | Just (prev_stmts, ret) <- identifyCall mem stmts s' -> do
-        Fold.mapM_ (recordWriteStmt mem regs') prev_stmts
+        Fold.mapM_ (recordWriteStmt arch_info mem regs') prev_stmts
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
@@ -707,7 +720,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
                 _ -> False
             nonret_stmts = filter (not . isRetLoad) stmts
 
-        mapM_ (recordWriteStmt mem regs') nonret_stmts
+        mapM_ (recordWriteStmt arch_info mem regs') nonret_stmts
 
         let ip_val = s'^.boundValue ip_reg
         case transferValue regs' ip_val of
@@ -730,7 +743,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
       | Just tgt_addr <- asLiteralAddr mem (s'^.boundValue ip_reg)
       , tgt_addr /= pctxFunAddr ctx -> do
          assert (segmentFlags (addrSegment tgt_addr) `Perm.hasPerm` Perm.execute) $ do
-         mapM_ (recordWriteStmt mem regs') stmts
+         mapM_ (recordWriteStmt arch_info mem regs') stmts
          -- Merge block state and add intra jump target.
          let abst = finalAbsBlockState regs' s'
          let abst' = abst & setAbsIP tgt_addr
@@ -747,14 +760,14 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
         case getJumpTableBounds arch_info regs' base jump_idx of
           Left err ->
             trace (show src ++ ": Could not compute bounds: " ++ showJumpTableBoundsError err) $ do
-            mapM_ (recordWriteStmt mem regs') stmts
+            mapM_ (recordWriteStmt arch_info mem regs') stmts
             pure ParsedBlock { pblockLabel = lbl_idx
                              , pblockStmts = stmts
                              , pblockState = regs'
                              , pblockTerm  = ClassifyFailure s'
                              }
           Right read_end -> do
-            mapM_ (recordWriteStmt mem regs') stmts
+            mapM_ (recordWriteStmt arch_info mem regs') stmts
 
             -- Try to compute jump table bounds
 
@@ -776,7 +789,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
                   return (reverse prev)
                 resolveJump prev idx = do
                   let read_addr = base & addrOffset +~ 8 * idx
-                  case readAddr mem LittleEndian read_addr of
+                  case readAddr mem (archEndianness arch_info) read_addr of
                       Right tgt_addr
                         | Perm.isReadonly (segmentFlags (addrSegment read_addr)) -> do
                           let flags = segmentFlags (addrSegment tgt_addr)
@@ -795,11 +808,11 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
                              }
 
       -- Check for tail call (anything where we are right at stack height
-      | ptrType    <- BVTypeRepr (addrWidthNatRepr (archAddrWidth arch_info))
+      | ptrType    <- addrMemRepr arch_info
       , sp_val     <-  s'^.boundValue sp_reg
-      , ReturnAddr <- transferRHS arch_info regs' (ReadMem sp_val ptrType) -> do
+      , ReturnAddr <- transferReadMem regs' sp_val ptrType -> do
 
-        mapM_ (recordWriteStmt mem regs') stmts
+        mapM_ (recordWriteStmt arch_info mem regs') stmts
 
         -- Compute fina lstate
         let abst = finalAbsBlockState regs' s'
@@ -819,7 +832,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
       -- Block that ends with some unknown
       | otherwise -> do
           trace ("Could not classify " ++ show lbl) $ do
-          mapM_ (recordWriteStmt mem regs') stmts
+          mapM_ (recordWriteStmt arch_info mem regs') stmts
           pure ParsedBlock { pblockLabel = lbl_idx
                            , pblockStmts = stmts
                            , pblockState = regs'
@@ -848,7 +861,7 @@ parseBlocks ctx ((b,regs):rest) = do
   case blockTerm b of
     Branch c lb rb -> do
       let regs' = transferStmts arch_info regs (blockStmts b)
-      mapM_ (recordWriteStmt mem regs') (blockStmts b)
+      mapM_ (recordWriteStmt arch_info mem regs') (blockStmts b)
 
       let l = tryLookupBlock "left branch"  src block_map lb
       let l_regs = refineProcStateBounds c True $ refineProcState c absTrue regs'
@@ -874,7 +887,7 @@ parseBlocks ctx ((b,regs):rest) = do
 
     Syscall s' -> do
       let regs' = transferStmts arch_info regs (blockStmts b)
-      mapM_ (recordWriteStmt mem regs') (blockStmts b)
+      mapM_ (recordWriteStmt arch_info mem regs') (blockStmts b)
       let abst = finalAbsBlockState regs' s'
       case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
         [] -> error "Could not identify concrete system call address"

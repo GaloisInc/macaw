@@ -65,6 +65,8 @@ data ArchitectureInfo arch
    = ArchitectureInfo
      { archAddrWidth :: !(AddrWidthRepr (RegAddrWidth (ArchReg arch)))
        -- ^ Architecture address width.
+     , archEndianness :: !Endianness
+       -- ^ The byte order values are stored in.
      , jumpTableEntrySize :: !(MemWord (ArchAddrWidth arch))
        -- ^ The size of each entry in a jump table.
      , callStackDelta :: !Integer

@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2016
+Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 Defines data types needed to represent control flow graphs from machine code.
@@ -44,6 +44,8 @@ module Data.Macaw.CFG
   , Assignment(..)
   , AssignId(..)
   , AssignRhs(..)
+  , MemRepr(..)
+  , memReprBytes
     -- * Value
   , Value(..)
   , BVValue
@@ -136,7 +138,7 @@ import           GHC.TypeLits
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
-import           Data.Macaw.Memory (MemWord, MemWidth, SegmentedAddr(..))
+import           Data.Macaw.Memory (MemWord, MemWidth, SegmentedAddr(..), Endianness)
 import           Data.Macaw.Types
 
 -- Note:
@@ -762,6 +764,29 @@ data Assignment arch ids tp =
              , assignRhs :: !(AssignRhs arch ids tp)
              }
 
+-- | The type stored in memory.
+--
+-- The endianess indicates whether the address stores the most
+-- or least significant byte.  The following indices either store
+-- the next lower or higher bytes.
+data MemRepr (tp :: Type) where
+  BVMemRepr :: NatRepr w -> Endianness -> MemRepr (BVType (8*w))
+
+-- | Return the number of bytes this takes up.
+memReprBytes :: MemRepr tp -> Integer
+memReprBytes (BVMemRepr x _) = natValue x
+
+instance TestEquality MemRepr where
+  testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =
+    if xe == ye then do
+      Refl <- testEquality xw yw
+      Just Refl
+     else
+      Nothing
+
+instance HasRepr MemRepr TypeRepr where
+  typeRepr (BVMemRepr w _) = BVTypeRepr (natMultiply n8 w)
+
 -- | The right hand side of an assignment is an expression that
 -- returns a value.
 data AssignRhs (arch :: *) ids tp where
@@ -776,7 +801,7 @@ data AssignRhs (arch :: *) ids tp where
 
   -- Read memory at given location.
   ReadMem :: !(ArchAddrValue arch ids)
-          -> !(TypeRepr tp)
+          -> !(MemRepr tp)
           -> AssignRhs arch ids tp
 
   -- Call an architecture specific function that returns some result.
@@ -792,7 +817,7 @@ instance HasRepr (AssignRhs arch ids) TypeRepr where
     case rhs of
       EvalApp a -> appType a
       SetUndefined w -> BVTypeRepr w
-      ReadMem _ tp -> tp
+      ReadMem _ tp -> typeRepr tp
       EvalArchFn _ rtp -> rtp
 
 instance ( HasRepr (ArchReg arch) TypeRepr
@@ -1129,7 +1154,7 @@ instance ( OrdF r
 -- | A statement in our control flow graph language.
 data Stmt arch ids
    = forall tp . AssignStmt !(Assignment arch ids tp)
-   | forall tp . WriteMem !(ArchAddrValue arch ids) !(Value arch ids tp)
+   | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
     -- ^ Write to memory at the given location
    | PlaceHolderStmt !([Some (Value arch ids)]) !String
    | Comment !Text
@@ -1138,7 +1163,7 @@ data Stmt arch ids
 
 instance ArchConstraints arch => Pretty (Stmt arch ids) where
   pretty (AssignStmt a) = pretty a
-  pretty (WriteMem a rhs) = text "*" PP.<> prettyPrec 11 a <+> text ":=" <+> ppValue 0 rhs
+  pretty (WriteMem a _ rhs) = text "*" PP.<> prettyPrec 11 a <+> text ":=" <+> ppValue 0 rhs
   pretty (PlaceHolderStmt vals name) = text ("PLACEHOLDER: " ++ name)
                                        <+> parens (hcat $ punctuate comma
                                                    $ map (viewSome (ppValue 0)) vals)

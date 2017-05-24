@@ -40,9 +40,6 @@ n1 = knownNat
 n4 :: NatRepr 4
 n4 = knownNat
 
-n5 :: NatRepr 5
-n5 = knownNat
-
 n8 :: NatRepr 8
 n8 = knownNat
 
@@ -61,21 +58,49 @@ n80 = knownNat
 n128 :: NatRepr 128
 n128 = knownNat
 
-
 ------------------------------------------------------------------------
 -- Type
 
 data Type
-  = -- | An array of bits
+  = -- | A bitvector with the given number of bits.
     BVType Nat
+    -- | 64 bit binary IEE754
+  | DoubleFloat
+    -- | 32 bit binary IEE754
+  | SingleFloat
+    -- | X86 80-bit extended floats
+  | X86_80Float
+    -- | 128 bit binary IEE754
+  | QuadFloat
+    --  | 16 bit binary IEE754
+  | HalfFloat
 
+-- Return number of bytes in the type.
+type family TypeBytes (tp :: Type) :: Nat where
+  TypeBytes (BVType  8) =  1
+  TypeBytes (BVType 16) =  2
+  TypeBytes (BVType 32) =  4
+  TypeBytes (BVType 64) =  8
+  TypeBytes HalfFloat   =  2
+  TypeBytes SingleFloat =  4
+  TypeBytes DoubleFloat =  8
+  TypeBytes QuadFloat   = 16
+  TypeBytes X86_80Float = 10
+
+-- Return number of bits in the type.
 type family TypeBits (tp :: Type) :: Nat where
-  TypeBits (BVType n) = n
+  TypeBits (BVType n)  = n
+  TypeBits HalfFloat   = 16
+  TypeBits SingleFloat = 32
+  TypeBits DoubleFloat = 64
+  TypeBits QuadFloat   = 128
+  TypeBits X86_80Float = 80
+
+type FloatType tp = BVType (8 * TypeBytes tp)
 
 type BVType = 'BVType
 
 type BoolType   = BVType 1
-type XMMType    = BVType 128
 
 -- | A runtime representation of @Type@ for case matching purposes.
 data TypeRepr (tp :: Type) where
@@ -103,23 +128,7 @@ instance KnownNat n => KnownType (BVType n) where
   knownType = BVTypeRepr knownNat
 
 ------------------------------------------------------------------------
--- IsLeq
-
-type IsLeq (m :: Nat) (n :: Nat) = (m <= n)
-
-------------------------------------------------------------------------
 -- Floating point sizes
-
--- | This data kind describes the styles of floating-point values understood
---   by recent LLVM bytecode formats.  This consist of the standard IEEE 754-2008
---   binary floating point formats, as well as the X86 extended 80-bit format
---   and the double-double format.
-data FloatInfo where
-  DoubleFloat       :: FloatInfo  --  64 bit binary IEE754
-  SingleFloat       :: FloatInfo  --  32 bit binary IEE754
-  X86_80Float       :: FloatInfo  -- X86 80-bit extended floats
-  QuadFloat         :: FloatInfo  -- 128 bit binary IEE754
-  HalfFloat         :: FloatInfo  --  16 bit binary IEE754
 
 type SingleFloat = 'SingleFloat
 type DoubleFloat = 'DoubleFloat
@@ -127,7 +136,7 @@ type X86_80Float = 'X86_80Float
 type QuadFloat = 'QuadFloat
 type HalfFloat = 'HalfFloat
 
-data FloatInfoRepr (flt::FloatInfo) where
+data FloatInfoRepr (flt::Type) where
   DoubleFloatRepr       :: FloatInfoRepr DoubleFloat
   SingleFloatRepr       :: FloatInfoRepr SingleFloat
   X86_80FloatRepr       :: FloatInfoRepr X86_80Float
@@ -166,19 +175,8 @@ instance Pretty (FloatInfoRepr flt) where
   pretty HalfFloatRepr   = text "half"
 
 
-type family FloatInfoBits (flt :: FloatInfo) :: Nat where
-  FloatInfoBits HalfFloat         = 16
-  FloatInfoBits SingleFloat       = 32
-  FloatInfoBits DoubleFloat       = 64
-  FloatInfoBits QuadFloat         = 128
-  FloatInfoBits X86_80Float       = 80
-
-type FloatType flt = BVType (FloatInfoBits flt)
-
--- type instance FloatInfoBits DoubleDoubleFloat =
-
-floatInfoBits :: FloatInfoRepr flt -> NatRepr (FloatInfoBits flt)
-floatInfoBits fir =
+floatInfoBytes :: FloatInfoRepr flt -> NatRepr (TypeBytes flt)
+floatInfoBytes fir =
   case fir of
     HalfFloatRepr         -> knownNat
     SingleFloatRepr       -> knownNat
@@ -186,7 +184,10 @@ floatInfoBits fir =
     QuadFloatRepr         -> knownNat
     X86_80FloatRepr       -> knownNat
 
-floatTypeRepr :: FloatInfoRepr flt -> TypeRepr (BVType (FloatInfoBits flt))
+floatInfoBits :: FloatInfoRepr flt -> NatRepr (8 * TypeBytes flt)
+floatInfoBits fir = natMultiply (knownNat :: NatRepr 8) (floatInfoBytes fir)
+
+floatTypeRepr :: FloatInfoRepr flt -> TypeRepr (BVType (8 * TypeBytes flt))
 floatTypeRepr fir = BVTypeRepr (floatInfoBits fir)
 
 ------------------------------------------------------------------------

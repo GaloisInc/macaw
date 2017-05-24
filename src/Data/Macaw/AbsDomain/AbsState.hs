@@ -572,7 +572,7 @@ uext (SubValue (n :: NatRepr n) av) _ =
     LeqProof -> SubValue n av
   where
     proof :: LeqProof (n + 1) v
-    proof = leqTrans (leqAdd (LeqProof :: LeqProof (n+1) u) n1) (LeqProof :: LeqProof (u + 1) v)
+    proof = leqTrans (leqAdd (LeqProof :: LeqProof (n+1) u) knownNat) (LeqProof :: LeqProof (u + 1) v)
 uext (StackOffset _ _) _ = TopV
 uext (SomeStackOffset _) _ = TopV
 uext ReturnAddr _ = TopV
@@ -839,7 +839,7 @@ abstractULeq _tp x y = (x, y)
 -- AbsBlockStack
 
 data StackEntry w
-   = forall tp . StackEntry !(TypeRepr tp) !(AbsValue w tp)
+   = forall tp . StackEntry !(MemRepr tp) !(AbsValue w tp)
 
 instance Eq (StackEntry w) where
   StackEntry x_tp x_v == StackEntry y_tp y_v
@@ -1181,10 +1181,11 @@ addMemWrite :: ( HasRepr (ArchReg arch) TypeRepr
                --
                -- Used for pretty printing
             -> BVValue arch ids (ArchAddrWidth arch)
+            -> MemRepr tp
             -> Value arch ids tp
             -> AbsProcessorState (ArchReg arch) ids
             -> AbsProcessorState (ArchReg arch) ids
-addMemWrite cur_ip a v r =
+addMemWrite cur_ip a memRepr v r =
   case (transferValue r a, transferValue r v) of
     -- (_,TopV) -> r
     -- We overwrite _some_ stack location.  An alternative would be to
@@ -1197,7 +1198,7 @@ addMemWrite cur_ip a v r =
       r & curAbsStack %~ pruneStack
     (StackOffset _ s, v_abs) ->
       let w = valueByteSize v
-          e = StackEntry (typeRepr v) v_abs
+          e = StackEntry memRepr v_abs
           stk0 = r^.curAbsStack
           -- Delete information about old assignment
           stk1 = Set.fold (\o m -> deleteRange o (o+w) m) stk0 s
