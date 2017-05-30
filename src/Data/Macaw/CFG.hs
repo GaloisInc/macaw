@@ -94,8 +94,9 @@ module Data.Macaw.CFG
   , ArchStmt
   , RegAddr
   , RegAddrWidth
-    -- ** Classqes
+    -- * RegisterInfo
   , RegisterInfo(..)
+  , asStackAddrOffset
     -- * References
   , StmtHasRefs(..)
   , FnHasRefs(..)
@@ -703,11 +704,12 @@ type family ArchStmt (arch :: *) :: * -> *
 -- | The type to use for addresses on the architecutre.
 type ArchAddr arch = RegAddr (ArchReg arch)
 
+-- | Number of bits in addreses for architecture.
+type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
+
 -- | A segmented addr for a given architecture.
 type ArchSegmentedAddr arch = SegmentedAddr (ArchAddrWidth arch)
 
--- | Number of bits in addreses for architecture.
-type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 
 type ArchLabel arch = BlockLabel (ArchAddrWidth arch)
 
@@ -1009,6 +1011,22 @@ zipWithRegState :: RegisterInfo r
                 -> RegState r g
                 -> RegState r h
 zipWithRegState f x y = mkRegState (\r -> f (x ^. boundValue r) (y ^. boundValue r))
+
+-- | Returns a offset if the value is an offset of the stack.
+asStackAddrOffset :: RegisterInfo (ArchReg arch)
+                  => Value arch ids tp
+                  -> Maybe (BVValue arch ids (ArchAddrWidth arch))
+asStackAddrOffset addr
+  | Just (BVAdd _ (Initial base) offset) <- valueAsApp addr
+  , Just Refl <- testEquality base sp_reg = do
+    Just offset
+  | Initial base <- addr
+  , Just Refl <- testEquality base sp_reg =
+      case typeRepr base of
+        BVTypeRepr w -> Just (BVValue w 0)
+  | otherwise =
+    Nothing
+
 
 ------------------------------------------------------------------------
 -- Pretty print Assign, AssignRhs, Value operations

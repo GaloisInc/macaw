@@ -36,6 +36,7 @@ library
     Data.Macaw.Discovery
     Data.Macaw.Discovery.Info
     Data.Macaw.Dwarf
+    Data.Macaw.Fold
     Data.Macaw.Memory
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.Permissions
