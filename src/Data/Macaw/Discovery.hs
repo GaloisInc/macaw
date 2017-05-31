@@ -611,11 +611,11 @@ identifyCall :: ( RegConstraint (ArchReg a)
              -> [Stmt a ids]
              -> RegState (ArchReg a) (Value a ids)
              -> Maybe (Seq (Stmt a ids), ArchSegmentedAddr a)
-identifyCall mem stmts0 s = go (Seq.fromList stmts0)
+identifyCall mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
   where -- Get value of stack pointer
         next_sp = s^.boundValue sp_reg
         -- Recurse on statements.
-        go stmts =
+        go stmts after =
           case Seq.viewr stmts of
             Seq.EmptyR -> Nothing
             prev Seq.:> stmt
@@ -629,12 +629,12 @@ identifyCall mem stmts0 s = go (Seq.fromList stmts0)
               , Just val_a <- asLiteralAddr mem val
                 -- Check if segment of address is marked as executable.
               , Perm.isExecutable (segmentFlags (addrSegment val_a)) ->
-                Just (prev, val_a)
+                Just (prev Seq.>< after, val_a)
                 -- Stop if we hit any architecture specific instructions prior to
                 -- identifying return address since they may have side effects.
               | ExecArchStmt _ <- stmt -> Nothing
                 -- Otherwise skip over this instruction.
-              | otherwise -> go prev
+              | otherwise -> go prev (stmt Seq.<| after)
 
 -- | This is designed to detect returns from the register state representation.
 --
