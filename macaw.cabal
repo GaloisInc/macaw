@@ -32,6 +32,7 @@ library
     Data.Macaw.Architecture.Info
     Data.Macaw.Architecture.Syscall
     Data.Macaw.CFG
+    Data.Macaw.CFG.App
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.Info

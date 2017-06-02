@@ -11,6 +11,7 @@ discovery.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -245,7 +246,7 @@ instance ArchConstraints arch
 
 type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch)))
 
--- | Information discovered about a particular
+-- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
    = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
                         -- ^ Address of function entry block.
@@ -283,7 +284,7 @@ initDiscoveryFunInfo :: ArchitectureInfo arch
 initDiscoveryFunInfo info mem symMap addr rsn =
   let nm = fromMaybe (BSC.pack (show addr)) (Map.lookup addr symMap)
       faddr = FoundAddr { foundReason = rsn
-                        , foundAbstractState = fnBlockStateFn info mem addr
+                        , foundAbstractState = mkInitialAbsState info mem addr
                         }
    in DiscoveryFunInfo { discoveredFunAddr = addr
                        , discoveredFunName = nm
@@ -325,10 +326,15 @@ data DiscoveryInfo arch ids
                      -- ^ Set of functions to explore next.
                    }
 
-ppDiscoveryInfoBlocks :: ArchConstraints arch
-                      => DiscoveryInfo arch ids
+withDiscoveryArchConstraints :: DiscoveryInfo arch ids
+                             -> (ArchConstraints arch => a)
+                             -> a
+withDiscoveryArchConstraints dinfo = withArchConstraints (archInfo dinfo)
+
+ppDiscoveryInfoBlocks :: DiscoveryInfo arch ids
                       -> Doc
-ppDiscoveryInfoBlocks info = vcat (pretty <$> Map.elems (info^.funInfo))
+ppDiscoveryInfoBlocks info = withDiscoveryArchConstraints info $
+  vcat (pretty <$> Map.elems (info^.funInfo))
 
 -- | Empty interpreter state.
 emptyDiscoveryInfo :: NonceGenerator (ST ids) ids

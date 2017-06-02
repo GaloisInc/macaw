@@ -23,7 +23,6 @@ import Data.Parameterized.Nonce
 import Data.Macaw.AbsDomain.AbsState
 import Data.Macaw.CFG
 import Data.Macaw.Memory
-import Data.Macaw.Types
 
 ------------------------------------------------------------------------
 -- ArchitectureInfo
@@ -63,7 +62,10 @@ type DisassembleFn arch
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
    = ArchitectureInfo
-     { archAddrWidth :: !(AddrWidthRepr (RegAddrWidth (ArchReg arch)))
+     { withArchConstraints :: forall a . (ArchConstraints arch => a) -> a
+       -- ^ Provides the architecture constraints to any computation
+       -- that needs it.
+     , archAddrWidth :: !(AddrWidthRepr (RegAddrWidth (ArchReg arch)))
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
@@ -77,9 +79,9 @@ data ArchitectureInfo arch
        -- ^ Return true if architecture register should be preserved across a call.
      , preserveRegAcrossSyscall :: !(forall tp . ArchReg arch tp -> Bool)
        -- ^ Return true if architecture register should be preserved across a system call.
-     , fnBlockStateFn :: !(Memory (RegAddrWidth (ArchReg arch))
-                           -> SegmentedAddr (RegAddrWidth (ArchReg arch))
-                           -> AbsBlockState (ArchReg arch))
+     , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
+                         -> SegmentedAddr (RegAddrWidth (ArchReg arch))
+                         -> AbsBlockState (ArchReg arch))
        -- ^ Creates an abstract block state for representing the beginning of a
        -- function.
      , absEvalArchFn :: !(forall ids tp
@@ -87,32 +89,32 @@ data ArchitectureInfo arch
                           -> ArchFn arch ids tp
                           -> AbsValue (RegAddrWidth (ArchReg arch)) tp)
        -- ^ Evaluates an architecture-specific function
+     , absEvalArchStmt :: !(forall ids
+                            .  AbsProcessorState (ArchReg arch) ids
+                            -> ArchStmt arch ids
+                            -> AbsProcessorState (ArchReg arch) ids)
+       -- ^ Evaluates an architecture-specific statement
      }
 
 -- | Return state post call
-archPostCallAbsState :: ( RegisterInfo (ArchReg arch)
-                        , HasRepr (ArchReg arch) TypeRepr
-                        )
-                     => ArchitectureInfo arch
+archPostCallAbsState :: ArchitectureInfo arch
                         -- ^ Architecture information
                      -> AbsBlockState (ArchReg arch)
                      -> SegmentedAddr (RegAddrWidth (ArchReg arch))
                      -> AbsBlockState (ArchReg arch)
-archPostCallAbsState archInfo = postCallAbsState params
-  where params = CallParams { postCallStackDelta = negate (callStackDelta archInfo)
-                            , preserveReg = preserveRegAcrossCall archInfo
-                            }
+archPostCallAbsState info = withArchConstraints info $
+  let params = CallParams { postCallStackDelta = negate (callStackDelta info)
+                          , preserveReg = preserveRegAcrossCall info
+                          }
+   in postCallAbsState params
 
 -- | Return state post call
-archPostSyscallAbsState :: ( RegisterInfo (ArchReg arch)
-                           , HasRepr (ArchReg arch) TypeRepr
-                           )
-                        => ArchitectureInfo arch
+archPostSyscallAbsState :: ArchitectureInfo arch
                            -- ^ Architecture information
                         -> AbsBlockState (ArchReg arch)
                         -> SegmentedAddr (RegAddrWidth (ArchReg arch))
                         -> AbsBlockState (ArchReg arch)
-archPostSyscallAbsState archInfo = postCallAbsState params
+archPostSyscallAbsState info = withArchConstraints info $ postCallAbsState params
   where params = CallParams { postCallStackDelta = 0
-                            , preserveReg = preserveRegAcrossSyscall archInfo
+                            , preserveReg = preserveRegAcrossSyscall info
                             }

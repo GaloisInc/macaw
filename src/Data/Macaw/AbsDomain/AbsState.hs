@@ -1171,31 +1171,30 @@ transferValue c v =
 ------------------------------------------------------------------------
 -- Operations
 
-addMemWrite :: ( HasRepr (ArchReg arch) TypeRepr
-               , OrdF    (ArchReg arch)
-               , ShowF   (ArchReg arch)
+addMemWrite :: ( RegisterInfo (ArchReg arch)
                , MemWidth (ArchAddrWidth arch)
                )
-            => ArchAbsValue arch (BVType (ArchAddrWidth arch))
-               -- ^ Current instruction pointer
-               --
-               -- Used for pretty printing
-            -> BVValue arch ids (ArchAddrWidth arch)
+            => BVValue arch ids (ArchAddrWidth arch)
+               -- ^ Address that we are writing to.
             -> MemRepr tp
+               -- ^ Information about how value should be represented in memory.
             -> Value arch ids tp
+               -- ^ Value to write to memory
             -> AbsProcessorState (ArchReg arch) ids
+               -- ^ Current processor state.
             -> AbsProcessorState (ArchReg arch) ids
-addMemWrite cur_ip a memRepr v r =
+addMemWrite a memRepr v r =
   case (transferValue r a, transferValue r v) of
     -- (_,TopV) -> r
     -- We overwrite _some_ stack location.  An alternative would be to
     -- update everything with v.
-    (SomeStackOffset _, _) ->
+    (SomeStackOffset _, _) -> do
+      let cur_ip = r^.absInitialRegs^.curIP
       debug DAbsInt ("addMemWrite: dropping stack at "
              ++ show (pretty cur_ip)
              ++ " via " ++ show (pretty a)
              ++" in SomeStackOffset case") $
-      r & curAbsStack %~ pruneStack
+        r & curAbsStack %~ pruneStack
     (StackOffset _ s, v_abs) ->
       let w = valueByteSize v
           e = StackEntry memRepr v_abs

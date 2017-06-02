@@ -8,6 +8,7 @@
 -- The type of machine words, including bit vectors and floating point
 ------------------------------------------------------------------------
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE TypeOperators #-}
@@ -197,3 +198,8 @@ floatTypeRepr fir = BVTypeRepr (floatInfoBits fir)
 -- parameterized type value has some representative type such as a TypeRepr.
 class HasRepr (f :: k -> *) (v :: k -> *)  | f -> v where
   typeRepr :: f tp -> v tp
+
+typeWidth :: HasRepr f TypeRepr => f (BVType w) -> NatRepr w
+typeWidth x =
+  case typeRepr x of
+    BVTypeRepr w -> w
