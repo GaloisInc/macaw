@@ -198,33 +198,31 @@ newtype CFGM arch ids a =
            )
 
 -- | Run a CFGM at the top level
-runCFGM :: ArchitectureInfo arch
-           -- ^ Architecture-specific information needed for doing control-flow exploration.
-        -> Memory (ArchAddrWidth arch)
-           -- ^ Memory to use when decoding instructions.
-        -> Map (ArchSegmentedAddr arch) BSC.ByteString
-           -- ^ Names for (some) function entry points
-        -> (forall ids . CFGM arch ids ())
-           -- ^ Computation to run.
-        -> Some (DiscoveryInfo arch)
-runCFGM arch_info mem symbols m = do
-  withGlobalSTNonceGenerator $ \nonce_gen -> do
-    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
-    Some <$> execStateT (unCFGM m) init_info
+runCFGM :: DiscoveryInfo arch ids -> CFGM arch ids a -> ST ids (a, DiscoveryInfo arch ids)
+runCFGM info m = runStateT (unCFGM m) info
 
 liftST :: ST ids a -> CFGM arch ids a
 liftST = CFGM . lift
 
 -- | Mark a escaped code pointer as a function entry.
 markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
+                      -- ^ Information about why the code address was discovered
+                      --
+                      -- Used for debugging
                    -> ArchSegmentedAddr arch
-                   -> CFGM arch ids ()
-markAddrAsFunction rsn addr = do
-  s <- get
-  when (not (Set.member addr (s^.functionEntries))) $ do
-    let _high = Set.lookupGT addr (s^.functionEntries)
-    modify $ (functionEntries   %~ Set.insert addr)
-           . (function_frontier %~ Map.insert addr rsn)
+                   -> DiscoveryInfo arch ids
+                   -> DiscoveryInfo arch ids
+markAddrAsFunction rsn addr s
+  | Set.member addr (s^.functionEntries) = s
+  | otherwise = s & functionEntries   %~ Set.insert addr
+                  & function_frontier %~ Map.insert addr rsn
+
+-- | Mark a list of addresses as function entries with the same reason.
+markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
+                    -> [ArchSegmentedAddr arch]
+                    -> DiscoveryInfo arch ids
+                    -> DiscoveryInfo arch ids
+markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
 
 ------------------------------------------------------------------------
 -- FunState
@@ -373,12 +371,10 @@ mergeIntraJump src ab tgt = do
                                  }
       curFunInfo . foundAddrs %= Map.insert tgt found_info
 
--- -----------------------------------------------------------------------------
--- Refining an abstract state based upon a condition
-
+-------------------------------------------------------------------------------
+-- Jump table bounds
 
 -- See if expression matches form expected by jump tables
--- TODO: Fixme, this uses a fixed multiple of 8 for the jump table
 matchJumpTable :: MemWidth (ArchAddrWidth arch)
                => Memory (ArchAddrWidth arch)
                -> BVValue arch ids (ArchAddrWidth arch) -- ^ Memory address that IP is read from.
@@ -436,6 +432,36 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
 --    TopV -> Left UpperBoundUndefined
     abs_value -> Left (CouldNotInterpretAbsValue abs_value)
 
+
+-------------------------------------------------------------------------------
+-- identifyReturn
+
+-- | This is designed to detect returns from the register state representation.
+--
+-- It pattern matches on a 'RegState' to detect if it read its instruction
+-- pointer from an address that is 8 below the stack pointer.
+--
+-- Note that this assumes the stack decrements as values are pushed, so we will
+-- need to fix this on other architectures.
+identifyReturn :: RegConstraint (ArchReg arch)
+               => RegState (ArchReg arch) (Value arch ids)
+               -> Integer
+                  -- ^ How stack pointer moves when a call is made
+               -> Maybe (Assignment arch ids (BVType (ArchAddrWidth arch)))
+identifyReturn s stack_adj = do
+  let next_ip = s^.boundValue ip_reg
+      next_sp = s^.boundValue sp_reg
+  case next_ip of
+    AssignedValue asgn@(Assignment _ (ReadMem ip_addr _))
+      | let (ip_base, ip_off) = asBaseOffset ip_addr
+      , let (sp_base, sp_off) = asBaseOffset next_sp
+      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) -> Just asgn
+    _ -> Nothing
+
+
+------------------------------------------------------------------------
+--
+
 tryLookupBlock :: String
                -> ArchSegmentedAddr arch
                -> Map Word64 (Block arch ids)
@@ -463,13 +489,18 @@ refineProcStateBounds v isTrue ps =
     Left{}    -> ps
     Right ps' -> ps'
 
-data ParseState arch ids = ParseState { _pblockMap :: !(Map Word64 (ParsedBlock arch ids))
-                                        -- ^ Block m ap
-                                      , _writtenCodeAddrs :: ![ArchSegmentedAddr arch]
-                                        -- ^ Addresses marked executable that were written to memory.
-                                      , _intraJumpTargets :: ![(ArchSegmentedAddr arch, AbsBlockState (ArchReg arch))]
-                                      , _newFunctionAddrs :: ![ArchSegmentedAddr arch]
-                                      }
+------------------------------------------------------------------------
+-- ParseState
+
+data ParseState arch ids =
+  ParseState { _pblockMap :: !(Map Word64 (ParsedBlock arch ids))
+               -- ^ Block m ap
+             , _writtenCodeAddrs :: ![ArchSegmentedAddr arch]
+               -- ^ Addresses marked executable that were written to memory.
+             , _intraJumpTargets ::
+                 ![(ArchSegmentedAddr arch, AbsBlockState (ArchReg arch))]
+             , _newFunctionAddrs :: ![ArchSegmentedAddr arch]
+             }
 
 pblockMap :: Simple Lens (ParseState arch ids) (Map Word64 (ParsedBlock arch ids))
 pblockMap = lens _pblockMap (\s v -> s { _pblockMap = v })
@@ -535,27 +566,8 @@ identifyCall mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Otherwise skip over this instruction.
               | otherwise -> go prev (stmt Seq.<| after)
 
--- | This is designed to detect returns from the register state representation.
---
--- It pattern matches on a 'RegState' to detect if it read its instruction
--- pointer from an address that is 8 below the stack pointer.
---
--- Note that this assumes the stack decrements as values are pushed, so we will
--- need to fix this on other architectures.
-identifyReturn :: RegConstraint (ArchReg arch)
-               => RegState (ArchReg arch) (Value arch ids)
-               -> Integer
-                  -- ^ How stack pointer moves when a call is made
-               -> Maybe (Assignment arch ids (BVType (ArchAddrWidth arch)))
-identifyReturn s stack_adj = do
-  let next_ip = s^.boundValue ip_reg
-      next_sp = s^.boundValue sp_reg
-  case next_ip of
-    AssignedValue asgn@(Assignment _ (ReadMem ip_addr _))
-      | let (ip_base, ip_off) = asBaseOffset ip_addr
-      , let (sp_base, sp_off) = asBaseOffset next_sp
-      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) -> Just asgn
-    _ -> Nothing
+------------------------------------------------------------------------
+-- ParseContext
 
 data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
                                           , pctxArchInfo :: !(ArchitectureInfo arch)
@@ -854,8 +866,9 @@ transferBlocks br regs =
                                  , regionBlockMap = ps^.pblockMap
                                  }
       curFunInfo . parsedBlocks %= Map.insert src pb
-      liftCFG $ mapM_ (markAddrAsFunction (InWrite src)) (ps^.writtenCodeAddrs)
-      liftCFG $ mapM_ (markAddrAsFunction (CallTarget src)) (ps^.newFunctionAddrs)
+      liftCFG $ do
+        modify $ markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
+        modify $ markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 transfer :: ArchSegmentedAddr arch
@@ -980,19 +993,21 @@ cfgFromAddrs :: forall arch
                 -- Each entry contains an address and the value stored in it.
              -> Some (DiscoveryInfo arch)
 cfgFromAddrs arch_info mem symbols init_addrs mem_words =
-  runCFGM arch_info mem symbols $ do
+  withGlobalSTNonceGenerator $ \nonce_gen -> do
     case checkSymbolMap symbols of
       Left msg -> error $ "internal error in cfgFromAddrs:" ++ msg
       Right () -> pure ()
-    -- Set abstract state for initial functions
-    mapM_ (markAddrAsFunction InitAddr) init_addrs
-    explore_frontier
-    -- Add in code pointers from memory.
-    let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
-    s <- get
-    let mem_addrs =
-          filter (uncurry (notAlreadyFunction s)) $
-          filter (uncurry isDataCodePointer) $
-          mem_words
-    mapM_ (\(src,val) -> markAddrAsFunction (CodePointerInMem src) val) mem_addrs
-    explore_frontier
+    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
+    fmap (Some . snd) $ runCFGM init_info $ do
+      -- Set abstract state for initial functions
+      modify $ markAddrsAsFunction InitAddr init_addrs
+      explore_frontier
+      -- Add in code pointers from memory.
+      let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
+      s <- get
+      let mem_addrs =
+            filter (uncurry (notAlreadyFunction s)) $
+            filter (uncurry isDataCodePointer) $
+            mem_words
+      mapM_ (\(src,val) -> modify $ markAddrAsFunction (CodePointerInMem src) val) mem_addrs
+      explore_frontier

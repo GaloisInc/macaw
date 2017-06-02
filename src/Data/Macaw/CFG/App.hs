@@ -61,11 +61,6 @@ data App (f :: Type -> *) (tp :: Type) where
   MMXExtend :: !(f (BVType 64))
             -> App f (BVType 80)
 
-  -- Get upper half of bitvector
-  UpperHalf :: !(NatRepr n)
-            -> !(f (BVType (n+n)))
-            -> App f (BVType n)
-
   -- Truncate a bitvector value.
   Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
   -- Signed extension.
@@ -371,7 +366,6 @@ ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
     MMXExtend e -> sexprA "mmx_extend" [ pp e ]
-    UpperHalf _ x -> sexprA "upper_half" [ pp x ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
@@ -432,7 +426,6 @@ instance HasRepr (App f) TypeRepr where
    case a of
     Mux w _ _ _ -> BVTypeRepr w
     MMXExtend{} -> knownType
-    UpperHalf w _ -> BVTypeRepr w
     Trunc _ w -> BVTypeRepr w
     SExt  _ w -> BVTypeRepr w
     UExt  _ w -> BVTypeRepr w
