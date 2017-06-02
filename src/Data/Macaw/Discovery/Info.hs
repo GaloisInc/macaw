@@ -29,7 +29,6 @@ module Data.Macaw.Discovery.Info
   , ppDiscoveryInfoBlocks
 
   , emptyDiscoveryInfo
-  , nonceGen
   , memory
   , symbolNames
   , archInfo
@@ -56,13 +55,12 @@ module Data.Macaw.Discovery.Info
   )  where
 
 import           Control.Lens
-import           Control.Monad.ST
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe (fromMaybe)
 import           Data.Parameterized.Classes
-import           Data.Parameterized.Nonce
+import           Data.Parameterized.Some
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
@@ -244,7 +242,7 @@ instance ArchConstraints arch
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
 
-type ReverseEdgeMap arch = (Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch)))
+type ReverseEdgeMap arch = Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch))
 
 -- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
@@ -269,6 +267,14 @@ parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 reverseEdges :: Simple Lens (DiscoveryFunInfo arch ids) (ReverseEdgeMap arch)
 reverseEdges = lens _reverseEdges (\s v -> s { _reverseEdges = v })
+
+-- | Does a simple lookup in the cfg at a given DecompiledBlock address.
+lookupParsedBlock :: DiscoveryFunInfo arch ids
+                  -> ArchLabel arch
+                  -> Maybe (ParsedBlock arch ids)
+lookupParsedBlock info lbl = do
+  br <- Map.lookup (labelAddr lbl) (info^.parsedBlocks)
+  Map.lookup (labelIndex lbl) (regionBlockMap br)
 
 initDiscoveryFunInfo :: ArchitectureInfo arch
                         -- ^ Architecture information
@@ -302,10 +308,8 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 -- DiscoveryInfo
 
 -- | Information discovered about the program
-data DiscoveryInfo arch ids
-   = DiscoveryInfo { nonceGen    :: !(NonceGenerator (ST ids) ids)
-                     -- ^ Generator for creating fresh ids.
-                   , memory      :: !(Memory (ArchAddrWidth arch))
+data DiscoveryInfo arch
+   = DiscoveryInfo { memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
                    , symbolNames :: !(Map (ArchSegmentedAddr arch) BSC.ByteString)
                      -- ^ Map addresses to known symbol names
@@ -318,35 +322,32 @@ data DiscoveryInfo arch ids
 
                    , _functionEntries :: !(Set (ArchSegmentedAddr arch))
                       -- ^ Maps addresses that are marked as the start of a function
-                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (DiscoveryFunInfo arch ids))
+                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
                      -- ^ Map from function addresses to discovered information about function
-
                    , _function_frontier :: !(Map (ArchSegmentedAddr arch)
                                                  (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ Set of functions to explore next.
                    }
 
-withDiscoveryArchConstraints :: DiscoveryInfo arch ids
+withDiscoveryArchConstraints :: DiscoveryInfo arch
                              -> (ArchConstraints arch => a)
                              -> a
 withDiscoveryArchConstraints dinfo = withArchConstraints (archInfo dinfo)
 
-ppDiscoveryInfoBlocks :: DiscoveryInfo arch ids
+ppDiscoveryInfoBlocks :: DiscoveryInfo arch
                       -> Doc
 ppDiscoveryInfoBlocks info = withDiscoveryArchConstraints info $
-  vcat (pretty <$> Map.elems (info^.funInfo))
+  vcat $ (\(Some v) -> pretty v) <$> Map.elems (info^.funInfo)
 
 -- | Empty interpreter state.
-emptyDiscoveryInfo :: NonceGenerator (ST ids) ids
-                   -> Memory (ArchAddrWidth arch)
+emptyDiscoveryInfo :: Memory (ArchAddrWidth arch)
                    -> Map (ArchSegmentedAddr arch) BSC.ByteString
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
-                   -> DiscoveryInfo arch ids
-emptyDiscoveryInfo ng mem symbols info =
+                   -> DiscoveryInfo arch
+emptyDiscoveryInfo mem symbols info =
   DiscoveryInfo
-      { nonceGen           = ng
-      , memory             = mem
+      { memory             = mem
       , symbolNames        = symbols
       , archInfo           = info
       , _globalDataMap     = Map.empty
@@ -358,33 +359,25 @@ emptyDiscoveryInfo ng mem symbols info =
 
 
 -- | Map each jump table start to the address just after the end.
-globalDataMap :: Simple Lens (DiscoveryInfo arch ids)
+globalDataMap :: Simple Lens (DiscoveryInfo arch)
                              (Map (ArchSegmentedAddr arch)
                                   (GlobalDataInfo (ArchSegmentedAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | Set of functions to explore next.
-function_frontier :: Simple Lens (DiscoveryInfo arch ids)
+function_frontier :: Simple Lens (DiscoveryInfo arch)
                                  (Map (ArchSegmentedAddr arch)
                                       (CodeAddrReason (ArchAddrWidth arch)))
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
 
 
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryInfo arch ids) (Map (ArchSegmentedAddr arch) (DiscoveryFunInfo arch ids))
+funInfo :: Simple Lens (DiscoveryInfo arch) (Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 -- | Addresses that start each function.
-functionEntries :: Simple Lens (DiscoveryInfo arch ids) (Set (ArchSegmentedAddr arch))
+functionEntries :: Simple Lens (DiscoveryInfo arch) (Set (ArchSegmentedAddr arch))
 functionEntries = lens _functionEntries (\s v -> s { _functionEntries = v })
-
--- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupParsedBlock :: DiscoveryFunInfo arch ids
-                  -> ArchLabel arch
-                  -> Maybe (ParsedBlock arch ids)
-lookupParsedBlock info lbl = do
-  br <- Map.lookup (labelAddr lbl) (info^.parsedBlocks)
-  Map.lookup (labelIndex lbl) (regionBlockMap br)
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities

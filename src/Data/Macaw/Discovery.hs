@@ -40,7 +40,6 @@ import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Sequence (Seq)
@@ -189,20 +188,17 @@ rangeInReadonlySegment base size
 
 -- | The CFG-building monad: includes a state component with a 'DiscoveryInfo'
 -- and a 'NonceGenerator', layered on top of the 'ST' monad
-newtype CFGM arch ids a =
-    CFGM { unCFGM :: StateT (DiscoveryInfo arch ids) (ST ids) a }
+newtype CFGM arch a =
+    CFGM { unCFGM :: State (DiscoveryInfo arch) a }
   deriving ( Functor
            , Applicative
            , Monad
-           , MonadState (DiscoveryInfo arch ids)
+           , MonadState (DiscoveryInfo arch)
            )
 
 -- | Run a CFGM at the top level
-runCFGM :: DiscoveryInfo arch ids -> CFGM arch ids a -> ST ids (a, DiscoveryInfo arch ids)
-runCFGM info m = runStateT (unCFGM m) info
-
-liftST :: ST ids a -> CFGM arch ids a
-liftST = CFGM . lift
+runCFGM :: DiscoveryInfo arch -> CFGM arch a -> (a, DiscoveryInfo arch)
+runCFGM info m = runState (unCFGM m) info
 
 -- | Mark a escaped code pointer as a function entry.
 markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
@@ -210,8 +206,8 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                       --
                       -- Used for debugging
                    -> ArchSegmentedAddr arch
-                   -> DiscoveryInfo arch ids
-                   -> DiscoveryInfo arch ids
+                   -> DiscoveryInfo arch
+                   -> DiscoveryInfo arch
 markAddrAsFunction rsn addr s
   | Set.member addr (s^.functionEntries) = s
   | otherwise = s & functionEntries   %~ Set.insert addr
@@ -220,8 +216,8 @@ markAddrAsFunction rsn addr s
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                     -> [ArchSegmentedAddr arch]
-                    -> DiscoveryInfo arch ids
-                    -> DiscoveryInfo arch ids
+                    -> DiscoveryInfo arch
+                    -> DiscoveryInfo arch
 markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
 
 ------------------------------------------------------------------------
@@ -229,12 +225,19 @@ markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s
 
 -- | The state for the function explroation monad
 data FunState arch ids
-   = FunState {  curFunAddr :: !(ArchSegmentedAddr arch)
-              , _curFunInfo :: !(DiscoveryFunInfo arch ids)
-                 -- ^ Information about current function we are working on
-              , _frontier :: !(Set (ArchSegmentedAddr arch))
-                 -- ^ Addresses to explore next.
+   = FunState { funNonceGen  :: !(NonceGenerator (ST ids) ids)
+              , curFunAddr   :: !(ArchSegmentedAddr arch)
+              , _curFunCtx   :: !(DiscoveryInfo arch)
+                -- ^ Discovery info
+              , _curFunInfo  :: !(DiscoveryFunInfo arch ids)
+                -- ^ Information about current function we are working on
+              , _frontier    :: !(Set (ArchSegmentedAddr arch))
+                -- ^ Addresses to explore next.
               }
+
+-- | Discovery info
+curFunCtx :: Simple Lens (FunState arch ids)  (DiscoveryInfo arch)
+curFunCtx = lens _curFunCtx (\s v -> s { _curFunCtx = v })
 
 -- | Information about current function we are working on
 curFunInfo :: Simple Lens (FunState arch ids)  (DiscoveryFunInfo arch ids)
@@ -251,15 +254,22 @@ frontier = lens _frontier (\s v -> s { _frontier = v })
 -- FunM
 
 -- | A newtype around a function
-newtype FunM arch ids a = FunM { unFunM :: StateT (FunState arch ids) (CFGM arch ids) a }
+newtype FunM arch ids a = FunM { unFunM :: StateT (FunState arch ids) (ST ids) a }
   deriving (Functor, Applicative, Monad)
 
 instance MonadState (FunState arch ids) (FunM arch ids) where
   get = FunM $ get
   put s = FunM $ put s
 
-liftCFG :: CFGM arch ids a -> FunM arch ids a
-liftCFG m = FunM (lift m)
+liftST :: ST ids a -> FunM arch ids a
+liftST = FunM . lift
+
+liftCFG :: CFGM arch a -> FunM arch ids a
+liftCFG m = do
+  s <- use curFunCtx
+  let (a, t) = runCFGM s m
+  curFunCtx .= t
+  pure a
 
 ------------------------------------------------------------------------
 -- Transfer stmts
@@ -879,7 +889,7 @@ transfer addr = do
     Nothing -> error $ "getBlock called on unfound address " ++ show addr ++ "."
     Just finfo -> do
       info      <- liftCFG $ gets archInfo
-      nonce_gen <- liftCFG $ gets nonceGen
+      nonce_gen <- gets funNonceGen
       mem       <- liftCFG $ gets memory
       -- Attempt to disassemble block.
       -- Get memory so that we can decode from it.
@@ -889,7 +899,7 @@ transfer addr = do
       prev_block_map <- use $ curFunInfo . parsedBlocks
       let not_at_block = (`Map.notMember` prev_block_map)
       let ab = foundAbstractState finfo
-      (bs, next_ip, maybeError) <- liftCFG $ liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
+      (bs, next_ip, maybeError) <- liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
       -- Build state for exploring this.
       case maybeError of
         Just e -> do
@@ -923,21 +933,23 @@ explore_fun_loop = do
 
 explore_fun :: ArchSegmentedAddr arch
             -> CodeAddrReason (ArchAddrWidth arch)
-            -> CFGM arch ids ()
-explore_fun addr rsn = do
-  s <- get
+            -> CFGM arch ()
+explore_fun addr rsn = modify $ \s -> withGlobalSTNonceGenerator $ \gen -> do
   let info = archInfo s
   let mem  = memory s
 
   let initFunInfo = initDiscoveryFunInfo info mem (symbolNames s) addr rsn
-  let fs0 = FunState { curFunAddr = addr
+
+  let fs0 = FunState { funNonceGen = gen
+                     , curFunAddr  = addr
+                     , _curFunCtx  = s
                      , _curFunInfo = initFunInfo
-                     , _frontier = Set.singleton addr
+                     , _frontier   = Set.singleton addr
                      }
   fs <- execStateT (unFunM explore_fun_loop) fs0
-  funInfo %= Map.insert addr (fs^.curFunInfo)
+  pure $ (fs^.curFunCtx) & funInfo %~ Map.insert addr (Some (fs^.curFunInfo))
 
-explore_frontier :: CFGM arch ids ()
+explore_frontier :: CFGM arch ()
 explore_frontier = do
   st <- get
   -- If local block frontier is empty, then try function frontier.
@@ -991,23 +1003,22 @@ cfgFromAddrs :: forall arch
                 -- after exploring function entry points.
                 --
                 -- Each entry contains an address and the value stored in it.
-             -> Some (DiscoveryInfo arch)
-cfgFromAddrs arch_info mem symbols init_addrs mem_words =
-  withGlobalSTNonceGenerator $ \nonce_gen -> do
+             -> DiscoveryInfo arch
+cfgFromAddrs arch_info mem symbols init_addrs mem_words = do
+  let init_info = emptyDiscoveryInfo mem symbols arch_info
+  snd $ runCFGM init_info $ do
     case checkSymbolMap symbols of
       Left msg -> error $ "internal error in cfgFromAddrs:" ++ msg
       Right () -> pure ()
-    let init_info = emptyDiscoveryInfo nonce_gen mem symbols arch_info
-    fmap (Some . snd) $ runCFGM init_info $ do
-      -- Set abstract state for initial functions
-      modify $ markAddrsAsFunction InitAddr init_addrs
-      explore_frontier
-      -- Add in code pointers from memory.
-      let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
-      s <- get
-      let mem_addrs =
-            filter (uncurry (notAlreadyFunction s)) $
-            filter (uncurry isDataCodePointer) $
-            mem_words
-      mapM_ (\(src,val) -> modify $ markAddrAsFunction (CodePointerInMem src) val) mem_addrs
-      explore_frontier
+    -- Set abstract state for initial functions
+    modify $ markAddrsAsFunction InitAddr init_addrs
+    explore_frontier
+    -- Add in code pointers from memory.
+    let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
+    s <- get
+    let mem_addrs =
+          filter (uncurry (notAlreadyFunction s)) $
+          filter (uncurry isDataCodePointer) $
+          mem_words
+    mapM_ (\(src,val) -> modify $ markAddrAsFunction (CodePointerInMem src) val) mem_addrs
+    explore_frontier
