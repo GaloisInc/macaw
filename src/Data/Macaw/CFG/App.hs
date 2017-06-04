@@ -251,11 +251,10 @@ data App (f :: Type -> *) (tp :: Type) where
        -> !(f (FloatType flt))
        -> App f BoolType
 
+  -- | Convert a float from input type @flt@ to output type @flt'@
   FPCvt :: !(FloatInfoRepr flt)
-           -- ^ Input float type
         -> !(f (FloatType flt))
         -> !(FloatInfoRepr flt')
-           -- ^ Output float type
         -> App f (FloatType flt')
 
   FPCvtRoundsUp :: !(FloatInfoRepr flt)

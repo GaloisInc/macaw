@@ -162,10 +162,12 @@ instance Ord (MemWord w) where
 
 -- | Typeclass for legal memory widths
 class MemWidth w where
-  -- | @addrWidthMod w@ returns @2^addrBitSize w - 1@.
+  -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
   addrWidthMod :: p w -> Word64
 
-   -- | Returns number of bytes in addr.
+  -- | Returns number of bytes in addr.
+  --
+  -- The argument is not evaluated.
   addrSize :: p w -> Int
 
   -- Rotates the value by the given index.

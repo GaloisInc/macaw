@@ -16,9 +16,8 @@ discovery.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
-module Data.Macaw.Discovery.Info
-  ( FoundAddr(..)
-  , lookupParsedBlock
+module Data.Macaw.Discovery.State
+  ( lookupParsedBlock
   , GlobalDataInfo(..)
   , ParsedTermStmt(..)
   , ParsedBlock(..)
@@ -30,30 +29,28 @@ module Data.Macaw.Discovery.Info
   , symbolAddrs
   , symbolAtAddr
     -- * The interpreter state
-  , DiscoveryInfo
+  , DiscoveryState
   , exploredFunctions
-  , ppDiscoveryInfoBlocks
-  , emptyDiscoveryInfo
+  , ppDiscoveryStateBlocks
+  , emptyDiscoveryState
   , memory
   , symbolNames
   , archInfo
-
   , globalDataMap
-
   , funInfo
-  , function_frontier
-
+  , unexploredFunctions
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo
   , initDiscoveryFunInfo
   , discoveredFunAddr
   , discoveredFunName
+  , FoundAddr(..)
   , foundAddrs
   , parsedBlocks
   , reverseEdges
     -- * CodeAddrRegion
   , CodeAddrReason(..)
-    -- ** DiscoveryInfo utilities
+    -- ** DiscoveryState utilities
   , RegConstraint
   , asLiteralAddr
   )  where
@@ -80,6 +77,28 @@ import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
+
+
+------------------------------------------------------------------------
+-- CodeAddrReason
+
+-- | This describes the source of an address that was marked as containing code.
+data CodeAddrReason w
+   = InWrite !(SegmentedAddr w)
+     -- ^ Exploring because the given block writes it to memory.
+   | NextIP !(SegmentedAddr w)
+     -- ^ Exploring because the given block jumps here.
+   | CallTarget !(SegmentedAddr w)
+     -- ^ Exploring because address terminates with a call that jumps here.
+   | InitAddr
+     -- ^ Identified as an entry point from initial information
+   | CodePointerInMem !(SegmentedAddr w)
+     -- ^ A code pointer that was stored at the given address.
+   | SplitAt !(SegmentedAddr w)
+     -- ^ Added because the address split this block after it had been disassembled.
+   | InterProcedureJump !(SegmentedAddr w)
+     -- ^ A jump from an address in another function.
+  deriving (Show)
 
 
 ------------------------------------------------------------------------
@@ -129,27 +148,6 @@ symbolAddrMap symbols
 symbolAddrMap symbols = do
    mapM_ checkSymbolName (Map.elems symbols)
    pure $! SymbolAddrMap symbols
-
-------------------------------------------------------------------------
--- CodeAddrReason
-
--- | This describes the source of an address that was marked as containing code.
-data CodeAddrReason w
-   = InWrite !(SegmentedAddr w)
-     -- ^ Exploring because the given block writes it to memory.
-   | NextIP !(SegmentedAddr w)
-     -- ^ Exploring because the given block jumps here.
-   | CallTarget !(SegmentedAddr w)
-     -- ^ Exploring because address terminates with a call that jumps here.
-   | InitAddr
-     -- ^ Identified as an entry point from initial information
-   | CodePointerInMem !(SegmentedAddr w)
-     -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(SegmentedAddr w)
-     -- ^ Added because the address split this block after it had been disassembled.
-   | InterProcedureJump !(SegmentedAddr w)
-     -- ^ A jump from an address in another function.
-  deriving (Show)
 
 ------------------------------------------------------------------------
 -- GlobalDataInfo
@@ -336,11 +334,11 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
     vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
--- DiscoveryInfo
+-- DiscoveryState
 
 -- | Information discovered about the program
-data DiscoveryInfo arch
-   = DiscoveryInfo { memory      :: !(Memory (ArchAddrWidth arch))
+data DiscoveryState arch
+   = DiscoveryState { memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
                    , symbolNames :: !(SymbolAddrMap (ArchAddrWidth arch))
                      -- ^ Map addresses to known symbol names
@@ -354,65 +352,65 @@ data DiscoveryInfo arch
                      -- ^ Map from function addresses to discovered information about function
                      --
                      -- If the binding is bound value has been explored it is a DiscoveryFunInfo.  If it
-                     -- has been discovered and added to the function_frontier below, then it is bound to
+                     -- has been discovered and added to the unexploredFunctions below, then it is bound to
                      -- 'Nothing'.
-                   , _function_frontier :: ![(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
+                   , _unexploredFunctions :: ![(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
                      -- ^ A list of addresses that we have marked as function entries, but not yet
                      -- explored.
                    }
 
 -- | Return list of all functions discovered so far.
-exploredFunctions :: DiscoveryInfo arch -> [Some (DiscoveryFunInfo arch)]
+exploredFunctions :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]
 exploredFunctions i = mapMaybe id $ Map.elems $ i^.funInfo
 
-withDiscoveryArchConstraints :: DiscoveryInfo arch
+withDiscoveryArchConstraints :: DiscoveryState arch
                              -> (ArchConstraints arch => a)
                              -> a
 withDiscoveryArchConstraints dinfo = withArchConstraints (archInfo dinfo)
 
-ppDiscoveryInfoBlocks :: DiscoveryInfo arch
+ppDiscoveryStateBlocks :: DiscoveryState arch
                       -> Doc
-ppDiscoveryInfoBlocks info = withDiscoveryArchConstraints info $
+ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
     vcat $ f <$> Map.elems (info^.funInfo)
   where f :: ArchConstraints arch => Maybe (Some (DiscoveryFunInfo arch)) -> Doc
         f (Just (Some v)) = pretty v
         f Nothing = PP.empty
 
 -- | Create empty discovery information.
-emptyDiscoveryInfo :: Memory (ArchAddrWidth arch)
+emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                    -> SymbolAddrMap (ArchAddrWidth arch)
                       -- ^ Map from addresses
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
-                   -> DiscoveryInfo arch
-emptyDiscoveryInfo mem symbols info =
-  DiscoveryInfo
+                   -> DiscoveryState arch
+emptyDiscoveryState mem symbols info =
+  DiscoveryState
   { memory             = mem
   , symbolNames        = symbols
   , archInfo           = info
   , _globalDataMap     = Map.empty
   , _funInfo           = Map.empty
-  , _function_frontier = []
+  , _unexploredFunctions = []
   }
 
 
 -- | Map each jump table start to the address just after the end.
-globalDataMap :: Simple Lens (DiscoveryInfo arch)
+globalDataMap :: Simple Lens (DiscoveryState arch)
                              (Map (ArchSegmentedAddr arch)
                                   (GlobalDataInfo (ArchSegmentedAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
--- | Set of functions to explore next.
-function_frontier :: Simple Lens (DiscoveryInfo arch)
+-- | List of functions to explore next.
+unexploredFunctions :: Simple Lens (DiscoveryState arch)
                                  [(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
-function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
+unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryInfo arch) (Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
+funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 ------------------------------------------------------------------------
--- DiscoveryInfo utilities
+-- DiscoveryState utilities
 
 -- | Constraint on architecture register values needed by code exploration.
 type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)

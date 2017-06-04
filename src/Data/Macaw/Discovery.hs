@@ -1,10 +1,8 @@
 {- |
-Module           : Reopt.Semantics.CFGDiscovery
-Copyright        : (c) Galois, Inc 2015-2016
+Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.com>
 
-This contains an implementation of a CFG discovery algorithm based upon an
-interleaved abstract interpretation.
+This provides information about code discovered in binaries.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
@@ -23,14 +21,27 @@ interleaved abstract interpretation.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.Discovery
-       ( -- * Top leve
+       ( -- * Top level
          cfgFromAddrs
-         -- * Utilities
+         -- * DiscoveryInfo
+       , State.DiscoveryState
+       , State.memory
+       , State.exploredFunctions
+       , State.symbolNames
+       , State.ppDiscoveryStateBlocks
        , markAddrsAsFunction
        , analyzeFunction
        , exploreMemPointers
        , analyzeDiscoveredFunctions
-       , assignmentAbsValues
+         -- * DiscoveryFunInfo
+       , State.DiscoveryFunInfo
+       , State.discoveredFunAddr
+       , State.discoveredFunName
+       , State.parsedBlocks
+         -- * SymbolAddrMap
+       , State.SymbolAddrMap
+       , State.symbolAddrMap
+       , State.symbolAddrs
        ) where
 
 import           Control.Exception
@@ -41,8 +52,6 @@ import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
-import           Data.Parameterized.Map (MapF)
-import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Sequence (Seq)
@@ -61,47 +70,11 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
-import           Data.Macaw.Discovery.Info
+import           Data.Macaw.Discovery.AbsEval
+import           Data.Macaw.Discovery.State as State
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
-
--- Get the absolute value associated with an address.
-transferReadMem :: (OrdF (ArchReg a), ShowF (ArchReg a), MemWidth (RegAddrWidth (ArchReg a)))
-                => AbsProcessorState (ArchReg a) ids
-                -> ArchAddrValue a ids
-                -> MemRepr tp
-                   -- ^ Information about the memory layout for the value.
-                -> ArchAbsValue a tp
-transferReadMem r a tp
-  | StackOffset _ s <- transferValue r a
-  , [o] <- Set.toList s
-  , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
-  , Just Refl <- testEquality tp v_tp = v
-  | otherwise = TopV
-
--- | Get the abstract domain for the right-hand side of an assignment.
-transferRHS :: ArchitectureInfo a
-            -> AbsProcessorState (ArchReg a) ids
-            -> AssignRhs a ids tp
-            -> ArchAbsValue a tp
-transferRHS info r rhs =
-  case rhs of
-    EvalApp app    -> withArchConstraints info $ transferApp r app
-    SetUndefined _ -> TopV
-    ReadMem a tp   -> withArchConstraints info $ transferReadMem r a tp
-    EvalArchFn f _ -> absEvalArchFn info r f
-
--- | Merge in the value of the assignment.
---
--- If we have already seen a value, this will combine with meet.
-addAssignment :: ArchitectureInfo a
-              -> Assignment a ids tp
-              -> AbsProcessorState (ArchReg a) ids
-              -> AbsProcessorState (ArchReg a) ids
-addAssignment info a c = withArchConstraints info $
-  c & (absAssignments . assignLens (assignId a))
-    %~ (`meet` transferRHS info c (assignRhs a))
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -186,7 +159,7 @@ rangeInReadonlySegment base size
   where seg = addrSegment base
 
 ------------------------------------------------------------------------
--- DiscoveryInfo utilities
+-- DiscoveryState utilities
 
 -- | Mark a escaped code pointer as a function entry.
 markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
@@ -194,18 +167,18 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                       --
                       -- Used for debugging
                    -> ArchSegmentedAddr arch
-                   -> DiscoveryInfo arch
-                   -> DiscoveryInfo arch
+                   -> DiscoveryState arch
+                   -> DiscoveryState arch
 markAddrAsFunction rsn addr s
   | Map.member addr (s^.funInfo) = s
   | otherwise = s & funInfo           %~ Map.insert addr Nothing
-                  & function_frontier %~ (:) (addr, rsn)
+                  & unexploredFunctions %~ (:) (addr, rsn)
 
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                     -> [ArchSegmentedAddr arch]
-                    -> DiscoveryInfo arch
-                    -> DiscoveryInfo arch
+                    -> DiscoveryState arch
+                    -> DiscoveryState arch
 markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
 
 ------------------------------------------------------------------------
@@ -215,7 +188,7 @@ markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s
 data FunState arch ids
    = FunState { funNonceGen  :: !(NonceGenerator (ST ids) ids)
               , curFunAddr   :: !(ArchSegmentedAddr arch)
-              , _curFunCtx   :: !(DiscoveryInfo arch)
+              , _curFunCtx   :: !(DiscoveryState arch)
                 -- ^ Discovery info
               , _curFunInfo  :: !(DiscoveryFunInfo arch ids)
                 -- ^ Information about current function we are working on
@@ -224,7 +197,7 @@ data FunState arch ids
               }
 
 -- | Discovery info
-curFunCtx :: Simple Lens (FunState arch ids)  (DiscoveryInfo arch)
+curFunCtx :: Simple Lens (FunState arch ids)  (DiscoveryState arch)
 curFunCtx = lens _curFunCtx (\s v -> s { _curFunCtx = v })
 
 -- | Information about current function we are working on
@@ -251,75 +224,6 @@ instance MonadState (FunState arch ids) (FunM arch ids) where
 
 liftST :: ST ids a -> FunM arch ids a
 liftST = FunM . lift
-
-------------------------------------------------------------------------
--- Transfer stmts
-
--- | Given a statement this modifies the processor state based on the statement.
-absEvalStmt :: ArchitectureInfo arch
-             -> Stmt arch ids
-             -> State (AbsProcessorState (ArchReg arch) ids) ()
-absEvalStmt info stmt = withArchConstraints info $
-  case stmt of
-    AssignStmt a ->
-      modify $ addAssignment info a
-    WriteMem addr memRepr v ->
-      modify $ addMemWrite addr memRepr v
-    PlaceHolderStmt{} ->
-      pure ()
-    Comment{} ->
-      pure ()
-    ExecArchStmt astmt ->
-      modify $ \r -> absEvalArchStmt info r astmt
-
-absEvalStmts :: ArchitectureInfo arch
-              -> AbsProcessorState (ArchReg arch) ids
-              -> [Stmt arch ids]
-              -> AbsProcessorState (ArchReg arch) ids
-absEvalStmts info r stmts = execState (mapM_ (absEvalStmt info) stmts) r
-
--- | Generate map that maps each assignment in the CFG to the abstract value
--- associated with it.
-assignmentAbsValues :: forall arch ids
-                    .  ArchitectureInfo arch
-                    -> Memory (ArchAddrWidth arch)
-                    -> CFG arch ids
-                    -> Map (ArchSegmentedAddr arch) (AbsBlockState (ArchReg arch))
-                       -- ^ Maps addresses to the initial state at that address.
-                    -> MapF (AssignId ids) (ArchAbsValue arch)
-assignmentAbsValues info mem g absm =
-     foldl' go MapF.empty (Map.elems (g^.cfgBlocks))
-  where go :: MapF (AssignId ids) (ArchAbsValue arch)
-           -> Block arch ids
-           -> MapF (AssignId ids) (ArchAbsValue arch)
-        go m0 b =
-          case blockLabel b of
-            GeneratedBlock a 0 -> do
-              case Map.lookup a absm of
-                Nothing -> do
-                  error $ "internal: assignmentAbsValues could not find code infomation for block " ++ show a
-                Just blockState -> do
-                  let abs_state = initAbsProcessorState mem blockState
-                  insBlock b abs_state m0
-            _ -> m0
-
-        insBlock :: Block arch ids
-                 -> AbsProcessorState (ArchReg arch) ids
-                 -> MapF (AssignId ids) (ArchAbsValue arch)
-                 -> MapF (AssignId ids) (ArchAbsValue arch)
-        insBlock b r0 m0 =
-          let final = absEvalStmts info r0 (blockStmts b)
-              m = MapF.union (final^.absAssignments) m0 in
-          case blockTerm b of
-            Branch _ lb rb -> do
-              let Just l = findBlock g lb
-              let Just r = findBlock g rb
-              insBlock l final $
-                insBlock r final $
-                m
-            FetchAndExecute _ -> m
-            Syscall _ -> m
-            TranslateError{} -> m
 
 ------------------------------------------------------------------------
 -- Transfer functions
@@ -712,7 +616,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
       -- Check for tail call (anything where we are right at stack height
       | ptrType    <- addrMemRepr arch_info
       , sp_val     <-  s'^.boundValue sp_reg
-      , ReturnAddr <- transferReadMem regs' sp_val ptrType -> do
+      , ReturnAddr <- absEvalReadMem regs' sp_val ptrType -> do
 
         mapM_ (recordWriteStmt arch_info mem regs') stmts
 
@@ -918,9 +822,9 @@ analyzeFunction :: ArchSegmentedAddr arch
                --
                -- This can be used to figure out why we decided a
                -- given address identified a code location.
-            -> DiscoveryInfo arch
+            -> DiscoveryState arch
                -- ^ The current binary information.
-            -> DiscoveryInfo arch
+            -> DiscoveryState arch
 analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
   let info = archInfo s
   let mem  = memory s
@@ -939,33 +843,33 @@ analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
 -- analyzed all function entry points.
-analyzeDiscoveredFunctions :: DiscoveryInfo arch -> DiscoveryInfo arch
+analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
   -- If local block frontier is empty, then try function frontier.
-  case info^.function_frontier of
+  case info^.unexploredFunctions of
     [] -> info
     (addr, rsn) : next_roots ->
-      info & function_frontier .~ next_roots
+      info & unexploredFunctions .~ next_roots
            & analyzeFunction addr rsn
            & analyzeDiscoveredFunctions
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: SegmentedAddr w -> SegmentedAddr w -> Bool
 isDataCodePointer a v
-  = segmentFlags (addrSegment a) `Perm.hasPerm` Perm.write
+  =  segmentFlags (addrSegment a) `Perm.hasPerm` Perm.write
   && segmentFlags (addrSegment v) `Perm.hasPerm` Perm.execute
 
 
 addMemCodePointer :: (ArchSegmentedAddr arch, ArchSegmentedAddr arch)
-                  -> DiscoveryInfo arch
-                  -> DiscoveryInfo arch
+                  -> DiscoveryState arch
+                  -> DiscoveryState arch
 addMemCodePointer (src,val) = markAddrAsFunction (CodePointerInMem src) val
 
 exploreMemPointers :: [(ArchSegmentedAddr arch, ArchSegmentedAddr arch)]
                    -- ^ List of addresses and value pairs to use for
                    -- considering possible addresses.
-                   -> DiscoveryInfo arch
-                   -> DiscoveryInfo arch
+                   -> DiscoveryState arch
+                   -> DiscoveryState arch
 exploreMemPointers mem_words info =
   flip execState info $ do
     let notAlreadyFunction s (_a, v) = not (Map.member v (s^.funInfo))
@@ -991,9 +895,9 @@ cfgFromAddrs :: forall arch
                 -- after exploring function entry points.
                 --
                 -- Each entry contains an address and the value stored in it.
-             -> DiscoveryInfo arch
+             -> DiscoveryState arch
 cfgFromAddrs arch_info mem symbols init_addrs mem_words = do
-  emptyDiscoveryInfo mem symbols arch_info
+  emptyDiscoveryState mem symbols arch_info
     & markAddrsAsFunction InitAddr init_addrs
     & analyzeDiscoveredFunctions
     & exploreMemPointers mem_words
