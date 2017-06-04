@@ -23,7 +23,13 @@ interleaved abstract interpretation.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.Discovery
-       ( cfgFromAddrs
+       ( -- * Top leve
+         cfgFromAddrs
+         -- * Utilities
+       , markAddrsAsFunction
+       , analyzeFunction
+       , exploreMemPointers
+       , analyzeDiscoveredFunctions
        , assignmentAbsValues
        ) where
 
@@ -31,10 +37,7 @@ import           Control.Exception
 import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
-import qualified Data.ByteString.Char8 as BSC
-import           Data.Char (isDigit)
-import qualified Data.Foldable as Fold
-import           Data.List
+import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
@@ -182,23 +185,8 @@ rangeInReadonlySegment base size
     && Perm.isReadonly (segmentFlags seg)
   where seg = addrSegment base
 
-
 ------------------------------------------------------------------------
--- CFGM
-
--- | The CFG-building monad: includes a state component with a 'DiscoveryInfo'
--- and a 'NonceGenerator', layered on top of the 'ST' monad
-newtype CFGM arch a =
-    CFGM { unCFGM :: State (DiscoveryInfo arch) a }
-  deriving ( Functor
-           , Applicative
-           , Monad
-           , MonadState (DiscoveryInfo arch)
-           )
-
--- | Run a CFGM at the top level
-runCFGM :: DiscoveryInfo arch -> CFGM arch a -> (a, DiscoveryInfo arch)
-runCFGM info m = runState (unCFGM m) info
+-- DiscoveryInfo utilities
 
 -- | Mark a escaped code pointer as a function entry.
 markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
@@ -209,9 +197,9 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                    -> DiscoveryInfo arch
                    -> DiscoveryInfo arch
 markAddrAsFunction rsn addr s
-  | Set.member addr (s^.functionEntries) = s
-  | otherwise = s & functionEntries   %~ Set.insert addr
-                  & function_frontier %~ Map.insert addr rsn
+  | Map.member addr (s^.funInfo) = s
+  | otherwise = s & funInfo           %~ Map.insert addr Nothing
+                  & function_frontier %~ (:) (addr, rsn)
 
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
@@ -263,13 +251,6 @@ instance MonadState (FunState arch ids) (FunM arch ids) where
 
 liftST :: ST ids a -> FunM arch ids a
 liftST = FunM . lift
-
-liftCFG :: CFGM arch a -> FunM arch ids a
-liftCFG m = do
-  s <- use curFunCtx
-  let (a, t) = runCFGM s m
-  curFunCtx .= t
-  pure a
 
 ------------------------------------------------------------------------
 -- Transfer stmts
@@ -353,7 +334,7 @@ mergeIntraJump  :: ArchSegmentedAddr arch
                    -- ^ Address we are trying to reach.
                 -> FunM arch ids ()
 mergeIntraJump src ab tgt = do
-  info <- liftCFG $ gets archInfo
+  info <- uses curFunCtx archInfo
   withArchConstraints info $ do
   when (not (absStackHasReturnAddr ab)) $ do
     debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) $
@@ -617,7 +598,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
     _ | Just (prev_stmts, ret) <- identifyCall mem stmts s' -> do
-        Fold.mapM_ (recordWriteStmt arch_info mem regs') prev_stmts
+        mapM_ (recordWriteStmt arch_info mem regs') prev_stmts
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
@@ -626,7 +607,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         newFunctionAddrs %= (++ addrs)
         pure ParsedBlock { pblockLabel = lbl_idx
-                         , pblockStmts = Fold.toList prev_stmts
+                         , pblockStmts = toList prev_stmts
                          , pblockState = regs'
                          , pblockTerm  = ParsedCall s' (Just ret)
                          }
@@ -843,27 +824,28 @@ parseBlocks ctx ((b,regs):rest) = do
       pblockMap %= Map.insert idx pb
       parseBlocks ctx rest
 
-
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: BlockRegion arch ids
-               -- ^ Input block regions
+transferBlocks :: ArchAddr arch
+                  -- ^ Size of the region these blocks cover.
+               -> Map Word64 (Block arch ids)
+                  -- ^ Map from labelIndex to associated block
                -> AbsProcessorState (ArchReg arch) ids
                -- ^ Abstract state describing machine state when block is encountered.
               -> FunM arch ids ()
-transferBlocks br regs =
-  case Map.lookup 0 (brBlocks br) of
+transferBlocks sz bmap regs =
+  case Map.lookup 0 bmap of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
       funAddr <- gets curFunAddr
-      s <- liftCFG get
+      s <- use curFunCtx
       let src = labelAddr (blockLabel b)
       let ctx = ParseContext { pctxMemory   = memory s
                              , pctxArchInfo = archInfo s
                              , pctxFunAddr  = funAddr
                              , pctxAddr     = src
-                             , pctxBlockMap = brBlocks br
+                             , pctxBlockMap = bmap
                              }
       let ps0 = ParseState { _pblockMap = Map.empty
                            , _writtenCodeAddrs = []
@@ -872,13 +854,12 @@ transferBlocks br regs =
                            }
       let ps = execState (parseBlocks ctx [(b,regs)]) ps0
       let pb = ParsedBlockRegion { regionAddr = src
-                                 , regionSize = brSize br
+                                 , regionSize = sz
                                  , regionBlockMap = ps^.pblockMap
                                  }
       curFunInfo . parsedBlocks %= Map.insert src pb
-      liftCFG $ do
-        modify $ markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
-        modify $ markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
+      curFunCtx %= markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
+                .  markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 transfer :: ArchSegmentedAddr arch
@@ -888,9 +869,9 @@ transfer addr = do
   case mfinfo of
     Nothing -> error $ "getBlock called on unfound address " ++ show addr ++ "."
     Just finfo -> do
-      info      <- liftCFG $ gets archInfo
+      info      <- uses curFunCtx archInfo
       nonce_gen <- gets funNonceGen
-      mem       <- liftCFG $ gets memory
+      mem       <- uses curFunCtx memory
       -- Attempt to disassemble block.
       -- Get memory so that we can decode from it.
       -- Returns true if we are not at the start of a block.
@@ -912,10 +893,8 @@ transfer addr = do
       assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
       assert (next_ip^.addrOffset > addr^.addrOffset) $ do
       let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-      let br = BlockRegion { brSize = next_ip^.addrOffset - addr^.addrOffset
-                           , brBlocks = block_map
-                           }
-      transferBlocks br $ initAbsProcessorState mem (foundAbstractState finfo)
+      let sz = next_ip^.addrOffset - addr^.addrOffset
+      transferBlocks sz block_map $ initAbsProcessorState mem (foundAbstractState finfo)
 
 ------------------------------------------------------------------------
 -- Main loop
@@ -931,10 +910,18 @@ explore_fun_loop = do
       transfer addr
       explore_fun_loop
 
-explore_fun :: ArchSegmentedAddr arch
+-- | This  the function at the given address
+analyzeFunction :: ArchSegmentedAddr arch
+               -- ^ The address to explore
             -> CodeAddrReason (ArchAddrWidth arch)
-            -> CFGM arch ()
-explore_fun addr rsn = modify $ \s -> withGlobalSTNonceGenerator $ \gen -> do
+               -- ^ Reason to provide for why we are exploring function
+               --
+               -- This can be used to figure out why we decided a
+               -- given address identified a code location.
+            -> DiscoveryInfo arch
+               -- ^ The current binary information.
+            -> DiscoveryInfo arch
+analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
   let info = archInfo s
   let mem  = memory s
 
@@ -947,45 +934,46 @@ explore_fun addr rsn = modify $ \s -> withGlobalSTNonceGenerator $ \gen -> do
                      , _frontier   = Set.singleton addr
                      }
   fs <- execStateT (unFunM explore_fun_loop) fs0
-  pure $ (fs^.curFunCtx) & funInfo %~ Map.insert addr (Some (fs^.curFunInfo))
+  pure $ (fs^.curFunCtx) & funInfo %~ Map.insert addr (Just (Some (fs^.curFunInfo)))
 
-explore_frontier :: CFGM arch ()
-explore_frontier = do
-  st <- get
+-- | Analyze addresses that we have marked as functions, but not yet analyzed to
+-- identify basic blocks, and discover new function candidates until we have
+-- analyzed all function entry points.
+analyzeDiscoveredFunctions :: DiscoveryInfo arch -> DiscoveryInfo arch
+analyzeDiscoveredFunctions info =
   -- If local block frontier is empty, then try function frontier.
-  case Map.minViewWithKey (st^.function_frontier) of
-    Nothing -> return ()
-    Just ((addr, rsn), next_roots) -> do
-      put $! st & function_frontier .~ next_roots
-      explore_fun addr rsn
-      explore_frontier
-
--- | Map from addresses to the associated symbol name.
-type SymbolNameMap w = Map (SegmentedAddr w) BSC.ByteString
-
-
--- | This checks the symbol name map for correctness of the symbol names.
---
--- It returns either an error message or (Right ()) if no error is found.
-checkSymbolMap :: SymbolNameMap w -> Either String ()
-checkSymbolMap symbols
-  | (Set.size symbol_names /= Map.size symbols)
-  , debug DCFG ("WARNING: The symbol name map contains duplicate symbol names") False
-  = error "internal: duplicate symbol names in symbol name map"
-  where symbol_names :: Set BSC.ByteString
-        symbol_names = Set.fromList (Map.elems symbols)
-checkSymbolMap symbols = do
-  forM_ (Map.elems symbols) $ \sym_nm -> do
-    case BSC.unpack sym_nm of
-      [] -> Left "Empty symbol name"
-      (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
-            | otherwise -> Right ()
+  case info^.function_frontier of
+    [] -> info
+    (addr, rsn) : next_roots ->
+      info & function_frontier .~ next_roots
+           & analyzeFunction addr rsn
+           & analyzeDiscoveredFunctions
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: SegmentedAddr w -> SegmentedAddr w -> Bool
 isDataCodePointer a v
   = segmentFlags (addrSegment a) `Perm.hasPerm` Perm.write
   && segmentFlags (addrSegment v) `Perm.hasPerm` Perm.execute
+
+
+addMemCodePointer :: (ArchSegmentedAddr arch, ArchSegmentedAddr arch)
+                  -> DiscoveryInfo arch
+                  -> DiscoveryInfo arch
+addMemCodePointer (src,val) = markAddrAsFunction (CodePointerInMem src) val
+
+exploreMemPointers :: [(ArchSegmentedAddr arch, ArchSegmentedAddr arch)]
+                   -- ^ List of addresses and value pairs to use for
+                   -- considering possible addresses.
+                   -> DiscoveryInfo arch
+                   -> DiscoveryInfo arch
+exploreMemPointers mem_words info =
+  flip execState info $ do
+    let notAlreadyFunction s (_a, v) = not (Map.member v (s^.funInfo))
+    let mem_addrs =
+          filter (notAlreadyFunction info) $
+          filter (uncurry isDataCodePointer) $
+          mem_words
+    mapM_ (modify . addMemCodePointer) mem_addrs
 
 -- | Construct a discovery info by starting with exploring from a given set of
 -- function entry points.
@@ -994,7 +982,7 @@ cfgFromAddrs :: forall arch
                 -- ^ Architecture-specific information needed for doing control-flow exploration.
              -> Memory (ArchAddrWidth arch)
                 -- ^ Memory to use when decoding instructions.
-             -> SymbolNameMap (ArchAddrWidth arch)
+             -> SymbolAddrMap (ArchAddrWidth arch)
                 -- ^ Map from addresses to the associated symbol name.
              -> [ArchSegmentedAddr arch]
                 -- ^ Initial function entry points.
@@ -1005,20 +993,8 @@ cfgFromAddrs :: forall arch
                 -- Each entry contains an address and the value stored in it.
              -> DiscoveryInfo arch
 cfgFromAddrs arch_info mem symbols init_addrs mem_words = do
-  let init_info = emptyDiscoveryInfo mem symbols arch_info
-  snd $ runCFGM init_info $ do
-    case checkSymbolMap symbols of
-      Left msg -> error $ "internal error in cfgFromAddrs:" ++ msg
-      Right () -> pure ()
-    -- Set abstract state for initial functions
-    modify $ markAddrsAsFunction InitAddr init_addrs
-    explore_frontier
-    -- Add in code pointers from memory.
-    let notAlreadyFunction s _a v = not (Set.member v (s^.functionEntries))
-    s <- get
-    let mem_addrs =
-          filter (uncurry (notAlreadyFunction s)) $
-          filter (uncurry isDataCodePointer) $
-          mem_words
-    mapM_ (\(src,val) -> modify $ markAddrAsFunction (CodePointerInMem src) val) mem_addrs
-    explore_frontier
+  emptyDiscoveryInfo mem symbols arch_info
+    & markAddrsAsFunction InitAddr init_addrs
+    & analyzeDiscoveredFunctions
+    & exploreMemPointers mem_words
+    & analyzeDiscoveredFunctions

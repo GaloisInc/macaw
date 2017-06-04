@@ -17,17 +17,22 @@ discovery.
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Discovery.Info
-  ( BlockRegion(..)
-  , FoundAddr(..)
+  ( FoundAddr(..)
   , lookupParsedBlock
   , GlobalDataInfo(..)
   , ParsedTermStmt(..)
   , ParsedBlock(..)
   , ParsedBlockRegion(..)
+     -- * SymbolAddrMap
+  , SymbolAddrMap
+  , symbolAddrsAsMap
+  , symbolAddrMap
+  , symbolAddrs
+  , symbolAtAddr
     -- * The interpreter state
   , DiscoveryInfo
+  , exploredFunctions
   , ppDiscoveryInfoBlocks
-
   , emptyDiscoveryInfo
   , memory
   , symbolNames
@@ -35,7 +40,6 @@ module Data.Macaw.Discovery.Info
 
   , globalDataMap
 
-  , functionEntries
   , funInfo
   , function_frontier
 
@@ -56,9 +60,10 @@ module Data.Macaw.Discovery.Info
 
 import           Control.Lens
 import qualified Data.ByteString.Char8 as BSC
+import           Data.Char (isDigit)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe, mapMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Set (Set)
@@ -89,15 +94,41 @@ data FoundAddr arch
                }
 
 ------------------------------------------------------------------------
--- BlockRegion
+-- SymbolAddrMap
 
--- | A contiguous region of instructions in memory.
-data BlockRegion arch ids
-   = BlockRegion { brSize :: !(ArchAddr arch)
-                   -- ^ The size of the region of memory covered by this.
-                 , brBlocks :: !(Map Word64 (Block arch ids))
-                   -- ^ Map from labelIndex to associated block.
-                 }
+-- | Map from addresses to the associated symbol name.
+newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (SegmentedAddr w) BSC.ByteString }
+
+-- | Return addresses in symbol name map
+symbolAddrs :: SymbolAddrMap w -> [SegmentedAddr w]
+symbolAddrs = Map.keys . symbolAddrsAsMap
+
+-- | Return the symbol at the given map.
+symbolAtAddr :: SegmentedAddr w -> SymbolAddrMap w -> Maybe BSC.ByteString
+symbolAtAddr a m = Map.lookup a (symbolAddrsAsMap m)
+
+-- | Check that a symbol name is well formed, returning an error message if not.
+checkSymbolName :: BSC.ByteString -> Either String ()
+checkSymbolName sym_nm =
+  case BSC.unpack sym_nm of
+    [] -> Left "Empty symbol name"
+    (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
+          | otherwise -> Right ()
+
+-- | This creates a symbol addr map after checking the correctness of
+-- symbol names.
+--
+-- It returns either an error message or the map.
+symbolAddrMap :: Map (SegmentedAddr w) BSC.ByteString
+              -> Either String (SymbolAddrMap w)
+symbolAddrMap symbols
+  | Set.size symbol_names /= Map.size symbols =
+      Left "internal: duplicate symbol names in symbol name map"
+  where symbol_names :: Set BSC.ByteString
+        symbol_names = Set.fromList (Map.elems symbols)
+symbolAddrMap symbols = do
+   mapM_ checkSymbolName (Map.elems symbols)
+   pure $! SymbolAddrMap symbols
 
 ------------------------------------------------------------------------
 -- CodeAddrReason
@@ -280,7 +311,7 @@ initDiscoveryFunInfo :: ArchitectureInfo arch
                         -- ^ Architecture information
                      -> Memory (ArchAddrWidth arch)
                         -- ^ Contents of memory for initializing abstract state.
-                     -> Map (ArchSegmentedAddr arch) BSC.ByteString
+                     -> SymbolAddrMap (ArchAddrWidth arch)
                         -- ^ The symbol map for computing the name
                      -> ArchSegmentedAddr arch
                         -- ^ Address of this function
@@ -288,7 +319,7 @@ initDiscoveryFunInfo :: ArchitectureInfo arch
                         -- ^ Reason this function was discovered
                      -> DiscoveryFunInfo arch ids
 initDiscoveryFunInfo info mem symMap addr rsn =
-  let nm = fromMaybe (BSC.pack (show addr)) (Map.lookup addr symMap)
+  let nm = fromMaybe (BSC.pack (show addr)) (symbolAtAddr addr symMap)
       faddr = FoundAddr { foundReason = rsn
                         , foundAbstractState = mkInitialAbsState info mem addr
                         }
@@ -311,7 +342,7 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 data DiscoveryInfo arch
    = DiscoveryInfo { memory      :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
-                   , symbolNames :: !(Map (ArchSegmentedAddr arch) BSC.ByteString)
+                   , symbolNames :: !(SymbolAddrMap (ArchAddrWidth arch))
                      -- ^ Map addresses to known symbol names
                    , archInfo    :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
@@ -319,15 +350,20 @@ data DiscoveryInfo arch
                                              (GlobalDataInfo (ArchSegmentedAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-
-                   , _functionEntries :: !(Set (ArchSegmentedAddr arch))
-                      -- ^ Maps addresses that are marked as the start of a function
-                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
+                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
                      -- ^ Map from function addresses to discovered information about function
-                   , _function_frontier :: !(Map (ArchSegmentedAddr arch)
-                                                 (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ Set of functions to explore next.
+                     --
+                     -- If the binding is bound value has been explored it is a DiscoveryFunInfo.  If it
+                     -- has been discovered and added to the function_frontier below, then it is bound to
+                     -- 'Nothing'.
+                   , _function_frontier :: ![(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
+                     -- ^ A list of addresses that we have marked as function entries, but not yet
+                     -- explored.
                    }
+
+-- | Return list of all functions discovered so far.
+exploredFunctions :: DiscoveryInfo arch -> [Some (DiscoveryFunInfo arch)]
+exploredFunctions i = mapMaybe id $ Map.elems $ i^.funInfo
 
 withDiscoveryArchConstraints :: DiscoveryInfo arch
                              -> (ArchConstraints arch => a)
@@ -337,25 +373,27 @@ withDiscoveryArchConstraints dinfo = withArchConstraints (archInfo dinfo)
 ppDiscoveryInfoBlocks :: DiscoveryInfo arch
                       -> Doc
 ppDiscoveryInfoBlocks info = withDiscoveryArchConstraints info $
-  vcat $ (\(Some v) -> pretty v) <$> Map.elems (info^.funInfo)
+    vcat $ f <$> Map.elems (info^.funInfo)
+  where f :: ArchConstraints arch => Maybe (Some (DiscoveryFunInfo arch)) -> Doc
+        f (Just (Some v)) = pretty v
+        f Nothing = PP.empty
 
--- | Empty interpreter state.
+-- | Create empty discovery information.
 emptyDiscoveryInfo :: Memory (ArchAddrWidth arch)
-                   -> Map (ArchSegmentedAddr arch) BSC.ByteString
+                   -> SymbolAddrMap (ArchAddrWidth arch)
+                      -- ^ Map from addresses
                    -> ArchitectureInfo arch
                       -- ^ architecture/OS specific information
                    -> DiscoveryInfo arch
 emptyDiscoveryInfo mem symbols info =
   DiscoveryInfo
-      { memory             = mem
-      , symbolNames        = symbols
-      , archInfo           = info
-      , _globalDataMap     = Map.empty
-
-      , _functionEntries   = Set.empty
-      , _funInfo           = Map.empty
-      , _function_frontier = Map.empty
-      }
+  { memory             = mem
+  , symbolNames        = symbols
+  , archInfo           = info
+  , _globalDataMap     = Map.empty
+  , _funInfo           = Map.empty
+  , _function_frontier = []
+  }
 
 
 -- | Map each jump table start to the address just after the end.
@@ -366,18 +404,12 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | Set of functions to explore next.
 function_frontier :: Simple Lens (DiscoveryInfo arch)
-                                 (Map (ArchSegmentedAddr arch)
-                                      (CodeAddrReason (ArchAddrWidth arch)))
+                                 [(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
 function_frontier = lens _function_frontier (\s v -> s { _function_frontier = v })
 
-
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryInfo arch) (Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
+funInfo :: Simple Lens (DiscoveryInfo arch) (Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
-
--- | Addresses that start each function.
-functionEntries :: Simple Lens (DiscoveryInfo arch) (Set (ArchSegmentedAddr arch))
-functionEntries = lens _functionEntries (\s v -> s { _functionEntries = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryInfo utilities
