@@ -8,9 +8,15 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
+  , ElfWordWidth
+  , cancelElfWordType
+  , cancelElfWordWidth
   , memoryForElfSegments
   , memoryForElfSections
     -- * High-level exports
@@ -35,6 +41,8 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Some
 import qualified Data.Vector as V
+import           Data.Word
+import           GHC.TypeLits
 import           System.IO
 
 import           Data.Macaw.Memory
@@ -260,7 +268,12 @@ mkSymbolRef (sym, mverId) =
             , symbolVersion = mkSymbolVersion <$> mverId
             }
 
--- | Creates a relocation map for the givenphdr
+-- | Return the width of an elf word.
+type family ElfWordWidth (w :: *) :: Nat where
+  ElfWordWidth Word32 = 32
+  ElfWordWidth Word64 = 64
+
+-- | Creates a relocation map from the contents of a dynamic section.
 relocMapOfDynamic :: ElfData
                   -> RelaWidth w
                   -> ElfMachine
@@ -311,13 +324,29 @@ insertElfSegment shdrMap contents relocMap phdr = do
         mlsIndexMap %= Map.insert elfIdx pair
       _ -> fail "Unexpected shdr interval"
 
+
+elfAddrWidth :: ElfClass v -> AddrWidthRepr (ElfWordWidth v)
+elfAddrWidth ELFCLASS32 = Addr32
+elfAddrWidth ELFCLASS64 = Addr64
+
+cancelElfWordType :: ElfClass v
+                  -> ((ElfWordType (ElfWordWidth v) ~ v, Integral v, Bits v, MemWidth (ElfWordWidth v)) => a)
+                  -> a
+cancelElfWordType ELFCLASS32 x = x
+cancelElfWordType ELFCLASS64 x = x
+
+cancelElfWordWidth :: AddrWidthRepr w
+                   -> ((ElfWordWidth (ElfWordType w) ~ w) => a)
+                   -> a
+cancelElfWordWidth Addr32 x = x
+cancelElfWordWidth Addr64 x = x
+
 -- | Load an elf file into memory.  This uses the Elf segments for loading.
-memoryForElfSegments :: forall w
-                     .  Integral (ElfWordType w)
-                     => AddrWidthRepr w
-                     -> Elf (ElfWordType w)
-                     -> Either String (SectionIndexMap (ElfWordType w) w, Memory w)
-memoryForElfSegments w e = addrWidthClass w $ do
+memoryForElfSegments :: forall v
+                     .  Elf v
+                     -> Either String (SectionIndexMap v (ElfWordWidth v), Memory (ElfWordWidth v))
+memoryForElfSegments e = cancelElfWordType (elfClass e) $ do
+  let w = elfAddrWidth (elfClass e)
   runExcept $ fmap memLoaderPair $ flip execStateT (initState w) $ do
     let l   = elfLayout e
     let d   = elfLayoutData l
@@ -333,7 +362,7 @@ memoryForElfSegments w e = addrWidthClass w $ do
            in relocMapOfDynamic d (relaWidthOfAddr w) (elfMachine e) virtMap dynContents
         _ -> throwError "Multiple dynamic sections"
 
-    let intervals :: ElfFileSectionMap (ElfWordType w)
+    let intervals :: ElfFileSectionMap v
         intervals = IMap.fromList $
           [ (IntervalCO start end, sec)
           | shdr <- Map.elems (l^.shdrs)
@@ -364,11 +393,10 @@ insertElfSection sec =
 -- | Load allocated Elf sections into memory.
 -- Normally, Elf uses segments for loading, but the segment information
 -- tends to be more precise.
-memoryForElfSections :: (Integral (ElfWordType w), Bits (ElfWordType w))
-                     => AddrWidthRepr w
-                     -> Elf (ElfWordType w)
-                     -> Either String (SectionIndexMap (ElfWordType w) w, Memory w)
-memoryForElfSections w e = addrWidthClass w $
+memoryForElfSections :: Elf v
+                     -> Either String (SectionIndexMap v (ElfWordWidth v), Memory (ElfWordWidth v))
+memoryForElfSections e = cancelElfWordType (elfClass e) $ do
+  let w = elfAddrWidth (elfClass e)
   runExcept $ fmap memLoaderPair $ flip execStateT (initState w) $ do
     traverseOf_ elfSections insertElfSection e
 
@@ -404,14 +432,12 @@ loadExecutable :: FilePath -> IO (Some Memory)
 loadExecutable path = do
   se <- readElf path
   case se of
-    Elf64 e -> either fail (return . Some . snd) $
-      memoryForElfSegments Addr64 e
-    Elf32 e -> either fail (return . Some . snd) $
-      memoryForElfSegments Addr32 e
+    Elf64 e -> either fail (return . Some . snd) $ memoryForElfSegments e
+    Elf32 e -> either fail (return . Some . snd) $ memoryForElfSegments e
 
 loadElfBySection :: FilePath -> IO (Some Memory)
 loadElfBySection path = do
   se <- readElf path
   case se of
-    Elf64 e -> either fail (return . Some . snd) $ memoryForElfSections Addr64 e
-    Elf32 e -> either fail (return . Some . snd) $ memoryForElfSections Addr32 e
+    Elf64 e -> either fail (return . Some . snd) $ memoryForElfSections e
+    Elf32 e -> either fail (return . Some . snd) $ memoryForElfSections e

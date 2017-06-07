@@ -64,7 +64,6 @@ import           Data.Maybe (fromMaybe, mapMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Set (Set)
-import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -138,13 +137,27 @@ checkSymbolName sym_nm =
 -- symbol names.
 --
 -- It returns either an error message or the map.
-symbolAddrMap :: Map (SegmentedAddr w) BSC.ByteString
+symbolAddrMap :: forall w
+              .  Map (SegmentedAddr w) BSC.ByteString
               -> Either String (SymbolAddrMap w)
+{-
 symbolAddrMap symbols
-  | Set.size symbol_names /= Map.size symbols =
-      Left "internal: duplicate symbol names in symbol name map"
-  where symbol_names :: Set BSC.ByteString
-        symbol_names = Set.fromList (Map.elems symbols)
+  | Map.size symbol_names /= Map.size symbols = do
+      let l = filter isMulti (Map.toList symbol_names)
+       in Left $ "Duplicate symbol names in symbol name map:\n" ++ show l
+  where symbol_names :: Map BSC.ByteString [SegmentedAddr w]
+        symbol_names = foldl insPair Map.empty (Map.toList symbols)
+
+        isMulti :: (BSC.ByteString, [SegmentedAddr w])
+                -> Bool
+        isMulti (_,[_]) = False
+        isMulti (_,_)   = True
+
+        insPair :: Map BSC.ByteString [SegmentedAddr w]
+                -> (SegmentedAddr w, BSC.ByteString)
+                -> Map BSC.ByteString [SegmentedAddr w]
+        insPair m (a,nm) = Map.insertWith (++) nm [a] m
+-}
 symbolAddrMap symbols = do
    mapM_ checkSymbolName (Map.elems symbols)
    pure $! SymbolAddrMap symbols
@@ -378,11 +391,12 @@ ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
 
 -- | Create empty discovery information.
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
-                   -> SymbolAddrMap (ArchAddrWidth arch)
-                      -- ^ Map from addresses
-                   -> ArchitectureInfo arch
-                      -- ^ architecture/OS specific information
-                   -> DiscoveryState arch
+                       -- ^ State of memory
+                    -> SymbolAddrMap (ArchAddrWidth arch)
+                       -- ^ Map from addresses
+                    -> ArchitectureInfo arch
+                       -- ^ architecture/OS specific information
+                    -> DiscoveryState arch
 emptyDiscoveryState mem symbols info =
   DiscoveryState
   { memory             = mem
@@ -392,7 +406,6 @@ emptyDiscoveryState mem symbols info =
   , _funInfo           = Map.empty
   , _unexploredFunctions = []
   }
-
 
 -- | Map each jump table start to the address just after the end.
 globalDataMap :: Simple Lens (DiscoveryState arch)

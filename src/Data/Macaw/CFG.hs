@@ -580,6 +580,7 @@ instance ShowF (ArchReg arch) => Show (Value arch ids tp) where
 class ( RegisterInfo (ArchReg arch)
       , PrettyF  (ArchStmt arch)
       )  => ArchConstraints arch where
+
   -- | A function for pretty printing an archFn of a given type.
   ppArchFn :: Applicative m
            => (forall u . Value arch ids u -> m Doc)

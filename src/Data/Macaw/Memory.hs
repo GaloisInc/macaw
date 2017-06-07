@@ -176,10 +176,11 @@ class MemWidth w where
   -- | Read an address with the given endianess.
   addrRead :: Endianness -> BS.ByteString -> Maybe (MemWord w)
 
--- | Returns add
+-- | Returns number of bits in address.
 addrBitSize :: MemWidth w => p w -> Int
 addrBitSize w = 8 * addrSize w
 
+-- | Convert word64 @x@ into mem word @x mod 2^w-1@.
 memWord :: forall w . MemWidth w => Word64 -> MemWord w
 memWord x = MemWord (x .&. addrWidthMod p)
   where p :: Proxy w
@@ -479,11 +480,10 @@ lookupSegment m i = Map.lookup i (memAllSegments m)
 -- | Return list of segmented address values in memory.
 --
 -- Each address includes the value and the base.
-memAsAddrPairs :: MemWidth w
-               => Memory w
+memAsAddrPairs :: Memory w
                -> Endianness
                -> [(SegmentedAddr w, SegmentedAddr w)]
-memAsAddrPairs mem end = do
+memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
   seg <- memSegments mem
   (contents_offset,r) <- contentsList (segmentContents seg)
   let addr = SegmentedAddr seg contents_offset
@@ -511,8 +511,8 @@ readonlySegments :: Memory w -> [MemSegment w]
 readonlySegments = filter (Perm.isReadonly . segmentFlags) . memSegments
 
 -- | Given an absolute address, this returns a segment and offset into the segment.
-absoluteAddrSegment :: MemWidth w => Memory w -> MemWord w -> Maybe (SegmentedAddr w)
-absoluteAddrSegment mem addr =
+absoluteAddrSegment :: Memory w -> MemWord w -> Maybe (SegmentedAddr w)
+absoluteAddrSegment mem addr = addrWidthClass (memAddrWidth mem) $
   case Map.lookupLE addr (memAbsoluteSegments mem) of
     Just (base, seg) | addr < base + segmentSize seg ->
       Just $! SegmentedAddr { addrSegment = seg
@@ -521,12 +521,11 @@ absoluteAddrSegment mem addr =
     _ -> Nothing
 
 -- | Read an address from the value in the segment or report a memory error.
-readAddr :: MemWidth w
-         => Memory w
+readAddr :: Memory w
          -> Endianness
          -> SegmentedAddr w
          -> Either (MemoryError w) (SegmentedAddr w)
-readAddr mem end addr = do
+readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   let sz = fromIntegral (addrSize addr)
   case lookupRange (addr^.addrOffset) (segmentContents (addrSegment addr)) of
     Just (MemWord offset, ByteRegion bs)
@@ -565,7 +564,6 @@ showInsertError (OverlapSegment _base _seg) =
 showInsertError (IndexAlreadyUsed seg) =
   "has the same index as another segment (" ++ show (segmentIndex seg) ++ ")."
 
-
 insertAbsoluteSegmentMap :: MemWidth w
                          => MemSegment w
                          -> AbsoluteSegmentMap w
@@ -592,11 +590,10 @@ insertAllSegmentMap seg m =
 
 -- | Insert segment into memory or fail if this overlaps with another
 -- segment in memory.
-insertMemSegment :: MemWidth w
-                 => MemSegment w
+insertMemSegment :: MemSegment w
                  -> Memory w
                  -> Either (InsertError w) (Memory w)
-insertMemSegment seg mem = do
+insertMemSegment seg mem = addrWidthClass (memAddrWidth mem) $ do
   absMap <- insertAbsoluteSegmentMap seg (memAbsoluteSegments mem)
   allMap <- insertAllSegmentMap      seg (memAllSegments mem)
   pure $ mem { memAbsoluteSegments = absMap
@@ -605,29 +602,29 @@ insertMemSegment seg mem = do
 
 -- | Return segment if range is entirely contained within a single segment
 -- and 'Nothing' otherwise.
-segmentOfRange :: MemWidth w
-               => MemWord w -- ^ Start of range
+segmentOfRange :: MemWord w -- ^ Start of range
                -> MemWord w -- ^ One past last index in range.
                -> Memory w
                -> Maybe (MemSegment w)
-segmentOfRange base end mem =
+segmentOfRange base end mem = addrWidthClass (memAddrWidth mem) $ do
   case Map.lookupLE base (memAbsoluteSegments mem) of
     Just (seg_base, seg) | end <= seg_base + segmentSize seg -> Just seg
     _ -> Nothing
 
 -- | Return true if address satisfies permissions check.
-addrPermissions :: MemWidth w => MemWord w -> Memory w -> Perm.Flags
-addrPermissions addr mem =
+addrPermissions :: MemWord w -> Memory w -> Perm.Flags
+addrPermissions addr mem =  addrWidthClass (memAddrWidth mem) $
   case Map.lookupLE addr (memAbsoluteSegments mem) of
     Just (base, seg) | addr < base + segmentSize seg -> segmentFlags seg
     _ -> Perm.none
 
 -- | Indicates if address is a code pointer.
-isCodeAddr :: MemWidth w => Memory w -> MemWord w -> Bool
-isCodeAddr mem val = addrPermissions val mem `Perm.hasPerm` Perm.execute
+isCodeAddr :: Memory w -> MemWord w -> Bool
+isCodeAddr mem val =
+  addrPermissions val mem `Perm.hasPerm` Perm.execute
 
 -- | Indicates if address is an address in code segment or null.
-isCodeAddrOrNull :: MemWidth w => Memory w -> MemWord w -> Bool
+isCodeAddrOrNull :: Memory w -> MemWord w -> Bool
 isCodeAddrOrNull _ (MemWord 0) = True
 isCodeAddrOrNull mem a = isCodeAddr mem a
 

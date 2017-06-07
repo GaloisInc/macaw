@@ -40,8 +40,9 @@ type ReadAddrFn w
 -- A block is defined as a contiguous region of code with a single known
 -- entrance and potentially multiple exits.
 --
--- This returns the list of blocks, one past the end of the last instruction successfully
--- disassembled, and any potential error that prematurely terminated translating the block.
+-- This returns the list of blocks, the number of bytes in the blocks,
+-- and any potential error that prematurely terminated translating the
+-- block.
 type DisassembleFn arch
    = forall ids
    .  NonceGenerator (ST ids) ids
@@ -57,7 +58,7 @@ type DisassembleFn arch
       -- from.
       --
       -- This is used for things like the height of the x87 stack.
-   -> ST ids ([Block arch ids], SegmentedAddr (ArchAddrWidth arch), Maybe String)
+   -> ST ids ([Block arch ids], MemWord (ArchAddrWidth arch), Maybe String)
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch

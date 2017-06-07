@@ -21,14 +21,13 @@ This provides information about code discovered in binaries.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.Discovery
-       ( -- * Top level
-         cfgFromAddrs
-         -- * DiscoveryInfo
-       , State.DiscoveryState
+       ( -- * DiscoveryInfo
+         State.DiscoveryState
        , State.memory
        , State.exploredFunctions
        , State.symbolNames
        , State.ppDiscoveryStateBlocks
+       , cfgFromAddrs
        , markAddrsAsFunction
        , analyzeFunction
        , exploreMemPointers
@@ -784,7 +783,7 @@ transfer addr = do
       prev_block_map <- use $ curFunInfo . parsedBlocks
       let not_at_block = (`Map.notMember` prev_block_map)
       let ab = foundAbstractState finfo
-      (bs, next_ip, maybeError) <- liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
+      (bs, sz, maybeError) <- liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
       -- Build state for exploring this.
       case maybeError of
         Just e -> do
@@ -793,11 +792,7 @@ transfer addr = do
           pure ()
 
       withArchConstraints info $ do
-
-      assert (segmentIndex (addrSegment next_ip) == segmentIndex (addrSegment addr)) $ do
-      assert (next_ip^.addrOffset > addr^.addrOffset) $ do
       let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-      let sz = next_ip^.addrOffset - addr^.addrOffset
       transferBlocks sz block_map $ initAbsProcessorState mem (foundAbstractState finfo)
 
 ------------------------------------------------------------------------
