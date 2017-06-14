@@ -184,10 +184,6 @@ mlsMemory = lens _mlsMemory (\s v -> s { _mlsMemory = v })
 mlsIndexMap :: Simple Lens (MemLoaderState w) (SectionIndexMap w)
 mlsIndexMap = lens _mlsIndexMap (\s v -> s { _mlsIndexMap = v })
 
-relaWidthOfAddr :: AddrWidthRepr w -> RelaWidth w
-relaWidthOfAddr Addr32 = Rela32
-relaWidthOfAddr Addr64 = Rela64
-
 initState :: forall w . AddrWidthRepr w -> MemLoaderState w
 initState w = MLS { _mlsIndex = 0
                   , _mlsMemory = emptyMemory w
@@ -290,16 +286,16 @@ mkSymbolRef (sym, mverId) =
 
 -- | Creates a relocation map from the contents of a dynamic section.
 relocMapOfDynamic :: ElfData
-                  -> RelaWidth w
+                  -> ElfClass w
                   -> ElfMachine
                   -> VirtAddrMap w
                   -> L.ByteString -- ^ Contents of .dynamic section
                   -> MemLoader w (RelocMap (MemWord w))
-relocMapOfDynamic d w mach virtMap dynContents =
-  case (w, mach) of
-    (Rela64, EM_X86_64) -> do
+relocMapOfDynamic d cl mach virtMap dynContents =
+  case (cl, mach) of
+    (ELFCLASS64, EM_X86_64) -> do
       dynSection <- either (throwError . show) pure $
-        dynamicEntries d (relaClass w) virtMap dynContents
+        dynamicEntries d cl virtMap dynContents
       relocs <- either (throwError . show) pure $
         dynRelocations (dynSection :: DynamicSection X86_64_RelocationType)
       syms <- either (throwError . show) pure $
@@ -373,7 +369,7 @@ memoryForElfSegments opt e = do
         [] -> pure Map.empty
         [dynPhdr] ->
           let dynContents = sliceL (phdrFileRange dynPhdr) contents
-           in relocMapOfDynamic d (relaWidthOfAddr w) (elfMachine e) virtMap dynContents
+           in relocMapOfDynamic d (elfClass e) (elfMachine e) virtMap dynContents
         _ -> throwError "Multiple dynamic sections"
 
     let intervals :: ElfFileSectionMap (ElfWordType w)
