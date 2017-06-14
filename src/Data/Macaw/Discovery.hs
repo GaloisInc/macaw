@@ -50,6 +50,7 @@ import           Control.Monad.State.Strict
 import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
@@ -327,32 +328,6 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
     abs_value -> Left (CouldNotInterpretAbsValue abs_value)
 
 
--------------------------------------------------------------------------------
--- identifyReturn
-
--- | This is designed to detect returns from the register state representation.
---
--- It pattern matches on a 'RegState' to detect if it read its instruction
--- pointer from an address that is 8 below the stack pointer.
---
--- Note that this assumes the stack decrements as values are pushed, so we will
--- need to fix this on other architectures.
-identifyReturn :: RegConstraint (ArchReg arch)
-               => RegState (ArchReg arch) (Value arch ids)
-               -> Integer
-                  -- ^ How stack pointer moves when a call is made
-               -> Maybe (Assignment arch ids (BVType (ArchAddrWidth arch)))
-identifyReturn s stack_adj = do
-  let next_ip = s^.boundValue ip_reg
-      next_sp = s^.boundValue sp_reg
-  case next_ip of
-    AssignedValue asgn@(Assignment _ (ReadMem ip_addr _))
-      | let (ip_base, ip_off) = asBaseOffset ip_addr
-      , let (sp_base, sp_off) = asBaseOffset next_sp
-      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) -> Just asgn
-    _ -> Nothing
-
-
 ------------------------------------------------------------------------
 --
 
@@ -505,7 +480,7 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
         let abst = finalAbsBlockState regs' s'
         seq abst $ do
         -- Merge caller return information
-        intraJumpTargets %= ((ret, archPostCallAbsState arch_info abst ret):)
+        intraJumpTargets %= ((ret, postCallAbsState arch_info abst ret):)
         -- Look for new ips.
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         newFunctionAddrs %= (++ addrs)
@@ -516,27 +491,11 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
                          }
 
     -- This block ends with a return.
-      | Just asgn' <- identifyReturn s' (callStackDelta arch_info) -> do
+      | ReturnAddr <- transferValue regs' (s'^.boundValue ip_reg) -> do
+        mapM_ (recordWriteStmt arch_info mem regs') stmts
 
-        let isRetLoad s =
-              case s of
-                AssignStmt asgn
-                  | Just Refl <- testEquality (assignId asgn) (assignId  asgn') -> True
-                _ -> False
-            nonret_stmts = filter (not . isRetLoad) stmts
-
-        mapM_ (recordWriteStmt arch_info mem regs') nonret_stmts
-
-        let ip_val = s'^.boundValue ip_reg
-        case transferValue regs' ip_val of
-          ReturnAddr -> return ()
-          -- The return_val is bad.
-          -- This could indicate an imprecision in analysis or maybe unreachable/bad code.
-          rv ->
-            debug DCFG ("return_val is bad at " ++ show lbl ++ ": " ++ show rv) $
-                  return ()
         pure ParsedBlock { pblockLabel = lbl_idx
-                         , pblockStmts = nonret_stmts
+                         , pblockStmts = stmts
                          , pblockState = regs'
                          , pblockTerm = ParsedReturn s'
                          }
@@ -736,8 +695,8 @@ transferBlocks :: ArchAddr arch
                -> AbsProcessorState (ArchReg arch) ids
                -- ^ Abstract state describing machine state when block is encountered.
               -> FunM arch ids ()
-transferBlocks sz bmap regs =
-  case Map.lookup 0 bmap of
+transferBlocks sz block_map regs =
+  case Map.lookup 0 block_map of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
@@ -748,7 +707,7 @@ transferBlocks sz bmap regs =
                              , pctxArchInfo = archInfo s
                              , pctxFunAddr  = funAddr
                              , pctxAddr     = src
-                             , pctxBlockMap = bmap
+                             , pctxBlockMap = block_map
                              }
       let ps0 = ParseState { _pblockMap = Map.empty
                            , _writtenCodeAddrs = []
@@ -769,58 +728,62 @@ transfer :: ArchSegmentedAddr arch
          -> FunM arch ids ()
 transfer addr = do
   mfinfo <- use $ curFunInfo . foundAddrs . at addr
-  case mfinfo of
-    Nothing -> error $ "getBlock called on unfound address " ++ show addr ++ "."
-    Just finfo -> do
-      info      <- uses curFunCtx archInfo
-      nonce_gen <- gets funNonceGen
-      mem       <- uses curFunCtx memory
-      -- Attempt to disassemble block.
-      -- Get memory so that we can decode from it.
-      -- Returns true if we are not at the start of a block.
-      -- This is used to stop the disassembler when we reach code
-      -- that is part of a new block.
-      prev_block_map <- use $ curFunInfo . parsedBlocks
-      let not_at_block = (`Map.notMember` prev_block_map)
-      let ab = foundAbstractState finfo
-      (bs, sz, maybeError) <- liftST $ disassembleFn info nonce_gen mem not_at_block addr ab
-      -- Build state for exploring this.
-      case maybeError of
-        Just e -> do
-          trace ("Failed to disassemble " ++ show e) $ pure ()
-        Nothing -> do
-          pure ()
+  let finfo = fromMaybe (error $ "getBlock called on unfound address " ++ show addr ++ ".") $
+                mfinfo
+  info      <- uses curFunCtx archInfo
+  withArchConstraints info $ do
+  nonce_gen <- gets funNonceGen
+  mem       <- uses curFunCtx memory
+  prev_block_map <- use $ curFunInfo . parsedBlocks
+  -- Get maximum number of bytes to disassemble
+  let max_size =
+        case Map.lookupGT addr prev_block_map of
+          Just (next,_) | addrSegment next == addrSegment addr -> next^.addrOffset - addr^.addrOffset
+          _ -> segmentSize (addrSegment addr) - addr^.addrOffset
+  let ab = foundAbstractState finfo
+  trace ("disassembleFn " ++ show (addr, max_size)) $ do
+  (bs, sz, maybeError) <-
+    liftST $ disassembleFn info nonce_gen addr max_size ab
+  seq bs $ do
+  trace ("disassembleFn done" ++ show (addr, max_size)) $ do
+  -- Build state for exploring this.
+  case maybeError of
+    Just e -> do
+      trace ("Failed to disassemble " ++ show e) $ pure ()
+    Nothing -> do
+      pure ()
 
-      withArchConstraints info $ do
-      let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-      transferBlocks sz block_map $ initAbsProcessorState mem (foundAbstractState finfo)
+  let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
+  transferBlocks sz block_map $ initAbsProcessorState mem (foundAbstractState finfo)
 
 ------------------------------------------------------------------------
 -- Main loop
 
 -- | Explore a specific function
-explore_fun_loop :: FunM arch ids ()
-explore_fun_loop = do
+analyzeBlocks :: FunM arch ids ()
+analyzeBlocks = do
   st <- FunM get
   case Set.minView (st^.frontier) of
     Nothing -> return ()
     Just (addr, next_roots) -> do
+      trace ("analyzeBlocks " ++ show addr) $ do
       FunM $ put $ st & frontier .~ next_roots
       transfer addr
-      explore_fun_loop
+      analyzeBlocks
 
 -- | This  the function at the given address
 analyzeFunction :: ArchSegmentedAddr arch
-               -- ^ The address to explore
-            -> CodeAddrReason (ArchAddrWidth arch)
-               -- ^ Reason to provide for why we are exploring function
-               --
-               -- This can be used to figure out why we decided a
-               -- given address identified a code location.
-            -> DiscoveryState arch
-               -- ^ The current binary information.
-            -> DiscoveryState arch
+                   -- ^ The address to explore
+                -> CodeAddrReason (ArchAddrWidth arch)
+                -- ^ Reason to provide for why we are exploring function
+                --
+                -- This can be used to figure out why we decided a
+                -- given address identified a code location.
+                -> DiscoveryState arch
+                -- ^ The current binary information.
+                -> DiscoveryState arch
 analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
+  trace ("analyzeFunction " ++ show addr) $ do
   let info = archInfo s
   let mem  = memory s
 
@@ -832,7 +795,7 @@ analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
                      , _curFunInfo = initFunInfo
                      , _frontier   = Set.singleton addr
                      }
-  fs <- execStateT (unFunM explore_fun_loop) fs0
+  fs <- execStateT (unFunM analyzeBlocks) fs0
   pure $ (fs^.curFunCtx) & funInfo %~ Map.insert addr (Just (Some (fs^.curFunInfo)))
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to

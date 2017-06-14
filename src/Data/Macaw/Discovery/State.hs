@@ -349,6 +349,8 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 ------------------------------------------------------------------------
 -- DiscoveryState
 
+
+
 -- | Information discovered about the program
 data DiscoveryState arch
    = DiscoveryState { memory      :: !(Memory (ArchAddrWidth arch))

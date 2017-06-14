@@ -13,14 +13,13 @@ module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , ReadAddrFn
   , DisassembleFn
-  , archPostCallAbsState
   , archPostSyscallAbsState
   ) where
 
 import Control.Monad.ST
 import Data.Parameterized.Nonce
 
-import Data.Macaw.AbsDomain.AbsState
+import Data.Macaw.AbsDomain.AbsState as AbsState
 import Data.Macaw.CFG
 import Data.Macaw.Memory
 
@@ -46,13 +45,10 @@ type ReadAddrFn w
 type DisassembleFn arch
    = forall ids
    .  NonceGenerator (ST ids) ids
-   -> Memory (ArchAddrWidth arch)
-     -- ^ Segment to read from.
-   -> (SegmentedAddr (ArchAddrWidth arch) -> Bool)
-      -- ^ Predicate that given an offset, tells whether to continue reading given
-      -- and offset in the segment.
    -> SegmentedAddr (ArchAddrWidth arch)
       -- ^ Segment that we are disassembling from
+   -> MemWord (ArchAddrWidth arch)
+      -- ^ Maximum offset for this to read from.
    -> AbsBlockState (ArchReg arch)
       -- ^ Abstract state associated with address that we are disassembling
       -- from.
@@ -72,12 +68,8 @@ data ArchitectureInfo arch
        -- ^ The byte order values are stored in.
      , jumpTableEntrySize :: !(MemWord (ArchAddrWidth arch))
        -- ^ The size of each entry in a jump table.
-     , callStackDelta :: !Integer
-       -- ^ The shift that the stack moves with a call.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disasembling a block.
-     , preserveRegAcrossCall :: !(forall tp . ArchReg arch tp -> Bool)
-       -- ^ Return true if architecture register should be preserved across a call.
      , preserveRegAcrossSyscall :: !(forall tp . ArchReg arch tp -> Bool)
        -- ^ Return true if architecture register should be preserved across a system call.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
@@ -95,19 +87,22 @@ data ArchitectureInfo arch
                             -> ArchStmt arch ids
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
+     , postCallAbsState :: AbsBlockState (ArchReg arch)
+                        -> SegmentedAddr (RegAddrWidth (ArchReg arch))
+                        -> AbsBlockState (ArchReg arch)
+       -- ^ Update the abstract state after a function call returns
+     , identifyReturn :: forall ids
+                      .  [Stmt arch ids]
+                      -> RegState (ArchReg arch) (Value arch ids)
+                      -> Maybe [Stmt arch ids]
+       -- ^ Identify returns to the classifier.
+       --
+       -- Given a list of statements and the final state of the registers, this
+       -- should return 'Just stmts' if this code looks like a function return.
+       -- The stmts should be a subset of the statements, but may remove unneeded memory
+       -- accesses like reading the stack pointer.
      }
 
--- | Return state post call
-archPostCallAbsState :: ArchitectureInfo arch
-                        -- ^ Architecture information
-                     -> AbsBlockState (ArchReg arch)
-                     -> SegmentedAddr (RegAddrWidth (ArchReg arch))
-                     -> AbsBlockState (ArchReg arch)
-archPostCallAbsState info = withArchConstraints info $
-  let params = CallParams { postCallStackDelta = negate (callStackDelta info)
-                          , preserveReg = preserveRegAcrossCall info
-                          }
-   in postCallAbsState params
 
 -- | Return state post call
 archPostSyscallAbsState :: ArchitectureInfo arch
@@ -115,7 +110,7 @@ archPostSyscallAbsState :: ArchitectureInfo arch
                         -> AbsBlockState (ArchReg arch)
                         -> SegmentedAddr (RegAddrWidth (ArchReg arch))
                         -> AbsBlockState (ArchReg arch)
-archPostSyscallAbsState info = withArchConstraints info $ postCallAbsState params
+archPostSyscallAbsState info = withArchConstraints info $ AbsState.absEvalCall params
   where params = CallParams { postCallStackDelta = 0
                             , preserveReg = preserveRegAcrossSyscall info
                             }

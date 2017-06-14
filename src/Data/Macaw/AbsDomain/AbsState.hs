@@ -19,7 +19,7 @@ module Data.Macaw.AbsDomain.AbsState
   , absRegState
   , absStackHasReturnAddr
   , CallParams(..)
-  , postCallAbsState
+  , absEvalCall
   , AbsBlockStack
   , StackEntry(..)
   , ArchAbsValue
@@ -1263,16 +1263,18 @@ data CallParams (r :: Type -> *)
                 }
 
 -- | Return state post call
-postCallAbsState :: forall r
+absEvalCall :: forall r
                  .  ( RegisterInfo r
                     , HasRepr r TypeRepr
                     )
                  => CallParams r
+                    -- ^ Configuration
                  -> AbsBlockState r
+                    -- ^ State before call
                  -> SegmentedAddr (RegAddrWidth r)
                     -- ^ Address we are jumping to
                  -> AbsBlockState r
-postCallAbsState params ab0 addr =
+absEvalCall params ab0 addr =
     AbsBlockState { _absRegState = mkRegState regFn
                   , _startAbsStack = ab0^.startAbsStack
                   , _initIndexBounds = Jmp.arbitraryInitialBounds

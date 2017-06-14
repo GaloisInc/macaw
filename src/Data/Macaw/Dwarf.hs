@@ -1160,9 +1160,7 @@ dwarfInfoFromElf e = do
                               , dsAbbrevSection = debug_abbrev
                               , dsStrSection    = debug_str
                               }
-      let w = case Elf.elfClass e of
-                Elf.ELFCLASS32 -> 4
-                Elf.ELFCLASS64 -> 8
+      let w = fromIntegral $ Elf.elfClassByteWidth (Elf.elfClass e)
       let end =
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian

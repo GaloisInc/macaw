@@ -269,14 +269,15 @@ data SymbolRef = SymbolRef { symbolName :: !BS.ByteString
                            }
 
 -- | Defines a portion of a segment.
-data SegmentRange w
+--
+-- The parameter denotes the width of a memory address.
+data SegmentRange (w :: Nat)
    = ByteRegion !BS.ByteString
-   | RelocatableAddr !SegmentIndex !(MemWord w)
+     -- ^ A region with specificed bytes
    | SymbolicRef !SymbolRef
 
 rangeSize :: forall w . MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
-rangeSize (RelocatableAddr _ w) = fromIntegral (addrSize w)
 rangeSize (SymbolicRef _) = fromIntegral (addrSize (error "rangeSize nat evaluated" :: NatRepr w))
 
 
@@ -284,8 +285,6 @@ instance Show (SegmentRange w) where
   showsPrec _ (ByteRegion bs) = \s -> foldr ppByte s (BS.unpack bs)
     where ppByte w | w < 16    = showChar '0' . showHex w
                    | otherwise = showHex w
-  showsPrec _ (RelocatableAddr i o)  =
-    showString "(seg: " . shows i . showString ", off: " . shows o . showChar ')'
   showsPrec _ (SymbolicRef s) = shows (BSC.unpack (symbolName s))
 
   showList [] = id
@@ -334,7 +333,6 @@ contentsAfter off (SegmentContents m) = do
         Just ((pre_off, ByteRegion bs),_) ->
           let v = ByteRegion (BS.drop (fromIntegral (off - pre_off)) bs)
            in Just $ v : Map.elems post
-        Just ((_, RelocatableAddr{}),_) -> Nothing
         Just ((_, SymbolicRef{}),_) -> Nothing
 
 contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
@@ -497,10 +495,6 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
           let seg_val =  SegmentedAddr value_seg (val - base)
            in [(addr,seg_val)]
         _ -> []
-    RelocatableAddr idx value_offset ->
-      case lookupSegment mem idx of
-        Just value_seg -> [(addr, SegmentedAddr value_seg value_offset)]
-        Nothing -> error "memAsAddrPairs found segment without valid index."
     SymbolicRef{} -> []
 
 -- | Get executable segments.
@@ -538,16 +532,6 @@ readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
                           , _addrOffset = val - base
                           }
           _ -> Left (InvalidAddr addr)
-
-    -- We encountered a relocat
-    Just (MemWord offset, RelocatableAddr idx a)
-      | offset == 0 ->
-          case lookupSegment mem idx of
-             Just seg -> Right (SegmentedAddr seg a)
-             Nothing -> error $ "Read address given invalid segment index."
-
-      | otherwise ->
-        Left (UnalignedRelocation addr)
 
     _ | otherwise ->
         Left (AccessViolation addr)
