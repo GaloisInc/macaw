@@ -23,6 +23,7 @@ This provides information about code discovered in binaries.
 module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState
+       , State.emptyDiscoveryState
        , State.memory
        , State.exploredFunctions
        , State.symbolNames
@@ -39,6 +40,7 @@ module Data.Macaw.Discovery
        , State.parsedBlocks
          -- * SymbolAddrMap
        , State.SymbolAddrMap
+       , State.emptySymbolAddrMap
        , State.symbolAddrMap
        , State.symbolAddrs
        ) where

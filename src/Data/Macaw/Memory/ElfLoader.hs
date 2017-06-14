@@ -14,15 +14,15 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
-  , ElfWordWidth
-  , cancelElfWordType
-  , cancelElfWordWidth
   , LoadStyle(..)
   , LoadOptions(..)
   , memoryForElf
     -- * High-level exports
   , readElf
   , loadExecutable
+    -- * Symbol resolution utilities
+  , resolvedSegmentedElfFuncSymbols
+  , ppElfUnresolvedSymbols
   ) where
 
 import           Control.Lens
@@ -32,6 +32,7 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
+import           Data.Either (partitionEithers)
 import           Data.ElfEdit
 import           Data.Foldable
 import           Data.IntervalMap.Strict (Interval(..), IntervalMap)
@@ -41,9 +42,9 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Some
 import qualified Data.Vector as V
-import           Data.Word
-import           GHC.TypeLits
+import           Numeric (showHex)
 import           System.IO
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
@@ -59,7 +60,7 @@ sliceL (i,c) = L.take (fromIntegral c) . L.drop (fromIntegral i)
 -- address and section contents.
 --
 -- The base address is expressed in terms of the underlying memory segment.
-type SectionIndexMap v w = Map ElfSectionIndex (SegmentedAddr w, ElfSection v)
+type SectionIndexMap w = Map ElfSectionIndex (SegmentedAddr w, ElfSection (ElfWordType w))
 
 ------------------------------------------------------------------------
 -- Flag conversion
@@ -133,14 +134,14 @@ byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
                 post   = L.drop (fromIntegral (off + ptrSize)) contents
 
 -- | Return a memory segment for elf segment if it loadable.
-memSegmentForElfSegment :: (Integral v, MemWidth w)
+memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         => LoadOptions
                         -> SegmentIndex
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
                         -> RelocMap (MemWord w)
                            -- ^ Relocation map
-                        -> Phdr v
+                        -> Phdr w
                            -- ^ Program header entry
                         -> MemSegment w
 memSegmentForElfSegment opt idx contents relocMap phdr = mseg
@@ -169,36 +170,36 @@ memSegmentForElfSection idx s = mseg
 ------------------------------------------------------------------------
 -- MemLoader
 
-data MemLoaderState v w = MLS { _mlsIndex :: !SegmentIndex
-                              , _mlsMemory :: !(Memory w)
-                              , _mlsIndexMap :: !(SectionIndexMap v w)
-                              }
+data MemLoaderState w = MLS { _mlsIndex :: !SegmentIndex
+                            , _mlsMemory :: !(Memory w)
+                            , _mlsIndexMap :: !(SectionIndexMap w)
+                            }
 
-mlsIndex :: Simple Lens (MemLoaderState v w) SegmentIndex
+mlsIndex :: Simple Lens (MemLoaderState w) SegmentIndex
 mlsIndex = lens _mlsIndex (\s v -> s { _mlsIndex = v })
 
-mlsMemory :: Simple Lens (MemLoaderState v w) (Memory w)
+mlsMemory :: Simple Lens (MemLoaderState w) (Memory w)
 mlsMemory = lens _mlsMemory (\s v -> s { _mlsMemory = v })
 
-mlsIndexMap :: Simple Lens (MemLoaderState v w) (SectionIndexMap v w)
+mlsIndexMap :: Simple Lens (MemLoaderState w) (SectionIndexMap w)
 mlsIndexMap = lens _mlsIndexMap (\s v -> s { _mlsIndexMap = v })
 
 relaWidthOfAddr :: AddrWidthRepr w -> RelaWidth w
 relaWidthOfAddr Addr32 = Rela32
 relaWidthOfAddr Addr64 = Rela64
 
-initState :: forall w . AddrWidthRepr w -> MemLoaderState (ElfWordType w) w
+initState :: forall w . AddrWidthRepr w -> MemLoaderState w
 initState w = MLS { _mlsIndex = 0
                   , _mlsMemory = emptyMemory w
                   , _mlsIndexMap = Map.empty
                   }
 
-memLoaderPair :: MemLoaderState v w -> (SectionIndexMap v w, Memory w)
+memLoaderPair :: MemLoaderState w -> (SectionIndexMap w, Memory w)
 memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
 
-type MemLoader v w = StateT (MemLoaderState v w) (Except String)
+type MemLoader w = StateT (MemLoaderState w) (Except String)
 
-loadMemSegment :: MemWidth w => String -> MemSegment w -> MemLoader v w ()
+loadMemSegment :: MemWidth w => String -> MemSegment w -> MemLoader w ()
 loadMemSegment nm seg =
   StateT $ \mls -> do
     case insertMemSegment seg (mls^.mlsMemory) of
@@ -287,18 +288,13 @@ mkSymbolRef (sym, mverId) =
             , symbolVersion = mkSymbolVersion <$> mverId
             }
 
--- | Return the width of an elf word.
-type family ElfWordWidth (w :: *) :: Nat where
-  ElfWordWidth Word32 = 32
-  ElfWordWidth Word64 = 64
-
 -- | Creates a relocation map from the contents of a dynamic section.
 relocMapOfDynamic :: ElfData
                   -> RelaWidth w
                   -> ElfMachine
-                  -> VirtAddrMap (ElfWordType w)
+                  -> VirtAddrMap w
                   -> L.ByteString -- ^ Contents of .dynamic section
-                  -> MemLoader (ElfWordType w) w (RelocMap (MemWord w))
+                  -> MemLoader w (RelocMap (MemWord w))
 relocMapOfDynamic d w mach virtMap dynContents =
   case (w, mach) of
     (Rela64, EM_X86_64) -> do
@@ -316,15 +312,16 @@ relocMapOfDynamic d w mach virtMap dynContents =
 -- Elf segment loading
 
 -- | Load an elf file into memory.
-insertElfSegment :: (Integral v, MemWidth w)
-                 => LoadOptions
-                 -> ElfFileSectionMap v
+insertElfSegment :: LoadOptions
+                 -> ElfFileSectionMap (ElfWordType w)
                  -> L.ByteString
                  -> RelocMap (MemWord w)
                     -- ^ Relocations to apply in loading section.
-                 -> Phdr v
-                 -> MemLoader v w ()
+                 -> Phdr w
+                 -> MemLoader w ()
 insertElfSegment opt shdrMap contents relocMap phdr = do
+  w <- uses mlsMemory memAddrWidth
+  reprConstraints w $ do
   idx <- use mlsIndex
   mlsIndex .= idx + 1
   let seg = memSegmentForElfSegment opt idx contents relocMap phdr
@@ -345,32 +342,25 @@ insertElfSegment opt shdrMap contents relocMap phdr = do
       _ -> fail "Unexpected shdr interval"
 
 
-elfAddrWidth :: ElfClass v -> AddrWidthRepr (ElfWordWidth v)
+elfAddrWidth :: ElfClass w -> AddrWidthRepr w
 elfAddrWidth ELFCLASS32 = Addr32
 elfAddrWidth ELFCLASS64 = Addr64
 
-cancelElfWordType :: ElfClass v
-                  -> ((ElfWordType (ElfWordWidth v) ~ v, Integral v, Bits v, MemWidth (ElfWordWidth v)) => a)
-                  -> a
-cancelElfWordType ELFCLASS32 x = x
-cancelElfWordType ELFCLASS64 x = x
+reprConstraints :: AddrWidthRepr w -> ((Bits (ElfWordType w), Integral (ElfWordType w), MemWidth w) => a) -> a
+reprConstraints Addr32 x = x
+reprConstraints Addr64 x = x
 
-cancelElfWordWidth :: AddrWidthRepr w
-                   -> ((ElfWordWidth (ElfWordType w) ~ w) => a)
-                   -> a
-cancelElfWordWidth Addr32 x = x
-cancelElfWordWidth Addr64 x = x
 
 -- | Load an elf file into memory.  This uses the Elf segments for loading.
 memoryForElfSegments
-  :: forall v
+  :: forall w
      -- | Options that affect loading
   .  LoadOptions
-  -> Elf v
-  -> Either String (SectionIndexMap v (ElfWordWidth v), Memory (ElfWordWidth v))
-memoryForElfSegments opt e =
-  cancelElfWordType (elfClass e) $ do
+  -> Elf w
+  -> Either String (SectionIndexMap w, Memory w)
+memoryForElfSegments opt e = do
   let w = elfAddrWidth (elfClass e)
+  reprConstraints w $ do
   runExcept $ fmap memLoaderPair $ flip execStateT (initState w) $ do
     let l   = elfLayout e
     let d   = elfLayoutData l
@@ -386,7 +376,7 @@ memoryForElfSegments opt e =
            in relocMapOfDynamic d (relaWidthOfAddr w) (elfMachine e) virtMap dynContents
         _ -> throwError "Multiple dynamic sections"
 
-    let intervals :: ElfFileSectionMap v
+    let intervals :: ElfFileSectionMap (ElfWordType w)
         intervals = IMap.fromList $
           [ (IntervalCO start end, sec)
           | shdr <- Map.elems (l^.shdrs)
@@ -401,10 +391,11 @@ memoryForElfSegments opt e =
 -- Elf section loading
 
 -- | Load an elf file into memory.
-insertElfSection :: (Integral v, Bits v, MemWidth w)
-                 => ElfSection v
-                 -> MemLoader v w ()
-insertElfSection sec =
+insertElfSection :: ElfSection (ElfWordType w)
+                 -> MemLoader w ()
+insertElfSection sec = do
+  w <- uses mlsMemory memAddrWidth
+  reprConstraints w $ do
   when (elfSectionFlags sec `hasPermissions` shf_alloc) $ do
     idx <- use mlsIndex
     mlsIndex .= idx + 1
@@ -418,9 +409,9 @@ insertElfSection sec =
 --
 -- Normally, Elf uses segments for loading, but the segment
 -- information tends to be more precise.
-memoryForElfSections :: Elf v
-                     -> Either String (SectionIndexMap v (ElfWordWidth v), Memory (ElfWordWidth v))
-memoryForElfSections e = cancelElfWordType (elfClass e) $ do
+memoryForElfSections :: Elf w
+                     -> Either String (SectionIndexMap w, Memory w)
+memoryForElfSections e = do
   let w = elfAddrWidth (elfClass e)
   runExcept $ fmap memLoaderPair $ flip execStateT (initState w) $ do
     traverseOf_ elfSections insertElfSection e
@@ -433,8 +424,8 @@ memoryForElfSections e = cancelElfWordType (elfClass e) $ do
 -- Normally, Elf uses segments for loading, but the segment
 -- information tends to be more precise.
 memoryForElf :: LoadOptions
-             -> Elf v
-             -> Either String (SectionIndexMap v (ElfWordWidth v), Memory (ElfWordWidth v))
+             -> Elf w
+             -> Either String (SectionIndexMap w, Memory w)
 memoryForElf opt e =
   case loadStyle opt of
     LoadBySection -> memoryForElfSections e
@@ -471,3 +462,40 @@ loadExecutable opt path = do
   case se of
     Elf64 e -> either fail (return . Some . snd) $ memoryForElf opt e
     Elf32 e -> either fail (return . Some . snd) $ memoryForElf opt e
+
+------------------------------------------------------------------------
+-- Elf symbol utilities
+
+-- | The takes the elf symbol table map and attempts to identify segmented addresses for each one.
+--
+-- It returns a two maps, the first contains entries that could not be resolved; the second
+-- contains those that could.
+resolvedSegmentedElfFuncSymbols :: forall w
+                                .  Memory w
+                                -> [ElfSymbolTableEntry (ElfWordType w)]
+                                -> (Map (MemWord w) [BS.ByteString], Map (SegmentedAddr w) [BS.ByteString])
+resolvedSegmentedElfFuncSymbols mem entries = reprConstraints (memAddrWidth mem) $
+  let -- Filter out just function entries
+     isCodeFuncSymbol ste = steType ste == STT_FUNC
+                         && isCodeAddr mem (fromIntegral (steValue ste))
+     func_entries = filter isCodeFuncSymbol entries
+     -- Build absolute address map
+     absAddrMap :: Map (MemWord w) [BS.ByteString]
+     absAddrMap = Map.fromListWith (++) $ [ (fromIntegral (steValue ste), [steName ste]) | ste <- func_entries ]
+     -- Resolve addresses
+     resolve (v,nms) =
+       case absoluteAddrSegment mem v of
+         Nothing -> Left  (v,  nms)
+         Just sv -> Right (sv, nms)
+     (u,r) = partitionEithers $ resolve <$> Map.toList absAddrMap
+  in (Map.fromList u, Map.fromList r)
+
+ppElfUnresolvedSymbols :: forall w
+                       .  MemWidth w
+                       => Map (MemWord w) [BS.ByteString]
+                       -> Doc
+ppElfUnresolvedSymbols m =
+    text "Could not resolve addresses of ELF symbols" <$$>
+    indent 2 (vcat $ pp <$> Map.toList m)
+  where pp :: (MemWord w, [BS.ByteString]) -> Doc
+        pp (w, nms) = text (showHex w ":") <+> hsep (text . BSC.unpack <$> nms)

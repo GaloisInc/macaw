@@ -24,6 +24,7 @@ module Data.Macaw.Discovery.State
   , ParsedBlockRegion(..)
      -- * SymbolAddrMap
   , SymbolAddrMap
+  , emptySymbolAddrMap
   , symbolAddrsAsMap
   , symbolAddrMap
   , symbolAddrs
@@ -117,6 +118,10 @@ data FoundAddr arch
 -- | Map from addresses to the associated symbol name.
 newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (SegmentedAddr w) BSC.ByteString }
 
+-- | Return an empty symbol addr map
+emptySymbolAddrMap :: SymbolAddrMap w
+emptySymbolAddrMap = SymbolAddrMap Map.empty
+
 -- | Return addresses in symbol name map
 symbolAddrs :: SymbolAddrMap w -> [SegmentedAddr w]
 symbolAddrs = Map.keys . symbolAddrsAsMap
@@ -132,6 +137,7 @@ checkSymbolName sym_nm =
     [] -> Left "Empty symbol name"
     (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
           | otherwise -> Right ()
+
 
 -- | This creates a symbol addr map after checking the correctness of
 -- symbol names.
