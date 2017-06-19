@@ -762,7 +762,8 @@ transfer addr = do
 ------------------------------------------------------------------------
 -- Main loop
 
--- | Explore a specific function
+-- | Loop that repeatedly explore blocks until we have explored blocks
+-- on the frontier.
 analyzeBlocks :: FunM arch ids ()
 analyzeBlocks = do
   st <- FunM get
@@ -774,11 +775,15 @@ analyzeBlocks = do
       transfer addr
       analyzeBlocks
 
--- | This  the function at the given address
+-- | This analyzes the function at a given address, possibly
+-- discovering new candidates.
+--
+-- This returns the updated state and the discovered control flow
+-- graph for this function.
 analyzeFunction :: ArchSegmentedAddr arch
                    -- ^ The address to explore
                 -> CodeAddrReason (ArchAddrWidth arch)
-                -- ^ Reason to provide for why we are exploring function
+                -- ^ Reason to provide for why we are analyzing this function
                 --
                 -- This can be used to figure out why we decided a
                 -- given address identified a code location.
