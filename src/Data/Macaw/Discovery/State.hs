@@ -61,7 +61,7 @@ import qualified Data.ByteString.Char8 as BSC
 import           Data.Char (isDigit)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import           Data.Maybe (fromMaybe, mapMaybe)
+import           Data.Maybe (fromMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Set (Set)
@@ -98,8 +98,9 @@ data CodeAddrReason w
      -- ^ Added because the address split this block after it had been disassembled.
    | InterProcedureJump !(SegmentedAddr w)
      -- ^ A jump from an address in another function.
+   | UserRequest
+     -- ^ The user requested that we analyze this address as a function.
   deriving (Show)
-
 
 ------------------------------------------------------------------------
 -- FoundAddr
@@ -369,20 +370,18 @@ data DiscoveryState arch
                                              (GlobalDataInfo (ArchSegmentedAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
+                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
                      -- ^ Map from function addresses to discovered information about function
+                   , _unexploredFunctions :: !(Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
+                     -- ^ This maps addresses that have been marked as functions, but not yet analyzed to
+                     -- the reason they are analyzed.
                      --
-                     -- If the binding is bound value has been explored it is a DiscoveryFunInfo.  If it
-                     -- has been discovered and added to the unexploredFunctions below, then it is bound to
-                     -- 'Nothing'.
-                   , _unexploredFunctions :: ![(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
-                     -- ^ A list of addresses that we have marked as function entries, but not yet
-                     -- explored.
+                     -- The keys in this map and `_funInfo` should be mutually disjoint.
                    }
 
 -- | Return list of all functions discovered so far.
 exploredFunctions :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]
-exploredFunctions i = mapMaybe id $ Map.elems $ i^.funInfo
+exploredFunctions i = Map.elems $ i^.funInfo
 
 withDiscoveryArchConstraints :: DiscoveryState arch
                              -> (ArchConstraints arch => a)
@@ -393,9 +392,8 @@ ppDiscoveryStateBlocks :: DiscoveryState arch
                       -> Doc
 ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
     vcat $ f <$> Map.elems (info^.funInfo)
-  where f :: ArchConstraints arch => Maybe (Some (DiscoveryFunInfo arch)) -> Doc
-        f (Just (Some v)) = pretty v
-        f Nothing = PP.empty
+  where f :: ArchConstraints arch => Some (DiscoveryFunInfo arch) -> Doc
+        f (Some v) = pretty v
 
 -- | Create empty discovery information.
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
@@ -411,8 +409,8 @@ emptyDiscoveryState mem symbols info =
   , symbolNames        = symbols
   , archInfo           = info
   , _globalDataMap     = Map.empty
-  , _funInfo           = Map.empty
-  , _unexploredFunctions = []
+  , _funInfo             = Map.empty
+  , _unexploredFunctions = Map.empty
   }
 
 -- | Map each jump table start to the address just after the end.
@@ -423,11 +421,11 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions :: Simple Lens (DiscoveryState arch)
-                                 [(ArchSegmentedAddr arch, CodeAddrReason (ArchAddrWidth arch))]
+                              (Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentedAddr arch) (Maybe (Some (DiscoveryFunInfo arch))))
+funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 ------------------------------------------------------------------------

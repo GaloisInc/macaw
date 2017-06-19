@@ -24,15 +24,18 @@ module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState
        , State.emptyDiscoveryState
+       , State.archInfo
        , State.memory
+       , State.funInfo
        , State.exploredFunctions
        , State.symbolNames
        , State.ppDiscoveryStateBlocks
-       , cfgFromAddrs
-       , markAddrsAsFunction
-       , analyzeFunction
-       , exploreMemPointers
-       , analyzeDiscoveredFunctions
+       , Data.Macaw.Discovery.cfgFromAddrs
+       , Data.Macaw.Discovery.markAddrsAsFunction
+       , State.CodeAddrReason(..)
+       , Data.Macaw.Discovery.analyzeFunction
+       , Data.Macaw.Discovery.exploreMemPointers
+       , Data.Macaw.Discovery.analyzeDiscoveredFunctions
          -- * DiscoveryFunInfo
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
@@ -173,8 +176,7 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
   | Map.member addr (s^.funInfo) = s
-  | otherwise = s & funInfo           %~ Map.insert addr Nothing
-                  & unexploredFunctions %~ (:) (addr, rsn)
+  | otherwise = s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
 
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
@@ -326,7 +328,6 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
           Left  msg -> Left (CouldNotFindBound  msg jump_index)
        else
         error $ "Jump table range is not in readonly memory"
---    TopV -> Left UpperBoundUndefined
     abs_value -> Left (CouldNotInterpretAbsValue abs_value)
 
 
@@ -783,22 +784,28 @@ analyzeFunction :: ArchSegmentedAddr arch
                 -- given address identified a code location.
                 -> DiscoveryState arch
                 -- ^ The current binary information.
-                -> DiscoveryState arch
-analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
-  trace ("analyzeFunction " ++ show addr) $ do
-  let info = archInfo s
-  let mem  = memory s
+                -> (DiscoveryState arch, Some (DiscoveryFunInfo arch))
+analyzeFunction addr rsn s =
+  case Map.lookup addr (s^.funInfo) of
+    Just finfo -> (s, finfo)
+    Nothing -> do
+      withGlobalSTNonceGenerator $ \gen -> do
+      let info = archInfo s
+      let mem  = memory s
 
-  let initFunInfo = initDiscoveryFunInfo info mem (symbolNames s) addr rsn
+      let initFunInfo = initDiscoveryFunInfo info mem (symbolNames s) addr rsn
 
-  let fs0 = FunState { funNonceGen = gen
-                     , curFunAddr  = addr
-                     , _curFunCtx  = s
-                     , _curFunInfo = initFunInfo
-                     , _frontier   = Set.singleton addr
-                     }
-  fs <- execStateT (unFunM analyzeBlocks) fs0
-  pure $ (fs^.curFunCtx) & funInfo %~ Map.insert addr (Just (Some (fs^.curFunInfo)))
+      let fs0 = FunState { funNonceGen = gen
+                         , curFunAddr  = addr
+                         , _curFunCtx  = s
+                         , _curFunInfo = initFunInfo
+                         , _frontier   = Set.singleton addr
+                         }
+      fs <- execStateT (unFunM analyzeBlocks) fs0
+      let finfo = Some (fs^.curFunInfo)
+      let s' = (fs^.curFunCtx) & funInfo             %~ Map.insert addr finfo
+                               & unexploredFunctions %~ Map.delete addr
+      pure (s', finfo)
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
@@ -806,12 +813,10 @@ analyzeFunction addr rsn s = withGlobalSTNonceGenerator $ \gen -> do
 analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
   -- If local block frontier is empty, then try function frontier.
-  case info^.unexploredFunctions of
-    [] -> info
-    (addr, rsn) : next_roots ->
-      info & unexploredFunctions .~ next_roots
-           & analyzeFunction addr rsn
-           & analyzeDiscoveredFunctions
+  case Map.lookupMin (info^.unexploredFunctions) of
+    Nothing -> info
+    Just (addr, rsn) ->
+      analyzeDiscoveredFunctions $! fst (analyzeFunction addr rsn info)
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: SegmentedAddr w -> SegmentedAddr w -> Bool
@@ -832,9 +837,7 @@ exploreMemPointers :: [(ArchSegmentedAddr arch, ArchSegmentedAddr arch)]
                    -> DiscoveryState arch
 exploreMemPointers mem_words info =
   flip execState info $ do
-    let notAlreadyFunction s (_a, v) = not (Map.member v (s^.funInfo))
     let mem_addrs =
-          filter (notAlreadyFunction info) $
           filter (uncurry isDataCodePointer) $
           mem_words
     mapM_ (modify . addMemCodePointer) mem_addrs
