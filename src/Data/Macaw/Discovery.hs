@@ -519,7 +519,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
         newFunctionAddrs %= (++ addrs)
         pure ParsedBlock { pblockLabel = lbl_idx
                          , pblockStmts = toList prev_stmts
-                         , pblockState = regs'
                          , pblockTerm  = ParsedCall s' (Just ret)
                          }
 
@@ -529,7 +528,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
 
         pure ParsedBlock { pblockLabel = lbl_idx
                          , pblockStmts = stmts
-                         , pblockState = regs'
                          , pblockTerm = ParsedReturn s'
                          }
 
@@ -547,7 +545,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
          intraJumpTargets %= ((tgt_addr, abst'):)
          pure ParsedBlock { pblockLabel = lbl_idx
                           , pblockStmts = stmts
-                          , pblockState = regs'
                           , pblockTerm  = ParsedJump s' tgt_addr
                           }
       -- Block ends with what looks like a jump table.
@@ -560,7 +557,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
             mapM_ (recordWriteStmt arch_info mem regs') stmts
             pure ParsedBlock { pblockLabel = lbl_idx
                              , pblockStmts = stmts
-                             , pblockState = regs'
                              , pblockTerm  = ClassifyFailure s'
                              }
           Right read_end -> do
@@ -600,7 +596,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
             read_addrs <- resolveJump [] 0
             pure ParsedBlock { pblockLabel = lbl_idx
                              , pblockStmts = stmts
-                             , pblockState = regs'
                              , pblockTerm = ParsedLookupTable s' jump_idx (V.fromList read_addrs)
                              }
 
@@ -622,7 +617,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
 
         pure ParsedBlock { pblockLabel = lbl_idx
                          , pblockStmts = stmts
-                         , pblockState = regs'
                          , pblockTerm  = ParsedCall s' Nothing
                          }
 
@@ -632,11 +626,10 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
           mapM_ (recordWriteStmt arch_info mem regs') stmts
           pure ParsedBlock { pblockLabel = lbl_idx
                            , pblockStmts = stmts
-                           , pblockState = regs'
                            , pblockTerm  = ClassifyFailure s'
                            }
 
--- | This evalutes the statements in a block to expand the information known
+-- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
 parseBlocks :: ParseContext arch ids
                -- ^ Context for parsing blocks.
@@ -675,7 +668,6 @@ parseBlocks ctx ((b,regs):rest) = do
 
       let pb = ParsedBlock { pblockLabel = idx
                            , pblockStmts = blockStmts b
-                           , pblockState = regs'
                            , pblockTerm  = ParsedBranch c (labelIndex lb) (labelIndex rb)
                            }
       pblockMap %= Map.insert idx pb
@@ -695,7 +687,6 @@ parseBlocks ctx ((b,regs):rest) = do
           intraJumpTargets %= ((addr, post):)
           let pb = ParsedBlock { pblockLabel = idx
                                , pblockStmts = blockStmts b
-                               , pblockState = regs'
                                , pblockTerm  = ParsedSyscall s' addr
                                }
           pblockMap %= Map.insert idx pb
@@ -710,10 +701,8 @@ parseBlocks ctx ((b,regs):rest) = do
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg -> do
-      let regs' = absEvalStmts arch_info regs (blockStmts b)
       let pb = ParsedBlock { pblockLabel = idx
                            , pblockStmts = blockStmts b
-                           , pblockState = regs'
                            , pblockTerm = ParsedTranslateError msg
                            }
       pblockMap %= Map.insert idx pb

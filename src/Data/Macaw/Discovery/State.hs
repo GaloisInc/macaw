@@ -189,6 +189,8 @@ data ParsedTermStmt arch ids
      -- ^ A return with the given registers.
    | ParsedBranch !(Value arch ids BoolType) !Word64 !Word64
      -- ^ A branch (i.e., BlockTerm is Branch)
+   | ParsedIte !(Value arch ids BoolType) !(ParsedBlock arch ids) !(ParsedBlock arch ids)
+     -- ^ An if-then-else
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
                    !(ArchSegmentedAddr arch)
      -- ^ A system call with the registers prior to call and given return address.
@@ -199,7 +201,14 @@ data ParsedTermStmt arch ids
 
 deriving instance ArchConstraints arch => Show (ParsedTermStmt arch ids)
 
-instance (OrdF (ArchReg arch), ShowF (ArchReg arch)) => Pretty (ParsedTermStmt arch ids) where
+-- | Pretty print the block contents indented inside brackets.
+ppBlockIndented :: ArchConstraints arch => ParsedBlock arch ids -> Doc
+ppBlockIndented b =
+  text "{" <$$>
+  indent 2 (vcat (pretty <$> pblockStmts b) <$$> pretty (pblockTerm b)) <$$>
+  text "}"
+
+instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
   pretty (ParsedCall s Nothing) =
     text "tail call" <$$>
     indent 2 (pretty s)
@@ -218,6 +227,10 @@ instance (OrdF (ArchReg arch), ShowF (ArchReg arch)) => Pretty (ParsedTermStmt a
     indent 2 (pretty s)
   pretty (ParsedBranch c t f) =
     text "branch" <+> pretty c <+> text (show t) <+> text (show f)
+  pretty (ParsedIte c t f) =
+    text "ite" <+> pretty c <$$>
+    ppBlockIndented t <$$>
+    ppBlockIndented f
   pretty (ParsedSyscall s addr) =
     text "syscall, return to" <+> text (show addr) <$$>
     indent 2 (pretty s)
@@ -233,8 +246,6 @@ instance (OrdF (ArchReg arch), ShowF (ArchReg arch)) => Pretty (ParsedTermStmt a
 data ParsedBlock arch ids
    = ParsedBlock { pblockLabel :: !Word64
                  , pblockStmts :: !([Stmt arch ids])
-                 , pblockState :: !(AbsProcessorState (ArchReg arch) ids)
-                   -- ^ State of processor prior to term statement.
                  , pblockTerm  :: !(ParsedTermStmt arch ids)
                  }
 
