@@ -17,8 +17,7 @@ discovery.
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Discovery.State
-  ( lookupParsedBlock
-  , GlobalDataInfo(..)
+  ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
   , ParsedBlock(..)
   , ParsedBlockRegion(..)
@@ -187,8 +186,6 @@ data ParsedTermStmt arch ids
      -- to, and the possible addresses.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
      -- ^ A return with the given registers.
-   | ParsedBranch !(Value arch ids BoolType) !Word64 !Word64
-     -- ^ A branch (i.e., BlockTerm is Branch)
    | ParsedIte !(Value arch ids BoolType) !(ParsedBlock arch ids) !(ParsedBlock arch ids)
      -- ^ An if-then-else
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
@@ -225,8 +222,6 @@ instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
   pretty (ParsedReturn s) =
     text "return" <$$>
     indent 2 (pretty s)
-  pretty (ParsedBranch c t f) =
-    text "branch" <+> pretty c <+> text (show t) <+> text (show f)
   pretty (ParsedIte c t f) =
     text "ite" <+> pretty c <$$>
     ppBlockIndented t <$$>
@@ -277,15 +272,16 @@ data ParsedBlockRegion arch ids
                        , regionAbstractState :: !(AbsBlockState (ArchReg arch))
                          -- ^ Abstract state prior to the execution of
                          -- this region.
-                       , regionBlockMap :: !(Map Word64 (ParsedBlock arch ids))
-                         -- ^ Map from labelIndex to associated block.
+                       , regionFirstBlock :: !(ParsedBlock arch ids)
+                         -- ^ Returns the entry block for the region
                        }
+
 deriving instance ArchConstraints arch
   => Show (ParsedBlockRegion arch ids)
 
 instance ArchConstraints arch
       => Pretty (ParsedBlockRegion arch ids) where
-  pretty r = vcat $ ppParsedBlock (regionAddr r) <$> Map.elems (regionBlockMap r)
+  pretty r = ppParsedBlock (regionAddr r) (regionFirstBlock r)
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
@@ -303,14 +299,6 @@ data DiscoveryFunInfo arch ids
 parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
--- | Does a simple lookup in the cfg at a given DecompiledBlock address.
-lookupParsedBlock :: DiscoveryFunInfo arch ids
-                  -> ArchLabel arch
-                  -> Maybe (ParsedBlock arch ids)
-lookupParsedBlock info lbl = do
-  br <- Map.lookup (labelAddr lbl) (info^.parsedBlocks)
-  Map.lookup (labelIndex lbl) (regionBlockMap br)
-
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
     text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
@@ -318,8 +306,6 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 
 ------------------------------------------------------------------------
 -- DiscoveryState
-
-
 
 -- | Information discovered about the program
 data DiscoveryState arch
@@ -336,8 +322,9 @@ data DiscoveryState arch
                    , _funInfo :: !(Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
                      -- ^ Map from function addresses to discovered information about function
                    , _unexploredFunctions :: !(Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ This maps addresses that have been marked as functions, but not yet analyzed to
-                     -- the reason they are analyzed.
+                     -- ^ This maps addresses that have been marked as
+                     -- functions, but not yet analyzed to the reason
+                     -- they are analyzed.
                      --
                      -- The keys in this map and `_funInfo` should be mutually disjoint.
                    }

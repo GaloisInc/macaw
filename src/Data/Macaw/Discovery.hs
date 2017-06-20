@@ -395,17 +395,12 @@ refineProcStateBounds v isTrue ps =
 -- ParseState
 
 data ParseState arch ids =
-  ParseState { _pblockMap :: !(Map Word64 (ParsedBlock arch ids))
-               -- ^ Block m ap
-             , _writtenCodeAddrs :: ![ArchSegmentedAddr arch]
+  ParseState { _writtenCodeAddrs :: ![ArchSegmentedAddr arch]
                -- ^ Addresses marked executable that were written to memory.
              , _intraJumpTargets ::
                  ![(ArchSegmentedAddr arch, AbsBlockState (ArchReg arch))]
              , _newFunctionAddrs :: ![ArchSegmentedAddr arch]
              }
-
-pblockMap :: Simple Lens (ParseState arch ids) (Map Word64 (ParsedBlock arch ids))
-pblockMap = lens _pblockMap (\s v -> s { _pblockMap = v })
 
 writtenCodeAddrs :: Simple Lens (ParseState arch ids) [ArchSegmentedAddr arch]
 writtenCodeAddrs = lens _writtenCodeAddrs (\s v -> s { _writtenCodeAddrs = v })
@@ -631,13 +626,14 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-parseBlocks :: ParseContext arch ids
-               -- ^ Context for parsing blocks.
-            -> [(Block arch ids, AbsProcessorState (ArchReg arch) ids)]
-               -- ^ Queue of blocks to travese
-            -> State (ParseState arch ids) ()
-parseBlocks _ct [] = pure ()
-parseBlocks ctx ((b,regs):rest) = do
+parseBlock :: ParseContext arch ids
+              -- ^ Context for parsing blocks.
+           -> Block arch ids
+              -- ^ Block to parse
+           -> AbsProcessorState (ArchReg arch) ids
+              -- ^ Abstract state at start of block
+           -> State (ParseState arch ids) (ParsedBlock arch ids)
+parseBlock ctx b regs = do
   let mem       = pctxMemory ctx
   let arch_info = pctxArchInfo ctx
   withArchConstraints arch_info $ do
@@ -657,22 +653,17 @@ parseBlocks ctx ((b,regs):rest) = do
       let l_regs = refineProcStateBounds c True $ refineProcState c absTrue regs'
       let r = tryLookupBlock "right branch" src block_map rb
       let r_regs = refineProcStateBounds c False $ refineProcState c absFalse regs'
-      -- We re-transfer the stmts to propagate any changes from
-      -- the above refineProcState.  This could be more efficient by
-      -- tracking what (if anything) changed.  We also might
-      -- need to keep going back and forth until we reach a
-      -- fixpoint
+
       let l_regs' = absEvalStmts arch_info l_regs (blockStmts b)
       let r_regs' = absEvalStmts arch_info r_regs (blockStmts b)
 
+      parsedTrueBlock  <- parseBlock ctx l l_regs'
+      parsedFalseBlock <- parseBlock ctx r r_regs'
 
-      let pb = ParsedBlock { pblockLabel = idx
-                           , pblockStmts = blockStmts b
-                           , pblockTerm  = ParsedBranch c (labelIndex lb) (labelIndex rb)
-                           }
-      pblockMap %= Map.insert idx pb
-
-      parseBlocks ctx ((l, l_regs'):(r, r_regs'):rest)
+      pure $! ParsedBlock { pblockLabel = idx
+                          , pblockStmts = blockStmts b
+                          , pblockTerm  = ParsedIte c parsedTrueBlock parsedFalseBlock
+                          }
 
     Syscall s' -> do
       let regs' = absEvalStmts arch_info regs (blockStmts b)
@@ -685,28 +676,22 @@ parseBlocks ctx ((b,regs):rest) = do
           let post = archPostSyscallAbsState arch_info abst addr
 
           intraJumpTargets %= ((addr, post):)
-          let pb = ParsedBlock { pblockLabel = idx
-                               , pblockStmts = blockStmts b
-                               , pblockTerm  = ParsedSyscall s' addr
-                               }
-          pblockMap %= Map.insert idx pb
-          parseBlocks ctx rest
+          pure $! ParsedBlock { pblockLabel = idx
+                              , pblockStmts = blockStmts b
+                              , pblockTerm  = ParsedSyscall s' addr
+                              }
         _ -> error "Multiple system call addresses."
 
 
     FetchAndExecute s' -> do
-      pb <- parseFetchAndExecute ctx (blockLabel b) (blockStmts b) regs s'
-      pblockMap %= Map.insert idx pb
-      parseBlocks ctx rest
+      parseFetchAndExecute ctx (blockLabel b) (blockStmts b) regs s'
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg -> do
-      let pb = ParsedBlock { pblockLabel = idx
-                           , pblockStmts = blockStmts b
-                           , pblockTerm = ParsedTranslateError msg
-                           }
-      pblockMap %= Map.insert idx pb
-      parseBlocks ctx rest
+      pure $! ParsedBlock { pblockLabel = idx
+                          , pblockStmts = blockStmts b
+                          , pblockTerm = ParsedTranslateError msg
+                          }
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -733,17 +718,16 @@ transferBlocks finfo sz block_map =
                              , pctxAddr     = src
                              , pctxBlockMap = block_map
                              }
-      let ps0 = ParseState { _pblockMap = Map.empty
-                           , _writtenCodeAddrs = []
+      let ps0 = ParseState { _writtenCodeAddrs = []
                            , _intraJumpTargets = []
                            , _newFunctionAddrs = []
                            }
-      let ps = execState (parseBlocks ctx [(b,regs)]) ps0
+      let (pblock, ps) = runState (parseBlock ctx b regs) ps0
       let pb = ParsedBlockRegion { regionAddr = src
                                  , regionReason = foundReason finfo
                                  , regionAbstractState = foundAbstractState finfo
                                  , regionSize = sz
-                                 , regionBlockMap = ps^.pblockMap
+                                 , regionFirstBlock = pblock
                                  }
       curFunBlocks %= Map.insert src pb
       curFunCtx %= markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
