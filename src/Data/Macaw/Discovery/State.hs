@@ -41,14 +41,8 @@ module Data.Macaw.Discovery.State
   , funInfo
   , unexploredFunctions
     -- * DiscoveryFunInfo
-  , DiscoveryFunInfo
-  , initDiscoveryFunInfo
-  , discoveredFunAddr
-  , discoveredFunName
-  , FoundAddr(..)
-  , foundAddrs
+  , DiscoveryFunInfo(..)
   , parsedBlocks
-  , reverseEdges
     -- * CodeAddrRegion
   , CodeAddrReason(..)
     -- ** DiscoveryState utilities
@@ -61,10 +55,8 @@ import qualified Data.ByteString.Char8 as BSC
 import           Data.Char (isDigit)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import           Data.Maybe (fromMaybe)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
-import           Data.Set (Set)
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -101,17 +93,6 @@ data CodeAddrReason w
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Show)
-
-------------------------------------------------------------------------
--- FoundAddr
-
--- | An address that has been found to be reachable.
-data FoundAddr arch
-   = FoundAddr { foundReason :: !(CodeAddrReason (ArchAddrWidth arch))
-                 -- ^ The reason the address was found to be containing code.
-               , foundAbstractState :: !(AbsBlockState (ArchReg arch))
-                 -- ^ The abstract state formed from post-states that reach this address.
-               }
 
 ------------------------------------------------------------------------
 -- SymbolAddrMap
@@ -276,10 +257,17 @@ ppParsedBlock a b =
 -- | A contiguous region of instructions in memory.
 data ParsedBlockRegion arch ids
    = ParsedBlockRegion { regionAddr :: !(ArchSegmentedAddr arch)
+                         -- ^ Address of region
                        , regionSize :: !(ArchAddr arch)
-                       -- ^ The size of the region of memory covered by this.
+                         -- ^ The size of the region of memory covered by this.
+                       , regionReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                          -- ^ Reason that we marked this address as
+                          -- the start of a basic block.
+                       , regionAbstractState :: !(AbsBlockState (ArchReg arch))
+                         -- ^ Abstract state prior to the execution of
+                         -- this region.
                        , regionBlockMap :: !(Map Word64 (ParsedBlock arch ids))
-                       -- ^ Map from labelIndex to associated block.
+                         -- ^ Map from labelIndex to associated block.
                        }
 deriving instance ArchConstraints arch
   => Show (ParsedBlockRegion arch ids)
@@ -291,31 +279,18 @@ instance ArchConstraints arch
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
 
-type ReverseEdgeMap arch = Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch))
-
 -- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
    = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
                         -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
-                      , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
-                        -- ^ Maps fopund address to the pre-state for that block.
                       , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
                         -- ^ Maps an address to the blocks associated with that address.
-                      , _reverseEdges :: !(ReverseEdgeMap arch)
-                       -- ^ Maps each code address to the list of predecessors that
-                       -- affected its abstract state.
                       }
-
-foundAddrs :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (FoundAddr arch))
-foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
 
 parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
-
-reverseEdges :: Simple Lens (DiscoveryFunInfo arch ids) (ReverseEdgeMap arch)
-reverseEdges = lens _reverseEdges (\s v -> s { _reverseEdges = v })
 
 -- | Does a simple lookup in the cfg at a given DecompiledBlock address.
 lookupParsedBlock :: DiscoveryFunInfo arch ids
@@ -324,29 +299,6 @@ lookupParsedBlock :: DiscoveryFunInfo arch ids
 lookupParsedBlock info lbl = do
   br <- Map.lookup (labelAddr lbl) (info^.parsedBlocks)
   Map.lookup (labelIndex lbl) (regionBlockMap br)
-
-initDiscoveryFunInfo :: ArchitectureInfo arch
-                        -- ^ Architecture information
-                     -> Memory (ArchAddrWidth arch)
-                        -- ^ Contents of memory for initializing abstract state.
-                     -> SymbolAddrMap (ArchAddrWidth arch)
-                        -- ^ The symbol map for computing the name
-                     -> ArchSegmentedAddr arch
-                        -- ^ Address of this function
-                     -> CodeAddrReason (ArchAddrWidth arch)
-                        -- ^ Reason this function was discovered
-                     -> DiscoveryFunInfo arch ids
-initDiscoveryFunInfo info mem symMap addr rsn =
-  let nm = fromMaybe (BSC.pack (show addr)) (symbolAtAddr addr symMap)
-      faddr = FoundAddr { foundReason = rsn
-                        , foundAbstractState = mkInitialAbsState info mem addr
-                        }
-   in DiscoveryFunInfo { discoveredFunAddr = addr
-                       , discoveredFunName = nm
-                       , _foundAddrs = Map.singleton addr faddr
-                       , _parsedBlocks = Map.empty
-                       , _reverseEdges = Map.empty
-                       }
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =

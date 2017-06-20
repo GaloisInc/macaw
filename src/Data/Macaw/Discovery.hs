@@ -52,6 +52,7 @@ import           Control.Exception
 import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
+import qualified Data.ByteString.Char8 as BSC
 import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -185,6 +186,18 @@ markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                     -> DiscoveryState arch
 markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
 
+
+------------------------------------------------------------------------
+-- FoundAddr
+
+-- | An address that has been found to be reachable.
+data FoundAddr arch
+   = FoundAddr { foundReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                 -- ^ The reason the address was found to be containing code.
+               , foundAbstractState :: !(AbsBlockState (ArchReg arch))
+                 -- ^ The abstract state formed from post-states that reach this address.
+               }
+
 ------------------------------------------------------------------------
 -- FunState
 
@@ -193,9 +206,14 @@ data FunState arch ids
    = FunState { funNonceGen  :: !(NonceGenerator (ST ids) ids)
               , curFunAddr   :: !(ArchSegmentedAddr arch)
               , _curFunCtx   :: !(DiscoveryState arch)
-                -- ^ Discovery info
-              , _curFunInfo  :: !(DiscoveryFunInfo arch ids)
-                -- ^ Information about current function we are working on
+                -- ^ Discovery state without this function
+              , _curFunBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+                -- ^ Maps an address to the blocks associated with that address.
+              , _foundAddrs :: !(Map (ArchSegmentedAddr arch) (FoundAddr arch))
+                -- ^ Maps found address to the pre-state for that block.
+              , _reverseEdges :: !(ReverseEdgeMap arch)
+                -- ^ Maps each code address to the list of predecessors that
+                -- affected its abstract state.
               , _frontier    :: !(Set (ArchSegmentedAddr arch))
                 -- ^ Addresses to explore next.
               }
@@ -205,8 +223,20 @@ curFunCtx :: Simple Lens (FunState arch ids)  (DiscoveryState arch)
 curFunCtx = lens _curFunCtx (\s v -> s { _curFunCtx = v })
 
 -- | Information about current function we are working on
-curFunInfo :: Simple Lens (FunState arch ids)  (DiscoveryFunInfo arch ids)
-curFunInfo = lens _curFunInfo (\s v -> s { _curFunInfo = v })
+curFunBlocks :: Simple Lens (FunState arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+curFunBlocks = lens _curFunBlocks (\s v -> s { _curFunBlocks = v })
+
+foundAddrs :: Simple Lens (FunState arch ids) (Map (ArchSegmentedAddr arch) (FoundAddr arch))
+foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
+
+type ReverseEdgeMap arch = Map (ArchSegmentedAddr arch) (Set (ArchSegmentedAddr arch))
+
+-- | Maps each code address to the list of predecessors that
+-- affected its abstract state.
+reverseEdges :: Simple Lens (FunState arch ids) (ReverseEdgeMap arch)
+reverseEdges = lens _reverseEdges (\s v -> s { _reverseEdges = v })
+
+
 
 -- | Set of addresses to explore next.
 --
@@ -249,8 +279,8 @@ mergeIntraJump src ab tgt = do
       pure ()
   let rsn = NextIP src
   -- Associate a new abstract state with the code region.
-  s0 <- use curFunInfo
-  case Map.lookup tgt (s0^.foundAddrs) of
+  foundMap <- use foundAddrs
+  case Map.lookup tgt foundMap of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
     Just old_info -> do
@@ -258,17 +288,17 @@ mergeIntraJump src ab tgt = do
         Nothing  -> return ()
         Just new -> do
           let new_info = old_info { foundAbstractState = new }
-          curFunInfo . foundAddrs   %= Map.insert tgt new_info
-          curFunInfo . reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
+          foundAddrs   %= Map.insert tgt new_info
+          reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
           frontier %= Set.insert tgt
     -- We haven't seen this block before
     Nothing -> do
-      curFunInfo . reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
+      reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
       frontier     %= Set.insert tgt
       let found_info = FoundAddr { foundReason = rsn
                                  , foundAbstractState = ab
                                  }
-      curFunInfo . foundAddrs %= Map.insert tgt found_info
+      foundAddrs %= Map.insert tgt found_info
 
 -------------------------------------------------------------------------------
 -- Jump table bounds
@@ -691,18 +721,20 @@ parseBlocks ctx ((b,regs):rest) = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: ArchAddr arch
+transferBlocks :: FoundAddr arch
+                  -- ^ State leading to explore block
+               -> ArchAddr arch
                   -- ^ Size of the region these blocks cover.
                -> Map Word64 (Block arch ids)
                   -- ^ Map from labelIndex to associated block
-               -> AbsProcessorState (ArchReg arch) ids
-               -- ^ Abstract state describing machine state when block is encountered.
-              -> FunM arch ids ()
-transferBlocks sz block_map regs =
+               -> FunM arch ids ()
+transferBlocks finfo sz block_map =
   case Map.lookup 0 block_map of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
+      mem       <- uses curFunCtx memory
+      let regs = initAbsProcessorState mem (foundAbstractState finfo)
       funAddr <- gets curFunAddr
       s <- use curFunCtx
       let src = labelAddr (blockLabel b)
@@ -719,10 +751,12 @@ transferBlocks sz block_map regs =
                            }
       let ps = execState (parseBlocks ctx [(b,regs)]) ps0
       let pb = ParsedBlockRegion { regionAddr = src
+                                 , regionReason = foundReason finfo
+                                 , regionAbstractState = foundAbstractState finfo
                                  , regionSize = sz
                                  , regionBlockMap = ps^.pblockMap
                                  }
-      curFunInfo . parsedBlocks %= Map.insert src pb
+      curFunBlocks %= Map.insert src pb
       curFunCtx %= markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
                 .  markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
@@ -730,25 +764,22 @@ transferBlocks sz block_map regs =
 transfer :: ArchSegmentedAddr arch
          -> FunM arch ids ()
 transfer addr = do
-  mfinfo <- use $ curFunInfo . foundAddrs . at addr
+  mfinfo <- use $ foundAddrs . at addr
   let finfo = fromMaybe (error $ "getBlock called on unfound address " ++ show addr ++ ".") $
                 mfinfo
   info      <- uses curFunCtx archInfo
   withArchConstraints info $ do
   nonce_gen <- gets funNonceGen
-  mem       <- uses curFunCtx memory
-  prev_block_map <- use $ curFunInfo . parsedBlocks
+  prev_block_map <- use $ curFunBlocks
   -- Get maximum number of bytes to disassemble
   let max_size =
         case Map.lookupGT addr prev_block_map of
           Just (next,_) | addrSegment next == addrSegment addr -> next^.addrOffset - addr^.addrOffset
           _ -> segmentSize (addrSegment addr) - addr^.addrOffset
   let ab = foundAbstractState finfo
-  trace ("disassembleFn " ++ show (addr, max_size)) $ do
   (bs, sz, maybeError) <-
     liftST $ disassembleFn info nonce_gen addr max_size ab
   seq bs $ do
-  trace ("disassembleFn done" ++ show (addr, max_size)) $ do
   -- Build state for exploring this.
   case maybeError of
     Just e -> do
@@ -757,7 +788,7 @@ transfer addr = do
       pure ()
 
   let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-  transferBlocks sz block_map $ initAbsProcessorState mem (foundAbstractState finfo)
+  transferBlocks finfo sz block_map
 
 ------------------------------------------------------------------------
 -- Main loop
@@ -798,19 +829,28 @@ analyzeFunction addr rsn s =
       let info = archInfo s
       let mem  = memory s
 
-      let initFunInfo = initDiscoveryFunInfo info mem (symbolNames s) addr rsn
+      let faddr = FoundAddr { foundReason = rsn
+                            , foundAbstractState = mkInitialAbsState info mem addr
+                            }
 
       let fs0 = FunState { funNonceGen = gen
                          , curFunAddr  = addr
                          , _curFunCtx  = s
-                         , _curFunInfo = initFunInfo
+                         , _curFunBlocks = Map.empty
+                         , _foundAddrs = Map.singleton addr faddr
+                         , _reverseEdges = Map.empty
                          , _frontier   = Set.singleton addr
                          }
       fs <- execStateT (unFunM analyzeBlocks) fs0
-      let finfo = Some (fs^.curFunInfo)
-      let s' = (fs^.curFunCtx) & funInfo             %~ Map.insert addr finfo
-                               & unexploredFunctions %~ Map.delete addr
-      pure (s', finfo)
+      let nm = fromMaybe (BSC.pack (show addr)) (symbolAtAddr addr (symbolNames s))
+      let finfo = DiscoveryFunInfo { discoveredFunAddr = addr
+                                   , discoveredFunName = nm
+                                   , _parsedBlocks = fs^.curFunBlocks
+                                   }
+      let s' = (fs^.curFunCtx)
+             & funInfo             %~ Map.insert addr (Some finfo)
+             & unexploredFunctions %~ Map.delete addr
+      pure (s', Some finfo)
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
