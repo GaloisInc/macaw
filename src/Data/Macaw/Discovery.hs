@@ -368,17 +368,14 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
 tryLookupBlock :: String
                -> ArchSegmentedAddr arch
                -> Map Word64 (Block arch ids)
-               -> ArchLabel arch
+               -> Word64
                -> Block arch ids
-tryLookupBlock ctx base block_map lbl =
-  if labelAddr lbl /= base then
-    error $ "internal error: tryLookupBlock " ++ ctx ++ " given invalid addr " ++ show (labelAddr lbl)
-  else
-    case Map.lookup (labelIndex lbl) block_map of
-      Nothing ->
-        error $ "internal error: tryLookupBlock " ++ ctx ++ " " ++ show base
-             ++ " given invalid index " ++ show (labelIndex lbl)
-      Just b -> b
+tryLookupBlock ctx base block_map idx =
+  case Map.lookup idx block_map of
+    Nothing ->
+      error $ "internal error: tryLookupBlock " ++ ctx ++ " " ++ show base
+           ++ " given invalid index " ++ show idx
+    Just b -> b
 
 refineProcStateBounds :: ( OrdF (ArchReg arch)
                          , HasRepr (ArchReg arch) TypeRepr
@@ -472,6 +469,7 @@ data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWi
                                           , pctxFunAddr  :: !(ArchSegmentedAddr arch)
                                             -- ^ Address of function this block is being parsed as
                                           , pctxAddr     :: !(ArchSegmentedAddr arch)
+                                             -- ^ Address of the current block
                                           , pctxBlockMap :: !(Map Word64 (Block arch ids))
                                           }
 
@@ -484,15 +482,15 @@ addrMemRepr arch_info =
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ParseContext arch ids
-                     -> ArchLabel arch
+                     -> Word64
+                        -- ^ Index of this block
                      -> [Stmt arch ids]
                      -> AbsProcessorState (ArchReg arch) ids
                      -- ^ Registers at this block after statements executed
                      -> RegState (ArchReg arch) (Value arch ids)
                      -> State (ParseState arch ids) (ParsedBlock arch ids)
-parseFetchAndExecute ctx lbl stmts regs s' = do
-  let src = labelAddr lbl
-  let lbl_idx = labelIndex lbl
+parseFetchAndExecute ctx lbl_idx stmts regs s' = do
+  let src = pctxAddr ctx
   let mem = pctxMemory ctx
   let arch_info = pctxArchInfo ctx
   withArchConstraints arch_info $ do
@@ -618,7 +616,6 @@ parseFetchAndExecute ctx lbl stmts regs s' = do
 
       -- Block that ends with some unknown
       | otherwise -> do
-          trace ("Could not classify " ++ show lbl) $ do
           mapM_ (recordWriteStmt arch_info mem regs') stmts
           pure ParsedBlock { pblockLabel = lbl_idx
                            , pblockStmts = stmts
@@ -638,11 +635,8 @@ parseBlock ctx b regs = do
   let mem       = pctxMemory ctx
   let arch_info = pctxArchInfo ctx
   withArchConstraints arch_info $ do
-  let lbl = blockLabel b
-  -- Assert we are still in source block.
-  assert (pctxAddr ctx == labelAddr lbl) $ do
-  let idx = labelIndex lbl
   let src = pctxAddr ctx
+  let idx = blockLabel b
   let block_map = pctxBlockMap ctx
   -- FIXME: we should propagate c back to the initial block, not just b
   case blockTerm b of
@@ -685,7 +679,7 @@ parseBlock ctx b regs = do
 
 
     FetchAndExecute s' -> do
-      parseFetchAndExecute ctx (blockLabel b) (blockStmts b) regs s'
+      parseFetchAndExecute ctx idx (blockStmts b) regs s'
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg -> do
@@ -696,14 +690,16 @@ parseBlock ctx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: FoundAddr arch
+transferBlocks :: ArchSegmentedAddr arch
+                  -- ^ Address of theze blocks
+               -> FoundAddr arch
                   -- ^ State leading to explore block
                -> ArchAddr arch
                   -- ^ Size of the region these blocks cover.
                -> Map Word64 (Block arch ids)
                   -- ^ Map from labelIndex to associated block
                -> FunM arch ids ()
-transferBlocks finfo sz block_map =
+transferBlocks src finfo sz block_map =
   case Map.lookup 0 block_map of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
@@ -712,7 +708,6 @@ transferBlocks finfo sz block_map =
       let regs = initAbsProcessorState mem (foundAbstractState finfo)
       funAddr <- gets curFunAddr
       s <- use curFunCtx
-      let src = labelAddr (blockLabel b)
       let ctx = ParseContext { pctxMemory   = memory s
                              , pctxArchInfo = archInfo s
                              , pctxFunAddr  = funAddr
@@ -759,14 +754,14 @@ transfer addr = do
         where -- TODO: Fix this to work with segmented memory
               w = addrWidthNatRepr (archAddrWidth info)
               errState = mkRegState Initial
-                       & boundValue ip_reg  .~ RelocatableValue w (addrValue addr)
+                       & boundValue ip_reg  .~ RelocatableValue w addr
               errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
-              errBlock = Block { blockLabel = GeneratedBlock addr 0
+              errBlock = Block { blockLabel = 0
                                , blockStmts = []
                                , blockTerm = TranslateError errState errMsg
                                }
-  let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
-  transferBlocks finfo sz block_map
+  let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
+  transferBlocks addr finfo sz block_map
 
 ------------------------------------------------------------------------
 -- Main loop

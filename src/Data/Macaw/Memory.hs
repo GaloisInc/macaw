@@ -83,7 +83,6 @@ import           Data.Parameterized.NatRepr
 
 import qualified Data.Macaw.Memory.Permissions as Perm
 
-
 ------------------------------------------------------------------------
 -- AddrWidthRepr
 

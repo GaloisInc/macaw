@@ -1142,9 +1142,8 @@ transferValue' code_width is_code amap aregs v =
    BVValue w i
      | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
      | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
-   RelocatableValue w i
-     | 0 <= i && toInteger i <= maxUnsigned w -> abstractSingleton code_width is_code w (toInteger i)
-     | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v, maxUnsigned w)
+   -- TODO: Ensure a relocatable
+   RelocatableValue _w i -> CodePointers (Set.singleton i) False
    -- Invariant: v is in m
    AssignedValue a ->
      fromMaybe (error $ "Missing assignment for " ++ show (assignId a))

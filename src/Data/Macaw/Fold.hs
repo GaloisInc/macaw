@@ -20,7 +20,6 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory ( MemWord )
 
 -- Helper that is a state monad, and also a monoid when the return value
 -- is a monoid.
@@ -59,7 +58,7 @@ foldValueCached :: forall m arch ids tp
                 .  (Monoid m, CanFoldValues arch)
                 => (forall n.  NatRepr n -> Integer -> m)
                    -- ^ Function for literals
-                -> (forall n.  NatRepr n -> MemWord (RegAddrWidth (ArchReg arch)) -> m)
+                -> (forall n.  NatRepr n -> ArchSegmentedAddr arch -> m)
                    -- ^ Function for memwords
                 -> (forall utp . ArchReg arch utp -> m)
                    -- ^ Function for input registers

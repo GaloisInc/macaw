@@ -22,19 +22,7 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG
-  ( CFG
-  , emptyCFG
-  , cfgBlocks
-  , insertBlocksForCode
-  , traverseBlocks
-  , traverseBlockAndChildren
-  , findBlock
-    -- * Block level declarations
-  , BlockLabel(..)
-  , isRootBlockLabel
-  , rootBlockLabel
-  , mkRootBlockLabel
-  , Block(..)
+  ( Block(..)
     -- * Stmt level declarations
   , Stmt(..)
   , TermStmt(..)
@@ -92,7 +80,6 @@ module Data.Macaw.CFG
   , refsInAssignRhs
     -- ** Synonyms
   , ArchAddrWidth
-  , ArchLabel
   , ArchAddrValue
   , Data.Macaw.Memory.SegmentedAddr
   ) where
@@ -103,11 +90,7 @@ import           Control.Monad.Identity
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
-import           Data.List
-import           Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 import           Data.Maybe (isNothing, catMaybes)
-import           Data.Monoid as Monoid
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -160,41 +143,6 @@ bracketsep (h:l) = vcat $
   [text "{" <+> h]
   ++ fmap (text "," <+>) l
   ++ [text "}"]
-
-------------------------------------------------------------------------
--- BlockLabel
-
--- | A label used to identify a block within a function.
---
--- The field is the address width.
-data BlockLabel w
-   = GeneratedBlock { labelAddr   :: !(SegmentedAddr w)
-                      -- ^ Address of function label
-                    , labelIndex  :: {-# UNPACK #-} !Word64
-                    -- ^ A unique identifier for a generated block.
-                    }
-  deriving Eq
-
-isRootBlockLabel :: BlockLabel w -> Bool
-isRootBlockLabel (GeneratedBlock _ w) = w == 0
-
-rootBlockLabel :: BlockLabel w -> BlockLabel w
-rootBlockLabel (GeneratedBlock p _) = GeneratedBlock p 0
-
-mkRootBlockLabel :: SegmentedAddr w -> BlockLabel w
-mkRootBlockLabel p = GeneratedBlock p 0
-
-instance Ord (BlockLabel w) where
-  compare (GeneratedBlock p v) (GeneratedBlock p' v') =
-    compare p p' Monoid.<> compare v v'
-
-instance Show (BlockLabel w) where
-  showsPrec _ (GeneratedBlock a 0) s = "block_" ++ shows a s
-  showsPrec _ (GeneratedBlock a w) s = "subblock_" ++ shows a ("_" ++ shows w s)
-  {-# INLINABLE showsPrec #-}
-
-instance Pretty (BlockLabel w) where
-  pretty l = text (show l)
 
 ------------------------------------------------------------------------
 -- AssignId
@@ -262,8 +210,6 @@ type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 type ArchSegmentedAddr arch = SegmentedAddr (ArchAddrWidth arch)
 
 
-type ArchLabel arch = BlockLabel (ArchAddrWidth arch)
-
 ------------------------------------------------------------------------
 -- Value, Assignment, AssignRhs declarations.
 
@@ -274,7 +220,7 @@ data Value arch ids tp
    => BVValue !(NatRepr n) !Integer
      -- ^ A constant bitvector
    | ( tp ~ BVType (ArchAddrWidth arch))
-   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(MemWord (ArchAddrWidth arch))
+   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchSegmentedAddr arch)
      -- ^ A given memory address.
      -- TODO: See if we can change this to a SegmentedAddr
    | AssignedValue !(Assignment arch ids tp)
@@ -696,10 +642,11 @@ instance ( OrdF r
 data Stmt arch ids
    = forall tp . AssignStmt !(Assignment arch ids tp)
    | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
-    -- ^ Write to memory at the given location
+     -- ^ This denotes a write to memory, and consists of an address to write to, a `MemRepr` defining
+     -- how the value should be stored in memory, and the value to be written.
    | PlaceHolderStmt !([Some (Value arch ids)]) !String
    | Comment !Text
-   | ExecArchStmt (ArchStmt arch ids)
+   | ExecArchStmt !(ArchStmt arch ids)
      -- ^ Execute an architecture specific statement
 
 instance ArchConstraints arch => Pretty (Stmt arch ids) where
@@ -723,7 +670,7 @@ data TermStmt arch ids
      -- | Fetch and execute the next instruction from the given processor state.
   = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
     -- | Branch and execute one block or another.
-  | Branch !(Value arch ids BoolType) !(ArchLabel arch) !(ArchLabel arch)
+  | Branch !(Value arch ids BoolType) !Word64 !Word64
     -- | The syscall instruction.
     -- We model system calls as terminal instructions because from the
     -- application perspective, the semantics will depend on the operating
@@ -744,7 +691,7 @@ instance ( OrdF (ArchReg arch)
     text "fetch_and_execute" <$$>
     indent 2 (pretty s)
   pretty (Branch c x y) =
-    text "branch" <+> ppValue 0 c <+> pretty x <+> pretty y
+    text "branch" <+> ppValue 0 c <+> text (show x) <+> text (show y)
   pretty (Syscall s) =
     text "syscall" <$$>
     indent 2 (pretty s)
@@ -785,7 +732,8 @@ refsInAssignRhs rhs =
 
 -- | A basic block in a control flow graph.
 data Block arch ids
-   = Block { blockLabel :: !(ArchLabel arch)
+   = Block { blockLabel :: !Word64
+             -- ^ Index of this block
            , blockStmts :: !([Stmt arch ids])
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
@@ -794,100 +742,5 @@ data Block arch ids
 
 instance ArchConstraints arch => Pretty (Block arch ids) where
   pretty b = do
-    pretty (blockLabel b) PP.<> text ":" <$$>
+    text (show (blockLabel b)) PP.<> text ":" <$$>
       indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
-
-------------------------------------------------------------------------
--- CFG
-
--- | A CFG is a map from all reachable code locations
--- to the block for that code location.
-data CFG arch ids
-   = CFG { _cfgBlocks :: !(Map (ArchLabel arch) (Block arch ids))
-         , _cfgBlockRanges :: !(Map (ArchSegmentedAddr arch) (ArchAddr arch))
-           -- ^ Maps each address that is the start of a block
-           -- to the size of the block.
-         }
-
--- | Create empty CFG
-emptyCFG :: CFG addr ids
-emptyCFG = CFG { _cfgBlocks = Map.empty
-               , _cfgBlockRanges = Map.empty
-               }
-
-cfgBlocks :: Simple Lens (CFG arch ids) (Map (ArchLabel arch) (Block arch ids))
-cfgBlocks = lens _cfgBlocks (\s v -> s { _cfgBlocks = v })
-
-cfgBlockRanges :: Simple Lens (CFG arch ids) (Map (ArchSegmentedAddr arch) (ArchAddr arch))
-cfgBlockRanges = lens _cfgBlockRanges (\s v -> s { _cfgBlockRanges = v })
-
--- | Return block with given label.
-findBlock :: CFG arch ids -> ArchLabel arch -> Maybe (Block arch ids)
-findBlock g l = _cfgBlocks g ^. at l
-
-insertBlock :: ( Integral (ArchAddr arch)
-               , Ord (ArchAddr arch)
-               , Show (ArchAddr arch)
-               )
-            => Block arch ids
-            -> CFG arch ids
-            -> CFG arch ids
-insertBlock b c = do
-  let lbl = blockLabel b
-  case findBlock c lbl of
-    Just{} -> error $ "Block with label " ++ show (pretty lbl) ++ " already defined."
-    Nothing -> c { _cfgBlocks = Map.insert (blockLabel b) b (_cfgBlocks c) }
-
--- | Inserts blocks for a contiguous region of code.
-insertBlocksForCode :: ( Integral (ArchAddr arch)
-                       , Show     (ArchAddr arch)
-                       )
-                    => ArchSegmentedAddr arch -- ^ Start of block
-                    -> ArchAddr arch -- ^ Size of block
-                    -> [Block arch ids]
-                    -> CFG arch ids
-                    -> CFG arch ids
-insertBlocksForCode start size bs cfg =
-  let cfg' = cfg & cfgBlockRanges %~ Map.insert start size
-   in foldl' (flip insertBlock) cfg' bs
-
-instance ArchConstraints arch => Pretty (CFG arch ids) where
-  pretty g = vcat (pretty <$> Map.elems (_cfgBlocks g))
-
--- FIXME: refactor to be more efficient
--- FIXME: not a Traversal, more like a map+fold
-traverseBlocks :: Ord (ArchAddr arch)
-               => CFG arch ids
-               -> ArchLabel arch
-               -> (Block arch ids -> a)
-               -> (a -> a -> a -> a)
-               -> a
-traverseBlocks cfg root f merge = go root
-  where
-    go l = case findBlock cfg l of
-             Nothing -> error $ "label not found"
-             Just b  ->
-               let v = f b
-                in case blockTerm b of
-                     Branch _ lb rb -> merge (go lb) v (go rb)
-                     _              -> v
-
--- | As for traverseBlocks but starting from a block in the cfg, not
--- an address
-traverseBlockAndChildren :: Ord (ArchAddr arch)
-                         => CFG arch ids
-                         -> Block arch ids
-                         -> (Block arch ids -> a)
-                            -- Maps a block to a value
-                         -> (Block arch ids -> a -> a -> a)
-                            -- Maps results from to sub-blocks together.
-                         -> a
-traverseBlockAndChildren cfg b0 f merge = goBlock b0
-  where
-    goBlock b = case blockTerm b of
-                 Branch _ lb rb -> merge b (go lb) (go rb)
-                 _              -> f b
-
-    go l = case _cfgBlocks cfg ^. at l of
-            Nothing -> error $ "label not found"
-            Just b  -> goBlock b

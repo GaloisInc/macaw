@@ -1,5 +1,5 @@
 {-|
-Copyright  : (c) Galois, Inc 2016
+Copyright  : (c) Galois, Inc 2016-2017
 Maintainer : jhendrix@galois.com
 
 This defines the main data structure for storing information learned from code
@@ -247,16 +247,6 @@ data ParsedBlock arch ids
 deriving instance ArchConstraints arch
   => Show (ParsedBlock arch ids)
 
-
-ppParsedBlock :: ArchConstraints arch
-              => ArchSegmentedAddr arch
-              -> ParsedBlock arch ids
-              -> Doc
-ppParsedBlock a b =
-  pretty (GeneratedBlock a (pblockLabel b)) PP.<> text ":" <$$>
-  indent 2 (vcat (pretty <$> pblockStmts b) <$$>
-            pretty (pblockTerm b))
-
 ------------------------------------------------------------------------
 -- ParsedBlockRegion
 
@@ -281,7 +271,10 @@ deriving instance ArchConstraints arch
 
 instance ArchConstraints arch
       => Pretty (ParsedBlockRegion arch ids) where
-  pretty r = ppParsedBlock (regionAddr r) (regionFirstBlock r)
+  pretty r =
+    let b = regionFirstBlock r
+     in text (show (regionAddr r)) PP.<> text ":" <$$>
+        indent 2 (vcat (pretty <$> pblockStmts b) <$$> pretty (pblockTerm b))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
@@ -392,6 +385,5 @@ asLiteralAddr :: MemWidth (ArchAddrWidth arch)
               -> Maybe (ArchSegmentedAddr arch)
 asLiteralAddr mem (BVValue _ val) =
   absoluteAddrSegment mem (fromInteger val)
-asLiteralAddr mem (RelocatableValue _ i) =
-  absoluteAddrSegment mem (fromIntegral i)
+asLiteralAddr _ (RelocatableValue _ i) = Just i
 asLiteralAddr _ _ = Nothing
