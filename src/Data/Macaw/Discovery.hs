@@ -64,6 +64,7 @@ import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           Data.Word
 
@@ -750,16 +751,20 @@ transfer addr = do
           Just (next,_) | addrSegment next == addrSegment addr -> next^.addrOffset - addr^.addrOffset
           _ -> segmentSize (addrSegment addr) - addr^.addrOffset
   let ab = foundAbstractState finfo
-  (bs, sz, maybeError) <-
+  (bs0, sz, maybeError) <-
     liftST $ disassembleFn info nonce_gen addr max_size ab
-  seq bs $ do
-  -- Build state for exploring this.
-  case maybeError of
-    Just e -> do
-      trace ("Failed to disassemble " ++ show e) $ pure ()
-    Nothing -> do
-      pure ()
-
+  -- Make sure at least one block is returned
+  let bs | null bs0 = [errBlock]
+         | otherwise = bs0
+        where -- TODO: Fix this to work with segmented memory
+              w = addrWidthNatRepr (archAddrWidth info)
+              errState = mkRegState Initial
+                       & boundValue ip_reg  .~ RelocatableValue w (addrValue addr)
+              errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
+              errBlock = Block { blockLabel = GeneratedBlock addr 0
+                               , blockStmts = []
+                               , blockTerm = TranslateError errState errMsg
+                               }
   let block_map = Map.fromList [ (labelIndex (blockLabel b), b) | b <- bs ]
   transferBlocks finfo sz block_map
 
@@ -774,7 +779,6 @@ analyzeBlocks = do
   case Set.minView (st^.frontier) of
     Nothing -> return ()
     Just (addr, next_roots) -> do
-      trace ("analyzeBlocks " ++ show addr) $ do
       FunM $ put $ st & frontier .~ next_roots
       transfer addr
       analyzeBlocks
