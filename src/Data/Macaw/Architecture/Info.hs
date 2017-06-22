@@ -11,28 +11,43 @@ This defines the architecture-specific information needed for code discovery.
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
-  , ReadAddrFn
   , DisassembleFn
   , archPostSyscallAbsState
+  , Block(..)
   ) where
 
 import Control.Monad.ST
 import Data.Parameterized.Nonce
+import Data.Word
+import Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import Data.Macaw.AbsDomain.AbsState as AbsState
 import Data.Macaw.CFG
 import Data.Macaw.Memory
 
 ------------------------------------------------------------------------
--- ArchitectureInfo
+-- Block
 
--- | A function for reading an address from memory
-type ReadAddrFn w
-   = MemSegment w
-     -- ^ Segment to read from
-   -> MemWord w
-     -- Offset to read from.
-   -> Either (MemoryError w) (MemWord w)
+-- | The type for code blocks returned by the disassembler.
+--
+-- The discovery process will attempt to map each block to a suitable ParsedBlock.
+
+-- | A basic block in a control flow graph.
+data Block arch ids
+   = Block { blockLabel :: !Word64
+             -- ^ Index of this block
+           , blockStmts :: !([Stmt arch ids])
+             -- ^ List of statements in the block.
+           , blockTerm :: !(TermStmt arch ids)
+             -- ^ The last statement in the block.
+           }
+
+instance ArchConstraints arch => Pretty (Block arch ids) where
+  pretty b = do
+    text (show (blockLabel b)) PP.<> text ":" <$$>
+      indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
+
+
 
 -- | Function for disassembling a block.
 --

@@ -238,10 +238,18 @@ instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
 ------------------------------------------------------------------------
 -- ParsedBlock
 
+-- | This is a code block after we have classified the control flow
+-- statement(s) that the block ends with.
 data ParsedBlock arch ids
    = ParsedBlock { pblockLabel :: !Word64
+                   -- ^ An index for uniquely identifying the block.
+                   --
+                   -- This is primarily used so that we can reference
+                   -- which branch lead to a particular next state.
                  , pblockStmts :: !([Stmt arch ids])
+                   -- ^ The non-terminal statements in the block
                  , pblockTerm  :: !(ParsedTermStmt arch ids)
+                   -- ^ The terminal statement in the block.
                  }
 
 deriving instance ArchConstraints arch

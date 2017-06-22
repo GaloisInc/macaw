@@ -36,6 +36,7 @@ library
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.AbsEval
+    Data.Macaw.Discovery.Opt
     Data.Macaw.Discovery.State
     Data.Macaw.Dwarf
     Data.Macaw.Fold

@@ -2,7 +2,7 @@
 Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
-Defines data types needed to represent control flow graphs from machine code.
+Defines data types needed to represent program generated from machine code.
 
 This is a low-level CFG representation where the entire program is a
 single CFG.
@@ -22,9 +22,8 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG
-  ( Block(..)
-    -- * Stmt level declarations
-  , Stmt(..)
+  ( -- * Stmt level declarations
+    Stmt(..)
   , TermStmt(..)
   , Assignment(..)
   , AssignId(..)
@@ -726,21 +725,3 @@ refsInAssignRhs rhs =
     SetUndefined _ -> Set.empty
     ReadMem v _    -> refsInValue v
     EvalArchFn f _ -> refsInFn f
-
-------------------------------------------------------------------------
--- Block
-
--- | A basic block in a control flow graph.
-data Block arch ids
-   = Block { blockLabel :: !Word64
-             -- ^ Index of this block
-           , blockStmts :: !([Stmt arch ids])
-             -- ^ List of statements in the block.
-           , blockTerm :: !(TermStmt arch ids)
-             -- ^ The last statement in the block.
-           }
-
-instance ArchConstraints arch => Pretty (Block arch ids) where
-  pretty b = do
-    text (show (blockLabel b)) PP.<> text ":" <$$>
-      indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
