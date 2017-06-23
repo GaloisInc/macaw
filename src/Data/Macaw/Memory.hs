@@ -57,11 +57,21 @@ module Data.Macaw.Memory
   , MemWidth(..)
   , MemWord
   , memWord
+    -- * Segmented Addresses
   , SegmentedAddr(..)
   , addrOffset
   , addrContentsAfter
   , addrBase
   , addrValue
+  , readByteString
+  , readWord8
+  , readWord16be
+  , readWord16le
+  , readWord32be
+  , readWord32le
+  , readWord64be
+  , readWord64le
+    -- * Memory addrs
   , MemoryError(..)
   ) where
 
@@ -116,21 +126,34 @@ regularChunks sz bs
   | BS.length bs < sz = []
   | otherwise = BS.take sz bs : regularChunks sz (BS.drop sz bs)
 
+bsWord8 :: BS.ByteString -> Word8
+bsWord8 bs
+    | BS.length bs /= 1 = error "bsWord8 given bytestring with bad length."
+    | otherwise = BS.index bs 0
+
+bsWord16be :: BS.ByteString -> Word16
+bsWord16be bs
+    | BS.length bs /= 2 = error "bsWord16be given bytestring with bad length."
+    | otherwise = w 0 .|. w 1
+  where w i = fromIntegral (BS.index bs i) `shiftL` ((1 - i) `shiftL` 3)
+
+bsWord16le :: BS.ByteString -> Word16
+bsWord16le bs
+    | BS.length bs /= 2 = error "bsWord16le given bytestring with bad length."
+    | otherwise = w 0 .|. w 1
+  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
+
 bsWord32be :: BS.ByteString -> Word32
-bsWord32be bs | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
-              | otherwise = w0 .|. w1 .|. w2 .|. w3
-  where w0 = fromIntegral (BS.index bs 0)
-        w1 = fromIntegral (BS.index bs 1) `shiftL`  8
-        w2 = fromIntegral (BS.index bs 2) `shiftL` 16
-        w3 = fromIntegral (BS.index bs 3) `shiftL` 24
+bsWord32be bs
+    | BS.length bs /= 4 = error "bsWord32be given bytestring with bad length."
+    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
+  where w i = fromIntegral (BS.index bs i) `shiftL` ((3 - i) `shiftL` 3)
 
 bsWord32le :: BS.ByteString -> Word32
-bsWord32le bs | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
-            | otherwise = w0 .|. w1 .|. w2 .|. w3
-  where w0 = fromIntegral (BS.index bs 0)
-        w1 = fromIntegral (BS.index bs 1) `shiftL`  8
-        w2 = fromIntegral (BS.index bs 2) `shiftL` 16
-        w3 = fromIntegral (BS.index bs 3) `shiftL` 24
+bsWord32le bs
+    | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
+    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
+  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
 
 bsWord64be :: BS.ByteString -> Word64
 bsWord64be bs
@@ -306,15 +329,6 @@ contentsSize (SegmentContents m) =
     Nothing -> 0
     Just ((start, c),_) -> start + rangeSize c
 
--- | Read an address from the value in the segment or report a memory error.
-lookupRange :: MemWidth w
-            => MemWord w
-            -> SegmentContents w
-            -> Maybe (MemWord w, SegmentRange w)
-lookupRange i (SegmentContents m) = do
-  (k,r) <- Map.lookupLE i m
-  Just (i-k,r)
-
 -- | Return list of contents from given word or 'Nothing' if this can't be done
 -- due to a relocation.
 contentsAfter :: MemWidth w
@@ -428,6 +442,17 @@ instance Show (SegmentedAddr w) where
         . showString "+"
         . shows (a^.addrOffset)
 
+-- | Given a segemnted addr this returns the offset and range at that offset.
+nextRegion :: MemWidth w
+           => SegmentedAddr w
+           -> Maybe (MemWord w, SegmentRange w)
+nextRegion addr = do
+  let i = addr^.addrOffset
+  let SegmentContents m = segmentContents (addrSegment addr)
+  (k,r) <- Map.lookupLE (addr^.addrOffset) m
+  Just (i-k,r)
+
+
 -- | Return contents starting from location or throw a memory error if there
 -- is an unaligned relocation.
 addrContentsAfter :: MemWidth w
@@ -435,7 +460,7 @@ addrContentsAfter :: MemWidth w
                   -> Either (MemoryError w) [SegmentRange w]
 addrContentsAfter addr =
   case contentsAfter (addr^.addrOffset) (segmentContents (addrSegment addr)) of
-    Nothing -> Left (UnalignedRelocation addr)
+    Nothing -> Left (UnexpectedRelocation addr)
     Just l  -> Right l
 
 ------------------------------------------------------------------------
@@ -520,10 +545,10 @@ readAddr :: Memory w
          -> Either (MemoryError w) (SegmentedAddr w)
 readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   let sz = fromIntegral (addrSize addr)
-  case lookupRange (addr^.addrOffset) (segmentContents (addrSegment addr)) of
+  case nextRegion addr of
     Just (MemWord offset, ByteRegion bs)
       | offset + sz >= offset                           -- Check for no overfow
-      , offset + sz < fromIntegral (BS.length bs) -> do -- Check length
+      , offset + sz <= fromIntegral (BS.length bs) -> do -- Check length
         let Just val = addrRead end (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
         case Map.lookupLE val (memAbsoluteSegments mem) of
           Just (base, seg) | val <= base + segmentSize seg -> Right $
@@ -624,7 +649,7 @@ data MemoryError w
      -- ^ Memory could not be read, because it was not defined.
    | PermissionsError (SegmentedAddr w)
      -- ^ Memory could not be read due to insufficient permissions.
-   | UnalignedRelocation (SegmentedAddr w)
+   | UnexpectedRelocation (SegmentedAddr w)
      -- ^ Read from location that partially overlaps a relocated entry
    | InvalidAddr (SegmentedAddr w)
      -- ^ The data at the given address did not refer to a valid memory location.
@@ -637,7 +662,51 @@ instance Show (MemoryError w) where
     "Access violation at " ++ show a ++ "."
   show (PermissionsError a)  =
     "Insufficient permissions at " ++ show a ++ "."
-  show (UnalignedRelocation a)   =
-    "Attempt to read an offset of a relocation entry at " ++ show a ++ "."
+  show (UnexpectedRelocation a)   =
+    "Attempt to read an unexpected relocation entry at " ++ show a ++ "."
   show (InvalidAddr a)   =
     "Attempt to interpret an invalid address: " ++ show a ++ "."
+
+------------------------------------------------------------------------
+-- Meory reading utilities
+
+-- | Attemtp to read a bytestring of the given length
+readByteString :: MemWidth w => SegmentedAddr w -> Word64 -> Either (MemoryError w) BS.ByteString
+readByteString addr sz =
+  case nextRegion addr of
+    Nothing -> Left (InvalidAddr addr)
+    Just (MemWord offset, ByteRegion bs)
+      | offset + sz >= offset                           -- Check for no overfow
+      , offset + sz <= fromIntegral (BS.length bs) -> do -- Check length
+        Right $ (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
+      | otherwise -> Left (InvalidAddr addr)
+    Just (_, SymbolicRef{}) ->
+      Left (UnexpectedRelocation addr)
+
+-- | Read a big endian word16
+readWord8 :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word8
+readWord8 addr = bsWord8 <$> readByteString addr 8
+
+-- | Read a big endian word16
+readWord16be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word16
+readWord16be addr = bsWord16be <$> readByteString addr 8
+
+-- | Read a little endian word16
+readWord16le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word16
+readWord16le addr = bsWord16le <$> readByteString addr 8
+
+-- | Read a big endian word32
+readWord32be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word32
+readWord32be addr = bsWord32be <$> readByteString addr 8
+
+-- | Read a little endian word32
+readWord32le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word32
+readWord32le addr = bsWord32le <$> readByteString addr 8
+
+-- | Read a big endian word64
+readWord64be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word64
+readWord64be addr = bsWord64be <$> readByteString addr 8
+
+-- | Read a little endian word64
+readWord64le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word64
+readWord64le addr = bsWord64le <$> readByteString addr 8
