@@ -926,7 +926,6 @@ data AbsBlockState r
 
 deriving instance MapF.OrdF r => Eq (AbsBlockState r)
 
-
 absRegState :: Simple Lens (AbsBlockState r)
                            (RegState r (AbsValue (RegAddrWidth r)))
 absRegState = lens _absRegState (\s v -> s { _absRegState = v })

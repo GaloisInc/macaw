@@ -486,7 +486,7 @@ parseFetchAndExecute :: forall arch ids
                         -- ^ Index of this block
                      -> [Stmt arch ids]
                      -> AbsProcessorState (ArchReg arch) ids
-                     -- ^ Registers at this block after statements executed
+                     -- ^ Registers prior to blocks being executed.
                      -> RegState (ArchReg arch) (Value arch ids)
                      -> State (ParseState arch ids) (ParsedBlock arch ids)
 parseFetchAndExecute ctx lbl_idx stmts regs s' = do

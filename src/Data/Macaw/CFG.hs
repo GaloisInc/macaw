@@ -221,7 +221,6 @@ data Value arch ids tp
    | ( tp ~ BVType (ArchAddrWidth arch))
    => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchSegmentedAddr arch)
      -- ^ A given memory address.
-     -- TODO: See if we can change this to a SegmentedAddr
    | AssignedValue !(Assignment arch ids tp)
      -- ^ Value from an assignment statement.
    | Initial !(ArchReg arch tp)
