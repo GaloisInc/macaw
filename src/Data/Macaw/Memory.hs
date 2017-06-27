@@ -3,7 +3,7 @@ Copyright   : (c) Galois Inc, 2015-2016
 Maintainer  : jhendrix@galois.com
 
 Declares 'Memory', a type for representing segmented memory with permissions.
--}
+n-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
@@ -63,6 +63,13 @@ module Data.Macaw.Memory
   , addrContentsAfter
   , addrBase
   , addrValue
+  , bsWord8
+  , bsWord16be
+  , bsWord16le
+  , bsWord32be
+  , bsWord32le
+  , bsWord64be
+  , bsWord64le
   , readByteString
   , readWord8
   , readWord16be
