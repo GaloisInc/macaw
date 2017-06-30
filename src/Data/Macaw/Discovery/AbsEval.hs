@@ -58,7 +58,7 @@ addAssignment :: ArchitectureInfo a
               -> Assignment a ids tp
               -> AbsProcessorState (ArchReg a) ids
               -> AbsProcessorState (ArchReg a) ids
-  addAssignment info a c = withArchConstraints info $
+addAssignment info a c = withArchConstraints info $
   c & (absAssignments . assignLens (assignId a))
     %~ (`meet` transferRHS info c (assignRhs a))
 
