@@ -58,7 +58,7 @@ addAssignment :: ArchitectureInfo a
               -> Assignment a ids tp
               -> AbsProcessorState (ArchReg a) ids
               -> AbsProcessorState (ArchReg a) ids
-addAssignment info a c = withArchConstraints info $
+  addAssignment info a c = withArchConstraints info $
   c & (absAssignments . assignLens (assignId a))
     %~ (`meet` transferRHS info c (assignRhs a))
 
@@ -79,8 +79,9 @@ absEvalStmt info stmt = withArchConstraints info $
     ExecArchStmt astmt ->
       modify $ \r -> absEvalArchStmt info r astmt
 
+-- This takes a processor state and updates it based on executing each statement.
 absEvalStmts :: ArchitectureInfo arch
-              -> AbsProcessorState (ArchReg arch) ids
-              -> [Stmt arch ids]
-              -> AbsProcessorState (ArchReg arch) ids
+             -> AbsProcessorState (ArchReg arch) ids
+             -> [Stmt arch ids]
+             -> AbsProcessorState (ArchReg arch) ids
 absEvalStmts info r stmts = execState (mapM_ (absEvalStmt info) stmts) r

@@ -19,8 +19,8 @@ discovery.
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
+  , StatementList(..)
   , ParsedBlock(..)
-  , ParsedBlockRegion(..)
      -- * SymbolAddrMap
   , SymbolAddrMap
   , emptySymbolAddrMap
@@ -47,7 +47,6 @@ module Data.Macaw.Discovery.State
     -- * DiscoveryState utilities
   , RegConstraint
   , asLiteralAddr
-  , rewriteParsedBlock
   )  where
 
 import           Control.Lens
@@ -57,7 +56,6 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
-import           Data.Parameterized.TraversableF
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -68,7 +66,6 @@ import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
-import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
 
@@ -189,7 +186,7 @@ data ParsedTermStmt arch ids
      -- to, and the possible addresses.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
      -- ^ A return with the given registers.
-   | ParsedIte !(Value arch ids BoolType) !(ParsedBlock arch ids) !(ParsedBlock arch ids)
+   | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
      -- ^ An if-then-else
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
                    !(ArchSegmentedAddr arch)
@@ -202,10 +199,10 @@ data ParsedTermStmt arch ids
 deriving instance ArchConstraints arch => Show (ParsedTermStmt arch ids)
 
 -- | Pretty print the block contents indented inside brackets.
-ppBlockIndented :: ArchConstraints arch => ParsedBlock arch ids -> Doc
-ppBlockIndented b =
+ppStatementList :: ArchConstraints arch => StatementList arch ids -> Doc
+ppStatementList b =
   text "{" <$$>
-  indent 2 (vcat (pretty <$> pblockStmts b) <$$> pretty (pblockTerm b)) <$$>
+  indent 2 (vcat (pretty <$> stmtsNonterm b) <$$> pretty (stmtsTerm b)) <$$>
   text "}"
 
 instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
@@ -227,8 +224,8 @@ instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
     indent 2 (pretty s)
   pretty (ParsedIte c t f) =
     text "ite" <+> pretty c <$$>
-    ppBlockIndented t <$$>
-    ppBlockIndented f
+    ppStatementList t <$$>
+    ppStatementList f
   pretty (ParsedSyscall s addr) =
     text "syscall, return to" <+> text (show addr) <$$>
     indent 2 (pretty s)
@@ -239,28 +236,31 @@ instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
     indent 2 (pretty s)
 
 ------------------------------------------------------------------------
--- ParsedBlock
+-- StatementList
 
 -- | This is a code block after we have classified the control flow
 -- statement(s) that the block ends with.
-data ParsedBlock arch ids
-   = ParsedBlock { pblockLabel :: !Word64
-                   -- ^ An index for uniquely identifying the block.
-                   --
-                   -- This is primarily used so that we can reference
-                   -- which branch lead to a particular next state.
-                 , pblockStmts :: !([Stmt arch ids])
-                   -- ^ The non-terminal statements in the block
-                 , pblockTerm  :: !(ParsedTermStmt arch ids)
-                   -- ^ The terminal statement in the block.
-                 }
+data StatementList arch ids
+   = StatementList { stmtsIdent :: !Word64
+                     -- ^ An index for uniquely identifying the block.
+                     --
+                     -- This is primarily used so that we can reference
+                     -- which branch lead to a particular next state.
+                   , stmtsNonterm :: !([Stmt arch ids])
+                     -- ^ The non-terminal statements in the block
+                   , stmtsTerm  :: !(ParsedTermStmt arch ids)
+                     -- ^ The terminal statement in the block.
+                   , stmtsAbsState :: !(AbsProcessorState (ArchReg arch) ids)
+                     -- ^ The abstract state of the block just before terminal
+                    }
 
 deriving instance ArchConstraints arch
-  => Show (ParsedBlock arch ids)
+  => Show (StatementList arch ids)
 
 ------------------------------------------------------------------------
 -- Rewriting parsed blocks
 
+{-
 -- | Apply optimizations to a parsed terminal statement.
 rewriteParsedTermStmt :: ParsedTermStmt arch src -> Rewriter arch src tgt (ParsedTermStmt arch tgt)
 rewriteParsedTermStmt tstmt =
@@ -279,8 +279,8 @@ rewriteParsedTermStmt tstmt =
       ParsedReturn <$> traverseF rewriteValue regs
     ParsedIte c t f ->
       ParsedIte <$> rewriteValue c
-                <*> rewriteParsedBlock t
-                <*> rewriteParsedBlock f
+                <*> rewriteStatementList t
+                <*> rewriteStatementList f
     ParsedSyscall regs next ->
       ParsedSyscall <$> traverseF rewriteValue regs
                     <*> pure next
@@ -288,46 +288,48 @@ rewriteParsedTermStmt tstmt =
     ClassifyFailure regs -> ClassifyFailure <$> traverseF rewriteValue regs
 
 -- | Apply optimizations to code in the block
-rewriteParsedBlock :: ParsedBlock arch src -> Rewriter arch src tgt (ParsedBlock arch tgt)
-rewriteParsedBlock b = do
+rewriteStatementList :: StatementList arch src -> Rewriter arch src tgt (StatementList arch tgt)
+rewriteStatementList b = do
   (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
-    mapM_ rewriteStmt (pblockStmts b)
-    rewriteParsedTermStmt (pblockTerm b)
+    mapM_ rewriteStmt (stmtsNonterm b)
+    rewriteParsedTermStmt (stmtsTerm b)
   -- Return new block
   pure $
-    ParsedBlock { pblockLabel = pblockLabel b
-                , pblockStmts = tgtStmts
-                , pblockTerm  = tgtTermStmt
-                }
+    StatementList { stmtsIdent = stmtsIdent b
+                  , stmtsNonterm = tgtStmts
+                  , stmtsTerm  = tgtTermStmt
+                  ,
+                  }
+-}
 
 ------------------------------------------------------------------------
--- ParsedBlockRegion
+-- ParsedBlock
 
 -- | A contiguous region of instructions in memory.
-data ParsedBlockRegion arch ids
-   = ParsedBlockRegion { regionAddr :: !(ArchSegmentedAddr arch)
-                         -- ^ Address of region
-                       , regionSize :: !(ArchAddr arch)
-                         -- ^ The size of the region of memory covered by this.
-                       , regionReason :: !(CodeAddrReason (ArchAddrWidth arch))
-                          -- ^ Reason that we marked this address as
-                          -- the start of a basic block.
-                       , regionAbstractState :: !(AbsBlockState (ArchReg arch))
-                         -- ^ Abstract state prior to the execution of
-                         -- this region.
-                       , regionFirstBlock :: !(ParsedBlock arch ids)
-                         -- ^ Returns the entry block for the region
-                       }
+data ParsedBlock arch ids
+   = ParsedBlock { blockAddr :: !(ArchSegmentedAddr arch)
+                   -- ^ Address of region
+                 , blockSize :: !(ArchAddr arch)
+                   -- ^ The size of the region of memory covered by this.
+                 , blockReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                   -- ^ Reason that we marked this address as
+                   -- the start of a basic block.
+                 , blockAbstractState :: !(AbsBlockState (ArchReg arch))
+                   -- ^ Abstract state prior to the execution of
+                   -- this region.
+                 , blockStatementList :: !(StatementList arch ids)
+                   -- ^ Returns the entry block for the region
+                 }
 
 deriving instance ArchConstraints arch
-  => Show (ParsedBlockRegion arch ids)
+  => Show (ParsedBlock arch ids)
 
 instance ArchConstraints arch
-      => Pretty (ParsedBlockRegion arch ids) where
+      => Pretty (ParsedBlock arch ids) where
   pretty r =
-    let b = regionFirstBlock r
-     in text (show (regionAddr r)) PP.<> text ":" <$$>
-        indent 2 (vcat (pretty <$> pblockStmts b) <$$> pretty (pblockTerm b))
+    let b = blockStatementList r
+     in text (show (blockAddr r)) PP.<> text ":" <$$>
+        indent 2 (vcat (pretty <$> stmtsNonterm b) <$$> pretty (stmtsTerm b))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
@@ -338,11 +340,11 @@ data DiscoveryFunInfo arch ids
                         -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
-                      , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+                      , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlock arch ids))
                         -- ^ Maps an address to the blocks associated with that address.
                       }
 
-parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlockRegion arch ids))
+parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlock arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
