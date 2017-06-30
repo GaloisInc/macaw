@@ -44,9 +44,10 @@ module Data.Macaw.Discovery.State
   , parsedBlocks
     -- * CodeAddrRegion
   , CodeAddrReason(..)
-    -- ** DiscoveryState utilities
+    -- * DiscoveryState utilities
   , RegConstraint
   , asLiteralAddr
+  , rewriteParsedBlock
   )  where
 
 import           Control.Lens
@@ -56,6 +57,7 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -66,6 +68,7 @@ import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
+import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
 
@@ -254,6 +257,48 @@ data ParsedBlock arch ids
 
 deriving instance ArchConstraints arch
   => Show (ParsedBlock arch ids)
+
+------------------------------------------------------------------------
+-- Rewriting parsed blocks
+
+-- | Apply optimizations to a parsed terminal statement.
+rewriteParsedTermStmt :: ParsedTermStmt arch src -> Rewriter arch src tgt (ParsedTermStmt arch tgt)
+rewriteParsedTermStmt tstmt =
+  case tstmt of
+    ParsedCall regs mr -> do
+      ParsedCall <$> traverseF rewriteValue regs
+                 <*> pure mr
+    ParsedJump regs a -> do
+      ParsedJump <$> traverseF rewriteValue regs
+                 <*> pure a
+    ParsedLookupTable regs idx tbl -> do
+      ParsedLookupTable <$> traverseF rewriteValue regs
+                        <*> rewriteValue idx
+                        <*> pure tbl
+    ParsedReturn regs -> do
+      ParsedReturn <$> traverseF rewriteValue regs
+    ParsedIte c t f ->
+      ParsedIte <$> rewriteValue c
+                <*> rewriteParsedBlock t
+                <*> rewriteParsedBlock f
+    ParsedSyscall regs next ->
+      ParsedSyscall <$> traverseF rewriteValue regs
+                    <*> pure next
+    ParsedTranslateError txt -> pure (ParsedTranslateError txt)
+    ClassifyFailure regs -> ClassifyFailure <$> traverseF rewriteValue regs
+
+-- | Apply optimizations to code in the block
+rewriteParsedBlock :: ParsedBlock arch src -> Rewriter arch src tgt (ParsedBlock arch tgt)
+rewriteParsedBlock b = do
+  (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
+    mapM_ rewriteStmt (pblockStmts b)
+    rewriteParsedTermStmt (pblockTerm b)
+  -- Return new block
+  pure $
+    ParsedBlock { pblockLabel = pblockLabel b
+                , pblockStmts = tgtStmts
+                , pblockTerm  = tgtTermStmt
+                }
 
 ------------------------------------------------------------------------
 -- ParsedBlockRegion

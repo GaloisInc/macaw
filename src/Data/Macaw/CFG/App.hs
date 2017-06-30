@@ -37,6 +37,7 @@ import           Control.Monad.Identity
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
+import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
@@ -117,10 +118,10 @@ data App (f :: Type -> *) (tp :: Type) where
   BVUnsignedLe :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Signed less than
-  BVSignedLt :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  BVSignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Signed less than or equal.
-  BVSignedLe :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  BVSignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- @BVTestBit x i@ returns true iff bit @i@ of @x@ is true.
   -- 0 is the index of the least-significant bit.
@@ -140,7 +141,7 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Logical right shift (x / 2 ^ n)
   BVShr :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
   -- Arithmetic right shift (x / 2 ^ n)
-  BVSar :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Compare for equality.
   BVEq :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
@@ -302,15 +303,26 @@ instance OrdF f => OrdF (App f) where
               )
 
 instance OrdF f => Ord (App f tp) where
-  compare a b = case compareF a b of LTF -> LT
-                                     EQF -> EQ
-                                     GTF -> GT
+  compare a b =
+    case compareF a b of
+      LTF -> LT
+      EQF -> EQ
+      GTF -> GT
 
 traverseApp :: Applicative m
             => (forall u . f u -> m (g u))
             -> App f tp
             -> m (App g tp)
 traverseApp = $(structuralTraversal [t|App|] [])
+
+instance FunctorFC App where
+  fmapFC = fmapFCDefault
+
+instance FoldableFC App where
+  foldMapFC = foldMapFCDefault
+
+instance TraversableFC App where
+  traverseFC = traverseApp
 
 mapApp :: (forall u . f u -> g u)
        -> App f tp

@@ -2,7 +2,7 @@
 Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
-Defines data types needed to represent program generated from machine code.
+Defines data types needed to represent values, assignments, and statements from Machine code.
 
 This is a low-level CFG representation where the entire program is a
 single CFG.
@@ -24,7 +24,6 @@ single CFG.
 module Data.Macaw.CFG
   ( -- * Stmt level declarations
     Stmt(..)
-  , TermStmt(..)
   , Assignment(..)
   , AssignId(..)
   , AssignRhs(..)
@@ -101,13 +100,12 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
-import           Data.Word
 import           GHC.TypeLits
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.CFG.App
-import           Data.Macaw.Memory (MemWord, MemWidth, SegmentedAddr(..), Endianness)
+import           Data.Macaw.Memory (MemWord, MemWidth, SegmentedAddr(..), Endianness(..))
 import           Data.Macaw.Types
 
 -- Note:
@@ -121,7 +119,6 @@ colonPrec = 7
 
 plusPrec :: Prec
 plusPrec = 6
-
 
 -- | Class for pretty printing with a precedence field.
 class PrettyPrec v where
@@ -155,6 +152,9 @@ newtype AssignId (ids :: *) (tp :: Type) = AssignId (Nonce ids tp)
 
 ppAssignId :: AssignId ids tp -> Doc
 ppAssignId (AssignId w) = text ("r" ++ show (indexValue w))
+
+instance Eq (AssignId ids tp) where
+  AssignId id1 == AssignId id2 = id1 == id2
 
 instance TestEquality (AssignId ids) where
   testEquality (AssignId id1) (AssignId id2) = testEquality id1 id2
@@ -244,7 +244,11 @@ data Assignment arch ids tp =
 -- or least significant byte.  The following indices either store
 -- the next lower or higher bytes.
 data MemRepr (tp :: Type) where
-  BVMemRepr :: NatRepr w -> Endianness -> MemRepr (BVType (8*w))
+  BVMemRepr :: !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
+
+instance Pretty (MemRepr tp) where
+  pretty (BVMemRepr w BigEndian)    = text "bvbe" <+> text (show w)
+  pretty (BVMemRepr w LittleEndian) = text "bvle" <+> text (show w)
 
 -- | Return the number of bytes this takes up.
 memReprBytes :: MemRepr tp -> Integer
@@ -542,7 +546,8 @@ ppAssignRhs :: (Applicative m, ArchConstraints arch)
             -> m Doc
 ppAssignRhs pp (EvalApp a) = ppAppA pp a
 ppAssignRhs _  (SetUndefined w) = pure $ text "undef ::" <+> brackets (text (show w))
-ppAssignRhs pp (ReadMem a _) = (\d -> text "*" PP.<> d) <$> pp a
+ppAssignRhs pp (ReadMem a repr) =
+  (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
 instance ArchConstraints arch => Pretty (AssignRhs arch ids tp) where
@@ -659,43 +664,6 @@ instance ArchConstraints arch => Pretty (Stmt arch ids) where
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . pretty
-
-------------------------------------------------------------------------
--- TermStmt
-
--- A terminal statement in a block
-data TermStmt arch ids
-     -- | Fetch and execute the next instruction from the given processor state.
-  = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
-    -- | Branch and execute one block or another.
-  | Branch !(Value arch ids BoolType) !Word64 !Word64
-    -- | The syscall instruction.
-    -- We model system calls as terminal instructions because from the
-    -- application perspective, the semantics will depend on the operating
-    -- system.
-  | Syscall !(RegState (ArchReg arch) (Value arch ids))
-    -- | The block ended prematurely due to an error in instruction
-    -- decoding or translation.
-    --
-    -- This contains the state of the registers when the translation error
-    -- occured and the error message recorded.
-  | TranslateError !(RegState (ArchReg arch) (Value arch ids)) !Text
-
-instance ( OrdF (ArchReg arch)
-         , ShowF (ArchReg arch)
-         )
-      => Pretty (TermStmt arch ids) where
-  pretty (FetchAndExecute s) =
-    text "fetch_and_execute" <$$>
-    indent 2 (pretty s)
-  pretty (Branch c x y) =
-    text "branch" <+> ppValue 0 c <+> text (show x) <+> text (show y)
-  pretty (Syscall s) =
-    text "syscall" <$$>
-    indent 2 (pretty s)
-  pretty (TranslateError s msg) =
-    text "ERROR: " <+> text (Text.unpack msg) <$$>
-    indent 2 (pretty s)
 
 ------------------------------------------------------------------------
 -- References

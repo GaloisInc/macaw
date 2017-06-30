@@ -13,17 +13,62 @@ module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , DisassembleFn
   , archPostSyscallAbsState
+    -- * Unclassified blocks
   , Block(..)
+  , TermStmt(..)
   ) where
 
-import Control.Monad.ST
-import Data.Parameterized.Nonce
-import Data.Word
-import Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Control.Monad.ST
+import           Data.Parameterized.Classes
+import           Data.Parameterized.Nonce
+import           Data.Text (Text)
+import qualified Data.Text as Text
+import           Data.Word
+import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
-import Data.Macaw.AbsDomain.AbsState as AbsState
-import Data.Macaw.CFG
-import Data.Macaw.Memory
+import           Data.Macaw.AbsDomain.AbsState as AbsState
+import           Data.Macaw.CFG
+import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.CFG.Rewriter
+import           Data.Macaw.Memory
+import           Data.Macaw.Types
+
+------------------------------------------------------------------------
+-- TermStmt
+
+-- A terminal statement in a block
+data TermStmt arch ids
+     -- | Fetch and execute the next instruction from the given processor state.
+  = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
+    -- | Branch and execute one block or another.
+  | Branch !(Value arch ids BoolType) !Word64 !Word64
+    -- | The syscall instruction.
+    -- We model system calls as terminal instructions because from the
+    -- application perspective, the semantics will depend on the operating
+    -- system.
+  | Syscall !(RegState (ArchReg arch) (Value arch ids))
+    -- | The block ended prematurely due to an error in instruction
+    -- decoding or translation.
+    --
+    -- This contains the state of the registers when the translation error
+    -- occured and the error message recorded.
+  | TranslateError !(RegState (ArchReg arch) (Value arch ids)) !Text
+
+instance ( OrdF (ArchReg arch)
+         , ShowF (ArchReg arch)
+         )
+      => Pretty (TermStmt arch ids) where
+  pretty (FetchAndExecute s) =
+    text "fetch_and_execute" <$$>
+    indent 2 (pretty s)
+  pretty (Branch c x y) =
+    text "branch" <+> ppValue 0 c <+> text (show x) <+> text (show y)
+  pretty (Syscall s) =
+    text "syscall" <$$>
+    indent 2 (pretty s)
+  pretty (TranslateError s msg) =
+    text "ERROR: " <+> text (Text.unpack msg) <$$>
+    indent 2 (pretty s)
 
 ------------------------------------------------------------------------
 -- Block
@@ -31,8 +76,6 @@ import Data.Macaw.Memory
 -- | The type for code blocks returned by the disassembler.
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
-
--- | A basic block in a control flow graph.
 data Block arch ids
    = Block { blockLabel :: !Word64
              -- ^ Index of this block
@@ -47,7 +90,8 @@ instance ArchConstraints arch => Pretty (Block arch ids) where
     text (show (blockLabel b)) PP.<> text ":" <$$>
       indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
 
-
+------------------------------------------------------------------------
+-- ArchitectureInfo
 
 -- | Function for disassembling a block.
 --
@@ -86,6 +130,7 @@ data ArchitectureInfo arch
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disasembling a block.
      , preserveRegAcrossSyscall :: !(forall tp . ArchReg arch tp -> Bool)
+
        -- ^ Return true if architecture register should be preserved across a system call.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
                          -> SegmentedAddr (RegAddrWidth (ArchReg arch))
@@ -116,6 +161,11 @@ data ArchitectureInfo arch
        -- should return 'Just stmts' if this code looks like a function return.
        -- The stmts should be a subset of the statements, but may remove unneeded memory
        -- accesses like reading the stack pointer.
+     , rewriteArchFn :: (forall src tgt tp . ArchFn arch src tp -> Rewriter arch src tgt (Value arch tgt tp))
+       -- ^ This rewrites an architecture specific statement
+     , rewriteArchStmt :: (forall src tgt . ArchStmt arch src -> Rewriter arch src tgt ())
+       -- ^ This rewrites an architecture specific statement
+     , archDemandContext :: !(forall ids . DemandContext arch ids)
      }
 
 

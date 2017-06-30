@@ -33,10 +33,11 @@ library
     Data.Macaw.Architecture.Syscall
     Data.Macaw.CFG
     Data.Macaw.CFG.App
+    Data.Macaw.CFG.DemandSet
+    Data.Macaw.CFG.Rewriter
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.AbsEval
-    Data.Macaw.Discovery.Opt
     Data.Macaw.Discovery.State
     Data.Macaw.Dwarf
     Data.Macaw.Fold

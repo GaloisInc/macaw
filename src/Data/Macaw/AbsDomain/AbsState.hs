@@ -50,7 +50,6 @@ module Data.Macaw.AbsDomain.AbsState
   , finalAbsBlockState
   , addMemWrite
   , transferValue
-  , transferValue'
   , abstractULt
   , abstractULeq
   , isBottom
@@ -75,6 +74,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import           GHC.Stack
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
@@ -1123,54 +1123,43 @@ pruneStack = Map.filter f
 ------------------------------------------------------------------------
 -- Transfer Value
 
-transferValue' :: ( OrdF (ArchReg a)
-                  , ShowF (ArchReg a)
-                  , Num (ArchAddr a)
-                  , MemWidth (RegAddrWidth (ArchReg a))
-                  )
-               => NatRepr (ArchAddrWidth a)
-                  -- ^ Width of a code pointer
-               -> (MemWord (ArchAddrWidth a) -> Maybe (SegmentedAddr (ArchAddrWidth a)))
-                  -- ^ Predicate that recognizes if address is code addreess.
-               -> MapF (AssignId ids) (ArchAbsValue a)
-               -> RegState (ArchReg a) (ArchAbsValue a)
-               -> Value a ids tp
-               -> ArchAbsValue a tp
-transferValue' code_width is_code amap aregs v =
-  case v of
-   BVValue w i
-     | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
-     | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
-   -- TODO: Ensure a relocatable
-   RelocatableValue _w i -> CodePointers (Set.singleton i) False
-   -- Invariant: v is in m
-   AssignedValue a ->
-     fromMaybe (error $ "Missing assignment for " ++ show (assignId a))
-               (MapF.lookup (assignId a) amap)
-   Initial r -> aregs ^. boundValue r
-
 -- | Compute abstract value from value and current registers.
 transferValue :: ( OrdF (ArchReg a)
                  , ShowF (ArchReg a)
                  , MemWidth (ArchAddrWidth a)
+                 , HasCallStack
                  )
               => AbsProcessorState (ArchReg a) ids
               -> Value a ids tp
               -> ArchAbsValue a tp
-transferValue c v =
-  let is_code addr = do
+transferValue c v = do
+  let code_width = absCodeWidth c
+      is_code addr = do
         sa <- absoluteAddrSegment (absMem c) addr
         if segmentFlags (addrSegment sa) `Perm.hasPerm` Perm.execute then
           Just $! sa
          else
           Nothing
-   in transferValue' (absCodeWidth c) is_code (c^.absAssignments) (c^.absInitialRegs) v
+      amap = c^.absAssignments
+      aregs = c^.absInitialRegs
+  case v of
+    BVValue w i
+      | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
+      | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
+    -- TODO: Ensure a relocatable value is in code.
+    RelocatableValue _w i -> CodePointers (Set.singleton i) False
+    -- Invariant: v is in m
+    AssignedValue a ->
+      fromMaybe (error $ "Missing assignment for " ++ show (assignId a))
+                (MapF.lookup (assignId a) amap)
+    Initial r -> aregs ^. boundValue r
 
 ------------------------------------------------------------------------
 -- Operations
 
 addMemWrite :: ( RegisterInfo (ArchReg arch)
                , MemWidth (ArchAddrWidth arch)
+               , HasCallStack
                )
             => BVValue arch ids (ArchAddrWidth arch)
                -- ^ Address that we are writing to.
@@ -1218,6 +1207,7 @@ absStackHasReturnAddr s = isJust $ find isReturnAddr (Map.elems (s^.startAbsStac
 finalAbsBlockState :: forall a ids
                    .  ( RegisterInfo (ArchReg a)
                       , MemWidth (ArchAddrWidth a)
+                      , HasCallStack
                       )
                    => AbsProcessorState (ArchReg a) ids
                    -> RegState (ArchReg a) (Value a ids)
@@ -1237,6 +1227,7 @@ finalAbsBlockState c s =
 transferApp :: ( OrdF (ArchReg a)
                , ShowF (ArchReg a)
                , MemWidth (ArchAddrWidth a)
+               , HasCallStack
                )
             => AbsProcessorState (ArchReg a) ids
             -> App (Value a ids) tp

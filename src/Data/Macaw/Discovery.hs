@@ -60,6 +60,7 @@ import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Set (Set)
@@ -76,12 +77,15 @@ import           Data.Macaw.AbsDomain.Refine
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
+import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
+
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -152,8 +156,68 @@ cameFromUnsoundReason found_map rsn = do
 -}
 
 ------------------------------------------------------------------------
--- Memory utilities
+-- Rewriting block
 
+-- | Apply optimizations to a terminal statement.
+rewriteTermStmt :: TermStmt arch src -> Rewriter arch src tgt (TermStmt arch tgt)
+rewriteTermStmt tstmt = do
+  case tstmt of
+    FetchAndExecute regs ->
+      FetchAndExecute <$> traverseF rewriteValue regs
+    Branch c t f ->
+      Branch <$> rewriteValue c <*> pure t <*> pure f
+    Syscall regs ->
+      Syscall <$> traverseF rewriteValue regs
+    TranslateError regs msg ->
+      TranslateError <$> traverseF rewriteValue regs
+                     <*> pure msg
+
+-- | Apply optimizations to code in the block
+rewriteBlock :: Block arch src -> Rewriter arch src tgt (Block arch tgt)
+rewriteBlock b = do
+  (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
+    mapM_ rewriteStmt (blockStmts b)
+    rewriteTermStmt (blockTerm b)
+  -- Return new block
+  pure $
+    Block { blockLabel = blockLabel b
+          , blockStmts = tgtStmts
+          , blockTerm  = tgtTermStmt
+          }
+
+------------------------------------------------------------------------
+-- Demanded subterm utilities
+
+-- | Add any values needed to compute term statement to demand set.
+addTermDemands :: TermStmt arch ids -> DemandComp arch ids ()
+addTermDemands t = do
+  case t of
+    FetchAndExecute regs -> do
+      traverseF_ addValueDemands regs
+    Branch v _ _ -> do
+      addValueDemands v
+    Syscall regs -> do
+      traverseF_ addValueDemands regs
+    TranslateError regs _ -> do
+      traverseF_ addValueDemands regs
+
+-- | Add any assignments needed to evaluate statements with side
+-- effects and terminal statement to demand set.
+addBlockDemands :: Block arch ids -> DemandComp arch ids ()
+addBlockDemands b = do
+  mapM_ addStmtDemands (blockStmts b)
+  addTermDemands (blockTerm b)
+
+-- | Return a block after filtering out statements not needed to compute it.
+elimDeadBlockStmts :: AssignIdSet ids -> Block arch ids -> Block arch ids
+elimDeadBlockStmts demandSet b =
+  Block { blockLabel = blockLabel b
+        , blockStmts = filter (stmtNeeded demandSet) (blockStmts b)
+        , blockTerm  = blockTerm b
+        }
+
+------------------------------------------------------------------------
+-- Memory utilities
 
 -- | Return true if range is entirely contained within a single read only segment.Q
 rangeInReadonlySegment :: MemWidth w
@@ -730,15 +794,16 @@ transferBlocks src finfo sz block_map =
                 .  markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
+
 transfer :: ArchSegmentedAddr arch
          -> FunM arch ids ()
 transfer addr = do
   mfinfo <- use $ foundAddrs . at addr
   let finfo = fromMaybe (error $ "getBlock called on unfound address " ++ show addr ++ ".") $
                 mfinfo
-  info      <- uses curFunCtx archInfo
-  withArchConstraints info $ do
-  nonce_gen <- gets funNonceGen
+  ainfo      <- uses curFunCtx archInfo
+  withArchConstraints ainfo $ do
+  nonceGen <- gets funNonceGen
   prev_block_map <- use $ curFunBlocks
   -- Get maximum number of bytes to disassemble
   let max_size =
@@ -747,19 +812,34 @@ transfer addr = do
           _ -> segmentSize (addrSegment addr) - addr^.addrOffset
   let ab = foundAbstractState finfo
   (bs0, sz, maybeError) <-
-    liftST $ disassembleFn info nonce_gen addr max_size ab
+    liftST $ disassembleFn ainfo nonceGen addr max_size ab
+
+  let ctx = RewriteContext { rwctxNonceGen = nonceGen
+                           , rwctxArchFn   = rewriteArchFn ainfo
+                           , rwctxArchStmt = rewriteArchStmt ainfo
+                           , rwctxConstraints = \x -> x
+                           }
+  bs1 <- liftST $ runRewriter ctx $ do
+    traverse rewriteBlock bs0
+
+  let demandSet =
+        runDemandComp (archDemandContext ainfo) $ do
+          traverse_ addBlockDemands bs1
+  let bs2 = elimDeadBlockStmts demandSet <$> bs1
+
   -- Make sure at least one block is returned
-  let bs | null bs0 = [errBlock]
-         | otherwise = bs0
-        where -- TODO: Fix this to work with segmented memory
-              w = addrWidthNatRepr (archAddrWidth info)
-              errState = mkRegState Initial
-                       & boundValue ip_reg  .~ RelocatableValue w addr
-              errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
-              errBlock = Block { blockLabel = 0
-                               , blockStmts = []
-                               , blockTerm = TranslateError errState errMsg
-                               }
+  let bs | null bs2 =
+           let -- TODO: Fix this to work with segmented memory
+               w = addrWidthNatRepr (archAddrWidth ainfo)
+               errState = mkRegState Initial
+                        & boundValue ip_reg  .~ RelocatableValue w addr
+               errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
+               errBlock = Block { blockLabel = 0
+                                , blockStmts = []
+                                , blockTerm = TranslateError errState errMsg
+                                }
+            in [errBlock]
+         | otherwise = bs2
   let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
   transferBlocks addr finfo sz block_map
 
