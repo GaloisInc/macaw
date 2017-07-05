@@ -48,7 +48,8 @@ import           Data.Macaw.Types
 -- | App defines builtin operations on values.
 data App (f :: Type -> *) (tp :: Type) where
 
-  Mux :: !(NatRepr n)
+  Mux :: (1 <= n)
+      => !(NatRepr n)
       -> !(f BoolType)
       -> !(f (BVType n))
       -> !(f (BVType n))

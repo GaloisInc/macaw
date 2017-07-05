@@ -33,6 +33,8 @@ library
     Data.Macaw.Architecture.Syscall
     Data.Macaw.CFG
     Data.Macaw.CFG.App
+    Data.Macaw.CFG.Block
+    Data.Macaw.CFG.Core
     Data.Macaw.CFG.DemandSet
     Data.Macaw.CFG.Rewriter
     Data.Macaw.DebugLogging
