@@ -101,9 +101,10 @@ concretizeAbsCodePointers mem (FinSet s) =
   , Just sa <- [absoluteAddrSegment mem (fromInteger a)]
   , Perm.isExecutable (segmentFlags (addrSegment sa))
   ]
-concretizeAbsCodePointers _ (CodePointers s _) =
+concretizeAbsCodePointers mem (CodePointers s _) =
   [ sa
-  | sa <- Set.toList s
+  | a <- Set.toList s
+  , Just sa <- [absoluteAddrSegment mem (_addrOffset a)]
   , Perm.isExecutable (segmentFlags (addrSegment sa))
   ]
   -- FIXME: this is dangerous !!
