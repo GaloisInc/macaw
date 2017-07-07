@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This module provides a function for folding over the subexpressions in
 a value without revisiting shared subterms.
 -}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -73,6 +74,7 @@ foldValueCached litf rwf initf assignf = getStateMonadMonoid . go
        -> StateMonadMonoid (Map (Some (AssignId ids)) m) m
     go v =
       case v of
+        BoolValue b -> return (litf (knownNat :: NatRepr 1) (if b then 1 else 0))
         BVValue sz i -> return $ litf sz i
         RelocatableValue w a -> pure $ rwf w a
         Initial r    -> return $ initf r

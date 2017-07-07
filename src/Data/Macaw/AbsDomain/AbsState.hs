@@ -133,7 +133,9 @@ class Eq d => AbsDomain d where
 -- The first parameter is the width of pointers on the value.  It is expected
 -- to be at most 64 bits.
 data AbsValue w (tp :: Type)
-  = forall n . (tp ~ BVType n) => FinSet !(Set Integer)
+  = (tp ~ BoolType) => BoolConst !Bool
+    -- ^ A Boolean constant
+  | forall n . (tp ~ BVType n) => FinSet !(Set Integer)
     -- ^ Denotes that this value can take any one of the fixed set.
   | (tp ~ BVType w) => CodePointers !(Set (SegmentedAddr w)) !Bool
      -- ^ A possibly empty set of values that either point to a code segment.
@@ -242,6 +244,7 @@ instance Show (AbsValue w tp) where
   show = show . pretty
 
 instance Pretty (AbsValue w tp) where
+  pretty (BoolConst b) = text (show b)
   pretty (FinSet s) = text "finset" <+> ppIntegerSet s
   pretty (CodePointers s b) = text "code" <+> ppSet (s0 ++ sd)
     where s0 = if b then [text "0"] else []
@@ -459,6 +462,7 @@ mayBeMember _n _v = True
 
 -- | Returns true if this value represents the empty set.
 isBottom :: AbsValue w tp -> Bool
+isBottom BoolConst{}      = False
 isBottom (FinSet v)       = Set.null v
 isBottom (CodePointers v b) = Set.null v && not b
 isBottom (StackOffset _ v) = Set.null v
@@ -745,10 +749,10 @@ instance ShowF r => PrettyRegValue r (AbsValue w) where
 
 
 absTrue :: AbsValue w BoolType
-absTrue = FinSet (Set.singleton 1)
+absTrue = BoolConst True
 
 absFalse :: AbsValue w BoolType
-absFalse = FinSet (Set.singleton 0)
+absFalse = BoolConst False
 
 -- | This returns the smallest abstract value that contains the
 -- given unsigned integer.
@@ -775,19 +779,19 @@ concreteStackOffset a o = StackOffset a (Set.singleton (fromInteger o))
 ------------------------------------------------------------------------
 -- Restrictions
 
-hasMaximum :: TypeRepr tp -> AbsValue w tp -> Maybe Integer
+hasMaximum :: TypeRepr (BVType w) -> AbsValue p (BVType w) -> Maybe Integer
 hasMaximum tp v =
   case v of
-   FinSet s | Set.null s -> Nothing
-            | otherwise  -> Just $! Set.findMax s
-   CodePointers s b | Set.null s -> if b then Just 0 else Nothing
-                    | otherwise  -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
-   StridedInterval si -> Just (SI.intervalEnd si)
-   TopV               -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
-   _                  -> Nothing
+    FinSet s | Set.null s -> Nothing
+             | otherwise  -> Just $! Set.findMax s
+    CodePointers s b | Set.null s -> if b then Just 0 else Nothing
+                     | otherwise  -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
+    StridedInterval si -> Just (SI.intervalEnd si)
+    TopV               -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
+    _                  -> Nothing
 
 
-hasMinimum :: TypeRepr tp -> AbsValue w tp -> Maybe Integer
+hasMinimum :: TypeRepr (BVType w) -> AbsValue p (BVType w) -> Maybe Integer
 hasMinimum _tp v =
   case v of
    FinSet s       | Set.null s -> Nothing
@@ -807,10 +811,9 @@ abstractULt :: MemWidth w
             -> AbsValue w tp
             -> (AbsValue w tp, AbsValue w tp)
 abstractULt _tp TopV TopV = (TopV, TopV)
-abstractULt tp x y
+abstractULt tp@(BVTypeRepr n) x y
   | Just u_y <- hasMaximum tp y
-  , Just l_x <- hasMinimum tp x
-  , BVTypeRepr n <- tp =
+  , Just l_x <- hasMinimum tp x =
     -- debug DAbsInt' ("abstractLt " ++ show (pretty x) ++ " " ++ show (pretty y) ++ " -> ")
     ( meet x (stridedInterval $ SI.mkStridedInterval n False 0 (u_y - 1) 1)
     , meet y (stridedInterval $ SI.mkStridedInterval n False (l_x + 1)
@@ -821,14 +824,13 @@ abstractULt _tp x y = (x, y)
 -- | @abstractULeq x y@ refines x and y with the knowledge that @x <= y@
 abstractULeq :: MemWidth w
              => TypeRepr tp
-               -> AbsValue w tp
-               -> AbsValue w tp
-               -> (AbsValue w tp, AbsValue w tp)
+             -> AbsValue w tp
+             -> AbsValue w tp
+             -> (AbsValue w tp, AbsValue w tp)
 abstractULeq _tp TopV TopV = (TopV, TopV)
-abstractULeq tp x y
+abstractULeq tp@(BVTypeRepr n) x y
   | Just u_y <- hasMaximum tp y
-  , Just l_x <- hasMinimum tp x
-  , BVTypeRepr n <- tp =
+  , Just l_x <- hasMinimum tp x =
     ( meet x (stridedInterval $ SI.mkStridedInterval n False 0 u_y 1)
     , meet y (stridedInterval $ SI.mkStridedInterval n False l_x
                                                      (maxUnsigned n) 1))
@@ -1099,21 +1101,6 @@ deleteRange l h m
           deleteRange (k+1) h (Map.delete k m)
       _ -> m
 
--- Return the width of a value.
-someValueWidth :: ( HasRepr (ArchReg arch) TypeRepr
-                  )
-               => Value arch ids tp
-               -> Integer
-someValueWidth v =
-  case typeRepr v of
-    BVTypeRepr w -> natValue w
-
-valueByteSize :: ( HasRepr (ArchReg arch) TypeRepr
-                 )
-              => Value arch ids tp
-              -> Int64
-valueByteSize v = fromInteger $ (someValueWidth v + 7) `div` 8
-
 -- | Prune stack based on write that may modify stack.
 pruneStack :: AbsBlockStack w -> AbsBlockStack w
 pruneStack = Map.filter f
@@ -1143,6 +1130,7 @@ transferValue c v = do
       amap = c^.absAssignments
       aregs = c^.absInitialRegs
   case v of
+    BoolValue b -> BoolConst b
     BVValue w i
       | 0 <= i && i <= maxUnsigned w -> abstractSingleton code_width is_code w i
       | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
@@ -1183,7 +1171,7 @@ addMemWrite a memRepr v r =
              ++" in SomeStackOffset case") $
         r & curAbsStack %~ pruneStack
     (StackOffset _ s, v_abs) ->
-      let w = valueByteSize v
+      let w = fromInteger (memReprBytes memRepr)
           e = StackEntry memRepr v_abs
           stk0 = r^.curAbsStack
           -- Delete information about old assignment

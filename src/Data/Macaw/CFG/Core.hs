@@ -93,6 +93,7 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
+import           Data.Proxy
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
@@ -212,10 +213,15 @@ type ArchSegmentedAddr arch = SegmentedAddr (ArchAddrWidth arch)
 -- | A value at runtime.
 data Value arch ids tp
    = forall n
-   .  (tp ~ BVType n)
+   . (tp ~ BVType n, 1 <= n)
    => BVValue !(NatRepr n) !Integer
      -- ^ A constant bitvector
-   | ( tp ~ BVType (ArchAddrWidth arch))
+   | (tp ~ BoolType)
+   => BoolValue !Bool
+     -- ^ A constant Boolean
+   | ( tp ~ BVType (ArchAddrWidth arch)
+     , 1 <= ArchAddrWidth arch
+     )
    => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchSegmentedAddr arch)
      -- ^ A given memory address.
    | AssignedValue !(Assignment arch ids tp)
@@ -241,7 +247,7 @@ data Assignment arch ids tp =
 -- or least significant byte.  The following indices either store
 -- the next lower or higher bytes.
 data MemRepr (tp :: Type) where
-  BVMemRepr :: !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
+  BVMemRepr :: (1 <= w) => !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
 
 instance Pretty (MemRepr tp) where
   pretty (BVMemRepr w BigEndian)    = text "bvbe" <+> text (show w)
@@ -260,7 +266,10 @@ instance TestEquality MemRepr where
       Nothing
 
 instance HasRepr MemRepr TypeRepr where
-  typeRepr (BVMemRepr w _) = BVTypeRepr (natMultiply n8 w)
+  typeRepr (BVMemRepr w _) =
+    let r = (natMultiply n8 w)
+     in case leqMulPos (Proxy :: Proxy 8) w of
+          LeqProof -> BVTypeRepr r
 
 -- | The right hand side of an assignment is an expression that
 -- returns a value.
@@ -270,8 +279,7 @@ data AssignRhs (arch :: *) ids tp where
           -> AssignRhs arch ids tp
 
   -- An expression with an undefined value.
-  SetUndefined :: (tp ~ BVType n)
-               => !(NatRepr n) -- Width of undefined value.
+  SetUndefined :: !(TypeRepr tp)
                -> AssignRhs arch ids tp
 
   -- Read memory at given location.
@@ -291,7 +299,7 @@ instance HasRepr (AssignRhs arch ids) TypeRepr where
   typeRepr rhs =
     case rhs of
       EvalApp a -> typeRepr a
-      SetUndefined w -> BVTypeRepr w
+      SetUndefined tp -> tp
       ReadMem _ tp -> typeRepr tp
       EvalArchFn _ rtp -> rtp
 
@@ -299,6 +307,7 @@ instance ( HasRepr (ArchReg arch) TypeRepr
          )
       => HasRepr (Value arch ids) TypeRepr where
 
+  typeRepr (BoolValue _) = BoolTypeRepr
   typeRepr (BVValue w _) = BVTypeRepr w
   typeRepr (RelocatableValue w _) = BVTypeRepr w
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
@@ -316,6 +325,11 @@ valueWidth v =
 
 instance OrdF (ArchReg arch)
       => OrdF (Value arch ids) where
+
+  compareF (BoolValue x) (BoolValue y) = fromOrdering (compare x y)
+  compareF BoolValue{} _ = LTF
+  compareF _ BoolValue{} = GTF
+
   compareF (BVValue wx vx) (BVValue wy vy) =
     case compareF wx wy of
       LTF -> LTF
@@ -323,6 +337,7 @@ instance OrdF (ArchReg arch)
       GTF -> GTF
   compareF BVValue{} _ = LTF
   compareF _ BVValue{} = GTF
+
 
   compareF (RelocatableValue _ x) (RelocatableValue _ y) =
     fromOrdering (compare x y)
@@ -359,11 +374,11 @@ instance OrdF (ArchReg arch)
 ------------------------------------------------------------------------
 -- Value operations
 
-mkLit :: NatRepr n -> Integer -> Value arch ids (BVType n)
+mkLit :: (1 <= n) => NatRepr n -> Integer -> Value arch ids (BVType n)
 mkLit n v = BVValue n (v .&. mask)
   where mask = maxUnsigned n
 
-bvValue :: KnownNat n => Integer -> Value arch ids (BVType n)
+bvValue :: (KnownNat n, 1 <= n) => Integer -> Value arch ids (BVType n)
 bvValue i = mkLit knownNat i
 
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
@@ -509,6 +524,7 @@ ppLit w i
 
 -- | Pretty print a value.
 ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
+ppValue _ (BoolValue b)     = text $ if b then "true" else "false"
 ppValue p (BVValue w i)     = assert (i >= 0) $ parenIf (p > colonPrec) $ ppLit w i
 ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
@@ -542,7 +558,7 @@ ppAssignRhs :: (Applicative m, ArchConstraints arch)
             -> AssignRhs arch ids tp
             -> m Doc
 ppAssignRhs pp (EvalApp a) = ppAppA pp a
-ppAssignRhs _  (SetUndefined w) = pure $ text "undef ::" <+> brackets (text (show w))
+ppAssignRhs _  (SetUndefined tp) = pure $ text "undef ::" <+> brackets (text (show tp))
 ppAssignRhs pp (ReadMem a repr) =
   (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f

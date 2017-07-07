@@ -14,6 +14,7 @@ n-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Memory
   ( Memory
@@ -190,7 +191,7 @@ instance Ord (MemWord w) where
   compare (MemWord x) (MemWord y) = compare x y
 
 -- | Typeclass for legal memory widths
-class MemWidth w where
+class (1 <= w) => MemWidth w where
   -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
   addrWidthMod :: p w -> Word64
 

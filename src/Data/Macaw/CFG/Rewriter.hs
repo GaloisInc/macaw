@@ -118,13 +118,6 @@ addBinding srcId val = Rewriter $ do
     fail $ "Assignment " ++ show srcId ++ " is already bound."
   srcAssignedValues .= MapF.insert srcId val m
 
-asApp :: Value arch tgt tp -> Maybe (App (Value arch tgt) tp)
-asApp (AssignedValue a) =
-  case assignRhs a of
-    EvalApp app -> Just app
-    _ -> Nothing
-asApp _ = Nothing
-
 -- | Return true if values are identical
 identValue :: TestEquality (ArchReg arch) => Value arch tgt tp -> Value arch tgt tp -> Bool
 identValue (BVValue _ x) (BVValue _ y) = x == y
@@ -134,16 +127,15 @@ identValue (Initial x) (Initial y) | Just Refl <- testEquality x y = True
 identValue _ _ = False
 
 boolLitValue :: Bool -> Value arch ids BoolType
-boolLitValue True  = BVValue n1 1
-boolLitValue False = BVValue n1 0
+boolLitValue = BoolValue
 
 rewriteApp :: App (Value arch tgt) tp -> Rewriter arch src tgt (Value arch tgt tp)
 rewriteApp app = do
   ctx <- Rewriter $ gets rwContext
   rwctxConstraints ctx $ do
   case app of
-    Mux _ (BVValue _ c) t f -> do
-      if c `testBit` 0 then
+    Mux _ (BoolValue c) t f -> do
+      if c then
         pure t
        else
         pure f
@@ -155,21 +147,21 @@ rewriteApp app = do
     UExt (BVValue _ x) w -> do
       pure $ BVValue w x
 
-    AndApp (BVValue _ xc) y -> do
-      if xc `testBit` 0 then
+    AndApp (BoolValue xc) y -> do
+      if xc then
         pure y
        else
-        pure (BVValue n1 0)
-    AndApp x y@BVValue{} -> rewriteApp (AndApp y x)
+        pure (BoolValue False)
+    AndApp x y@BoolValue{} -> rewriteApp (AndApp y x)
 
-    OrApp (BVValue _ xc) y -> do
-      if xc `testBit` 0 then
-        pure (BVValue n1 1)
+    OrApp (BoolValue xc) y -> do
+      if xc then
+        pure (BoolValue True)
        else
         pure y
-    OrApp x y@BVValue{} -> rewriteApp (OrApp y x)
-    NotApp (BVValue _ xc) ->
-      pure $ boolLitValue (not (xc `testBit` 0))
+    OrApp x y@BoolValue{} -> rewriteApp (OrApp y x)
+    NotApp (BoolValue b) ->
+      pure $ boolLitValue (not b)
 
     BVAdd _ x (BVValue _ 0) -> do
       pure x
@@ -179,13 +171,13 @@ rewriteApp app = do
     BVAdd w (BVValue _ x) y -> do
       rewriteApp (BVAdd w y (BVValue w x))
     -- (x + yc) + zc -> x + (yc + zc)
-    BVAdd w (asApp -> Just (BVAdd _ x (BVValue _ yc))) (BVValue _ zc) -> do
+    BVAdd w (valueAsApp -> Just (BVAdd _ x (BVValue _ yc))) (BVValue _ zc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (yc + zc))))
     -- (x - yc) + zc -> x + (zc - yc)
-    BVAdd w (asApp -> Just (BVSub _ x (BVValue _ yc))) (BVValue _ zc) -> do
+    BVAdd w (valueAsApp -> Just (BVSub _ x (BVValue _ yc))) (BVValue _ zc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (zc - yc))))
     -- (xc - y) + zc => (xc + zc) - y
-    BVAdd w (asApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
+    BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
       rewriteApp (BVSub w (BVValue w (toUnsigned w (xc + zc))) y)
 
     -- x - yc = x + (negate yc)
@@ -209,18 +201,16 @@ rewriteApp app = do
     BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic
       pure $! boolLitValue v
-    BVTestBit x (BVValue _ 0) | Just Refl <- testEquality (typeWidth x) n1 -> do
-      pure x
-    BVTestBit (asApp -> Just (UExt x _)) i@(BVValue _ ic) -> do
+    BVTestBit (valueAsApp -> Just (UExt x _)) i@(BVValue _ ic) -> do
       let xw = typeWidth x
       if ic < natValue xw then
         rewriteApp (BVTestBit x i)
        else
-        pure (BVValue n1 0)
-    BVTestBit (asApp -> Just (BVXor _ x y@BVValue{})) i -> do
+        pure (BoolValue False)
+    BVTestBit (valueAsApp -> Just (BVXor _ x y@BVValue{})) i -> do
       xb <- rewriteApp (BVTestBit x i)
       yb <- rewriteApp (BVTestBit y i)
-      rewriteApp (BVXor n1 xb yb)
+      rewriteApp (XorApp xb yb)
 
     BVComplement w (BVValue _ x) -> do
       pure (BVValue w (toUnsigned w (complement x)))
@@ -262,23 +252,35 @@ rewriteApp app = do
       let s = min y (natValue w)
       pure (BVValue w (toUnsigned w (toSigned w x `shiftR` fromInteger s)))
 
+    Eq (BoolValue x) (BoolValue y) -> do
+      pure $! boolLitValue (x == y)
 
-    BVEq (BVValue _ x) (BVValue _ y) -> do
+    Eq (BoolValue True) y -> do
+      pure $! y
+    Eq (BoolValue False) y -> do
+      rewriteApp $ NotApp y
+
+    Eq x (BoolValue True) -> do
+      pure $! x
+    Eq x (BoolValue False) -> do
+      rewriteApp $ NotApp x
+
+    Eq (BVValue _ x) (BVValue _ y) -> do
       pure $! boolLitValue (x == y)
 
     -- Move constant to right hand side.
-    BVEq x@BVValue{} y -> do
-      rewriteApp (BVEq y x)
+    Eq x@BVValue{} y -> do
+      rewriteApp (Eq y x)
 
-    BVEq (asApp -> Just (BVAdd w x (BVValue _ o))) (BVValue _ yc) -> do
-      rewriteApp (BVEq x (BVValue w (toUnsigned w (yc - o))))
+    Eq (valueAsApp -> Just (BVAdd w x (BVValue _ o))) (BVValue _ yc) -> do
+      rewriteApp (Eq x (BVValue w (toUnsigned w (yc - o))))
 
-    BVEq (asApp -> Just (UExt x _)) (BVValue _ yc) -> do
+    Eq (valueAsApp -> Just (UExt x _)) (BVValue _ yc) -> do
       let u = typeWidth x
       if yc > maxUnsigned u then
-        pure (BVValue n1 0)
+        pure (BoolValue False)
        else
-        rewriteApp (BVEq x (BVValue u (toUnsigned u yc)))
+        rewriteApp (Eq x (BVValue u (toUnsigned u yc)))
 
     _ -> evalRewrittenRhs (EvalApp app)
 
@@ -299,6 +301,7 @@ rewriteAssignRhs rhs =
 rewriteValue :: Value arch src tp -> Rewriter arch src tgt (Value arch tgt tp)
 rewriteValue v =
   case v of
+    BoolValue b -> pure (BoolValue b)
     BVValue w i -> pure (BVValue w i)
     RelocatableValue w a -> pure (RelocatableValue w a)
     AssignedValue (Assignment aid _) -> do

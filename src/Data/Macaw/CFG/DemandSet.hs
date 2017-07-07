@@ -90,6 +90,7 @@ addAssignmentDemands a = do
 addValueDemands :: Value arch ids tp -> DemandComp arch ids ()
 addValueDemands v = do
   case v of
+    BoolValue{} -> pure ()
     BVValue{} -> pure ()
     RelocatableValue{} -> pure ()
     AssignedValue a -> addAssignmentDemands a

@@ -73,8 +73,10 @@ data Type
   | X86_80Float
     -- | 128 bit binary IEE754
   | QuadFloat
-    --  | 16 bit binary IEE754
+    -- | 16 bit binary IEE754
   | HalfFloat
+    -- | A Boolean value
+  | BoolType
 
 -- Return number of bytes in the type.
 type family TypeBytes (tp :: Type) :: Nat where
@@ -101,31 +103,45 @@ type FloatType tp = BVType (8 * TypeBytes tp)
 
 type BVType = 'BVType
 
-type BoolType   = BVType 1
+type BoolType = 'BoolType
 
 -- | A runtime representation of @Type@ for case matching purposes.
 data TypeRepr (tp :: Type) where
-  BVTypeRepr :: !(NatRepr n) -> TypeRepr (BVType n)
+  BoolTypeRepr :: TypeRepr BoolType
+  BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
 
 instance TestEquality TypeRepr where
+  testEquality BoolTypeRepr BoolTypeRepr = do
+    return Refl
   testEquality (BVTypeRepr m) (BVTypeRepr n) = do
     Refl <- testEquality m n
     return Refl
+  testEquality _ _ = Nothing
 
 instance OrdF TypeRepr where
+  compareF BoolTypeRepr BoolTypeRepr = EQF
+  compareF BoolTypeRepr _ = LTF
+  compareF _ BoolTypeRepr = GTF
   compareF (BVTypeRepr m) (BVTypeRepr n) = do
     case compareF m n of
       LTF -> LTF
       EQF -> EQF
       GTF -> GTF
 
+instance Show (TypeRepr tp) where
+  show BoolTypeRepr = "bool"
+  show (BVTypeRepr w) = "[" ++ show w ++ "]"
+
 class KnownType tp where
   knownType :: TypeRepr tp
 
-instance KnownNat n => KnownType (BVType n) where
+instance KnownType BoolType where
+  knownType = BoolTypeRepr
+
+instance (KnownNat n, 1 <= n) => KnownType (BVType n) where
   knownType = BVTypeRepr knownNat
 
 ------------------------------------------------------------------------
@@ -185,11 +201,36 @@ floatInfoBytes fir =
     QuadFloatRepr         -> knownNat
     X86_80FloatRepr       -> knownNat
 
+floatInfoBytesIsPos :: FloatInfoRepr flt -> LeqProof 1 (TypeBytes flt)
+floatInfoBytesIsPos fir =
+  case fir of
+    HalfFloatRepr         -> LeqProof
+    SingleFloatRepr       -> LeqProof
+    DoubleFloatRepr       -> LeqProof
+    QuadFloatRepr         -> LeqProof
+    X86_80FloatRepr       -> LeqProof
+
+
 floatInfoBits :: FloatInfoRepr flt -> NatRepr (8 * TypeBytes flt)
 floatInfoBits fir = natMultiply (knownNat :: NatRepr 8) (floatInfoBytes fir)
 
 floatTypeRepr :: FloatInfoRepr flt -> TypeRepr (BVType (8 * TypeBytes flt))
-floatTypeRepr fir = BVTypeRepr (floatInfoBits fir)
+floatTypeRepr fir =
+  case fir of
+    HalfFloatRepr         -> knownType
+    SingleFloatRepr       -> knownType
+    DoubleFloatRepr       -> knownType
+    QuadFloatRepr         -> knownType
+    X86_80FloatRepr       -> knownType
+
+floatInfoBitsIsPos :: FloatInfoRepr flt -> LeqProof 1 (8 * TypeBytes flt)
+floatInfoBitsIsPos fir =
+  case fir of
+    HalfFloatRepr         -> LeqProof
+    SingleFloatRepr       -> LeqProof
+    DoubleFloatRepr       -> LeqProof
+    QuadFloatRepr         -> LeqProof
+    X86_80FloatRepr       -> LeqProof
 
 ------------------------------------------------------------------------
 --

@@ -169,13 +169,14 @@ assertPred _ _ bnds = Right bnds
 
 -- | Lookup an upper bound or return analysis for why it is not defined.
 unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
-                    , MapF.ShowF (ArchReg arch)
-                    )
+                      , MapF.ShowF (ArchReg arch)
+                      )
                   => IndexBounds (ArchReg arch) ids
                   -> Value arch ids tp
                   -> Either String (UpperBound tp)
 unsignedUpperBound bnds v =
   case v of
+    BoolValue _ -> Left "Boolean values do not have bounds."
     BVValue _ i -> Right (IntegerUpperBound i)
     RelocatableValue{} ->
       Left "Relocatable values do not have bounds."
