@@ -11,7 +11,6 @@ import           Control.Monad.ST
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Context as Ctx
-import           Data.Parameterized.Ctx
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Set as Set
 import           Data.String
@@ -31,14 +30,9 @@ import           System.IO (stdout)
 
 import qualified Data.Macaw.CFG.Block as M
 
+import Data.Macaw.Symbolic.App
+
 data ReoptSimulatorState sym = ReoptSimulatorState
-
-type family ArchRegContext (arch :: *) :: Ctx C.CrucibleType
-
-type ArchRegStruct (arch :: *) = C.StructType (ArchRegContext arch)
-
-type MacawFunctionArgs arch = EmptyCtx ::> ArchRegStruct arch
-type MacawFunctionResult arch = ArchRegStruct arch
 
 translateBlock :: Map Word64 (CR.Label s)
                   -- ^ Map from block indices to the associated label.
@@ -61,7 +55,10 @@ stepBlocks :: forall sym arch ids
            -> Word64
            -> Map Word64 (M.Block arch ids)
               -- ^ Map from block indices to block
-           -> IO (C.ExecResult ReoptSimulatorState sym (C.RegEntry sym (C.StructType (ArchRegContext arch))))
+           -> IO (C.ExecResult
+                   ReoptSimulatorState
+                   sym
+                   (C.RegEntry sym (C.StructType (ArchRegContext arch))))
 stepBlocks sym regTypes addr macawBlockMap = do
   let macawStructRepr = C.StructRepr regTypes
   halloc <- C.newHandleAllocator

@@ -3,6 +3,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -24,14 +25,24 @@ import           Data.Parameterized.Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
-import Data.String
-import           Data.Text
+import qualified Data.Sequence as Seq
+import qualified Data.Set as Set
+import           Data.String
+import           Data.Text (Text)
+import qualified Data.Text as Text
 import           Data.Word
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.FunctionHandle as C
 import           Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Types as C
+
+type family ArchRegContext (arch :: *) :: Ctx C.CrucibleType
+
+type ArchRegStruct (arch :: *) = C.StructType (ArchRegContext arch)
+
+type MacawFunctionArgs arch = EmptyCtx ::> ArchRegStruct arch
+type MacawFunctionResult arch = ArchRegStruct arch
 
 type family ToCrucibleType (mtp :: M.Type) :: C.CrucibleType where
   ToCrucibleType (M.BVType w) = C.BVType w
@@ -56,7 +67,40 @@ type ArchConstraints arch
 
 newtype SymbolicHandle f tp = SymbolicHandle (f (ToCrucibleType tp))
 
-type ReadMemHandle arch = C.FnHandle (EmptyCtx ::> C.BVType (M.ArchAddrWidth arch))
+type ArchAddrCrucibleType arch = C.BVType (M.ArchAddrWidth arch)
+
+-- | Type
+type ReadMemHandle arch = C.FnHandle (EmptyCtx ::> ArchAddrCrucibleType arch)
+
+type WriteMemHandle arch tp
+   = C.FnHandle (EmptyCtx ::> ArchAddrCrucibleType arch ::> tp) C.UnitType
+
+newtype WriteMemWrapper arch tp = WriteMemWrapper (WriteMemHandle arch (ToCrucibleType tp))
+
+type FreshSymHandleMap = MapF M.TypeRepr (SymbolicHandle (C.FnHandle EmptyCtx))
+
+type ReadMemHandleMap  arch = MapF M.MemRepr (SymbolicHandle (ReadMemHandle arch))
+type WriteMemHandleMap arch = MapF M.MemRepr (WriteMemWrapper arch)
+
+-- | Structure for getitng information about what handles are used
+data CrucGenHandles arch
+  = CrucGenHandles
+  { freshSymHandleMap :: !FreshSymHandleMap
+    -- ^ Map type reprs to associated handle for creating symbolic values.
+  , readMemHandleMap  :: !(ReadMemHandleMap arch)
+    -- ^ Maps memory repr to symbolic handle for reading memory.
+  , writeMemHandleMap :: !(WriteMemHandleMap arch)
+    -- ^ Maps mem repr to function for writing to memory.
+  }
+
+freshSymHandleMapLens :: Simple Lens (CrucGenHandles arch) FreshSymHandleMap
+freshSymHandleMapLens = lens freshSymHandleMap (\s v -> s { freshSymHandleMap = v})
+
+readMemHandleMapLens :: Simple Lens (CrucGenHandles arch) (ReadMemHandleMap arch)
+readMemHandleMapLens = lens readMemHandleMap (\s v -> s { readMemHandleMap = v})
+
+writeMemHandleMapLens :: Simple Lens (CrucGenHandles arch) (WriteMemHandleMap arch)
+writeMemHandleMapLens = lens writeMemHandleMap (\s v -> s { writeMemHandleMap = v})
 
 -- | State used for generating blocks
 data CrucGenState arch ids s
@@ -74,10 +118,14 @@ data CrucGenState arch ids s
    , translateArchFn :: !(forall tp
                           . M.ArchFn arch ids tp
                           -> CrucGen arch ids s (C.Atom s (ToCrucibleType tp)))
-   , freshSymHandleMap :: !(MapF M.TypeRepr (SymbolicHandle (C.FnHandle EmptyCtx)))
-     -- ^ Map type reprs to associated handle for creating symbolic values.
-   , readMemHandleMap  :: !(MapF M.MemRepr (SymbolicHandle (ReadMemHandle arch)))
-   , prevStmts :: ![C.Stmt s]
+     -- ^ Function for translating an architecture specific function
+   , translateArchStmt :: !(M.ArchStmt arch ids -> CrucGen arch ids s ())
+     -- ^ Function for translating an architecture specific statement.
+   , blockLabel :: (C.Label s)
+     -- ^ Label for this block we are tranlating
+   , handleMap :: !(CrucGenHandles arch)
+     -- ^ Handles found so far
+   , prevStmts :: ![C.Posd (C.Stmt s)]
      -- ^ List of states in reverse order
    , valueCount :: !Int
      -- ^ Counter used to get fresh indices for Crucible atoms.
@@ -89,13 +137,66 @@ data CrucGenState arch ids s
      -- ^ Map Macaw assign id to associated Crucible value.
    }
 
-type CrucGen arch ids s = StateT (CrucGenState arch ids s) (ST s)
+handleMapLens :: Simple Lens (CrucGenState arch ids s) (CrucGenHandles arch)
+handleMapLens = lens handleMap (\s v -> s { handleMap = v })
 
+data CrucGenResult arch ids s
+   = CrucGenResult
+   { resHandleMap :: !(CrucGenHandles arch)
+   , resBlock :: !(C.Block s (MacawFunctionResult arch))
+   }
+
+newtype CrucGen arch ids s r
+   = CrucGen { unContGen
+               :: CrucGenState arch ids s
+                  -> (CrucGenState arch ids s -> r -> ST s (CrucGenResult arch ids s))
+                  -> ST s (CrucGenResult arch ids s)
+             }
+
+instance Functor (CrucGen arch ids s) where
+  fmap f m = CrucGen $ \s0 cont -> unContGen m s0 $ \s1 v -> cont s1 (f v)
+
+instance Applicative (CrucGen arch ids s) where
+  pure r = CrucGen $ \s cont -> cont s r
+  mf <*> ma = CrucGen $ \s0 cont -> unContGen mf s0
+                      $ \s1 f -> unContGen ma s1
+                      $ \s2 a -> cont s2 (f a)
+
+instance Monad (CrucGen arch ids s) where
+  m >>= h = CrucGen $ \s0 cont -> unContGen m s0 $ \s1 r -> unContGen (h r) s1 cont
+
+instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
+  get = CrucGen $ \s cont -> cont s s
+  put s = CrucGen $ \_ cont -> cont s ()
+
+liftST :: ST s r -> CrucGen arch ids s r
+liftST m = CrucGen $ \s cont -> m >>= cont s
+
+getPos :: CrucGen arch ids s C.Position
+getPos = undefined
 
 addStmt :: C.Stmt s -> CrucGen arch ids s ()
 addStmt stmt = seq stmt $ do
+  p <- getPos
   s <- get
-  put $! s { prevStmts = stmt : prevStmts s }
+  let pstmt = C.Posd p stmt
+  seq pstmt $ do
+  put $! s { prevStmts = pstmt : prevStmts s }
+
+addTermStmt :: C.TermStmt s (MacawFunctionResult arch)
+            -> CrucGen arch ids s a
+addTermStmt tstmt = do
+  termPos <- getPos
+  CrucGen $ \s _ -> do
+  let lbl = C.LabelID (blockLabel s)
+  let stmts = Seq.fromList (reverse (prevStmts s))
+  let term = C.Posd termPos tstmt
+  let blk = C.mkBlock lbl Set.empty stmts term
+  let res = CrucGenResult
+          { resHandleMap = handleMap s
+          , resBlock = blk
+          }
+  pure $! res
 
 freshValueIndex :: CrucGen arch ids s Int
 freshValueIndex = do
@@ -172,7 +273,7 @@ valueToCrucible v = do
 freshSymbolicHandle :: M.TypeRepr tp
                     -> CrucGen arch ids s (C.FnHandle EmptyCtx (ToCrucibleType tp))
 freshSymbolicHandle repr = do
-  hmap <- gets freshSymHandleMap
+  hmap <- use $ handleMapLens . freshSymHandleMapLens
   case MapF.lookup repr hmap of
     Just (SymbolicHandle h) -> pure h
     Nothing -> do
@@ -180,11 +281,45 @@ freshSymbolicHandle repr = do
                   M.BoolTypeRepr -> "symbolicBool"
                   M.BVTypeRepr w -> fromString $ "symbolicBV" ++ show w
       halloc <- gets handleAlloc
-      hndl <- lift $ C.mkHandle' halloc fnm Ctx.empty (typeToCrucible repr)
-      modify $ \s -> s { freshSymHandleMap =
-                           MapF.insert repr (SymbolicHandle hndl) (freshSymHandleMap s)
-                       }
+      hndl <- liftST $ C.mkHandle' halloc fnm Ctx.empty (typeToCrucible repr)
+      handleMapLens . freshSymHandleMapLens %= MapF.insert repr (SymbolicHandle hndl)
       pure $! hndl
+
+readMemHandle :: M.MemRepr tp
+              -> CrucGen arch ids s (ReadMemHandle arch (ToCrucibleType tp))
+readMemHandle repr = do
+  hmap <- use $ handleMapLens . readMemHandleMapLens
+  case MapF.lookup repr hmap of
+    Just (SymbolicHandle r) -> pure r
+    Nothing -> do
+      cns <- gets archConstraints
+      cns $ do
+      halloc <- gets handleAlloc
+      let fnm = case repr of
+                  M.BVMemRepr w _ -> fromString $ "readWord" ++ show (8 * natValue w)
+      wrepr <- gets archWidthRepr
+      let argTypes = Ctx.empty Ctx.%> C.BVRepr wrepr
+      hndl <- liftST $ C.mkHandle' halloc fnm argTypes (memReprToCrucible repr)
+      handleMapLens . readMemHandleMapLens %= MapF.insert repr (SymbolicHandle hndl)
+      pure hndl
+
+writeMemHandle :: M.MemRepr tp
+               -> CrucGen arch ids s (WriteMemHandle arch (ToCrucibleType tp))
+writeMemHandle repr = do
+  hmap <- use $ handleMapLens . writeMemHandleMapLens
+  case MapF.lookup repr hmap of
+    Just (WriteMemWrapper r) -> pure r
+    Nothing -> do
+      cns <- gets archConstraints
+      cns $ do
+      halloc <- gets handleAlloc
+      let fnm = case repr of
+                  M.BVMemRepr w _ -> fromString $ "readWord" ++ show (8 * natValue w)
+      wrepr <- gets archWidthRepr
+      let argTypes = Ctx.empty Ctx.%> C.BVRepr wrepr Ctx.%> memReprToCrucible repr
+      hndl <- liftST $ C.mkHandle' halloc fnm argTypes C.UnitRepr
+      handleMapLens . writeMemHandleMapLens %= MapF.insert repr (WriteMemWrapper hndl)
+      pure hndl
 
 runCall :: C.FnHandle args ret
         -> Ctx.Assignment (C.Atom s) args
@@ -199,24 +334,6 @@ freshSymbolic repr = do
   hndl <- freshSymbolicHandle repr
   runCall hndl Ctx.empty (typeToCrucible repr)
 
-readMemHandle :: M.MemRepr tp
-              -> CrucGen arch ids s (ReadMemHandle arch (ToCrucibleType tp))
-readMemHandle repr = do
-  hmap <- gets readMemHandleMap
-  case MapF.lookup repr hmap of
-    Just (SymbolicHandle r) -> pure r
-    Nothing -> do
-      cns <- gets archConstraints
-      cns $ do
-      halloc <- gets handleAlloc
-      let fnm = case repr of
-                  M.BVMemRepr w _ -> fromString $ "readWord" ++ show w
-      wrepr <- gets archWidthRepr
-      let argTypes = Ctx.empty Ctx.%> C.BVRepr wrepr
-      hndl <- lift $ C.mkHandle' halloc fnm argTypes (memReprToCrucible repr)
-      modify' $ \s ->
-        s { readMemHandleMap = MapF.insert repr (SymbolicHandle hndl) (readMemHandleMap s) }
-      pure hndl
 
 readMem :: M.ArchAddrValue arch ids
         -> M.MemRepr tp
@@ -225,6 +342,17 @@ readMem addr repr = do
   hndl <- readMemHandle repr
   caddr <- valueToCrucible addr
   runCall hndl (Ctx.empty Ctx.%> caddr) (memReprToCrucible repr)
+
+writeMem :: M.ArchAddrValue arch ids
+        -> M.MemRepr tp
+        -> M.Value arch ids tp
+        -> CrucGen arch ids s ()
+writeMem addr repr val = do
+  hndl <- writeMemHandle repr
+  caddr <- valueToCrucible addr
+  cval  <- valueToCrucible val
+  let args = Ctx.empty Ctx.%> caddr Ctx.%> cval
+  void $ runCall hndl args C.UnitRepr
 
 assignRhsToCrucible :: M.AssignRhs arch ids tp
                     -> CrucGen arch ids s (C.Atom s (ToCrucibleType tp))
@@ -245,10 +373,12 @@ addMacawStmt stmt = do
       a <- assignRhsToCrucible (M.assignRhs asgn)
       modify' $ \s -> s { assignValueMap = MapF.insert idx (WrappedAtom a) (assignValueMap s) }
     M.WriteMem addr repr val -> do
-      undefined addr repr val
-    M.PlaceHolderStmt vals msg -> do
-      undefined vals msg
-    M.Comment txt -> do
-      undefined txt
+      writeMem addr repr val
+    M.PlaceHolderStmt _vals msg -> do
+      cmsg <- crucibleValue (C.TextLit (Text.pack msg))
+      addTermStmt (C.ErrorStmt cmsg)
+    M.Comment _txt -> do
+      pure ()
     M.ExecArchStmt astmt -> do
-      undefined astmt
+      f <- gets translateArchStmt
+      f astmt
