@@ -7,12 +7,14 @@ cabal-version: >= 1.9.2
 
 library
   build-depends:
-    base >= 4,
-    containers,
-    crucible,
-    macaw,
-    mtl,
-    parameterized-utils
+                base >= 4,
+                containers,
+                crucible,
+                lens,
+                macaw,
+                mtl,
+                parameterized-utils,
+                text
 
   hs-source-dirs: src
 

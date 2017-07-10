@@ -13,6 +13,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Ctx
 import qualified Data.Parameterized.Map as MapF
+import qualified Data.Set as Set
 import           Data.String
 import           Data.Word
 import qualified Lang.Crucible.CFG.Core as C
@@ -40,11 +41,18 @@ type MacawFunctionArgs arch = EmptyCtx ::> ArchRegStruct arch
 type MacawFunctionResult arch = ArchRegStruct arch
 
 translateBlock :: Map Word64 (CR.Label s)
+                  -- ^ Map from block indices to the associated label.
                -> M.Block arch ids
-               -> CR.Block s (MacawFunctionResult arch)
-translateBlock = undefined
-
---data MacawRegClass (tp :: M.TypeRepr) =
+               -> Either String (CR.Block s (MacawFunctionResult arch))
+translateBlock idMap b = do
+  let idx = M.blockLabel b
+  lbl <-
+    case Map.lookup idx idMap of
+      Just lbl -> Right (CR.LabelID lbl)
+      Nothing -> Left $ "Internal: Could not find block with index " ++ show idx
+  let stmts = undefined
+      term = undefined
+  pure $ CR.mkBlock lbl Set.empty stmts term
 
 stepBlocks :: forall sym arch ids
            .  IsSymInterface sym
@@ -63,10 +71,11 @@ stepBlocks sym regTypes addr macawBlockMap = do
   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label ())
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w)) | w <- Map.keys macawBlockMap ]
+  let Right blks = traverse (translateBlock blockLabelMap) $ Map.elems macawBlockMap
   -- Create control flow graph
   let rg :: CR.CFG () (MacawFunctionArgs arch) (MacawFunctionResult arch)
       rg = CR.CFG { CR.cfgHandle = h
-                  , CR.cfgBlocks = translateBlock blockLabelMap <$> Map.elems macawBlockMap
+                  , CR.cfgBlocks = blks
                   }
   cfg <- C.initialConfig 0 []
   let ctx :: C.SimContext ReoptSimulatorState sym

@@ -121,7 +121,7 @@ addrWidthNatRepr Addr64 = knownNat
 
 -- | Indicates whether bytes are stored in big or little endian representation.
 data Endianness = BigEndian | LittleEndian
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 ------------------------------------------------------------------------
 -- Utilities

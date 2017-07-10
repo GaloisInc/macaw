@@ -265,6 +265,13 @@ instance TestEquality MemRepr where
      else
       Nothing
 
+instance OrdF MemRepr where
+  compareF (BVMemRepr xw xe) (BVMemRepr yw ye) =
+    case compareF xw yw of
+      LTF -> LTF
+      GTF -> GTF
+      EQF -> fromOrdering (compare xe ye)
+
 instance HasRepr MemRepr TypeRepr where
   typeRepr (BVMemRepr w _) =
     let r = (natMultiply n8 w)
