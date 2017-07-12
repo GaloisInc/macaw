@@ -286,7 +286,11 @@ concretize (SubValue _ _) = Nothing -- we know nothing about _all_ values
 concretize (StridedInterval s) =
   debug DAbsInt ("Concretizing " ++ show (pretty s)) $
   Just (Set.fromList (SI.toList s))
-concretize _ = Nothing
+concretize (BoolConst b) = Just (Set.singleton (if b then 1 else 0))
+concretize SomeStackOffset{} = Nothing
+concretize TopV       = Nothing
+concretize ReturnAddr = Nothing
+concretize StackOffset{} = Nothing
 
 -- FIXME: make total, we would need to carry around tp
 absValueSize :: AbsValue w tp -> Maybe Integer
@@ -294,9 +298,13 @@ absValueSize (FinSet s) = Just $ fromIntegral (Set.size s)
 absValueSize (CodePointers s b) = Just $ fromIntegral (Set.size s) + (if b then 1 else 0)
 absValueSize (StridedInterval s) = Just $ SI.size s
 absValueSize (StackOffset _ s) = Just $ fromIntegral (Set.size s)
-absValueSize _ = Nothing
+absValueSize (BoolConst _)     = Just 1
+absValueSize SomeStackOffset{} = Nothing
+absValueSize SubValue{} = Nothing
+absValueSize TopV       = Nothing
+absValueSize ReturnAddr = Nothing
 
--- | Return single value is the abstract value can only take on one value.
+-- | Returns single value, if the abstract value can only take on one value.
 asConcreteSingleton :: MemWidth w => AbsValue w tp -> Maybe Integer
 asConcreteSingleton v = do
   sz <- absValueSize v
