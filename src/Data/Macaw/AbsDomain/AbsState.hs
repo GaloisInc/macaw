@@ -449,7 +449,9 @@ joinAbsValue' (SomeStackOffset ax) (SomeStackOffset ay) | ax == ay = return $ No
 
 
 joinAbsValue' ReturnAddr ReturnAddr = return Nothing
-
+joinAbsValue' (BoolConst b1) (BoolConst b2)
+  | b1 == b2  = return Nothing
+  | otherwise = return $! Just TopV
 
 joinAbsValue' x y = do
   addWords (codePointerSet x)
