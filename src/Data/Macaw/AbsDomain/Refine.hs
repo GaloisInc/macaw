@@ -24,15 +24,14 @@ import Data.Parameterized.NatRepr
 
 import Data.Macaw.AbsDomain.AbsState
 import Data.Macaw.CFG
-import Data.Macaw.Memory (MemWidth)
 import Data.Macaw.Types
 
 -- | Constraints needed for refinement on abstract states.
 type RefineConstraints arch
-   = ( OrdF  (ArchReg arch)
-     , ShowF (ArchReg arch)
-     , HasRepr (ArchReg arch) TypeRepr
-     , MemWidth (ArchAddrWidth arch)
+   = ( RegisterInfo (ArchReg arch)
+--     , ShowF (ArchReg arch)
+--     , HasRepr (ArchReg arch) TypeRepr
+--     , MemWidth (ArchAddrWidth arch)
      )
 
 -- FIXME: if val \notin av then we should return bottom

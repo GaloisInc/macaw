@@ -11,6 +11,7 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
@@ -32,7 +33,6 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
-import           Data.Either (partitionEithers)
 import           Data.ElfEdit
 import           Data.Foldable
 import           Data.IntervalMap.Strict (Interval(..), IntervalMap)
@@ -60,7 +60,7 @@ sliceL (i,c) = L.take (fromIntegral c) . L.drop (fromIntegral i)
 -- address and section contents.
 --
 -- The base address is expressed in terms of the underlying memory segment.
-type SectionIndexMap w = Map ElfSectionIndex (SegmentedAddr w, ElfSection (ElfWordType w))
+type SectionIndexMap w = Map ElfSectionIndex (MemSegmentOff w, ElfSection (ElfWordType w))
 
 ------------------------------------------------------------------------
 -- Flag conversion
@@ -333,8 +333,8 @@ insertElfSegment opt shdrMap contents relocMap phdr = do
         when (phdr_offset > shdr_start) $ do
           fail $ "Found section header that overlaps with program header."
         let sec_offset = fromIntegral $ shdr_start - phdr_offset
-        let pair = (SegmentedAddr seg sec_offset, sec)
-        mlsIndexMap %= Map.insert elfIdx pair
+        let Just addr = resolveSegmentOff seg sec_offset
+        mlsIndexMap %= Map.insert elfIdx (addr, sec)
       _ -> fail "Unexpected shdr interval"
 
 
@@ -398,8 +398,8 @@ insertElfSection sec = do
     let seg = memSegmentForElfSection idx sec
     loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
-    let pair = (SegmentedAddr seg 0, sec)
-    mlsIndexMap %= Map.insert elfIdx pair
+    let Just addr = resolveSegmentOff seg 0
+    mlsIndexMap %= Map.insert elfIdx (addr, sec)
 
 -- | Load allocated Elf sections into memory.
 --
@@ -462,29 +462,22 @@ loadExecutable opt path = do
 ------------------------------------------------------------------------
 -- Elf symbol utilities
 
--- | The takes the elf symbol table map and attempts to identify segmented addresses for each one.
---
--- It returns a two maps, the first contains entries that could not be resolved; the second
--- contains those that could.
+-- | The takes the elf symbol table map, creates a map from function
+-- symbol addresses to the associated symbol name.
 resolvedSegmentedElfFuncSymbols :: forall w
                                 .  Memory w
                                 -> [ElfSymbolTableEntry (ElfWordType w)]
-                                -> (Map (MemWord w) [BS.ByteString], Map (SegmentedAddr w) [BS.ByteString])
+                                -> Map (MemSegmentOff w) [BS.ByteString]
 resolvedSegmentedElfFuncSymbols mem entries = reprConstraints (memAddrWidth mem) $
   let -- Filter out just function entries
-     isCodeFuncSymbol ste = steType ste == STT_FUNC
-                         && isCodeAddr mem (fromIntegral (steValue ste))
-     func_entries = filter isCodeFuncSymbol entries
-     -- Build absolute address map
-     absAddrMap :: Map (MemWord w) [BS.ByteString]
-     absAddrMap = Map.fromListWith (++) $ [ (fromIntegral (steValue ste), [steName ste]) | ste <- func_entries ]
-     -- Resolve addresses
-     resolve (v,nms) =
-       case absoluteAddrSegment mem v of
-         Nothing -> Left  (v,  nms)
-         Just sv -> Right (sv, nms)
-     (u,r) = partitionEithers $ resolve <$> Map.toList absAddrMap
-  in (Map.fromList u, Map.fromList r)
+     func_entries =
+       [ (addr, [steName ste])
+       | ste <- entries
+       , steType ste == STT_FUNC
+       , addr <- maybeToList $ resolveAbsoluteAddr mem (fromIntegral (steValue ste))
+       , segmentFlags (msegSegment addr) `Perm.hasPerm` Perm.execute
+       ]
+  in Map.fromListWith (++) func_entries
 
 ppElfUnresolvedSymbols :: forall w
                        .  MemWidth w

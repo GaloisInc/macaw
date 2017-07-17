@@ -7,7 +7,7 @@ This exports the main CFG modules
 module Data.Macaw.CFG
   ( module Data.Macaw.CFG.Core
   , module Data.Macaw.CFG.App
-  , Data.Macaw.Memory.SegmentedAddr
+  , Data.Macaw.Memory.MemAddr
   ) where
 
 import           Data.Macaw.CFG.App

@@ -110,6 +110,8 @@ addStmtDemands s =
       addValueDemands val
     PlaceHolderStmt l _ ->
       mapM_ (\(Some v) -> addValueDemands v) l
+    InstructionStart{} ->
+      pure ()
     Comment _ ->
       pure ()
     ExecArchStmt astmt -> do
@@ -126,5 +128,6 @@ stmtNeeded demandSet stmt =
     AssignStmt a -> Set.member (Some (assignId a)) demandSet
     WriteMem{} -> True
     PlaceHolderStmt{} -> True
+    InstructionStart{} -> True
     Comment{} -> True
     ExecArchStmt{} -> True

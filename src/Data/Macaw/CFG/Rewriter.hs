@@ -325,11 +325,14 @@ rewriteStmt s =
     WriteMem addr repr val -> do
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
-      appendRewrittenStmt (WriteMem tgtAddr repr tgtVal)
+      appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
     PlaceHolderStmt args nm -> do
       args' <- traverse (traverseSome rewriteValue) args
-      appendRewrittenStmt (PlaceHolderStmt args' nm)
-    Comment cmt -> appendRewrittenStmt (Comment cmt)
+      appendRewrittenStmt $ PlaceHolderStmt args' nm
+    Comment cmt ->
+      appendRewrittenStmt $ Comment cmt
+    InstructionStart off mnem ->
+      appendRewrittenStmt $ InstructionStart off mnem
     ExecArchStmt astmt -> do
       f <- Rewriter $ gets $ rwctxArchStmt . rwContext
       f astmt

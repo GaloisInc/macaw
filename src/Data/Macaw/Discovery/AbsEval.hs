@@ -23,15 +23,13 @@ import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 
-import           Data.Macaw.Memory
-
 -- | Get the absolute value associated with an address.
-absEvalReadMem :: (OrdF (ArchReg a), ShowF (ArchReg a), MemWidth (RegAddrWidth (ArchReg a)))
-                => AbsProcessorState (ArchReg a) ids
-                -> ArchAddrValue a ids
-                -> MemRepr tp
-                   -- ^ Information about the memory layout for the value.
-                -> ArchAbsValue a tp
+absEvalReadMem :: RegisterInfo (ArchReg a)
+               => AbsProcessorState (ArchReg a) ids
+               -> ArchAddrValue a ids
+               -> MemRepr tp
+                  -- ^ Information about the memory layout for the value.
+               -> ArchAbsValue a tp
 absEvalReadMem r a tp
   | StackOffset _ s <- transferValue r a
   , [o] <- Set.toList s
@@ -73,6 +71,8 @@ absEvalStmt info stmt = withArchConstraints info $
     WriteMem addr memRepr v ->
       modify $ addMemWrite addr memRepr v
     PlaceHolderStmt{} ->
+      pure ()
+    InstructionStart _ _ ->
       pure ()
     Comment{} ->
       pure ()

@@ -75,20 +75,18 @@ import           Data.Macaw.Types
 
 -- | This describes the source of an address that was marked as containing code.
 data CodeAddrReason w
-   = InWrite !(SegmentedAddr w)
+   = InWrite !(MemSegmentOff w)
      -- ^ Exploring because the given block writes it to memory.
-   | NextIP !(SegmentedAddr w)
+   | NextIP !(MemSegmentOff w)
      -- ^ Exploring because the given block jumps here.
-   | CallTarget !(SegmentedAddr w)
+   | CallTarget !(MemSegmentOff w)
      -- ^ Exploring because address terminates with a call that jumps here.
    | InitAddr
      -- ^ Identified as an entry point from initial information
-   | CodePointerInMem !(SegmentedAddr w)
+   | CodePointerInMem !(MemSegmentOff w)
      -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(SegmentedAddr w)
+   | SplitAt !(MemAddr w)
      -- ^ Added because the address split this block after it had been disassembled.
-   | InterProcedureJump !(SegmentedAddr w)
-     -- ^ A jump from an address in another function.
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Show)
@@ -97,18 +95,18 @@ data CodeAddrReason w
 -- SymbolAddrMap
 
 -- | Map from addresses to the associated symbol name.
-newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (SegmentedAddr w) BSC.ByteString }
+newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (MemSegmentOff w) BSC.ByteString }
 
 -- | Return an empty symbol addr map
 emptySymbolAddrMap :: SymbolAddrMap w
 emptySymbolAddrMap = SymbolAddrMap Map.empty
 
 -- | Return addresses in symbol name map
-symbolAddrs :: SymbolAddrMap w -> [SegmentedAddr w]
+symbolAddrs :: SymbolAddrMap w -> [MemSegmentOff w]
 symbolAddrs = Map.keys . symbolAddrsAsMap
 
 -- | Return the symbol at the given map.
-symbolAtAddr :: SegmentedAddr w -> SymbolAddrMap w -> Maybe BSC.ByteString
+symbolAtAddr :: MemSegmentOff w -> SymbolAddrMap w -> Maybe BSC.ByteString
 symbolAtAddr a m = Map.lookup a (symbolAddrsAsMap m)
 
 -- | Check that a symbol name is well formed, returning an error message if not.
@@ -125,26 +123,8 @@ checkSymbolName sym_nm =
 --
 -- It returns either an error message or the map.
 symbolAddrMap :: forall w
-              .  Map (SegmentedAddr w) BSC.ByteString
+              .  Map (MemSegmentOff w) BSC.ByteString
               -> Either String (SymbolAddrMap w)
-{-
-symbolAddrMap symbols
-  | Map.size symbol_names /= Map.size symbols = do
-      let l = filter isMulti (Map.toList symbol_names)
-       in Left $ "Duplicate symbol names in symbol name map:\n" ++ show l
-  where symbol_names :: Map BSC.ByteString [SegmentedAddr w]
-        symbol_names = foldl insPair Map.empty (Map.toList symbols)
-
-        isMulti :: (BSC.ByteString, [SegmentedAddr w])
-                -> Bool
-        isMulti (_,[_]) = False
-        isMulti (_,_)   = True
-
-        insPair :: Map BSC.ByteString [SegmentedAddr w]
-                -> (SegmentedAddr w, BSC.ByteString)
-                -> Map BSC.ByteString [SegmentedAddr w]
-        insPair m (a,nm) = Map.insertWith (++) nm [a] m
--}
 symbolAddrMap symbols = do
    mapM_ checkSymbolName (Map.elems symbols)
    pure $! SymbolAddrMap symbols
@@ -173,13 +153,13 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 -- interpreted.
 data ParsedTermStmt arch ids
    = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
-                !(Maybe (ArchSegmentedAddr arch))
+                !(Maybe (ArchSegmentOff arch))
     -- ^ A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
-   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentedAddr arch)
+   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
      -- ^ A jump to an explicit address within a function.
    | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
                        !(BVValue arch ids (ArchAddrWidth arch))
-                       !(V.Vector (ArchSegmentedAddr arch))
+                       !(V.Vector (ArchSegmentOff arch))
      -- ^ A lookup table that branches to one of a vector of addresses.
      --
      -- The registers store the registers, the value contains the index to jump
@@ -189,7 +169,7 @@ data ParsedTermStmt arch ids
    | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
      -- ^ An if-then-else
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
-                   !(ArchSegmentedAddr arch)
+                   !(ArchSegmentOff arch)
      -- ^ A system call with the registers prior to call and given return address.
    | ParsedTranslateError !Text
      -- ^ An error occured in translating the block
@@ -199,41 +179,49 @@ data ParsedTermStmt arch ids
 deriving instance ArchConstraints arch => Show (ParsedTermStmt arch ids)
 
 -- | Pretty print the block contents indented inside brackets.
-ppStatementList :: ArchConstraints arch => StatementList arch ids -> Doc
-ppStatementList b =
+ppStatementList :: ArchConstraints arch => (ArchAddrWord arch -> Doc) -> StatementList arch ids -> Doc
+ppStatementList ppOff b =
   text "{" <$$>
-  indent 2 (vcat (pretty <$> stmtsNonterm b) <$$> pretty (stmtsTerm b)) <$$>
+  indent 2 (vcat (ppStmt ppOff  <$> stmtsNonterm b) <$$>
+            ppTermStmt ppOff (stmtsTerm b)) <$$>
   text "}"
 
-instance ArchConstraints arch => Pretty (ParsedTermStmt arch ids) where
-  pretty (ParsedCall s Nothing) =
-    text "tail call" <$$>
-    indent 2 (pretty s)
-  pretty (ParsedCall s (Just next)) =
-    text "call and return to" <+> text (show next) <$$>
-    indent 2 (pretty s)
-  pretty (ParsedJump s addr) =
-    text "jump" <+> text (show addr) <$$>
-    indent 2 (pretty s)
-  pretty (ParsedLookupTable s idx entries) =
-    text "ijump" <+> pretty idx <$$>
-    indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v)) (V.toList entries))) <$$>
-    indent 2 (pretty s)
-  pretty (ParsedReturn s) =
-    text "return" <$$>
-    indent 2 (pretty s)
-  pretty (ParsedIte c t f) =
-    text "ite" <+> pretty c <$$>
-    ppStatementList t <$$>
-    ppStatementList f
-  pretty (ParsedSyscall s addr) =
-    text "syscall, return to" <+> text (show addr) <$$>
-    indent 2 (pretty s)
-  pretty (ParsedTranslateError msg) =
-    text "translation error" <+> text (Text.unpack msg)
-  pretty (ClassifyFailure s) =
-    text "unknown transfer" <$$>
-    indent 2 (pretty s)
+ppTermStmt :: ArchConstraints arch
+           => (ArchAddrWord arch -> Doc)
+              -- ^ Given an address offset, this prints the value
+           -> ParsedTermStmt arch ids
+           -> Doc
+ppTermStmt ppOff tstmt =
+  case tstmt of
+    ParsedCall s Nothing ->
+      text "tail call" <$$>
+      indent 2 (pretty s)
+    ParsedCall s (Just next) ->
+      text "call and return to" <+> text (show next) <$$>
+      indent 2 (pretty s)
+    ParsedJump s addr ->
+      text "jump" <+> text (show addr) <$$>
+      indent 2 (pretty s)
+    ParsedLookupTable s idx entries ->
+      text "ijump" <+> pretty idx <$$>
+      indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v))
+                           (V.toList entries))) <$$>
+      indent 2 (pretty s)
+    ParsedReturn s ->
+      text "return" <$$>
+      indent 2 (pretty s)
+    ParsedIte c t f ->
+      text "ite" <+> pretty c <$$>
+      ppStatementList ppOff t <$$>
+      ppStatementList ppOff f
+    ParsedSyscall s addr ->
+      text "syscall, return to" <+> text (show addr) <$$>
+      indent 2 (pretty s)
+    ParsedTranslateError msg ->
+      text "translation error" <+> text (Text.unpack msg)
+    ClassifyFailure s ->
+      text "unknown transfer" <$$>
+      indent 2 (pretty s)
 
 ------------------------------------------------------------------------
 -- StatementList
@@ -307,9 +295,9 @@ rewriteStatementList b = do
 
 -- | A contiguous region of instructions in memory.
 data ParsedBlock arch ids
-   = ParsedBlock { blockAddr :: !(ArchSegmentedAddr arch)
+   = ParsedBlock { blockAddr :: !(ArchSegmentOff arch)
                    -- ^ Address of region
-                 , blockSize :: !(ArchAddr arch)
+                 , blockSize :: !(ArchAddrWord arch)
                    -- ^ The size of the region of memory covered by this.
                  , blockReason :: !(CodeAddrReason (ArchAddrWidth arch))
                    -- ^ Reason that we marked this address as
@@ -326,25 +314,26 @@ deriving instance ArchConstraints arch
 
 instance ArchConstraints arch
       => Pretty (ParsedBlock arch ids) where
-  pretty r =
-    let b = blockStatementList r
-     in text (show (blockAddr r)) PP.<> text ":" <$$>
-        indent 2 (vcat (pretty <$> stmtsNonterm b) <$$> pretty (stmtsTerm b))
+  pretty b =
+    let sl = blockStatementList b
+        ppOff o = text (show (incAddr (toInteger o) (relativeSegmentAddr (blockAddr b))))
+     in text (show (blockAddr b)) PP.<> text ":" <$$>
+        indent 2 (vcat (ppStmt ppOff <$> stmtsNonterm sl) <$$> ppTermStmt ppOff (stmtsTerm sl))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
 
 -- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
-   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentedAddr arch)
+   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentOff arch)
                         -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
-                      , _parsedBlocks :: !(Map (ArchSegmentedAddr arch) (ParsedBlock arch ids))
+                      , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
                         -- ^ Maps an address to the blocks associated with that address.
                       }
 
-parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentedAddr arch) (ParsedBlock arch ids))
+parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentOff arch) (ParsedBlock arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
@@ -363,13 +352,13 @@ data DiscoveryState arch
                      -- ^ Map addresses to known symbol names
                    , archInfo    :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
-                   , _globalDataMap :: !(Map (ArchSegmentedAddr arch)
-                                             (GlobalDataInfo (ArchSegmentedAddr arch)))
+                   , _globalDataMap :: !(Map (ArchMemAddr arch)
+                                             (GlobalDataInfo (ArchMemAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-                   , _funInfo :: !(Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
+                   , _funInfo :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
                      -- ^ Map from function addresses to discovered information about function
-                   , _unexploredFunctions :: !(Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
+                   , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ This maps addresses that have been marked as
                      -- functions, but not yet analyzed to the reason
                      -- they are analyzed.
@@ -413,17 +402,16 @@ emptyDiscoveryState mem symbols info =
 
 -- | Map each jump table start to the address just after the end.
 globalDataMap :: Simple Lens (DiscoveryState arch)
-                             (Map (ArchSegmentedAddr arch)
-                                  (GlobalDataInfo (ArchSegmentedAddr arch)))
+                             (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions :: Simple Lens (DiscoveryState arch)
-                              (Map (ArchSegmentedAddr arch) (CodeAddrReason (ArchAddrWidth arch)))
+                              (Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions
-funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentedAddr arch) (Some (DiscoveryFunInfo arch)))
+funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 ------------------------------------------------------------------------
@@ -435,10 +423,8 @@ type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
 asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-              => Memory (ArchAddrWidth arch)
-              -> BVValue arch ids (ArchAddrWidth arch)
-              -> Maybe (ArchSegmentedAddr arch)
-asLiteralAddr mem (BVValue _ val) =
-  absoluteAddrSegment mem (fromInteger val)
-asLiteralAddr _ (RelocatableValue _ i) = Just i
-asLiteralAddr _ _ = Nothing
+              => BVValue arch ids (ArchAddrWidth arch)
+              -> Maybe (ArchMemAddr arch)
+asLiteralAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
+asLiteralAddr (RelocatableValue _ i) = Just i
+asLiteralAddr _ = Nothing

@@ -173,7 +173,7 @@ liftST :: ST s r -> CrucGen arch ids s r
 liftST m = CrucGen $ \s cont -> m >>= cont s
 
 getPos :: CrucGen arch ids s C.Position
-getPos = undefined
+getPos = C.BinaryPos <$> gets binaryPath <*> gets codeAddr
 
 addStmt :: C.Stmt s -> CrucGen arch ids s ()
 addStmt stmt = seq stmt $ do
