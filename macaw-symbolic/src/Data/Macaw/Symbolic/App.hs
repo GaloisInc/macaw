@@ -248,15 +248,16 @@ valueToCrucible v = do
     M.BoolValue b -> do
       crucibleValue (C.BoolLit b)
     M.RelocatableValue w addr -> do
-      let seg = M.addrSegment addr
-      case M.segmentBase seg of
-        Just base -> do
-          crucibleValue (C.BVLit w (toInteger base + toInteger (addr^.M.addrOffset)))
-        Nothing -> do
+      case M.viewAddr addr of
+        Left base -> do
+          crucibleValue (C.BVLit w (toInteger base))
+        Right (seg,off) -> do
           let idx = M.segmentIndex seg
           segMap <- gets memSegmentMap
           case Map.lookup idx segMap of
-            Just a -> pure a
+            Just a -> do
+              offset <- crucibleValue (C.BVLit w (toInteger off))
+              crucibleValue (C.BVAdd w a offset)
             Nothing -> fail $ "internal: No Crucible address associated with segment."
     M.Initial r -> do
       regmap <- gets regValueMap
@@ -377,6 +378,8 @@ addMacawStmt stmt = do
     M.PlaceHolderStmt _vals msg -> do
       cmsg <- crucibleValue (C.TextLit (Text.pack msg))
       addTermStmt (C.ErrorStmt cmsg)
+    M.InstructionStart _ _ ->
+      pure ()
     M.Comment _txt -> do
       pure ()
     M.ExecArchStmt astmt -> do

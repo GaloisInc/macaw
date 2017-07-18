@@ -66,6 +66,7 @@ module Data.Macaw.Memory
   , absoluteAddr
   , relativeAddr
   , relativeSegmentAddr
+  , viewAddr
   , asAbsoluteAddr
   , asSegmentOff
   , diffAddr
@@ -658,10 +659,16 @@ asAbsoluteAddr RelativeAddr{} = Nothing
 
 -- | Return the resolved segment offset reference from an address.
 asSegmentOff :: Memory w -> MemAddr w -> Maybe (MemSegmentOff w)
-asSegmentOff mem (AbsoluteAddr addr) = resolveAbsoluteAddr mem addr
+asSegmentOff mem (AbsoluteAddr addr) =
+  resolveAbsoluteAddr mem addr
 asSegmentOff mem (RelativeAddr seg off) =
   addrWidthClass (memAddrWidth mem) $
     resolveSegmentOff seg off
+
+-- | This projects an addr into either an absolute address or a segment plus offset.
+viewAddr :: MemAddr w -> Either (MemWord w) (MemSegment w, MemWord w)
+viewAddr (AbsoluteAddr addr) = Left addr
+viewAddr (RelativeAddr seg off) = Right (seg,off)
 
 -- | Clear the least significant bit of an address.
 clearAddrLeastBit :: MemWidth w => MemAddr w -> MemAddr w
