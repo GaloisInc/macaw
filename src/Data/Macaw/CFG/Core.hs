@@ -41,7 +41,7 @@ module Data.Macaw.CFG.Core
   , ppValueAssignments
   , ppValueAssignmentList
   -- * RegState
-  , RegState
+  , RegState(..)
   , regStateMap
   , boundValue
   , cmpRegState
