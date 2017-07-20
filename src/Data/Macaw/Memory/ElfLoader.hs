@@ -428,7 +428,8 @@ memoryForElf opt e =
     LoadBySegment -> memoryForElfSegments opt e
 
 -- | Pretty print parser errors to stderr.
-ppErrors :: FilePath -> [ElfParseError w] -> IO ()
+ppErrors :: (Eq (ElfWordType w), Num (ElfWordType w), Show (ElfWordType w))
+         => FilePath -> [ElfParseError w] -> IO ()
 ppErrors path errl = do
   when (not (null errl)) $ do
     hPutStrLn stderr $ "Non-fatal errors during parsing " ++ path
