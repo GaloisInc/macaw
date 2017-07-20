@@ -90,6 +90,7 @@ addAssignmentDemands a = do
 addValueDemands :: Value arch ids tp -> DemandComp arch ids ()
 addValueDemands v = do
   case v of
+    BoolValue{} -> pure ()
     BVValue{} -> pure ()
     RelocatableValue{} -> pure ()
     AssignedValue a -> addAssignmentDemands a
@@ -109,6 +110,8 @@ addStmtDemands s =
       addValueDemands val
     PlaceHolderStmt l _ ->
       mapM_ (\(Some v) -> addValueDemands v) l
+    InstructionStart{} ->
+      pure ()
     Comment _ ->
       pure ()
     ExecArchStmt astmt -> do
@@ -125,5 +128,6 @@ stmtNeeded demandSet stmt =
     AssignStmt a -> Set.member (Some (assignId a)) demandSet
     WriteMem{} -> True
     PlaceHolderStmt{} -> True
+    InstructionStart{} -> True
     Comment{} -> True
     ExecArchStmt{} -> True

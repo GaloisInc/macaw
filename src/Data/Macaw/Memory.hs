@@ -13,7 +13,7 @@ n-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Memory
   ( Memory
@@ -27,13 +27,6 @@ module Data.Macaw.Memory
   , memSegments
   , executableSegments
   , readonlySegments
-  , readAddr
-  , segmentOfRange
-  , addrPermissions
-  , isCodeAddr
-  , isCodeAddrOrNull
-  , absoluteAddrSegment
-  , memAsAddrPairs
     -- * AddrWidthRepr
   , AddrWidthRepr(..)
   , addrWidthNatRepr
@@ -51,26 +44,38 @@ module Data.Macaw.Memory
   , ppMemSegment
   , segmentSize
   , SegmentRange(..)
+    -- * MemWord
+  , MemWord
+  , MemWidth(..)
+  , memWord
+    -- * Segment offsets
+  , MemSegmentOff
+  , resolveAbsoluteAddr
+  , resolveSegmentOff
+  , msegSegment
+  , msegOffset
+  , msegAddr
+  , incSegmentOff
+  , diffSegmentOff
+  , memAsAddrPairs
+    -- * Symbols
   , SymbolRef(..)
   , SymbolVersion(..)
-    -- * Address and offset.
-  , MemWidth(..)
-  , MemWord
-  , memWord
-    -- * Segmented Addresses
-  , SegmentedAddr(..)
-  , addrOffset
+    -- * General purposes addrs
+  , MemAddr
+  , absoluteAddr
+  , relativeAddr
+  , relativeSegmentAddr
+  , asAbsoluteAddr
+  , asSegmentOff
+  , diffAddr
+  , incAddr
+  , clearAddrLeastBit
+    -- * Reading
+  , MemoryError(..)
   , addrContentsAfter
-  , addrBase
-  , addrValue
-  , bsWord8
-  , bsWord16be
-  , bsWord16le
-  , bsWord32be
-  , bsWord32le
-  , bsWord64be
-  , bsWord64le
   , readByteString
+  , readAddr
   , readWord8
   , readWord16be
   , readWord16le
@@ -78,18 +83,22 @@ module Data.Macaw.Memory
   , readWord32le
   , readWord64be
   , readWord64le
-    -- * Memory addrs
-  , MemoryError(..)
+    -- * Utilities
+  , bsWord8
+  , bsWord16be
+  , bsWord16le
+  , bsWord32be
+  , bsWord32le
+  , bsWord64be
+  , bsWord64le
   ) where
 
 import           Control.Exception (assert)
-import           Control.Lens
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as Fold
 import qualified Data.Map.Strict as Map
-import           Data.Maybe
 import           Data.Proxy
 import           Data.Word
 import           GHC.TypeLits
@@ -120,7 +129,7 @@ addrWidthNatRepr Addr64 = knownNat
 
 -- | Indicates whether bytes are stored in big or little endian representation.
 data Endianness = BigEndian | LittleEndian
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -177,11 +186,15 @@ bsWord64le bs
 ------------------------------------------------------------------------
 -- MemBase
 
-newtype MemWord (n :: Nat) = MemWord { memWordValue :: Word64 }
--- ^ A value in memory.
+-- | This represents a particular numeric address in memory.
+--
+newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
+
+instance Pretty (MemWord w) where
+  pretty = text . show
 
 instance Eq (MemWord w) where
   MemWord x == MemWord y = x == y
@@ -190,7 +203,7 @@ instance Ord (MemWord w) where
   compare (MemWord x) (MemWord y) = compare x y
 
 -- | Typeclass for legal memory widths
-class MemWidth w where
+class (1 <= w) => MemWidth w where
   -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
   addrWidthMod :: p w -> Word64
 
@@ -279,8 +292,6 @@ addrWidthClass :: AddrWidthRepr w -> (MemWidth w => a) -> a
 addrWidthClass Addr32 x = x
 addrWidthClass Addr64 x = x
 
-$(pure [])
-
 -- | A unique identifier for a segment.
 type SegmentIndex = Int
 
@@ -368,13 +379,21 @@ data MemSegment w
    = MemSegment { segmentIndex :: !SegmentIndex
                                   -- ^ Unique index for this segment
                 , segmentBase  :: !(Maybe (MemWord w))
-                                  -- ^ Base for this segment
+                  -- ^ Base for this segment
+                  --
+                  -- Note that the current code assumes that segments are
+                  -- always on even addresses even if the base is omitted.
                 , segmentFlags :: !Perm.Flags
                                   -- ^ Permisison flags
                 , segmentContents :: !(SegmentContents w)
                                      -- ^ Map from offsets to the contents of
                                      -- the segment.
                 }
+
+-- | Check base plus size of segment does not overflow
+checkBaseAndSize :: MemWidth w => Maybe (MemWord w) -> MemWord w -> Bool
+checkBaseAndSize Nothing _ = True
+checkBaseAndSize (Just b) sz = b + sz >= b
 
 -- | Create a memory segment with the given values.
 memSegment :: MemWidth w
@@ -387,12 +406,18 @@ memSegment :: MemWidth w
            -> [SegmentRange w]
               -- ^ Range of vlaues.
            -> MemSegment w
-memSegment idx base flags contents =
-  MemSegment { segmentIndex = idx
-             , segmentBase = base
-             , segmentFlags = flags
-             , segmentContents = contentsFromList contents
-             }
+memSegment idx mbase flags contentsl
+    | checkBaseAndSize mbase (contentsSize contents) =
+      MemSegment { segmentIndex = idx
+                 , segmentBase = mbase
+                 , segmentFlags = flags
+                 , segmentContents = contents
+                 }
+    | otherwise =
+      error "Contents two large for base."
+  where contents = contentsFromList contentsl
+
+
 
 instance Eq (MemSegment w) where
   x == y = segmentIndex x == segmentIndex y
@@ -415,60 +440,6 @@ ppMemSegment s =
 
 instance MemWidth w => Show (MemSegment w) where
   show = show . ppMemSegment
-
-------------------------------------------------------------------------
--- SegmentedAddr
-
--- | A memory address is a reference to memory that uses an explicit segment plus
--- offset representation.
-data SegmentedAddr w = SegmentedAddr { addrSegment :: !(MemSegment w)
-                                     , _addrOffset  :: !(MemWord w)
-                                     }
-  deriving (Eq, Ord)
-
-addrOffset :: Simple Lens (SegmentedAddr w) (MemWord w)
-addrOffset = lens _addrOffset (\s v -> s { _addrOffset = v })
-
--- | Return the base value of an address or 0 if undefined.
-addrBase :: MemWidth w => SegmentedAddr w -> MemWord w
-addrBase addr = fromMaybe 0 (segmentBase (addrSegment addr))
-
--- | Return the offset of the address after adding the base segment value if defined.
-addrValue :: MemWidth w => SegmentedAddr w -> MemWord w
-addrValue addr = addrBase addr + addr^.addrOffset
-
-instance Show (SegmentedAddr w) where
-  showsPrec p a =
-    case segmentBase (addrSegment a) of
-      Just b ->
-        showString "0x" . showHex (memWordValue b + memWordValue (a^.addrOffset))
-      Nothing ->
-        showParen (p > 6)
-        $ showString "segment"
-        . shows (segmentIndex (addrSegment a))
-        . showString "+"
-        . shows (a^.addrOffset)
-
--- | Given a segemnted addr this returns the offset and range at that offset.
-nextRegion :: MemWidth w
-           => SegmentedAddr w
-           -> Maybe (MemWord w, SegmentRange w)
-nextRegion addr = do
-  let i = addr^.addrOffset
-  let SegmentContents m = segmentContents (addrSegment addr)
-  (k,r) <- Map.lookupLE (addr^.addrOffset) m
-  Just (i-k,r)
-
-
--- | Return contents starting from location or throw a memory error if there
--- is an unaligned relocation.
-addrContentsAfter :: MemWidth w
-                  => SegmentedAddr w
-                  -> Either (MemoryError w) [SegmentRange w]
-addrContentsAfter addr =
-  case contentsAfter (addr^.addrOffset) (segmentContents (addrSegment addr)) of
-    Nothing -> Left (UnexpectedRelocation addr)
-    Just l  -> Right l
 
 ------------------------------------------------------------------------
 -- Memory
@@ -502,70 +473,17 @@ emptyMemory w = Memory { memAddrWidth        = w
 memSegments :: Memory w -> [MemSegment w]
 memSegments m = Map.elems (memAllSegments m)
 
--- | Return segment with given index in memory.
-lookupSegment :: Memory w -> SegmentIndex -> Maybe (MemSegment w)
-lookupSegment m i = Map.lookup i (memAllSegments m)
-
--- | Return list of segmented address values in memory.
---
--- Each address includes the value and the base.
-memAsAddrPairs :: Memory w
-               -> Endianness
-               -> [(SegmentedAddr w, SegmentedAddr w)]
-memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
-  seg <- memSegments mem
-  (contents_offset,r) <- contentsList (segmentContents seg)
-  let addr = SegmentedAddr seg contents_offset
-  let sz = addrSize mem
-  case r of
-    ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
-      w <- regularChunks (fromIntegral sz) bs
-      let Just val = addrRead end w
-      case Map.lookupLE val (memAbsoluteSegments mem) of
-        Just (base, value_seg) | val <= base + segmentSize value_seg -> do
-          let seg_val =  SegmentedAddr value_seg (val - base)
-           in [(addr,seg_val)]
-        _ -> []
-    SymbolicRef{} -> []
-
 -- | Get executable segments.
 executableSegments :: Memory w -> [MemSegment w]
 executableSegments = filter (Perm.isExecutable . segmentFlags) . memSegments
 
+-- | Get readonly segments
 readonlySegments :: Memory w -> [MemSegment w]
 readonlySegments = filter (Perm.isReadonly . segmentFlags) . memSegments
 
--- | Given an absolute address, this returns a segment and offset into the segment.
-absoluteAddrSegment :: Memory w -> MemWord w -> Maybe (SegmentedAddr w)
-absoluteAddrSegment mem addr = addrWidthClass (memAddrWidth mem) $
-  case Map.lookupLE addr (memAbsoluteSegments mem) of
-    Just (base, seg) | addr < base + segmentSize seg ->
-      Just $! SegmentedAddr { addrSegment = seg
-                            , _addrOffset = addr - base
-                            }
-    _ -> Nothing
-
--- | Read an address from the value in the segment or report a memory error.
-readAddr :: Memory w
-         -> Endianness
-         -> SegmentedAddr w
-         -> Either (MemoryError w) (SegmentedAddr w)
-readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
-  let sz = fromIntegral (addrSize addr)
-  case nextRegion addr of
-    Just (MemWord offset, ByteRegion bs)
-      | offset + sz >= offset                           -- Check for no overfow
-      , offset + sz <= fromIntegral (BS.length bs) -> do -- Check length
-        let Just val = addrRead end (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
-        case Map.lookupLE val (memAbsoluteSegments mem) of
-          Just (base, seg) | val <= base + segmentSize seg -> Right $
-            SegmentedAddr { addrSegment = seg
-                          , _addrOffset = val - base
-                          }
-          _ -> Left (InvalidAddr addr)
-
-    _ | otherwise ->
-        Left (AccessViolation addr)
+-- | Return segment with given index in memory.
+lookupSegment :: Memory w -> SegmentIndex -> Maybe (MemSegment w)
+lookupSegment m i = Map.lookup i (memAllSegments m)
 
 data InsertError w
    = OverlapSegment (MemWord w) (MemSegment w)
@@ -615,53 +533,188 @@ insertMemSegment seg mem = addrWidthClass (memAddrWidth mem) $ do
              , memAllSegments      = allMap
              }
 
--- | Return segment if range is entirely contained within a single segment
--- and 'Nothing' otherwise.
-segmentOfRange :: MemWord w -- ^ Start of range
-               -> MemWord w -- ^ One past last index in range.
-               -> Memory w
-               -> Maybe (MemSegment w)
-segmentOfRange base end mem = addrWidthClass (memAddrWidth mem) $ do
-  case Map.lookupLE base (memAbsoluteSegments mem) of
-    Just (seg_base, seg) | end <= seg_base + segmentSize seg -> Just seg
+------------------------------------------------------------------------
+-- MemSegmentOff
+-- | A pair containing a segment and offset.
+--
+-- Constructrs enforce that the offset is valid
+data MemSegmentOff w = MemSegmentOff { msegSegment :: !(MemSegment w)
+                                     , msegOffset :: !(MemWord w)
+                                     }
+  deriving (Eq, Ord)
+
+-- | Return the segment associated with the given address if well-defined.
+resolveAbsoluteAddr :: Memory w -> MemWord w -> Maybe (MemSegmentOff w)
+resolveAbsoluteAddr mem addr = addrWidthClass (memAddrWidth mem) $
+  case Map.lookupLE addr (memAbsoluteSegments mem) of
+    Just (base, seg) | addr - base < segmentSize seg ->
+      Just $! MemSegmentOff seg (addr - base)
     _ -> Nothing
 
--- | Return true if address satisfies permissions check.
-addrPermissions :: MemWord w -> Memory w -> Perm.Flags
-addrPermissions addr mem =  addrWidthClass (memAddrWidth mem) $
-  case Map.lookupLE addr (memAbsoluteSegments mem) of
-    Just (base, seg) | addr < base + segmentSize seg -> segmentFlags seg
-    _ -> Perm.none
 
--- | Indicates if address is a code pointer.
-isCodeAddr :: Memory w -> MemWord w -> Bool
-isCodeAddr mem val =
-  addrPermissions val mem `Perm.hasPerm` Perm.execute
+-- | Make a segment offset pair after ensuring the offset is valid
+resolveSegmentOff :: MemWidth w => MemSegment w -> MemWord w -> Maybe (MemSegmentOff w)
+resolveSegmentOff seg off
+  | off < segmentSize seg = Just (MemSegmentOff seg off)
+  | otherwise = Nothing
 
--- | Indicates if address is an address in code segment or null.
-isCodeAddrOrNull :: Memory w -> MemWord w -> Bool
-isCodeAddrOrNull _ (MemWord 0) = True
-isCodeAddrOrNull mem a = isCodeAddr mem a
+-- | Return the absolute address associated with the segment offset pair (if any)
+msegAddr :: MemWidth w => MemSegmentOff w -> Maybe (MemWord w)
+msegAddr (MemSegmentOff seg off) = (+ off) <$> segmentBase seg
+
+-- | Increment a segment offset by a given amount.
+--
+-- Returns 'Nothing' if the result would be out of range.
+incSegmentOff :: MemWidth w => MemSegmentOff w -> Integer -> Maybe (MemSegmentOff w)
+incSegmentOff (MemSegmentOff seg off) inc
+  | 0 <= next && next <= toInteger (segmentSize seg) = Just $ MemSegmentOff seg (fromInteger next)
+  | otherwise = Nothing
+  where next = toInteger off + inc
+
+-- | Return the difference between two segment offsets pairs or `Nothing` if undefined.
+diffSegmentOff :: MemWidth w => MemSegmentOff w -> MemSegmentOff w -> Maybe Integer
+diffSegmentOff (MemSegmentOff xseg xoff) (MemSegmentOff yseg yoff)
+  | xseg == yseg = Just $ toInteger xoff - toInteger yoff
+  | Just xb <- segmentBase xseg
+  , Just yb <- segmentBase yseg =
+    Just ((toInteger xb + toInteger xoff) - (toInteger yb + toInteger yoff))
+  | otherwise = Nothing
+
+instance MemWidth w => Show (MemSegmentOff w) where
+  showsPrec p (MemSegmentOff seg off) =
+    case segmentBase seg of
+      Just base ->  showString "0x" . showHex (base+off)
+      Nothing ->
+        showParen (p > 6)
+        $ showString "segment"
+        . shows (segmentIndex seg)
+        . showString "+"
+        . shows off
+
+instance MemWidth w => Pretty (MemSegmentOff w) where
+  pretty = text . show
+
+-- | Return list of segmented address values in memory.
+--
+-- Each address includes the value and the base.
+memAsAddrPairs :: Memory w
+               -> Endianness
+               -> [(MemSegmentOff w, MemSegmentOff w)]
+memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
+  seg <- memSegments mem
+  (contents_offset,r) <- contentsList (segmentContents seg)
+  let sz = addrSize mem
+  case r of
+    ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
+      (off,w) <-
+        zip [contents_offset..]
+            (regularChunks (fromIntegral sz) bs)
+      let Just val = addrRead end w
+      case resolveAbsoluteAddr mem val of
+        Just val_ref -> do
+          pure (MemSegmentOff seg off, val_ref)
+        _ -> []
+    SymbolicRef{} -> []
+
+------------------------------------------------------------------------
+-- MemAddr
+
+-- | A memory address is either an absolute value in memory or an offset of segment that
+-- could be relocated.
+--
+-- This representation does not require that the address is mapped to
+-- actual memory (see `MemSegmentOff` for an address representation
+-- that ensures the reference points to allocated memory).
+data MemAddr w
+   = AbsoluteAddr (MemWord w)
+     -- ^ An address formed from a specific value.
+   | RelativeAddr !(MemSegment w) !(MemWord w)
+     -- ^ An address that is relative to some specific segment.
+     --
+     -- Note that the segment base value of this segment should be nothing.
+  deriving (Eq, Ord)
+
+-- | Given an absolute address, this returns a segment and offset into the segment.
+absoluteAddr :: MemWord w -> MemAddr w
+absoluteAddr = AbsoluteAddr
+
+-- | Return an address relative to a known memory segment
+-- if the memory is unmapped.
+relativeAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
+relativeAddr seg off =
+  case segmentBase seg of
+    Just base -> AbsoluteAddr (base + off)
+    Nothing -> RelativeAddr seg off
+
+-- | Return a segmented addr using the offset of an existing segment, or 'Nothing'
+-- if the memory is unmapped.
+relativeSegmentAddr :: MemWidth w => MemSegmentOff w -> MemAddr w
+relativeSegmentAddr (MemSegmentOff seg off) = relativeAddr seg off
+
+-- | Return the offset of the address after adding the base segment value if defined.
+asAbsoluteAddr :: MemWidth w => MemAddr w -> Maybe (MemWord w)
+asAbsoluteAddr (AbsoluteAddr w) = Just w
+asAbsoluteAddr RelativeAddr{} = Nothing
+
+-- | Return the resolved segment offset reference from an address.
+asSegmentOff :: Memory w -> MemAddr w -> Maybe (MemSegmentOff w)
+asSegmentOff mem (AbsoluteAddr addr) = resolveAbsoluteAddr mem addr
+asSegmentOff mem (RelativeAddr seg off) =
+  addrWidthClass (memAddrWidth mem) $
+    resolveSegmentOff seg off
+
+-- | Clear the least significant bit of an address.
+clearAddrLeastBit :: MemWidth w => MemAddr w -> MemAddr w
+clearAddrLeastBit sa =
+  case sa of
+    AbsoluteAddr a -> AbsoluteAddr (a .&. complement 1)
+    RelativeAddr seg off -> RelativeAddr seg (off .&. complement 1)
+
+-- | Increment an address by a fixed amount.
+incAddr :: MemWidth w => Integer -> MemAddr w -> MemAddr w
+incAddr o (AbsoluteAddr a) = AbsoluteAddr (a + fromInteger o)
+incAddr o (RelativeAddr seg off) = RelativeAddr seg (off + fromInteger o)
+
+-- | Returns the number of bytes between two addresses if they are comparable
+-- or 'Nothing' if they are not.
+diffAddr :: MemWidth w => MemAddr w -> MemAddr w -> Maybe Integer
+diffAddr (AbsoluteAddr x) (AbsoluteAddr y) =
+  Just $ toInteger x - toInteger y
+diffAddr (RelativeAddr xseg xoff) (RelativeAddr yseg yoff) | xseg == yseg =
+  Just $ toInteger xoff - toInteger yoff
+diffAddr _ _ = Nothing
+
+instance MemWidth w => Show (MemAddr w) where
+  showsPrec _ (AbsoluteAddr a) = showString "0x" . showHex a
+  showsPrec p (RelativeAddr seg off) =
+    showParen (p > 6)
+    $ showString "segment"
+    . shows (segmentIndex seg)
+    . showString "+"
+    . shows off
+
+instance MemWidth w => Pretty (MemAddr w) where
+  pretty = text . show
 
 ------------------------------------------------------------------------
 -- MemoryError
 
 -- | Type of errors that may occur when reading memory.
 data MemoryError w
-   = UserMemoryError (SegmentedAddr w) !String
+   = UserMemoryError (MemAddr w) !String
      -- ^ the memory reader threw an unspecified error at the given location.
-   | InvalidInstruction (SegmentedAddr w) ![SegmentRange w]
+   | InvalidInstruction (MemAddr w) ![SegmentRange w]
      -- ^ The memory reader could not parse the value starting at the given address.
-   | AccessViolation (SegmentedAddr w)
+   | AccessViolation (MemAddr w)
      -- ^ Memory could not be read, because it was not defined.
-   | PermissionsError (SegmentedAddr w)
+   | PermissionsError (MemAddr w)
      -- ^ Memory could not be read due to insufficient permissions.
-   | UnexpectedRelocation (SegmentedAddr w)
+   | UnexpectedRelocation (MemAddr w)
      -- ^ Read from location that partially overlaps a relocated entry
-   | InvalidAddr (SegmentedAddr w)
+   | InvalidAddr (MemAddr w)
      -- ^ The data at the given address did not refer to a valid memory location.
 
-instance Show (MemoryError w) where
+instance MemWidth w => Show (MemoryError w) where
   show (UserMemoryError _ msg) = msg
   show (InvalidInstruction start contents) =
     "Invalid instruction at " ++ show start ++ ": " ++ showList contents ""
@@ -675,45 +728,72 @@ instance Show (MemoryError w) where
     "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
--- Meory reading utilities
+-- Memory reading utilities
+
+-- | Return contents starting from location or throw a memory error if there
+-- is an unaligned relocation.
+addrContentsAfter :: Memory w
+                  -> MemAddr w
+                  -> Either (MemoryError w) [SegmentRange w]
+addrContentsAfter mem addr = addrWidthClass (memAddrWidth mem) $ do
+  MemSegmentOff seg off <-
+    case asSegmentOff mem addr of
+      Just p -> pure p
+      Nothing -> Left (InvalidAddr addr)
+  case contentsAfter off (segmentContents seg) of
+    Just l -> Right l
+    Nothing -> Left (UnexpectedRelocation addr)
 
 -- | Attemtp to read a bytestring of the given length
-readByteString :: MemWidth w => SegmentedAddr w -> Word64 -> Either (MemoryError w) BS.ByteString
-readByteString addr sz =
-  case nextRegion addr of
-    Nothing -> Left (InvalidAddr addr)
-    Just (MemWord offset, ByteRegion bs)
-      | offset + sz >= offset                           -- Check for no overfow
-      , offset + sz <= fromIntegral (BS.length bs) -> do -- Check length
-        Right $ (BS.take (fromIntegral sz) (BS.drop (fromIntegral offset) bs))
-      | otherwise -> Left (InvalidAddr addr)
-    Just (_, SymbolicRef{}) ->
+readByteString :: Memory w -> MemAddr w -> Word64 -> Either (MemoryError w) BS.ByteString
+readByteString mem addr sz = do
+  l <- addrContentsAfter mem addr
+  case l of
+    ByteRegion bs:_
+      |  sz <= fromIntegral (BS.length bs) -> do -- Check length
+        Right (BS.take (fromIntegral sz) bs)
+      | otherwise ->
+        Left (InvalidAddr addr)
+    SymbolicRef{}:_ ->
       Left (UnexpectedRelocation addr)
+    [] ->
+      Left (InvalidAddr addr)
+
+-- | Read an address from the value in the segment or report a memory error.
+readAddr :: Memory w
+         -> Endianness
+         -> MemAddr w
+         -> Either (MemoryError w) (MemAddr w)
+readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
+  let sz = fromIntegral (addrSize addr)
+  bs <- readByteString mem addr sz
+  let Just val = addrRead end bs
+  Right $ AbsoluteAddr val
 
 -- | Read a big endian word16
-readWord8 :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word8
-readWord8 addr = bsWord8 <$> readByteString addr 8
+readWord8 :: Memory w -> MemAddr w -> Either (MemoryError w) Word8
+readWord8 mem addr = bsWord8 <$> readByteString mem addr 1
 
 -- | Read a big endian word16
-readWord16be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word16
-readWord16be addr = bsWord16be <$> readByteString addr 8
+readWord16be :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
+readWord16be mem addr = bsWord16be <$> readByteString mem addr 2
 
 -- | Read a little endian word16
-readWord16le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word16
-readWord16le addr = bsWord16le <$> readByteString addr 8
+readWord16le :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
+readWord16le mem addr = bsWord16le <$> readByteString mem addr 2
 
 -- | Read a big endian word32
-readWord32be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word32
-readWord32be addr = bsWord32be <$> readByteString addr 8
+readWord32be :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
+readWord32be mem addr = bsWord32be <$> readByteString mem addr 4
 
 -- | Read a little endian word32
-readWord32le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word32
-readWord32le addr = bsWord32le <$> readByteString addr 8
+readWord32le :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
+readWord32le mem addr = bsWord32le <$> readByteString mem addr 4
 
 -- | Read a big endian word64
-readWord64be :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word64
-readWord64be addr = bsWord64be <$> readByteString addr 8
+readWord64be :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
+readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
 
 -- | Read a little endian word64
-readWord64le :: MemWidth w => SegmentedAddr w -> Either (MemoryError w) Word64
-readWord64le addr = bsWord64le <$> readByteString addr 8
+readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
+readWord64le mem addr = bsWord64le <$> readByteString mem addr 8

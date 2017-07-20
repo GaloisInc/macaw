@@ -36,10 +36,11 @@ import           Data.Macaw.Memory
 -- block.
 type DisassembleFn arch
    = forall ids
-   .  NonceGenerator (ST ids) ids
-   -> SegmentedAddr (ArchAddrWidth arch)
-      -- ^ Segment that we are disassembling from
-   -> MemWord (ArchAddrWidth arch)
+   .  Memory (ArchAddrWidth arch)
+   -> NonceGenerator (ST ids) ids
+   -> ArchSegmentOff arch
+      -- ^ The offset to start reading from.
+   -> ArchAddrWord arch
       -- ^ Maximum offset for this to read from.
    -> AbsBlockState (ArchReg arch)
       -- ^ Abstract state associated with address that we are disassembling
@@ -66,10 +67,12 @@ data ArchitectureInfo arch
 
        -- ^ Return true if architecture register should be preserved across a system call.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
-                         -> SegmentedAddr (RegAddrWidth (ArchReg arch))
+                         -> ArchSegmentOff arch
                          -> AbsBlockState (ArchReg arch))
        -- ^ Creates an abstract block state for representing the beginning of a
        -- function.
+       --
+       -- The address is the entry point of the function.
      , absEvalArchFn :: !(forall ids tp
                           .  AbsProcessorState (ArchReg arch) ids
                           -> ArchFn arch ids tp
@@ -81,7 +84,7 @@ data ArchitectureInfo arch
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
      , postCallAbsState :: AbsBlockState (ArchReg arch)
-                        -> SegmentedAddr (RegAddrWidth (ArchReg arch))
+                        -> ArchSegmentOff arch
                         -> AbsBlockState (ArchReg arch)
        -- ^ Update the abstract state after a function call returns
      , identifyReturn :: forall ids
@@ -106,7 +109,7 @@ data ArchitectureInfo arch
 archPostSyscallAbsState :: ArchitectureInfo arch
                            -- ^ Architecture information
                         -> AbsBlockState (ArchReg arch)
-                        -> SegmentedAddr (RegAddrWidth (ArchReg arch))
+                        -> ArchSegmentOff arch
                         -> AbsBlockState (ArchReg arch)
 archPostSyscallAbsState info = withArchConstraints info $ AbsState.absEvalCall params
   where params = CallParams { postCallStackDelta = 0

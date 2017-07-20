@@ -66,42 +66,44 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Truncate a bitvector value.
   Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
   -- Signed extension.
-  SExt :: (1 <= m, m+1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
+  SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
   -- Unsigned extension.
-  UExt :: (1 <= m, m+1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
+  UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
 
   ----------------------------------------------------------------------
   -- Boolean operations
 
+  BoolMux :: !(f BoolType) -> !(f BoolType) -> !(f BoolType) -> App f BoolType
   AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
   OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
   NotApp :: !(f BoolType) -> App f BoolType
+  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
 
   ----------------------------------------------------------------------
   -- Bitvector operations
 
-  BVAdd :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-  BVSub :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVAdd :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVSub :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Multiply two numbers
-  BVMul :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Unsigned division (rounds fractions to zero).
   --
   -- This operation is not defined when the denominator is zero. The
   -- caller should raise a #de exception in this case (see
   -- 'Reopt.Semantics.Implementation.exec_div').
-  BVQuot :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVQuot :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Unsigned modulo (rounds fractional results to zero)
   --
   -- See 'BVQuot' for usage.
-  BVRem :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVRem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Signed division (rounds fractional results to zero).
   --
   -- See 'BVQuot' for usage.
-  BVSignedQuot :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVSignedQuot :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Signed modulo (rounds fractional results to zero).
   --
@@ -110,13 +112,13 @@ data App (f :: Type -> *) (tp :: Type) where
   --   x = (y * BVSignedQuot x y) + BVSignedRem x y
   --
   -- See 'BVQuot' for usage.
-  BVSignedRem :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVSignedRem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Unsigned less than.
-  BVUnsignedLt :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  BVUnsignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Unsigned less than or equal.
-  BVUnsignedLe :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  BVUnsignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Signed less than
   BVSignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
@@ -129,29 +131,29 @@ data App (f :: Type -> *) (tp :: Type) where
   BVTestBit :: !(f (BVType n)) -> !(f (BVType log_n)) -> App f BoolType
 
   -- Bitwise complement
-  BVComplement :: !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+  BVComplement :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
   -- Bitwise and
-  BVAnd :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVAnd :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
   -- Bitwise or
-  BVOr  :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVOr  :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
   -- Exclusive or
-  BVXor :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVXor :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Logical left shift (x * 2 ^ n)
-  BVShl :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVShl :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
   -- Logical right shift (x / 2 ^ n)
-  BVShr :: !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVShr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
   -- Arithmetic right shift (x / 2 ^ n)
   BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Compare for equality.
-  BVEq :: !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  Eq :: !(f tp) -> !(f tp) -> App f BoolType
 
   -- Return true if value contains even number of true bits.
   EvenParity :: !(f (BVType 8)) -> App f BoolType
 
   -- Reverse the bytes in a bitvector expression.
-  ReverseBytes :: !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+  ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Add two values and a carry bit to determine if they have an unsigned
   -- overflow.
@@ -186,12 +188,12 @@ data App (f :: Type -> *) (tp :: Type) where
   -- bsf "bit scan forward" returns the index of the least-significant
   -- bit that is 1.  Undefined if value is zero.
   -- All bits at indices less than return value must be unset.
-  Bsf :: !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+  Bsf :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   -- bsr "bit scan reverse" returns the index of the most-significant
   -- bit that is 1.  Undefined if value is zero.
   -- All bits at indices greater than return value must be unset.
-  Bsr :: !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+  Bsr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   ----------------------------------------------------------------------
   -- Floating point operations
@@ -273,7 +275,8 @@ data App (f :: Type -> *) (tp :: Type) where
   -- If the conversion is out of the range of the bitvector, then a floating
   -- point exception should be raised.
   -- If that exception is masked, then this returns -1 (as a signed bitvector).
-  TruncFPToSignedBV :: FloatInfoRepr flt
+  TruncFPToSignedBV :: (1 <= n)
+                    => FloatInfoRepr flt
                     -> f (FloatType flt)
                     -> NatRepr n
                     -> App f (BVType n)
@@ -381,9 +384,11 @@ ppAppA pp a0 =
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
+    BoolMux c t f -> sexprA "bool_mux" [ pp c, pp t, pp f ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
     OrApp  x y -> sexprA "or"  [ pp x, pp y ]
     NotApp x   -> sexprA "not" [ pp x ]
+    XorApp  x y -> sexprA "xor"  [ pp x, pp y ]
     BVAdd _ x y -> sexprA "bv_add" [ pp x, pp y ]
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
     BVMul _ x y -> sexprA "bv_mul" [ pp x, pp y ]
@@ -403,7 +408,7 @@ ppAppA pp a0 =
     BVShl _ x y -> sexprA "bv_shl" [ pp x, pp y ]
     BVShr _ x y -> sexprA "bv_shr" [ pp x, pp y ]
     BVSar _ x y -> sexprA "bv_sar" [ pp x, pp y ]
-    BVEq x y    -> sexprA "bv_eq" [ pp x, pp y ]
+    Eq x y      -> sexprA "eq" [ pp x, pp y ]
     EvenParity x -> sexprA "even_parity" [ pp x ]
     ReverseBytes _ x -> sexprA "reverse_bytes" [ pp x ]
     UadcOverflows _ x y c -> sexprA "uadc_overflows" [ pp x, pp y, pp c ]
@@ -442,9 +447,11 @@ instance HasRepr (App f) TypeRepr where
     SExt  _ w -> BVTypeRepr w
     UExt  _ w -> BVTypeRepr w
 
+    BoolMux{} -> knownType
     AndApp{} -> knownType
     OrApp{}  -> knownType
     NotApp{} -> knownType
+    XorApp{} -> knownType
 
     BVAdd w _ _ -> BVTypeRepr w
     BVSub w _ _ -> BVTypeRepr w
@@ -467,7 +474,7 @@ instance HasRepr (App f) TypeRepr where
     BVShl w _ _ -> BVTypeRepr w
     BVShr w _ _ -> BVTypeRepr w
     BVSar w _ _ -> BVTypeRepr w
-    BVEq _ _ -> knownType
+    Eq _ _       -> knownType
     EvenParity _ -> knownType
     ReverseBytes w _ -> BVTypeRepr w
 

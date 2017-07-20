@@ -24,15 +24,14 @@ import Data.Parameterized.NatRepr
 
 import Data.Macaw.AbsDomain.AbsState
 import Data.Macaw.CFG
-import Data.Macaw.Memory (MemWidth)
 import Data.Macaw.Types
 
 -- | Constraints needed for refinement on abstract states.
 type RefineConstraints arch
-   = ( OrdF  (ArchReg arch)
-     , ShowF (ArchReg arch)
-     , HasRepr (ArchReg arch) TypeRepr
-     , MemWidth (ArchAddrWidth arch)
+   = ( RegisterInfo (ArchReg arch)
+--     , ShowF (ArchReg arch)
+--     , HasRepr (ArchReg arch) TypeRepr
+--     , MemWidth (ArchAddrWidth arch)
      )
 
 -- FIXME: if val \notin av then we should return bottom
@@ -43,6 +42,7 @@ refineProcState :: RefineConstraints arch
                 -> AbsValue (ArchAddrWidth arch) tp -- ^ Abstract value to assign value.
                 -> AbsProcessorState (ArchReg arch) ids
                 -> AbsProcessorState (ArchReg arch) ids
+refineProcState (BoolValue _) _av regs          = regs -- Skip refinment for literal values
 refineProcState (BVValue _n _val) _av regs      = regs -- Skip refinment for literal values
 refineProcState (RelocatableValue _ _) _av regs = regs -- Skip refinment for relocatable values
 refineProcState (Initial r) av regs =
@@ -84,8 +84,8 @@ refineApp app av regs =
 
    -- FIXME: HACK
    -- This detects r - x < 0 || r - x == 0, i.e. r <= x
-   BVOr _ (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BVValue _ 0)))
-          (getAssignApp -> Just (BVEq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))
+   OrApp (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BoolValue False)))
+         (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))
      | Just Refl <- testEquality r r'
      , Just Refl <- testEquality y (mkLit sz (negate x))
      , Just b    <- asConcreteSingleton av ->
@@ -93,10 +93,10 @@ refineApp app av regs =
 
    -- FIXME: HACK
    -- This detects not (r - x < 0) && not (r - x == 0), i.e. x < r
-   BVAnd _ (getAssignApp -> Just (BVComplement _
-                                  (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BVValue _ 0)))))
-           (getAssignApp -> Just (BVComplement _
-                                  (getAssignApp -> Just (BVEq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))))
+   AndApp (getAssignApp -> Just
+             (NotApp (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BoolValue False)))))
+          (getAssignApp -> Just
+             (NotApp (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))))
      | Just Refl <- testEquality r r'
      , Just Refl <- testEquality y (mkLit sz (negate x))
      , Just b    <- asConcreteSingleton av ->

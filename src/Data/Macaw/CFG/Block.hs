@@ -8,10 +8,10 @@ types.
 {-# LANGUAGE FlexibleContexts #-}
 module Data.Macaw.CFG.Block
   ( Block(..)
+  , ppBlock
   , TermStmt(..)
   ) where
 
-import           Data.Parameterized.Classes
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import           Data.Word
@@ -44,8 +44,7 @@ data TermStmt arch ids
     -- occured and the error message recorded.
   | TranslateError !(RegState (ArchReg arch) (Value arch ids)) !Text
 
-instance ( OrdF (ArchReg arch)
-         , ShowF (ArchReg arch)
+instance ( RegisterInfo(ArchReg arch)
          )
       => Pretty (TermStmt arch ids) where
   pretty (FetchAndExecute s) =
@@ -75,7 +74,7 @@ data Block arch ids
              -- ^ The last statement in the block.
            }
 
-instance ArchConstraints arch => Pretty (Block arch ids) where
-  pretty b = do
-    text (show (blockLabel b)) PP.<> text ":" <$$>
-      indent 2 (vcat (pretty <$> blockStmts b) <$$> pretty (blockTerm b))
+ppBlock :: ArchConstraints arch => Block arch ids -> Doc
+ppBlock b =
+  text (show (blockLabel b)) PP.<> text ":" <$$>
+  indent 2 (vcat (ppStmt (text . show) <$> blockStmts b) <$$> pretty (blockTerm b))
