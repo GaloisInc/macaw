@@ -50,6 +50,7 @@ module Data.Macaw.Memory
   , memWord
     -- * Segment offsets
   , MemSegmentOff
+  , viewSegmentOff
   , resolveAbsoluteAddr
   , resolveSegmentOff
   , msegSegment
@@ -543,6 +544,9 @@ data MemSegmentOff w = MemSegmentOff { msegSegment :: !(MemSegment w)
                                      , msegOffset :: !(MemWord w)
                                      }
   deriving (Eq, Ord)
+
+viewSegmentOff :: MemSegmentOff w -> (MemSegment w, MemWord w)
+viewSegmentOff mseg = (msegSegment mseg, msegOffset mseg)
 
 -- | Return the segment associated with the given address if well-defined.
 resolveAbsoluteAddr :: Memory w -> MemWord w -> Maybe (MemSegmentOff w)
