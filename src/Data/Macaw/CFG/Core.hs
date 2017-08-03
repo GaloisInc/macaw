@@ -483,7 +483,6 @@ class ( OrdF r
   -- | Registers used for passing system call arguments
   syscallArgumentRegs :: [r (BVType (RegAddrWidth r))]
 
-
 --  The value of the current instruction pointer.
 curIP :: RegisterInfo r
       => Simple Lens (RegState r f) (f (BVType (RegAddrWidth r)))

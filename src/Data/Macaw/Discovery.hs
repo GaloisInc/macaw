@@ -177,7 +177,8 @@ rewriteBlock b = do
     rewriteTermStmt (blockTerm b)
   -- Return new block
   pure $
-    Block { blockLabel = blockLabel b
+    Block { blockAddr  = blockAddr b
+          , blockLabel = blockLabel b
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }
@@ -208,10 +209,8 @@ addBlockDemands b = do
 -- | Return a block after filtering out statements not needed to compute it.
 elimDeadBlockStmts :: AssignIdSet ids -> Block arch ids -> Block arch ids
 elimDeadBlockStmts demandSet b =
-  Block { blockLabel = blockLabel b
-        , blockStmts = filter (stmtNeeded demandSet) (blockStmts b)
-        , blockTerm  = blockTerm b
-        }
+  b { blockStmts = filter (stmtNeeded demandSet) (blockStmts b)
+    }
 
 ------------------------------------------------------------------------
 -- Memory utilities
@@ -780,7 +779,7 @@ transferBlocks src finfo sz block_map =
                            , _newFunctionAddrs = []
                            }
       let (pblock, ps) = runState (parseBlock ctx b regs) ps0
-      let pb = ParsedBlock { blockAddr = src
+      let pb = ParsedBlock { pblockAddr = src
                            , blockSize = sz
                            , blockReason = foundReason finfo
                            , blockAbstractState = foundAbstractState finfo
@@ -795,12 +794,13 @@ transferBlocks src finfo sz block_map =
 transfer :: ArchSegmentOff arch
          -> FunM arch ids ()
 transfer addr = do
-  ainfo      <- uses curFunCtx archInfo
+  s <- use curFunCtx
+  let ainfo = archInfo s
   withArchConstraints ainfo $ do
   mfinfo <- use $ foundAddrs . at addr
   let finfo = fromMaybe (error $ "transfer called on unfound address " ++ show addr ++ ".") $
                 mfinfo
-  mem <- uses curFunCtx memory
+  let mem = memory s
   nonceGen <- gets funNonceGen
   prev_block_map <- use $ curFunBlocks
   -- Get maximum number of bytes to disassemble
@@ -813,35 +813,38 @@ transfer addr = do
   let ab = foundAbstractState finfo
   (bs0, sz, maybeError) <-
     liftST $ disassembleFn ainfo mem nonceGen addr max_size ab
-
-  let ctx = RewriteContext { rwctxNonceGen = nonceGen
-                           , rwctxArchFn   = rewriteArchFn ainfo
-                           , rwctxArchStmt = rewriteArchStmt ainfo
-                           , rwctxConstraints = \x -> x
-                           }
-  bs1 <- liftST $ runRewriter ctx $ do
-    traverse rewriteBlock bs0
-
-  let demandSet =
-        runDemandComp (archDemandContext ainfo) $ do
-          traverse_ addBlockDemands bs1
-  let bs2 = elimDeadBlockStmts demandSet <$> bs1
-
-  -- Make sure at least one block is returned
-  let bs | null bs2 =
-           let -- TODO: Fix this to work with segmented memory
-               w = addrWidthNatRepr (archAddrWidth ainfo)
-               errState = mkRegState Initial
-                        & boundValue ip_reg  .~ RelocatableValue w (relativeSegmentAddr addr)
-               errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
-               errBlock = Block { blockLabel = 0
-                                , blockStmts = []
-                                , blockTerm = TranslateError errState errMsg
-                                }
-            in [errBlock]
-         | otherwise = bs2
-  let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
-  transferBlocks addr finfo sz block_map
+  -- If no blocks are returned, then we just add an empty parsed block.
+  if null bs0 then do
+    let errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
+    let stmts = StatementList
+          { stmtsIdent = 0
+          , stmtsNonterm = []
+          , stmtsTerm = ParsedTranslateError errMsg
+          , stmtsAbsState = initAbsProcessorState mem (foundAbstractState finfo)
+          }
+    let pb = ParsedBlock { pblockAddr = addr
+                         , blockSize = sz
+                         , blockReason = foundReason finfo
+                         , blockAbstractState = foundAbstractState finfo
+                         , blockStatementList = stmts
+                         }
+    curFunBlocks %= Map.insert addr pb
+   else do
+    -- Rewrite returned blocks to simplify expressions
+    let ctx = RewriteContext { rwctxNonceGen = nonceGen
+                             , rwctxArchFn   = rewriteArchFn ainfo
+                             , rwctxArchStmt = rewriteArchStmt ainfo
+                             , rwctxConstraints = \x -> x
+                             }
+    bs1 <- liftST $ runRewriter ctx $ traverse rewriteBlock bs0
+    -- Comute demand set
+    let demandSet =
+          runDemandComp (archDemandContext ainfo) $ do
+            traverse_ addBlockDemands bs1
+    let bs = elimDeadBlockStmts demandSet <$> bs1
+    -- Call transfer blocks to calculate parsedblocks
+    let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
+    transferBlocks addr finfo sz block_map
 
 ------------------------------------------------------------------------
 -- Main loop

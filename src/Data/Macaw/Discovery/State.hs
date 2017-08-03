@@ -295,7 +295,7 @@ rewriteStatementList b = do
 
 -- | A contiguous region of instructions in memory.
 data ParsedBlock arch ids
-   = ParsedBlock { blockAddr :: !(ArchSegmentOff arch)
+   = ParsedBlock { pblockAddr :: !(ArchSegmentOff arch)
                    -- ^ Address of region
                  , blockSize :: !(ArchAddrWord arch)
                    -- ^ The size of the region of memory covered by this.
@@ -316,8 +316,8 @@ instance ArchConstraints arch
       => Pretty (ParsedBlock arch ids) where
   pretty b =
     let sl = blockStatementList b
-        ppOff o = text (show (incAddr (toInteger o) (relativeSegmentAddr (blockAddr b))))
-     in text (show (blockAddr b)) PP.<> text ":" <$$>
+        ppOff o = text (show (incAddr (toInteger o) (relativeSegmentAddr (pblockAddr b))))
+     in text (show (pblockAddr b)) PP.<> text ":" <$$>
         indent 2 (vcat (ppStmt ppOff <$> stmtsNonterm sl) <$$> ppTermStmt ppOff (stmtsTerm sl))
 
 ------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -8,11 +10,12 @@ module Data.Macaw.Symbolic
   ) where
 
 import           Control.Monad.ST
+import           Control.Monad.State.Strict
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
-import qualified Data.Set as Set
+import           Data.Parameterized.TraversableFC
 import           Data.String
 import           Data.Word
 import qualified Lang.Crucible.CFG.Core as C
@@ -29,48 +32,103 @@ import           Numeric (showHex)
 import           System.IO (stdout)
 
 import qualified Data.Macaw.CFG.Block as M
+import qualified Data.Macaw.CFG.Core as M
+import qualified Data.Macaw.Types as M
 
 import Data.Macaw.Symbolic.App
 
 data ReoptSimulatorState sym = ReoptSimulatorState
 
-translateBlock :: Map Word64 (CR.Label s)
-                  -- ^ Map from block indices to the associated label.
+
+
+-- Return the types associated with a register assignment.
+regTypes :: Ctx.Assignment M.TypeRepr ctx
+         -> Ctx.Assignment C.TypeRepr (CtxToCrucibleType ctx)
+regTypes a =
+  case Ctx.view a of
+    Ctx.AssignEmpty -> Ctx.empty
+    Ctx.AssignExtend b tp -> regTypes b Ctx.%> typeToCrucible tp
+
+-- | Create the variables from a collection of registers.
+regVars :: (IsSymInterface sym, M.HasRepr reg M.TypeRepr)
+        => sym
+        -> (forall tp . reg tp -> SolverSymbol)
+        -> Ctx.Assignment reg ctx
+        -> IO (Ctx.Assignment (C.RegValue' sym) (CtxToCrucibleType ctx))
+regVars sym nameFn a =
+  case Ctx.view a of
+    Ctx.AssignEmpty -> pure Ctx.empty
+    Ctx.AssignExtend b reg -> do
+      varAssign <- regVars sym nameFn b
+      c <- freshConstant sym (nameFn reg) (typeToCrucibleBase (M.typeRepr reg))
+      pure (varAssign Ctx.%> C.RV c)
+
+translateBlock :: CrucGenContext arch ids s
                -> M.Block arch ids
-               -> Either String (CR.Block s (MacawFunctionResult arch))
-translateBlock idMap b = do
-  let idx = M.blockLabel b
-  lbl <-
-    case Map.lookup idx idMap of
-      Just lbl -> Right (CR.LabelID lbl)
-      Nothing -> Left $ "Internal: Could not find block with index " ++ show idx
-  let stmts = undefined
-      term = undefined
-  pure $ CR.mkBlock lbl Set.empty stmts term
+               -> StateT (CrucPersistentState arch ids s) (ST s) ()
+translateBlock = undefined
+{-
+translateBlock ctx blockMap idx ip = do
+  s <- get
+  mr <- lift $ runExceptT (mkCrucibleBlock ctx undefined s b)
+  case mr of
+    Left err ->
+      fail err
+    Right r -> do
+      undefined r
+-}
+
+translateBlocks :: CrucGenContext arch ids s
+                -> Map Word64 (M.Block arch ids)
+                -> ST s (CrucGenHandles arch, [CR.Block s (MacawFunctionResult arch)])
+translateBlocks genCtx l = do
+  let ps0 = CrucPersistentState
+          { handleMap = undefined
+          , valueCount = 0
+          , assignValueMap = MapF.empty
+          , seenBlockMap = Map.empty
+          }
+  ps <- execStateT (mapM_ (translateBlock genCtx) (Map.elems l)) ps0
+  pure (handleMap ps, Map.elems (seenBlockMap ps))
+
+createHandleMap :: CrucGenHandles arch -> C.FunctionBindings ReoptSimulatorState sym
+createHandleMap = undefined
 
 stepBlocks :: forall sym arch ids
-           .  IsSymInterface sym
+           .  (IsSymInterface sym, M.ArchConstraints arch)
            => sym
-           -> Ctx.Assignment C.TypeRepr (ArchRegContext arch)
+           -> (forall tp . M.ArchReg arch tp -> SolverSymbol)
+           -> Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch)
            -> Word64
+              -- ^ Starting IP for block
            -> Map Word64 (M.Block arch ids)
               -- ^ Map from block indices to block
            -> IO (C.ExecResult
                    ReoptSimulatorState
                    sym
-                   (C.RegEntry sym (C.StructType (ArchRegContext arch))))
-stepBlocks sym regTypes addr macawBlockMap = do
-  let macawStructRepr = C.StructRepr regTypes
+                   (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
+stepBlocks sym nameFn regAssign addr macawBlockMap = do
+  let macawStructRepr = C.StructRepr (regTypes (fmapFC M.typeRepr regAssign))
   halloc <- C.newHandleAllocator
   let argTypes = Ctx.empty Ctx.%> macawStructRepr
   let nm = fromString $ "macaw_0x" ++ showHex addr ""
   h <- stToIO $ C.mkHandle' halloc nm argTypes macawStructRepr
   -- Map block map to Crucible CFG
-  let blockLabelMap :: Map Word64 (CR.Label ())
+  let blockLabelMap :: Map Word64 (CR.Label RealWorld)
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w)) | w <- Map.keys macawBlockMap ]
-  let Right blks = traverse (translateBlock blockLabelMap) $ Map.elems macawBlockMap
+  let genCtx = CrucGenContext { archConstraints = \x -> x
+                              , translateArchFn = undefined
+                              , translateArchStmt = undefined
+                              , handleAlloc = halloc
+                              , binaryPath = undefined
+                              , macawIndexToLabelMap = blockLabelMap
+                              , memSegmentMap = undefined
+                              , regValueMap = undefined
+                              , syscallHandle = undefined
+                              }
+  (hndls, blks) <- stToIO $ translateBlocks genCtx  macawBlockMap
   -- Create control flow graph
-  let rg :: CR.CFG () (MacawFunctionArgs arch) (MacawFunctionResult arch)
+  let rg :: CR.CFG RealWorld (MacawFunctionArgs arch) (MacawFunctionResult arch)
       rg = CR.CFG { CR.cfgHandle = h
                   , CR.cfgBlocks = blks
                   }
@@ -82,15 +140,16 @@ stepBlocks sym regTypes addr macawBlockMap = do
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C._functionBindings = C.emptyHandleMap
+                         , C._functionBindings = createHandleMap hndls
                          , C._cruciblePersonality = ReoptSimulatorState
                          }
   -- Create the symbolic simulator state
   let s = C.initSimState ctx C.emptyGlobals C.defaultErrorHandler
   -- Define the arguments to call the Reopt CFG with.
   -- This should be a symbolic variable for each register in the architecture.
+  regStruct <- regVars sym nameFn regAssign
   let args :: C.RegMap sym (MacawFunctionArgs arch)
-      args = undefined
+      args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
   -- Run the symbolic simulator.
   case C.toSSA rg of
     C.SomeCFG g ->

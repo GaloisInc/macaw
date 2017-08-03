@@ -3,7 +3,7 @@ Copyright   : (c) Galois Inc, 2015-2016
 Maintainer  : jhendrix@galois.com
 
 Declares 'Memory', a type for representing segmented memory with permissions.
-n-}
+-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
@@ -206,6 +206,9 @@ instance Ord (MemWord w) where
 
 -- | Typeclass for legal memory widths
 class (1 <= w) => MemWidth w where
+
+  addrWidthRepr :: p w -> AddrWidthRepr w
+
   -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
   addrWidthMod :: p w -> Word64
 
@@ -268,6 +271,7 @@ instance MemWidth w => Integral (MemWord w) where
 
 
 instance MemWidth 32 where
+  addrWidthRepr _ = Addr32
   addrWidthMod _ = 0xffffffff
   addrRotate (MemWord w) i = MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
   addrSize _ = 4
@@ -279,6 +283,7 @@ instance MemWidth 32 where
         LittleEndian -> Just $ MemWord $ fromIntegral $ bsWord32le s
 
 instance MemWidth 64 where
+  addrWidthRepr _ = Addr64
   addrWidthMod _ = 0xffffffffffffffff
   addrRotate (MemWord w) i = MemWord (w `rotate` i)
   addrSize _ = 8
