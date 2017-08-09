@@ -58,11 +58,6 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
 
-  -- This returns a 80-bit value where the high 16-bits are all 1s,
-  -- and the low 64-bits are the given register.
-  MMXExtend :: !(f (BVType 64))
-            -> App f (BVType 80)
-
   -- Truncate a bitvector value.
   Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
   -- Signed extension.
@@ -380,7 +375,6 @@ ppAppA :: Applicative m
 ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
-    MMXExtend e -> sexprA "mmx_extend" [ pp e ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
@@ -442,7 +436,6 @@ instance HasRepr (App f) TypeRepr where
   typeRepr a =
    case a of
     Mux w _ _ _ -> BVTypeRepr w
-    MMXExtend{} -> knownType
     Trunc _ w -> BVTypeRepr w
     SExt  _ w -> BVTypeRepr w
     UExt  _ w -> BVTypeRepr w
