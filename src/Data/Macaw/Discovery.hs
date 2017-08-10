@@ -30,6 +30,7 @@ module Data.Macaw.Discovery
        , State.exploredFunctions
        , State.symbolNames
        , State.ppDiscoveryStateBlocks
+       , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.CodeAddrReason(..)
@@ -46,6 +47,7 @@ module Data.Macaw.Discovery
        , State.emptySymbolAddrMap
        , State.symbolAddrMap
        , State.symbolAddrs
+       , State.symbolAtAddr
        ) where
 
 import           Control.Lens
@@ -161,8 +163,13 @@ rewriteTermStmt tstmt = do
   case tstmt of
     FetchAndExecute regs ->
       FetchAndExecute <$> traverseF rewriteValue regs
-    Branch c t f ->
-      Branch <$> rewriteValue c <*> pure t <*> pure f
+    Branch c t f -> do
+      tgtCond <- rewriteValue c
+      case () of
+        _ | Just (NotApp c) <- valueAsApp tgtCond -> do
+              Branch c <$> pure f <*> pure t
+          | otherwise ->
+            Branch tgtCond <$> pure t <*> pure f
     Syscall regs ->
       Syscall <$> traverseF rewriteValue regs
     TranslateError regs msg ->
@@ -913,7 +920,6 @@ analyzeFunction addr rsn s = do
 -- analyzed all function entry points.
 analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
-  -- If local block frontier is empty, then try function frontier.
   case Map.lookupMin (info^.unexploredFunctions) of
     Nothing -> info
     Just (addr, rsn) ->

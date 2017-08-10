@@ -24,6 +24,7 @@ module Data.Macaw.Memory.ElfLoader
     -- * Symbol resolution utilities
   , resolvedSegmentedElfFuncSymbols
   , ppElfUnresolvedSymbols
+  , elfAddrWidth
   ) where
 
 import           Control.Lens
@@ -52,6 +53,11 @@ import qualified Data.Macaw.Memory.Permissions as Perm
 -- | Return a subbrange of a bytestring.
 sliceL :: Integral w => Range w -> L.ByteString -> L.ByteString
 sliceL (i,c) = L.take (fromIntegral c) . L.drop (fromIntegral i)
+
+-- | Return the addr width repr associated with an elf class
+elfAddrWidth :: ElfClass w -> AddrWidthRepr w
+elfAddrWidth ELFCLASS32 = Addr32
+elfAddrWidth ELFCLASS64 = Addr64
 
 ------------------------------------------------------------------------
 -- SectionIndexMap
@@ -307,6 +313,10 @@ relocMapOfDynamic d cl mach virtMap dynContents =
 ------------------------------------------------------------------------
 -- Elf segment loading
 
+reprConstraints :: AddrWidthRepr w -> ((Bits (ElfWordType w), Integral (ElfWordType w), MemWidth w) => a) -> a
+reprConstraints Addr32 x = x
+reprConstraints Addr64 x = x
+
 -- | Load an elf file into memory.
 insertElfSegment :: LoadOptions
                  -> ElfFileSectionMap (ElfWordType w)
@@ -336,16 +346,6 @@ insertElfSegment opt shdrMap contents relocMap phdr = do
         let Just addr = resolveSegmentOff seg sec_offset
         mlsIndexMap %= Map.insert elfIdx (addr, sec)
       _ -> fail "Unexpected shdr interval"
-
-
-elfAddrWidth :: ElfClass w -> AddrWidthRepr w
-elfAddrWidth ELFCLASS32 = Addr32
-elfAddrWidth ELFCLASS64 = Addr64
-
-reprConstraints :: AddrWidthRepr w -> ((Bits (ElfWordType w), Integral (ElfWordType w), MemWidth w) => a) -> a
-reprConstraints Addr32 x = x
-reprConstraints Addr64 x = x
-
 
 -- | Load an elf file into memory.  This uses the Elf segments for loading.
 memoryForElfSegments
