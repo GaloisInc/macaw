@@ -125,7 +125,7 @@ addUpperBound :: ( MapF.OrdF (ArchReg arch)
                -> Either String (IndexBounds (ArchReg arch) ids)
 addUpperBound v u bnds
     -- Do nothing if upper bounds equals or exceeds function
-  | u >= maxUnsigned (valueWidth v) = Right bnds
+  | u >= maxUnsigned (typeWidth v) = Right bnds
   | u < 0 = error "addUpperBound given negative value."
   | otherwise =
   case v of

@@ -924,7 +924,7 @@ ppAbsStack m = vcat (pp <$> Map.toDescList m)
 ------------------------------------------------------------------------
 -- AbsBlockState
 
--- | State at beginning of a block.
+-- | Processor/memory state after at beginning of a block.
 data AbsBlockState r
    = AbsBlockState { _absRegState :: !(RegState r (AbsValue (RegAddrWidth r)))
                    , _startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
@@ -1121,8 +1121,6 @@ transferValue :: forall a ids tp
               -> Value a ids tp
               -> ArchAbsValue a tp
 transferValue c v = do
-  let amap = c^.absAssignments
-      aregs = c^.absInitialRegs
   case v of
     BoolValue b -> BoolConst b
     BVValue w i
@@ -1140,8 +1138,8 @@ transferValue c v = do
     -- Invariant: v is in m
     AssignedValue a ->
       fromMaybe (error $ "Missing assignment for " ++ show (assignId a))
-                (MapF.lookup (assignId a) amap)
-    Initial r -> aregs ^. boundValue r
+                (MapF.lookup (assignId a) (c^.absAssignments))
+    Initial r -> c^.absInitialRegs ^. boundValue r
 
 ------------------------------------------------------------------------
 -- Operations

@@ -147,6 +147,27 @@ rewriteApp app = do
     UExt (BVValue _ x) w -> do
       pure $ BVValue w x
 
+    BoolMux (BoolValue b) x y -> do
+      pure $! if b then x else y
+    -- ite c T y = (~c | T) & (c | y)
+    --           = c | y
+    BoolMux c (BoolValue True) y -> do
+      rewriteApp (OrApp c y)
+    -- ite c F y = (~c | F) & (c | y)
+    --           = ~c & y
+    BoolMux c (BoolValue False) y -> do
+      cn <- rewriteApp (NotApp c)
+      rewriteApp (AndApp cn y)
+    -- ite c x T = (~c | x) & (c | T)
+    --           = ~c | x
+    BoolMux c x (BoolValue True) -> do
+      cn <- rewriteApp (NotApp c)
+      rewriteApp (OrApp cn x)
+    -- ite c x F = (~c | x) & (c | F)
+    --           = c & x
+    BoolMux c x (BoolValue False) -> do
+      rewriteApp (AndApp c x)
+
     AndApp (BoolValue xc) y -> do
       if xc then
         pure y
@@ -161,7 +182,19 @@ rewriteApp app = do
         pure y
     OrApp x y@BoolValue{} -> rewriteApp (OrApp y x)
     NotApp (BoolValue b) ->
-      pure $ boolLitValue (not b)
+      pure $! boolLitValue (not b)
+    NotApp (valueAsApp -> Just (NotApp c)) ->
+      pure $! c
+    XorApp (BoolValue b) x ->
+      if b then
+        rewriteApp (NotApp x)
+       else
+        pure x
+    XorApp x (BoolValue b) ->
+      if b then
+        rewriteApp (NotApp x)
+       else
+        pure x
 
     BVAdd _ x (BVValue _ 0) -> do
       pure x
@@ -196,27 +229,53 @@ rewriteApp app = do
       r <- rewriteApp (BVSignedLe y x)
       rewriteApp (NotApp r)
     BVSignedLe (BVValue w x) (BVValue _ y) -> do
-      pure $ boolLitValue $ toSigned w x <= toSigned w y
 
+      pure $ boolLitValue $ toSigned w x <= toSigned w y
     BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic
       pure $! boolLitValue v
+    -- If we test the greatest bit turn this to a signed equality
+    BVTestBit x (BVValue _ ic)
+      | w <- typeWidth x
+      , ic + 1 == natValue w -> do
+      rewriteApp (BVSignedLt x (BVValue w 0))
     BVTestBit (valueAsApp -> Just (UExt x _)) i@(BVValue _ ic) -> do
       let xw = typeWidth x
       if ic < natValue xw then
         rewriteApp (BVTestBit x i)
        else
         pure (BoolValue False)
-    BVTestBit (valueAsApp -> Just (BVXor _ x y@BVValue{})) i -> do
+    BVTestBit (valueAsApp -> Just (BVAnd _ x y)) i@BVValue{} -> do
+      xb <- rewriteApp (BVTestBit x i)
+      yb <- rewriteApp (BVTestBit y i)
+      rewriteApp (AndApp xb yb)
+    BVTestBit (valueAsApp -> Just (BVOr _ x y)) i@BVValue{} -> do
+      xb <- rewriteApp (BVTestBit x i)
+      yb <- rewriteApp (BVTestBit y i)
+      rewriteApp (OrApp xb yb)
+    BVTestBit (valueAsApp -> Just (BVXor _ x y)) i -> do
       xb <- rewriteApp (BVTestBit x i)
       yb <- rewriteApp (BVTestBit y i)
       rewriteApp (XorApp xb yb)
+    BVTestBit (valueAsApp -> Just (BVComplement _ x)) i -> do
+      xb <- rewriteApp (BVTestBit x i)
+      rewriteApp (NotApp xb)
+    BVTestBit (valueAsApp -> Just (Mux _ c x y)) i -> do
+      xb <- rewriteApp (BVTestBit x i)
+      yb <- rewriteApp (BVTestBit y i)
+      rewriteApp (BoolMux c xb yb)
+
+    -- (x >> j) testBit i ~> x testBit (j+i)
+    BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
+      | j + i < natValue w, j + i <= maxUnsigned w -> do
+      rewriteApp (BVTestBit x (BVValue w (j + i)))
 
     BVComplement w (BVValue _ x) -> do
       pure (BVValue w (toUnsigned w (complement x)))
 
     BVAnd w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (x .&. y))
+    -- Ensure constant with and is second argument.
     BVAnd w x@BVValue{} y -> do
       rewriteApp (BVAnd w y x)
     BVAnd _ _ y@(BVValue _ 0) -> do
@@ -272,8 +331,12 @@ rewriteApp app = do
     Eq x@BVValue{} y -> do
       rewriteApp (Eq y x)
 
+    -- x + o = y ~> x = (y - o)
     Eq (valueAsApp -> Just (BVAdd w x (BVValue _ o))) (BVValue _ yc) -> do
       rewriteApp (Eq x (BVValue w (toUnsigned w (yc - o))))
+
+    Eq (valueAsApp -> Just (BVSub _ x y)) (BVValue _ 0) -> do
+      rewriteApp (Eq x y)
 
     Eq (valueAsApp -> Just (UExt x _)) (BVValue _ yc) -> do
       let u = typeWidth x

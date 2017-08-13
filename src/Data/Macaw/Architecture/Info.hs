@@ -15,6 +15,7 @@ module Data.Macaw.Architecture.Info
 
 import           Control.Monad.ST
 import           Data.Parameterized.Nonce
+import           Data.Sequence (Seq)
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
 import           Data.Macaw.CFG.Block
@@ -87,6 +88,18 @@ data ArchitectureInfo arch
                         -> ArchSegmentOff arch
                         -> AbsBlockState (ArchReg arch)
        -- ^ Update the abstract state after a function call returns
+     , identifyCall :: forall ids
+                    .  Memory (ArchAddrWidth arch)
+                    -> [Stmt arch ids]
+                    -> RegState (ArchReg arch) (Value arch ids)
+                    -> Maybe (Seq (Stmt arch ids), ArchSegmentOff arch)
+       -- ^ Function for recognizing call statements.
+       --
+       -- Given a memory state, list of statements, and final register
+       -- state, the should determine if this is a call, and if so,
+       -- return the statements with any action to push the return
+       -- value to the stack removed, and provide the explicit return
+       -- address that the function should return to.
      , identifyReturn :: forall ids
                       .  [Stmt arch ids]
                       -> RegState (ArchReg arch) (Value arch ids)

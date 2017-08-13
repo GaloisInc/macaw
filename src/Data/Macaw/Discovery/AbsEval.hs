@@ -23,7 +23,7 @@ import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 
--- | Get the absolute value associated with an address.
+-- | Get the abstract value associated with an address.
 absEvalReadMem :: RegisterInfo (ArchReg a)
                => AbsProcessorState (ArchReg a) ids
                -> ArchAddrValue a ids
@@ -31,6 +31,8 @@ absEvalReadMem :: RegisterInfo (ArchReg a)
                   -- ^ Information about the memory layout for the value.
                -> ArchAbsValue a tp
 absEvalReadMem r a tp
+    -- If the value is a stack entry, then see if there is a stack
+    -- value associated with it.
   | StackOffset _ s <- transferValue r a
   , [o] <- Set.toList s
   , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
