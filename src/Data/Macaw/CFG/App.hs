@@ -123,7 +123,9 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- @BVTestBit x i@ returns true iff bit @i@ of @x@ is true.
   -- 0 is the index of the least-significant bit.
-  BVTestBit :: !(f (BVType n)) -> !(f (BVType log_n)) -> App f BoolType
+  --
+  -- If the value is larger than the width of n, then the result is false.
+  BVTestBit :: (1 <= n) => !(f (BVType n)) -> !(f (BVType log_n)) -> App f BoolType
 
   -- Bitwise complement
   BVComplement :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)

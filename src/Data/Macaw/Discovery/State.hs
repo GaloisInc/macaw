@@ -46,7 +46,6 @@ module Data.Macaw.Discovery.State
   , CodeAddrReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
-  , asLiteralAddr
   )  where
 
 import           Control.Lens
@@ -240,7 +239,7 @@ data StatementList arch ids
                      -- ^ The terminal statement in the block.
                    , stmtsAbsState :: !(AbsProcessorState (ArchReg arch) ids)
                      -- ^ The abstract state of the block just before terminal
-                    }
+                   }
 
 deriving instance ArchConstraints arch
   => Show (StatementList arch ids)
@@ -419,12 +418,3 @@ funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 -- | Constraint on architecture register values needed by code exploration.
 type RegConstraint r = (OrdF r, HasRepr r TypeRepr, RegisterInfo r, ShowF r)
-
--- | This returns a segmented address if the value can be interpreted as a literal memory
--- address, and returns nothing otherwise.
-asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-              => BVValue arch ids (ArchAddrWidth arch)
-              -> Maybe (ArchMemAddr arch)
-asLiteralAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
-asLiteralAddr (RelocatableValue _ i) = Just i
-asLiteralAddr _ = Nothing

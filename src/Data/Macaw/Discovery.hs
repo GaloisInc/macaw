@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.
 This provides information about code discovered in binaries.
 -}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -77,7 +78,6 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
-import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
@@ -85,6 +85,11 @@ import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
+#define USE_REWRITER 1
+
+#ifdef USE_REWRITER
+import           Data.Macaw.CFG.Rewriter
+#endif
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -153,8 +158,26 @@ cameFromUnsoundReason found_map rsn = do
 -}
 
 ------------------------------------------------------------------------
+--
+
+-- | This uses an assertion about a given value being true or false to
+-- refine the information in an abstract processor state.
+refineProcStateBounds :: ( OrdF (ArchReg arch)
+                         , HasRepr (ArchReg arch) TypeRepr
+                         )
+                      => Value arch ids BoolType
+                      -> Bool
+                      -> AbsProcessorState (ArchReg arch) ids
+                      -> AbsProcessorState (ArchReg arch) ids
+refineProcStateBounds v isTrue ps =
+  case indexBounds (Jmp.assertPred v isTrue) ps of
+    Left{}    -> ps
+    Right ps' -> ps'
+
+------------------------------------------------------------------------
 -- Rewriting block
 
+#ifdef USE_REWRITER
 -- | Apply optimizations to a terminal statement.
 rewriteTermStmt :: TermStmt arch src -> Rewriter arch src tgt (TermStmt arch tgt)
 rewriteTermStmt tstmt = do
@@ -167,7 +190,7 @@ rewriteTermStmt tstmt = do
         _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
               Branch cn <$> pure f <*> pure t
           | otherwise ->
-            Branch tgtCond <$> pure t <*> pure f
+              pure $ Branch tgtCond t f
     Syscall regs ->
       Syscall <$> traverseF rewriteValue regs
     TranslateError regs msg ->
@@ -187,6 +210,7 @@ rewriteBlock b = do
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }
+#endif
 
 ------------------------------------------------------------------------
 -- Demanded subterm utilities
@@ -268,7 +292,7 @@ data FoundAddr arch
 ------------------------------------------------------------------------
 -- FunState
 
--- | The state for the function explroation monad
+-- | The state for the function exploration monad (funM)
 data FunState arch ids
    = FunState { funNonceGen  :: !(NonceGenerator (ST ids) ids)
               , curFunAddr   :: !(ArchSegmentOff arch)
@@ -332,7 +356,7 @@ liftST = FunM . lift
 mergeIntraJump  :: ArchSegmentOff arch
                   -- ^ Source label that we are jumping from.
                 -> AbsBlockState (ArchReg arch)
-                   -- ^ Block state after executing instructions.
+                   -- ^ The state of the system after jumping to new block.
                 -> ArchSegmentOff arch
                    -- ^ Address we are trying to reach.
                 -> FunM arch ids ()
@@ -368,7 +392,7 @@ mergeIntraJump src ab tgt = do
 -------------------------------------------------------------------------------
 -- Jump table bounds
 
--- See if expression matches form expected by jump tables
+-- | Figure out if this is a jump table.
 matchJumpTable :: MemWidth (ArchAddrWidth arch)
                => Memory (ArchAddrWidth arch)
                -> BVValue arch ids (ArchAddrWidth arch) -- ^ Memory address that IP is read from.
@@ -386,11 +410,14 @@ matchJumpTable mem read_addr
 matchJumpTable _ _ =
     Nothing
 
+-- | This describes why we could not infer the bounds of code that looked like it
+-- was accessing a jump table.
 data JumpTableBoundsError arch ids
    = CouldNotInterpretAbsValue !(AbsValue (ArchAddrWidth arch) (BVType (ArchAddrWidth arch)))
    | UpperBoundMismatch !(Jmp.UpperBound (BVType (ArchAddrWidth arch))) !Integer
    | CouldNotFindBound String !(ArchAddrValue arch ids)
 
+-- | Show the jump table bounds
 showJumpTableBoundsError :: ArchConstraints arch => JumpTableBoundsError arch ids -> String
 showJumpTableBoundsError err =
   case err of
@@ -405,8 +432,8 @@ showJumpTableBoundsError err =
       show "Could not find  jump table: " ++ msg ++ "\n"
       ++ show (ppValueAssignments jump_index)
 
--- Returns the index bounds for a jump table of 'Nothing' if this is not a block
--- table.
+-- | Returns the index bounds for a jump table of 'Nothing' if this is
+-- not a block table.
 getJumpTableBounds :: ArchitectureInfo a
                    -> AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
                    -> ArchMemAddr a -- ^ Base
@@ -429,23 +456,10 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
 
 
 ------------------------------------------------------------------------
---
-
-refineProcStateBounds :: ( OrdF (ArchReg arch)
-                         , HasRepr (ArchReg arch) TypeRepr
-                         )
-                      => Value arch ids BoolType
-                      -> Bool
-                      -> AbsProcessorState (ArchReg arch) ids
-                      -> AbsProcessorState (ArchReg arch) ids
-refineProcStateBounds v isTrue ps =
-  case indexBounds (Jmp.assertPred v isTrue) ps of
-    Left{}    -> ps
-    Right ps' -> ps'
-
-------------------------------------------------------------------------
 -- ParseState
 
+-- | This describes information learned when analyzing a block to look
+-- for code pointers and classify exit.
 data ParseState arch ids =
   ParseState { _writtenCodeAddrs :: ![ArchSegmentOff arch]
                -- ^ Addresses marked executable that were written to memory.
@@ -454,9 +468,11 @@ data ParseState arch ids =
              , _newFunctionAddrs :: ![ArchSegmentOff arch]
              }
 
+-- | Code addresses written to memory.
 writtenCodeAddrs :: Simple Lens (ParseState arch ids) [ArchSegmentOff arch]
 writtenCodeAddrs = lens _writtenCodeAddrs (\s v -> s { _writtenCodeAddrs = v })
 
+-- | Intraprocedural jump targets.
 intraJumpTargets :: Simple Lens (ParseState arch ids) [(ArchSegmentOff arch, AbsBlockState (ArchReg arch))]
 intraJumpTargets = lens _intraJumpTargets (\s v -> s { _intraJumpTargets = v })
 
@@ -483,6 +499,7 @@ recordWriteStmt arch_info mem regs stmt = do
 ------------------------------------------------------------------------
 -- ParseContext
 
+-- | Information needed to parse the processor state
 data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
                                           , pctxArchInfo :: !(ArchitectureInfo arch)
                                           , pctxFunAddr  :: !(ArchSegmentOff arch)
@@ -497,6 +514,34 @@ addrMemRepr arch_info =
   case archAddrWidth arch_info of
     Addr32 -> BVMemRepr n4 (archEndianness arch_info)
     Addr64 -> BVMemRepr n8 (archEndianness arch_info)
+
+identifyCallTargets :: forall arch ids
+                    .  (RegisterInfo (ArchReg arch))
+                    => AbsProcessorState (ArchReg arch) ids
+                       -- ^ Abstract processor state just before call.
+                    -> BVValue arch ids (ArchAddrWidth arch)
+                    -> [ArchSegmentOff arch]
+identifyCallTargets absState ip = do
+  -- Code pointers from abstract domains.
+  let mem = absMem absState
+  let def = concretizeAbsCodePointers mem (transferValue absState ip)
+  let segOffAddrs :: Maybe (ArchSegmentOff arch) -> [ArchSegmentOff arch]
+      segOffAddrs (Just addr)
+        | segmentFlags (msegSegment addr) `Perm.hasPerm` Perm.execute =
+            [addr]
+      segOffAddrs _ = []
+  case ip of
+    BVValue _ x -> segOffAddrs $ resolveAbsoluteAddr mem (fromInteger x)
+    RelocatableValue _ a -> segOffAddrs $ asSegmentOff mem a
+    AssignedValue a ->
+      case assignRhs a of
+        -- See if we can get a value out of a concrete memory read.
+        ReadMem addr (BVMemRepr _ end)
+          | Just laddr <- asLiteralAddr addr
+          , Right val <- readAddr mem end laddr ->
+            segOffAddrs (asSegmentOff mem val) ++ def
+        _ -> def
+    Initial _ -> def
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
@@ -521,15 +566,17 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
     -- The last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
-    _ | Just (prev_stmts, ret) <- identifyCall arch_info  mem stmts s'  -> do
+    _ | Just (prev_stmts, ret) <- identifyCall arch_info mem stmts s'  -> do
         mapM_ (recordWriteStmt arch_info mem absProcState') prev_stmts
         let abst = finalAbsBlockState absProcState' s'
         seq abst $ do
         -- Merge caller return information
         intraJumpTargets %= ((ret, postCallAbsState arch_info abst ret):)
-        -- Look for new ips.
-        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+        -- Use the abstract domain to look for new code pointers for the current IP.
+        let addrs = identifyCallTargets absProcState' (s'^.boundValue ip_reg)
         newFunctionAddrs %= (++ addrs)
+        -- Use the call-specific code to look for new IPs.
+
         pure StatementList { stmtsIdent = lbl_idx
                            , stmtsNonterm = toList prev_stmts
                            , stmtsTerm  = ParsedCall s' (Just ret)
@@ -546,14 +593,14 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                            , stmtsAbsState = absProcState'
                            }
 
-      -- Jump to concrete offset.
-      --
-      -- Note, we disallow jumps back to function entry point thus forcing them to be treated
-      -- as tail calls or unclassified if the stack has changed size.
-      | Just tgt_addr <- asLiteralAddr (s'^.boundValue ip_reg)
-      , Just tgt_mseg <- asSegmentOff mem tgt_addr
+      -- Jump to a block within this function.
+      | Just tgt_mseg <- asSegmentOff mem =<< asLiteralAddr (s'^.boundValue ip_reg)
       , segmentFlags (msegSegment tgt_mseg) `Perm.hasPerm` Perm.execute
+        -- The target address cannot be this function entry point.
+        --
+        -- This will result in the target being trated as a call or tail call.
       , tgt_mseg /= pctxFunAddr ctx -> do
+
          mapM_ (recordWriteStmt arch_info mem absProcState') stmts
          -- Merge block state and add intra jump target.
          let abst = finalAbsBlockState absProcState' s'
@@ -633,7 +680,6 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
         -- Look for new instruction pointers
         let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
         newFunctionAddrs %= (++ addrs)
-
 
         pure StatementList { stmtsIdent = lbl_idx
                            , stmtsNonterm = stmts
@@ -800,12 +846,16 @@ transfer addr = do
     curFunBlocks %= Map.insert addr pb
    else do
     -- Rewrite returned blocks to simplify expressions
+#ifdef USE_REWRITER
     let ctx = RewriteContext { rwctxNonceGen = nonceGen
                              , rwctxArchFn   = rewriteArchFn ainfo
                              , rwctxArchStmt = rewriteArchStmt ainfo
                              , rwctxConstraints = \x -> x
                              }
     bs1 <- liftST $ runRewriter ctx $ traverse rewriteBlock bs0
+#else
+    let bs1 = bs0
+#endif
     -- Comute demand set
     let demandSet =
           runDemandComp (archDemandContext ainfo) $ do

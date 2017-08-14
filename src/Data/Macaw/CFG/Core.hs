@@ -33,7 +33,7 @@ module Data.Macaw.CFG.Core
   , Value(..)
   , BVValue
   , valueAsApp
-  , valueWidth
+  , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
   , mkLit
@@ -105,7 +105,8 @@ import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.CFG.App
-import           Data.Macaw.Memory (MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..))
+import           Data.Macaw.Memory ( MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..)
+                                   , absoluteAddr)
 import           Data.Macaw.Types
 
 -- Note:
@@ -323,13 +324,6 @@ instance ( HasRepr (ArchReg arch) TypeRepr
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
   typeRepr (Initial r) = typeRepr r
 
-valueWidth :: ( HasRepr (ArchReg arch) TypeRepr
-              )
-           => Value arch ids (BVType n) -> NatRepr n
-valueWidth v =
-  case typeRepr v of
-    BVTypeRepr n -> n
-
 ------------------------------------------------------------------------
 -- Value equality
 
@@ -394,6 +388,15 @@ bvValue i = mkLit knownNat i
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
 valueAsApp (AssignedValue (Assignment _ (EvalApp a))) = Just a
 valueAsApp _ = Nothing
+
+-- | This returns a segmented address if the value can be interpreted as a literal memory
+-- address, and returns nothing otherwise.
+asLiteralAddr :: MemWidth (ArchAddrWidth arch)
+              => BVValue arch ids (ArchAddrWidth arch)
+              -> Maybe (ArchMemAddr arch)
+asLiteralAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
+asLiteralAddr (RelocatableValue _ i) = Just i
+asLiteralAddr _ = Nothing
 
 asInt64Constant :: Value arch ids (BVType 64) -> Maybe Int64
 asInt64Constant (BVValue _ o) = Just (fromInteger o)

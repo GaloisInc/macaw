@@ -561,7 +561,6 @@ resolveAbsoluteAddr mem addr = addrWidthClass (memAddrWidth mem) $
       Just $! MemSegmentOff seg (addr - base)
     _ -> Nothing
 
-
 -- | Make a segment offset pair after ensuring the offset is valid
 resolveSegmentOff :: MemWidth w => MemSegment w -> MemWord w -> Maybe (MemSegmentOff w)
 resolveSegmentOff seg off
