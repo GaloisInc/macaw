@@ -62,8 +62,6 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
-import           Data.Sequence (Seq)
-import qualified Data.Sequence as Seq
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
@@ -166,8 +164,8 @@ rewriteTermStmt tstmt = do
     Branch c t f -> do
       tgtCond <- rewriteValue c
       case () of
-        _ | Just (NotApp c) <- valueAsApp tgtCond -> do
-              Branch c <$> pure f <*> pure t
+        _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
+              Branch cn <$> pure f <*> pure t
           | otherwise ->
             Branch tgtCond <$> pure t <*> pure f
     Syscall regs ->
@@ -481,42 +479,6 @@ recordWriteStmt arch_info mem regs stmt = do
           writtenCodeAddrs %= (addrs ++)
     _ -> return ()
 
--- | Attempt to identify the write to a stack return address, returning
--- instructions prior to that write and return  values.
---
--- This can also return Nothing if the call is not supported.
-identifyCall :: ( RegConstraint (ArchReg a)
-                , MemWidth (ArchAddrWidth a)
-                )
-             => Memory (ArchAddrWidth a)
-             -> [Stmt a ids]
-             -> RegState (ArchReg a) (Value a ids)
-             -> Maybe (Seq (Stmt a ids), ArchSegmentOff a)
-identifyCall mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
-  where -- Get value of stack pointer
-        next_sp = s^.boundValue sp_reg
-        -- Recurse on statements.
-        go stmts after =
-          case Seq.viewr stmts of
-            Seq.EmptyR -> Nothing
-            prev Seq.:> stmt
-              -- Check for a call statement by determining if the last statement
-              -- writes an executable address to the stack pointer.
-              | WriteMem a _repr val <- stmt
-              , Just _ <- testEquality a next_sp
-                -- Check this is the right length.
-              , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
-                -- Check if value is a valid literal address
-              , Just val_a <- asLiteralAddr val
-                -- Check if segment of address is marked as executable.
-              , Just ret_addr <- asSegmentOff mem val_a
-              , segmentFlags (msegSegment ret_addr) `Perm.hasPerm` Perm.execute ->
-                Just (prev Seq.>< after, ret_addr)
-                -- Stop if we hit any architecture specific instructions prior to
-                -- identifying return address since they may have side effects.
-              | ExecArchStmt _ <- stmt -> Nothing
-                -- Otherwise skip over this instruction.
-              | otherwise -> go prev (stmt Seq.<| after)
 
 ------------------------------------------------------------------------
 -- ParseContext
@@ -559,7 +521,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
     -- The last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
-    _ | Just (prev_stmts, ret) <- identifyCall mem stmts s'  -> do
+    _ | Just (prev_stmts, ret) <- identifyCall arch_info  mem stmts s'  -> do
         mapM_ (recordWriteStmt arch_info mem absProcState') prev_stmts
         let abst = finalAbsBlockState absProcState' s'
         seq abst $ do

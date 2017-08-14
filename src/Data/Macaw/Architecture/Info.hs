@@ -15,7 +15,7 @@ module Data.Macaw.Architecture.Info
 
 import           Control.Monad.ST
 import           Data.Parameterized.Nonce
-
+import           Data.Sequence (Seq)
 import           Data.Macaw.AbsDomain.AbsState as AbsState
 import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
@@ -87,6 +87,12 @@ data ArchitectureInfo arch
                         -> ArchSegmentOff arch
                         -> AbsBlockState (ArchReg arch)
        -- ^ Update the abstract state after a function call returns
+     , identifyCall :: forall ids
+                    . Memory (ArchAddrWidth arch)
+                    -> [Stmt arch ids]
+                    -> RegState (ArchReg arch) (Value arch ids)
+                    -> Maybe (Seq (Stmt arch ids), ArchSegmentOff arch)
+
      , identifyReturn :: forall ids
                       .  [Stmt arch ids]
                       -> RegState (ArchReg arch) (Value arch ids)
