@@ -33,6 +33,7 @@ module Data.Macaw.Discovery
        , State.ppDiscoveryStateBlocks
        , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
+       , Data.Macaw.Discovery.cfgFromAddrsTrustFns
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.CodeAddrReason(..)
        , Data.Macaw.Discovery.analyzeFunction
@@ -500,14 +501,19 @@ recordWriteStmt arch_info mem regs stmt = do
 -- ParseContext
 
 -- | Information needed to parse the processor state
-data ParseContext arch ids = ParseContext { pctxMemory   :: !(Memory (ArchAddrWidth arch))
-                                          , pctxArchInfo :: !(ArchitectureInfo arch)
-                                          , pctxFunAddr  :: !(ArchSegmentOff arch)
-                                            -- ^ Address of function this block is being parsed as
-                                          , pctxAddr     :: !(ArchSegmentOff arch)
-                                             -- ^ Address of the current block
-                                          , pctxBlockMap :: !(Map Word64 (Block arch ids))
-                                          }
+data ParseContext arch ids =
+  ParseContext { pctxMemory         :: !(Memory (ArchAddrWidth arch))
+               , pctxArchInfo       :: !(ArchitectureInfo arch)
+               , pctxKnownFnEntries :: !(Set (ArchSegmentOff arch))
+                 -- ^ Entry addresses for known functions (e.g. from symbol information)
+               , pctxTrustKnownFns  :: !Bool
+                 -- ^ should we use pctxKnownFns in analysis to identify e.g. jump vs. tail calls
+               , pctxFunAddr        :: !(ArchSegmentOff arch)
+                 -- ^ Address of function this block is being parsed as
+               , pctxAddr           :: !(ArchSegmentOff arch)
+                 -- ^ Address of the current block
+               , pctxBlockMap       :: !(Map Word64 (Block arch ids))
+               }
 
 addrMemRepr :: ArchitectureInfo arch -> MemRepr (BVType (RegAddrWidth (ArchReg arch)))
 addrMemRepr arch_info =
@@ -555,8 +561,6 @@ parseFetchAndExecute :: forall arch ids
                      -> State (ParseState arch ids) (StatementList arch ids)
 parseFetchAndExecute ctx lbl_idx stmts regs s' = do
   let src = pctxAddr ctx
-  let mem = pctxMemory ctx
-  let arch_info = pctxArchInfo ctx
   withArchConstraints arch_info $ do
   -- See if next statement appears to end with a call.
   -- We define calls as statements that end with a write that
@@ -583,7 +587,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                            , stmtsAbsState = absProcState'
                            }
 
-    -- This block ends with a return.
+      -- This block ends with a return.
       | ReturnAddr <- transferValue absProcState' (s'^.boundValue ip_reg) -> do
         mapM_ (recordWriteStmt arch_info mem absProcState') stmts
 
@@ -598,8 +602,12 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
       , segmentFlags (msegSegment tgt_mseg) `Perm.hasPerm` Perm.execute
         -- The target address cannot be this function entry point.
         --
-        -- This will result in the target being trated as a call or tail call.
-      , tgt_mseg /= pctxFunAddr ctx -> do
+        -- This will result in the target being treated as a call or tail call.
+      , tgt_mseg /= pctxFunAddr ctx
+
+      -- If we are trusting known function entries, then only mark as an
+      -- intra-procedural jump if the target is not a known function entry.
+      , not (pctxTrustKnownFns ctx) || (tgt_mseg `notElem` pctxKnownFnEntries ctx) -> do
 
          mapM_ (recordWriteStmt arch_info mem absProcState') stmts
          -- Merge block state and add intra jump target.
@@ -666,26 +674,21 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                                , stmtsAbsState = absProcState'
                                }
 
-      -- Check for tail call (anything where we are right at stack height
+      -- Check for tail call (anything where we are right at stack height)
+      --
+      -- TODO: this makes sense for x86, but is not correct for all architectures
       | ptrType    <- addrMemRepr arch_info
-      , sp_val     <-  s'^.boundValue sp_reg
-      , ReturnAddr <- absEvalReadMem absProcState' sp_val ptrType -> do
+      , sp_val     <- s'^.boundValue sp_reg
+      , ReturnAddr <- absEvalReadMem absProcState' sp_val ptrType ->
+        finishWithTailCall absProcState'
 
-        mapM_ (recordWriteStmt arch_info mem absProcState') stmts
-
-        -- Compute fina lstate
-        let abst = finalAbsBlockState absProcState' s'
-        seq abst $ do
-
-        -- Look for new instruction pointers
-        let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
-        newFunctionAddrs %= (++ addrs)
-
-        pure StatementList { stmtsIdent = lbl_idx
-                           , stmtsNonterm = stmts
-                           , stmtsTerm  = ParsedCall s' Nothing
-                           , stmtsAbsState = absProcState'
-                           }
+      -- Is this a jump to a known function entry? We're already past the
+      -- "identifyCall" case, so this must be a tail call, assuming we trust our
+      -- known function entry info.
+      | pctxTrustKnownFns ctx
+      , Just tgt_mseg <- asSegmentOff mem =<< asLiteralAddr (s'^.boundValue ip_reg)
+      , tgt_mseg `elem` pctxKnownFnEntries ctx ->
+        finishWithTailCall absProcState'
 
       -- Block that ends with some unknown
       | otherwise -> do
@@ -695,6 +698,30 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                              , stmtsTerm  = ClassifyFailure s'
                              , stmtsAbsState = absProcState'
                              }
+
+  where mem = pctxMemory ctx
+        arch_info = pctxArchInfo ctx
+
+        finishWithTailCall :: RegisterInfo (ArchReg arch)
+                           => AbsProcessorState (ArchReg arch) ids
+                           -> State (ParseState arch ids) (StatementList arch ids)
+        finishWithTailCall absProcState' = do
+          mapM_ (recordWriteStmt arch_info mem absProcState') stmts
+
+          -- Compute final state
+          let abst = finalAbsBlockState absProcState' s'
+          seq abst $ do
+
+          -- Look for new instruction pointers
+          let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
+          newFunctionAddrs %= (++ addrs)
+
+          pure StatementList { stmtsIdent = lbl_idx
+                             , stmtsNonterm = stmts
+                             , stmtsTerm  = ParsedCall s' Nothing
+                             , stmtsAbsState = absProcState'
+                             }
+
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -783,11 +810,19 @@ transferBlocks src finfo sz block_map =
       let regs = initAbsProcessorState mem (foundAbstractState finfo)
       funAddr <- gets curFunAddr
       s <- use curFunCtx
-      let ctx = ParseContext { pctxMemory   = memory s
-                             , pctxArchInfo = archInfo s
-                             , pctxFunAddr  = funAddr
-                             , pctxAddr     = src
-                             , pctxBlockMap = block_map
+
+      -- Combine entries of functions we've discovered thus far with
+      -- undiscovered functions with entries marked InitAddr, which we assume is
+      -- info we know from the symbol table or some other reliable source, and
+      -- pass in. Only used in analysis if pctxTrustKnownFns is True.
+      let knownFns = Set.union (Map.keysSet $ s^.funInfo) (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
+      let ctx = ParseContext { pctxMemory         = memory s
+                             , pctxArchInfo       = archInfo s
+                             , pctxKnownFnEntries = knownFns
+                             , pctxTrustKnownFns  = s^.trustKnownFns
+                             , pctxFunAddr        = funAddr
+                             , pctxAddr           = src
+                             , pctxBlockMap       = block_map
                              }
       let ps0 = ParseState { _writtenCodeAddrs = []
                            , _intraJumpTargets = []
@@ -960,25 +995,37 @@ exploreMemPointers mem_words info =
           $ mem_words
     mapM_ (modify . addMemCodePointer) mem_addrs
 
+
 -- | Construct a discovery info by starting with exploring from a given set of
 -- function entry points.
-cfgFromAddrs :: forall arch
-             .  ArchitectureInfo arch
-                -- ^ Architecture-specific information needed for doing control-flow exploration.
-             -> Memory (ArchAddrWidth arch)
-                -- ^ Memory to use when decoding instructions.
-             -> SymbolAddrMap (ArchAddrWidth arch)
-                -- ^ Map from addresses to the associated symbol name.
-             -> [ArchSegmentOff arch]
-                -- ^ Initial function entry points.
-             -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
-                -- ^ Function entry points in memory to be explored
-                -- after exploring function entry points.
-                --
-                -- Each entry contains an address and the value stored in it.
-             -> DiscoveryState arch
-cfgFromAddrs arch_info mem symbols init_addrs mem_words = do
-  emptyDiscoveryState mem symbols arch_info
+cfgFromAddrs, cfgFromAddrsTrustFns ::
+     forall arch
+  .  ArchitectureInfo arch
+     -- ^ Architecture-specific information needed for doing control-flow exploration.
+  -> Memory (ArchAddrWidth arch)
+     -- ^ Memory to use when decoding instructions.
+  -> SymbolAddrMap (ArchAddrWidth arch)
+     -- ^ Map from addresses to the associated symbol name.
+  -> [ArchSegmentOff arch]
+     -- ^ Initial function entry points.
+  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+     -- ^ Function entry points in memory to be explored
+     -- after exploring function entry points.
+     --
+     -- Each entry contains an address and the value stored in it.
+  -> DiscoveryState arch
+cfgFromAddrs arch_info mem symbols =
+  cfgFromAddrsWorker (emptyDiscoveryState mem symbols arch_info)
+cfgFromAddrsTrustFns arch_info mem symbols =
+  cfgFromAddrsWorker (set trustKnownFns True $ emptyDiscoveryState mem symbols arch_info)
+
+cfgFromAddrsWorker :: forall arch
+                   .  DiscoveryState arch
+                   -> [ArchSegmentOff arch]
+                   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+                   -> DiscoveryState arch
+cfgFromAddrsWorker initial_state init_addrs mem_words =
+  initial_state
     & markAddrsAsFunction InitAddr init_addrs
     & analyzeDiscoveredFunctions
     & exploreMemPointers mem_words

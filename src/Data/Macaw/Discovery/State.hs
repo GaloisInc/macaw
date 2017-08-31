@@ -39,6 +39,7 @@ module Data.Macaw.Discovery.State
   , globalDataMap
   , funInfo
   , unexploredFunctions
+  , trustKnownFns
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
   , parsedBlocks
@@ -88,7 +89,7 @@ data CodeAddrReason w
      -- ^ Added because the address split this block after it had been disassembled.
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
-  deriving (Show)
+  deriving (Eq, Show)
 
 ------------------------------------------------------------------------
 -- SymbolAddrMap
@@ -345,17 +346,17 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 
 -- | Information discovered about the program
 data DiscoveryState arch
-   = DiscoveryState { memory      :: !(Memory (ArchAddrWidth arch))
+   = DiscoveryState { memory              :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
-                   , symbolNames :: !(SymbolAddrMap (ArchAddrWidth arch))
+                   , symbolNames          :: !(SymbolAddrMap (ArchAddrWidth arch))
                      -- ^ Map addresses to known symbol names
-                   , archInfo    :: !(ArchitectureInfo arch)
+                   , archInfo             :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
-                   , _globalDataMap :: !(Map (ArchMemAddr arch)
+                   , _globalDataMap       :: !(Map (ArchMemAddr arch)
                                              (GlobalDataInfo (ArchMemAddr arch)))
                      -- ^ Maps each address that appears to be global data to information
                      -- inferred about it.
-                   , _funInfo :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
+                   , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
                      -- ^ Map from function addresses to discovered information about function
                    , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
                      -- ^ This maps addresses that have been marked as
@@ -363,6 +364,9 @@ data DiscoveryState arch
                      -- they are analyzed.
                      --
                      -- The keys in this map and `_funInfo` should be mutually disjoint.
+                   , _trustKnownFns       :: !Bool
+                     -- ^ Should we use and depend on known function entries in
+                     -- our analysis? E.g. used to distinguish jumps vs. tail calls
                    }
 
 -- | Return list of all functions discovered so far.
@@ -391,12 +395,13 @@ emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                     -> DiscoveryState arch
 emptyDiscoveryState mem symbols info =
   DiscoveryState
-  { memory             = mem
-  , symbolNames        = symbols
-  , archInfo           = info
-  , _globalDataMap     = Map.empty
+  { memory               = mem
+  , symbolNames          = symbols
+  , archInfo             = info
+  , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
+  , _trustKnownFns       = False
   }
 
 -- | Map each jump table start to the address just after the end.
@@ -412,6 +417,9 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 -- | Get information for specific functions
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
+
+trustKnownFns :: Simple Lens (DiscoveryState arch) Bool
+trustKnownFns = lens _trustKnownFns (\s v -> s { _trustKnownFns = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryState utilities
