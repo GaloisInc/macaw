@@ -105,6 +105,7 @@ instance Monad m => WarnMonad String (WarnT m) where
 ------------------------------------------------------------------------
 -- Parser
 
+-- | The context needed to read dwarf entries.
 data ParserState = ParserState { expectedPointerWidth :: !Word64
                                  -- ^ Number of bytes a pointer is expected to have.
                                , readerInfo :: !Dwarf.Reader
@@ -149,6 +150,7 @@ attributeAsUInt :: DW_ATVAL -> Parser Word64
 attributeAsUInt (DW_ATVAL_UINT u) = pure u
 attributeAsUInt _ = fail "Could not interpret as UInt"
 
+-- | Parse an attribute as a DIE identifier.
 attributeAsDieID :: DW_ATVAL -> Parser DieID
 attributeAsDieID (DW_ATVAL_REF r) = pure r
 attributeAsDieID _ = fail "Could not interpret as DieID."
@@ -397,7 +399,7 @@ data BaseType = BaseTypeDef { baseSize     :: !Word64
   deriving (Show)
 
 data Member tp = Member { memberName :: !String
-                        , memberDeclLoc  :: !DeclLoc
+                        , memberDeclLoc  :: !(Maybe DeclLoc)
                         , memberLoc      :: !(Maybe Word64)
                         , memberType     :: tp
                         }
@@ -424,9 +426,11 @@ data EnumDecl = EnumDecl { enumDeclName :: Maybe String
                          }
   deriving (Show)
 
-data SubroutineTypeDecl = SubroutineTypeDecl { fntypePrototyped :: !Bool
-                                             , fntypeFormals   :: ![DIE]
-                                             }
+data SubroutineTypeDecl tp
+   = SubroutineTypeDecl { fntypePrototyped :: !(Maybe Bool)
+                        , fntypeFormals    :: ![DIE]
+                        , fntypeType       :: !(Maybe tp)
+                        }
   deriving (Show)
 
 data Typedef tp = Typedef { typedefName :: !String
@@ -463,7 +467,7 @@ data TypeF tp
    | UnionType !(UnionDecl tp)
      -- ^ Denotes a C union
    | EnumType !EnumDecl
-   | SubroutinePtrType !SubroutineTypeDecl
+   | SubroutinePtrType !(SubroutineTypeDecl tp)
    | TypedefType !(Typedef tp)
   deriving (Show)
 
@@ -476,9 +480,11 @@ unionMembersLens = lens unionMembers (\s v -> s { unionMembers = v })
 memberTypeLens :: Lens (Member a) (Member b) a b
 memberTypeLens = lens memberType (\s v -> s { memberType = v })
 
+subroutineTypeLens :: Lens (SubroutineTypeDecl a) (SubroutineTypeDecl b) (Maybe a) (Maybe b)
+subroutineTypeLens = lens fntypeType (\s v -> s { fntypeType = v })
+
 typedefTypeLens :: Lens (Typedef a) (Typedef b) a b
 typedefTypeLens = lens typedefType (\s v -> s { typedefType = v })
-
 
 traverseSubtypes :: Traversal (TypeF a) (TypeF b) a b
 traverseSubtypes f tf =
@@ -495,7 +501,7 @@ traverseSubtypes f tf =
     StructType s -> StructType <$> (structMembersLens . traverse . memberTypeLens) f s
     UnionType  u -> UnionType  <$> (unionMembersLens . traverse . memberTypeLens) f u
     EnumType e -> pure (EnumType e)
-    SubroutinePtrType d -> pure (SubroutinePtrType d)
+    SubroutinePtrType d -> SubroutinePtrType <$> (subroutineTypeLens . traverse) f d
     TypedefType tp -> TypedefType <$> typedefTypeLens f tp
 
 parseMember :: V.Vector FilePath -> DIE -> Parser (Member DieID)
@@ -504,10 +510,15 @@ parseMember file_vec d = runDIEParser "parseMember" d $ do
   name       <- getSingleAttribute DW_AT_name       attributeAsString
   tp         <- getSingleAttribute DW_AT_type attributeAsDieID
   memLoc     <- getMaybeAttribute  DW_AT_data_member_location  attributeAsUInt
-  declLoc    <- parseDeclLoc file_vec
+  artificial <- fromMaybe False <$> getMaybeAttribute DW_AT_artificial attributeAsBool
+  mdloc <-
+    if artificial then
+      pure Nothing
+     else
+      Just <$> parseDeclLoc file_vec
 
   pure $! Member { memberName = name
-                 , memberDeclLoc  = declLoc
+                 , memberDeclLoc  = mdloc
                  , memberLoc = memLoc
                  , memberType = tp
                  }
@@ -526,7 +537,7 @@ data PreType
    | ConstTypeF !DieID
      -- ^ A const value with the given die ID.
    | VolatileTypeF !DieID
-   | SubroutineTypeF !SubroutineTypeDecl
+   | SubroutineTypeF !(SubroutineTypeDecl DieID)
 
 -- | A type parser takes the file vector and returns either a `TypeF` or `Nothing`.
 --
@@ -639,13 +650,18 @@ parseEnumerationType file_vec = do
                    }
   pure $ PreTypeF $ EnumType e
 
+-- | Parse a subroutine type.
 parseSubroutineType :: TypeParser
 parseSubroutineType _ = do
-  proto <- getSingleAttribute DW_AT_prototyped attributeAsBool
+  proto <- getMaybeAttribute DW_AT_prototyped attributeAsBool
   ignoreAttribute DW_AT_sibling
   formals <- parseChildrenList DW_TAG_formal_parameter pure
+
+  tp <- getMaybeAttribute DW_AT_type attributeAsDieID
+
   let sub = SubroutineTypeDecl { fntypePrototyped = proto
-                               , fntypeFormals   = formals
+                               , fntypeFormals    = formals
+                               , fntypeType       = tp
                                }
   pure $ SubroutineTypeF sub
 
@@ -663,6 +679,7 @@ typeParsers = Map.fromList
   , (,) DW_TAG_subroutine_type  parseSubroutineType
   ]
 
+-- | Parse a type given a vector identifying file vectors.
 parseTypeMap :: V.Vector FilePath -> DIEParser (Map DieID Type)
 parseTypeMap file_vec = do
   let go :: (DW_TAG, TypeParser) -> DIEParser [(DieID, PreType)]
@@ -719,7 +736,7 @@ resolveTypeMap m = r
         resolve :: PreType -> Maybe Type
         resolve (PreTypeF (PointerType (Just d)))
           | Just (SubroutineTypeF decl) <- Map.lookup d premap =
-              Just $ Type { typeF = SubroutinePtrType decl
+              Just $ Type { typeF = SubroutinePtrType (decl & subroutineTypeLens . traverse %~ g)
                           , typeIsConst = False
                           , typeIsVolatile = False
                           }
@@ -919,7 +936,7 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
       Just <$> parseSubprogramDef file_vec typeMap
 
   name       <- getSingleAttribute DW_AT_name       attributeAsString
-  prototyped <- getSingleAttribute DW_AT_prototyped attributeAsBool
+  prototyped <- getMaybeAttribute DW_AT_prototyped attributeAsBool
   artificial <- fromMaybe False <$> getMaybeAttribute DW_AT_artificial attributeAsBool
   mloc <-
     if artificial then
@@ -936,12 +953,14 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
   ignoreAttribute DW_AT_type
 
   ignoreChild DW_TAG_formal_parameter
+  ignoreChild DW_TAG_label
   ignoreChild DW_TAG_lexical_block
+  ignoreChild DW_TAG_unspecified_parameters
 
   pure Subprogram { subExternal   = ext
                   , subName       = name
                   , subDeclLoc    = mloc
-                  , subPrototyped = prototyped
+                  , subPrototyped = fromMaybe False prototyped
                   , subDef        = def
                   , subVars       = Map.fromList [ (varDieID v, v) | v <- vars ]
                   }

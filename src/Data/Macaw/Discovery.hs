@@ -189,7 +189,7 @@ rewriteTermStmt tstmt = do
       tgtCond <- rewriteValue c
       case () of
         _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
-              Branch cn <$> pure f <*> pure t
+              pure $ Branch cn f t
           | otherwise ->
               pure $ Branch tgtCond t f
     Syscall regs ->
