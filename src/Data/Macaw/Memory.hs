@@ -72,6 +72,7 @@ module Data.Macaw.Memory
   , asSegmentOff
   , diffAddr
   , incAddr
+  , addrLeastBit
   , clearAddrLeastBit
     -- * Reading
   , MemoryError(..)
@@ -190,6 +191,8 @@ bsWord64le bs
 
 -- | This represents a particular numeric address in memory.
 --
+-- Internally, the address is stored with all bits greater than the
+-- width equal to 0.
 newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
 
 instance Show (MemWord w) where
@@ -679,11 +682,16 @@ viewAddr (AbsoluteAddr addr) = Left addr
 viewAddr (RelativeAddr seg off) = Right (seg,off)
 
 -- | Clear the least significant bit of an address.
-clearAddrLeastBit :: MemWidth w => MemAddr w -> MemAddr w
+clearAddrLeastBit :: MemAddr w -> MemAddr w
 clearAddrLeastBit sa =
   case sa of
-    AbsoluteAddr a -> AbsoluteAddr (a .&. complement 1)
-    RelativeAddr seg off -> RelativeAddr seg (off .&. complement 1)
+    AbsoluteAddr (MemWord a) -> AbsoluteAddr (MemWord (a .&. complement 1))
+    RelativeAddr seg (MemWord off) -> RelativeAddr seg (MemWord (off .&. complement 1))
+
+-- | Return True if least-significant bit in addr is set.
+addrLeastBit :: MemAddr w -> Bool
+addrLeastBit (AbsoluteAddr (MemWord a)) = a `testBit` 0
+addrLeastBit (RelativeAddr _ (MemWord off)) = off `testBit` 0
 
 -- | Increment an address by a fixed amount.
 incAddr :: MemWidth w => Integer -> MemAddr w -> MemAddr w
