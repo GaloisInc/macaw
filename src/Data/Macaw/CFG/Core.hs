@@ -199,7 +199,7 @@ type family ArchFn (arch :: *) :: * -> Type -> *
 -- uniqueness of Nonce values that identify assignments.
 type family ArchStmt (arch :: *) :: * -> *
 
-  -- | Number of bits in addreses for architecture.
+-- | Number of bits in addreses for architecture.
 type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 
 -- | A word for the given architecture bitwidth.
