@@ -180,8 +180,10 @@ refineProcStateBounds v isTrue ps =
 
 #ifdef USE_REWRITER
 -- | Apply optimizations to a terminal statement.
-rewriteTermStmt :: TermStmt arch src -> Rewriter arch src tgt (TermStmt arch tgt)
-rewriteTermStmt tstmt = do
+rewriteTermStmt :: ArchitectureInfo arch
+                -> TermStmt arch src
+                -> Rewriter arch src tgt (TermStmt arch tgt)
+rewriteTermStmt info tstmt = do
   case tstmt of
     FetchAndExecute regs ->
       FetchAndExecute <$> traverseF rewriteValue regs
@@ -197,13 +199,16 @@ rewriteTermStmt tstmt = do
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
+    ArchTermStmt ts regs ->
+      ArchTermStmt <$> rewriteArchTermStmt info ts
+                   <*> traverseF rewriteValue regs
 
 -- | Apply optimizations to code in the block
-rewriteBlock :: Block arch src -> Rewriter arch src tgt (Block arch tgt)
-rewriteBlock b = do
+rewriteBlock :: ArchitectureInfo arch -> Block arch src -> Rewriter arch src tgt (Block arch tgt)
+rewriteBlock info b = do
   (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
     mapM_ rewriteStmt (blockStmts b)
-    rewriteTermStmt (blockTerm b)
+    rewriteTermStmt info (blockTerm b)
   -- Return new block
   pure $
     Block { blockAddr  = blockAddr b
@@ -227,6 +232,8 @@ addTermDemands t = do
     Syscall regs -> do
       traverseF_ addValueDemands regs
     TranslateError regs _ -> do
+      traverseF_ addValueDemands regs
+    ArchTermStmt _ regs -> do
       traverseF_ addValueDemands regs
 
 -- | Add any assignments needed to evaluate statements with side
@@ -778,7 +785,6 @@ parseBlock ctx b regs = do
                                 }
         _ -> error "Multiple system call addresses."
 
-
     FetchAndExecute s' -> do
       parseFetchAndExecute ctx idx (blockStmts b) regs s'
 
@@ -789,6 +795,27 @@ parseBlock ctx b regs = do
                             , stmtsTerm = ParsedTranslateError msg
                             , stmtsAbsState = absProcState'
                             }
+    ArchTermStmt ts s' -> do
+      mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
+      let abst = finalAbsBlockState absProcState' s'
+      case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
+        [addr] -> do
+          -- Merge system call result with possible next IPs.
+          let post = archPostSyscallAbsState arch_info abst addr
+
+          intraJumpTargets %= ((addr, post):)
+          pure $! StatementList { stmtsIdent = idx
+                                , stmtsNonterm = blockStmts b
+                                , stmtsTerm  = ParsedArchTermStmt ts s' addr
+                                , stmtsAbsState = absProcState'
+                                }
+        _ -> do
+          mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
+          pure StatementList { stmtsIdent = idx
+                             , stmtsNonterm = blockStmts b
+                             , stmtsTerm  = ClassifyFailure s'
+                             , stmtsAbsState = absProcState'
+                             }
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -887,7 +914,7 @@ transfer addr = do
                              , rwctxArchStmt = rewriteArchStmt ainfo
                              , rwctxConstraints = \x -> x
                              }
-    bs1 <- liftST $ runRewriter ctx $ traverse rewriteBlock bs0
+    bs1 <- liftST $ runRewriter ctx $ traverse (rewriteBlock ainfo) bs0
 #else
     let bs1 = bs0
 #endif

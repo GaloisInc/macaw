@@ -43,9 +43,15 @@ data TermStmt arch ids
     -- This contains the state of the registers when the translation error
     -- occured and the error message recorded.
   | TranslateError !(RegState (ArchReg arch) (Value arch ids)) !Text
+    -- | An architecture specific term stmt.
+    --
+    -- The registers include the state of registers just before the terminal statement
+    -- executes.
+  | ArchTermStmt !(ArchTermStmt arch ids)
+                 !(RegState (ArchReg arch) (Value arch ids))
 
-instance ( RegisterInfo(ArchReg arch)
-         )
+
+instance ArchConstraints arch
       => Pretty (TermStmt arch ids) where
   pretty (FetchAndExecute s) =
     text "fetch_and_execute" <$$>
@@ -58,6 +64,8 @@ instance ( RegisterInfo(ArchReg arch)
   pretty (TranslateError s msg) =
     text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
+  pretty (ArchTermStmt ts regs) =
+    prettyF ts <$$> indent 2 (pretty regs)
 
 ------------------------------------------------------------------------
 -- Block

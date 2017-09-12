@@ -171,12 +171,15 @@ data ParsedTermStmt arch ids
    | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
                    !(ArchSegmentOff arch)
      -- ^ A system call with the registers prior to call and given return address.
+   | ParsedArchTermStmt !(ArchTermStmt arch ids)
+                        !(RegState (ArchReg arch) (Value arch ids))
+                        !(ArchSegmentOff arch)
+     -- ^ An architecture-specific statement with the registers prior to execution, and
+     -- the given next control flow address.
    | ParsedTranslateError !Text
      -- ^ An error occured in translating the block
    | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
      -- ^ The classifier failed to identity the block.
-
-deriving instance ArchConstraints arch => Show (ParsedTermStmt arch ids)
 
 -- | Pretty print the block contents indented inside brackets.
 ppStatementList :: ArchConstraints arch => (ArchAddrWord arch -> Doc) -> StatementList arch ids -> Doc
@@ -217,11 +220,17 @@ ppTermStmt ppOff tstmt =
     ParsedSyscall s addr ->
       text "syscall, return to" <+> text (show addr) <$$>
       indent 2 (pretty s)
+    ParsedArchTermStmt ts s addr ->
+      prettyF ts <> text ", return to" <+> text (show addr) <$$>
+      indent 2 (pretty s)
     ParsedTranslateError msg ->
       text "translation error" <+> text (Text.unpack msg)
     ClassifyFailure s ->
       text "unknown transfer" <$$>
       indent 2 (pretty s)
+
+instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
+  show = show . ppTermStmt (text . show)
 
 ------------------------------------------------------------------------
 -- StatementList

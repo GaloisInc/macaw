@@ -62,6 +62,7 @@ module Data.Macaw.CFG.Core
   , ArchFn
   , ArchReg
   , ArchStmt
+  , ArchTermStmt
   , RegAddrWord
   , RegAddrWidth
     -- * RegisterInfo
@@ -198,6 +199,12 @@ type family ArchFn (arch :: *) :: * -> Type -> *
 -- The second type parameter is the ids phantom type used to provide
 -- uniqueness of Nonce values that identify assignments.
 type family ArchStmt (arch :: *) :: * -> *
+
+-- | A type family for defining architecture-specific statements.
+--
+-- The second type parameter is the ids phantom type used to provide
+-- uniqueness of Nonce values that identify assignments.
+type family ArchTermStmt (arch :: *) :: * -> *
 
 -- | Number of bits in addreses for architecture.
 type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
@@ -553,6 +560,7 @@ instance RegisterInfo (ArchReg arch) => Show (Value arch ids tp) where
 
 class ( RegisterInfo (ArchReg arch)
       , PrettyF  (ArchStmt arch)
+      , PrettyF  (ArchTermStmt arch)
       )  => ArchConstraints arch where
 
   -- | A function for pretty printing an archFn of a given type.

@@ -113,6 +113,9 @@ data ArchitectureInfo arch
        -- ^ This rewrites an architecture specific statement
      , rewriteArchStmt :: (forall src tgt . ArchStmt arch src -> Rewriter arch src tgt ())
        -- ^ This rewrites an architecture specific statement
+     , rewriteArchTermStmt :: (forall src tgt . ArchTermStmt arch src
+                                             -> Rewriter arch src tgt (ArchTermStmt arch tgt))
+       -- ^ This rewrites an architecture specific statement
      , archDemandContext :: !(forall ids . DemandContext arch ids)
      }
 
