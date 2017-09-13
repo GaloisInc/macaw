@@ -194,8 +194,6 @@ rewriteTermStmt info tstmt = do
               pure $ Branch cn f t
           | otherwise ->
               pure $ Branch tgtCond t f
-    Syscall regs ->
-      Syscall <$> traverseF rewriteValue regs
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
@@ -229,8 +227,6 @@ addTermDemands t = do
       traverseF_ addValueDemands regs
     Branch v _ _ -> do
       addValueDemands v
-    Syscall regs -> do
-      traverseF_ addValueDemands regs
     TranslateError regs _ -> do
       traverseF_ addValueDemands regs
     ArchTermStmt _ regs -> do
@@ -767,23 +763,6 @@ parseBlock ctx b regs = do
                             , stmtsTerm  = ParsedIte c parsedTrueBlock parsedFalseBlock
                             , stmtsAbsState = absProcState'
                             }
-
-    Syscall s' -> do
-      mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
-      let abst = finalAbsBlockState absProcState' s'
-      case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
-        [] -> error "Could not identify concrete system call address"
-        [addr] -> do
-          -- Merge system call result with possible next IPs.
-          let post = archPostSyscallAbsState arch_info abst addr
-
-          intraJumpTargets %= ((addr, post):)
-          pure $! StatementList { stmtsIdent = idx
-                                , stmtsNonterm = blockStmts b
-                                , stmtsTerm  = ParsedSyscall s' addr
-                                , stmtsAbsState = absProcState'
-                                }
-        _ -> error "Multiple system call addresses."
 
     FetchAndExecute s' -> do
       parseFetchAndExecute ctx idx (blockStmts b) regs s'

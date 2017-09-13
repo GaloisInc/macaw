@@ -168,9 +168,6 @@ data ParsedTermStmt arch ids
      -- ^ A return with the given registers.
    | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
      -- ^ An if-then-else
-   | ParsedSyscall !(RegState (ArchReg arch) (Value arch ids))
-                   !(ArchSegmentOff arch)
-     -- ^ A system call with the registers prior to call and given return address.
    | ParsedArchTermStmt !(ArchTermStmt arch ids)
                         !(RegState (ArchReg arch) (Value arch ids))
                         !(ArchSegmentOff arch)
@@ -217,9 +214,6 @@ ppTermStmt ppOff tstmt =
       text "ite" <+> pretty c <$$>
       ppStatementList ppOff t <$$>
       ppStatementList ppOff f
-    ParsedSyscall s addr ->
-      text "syscall, return to" <+> text (show addr) <$$>
-      indent 2 (pretty s)
     ParsedArchTermStmt ts s addr ->
       prettyF ts <> text ", return to" <+> text (show addr) <$$>
       indent 2 (pretty s)
@@ -253,51 +247,6 @@ data StatementList arch ids
 
 deriving instance ArchConstraints arch
   => Show (StatementList arch ids)
-
-------------------------------------------------------------------------
--- Rewriting parsed blocks
-
-{-
--- | Apply optimizations to a parsed terminal statement.
-rewriteParsedTermStmt :: ParsedTermStmt arch src -> Rewriter arch src tgt (ParsedTermStmt arch tgt)
-rewriteParsedTermStmt tstmt =
-  case tstmt of
-    ParsedCall regs mr -> do
-      ParsedCall <$> traverseF rewriteValue regs
-                 <*> pure mr
-    ParsedJump regs a -> do
-      ParsedJump <$> traverseF rewriteValue regs
-                 <*> pure a
-    ParsedLookupTable regs idx tbl -> do
-      ParsedLookupTable <$> traverseF rewriteValue regs
-                        <*> rewriteValue idx
-                        <*> pure tbl
-    ParsedReturn regs -> do
-      ParsedReturn <$> traverseF rewriteValue regs
-    ParsedIte c t f ->
-      ParsedIte <$> rewriteValue c
-                <*> rewriteStatementList t
-                <*> rewriteStatementList f
-    ParsedSyscall regs next ->
-      ParsedSyscall <$> traverseF rewriteValue regs
-                    <*> pure next
-    ParsedTranslateError txt -> pure (ParsedTranslateError txt)
-    ClassifyFailure regs -> ClassifyFailure <$> traverseF rewriteValue regs
-
--- | Apply optimizations to code in the block
-rewriteStatementList :: StatementList arch src -> Rewriter arch src tgt (StatementList arch tgt)
-rewriteStatementList b = do
-  (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
-    mapM_ rewriteStmt (stmtsNonterm b)
-    rewriteParsedTermStmt (stmtsTerm b)
-  -- Return new block
-  pure $
-    StatementList { stmtsIdent = stmtsIdent b
-                  , stmtsNonterm = tgtStmts
-                  , stmtsTerm  = tgtTermStmt
-                  ,
-                  }
--}
 
 ------------------------------------------------------------------------
 -- ParsedBlock

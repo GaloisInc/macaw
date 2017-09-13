@@ -32,11 +32,6 @@ data TermStmt arch ids
   = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
     -- | Branch and execute one block or another.
   | Branch !(Value arch ids BoolType) !Word64 !Word64
-    -- | The syscall instruction.
-    -- We model system calls as terminal instructions because from the
-    -- application perspective, the semantics will depend on the operating
-    -- system.
-  | Syscall !(RegState (ArchReg arch) (Value arch ids))
     -- | The block ended prematurely due to an error in instruction
     -- decoding or translation.
     --
@@ -58,9 +53,6 @@ instance ArchConstraints arch
     indent 2 (pretty s)
   pretty (Branch c x y) =
     text "branch" <+> ppValue 0 c <+> text (show x) <+> text (show y)
-  pretty (Syscall s) =
-    text "syscall" <$$>
-    indent 2 (pretty s)
   pretty (TranslateError s msg) =
     text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
