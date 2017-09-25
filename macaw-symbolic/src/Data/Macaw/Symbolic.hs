@@ -6,7 +6,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Symbolic
-  ( ArchStepInfo(..)
+  ( ArchTranslateFunctions(..)
+  , MacawSimulatorState
   , stepBlocks
   ) where
 
@@ -117,17 +118,6 @@ createHandleMap ctx = MapF.foldrWithKey go C.emptyHandleMap
           let o = C.mkOverride' (handleIdName hid) (handleIdRetType ctx hid) (createHandleBinding ctx hid)
            in  C.insertHandleMap h (C.UseOverride o) b
 
-data ArchStepInfo arch
-  = ArchStepInfo
-  { archRegNameFn :: !(forall tp . M.ArchReg arch tp -> SolverSymbol)
-  , archRegAssignment :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
-  , archTranslateFn :: !(forall ids s tp
-                         . M.ArchFn arch ids tp
-                         -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
-     -- ^ Function for translating an architecture specific function
-  , archTranslateStmt :: !(forall ids s . M.ArchStmt arch ids -> CrucGen arch ids s ())
-  }
-
 
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
@@ -151,7 +141,7 @@ mkMemSegmentMap halloc mem = do
 stepBlocks :: forall sym arch ids
            .  (IsSymInterface sym, M.ArchConstraints arch)
            => sym
-           -> ArchStepInfo arch
+           -> ArchTranslateFunctions arch
            -> M.Memory (M.ArchAddrWidth arch)
               -- ^ Memory image for executable
            -> Text
@@ -179,10 +169,9 @@ stepBlocks sym sinfo mem binPath addr macawBlocks = do
   memSegmentVarMap <- stToIO $ mkMemSegmentMap halloc mem
 
   let genCtx = CrucGenContext { archConstraints = \x -> x
-                              , macawRegAssign = regAssign
+                              , macawRegAssign = archRegAssignment sinfo
                               , regIndexMap = mkRegIndexMap regAssign (Ctx.size crucRegTypes)
-                              , translateArchFn = archTranslateFn sinfo
-                              , translateArchStmt = archTranslateStmt sinfo
+                              , translateFns = sinfo
                               , handleAlloc = halloc
                               , binaryPath = binPath
                               , macawIndexToLabelMap = blockLabelMap
