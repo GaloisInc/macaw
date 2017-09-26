@@ -85,7 +85,7 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- Unsigned division (rounds fractions to zero).
   --
-  -- This operation is not defined when the denominator is zero. The
+  -- This operation should never be called when the denominator is zero. The
   -- caller should raise a #de exception in this case (see
   -- 'Reopt.Semantics.Implementation.exec_div').
   BVQuot :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)

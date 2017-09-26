@@ -453,17 +453,35 @@ getRegInput idx = do
   let tp = M.typeRepr (macawRegAssign ctx Ctx.! macawIndex idx)
   crucibleValue (C.GetStruct regStruct (crucibleIndex idx) (typeToCrucible tp))
 
+v2c :: M.Value arch ids tp
+    -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
+v2c = valueToCrucible
+
+-- | Evaluate the crucible app and return a reference to the result.
+appAtom :: C.App (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
+appAtom app = evalAtom (CR.EvalApp app)
+
 appToCrucible :: M.App (M.Value arch ids) tp
               -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-appToCrucible app =
+appToCrucible app = do
+  ctx <- getCtx
+  archConstraints ctx $ do
   case app of
-    M.Mux w c t f -> do
-      crucibleValue =<<
-        C.BVIte <$> valueToCrucible c
-                <*> pure w
-                <*> valueToCrucible t
-                <*> valueToCrucible f
-    _ -> undefined
+    M.Mux w c t f ->
+      appAtom =<< C.BVIte <$> v2c c <*> pure w <*> v2c t <*> v2c f
+    M.Trunc x w -> appAtom =<< C.BVTrunc w (M.typeWidth x) <$> v2c x
+    M.SExt x w  -> appAtom =<< C.BVSext  w (M.typeWidth x) <$> v2c x
+    M.UExt x w  -> appAtom =<< C.BVZext  w (M.typeWidth x) <$> v2c x
+    M.BoolMux c t f -> appAtom =<< C.BoolIte <$> v2c c <*> v2c t <*> v2c f
+    M.AndApp x y  -> appAtom =<< C.And     <$> v2c x <*> v2c y
+    M.OrApp  x y  -> appAtom =<< C.Or      <$> v2c x <*> v2c y
+    M.NotApp x    -> appAtom =<< C.Not     <$> v2c x
+    M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
+    M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
+    M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
+    M.BVMul w x y -> appAtom =<< C.BVMul w <$> v2c x <*> v2c y
+
+--    _ -> undefined
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
