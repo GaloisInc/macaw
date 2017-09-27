@@ -4,6 +4,7 @@ Maintainer : jhendrix@galois.com
 
 This defines the architecture-specific information needed for code discovery.
 -}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
@@ -75,7 +76,7 @@ data ArchitectureInfo arch
        -- The address is the entry point of the function.
      , absEvalArchFn :: !(forall ids tp
                           .  AbsProcessorState (ArchReg arch) ids
-                          -> ArchFn arch ids tp
+                          -> ArchFn arch (Value arch ids) tp
                           -> AbsValue (RegAddrWidth (ArchReg arch)) tp)
        -- ^ Evaluates an architecture-specific function
      , absEvalArchStmt :: !(forall ids
@@ -109,7 +110,9 @@ data ArchitectureInfo arch
        -- should return 'Just stmts' if this code looks like a function return.
        -- The stmts should be a subset of the statements, but may remove unneeded memory
        -- accesses like reading the stack pointer.
-     , rewriteArchFn :: (forall src tgt tp . ArchFn arch src tp -> Rewriter arch src tgt (Value arch tgt tp))
+     , rewriteArchFn :: (forall src tgt tp
+                         .  ArchFn arch (Value arch src) tp
+                         -> Rewriter arch src tgt (Value arch tgt tp))
        -- ^ This rewrites an architecture specific statement
      , rewriteArchStmt :: (forall src tgt . ArchStmt arch src -> Rewriter arch src tgt ())
        -- ^ This rewrites an architecture specific statement

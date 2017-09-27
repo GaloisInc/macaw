@@ -40,7 +40,7 @@ data RewriteContext arch src tgt
    = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST tgt) tgt)
                       -- ^ Generator for making new nonces in the target ST monad
                     , rwctxArchFn    :: !(forall tp
-                                            .  ArchFn arch src tp
+                                            .  ArchFn arch (Value arch src) tp
                                             -> Rewriter arch src tgt (Value arch tgt tp))
                       -- ^ Rewriter for architecture-specific statements
                     , rwctxArchStmt  :: !(ArchStmt arch src -> Rewriter arch src tgt ())
@@ -105,8 +105,8 @@ evalRewrittenRhs rhs = Rewriter $ do
   pure $! AssignedValue a
 
 -- | Add an assignment statement that evaluates the architecture function.
-evalRewrittenArchFn :: HasRepr (ArchFn arch tgt) TypeRepr
-                    => ArchFn arch tgt tp
+evalRewrittenArchFn :: HasRepr (ArchFn arch (Value arch tgt)) TypeRepr
+                    => ArchFn arch (Value arch tgt) tp
                     -> Rewriter arch src tgt (Value arch tgt tp)
 evalRewrittenArchFn f = evalRewrittenRhs (EvalArchFn f (typeRepr f))
 

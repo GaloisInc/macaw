@@ -28,8 +28,8 @@ type AssignIdSet ids = Set (Some (AssignId ids))
 -- resolve demand sets.
 data DemandContext arch ids
    = DemandContext { addArchStmtDemands :: !(ArchStmt arch ids  -> DemandComp arch ids ())
-                   , addArchFnDemands   :: !(forall tp . ArchFn arch ids tp -> DemandComp arch ids ())
-                   , archFnHasSideEffects :: !(forall tp . ArchFn arch ids tp -> Bool)
+                   , addArchFnDemands   :: !(forall tp . ArchFn arch (Value arch ids) tp -> DemandComp arch ids ())
+                   , archFnHasSideEffects :: !(forall v tp . ArchFn arch v tp -> Bool)
                      -- ^ This returns true if the architecture function has implicit
                      -- side effects (and thus can be safely removed).
                    }

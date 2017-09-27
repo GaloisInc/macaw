@@ -7,12 +7,12 @@ Defines data types needed to represent values, assignments, and statements from 
 This is a low-level CFG representation where the entire program is a
 single CFG.
 -}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PolyKinds #-}
@@ -56,7 +56,7 @@ module Data.Macaw.CFG.Core
   , ppValue
   , ppStmt
   , PrettyF(..)
-  , ArchConstraints(..)
+  , ArchConstraints
   , PrettyRegValue(..)
     -- * Architecture type families
   , ArchFn
@@ -70,16 +70,17 @@ module Data.Macaw.CFG.Core
   , asStackAddrOffset
     -- * References
   , StmtHasRefs(..)
-  , FnHasRefs(..)
   , refsInValue
   , refsInApp
   , refsInAssignRhs
+  , IsArchFn(..)
     -- ** Synonyms
   , ArchAddrWidth
   , ArchAddrValue
   , ArchAddrWord
   , ArchMemAddr
   , ArchSegmentOff
+  , Data.Parameterized.TraversableFC.FoldableFC(..)
   ) where
 
 import           Control.Exception (assert)
@@ -96,6 +97,7 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
+import           Data.Parameterized.TraversableFC (FoldableFC(..))
 import           Data.Proxy
 import           Data.Set (Set)
 import qualified Data.Set as Set
@@ -192,7 +194,7 @@ type family ArchReg (arch :: *) :: Type -> *
 --
 -- The function may depend on the set of registers defined so far, and the type
 -- of the result.
-type family ArchFn (arch :: *) :: * -> Type -> *
+type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
 
 -- | A type family for defining architecture-specific statements.
 --
@@ -306,7 +308,7 @@ data AssignRhs (arch :: *) ids tp where
           -> AssignRhs arch ids tp
 
   -- Call an architecture specific function that returns some result.
-  EvalArchFn :: !(ArchFn arch ids tp)
+  EvalArchFn :: !(ArchFn arch (Value arch ids) tp)
              -> !(TypeRepr tp)
              -> AssignRhs arch ids tp
 
@@ -558,17 +560,13 @@ instance RegisterInfo (ArchReg arch) => Pretty (Value arch ids tp) where
 instance RegisterInfo (ArchReg arch) => Show (Value arch ids tp) where
   show = show . pretty
 
-class ( RegisterInfo (ArchReg arch)
-      , PrettyF  (ArchStmt arch)
-      , PrettyF  (ArchTermStmt arch)
-      )  => ArchConstraints arch where
-
-  -- | A function for pretty printing an archFn of a given type.
-  ppArchFn :: Applicative m
-           => (forall u . Value arch ids u -> m Doc)
-              -- ^ Function for pretty printing vlaue.
-           -> ArchFn arch ids tp
-           -> m Doc
+type ArchConstraints arch
+   = ( RegisterInfo (ArchReg arch)
+     , PrettyF  (ArchStmt arch)
+     , PrettyF  (ArchTermStmt arch)
+     , FoldableFC (ArchFn arch)
+     , IsArchFn (ArchFn arch)
+     )
 
 -- | Pretty print an assignment right-hand side using operations parameterized
 -- over an application to allow side effects.
@@ -603,7 +601,7 @@ collectValueRep :: forall arch ids tp
                 => Prec
                 -> Value arch ids tp
                 -> State (MapF (AssignId ids) DocF) Doc
-collectValueRep _ (AssignedValue a :: Value arch ids tp) = do
+collectValueRep _ (AssignedValue a) = do
   let lhs = assignId a
   mr <- gets $ MapF.lookup lhs
   when (isNothing mr) $ do
@@ -721,9 +719,14 @@ instance ArchConstraints arch => Show (Stmt arch ids) where
 class StmtHasRefs f where
   refsInStmt :: f ids -> Set (Some (AssignId ids))
 
--- | Return refernces in a function type.
-class FnHasRefs (f :: * -> Type -> *) where
-  refsInFn  :: f ids tp -> Set (Some (AssignId ids))
+-- | Typeclass for folding over architecture-specific values.
+class IsArchFn (f :: (k -> *) -> k -> *)  where
+  -- | A function for pretty printing an archFn of a given type.
+  ppArchFn :: Applicative m
+           => (forall u . v u -> m Doc)
+              -- ^ Function for pretty printing vlaue.
+           -> f v tp
+           -> m Doc
 
 refsInValue :: Value arch ids tp -> Set (Some (AssignId ids))
 refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
@@ -732,7 +735,7 @@ refsInValue _                                = Set.empty
 refsInApp :: App (Value arch ids) tp -> Set (Some (AssignId ids))
 refsInApp app = foldApp refsInValue app
 
-refsInAssignRhs :: FnHasRefs (ArchFn arch)
+refsInAssignRhs :: FoldableFC (ArchFn arch)
                 => AssignRhs arch ids tp
                 -> Set (Some (AssignId ids))
 refsInAssignRhs rhs =
@@ -740,4 +743,4 @@ refsInAssignRhs rhs =
     EvalApp v      -> refsInApp v
     SetUndefined _ -> Set.empty
     ReadMem v _    -> refsInValue v
-    EvalArchFn f _ -> refsInFn f
+    EvalArchFn f _ -> foldMapFC refsInValue f

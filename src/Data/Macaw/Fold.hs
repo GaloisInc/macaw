@@ -6,11 +6,12 @@ This module provides a function for folding over the subexpressions in
 a value without revisiting shared subterms.
 -}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.Fold
-  ( CanFoldValues(..)
+  ( Data.Parameterized.TraversableFC.FoldableFC(..)
   , foldValueCached
   ) where
 
@@ -19,6 +20,7 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableFC
 
 import           Data.Macaw.CFG
 
@@ -32,15 +34,7 @@ instance Monoid m => Monoid (StateMonadMonoid s m) where
   mempty = return mempty
   mappend m m' = mappend <$> m <*> m'
 
--- | Typeclass for folding over architecture-specific values.
-class CanFoldValues arch where
-  -- | Folding over ArchFn values
-  foldFnValues :: Monoid r
-               => (forall vtp . Value arch ids vtp -> r)
-               -> ArchFn arch ids tp
-               -> r
-
-foldAssignRHSValues :: (Monoid r, CanFoldValues arch)
+foldAssignRHSValues :: (Monoid r, FoldableFC (ArchFn arch))
                     => (forall vtp . Value arch ids vtp -> r)
                     -> AssignRhs arch ids tp
                     -> r
@@ -49,14 +43,14 @@ foldAssignRHSValues go v =
     EvalApp a -> foldApp go a
     SetUndefined _w -> mempty
     ReadMem addr _ -> go addr
-    EvalArchFn f _ -> foldFnValues go f
+    EvalArchFn f _ -> foldMapFC go f
 
 -- | This folds over elements of a values in a  values.
 --
 -- It memoizes values so that it only evaluates assignments with the same id
 -- once.
 foldValueCached :: forall m arch ids tp
-                .  (Monoid m, CanFoldValues arch)
+                .  (Monoid m, FoldableFC (ArchFn arch))
                 => (forall n.  NatRepr n -> Integer -> m)
                    -- ^ Function for literals
                 -> (ArchMemAddr arch -> m)
