@@ -4,6 +4,8 @@ author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
 cabal-version: >= 1.9.2
+license:       BSD3
+license-file:  LICENSE
 
 library
   build-depends:
