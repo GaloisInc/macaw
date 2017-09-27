@@ -18,11 +18,6 @@ probably call it a signature.
 module Data.Macaw.CFG.App
   ( -- * Constructor
     App(..)
-    -- * Traversals
-  , mapApp
-  , foldApp
-  , foldAppl
-  , traverseApp
     -- * Folding
   , ppApp
   , ppAppA
@@ -32,7 +27,6 @@ module Data.Macaw.CFG.App
   , sexprA
   ) where
 
-import           Control.Applicative
 import           Control.Monad.Identity
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
@@ -310,12 +304,6 @@ instance OrdF f => Ord (App f tp) where
       EQF -> EQ
       GTF -> GT
 
-traverseApp :: Applicative m
-            => (forall u . f u -> m (g u))
-            -> App f tp
-            -> m (App g tp)
-traverseApp = $(structuralTraversal [t|App|] [])
-
 instance FunctorFC App where
   fmapFC = fmapFCDefault
 
@@ -323,32 +311,7 @@ instance FoldableFC App where
   foldMapFC = foldMapFCDefault
 
 instance TraversableFC App where
-  traverseFC = traverseApp
-
-mapApp :: (forall u . f u -> g u)
-       -> App f tp
-       -> App g tp
-mapApp f m = runIdentity $ traverseApp (return . f) m
-
-foldApp :: Monoid m => (forall u. f u -> m) -> App f tp -> m
-foldApp f m = getConst (traverseApp (\f_u -> Const $ f f_u) m)
-
-newtype FoldFn s a = FoldFn { getFoldFn :: s -> s }
-
-
-instance Functor (FoldFn s) where
-  fmap _ (FoldFn g) = FoldFn g
-
-instance Applicative (FoldFn s) where
-  pure _ = FoldFn id
-  FoldFn g <*> FoldFn h = FoldFn (\s -> h (g s))
-
--- | Left-fold over all values in the app
-foldAppl :: forall (f :: Type -> *) s tp . (forall u . s -> f u -> s) -> s -> App f tp -> s
-foldAppl f s0 a = getFoldFn (traverseApp go a) s0
-  where go :: f u -> FoldFn s (f u)
-        go v = FoldFn (\s -> f s v)
-
+  traverseFC = $(structuralTraversal [t|App|] [])
 
 ------------------------------------------------------------------------
 -- App pretty printing

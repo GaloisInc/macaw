@@ -733,7 +733,7 @@ refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
 refsInValue _                                = Set.empty
 
 refsInApp :: App (Value arch ids) tp -> Set (Some (AssignId ids))
-refsInApp app = foldApp refsInValue app
+refsInApp app = foldMapFC refsInValue app
 
 refsInAssignRhs :: FoldableFC (ArchFn arch)
                 => AssignRhs arch ids tp

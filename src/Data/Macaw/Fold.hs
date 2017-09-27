@@ -40,7 +40,7 @@ foldAssignRHSValues :: (Monoid r, FoldableFC (ArchFn arch))
                     -> r
 foldAssignRHSValues go v =
   case v of
-    EvalApp a -> foldApp go a
+    EvalApp a -> foldMapFC go a
     SetUndefined _w -> mempty
     ReadMem addr _ -> go addr
     EvalArchFn f _ -> foldMapFC go f

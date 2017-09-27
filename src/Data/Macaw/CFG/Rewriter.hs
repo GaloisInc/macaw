@@ -31,6 +31,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableFC
 
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
@@ -351,8 +352,7 @@ rewriteAssignRhs :: AssignRhs arch src tp -> Rewriter arch src tgt (Value arch t
 rewriteAssignRhs rhs =
   case rhs of
     EvalApp app -> do
-      app' <- traverseApp rewriteValue app
-      rewriteApp app'
+      rewriteApp =<< traverseFC rewriteValue app
     SetUndefined w -> evalRewrittenRhs (SetUndefined w)
     ReadMem addr repr -> do
       tgtAddr <- rewriteValue addr
