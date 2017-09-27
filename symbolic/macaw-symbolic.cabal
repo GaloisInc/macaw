@@ -11,7 +11,7 @@ library
                 containers,
                 crucible,
                 lens,
-                macaw,
+                macaw-base,
                 mtl,
                 parameterized-utils,
                 text
