@@ -1,0 +1,33 @@
+name: macaw-x86-support
+version: 0.0.1
+author: Galois, Inc.
+maintainer: jhendrix@galois.com
+build-type: Simple
+cabal-version: >= 1.9.2
+
+executable make_bsd_syscalls
+
+  build-depends:
+    base >= 4,
+    bytestring,
+    language-c <= 0.5.0,
+    lens,
+    pretty,
+    containers,
+    pretty-show,
+    attoparsec
+ hs-source-dirs: make_bsd_syscalls
+ main-is: Main.hs
+
+executable make_linux_syscalls
+ build-depends:
+    base >= 4,
+    bytestring,
+    language-c <= 0.5.0,
+    lens,
+    pretty,
+    containers,
+    pretty-show,
+    attoparsec
+ hs-source-dirs: make_linux_syscalls
+ main-is: Main.hs
