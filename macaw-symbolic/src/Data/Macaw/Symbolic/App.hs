@@ -184,7 +184,7 @@ data ArchTranslateFunctions arch
   { archRegNameFn :: !(forall tp . M.ArchReg arch tp -> C.SolverSymbol)
   , archRegAssignment :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
   , archTranslateFn :: !(forall ids s tp
-                         . M.ArchFn arch ids tp
+                         . M.ArchFn arch (M.Value arch ids) tp
                          -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
      -- ^ Function for translating an architecture specific function
   , archTranslateStmt :: !(forall ids s . M.ArchStmt arch ids -> CrucGen arch ids s ())
