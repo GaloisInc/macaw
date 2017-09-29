@@ -53,19 +53,25 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 data PreBlock ids = PreBlock { pBlockIndex :: !Word64
                              , pBlockAddr  :: !(MemSegmentOff 64)
                              -- ^ Starting address of function in preblock.
-                             , pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
+                             , _pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
                              , pBlockState :: !(RegState PPCReg (Value PPC ids))
                              , pBlockApps  :: !(P.MapF (App (Value PPC ids)) (Assignment PPC ids))
                              }
+
+pBlockStmts :: Simple Lens (PreBlock ids) (Seq.Seq (Stmt PPC ids))
+pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
 ------------------------------------------------------------------------
 -- GenState
 
 data GenState w s ids = GenState { assignIdGen :: !(P.NonceGenerator (ST s) ids)
                                  , blockSeq :: !(BlockSeq ids)
-                                 , blockState :: !(PreBlock ids)
+                                 , _blockState :: !(PreBlock ids)
                                  , genAddr :: !(MemSegmentOff w)
                                  }
+
+blockState :: Simple Lens (GenState w s ids) (PreBlock ids)
+blockState = lens _blockState (\s v -> s { _blockState = v })
 
 ------------------------------------------------------------------------
 -- PPCGenerator
@@ -83,7 +89,8 @@ modGenState m = PPCGenerator $ StateT $ \genState -> do
   return $ runState m genState
 
 addStmt :: Stmt PPC ids -> PPCGenerator w s ids ()
-addStmt = undefined
+addStmt stmt = PPCGenerator $ StateT $ \genState ->
+  return ((), genState & (blockState . pBlockStmts %~ (Seq.|> stmt)))
 
 ppc_linux_info :: ArchitectureInfo PPC
 ppc_linux_info = undefined
