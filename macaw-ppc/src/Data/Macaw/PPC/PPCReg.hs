@@ -9,7 +9,7 @@ import Data.Parameterized.Some
 import qualified Dismantle.PPC as D
 
 data PPCReg tp where
-  PPC_GP :: (tp ~ BVType 64) => D.GPR -> PPCReg tp
+  PPC_GP :: D.GPR -> PPCReg (BVType 64)
 
 instance Show (PPCReg tp) where
   show (PPC_GP r) = show r

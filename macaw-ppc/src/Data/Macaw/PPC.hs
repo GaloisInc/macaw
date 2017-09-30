@@ -16,11 +16,14 @@ import Data.Macaw.CFG
 import Data.Macaw.Memory
 import Data.Parameterized.Map as P
 import Data.Parameterized.Nonce as P
+import qualified Dismantle.PPC as D
 
 import Data.Macaw.PPC.ArchTypes
 import Data.Macaw.PPC.PPCReg
 
 data Hole = Hole
+
+-- A lot of the stuff in this file will ultimately be lifted into macaw-semmc.
 
 ------------------------------------------------------------------------
 -- Expr
@@ -54,12 +57,15 @@ data PreBlock ids = PreBlock { pBlockIndex :: !Word64
                              , pBlockAddr  :: !(MemSegmentOff 64)
                              -- ^ Starting address of function in preblock.
                              , _pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
-                             , pBlockState :: !(RegState PPCReg (Value PPC ids))
+                             , _pBlockState :: !(RegState PPCReg (Value PPC ids))
                              , pBlockApps  :: !(P.MapF (App (Value PPC ids)) (Assignment PPC ids))
                              }
 
 pBlockStmts :: Simple Lens (PreBlock ids) (Seq.Seq (Stmt PPC ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
+
+pBlockState :: Simple Lens (PreBlock ids) (RegState PPCReg (Value PPC ids))
+pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 ------------------------------------------------------------------------
 -- GenState
@@ -72,6 +78,9 @@ data GenState w s ids = GenState { assignIdGen :: !(P.NonceGenerator (ST s) ids)
 
 blockState :: Simple Lens (GenState w s ids) (PreBlock ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
+
+curPPCState :: Simple Lens (GenState w s ids) (RegState PPCReg (Value PPC ids))
+curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
 -- PPCGenerator
@@ -91,6 +100,24 @@ modGenState m = PPCGenerator $ StateT $ \genState -> do
 addStmt :: Stmt PPC ids -> PPCGenerator w s ids ()
 addStmt stmt = PPCGenerator $ StateT $ \genState ->
   return ((), genState & (blockState . pBlockStmts %~ (Seq.|> stmt)))
+
+newAssignId :: PPCGenerator w s ids (AssignId ids tp)
+newAssignId = PPCGenerator $ StateT $ \genState -> do
+  n <- freshNonce $ assignIdGen genState
+  return (AssignId n, genState)
+
+addAssignment :: AssignRhs PPC ids tp
+              -> PPCGenerator w s ids (Assignment PPC ids tp)
+addAssignment rhs = do
+  l <- newAssignId
+  let a = Assignment l rhs
+  addStmt $ AssignStmt a
+  return a
+
+getReg :: PPCReg tp -> PPCGenerator w s ids (Expr ids tp)
+getReg r = PPCGenerator $ StateT $ \genState -> do
+  let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
+  return (expr, genState)
 
 ppc_linux_info :: ArchitectureInfo PPC
 ppc_linux_info = undefined
