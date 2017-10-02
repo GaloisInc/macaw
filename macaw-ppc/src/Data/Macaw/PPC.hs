@@ -15,8 +15,12 @@ import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
 
 import qualified Data.Macaw.Architecture.Info as MI
+import Data.Macaw.AbsDomain.AbsState as MA
 import Data.Macaw.CFG
 import Data.Macaw.CFG.Block
+import Data.Macaw.CFG.Core
+import qualified Data.Macaw.CFG.DemandSet as MDS
+import Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
@@ -126,22 +130,86 @@ getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
 
+disassembleFn :: MM.Memory (ArchAddrWidth PPC)
+              -> NC.NonceGenerator (ST ids) ids
+              -> ArchSegmentOff PPC
+              -> ArchAddrWord PPC
+              -> MA.AbsBlockState (ArchReg PPC)
+              -- ^ NOTE: We are leaving the type function ArchReg here because
+              -- we need to generalize over PPC64 vs PPC32
+              -> ST ids ([Block PPC ids], MM.MemWord (ArchAddrWidth PPC), Maybe String)
+disassembleFn = undefined
+
+preserveRegAcrossSyscall :: ArchReg PPC tp -> Bool
+preserveRegAcrossSyscall = undefined
+
+mkInitialAbsState :: MM.Memory (RegAddrWidth (ArchReg PPC))
+                  -> ArchSegmentOff PPC
+                  -> MA.AbsBlockState (ArchReg PPC)
+mkInitialAbsState = undefined
+
+absEvalArchFn :: AbsProcessorState (ArchReg PPC) ids
+              -> ArchFn PPC (Value PPC ids) tp
+              -> AbsValue (RegAddrWidth (ArchReg PPC)) tp
+absEvalArchFn = undefined
+
+absEvalArchStmt :: AbsProcessorState (ArchReg PPC) ids
+                -> ArchStmt PPC ids
+                -> AbsProcessorState (ArchReg PPC) ids
+absEvalArchStmt = undefined
+
+postCallAbsState :: AbsBlockState (ArchReg PPC)
+                 -> ArchSegmentOff PPC
+                 -> AbsBlockState (ArchReg PPC)
+postCallAbsState = undefined
+
+identifyCall :: MM.Memory (ArchAddrWidth PPC)
+             -> [Stmt PPC ids]
+             -> RegState (ArchReg PPC) (Value PPC ids)
+             -> Maybe (Seq.Seq (Stmt PPC ids), ArchSegmentOff PPC)
+identifyCall = undefined
+
+identifyReturn :: [Stmt PPC ids]
+               -> RegState (ArchReg PPC) (Value PPC ids)
+               -> Maybe [Stmt PPC ids]
+identifyReturn = undefined
+
+rewriteArchFn :: ArchFn PPC (Value PPC src) tp
+              -> Rewriter PPC src tgt (Value PPC tgt tp)
+rewriteArchFn = undefined
+
+rewriteArchStmt :: ArchStmt PPC src
+                -> Rewriter PPC src tgt ()
+rewriteArchStmt = undefined
+
+rewriteArchTermStmt :: ArchTermStmt PPC src
+                    -> Rewriter PPC src tgt (ArchTermStmt PPC tgt)
+rewriteArchTermStmt = undefined
+
+archDemandContext :: MDS.DemandContext PPC ids
+archDemandContext = undefined
+
+-- | NOTE: There isn't necessarily one answer for this.  This will need to turn
+-- into a function.  With PIC jump tables, it can be smaller than the native size.
+jumpTableEntrySize :: MM.MemWord (ArchAddrWidth PPC)
+jumpTableEntrySize = undefined
+
 ppc_linux_info :: MI.ArchitectureInfo PPC
 ppc_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
                       , MI.archEndianness = MM.BigEndian
-                      , MI.jumpTableEntrySize = undefined
-                      , MI.disassembleFn = undefined
-                      , MI.preserveRegAcrossSyscall = undefined
-                      , MI.mkInitialAbsState = undefined
-                      , MI.absEvalArchFn = undefined
-                      , MI.absEvalArchStmt = undefined
-                      , MI.postCallAbsState = undefined
-                      , MI.identifyCall = undefined
-                      , MI.identifyReturn = undefined
-                      , MI.rewriteArchFn = undefined
-                      , MI.rewriteArchStmt = undefined
-                      , MI.rewriteArchTermStmt = undefined
-                      , MI.archDemandContext = undefined
+                      , MI.jumpTableEntrySize = jumpTableEntrySize
+                      , MI.disassembleFn = disassembleFn
+                      , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall
+                      , MI.mkInitialAbsState = mkInitialAbsState
+                      , MI.absEvalArchFn = absEvalArchFn
+                      , MI.absEvalArchStmt = absEvalArchStmt
+                      , MI.postCallAbsState = postCallAbsState
+                      , MI.identifyCall = identifyCall
+                      , MI.identifyReturn = identifyReturn
+                      , MI.rewriteArchFn = rewriteArchFn
+                      , MI.rewriteArchStmt = rewriteArchStmt
+                      , MI.rewriteArchTermStmt = rewriteArchTermStmt
+                      , MI.archDemandContext = archDemandContext
                       }
