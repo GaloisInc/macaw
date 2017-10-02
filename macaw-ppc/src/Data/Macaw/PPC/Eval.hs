@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 module Data.Macaw.PPC.Eval (
   mkInitialAbsState,
   absEvalArchFn,
@@ -6,12 +7,20 @@ module Data.Macaw.PPC.Eval (
   preserveRegAcrossSyscall
   ) where
 
+import qualified Data.Set as S
+
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
+import           Data.Parameterized.Some ( Some(..) )
 
-preserveRegAcrossSyscall :: proxy ppc -> ArchReg ppc tp -> Bool
-preserveRegAcrossSyscall = undefined
+import           Data.Macaw.PPC.PPCReg
+
+preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc)
+                         => proxy ppc
+                         -> ArchReg ppc tp
+                         -> Bool
+preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
 mkInitialAbsState :: proxy ppc
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))

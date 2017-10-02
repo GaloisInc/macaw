@@ -59,9 +59,9 @@ data Hole = Hole
 ------------------------------------------------------------------------
 -- Expr
 
-data Expr ids tp where
-  ValueExpr :: !(Value PPC ids tp) -> Expr ids tp
-  AppExpr   :: !(App (Expr ids) tp) -> Expr ids tp
+data Expr ppc ids tp where
+  ValueExpr :: !(Value ppc ids tp) -> Expr ppc ids tp
+  AppExpr   :: !(App (Expr ppc ids) tp) -> Expr ppc ids tp
 
 ------------------------------------------------------------------------
 -- Location
@@ -72,90 +72,90 @@ data Location addr (tp :: Type) where
 
 ------------------------------------------------------------------------
 -- BlockSeq
-data BlockSeq ids = BlockSeq
+data BlockSeq ppc ids = BlockSeq
   { _nextBlockID :: !Word64
     -- ^ index of next block
-  , _frontierBlocks :: !(Seq.Seq (Block PPC ids))
+  , _frontierBlocks :: !(Seq.Seq (Block ppc ids))
     -- ^ Blocks added to CFG
   }
 
 -- | Control flow blocs generated so far.
-nextBlockID :: Simple Lens (BlockSeq ids) Word64
+nextBlockID :: Simple Lens (BlockSeq ppc ids) Word64
 nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
 -- which we need to analyze to compute new potential branch targets.
-frontierBlocks :: Simple Lens (BlockSeq ids) (Seq.Seq (Block PPC ids))
+frontierBlocks :: Simple Lens (BlockSeq ppc ids) (Seq.Seq (Block ppc ids))
 frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 
 ------------------------------------------------------------------------
 -- PreBlock
 
-data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , pBlockAddr  :: !(MM.MemSegmentOff 64)
-                             -- ^ Starting address of function in preblock.
-                             , _pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
-                             , _pBlockState :: !(RegState PPCReg (Value PPC ids))
-                             , pBlockApps  :: !(MapF.MapF (App (Value PPC ids)) (Assignment PPC ids))
-                             }
+data PreBlock ppc ids = PreBlock { pBlockIndex :: !Word64
+                                  , pBlockAddr  :: !(MM.MemSegmentOff 64)
+                                  -- ^ Starting address of function in preblock.
+                                  , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
+                                  , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
+                                  , pBlockApps  :: !(MapF.MapF (App (Value ppc ids)) (Assignment ppc ids))
+                                  }
 
-pBlockStmts :: Simple Lens (PreBlock ids) (Seq.Seq (Stmt PPC ids))
+pBlockStmts :: Simple Lens (PreBlock ppc ids) (Seq.Seq (Stmt ppc ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
-pBlockState :: Simple Lens (PreBlock ids) (RegState PPCReg (Value PPC ids))
+pBlockState :: Simple Lens (PreBlock ppc ids) (RegState (PPCReg ppc) (Value ppc ids))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 ------------------------------------------------------------------------
 -- GenState
 
-data GenState w s ids = GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
-                                 , blockSeq :: !(BlockSeq ids)
-                                 , _blockState :: !(PreBlock ids)
-                                 , genAddr :: !(MM.MemSegmentOff w)
-                                 }
+data GenState ppc w s ids = GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
+                                     , blockSeq :: !(BlockSeq ppc ids)
+                                     , _blockState :: !(PreBlock ppc ids)
+                                     , genAddr :: !(MM.MemSegmentOff w)
+                                     }
 
-blockState :: Simple Lens (GenState w s ids) (PreBlock ids)
+blockState :: Simple Lens (GenState ppc w s ids) (PreBlock ppc ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curPPCState :: Simple Lens (GenState w s ids) (RegState PPCReg (Value PPC ids))
+curPPCState :: Simple Lens (GenState ppc w s ids) (RegState (PPCReg ppc) (Value ppc ids))
 curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
 -- PPCGenerator
 
-newtype PPCGenerator w s ids a = PPCGenerator { runGen :: St.StateT (GenState w s ids) (ST s) a }
+newtype PPCGenerator ppc w s ids a = PPCGenerator { runGen :: St.StateT (GenState ppc w s ids) (ST s) a }
   deriving (Monad,
             Functor,
             Applicative,
-            St.MonadState (GenState w s ids))
+            St.MonadState (GenState ppc w s ids))
 
 -- Given a stateful computation on the underlying GenState, create a PPCGenerator
 -- that runs that same computation.
-modGenState :: St.State (GenState w s ids) a -> PPCGenerator w s ids a
+modGenState :: St.State (GenState ppc w s ids) a -> PPCGenerator ppc w s ids a
 modGenState m = PPCGenerator $ St.StateT $ \genState -> do
   return $ St.runState m genState
 
-addStmt :: Stmt PPC ids -> PPCGenerator w s ids ()
+addStmt :: Stmt ppc ids -> PPCGenerator ppc w s ids ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
-newAssignId :: PPCGenerator w s ids (AssignId ids tp)
+newAssignId :: PPCGenerator ppc w s ids (AssignId ids tp)
 newAssignId = do
   nonceGen <- St.gets assignIdGen
   n <- liftST $ NC.freshNonce nonceGen
   return (AssignId n)
 
-liftST :: ST s a -> PPCGenerator w s ids a
+liftST :: ST s a -> PPCGenerator ppc w s ids a
 liftST = PPCGenerator . lift
 
-addAssignment :: AssignRhs PPC ids tp
-              -> PPCGenerator w s ids (Assignment PPC ids tp)
+addAssignment :: AssignRhs ppc ids tp
+              -> PPCGenerator ppc w s ids (Assignment ppc ids tp)
 addAssignment rhs = do
   l <- newAssignId
   let a = Assignment l rhs
   addStmt $ AssignStmt a
   return a
 
-getReg :: PPCReg tp -> PPCGenerator w s ids (Expr ids tp)
+getReg :: PPCReg ppc tp -> PPCGenerator ppc w s ids (Expr ppc ids tp)
 getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
@@ -174,7 +174,7 @@ ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC)
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC)
 
-ppc_linux_info :: proxy ppc -> MI.ArchitectureInfo ppc
+ppc_linux_info :: (ArchReg ppc ~ PPCReg ppc) => proxy ppc -> MI.ArchitectureInfo ppc
 ppc_linux_info proxy =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
