@@ -1,0 +1,11 @@
+packages: macaw-ppc/
+          submodules/macaw/base/
+          submodules/semmc/semmc/
+          submodules/semmc/semmc-ppc/
+          submodules/dismantle/dismantle-tablegen/
+          submodules/dismantle/dismantle-ppc/
+          submodules/parameterized-utils/
+          submodules/crucible/crucible/
+          submodules/crucible/galois-matlab/
+          submodules/dwarf/
+          submodules/elf-edit/

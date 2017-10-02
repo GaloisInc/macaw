@@ -1,17 +1,21 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
+module Data.Macaw.PPC.PPCReg (
+  PPCReg(..)
+  ) where
 
-module Data.Macaw.PPC.PPCReg where
-
-import Data.Macaw.Types
-import Data.Parameterized.Classes
-import Data.Parameterized.Some
+import           Data.Macaw.Types
+import           Data.Parameterized.Classes
+import qualified Data.Parameterized.TH.GADT as TH
 import qualified Dismantle.PPC as D
 
 data PPCReg tp where
   PPC_GP :: D.GPR -> PPCReg (BVType 64)
+
+deriving instance Eq (PPCReg tp)
+deriving instance Ord (PPCReg tp)
 
 instance Show (PPCReg tp) where
   show (PPC_GP r) = show r
@@ -19,17 +23,10 @@ instance Show (PPCReg tp) where
 instance ShowF PPCReg where
   showF = show
 
+$(return [])
+
 instance TestEquality PPCReg where
-  testEquality x y = orderingIsEqual (compareF x y)
-    where
-      orderingIsEqual :: OrderingF (x :: k) (y :: k) -> Maybe (x :~: y)
-      orderingIsEqual o =
-        case o of
-          LTF -> Nothing
-          EQF -> Just Refl
-          GTF -> Nothing
+  testEquality = $(TH.structuralTypeEquality [t| PPCReg |] [])
 
 instance OrdF PPCReg where
-  compareF (PPC_GP n) (PPC_GP n') = fromOrdering (compare n n')
-  compareF PPC_GP{} _ = LTF
-  compareF _ PPC_GP{} = GTF
+  compareF = $(TH.structuralTypeOrd [t| PPCReg |] [])

@@ -5,6 +5,7 @@ packages:
 - macaw-semmc/
 - macaw-ppc/
 - submodules/semmc/semmc
+- submodules/semmc/semmc-ppc
 - submodules/dismantle/dismantle-tablegen
 - submodules/dismantle/dismantle-ppc
 - submodules/macaw/base
@@ -125,4 +126,10 @@ extra-deps:
 - unix-time-0.3.7
 
 - old-time-1.1.0.3
+
+- base16-bytestring-0.1.1.6
+- cereal-0.5.4.0
+
+
+
 resolver: ghc-8.2.1

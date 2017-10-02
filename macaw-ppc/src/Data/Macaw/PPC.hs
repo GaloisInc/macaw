@@ -2,24 +2,39 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-
-module Data.Macaw.PPC where
+{-# LANGUAGE TypeApplications #-}
+module Data.Macaw.PPC (
+  ppc_linux_info,
+  ppc32_linux_info,
+  ppc64_linux_info
+  ) where
 
 import Control.Lens
 import Control.Monad.ST ( ST )
-import Control.Monad.State.Strict
+import           Control.Monad.Trans ( lift )
+import qualified Control.Monad.State.Strict as St
+import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
-import Data.Word (Word64)
+import           Data.Word (Word64)
 
-import Data.Macaw.Architecture.Info
+import qualified Data.Macaw.Architecture.Info as MI
+import Data.Macaw.AbsDomain.AbsState as MA
 import Data.Macaw.CFG
-import Data.Macaw.Memory
-import Data.Parameterized.Map as P
-import Data.Parameterized.Nonce as P
+import Data.Macaw.CFG.Block
+import Data.Macaw.CFG.Core
+import qualified Data.Macaw.CFG.DemandSet as MDS
+import Data.Macaw.CFG.Rewriter
+import qualified Data.Macaw.Memory as MM
+import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.Nonce as NC
 import qualified Dismantle.PPC as D
+
+import qualified SemMC.Architecture.PPC32 as PPC32
+import qualified SemMC.Architecture.PPC64 as PPC64
 
 import Data.Macaw.PPC.ArchTypes
 import Data.Macaw.PPC.PPCReg
+-- import Data.Macaw.PPC.Rewrite
 
 data Hole = Hole
 
@@ -54,11 +69,11 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 -- PreBlock
 
 data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , pBlockAddr  :: !(MemSegmentOff 64)
+                             , pBlockAddr  :: !(MM.MemSegmentOff 64)
                              -- ^ Starting address of function in preblock.
                              , _pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
                              , _pBlockState :: !(RegState PPCReg (Value PPC ids))
-                             , pBlockApps  :: !(P.MapF (App (Value PPC ids)) (Assignment PPC ids))
+                             , pBlockApps  :: !(MapF.MapF (App (Value PPC ids)) (Assignment PPC ids))
                              }
 
 pBlockStmts :: Simple Lens (PreBlock ids) (Seq.Seq (Stmt PPC ids))
@@ -70,10 +85,10 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 ------------------------------------------------------------------------
 -- GenState
 
-data GenState w s ids = GenState { assignIdGen :: !(P.NonceGenerator (ST s) ids)
+data GenState w s ids = GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
                                  , blockSeq :: !(BlockSeq ids)
                                  , _blockState :: !(PreBlock ids)
-                                 , genAddr :: !(MemSegmentOff w)
+                                 , genAddr :: !(MM.MemSegmentOff w)
                                  }
 
 blockState :: Simple Lens (GenState w s ids) (PreBlock ids)
@@ -85,26 +100,29 @@ curPPCState = blockState . pBlockState
 ------------------------------------------------------------------------
 -- PPCGenerator
 
-newtype PPCGenerator w s ids a = PPCGenerator { runGen :: StateT (GenState w s ids) (ST s) a }
+newtype PPCGenerator w s ids a = PPCGenerator { runGen :: St.StateT (GenState w s ids) (ST s) a }
   deriving (Monad,
             Functor,
             Applicative,
-            MonadState (GenState w s ids))
+            St.MonadState (GenState w s ids))
 
 -- Given a stateful computation on the underlying GenState, create a PPCGenerator
 -- that runs that same computation.
-modGenState :: State (GenState w s ids) a -> PPCGenerator w s ids a
-modGenState m = PPCGenerator $ StateT $ \genState -> do
-  return $ runState m genState
+modGenState :: St.State (GenState w s ids) a -> PPCGenerator w s ids a
+modGenState m = PPCGenerator $ St.StateT $ \genState -> do
+  return $ St.runState m genState
 
 addStmt :: Stmt PPC ids -> PPCGenerator w s ids ()
-addStmt stmt = PPCGenerator $ StateT $ \genState ->
-  return ((), genState & (blockState . pBlockStmts %~ (Seq.|> stmt)))
+addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
 newAssignId :: PPCGenerator w s ids (AssignId ids tp)
-newAssignId = PPCGenerator $ StateT $ \genState -> do
-  n <- freshNonce $ assignIdGen genState
-  return (AssignId n, genState)
+newAssignId = do
+  nonceGen <- St.gets assignIdGen
+  n <- liftST $ NC.freshNonce nonceGen
+  return (AssignId n)
+
+liftST :: ST s a -> PPCGenerator w s ids a
+liftST = PPCGenerator . lift
 
 addAssignment :: AssignRhs PPC ids tp
               -> PPCGenerator w s ids (Assignment PPC ids tp)
@@ -115,12 +133,99 @@ addAssignment rhs = do
   return a
 
 getReg :: PPCReg tp -> PPCGenerator w s ids (Expr ids tp)
-getReg r = PPCGenerator $ StateT $ \genState -> do
+getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
 
 setReg :: PPCReg tp -> Value PPC ids tp -> PPCGenerator w s ids ()
 setReg = undefined
 
-ppc_linux_info :: ArchitectureInfo PPC
-ppc_linux_info = undefined
+disassembleFn :: proxy ppc -> MM.Memory (ArchAddrWidth ppc)
+              -> NC.NonceGenerator (ST ids) ids
+              -> ArchSegmentOff ppc
+              -> ArchAddrWord ppc
+              -> MA.AbsBlockState (ArchReg ppc)
+              -- ^ NOTE: We are leaving the type function ArchReg here because
+              -- we need to generalize over PPC64 vs PPC32
+              -> ST ids ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), Maybe String)
+disassembleFn = undefined
+
+preserveRegAcrossSyscall :: proxy ppc -> ArchReg ppc tp -> Bool
+preserveRegAcrossSyscall = undefined
+
+mkInitialAbsState :: proxy ppc -> MM.Memory (RegAddrWidth (ArchReg ppc))
+                  -> ArchSegmentOff ppc
+                  -> MA.AbsBlockState (ArchReg ppc)
+mkInitialAbsState = undefined
+
+absEvalArchFn :: proxy ppc -> AbsProcessorState (ArchReg ppc) ids
+              -> ArchFn ppc (Value ppc ids) tp
+              -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
+absEvalArchFn = undefined
+
+absEvalArchStmt :: proxy ppc -> AbsProcessorState (ArchReg ppc) ids
+                -> ArchStmt ppc ids
+                -> AbsProcessorState (ArchReg ppc) ids
+absEvalArchStmt = undefined
+
+postCallAbsState :: proxy ppc -> AbsBlockState (ArchReg ppc)
+                 -> ArchSegmentOff ppc
+                 -> AbsBlockState (ArchReg ppc)
+postCallAbsState = undefined
+
+identifyCall :: proxy ppc -> MM.Memory (ArchAddrWidth ppc)
+             -> [Stmt ppc ids]
+             -> RegState (ArchReg ppc) (Value ppc ids)
+             -> Maybe (Seq.Seq (Stmt ppc ids), ArchSegmentOff ppc)
+identifyCall = undefined
+
+identifyReturn :: proxy ppc -> [Stmt ppc ids]
+               -> RegState (ArchReg ppc) (Value ppc ids)
+               -> Maybe [Stmt ppc ids]
+identifyReturn = undefined
+
+rewriteArchFn :: proxy ppc -> ArchFn ppc (Value ppc src) tp
+              -> Rewriter ppc src tgt (Value ppc tgt tp)
+rewriteArchFn = undefined
+
+rewriteArchStmt :: proxy ppc -> ArchStmt ppc src
+                -> Rewriter ppc src tgt ()
+rewriteArchStmt = undefined
+
+rewriteArchTermStmt :: proxy ppc -> ArchTermStmt ppc src
+                    -> Rewriter ppc src tgt (ArchTermStmt ppc tgt)
+rewriteArchTermStmt = undefined
+
+archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
+archDemandContext = undefined
+
+-- | NOTE: There isn't necessarily one answer for this.  This will need to turn
+-- into a function.  With PIC jump tables, it can be smaller than the native size.
+jumpTableEntrySize :: proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
+jumpTableEntrySize = undefined
+
+ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
+ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC)
+
+ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
+ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC)
+
+ppc_linux_info :: proxy ppc -> MI.ArchitectureInfo ppc
+ppc_linux_info proxy =
+  MI.ArchitectureInfo { MI.withArchConstraints = undefined
+                      , MI.archAddrWidth = undefined
+                      , MI.archEndianness = MM.BigEndian
+                      , MI.jumpTableEntrySize = jumpTableEntrySize proxy
+                      , MI.disassembleFn = disassembleFn proxy
+                      , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy
+                      , MI.absEvalArchFn = absEvalArchFn proxy
+                      , MI.absEvalArchStmt = absEvalArchStmt proxy
+                      , MI.postCallAbsState = postCallAbsState proxy
+                      , MI.identifyCall = identifyCall proxy
+                      , MI.identifyReturn = identifyReturn proxy
+                      , MI.rewriteArchFn = rewriteArchFn proxy
+                      , MI.rewriteArchStmt = rewriteArchStmt proxy
+                      , MI.rewriteArchTermStmt = rewriteArchTermStmt proxy
+                      , MI.archDemandContext = archDemandContext proxy
+                      }
