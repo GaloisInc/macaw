@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -164,7 +165,10 @@ ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC)
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC)
 
-ppc_linux_info :: (ArchReg ppc ~ PPCReg ppc) => proxy ppc -> MI.ArchitectureInfo ppc
+ppc_linux_info :: (ArchReg ppc ~ PPCReg ppc,
+                  MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+               => proxy ppc
+               -> MI.ArchitectureInfo ppc
 ppc_linux_info proxy =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
