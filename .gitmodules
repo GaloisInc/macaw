@@ -7,12 +7,6 @@
 [submodule "submodules/dismantle"]
 	path = submodules/dismantle
 	url = git@github.com:travitch/dismantle.git
-[submodule "submodules/macaw-x86"]
-	path = submodules/macaw-x86
-	url = git@gitlab-ext.galois.com:macaw/macaw-x86.git
-[submodule "macaw"]
-	path = macaw
-	url = git@gitlab-ext.galois.com:macaw/macaw.git
 [submodule "submodules/crucible"]
 	path = submodules/crucible
 	url = git@github.com:GaloisInc/crucible.git
@@ -22,6 +16,3 @@
 [submodule "submodules/elf-edit"]
 	path = submodules/elf-edit
 	url = git@github.com:GaloisInc/elf-edit.git
-[submodule "submodules/macaw"]
-	path = submodules/macaw
-	url = git@gitlab-ext.galois.com:macaw/macaw.git
