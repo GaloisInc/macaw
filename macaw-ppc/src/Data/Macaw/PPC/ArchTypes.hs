@@ -1,17 +1,18 @@
 {-# LANGUAGE TypeFamilies #-}
 
 module Data.Macaw.PPC.ArchTypes
-  ( PPC
+  ( PPC64.PPC
   ) where
 
 import Data.Macaw.CFG
 import Data.Macaw.Types
 
+import qualified SemMC.Architecture.PPC64 as PPC64
+
 import Data.Macaw.PPC.PPCReg
+
 
 ------------------------------------------------------------------------
 -- PPC specific declarations
 
-data PPC
-
-type instance ArchReg PPC = PPCReg
+type instance ArchReg PPC64.PPC = PPCReg
