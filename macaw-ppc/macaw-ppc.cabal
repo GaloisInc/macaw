@@ -16,9 +16,13 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  exposed-modules:     Data.Macaw.PPC,
-                       Data.Macaw.PPC.ArchTypes,
+  exposed-modules:     Data.Macaw.PPC
+                       Data.Macaw.PPC.ArchTypes
+                       Data.Macaw.PPC.Disassemble
+                       Data.Macaw.PPC.Eval
+                       Data.Macaw.PPC.Identify
                        Data.Macaw.PPC.PPCReg
+                       Data.Macaw.PPC.Rewrite
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.9 && <5,
