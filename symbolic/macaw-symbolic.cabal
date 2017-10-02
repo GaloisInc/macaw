@@ -22,6 +22,7 @@ library
 
   exposed-modules:
     Data.Macaw.Symbolic.App
+    Data.Macaw.Symbolic.PersistentState
     Data.Macaw.Symbolic
 
   ghc-options: -Wall -Werror

@@ -148,25 +148,23 @@ rewriteApp app = do
     UExt (BVValue _ x) w -> do
       pure $ BVValue w x
 
-    BoolMux (BoolValue b) x y -> do
-      pure $! if b then x else y
     -- ite c T y = (~c | T) & (c | y)
     --           = c | y
-    BoolMux c (BoolValue True) y -> do
+    Mux _ c (BoolValue True) y -> do
       rewriteApp (OrApp c y)
     -- ite c F y = (~c | F) & (c | y)
     --           = ~c & y
-    BoolMux c (BoolValue False) y -> do
+    Mux BoolTypeRepr c (BoolValue False) y -> do
       cn <- rewriteApp (NotApp c)
       rewriteApp (AndApp cn y)
     -- ite c x T = (~c | x) & (c | T)
     --           = ~c | x
-    BoolMux c x (BoolValue True) -> do
+    Mux BoolTypeRepr c x (BoolValue True) -> do
       cn <- rewriteApp (NotApp c)
       rewriteApp (OrApp cn x)
     -- ite c x F = (~c | x) & (c | F)
     --           = c & x
-    BoolMux c x (BoolValue False) -> do
+    Mux BoolTypeRepr c x (BoolValue False) -> do
       rewriteApp (AndApp c x)
 
     AndApp (BoolValue xc) y -> do
@@ -264,7 +262,7 @@ rewriteApp app = do
     BVTestBit (valueAsApp -> Just (Mux _ c x y)) i -> do
       xb <- rewriteApp (BVTestBit x i)
       yb <- rewriteApp (BVTestBit y i)
-      rewriteApp (BoolMux c xb yb)
+      rewriteApp (Mux BoolTypeRepr c xb yb)
 
     -- (x >> j) testBit i ~> x testBit (j+i)
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)

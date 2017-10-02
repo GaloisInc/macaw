@@ -178,10 +178,7 @@ instance S.IsValue (Expr ids) where
     | Just False <- asBoolLit c = y
     | x == y = x
     | Just (NotApp cn) <- asApp c = S.mux cn y x
-    | otherwise =
-      case typeRepr x of
-        BoolTypeRepr -> app $ BoolMux c x y
-        BVTypeRepr w -> app $ Mux w c x y
+    | otherwise = app $ Mux (typeRepr x) c x y
 
   boolValue b = ValueExpr (BoolValue b)
 
@@ -964,22 +961,6 @@ setLoc loc v =
      off <- getX87Offset i
      modState $ boundValue (X87_FPUReg (F.mmxReg (fromIntegral off))) .= v
 
--- | Helper function for 'S.Semantics' instance below.
-bvBinOp :: (NatRepr n
-            -> Value X86_64 ids tp
-            -> BVValue X86_64 ids n
-            -> App (Value X86_64 ids) tp1)
-        -> Expr ids tp
-        -> Expr ids (BVType n)
-        -> X86Generator st_s ids (Expr ids tp1)
-bvBinOp op' x y = do
-  let w = typeWidth y
-  xv <- eval x
-  yv <- eval y
-  zv <- evalApp (op' w xv yv)
-  return $ ValueExpr zv
-
-
 instance S.Semantics (X86Generator st_s ids) where
   make_undefined tp =
     ValueExpr . AssignedValue <$> addAssignment (SetUndefined tp)
@@ -1126,8 +1107,12 @@ instance S.Semantics (X86Generator st_s ids) where
       _ ->
         error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
 
-  bvQuot       = bvBinOp BVQuot
-  bvRem        = bvBinOp BVRem
+  bvQuotRem rep n d = do
+    nv <- eval n
+    dv <- eval d
+    q <- ValueExpr . AssignedValue <$> addArchFn (X86Div rep nv dv)
+    r <- ValueExpr . AssignedValue <$> addArchFn (X86Rem rep nv dv)
+    pure (q,r)
 
   bvSignedQuotRem rep n d = do
     nv <- eval n
@@ -1330,8 +1315,10 @@ transferAbsValue r f =
           stridedInterval $ SI.mkStridedInterval knownNat False 0 upper 1
       | otherwise -> TopV
     MMXExtend{}   -> TopV
-    X86IDiv{}   -> TopV
-    X86IRem{}   -> TopV
+    X86IDiv{} -> TopV
+    X86IRem{} -> TopV
+    X86Div{}  -> TopV
+    X86Rem{}  -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.

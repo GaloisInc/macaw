@@ -390,25 +390,6 @@ set_div_flags = do
   set_undefined pf_loc
   set_undefined zf_loc
 
-do_div :: forall m n
-        . (IsLocationBV m n, 1 <= n + n, n <= n + n)
-       => MLocation m (BVType n) -- ^ Location to store quotient
-       -> MLocation m (BVType n) -- ^ Location to store remainder
-       -> Value m (BVType (n+n)) -- ^ Numerator
-       -> Value m (BVType n)     -- ^ Denominator
-       -> m ()
-do_div axr dxr numerator denominator = do
-  let n :: NatRepr n
-      n = bv_width denominator
-
-  let nn = addNat n n
-  let denominator' = uext nn denominator
-  q <- bvTrunc n <$> bvQuot numerator denominator'
-  r <- bvTrunc n <$> bvRem  numerator denominator'
-  axr .= q
-  dxr .= r
-  set_div_flags
-
 -- | Helper function for @div@ and @idiv@ instructions.
 --
 -- The difference between @div@ and @idiv@ is whether the primitive
@@ -431,21 +412,26 @@ do_div axr dxr numerator denominator = do
 def_div :: InstructionDef
 def_div = defUnaryV "div" $ \d ->
    case bv_width d of
-     n | Just Refl <- testEquality n n8  -> do
+    n | Just Refl <- testEquality n n8  -> do
            num <- get ax
-           do_div al ah num d
+           (q,r) <- bvQuotRem ByteRepVal num d
+           al .= q
+           ah .= r
        | Just Refl <- testEquality n n16 -> do
-           dxv <- get dx
-           axv <- get ax
-           do_div ax  dx (bvCat dxv axv) d
+           num <- bvCat <$> get dx <*> get ax
+           (q,r) <- bvQuotRem WordRepVal num d
+           ax .= q
+           dx .= r
        | Just Refl <- testEquality n n32 -> do
-           dxv <- get edx
-           axv <- get eax
-           do_div eax edx (bvCat dxv axv) d
+           num <- bvCat <$> get edx <*> get eax
+           (q,r) <- bvQuotRem DWordRepVal num d
+           eax .= q
+           edx .= r
        | Just Refl <- testEquality n n64 -> do
-           dxv <- get rdx
-           axv <- get rax
-           do_div rax rdx (bvCat dxv axv) d
+           num <- bvCat <$> get rdx <*> get rax
+           (q,r) <- bvQuotRem QWordRepVal num d
+           rax .= q
+           rdx .= r
        | otherwise -> fail "div: Unknown bit width"
 
 def_idiv :: InstructionDef

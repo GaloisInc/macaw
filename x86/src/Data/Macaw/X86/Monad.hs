@@ -1455,40 +1455,32 @@ class ( Applicative m
 
   -- | Unsigned division.
   --
-  -- Rounds the result to zero.
+  -- The x86 documentation for @div@ (Intel x86 manual volume 2A,
+  -- page 3-393) says that results should be truncated towards
+  -- zero. These operations are called @quot@ and @rem@ in Haskell,
+  -- whereas @div@ and @mod@ in Haskell round towards negative
+  -- infinity.
   --
   -- This should raise a #DE exception if the denominator is zero or the
-  -- quotient is larger than maxUnsigned n.
-  --
-  -- This and the other BV division operations ('bvRem',
-  -- 'bvSignedQuot', 'bvSignedRem') are defined in 'Semantics', and
-  -- not in 'IsValue', because they are inherently partial operations.
-  bvQuot :: (1 <= n)
-         => Value m (BVType n)
-         -> Value m (BVType n)
-         -> m (Value m (BVType n))
-
-  -- | Unsigned remainder.
-  --
-  -- Rounds the result to zero.  Undefined if the denominator is zero.
-  bvRem :: (1 <= n)
-        => Value m (BVType n)
-        -> Value m (BVType n)
-        -> m (Value m (BVType n))
+  -- result is larger than maxUnsigned n.
+  bvQuotRem :: (1 <= w)
+            => RepValSize w
+            -> Value m (BVType (w+w))
+               -- ^ Numerator
+            -> Value m (BVType w)
+               -- ^ Denominator
+            -> m (BVValue m w, BVValue m w)
 
   -- | Signed division.
   --
   -- The x86 documentation for @idiv@ (Intel x86 manual volume 2A,
-  -- page 3-393) says that results should be rounded towards
+  -- page 3-393) says that results should be truncated towards
   -- zero. These operations are called @quot@ and @rem@ in Haskell,
   -- whereas @div@ and @mod@ in Haskell round towards negative
   -- infinity.
   --
   -- This should raise a #DE exception if the denominator is zero or the
   -- result is larger than maxSigned n or less than minSigned n.
-  --
-  -- This has the satisfies the property that
-  -- `n = m * bvSignedQuot n m + bvSignedRem n m.`
   bvSignedQuotRem :: (1 <= w)
                   => RepValSize w
                   -> Value m (BVType (w+w))

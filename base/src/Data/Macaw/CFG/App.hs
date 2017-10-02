@@ -42,12 +42,7 @@ import           Data.Macaw.Types
 -- | App defines builtin operations on values.
 data App (f :: Type -> *) (tp :: Type) where
 
-  Mux :: (1 <= n)
-      => !(NatRepr n)
-      -> !(f BoolType)
-      -> !(f (BVType n))
-      -> !(f (BVType n))
-      -> App f (BVType n)
+  Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -62,7 +57,6 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Boolean operations
 
-  BoolMux :: !(f BoolType) -> !(f BoolType) -> !(f BoolType) -> App f BoolType
   AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
   OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
   NotApp :: !(f BoolType) -> App f BoolType
@@ -76,32 +70,6 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- Multiply two numbers
   BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Unsigned division (rounds fractions to zero).
-  --
-  -- This operation should never be called when the denominator is zero. The
-  -- caller should raise a #de exception in this case (see
-  -- 'Reopt.Semantics.Implementation.exec_div').
-  BVQuot :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Unsigned modulo (rounds fractional results to zero)
-  --
-  -- See 'BVQuot' for usage.
-  BVRem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Signed division (rounds fractional results to zero).
-  --
-  -- See 'BVQuot' for usage.
-  BVSignedQuot :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Signed modulo (rounds fractional results to zero).
-  --
-  -- The resulting modulus has the same sign as the quotient and satisfies
-  -- the constraint that for all x y where y != 0:
-  --   x = (y * BVSignedQuot x y) + BVSignedRem x y
-  --
-  -- See 'BVQuot' for usage.
-  BVSignedRem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Unsigned less than.
   BVUnsignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
@@ -286,6 +254,7 @@ instance TestEquality f => TestEquality (App f) where
                    [ (DataArg 0                  `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
+                   , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|testEquality|])
                    ]
                   )
 
@@ -294,6 +263,7 @@ instance OrdF f => OrdF (App f) where
                    [ (DataArg 0                  `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
+                   , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
                    ]
               )
 
@@ -343,7 +313,6 @@ ppAppA pp a0 =
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
-    BoolMux c t f -> sexprA "bool_mux" [ pp c, pp t, pp f ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
     OrApp  x y -> sexprA "or"  [ pp x, pp y ]
     NotApp x   -> sexprA "not" [ pp x ]
@@ -351,10 +320,6 @@ ppAppA pp a0 =
     BVAdd _ x y -> sexprA "bv_add" [ pp x, pp y ]
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
     BVMul _ x y -> sexprA "bv_mul" [ pp x, pp y ]
-    BVQuot _ x y      -> sexprA "bv_uquot" [ pp x, pp y ]
-    BVSignedQuot _ x y -> sexprA "bv_squot" [ pp x, pp y ]
-    BVRem _ x y       -> sexprA "bv_urem" [ pp x, pp y ]
-    BVSignedRem _ x y -> sexprA "bv_srem" [ pp x, pp y ]
     BVUnsignedLt x y  -> sexprA "bv_ult"  [ pp x, pp y ]
     BVUnsignedLe x y  -> sexprA "bv_ule"  [ pp x, pp y ]
     BVSignedLt x y    -> sexprA "bv_slt"  [ pp x, pp y ]
@@ -400,12 +365,11 @@ ppAppA pp a0 =
 instance HasRepr (App f) TypeRepr where
   typeRepr a =
    case a of
-    Mux w _ _ _ -> BVTypeRepr w
+    Mux tp _ _ _ -> tp
     Trunc _ w -> BVTypeRepr w
     SExt  _ w -> BVTypeRepr w
     UExt  _ w -> BVTypeRepr w
 
-    BoolMux{} -> knownType
     AndApp{} -> knownType
     OrApp{}  -> knownType
     NotApp{} -> knownType
@@ -414,10 +378,6 @@ instance HasRepr (App f) TypeRepr where
     BVAdd w _ _ -> BVTypeRepr w
     BVSub w _ _ -> BVTypeRepr w
     BVMul w _ _ -> BVTypeRepr w
-    BVQuot w _ _ -> BVTypeRepr w
-    BVSignedQuot w _ _ -> BVTypeRepr w
-    BVRem w _ _ -> BVTypeRepr w
-    BVSignedRem w _ _ -> BVTypeRepr w
 
     BVUnsignedLt{} -> knownType
     BVUnsignedLe{} -> knownType

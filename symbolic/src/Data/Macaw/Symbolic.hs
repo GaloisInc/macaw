@@ -44,6 +44,7 @@ import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
 import           Data.Macaw.Symbolic.App
+import           Data.Macaw.Symbolic.PersistentState
 
 data MacawSimulatorState sym = MacawSimulatorState
 
@@ -83,15 +84,6 @@ runWriteMemOverride :: NatRepr w
                                      C.UnitType
                                      (C.RegValue sym C.UnitType)
 runWriteMemOverride = undefined
-
-{-
-runSyscallOverride :: CrucGenContext arch ids s
-                   -> C.OverrideSim MacawSimulatorState sym ret
-                                    (EmptyCtx ::> ArchRegStruct arch)
-                                    (ArchRegStruct arch)
-                                    (C.RegValue sym (ArchRegStruct arch))
-runSyscallOverride = undefined
--}
 
 createHandleBinding :: CrucGenContext arch ids s
                     -> HandleId arch '(args, rtp)
@@ -171,14 +163,13 @@ stepBlocks sym sinfo mem binPath addr macawBlocks = do
   let genCtx = CrucGenContext { archConstraints = \x -> x
                               , macawRegAssign = archRegAssignment sinfo
                               , regIndexMap = mkRegIndexMap regAssign (Ctx.size crucRegTypes)
-                              , translateFns = sinfo
                               , handleAlloc = halloc
                               , binaryPath = binPath
                               , macawIndexToLabelMap = blockLabelMap
                               , memSegmentMap = memSegmentVarMap
                               }
   let ps0 = initCrucPersistentState
-  blockRes <- stToIO $ runStateT (runExceptT (mapM_ (addMacawBlock genCtx) macawBlocks)) ps0
+  blockRes <- stToIO $ runStateT (runExceptT (mapM_ (addMacawBlock sinfo genCtx) macawBlocks)) ps0
   ps <-
     case blockRes of
       (Left err, _) -> fail err

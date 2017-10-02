@@ -171,16 +171,30 @@ data X86PrimFn f tp
                 !(f (BVType (w+w)))
                 !(f (BVType w))
     -- ^ This performs a signed quotient for idiv.
-    -- The dividend is rounded to zero.
     -- It raises a #DE exception if the divisor is 0 or the result overflows.
+    -- The stored result is truncated to zero.
    | forall w
      . (tp ~ BVType w)
      => X86IRem !(RepValSize w)
                 !(f (BVType (w+w)))
                 !(f (BVType w))
     -- ^ This performs a signed remainder for idiv.
-    -- The dividend is rounded to zero.
-    -- It raises a #DE exception if the divisor is 0 or the result overflows.
+    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
+    -- The stored result is truncated to zero.
+   | forall w
+     . (tp ~ BVType w)
+     => X86Div !(RepValSize w)
+                !(f (BVType (w+w)))
+                !(f (BVType w))
+    -- ^ This performs a unsigned quotient for div.
+    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
+   | forall w
+     . (tp ~ BVType w)
+     => X86Rem !(RepValSize w)
+                !(f (BVType (w+w)))
+                !(f (BVType w))
+    -- ^ This performs an unsigned remainder for div.
+    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
@@ -197,95 +211,8 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       MMXExtend{}   -> knownType
       X86IDiv w _ _ -> typeRepr (repValSizeMemRepr w)
       X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
-
--- | An operation for pretty printing a 'X86PrimFn' using a pretty printer
--- for values that is implemented as a 'Applicative' action to allow side
--- effects.
-ppX86PrimFn :: Applicative m
-            => (forall u . f u -> m Doc)
-               -- ^ Function for pretty printing vlaue.
-            -> X86PrimFn f tp
-            -> m Doc
-ppX86PrimFn pp f =
-  case f of
-    ReadLoc loc -> pure $ pretty loc
-    ReadFSBase  -> pure $ text "fs.base"
-    ReadGSBase  -> pure $ text "gs.base"
-    CPUID code  -> sexprA "cpuid" [ pp code ]
-    RDTSC       -> pure $ text "rdtsc"
-    XGetBV code -> sexprA "xgetbv" [ pp code ]
-    PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
-    MemCmp sz cnt src dest rev -> sexprA "memcmp" args
-      where args = [pure (pretty sz), pp cnt, pp dest, pp src, pp rev]
-    RepnzScas _ val buf cnt  -> sexprA "first_byte_offset" args
-      where args = [pp val, pp buf, pp cnt]
-    MMXExtend e -> sexprA "mmx_extend" [ pp e ]
-    X86IDiv w n d -> sexprA "idiv" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-    X86IRem w n d -> sexprA "irem" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-
-
-rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
-                 -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
-rewriteX86PrimFn f =
-  case f of
-    ReadLoc loc -> evalRewrittenArchFn $ ReadLoc loc
-    ReadFSBase  -> evalRewrittenArchFn ReadFSBase
-    ReadGSBase  -> evalRewrittenArchFn ReadGSBase
-    CPUID code  -> do
-      tgtFn <- CPUID <$> rewriteValue code
-      evalRewrittenArchFn tgtFn
-    RDTSC       -> evalRewrittenArchFn RDTSC
-    XGetBV code -> do
-      tgtFn <- XGetBV <$> rewriteValue code
-      evalRewrittenArchFn tgtFn
-    PShufb w x s -> do
-      tgtFn <- PShufb w <$> rewriteValue x
-                        <*> rewriteValue s
-      evalRewrittenArchFn tgtFn
-    MemCmp sz cnt src dest rev -> do
-      tgtFn <- MemCmp sz <$> rewriteValue cnt
-                         <*> rewriteValue src
-                         <*> rewriteValue dest
-                         <*> rewriteValue rev
-      evalRewrittenArchFn tgtFn
-    RepnzScas sz val buf cnt -> do
-      tgtFn <- RepnzScas sz <$> rewriteValue val
-                            <*> rewriteValue buf
-                            <*> rewriteValue cnt
-      evalRewrittenArchFn tgtFn
-    MMXExtend e -> do
-      tgtExpr <- rewriteValue e
-      case tgtExpr of
-        BVValue _ i -> do
-          pure $ BVValue (knownNat :: NatRepr 80) $ 0xffff `shiftL` 64 .|. i
-        _ ->
-          evalRewrittenArchFn (MMXExtend tgtExpr)
-    X86IDiv w n d -> do
-      tgtFn <- X86IDiv w <$> rewriteValue n
-                         <*> rewriteValue d
-      evalRewrittenArchFn tgtFn
-    X86IRem w n d -> do
-      tgtFn <- X86IRem w <$> rewriteValue n
-                         <*> rewriteValue d
-      evalRewrittenArchFn tgtFn
-
--- | This returns true if evaluating the primitive function implicitly
--- changes the processor state in some way.
-x86PrimFnHasSideEffects :: X86PrimFn f tp -> Bool
-x86PrimFnHasSideEffects f =
-  case f of
-    ReadLoc{}   -> False
-    ReadFSBase  -> False
-    ReadGSBase  -> False
-    CPUID{}     -> False
-    RDTSC       -> False
-    XGetBV{}    -> False
-    PShufb{}    -> False
-    MemCmp{}    -> False
-    RepnzScas{} -> True
-    MMXExtend{} -> False
-    X86IDiv{}   -> True -- To be conservative we treat the floating point exceptions as side effects.
-    X86IRem{}   -> True -- To be conservative we treat the floating point exceptions as side effects.
+      X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
+      X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
 
 instance FunctorFC X86PrimFn where
   fmapFC = fmapFCDefault
@@ -310,9 +237,62 @@ instance TraversableFC X86PrimFn where
       MMXExtend v -> MMXExtend <$> go v
       X86IDiv w n d -> X86IDiv w <$> go n <*> go d
       X86IRem w n d -> X86IRem w <$> go n <*> go d
+      X86Div  w n d -> X86Div  w <$> go n <*> go d
+      X86Rem  w n d -> X86Rem  w <$> go n <*> go d
 
 instance IsArchFn X86PrimFn where
-  ppArchFn = ppX86PrimFn
+  ppArchFn pp f =
+    case f of
+      ReadLoc loc -> pure $ pretty loc
+      ReadFSBase  -> pure $ text "fs.base"
+      ReadGSBase  -> pure $ text "gs.base"
+      CPUID code  -> sexprA "cpuid" [ pp code ]
+      RDTSC       -> pure $ text "rdtsc"
+      XGetBV code -> sexprA "xgetbv" [ pp code ]
+      PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
+      MemCmp sz cnt src dest rev -> sexprA "memcmp" args
+        where args = [pure (pretty sz), pp cnt, pp dest, pp src, pp rev]
+      RepnzScas _ val buf cnt  -> sexprA "first_byte_offset" args
+        where args = [pp val, pp buf, pp cnt]
+      MMXExtend e -> sexprA "mmx_extend" [ pp e ]
+      X86IDiv w n d -> sexprA "idiv" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
+      X86IRem w n d -> sexprA "irem" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
+      X86Div  w n d -> sexprA "div"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
+      X86Rem  w n d -> sexprA "rem"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
+
+
+rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
+                 -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
+rewriteX86PrimFn f =
+  case f of
+    MMXExtend e -> do
+      tgtExpr <- rewriteValue e
+      case tgtExpr of
+        BVValue _ i -> do
+          pure $ BVValue (knownNat :: NatRepr 80) $ 0xffff `shiftL` 64 .|. i
+        _ -> evalRewrittenArchFn (MMXExtend tgtExpr)
+    _ -> do
+      evalRewrittenArchFn =<< traverseFC rewriteValue f
+
+-- | This returns true if evaluating the primitive function implicitly
+-- changes the processor state in some way.
+x86PrimFnHasSideEffects :: X86PrimFn f tp -> Bool
+x86PrimFnHasSideEffects f =
+  case f of
+    ReadLoc{}   -> False
+    ReadFSBase  -> False
+    ReadGSBase  -> False
+    CPUID{}     -> False
+    RDTSC       -> False
+    XGetBV{}    -> False
+    PShufb{}    -> False
+    MemCmp{}    -> False
+    RepnzScas{} -> True
+    MMXExtend{} -> False
+    X86IDiv{}   -> True -- To be conservative we treat the divide errors as side effects.
+    X86IRem{}   -> True -- /\ ..
+    X86Div{}    -> True -- /\ ..
+    X86Rem{}    -> True -- /\ ..
 
 valuesInX86Fn :: X86PrimFn v tp -> [Some v]
 valuesInX86Fn = foldMapFC (\v -> [Some v])
