@@ -2,17 +2,22 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters
   ) where
 
 import qualified Data.Set as S
+import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.Types
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
+
 import qualified Dismantle.PPC as D
+import qualified SemMC.Architecture.PPC32 as PPC32
+import qualified SemMC.Architecture.PPC64 as PPC64
 
 data PPCReg arch tp where
   PPC_GP :: D.GPR -> PPCReg arch (BVType 64)
@@ -46,3 +51,6 @@ instance OrdF (PPCReg arch) where
 linuxSystemCallPreservedRegisters :: proxy ppc -> S.Set (Some (PPCReg ppc))
 linuxSystemCallPreservedRegisters _ =
   S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
+
+type instance MC.RegAddrWidth (PPCReg PPC32.PPC) = 32
+type instance MC.RegAddrWidth (PPCReg PPC64.PPC) = 64
