@@ -54,3 +54,6 @@ linuxSystemCallPreservedRegisters _ =
 
 type instance MC.RegAddrWidth (PPCReg PPC32.PPC) = 32
 type instance MC.RegAddrWidth (PPCReg PPC64.PPC) = 64
+
+type instance MC.ArchReg PPC64.PPC = PPCReg PPC64.PPC
+type instance MC.ArchReg PPC32.PPC = PPCReg PPC32.PPC

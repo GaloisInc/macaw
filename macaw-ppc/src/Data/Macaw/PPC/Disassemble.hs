@@ -12,6 +12,8 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Nonce as NC
 
+import           Data.Macaw.PPC.Generator
+
 newtype DisM s a = DisM { unDisM :: ET.ExceptT DisassembleException (ST s) a }
   deriving (Functor,
             Applicative,

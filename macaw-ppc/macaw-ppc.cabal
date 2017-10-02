@@ -20,6 +20,7 @@ library
                        Data.Macaw.PPC.ArchTypes
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
+                       Data.Macaw.PPC.Generator
                        Data.Macaw.PPC.Identify
                        Data.Macaw.PPC.PPCReg
                        Data.Macaw.PPC.Rewrite
