@@ -3,7 +3,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Data.Macaw.PPC where
+module Data.Macaw.PPC (
+  ppc_linux_info
+  ) where
 
 import Control.Lens
 import Control.Monad.ST ( ST )
@@ -12,8 +14,9 @@ import qualified Control.Monad.State.Strict as St
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
 
-import Data.Macaw.Architecture.Info
+import qualified Data.Macaw.Architecture.Info as MI
 import Data.Macaw.CFG
+import Data.Macaw.CFG.Block
 import Data.Macaw.Memory
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
@@ -123,5 +126,22 @@ getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
 
-ppc_linux_info :: ArchitectureInfo PPC
-ppc_linux_info = undefined
+ppc_linux_info :: MI.ArchitectureInfo PPC
+ppc_linux_info =
+  MI.ArchitectureInfo { MI.withArchConstraints = undefined
+                      , MI.archAddrWidth = undefined
+                      , MI.archEndianness = undefined
+                      , MI.jumpTableEntrySize = undefined
+                      , MI.disassembleFn = undefined
+                      , MI.preserveRegAcrossSyscall = undefined
+                      , MI.mkInitialAbsState = undefined
+                      , MI.absEvalArchFn = undefined
+                      , MI.absEvalArchStmt = undefined
+                      , MI.postCallAbsState = undefined
+                      , MI.identifyCall = undefined
+                      , MI.identifyReturn = undefined
+                      , MI.rewriteArchFn = undefined
+                      , MI.rewriteArchStmt = undefined
+                      , MI.rewriteArchTermStmt = undefined
+                      , MI.archDemandContext = undefined
+                      }
