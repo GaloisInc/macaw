@@ -16,3 +16,6 @@
 [submodule "submodules/elf-edit"]
 	path = submodules/elf-edit
 	url = git@github.com:GaloisInc/elf-edit.git
+[submodule "submodules/macaw"]
+	path = submodules/macaw
+	url = git@github.com:GaloisInc/macaw.git
