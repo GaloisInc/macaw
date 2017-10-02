@@ -17,7 +17,7 @@ import           Data.Word (Word64)
 import qualified Data.Macaw.Architecture.Info as MI
 import Data.Macaw.CFG
 import Data.Macaw.CFG.Block
-import Data.Macaw.Memory
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 import qualified Dismantle.PPC as D
@@ -58,7 +58,7 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 -- PreBlock
 
 data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , pBlockAddr  :: !(MemSegmentOff 64)
+                             , pBlockAddr  :: !(MM.MemSegmentOff 64)
                              -- ^ Starting address of function in preblock.
                              , _pBlockStmts :: !(Seq.Seq (Stmt PPC ids))
                              , _pBlockState :: !(RegState PPCReg (Value PPC ids))
@@ -77,7 +77,7 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 data GenState w s ids = GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
                                  , blockSeq :: !(BlockSeq ids)
                                  , _blockState :: !(PreBlock ids)
-                                 , genAddr :: !(MemSegmentOff w)
+                                 , genAddr :: !(MM.MemSegmentOff w)
                                  }
 
 blockState :: Simple Lens (GenState w s ids) (PreBlock ids)
@@ -130,7 +130,7 @@ ppc_linux_info :: MI.ArchitectureInfo PPC
 ppc_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
-                      , MI.archEndianness = undefined
+                      , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = undefined
                       , MI.disassembleFn = undefined
                       , MI.preserveRegAcrossSyscall = undefined
