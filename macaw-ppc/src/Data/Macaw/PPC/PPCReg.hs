@@ -2,11 +2,12 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
-module Data.Macaw.PPC.PPCReg where
+module Data.Macaw.PPC.PPCReg (
+  PPCReg(..)
+  ) where
 
-import Data.Macaw.Types
-import Data.Parameterized.Classes
-import Data.Parameterized.Some
+import           Data.Macaw.Types
+import           Data.Parameterized.Classes
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Dismantle.PPC as D
 
