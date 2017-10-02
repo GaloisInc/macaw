@@ -13,11 +13,13 @@ module Data.Macaw.PPC.Generator (
   addStmt,
   addAssignment,
   getReg,
+  blockSeq,
   -- * Lenses
   blockState,
   curPPCState,
   pBlockStmts,
   pBlockState,
+  frontierBlocks
   ) where
 
 import           Control.Lens

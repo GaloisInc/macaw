@@ -2,9 +2,13 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
+import           Control.Lens ( (^.) )
+import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
+import qualified Data.Foldable as F
+import           Data.Word ( Word64 )
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
@@ -20,18 +24,26 @@ newtype DisM s a = DisM { unDisM :: ET.ExceptT DisassembleException (ST s) a }
             Monad,
             ET.MonadError DisassembleException)
 
-data DisassembleException = DisassembleException
+data DisassembleException = InvalidNextIP Word64 Word64
   deriving (Show)
 
 liftST :: ST s a -> DisM s a
 liftST = DisM . lift
 
-tryDisassembleBlock :: MM.Memory (ArchAddrWidth ppc)
-                    -> NC.NonceGenerator (ST ids) ids
+tryDisassembleBlock :: (MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+                    => MM.Memory (ArchAddrWidth ppc)
+                    -> NC.NonceGenerator (ST s) s
                     -> ArchSegmentOff ppc
                     -> ArchAddrWord ppc
-                    -> DisM s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc))
-tryDisassembleBlock = undefined
+                    -> DisM s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
+tryDisassembleBlock mem nonceGen startAddr maxSize = do
+  let gs0 = initGenState nonceGen startAddr
+  let startOffset = MM.msegOffset startAddr
+  (nextIPOffset, gs1) <- liftST $ runGenerator gs0 $ undefined
+  unless (nextIPOffset > startOffset) $ do
+    ET.throwError (InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset))
+  let blocks = F.toList (blockSeq gs1 ^. frontierBlocks)
+  return (blocks, nextIPOffset - startOffset)
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
