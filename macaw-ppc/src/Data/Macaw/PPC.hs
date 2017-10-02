@@ -1,8 +1,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+
 module Data.Macaw.PPC (
   ppc_linux_info,
   ppc32_linux_info,
@@ -25,6 +27,7 @@ import Data.Macaw.CFG.Core
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Memory as MM
+import Data.Macaw.Types
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 import qualified Dismantle.PPC as D
@@ -33,8 +36,21 @@ import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
 import Data.Macaw.PPC.ArchTypes
+import Data.Macaw.PPC.Disassemble ( disassembleFn )
+import Data.Macaw.PPC.Eval ( mkInitialAbsState,
+                             absEvalArchFn,
+                             absEvalArchStmt,
+                             postCallAbsState,
+                             preserveRegAcrossSyscall
+                           )
+import Data.Macaw.PPC.Identify ( identifyCall,
+                                 identifyReturn
+                               )
 import Data.Macaw.PPC.PPCReg
--- import Data.Macaw.PPC.Rewrite
+import Data.Macaw.PPC.Rewrite ( rewriteArchFn,
+                                rewriteArchStmt,
+                                rewriteArchTermStmt
+                              )
 
 data Hole = Hole
 
@@ -46,6 +62,13 @@ data Hole = Hole
 data Expr ids tp where
   ValueExpr :: !(Value PPC ids tp) -> Expr ids tp
   AppExpr   :: !(App (Expr ids) tp) -> Expr ids tp
+
+------------------------------------------------------------------------
+-- Location
+
+data Location addr (tp :: Type) where
+  MemoryAddr :: !addr -> !(MemRepr tp) -> Location addr tp
+  FullRegister :: !(PPCReg tp) -> Location addr tp
 
 ------------------------------------------------------------------------
 -- BlockSeq
@@ -136,65 +159,6 @@ getReg :: PPCReg tp -> PPCGenerator w s ids (Expr ids tp)
 getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
-
-setReg :: PPCReg tp -> Value PPC ids tp -> PPCGenerator w s ids ()
-setReg = undefined
-
-disassembleFn :: proxy ppc -> MM.Memory (ArchAddrWidth ppc)
-              -> NC.NonceGenerator (ST ids) ids
-              -> ArchSegmentOff ppc
-              -> ArchAddrWord ppc
-              -> MA.AbsBlockState (ArchReg ppc)
-              -- ^ NOTE: We are leaving the type function ArchReg here because
-              -- we need to generalize over PPC64 vs PPC32
-              -> ST ids ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), Maybe String)
-disassembleFn = undefined
-
-preserveRegAcrossSyscall :: proxy ppc -> ArchReg ppc tp -> Bool
-preserveRegAcrossSyscall = undefined
-
-mkInitialAbsState :: proxy ppc -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                  -> ArchSegmentOff ppc
-                  -> MA.AbsBlockState (ArchReg ppc)
-mkInitialAbsState = undefined
-
-absEvalArchFn :: proxy ppc -> AbsProcessorState (ArchReg ppc) ids
-              -> ArchFn ppc (Value ppc ids) tp
-              -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
-absEvalArchFn = undefined
-
-absEvalArchStmt :: proxy ppc -> AbsProcessorState (ArchReg ppc) ids
-                -> ArchStmt ppc ids
-                -> AbsProcessorState (ArchReg ppc) ids
-absEvalArchStmt = undefined
-
-postCallAbsState :: proxy ppc -> AbsBlockState (ArchReg ppc)
-                 -> ArchSegmentOff ppc
-                 -> AbsBlockState (ArchReg ppc)
-postCallAbsState = undefined
-
-identifyCall :: proxy ppc -> MM.Memory (ArchAddrWidth ppc)
-             -> [Stmt ppc ids]
-             -> RegState (ArchReg ppc) (Value ppc ids)
-             -> Maybe (Seq.Seq (Stmt ppc ids), ArchSegmentOff ppc)
-identifyCall = undefined
-
-identifyReturn :: proxy ppc -> [Stmt ppc ids]
-               -> RegState (ArchReg ppc) (Value ppc ids)
-               -> Maybe [Stmt ppc ids]
-identifyReturn = undefined
-
-rewriteArchFn :: proxy ppc -> ArchFn ppc (Value ppc src) tp
-              -> Rewriter ppc src tgt (Value ppc tgt tp)
-rewriteArchFn = undefined
-
-rewriteArchStmt :: proxy ppc -> ArchStmt ppc src
-                -> Rewriter ppc src tgt ()
-rewriteArchStmt = undefined
-
-rewriteArchTermStmt :: proxy ppc -> ArchTermStmt ppc src
-                    -> Rewriter ppc src tgt (ArchTermStmt ppc tgt)
-rewriteArchTermStmt = undefined
 
 archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext = undefined
