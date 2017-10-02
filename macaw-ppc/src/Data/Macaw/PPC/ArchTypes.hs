@@ -16,5 +16,3 @@ import Data.Macaw.PPC.PPCReg
 ------------------------------------------------------------------------
 -- PPC specific declarations
 
-type instance ArchReg PPC64.PPC = PPCReg PPC64.PPC
-type instance ArchReg PPC32.PPC = PPCReg PPC32.PPC
