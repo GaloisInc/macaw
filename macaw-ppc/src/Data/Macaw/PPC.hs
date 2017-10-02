@@ -119,5 +119,8 @@ getReg r = PPCGenerator $ StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
 
+setReg :: PPCReg tp -> Value PPC ids tp -> PPCGenerator w s ids ()
+setReg = undefined
+
 ppc_linux_info :: ArchitectureInfo PPC
 ppc_linux_info = undefined
