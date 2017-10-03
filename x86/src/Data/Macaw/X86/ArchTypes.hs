@@ -15,10 +15,11 @@ module Data.Macaw.X86.ArchTypes
   ( -- * Architecture
     X86_64
   , X86PrimFn(..)
-  , valuesInX86Fn
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
+  , X86ArchStmt(..)
   , X86Stmt(..)
+  , ppX86Stmt
   , valuesInX86Stmt
   , rewriteX86Stmt
   , X86TermStmt(..)
@@ -30,6 +31,7 @@ import           Data.Bits
 import           Data.Foldable
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.Set (Set)
 import qualified Data.Set as Set
@@ -55,21 +57,6 @@ data X86TermStmt ids = X86Syscall
 
 instance PrettyF X86TermStmt where
   prettyF X86Syscall = text "x86_syscall"
-
-rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 src tgt (X86TermStmt tgt)
-rewriteX86TermStmt f =
-  case f of
-    X86Syscall -> pure X86Syscall
-
-------------------------------------------------------------------------
--- X86_64 specific declarations
-
-data X86_64
-
-type instance ArchReg  X86_64 = X86Reg
-type instance ArchFn   X86_64 = X86PrimFn
-type instance ArchStmt X86_64 = X86Stmt
-type instance ArchTermStmt X86_64 = X86TermStmt
 
 ------------------------------------------------------------------------
 -- X86PrimLoc
@@ -261,19 +248,6 @@ instance IsArchFn X86PrimFn where
       X86Rem  w n d -> sexprA "rem"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
 
 
-rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
-                 -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
-rewriteX86PrimFn f =
-  case f of
-    MMXExtend e -> do
-      tgtExpr <- rewriteValue e
-      case tgtExpr of
-        BVValue _ i -> do
-          pure $ BVValue (knownNat :: NatRepr 80) $ 0xffff `shiftL` 64 .|. i
-        _ -> evalRewrittenArchFn (MMXExtend tgtExpr)
-    _ -> do
-      evalRewrittenArchFn =<< traverseFC rewriteValue f
-
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
 x86PrimFnHasSideEffects :: X86PrimFn f tp -> Bool
@@ -294,23 +268,20 @@ x86PrimFnHasSideEffects f =
     X86Div{}    -> True -- /\ ..
     X86Rem{}    -> True -- /\ ..
 
-valuesInX86Fn :: X86PrimFn v tp -> [Some v]
-valuesInX86Fn = foldMapFC (\v -> [Some v])
-
 ------------------------------------------------------------------------
 -- X86Stmt
 
 -- | An X86 specific statement.
-data X86Stmt ids
+data X86Stmt (v :: Type -> *)
    = forall tp .
-     WriteLoc !(X86PrimLoc tp) !(Value X86_64 ids tp)
-   | StoreX87Control !(BVValue X86_64 ids 64)
+     WriteLoc !(X86PrimLoc tp) !(v tp)
+   | StoreX87Control !(v (BVType 64))
      -- ^ Store the X87 control register in the given location.
    | MemCopy !Integer
-             !(Value X86_64 ids (BVType 64))
-             !(Value X86_64 ids (BVType 64))
-             !(Value X86_64 ids (BVType 64))
-             !(Value X86_64 ids BoolType)
+             !(v (BVType 64))
+             !(v (BVType 64))
+             !(v (BVType 64))
+             !(v BoolType)
      -- ^ Copy a region of memory from a source buffer to a destination buffer.
      --
      -- In an expression @MemCopy bc v src dest dir@
@@ -322,63 +293,83 @@ data X86Stmt ids
      --   * 'True' means we should decrement buffer pointers after each copy.
      --   * 'False' means we should increment the buffer pointers after each copy.
    | forall n .
-     MemSet !(Value X86_64 ids (BVType 64))
+     MemSet !(v (BVType 64))
             -- /\ Number of values to assign
-            !(Value X86_64 ids (BVType n))
+            !(v (BVType n))
             -- /\ Value to assign
-            !(Value X86_64 ids (BVType 64))
+            !(v (BVType 64))
             -- /\ Address to start assigning from.
-            !(Value X86_64 ids BoolType)
+            !(v BoolType)
             -- /\ Direction flag
 
-instance PrettyF X86Stmt where
-  prettyF (WriteLoc loc rhs) = pretty loc <+> text ":=" <+> ppValue 0 rhs
-  prettyF (StoreX87Control addr) = pretty addr <+> text ":= x87_control"
-  prettyF (MemCopy sz cnt src dest rev) =
-      text "memcopy" <+> parens (hcat $ punctuate comma args)
-    where args = [pretty sz, pretty cnt, pretty src, pretty dest, pretty rev]
-  prettyF (MemSet cnt val dest d) =
-      text "memset" <+> parens (hcat $ punctuate comma args)
-    where args = [pretty cnt, pretty val, pretty dest, pretty d]
+instance FunctorF X86Stmt where
+  fmapF = fmapFDefault
 
-rewriteX86Stmt :: X86Stmt src -> Rewriter X86_64 src tgt ()
-rewriteX86Stmt f =
+instance FoldableF X86Stmt where
+  foldMapF = foldMapFDefault
+
+instance TraversableF X86Stmt where
+  traverseF go stmt =
+    case stmt of
+      WriteLoc loc v    -> WriteLoc loc <$> go v
+      StoreX87Control v -> StoreX87Control <$> go v
+      MemCopy bc v src dest dir -> MemCopy bc <$> go v <*> go src <*> go dest <*> go dir
+      MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
+
+ppX86Stmt :: (forall tp . f tp -> Doc) -> X86Stmt f -> Doc
+ppX86Stmt pp stmt =
+  case stmt of
+    WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
+    StoreX87Control addr -> pp addr <+> text ":= x87_control"
+    MemCopy sz cnt src dest rev ->
+        text "memcopy" <+> parens (hcat $ punctuate comma args)
+      where args = [pretty sz, pp cnt, pp src, pp dest, pp rev]
+    MemSet cnt val dest d ->
+        text "memset" <+> parens (hcat $ punctuate comma args)
+      where args = [pp cnt, pp val, pp dest, pp d]
+
+------------------------------------------------------------------------
+-- X86_64
+
+newtype X86ArchStmt ids = X86Stmt (X86Stmt (Value X86_64 ids))
+
+data X86_64
+
+type instance ArchReg  X86_64 = X86Reg
+type instance ArchFn   X86_64 = X86PrimFn
+type instance ArchStmt X86_64 = X86ArchStmt
+type instance ArchTermStmt X86_64 = X86TermStmt
+
+rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
+                 -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
+rewriteX86PrimFn f =
   case f of
-    WriteLoc loc rhs -> do
-      tgtStmt <-
-        WriteLoc loc
-        <$> rewriteValue rhs
-      appendRewrittenArchStmt tgtStmt
-    StoreX87Control addr -> do
-      tgtStmt <-
-        StoreX87Control
-        <$> rewriteValue addr
-      appendRewrittenArchStmt tgtStmt
-    MemCopy bc cnt src dest dir -> do
-      tgtStmt <-
-        MemCopy bc
-        <$> rewriteValue cnt
-        <*> rewriteValue src
-        <*> rewriteValue dest
-        <*> rewriteValue dir
-      appendRewrittenArchStmt tgtStmt
-    MemSet cnt val dest dir -> do
-      tgtStmt <-
-        MemSet
-        <$> rewriteValue cnt
-        <*> rewriteValue val
-        <*> rewriteValue dest
-        <*> rewriteValue dir
-      appendRewrittenArchStmt tgtStmt
+    MMXExtend e -> do
+      tgtExpr <- rewriteValue e
+      case tgtExpr of
+        BVValue _ i -> do
+          pure $ BVValue (knownNat :: NatRepr 80) $ 0xffff `shiftL` 64 .|. i
+        _ -> evalRewrittenArchFn (MMXExtend tgtExpr)
+    _ -> do
+      evalRewrittenArchFn =<< traverseFC rewriteValue f
 
-valuesInX86Stmt :: X86Stmt ids -> [Some (Value X86_64 ids)]
-valuesInX86Stmt (WriteLoc _ rhs) = [Some rhs]
-valuesInX86Stmt (StoreX87Control addr) = [Some addr]
-valuesInX86Stmt (MemCopy _ cnt src dest d) = [ Some cnt, Some src, Some dest, Some d ]
-valuesInX86Stmt (MemSet cnt val dest d) = [ Some cnt, Some val, Some dest, Some d ]
+instance PrettyF X86ArchStmt where
+  prettyF (X86Stmt s) = ppX86Stmt pretty s
 
-refsInX86Stmt :: X86Stmt ids -> Set (Some (AssignId ids))
-refsInX86Stmt = assignIdSetFromValues . valuesInX86Stmt
+valuesInX86Stmt :: X86ArchStmt ids -> [Some (Value X86_64 ids)]
+valuesInX86Stmt (X86Stmt s) = foldMapF (\v -> [Some v]) s
 
-instance StmtHasRefs X86Stmt where
-  refsInStmt = refsInX86Stmt
+instance StmtHasRefs X86ArchStmt where
+  refsInStmt = assignIdSetFromValues . valuesInX86Stmt
+
+
+
+rewriteX86Stmt :: X86ArchStmt src -> Rewriter X86_64 src tgt ()
+rewriteX86Stmt (X86Stmt f) = do
+  s <- traverseF rewriteValue f
+  appendRewrittenArchStmt (X86Stmt s)
+
+rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 src tgt (X86TermStmt tgt)
+rewriteX86TermStmt f =
+  case f of
+    X86Syscall -> pure X86Syscall

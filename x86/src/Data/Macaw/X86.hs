@@ -922,8 +922,11 @@ getLoc (l0 :: ImpLocation ids tp) =
       -- TODO: Check tag register is assigned.
       return $! ValueExpr e
 
+addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
+addArchStmt s = addStmt $ ExecArchStmt (X86Stmt s)
+
 addWriteLoc :: X86PrimLoc tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
-addWriteLoc l v = addStmt $ ExecArchStmt $ WriteLoc l v
+addWriteLoc l v = addArchStmt $ WriteLoc l v
 
 -- | Assign a value to a location
 setLoc :: forall ids st_s tp
@@ -1029,7 +1032,7 @@ instance S.Semantics (X86Generator st_s ids) where
     src_v   <- eval src
     dest_v  <- eval dest
     is_reverse_v <- eval is_reverse
-    addStmt $ ExecArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
+    addArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
 
   memcmp sz count src dest is_reverse = do
     count_v <- eval count
@@ -1044,7 +1047,7 @@ instance S.Semantics (X86Generator st_s ids) where
     val_v   <- eval val
     dest_v  <- eval dest
     df_v    <- eval dfl
-    addStmt $ ExecArchStmt $ MemSet count_v val_v dest_v df_v
+    addArchStmt $ MemSet count_v val_v dest_v df_v
 
   rep_scas True is_reverse sz val buf count = do
     val_v   <- eval val
@@ -1093,7 +1096,7 @@ instance S.Semantics (X86Generator st_s ids) where
 
   fnstcw addr = do
     addr_val <- eval addr
-    addStmt $ ExecArchStmt $ StoreX87Control addr_val
+    addArchStmt $ StoreX87Control addr_val
 
   pshufb w x y = do
     x_val <- eval x
@@ -1454,7 +1457,7 @@ addValueListDemands = mapM_ (viewSome addValueDemands)
 x86DemandContext :: DemandContext X86_64 ids
 x86DemandContext =
   DemandContext { addArchStmtDemands = addValueListDemands . valuesInX86Stmt
-                , addArchFnDemands   = addValueListDemands . valuesInX86Fn
+                , addArchFnDemands   = addValueListDemands . foldMapFC (\v -> [Some v])
                 , archFnHasSideEffects = x86PrimFnHasSideEffects
                 }
 
