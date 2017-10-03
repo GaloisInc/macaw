@@ -2,7 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -18,7 +18,9 @@ import qualified Data.Macaw.Architecture.Info as MI
 import Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Types as MT
 
+import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -37,10 +39,7 @@ import Data.Macaw.PPC.Rewrite ( rewriteArchFn,
                                 rewriteArchStmt,
                                 rewriteArchTermStmt
                               )
-
-data Hole = Hole
-
--- A lot of the stuff in this file will ultimately be lifted into macaw-semmc.
+import Data.Macaw.PPC.Generator ( PPCGenerator )
 
 archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext = undefined
@@ -51,21 +50,23 @@ jumpTableEntrySize :: proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
 jumpTableEntrySize = undefined
 
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
-ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC)
+ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC) undefined
 
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
-ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC)
+ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC) undefined
 
-ppc_linux_info :: (ArchReg ppc ~ PPCReg ppc,
-                  MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+ppc_linux_info :: (ArchWidth ppc,
+                   ArchReg ppc ~ PPCReg ppc,
+                   MM.MemWidth (RegAddrWidth (ArchReg ppc)))
                => proxy ppc
+               -> (forall s . Value ppc s (MT.BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                -> MI.ArchitectureInfo ppc
-ppc_linux_info proxy =
+ppc_linux_info proxy lookupSemantics =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
-                      , MI.disassembleFn = disassembleFn proxy
+                      , MI.disassembleFn = disassembleFn proxy lookupSemantics
                       , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
                       , MI.mkInitialAbsState = mkInitialAbsState proxy
                       , MI.absEvalArchFn = absEvalArchFn proxy

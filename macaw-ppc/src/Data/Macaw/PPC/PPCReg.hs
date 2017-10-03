@@ -5,7 +5,8 @@
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
-  linuxSystemCallPreservedRegisters
+  linuxSystemCallPreservedRegisters,
+  ArchWidth(..)
   ) where
 
 import qualified Data.Set as S
@@ -20,7 +21,7 @@ import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
 data PPCReg arch tp where
-  PPC_GP :: D.GPR -> PPCReg arch (BVType 64)
+  PPC_GP :: D.GPR -> PPCReg arch (BVType (MC.ArchAddrWidth arch))
 
 deriving instance Eq (PPCReg arch tp)
 deriving instance Ord (PPCReg arch tp)
@@ -57,3 +58,12 @@ type instance MC.RegAddrWidth (PPCReg PPC64.PPC) = 64
 
 type instance MC.ArchReg PPC64.PPC = PPCReg PPC64.PPC
 type instance MC.ArchReg PPC32.PPC = PPCReg PPC32.PPC
+
+class ArchWidth arch where
+  pointerRepr :: proxy arch -> NatRepr (MC.ArchAddrWidth arch)
+
+instance ArchWidth PPC32.PPC where
+  pointerRepr _ = n32
+
+instance ArchWidth PPC64.PPC where
+  pointerRepr _ = n64
