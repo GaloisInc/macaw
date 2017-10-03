@@ -66,7 +66,7 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 -- PreBlock
 
 data PreBlock ppc ids = PreBlock { pBlockIndex :: !Word64
-                                  , pBlockAddr  :: !(MM.MemSegmentOff 64)
+                                  , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
                                   -- ^ Starting address of function in preblock.
                                   , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
                                   , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
