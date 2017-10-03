@@ -20,10 +20,13 @@ module Data.Macaw.PPC.Generator (
   curPPCState,
   pBlockStmts,
   pBlockState,
-  frontierBlocks
+  frontierBlocks,
+  -- * Errors
+  GeneratorError(..)
   ) where
 
 import           Control.Lens
+import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
 import qualified Control.Monad.State.Strict as St
@@ -116,23 +119,21 @@ curPPCState = blockState . pBlockState
 ------------------------------------------------------------------------
 -- PPCGenerator
 
-newtype PPCGenerator ppc s a = PPCGenerator { runGen :: St.StateT (GenState ppc s) (ST s) a }
+data GeneratorError = InvalidEncoding
+  deriving (Show)
+
+newtype PPCGenerator ppc s a = PPCGenerator { runGen :: St.StateT (GenState ppc s) (ET.ExceptT GeneratorError (ST s)) a }
   deriving (Monad,
             Functor,
             Applicative,
+            ET.MonadError GeneratorError,
             St.MonadState (GenState ppc s))
 
-runGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (a, GenState ppc s)
-runGenerator s0 act = St.runStateT (runGen act) s0
+runGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (Either GeneratorError (a, GenState ppc s))
+runGenerator s0 act = ET.runExceptT (St.runStateT (runGen act) s0)
 
-execGenerator :: GenState ppc s -> PPCGenerator ppc s () -> ST s (GenState ppc s)
-execGenerator s0 act = St.execStateT (runGen act) s0
-
--- Given a stateful computation on the underlying GenState, create a PPCGenerator
--- that runs that same computation.
-modGenState :: St.State (GenState ppc s) a -> PPCGenerator ppc s a
-modGenState m = PPCGenerator $ St.StateT $ \genState -> do
-  return $ St.runState m genState
+execGenerator :: GenState ppc s -> PPCGenerator ppc s () -> ST s (Either GeneratorError (GenState ppc s))
+execGenerator s0 act = ET.runExceptT (St.execStateT (runGen act) s0)
 
 addStmt :: Stmt ppc s -> PPCGenerator ppc s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
@@ -144,7 +145,7 @@ newAssignId = do
   return (AssignId n)
 
 liftST :: ST s a -> PPCGenerator ppc s a
-liftST = PPCGenerator . lift
+liftST = PPCGenerator . lift . lift
 
 addAssignment :: AssignRhs ppc s tp
               -> PPCGenerator ppc s (Assignment ppc s tp)
@@ -155,6 +156,7 @@ addAssignment rhs = do
   return a
 
 getReg :: PPCReg ppc tp -> PPCGenerator ppc s (Expr ppc s tp)
-getReg r = PPCGenerator $ St.StateT $ \genState -> do
+getReg r = do
+  genState <- St.get
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
-  return (expr, genState)
+  return expr

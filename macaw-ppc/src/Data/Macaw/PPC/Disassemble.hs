@@ -94,11 +94,13 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           -- FIXME: Do we need to add failure modes here?  Probably.  There are
           -- some invalid encodings that we could encounter that would be worth
           -- failing for.
-          gs1 <- liftST $ execGenerator gs $ do
+          egs1 <- liftST $ execGenerator gs $ do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
             transformer
-          undefined
+          case egs1 of
+            Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
+            Right gs1 -> undefined
 
 tryDisassembleBlock :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
@@ -190,6 +192,7 @@ data TranslationErrorReason w = InvalidNextIP Word64 Word64
                               | DecodeError (MM.MemoryError w)
                               | UnsupportedInstruction D.Instruction
                               | InstructionAtUnmappedAddr D.Instruction
+                              | GenerationError D.Instruction GeneratorError
                               deriving (Show)
 
 deriving instance (MM.MemWidth w) => Show (TranslationError w)
