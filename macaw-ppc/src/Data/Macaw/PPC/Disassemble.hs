@@ -87,7 +87,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
       -- physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (pointerRepr (Proxy @ppc)) (fromIntegral addr))
+                 Just addr -> return (BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do

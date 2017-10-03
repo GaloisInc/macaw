@@ -17,7 +17,6 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.PPC
-                       Data.Macaw.PPC.ArchTypes
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
                        Data.Macaw.PPC.Generator
@@ -30,6 +29,7 @@ library
                        containers,
                        bytestring,
                        text,
+                       dismantle-tablegen,
                        dismantle-ppc,
                        semmc,
                        semmc-ppc,
