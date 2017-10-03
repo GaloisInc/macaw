@@ -22,6 +22,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
+import           Text.Printf ( printf )
 
 import qualified Dismantle.PPC as D
 
@@ -89,6 +90,15 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                  Just addr -> return (BVValue (pointerRepr (Proxy @ppc)) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
+        Just transformer -> do
+          -- FIXME: Do we need to add failure modes here?  Probably.  There are
+          -- some invalid encodings that we could encounter that would be worth
+          -- failing for.
+          gs1 <- liftST $ execGenerator gs $ do
+            let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
+            addStmt (Comment (T.pack  line))
+            transformer
+          undefined
 
 tryDisassembleBlock :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
