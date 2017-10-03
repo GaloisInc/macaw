@@ -5,6 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
@@ -17,6 +18,7 @@ import           Control.Monad.Trans ( lift )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
+import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
@@ -29,6 +31,7 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
+import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
@@ -61,13 +64,15 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
-disassembleBlock :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
-                 => MM.Memory (ArchAddrWidth ppc)
+disassembleBlock :: forall ppc s
+                  . (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+                 => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+                 -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -> MM.MemWord (ArchAddrWidth ppc)
                  -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s)
-disassembleBlock mem gs curIPAddr maxOffset = do
+disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
   case readInstruction mem curIPAddr of
@@ -75,18 +80,27 @@ disassembleBlock mem gs curIPAddr maxOffset = do
     Right (i, bytesRead) -> do
       -- let nextIP = MM.relativeAddr seg (off + bytesRead)
       -- let nextIPVal = MC.RelocatableValue undefined nextIP
-      undefined
 
-tryDisassembleBlock :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
-                    => MM.Memory (ArchAddrWidth ppc)
+      -- Note: In PowerPC, the IP is incremented *after* an instruction
+      -- executes, rather than before as in X86.  We have to pass in the
+      -- physical address of the instruction here.
+      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
+                 Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
+                 Just addr -> return (BVValue (pointerRepr (Proxy @ppc)) (fromIntegral addr))
+      case lookupSemantics ipVal i of
+        Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
+
+tryDisassembleBlock :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+                    => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+                    -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
                     -> ArchSegmentOff ppc
                     -> ArchAddrWord ppc
                     -> DisM ppc s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
-tryDisassembleBlock mem nonceGen startAddr maxSize = do
+tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr
   let startOffset = MM.msegOffset startAddr
-  (nextIPOffset, gs1) <- disassembleBlock mem gs0 startAddr (startOffset + maxSize)
+  (nextIPOffset, gs1) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs1 nextIPOffset startAddr reason
@@ -98,10 +112,16 @@ tryDisassembleBlock mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+disassembleFn :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (RegAddrWidth (ArchReg ppc)))
               => proxy ppc
+              -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+              -- ^ A function to look up the semantics for an instruction.  The
+              -- lookup is provided with the value of the IP in case IP-relative
+              -- addressing is necessary.
               -> MM.Memory (ArchAddrWidth ppc)
+              -- ^ The mapped memory space
               -> NC.NonceGenerator (ST s) s
+              -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff ppc
               -- ^ The address to disassemble from
               -> ArchAddrWord ppc
@@ -109,8 +129,8 @@ disassembleFn :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (RegAddrWidth (ArchReg p
               -> MA.AbsBlockState (ArchReg ppc)
               -- ^ Abstract state of the processor at the start of the block
               -> ST s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), Maybe String)
-disassembleFn _ mem nonceGen startAddr maxSize _  = do
-  mr <- ET.runExceptT (unDisM (tryDisassembleBlock mem nonceGen startAddr maxSize))
+disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
+  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
@@ -158,6 +178,8 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
 
 data TranslationErrorReason w = InvalidNextIP Word64 Word64
                               | DecodeError (MM.MemoryError w)
+                              | UnsupportedInstruction D.Instruction
+                              | InstructionAtUnmappedAddr D.Instruction
                               deriving (Show)
 
 deriving instance (MM.MemWidth w) => Show (TranslationError w)
