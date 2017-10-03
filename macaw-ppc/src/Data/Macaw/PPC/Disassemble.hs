@@ -27,16 +27,22 @@ import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
 
-newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (DisassembleException ppc) (ST s) a }
+type LocatedFailure ppc s = ([Block ppc s], MM.MemWord (RegAddrWidth (ArchReg ppc)), TranslationError (RegAddrWidth (ArchReg ppc)))
+newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedFailure ppc s) (ST s) a }
   deriving (Functor,
             Applicative,
             Monad,
-            ET.MonadError (DisassembleException ppc))
+            ET.MonadError (LocatedFailure ppc s))
 
-data DisassembleException w = InvalidNextIP Word64 Word64
-                            | DecodeError (MM.MemoryError w)
+data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff w
+                                           , transErrorReason :: TranslationErrorReason w
+                                           }
 
-deriving instance (MM.MemWidth w) => Show (DisassembleException w)
+data TranslationErrorReason w = InvalidNextIP Word64 Word64
+                              | DecodeError (MM.MemoryError w)
+                              deriving (Show)
+
+deriving instance (MM.MemWidth w) => Show (TranslationError w)
 
 liftST :: ST s a -> DisM ppc s a
 liftST = DisM . lift
@@ -65,35 +71,45 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
-disassembleBlock :: (w ~ RegAddrWidth (ArchReg ppc))
-                 => MM.Memory (ArchAddrWidth ppc)
-                 -> GenState ppc w s ids
-                 -> MM.MemSegmentOff w
-                 -> MM.MemWord w
-                 -> DisM w s (MM.MemWord w, GenState ppc w s ids)
+failAt :: GenState ppc s ids
+       -> MM.MemWord (ArchAddrWidth ppc)
+       -> MM.MemSegmentOff (ArchAddrWidth ppc)
+       -> TranslationErrorReason (ArchAddrWidth ppc)
+       -> DisM ppc s a
+failAt gs offset curIPAddr reason = do
+  let exn = TranslationError { transErrorAddr = curIPAddr
+                             , transErrorReason = reason
+                             }
+  undefined  ([], offset, exn)
+
+disassembleBlock :: MM.Memory (ArchAddrWidth ppc)
+                 -> GenState ppc s ids
+                 -> MM.MemSegmentOff (ArchAddrWidth ppc)
+                 -> MM.MemWord (ArchAddrWidth ppc)
+                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s ids)
 disassembleBlock mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
   case readInstruction mem curIPAddr of
-    Left err -> undefined
+    Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
       -- let nextIP = MM.relativeAddr seg (off + bytesRead)
       -- let nextIPVal = MC.RelocatableValue undefined nextIP
       undefined
 
-tryDisassembleBlock :: (MM.MemWidth w,
-                       w ~ RegAddrWidth (ArchReg  ppc))
+tryDisassembleBlock :: (MM.MemWidth (ArchAddrWidth ppc))
                     => MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
                     -> ArchSegmentOff ppc
                     -> ArchAddrWord ppc
-                    -> DisM w s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
+                    -> DisM ppc s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
 tryDisassembleBlock mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr
   let startOffset = MM.msegOffset startAddr
   (nextIPOffset, gs1) <- disassembleBlock mem gs0 startAddr (startOffset + maxSize)
   unless (nextIPOffset > startOffset) $ do
-    ET.throwError (InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset))
+    let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
+    failAt gs1 nextIPOffset startAddr reason
   let blocks = F.toList (blockSeq gs1 ^. frontierBlocks)
   return (blocks, nextIPOffset - startOffset)
 
@@ -116,5 +132,5 @@ disassembleFn :: (MM.MemWidth (RegAddrWidth (ArchReg ppc)))
 disassembleFn _ mem nonceGen startAddr maxSize _  = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock mem nonceGen startAddr maxSize))
   case mr of
-    Left exn -> return ([], 0, Just (show exn))
+    Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)

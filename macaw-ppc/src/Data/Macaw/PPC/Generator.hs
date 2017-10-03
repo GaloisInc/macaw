@@ -82,15 +82,16 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 ------------------------------------------------------------------------
 -- GenState
 
-data GenState ppc w s ids = GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
-                                     , blockSeq :: !(BlockSeq ppc ids)
-                                     , _blockState :: !(PreBlock ppc ids)
-                                     , genAddr :: !(MM.MemSegmentOff w)
-                                     }
+data GenState ppc s ids =
+  GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
+           , blockSeq :: !(BlockSeq ppc ids)
+           , _blockState :: !(PreBlock ppc ids)
+           , genAddr :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
+           }
 
 initGenState :: NC.NonceGenerator (ST s) ids
-             -> MM.MemSegmentOff w
-             -> GenState ppc w s ids
+             -> MM.MemSegmentOff (ArchAddrWidth ppc)
+             -> GenState ppc s ids
 initGenState nonceGen addr =
   GenState { assignIdGen = nonceGen
            , blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
@@ -98,54 +99,54 @@ initGenState nonceGen addr =
            , genAddr = addr
            }
 
-blockState :: Simple Lens (GenState ppc w s ids) (PreBlock ppc ids)
+blockState :: Simple Lens (GenState ppc s ids) (PreBlock ppc ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curPPCState :: Simple Lens (GenState ppc w s ids) (RegState (PPCReg ppc) (Value ppc ids))
+curPPCState :: Simple Lens (GenState ppc s ids) (RegState (PPCReg ppc) (Value ppc ids))
 curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
 -- PPCGenerator
 
-newtype PPCGenerator ppc w s ids a = PPCGenerator { runGen :: St.StateT (GenState ppc w s ids) (ST s) a }
+newtype PPCGenerator ppc s ids a = PPCGenerator { runGen :: St.StateT (GenState ppc s ids) (ST s) a }
   deriving (Monad,
             Functor,
             Applicative,
-            St.MonadState (GenState ppc w s ids))
+            St.MonadState (GenState ppc s ids))
 
-runGenerator :: GenState ppc w s ids -> PPCGenerator ppc w s ids a -> ST s (a, GenState ppc w s ids)
+runGenerator :: GenState ppc s ids -> PPCGenerator ppc s ids a -> ST s (a, GenState ppc s ids)
 runGenerator s0 act = St.runStateT (runGen act) s0
 
-execGenerator :: GenState ppc w s ids -> PPCGenerator ppc w s ids () -> ST s (GenState ppc w s ids)
+execGenerator :: GenState ppc s ids -> PPCGenerator ppc s ids () -> ST s (GenState ppc s ids)
 execGenerator s0 act = St.execStateT (runGen act) s0
 
 -- Given a stateful computation on the underlying GenState, create a PPCGenerator
 -- that runs that same computation.
-modGenState :: St.State (GenState ppc w s ids) a -> PPCGenerator ppc w s ids a
+modGenState :: St.State (GenState ppc s ids) a -> PPCGenerator ppc s ids a
 modGenState m = PPCGenerator $ St.StateT $ \genState -> do
   return $ St.runState m genState
 
-addStmt :: Stmt ppc ids -> PPCGenerator ppc w s ids ()
+addStmt :: Stmt ppc ids -> PPCGenerator ppc s ids ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
-newAssignId :: PPCGenerator ppc w s ids (AssignId ids tp)
+newAssignId :: PPCGenerator ppc s ids (AssignId ids tp)
 newAssignId = do
   nonceGen <- St.gets assignIdGen
   n <- liftST $ NC.freshNonce nonceGen
   return (AssignId n)
 
-liftST :: ST s a -> PPCGenerator ppc w s ids a
+liftST :: ST s a -> PPCGenerator ppc s ids a
 liftST = PPCGenerator . lift
 
 addAssignment :: AssignRhs ppc ids tp
-              -> PPCGenerator ppc w s ids (Assignment ppc ids tp)
+              -> PPCGenerator ppc s ids (Assignment ppc ids tp)
 addAssignment rhs = do
   l <- newAssignId
   let a = Assignment l rhs
   addStmt $ AssignStmt a
   return a
 
-getReg :: PPCReg ppc tp -> PPCGenerator ppc w s ids (Expr ppc ids tp)
+getReg :: PPCReg ppc tp -> PPCGenerator ppc s ids (Expr ppc ids tp)
 getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)
