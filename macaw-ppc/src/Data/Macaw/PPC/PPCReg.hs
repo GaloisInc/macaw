@@ -111,8 +111,10 @@ ppcRegs :: forall w ppc
          . (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
         => [Some (PPCReg ppc)]
 ppcRegs = concat [ gprs
+                 , sprs
                  ]
   where
+    sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR ]
     gprs = [ Some (PPC_GP (D.GPR rnum))
            | rnum <- [0..31]
            ]
