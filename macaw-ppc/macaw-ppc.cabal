@@ -28,6 +28,7 @@ library
   -- other-extensions:    
   build-depends:       base >=4.9 && <5,
                        containers,
+                       bytestring,
                        dismantle-ppc,
                        semmc,
                        semmc-ppc,
