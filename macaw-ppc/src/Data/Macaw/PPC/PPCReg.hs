@@ -21,7 +21,7 @@ import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
 data PPCReg arch tp where
-  PPC_GP :: D.GPR -> PPCReg arch (BVType 64)
+  PPC_GP :: D.GPR -> PPCReg arch (BVType (MC.ArchAddrWidth arch))
 
 deriving instance Eq (PPCReg arch tp)
 deriving instance Ord (PPCReg arch tp)
