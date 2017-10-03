@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Data.Macaw.PPC.Generator (
+  GenResult(..),
   GenState,
   initGenState,
   PPCGenerator,
@@ -37,61 +38,68 @@ import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
 
+-- GenResult
+
+data GenResult ppc s =
+  GenResult { resBlockSeq :: BlockSeq ppc s
+            , resState :: Maybe (PreBlock ppc s)
+            }
+
 ------------------------------------------------------------------------
 -- Expr
 
 data Expr ppc ids tp where
-  ValueExpr :: !(Value ppc ids tp) -> Expr ppc ids tp
-  AppExpr   :: !(App (Expr ppc ids) tp) -> Expr ppc ids tp
+  ValueExpr :: !(Value ppc s tp) -> Expr ppc s tp
+  AppExpr   :: !(App (Expr ppc s) tp) -> Expr ppc s tp
 
 ------------------------------------------------------------------------
 -- BlockSeq
-data BlockSeq ppc ids = BlockSeq
+data BlockSeq ppc s = BlockSeq
   { _nextBlockID :: !Word64
     -- ^ index of next block
-  , _frontierBlocks :: !(Seq.Seq (Block ppc ids))
+  , _frontierBlocks :: !(Seq.Seq (Block ppc s))
     -- ^ Blocks added to CFG
   }
 
 -- | Control flow blocs generated so far.
-nextBlockID :: Simple Lens (BlockSeq ppc ids) Word64
+nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
 nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
 -- which we need to analyze to compute new potential branch targets.
-frontierBlocks :: Simple Lens (BlockSeq ppc ids) (Seq.Seq (Block ppc ids))
+frontierBlocks :: Simple Lens (BlockSeq ppc s) (Seq.Seq (Block ppc s))
 frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 
 ------------------------------------------------------------------------
 -- PreBlock
 
-data PreBlock ppc ids = PreBlock { pBlockIndex :: !Word64
-                                  , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
-                                  -- ^ Starting address of function in preblock.
-                                  , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
-                                  , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
-                                  , pBlockApps  :: !(MapF.MapF (App (Value ppc ids)) (Assignment ppc ids))
-                                  }
+data PreBlock ppc s = PreBlock { pBlockIndex :: !Word64
+                               , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
+                               -- ^ Starting address of function in preblock.
+                               , _pBlockStmts :: !(Seq.Seq (Stmt ppc s))
+                               , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc s))
+                               , pBlockApps  :: !(MapF.MapF (App (Value ppc s)) (Assignment ppc s))
+                               }
 
-pBlockStmts :: Simple Lens (PreBlock ppc ids) (Seq.Seq (Stmt ppc ids))
+pBlockStmts :: Simple Lens (PreBlock ppc s) (Seq.Seq (Stmt ppc s))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
-pBlockState :: Simple Lens (PreBlock ppc ids) (RegState (PPCReg ppc) (Value ppc ids))
+pBlockState :: Simple Lens (PreBlock ppc s) (RegState (PPCReg ppc) (Value ppc s))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 ------------------------------------------------------------------------
 -- GenState
 
-data GenState ppc s ids =
-  GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
-           , blockSeq :: !(BlockSeq ppc ids)
-           , _blockState :: !(PreBlock ppc ids)
+data GenState ppc s =
+  GenState { assignIdGen :: !(NC.NonceGenerator (ST s) s)
+           , blockSeq :: !(BlockSeq ppc s)
+           , _blockState :: !(PreBlock ppc s)
            , genAddr :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
            }
 
-initGenState :: NC.NonceGenerator (ST s) ids
+initGenState :: NC.NonceGenerator (ST s) s
              -> MM.MemSegmentOff (ArchAddrWidth ppc)
-             -> GenState ppc s ids
+             -> GenState ppc s
 initGenState nonceGen addr =
   GenState { assignIdGen = nonceGen
            , blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
@@ -99,54 +107,54 @@ initGenState nonceGen addr =
            , genAddr = addr
            }
 
-blockState :: Simple Lens (GenState ppc s ids) (PreBlock ppc ids)
+blockState :: Simple Lens (GenState ppc s) (PreBlock ppc s)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curPPCState :: Simple Lens (GenState ppc s ids) (RegState (PPCReg ppc) (Value ppc ids))
+curPPCState :: Simple Lens (GenState ppc s) (RegState (PPCReg ppc) (Value ppc s))
 curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
 -- PPCGenerator
 
-newtype PPCGenerator ppc s ids a = PPCGenerator { runGen :: St.StateT (GenState ppc s ids) (ST s) a }
+newtype PPCGenerator ppc s a = PPCGenerator { runGen :: St.StateT (GenState ppc s) (ST s) a }
   deriving (Monad,
             Functor,
             Applicative,
-            St.MonadState (GenState ppc s ids))
+            St.MonadState (GenState ppc s))
 
-runGenerator :: GenState ppc s ids -> PPCGenerator ppc s ids a -> ST s (a, GenState ppc s ids)
+runGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (a, GenState ppc s)
 runGenerator s0 act = St.runStateT (runGen act) s0
 
-execGenerator :: GenState ppc s ids -> PPCGenerator ppc s ids () -> ST s (GenState ppc s ids)
+execGenerator :: GenState ppc s -> PPCGenerator ppc s () -> ST s (GenState ppc s)
 execGenerator s0 act = St.execStateT (runGen act) s0
 
 -- Given a stateful computation on the underlying GenState, create a PPCGenerator
 -- that runs that same computation.
-modGenState :: St.State (GenState ppc s ids) a -> PPCGenerator ppc s ids a
+modGenState :: St.State (GenState ppc s) a -> PPCGenerator ppc s a
 modGenState m = PPCGenerator $ St.StateT $ \genState -> do
   return $ St.runState m genState
 
-addStmt :: Stmt ppc ids -> PPCGenerator ppc s ids ()
+addStmt :: Stmt ppc s -> PPCGenerator ppc s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
-newAssignId :: PPCGenerator ppc s ids (AssignId ids tp)
+newAssignId :: PPCGenerator ppc s (AssignId s tp)
 newAssignId = do
   nonceGen <- St.gets assignIdGen
   n <- liftST $ NC.freshNonce nonceGen
   return (AssignId n)
 
-liftST :: ST s a -> PPCGenerator ppc s ids a
+liftST :: ST s a -> PPCGenerator ppc s a
 liftST = PPCGenerator . lift
 
-addAssignment :: AssignRhs ppc ids tp
-              -> PPCGenerator ppc s ids (Assignment ppc ids tp)
+addAssignment :: AssignRhs ppc s tp
+              -> PPCGenerator ppc s (Assignment ppc s tp)
 addAssignment rhs = do
   l <- newAssignId
   let a = Assignment l rhs
   addStmt $ AssignStmt a
   return a
 
-getReg :: PPCReg ppc tp -> PPCGenerator ppc s ids (Expr ppc ids tp)
+getReg :: PPCReg ppc tp -> PPCGenerator ppc s (Expr ppc s tp)
 getReg r = PPCGenerator $ St.StateT $ \genState -> do
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return (expr, genState)

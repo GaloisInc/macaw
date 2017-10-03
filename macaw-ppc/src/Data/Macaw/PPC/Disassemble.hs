@@ -1,11 +1,15 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
-import           Control.Lens ( (^.) )
+import           Control.Lens ( (&), (^.), (%~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -13,6 +17,8 @@ import           Control.Monad.Trans ( lift )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
+import qualified Data.Sequence as Seq
+import qualified Data.Text as T
 import           Data.Word ( Word64 )
 
 import qualified Dismantle.PPC as D
@@ -26,30 +32,14 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
-
-type LocatedFailure ppc s = ([Block ppc s], MM.MemWord (RegAddrWidth (ArchReg ppc)), TranslationError (RegAddrWidth (ArchReg ppc)))
-newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedFailure ppc s) (ST s) a }
-  deriving (Functor,
-            Applicative,
-            Monad,
-            ET.MonadError (LocatedFailure ppc s))
-
-data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff w
-                                           , transErrorReason :: TranslationErrorReason w
-                                           }
-
-data TranslationErrorReason w = InvalidNextIP Word64 Word64
-                              | DecodeError (MM.MemoryError w)
-                              deriving (Show)
-
-deriving instance (MM.MemWidth w) => Show (TranslationError w)
-
-liftST :: ST s a -> DisM ppc s a
-liftST = DisM . lift
+import           Data.Macaw.PPC.PPCReg
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
 -- Returns the instruction and number of bytes consumed /or/ an error.
+--
+-- This code assumes that the 'MM.ByteRegion' is maximal; that is, that there
+-- are no byte regions that could be coalesced.
 readInstruction :: MM.Memory w
                 -> MM.MemSegmentOff w
                 -> Either (MM.MemoryError w) (D.Instruction, MM.MemWord w)
@@ -71,22 +61,12 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
-failAt :: GenState ppc s ids
-       -> MM.MemWord (ArchAddrWidth ppc)
-       -> MM.MemSegmentOff (ArchAddrWidth ppc)
-       -> TranslationErrorReason (ArchAddrWidth ppc)
-       -> DisM ppc s a
-failAt gs offset curIPAddr reason = do
-  let exn = TranslationError { transErrorAddr = curIPAddr
-                             , transErrorReason = reason
-                             }
-  undefined  ([], offset, exn)
-
-disassembleBlock :: MM.Memory (ArchAddrWidth ppc)
-                 -> GenState ppc s ids
+disassembleBlock :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+                 => MM.Memory (ArchAddrWidth ppc)
+                 -> GenState ppc s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -> MM.MemWord (ArchAddrWidth ppc)
-                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s ids)
+                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s)
 disassembleBlock mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
@@ -97,7 +77,7 @@ disassembleBlock mem gs curIPAddr maxOffset = do
       -- let nextIPVal = MC.RelocatableValue undefined nextIP
       undefined
 
-tryDisassembleBlock :: (MM.MemWidth (ArchAddrWidth ppc))
+tryDisassembleBlock :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
                     => MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
                     -> ArchSegmentOff ppc
@@ -118,19 +98,86 @@ tryDisassembleBlock mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+disassembleFn :: (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (RegAddrWidth (ArchReg ppc)))
               => proxy ppc
               -> MM.Memory (ArchAddrWidth ppc)
-              -> NC.NonceGenerator (ST ids) ids
+              -> NC.NonceGenerator (ST s) s
               -> ArchSegmentOff ppc
               -- ^ The address to disassemble from
               -> ArchAddrWord ppc
               -- ^ Maximum size of the block (a safeguard)
               -> MA.AbsBlockState (ArchReg ppc)
               -- ^ Abstract state of the processor at the start of the block
-              -> ST ids ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), Maybe String)
+              -> ST s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), Maybe String)
 disassembleFn _ mem nonceGen startAddr maxSize _  = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
+
+finishBlock' :: PreBlock ppc s
+             -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+             -> Block ppc s
+finishBlock' preBlock term =
+  Block { blockLabel = pBlockIndex preBlock
+        , blockAddr = pBlockAddr preBlock
+        , blockStmts = F.toList (preBlock ^. pBlockStmts)
+        , blockTerm = term (preBlock ^. pBlockState)
+        }
+
+finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+            -> GenResult ppc s
+            -> BlockSeq ppc s
+finishBlock term st =
+  case resState st of
+    Nothing -> resBlockSeq st
+    Just preBlock ->
+      let b = finishBlock' preBlock term
+      in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
+
+type LocatedError ppc s = ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a }
+  deriving (Functor,
+            Applicative,
+            Monad)
+
+-- | This funny instance is required because GHC doesn't allow type function
+-- applications in instance heads, so we factor the type functions out into a
+-- constraint on a fresh variable.  See
+--
+-- > https://stackoverflow.com/questions/45360959/illegal-type-synonym-family-application-in-instance-with-functional-dependency
+--
+-- We also can't derive this instance because of that restriction (but deriving
+-- silently fails).
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc s], MM.MemWord w, TranslationError w) (DisM ppc s) where
+  throwError e = DisM (ET.throwError e)
+
+data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff w
+                                           , transErrorReason :: TranslationErrorReason w
+                                           }
+
+data TranslationErrorReason w = InvalidNextIP Word64 Word64
+                              | DecodeError (MM.MemoryError w)
+                              deriving (Show)
+
+deriving instance (MM.MemWidth w) => Show (TranslationError w)
+
+liftST :: ST s a -> DisM ppc s a
+liftST = DisM . lift
+
+failAt :: forall ppc s a
+        . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+       => GenState ppc s
+       -> MM.MemWord (ArchAddrWidth ppc)
+       -> MM.MemSegmentOff (ArchAddrWidth ppc)
+       -> TranslationErrorReason (ArchAddrWidth ppc)
+       -> DisM ppc s a
+failAt gs offset curIPAddr reason = do
+  let exn = TranslationError { transErrorAddr = curIPAddr
+                             , transErrorReason = reason
+                             }
+  let term = (`TranslateError` T.pack (show exn))
+  let b = finishBlock' (gs ^. blockState) term
+  let res = blockSeq gs & frontierBlocks %~ (Seq.|> b)
+  let res' = F.toList (res ^. frontierBlocks)
+  ET.throwError (res', offset, exn)
