@@ -10,8 +10,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
-import           GHC.TypeLits
-
 import           Control.Lens ( (&), (^.), (%~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
@@ -62,6 +60,10 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
         MM.ByteRegion bs : _rest
           | BS.null bs -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
           | otherwise -> do
+            -- FIXME: Having to wrap the bytestring in a lazy wrapper is
+            -- unpleasant.  We could alter the disassembler to consume strict
+            -- bytestrings, at the cost of possibly making it less efficient for
+            -- other clients.
             let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
@@ -74,13 +76,16 @@ disassembleBlock :: forall ppc s
                  -> GenState ppc s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -> MM.MemWord (ArchAddrWidth ppc)
-                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s)
+                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc s)
 disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
   case readInstruction mem curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
+      let nextIPOffset = off + bytesRead
+          nextIP = MM.relativeAddr seg nextIPOffset
+          nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @ppc)) nextIP
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
@@ -90,13 +95,31 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
-          egs1 <- liftST $ execGenerator gs $ do
+          -- Once we have the semantics for the instruction (represented by a
+          -- state transformer), we apply the state transformer and then extract
+          -- a result from the state of the 'PPCGenerator'.
+          egs1 <- liftST $ evalGenerator gs $ do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
             transformer
+            genResult
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
-            Right gs1 -> undefined
+            Right gs1 -> do
+              case resState gs1 of
+                Just preBlock
+                  | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
+                  , v <- preBlock ^. (pBlockState . curIP)
+                  , v == nextIPVal
+                  , nextIPOffset < maxOffset
+                  , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
+                      let gs2 = GenState { assignIdGen = assignIdGen gs
+                                         , blockSeq = resBlockSeq gs1
+                                         , _blockState = preBlock
+                                         , genAddr = nextIPSegAddr
+                                         }
+                      disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
+                _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
 tryDisassembleBlock :: (PPCWidth ppc)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
@@ -108,12 +131,11 @@ tryDisassembleBlock :: (PPCWidth ppc)
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextIPOffset, gs1) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
+  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
-    failAt gs1 nextIPOffset startAddr reason
-  let blocks = F.toList (blockSeq gs1 ^. frontierBlocks)
-  return (blocks, nextIPOffset - startOffset)
+    failAt gs0 nextIPOffset startAddr reason
+  return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
@@ -143,6 +165,10 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
+-- | Convert the contents of a 'PreBlock' (a block being constructed) into a
+-- full-fledged 'Block'
+--
+-- The @term@ function is used to create the terminator statement of the block.
 finishBlock' :: PreBlock ppc s
              -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
              -> Block ppc s
@@ -153,6 +179,8 @@ finishBlock' preBlock term =
         , blockTerm = term (preBlock ^. pBlockState)
         }
 
+-- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
+-- new block to the block frontier.
 finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
             -> GenResult ppc s
             -> BlockSeq ppc s
@@ -164,6 +192,11 @@ finishBlock term st =
       in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
 
 type LocatedError ppc s = ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+-- | This is a monad for error handling during disassembly
+--
+-- It allows for early failure that reports progress (in the form of blocks
+-- discovered and the latest address examined) along with a reason for failure
+-- (a 'TranslationError').
 newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a }
   deriving (Functor,
             Applicative,
@@ -179,6 +212,15 @@ newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a
 -- silently fails).
 instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc s], MM.MemWord w, TranslationError w) (DisM ppc s) where
   throwError e = DisM (ET.throwError e)
+  catchError a hdlr = do
+    r <- liftST $ ET.runExceptT (unDisM a)
+    case r of
+      Left l -> do
+        r' <- liftST $ ET.runExceptT (unDisM (hdlr l))
+        case r' of
+          Left e -> DisM (ET.throwError e)
+          Right res -> return res
+      Right res -> return res
 
 data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff w
                                            , transErrorReason :: TranslationErrorReason w
@@ -196,6 +238,8 @@ deriving instance (MM.MemWidth w) => Show (TranslationError w)
 liftST :: ST s a -> DisM ppc s a
 liftST = DisM . lift
 
+-- | Early failure for 'DisM'.  This is a wrapper around 'ET.throwError' that
+-- computes the current progress alongside the reason for the failure.
 failAt :: forall ppc s a
         . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
        => GenState ppc s

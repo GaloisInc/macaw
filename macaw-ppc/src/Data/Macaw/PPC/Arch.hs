@@ -25,7 +25,13 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 import Data.Macaw.PPC.PPCReg
 
 data PPCTermStmt ids where
+  -- | A representation of the PowerPC @sc@ instruction
+  --
+  -- That instruction technically takes an argument, but it must be zero so we
+  -- don't preserve it.
   PPCSyscall :: PPCTermStmt ids
+  -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
+  PPCTrap :: PPCTermStmt ids
 
 type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt
 type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt
@@ -34,11 +40,13 @@ instance MC.PrettyF PPCTermStmt where
   prettyF ts =
     case ts of
       PPCSyscall -> PP.text "ppc_syscall"
+      PPCTrap -> PP.text "ppc_trap"
 
 rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc src tgt (PPCTermStmt tgt)
 rewriteTermStmt s =
   case s of
     PPCSyscall -> pure PPCSyscall
+    PPCTrap -> pure PPCTrap
 
 -- | We currently have no PPC-specific statements.  Remove 'None' if we add some.
 data PPCStmt ids where

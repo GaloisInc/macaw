@@ -5,12 +5,14 @@
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Generator (
   GenResult(..),
-  GenState,
+  GenState(..),
   initGenState,
   initRegState,
   PPCGenerator,
   runGenerator,
   execGenerator,
+  evalGenerator,
+  genResult,
   Expr(..),
   BlockSeq(..),
   PreBlock(..),
@@ -159,6 +161,16 @@ runGenerator s0 act = ET.runExceptT (St.runStateT (runGen act) s0)
 
 execGenerator :: GenState ppc s -> PPCGenerator ppc s () -> ST s (Either GeneratorError (GenState ppc s))
 execGenerator s0 act = ET.runExceptT (St.execStateT (runGen act) s0)
+
+evalGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (Either GeneratorError a)
+evalGenerator s0 act = ET.runExceptT (St.evalStateT (runGen act) s0)
+
+genResult :: PPCGenerator ppc s (GenResult ppc s)
+genResult = do
+  s <- St.get
+  return GenResult { resBlockSeq = blockSeq s
+                   , resState = Just (s ^. blockState)
+                   }
 
 addStmt :: Stmt ppc s -> PPCGenerator ppc s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
