@@ -32,12 +32,10 @@ import Data.Macaw.PPC.Eval ( mkInitialAbsState,
 import Data.Macaw.PPC.Identify ( identifyCall,
                                  identifyReturn
                                )
-import Data.Macaw.PPC.PPCReg
 import Data.Macaw.PPC.Rewrite ( rewriteArchFn,
                                 rewriteArchStmt,
                                 rewriteArchTermStmt
                               )
-import Data.Macaw.PPC.Generator ( PPCGenerator )
 
 archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext = undefined
