@@ -16,9 +16,7 @@ import qualified Data.Macaw.Architecture.Info as MI
 import Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
-import qualified Data.Macaw.Types as MT
 
-import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -32,10 +30,7 @@ import Data.Macaw.PPC.Eval ( mkInitialAbsState,
 import Data.Macaw.PPC.Identify ( identifyCall,
                                  identifyReturn
                                )
-import Data.Macaw.PPC.Rewrite ( rewriteArchFn,
-                                rewriteArchStmt,
-                                rewriteArchTermStmt
-                              )
+import Data.Macaw.PPC.Arch ( rewriteTermStmt, rewriteStmt, rewritePrimFn )
 
 archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext = undefined
@@ -47,7 +42,7 @@ jumpTableEntrySize = undefined
 
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
 ppc64_linux_info =
-  MI.ArchitectureInfo { MI.withArchConstraints = undefined
+  MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
@@ -59,9 +54,9 @@ ppc64_linux_info =
                       , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
                       , MI.identifyReturn = identifyReturn proxy
-                      , MI.rewriteArchFn = rewriteArchFn proxy
-                      , MI.rewriteArchStmt = rewriteArchStmt proxy
-                      , MI.rewriteArchTermStmt = rewriteArchTermStmt proxy
+                      , MI.rewriteArchFn = rewritePrimFn
+                      , MI.rewriteArchStmt = rewriteStmt
+                      , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
                       }
   where
@@ -70,7 +65,7 @@ ppc64_linux_info =
 
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info =
-  MI.ArchitectureInfo { MI.withArchConstraints = undefined
+  MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
@@ -82,9 +77,9 @@ ppc32_linux_info =
                       , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
                       , MI.identifyReturn = identifyReturn proxy
-                      , MI.rewriteArchFn = rewriteArchFn proxy
-                      , MI.rewriteArchStmt = rewriteArchStmt proxy
-                      , MI.rewriteArchTermStmt = rewriteArchTermStmt proxy
+                      , MI.rewriteArchFn = rewritePrimFn
+                      , MI.rewriteArchStmt = rewriteStmt
+                      , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
                       }
   where

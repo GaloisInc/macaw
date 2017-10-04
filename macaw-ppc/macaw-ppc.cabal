@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.PPC
+                       Data.Macaw.PPC.Arch
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
                        Data.Macaw.PPC.Generator
@@ -35,6 +36,7 @@ library
                        semmc-ppc,
                        lens,
                        macaw-base,
+                       ansi-wl-pprint,
                        mtl,
                        parameterized-utils
   hs-source-dirs:      src
