@@ -60,6 +60,10 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
         MM.ByteRegion bs : _rest
           | BS.null bs -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
           | otherwise -> do
+            -- FIXME: Having to wrap the bytestring in a lazy wrapper is
+            -- unpleasant.  We could alter the disassembler to consume strict
+            -- bytestrings, at the cost of possibly making it less efficient for
+            -- other clients.
             let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
@@ -79,6 +83,9 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   case readInstruction mem curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
+      let nextIPOffset = off + bytesRead
+          nextIP = MM.relativeAddr seg nextIPOffset
+          nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @ppc)) nextIP
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
@@ -88,6 +95,9 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
+          -- Once we have the semantics for the instruction (represented by a
+          -- state transformer), we apply the state transformer and then extract
+          -- a result from the state of the 'PPCGenerator'.
           egs1 <- liftST $ evalGenerator gs $ do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
@@ -96,9 +106,6 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
-              let nextIPVal = undefined
-                  nextIPOffset = undefined
-                  nextIP = undefined
               case resState gs1 of
                 Just preBlock
                   | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
