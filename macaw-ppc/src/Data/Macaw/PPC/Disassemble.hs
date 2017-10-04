@@ -179,6 +179,15 @@ newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a
 -- silently fails).
 instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc s], MM.MemWord w, TranslationError w) (DisM ppc s) where
   throwError e = DisM (ET.throwError e)
+  catchError a hdlr = do
+    r <- liftST $ ET.runExceptT (unDisM a)
+    case r of
+      Left l -> do
+        r' <- liftST $ ET.runExceptT (unDisM (hdlr l))
+        case r' of
+          Left e -> DisM (ET.throwError e)
+          Right res -> return res
+      Right res -> return res
 
 data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff w
                                            , transErrorReason :: TranslationErrorReason w
