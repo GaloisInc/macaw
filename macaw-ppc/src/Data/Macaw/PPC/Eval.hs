@@ -1,4 +1,6 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Eval (
   mkInitialAbsState,
   absEvalArchFn,
@@ -6,6 +8,8 @@ module Data.Macaw.PPC.Eval (
   postCallAbsState,
   preserveRegAcrossSyscall
   ) where
+
+import           GHC.TypeLits
 
 import qualified Data.Set as S
 
@@ -16,7 +20,7 @@ import           Data.Parameterized.Some ( Some(..) )
 
 import           Data.Macaw.PPC.PPCReg
 
-preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc)
+preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
                          => proxy ppc
                          -> ArchReg ppc tp
                          -> Bool

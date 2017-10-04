@@ -1,10 +1,13 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Generator (
   GenResult(..),
   GenState,
   initGenState,
+  initRegState,
   PPCGenerator,
   runGenerator,
   execGenerator,
@@ -25,6 +28,8 @@ module Data.Macaw.PPC.Generator (
   GeneratorError(..)
   ) where
 
+import           GHC.TypeLits
+
 import           Control.Lens
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -37,6 +42,7 @@ import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
@@ -51,7 +57,7 @@ data GenResult ppc s =
 ------------------------------------------------------------------------
 -- Expr
 
-data Expr ppc ids tp where
+data Expr ppc s tp where
   ValueExpr :: !(Value ppc s tp) -> Expr ppc s tp
   AppExpr   :: !(App (Expr ppc s) tp) -> Expr ppc s tp
 
@@ -102,12 +108,31 @@ data GenState ppc s =
 
 initGenState :: NC.NonceGenerator (ST s) s
              -> MM.MemSegmentOff (ArchAddrWidth ppc)
+             -> RegState (PPCReg ppc) (Value ppc s)
              -> GenState ppc s
-initGenState nonceGen addr =
+initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
            , blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
-           , _blockState = undefined
+           , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
+           }
+
+initRegState :: (KnownNat (RegAddrWidth (PPCReg ppc)), ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc), MM.MemWidth (RegAddrWidth (PPCReg ppc)), ArchWidth ppc)
+             => ArchSegmentOff ppc
+             -> RegState (PPCReg ppc) (Value ppc s)
+initRegState startIP = mkRegState Initial
+                     & curIP .~ RelocatableValue NR.knownNat (MM.relativeSegmentAddr startIP)
+
+emptyPreBlock :: RegState (PPCReg ppc) (Value ppc s)
+              -> Word64
+              -> MM.MemSegmentOff (RegAddrWidth (ArchReg ppc))
+              -> PreBlock ppc s
+emptyPreBlock s0 idx addr =
+  PreBlock { pBlockIndex = idx
+           , pBlockAddr = addr
+           , _pBlockStmts = Seq.empty
+           , _pBlockState = s0
+           , pBlockApps = MapF.empty
            }
 
 blockState :: Simple Lens (GenState ppc s) (PreBlock ppc s)

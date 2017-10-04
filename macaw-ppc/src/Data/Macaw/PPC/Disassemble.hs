@@ -10,6 +10,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
+import           GHC.TypeLits
+
 import           Control.Lens ( (&), (^.), (%~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
@@ -66,7 +68,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
 disassembleBlock :: forall ppc s
-                  . (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+                  . (PPCWidth ppc)
                  => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc s
@@ -79,21 +81,15 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   case readInstruction mem curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
-      -- let nextIP = MM.relativeAddr seg (off + bytesRead)
-      -- let nextIPVal = MC.RelocatableValue undefined nextIP
-
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (pointerRepr (Proxy @ppc)) (fromIntegral addr))
+                 Just addr -> return (BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
-          -- FIXME: Do we need to add failure modes here?  Probably.  There are
-          -- some invalid encodings that we could encounter that would be worth
-          -- failing for.
           egs1 <- liftST $ execGenerator gs $ do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
@@ -102,7 +98,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> undefined
 
-tryDisassembleBlock :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
+tryDisassembleBlock :: (PPCWidth ppc)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
@@ -110,7 +106,7 @@ tryDisassembleBlock :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (Ar
                     -> ArchAddrWord ppc
                     -> DisM ppc s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen startAddr
+  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
   (nextIPOffset, gs1) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   unless (nextIPOffset > startOffset) $ do
@@ -124,7 +120,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (ArchWidth ppc, ArchReg ppc ~ PPCReg ppc, MM.MemWidth (RegAddrWidth (ArchReg ppc)))
+disassembleFn :: (PPCWidth ppc)
               => proxy ppc
               -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
               -- ^ A function to look up the semantics for an instruction.  The

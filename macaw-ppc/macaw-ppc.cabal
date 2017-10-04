@@ -17,28 +17,28 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.PPC
-                       Data.Macaw.PPC.ArchTypes
+                       Data.Macaw.PPC.Arch
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
                        Data.Macaw.PPC.Generator
                        Data.Macaw.PPC.Identify
                        Data.Macaw.PPC.PPCReg
-                       Data.Macaw.PPC.Rewrite
                        Data.Macaw.PPC.Semantics
                        Data.Macaw.PPC.Semantics.PPC64
                        Data.Macaw.PPC.Semantics.PPC32
                        Data.Macaw.PPC.Semantics.TH
-  -- other-modules:
-  -- other-extensions:
   build-depends:       base >=4.9 && <5,
                        bytestring,
                        containers,
                        crucible,
+                       text,
+                       dismantle-tablegen,
                        dismantle-ppc,
                        semmc,
                        semmc-ppc,
                        lens,
                        macaw-base,
+                       ansi-wl-pprint,
                        mtl,
                        parameterized-utils,
                        template-haskell,
