@@ -20,6 +20,7 @@ import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Some ( Some(..) )
 
+import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
 
 preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
@@ -45,11 +46,14 @@ mkInitialAbsState :: (PPCWidth ppc)
 mkInitialAbsState _ _mem startAddr =
   MA.top & MA.setAbsIP startAddr
 
-absEvalArchFn :: proxy ppc
+absEvalArchFn :: (PPCArch ppc)
+              => proxy ppc
               -> AbsProcessorState (ArchReg ppc) ids
               -> ArchFn ppc (Value ppc ids) tp
               -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
-absEvalArchFn = undefined
+absEvalArchFn _ _r f =
+  case f of
+    IDiv {} -> MA.TopV
 
 -- | For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
