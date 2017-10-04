@@ -51,11 +51,13 @@ absEvalArchFn :: proxy ppc
               -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
 absEvalArchFn = undefined
 
+-- | For now, none of the architecture-specific statements have an effect on the
+-- abstract value.
 absEvalArchStmt :: proxy ppc
                 -> AbsProcessorState (ArchReg ppc) ids
                 -> ArchStmt ppc ids
                 -> AbsProcessorState (ArchReg ppc) ids
-absEvalArchStmt = undefined
+absEvalArchStmt _ s _ = s
 
 postCallAbsState :: proxy ppc
                  -> AbsBlockState (ArchReg ppc)
