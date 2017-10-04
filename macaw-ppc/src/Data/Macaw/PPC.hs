@@ -48,7 +48,7 @@ jumpTableEntrySize = undefined
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
 ppc64_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
-                      , MI.archAddrWidth = undefined
+                      , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
                       , MI.disassembleFn = disassembleFn proxy lookupSemantics
@@ -71,7 +71,7 @@ ppc64_linux_info =
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
-                      , MI.archAddrWidth = undefined
+                      , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
                       , MI.disassembleFn = disassembleFn proxy lookupSemantics
