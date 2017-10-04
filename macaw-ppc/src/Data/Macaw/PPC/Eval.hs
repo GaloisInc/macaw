@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Eval (
@@ -11,6 +12,7 @@ module Data.Macaw.PPC.Eval (
 
 import           GHC.TypeLits
 
+import           Control.Lens ( (&) )
 import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
@@ -26,11 +28,22 @@ preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-mkInitialAbsState :: proxy ppc
+-- | Set up an initial abstract state that holds at the beginning of a basic
+-- block.
+--
+-- The 'MM.Memory' is the mapped memory region
+--
+-- The 'ArchSegmentOff' is the start address of the basic block.
+--
+-- Note that we don't initialize the abstract stack.  On PowerPC, there are no
+-- initial stack entries (since the return address is in the link register).
+mkInitialAbsState :: (PPCWidth ppc)
+                  => proxy ppc
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))
                   -> ArchSegmentOff ppc
                   -> MA.AbsBlockState (ArchReg ppc)
-mkInitialAbsState = undefined
+mkInitialAbsState _ _mem startAddr =
+  MA.top & MA.setAbsIP startAddr
 
 absEvalArchFn :: proxy ppc
               -> AbsProcessorState (ArchReg ppc) ids
