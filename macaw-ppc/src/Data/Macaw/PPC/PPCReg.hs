@@ -13,6 +13,7 @@
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters,
+  linuxCalleeSaveRegisters,
   PPCWidth,
   ArchWidth(..)
   ) where
@@ -75,6 +76,12 @@ linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
                                   => proxy ppc
                                   -> S.Set (Some (PPCReg ppc))
 linuxSystemCallPreservedRegisters _ =
+  S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
+
+linuxCalleeSaveRegisters :: (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
+                         => proxy ppc
+                         -> S.Set (Some (PPCReg ppc))
+linuxCalleeSaveRegisters _ =
   S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
 
 type instance MC.RegAddrWidth (PPCReg PPC32.PPC) = 32

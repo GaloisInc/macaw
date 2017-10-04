@@ -1,6 +1,9 @@
+{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -8,13 +11,18 @@ module Data.Macaw.PPC.Arch (
   PPCTermStmt(..),
   rewriteTermStmt,
   PPCStmt(..),
+  valuesInPPCStmt,
   rewriteStmt,
   PPCPrimFn(..),
-  rewritePrimFn
+  rewritePrimFn,
+  ppcPrimFnHasSideEffects,
+  PPCArch
   ) where
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Parameterized.TraversableFC as FC
+import qualified Data.Parameterized.TraversableF as TF
+import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn )
 import qualified Data.Macaw.Types as MT
@@ -49,16 +57,31 @@ rewriteTermStmt s =
     PPCTrap -> pure PPCTrap
 
 -- | We currently have no PPC-specific statements.  Remove 'None' if we add some.
-data PPCStmt ids where
-  None :: PPCStmt ids
+data PPCStmt (v :: MT.Type -> *) where
+  None :: PPCStmt v
 
-instance MC.PrettyF PPCStmt where
-  prettyF None = PP.text "None"
+instance MC.PrettyF (PPCArchStmt ppc) where
+  prettyF (PPCArchStmt s) =
+    case s of
+      None -> PP.text "None"
 
-type instance MC.ArchStmt PPC64.PPC = PPCStmt
-type instance MC.ArchStmt PPC32.PPC = PPCStmt
+instance TF.FunctorF PPCStmt where
+  fmapF = TF.fmapFDefault
 
-rewriteStmt :: PPCStmt src -> Rewriter ppc src tgt ()
+instance TF.FoldableF PPCStmt where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.TraversableF PPCStmt where
+  traverseF _go stmt =
+    case stmt of
+      None -> pure None
+
+newtype PPCArchStmt ppc ids = PPCArchStmt (PPCStmt (MC.Value ppc ids))
+
+type instance MC.ArchStmt PPC64.PPC = PPCArchStmt PPC64.PPC
+type instance MC.ArchStmt PPC32.PPC = PPCArchStmt PPC32.PPC
+
+rewriteStmt :: PPCArchStmt ppc src -> Rewriter ppc src tgt ()
 rewriteStmt _ = return ()
 
 data PPCPrimFn ppc f tp where
@@ -71,6 +94,13 @@ instance MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
   typeRepr f =
     case f of
       IDiv {} -> undefined
+
+-- | Right now, none of the primitive functions has a side effect.  That will
+-- probably change.
+ppcPrimFnHasSideEffects :: PPCPrimFn ppc f tp -> Bool
+ppcPrimFnHasSideEffects pf =
+  case pf of
+    IDiv {} -> False
 
 rewritePrimFn :: (PPCWidth ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
@@ -102,3 +132,8 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
+
+valuesInPPCStmt :: PPCArchStmt ppc ids -> [Some (MC.Value ppc ids)]
+valuesInPPCStmt (PPCArchStmt s) = TF.foldMapF (\x -> [Some x]) s
+
+type PPCArch ppc = (PPCWidth ppc, MC.ArchStmt ppc ~ PPCArchStmt ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
