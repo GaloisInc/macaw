@@ -19,7 +19,6 @@ module Data.Macaw.PPC.Generator (
   addStmt,
   addAssignment,
   getReg,
-  blockSeq,
   -- * Lenses
   blockState,
   curPPCState,
