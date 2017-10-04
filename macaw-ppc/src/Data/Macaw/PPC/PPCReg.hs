@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -12,6 +13,7 @@
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters,
+  PPCWidth,
   ArchWidth(..)
   ) where
 
@@ -99,8 +101,13 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_CTR -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_CR -> BVTypeRepr n32
 
-instance (MM.MemWidth w, ArchWidth ppc, w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
-       => MC.RegisterInfo (PPCReg ppc) where
+type PPCWidth ppc = (ArchWidth ppc,
+                     MC.ArchReg ppc ~ PPCReg ppc,
+                     MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
+                     1 <= MC.RegAddrWidth (PPCReg ppc),
+                     KnownNat (MC.RegAddrWidth (PPCReg ppc)))
+
+instance (PPCWidth ppc) => MC.RegisterInfo (PPCReg ppc) where
   archRegs = ppcRegs
   sp_reg = PPC_GP (D.GPR 1)
   ip_reg = PPC_IP
