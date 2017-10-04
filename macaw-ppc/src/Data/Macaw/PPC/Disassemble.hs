@@ -158,6 +158,10 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
+-- | Convert the contents of a 'PreBlock' (a block being constructed) into a
+-- full-fledged 'Block'
+--
+-- The @term@ function is used to create the terminator statement of the block.
 finishBlock' :: PreBlock ppc s
              -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
              -> Block ppc s
@@ -168,6 +172,8 @@ finishBlock' preBlock term =
         , blockTerm = term (preBlock ^. pBlockState)
         }
 
+-- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
+-- new block to the block frontier.
 finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
             -> GenResult ppc s
             -> BlockSeq ppc s
@@ -179,6 +185,11 @@ finishBlock term st =
       in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
 
 type LocatedError ppc s = ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+-- | This is a monad for error handling during disassembly
+--
+-- It allows for early failure that reports progress (in the form of blocks
+-- discovered and the latest address examined) along with a reason for failure
+-- (a 'TranslationError').
 newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a }
   deriving (Functor,
             Applicative,
@@ -220,6 +231,8 @@ deriving instance (MM.MemWidth w) => Show (TranslationError w)
 liftST :: ST s a -> DisM ppc s a
 liftST = DisM . lift
 
+-- | Early failure for 'DisM'.  This is a wrapper around 'ET.throwError' that
+-- computes the current progress alongside the reason for the failure.
 failAt :: forall ppc s a
         . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
        => GenState ppc s
