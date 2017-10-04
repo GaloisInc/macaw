@@ -17,6 +17,8 @@ import qualified Data.Macaw.Architecture.Info as MI
 import Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Parameterized.TraversableFC as FC
+import           Data.Parameterized.Some ( Some(..), viewSome )
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -31,13 +33,26 @@ import Data.Macaw.PPC.Eval ( mkInitialAbsState,
 import Data.Macaw.PPC.Identify ( identifyCall,
                                  identifyReturn
                                )
-import Data.Macaw.PPC.Arch ( rewriteTermStmt, rewriteStmt, rewritePrimFn )
+import Data.Macaw.PPC.Arch ( rewriteTermStmt,
+                             rewriteStmt,
+                             rewritePrimFn,
+                             valuesInPPCStmt,
+                             ppcPrimFnHasSideEffects,
+                             PPCArch
+                           )
 import Data.Macaw.PPC.PPCReg ( PPCWidth )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
-archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
-archDemandContext = undefined
+addValueListDemands :: [Some (Value ppc ids)] -> MDS.DemandComp ppc ids ()
+addValueListDemands = mapM_ (viewSome MDS.addValueDemands)
+
+archDemandContext :: (PPCArch ppc) => proxy ppc -> MDS.DemandContext ppc ids
+archDemandContext _ =
+  MDS.DemandContext { MDS.addArchStmtDemands = addValueListDemands . valuesInPPCStmt
+                    , MDS.addArchFnDemands = addValueListDemands . FC.foldMapFC (\v -> [ Some v ])
+                    , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
+                    }
 
 -- | NOTE: There isn't necessarily one answer for this.  This will need to turn
 -- into a function.  With PIC jump tables, it can be smaller than the native size.
