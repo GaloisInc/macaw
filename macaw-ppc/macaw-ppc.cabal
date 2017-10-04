@@ -23,7 +23,6 @@ library
                        Data.Macaw.PPC.Generator
                        Data.Macaw.PPC.Identify
                        Data.Macaw.PPC.PPCReg
-                       Data.Macaw.PPC.Rewrite
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.9 && <5,
