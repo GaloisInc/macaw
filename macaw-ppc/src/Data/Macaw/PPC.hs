@@ -32,6 +32,7 @@ import Data.Macaw.PPC.Identify ( identifyCall,
                                  identifyReturn
                                )
 import Data.Macaw.PPC.Arch ( rewriteTermStmt, rewriteStmt, rewritePrimFn )
+import Data.Macaw.PPC.PPCReg ( PPCWidth )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
@@ -40,8 +41,8 @@ archDemandContext = undefined
 
 -- | NOTE: There isn't necessarily one answer for this.  This will need to turn
 -- into a function.  With PIC jump tables, it can be smaller than the native size.
-jumpTableEntrySize :: proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
-jumpTableEntrySize = undefined
+jumpTableEntrySize :: (PPCWidth ppc) => proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
+jumpTableEntrySize _ = 4
 
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
 ppc64_linux_info =
