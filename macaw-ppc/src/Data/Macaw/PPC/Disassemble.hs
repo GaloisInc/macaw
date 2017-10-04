@@ -10,8 +10,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
-import           GHC.TypeLits
-
 import           Control.Lens ( (&), (^.), (%~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
