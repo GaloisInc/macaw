@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Generator (
   GenResult(..),
-  GenState,
+  GenState(..),
   initGenState,
   initRegState,
   PPCGenerator,

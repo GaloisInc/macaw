@@ -72,7 +72,7 @@ disassembleBlock :: forall ppc s
                  -> GenState ppc s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -> MM.MemWord (ArchAddrWidth ppc)
-                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), GenState ppc s)
+                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc s)
 disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
@@ -88,13 +88,31 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
-          egs1 <- liftST $ execGenerator gs $ do
+          egs1 <- liftST $ evalGenerator gs $ do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
             transformer
+            genResult
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
-            Right gs1 -> undefined
+            Right gs1 -> do
+              let nextIPVal = undefined
+                  nextIPOffset = undefined
+                  nextIP = undefined
+              case resState gs1 of
+                Just preBlock
+                  | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
+                  , v <- preBlock ^. (pBlockState . curIP)
+                  , v == nextIPVal
+                  , nextIPOffset < maxOffset
+                  , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
+                      let gs2 = GenState { assignIdGen = assignIdGen gs
+                                         , blockSeq = resBlockSeq gs1
+                                         , _blockState = preBlock
+                                         , genAddr = nextIPSegAddr
+                                         }
+                      disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
+                _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
 tryDisassembleBlock :: (PPCWidth ppc)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
@@ -106,12 +124,11 @@ tryDisassembleBlock :: (PPCWidth ppc)
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextIPOffset, gs1) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
+  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
-    failAt gs1 nextIPOffset startAddr reason
-  let blocks = F.toList (blockSeq gs1 ^. frontierBlocks)
-  return (blocks, nextIPOffset - startOffset)
+    failAt gs0 nextIPOffset startAddr reason
+  return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
