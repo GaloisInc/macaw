@@ -6,7 +6,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Data.Macaw.PPC (
-  ppc_linux_info,
   ppc32_linux_info,
   ppc64_linux_info
   ) where
@@ -49,18 +48,7 @@ jumpTableEntrySize :: proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
 jumpTableEntrySize = undefined
 
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC
-ppc64_linux_info = ppc_linux_info (Proxy @PPC64.PPC) undefined
-
-ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
-ppc32_linux_info = ppc_linux_info (Proxy @PPC32.PPC) undefined
-
-ppc_linux_info :: (ArchWidth ppc,
-                   ArchReg ppc ~ PPCReg ppc,
-                   MM.MemWidth (RegAddrWidth (ArchReg ppc)))
-               => proxy ppc
-               -> (forall s . Value ppc s (MT.BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
-               -> MI.ArchitectureInfo ppc
-ppc_linux_info proxy lookupSemantics =
+ppc64_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = undefined
                       , MI.archAddrWidth = undefined
                       , MI.archEndianness = MM.BigEndian
@@ -78,3 +66,30 @@ ppc_linux_info proxy lookupSemantics =
                       , MI.rewriteArchTermStmt = rewriteArchTermStmt proxy
                       , MI.archDemandContext = archDemandContext proxy
                       }
+  where
+    proxy = Proxy @PPC64.PPC
+    lookupSemantics = undefined
+
+ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
+ppc32_linux_info =
+  MI.ArchitectureInfo { MI.withArchConstraints = undefined
+                      , MI.archAddrWidth = undefined
+                      , MI.archEndianness = MM.BigEndian
+                      , MI.jumpTableEntrySize = jumpTableEntrySize proxy
+                      , MI.disassembleFn = disassembleFn proxy lookupSemantics
+                      , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy
+                      , MI.absEvalArchFn = absEvalArchFn proxy
+                      , MI.absEvalArchStmt = absEvalArchStmt proxy
+                      , MI.postCallAbsState = postCallAbsState proxy
+                      , MI.identifyCall = identifyCall proxy
+                      , MI.identifyReturn = identifyReturn proxy
+                      , MI.rewriteArchFn = rewriteArchFn proxy
+                      , MI.rewriteArchStmt = rewriteArchStmt proxy
+                      , MI.rewriteArchTermStmt = rewriteArchTermStmt proxy
+                      , MI.archDemandContext = archDemandContext proxy
+                      }
+  where
+    proxy = Proxy @PPC32.PPC
+    lookupSemantics = undefined
+
