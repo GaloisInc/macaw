@@ -59,8 +59,16 @@ absEvalArchStmt :: proxy ppc
                 -> AbsProcessorState (ArchReg ppc) ids
 absEvalArchStmt _ s _ = s
 
-postCallAbsState :: proxy ppc
+-- | There should be no difference in stack height before and after a call, as
+-- the callee pushes the return address if required.  Return values are also
+-- passed in registers.
+postCallAbsState :: (PPCWidth ppc)
+                 => proxy ppc
                  -> AbsBlockState (ArchReg ppc)
                  -> ArchSegmentOff ppc
                  -> AbsBlockState (ArchReg ppc)
-postCallAbsState = undefined
+postCallAbsState proxy = MA.absEvalCall params
+  where
+    params = MA.CallParams { MA.postCallStackDelta = 0
+                           , MA.preserveReg = \r -> S.member (Some r) (linuxCalleeSaveRegisters proxy)
+                           }
