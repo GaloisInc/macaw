@@ -240,6 +240,11 @@ liftST = DisM . lift
 
 -- | Early failure for 'DisM'.  This is a wrapper around 'ET.throwError' that
 -- computes the current progress alongside the reason for the failure.
+--
+-- Note that the 'TranslateError' below is a block terminator marker that notes
+-- that translation of the basic block resulted in an error (with the exception
+-- string stored as its argument).  This allows macaw to carry errors in the
+-- instruction stream, which is useful for debugging and diagnostics.
 failAt :: forall ppc s a
         . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
        => GenState ppc s
