@@ -32,6 +32,8 @@ import Data.Macaw.PPC.Identify ( identifyCall,
                                  identifyReturn
                                )
 import Data.Macaw.PPC.Arch ( rewriteTermStmt, rewriteStmt, rewritePrimFn )
+import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
+import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
 archDemandContext :: proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext = undefined
@@ -47,7 +49,7 @@ ppc64_linux_info =
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
-                      , MI.disassembleFn = disassembleFn proxy lookupSemantics
+                      , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
                       , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
                       , MI.mkInitialAbsState = mkInitialAbsState proxy
                       , MI.absEvalArchFn = absEvalArchFn proxy
@@ -62,7 +64,6 @@ ppc64_linux_info =
                       }
   where
     proxy = Proxy @PPC64.PPC
-    lookupSemantics = undefined
 
 ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info =
@@ -70,7 +71,7 @@ ppc32_linux_info =
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
-                      , MI.disassembleFn = disassembleFn proxy lookupSemantics
+                      , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
                       , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
                       , MI.mkInitialAbsState = mkInitialAbsState proxy
                       , MI.absEvalArchFn = absEvalArchFn proxy
@@ -85,5 +86,4 @@ ppc32_linux_info =
                       }
   where
     proxy = Proxy @PPC32.PPC
-    lookupSemantics = undefined
 
