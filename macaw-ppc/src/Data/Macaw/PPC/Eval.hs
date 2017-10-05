@@ -12,7 +12,7 @@ module Data.Macaw.PPC.Eval (
 
 import           GHC.TypeLits
 
-import           Control.Lens ( (&) )
+import           Control.Lens ( (&), (.~) )
 import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
@@ -38,6 +38,9 @@ preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRe
 --
 -- Note that we don't initialize the abstract stack.  On PowerPC, there are no
 -- initial stack entries (since the return address is in the link register).
+--
+-- One value that is definitely set is the link register, which holds the
+-- abstract return value.
 mkInitialAbsState :: (PPCWidth ppc)
                   => proxy ppc
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))
@@ -45,6 +48,7 @@ mkInitialAbsState :: (PPCWidth ppc)
                   -> MA.AbsBlockState (ArchReg ppc)
 mkInitialAbsState _ _mem startAddr =
   MA.top & MA.setAbsIP startAddr
+         & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
 
 absEvalArchFn :: (PPCArch ppc)
               => proxy ppc
