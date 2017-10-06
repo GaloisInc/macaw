@@ -18,6 +18,8 @@ module Data.Macaw.X86.Semantics
   ) where
 
 import           Prelude hiding (isNaN)
+import           Control.Monad (when)
+import qualified Data.Bits as Bits
 import           Data.Foldable
 import           Data.Int
 import           Data.Map.Strict (Map)
@@ -105,34 +107,28 @@ pop repr = do
   -- Return value
   return v
 
-dwordLoc  :: Semantics m => F.AddrRef -> m (MLocation m (BVType 32))
-dwordLoc addr = (`MemoryAddr` dwordMemRepr) <$> getBVAddress addr
+readBV32 :: Semantics m => Value m (BVType 64) -> m (Value m (BVType 32))
+readBV32 addr = get (MemoryAddr addr dwordMemRepr)
 
-readDWord :: Semantics m => F.AddrRef -> m (Value m (BVType 32))
-readDWord addr = get =<< dwordLoc addr
-
-qwordLoc  :: Semantics m => F.AddrRef -> m (MLocation m (BVType 64))
-qwordLoc addr = (`MemoryAddr` qwordMemRepr) <$> getBVAddress addr
-
-readQWord :: Semantics m => F.AddrRef -> m (Value m (BVType 64))
-readQWord addr = get =<< qwordLoc addr
+readBV64 :: Semantics m => Value m (BVType 64) -> m (Value m (BVType 64))
+readBV64 addr = get (MemoryAddr addr qwordMemRepr)
 
 -- | Read a 32 or 64-bit register
 getReg32_Reg64 :: Monad m => F.Value -> m (Either (MLocation m (BVType 32)) (MLocation m (BVType 64)))
 getReg32_Reg64 v =
   case v of
-    F.DWordReg r -> pure $ Left  $ reg_low32    $ R.X86_GP $ F.reg32_reg r
-    F.QWordReg r -> pure $ Right $ fullRegister $ R.X86_GP r
+    F.DWordReg r -> pure $ Left  $ reg32Loc r
+    F.QWordReg r -> pure $ Right $ reg64Loc r
     _ -> fail "Unexpected operand"
 
 -- | Read a 32 or 64-bit register or meory value
 getRM32_RM64 :: Semantics m => F.Value -> m (Either (MLocation m (BVType 32)) (MLocation m (BVType 64)))
 getRM32_RM64 v =
   case v of
-    F.DWordReg r -> pure $ Left  $ reg_low32    $ R.X86_GP $ F.reg32_reg r
-    F.QWordReg r -> pure $ Right $ fullRegister $ R.X86_GP r
-    F.Mem32 addr -> Left  <$> dwordLoc addr
-    F.Mem64 addr -> Right <$> qwordLoc addr
+    F.DWordReg r -> pure $ Left  $ reg32Loc r
+    F.QWordReg r -> pure $ Right $ reg64Loc r
+    F.Mem32 addr -> Left  <$> getBV32Addr addr
+    F.Mem64 addr -> Right <$> getBV64Addr addr
     _ -> fail "Unexpected operand"
 
 -- | Location that get the high 64 bits of a XMM register,
@@ -167,7 +163,7 @@ getXMM _ = fail "Unexpected argument"
 -- Otherwise it fails.
 getXMM_mr_low32 :: Semantics m => F.Value -> m (MLocation m (FloatType SingleFloat))
 getXMM_mr_low32 (F.XMMReg r) = pure (xmm_low32 r)
-getXMM_mr_low32 (F.Mem128 src_addr) = dwordLoc src_addr
+getXMM_mr_low32 (F.Mem128 src_addr) = getBV32Addr src_addr
 getXMM_mr_low32 _ = fail "Unexpected argument"
 
 -- | This gets the value of a xmm/m64 field.
@@ -177,7 +173,7 @@ getXMM_mr_low32 _ = fail "Unexpected argument"
 -- Otherwise it fails.
 getXMM_mr_low64 :: Semantics m => F.Value -> m (MLocation m (FloatType DoubleFloat))
 getXMM_mr_low64 (F.XMMReg r) = pure (xmm_low64 r)
-getXMM_mr_low64 (F.Mem128 src_addr) = qwordLoc src_addr
+getXMM_mr_low64 (F.Mem128 src_addr) = getBV64Addr src_addr
 getXMM_mr_low64 _ = fail "Unexpected argument"
 
 -- ** Condition codes
@@ -668,97 +664,100 @@ exec_xor l v = do
 
 -- ** Shift and Rotate Instructions
 
-
-really_exec_shift :: (1 <= n', n' <= n, IsLocationBV m n)
-                  => MLocation m (BVType n)
-                  -> Value m (BVType n')
-                     -- Operation for performing the shift.
-                     -- Takes value as first argument and shift amount as second arg.
-                  -> (Value m (BVType n) -> Value m (BVType n) -> Value m (BVType n))
-                     -- Operation for constructing new carry flag "cf" value.
-                  -> (Value m (BVType n) -> Value m (BVType n')
-                                         -> Value m (BVType n')
-                                         -> Value m BoolType)
-                     -- Operation for constructing new overflow flag "of" value.
-                  -> (Value m (BVType n) -> Value m (BVType n)
-                                         -> Value m BoolType
-                                         -> Value m BoolType)
-                  -> m ()
-really_exec_shift l count do_shift mk_cf mk_of = do
-  v    <- get l
+exec_sh :: (Semantics m, 1 <= n, 8 <= n)
+        => RepValSize n -- ^ Number of bits to shift
+        -> MLocation m (BVType n) -- ^ Location to read/write value to shift
+        -> F.Value -- ^ 8-bitshift amount
+        -> (Value m (BVType n) -> Value m (BVType n) -> Value m (BVType n))
+           -- ^ Function for value
+        -> (NatRepr n -> Value m (BVType n) -> Value m (BVType 8) -> Value m BoolType)
+           -- ^ Function to update carry flag
+           -- Takes current value of location to shift and number of indices to shift by.
+        -> (Value m (BVType n) -> Value m (BVType n) -> Value m BoolType)
+           -- ^ Function to update overflow flag
+           -- Takes current and new value of location.
+        -> m ()
+exec_sh lw l val val_setter cf_setter of_setter = do
+  count <-
+    case val of
+      F.ByteImm i ->
+        pure (bvLit n8 (toInteger i))
+      F.ByteReg r | Just r64 <- F.is_low_reg r -> do
+        get (reg_low8  $ R.X86_GP r64)
+      _ -> fail "Count could not be interpreted."
+  v <- get l
   -- The intel manual says that the count is masked to give an upper
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
-  let nbits =
-        case testLeq (bv_width v) n32 of
-          Just LeqProof -> 32
-          _             -> 64
-      count_mask = bvLit (bv_width count) (nbits - 1)
-      --
-      low_count = count .&. count_mask  -- FIXME: prefer mod?
-      r = do_shift v (uext (bv_width v) low_count)
-
+  let w = typeWidth (repValSizeMemRepr lw)
+  let nbits = if natValue w == 64 then 64 else 32
+  let low_count = count .&. bvLit n8 (nbits - 1)
+  -- Compute result.
+  let res = val_setter v (uext (bv_width v) low_count)
+  let zero8 = bvLit n8 0
   -- When the count is zero, nothing happens, in particular, no flags change
-  unless_ (is_zero low_count) $ do
-    let dest_width = bvLit (bv_width low_count) (natValue (bv_width v))
+  let isNonzero = low_count .=/=. zero8
+  -- Set the af flag
+  do af_new_val <- make_undefined knownType
+     modify af_loc $ mux isNonzero af_new_val
+  -- Set the overflow flag based on count.
+  do of_val   <- get of_loc
+     of_undef <- make_undefined knownType
+     -- If count is zero, then flag is unchanged
+     of_loc .= mux (low_count .=. zero8) of_val
+                 -- If count is one, then of is xor of initial and final values.
+                 (mux (low_count .=. bvLit n8 1) (of_setter v res) of_undef)
+  -- Set the cover flag
+  modify cf_loc $ mux isNonzero (cf_setter w v low_count)
+  -- Set result flags
+  modify sf_loc $ mux isNonzero (msb res)
+  modify zf_loc $ mux isNonzero (is_zero res)
+  modify pf_loc $ mux isNonzero (even_parity (least_byte res))
+  modify l      $ mux isNonzero res
 
-    let new_cf = mk_cf v dest_width low_count
-    cf_undef <- make_undefined knownType
-    cf_loc .= mux (low_count `bvUlt` dest_width) new_cf cf_undef
+def_sh :: String
+        -> (forall v n . (IsValue v, 1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n))
+           -- ^ Function for value
+        -> (forall v n . (IsValue v, 1 <= n, 8 <= n) => NatRepr n -> v (BVType n) -> v (BVType 8) -> v BoolType)
+           -- ^ Function to update carry flag
+           -- Takes current value of location to shift and number of indices to shift by.
+        -> (forall v n . (IsValue v, 1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType)
+           -- ^ Function to update overflow flag
+           -- Takes current and new value of location.
+       -> InstructionDef
+def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
+  Some (HasRepSize lw l) <- getAddrRegOrSegment loc
+  case lw of
+    ByteRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
+    WordRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
+    DWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
+    QWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
 
-    let low1 = bvLit (bv_width low_count) 1
+def_shl :: InstructionDef
+def_shl = def_sh "shl" bvShl set_cf set_of
+  where set_cf w v i =
+           (i `bvUle` bvLit n8 (natValue w))
+             .&&. bvBit v (bvLit w (natValue w) `bvSub` uext w i)
+        set_of v _ =  msb v
 
-    of_undef <- make_undefined knownType
-    of_loc .= mux (low_count .=. low1) (mk_of v r new_cf) of_undef
+def_shr :: InstructionDef
+def_shr = def_sh "shr" bvShr set_cf set_of
+  where -- Carry flag should be set to last bit shifted out.
+        -- Note that if i exceeds w, bvBit v i returns false, so this does what we want.
+        set_cf w v i = bvBit v (uext w i `bvSub` bvLit w 1)
+        set_of v res = msb res `boolXor` msb v
 
-    set_undefined af_loc
-    set_result_value l r
-
--- FIXME: could be 8 instead of n' here ...
-exec_shl :: (1 <= n', n' <= n, IsLocationBV m n)
-         => MLocation m (BVType n) -> Value m (BVType n') -> m ()
-exec_shl l count = really_exec_shift l count bvShl mk_cf mk_of
-  where mk_cf v dest_width low_count = bvBit v (dest_width `bvSub` low_count)
-        mk_of _ r new_cf = msb r `boolXor` new_cf
-
-exec_shr :: (1 <= n', n' <= n, IsLocationBV m n)
-         => MLocation m (BVType n)
-         -> Value m (BVType n') -> m ()
-exec_shr l count = really_exec_shift l count bvShr mk_cf mk_of
-  where mk_cf v _ low_count = bvBit v (low_count `bvSub` bvLit (bv_width low_count) 1)
-        mk_of v _ _         = msb v
-
--- FIXME: we can factor this out as above, but we need to check the CF
--- for SAR (intel manual says it is only undefined for shl/shr when
--- the shift is >= the bit width.
-exec_sar :: (1 <= n', n' <= n, IsLocationBV m n)
-         => MLocation m (BVType n) -> Value m (BVType n') -> m ()
-exec_sar l count = do
-  v    <- get l
-  -- The intel manual says that the count is masked to give an upper
-  -- bound on the time the shift takes, with a mask of 63 in the case
-  -- of a 64 bit operand, and 31 in the other cases.
-  let nbits = case testLeq (bv_width v) n32 of
-                Just LeqProof -> 32
-                Nothing       -> 64
-      countMASK = bvLit (bv_width v) (nbits - 1)
-      low_count = uext (bv_width v) count .&. countMASK  -- FIXME: prefer mod?
-      r = bvSar v low_count
-
-  -- When the count is zero, nothing happens, in particular, no flags change
-  unless_ (is_zero low_count) $ do
-    let dest_width = bvLit (bv_width low_count) (natValue (bv_width v))
-    let new_cf = bvBit v (low_count `bvSub` bvLit (bv_width low_count) 1)
-
-    -- FIXME: correct?  we assume here that we will get the sign bit ...
-    cf_loc .= mux (low_count `bvUlt` dest_width) new_cf (msb v)
-
-    ifte_ (low_count .=. bvLit (bv_width low_count) 1)
-      (of_loc .= false)
-      (set_undefined of_loc)
-
-    set_undefined af_loc
-    set_result_value l r
+def_sar :: InstructionDef
+def_sar = def_sh "sar" bvSar set_cf set_of
+  where -- Set carry flag to last bit shifted out.  This is either the bit at
+        -- the index - 1 or the most-significant bit depending on the shift value.
+        set_cf w v i = do
+          -- Check if w < i
+          let notInRange = bvUlt (bvLit n8 (natValue w)) i
+          -- Get most-significant bit
+          let msb_v = bvBit v (bvLit w (natValue w-1))
+          bvBit v (uext w i `bvSub` bvLit w 1) .||. (notInRange .&&. msb_v)
+        set_of _ _ = false
 
 -- FIXME: use really_exec_shift above?
 exec_rol :: (1 <= n', n' <= n, IsLocationBV m n)
@@ -825,56 +824,109 @@ exec_ror l count = do
 
 -- ** Bit and Byte Instructions
 
-isRegister :: Location addr tp -> Bool
-isRegister (Register _)      = True
-isRegister (FullRegister _)  = True
-isRegister (MemoryAddr {})   = False
-isRegister (ControlReg _)    = True
-isRegister (DebugReg _)      = True
-isRegister (SegmentReg _)    = True
-isRegister (X87ControlReg _) = True
-isRegister (X87StackRegister {}) = False
+getBT16RegOffset :: Semantics m => F.Value -> m (Value m (BVType 16))
+getBT16RegOffset val =
+  case val of
+    F.ByteImm i -> do
+      pure $ bvLit n16 $ toInteger $ i Bits..&. 0xF
+    F.WordReg ir -> do
+      iv <- get $ reg16Loc ir
+      pure $ (iv .&. bvLit n16 0xF)
+    _ -> error "Unexpected index."
 
--- return val modulo the size of the register at loc iff loc is a register, otherwise return val
-moduloRegSize :: (IsValue v, 1 <= n) => Location addr (BVType n') -> v (BVType n) -> v (BVType n)
-moduloRegSize loc val
-  | Just Refl <- testEquality (typeWidth loc) n8  = go loc val  7
-  | Just Refl <- testEquality (typeWidth loc) n16 = go loc val 15
-  | Just Refl <- testEquality (typeWidth loc) n32 = go loc val 31
-  | Just Refl <- testEquality (typeWidth loc) n64 = go loc val 63
-  | otherwise = val -- doesn't match any of the register sizes
-  where go l v maskVal | isRegister l = v .&. bvLit (bv_width v) maskVal -- v mod maskVal
-                       | otherwise = v
+getBT32RegOffset :: Semantics m => F.Value -> m (Value m (BVType 32))
+getBT32RegOffset val =
+  case val of
+    F.ByteImm i -> do
+      pure $ bvLit n32 $ toInteger $ i Bits..&. 0x1F
+    F.DWordReg ir -> do
+      iv <- get $ reg32Loc ir
+      pure $ (iv .&. bvLit n32 0x1F)
+    _ -> error "Unexpected index."
 
--- make a bitmask of size 'width' with only the bit at bitPosition set
-singleBitMask :: (IsValue v, 1 <= n, 1 <= log_n, log_n <= n) => NatRepr n -> v (BVType log_n) -> v (BVType n)
-singleBitMask width bitPosition = bvShl (bvLit width 1) (uext width bitPosition)
+getBT64RegOffset :: Semantics m => F.Value -> m (Value m (BVType 64))
+getBT64RegOffset val =
+  case val of
+    F.ByteImm i -> do
+      pure $ bvLit n64 $ toInteger $ i Bits..&. 0x3F
+    F.QWordReg ir -> do
+      iv <- get $ reg64Loc ir
+      pure $ (iv .&. bvLit n64 0x3F)
+    _ -> error "Unexpected index."
 
-exec_bt :: (IsLocationBV m n, 1 <= log_n) => MLocation m (BVType n) -> Value m (BVType log_n) -> m ()
-exec_bt base offset = do
-  b <- get base
-  -- if base is register, take offset modulo 16/32/64 based on reg width
-  cf_loc .= bvBit b (moduloRegSize base offset)
+set_bt_flags :: Semantics m => m ()
+set_bt_flags = do
   set_undefined of_loc
   set_undefined sf_loc
   set_undefined af_loc
   set_undefined pf_loc
 
--- for all BT* instructions that modify the checked bit
-exec_bt_chg :: (IsLocationBV m n, 1 <= log_n, log_n <= n)
-            => (Value m (BVType n) -> Value m (BVType n) -> Value m (BVType n))
-            -> MLocation m (BVType n)
-            -> Value m (BVType log_n) -> m ()
-exec_bt_chg op base offset = do
-  exec_bt base offset
-  b <- get base
-  base .= b `op` singleBitMask (typeWidth base) (moduloRegSize base offset)
-
-exec_btc, exec_btr, exec_bts :: (IsLocationBV m n, 1 <= log_n, log_n <= n) => MLocation m (BVType n) -> Value m (BVType log_n) -> m ()
-exec_btc = exec_bt_chg bvXor
-exec_btr = exec_bt_chg $ \l r -> l .&. (bvComplement r)
-exec_bts = exec_bt_chg (.|.)
-
+-- | Generic function for bt, btc, btr, and bts instructions.
+--
+-- The first argument is the mnemonic, and action to run.
+def_bt :: String
+       -> (forall m n . (Semantics m, 1 <= n)
+           => NatRepr n -- Width of instruction
+           -> MLocation m (BVType n) -- Location to read/write value from
+           -> Value m (BVType n) -- Index
+           -> m ())
+       -> InstructionDef
+def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
+  case (base_loc, idx) of
+    (F.WordReg r, _) -> do
+      iv  <- getBT16RegOffset idx
+      act knownNat (reg16Loc r) iv
+      set_bt_flags
+    (F.DWordReg r, _) -> do
+      iv <- getBT32RegOffset idx
+      act knownNat (reg32Loc r) iv
+      set_bt_flags
+    (F.QWordReg r, _) -> do
+      iv  <- getBT64RegOffset idx
+      act knownNat (reg64Loc r) iv
+      set_bt_flags
+    (F.Mem16 base, F.ByteImm  i) -> do
+      when (i >= 16) $ fail $ mnem ++ " given invalid index."
+      loc <- getBV16Addr base
+      act knownNat loc (bvLit knownNat (toInteger i))
+      set_bt_flags
+    (F.Mem16 base, F.WordReg ir) -> do
+      off <- get $! reg16Loc ir
+      base_addr <- getBVAddress base
+      let word_off = sext' n64 $ bvSar off (bvLit knownNat 4)
+      let loc = MemoryAddr (bvAdd base_addr word_off) wordMemRepr
+      let iv = off .&. bvLit knownNat 15
+      act knownNat loc iv
+      set_bt_flags
+    (F.Mem32 base, F.ByteImm  i) -> do
+      when (i >= 32) $ fail $ mnem ++ " given invalid index."
+      loc <- getBV32Addr base
+      let iv = bvLit knownNat (toInteger i)
+      act knownNat loc iv
+      set_bt_flags
+    (F.Mem32 base, F.DWordReg  ir) -> do
+      off <- get $! reg32Loc ir
+      base_addr <- getBVAddress base
+      let dword_off = sext' n64 $ bvSar off (bvLit knownNat 5)
+      let loc = MemoryAddr (bvAdd base_addr dword_off) dwordMemRepr
+      let iv  = off .&. bvLit knownNat 31
+      act knownNat loc iv
+      set_bt_flags
+    (F.Mem64 base, F.ByteImm  i) -> do
+      when (i >= 64) $ fail $ mnem ++ " given invalid index."
+      loc <- getBV64Addr base
+      let iv = bvLit knownNat (toInteger i)
+      act knownNat loc iv
+      set_bt_flags
+    (F.Mem64 base, F.QWordReg  ir) -> do
+      off <- get $! reg64Loc ir
+      let qword_off = bvSar off (bvLit knownNat 6)
+      base_addr <- getBVAddress base
+      let loc = MemoryAddr (bvAdd base_addr qword_off) qwordMemRepr
+      let iv = off .&. bvLit knownNat 63
+      act knownNat loc iv
+      set_bt_flags
+    _ -> error $ "bt given unexpected base and index."
 
 exec_bsf :: IsLocationBV m n => MLocation m (BVType n) -> Value m (BVType n) -> m ()
 exec_bsf r y = do
@@ -995,16 +1047,16 @@ exec_movs True w = do
   rdi .= mux df (dest  .- total_bytes) (dest  .+ total_bytes)
 
 def_movs :: InstructionDef
-def_movs = defBinary "movs" $ \pfx loc _ -> do
+def_movs = defBinary "movs" $ \ii loc _ -> do
   case loc of
     F.Mem8 F.Addr_64{} ->
-      exec_movs (pfx == F.RepPrefix) (knownNat :: NatRepr 1)
+      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 1)
     F.Mem16 F.Addr_64{} ->
-      exec_movs (pfx == F.RepPrefix) (knownNat :: NatRepr 2)
+      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 2)
     F.Mem32 F.Addr_64{} ->
-      exec_movs (pfx == F.RepPrefix) (knownNat :: NatRepr 4)
+      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 4)
     F.Mem64 F.Addr_64{} ->
-      exec_movs (pfx == F.RepPrefix) (knownNat :: NatRepr 8)
+      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 8)
     _ -> fail "Bad argument to movs"
 
 -- FIXME: can also take rep prefix
@@ -1055,7 +1107,7 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
 
 
 def_cmps :: InstructionDef
-def_cmps = defBinary "cmps" $ \pfx loc _ -> do
+def_cmps = defBinary "cmps" $ \ii loc _ -> do
   Some rval <-
     case loc of
       F.Mem8 F.Addr_64{} -> do
@@ -1067,7 +1119,7 @@ def_cmps = defBinary "cmps" $ \pfx loc _ -> do
       F.Mem64 F.Addr_64{} -> do
         pure $ Some QWordRepVal
       _ -> fail "Bad argument to cmps"
-  exec_cmps (pfx == F.RepZPrefix) rval
+  exec_cmps (F.iiLockPrefix ii == F.RepZPrefix) rval
 
 -- SCAS/SCASB Scan string/Scan byte string
 -- SCAS/SCASW Scan string/Scan word string
@@ -1132,7 +1184,7 @@ exec_scas _repz_pfx repnz_pfx rep = repValHasSupportedWidth rep $ do
     rcx .= count'
 
 def_scas :: InstructionDef
-def_scas = defBinary "scas" $ \pfx loc loc' -> do
+def_scas = defBinary "scas" $ \ii loc loc' -> do
   Some rval <-
     case (loc, loc') of
       (F.ByteReg  F.AL,  F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement)) -> do
@@ -1144,7 +1196,7 @@ def_scas = defBinary "scas" $ \pfx loc loc' -> do
       (F.QWordReg F.RAX, F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement)) -> do
         pure $ Some QWordRepVal
       _ -> error $ "scas given bad addrs " ++ show (loc, loc')
-  exec_scas (pfx == F.RepZPrefix) (pfx == F.RepNZPrefix) rval
+  exec_scas (F.iiLockPrefix ii == F.RepZPrefix) (F.iiLockPrefix ii == F.RepNZPrefix) rval
 
 -- LODS/LODSB Load string/Load byte string
 -- LODS/LODSW Load string/Load word string
@@ -1166,16 +1218,16 @@ exec_lods False rep = do
 exec_lods True _rep = error "exec_lods: rep prefix support not implemented"
 
 def_lods :: InstructionDef
-def_lods = defBinary "lods" $ \pfx loc loc' -> do
+def_lods = defBinary "lods" $ \ii loc loc' -> do
   case (loc, loc') of
     (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
-      exec_lods (pfx == F.RepPrefix) ByteRepVal
+      exec_lods (F.iiLockPrefix ii == F.RepPrefix) ByteRepVal
     (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
-      exec_lods (pfx == F.RepPrefix) WordRepVal
+      exec_lods (F.iiLockPrefix ii == F.RepPrefix) WordRepVal
     (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
-      exec_lods (pfx == F.RepPrefix) DWordRepVal
+      exec_lods (F.iiLockPrefix ii == F.RepPrefix) DWordRepVal
     (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
-      exec_lods (pfx == F.RepPrefix) QWordRepVal
+      exec_lods (F.iiLockPrefix ii == F.RepPrefix) QWordRepVal
     _ -> error $ "lods given bad arguments " ++ show (loc, loc')
 
 def_lodsx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
@@ -1219,16 +1271,16 @@ exec_stos True rep = do
   rcx .= bvKLit 0
 
 def_stos :: InstructionDef
-def_stos = defBinary "stos" $ \pfx loc loc' -> do
+def_stos = defBinary "stos" $ \ii loc loc' -> do
   case (loc, loc') of
     (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
-      exec_stos (pfx == F.RepPrefix) ByteRepVal
+      exec_stos (F.iiLockPrefix ii == F.RepPrefix) ByteRepVal
     (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
-      exec_stos (pfx == F.RepPrefix) WordRepVal
+      exec_stos (F.iiLockPrefix ii == F.RepPrefix) WordRepVal
     (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
-      exec_stos (pfx == F.RepPrefix) DWordRepVal
+      exec_stos (F.iiLockPrefix ii == F.RepPrefix) DWordRepVal
     (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
-      exec_stos (pfx == F.RepPrefix) QWordRepVal
+      exec_stos (F.iiLockPrefix ii == F.RepPrefix) QWordRepVal
     _ -> error $ "stos given bad arguments " ++ show (loc, loc')
 
 -- REP        Repeat while ECX not zero
@@ -1663,13 +1715,13 @@ def_movsd = defBinary "movsd" $ \_ v1 v2 -> do
       vLow <- get (xmm_low64 src)
       xmm_low64 dest .= vLow
     (F.Mem128 src_addr, F.XMMReg src) -> do
-      dest <- qwordLoc src_addr
+      dest <- getBV64Addr src_addr
       vLow <- get (xmm_low64 src)
       dest .= vLow
     -- If destination is an XMM register and source is memory, then zero out
     -- high order bits.
     (F.XMMReg dest, F.Mem128 src_addr) -> do
-      v' <- readQWord src_addr
+      v' <- readBV64 =<< getBVAddress src_addr
       xmm_loc dest .= uext n128 v'
     _ ->
       fail $ "Unexpected arguments in FlexdisMatcher.movsd: " ++ show v1 ++ ", " ++ show v2
@@ -1683,13 +1735,13 @@ def_movss = defBinary "movss" $ \_ v1 v2 -> do
       vLow <- get (xmm_low32 src)
       xmm_low32 dest .= vLow
     (F.Mem128 f_addr, F.XMMReg src) -> do
-      dest <- dwordLoc f_addr
+      dest <- getBV32Addr f_addr
       vLow <- get (xmm_low32 src)
       dest .= vLow
     -- If destination is an XMM register and source is memory, then zero out
     -- high order bits.
     (F.XMMReg dest, F.Mem128 src_addr) -> do
-      vLoc <- readDWord src_addr
+      vLoc <- readBV32 =<< getBVAddress src_addr
       xmm_loc dest .= uext n128 vLoc
     _ ->
       fail $ "Unexpected arguments in FlexdisMatcher.movss: " ++ show v1 ++ ", " ++ show v2
@@ -1727,11 +1779,11 @@ def_movhps = defBinary "movhps" $ \_ x y -> do
     -- Move high qword of src to dst.
     (F.Mem64 dst_addr, F.XMMReg src) -> do
       src_val <- get $ xmm_high64 src
-      dst <- qwordLoc dst_addr
+      dst <- getBV64Addr dst_addr
       dst .= src_val
     -- Move qword at src to high qword of dst.
     (F.XMMReg dst, F.Mem64 src_addr) -> do
-      src_val <- readQWord src_addr
+      src_val <- readBV64 =<< getBVAddress src_addr
       xmm_high64 dst .= src_val
     _ -> fail "Unexpected operands."
 
@@ -1750,12 +1802,12 @@ def_movlps = defBinary "movlps" $ \_ x y -> do
   case (x, y) of
     -- Move low qword of src to dst.
     (F.Mem64 dst_addr, F.XMMReg src) -> do
-      dst <- qwordLoc dst_addr
+      dst <- getBV64Addr dst_addr
       src_val <- get $ xmm_low64 src
       dst .= src_val
     -- Move qword at src to low qword of dst.
     (F.XMMReg dst, F.Mem64 src_addr) -> do
-      src_val <- readQWord src_addr
+      src_val <- readBV64 =<< getBVAddress src_addr
       xmm_low64 dst .= src_val
     _ -> fail "Unexpected operands."
 
@@ -2456,10 +2508,21 @@ all_instructions =
   , defBinaryLV "add" exec_add
   , defBinaryLV "adc" exec_adc
   , defBinaryLV "and" exec_and
-  , defBinaryLVge "bt"  exec_bt
-  , defBinaryLVge "btc" exec_btc
-  , defBinaryLVge "btr" exec_btr
-  , defBinaryLVge "bts" exec_bts
+  , def_bt "bt" $ \_ loc idx -> do
+      val <- get loc
+      cf_loc .= bvBit val idx
+  , def_bt "btc" $ \w loc idx -> do
+      val <- get loc
+      loc .= bvXor val ((bvLit w 1) `bvShl` idx)
+      cf_loc .= bvBit val idx
+  , def_bt "btr" $ \w loc idx -> do
+      val <- get loc
+      loc .= val .&. bvComplement ((bvLit w 1) `bvShl` idx)
+      cf_loc .= bvBit val idx
+  , def_bt "bts" $ \w loc idx -> do
+      val <- get loc
+      loc .= val .|. ((bvLit w 1) `bvShl` idx)
+      cf_loc .= bvBit val idx
   , defBinaryLV "bsf" exec_bsf
   , defBinaryLV "bsr" exec_bsr
   , defUnaryLoc "bswap" $ exec_bswap
@@ -2493,9 +2556,9 @@ all_instructions =
   , defBinaryLVge "ror"  exec_ror
   , def_sahf
   , defBinaryLV   "sbb"  exec_sbb
-  , defBinaryLVge "sar"  exec_sar
-  , defBinaryLVge "shl"  exec_shl
-  , defBinaryLVge "shr"  exec_shr
+  , def_shl
+  , def_shr
+  , def_sar
   , defNullary    "std" $ df_loc .= true
   , defBinaryLV   "sub" exec_sub
   , defBinaryLV   "test" exec_test

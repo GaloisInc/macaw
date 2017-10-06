@@ -216,6 +216,16 @@ appToCrucible app = do
     M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
     M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
     M.BVMul w x y -> appAtom =<< C.BVMul w <$> v2c x <*> v2c y
+    M.UnsignedLe x y -> appAtom =<< C.BVUle (M.typeWidth x) <$> v2x x <*> v2c y
+    M.UnsignedLt x y -> appAtom =<< C.BVUlt (M.typeWidth x) <$> v2x x <*> v2c y
+    M.SignedLe   x y -> appAtom =<< C.BVSle (M.typeWidth x) <$> v2x x <*> v2c y
+    M.SignedLt   x y -> appAtom =<< C.BVSlt (M.typeWidth x) <$> v2x x <*> v2c y
+    M.BVTestBit x i -> do
+      let w = M.typeWidth x
+      -- Logical shift x right by i bits.
+      x_shift <- appAtom =<< C.BVLshr w x i
+      -- Mask off least-significant bit.
+      -- Check to see if result is one.
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))

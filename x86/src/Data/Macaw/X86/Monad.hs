@@ -28,8 +28,9 @@ module Data.Macaw.X86.Monad
   , repValHasSupportedWidth
   , repValSizeMemRepr
   , repValSizeByteCount
-  , FloatInfoRepr(..)
-  , floatInfoBits
+  , Data.Macaw.Types.FloatInfoRepr(..)
+  , Data.Macaw.Types.floatInfoBits
+  , floatMemRepr
     -- * RegisterView
   , RegisterView
   , RegisterViewType(..)
@@ -635,7 +636,7 @@ c1_loc = fullRegister R.X87_C1
 c2_loc = fullRegister R.X87_C2
 c3_loc = fullRegister R.X87_C3
 
--- | Tuen an address into a location of size @n
+-- | Maps float info repr to associated MemRepr.
 floatMemRepr :: FloatInfoRepr flt -> MemRepr (FloatType flt)
 floatMemRepr fir =
   case floatInfoBytesIsPos fir of
@@ -931,6 +932,10 @@ class IsValue (v  :: Type -> *) where
       n :: NatRepr n
       n = bv_width v
 
+  -- | Unsigned less than or equal.
+  bvUle :: v (BVType n) -> v (BVType n) -> v BoolType
+  bvUle x y = boolNot (bvUlt y x)
+
   -- | Unsigned less than
   bvUlt :: v (BVType n) -> v (BVType n) -> v BoolType
 
@@ -938,7 +943,8 @@ class IsValue (v  :: Type -> *) where
   bvSlt :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
 
   -- | Returns bit at index given by second argument, 0 being lsb
-  bvBit :: (1 <= n, 1 <= log_n) => v (BVType n) -> v (BVType log_n) -> v BoolType
+  -- If the bit index is greater than or equal to n, then the result is zero.
+  bvBit :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
 
   -- | Return most significant bit of number.
   msb :: (1 <= n) => v (BVType n) -> v BoolType
@@ -1155,7 +1161,6 @@ class IsValue (v  :: Type -> *) where
   false = boolValue True
 
   boolValue :: Bool -> v BoolType
-  --boolValue b = if b then true else false
 
   boolNot :: v BoolType -> v BoolType
 

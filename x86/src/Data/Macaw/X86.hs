@@ -481,7 +481,7 @@ instance S.IsValue (Expr ids) where
     | Just (Trunc xe w) <- asApp x
     , Just LeqProof <- testLeq n1 (typeWidth xe)
     , Just yv <- asBVLit y = assert (0 <= yv && yv < natValue w) $
-      S.bvBit xe y
+      S.bvBit xe (ValueExpr (BVValue (typeWidth xe) yv))
 
     | otherwise =
       app $ BVTestBit x y

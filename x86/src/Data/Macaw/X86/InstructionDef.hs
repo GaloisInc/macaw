@@ -12,6 +12,7 @@ semantic definition of a function.
 module Data.Macaw.X86.InstructionDef
   ( InstructionDef
   , InstructionSemantics(..)
+  , defInstruction
   , defVariadic
   , defConditionals
     -- * Nullary function helper
@@ -60,11 +61,16 @@ newtype InstructionSemantics
 type InstructionDef = (String, InstructionSemantics)
 
 -- | Create a instruction that potentially takes any number of arguments.
+defInstruction :: String
+            -> (forall m. Semantics m => F.InstructionInstance -> m ())
+            -> InstructionDef
+defInstruction mnemonic f = (mnemonic, InstructionSemantics f)
+
+-- | Create a instruction that potentially takes any number of arguments.
 defVariadic :: String
             -> (forall m. Semantics m => F.LockPrefix -> [F.Value] -> m ())
             -> InstructionDef
-defVariadic mnemonic f =
-  (mnemonic, InstructionSemantics (\ii -> f (F.iiLockPrefix ii) (fst <$> F.iiArgs ii)))
+defVariadic mnem f = defInstruction mnem (\ii -> f (F.iiLockPrefix ii) (fst <$> F.iiArgs ii))
 
 -- | Define an instruction that expects no arguments.
 defNullary :: String
@@ -128,12 +134,12 @@ defUnaryFPV mnem f = defUnary mnem $ \_ v -> do
 
 -- | Define an instruction that expects two arguments.
 defBinary :: String
-          -> (forall m . Semantics m => F.LockPrefix -> F.Value -> F.Value -> m ())
+          -> (forall m . Semantics m => F.InstructionInstance -> F.Value -> F.Value -> m ())
           -> InstructionDef
-defBinary mnem f = defVariadic mnem $ \pfx vs ->
-  case vs of
-    [v, v']   -> f pfx v v'
-    _         -> fail $ "defBinary: " ++ mnem ++ ": expecting 2 arguments, got " ++ show (length vs)
+defBinary mnem f = defInstruction mnem $ \ii ->
+  case F.iiArgs ii of
+    [(v,_), (v',_)]   -> f ii v v'
+    _         -> fail $ "defBinary: " ++ mnem ++ ": expecting 2 arguments, got " ++ show (length (F.iiArgs ii))
 
 defBinaryLV :: String
       -> (forall m n. IsLocationBV m n => MLocation m (BVType n) -> Value m (BVType n) -> m ())
@@ -194,10 +200,10 @@ defBinaryLL :: String
              => F.LockPrefix
              ->  MLocation m (BVType n) -> MLocation m (BVType n) -> m ())
           -> InstructionDef
-defBinaryLL mnem f = defBinary mnem $ \pfx loc loc' -> do
+defBinaryLL mnem f = defBinary mnem $ \ii loc loc' -> do
   SomeBV l <- getSomeBVLocation loc
   l'       <- getBVLocation loc' (typeWidth l)
-  f pfx l l'
+  f (F.iiLockPrefix ii) l l'
 
 -- | Define a function that takes either two floating point arguments.
 --

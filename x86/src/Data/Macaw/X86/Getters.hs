@@ -29,14 +29,21 @@ module Data.Macaw.X86.Getters
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
   , readXMMValue
+    -- * Utilities
+  , reg16Loc
+  , reg32Loc
+  , reg64Loc
+  , getBV8Addr
+  , getBV16Addr
+  , getBV32Addr
+  , getBV64Addr
+  , getBV128Addr
     -- * Reprs
   , byteMemRepr
   , wordMemRepr
   , dwordMemRepr
   , qwordMemRepr
   , xmmMemRepr
-  , floatMemRepr
-  , doubleMemRepr
   ) where
 
 import           Data.Parameterized.NatRepr
@@ -62,17 +69,23 @@ dwordMemRepr = BVMemRepr (knownNat :: NatRepr 4) LittleEndian
 qwordMemRepr :: MemRepr (BVType 64)
 qwordMemRepr = BVMemRepr (knownNat :: NatRepr 8) LittleEndian
 
-floatMemRepr :: MemRepr (BVType 32)
-floatMemRepr = BVMemRepr (knownNat :: NatRepr 4) LittleEndian
-
-doubleMemRepr :: MemRepr (BVType 64)
-doubleMemRepr = BVMemRepr (knownNat :: NatRepr 8) LittleEndian
-
-x87MemRepr :: MemRepr (BVType 80)
-x87MemRepr = BVMemRepr (knownNat :: NatRepr 10) LittleEndian
-
 xmmMemRepr :: MemRepr (BVType 128)
 xmmMemRepr = BVMemRepr (knownNat :: NatRepr 16) LittleEndian
+
+------------------------------------------------------------------------
+-- Utilities
+
+-- | Return a location from a 16-bit register
+reg16Loc :: F.Reg16 -> Location addr (BVType 16)
+reg16Loc = reg_low16 . X86_GP . F.reg16_reg
+
+-- | Return a location from a 32-bit register
+reg32Loc :: F.Reg32 -> Location addr (BVType 32)
+reg32Loc = reg_low32 . X86_GP . F.reg32_reg
+
+-- | Return a location from a 64-bit register
+reg64Loc :: F.Reg64 -> Location addr (BVType 64)
+reg64Loc = fullRegister . X86_GP
 
 ------------------------------------------------------------------------
 -- Getters
@@ -85,11 +98,13 @@ getBVAddress ar =
     F.Addr_32 seg m_r32 m_int_r32 i32 -> do
       base <- case m_r32 of
                 Nothing -> return $! bvKLit 0
-                Just r  -> get (reg_low32 (X86_GP $ F.reg32_reg r))
-      scale <- case m_int_r32 of
-                 Nothing     -> return $! bvKLit 0
-                 Just (i, r) -> bvTrunc n32 . bvMul (bvLit n32 (toInteger i))
-                                <$> get (reg_low32 (X86_GP $ F.reg32_reg r))
+                Just r  -> get (reg32Loc r)
+      scale <-
+        case m_int_r32 of
+          Nothing     -> return $! bvKLit 0
+          Just (i, r) ->
+            bvTrunc n32 . bvMul (bvLit n32 (toInteger i))
+              <$> get (reg32Loc r)
       let offset = uext n64 (base `bvAdd` scale `bvAdd` bvLit n32 (toInteger (F.displacementInt i32)))
       mk_absolute seg offset
     F.IP_Offset_32 _seg _i32                 -> fail "IP_Offset_32"
@@ -99,11 +114,11 @@ getBVAddress ar =
     F.Addr_64      seg m_r64 m_int_r64 i32 -> do
       base <- case m_r64 of
                 Nothing -> return v0_64
-                Just r  -> get (fullRegister $ X86_GP r)
+                Just r  -> get (reg64Loc r)
       scale <- case m_int_r64 of
                  Nothing     -> return v0_64
                  Just (i, r) -> bvTrunc n64 . bvMul (bvLit n64 (toInteger i))
-                                 <$> get (fullRegister $ X86_GP r)
+                                 <$> get (reg64Loc r)
       let offset = base `bvAdd` scale `bvAdd` bvLit n64 (toInteger i32)
       mk_absolute seg offset
     F.IP_Offset_64 seg i32 -> do
@@ -126,14 +141,32 @@ getBVAddress ar =
         base <- getSegmentBase seg
         return $ base `bvAdd` offset
 
+-- | Translate a flexdis address-refrence into a one-byte address.
+getBV8Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 8))
+getBV8Addr ar = (`MemoryAddr`  byteMemRepr) <$> getBVAddress ar
+
+-- | Translate a flexdis address-refrence into a two-byte address.
+getBV16Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 16))
+getBV16Addr ar = (`MemoryAddr`  wordMemRepr) <$> getBVAddress ar
+
+-- | Translate a flexdis address-refrence into a four-byte address.
+getBV32Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 32))
+getBV32Addr ar = (`MemoryAddr` dwordMemRepr) <$> getBVAddress ar
+
+-- | Translate a flexdis address-refrence into a eight-byte address.
+getBV64Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 64))
+getBV64Addr ar = (`MemoryAddr` qwordMemRepr) <$> getBVAddress ar
+
+-- | Translate a flexdis address-refrence into a sixteen-byte address.
+getBV128Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 128))
+getBV128Addr ar = (`MemoryAddr` xmmMemRepr) <$> getBVAddress ar
+
 readBVAddress :: Semantics m => F.AddrRef -> MemRepr tp -> m (Value m tp)
-readBVAddress ar repr =
-  get . (`MemoryAddr` repr) =<< getBVAddress ar
+readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
 
 -- | A bitvector value with a width that satisfies `SupportedBVWidth`.
 data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
-
 
 -- | Extract the location of a bitvector value.
 getSomeBVLocation :: Semantics m => F.Value -> m (SomeBV (MLocation m))
@@ -148,21 +181,21 @@ getSomeBVLocation v =
     F.FarPointer _      -> fail "FarPointer"
     -- SomeBV . (`MemoryAddr`   byteMemRepr) <$> getBVAddress ar -- FIXME: what size here?
     F.VoidMem _  -> fail "VoidMem"
-    F.Mem8   ar  -> SomeBV . (`MemoryAddr`   byteMemRepr) <$> getBVAddress ar
-    F.Mem16  ar  -> SomeBV . (`MemoryAddr`   wordMemRepr) <$> getBVAddress ar
-    F.Mem32  ar  -> SomeBV . (`MemoryAddr`  dwordMemRepr) <$> getBVAddress ar
-    F.Mem64  ar  -> SomeBV . (`MemoryAddr`  qwordMemRepr) <$> getBVAddress ar
-    F.Mem128 ar  -> SomeBV . (`MemoryAddr`    xmmMemRepr) <$> getBVAddress ar
-    F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` floatMemRepr)
-    F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` doubleMemRepr)
-    F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` x87MemRepr)
+    F.Mem8   ar  -> SomeBV <$> getBV8Addr   ar
+    F.Mem16  ar  -> SomeBV <$> getBV16Addr  ar
+    F.Mem32  ar  -> SomeBV <$> getBV32Addr  ar
+    F.Mem64  ar  -> SomeBV <$> getBV64Addr  ar
+    F.Mem128 ar  -> SomeBV <$> getBV128Addr ar
+    F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
+    F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
+    F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
     F.ByteReg  r
       | Just r64 <- F.is_low_reg r  -> mk (reg_low8  $ X86_GP r64)
       | Just r64 <- F.is_high_reg r -> mk (reg_high8 $ X86_GP r64)
       | otherwise                   -> fail "unknown r8"
-    F.WordReg  r -> mk (reg_low16 (X86_GP $ F.reg16_reg r))
-    F.DWordReg r -> mk (reg_low32 (X86_GP $ F.reg32_reg r))
-    F.QWordReg r -> mk (fullRegister $ X86_GP r)
+    F.WordReg  r -> mk (reg16Loc r)
+    F.DWordReg r -> mk (reg32Loc r)
+    F.QWordReg r -> mk (reg64Loc r)
     F.ByteImm  _ -> noImm
     F.WordImm  _ -> noImm
     F.DWordImm _ -> noImm
@@ -219,19 +252,19 @@ getSignExtendedValue v out_w =
   case v of
     -- If an instruction can take a VoidMem, it needs to get it explicitly
     F.VoidMem _ar -> fail "VoidMem"
-    F.Mem8   ar   -> mk . (`MemoryAddr`  byteMemRepr) =<< getBVAddress ar
-    F.Mem16  ar   -> mk . (`MemoryAddr`  wordMemRepr) =<< getBVAddress ar
-    F.Mem32  ar   -> mk . (`MemoryAddr` dwordMemRepr) =<< getBVAddress ar
-    F.Mem64  ar   -> mk . (`MemoryAddr` qwordMemRepr) =<< getBVAddress ar
-    F.Mem128 ar   -> mk . (`MemoryAddr`   xmmMemRepr) =<< getBVAddress ar
+    F.Mem8   ar   -> mk =<< getBV8Addr ar
+    F.Mem16  ar   -> mk =<< getBV16Addr ar
+    F.Mem32  ar   -> mk =<< getBV32Addr ar
+    F.Mem64  ar   -> mk =<< getBV64Addr ar
+    F.Mem128 ar   -> mk =<< getBV128Addr ar
 
     F.ByteReg  r
       | Just r64 <- F.is_low_reg r  -> mk (reg_low8  $ X86_GP r64)
       | Just r64 <- F.is_high_reg r -> mk (reg_high8 $ X86_GP r64)
       | otherwise                   -> fail "unknown r8"
-    F.WordReg  r                    -> mk (reg_low16 (X86_GP $ F.reg16_reg r))
-    F.DWordReg r                    -> mk (reg_low32 (X86_GP $ F.reg32_reg r))
-    F.QWordReg r                    -> mk (fullRegister $ X86_GP r)
+    F.WordReg  r                    -> mk (reg16Loc r)
+    F.DWordReg r                    -> mk (reg32Loc r)
+    F.QWordReg r                    -> mk (reg64Loc r)
     F.XMMReg r                      -> mk (fullRegister $ X86_XMMReg r)
 
     F.ByteImm  i                    -> return $! bvLit out_w (toInteger i)
@@ -268,10 +301,8 @@ getJumpTarget :: Semantics m
               -> m (Value m (BVType 64))
 getJumpTarget v =
   case v of
-    F.Mem64 ar -> do
-      a <- getBVAddress ar
-      get (MemoryAddr a qwordMemRepr)
-    F.QWordReg r -> get (fullRegister $ X86_GP r)
+    F.Mem64 ar -> get =<< getBV64Addr ar
+    F.QWordReg r -> get (reg64Loc r)
     F.JumpOffset _ off -> bvAdd (bvLit n64 (toInteger off)) <$> get rip
     _ -> fail "Unexpected argument"
 
@@ -289,9 +320,9 @@ readFPLocation (FPLocation repr l) = FPValue repr <$>  get l
 
 -- | Read an address as a floating point vlaue
 getFPAddrLoc :: Semantics m => FloatInfoRepr flt -> F.AddrRef -> m (FPLocation m flt)
-getFPAddrLoc repr f_addr = do
-  addr <- getBVAddress f_addr
-  pure $ FPLocation repr (mkFPAddr repr addr)
+getFPAddrLoc fir f_addr = do
+  FPLocation fir . (`MemoryAddr` (floatMemRepr fir))
+    <$> getBVAddress f_addr
 
 -- | Get a floating point value from the argument.
 getFPLocation :: Semantics m => F.Value -> m (Some (FPLocation m))
@@ -320,18 +351,18 @@ getAddrRegOrSegment :: forall m . Semantics m => F.Value -> m (Some (HasRepSize 
 getAddrRegOrSegment v =
   case v of
     F.SegmentValue s -> pure $ Some $ HasRepSize WordRepVal (SegmentReg s)
-    F.Mem8  ar -> Some . HasRepSize  ByteRepVal . (`MemoryAddr`  byteMemRepr) <$> getBVAddress ar
-    F.Mem16 ar -> Some . HasRepSize  WordRepVal . (`MemoryAddr`  wordMemRepr) <$> getBVAddress ar
-    F.Mem32 ar -> Some . HasRepSize DWordRepVal . (`MemoryAddr` dwordMemRepr) <$> getBVAddress ar
-    F.Mem64 ar -> Some . HasRepSize QWordRepVal . (`MemoryAddr` qwordMemRepr) <$> getBVAddress ar
+    F.Mem8  ar -> Some . HasRepSize  ByteRepVal <$> getBV8Addr  ar
+    F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> getBV16Addr ar
+    F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
+    F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
 
     F.ByteReg  r
       | Just r64 <- F.is_low_reg r  -> pure $ Some $ HasRepSize  ByteRepVal (reg_low8 $ X86_GP r64)
       | Just r64 <- F.is_high_reg r -> pure $ Some $ HasRepSize  ByteRepVal (reg_high8 $ X86_GP r64)
       | otherwise                   -> fail "unknown r8"
-    F.WordReg  r                    -> pure $ Some $ HasRepSize  WordRepVal (reg_low16 (X86_GP $ F.reg16_reg r))
-    F.DWordReg r                    -> pure $ Some $ HasRepSize DWordRepVal (reg_low32 (X86_GP $ F.reg32_reg r))
-    F.QWordReg r                    -> pure $ Some $ HasRepSize QWordRepVal (fullRegister $ X86_GP r)
+    F.WordReg  r                    -> pure $ Some $ HasRepSize  WordRepVal (reg16Loc r)
+    F.DWordReg r                    -> pure $ Some $ HasRepSize DWordRepVal (reg32Loc r)
+    F.QWordReg r                    -> pure $ Some $ HasRepSize QWordRepVal (reg64Loc r)
     _  -> fail $ "Argument " ++ show v ++ " not supported."
 
 -- | Gets a value that can be pushed.

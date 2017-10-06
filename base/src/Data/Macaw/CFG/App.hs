@@ -71,23 +71,23 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Multiply two numbers
   BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Unsigned less than.
-  BVUnsignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
-
   -- Unsigned less than or equal.
   BVUnsignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
-  -- Signed less than
-  BVSignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+  -- Unsigned less than.
+  BVUnsignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Signed less than or equal.
   BVSignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
+
+  -- Signed less than
+  BVSignedLt :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- @BVTestBit x i@ returns true iff bit @i@ of @x@ is true.
   -- 0 is the index of the least-significant bit.
   --
   -- If the value is larger than the width of n, then the result is false.
-  BVTestBit :: (1 <= n) => !(f (BVType n)) -> !(f (BVType log_n)) -> App f BoolType
+  BVTestBit :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
   -- Bitwise complement
   BVComplement :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)

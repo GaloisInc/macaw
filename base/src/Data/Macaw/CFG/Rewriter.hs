@@ -238,10 +238,10 @@ rewriteApp app = do
       | w <- typeWidth x
       , ic + 1 == natValue w -> do
       rewriteApp (BVSignedLt x (BVValue w 0))
-    BVTestBit (valueAsApp -> Just (UExt x _)) i@(BVValue _ ic) -> do
+    BVTestBit (valueAsApp -> Just (UExt x _)) (BVValue _ ic) -> do
       let xw = typeWidth x
       if ic < natValue xw then
-        rewriteApp (BVTestBit x i)
+        rewriteApp (BVTestBit x (BVValue xw ic))
        else
         pure (BoolValue False)
     BVTestBit (valueAsApp -> Just (BVAnd _ x y)) i@BVValue{} -> do
