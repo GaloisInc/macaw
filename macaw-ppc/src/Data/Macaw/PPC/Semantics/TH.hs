@@ -1,16 +1,24 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.PPC.Semantics.TH
   ( genExecInstruction
   ) where
 
-import Language.Haskell.TH
+import qualified Data.ByteString as BS
+import qualified Data.Constraint as C
+import           Language.Haskell.TH
 
+import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as Map
+import qualified Data.Parameterized.Nonce as PN
+import           Data.Parameterized.Some ( Some(..) )
+import           Data.Parameterized.Witness ( Witness(..) )
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import qualified Lang.Crucible.Solver.SimpleBackend as S
 import qualified Lang.Crucible.BaseTypes as S
@@ -26,9 +34,17 @@ import Data.Parameterized.NatRepr (knownNat)
 import Data.Macaw.PPC.Generator
 
 -- generate a different case for each key/value pair in the map
-genExecInstruction :: Map.MapF (A.Opcode arch (A.Operand arch)) (ParameterizedFormula sym arch)
+genExecInstruction :: (A.Architecture arch, OrdF a)
+                   => proxy arch
+                   -> (forall sh . c sh C.:- BuildOperandList arch sh)
+                   -> [(Some (Witness c a), BS.ByteString)]
                    -> Q Exp
-genExecInstruction _ = [| undefined |]
+genExecInstruction _ impl semantics = do
+  Some ng <- runIO PN.newIONonceGenerator
+  sym <- runIO (S.newSimpleBackend ng)
+  formulas <- runIO (loadFormulas sym impl semantics)
+  reportWarning ("Found " ++ show (length semantics) ++ " formulas")
+  [| undefined |]
 
 -- SemMC.Formula: instantiateFormula
 
