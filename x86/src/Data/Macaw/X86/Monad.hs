@@ -1011,16 +1011,16 @@ class IsValue (v  :: Type -> *) where
 
   -- | Return true expression is unsigned add overflows.  See
   -- @sadc_overflows@ for definition.
-  uadd_overflows :: v (BVType n) -> v (BVType n) -> v BoolType
+  uadd_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
   uadd_overflows x y = uadc_overflows x y false
 
   -- | Return true expression if a signed add-with carry would overflow.
   -- This holds if the sign bits of the arguments are the same, and the sign
   -- of the result is different.
-  sadc_overflows :: v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
+  sadc_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
 
   -- | Return true expression if a unsigned add-with carry would overflow.
-  uadc_overflows :: v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
+  uadc_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
 
   -- | Return true expression if unsigned sub overflows.
   -- @usub_overflows x y@ is true when @x - y@ (interpreted as unsigned numbers),

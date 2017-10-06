@@ -26,6 +26,7 @@ import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
+import           Data.Bits
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Memory as M
@@ -35,6 +36,7 @@ import           Data.Maybe
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableFC
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
@@ -45,6 +47,7 @@ import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.FunctionHandle as C
 import           Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Solver.Symbol as C
+import qualified Lang.Crucible.Types as C
 
 import           Data.Macaw.Symbolic.PersistentState
 
@@ -196,12 +199,53 @@ v2c = valueToCrucible
 appAtom :: C.App (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
 appAtom app = evalAtom (CR.EvalApp app)
 
+-- | Create a crucible value for a bitvector literal.
+bvLit :: (1 <= w) => NatRepr w -> Integer -> CrucGen arch ids s (CR.Atom s (C.BVType w))
+bvLit w i = crucibleValue (C.BVLit w (i .&. maxUnsigned w))
+
+incNatIsPos :: forall p w . p w -> LeqProof 1 (w+1)
+incNatIsPos _ = leqAdd2 (LeqProof :: LeqProof 0 w) (LeqProof :: LeqProof 1 1)
+
+zext1 :: forall arch ids s w
+      .  (1 <= w)
+      => NatRepr w
+      -> CR.Atom s (C.BVType w)
+      -> CrucGen arch ids s (CR.Atom s (C.BVType (w+1)))
+zext1 w =
+  case incNatIsPos w of
+    LeqProof -> appAtom . C.BVZext (incNat w) w
+
+msb :: (1 <= w) => NatRepr w -> CR.Atom s (C.BVType w) -> CrucGen arch ids s (CR.Atom s C.BoolType)
+msb w x = do
+  mask <- bvLit w (maxSigned w + 1)
+  x_mask <- appAtom $ C.BVAnd w x mask
+  appAtom (C.BVEq w x_mask mask)
+
+bvAdc :: (1 <= w)
+      => NatRepr w
+      -> CR.Atom s (C.BVType w)
+      -> CR.Atom s (C.BVType w)
+      -> CR.Atom s C.BoolType
+      -> CrucGen arch ids s (CR.Atom s (C.BVType w))
+bvAdc w x y c = do
+  s  <- appAtom $ C.BVAdd w x y
+  cbv <- appAtom =<< C.BVIte c w <$> bvLit w 1 <*> bvLit w 0
+  appAtom $ C.BVAdd w s cbv
+
+
 appToCrucible :: M.App (M.Value arch ids) tp
               -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 appToCrucible app = do
   ctx <- getCtx
   archConstraints ctx $ do
   case app of
+    M.Eq x y ->
+      case M.typeRepr x of
+        M.BoolTypeRepr -> do
+          eq <- appAtom =<< C.BoolXor <$> v2c x <*> v2c y
+          appAtom (C.Not eq)
+        M.BVTypeRepr w -> do
+          appAtom =<< C.BVEq w <$> v2c x <*> v2c y
     M.Mux M.BoolTypeRepr c t f ->
       appAtom =<< C.BoolIte <$> v2c c <*> v2c t <*> v2c f
     M.Mux (M.BVTypeRepr w) c t f ->
@@ -216,16 +260,33 @@ appToCrucible app = do
     M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
     M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
     M.BVMul w x y -> appAtom =<< C.BVMul w <$> v2c x <*> v2c y
-    M.UnsignedLe x y -> appAtom =<< C.BVUle (M.typeWidth x) <$> v2x x <*> v2c y
-    M.UnsignedLt x y -> appAtom =<< C.BVUlt (M.typeWidth x) <$> v2x x <*> v2c y
-    M.SignedLe   x y -> appAtom =<< C.BVSle (M.typeWidth x) <$> v2x x <*> v2c y
-    M.SignedLt   x y -> appAtom =<< C.BVSlt (M.typeWidth x) <$> v2x x <*> v2c y
+    M.BVUnsignedLe x y -> appAtom =<< C.BVUle (M.typeWidth x) <$> v2c x <*> v2c y
+    M.BVUnsignedLt x y -> appAtom =<< C.BVUlt (M.typeWidth x) <$> v2c x <*> v2c y
+    M.BVSignedLe   x y -> appAtom =<< C.BVSle (M.typeWidth x) <$> v2c x <*> v2c y
+    M.BVSignedLt   x y -> appAtom =<< C.BVSlt (M.typeWidth x) <$> v2c x <*> v2c y
     M.BVTestBit x i -> do
       let w = M.typeWidth x
-      -- Logical shift x right by i bits.
-      x_shift <- appAtom =<< C.BVLshr w x i
-      -- Mask off least-significant bit.
-      -- Check to see if result is one.
+      one <- bvLit w 1
+      -- Create mask for ith index
+      i_mask <- appAtom =<< C.BVShl w one <$> v2c i
+      -- Mask off index
+      x_mask <- appAtom =<< C.BVAnd w <$> v2c x <*> pure i_mask
+      -- Check to see if result is i_mask
+      appAtom (C.BVEq w x_mask i_mask)
+    M.BVComplement w x -> appAtom =<< C.BVNot w <$> v2c x
+    M.BVAnd w x y -> appAtom =<< C.BVAnd w <$> v2c x <*> v2c y
+    M.BVOr  w x y -> appAtom =<< C.BVOr  w <$> v2c x <*> v2c y
+    M.BVXor w x y -> appAtom =<< C.BVXor w <$> v2c x <*> v2c y
+    M.BVShl w x y -> appAtom =<< C.BVShl  w <$> v2c x <*> v2c y
+    M.BVShr w x y -> appAtom =<< C.BVLshr w <$> v2c x <*> v2c y
+    M.BVSar w x y -> appAtom =<< C.BVAshr w <$> v2c x <*> v2c y
+    M.UadcOverflows w x y c -> do
+      let w' = incNat w
+      x' <- zext1 w =<< v2c x
+      y' <- zext1 w =<< v2c y
+      LeqProof <- pure (incNatIsPos w)
+      r <- bvAdc w' x' y' =<< v2c c
+      msb w' r
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
@@ -233,10 +294,8 @@ valueToCrucible v = do
   cns <- archConstraints <$> getCtx
   cns $ do
   case v of
-    M.BVValue w c -> do
-      crucibleValue (C.BVLit w c)
-    M.BoolValue b -> do
-      crucibleValue (C.BoolLit b)
+    M.BVValue w c -> bvLit w c
+    M.BoolValue b -> crucibleValue (C.BoolLit b)
     M.RelocatableValue w addr -> do
       case M.viewAddr addr of
         Left base -> do

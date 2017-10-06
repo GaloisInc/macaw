@@ -42,6 +42,9 @@ import           Data.Macaw.Types
 -- | App defines builtin operations on values.
 data App (f :: Type -> *) (tp :: Type) where
 
+  -- Compare for equality.
+  Eq :: !(f tp) -> !(f tp) -> App f BoolType
+
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
   ----------------------------------------------------------------------
@@ -105,44 +108,45 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Arithmetic right shift (x / 2 ^ n)
   BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Compare for equality.
-  Eq :: !(f tp) -> !(f tp) -> App f BoolType
-
-  -- Return true if value contains even number of true bits.
-  EvenParity :: !(f (BVType 8)) -> App f BoolType
-
-  -- Reverse the bytes in a bitvector expression.
-  ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Add two values and a carry bit to determine if they have an unsigned
-  -- overflow.
-  UadcOverflows :: !(NatRepr n)
+  -- Add two values and a carry bit to determine if they have an unsigned overflow.
+  --
+  -- This is the sum of three three values cannot be represented as an unsigned number.
+  UadcOverflows :: (1 <= n)
+                => !(NatRepr n)
                 -> !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
   -- Add two values and a carry bit to determine if they have a signed
   -- overflow.
-  SadcOverflows :: !(NatRepr n)
+  SadcOverflows :: (1 <= n)
+                => !(NatRepr n)
                 -> !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
   -- Unsigned subtract with borrow overflow
-  UsbbOverflows :: !(NatRepr n)
+  UsbbOverflows :: (1 <= n)
+                => !(NatRepr n)
                 -> !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
   -- Signed subtract with borrow overflow
-  SsbbOverflows :: !(NatRepr n)
+  SsbbOverflows :: (1 <= n)
+                => !(NatRepr n)
                 -> !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
+  -- Return true if value contains even number of true bits.
+  EvenParity :: !(f (BVType 8)) -> App f BoolType
+
+  -- Reverse the bytes in a bitvector expression.
+  ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   -- bsf "bit scan forward" returns the index of the least-significant
   -- bit that is 1.  Undefined if value is zero.
