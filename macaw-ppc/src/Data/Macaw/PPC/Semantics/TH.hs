@@ -34,16 +34,15 @@ import Data.Parameterized.NatRepr (knownNat)
 import Data.Macaw.PPC.Generator
 
 -- generate a different case for each key/value pair in the map
-genExecInstruction :: (A.Architecture arch, OrdF a)
+genExecInstruction :: (A.Architecture arch, OrdF a, ShowF a)
                    => proxy arch
                    -> (forall sh . c sh C.:- BuildOperandList arch sh)
                    -> [(Some (Witness c a), BS.ByteString)]
                    -> Q Exp
 genExecInstruction _ impl semantics = do
   Some ng <- runIO PN.newIONonceGenerator
-  sym <- runIO (S.newSimpleBackend ng)
-  formulas <- runIO (loadFormulas sym impl semantics)
-  reportWarning ("Found " ++ show (length semantics) ++ " formulas")
+  _sym <- runIO (S.newSimpleBackend ng)
+  -- formulas <- runIO (loadFormulas sym impl semantics)
   [| undefined |]
 
 -- SemMC.Formula: instantiateFormula
