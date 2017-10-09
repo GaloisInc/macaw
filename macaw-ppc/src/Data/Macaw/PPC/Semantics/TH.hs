@@ -77,57 +77,95 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
 --   - BVConcat (shifts, extensions and adds?)
 --   - BVSelect
 --   - BVNeg (complement, add 1)
+--   - BVTestBit
 
 -- Might need to implement later:
 --   - BVUdiv, BVUrem, BVSdiv, BVSrem
 
-crucAppToExpr :: S.App (S.Elt t) ctp -> Expr ppc ids (FromCrucibleBaseType ctp)
-crucAppToExpr S.TrueBool  = ValueExpr (M.BoolValue True)
-crucAppToExpr S.FalseBool = ValueExpr (M.BoolValue False)
-crucAppToExpr (S.NotBool bool) = AppExpr $ M.NotApp (eltToExpr bool)
--- crucAppToExpr (S.AndBool bool1 bool2)
---   = AppExpr $ M.AndApp (eltToExpr bool1) (eltToExpr bool2)
--- crucAppToExpr (S.XorBool bool1 bool2)
---   = AppExpr $ M.XorApp (eltToExpr bool1) (eltToExpr bool2)
--- crucAppToExpr (S.IteBool test t f)
---   = AppExpr $ M.Mux M.BoolTypeRepr (eltToExpr test) (eltToExpr t) (eltToExpr f)
--- crucAppToExpr (S.BVIte w numBranches test t f) -- what is numBranches for?
---   = AppExpr $ M.Mux (M.BVTypeRepr w) (eltToExpr test) (eltToExpr t) (eltToExpr f)
--- crucAppToExpr (S.BVTestBit ix bv)
---   = AppExpr $ undefined
--- crucAppToExpr (S.BVEq bv1 bv2) = AppExpr $ M.Eq (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVSlt bv1 bv2)
---   = AppExpr $ M.BVSignedLt (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVUlt bv1 bv2)
---   = AppExpr $ M.BVUnsignedLt (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVAdd repr bv1 bv2)
---   = AppExpr $ M.BVAdd repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVMul repr bv1 bv2)
---   = AppExpr $ M.BVMul repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVShl repr bv1 bv2)
---   = AppExpr $ M.BVShl repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVLshr repr bv1 bv2)
---   = AppExpr $ M.BVShr repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVAshr repr bv1 bv2)
---   = AppExpr $ M.BVSar repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVZext repr bv)
---   = AppExpr $ M.UExt (eltToExpr bv) repr
--- crucAppToExpr (S.BVSext repr bv)
---   = AppExpr $ M.SExt (eltToExpr bv) repr
--- crucAppToExpr (S.BVTrunc repr bv)
---   = AppExpr $ M.Trunc (eltToExpr bv) repr
--- crucAppToExpr (S.BVBitNot repr bv)
---   = AppExpr $ M.BVComplement repr (eltToExpr bv)
--- crucAppToExpr (S.BVBitAnd repr bv1 bv2)
---   = AppExpr $ M.BVAnd repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVBitOr repr bv1 bv2)
---   = AppExpr $ M.BVOr repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr (S.BVBitXor repr bv1 bv2)
---   = AppExpr $ M.BVXor repr (eltToExpr bv1) (eltToExpr bv2)
--- crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
+data Hole = Hole
 
-eltToExpr :: S.Elt t ctp -> Expr ppc ids (FromCrucibleBaseType ctp)
-eltToExpr (S.BVElt w val loc) = ValueExpr (M.BVValue w val)
+addExpr :: Expr ppc ids tp -> PPCGenerator ppc ids (M.Value ppc ids tp)
+addExpr expr = do
+  case expr of
+    ValueExpr val -> return val
+    AppExpr app -> do
+      assignment <- addAssignment (M.EvalApp app)
+      return $ M.AssignedValue assignment
+
+addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt elt = eltToExpr elt >>= addExpr
+
+crucAppToExpr :: S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
+crucAppToExpr S.FalseBool = return $ ValueExpr (M.BoolValue False)
+crucAppToExpr (S.NotBool bool) = do
+  subExpr <- eltToExpr bool
+  val <- addExpr subExpr
+  return $ AppExpr (M.NotApp val)
+crucAppToExpr (S.AndBool bool1 bool2) = do
+  [val1, val2] <- sequence $ fmap addElt [bool1, bool2]
+  return $ AppExpr (M.AndApp val1 val2)
+crucAppToExpr (S.XorBool bool1 bool2) = do
+  [val1, val2] <- sequence $ fmap addElt [bool1, bool2]
+  return $ AppExpr (M.XorApp val1 val2)
+crucAppToExpr (S.IteBool test t f) = do
+  [testVal, tVal, fVal] <- sequence $ fmap addElt [test, t, f]
+  return $ AppExpr (M.Mux M.BoolTypeRepr testVal tVal fVal)
+crucAppToExpr (S.BVIte w numBranches test t f) = do -- what is numBranches for?
+  testVal <- addElt test
+  -- TODO: Is there any way to combine above and below into a single thing? Somehow
+  -- hide the type parameter?
+  [tVal, fVal] <- sequence $ fmap addElt [t, f]
+  return $ AppExpr (M.Mux (M.BVTypeRepr w) testVal tVal fVal)
+crucAppToExpr (S.BVEq bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.Eq bv1Val bv2Val)
+crucAppToExpr (S.BVSlt bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVSignedLt bv1Val bv2Val)
+crucAppToExpr (S.BVUlt bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVUnsignedLt bv1Val bv2Val)
+crucAppToExpr (S.BVAdd repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVAdd repr bv1Val bv2Val)
+crucAppToExpr (S.BVMul repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVMul repr bv1Val bv2Val)
+crucAppToExpr (S.BVShl repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVShl repr bv1Val bv2Val)
+crucAppToExpr (S.BVLshr repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVShr repr bv1Val bv2Val)
+crucAppToExpr (S.BVAshr repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVSar repr bv1Val bv2Val)
+crucAppToExpr (S.BVZext repr bv) = do
+  bvVal <- addElt bv
+  return $ AppExpr (M.UExt bvVal repr)
+crucAppToExpr (S.BVSext repr bv) = do
+  bvVal <- addElt bv
+  return $ AppExpr (M.SExt bvVal repr)
+crucAppToExpr (S.BVTrunc repr bv) = do
+  bvVal <- addElt bv
+  return $ AppExpr (M.Trunc bvVal repr)
+crucAppToExpr (S.BVBitNot repr bv) = do
+  bvVal <- addElt bv
+  return $ AppExpr (M.BVComplement repr bvVal)
+crucAppToExpr (S.BVBitAnd repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVAnd repr bv1Val bv2Val)
+crucAppToExpr (S.BVBitOr repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVOr repr bv1Val bv2Val)
+crucAppToExpr (S.BVBitXor repr bv1 bv2) = do
+  [bv1Val, bv2Val] <- sequence $ fmap addElt [bv1, bv2]
+  return $ AppExpr (M.BVXor repr bv1Val bv2Val)
+crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
+
+eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
 eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
 
 locToReg :: (1 <= APPC.ArchRegWidth ppc, M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc) =>
@@ -144,7 +182,7 @@ interpretFormula :: forall tp ppc t ctp s .
                  -> S.Elt t ctp
                  -> PPCGenerator ppc s ()
 interpretFormula loc elt = do
-  let expr = eltToExpr elt
+  expr <- eltToExpr elt
   let reg  = (locToReg (Proxy @ppc) loc)
   case expr of
     ValueExpr val -> curPPCState . M.boundValue reg .= val
