@@ -60,8 +60,8 @@ data GenResult ppc s =
 
 data Expr ppc s tp where
   ValueExpr :: !(Value ppc s tp) -> Expr ppc s tp
-  AppExpr   :: !(App (Expr ppc s) tp) -> Expr ppc s tp
-
+--   AppExpr   :: !(App (Value ppc s) tp) -> Expr ppc s tp
+  AppExpr   :: !(App (Value ppc s) tp) -> Expr ppc s tp
 ------------------------------------------------------------------------
 -- BlockSeq
 data BlockSeq ppc s = BlockSeq
@@ -196,3 +196,10 @@ getReg r = do
   genState <- St.get
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return expr
+
+-- evalApp :: App (Value PPC s) tp -> PPCGenerator ppc s (Value PPC s tp)
+-- evalApp = undefined
+
+-- eval :: Expr ppc s tp -> PPCGenerator ppc s (Value PPC s tp)
+-- eval (ValueExpr v) = return v
+-- eval (AppExpr a) = evalAp =<< traverseFC eval a
