@@ -190,6 +190,10 @@ locToReg :: (1 <= APPC.ArchRegWidth ppc,
          -> APPC.Location ppc ctp
          -> PPCReg ppc (FromCrucibleBaseType ctp)
 locToReg _ (APPC.LocGPR gpr) = PPC_GP gpr
+locToReg _  APPC.LocIP       = PPC_IP
+locToReg _  APPC.LocLNK      = PPC_LNK
+locToReg _  APPC.LocCTR      = PPC_CTR
+locToReg _  APPC.LocCR       = PPC_CR
 -- fill the rest out later
 
 -- | Given a location to modify and a crucible formula, construct a PPCGenerator that
