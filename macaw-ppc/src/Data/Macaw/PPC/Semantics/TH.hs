@@ -79,8 +79,6 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
 --   - all structs
 
 -- Can implement now:
---   - BVSelect
---   - BVNeg (complement, add 1)
 --   - BVTestBit
 
 -- Might need to implement later:
@@ -96,6 +94,11 @@ addExpr expr = do
 
 addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr
+
+-- combine this with addElt
+eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
+eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
 
 crucAppToExpr :: S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
@@ -116,7 +119,7 @@ crucAppToExpr (S.BVSlt bv1 bv2) = AppExpr <$> do
   M.BVSignedLt <$> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVUlt bv1 bv2) = AppExpr <$> do
   M.BVUnsignedLt <$> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVConcat repr bv1 bv2) = AppExpr <$> do
+crucAppToExpr (S.BVConcat w bv1 bv2) = AppExpr <$> do
   let u = S.bvWidth bv1
       v = S.bvWidth bv2
   bv1Val <- addElt bv1
@@ -124,20 +127,33 @@ crucAppToExpr (S.BVConcat repr bv1 bv2) = AppExpr <$> do
   S.LeqProof <- return $ S.leqAdd2 (S.leqRefl u) (S.leqProof (knownNat @1) v)
   S.LeqProof <- return $ S.leqAdd2 (S.leqRefl v) (S.leqProof (knownNat @1) u)
   Refl <- return $ S.plusComm u v
-  bv1Ext <- addExpr (AppExpr (M.UExt bv1Val repr)) ---(u `addNat` v)))
-  bv2Ext <- addExpr (AppExpr (M.UExt bv2Val repr))
-  bv1Shifter <- addExpr (ValueExpr (M.BVValue repr (natValue v)))
-  bv1Shf <- addExpr (AppExpr (M.BVShl repr bv1Ext bv1Shifter))
-  return $ M.BVOr repr bv1Shf bv2Ext
-crucAppToExpr (S.BVSelect iRepr nRepr bv) = AppExpr <$> do
+  bv1Ext <- addExpr (AppExpr (M.UExt bv1Val w)) ---(u `addNat` v)))
+  bv2Ext <- addExpr (AppExpr (M.UExt bv2Val w))
+  bv1Shifter <- addExpr (ValueExpr (M.BVValue w (natValue v)))
+  bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
+  return $ M.BVOr w bv1Shf bv2Ext
+crucAppToExpr (S.BVSelect idx n bv) = do
   let w = S.bvWidth bv
   bvVal <- addElt bv
-  -- Shouldn't we *know* that w is a positive nat?
-  Just S.LeqProof <- return $ isPosNat w
-  -- Shouldn't we *know* that n + 1 <= w?
-  Just S.LeqProof <- return $ testLeq (nRepr `addNat` (knownNat @1)) w
-  bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (natValue iRepr))))
-  return $ M.Trunc bvShf nRepr
+  case natValue n + 1 <= natValue w of
+    True -> do
+      -- Is there a way to just "know" that n + 1 <= w?
+      Just S.LeqProof <- return $ S.testLeq (n `addNat` (knownNat @1)) w
+      pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl idx) (S.leqProof (knownNat @1) n)
+      pf2@S.LeqProof <- return $ S.leqAdd (S.leqRefl (knownNat @1)) idx
+      Refl <- return $ S.plusComm (knownNat @1) idx
+      pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
+      S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof (idx `addNat` n) w)
+      bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (natValue idx))))
+      return $ AppExpr (M.Trunc bvShf n)
+    False -> do
+      -- Is there a way to just "know" that n = w?
+      Just Refl <- return $ testEquality n w
+      return $ ValueExpr bvVal
+crucAppToExpr (S.BVNeg w bv) = do
+  bvVal  <- addElt bv
+  bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
+  return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
 crucAppToExpr (S.BVAdd repr bv1 bv2) = AppExpr <$> do
   M.BVAdd <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVMul repr bv1 bv2) = AppExpr <$> do
@@ -163,11 +179,6 @@ crucAppToExpr (S.BVBitOr repr bv1 bv2) = AppExpr <$> do
 crucAppToExpr (S.BVBitXor repr bv1 bv2) = AppExpr <$> do
   M.BVXor <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
-
--- combine this with addElt
-eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
-eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
-eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
 
 locToReg :: (1 <= APPC.ArchRegWidth ppc,
              M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
