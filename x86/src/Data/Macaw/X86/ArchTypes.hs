@@ -95,7 +95,9 @@ instance Pretty (X86PrimLoc tp) where
 
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp
-   = ReadLoc !(X86PrimLoc tp)
+   = (tp ~ BoolType) => EvenParity (f (BVType 8))
+     -- ^ Return true if least-significant bit has even number of bits set.
+   | ReadLoc !(X86PrimLoc tp)
      -- ^ Read from a primitive X86 location
    | (tp ~ BVType 64) => ReadFSBase
      -- ^ Read the 'FS' base address
@@ -186,6 +188,7 @@ data X86PrimFn f tp
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
+      EvenParity{}  -> knownType
       ReadLoc loc   -> typeRepr loc
       ReadFSBase    -> knownType
       ReadGSBase    -> knownType
@@ -210,6 +213,7 @@ instance FoldableFC X86PrimFn where
 instance TraversableFC X86PrimFn where
   traverseFC go f =
     case f of
+      EvenParity x -> EvenParity <$> go x
       ReadLoc l  -> pure (ReadLoc l)
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
@@ -230,6 +234,7 @@ instance TraversableFC X86PrimFn where
 instance IsArchFn X86PrimFn where
   ppArchFn pp f =
     case f of
+      EvenParity x -> sexprA "even_parity" [ pp x ]
       ReadLoc loc -> pure $ pretty loc
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
@@ -253,20 +258,21 @@ instance IsArchFn X86PrimFn where
 x86PrimFnHasSideEffects :: X86PrimFn f tp -> Bool
 x86PrimFnHasSideEffects f =
   case f of
-    ReadLoc{}   -> False
-    ReadFSBase  -> False
-    ReadGSBase  -> False
-    CPUID{}     -> False
-    RDTSC       -> False
-    XGetBV{}    -> False
-    PShufb{}    -> False
-    MemCmp{}    -> False
-    RepnzScas{} -> True
-    MMXExtend{} -> False
-    X86IDiv{}   -> True -- To be conservative we treat the divide errors as side effects.
-    X86IRem{}   -> True -- /\ ..
-    X86Div{}    -> True -- /\ ..
-    X86Rem{}    -> True -- /\ ..
+    EvenParity{} -> False
+    ReadLoc{}    -> False
+    ReadFSBase   -> False
+    ReadGSBase   -> False
+    CPUID{}      -> False
+    RDTSC        -> False
+    XGetBV{}     -> False
+    PShufb{}     -> False
+    MemCmp{}     -> False
+    RepnzScas{}  -> True
+    MMXExtend{}  -> False
+    X86IDiv{}    -> True -- To be conservative we treat the divide errors as side effects.
+    X86IRem{}    -> True -- /\ ..
+    X86Div{}     -> True -- /\ ..
+    X86Rem{}     -> True -- /\ ..
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -344,6 +350,10 @@ rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
                  -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
 rewriteX86PrimFn f =
   case f of
+    EvenParity (BVValue _ xv) -> do
+      let go 8 r = r
+          go i r = go (i+1) $! (xv `testBit` i /= r)
+      pure $ BoolValue (go 0 True)
     MMXExtend e -> do
       tgtExpr <- rewriteValue e
       case tgtExpr of

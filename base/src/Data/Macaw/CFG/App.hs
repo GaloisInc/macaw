@@ -142,29 +142,36 @@ data App (f :: Type -> *) (tp :: Type) where
                 -> !(f BoolType)
                 -> App f BoolType
 
+  -- | This returns the number of true bits in the input.
+  PopCount :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+
   -- Return true if value contains even number of true bits.
-  EvenParity :: !(f (BVType 8)) -> App f BoolType
+  --EvenParity :: !(f (BVType 8)) -> App f BoolType
 
   -- Reverse the bytes in a bitvector expression.
-  ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
+  ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType (8*n))) -> App f (BVType (8*n))
 
-  -- bsf "bit scan forward" returns the index of the least-significant
-  -- bit that is 1.  Undefined if value is zero.
-  -- All bits at indices less than return value must be unset.
+  -- | bsf "bit scan forward" returns the index of the
+  -- least-significant bit that is 1.  An equivalent way of stating
+  -- this is that it returns the number "trailing" zero-bits.  This
+  -- returns n if the value is zero.
   Bsf :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- bsr "bit scan reverse" returns the index of the most-significant
-  -- bit that is 1.  Undefined if value is zero.
-  -- All bits at indices greater than return value must be unset.
+  -- | bsf "bit scan forward" returns the index of the
+  -- most-significant bit that is 1.  An equivalent way of stating
+  -- this is that it returns the number "least" zero-bits.  This
+  -- returns n if the value is zero.
   Bsr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   ----------------------------------------------------------------------
   -- Floating point operations
 
+  -- | Return true if floating point value is a "quiet" NaN.
   FPIsQNaN :: !(FloatInfoRepr flt)
            -> !(f (FloatType flt))
            -> App f BoolType
 
+  -- | Return true if floating point value is a "signaling" NaN.
   FPIsSNaN :: !(FloatInfoRepr flt)
            -> !(f (FloatType flt))
            -> App f BoolType
@@ -337,7 +344,7 @@ ppAppA pp a0 =
     BVShr _ x y -> sexprA "bv_shr" [ pp x, pp y ]
     BVSar _ x y -> sexprA "bv_sar" [ pp x, pp y ]
     Eq x y      -> sexprA "eq" [ pp x, pp y ]
-    EvenParity x -> sexprA "even_parity" [ pp x ]
+    PopCount _ x -> sexprA "popcount" [ pp x ]
     ReverseBytes _ x -> sexprA "reverse_bytes" [ pp x ]
     UadcOverflows _ x y c -> sexprA "uadc_overflows" [ pp x, pp y, pp c ]
     SadcOverflows _ x y c -> sexprA "sadc_overflows" [ pp x, pp y, pp c ]
@@ -397,14 +404,17 @@ instance HasRepr (App f) TypeRepr where
     BVShr w _ _ -> BVTypeRepr w
     BVSar w _ _ -> BVTypeRepr w
     Eq _ _       -> knownType
-    EvenParity _ -> knownType
-    ReverseBytes w _ -> BVTypeRepr w
 
-    UadcOverflows{}  -> knownType
+
+    UadcOverflows{} -> knownType
     SadcOverflows{} -> knownType
     UsbbOverflows{} -> knownType
     SsbbOverflows{} -> knownType
 
+    PopCount w _ -> BVTypeRepr w
+    ReverseBytes w _ ->
+      case leqMulCongr (LeqProof :: LeqProof 1 8) (leqProof (knownNat :: NatRepr 1) w) of
+        LeqProof -> BVTypeRepr (natMultiply (knownNat :: NatRepr 8) w)
     Bsf w _ -> BVTypeRepr w
     Bsr w _ -> BVTypeRepr w
 

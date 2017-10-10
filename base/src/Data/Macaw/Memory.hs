@@ -44,6 +44,7 @@ module Data.Macaw.Memory
   , ppMemSegment
   , segmentSize
   , SegmentRange(..)
+  , dropSegmentRangeListBytes
     -- * MemWord
   , MemWord
   , MemWidth(..)
@@ -58,6 +59,7 @@ module Data.Macaw.Memory
   , msegAddr
   , incSegmentOff
   , diffSegmentOff
+  , clearSegmentOffLeastBit
   , memAsAddrPairs
     -- * Symbols
   , SymbolRef(..)
@@ -340,6 +342,30 @@ instance Show (SegmentRange w) where
   showList [] = id
   showList (h : r) = showsPrec 10 h . showList r
 
+-- | Given a contiguous list of segment ranges and a number of bytes to drop, this
+-- returns the remaining segment ranges or throws an error.
+dropSegmentRangeListBytes :: forall w
+                          .  MemWidth w
+                          => MemAddr w
+                          -> [SegmentRange w]
+                          -> Int
+                          -> Either (MemoryError w) [SegmentRange w]
+dropSegmentRangeListBytes _ ranges 0 = Right ranges
+dropSegmentRangeListBytes addr (ByteRegion bs : rest) cnt = do
+  let sz = BS.length bs
+  if sz > cnt then
+    Right $ ByteRegion (BS.drop cnt bs) : rest
+   else
+    dropSegmentRangeListBytes (incAddr (toInteger sz) addr)  rest (cnt - sz)
+dropSegmentRangeListBytes addr (SymbolicRef _:rest) cnt = do
+  let sz = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
+  if sz > cnt then
+    Left (UnexpectedRelocation addr)
+   else
+    dropSegmentRangeListBytes (incAddr (toInteger sz) addr) rest (cnt - sz)
+dropSegmentRangeListBytes addr [] _ =
+  Left (InvalidAddr addr)
+
 ------------------------------------------------------------------------
 -- SegmentContents
 
@@ -573,6 +599,10 @@ resolveSegmentOff seg off
 -- | Return the absolute address associated with the segment offset pair (if any)
 msegAddr :: MemWidth w => MemSegmentOff w -> Maybe (MemWord w)
 msegAddr (MemSegmentOff seg off) = (+ off) <$> segmentBase seg
+
+-- | Clear the least-significant bit of an segment offset.
+clearSegmentOffLeastBit :: MemWidth w => MemSegmentOff w -> MemSegmentOff w
+clearSegmentOffLeastBit (MemSegmentOff seg off) = MemSegmentOff seg (off .&. complement 1)
 
 -- | Increment a segment offset by a given amount.
 --

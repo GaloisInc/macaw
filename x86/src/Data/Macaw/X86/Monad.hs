@@ -997,12 +997,9 @@ class IsValue (v  :: Type -> *) where
   least_byte :: forall n . (8 <= n) => v (BVType n) -> v (BVType 8)
   least_byte = bvTrunc knownNat
 
-  -- | Return true if value contains an even number of true bits.
-  even_parity :: v (BVType 8) -> v BoolType
-
   -- | Reverse the bytes in a bitvector expression.
   -- The parameter n should be a multiple of 8.
-  reverse_bytes :: (1 <= n) => v (BVType n) -> v (BVType n)
+  reverse_bytes :: (1 <= n) => NatRepr n -> v (BVType (8*n)) -> v (BVType (8*n))
 
   -- | Return true expression is signed add overflows.  See
   -- @sadc_overflows@ for definition.
@@ -1432,6 +1429,8 @@ class ( Applicative m
               -- ^ Maximum number of elementes to compare
            -> m (Value m (BVType 64))
 
+  -- | Return true if value contains an even number of true bits.
+  even_parity :: Value m (BVType 8) -> m (Value m BoolType)
 
   -- | execute a primitive instruction.
   primitive :: Primitive -> m ()

@@ -9,7 +9,6 @@ This defines the architecture-specific information needed for code discovery.
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , DisassembleFn
-  , archPostSyscallAbsState
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   ) where
@@ -64,9 +63,6 @@ data ArchitectureInfo arch
        -- ^ The size of each entry in a jump table.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disasembling a block.
-     , preserveRegAcrossSyscall :: !(forall tp . ArchReg arch tp -> Bool)
-
-       -- ^ Return true if architecture register should be preserved across a system call.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
                          -> ArchSegmentOff arch
                          -> AbsBlockState (ArchReg arch))
@@ -120,16 +116,16 @@ data ArchitectureInfo arch
                                              -> Rewriter arch src tgt (ArchTermStmt arch tgt))
        -- ^ This rewrites an architecture specific statement
      , archDemandContext :: !(forall ids . DemandContext arch ids)
+       -- ^ Provides architecture-specific information for computing which arguments must be
+       -- evaluated when evaluating a statement.
+     , postArchTermStmtAbsState :: !(forall ids
+                                        -- The abstract state when block terminates.
+                                     .  AbsBlockState (ArchReg arch)
+                                        -- The architecture-specific statement
+                                     -> ArchTermStmt arch ids
+                                        -- The IP we are going to next.
+                                     -> ArchSegmentOff arch
+                                     -> AbsBlockState (ArchReg arch))
+       -- ^ Returns the abstract state after executing an architecture-specific
+       -- terminal statement.
      }
-
-
--- | Return state post call
-archPostSyscallAbsState :: ArchitectureInfo arch
-                           -- ^ Architecture information
-                        -> AbsBlockState (ArchReg arch)
-                        -> ArchSegmentOff arch
-                        -> AbsBlockState (ArchReg arch)
-archPostSyscallAbsState info = withArchConstraints info $ AbsState.absEvalCall params
-  where params = CallParams { postCallStackDelta = 0
-                            , preserveReg = preserveRegAcrossSyscall info
-                            }

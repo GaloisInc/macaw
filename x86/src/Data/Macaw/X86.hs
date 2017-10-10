@@ -509,13 +509,7 @@ instance S.IsValue (Expr ids) where
       -- Default case
     | otherwise = app (UExt e0 w)
 
-  even_parity x
-    | Just xv <- asBVLit x =
-        let go 8 r = r
-            go i r = go (i+1) $! (xv `testBit` i /= r)
-         in S.boolValue (go 0 True)
-    | otherwise = app $ EvenParity x
-  reverse_bytes x = app $ ReverseBytes (typeWidth x) x
+  reverse_bytes w x = app $ ReverseBytes w x
 
   uadc_overflows x y c
     | Just 0 <- asBVLit y, Just False <- asBoolLit c = S.false
@@ -737,23 +731,27 @@ modGenState m = X86G $ ContT $ \c -> ReaderT $ \s ->
   let (a,s') = runState m s
    in runReaderT (c a) s'
 
-modState :: State (RegState X86Reg (Value X86_64 ids)) a -> X86Generator st_s ids a
-modState m = modGenState $ do
-  s <- use curX86State
-  let (r,s') = runState m s
-  curX86State .= s'
-  return r
+getState :: X86Generator st_s ids (GenState st_s ids)
+getState = X86G ask
+
+-- | Return the value associated with the given register.
+getReg :: X86Reg tp -> X86Generator st_s ids (Value X86_64 ids tp)
+getReg r = view (curX86State . boundValue r) <$> getState
+
+-- | Set the value associated with the given register.
+setReg :: X86Reg tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
+setReg r v = modGenState $ curX86State . boundValue r .= v
 
 -- | Create a new assignment identifier
 newAssignID :: X86Generator st_s ids (AssignId ids tp)
 newAssignID = do
-  gs <- X86G $ ask
+  gs <- getState
   liftM AssignId $ X86G $ lift $ lift $ lift $ freshNonce $ assignIdGen gs
 
+-- | Add a statement to the list of statements.
 addStmt :: Stmt X86_64 ids -> X86Generator st_s ids ()
 addStmt stmt = seq stmt $
   modGenState $ blockState . pBlockStmts %= (Seq.|> stmt)
-
 
 addAssignment :: AssignRhs X86_64 ids tp
               -> X86Generator st_s ids (Assignment X86_64 ids tp)
@@ -761,11 +759,17 @@ addAssignment rhs = do
   l <- newAssignID
   let a = Assignment l rhs
   addStmt $ AssignStmt a
-  return a
+  pure $! a
 
-addArchFn :: X86PrimFn (Value X86_64 ids) tp
-          -> X86Generator st_s ids (Assignment X86_64 ids tp)
-addArchFn fn = addAssignment (EvalArchFn fn (typeRepr fn))
+evalAssignRhs :: AssignRhs X86_64 ids tp
+              -> X86Generator st_s ids (Expr ids tp)
+evalAssignRhs rhs =
+  ValueExpr . AssignedValue <$> addAssignment rhs
+
+-- | Evaluate an architecture-specific function and return the resulting expr.
+evalArchFn :: X86PrimFn (Value X86_64 ids) tp
+          -> X86Generator st_s ids (Expr ids tp)
+evalArchFn f = evalAssignRhs (EvalArchFn f (typeRepr f))
 
 -- | This function does a top-level constant propagation/constant reduction.
 -- We assume that the leaf nodes have also been propagated (i.e., we only operate
@@ -875,7 +879,7 @@ type ImpLocation ids tp = S.Location (AddrExpr ids) tp
 
 getX87Top :: X86Generator st_s ids Int
 getX87Top = do
-  top_val <- modState $ use $ boundValue X87_TopReg
+  top_val <- getReg X87_TopReg
   case top_val of
     -- Validate that i is less than top and top +
     BVValue _ (fromInteger -> topv) ->
@@ -890,18 +894,18 @@ getX87Offset i = do
   return $! topv + i
 
 readLoc :: X86PrimLoc tp -> X86Generator st_s ids (Expr ids tp)
-readLoc l = ValueExpr . AssignedValue <$> addArchFn (ReadLoc l)
+readLoc l = evalArchFn (ReadLoc l)
 
 getLoc :: ImpLocation ids tp -> X86Generator st_s ids (Expr ids tp)
 getLoc (l0 :: ImpLocation ids tp) =
   case l0 of
     S.MemoryAddr w tp -> do
       addr <- eval w
-      ValueExpr . AssignedValue <$> addAssignment (ReadMem addr tp)
+      evalAssignRhs (ReadMem addr tp)
     S.ControlReg _ ->
-      fail $ "Do not support writing to control registers."
+      fail $ "Do not support reading control registers."
     S.DebugReg _ ->
-      fail $ "Do not support writing to debug registers."
+      fail $ "Do not support reading debug registers."
     S.SegmentReg s
       | s == F.FS -> readLoc FS
       | s == F.GS -> readLoc GS
@@ -911,16 +915,14 @@ getLoc (l0 :: ImpLocation ids tp) =
     S.X87ControlReg r ->
       readLoc (X87_ControlLoc r)
     S.FullRegister r -> do
-      modState $ ValueExpr <$> use (boundValue r)
+      ValueExpr <$> getReg r
     S.Register (rv :: S.RegisterView m b n) -> do
       let r = S.registerViewReg rv
-      modState $ S.registerViewRead rv . ValueExpr <$> use (boundValue r)
+      S.registerViewRead rv . ValueExpr <$> getReg r
     -- TODO
     S.X87StackRegister i -> do
       idx <- getX87Offset i
-      e <- modState $ use $ boundValue (X87_FPUReg (F.mmxReg (fromIntegral idx)))
-      -- TODO: Check tag register is assigned.
-      return $! ValueExpr e
+      ValueExpr <$> getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
 
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
 addArchStmt s = addStmt $ ExecArchStmt (X86Stmt s)
@@ -954,19 +956,19 @@ setLoc loc v =
    S.X87ControlReg r ->
      addWriteLoc (X87_ControlLoc r) v
    S.FullRegister r -> do
-     modState $ boundValue r .= v
+     setReg r v
    S.Register (rv :: S.RegisterView m b n) -> do
      let r = S.registerViewReg rv
-     v0 <- modState $ ValueExpr <$> use (boundValue r)
+     v0 <- ValueExpr <$> getReg r
      v1 <- eval $ S.registerViewWrite rv v0 (ValueExpr v)
-     modState $ boundValue r .= v1
+     setReg r v1
    S.X87StackRegister i -> do
      off <- getX87Offset i
-     modState $ boundValue (X87_FPUReg (F.mmxReg (fromIntegral off))) .= v
+     setReg (X87_FPUReg (F.mmxReg (fromIntegral off))) v
 
 instance S.Semantics (X86Generator st_s ids) where
   make_undefined tp =
-    ValueExpr . AssignedValue <$> addAssignment (SetUndefined tp)
+    evalAssignRhs (SetUndefined tp)
 
   -- Get value of a location.
   get = getLoc
@@ -1039,8 +1041,7 @@ instance S.Semantics (X86Generator st_s ids) where
     is_reverse_v <- eval is_reverse
     src_v   <- eval src
     dest_v  <- eval dest
-    ValueExpr . AssignedValue
-      <$> addArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
+    evalArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
 
   memset count val dest dfl = do
     count_v <- eval count
@@ -1055,12 +1056,16 @@ instance S.Semantics (X86Generator st_s ids) where
     count_v <- eval count
     is_reverse_v <- eval is_reverse
     case is_reverse_v of
-      BoolValue False -> do
-        ValueExpr . AssignedValue <$> addArchFn (RepnzScas sz val_v buf_v count_v)
-      _ -> do
+      BoolValue False ->
+        evalArchFn (RepnzScas sz val_v buf_v count_v)
+      _ ->
         fail $ "Unsupported rep_scas value " ++ show is_reverse_v
   rep_scas False _is_reverse _sz _val _buf _count = do
     fail $ "Semantics only currently supports finding elements."
+
+  even_parity v = do
+    val_v <- eval v
+    evalArchFn (EvenParity val_v)
 
   primitive S.Syscall = do
     shiftX86GCont $ \_ s0 -> do
@@ -1075,54 +1080,49 @@ instance S.Semantics (X86Generator st_s ids) where
                          }
 
   primitive S.CPUID = do
-    rax_val <- modState $ use $ boundValue RAX
+    rax_val <- getReg RAX
     eax_val <- eval (S.bvTrunc' n32  (ValueExpr rax_val))
     -- Call CPUID and get a 128-bit value back.
-    res <- ValueExpr . AssignedValue <$> addArchFn (CPUID eax_val)
+    res <- evalArchFn (CPUID eax_val)
     S.eax S..= S.bvTrunc n32 res
     S.ebx S..= S.bvTrunc n32 (res `S.bvShr` bvLit n128 32)
     S.ecx S..= S.bvTrunc n32 (res `S.bvShr` bvLit n128 64)
     S.edx S..= S.bvTrunc n32 (res `S.bvShr` bvLit n128 96)
 
   primitive S.RDTSC = do
-    res <- ValueExpr . AssignedValue <$> addArchFn RDTSC
+    res <- evalArchFn RDTSC
     S.edx S..= S.bvTrunc n32 (res `S.bvShr` bvLit n64 32)
     S.eax S..= S.bvTrunc n32 res
   primitive S.XGetBV = do
     ecx_val <- eval =<< S.get S.ecx
-    res <- ValueExpr . AssignedValue <$> addArchFn (XGetBV ecx_val)
+    res <- evalArchFn (XGetBV ecx_val)
     S.edx S..= S.bvTrunc n32 (res `S.bvShr` bvLit n64 32)
     S.eax S..= S.bvTrunc n32 res
 
-  fnstcw addr = do
-    addr_val <- eval addr
-    addArchStmt $ StoreX87Control addr_val
+  fnstcw addr =
+    addArchStmt =<< StoreX87Control <$> eval addr
 
-  pshufb w x y = do
-    x_val <- eval x
-    y_val <- eval y
-    ValueExpr . AssignedValue <$> addArchFn (PShufb w x_val y_val)
+  pshufb w x y =
+    evalArchFn =<< PShufb w <$> eval x <*> eval y
 
   getSegmentBase seg =
     case seg of
-      F.FS -> ValueExpr . AssignedValue <$> addArchFn ReadFSBase
-      F.GS -> ValueExpr . AssignedValue <$> addArchFn ReadGSBase
+      F.FS -> evalArchFn ReadFSBase
+      F.GS -> evalArchFn ReadGSBase
       _ ->
         error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
 
   bvQuotRem rep n d = do
     nv <- eval n
     dv <- eval d
-    q <- ValueExpr . AssignedValue <$> addArchFn (X86Div rep nv dv)
-    r <- ValueExpr . AssignedValue <$> addArchFn (X86Rem rep nv dv)
-    pure (q,r)
+    (,) <$> evalArchFn (X86Div rep nv dv)
+        <*> evalArchFn (X86Rem rep nv dv)
 
   bvSignedQuotRem rep n d = do
     nv <- eval n
     dv <- eval d
-    q <- ValueExpr . AssignedValue <$> addArchFn (X86IDiv rep nv dv)
-    r <- ValueExpr . AssignedValue <$> addArchFn (X86IRem rep nv dv)
-    pure (q,r)
+    (,) <$> evalArchFn (X86IDiv rep nv dv)
+        <*> evalArchFn (X86IRem rep nv dv)
 
   -- exception :: Value m BoolType    -- mask
   --            -> Value m BoolType -- predicate
@@ -1136,18 +1136,16 @@ instance S.Semantics (X86Generator st_s ids) where
     v <- eval e
     topv <- getX87Top
     let new_top = fromIntegral $ (topv - 1) .&. 0x7
-    modState $ do
-      -- TODO: Update tagWords
-      -- Store value at new top
-      boundValue (X87_FPUReg (F.mmxReg new_top)) .= v
-      -- Update top
-      boundValue X87_TopReg .= BVValue knownNat (toInteger new_top)
+    -- TODO: Update tagWords
+    -- Store value at new top
+    setReg (X87_FPUReg (F.mmxReg new_top)) v
+    -- Update top
+    setReg X87_TopReg (BVValue knownNat (toInteger new_top))
   x87Pop = do
     topv <- getX87Top
     let new_top = (topv + 1) .&. 0x7
-    modState $ do
-      -- Update top
-      boundValue X87_TopReg .= BVValue knownNat (toInteger new_top)
+    -- Update top
+    setReg X87_TopReg (BVValue knownNat (toInteger new_top))
 
 initGenState :: NonceGenerator (ST st_s) ids
              -> MemSegmentOff 64
@@ -1190,38 +1188,43 @@ instance Show X86TranslateError where
           ++ Text.unpack msg
     where addr = show (transErrorAddr err)
 
+returnWithError :: GenState st_s ids
+                -> MemSegmentOff 64
+                -> X86TranslateErrorReason
+                -> ST st_s (BlockSeq ids, MemWord 64, Maybe X86TranslateError)
+returnWithError gs curIPAddr rsn =
+  let err = X86TranslateError curIPAddr rsn
+      term = (`TranslateError` Text.pack (show err))
+      b = finishBlock' (gs^.blockState) term
+      res = seq b $ gs^.blockSeq & frontierBlocks %~ (Seq.|> b)
+   in return (res, msegOffset curIPAddr, Just err)
+
 -- | Disassemble block, returning list of blocks read so far, ending PC, and an optional error.
 -- and ending PC.
 disassembleBlockImpl :: forall st_s ids
-                     .  Memory 64
-                     -> GenState st_s ids
+                     .  GenState st_s ids
                      -- ^ State information for disassembling.
                      -> MemSegmentOff 64
                      -- ^ Address to disassemble
                      -> MemWord 64
                          -- ^ Maximum offset for this addr.
+                     -> [SegmentRange 64]
+                        -- ^ List of contents to read next.
                      -> ST st_s (BlockSeq ids, MemWord 64, Maybe X86TranslateError)
-disassembleBlockImpl mem gs curIPAddr max_offset = do
+disassembleBlockImpl gs curIPAddr max_offset contents = do
   let seg = msegSegment curIPAddr
   let off = msegOffset curIPAddr
-  let returnWithError rsn =
-        let err = X86TranslateError curIPAddr rsn
-            term = (`TranslateError` Text.pack (show err))
-            b = finishBlock' (gs^.blockState) term
-            res = seq b $ gs^.blockSeq & frontierBlocks %~ (Seq.|> b)
-         in return (res, off, Just err)
-  case readInstruction mem curIPAddr of
+  case readInstruction' curIPAddr contents of
     Left msg -> do
-      returnWithError (DecodeError msg)
+      returnWithError gs curIPAddr (DecodeError msg)
     Right (i, next_ip_off) -> do
       let next_ip :: MemAddr 64
           next_ip = relativeAddr seg next_ip_off
       let next_ip_val :: BVValue X86_64 ids 64
           next_ip_val = RelocatableValue n64 next_ip
-
       case execInstruction (ValueExpr next_ip_val) i of
         Nothing -> do
-          returnWithError (UnsupportedInstruction i)
+          returnWithError gs curIPAddr (UnsupportedInstruction i)
         Just exec -> do
           gsr <-
             runExceptT $ runX86Generator (\() s -> pure (mkGenResult s)) gs $ do
@@ -1234,23 +1237,30 @@ disassembleBlockImpl mem gs curIPAddr max_offset = do
               exec
           case gsr of
             Left msg -> do
-              returnWithError (ExecInstructionError i msg)
+              returnWithError gs curIPAddr (ExecInstructionError i msg)
             Right res -> do
               case resState res of
-                -- If next ip is exactly the next_ip_val then keep running.
+                -- If IP after interpretation is the next_ip, there are no blocks, and we
+                -- haven't crossed max_offset, then keep running.
                 Just p_b
                   | Seq.null (resBlockSeq res ^. frontierBlocks)
-                  , v <- p_b^.(pBlockState . curIP)
-                  , v == next_ip_val
+                  , RelocatableValue _ v <- p_b^.(pBlockState . curIP)
+                  , v == next_ip
                     -- Check to see if we should continue
                   , next_ip_off < max_offset
-                  , Just next_ip_segaddr <- asSegmentOff mem next_ip -> do
+                  , Just next_ip_segaddr <- resolveSegmentOff seg next_ip_off -> do
                  let gs2 = GenState { assignIdGen = assignIdGen gs
                                     , _blockSeq = resBlockSeq res
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     }
-                 disassembleBlockImpl mem gs2 next_ip_segaddr max_offset
+                 case dropSegmentRangeListBytes (relativeSegmentAddr curIPAddr)
+                                                contents
+                                                (fromIntegral (next_ip_off - off)) of
+                   Left msg -> do
+                     returnWithError gs curIPAddr (DecodeError msg)
+                   Right contents' ->
+                     disassembleBlockImpl gs2 next_ip_segaddr max_offset contents'
                 _ -> do
                   let gs3 = finishBlock FetchAndExecute res
                   return (gs3, next_ip_off, Nothing)
@@ -1268,10 +1278,15 @@ disassembleBlock mem nonce_gen loc max_size = do
   let addr = loc_ip loc
   let gs = initGenState nonce_gen addr (initX86State loc)
   let sz = msegOffset addr + max_size
-  (gs', next_ip_off, maybeError) <- disassembleBlockImpl mem gs addr sz
+  (gs', next_ip_off, maybeError) <-
+    case addrContentsAfter mem (relativeSegmentAddr addr) of
+      Left msg ->
+        returnWithError gs addr (DecodeError msg)
+      Right contents ->
+        disassembleBlockImpl gs addr sz contents
   assert (next_ip_off > msegOffset addr) $ do
   let block_sz = next_ip_off - msegOffset addr
-  pure $ (Fold.toList (gs'^.frontierBlocks), block_sz, maybeError)
+  pure (Fold.toList (gs'^.frontierBlocks), block_sz, maybeError)
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
@@ -1301,6 +1316,7 @@ transferAbsValue :: AbsProcessorState X86Reg ids
                  -> AbsValue 64 tp
 transferAbsValue r f =
   case f of
+    EvenParity _ -> TopV
     ReadLoc _  -> TopV
     ReadFSBase -> TopV
     ReadGSBase -> TopV
@@ -1351,7 +1367,12 @@ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
                        }
   let gs = initGenState nonce_gen addr (initX86State loc)
   let off = msegOffset  addr
-  (gs', next_ip_off, maybeError) <- lift $ disassembleBlockImpl mem gs addr (off + max_size)
+  (gs', next_ip_off, maybeError) <- lift $
+    case addrContentsAfter mem (relativeSegmentAddr addr) of
+      Left msg ->
+        returnWithError gs addr (DecodeError msg)
+      Right contents -> do
+        disassembleBlockImpl gs addr (off + max_size) contents
   assert (next_ip_off > off) $ do
   let sz = next_ip_off - off
   let blocks = Fold.toList (gs'^.frontierBlocks)
@@ -1461,6 +1482,21 @@ x86DemandContext =
                 , archFnHasSideEffects = x86PrimFnHasSideEffects
                 }
 
+
+postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
+                        -> AbsBlockState X86Reg
+                        -> X86TermStmt ids
+                        -> MemSegmentOff 64
+                        -> AbsBlockState X86Reg
+postX86TermStmtAbsState preservePred s tstmt nextIP =
+  case tstmt of
+    X86Syscall ->
+      let params = CallParams { postCallStackDelta = 0
+                              , preserveReg = preservePred
+                              }
+       in absEvalCall params s nextIP
+
+
 -- | Common architecture information for X86_64
 x86_64_info :: (forall tp . X86Reg tp -> Bool)
                -- ^ Function that returns true if we should preserve a register across a system call.
@@ -1471,7 +1507,6 @@ x86_64_info preservePred =
                    , archEndianness     = LittleEndian
                    , jumpTableEntrySize = 8
                    , disassembleFn      = disassembleBlockFromAbsState
-                   , preserveRegAcrossSyscall = preservePred
                    , mkInitialAbsState = \_ -> initialX86AbsState
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s
@@ -1482,6 +1517,7 @@ x86_64_info preservePred =
                    , rewriteArchStmt   = rewriteX86Stmt
                    , rewriteArchTermStmt = rewriteX86TermStmt
                    , archDemandContext = x86DemandContext
+                   , postArchTermStmtAbsState = postX86TermStmtAbsState preservePred
                    }
 
 -- | Architecture information for X86_64 on FreeBSD.

@@ -72,7 +72,7 @@ set_result_flags :: IsLocationBV m n => Value m (BVType n) -> m ()
 set_result_flags res = do
   sf_loc .= msb res
   zf_loc .= is_zero res
-  pf_loc .= even_parity (least_byte res)
+  (pf_loc .=) =<< even_parity (least_byte res)
 
 -- | Assign value to location and update corresponding flags.
 set_result_value :: IsLocationBV m n => MLocation m (BVType n) -> Value m (BVType n) -> m ()
@@ -712,7 +712,8 @@ exec_sh lw l val val_setter cf_setter of_setter = do
   -- Set result flags
   modify sf_loc $ mux isNonzero (msb res)
   modify zf_loc $ mux isNonzero (is_zero res)
-  modify pf_loc $ mux isNonzero (even_parity (least_byte res))
+  p <- even_parity (least_byte res)
+  modify pf_loc $ mux isNonzero p
   modify l      $ mux isNonzero res
 
 def_sh :: String

@@ -780,7 +780,7 @@ parseBlock ctx b regs = do
       case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
         [addr] -> do
           -- Merge system call result with possible next IPs.
-          let post = archPostSyscallAbsState arch_info abst addr
+          let post = postArchTermStmtAbsState arch_info abst ts addr
 
           intraJumpTargets %= ((addr, post):)
           pure $! StatementList { stmtsIdent = idx
