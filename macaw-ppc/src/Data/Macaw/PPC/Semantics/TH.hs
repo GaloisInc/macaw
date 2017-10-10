@@ -154,6 +154,10 @@ crucAppToExpr (S.BVNeg w bv) = do
   bvVal  <- addElt bv
   bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
   return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
+crucAppToExpr (S.BVTestBit idx bv) = AppExpr <$> do
+  M.BVTestBit
+    <$> addExpr (ValueExpr (M.BVValue (S.bvWidth bv) (fromIntegral idx)))
+    <*> addElt bv
 crucAppToExpr (S.BVAdd repr bv1 bv2) = AppExpr <$> do
   M.BVAdd <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVMul repr bv1 bv2) = AppExpr <$> do
