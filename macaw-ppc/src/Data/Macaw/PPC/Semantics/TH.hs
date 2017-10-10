@@ -49,8 +49,8 @@ genExecInstruction :: (A.Architecture arch, OrdF a, ShowF a)
                    -> Q Exp
 genExecInstruction _ impl semantics = do
   Some ng <- runIO PN.newIONonceGenerator
-  _sym <- runIO (S.newSimpleBackend ng)
-  -- formulas <- runIO (loadFormulas sym impl semantics)
+  sym <- runIO (S.newSimpleBackend ng)
+  formulas <- runIO (loadFormulas sym impl semantics)
   [| undefined |]
 
 -- SemMC.Formula: instantiateFormula
