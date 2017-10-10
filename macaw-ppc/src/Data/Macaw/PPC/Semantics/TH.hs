@@ -36,7 +36,12 @@ import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
 
-import Data.Parameterized.NatRepr (knownNat)
+import Data.Parameterized.NatRepr ( knownNat
+                                  , addNat
+                                  , natValue
+                                  , isPosNat
+                                  , testLeq
+                                  )
 
 import Data.Macaw.PPC.Generator
 import Data.Macaw.PPC.PPCReg
@@ -74,7 +79,6 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
 --   - all structs
 
 -- Can implement now:
---   - BVConcat (shifts, extensions and adds?)
 --   - BVSelect
 --   - BVNeg (complement, add 1)
 --   - BVTestBit
@@ -112,8 +116,28 @@ crucAppToExpr (S.BVSlt bv1 bv2) = AppExpr <$> do
   M.BVSignedLt <$> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVUlt bv1 bv2) = AppExpr <$> do
   M.BVUnsignedLt <$> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVConcat repr bv1 bv2) = undefined
-
+crucAppToExpr (S.BVConcat repr bv1 bv2) = AppExpr <$> do
+  let u = S.bvWidth bv1
+      v = S.bvWidth bv2
+  bv1Val <- addElt bv1
+  bv2Val <- addElt bv2
+  S.LeqProof <- return $ S.leqAdd2 (S.leqRefl u) (S.leqProof (knownNat @1) v)
+  S.LeqProof <- return $ S.leqAdd2 (S.leqRefl v) (S.leqProof (knownNat @1) u)
+  Refl <- return $ S.plusComm u v
+  bv1Ext <- addExpr (AppExpr (M.UExt bv1Val repr)) ---(u `addNat` v)))
+  bv2Ext <- addExpr (AppExpr (M.UExt bv2Val repr))
+  bv1Shifter <- addExpr (ValueExpr (M.BVValue repr (natValue v)))
+  bv1Shf <- addExpr (AppExpr (M.BVShl repr bv1Ext bv1Shifter))
+  return $ M.BVOr repr bv1Shf bv2Ext
+crucAppToExpr (S.BVSelect iRepr nRepr bv) = AppExpr <$> do
+  let w = S.bvWidth bv
+  bvVal <- addElt bv
+  -- Shouldn't we *know* that w is a positive nat?
+  Just S.LeqProof <- return $ isPosNat w
+  -- Shouldn't we *know* that n + 1 <= w?
+  Just S.LeqProof <- return $ testLeq (nRepr `addNat` (knownNat @1)) w
+  bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (natValue iRepr))))
+  return $ M.Trunc bvShf nRepr
 crucAppToExpr (S.BVAdd repr bv1 bv2) = AppExpr <$> do
   M.BVAdd <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVMul repr bv1 bv2) = AppExpr <$> do
