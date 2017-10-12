@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -18,18 +19,24 @@ import qualified Data.Constraint as C
 import Control.Lens
 import Data.Proxy
 import Language.Haskell.TH
+import Language.Haskell.TH.Syntax
 import GHC.TypeLits
 
 import           Data.Parameterized.Classes
+import           Data.Parameterized.FreeParamF ( FreeParamF(..) )
+import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.Map as Map
 import qualified Data.Parameterized.Nonce as PN
+import qualified Data.Parameterized.ShapedList as SL
 import           Data.Parameterized.Some ( Some(..) )
+import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.Witness ( Witness(..) )
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import qualified Lang.Crucible.Solver.SimpleBackend as S
 import qualified Lang.Crucible.BaseTypes as S
 
 import qualified Dismantle.PPC as D
+import qualified Dismantle.Tablegen.TH.Capture as DT
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.PPC.Location as APPC
@@ -46,17 +53,75 @@ import Data.Parameterized.NatRepr ( knownNat
 import Data.Macaw.PPC.Generator
 import Data.Macaw.PPC.PPCReg
 
--- generate a different case for each key/value pair in the map
-genExecInstruction :: (A.Architecture arch, OrdF a, ShowF a)
+-- | A different parameterized pair wrapper; the one in Data.Parameterized.Map
+-- hides the @tp@ parameter under an existential, while we need the variant that
+-- exposes it.
+data PairF a b tp = PairF (a tp) (b tp)
+
+-- | Generate the top-level lambda with a case expression over an instruction (casing on opcode)
+instructionMatcher :: (OrdF a, LF.LiftF a)
+                   => Map.MapF (Witness c a) (PairF (ParameterizedFormula sym arch) (DT.CaptureInfo c a))
+                   -> Q Exp
+instructionMatcher formulas = do
+  ipVarName <- newName "ipVal"
+  opcodeVar <- newName "opcode"
+  operandListVar <- newName "operands"
+  let cases = map (mkSemanticsCase ipVarName operandListVar) (Map.toList formulas)
+  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) cases)
+
+-- | Generate a single case for one opcode of the case expression.
+mkSemanticsCase :: (LF.LiftF a)
+                => Name
+                -> Name
+                -> Map.Pair (Witness c a) (PairF (ParameterizedFormula sym arch) (DT.CaptureInfo c a))
+                -> MatchQ
+mkSemanticsCase ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
+  match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ipVarName operandListVar opc semantics capInfo)) []
+
+-- | For each opcode case, we have a sub-case expression to match
+mkOperandListCase :: Name -> Name -> a tp -> ParameterizedFormula sym arch tp -> DT.CaptureInfo c a tp -> Q Exp
+mkOperandListCase ipVarName operandListVar opc semantics capInfo = do
+  body <- genCaseBody ipVarName opc semantics (DT.capturedOperandNames capInfo)
+  DT.genCase capInfo operandListVar body
+
+genCaseBody :: Name -> a tp -> ParameterizedFormula sym arch tp -> SL.ShapedList (FreeParamF Name) tp -> Q Exp
+genCaseBody ipVarName opc semantics varNames =
+  [| undefined $(tupE (map varE binders)) |]
+  where
+    binders = ipVarName : FC.toListFC unFreeParamF varNames
+
+-- | Generate an implementation of 'execInstruction' that runs in the
+-- 'PPCGenerator' monad.  We pass in both the original list of semantics files
+-- along with the list of opcode info objects.  We can match them up using
+-- equality on opcodes (via a MapF).  Generating a combined list up-front would
+-- be ideal, but is difficult for various TH reasons (we can't call 'lift' on
+-- all of the things we would need to for that).
+genExecInstruction :: (A.Architecture arch, OrdF a, ShowF a, LF.LiftF a)
                    => proxy arch
                    -> (forall sh . c sh C.:- BuildOperandList arch sh)
+                   -- ^ A constraint implication to let us extract/weaken the
+                   -- constraint in our 'Witness' to the required 'BuildOperandList'
                    -> [(Some (Witness c a), BS.ByteString)]
+                   -- ^ A list of opcodes (with constraint information
+                   -- witnessed) paired with the bytestrings containing their
+                   -- semantics.  This comes from semmc.
+                   -> [Some (DT.CaptureInfo c a)]
+                   -- ^ Extra information for each opcode to let us generate
+                   -- some TH to match them.  This comes from the semantics
+                   -- definitions in semmc.
                    -> Q Exp
-genExecInstruction _ impl semantics = do
+genExecInstruction _ impl semantics captureInfo = do
   Some ng <- runIO PN.newIONonceGenerator
   sym <- runIO (S.newSimpleBackend ng)
   formulas <- runIO (loadFormulas sym impl semantics)
-  [| undefined |]
+  let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
+  instructionMatcher formulasWithInfo
+  where
+    attachInfo m0 (Some ci) m =
+      let co = DT.capturedOpcode ci
+      in case Map.lookup co m0 of
+        Nothing -> m
+        Just pf -> Map.insert co (PairF pf ci) m
 
 -- SemMC.Formula: instantiateFormula
 
