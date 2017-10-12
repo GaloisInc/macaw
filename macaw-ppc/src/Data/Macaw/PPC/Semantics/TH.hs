@@ -18,6 +18,7 @@ import qualified Data.Constraint as C
 import Control.Lens
 import Data.Proxy
 import Language.Haskell.TH
+import Language.Haskell.TH.Syntax
 import GHC.TypeLits
 
 import           Data.Parameterized.Classes
@@ -78,9 +79,6 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
 --   - all complex operations
 --   - all structs
 
--- Can implement now:
---   - BVTestBit
-
 -- Might need to implement later:
 --   - BVUdiv, BVUrem, BVSdiv, BVSrem
 
@@ -99,12 +97,37 @@ addElt elt = eltToExpr elt >>= addExpr
 eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
 eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
+eltToExpr (S.BoundVarElt sbv) = undefined
+
+addElt' :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt' elt = case elt of
+  S.BVElt w val loc -> return $ M.BVValue w val
+  S.AppElt appElt   -> do x <- crucAppToExpr (S.appEltApp appElt)
+                          addExpr x
+  S.BoundVarElt sbv -> undefined
+
+natReprTH :: M.NatRepr w -> Q Exp
+natReprTH w = [| knownNat :: M.NatRepr $(litT (return $ NumTyLit (natValue w))) |]
+
+addEltTH :: S.Elt t ctp -> Q Exp
+addEltTH elt = case elt of
+  S.BVElt w val loc ->
+    [| return (M.BVValue $(natReprTH w) $(lift val)) |]
+
+crucAppToExprTH :: S.App (S.Elt t) ctp -> Q Exp
+crucAppToExprTH S.TrueBool  = [| return $ ValueExpr (M.BoolValue True) |]
+crucAppToExprTH S.FalseBool = [| return $ ValueExpr (M.BoolValue False) |]
+crucAppToExprTH (S.NotBool bool) = do
+  boolElt <- addEltTH bool
+  [| AppExpr (M.NotApp $(return boolElt)) |]
+
+
+  --AppExpr <$> M.NotApp <$> addElt bool
 
 crucAppToExpr :: S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
 crucAppToExpr S.FalseBool = return $ ValueExpr (M.BoolValue False)
-crucAppToExpr (S.NotBool bool) = AppExpr <$> do
-  M.NotApp <$> addElt bool
+crucAppToExpr (S.NotBool bool) = (AppExpr . M.NotApp) <$> addElt bool
 crucAppToExpr (S.AndBool bool1 bool2) = AppExpr <$> do
   M.AndApp <$> addElt bool1 <*> addElt bool2
 crucAppToExpr (S.XorBool bool1 bool2) = AppExpr <$> do
