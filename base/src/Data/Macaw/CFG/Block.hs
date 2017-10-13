@@ -68,8 +68,6 @@ instance ArchConstraints arch
 data Block arch ids
    = Block { blockLabel :: !Word64
              -- ^ Index of this block
-           , blockAddr :: !(ArchSegmentOff arch)
-             -- ^ Address at start of block
            , blockStmts :: !([Stmt arch ids])
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)

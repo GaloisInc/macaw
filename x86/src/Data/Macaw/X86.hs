@@ -660,7 +660,6 @@ finishBlock' :: PreBlock ids
              -> Block X86_64 ids
 finishBlock' pre_b term =
   Block { blockLabel = pBlockIndex pre_b
-        , blockAddr  = pBlockAddr pre_b
         , blockStmts = Fold.toList (pre_b^.pBlockStmts)
         , blockTerm  = term (pre_b^.pBlockState)
         }
@@ -1254,11 +1253,10 @@ disassembleBlockImpl gs curIPAddr max_offset contents = do
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     }
-                 case dropSegmentRangeListBytes (relativeSegmentAddr curIPAddr)
-                                                contents
-                                                (fromIntegral (next_ip_off - off)) of
+                 case dropSegmentRangeListBytes contents (fromIntegral (next_ip_off - off)) of
                    Left msg -> do
-                     returnWithError gs curIPAddr (DecodeError msg)
+                     let err = dropErrorAsMemError (relativeSegmentAddr curIPAddr) msg
+                     returnWithError gs curIPAddr (DecodeError err)
                    Right contents' ->
                      disassembleBlockImpl gs2 next_ip_segaddr max_offset contents'
                 _ -> do

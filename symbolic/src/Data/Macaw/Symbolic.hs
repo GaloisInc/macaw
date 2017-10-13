@@ -21,7 +21,6 @@ import           Data.Parameterized.Ctx
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableFC
-import           Data.String
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import           Data.Word
@@ -30,12 +29,12 @@ import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
 import qualified Lang.Crucible.Config as C
 import qualified Lang.Crucible.FunctionHandle as C
+import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified Lang.Crucible.Simulator.OverrideSim as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import           Lang.Crucible.Solver.Interface
-import           Numeric (showHex)
 import           System.IO (stdout)
 
 import qualified Data.Macaw.CFG.Block as M
@@ -138,21 +137,22 @@ stepBlocks :: forall sym arch ids
               -- ^ Memory image for executable
            -> Text
               -- ^ Name of executable
+           -> C.FunctionName
+              -- ^ Name of function for pretty print purposes.
            -> Word64
-              -- ^ Starting IP for block
+              -- ^ Code address
            -> [M.Block arch ids]
               -- ^ List of blocks
            -> IO (C.ExecResult
                    MacawSimulatorState
                    sym
                    (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
-stepBlocks sym sinfo mem binPath addr macawBlocks = do
+stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
   let regAssign = archRegAssignment sinfo
   let crucRegTypes = typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   let macawStructRepr = C.StructRepr crucRegTypes
   halloc <- C.newHandleAllocator
   let argTypes = Ctx.empty Ctx.%> macawStructRepr
-  let nm = fromString $ "macaw_0x" ++ showHex addr ""
   h <- stToIO $ C.mkHandle' halloc nm argTypes macawStructRepr
   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label RealWorld)
@@ -169,7 +169,7 @@ stepBlocks sym sinfo mem binPath addr macawBlocks = do
                               , memSegmentMap = memSegmentVarMap
                               }
   let ps0 = initCrucPersistentState
-  blockRes <- stToIO $ runStateT (runExceptT (mapM_ (addMacawBlock sinfo genCtx) macawBlocks)) ps0
+  blockRes <- stToIO $ runStateT (runExceptT (mapM_ (addMacawBlock sinfo genCtx addr) macawBlocks)) ps0
   ps <-
     case blockRes of
       (Left err, _) -> fail err

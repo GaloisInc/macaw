@@ -80,7 +80,7 @@ data CrucGenState arch ids s
    , blockLabel :: (CR.Label s)
      -- ^ Label for this block we are translating
    , macawBlockIndex :: !Word64
-   , codeAddr :: !(M.ArchSegmentOff arch)
+   , codeAddr :: !Word64
      -- ^ Address of this code
    , prevStmts :: ![C.Posd (CR.Stmt s)]
      -- ^ List of states in reverse order
@@ -127,10 +127,7 @@ liftST m = CrucGen $ \s cont -> m >>= cont s
 getPos :: CrucGen arch ids s C.Position
 getPos = do
   ctx <- getCtx
-  archConstraints ctx $ do
-  a <- gets codeAddr
-  let absAddr = fromMaybe (M.msegOffset a) (M.msegAddr a)
-  pure $ C.BinaryPos (binaryPath ctx) (fromIntegral absAddr)
+  C.BinaryPos (binaryPath ctx) <$> gets codeAddr
 
 addStmt :: CR.Stmt s -> CrucGen arch ids s ()
 addStmt stmt = seq stmt $ do
@@ -442,11 +439,6 @@ addMacawTermStmt tstmt =
     M.ArchTermStmt ts regs -> do
       fns <- translateFns <$> get
       archTranslateTermStmt fns ts regs
---    M.Syscall regs -> do
---      h <- mkHandleVal SyscallId
---      s  <- createRegStruct regs
---      s' <- callFnHandle h (Ctx.empty Ctx.%> s)
---      addTermStmt (C.Return s')
     M.TranslateError _regs msg -> do
       cmsg <- crucibleValue (C.TextLit msg)
       addTermStmt (CR.ErrorStmt cmsg)
@@ -456,9 +448,11 @@ type MacawMonad arch ids s = ExceptT String (StateT (CrucPersistentState arch id
 
 addMacawBlock :: ArchTranslateFunctions arch
               -> CrucGenContext arch ids s
+              -> Word64
+                 -- ^ Code address
               -> M.Block arch ids
               -> MacawMonad arch ids s ()
-addMacawBlock tfns ctx b = do
+addMacawBlock tfns ctx addr b = do
   pstate <- get
   let idx = M.blockLabel b
   lbl <-
@@ -470,7 +464,7 @@ addMacawBlock tfns ctx b = do
                         , crucPState = pstate
                         , blockLabel = lbl
                         , macawBlockIndex = idx
-                        , codeAddr = M.blockAddr b
+                        , codeAddr = addr
                         , prevStmts = []
                         }
   let cont _s () = fail "Unterminated crucible block"

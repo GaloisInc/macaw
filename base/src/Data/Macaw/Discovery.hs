@@ -209,8 +209,7 @@ rewriteBlock info b = do
     rewriteTermStmt info (blockTerm b)
   -- Return new block
   pure $
-    Block { blockAddr  = blockAddr b
-          , blockLabel = blockLabel b
+    Block { blockLabel = blockLabel b
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }

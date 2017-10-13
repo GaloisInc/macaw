@@ -44,6 +44,8 @@ module Data.Macaw.Memory
   , ppMemSegment
   , segmentSize
   , SegmentRange(..)
+  , DropError(..)
+  , dropErrorAsMemError
   , dropSegmentRangeListBytes
     -- * MemWord
   , MemWord
@@ -342,29 +344,36 @@ instance Show (SegmentRange w) where
   showList [] = id
   showList (h : r) = showsPrec 10 h . showList r
 
+data DropError
+   = DropUnexpectedRelocation
+   | DropInvalidAddr
+
+dropErrorAsMemError :: MemAddr w -> DropError -> MemoryError w
+dropErrorAsMemError a DropUnexpectedRelocation = UnexpectedRelocation a
+dropErrorAsMemError a DropInvalidAddr          = InvalidAddr a
+
 -- | Given a contiguous list of segment ranges and a number of bytes to drop, this
 -- returns the remaining segment ranges or throws an error.
 dropSegmentRangeListBytes :: forall w
                           .  MemWidth w
-                          => MemAddr w
-                          -> [SegmentRange w]
+                          => [SegmentRange w]
                           -> Int
-                          -> Either (MemoryError w) [SegmentRange w]
-dropSegmentRangeListBytes _ ranges 0 = Right ranges
-dropSegmentRangeListBytes addr (ByteRegion bs : rest) cnt = do
+                          -> Either DropError [SegmentRange w]
+dropSegmentRangeListBytes ranges 0 = Right ranges
+dropSegmentRangeListBytes (ByteRegion bs : rest) cnt = do
   let sz = BS.length bs
   if sz > cnt then
     Right $ ByteRegion (BS.drop cnt bs) : rest
    else
-    dropSegmentRangeListBytes (incAddr (toInteger sz) addr)  rest (cnt - sz)
-dropSegmentRangeListBytes addr (SymbolicRef _:rest) cnt = do
+    dropSegmentRangeListBytes rest (cnt - sz)
+dropSegmentRangeListBytes (SymbolicRef _:rest) cnt = do
   let sz = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
   if sz > cnt then
-    Left (UnexpectedRelocation addr)
+    Left DropUnexpectedRelocation
    else
-    dropSegmentRangeListBytes (incAddr (toInteger sz) addr) rest (cnt - sz)
-dropSegmentRangeListBytes addr [] _ =
-  Left (InvalidAddr addr)
+    dropSegmentRangeListBytes rest (cnt - sz)
+dropSegmentRangeListBytes [] _ =
+  Left DropInvalidAddr
 
 ------------------------------------------------------------------------
 -- SegmentContents
