@@ -14,7 +14,7 @@ module Data.Macaw.PPC (
 import           Data.Proxy ( Proxy(..) )
 
 import qualified Data.Macaw.Architecture.Info as MI
-import Data.Macaw.CFG
+import           Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.TraversableFC as FC
@@ -28,6 +28,7 @@ import Data.Macaw.PPC.Eval ( mkInitialAbsState,
                              absEvalArchFn,
                              absEvalArchStmt,
                              postCallAbsState,
+                             postPPCTermStmtAbsState,
                              preserveRegAcrossSyscall
                            )
 import Data.Macaw.PPC.Identify ( identifyCall,
@@ -66,7 +67,6 @@ ppc64_linux_info =
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
                       , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
-                      , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
                       , MI.mkInitialAbsState = mkInitialAbsState proxy
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
@@ -77,6 +77,7 @@ ppc64_linux_info =
                       , MI.rewriteArchStmt = rewriteStmt
                       , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
+                      , MI.postArchTermStmtAbsState = postPPCTermStmtAbsState (preserveRegAcrossSyscall proxy)
                       }
   where
     proxy = Proxy @PPC64.PPC
@@ -88,7 +89,6 @@ ppc32_linux_info =
                       , MI.archEndianness = MM.BigEndian
                       , MI.jumpTableEntrySize = jumpTableEntrySize proxy
                       , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
-                      , MI.preserveRegAcrossSyscall = preserveRegAcrossSyscall proxy
                       , MI.mkInitialAbsState = mkInitialAbsState proxy
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
@@ -99,6 +99,7 @@ ppc32_linux_info =
                       , MI.rewriteArchStmt = rewriteStmt
                       , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
+                      , MI.postArchTermStmtAbsState = postPPCTermStmtAbsState (preserveRegAcrossSyscall proxy)
                       }
   where
     proxy = Proxy @PPC32.PPC

@@ -1,12 +1,14 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Eval (
   mkInitialAbsState,
   absEvalArchFn,
   absEvalArchStmt,
   postCallAbsState,
+  postPPCTermStmtAbsState,
   preserveRegAcrossSyscall
   ) where
 
@@ -28,6 +30,21 @@ preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg
                          -> ArchReg ppc tp
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
+
+postPPCTermStmtAbsState :: (PPCArch ppc)
+                        => (forall tp . PPCReg ppc tp -> Bool)
+                        -> AbsBlockState (PPCReg ppc)
+                        -> PPCTermStmt ids
+                        -> MM.MemSegmentOff (RegAddrWidth (ArchReg ppc))
+                        -> AbsBlockState (PPCReg ppc)
+postPPCTermStmtAbsState preservePred s0 stmt nextIP =
+  case stmt of
+    PPCSyscall ->
+      let params = MA.CallParams { MA.postCallStackDelta = 0
+                                 , MA.preserveReg = preservePred
+                                 }
+      in MA.absEvalCall params s0 nextIP
+    PPCTrap -> error "Trap isn't handled in the postPPCTermStmtAbsState function yet"
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
 -- block.
