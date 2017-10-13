@@ -244,6 +244,10 @@ addExpr expr = do
       assignment <- addAssignment (M.EvalApp app)
       return $ M.AssignedValue assignment
 
+addExprTH :: Expr ppc ids tp -> Q Exp
+addExprTH expr = do
+  undefined
+
 addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr
 
@@ -267,16 +271,13 @@ addEltTH :: S.Elt t ctp -> Q Exp
 addEltTH elt = case elt of
   S.BVElt w val loc ->
     [| return (M.BVValue $(natReprTH w) $(lift val)) |]
-
-crucAppToExprTH :: S.App (S.Elt t) ctp -> Q Exp
-crucAppToExprTH S.TrueBool  = [| return $ ValueExpr (M.BoolValue True) |]
-crucAppToExprTH S.FalseBool = [| return $ ValueExpr (M.BoolValue False) |]
-crucAppToExprTH (S.NotBool bool) = do
-  boolElt <- addEltTH bool
-  [| AppExpr (M.NotApp $(return boolElt)) |]
-
-
-  --AppExpr <$> M.NotApp <$> addElt bool
+  S.AppElt appElt -> do
+    x <- newName "x"
+    let app = S.appEltApp appElt
+    appExpr <- crucAppToExprTH app
+    [| do $(varP x) <- $(crucAppToExprTH (S.appEltApp appElt))
+          addExpr $(varE x)
+     |]
 
 crucAppToExpr :: S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
@@ -360,6 +361,130 @@ crucAppToExpr (S.BVBitOr repr bv1 bv2) = AppExpr <$> do
 crucAppToExpr (S.BVBitXor repr bv1 bv2) = AppExpr <$> do
   M.BVXor <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
+
+crucAppToExprTH :: S.App (S.Elt t) ctp -> Q Exp
+crucAppToExprTH S.TrueBool  = [| return $ ValueExpr (M.BoolValue True) |]
+crucAppToExprTH S.FalseBool = [| return $ ValueExpr (M.BoolValue False) |]
+crucAppToExprTH (S.NotBool bool) = do
+  boolExp <- addEltTH bool
+  [| AppExpr (M.NotApp $(return boolExp)) |]
+crucAppToExprTH (S.AndBool bool1 bool2) = do
+  bool1Exp <- addEltTH bool1
+  bool2Exp <- addEltTH bool2
+  [| AppExpr (M.AndApp $(return bool1Exp) $(return bool2Exp)) |]
+crucAppToExprTH (S.XorBool bool1 bool2) = do
+  bool1Exp <- addEltTH bool1
+  bool2Exp <- addEltTH bool2
+  [| AppExpr (M.AndApp $(return bool1Exp) $(return bool2Exp)) |]
+crucAppToExprTH (S.IteBool test t f) = do
+  testExp <- addEltTH test
+  tExp    <- addEltTH t
+  fExp    <- addEltTH f
+  [| AppExpr (M.Mux M.BoolTypeRepr $(return testExp) $(return tExp) $(return fExp)) |]
+crucAppToExprTH (S.BVIte w numBranches test t f) = do
+  testExp <- addEltTH test
+  tExp    <- addEltTH t
+  fExp    <- addEltTH f
+  [| AppExpr (M.Mux (M.BVTypeRepr $(natReprTH w)) $(return testExp) $(return tExp) $(return fExp)) |]
+crucAppToExprTH (S.BVEq bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.Eq $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVSlt bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVSignedLt $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVUlt bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVUnsignedLt $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVConcat w bv1 bv2) = do
+  undefined
+  -- let u = S.bvWidth bv1
+  --     v = S.bvWidth bv2
+  -- bv1Val <- addElt bv1
+  -- bv2Val <- addElt bv2
+  -- S.LeqProof <- return $ S.leqAdd2 (S.leqRefl u) (S.leqProof (knownNat @1) v)
+  -- S.LeqProof <- return $ S.leqAdd2 (S.leqRefl v) (S.leqProof (knownNat @1) u)
+  -- Refl <- return $ S.plusComm u v
+  -- bv1Ext <- addExpr (AppExpr (M.UExt bv1Val w)) ---(u `addNat` v)))
+  -- bv2Ext <- addExpr (AppExpr (M.UExt bv2Val w))
+  -- bv1Shifter <- addExpr (ValueExpr (M.BVValue w (natValue v)))
+  -- bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
+  -- return $ M.BVOr w bv1Shf bv2Ext
+crucAppToExprTH (S.BVSelect idx n bv) = do
+  undefined
+  -- let w = S.bvWidth bv
+  -- bvVal <- addElt bv
+  -- case natValue n + 1 <= natValue w of
+  --   True -> do
+  --     -- Is there a way to just "know" that n + 1 <= w?
+  --     Just S.LeqProof <- return $ S.testLeq (n `addNat` (knownNat @1)) w
+  --     pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl idx) (S.leqProof (knownNat @1) n)
+  --     pf2@S.LeqProof <- return $ S.leqAdd (S.leqRefl (knownNat @1)) idx
+  --     Refl <- return $ S.plusComm (knownNat @1) idx
+  --     pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
+  --     S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof (idx `addNat` n) w)
+  --     bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (natValue idx))))
+  --     return $ AppExpr (M.Trunc bvShf n)
+  --   False -> do
+  --     -- Is there a way to just "know" that n = w?
+  --     Just Refl <- return $ testEquality n w
+  --     return $ ValueExpr bvVal
+crucAppToExprTH (S.BVNeg w bv) = do
+  undefined
+  -- bvVal  <- addElt bv
+  -- bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
+  -- return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
+crucAppToExprTH (S.BVTestBit idx bv) = do
+  bitExp <- addExprTH (ValueExpr (M.BVValue (S.bvWidth bv) (fromIntegral idx)))
+  bvExp  <- addEltTH bv
+  [| AppExpr (M.BVTestBit $(return bitExp) $(return bvExp)) |]
+crucAppToExprTH (S.BVAdd w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVAdd $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVMul w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVMul $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVShl w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVShl $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVLshr w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVShr $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVAshr w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVSar $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVZext w bv) = do
+  bvExp <- addEltTH bv
+  [| AppExpr (M.UExt $(return bvExp) $(natReprTH w)) |]
+crucAppToExprTH (S.BVSext w bv) = do
+  bvExp <- addEltTH bv
+  [| AppExpr (M.SExt $(return bvExp) $(natReprTH w)) |]
+crucAppToExprTH (S.BVTrunc w bv) = do
+  bvExp <- addEltTH bv
+  [| AppExpr (M.Trunc $(return bvExp) $(natReprTH w)) |]
+crucAppToExprTH (S.BVBitNot w bv) = do
+  bvExp <- addEltTH bv
+  [| AppExpr (M.BVComplement $(return bvExp) $(natReprTH w)) |]
+crucAppToExprTH (S.BVBitAnd w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVAnd $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVBitOr w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVOr $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+crucAppToExprTH (S.BVBitXor w bv1 bv2) = do
+  bv1Exp <- addEltTH bv1
+  bv2Exp <- addEltTH bv2
+  [| AppExpr (M.BVXor $(natReprTH w) $(return bv1Exp) $(return bv2Exp)) |]
+
 
 locToReg :: (1 <= APPC.ArchRegWidth ppc,
              M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
