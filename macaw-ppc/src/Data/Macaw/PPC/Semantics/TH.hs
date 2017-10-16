@@ -56,6 +56,7 @@ import Data.Parameterized.NatRepr ( knownNat
 
 import Data.Macaw.PPC.Generator
 import Data.Macaw.PPC.PPCReg
+import Data.Macaw.PPC.Operand
 
 -- run stack with --ghc-options=-ddump-splices
 
@@ -292,7 +293,8 @@ translateFormula semantics bvInterps = do
                |]
             FunctionParameter str operand w -> [| undefined |]
 
-addEltTH :: (L.Location arch ~ APPC.Location arch,
+addEltTH :: forall arch t ctp .
+            (L.Location arch ~ APPC.Location arch,
              1 <= APPC.ArchRegWidth arch,
              M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
          => BoundVarInterpretations arch t
@@ -307,9 +309,12 @@ addEltTH bvInterps elt = case elt of
     [| $(crucAppToExprTH (S.appEltApp appElt) bvInterps) >>= addExpr |]
   S.BoundVarElt bVar ->
     case Map.lookup bVar (locVars bvInterps) of
-      Just loc -> [| getRegValue $(locToRegTH undefined loc) |]
-      Nothing  -> [| undefined |]
-  _ -> [| undefined |]
+      Just loc -> [| getRegValue $(locToRegTH (Proxy @arch) loc) |]
+      Nothing  ->
+        case Map.lookup bVar (opVars bvInterps) of
+          Just (FreeParamF name) -> [| extractValue $(varE name) |]
+          Nothing -> fail $ "bound var not found: " ++ show bVar
+  _ -> [| error "addEltTH" |]
 
 -- Unimplemented:
 
