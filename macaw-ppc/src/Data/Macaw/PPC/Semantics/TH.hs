@@ -138,6 +138,11 @@ mkOperandListCase ipVarName operandListVar opc semantics capInfo = do
   body <- genCaseBody ipVarName opc semantics (DT.capturedOperandNames capInfo)
   DT.genCase capInfo operandListVar body
 
+data BoundVarInterpretations arch t =
+  BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+                          , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                          }
+
 -- | This is the function that translates formulas (semantics) into expressions
 -- that construct macaw terms.
 --
@@ -246,21 +251,8 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
   FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
 
--- Unimplemented:
-
--- Don't need to implement:
---   - all SemiRing operations (not using)
---   - all "Basic arithmetic operations" (not using)
---   - all "Operations that introduce irrational numbers" (not using)
---   - BVUnaryTerm (not using)
---   - all array operations (probably not using)
---   - all conversions
---   - all complex operations
---   - all structs
-
--- Might need to implement later:
---   - BVUdiv, BVUrem, BVSdiv, BVSrem
-
+-- Add an expression in the PPCGenerator monad. This returns a Macaw value
+-- corresponding to the added expression.
 addExpr :: Expr ppc ids tp -> PPCGenerator ppc ids (M.Value ppc ids tp)
 addExpr expr = do
   case expr of
@@ -268,28 +260,6 @@ addExpr expr = do
     AppExpr app -> do
       assignment <- addAssignment (M.EvalApp app)
       return $ M.AssignedValue assignment
-
--- This function needs to be written.
-addExprTH :: Expr ppc ids tp -> Q Exp
-addExprTH expr = case expr of
-  ValueExpr val -> [| undefined |]
-  AppExpr app -> [| undefined |]
-
-addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
-addElt elt = eltToExpr elt >>= addExpr
-
--- combine this with addElt
-eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
-eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
-eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
-eltToExpr (S.BoundVarElt sbv) = undefined
-
-addElt' :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
-addElt' elt = case elt of
-  S.BVElt w val loc -> return $ M.BVValue w val
-  S.AppElt appElt   -> do x <- crucAppToExpr (S.appEltApp appElt)
-                          addExpr x
-  S.BoundVarElt sbv -> undefined
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (return $ NumTyLit (natValue w))) |]
@@ -322,11 +292,6 @@ translateFormula semantics bvInterps = do
                |]
             FunctionParameter str operand w -> [| undefined |]
 
-data BoundVarInterpretations arch t =
-  BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-                          , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
-                          }
-
 addEltTH :: (L.Location arch ~ APPC.Location arch,
              1 <= APPC.ArchRegWidth arch,
              M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
@@ -346,6 +311,20 @@ addEltTH bvInterps elt = case elt of
       Nothing  -> [| undefined |]
   _ -> [| undefined |]
 
+-- Unimplemented:
+
+-- Don't need to implement:
+--   - all SemiRing operations (not using)
+--   - all "Basic arithmetic operations" (not using)
+--   - all "Operations that introduce irrational numbers" (not using)
+--   - BVUnaryTerm (not using)
+--   - all array operations (probably not using)
+--   - all conversions
+--   - all complex operations
+--   - all structs
+
+-- Might need to implement later:
+--   - BVUdiv, BVUrem, BVSdiv, BVSrem
 crucAppToExprTH :: (L.Location arch ~ APPC.Location arch,
                    1 <= APPC.ArchRegWidth arch,
                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
@@ -412,7 +391,10 @@ crucAppToExprTH elt bvInterps = case elt of
   --     Just Refl <- return $ testEquality n w
   --     return $ ValueExpr bvVal
   S.BVNeg w bv -> do
-    [| error "BVNeg" |]
+    -- [| error "BVNeg" |]
+    [| do bvVal <- $(addEltTH bvInterps bv)
+          bvComp <- addExpr (AppExpr (M.BVComplement $(natReprTH w) bvVal))
+          AppExpr <$> (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1)) |]
   -- bvVal  <- addElt bv
   -- bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
   -- return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
@@ -442,7 +424,7 @@ crucAppToExprTH elt bvInterps = case elt of
                     <$> $(addEltTH bvInterps bv1)
                     <*> $(addEltTH bvInterps bv2)) |]
   S.BVZext w bv ->
-  -- [| AppExpr <$> (M.UExt <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+    -- [| AppExpr <$> (M.UExt <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
     [| undefined |]
   -- [| do val <- $(addEltTH bvInterps bv)
   -- return $ AppExpr (M.UExt val $(natReprTH w)) |]
@@ -595,3 +577,20 @@ interpretFormula loc elt = do
     AppExpr app -> do
       assignment <- addAssignment (M.EvalApp app)
       curPPCState . M.boundValue reg .= M.AssignedValue assignment
+
+-- Convert a Crucible element into an expression.
+eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
+eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
+eltToExpr (S.BoundVarElt sbv) = undefined
+
+-- Add a Crucible element in the PPCGenerator monad.
+addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt elt = eltToExpr elt >>= addExpr
+
+addElt' :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt' elt = case elt of
+  S.BVElt w val loc -> return $ M.BVValue w val
+  S.AppElt appElt   -> do x <- crucAppToExpr (S.appEltApp appElt)
+                          addExpr x
+  S.BoundVarElt sbv -> undefined
