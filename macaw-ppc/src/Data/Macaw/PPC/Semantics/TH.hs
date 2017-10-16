@@ -159,7 +159,7 @@ genCaseBody :: forall a sh t arch
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
 genCaseBody ipVarName opc semantics varNames =
-  translateFormula semantics locVars opVars
+  translateFormula semantics (BoundVarInterpretations locVars opVars)
   where
     binders = ipVarName : FC.toListFC unFreeParamF varNames
 
@@ -299,10 +299,9 @@ translateFormula :: forall arch t sh .
                      1 <= APPC.ArchRegWidth arch,
                      M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                  => ParameterizedFormula (Sym t) arch sh
-                 -> Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-                 -> Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                 -> BoundVarInterpretations arch t
                  -> Q Exp
-translateFormula semantics locVars opVars = do
+translateFormula semantics bvInterps = do
   let exps = map translateDefinition (Map.toList (pfDefs semantics))
   [| Just (sequence_ $(listE exps)) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
@@ -311,7 +310,7 @@ translateFormula semantics locVars opVars = do
           case param of
             OperandParameter w idx -> [| undefined |]
             LiteralParameter loc -> do
-              e <- addEltTH expr
+              e <- addEltTH bvInterps expr
               reg <- locToRegTH (Proxy @arch) loc
               [| do val <- $(return e)
                     curPPCState . M.boundValue $(return reg) .= val
@@ -323,38 +322,64 @@ translateFormula semantics locVars opVars = do
                |]
             FunctionParameter str operand w -> [| undefined |]
 
-addEltTH :: S.Elt t ctp -> Q Exp
-addEltTH elt = case elt of
+data BoundVarInterpretations arch t =
+  BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+                          , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                          }
+
+addEltTH :: (L.Location arch ~ APPC.Location arch,
+             1 <= APPC.ArchRegWidth arch,
+             M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+         => BoundVarInterpretations arch t
+         -> S.Elt t ctp
+         -> Q Exp
+addEltTH bvInterps elt = case elt of
   S.BVElt w val loc ->
     [| return (M.BVValue $(natReprTH w) $(lift val)) |]
   S.AppElt appElt -> do
     let app = S.appEltApp appElt
-    appExpr <- crucAppToExprTH app
-    [| $(crucAppToExprTH (S.appEltApp appElt)) >>= addExpr |]
-  _ -> [| error "addEltTH" |]
+    appExpr <- crucAppToExprTH app bvInterps
+    [| $(crucAppToExprTH (S.appEltApp appElt) bvInterps) >>= addExpr |]
+  S.BoundVarElt bVar ->
+    case Map.lookup bVar (locVars bvInterps) of
+      Just loc -> [| getRegValue $(locToRegTH undefined loc) |]
+      Nothing  -> [| undefined |]
+  _ -> [| undefined |]
 
-crucAppToExprTH :: S.App (S.Elt t) ctp -> Q Exp
-crucAppToExprTH S.TrueBool  = [| return $ ValueExpr (M.BoolValue True) |]
-crucAppToExprTH S.FalseBool = [| return $ ValueExpr (M.BoolValue False) |]
-crucAppToExprTH (S.NotBool bool) =
-  [| AppExpr (M.NotApp <$> $(addEltTH bool)) |]
-crucAppToExprTH (S.AndBool bool1 bool2) =
-  [| AppExpr (M.AndApp <$> $(addEltTH bool1) <*> $(addEltTH bool2)) |]
-crucAppToExprTH (S.XorBool bool1 bool2) =
-  [| AppExpr (M.XorApp <$> $(addEltTH bool1) <*> $(addEltTH bool2)) |]
-crucAppToExprTH (S.IteBool test t f) =
-  [| AppExpr (M.Mux M.BoolTypeRepr <$> $(addEltTH test) <*> $(addEltTH t) <*> $(addEltTH f)) |]
-crucAppToExprTH (S.BVIte w numBranches test t f) =
-  [| AppExpr (M.Mux (M.BVTypeRepr $(natReprTH w)) <$> $(addEltTH test) <*> $(addEltTH t) <*> $(addEltTH f)) |]
-crucAppToExprTH (S.BVEq bv1 bv2) =
-  [| AppExpr (M.Eq           <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVSlt bv1 bv2) =
-  [| AppExpr (M.BVSignedLt   <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVUlt bv1 bv2) =
-  [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVConcat w bv1 bv2) = do
-  [| error "BVConcat" |]
-  -- [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
+crucAppToExprTH :: (L.Location arch ~ APPC.Location arch,
+                   1 <= APPC.ArchRegWidth arch,
+                   M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+                => S.App (S.Elt t) ctp
+                -> BoundVarInterpretations arch t
+                -> Q Exp
+crucAppToExprTH elt bvInterps = case elt of
+  S.TrueBool  -> [| return $ ValueExpr (M.BoolValue True) |]
+  S.FalseBool -> [| return $ ValueExpr (M.BoolValue False) |]
+  S.NotBool bool ->
+    [| AppExpr (M.NotApp <$> $(addEltTH bvInterps bool)) |]
+  S.AndBool bool1 bool2 ->
+    [| AppExpr (M.AndApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
+  S.XorBool bool1 bool2 ->
+    [| AppExpr (M.XorApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
+  S.IteBool test t f ->
+    [| AppExpr (M.Mux M.BoolTypeRepr
+                <$> $(addEltTH bvInterps test)
+                <*> $(addEltTH bvInterps t)
+                <*> $(addEltTH bvInterps f)) |]
+  S.BVIte w numBranches test t f ->
+    [| AppExpr (M.Mux (M.BVTypeRepr $(natReprTH w))
+                <$> $(addEltTH bvInterps test)
+                <*> $(addEltTH bvInterps t)
+                <*> $(addEltTH bvInterps f)) |]
+  S.BVEq bv1 bv2 ->
+    [| AppExpr (M.Eq <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+  S.BVSlt bv1 bv2 ->
+    [| AppExpr (M.BVSignedLt   <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+  S.BVUlt bv1 bv2 ->
+    [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+  S.BVConcat w bv1 bv2 -> do
+    [| error "BVConcat" |]
+  -- [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
   -- let u = S.bvWidth bv1
   --     v = S.bvWidth bv2
   -- bv1Val <- addElt bv1
@@ -367,8 +392,8 @@ crucAppToExprTH (S.BVConcat w bv1 bv2) = do
   -- bv1Shifter <- addExpr (ValueExpr (M.BVValue w (natValue v)))
   -- bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
   -- return $ M.BVOr w bv1Shf bv2Ext
-crucAppToExprTH (S.BVSelect idx n bv) = do
-  [| error "BVSelect" |]
+  S.BVSelect idx n bv -> do
+    [| error "BVSelect" |]
   -- let w = S.bvWidth bv
   -- bvVal <- addElt bv
   -- case natValue n + 1 <= natValue w of
@@ -386,44 +411,61 @@ crucAppToExprTH (S.BVSelect idx n bv) = do
   --     -- Is there a way to just "know" that n = w?
   --     Just Refl <- return $ testEquality n w
   --     return $ ValueExpr bvVal
-crucAppToExprTH (S.BVNeg w bv) = do
-  [| error "BVNeg" |]
+  S.BVNeg w bv -> do
+    [| error "BVNeg" |]
   -- bvVal  <- addElt bv
   -- bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
   -- return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
-crucAppToExprTH (S.BVTestBit idx bv) = do
-  -- Note: below is untested, could be wrong.
-  [| do let bitExp = ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))
-        bitExpVal <- addExpr bitExp
-        AppExpr <$> (M.BVTestBit <$> bitExpVal <*> $(addEltTH bv)) |]
-crucAppToExprTH (S.BVAdd w bv1 bv2) =
-  [| AppExpr <$> (M.BVAdd $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVMul w bv1 bv2) =
-  [| AppExpr <$> (M.BVMul $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVShl w bv1 bv2) =
-  [| AppExpr <$> (M.BVShl $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVLshr w bv1 bv2) =
-  [| AppExpr <$> (M.BVShr $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVAshr w bv1 bv2) =
-  [| AppExpr <$> (M.BVSar $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVZext w bv) =
-  -- [| AppExpr <$> (M.UExt <$> $(addEltTH bv) <*> (pure $(natReprTH w))) |]
-  [| undefined |]
-  -- [| do val <- $(addEltTH bv)
+  S.BVTestBit idx bv ->
+    -- Note: below is untested, could be wrong.
+    [| do let bitExp = ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))
+          bitExpVal <- addExpr bitExp
+          AppExpr <$> (M.BVTestBit <$> bitExpVal <*> $(addEltTH bvInterps bv)) |]
+  S.BVAdd w bv1 bv2 ->
+    [| AppExpr <$> (M.BVAdd $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVMul w bv1 bv2 ->
+    [| AppExpr <$> (M.BVMul $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVShl w bv1 bv2 ->
+    [| AppExpr <$> (M.BVShl $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVLshr w bv1 bv2 ->
+    [| AppExpr <$> (M.BVShr $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVAshr w bv1 bv2 ->
+    [| AppExpr <$> (M.BVSar $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVZext w bv ->
+  -- [| AppExpr <$> (M.UExt <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+    [| undefined |]
+  -- [| do val <- $(addEltTH bvInterps bv)
   -- return $ AppExpr (M.UExt val $(natReprTH w)) |]
-crucAppToExprTH (S.BVSext w bv) =
-  -- [| AppExpr <$> (M.SExt <$> $(addEltTH bv) <*> (pure $(natReprTH w))) |]
-  [| undefined |]
-crucAppToExprTH (S.BVTrunc w bv) =
-  [| AppExpr <$> (M.Trunc <$> $(addEltTH bv) <*> (pure $(natReprTH w))) |]
-crucAppToExprTH (S.BVBitNot w bv) =
-  [| AppExpr <$> (M.BVComplement <$> $(addEltTH bv) <*> (pure $(natReprTH w))) |]
-crucAppToExprTH (S.BVBitAnd w bv1 bv2) =
-  [| AppExpr <$> (M.BVAnd  $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVBitOr w bv1 bv2) =
-  [| AppExpr <$> (M.BVOr  $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
-crucAppToExprTH (S.BVBitXor w bv1 bv2) =
-  [| AppExpr <$> (M.BVXor $(natReprTH w) <$> $(addEltTH bv1) <*> $(addEltTH bv2)) |]
+  S.BVSext w bv ->
+  -- [| AppExpr <$> (M.SExt <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+    [| undefined |]
+  S.BVTrunc w bv ->
+    [| AppExpr <$> (M.Trunc <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+  S.BVBitNot w bv ->
+    [| AppExpr <$> (M.BVComplement <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+  S.BVBitAnd w bv1 bv2 ->
+    [| AppExpr <$> (M.BVAnd $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVBitOr w bv1 bv2 ->
+    [| AppExpr <$> (M.BVOr $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  S.BVBitXor w bv1 bv2 ->
+    [| AppExpr <$> (M.BVXor $(natReprTH w)
+                    <$> $(addEltTH bvInterps bv1)
+                    <*> $(addEltTH bvInterps bv2)) |]
+  _ -> [| error "unsupported Crucible elt" |]
 
 
 
@@ -521,6 +563,7 @@ locToReg _  APPC.LocIP       = PPC_IP
 locToReg _  APPC.LocLNK      = PPC_LNK
 locToReg _  APPC.LocCTR      = PPC_CTR
 locToReg _  APPC.LocCR       = PPC_CR
+locToReg _  _                = undefined
 -- fill the rest out later
 
 locToRegTH :: (1 <= APPC.ArchRegWidth ppc,

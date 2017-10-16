@@ -19,6 +19,7 @@ module Data.Macaw.PPC.Generator (
   addStmt,
   addAssignment,
   getReg,
+  getRegValue,
   -- * Lenses
   blockState,
   curPPCState,
@@ -196,6 +197,11 @@ getReg r = do
   genState <- St.get
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return expr
+
+getRegValue :: PPCReg ppc tp -> PPCGenerator ppc s (Value ppc s tp)
+getRegValue r = do
+  genState <- St.get
+  return (genState ^. blockState ^. pBlockState ^. boundValue r)
 
 -- evalApp :: App (Value PPC s) tp -> PPCGenerator ppc s (Value PPC s tp)
 -- evalApp = undefined
