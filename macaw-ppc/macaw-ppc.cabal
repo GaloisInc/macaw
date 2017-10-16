@@ -22,6 +22,7 @@ library
                        Data.Macaw.PPC.Eval
                        Data.Macaw.PPC.Generator
                        Data.Macaw.PPC.Identify
+                       Data.Macaw.PPC.Operand
                        Data.Macaw.PPC.PPCReg
                        Data.Macaw.PPC.Semantics
                        Data.Macaw.PPC.Semantics.PPC64

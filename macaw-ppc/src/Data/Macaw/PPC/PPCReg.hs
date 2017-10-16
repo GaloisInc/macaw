@@ -35,6 +35,7 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 
 data PPCReg arch tp where
   PPC_GP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => D.GPR -> PPCReg arch (BVType w)
+  PPC_FR :: D.FR -> PPCReg arch (BVType 128)
   PPC_IP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_LNK :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_CTR :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
@@ -47,6 +48,7 @@ instance Show (PPCReg arch tp) where
   show r =
     case r of
       PPC_GP gpr -> show gpr
+      PPC_FR fr -> show fr
       PPC_IP -> "ip"
       PPC_LNK -> "lnk"
       PPC_CTR -> "ctr"
@@ -103,6 +105,7 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
   typeRepr r =
     case r of
       PPC_GP {} -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
+      PPC_FR {} -> BVTypeRepr n128
       PPC_IP -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_LNK -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_CTR -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
@@ -126,9 +129,13 @@ ppcRegs :: forall w ppc
         => [Some (PPCReg ppc)]
 ppcRegs = concat [ gprs
                  , sprs
+                 , fprs
                  ]
   where
     sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR ]
     gprs = [ Some (PPC_GP (D.GPR rnum))
+           | rnum <- [0..31]
+           ]
+    fprs = [ Some (PPC_FR (D.FR rnum))
            | rnum <- [0..31]
            ]
