@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -9,7 +10,9 @@
 -- | Tools for extracting Macaw values from instruction operands
 module Data.Macaw.PPC.Operand (
   ExtractValue,
-  extractValue
+  extractValue,
+  ToPPCReg,
+  toPPCReg
   ) where
 
 import           GHC.TypeLits
@@ -68,3 +71,15 @@ instance ExtractValue arch D.CRBitRC (BVType 5) where
 
 instance ExtractValue arch D.CRRC (BVType 3) where
   extractValue (D.CRRC b) = return $ MC.BVValue NR.knownNat (fromIntegral b)
+
+class ToPPCReg a arch tp | a arch -> tp where
+  toPPCReg :: a -> R.PPCReg arch tp
+
+instance ToPPCReg D.GPR PPC32.PPC (BVType 32) where
+  toPPCReg = R.PPC_GP
+
+instance ToPPCReg D.GPR PPC64.PPC (BVType 64) where
+  toPPCReg = R.PPC_GP
+
+instance ToPPCReg D.FR arch (BVType 128) where
+  toPPCReg = R.PPC_FR

@@ -165,7 +165,7 @@ genCaseBody :: forall a sh t arch
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
 genCaseBody ipVarName opc semantics varNames =
-  translateFormula semantics (BoundVarInterpretations locVars opVars)
+  translateFormula semantics (BoundVarInterpretations locVars opVars) varNames
   where
     binders = ipVarName : FC.toListFC unFreeParamF varNames
 
@@ -271,26 +271,26 @@ translateFormula :: forall arch t sh .
                      M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                  => ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
+                 -> SL.ShapedList (FreeParamF Name) sh
                  -> Q Exp
-translateFormula semantics bvInterps = do
+translateFormula semantics bvInterps varNames = do
   let exps = map translateDefinition (Map.toList (pfDefs semantics))
   [| Just (sequence_ $(listE exps)) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> Q Exp
         translateDefinition (Map.Pair param expr) = do
           case param of
-            OperandParameter w idx -> [| undefined |]
+            OperandParameter w idx -> do
+              e <- addEltTH bvInterps expr
+              let FreeParamF name = varNames `SL.indexShapedList` idx
+              [| do val <- $(return e)
+                    let reg = toPPCReg $(varE name)
+                    curPPCState . M.boundValue reg .= val |]
             LiteralParameter loc -> do
               e <- addEltTH bvInterps expr
               reg <- locToRegTH (Proxy @arch) loc
               [| do val <- $(return e)
-                    curPPCState . M.boundValue $(return reg) .= val
-                    -- case c of
-                    --   ValueExpr val -> curPPCState . M.boundValue $(return reg) .= val
-                    --   AppExpr app -> do
-                    --     assignment <- addAssignment (M.EvalApp app)
-                    --     curPPCState . M.boundValue $(return reg) .= M.AssignedValue assignment
-               |]
+                    curPPCState . M.boundValue $(return reg) .= val |]
             FunctionParameter str operand w -> [| undefined |]
 
 addEltTH :: forall arch t ctp .
@@ -340,27 +340,27 @@ crucAppToExprTH elt bvInterps = case elt of
   S.TrueBool  -> [| return $ ValueExpr (M.BoolValue True) |]
   S.FalseBool -> [| return $ ValueExpr (M.BoolValue False) |]
   S.NotBool bool ->
-    [| AppExpr (M.NotApp <$> $(addEltTH bvInterps bool)) |]
+    [| AppExpr <$> (M.NotApp <$> $(addEltTH bvInterps bool)) |]
   S.AndBool bool1 bool2 ->
-    [| AppExpr (M.AndApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
+    [| AppExpr <$> (M.AndApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
   S.XorBool bool1 bool2 ->
-    [| AppExpr (M.XorApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
+    [| AppExpr <$> (M.XorApp <$> $(addEltTH bvInterps bool1) <*> $(addEltTH bvInterps bool2)) |]
   S.IteBool test t f ->
-    [| AppExpr (M.Mux M.BoolTypeRepr
-                <$> $(addEltTH bvInterps test)
-                <*> $(addEltTH bvInterps t)
-                <*> $(addEltTH bvInterps f)) |]
+    [| AppExpr <$> (M.Mux M.BoolTypeRepr
+                    <$> $(addEltTH bvInterps test)
+                    <*> $(addEltTH bvInterps t)
+                    <*> $(addEltTH bvInterps f)) |]
   S.BVIte w numBranches test t f ->
-    [| AppExpr (M.Mux (M.BVTypeRepr $(natReprTH w))
-                <$> $(addEltTH bvInterps test)
-                <*> $(addEltTH bvInterps t)
-                <*> $(addEltTH bvInterps f)) |]
+    [| AppExpr <$> (M.Mux (M.BVTypeRepr $(natReprTH w))
+                    <$> $(addEltTH bvInterps test)
+                    <*> $(addEltTH bvInterps t)
+                    <*> $(addEltTH bvInterps f)) |]
   S.BVEq bv1 bv2 ->
-    [| AppExpr (M.Eq <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+    [| AppExpr <$> (M.Eq <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
   S.BVSlt bv1 bv2 ->
-    [| AppExpr (M.BVSignedLt   <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+    [| AppExpr <$> (M.BVSignedLt   <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
   S.BVUlt bv1 bv2 ->
-    [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
+    [| AppExpr <$> (M.BVUnsignedLt <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
   S.BVConcat w bv1 bv2 -> do
     [| error "BVConcat" |]
   -- [| AppExpr (M.BVUnsignedLt <$> $(addEltTH bvInterps bv1) <*> $(addEltTH bvInterps bv2)) |]
@@ -396,10 +396,10 @@ crucAppToExprTH elt bvInterps = case elt of
   --     Just Refl <- return $ testEquality n w
   --     return $ ValueExpr bvVal
   S.BVNeg w bv -> do
-    -- [| error "BVNeg" |]
+    -- Note: This is still untested
     [| do bvVal <- $(addEltTH bvInterps bv)
           bvComp <- addExpr (AppExpr (M.BVComplement $(natReprTH w) bvVal))
-          AppExpr <$> (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1)) |]
+          return $ AppExpr (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1)) |]
   -- bvVal  <- addElt bv
   -- bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
   -- return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
@@ -439,7 +439,7 @@ crucAppToExprTH elt bvInterps = case elt of
   S.BVTrunc w bv ->
     [| AppExpr <$> (M.Trunc <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
   S.BVBitNot w bv ->
-    [| AppExpr <$> (M.BVComplement <$> $(addEltTH bvInterps bv) <*> (pure $(natReprTH w))) |]
+    [| AppExpr <$> (M.BVComplement $(natReprTH w) <$> $(addEltTH bvInterps bv)) |]
   S.BVBitAnd w bv1 bv2 ->
     [| AppExpr <$> (M.BVAnd $(natReprTH w)
                     <$> $(addEltTH bvInterps bv1)
