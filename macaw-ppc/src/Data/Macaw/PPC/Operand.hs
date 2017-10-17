@@ -30,7 +30,7 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Generator as G
 
-class ExtractValue arch a tp where
+class ExtractValue arch a tp | arch a -> tp where
   extractValue :: a -> G.PPCGenerator arch s (MC.Value arch s tp)
 
 instance ExtractValue PPC32.PPC D.GPR (BVType 32) where

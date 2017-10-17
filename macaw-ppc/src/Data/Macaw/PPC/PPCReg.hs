@@ -40,6 +40,7 @@ data PPCReg arch tp where
   PPC_LNK :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_CTR :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_CR :: PPCReg arch (BVType 32)
+  PPC_XER :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
 
 deriving instance Eq (PPCReg arch tp)
 deriving instance Ord (PPCReg arch tp)
