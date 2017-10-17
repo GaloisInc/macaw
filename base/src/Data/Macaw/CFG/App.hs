@@ -68,8 +68,17 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Bitvector operations
 
+  -- | @BVAdd w x y@ denotes @x + y@.
   BVAdd :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+
+  -- | @BVAdc w x y c@ denotes @x + y + (c ? 1 : 0)@.
+  BVAdc :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> !(f BoolType) -> App f (BVType n)
+
+  -- | @BVSub w x y@ denotes @x - y@.
   BVSub :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+
+  -- | @BVSbb w x y b@ denotes @(x - y) - (b ? 1 : 0)@.
+  BVSbb :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> !(f BoolType) -> App f (BVType n)
 
   -- Multiply two numbers
   BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
@@ -112,32 +121,37 @@ data App (f :: Type -> *) (tp :: Type) where
   --
   -- This is the sum of three three values cannot be represented as an unsigned number.
   UadcOverflows :: (1 <= n)
-                => !(NatRepr n)
-                -> !(f (BVType n))
+                => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
   -- Add two values and a carry bit to determine if they have a signed
   -- overflow.
   SadcOverflows :: (1 <= n)
-                => !(NatRepr n)
-                -> !(f (BVType n))
+                => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
   -- Unsigned subtract with borrow overflow
+  --
+  -- @UsbbOverflows  w x y c@ should be true iff the result
+  -- @(toNat x - toNat y) - (c ? 1 : 0)@ is not between @0@ and @2^w-1@.
+  -- Since everything is unsigned, this is equivalent to @x unsignedLt (y + (c ? 1 : 0)@.
   UsbbOverflows :: (1 <= n)
-                => !(NatRepr n)
-                -> !(f (BVType n))
+                => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
-  -- Signed subtract with borrow overflow
+  -- Signed subtract with borrow overflow.
+  --
+  -- @SsbbOverflows w x y c@ should be true iff the result
+  -- @(toInt x - toInt y) - (c ? 1 : 0)@ is not between @-2^(w-1)@ and @2^(w-1)-1@.
+  -- An equivalent way to express this is that x and y should have opposite signs and
+  -- the sign of the result should differ from the sign of x.
   SsbbOverflows :: (1 <= n)
-                => !(NatRepr n)
-                -> !(f (BVType n))
+                => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
@@ -159,8 +173,9 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- | bsf "bit scan forward" returns the index of the
   -- most-significant bit that is 1.  An equivalent way of stating
-  -- this is that it returns the number "least" zero-bits.  This
-  -- returns n if the value is zero.
+  -- this is that it returns the number zero-bits starting from
+  -- the most-significant bit location.  This returns n if the
+  -- value is zero.
   Bsr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
   ----------------------------------------------------------------------
@@ -328,8 +343,10 @@ ppAppA pp a0 =
     OrApp  x y -> sexprA "or"  [ pp x, pp y ]
     NotApp x   -> sexprA "not" [ pp x ]
     XorApp  x y -> sexprA "xor"  [ pp x, pp y ]
-    BVAdd _ x y -> sexprA "bv_add" [ pp x, pp y ]
+    BVAdd _ x y   -> sexprA "bv_add" [ pp x, pp y ]
+    BVAdc _ x y c -> sexprA "bv_adc" [ pp x, pp y, pp c ]
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
+    BVSbb _ x y b -> sexprA "bv_sbb" [ pp x, pp y, pp b ]
     BVMul _ x y -> sexprA "bv_mul" [ pp x, pp y ]
     BVUnsignedLt x y  -> sexprA "bv_ult"  [ pp x, pp y ]
     BVUnsignedLe x y  -> sexprA "bv_ule"  [ pp x, pp y ]
@@ -346,10 +363,10 @@ ppAppA pp a0 =
     Eq x y      -> sexprA "eq" [ pp x, pp y ]
     PopCount _ x -> sexprA "popcount" [ pp x ]
     ReverseBytes _ x -> sexprA "reverse_bytes" [ pp x ]
-    UadcOverflows _ x y c -> sexprA "uadc_overflows" [ pp x, pp y, pp c ]
-    SadcOverflows _ x y c -> sexprA "sadc_overflows" [ pp x, pp y, pp c ]
-    UsbbOverflows _ x y c -> sexprA "usbb_overflows" [ pp x, pp y, pp c ]
-    SsbbOverflows _ x y c -> sexprA "ssbb_overflows" [ pp x, pp y, pp c ]
+    UadcOverflows x y c -> sexprA "uadc_overflows" [ pp x, pp y, pp c ]
+    SadcOverflows x y c -> sexprA "sadc_overflows" [ pp x, pp y, pp c ]
+    UsbbOverflows x y c -> sexprA "usbb_overflows" [ pp x, pp y, pp c ]
+    SsbbOverflows x y c -> sexprA "ssbb_overflows" [ pp x, pp y, pp c ]
     Bsf _ x -> sexprA "bsf" [ pp x ]
     Bsr _ x -> sexprA "bsr" [ pp x ]
 
@@ -386,8 +403,10 @@ instance HasRepr (App f) TypeRepr where
     NotApp{} -> knownType
     XorApp{} -> knownType
 
-    BVAdd w _ _ -> BVTypeRepr w
-    BVSub w _ _ -> BVTypeRepr w
+    BVAdd w _ _   -> BVTypeRepr w
+    BVAdc w _ _ _ -> BVTypeRepr w
+    BVSub w _ _   -> BVTypeRepr w
+    BVSbb w _ _ _ -> BVTypeRepr w
     BVMul w _ _ -> BVTypeRepr w
 
     BVUnsignedLt{} -> knownType

@@ -513,22 +513,22 @@ instance S.IsValue (Expr ids) where
 
   uadc_overflows x y c
     | Just 0 <- asBVLit y, Just False <- asBoolLit c = S.false
-    | otherwise = app $ UadcOverflows (typeWidth x) x y c
+    | otherwise = app $ UadcOverflows x y c
   sadc_overflows x y c
     | Just 0 <- asBVLit y, Just False <- asBoolLit c = S.false
-    | otherwise = app $ SadcOverflows (typeWidth x) x y c
+    | otherwise = app $ SadcOverflows x y c
 
   usbb_overflows x y c
     | Just 0 <- asBVLit y, Just False <- asBoolLit c = S.false
       -- If the borrow bit is zero, this is equivalent to unsigned x < y.
     | Just False <- asBoolLit c = S.bvUlt x y
-    | otherwise = app $ UsbbOverflows (typeWidth x) x y c
+    | otherwise = app $ UsbbOverflows x y c
 
   ssbb_overflows x y c
     | Just 0 <- asBVLit y, Just False <- asBoolLit c = S.false
       -- If the borrow bit is zero, this is equivalent to signed x < y.
       -- FIXME: not true? | Just 0 <- asBVLit c = app $ BVSignedLt x y
-    | otherwise = app $ SsbbOverflows (typeWidth x) x y c
+    | otherwise = app $ SsbbOverflows x y c
 
   bsf x = app $ Bsf (typeWidth x) x
   bsr x = app $ Bsr (typeWidth x) x

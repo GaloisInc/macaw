@@ -24,7 +24,7 @@ module Data.Macaw.AbsDomain.StridedInterval
          -- Domain operations
        , lub, lubSingleton, glb
          -- Operations
-       , bvadd, bvmul, trunc
+       , bvadd, bvadc, bvmul, trunc
          -- Debugging
        ) where
 
@@ -336,16 +336,33 @@ bvadd sz si1 si2 =
     r | m == 0 = error "bvadd given 0 stride"
       | otherwise = (range si1 * (stride si1 `div` m)) + (range si2 * (stride si2 `div` m))
 
--- prop_bvadd ::  StridedInterval (BVType 64)
---             -> StridedInterval (BVType 64)
---             -> Bool
--- prop_bvadd = mk_prop (+) bvadd
+bvadc :: NatRepr u
+      -> StridedInterval u
+      -> StridedInterval u
+      -> Maybe Bool
+      -> StridedInterval u
+bvadc sz si1 si2 (Just b)
+  | Just s <- isSingleton si1 =
+      clamp sz $ si2 { base = base si2 + s + (if b then 1 else 0) }
+bvadc sz si1 si2 (Just b)
+  | Just s <- isSingleton si2 =
+      clamp sz $ si1 { base = base si1 + s + (if b then 1 else 0) }
+bvadc sz si1 si2 b =
+  clamp sz $ StridedInterval { typ = typ si1
+                             , base = base si1 + base si2 + (if b == Just True then 1 else 0)
+                             , range = r
+                             , stride = m }
+  where
+    m | b == Nothing = 1
+      | otherwise = gcd (stride si1) (stride si2)
 
--- We have (x + [0..a] * b) * (y + [0 .. d] * e)
--- = (x * y) + [0..a] * b * y + [0 .. d] * e * x + ([0..a] * b * [0..d] * e)
--- `subsetOf`  (x * y) + [0..a] * (b * y)
---           + 0       + [0 .. d] * (e * x)
---           + 0       + ([0..a*d] * (b * e)
+    -- The amount to increase the range by given b.
+    -- We add 1 when b == Nothing due to the uncertainty
+    b_off | b == Nothing = 1
+          | otherwise = 0
+
+    r | m == 0 = error "bvadd given 0 stride"
+      | otherwise = (range si1 * (stride si1 `div` m)) + (range si2 * (stride si2 `div` m) + b_off)
 
 bvmul :: NatRepr u
       -> StridedInterval u

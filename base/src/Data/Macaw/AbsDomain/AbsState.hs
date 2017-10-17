@@ -589,36 +589,51 @@ uext (SomeStackOffset _) _ = TopV
 uext ReturnAddr _ = TopV
 uext TopV _ = TopV
 
+asBoolConst :: AbsValue w BoolType -> Maybe Bool
+asBoolConst (BoolConst b) = Just b
+asBoolConst TopV = Nothing
+
+bvadc :: forall w u
+      .  MemWidth w
+      => NatRepr u
+      -> AbsValue w (BVType u)
+      -> AbsValue w (BVType u)
+      -> AbsValue w BoolType
+      -> AbsValue w (BVType u)
+-- Stacks
+bvadc w (StackOffset a s) (FinSet t) c
+  | [o0] <- Set.toList t
+  , BoolConst b <- c
+  , o <- if b then o0 + 1 else o0 =
+    StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
+bvadc w (FinSet t) (StackOffset a s) c
+  | [o0] <- Set.toList t
+  , BoolConst b <- c
+  , o <- if b then o0 + 1 else o0 =
+    StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
+-- Strided intervals
+bvadc w v v' c
+  | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2
+  | StridedInterval si <- v,  IsFin s <- asFinSet "bvadc" v' = go si (SI.fromFoldable w s)
+  | StridedInterval si <- v', IsFin s <- asFinSet "bvadc" v  = go si (SI.fromFoldable w s)
+  where
+    go :: SI.StridedInterval u -> SI.StridedInterval u -> AbsValue w (BVType u)
+    go si1 si2 = stridedInterval $ SI.bvadc w si1 si2 (asBoolConst c)
+
+-- the rest
+bvadc _ (StackOffset ax _)   _ _ = SomeStackOffset ax
+bvadc _ _   (StackOffset ax _) _ = SomeStackOffset ax
+bvadc _ (SomeStackOffset ax) _ _ = SomeStackOffset ax
+bvadc _ _ (SomeStackOffset ax) _ = SomeStackOffset ax
+bvadc _ _ _ _ = TopV
+
 bvadd :: forall w u
       .  MemWidth w
       => NatRepr u
       -> AbsValue w (BVType u)
       -> AbsValue w (BVType u)
       -> AbsValue w (BVType u)
--- Stacks
-bvadd w (StackOffset a s) (FinSet t) | [o] <- Set.toList t = do
-  StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
-bvadd w (FinSet t) (StackOffset a s) | [o] <- Set.toList t = do
-  StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
--- Strided intervals
-bvadd w v v'
-  | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2
-  | StridedInterval si <- v,  IsFin s <- asFinSet "bvadd" v' = go si (SI.fromFoldable w s)
-  | StridedInterval si <- v', IsFin s <- asFinSet "bvadd" v  = go si (SI.fromFoldable w s)
-  where
-    go :: SI.StridedInterval u -> SI.StridedInterval u -> AbsValue w (BVType u)
-    go si1 si2 = stridedInterval $ SI.bvadd w si1 si2
-
--- subvalues
--- bvadd w (SubValue _n _av c) v' = bvadd w c v'
--- bvadd w v (SubValue _n _av c)  = bvadd w v c
-
--- the rest
-bvadd _ (StackOffset ax _) _ = SomeStackOffset ax
-bvadd _ _ (StackOffset ax _) = SomeStackOffset ax
-bvadd _ (SomeStackOffset ax) _ = SomeStackOffset ax
-bvadd _ _ (SomeStackOffset ax) = SomeStackOffset ax
-bvadd _ _ _ = TopV
+bvadd w x y = bvadc w x y (BoolConst False)
 
 setL :: Ord a
      => ([a] -> AbsValue w (BVType n))
@@ -627,6 +642,64 @@ setL :: Ord a
      -> AbsValue w (BVType n)
 setL def c l | length l > maxSetSize = def l
              | otherwise = c (Set.fromList l)
+
+-- | Subtracting
+bvsbb :: forall w u
+      .  MemWidth w
+      => Memory w
+         -- ^ Memory used for checking code pointers.
+      -> NatRepr u
+      -> AbsValue w (BVType u)
+      -> AbsValue w (BVType u)
+      -> AbsValue w BoolType
+      -> AbsValue w (BVType u)
+bvsbb mem w (CodePointers s b) (FinSet t) (BoolConst False)
+      -- If we just have zero.
+    | Set.null s && b = FinSet (Set.map (toUnsigned w . negate) t)
+    | all isJust vals && (not b || Set.singleton 0 == t) =
+      CodePointers (Set.fromList (catMaybes vals)) b
+    | otherwise = error "Losing code pointers due to bvsub."
+  where vals :: [Maybe (MemSegmentOff w)]
+        vals = do
+          x <- Set.toList s
+          y <- Set.toList t
+          let z = relativeSegmentAddr x & incAddr (negate y)
+          case asSegmentOff mem z of
+            Just z_mseg | segmentFlags (msegSegment z_mseg) `Perm.hasPerm` Perm.execute ->
+              pure (Just z_mseg)
+            _ ->
+              pure Nothing
+bvsbb _ _ xv@(CodePointers xs xb) (CodePointers ys yb) (BoolConst False)
+      -- If we just have zero.
+    | Set.null ys && yb = xv
+      --
+    | all isJust vals && xb == yb =
+        if xb then
+          FinSet (Set.insert 0 (Set.fromList (catMaybes vals)))
+         else
+          FinSet (Set.fromList (catMaybes vals))
+    | otherwise = error "Losing code pointers due to bvsub."
+  where vals :: [Maybe Integer]
+        vals = do
+          x <- Set.toList xs
+          y <- Set.toList ys
+          pure (relativeSegmentAddr x `diffAddr` relativeSegmentAddr y)
+bvsbb _ w (FinSet s) (asFinSet "bvsub3" -> IsFin t) (BoolConst b) =
+  setL (stridedInterval . SI.fromFoldable w) FinSet $ do
+  x <- Set.toList s
+  y <- Set.toList t
+  return $ toUnsigned w $ (x - y) - (if b then 1 else 0)
+bvsbb _ w (StackOffset ax s) (asFinSet "bvsub6" -> IsFin t) (BoolConst False) =
+  setL (\_ -> SomeStackOffset ax) (StackOffset ax) $ do
+    x <- toInteger <$> Set.toList s
+    y <- Set.toList t
+    return $! fromInteger (toUnsigned w (x - y))
+bvsbb _ _ (StackOffset ax _) _ _ = SomeStackOffset ax
+bvsbb _ _ _ (StackOffset _ _) _ = TopV
+bvsbb _ _ (SomeStackOffset ax) _ _ = SomeStackOffset ax
+bvsbb _ _ _ (SomeStackOffset _) _ = TopV
+bvsbb _ _ _ _ _b = TopV -- Keep the pattern checker happy
+
 
 -- | Subtracting
 bvsub :: forall w u
@@ -643,9 +716,6 @@ bvsub mem w (CodePointers s b) (FinSet t)
     | all isJust vals && (not b || Set.singleton 0 == t) =
       CodePointers (Set.fromList (catMaybes vals)) b
     | otherwise = error "Losing code pointers due to bvsub."
-      -- TODO: Fix this.
---      debug DAbsInt ("drooping " ++ show (ppIntegerSet s) ++ " " ++ show (ppIntegerSet t)) $
---        setL (stridedInterval . SI.fromFoldable w) FinSet (toInteger <$> vals)
   where vals :: [Maybe (MemSegmentOff w)]
         vals = do
           x <- Set.toList s
@@ -666,9 +736,6 @@ bvsub _ _ xv@(CodePointers xs xb) (CodePointers ys yb)
          else
           FinSet (Set.fromList (catMaybes vals))
     | otherwise = error "Losing code pointers due to bvsub."
-      -- TODO: Fix this.
---      debug DAbsInt ("drooping " ++ show (ppIntegerSet s) ++ " " ++ show (ppIntegerSet t)) $
---        setL (stridedInterval . SI.fromFoldable w) FinSet (toInteger <$> vals)
   where vals :: [Maybe Integer]
         vals = do
           x <- Set.toList xs
@@ -1211,21 +1278,26 @@ finalAbsBlockState c s =
 ------------------------------------------------------------------------
 -- Transfer functions
 
-transferApp :: ( RegisterInfo (ArchReg a)
+transferApp :: forall a ids tp
+            .  ( RegisterInfo (ArchReg a)
                , HasCallStack
                )
             => AbsProcessorState (ArchReg a) ids
             -> App (Value a ids) tp
             -> ArchAbsValue a tp
-transferApp r a =
+transferApp r a = do
+  let t :: Value a ids utp -> ArchAbsValue a utp
+      t = transferValue r
   case a of
-    Trunc v w -> trunc (transferValue r v) w
-    UExt  v w -> uext  (transferValue r v) w
-    BVAdd w x y -> bvadd w (transferValue r x) (transferValue r y)
-    BVSub w x y -> bvsub (absMem r) w (transferValue r x) (transferValue r y)
-    BVMul w x y -> bvmul w (transferValue r x) (transferValue r y)
-    BVAnd w x y -> bvand w (transferValue r x) (transferValue r y)
-    BVOr w x y  -> bitop (.|.) w (transferValue r x) (transferValue r y)
+    Trunc v w -> trunc (t v) w
+    UExt  v w -> uext  (t v) w
+    BVAdd w x y -> bvadd w (t x) (t y)
+    BVAdc w x y c -> bvadc w (t x) (t y) (t c)
+    BVSub w x y -> bvsub (absMem r) w (t x) (t y)
+    BVSbb w x y b -> bvsbb (absMem r) w (t x) (t y) (t b)
+    BVMul w x y -> bvmul w (t x) (t y)
+    BVAnd w x y -> bvand w (t x) (t y)
+    BVOr w x y  -> bitop (.|.) w (t x) (t y)
     _ -> TopV
 
 -- | Minimal information needed to parse a function call/system call
@@ -1259,8 +1331,9 @@ absEvalCall params ab0 addr =
           | Just Refl <- testEquality r ip_reg =
               CodePointers (Set.singleton addr) False
           | Just Refl <- testEquality r sp_reg =
-              let w = type_width (typeRepr r)
-               in bvadd w (ab0^.absRegState^.boundValue r) (FinSet (Set.singleton (postCallStackDelta params)))
+              let w = typeWidth r
+               in bvadd w (ab0^.absRegState^.boundValue r)
+                          (FinSet (Set.singleton (postCallStackDelta params)))
             -- Copy callee saved registers
           | preserveReg params r =
             ab0^.absRegState^.boundValue r

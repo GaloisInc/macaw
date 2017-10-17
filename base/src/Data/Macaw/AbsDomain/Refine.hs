@@ -84,7 +84,7 @@ refineApp app av regs =
 
    -- FIXME: HACK
    -- This detects r - x < 0 || r - x == 0, i.e. r <= x
-   OrApp (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BoolValue False)))
+   OrApp (getAssignApp -> Just (UsbbOverflows r xv@(BVValue sz x) (BoolValue False)))
          (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))
      | Just Refl <- testEquality r r'
      , Just Refl <- testEquality y (mkLit sz (negate x))
@@ -94,7 +94,7 @@ refineApp app av regs =
    -- FIXME: HACK
    -- This detects not (r - x < 0) && not (r - x == 0), i.e. x < r
    AndApp (getAssignApp -> Just
-             (NotApp (getAssignApp -> Just (UsbbOverflows _ r xv@(BVValue sz x) (BoolValue False)))))
+             (NotApp (getAssignApp -> Just (UsbbOverflows r xv@(BVValue sz x) (BoolValue False)))))
           (getAssignApp -> Just
              (NotApp (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))))
      | Just Refl <- testEquality r r'
