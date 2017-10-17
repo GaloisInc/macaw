@@ -277,7 +277,8 @@ appToCrucible app = do
     M.BVShl w x y -> appAtom =<< C.BVShl  w <$> v2c x <*> v2c y
     M.BVShr w x y -> appAtom =<< C.BVLshr w <$> v2c x <*> v2c y
     M.BVSar w x y -> appAtom =<< C.BVAshr w <$> v2c x <*> v2c y
-    M.UadcOverflows w x y c -> do
+    M.UadcOverflows x y c -> do
+      let w  = M.typeWidth x
       let w' = incNat w
       x' <- zext1 w =<< v2c x
       y' <- zext1 w =<< v2c y
