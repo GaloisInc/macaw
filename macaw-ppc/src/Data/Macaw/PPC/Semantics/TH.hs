@@ -265,6 +265,11 @@ addExpr expr = do
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (return $ NumTyLit (natValue w))) |]
 
+-- | Sequence a list of monadic actions without constructing an intermediate
+-- list structure
+doSequenceQ :: [ExpQ] -> Q Exp
+doSequenceQ = doE . map noBindS
+
 translateFormula :: forall arch t sh .
                     (L.Location arch ~ APPC.Location arch,
                      1 <= APPC.ArchRegWidth arch,
@@ -275,7 +280,7 @@ translateFormula :: forall arch t sh .
                  -> Q Exp
 translateFormula semantics bvInterps varNames = do
   let exps = map translateDefinition (Map.toList (pfDefs semantics))
-  [| Just (sequence_ $(listE exps)) |]
+  [| Just $(doSequenceQ exps) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> Q Exp
         translateDefinition (Map.Pair param expr) = do
