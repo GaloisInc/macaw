@@ -266,6 +266,16 @@ data App (f :: Type -> *) (tp :: Type) where
                     -> NatRepr n
                     -> App f (BVType n)
 
+  -- Take the absolute value of a floating point value.
+  --
+  -- This operation clears the sign bit of the given floating point number
+  -- (including for 0 and infinite values).  If the input is a NaN, the output
+  -- is also a NaN (and the relationship between the input NaN and output NaN is
+  -- unspecified).
+  FPAbs :: !(FloatInfoRepr flt)
+        -> !(f (FloatType flt))
+        -> App f (FloatType flt)
+
 -----------------------------------------------------------------------
 -- App utilities
 
@@ -386,6 +396,7 @@ ppAppA pp a0 =
     FPCvtRoundsUp src x tgt -> sexprA "fpCvtRoundsUp" [ prettyPure src, pp x, prettyPure tgt ]
     FPFromBV x tgt          -> sexprA "fpFromBV" [ pp x, prettyPure tgt ]
     TruncFPToSignedBV _ x w -> sexprA "truncFP_sbv" [ pp x, ppNat w]
+    FPAbs rep x             -> sexprA "fpAbs" [ prettyPure rep, pp x ]
 
 ------------------------------------------------------------------------
 -- appType
@@ -453,3 +464,4 @@ instance HasRepr (App f) TypeRepr where
     FPCvtRoundsUp{} -> knownType
     FPFromBV _ tgt  -> floatTypeRepr tgt
     TruncFPToSignedBV _ _ w -> BVTypeRepr w
+    FPAbs rep _ -> floatTypeRepr rep
