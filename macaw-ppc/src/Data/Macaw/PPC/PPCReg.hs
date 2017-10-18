@@ -54,6 +54,7 @@ instance Show (PPCReg arch tp) where
       PPC_LNK -> "lnk"
       PPC_CTR -> "ctr"
       PPC_CR -> "cr"
+      PPC_XER -> "xer"
 
 instance ShowF (PPCReg arch) where
   showF = show
@@ -111,6 +112,7 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_LNK -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_CTR -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_CR -> BVTypeRepr n32
+      PPC_XER -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
 
 type PPCWidth ppc = (ArchWidth ppc,
                      MC.ArchReg ppc ~ PPCReg ppc,
