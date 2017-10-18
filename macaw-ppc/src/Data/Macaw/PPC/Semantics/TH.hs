@@ -408,6 +408,7 @@ evalNonceAppTH bvi nonceApp =
             [Some lhs, Some rhs] -> do
               [| AppExpr <$> (M.FPDiv M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
         "fp_muladd64" ->
+          -- FIXME: This is very wrong - we need a separate constructor for it
           case FC.toListFC Some args of
             [Some a, Some b, Some c] ->
               -- a * c + b
@@ -423,6 +424,10 @@ evalNonceAppTH bvi nonceApp =
                     prodE <- addExpr prod
                     AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> pure prodE <*> $(addEltTH bvi b))
                |]
+        "fp_round_single" ->
+          case FC.toListFC Some args of
+            [Some a] ->
+              [| AppExpr <$> (M.FPCvt M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> pure M.SingleFloatRepr) |]
         "ppc_is_r0" -> do
           case FC.toListFC Some args of
             [Some operand] -> do
