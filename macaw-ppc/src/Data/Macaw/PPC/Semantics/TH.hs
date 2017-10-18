@@ -375,6 +375,54 @@ evalNonceAppTH bvi nonceApp =
       --
       -- At the top level (after cases 1 and 2), we need to call 'extractValue' *once*.
       case fnName of
+        "fp_add64" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_add32" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_sub64" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPSub M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_sub32" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPSub M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_mul64" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_mul32" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_div64" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPDiv M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_div32" ->
+          case FC.toListFC Some args of
+            [Some lhs, Some rhs] -> do
+              [| AppExpr <$> (M.FPDiv M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
+        "fp_muladd64" ->
+          case FC.toListFC Some args of
+            [Some a, Some b, Some c] ->
+              -- a * c + b
+              [| do prod <- AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
+                    prodE <- addExpr prod
+                    AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> pure prodE <*> $(addEltTH bvi b))
+               |]
+        "fp_muladd32" ->
+          case FC.toListFC Some args of
+            [Some a, Some b, Some c] ->
+              -- a * c + b
+              [| do prod <- AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
+                    prodE <- addExpr prod
+                    AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> pure prodE <*> $(addEltTH bvi b))
+               |]
         "ppc_is_r0" -> do
           case FC.toListFC Some args of
             [Some operand] -> do
