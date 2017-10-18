@@ -33,11 +33,26 @@ import qualified Data.Macaw.PPC.Generator as G
 class ExtractValue arch a tp | arch a -> tp where
   extractValue :: a -> G.PPCGenerator arch s (MC.Value arch s tp)
 
+instance ExtractValue arch Bool BoolType where
+  extractValue = return . MC.BoolValue
+
 instance ExtractValue PPC32.PPC D.GPR (BVType 32) where
   extractValue gpr = G.getRegValue (R.PPC_GP gpr)
 
+instance ExtractValue PPC32.PPC (Maybe D.GPR) (BVType 32) where
+  extractValue mgpr =
+    case mgpr of
+      Just gpr -> extractValue gpr
+      Nothing -> return $ MC.BVValue NR.knownNat 0
+
 instance ExtractValue PPC64.PPC D.GPR (BVType 64) where
   extractValue gpr = G.getRegValue (R.PPC_GP gpr)
+
+instance ExtractValue PPC64.PPC (Maybe D.GPR) (BVType 64) where
+  extractValue mgpr =
+    case mgpr of
+      Just gpr -> extractValue gpr
+      Nothing -> return $ MC.BVValue NR.knownNat 0
 
 instance ExtractValue ppc D.FR (BVType 128) where
   extractValue fr = G.getRegValue (R.PPC_FR fr)

@@ -18,6 +18,7 @@ import qualified Data.Constraint as C
 
 import Control.Lens
 import Data.Proxy
+import qualified Data.Text as T
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import GHC.TypeLits
@@ -34,6 +35,7 @@ import           Data.Parameterized.Witness ( Witness(..) )
 import qualified Lang.Crucible.Solver.Interface as SI
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import qualified Lang.Crucible.Solver.SimpleBackend as S
+import qualified Lang.Crucible.Solver.Symbol as Sy
 import qualified Lang.Crucible.BaseTypes as S
 
 import qualified Dismantle.PPC as D
@@ -318,6 +320,7 @@ translateFormula ipVarName semantics interps varNames = do
 
 addEltTH :: forall arch t ctp .
             (L.Location arch ~ APPC.Location arch,
+             A.Architecture arch,
              1 <= APPC.ArchRegWidth arch,
              M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
          => BoundVarInterpretations arch t
@@ -337,7 +340,33 @@ addEltTH interps elt = case elt of
         case Map.lookup bVar (opVars interps) of
           Just (FreeParamF name) -> [| extractValue $(varE name) |]
           Nothing -> fail $ "bound var not found: " ++ show bVar
-  _ -> [| error "addEltTH" |]
+  S.NonceAppElt n ->
+    case S.nonceEltApp n of
+      S.FnApp symFn args -> do
+        let txt = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))
+        case lookup txt (A.locationFuncInterpretation (Proxy @arch)) of
+          Nothing -> [| error ("Unsupported UF: " ++ show ($(litE (stringL txt)))) |]
+          Just fi -> do
+            -- args is an assignment that contains elts; we could just generate
+            -- expressions that evaluate each one and then splat them into new names
+            -- that we apply our name to.
+            let argNames = FC.toListFC (asName bvInterps) args
+            case argNames of
+              [] -> fail ("zero-argument uninterpreted functions are not supported yet: " ++ txt)
+              _ -> do
+                let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
+                [| extractValue ($(call)) |]
+      _ -> [| error "Unsupported NonceApp case" |]
+  S.SemiRingLiteral {} -> [| error "SemiRingLiteral Elts are not supported" |]
+
+asName :: BoundVarInterpretations arch t -> S.Elt t tp -> Name
+asName bvInterps elt =
+  case elt of
+    S.BoundVarElt bVar ->
+      case Map.lookup bVar (opVars bvInterps) of
+        Nothing -> error ("Expected " ++ show bVar ++ " to have an interpretation")
+        Just (FreeParamF name) -> name
+    _ -> error ("Unexpected elt as name: " ++ showF elt)
 
 -- Unimplemented:
 
@@ -354,6 +383,7 @@ addEltTH interps elt = case elt of
 -- Might need to implement later:
 --   - BVUdiv, BVUrem, BVSdiv, BVSrem
 crucAppToExprTH :: (L.Location arch ~ APPC.Location arch,
+                    A.Architecture arch,
                    1 <= APPC.ArchRegWidth arch,
                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                 => S.App (S.Elt t) ctp
