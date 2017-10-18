@@ -559,6 +559,7 @@ crucAppToExprTH elt interps = case elt of
           S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH u)) (S.leqProof (knownNat @1) $(natReprTH v))
           pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH v)) (S.leqProof (knownNat @1) $(natReprTH u))
           Refl <- return $ S.plusComm $(natReprTH u) $(natReprTH v)
+          S.LeqProof <- return (S.leqTrans pf1 (S.leqRefl $(natReprTH w)))
           bv1Ext <- addExpr (AppExpr (M.UExt bv1Val $(natReprTH w)))
           bv2Ext <- addExpr (AppExpr (M.UExt bv1Val $(natReprTH w)))
           bv1Shifter <- addExpr (ValueExpr (M.BVValue $(natReprTH w) (natValue $(natReprTH v))))
