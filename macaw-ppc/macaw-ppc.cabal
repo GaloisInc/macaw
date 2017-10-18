@@ -48,3 +48,32 @@ library
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
+
+test-suite macaw-ppc-tests
+  type: exitcode-stdio-1.0
+  default-language: Haskell2010
+  ghc-options: -Wall
+  main-is: Main.hs
+  other-modules: 
+  hs-source-dirs: tests
+  build-depends: base >=4.9 && <5,
+                 bytestring,
+                 containers,
+                 constraints,
+                 crucible,
+                 dismantle-tablegen,
+                 dismantle-ppc,
+                 elf-edit,
+                 exceptions,
+                 filemanip,
+                 filepath,
+                 lens,
+                 macaw-base,
+                 parameterized-utils,
+                 semmc,
+                 semmc-ppc,
+                 template-haskell,
+                 temporary,
+                 tasty,
+                 tasty-hunit,
+                 text

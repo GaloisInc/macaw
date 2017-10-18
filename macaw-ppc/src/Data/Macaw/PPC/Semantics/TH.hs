@@ -462,7 +462,7 @@ evalNonceAppTH bvi nonceApp =
               _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
           | otherwise ->
             case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
-              Nothing -> [| error ("Unsupported UF: " ++ show (litE (StringL $(lift fnName)))) |]
+              Nothing -> [| error ("Unsupported UF: ") |]-- ++ show (litE (StringL $(lift fnName)))) |]
               Just fi -> do
                 -- args is an assignment that contains elts; we could just generate
                 -- expressions that evaluate each one and then splat them into new names
@@ -549,23 +549,25 @@ crucAppToExprTH elt interps = case elt of
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
-    [| do bv1Val <- $(addEltTH interps bv1)
+    [| do let foo = "BVConcat"
+          bv1Val <- $(addEltTH interps bv1)
           bv2Val <- $(addEltTH interps bv2)
           S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH u)) (S.leqProof (knownNat @1) $(natReprTH v))
           pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH v)) (S.leqProof (knownNat @1) $(natReprTH u))
           Refl <- return $ S.plusComm $(natReprTH u) $(natReprTH v)
           bv1Ext <- addExpr (AppExpr (M.UExt bv1Val $(natReprTH w)))
-          -- bv2Ext <- addExpr (AppExpr (M.UExt bv2Val $(natReprTH w)))
+          bv2Ext <- addExpr (AppExpr (M.UExt bv1Val $(natReprTH w)))
           bv1Shifter <- addExpr (ValueExpr (M.BVValue $(natReprTH w) (natValue $(natReprTH v))))
           bv1Shf <- addExpr (AppExpr (M.BVShl $(natReprTH w) bv1Ext bv1Shifter))
-          return $ AppExpr (M.BVOr $(natReprTH w) bv1Shf (M.mkLit $(natReprTH w) 1)) |]
+          return $ AppExpr (M.BVOr $(natReprTH w) bv1Shf bv2Ext)
+     |]
 
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
-    [| do bvVal <- $(addEltTH interps bv)
-          case natValue $(natReprTH n) + 1 <= natValue $(natReprTH w) of
-            True -> do
-              -- Is there a way to just "know" that n + 1 <= w?
+    case natValue n + 1 <= natValue w of
+      True ->
+        [| do let foo = "BVSelect"
+              bvVal <- $(addEltTH interps bv)
               Just S.LeqProof <- return $ S.testLeq ($(natReprTH n) `addNat` (knownNat @1)) $(natReprTH w)
               pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH idx)) (S.leqProof (knownNat @1) $(natReprTH n))
               pf2@S.LeqProof <- return $ S.leqAdd (S.leqRefl (knownNat @1)) $(natReprTH idx)
@@ -573,21 +575,17 @@ crucAppToExprTH elt interps = case elt of
               pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
               S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof ($(natReprTH idx) `addNat` $(natReprTH n)) $(natReprTH w))
               bvShf <- addExpr (AppExpr (M.BVShr $(natReprTH w) bvVal (M.mkLit $(natReprTH w) (natValue $(natReprTH idx)))))
+              -- return $ ValueExpr (M.mkLit $(natReprTH n) 1)
               return $ AppExpr (M.Trunc bvShf $(natReprTH n))
-            False -> do
-              -- Is there a way to just "know" that n = w?
-              -- Just Refl <- return $ testEquality $(natReprTH n) $(natReprTH w)
-              -- return $ ValueExpr bvVal
-              error "BVSelect called with equal widths"
-     |]
+         |]
+      False -> [| do Just Refl <- return $ testEquality $(natReprTH n) $(natReprTH w)
+                     return $ ValueExpr bvVal
+                |]
   S.BVNeg w bv -> do
     -- Note: This is still untested
     [| do bvVal <- $(addEltTH interps bv)
           bvComp <- addExpr (AppExpr (M.BVComplement $(natReprTH w) bvVal))
           return $ AppExpr (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1)) |]
-  -- bvVal  <- addElt bv
-  -- bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
-  -- return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
   S.BVTestBit idx bv ->
     -- Note: below is untested, could be wrong.
     [| do let bitExp = ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))
@@ -614,9 +612,11 @@ crucAppToExprTH elt interps = case elt of
                     <$> $(addEltTH interps bv1)
                     <*> $(addEltTH interps bv2)) |]
   S.BVZext w bv ->
-    [| AppExpr <$> (M.UExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| error "ZExt" |]
+    -- [| AppExpr <$> (M.UExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVSext w bv ->
-    [| AppExpr <$> (M.SExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| error "SExt" |]
+    -- [| AppExpr <$> (M.SExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVTrunc w bv ->
     [| AppExpr <$> (M.Trunc <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVBitNot w bv ->
