@@ -174,7 +174,6 @@ finishBlock' :: PreBlock ppc s
              -> Block ppc s
 finishBlock' preBlock term =
   Block { blockLabel = pBlockIndex preBlock
-        , blockAddr = pBlockAddr preBlock
         , blockStmts = F.toList (preBlock ^. pBlockStmts)
         , blockTerm = term (preBlock ^. pBlockState)
         }
