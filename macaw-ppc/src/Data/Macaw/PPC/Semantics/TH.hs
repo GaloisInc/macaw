@@ -16,13 +16,13 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import Control.Lens
-import Data.Proxy
+import           Control.Lens
+import           Data.Proxy
 import qualified Data.List as L
 import qualified Data.Text as T
-import Language.Haskell.TH
-import Language.Haskell.TH.Syntax
-import GHC.TypeLits
+import           Language.Haskell.TH
+import           Language.Haskell.TH.Syntax
+import           GHC.TypeLits
 import           Text.Read ( readMaybe )
 
 import           Data.Parameterized.Classes
@@ -61,9 +61,9 @@ import Data.Parameterized.NatRepr ( knownNat
                                   , testLeq
                                   )
 
-import Data.Macaw.PPC.Generator
-import Data.Macaw.PPC.PPCReg
-import Data.Macaw.PPC.Operand
+import           Data.Macaw.PPC.Generator
+import           Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.Operand
 
 -- run stack with --ghc-options=-ddump-splices
 
@@ -467,7 +467,7 @@ evalNonceAppTH bvi nonceApp =
               _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
           | otherwise ->
             case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
-              Nothing -> [| error ("Unsupported UF: ") |]-- ++ show (litE (StringL $(lift fnName)))) |]
+              Nothing -> [| error ("Unsupported UF: " ++ show $(litE (StringL fnName))) |]
               Just fi -> do
                 -- args is an assignment that contains elts; we could just generate
                 -- expressions that evaluate each one and then splat them into new names
@@ -554,8 +554,7 @@ crucAppToExprTH elt interps = case elt of
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
-    [| do let foo = "BVConcat"
-          bv1Val <- $(addEltTH interps bv1)
+    [| do bv1Val <- $(addEltTH interps bv1)
           bv2Val <- $(addEltTH interps bv2)
           S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH u)) (S.leqProof (knownNat @1) $(natReprTH v))
           pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH v)) (S.leqProof (knownNat @1) $(natReprTH u))
@@ -617,11 +616,9 @@ crucAppToExprTH elt interps = case elt of
                     <$> $(addEltTH interps bv1)
                     <*> $(addEltTH interps bv2)) |]
   S.BVZext w bv ->
-    [| error "ZExt" |]
-    -- [| AppExpr <$> (M.UExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| AppExpr <$> (M.UExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVSext w bv ->
-    [| error "SExt" |]
-    -- [| AppExpr <$> (M.SExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| AppExpr <$> (M.SExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVTrunc w bv ->
     [| AppExpr <$> (M.Trunc <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
   S.BVBitNot w bv ->
