@@ -18,15 +18,18 @@ import qualified Data.Constraint as C
 
 import Control.Lens
 import Data.Proxy
+import qualified Data.List as L
 import qualified Data.Text as T
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import GHC.TypeLits
+import           Text.Read ( readMaybe )
 
 import           Data.Parameterized.Classes
 import           Data.Parameterized.FreeParamF ( FreeParamF(..) )
 import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.Map as Map
+import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.ShapedList as SL
 import           Data.Parameterized.Some ( Some(..) )
@@ -45,8 +48,10 @@ import qualified SemMC.BoundVar as BV
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
+import qualified SemMC.Architecture.PPC.Eval as PE
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
+import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
 import Data.Parameterized.NatRepr ( knownNat
@@ -340,33 +345,112 @@ addEltTH interps elt = case elt of
         case Map.lookup bVar (opVars interps) of
           Just (FreeParamF name) -> [| extractValue $(varE name) |]
           Nothing -> fail $ "bound var not found: " ++ show bVar
-  S.NonceAppElt n ->
-    case S.nonceEltApp n of
-      S.FnApp symFn args -> do
-        let txt = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))
-        case lookup txt (A.locationFuncInterpretation (Proxy @arch)) of
-          Nothing -> [| error ("Unsupported UF: " ++ show ($(litE (stringL txt)))) |]
-          Just fi -> do
-            -- args is an assignment that contains elts; we could just generate
-            -- expressions that evaluate each one and then splat them into new names
-            -- that we apply our name to.
-            let argNames = FC.toListFC (asName bvInterps) args
-            case argNames of
-              [] -> fail ("zero-argument uninterpreted functions are not supported yet: " ++ txt)
-              _ -> do
-                let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                [| extractValue ($(call)) |]
-      _ -> [| error "Unsupported NonceApp case" |]
+  S.NonceAppElt n -> evalNonceAppTH interps (S.nonceEltApp n)
   S.SemiRingLiteral {} -> [| error "SemiRingLiteral Elts are not supported" |]
 
-asName :: BoundVarInterpretations arch t -> S.Elt t tp -> Name
-asName bvInterps elt =
+evalNonceAppTH :: forall arch t tp
+                . (A.Architecture arch,
+                   L.Location arch ~ APPC.Location arch,
+                   1 <= APPC.ArchRegWidth arch,
+                   M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+               => BoundVarInterpretations arch t
+               -> S.NonceApp t (S.Elt t) tp
+               -> Q Exp
+evalNonceAppTH bvi nonceApp =
+  case nonceApp of
+    S.FnApp symFn args -> do
+      let fnName = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))
+      -- Recursively evaluate the arguments.  In the recursive evaluator, we
+      -- expect two cases:
+      --
+      -- 1) The argument is a name (via S.BoundVarElt); we want to return a
+      -- simple TH expression that just refers to that name
+      --
+      -- 2) The argument is another call, which we want to evaluate into a
+      -- simple TH expression
+      --
+      -- 3) Otherwise, we can probably just call the standard evaluator on it
+      -- (this will probably be the case for read_mem and the floating point
+      -- functions)
+      --
+      -- At the top level (after cases 1 and 2), we need to call 'extractValue' *once*.
+      case fnName of
+        "ppc_is_r0" -> do
+          case FC.toListFC Some args of
+            [Some operand] -> do
+              -- The operand can be either a variable (TH name bound from
+              -- matching on the instruction operand list) or a call on such.
+              case operand of
+                S.BoundVarElt bv -> do
+                  case Map.lookup bv (opVars bvi) of
+                    Just (FreeParamF name) -> [| extractValue (PE.interpIsR0 $(varE name)) |]
+                    Nothing -> fail ("bound var not found: " ++ show bv)
+                S.NonceAppElt nonceApp' -> do
+                  case S.nonceEltApp nonceApp' of
+                    S.FnApp symFn' args' -> do
+                      let recName = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn'))
+                      case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
+                        Nothing -> fail ("Unsupported UF: " ++ recName)
+                        Just fi -> do
+                          let argNames = FC.toListFC (asName fnName bvi) args'
+                          case argNames of
+                            [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
+                            _ -> do
+                              let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
+                              [| extractValue (PE.interpIsR0 ($(call))) |]
+                    _ -> fail ("Unsupported nonce app type")
+            _ -> fail ("Invalid argument list for ppc.is_r0: " ++ showF args)
+        _ | Just nBytes <- readMemBytes fnName -> do
+            case FC.toListFC Some args of
+              [_, Some addrElt] -> do
+                -- read_mem has a shape such that we expect two arguments; the
+                -- first is just a stand-in in the semantics to represent the
+                -- memory.
+                [| do let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) M.BigEndian
+                      addr <- $(addEltTH bvi addrElt)
+                      assignment <- addAssignment (M.ReadMem addr memRep)
+                      return (M.AssignedValue assignment)
+                 |]
+              _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
+          | otherwise ->
+            case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
+              Nothing -> [| error ("Unsupported UF: " ++ show (litE (StringL $(lift fnName)))) |]
+              Just fi -> do
+                -- args is an assignment that contains elts; we could just generate
+                -- expressions that evaluate each one and then splat them into new names
+                -- that we apply our name to.
+                let argNames = FC.toListFC (asName fnName bvi) args
+                case argNames of
+                  [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
+                  _ -> do
+                    let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
+                    [| extractValue ($(call)) |]
+    _ -> [| error "Unsupported NonceApp case" |]
+
+-- | This is the recursive evaluator for 'evalNonceAppTH'.
+--
+-- The main idea is that we don't want to fully evaluate two cases: bound vars
+-- and function calls.
+-- recEvalNonceAppTH
+
+-- | Parse the name of a memory read intrinsic and return the number of bytes
+-- that it reads.  For example
+--
+-- > readMemBytes "read_mem_8" == Just 1
+readMemBytes :: String -> Maybe Int
+readMemBytes s = do
+  nBitsStr <- L.stripPrefix "read_mem_" s
+  nBits <- readMaybe nBitsStr
+  return (nBits `div` 8)
+
+asName :: String -> BoundVarInterpretations arch t -> S.Elt t tp -> Name
+asName ufName bvInterps elt =
   case elt of
     S.BoundVarElt bVar ->
       case Map.lookup bVar (opVars bvInterps) of
         Nothing -> error ("Expected " ++ show bVar ++ " to have an interpretation")
         Just (FreeParamF name) -> name
-    _ -> error ("Unexpected elt as name: " ++ showF elt)
+    _ -> error ("Unexpected elt as name (" ++ showF elt ++ ") in " ++ ufName)
 
 -- Unimplemented:
 
