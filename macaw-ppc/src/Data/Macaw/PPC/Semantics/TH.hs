@@ -16,7 +16,7 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import           Control.Lens
+import           Control.Lens ( (.=) )
 import           Data.Proxy
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -175,16 +175,14 @@ genCaseBody :: forall a sh t arch
             -> ParameterizedFormula (Sym t) arch sh
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
-genCaseBody ipVarName opc semantics varNames =
-  translateFormula ipVarName semantics (BoundVarInterpretations locVars opVars) varNames
+genCaseBody ipVarName _opc semantics varNames =
+  translateFormula ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap) varNames
   where
-    binders = ipVarName : FC.toListFC unFreeParamF varNames
+    locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+    locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
 
-    locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-    locVars = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
-
-    opVars :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
-    opVars = SL.foldrFCIndexed (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
+    opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+    opVarsMap = SL.foldrFCIndexed (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
 
 collectVarForLocation :: forall tp arch proxy t
                        . proxy arch
@@ -276,6 +274,9 @@ addExpr expr = do
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (return $ NumTyLit (natValue w))) |]
 
+natReprFromIntTH :: Int -> Q Exp
+natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
+
 -- | Sequence a list of monadic actions without constructing an intermediate
 -- list structure
 doSequenceQ :: [ExpQ] -> Q Exp
@@ -291,7 +292,6 @@ translateFormula :: forall arch t sh .
                  -> BoundVarInterpretations arch t
                  -> SL.ShapedList (FreeParamF Name) sh
                  -> Q Exp
-
 translateFormula ipVarName semantics interps varNames = do
   let exps = map translateDefinition (Map.toList (pfDefs semantics))
   [| Just $(doSequenceQ exps) |]
@@ -299,18 +299,19 @@ translateFormula ipVarName semantics interps varNames = do
                             -> Q Exp
         translateDefinition (Map.Pair param expr) = do
           case param of
-            OperandParameter w idx -> do
+            OperandParameter _w idx -> do
               e <- addEltTH interps expr
               let FreeParamF name = varNames `SL.indexShapedList` idx
               [| do val <- $(return e)
                     let reg = toPPCReg $(varE name)
                     curPPCState . M.boundValue reg .= val |]
+            LiteralParameter APPC.LocMem -> writeMemTH interps expr
             LiteralParameter loc -> do
               e <- addEltTH interps expr
               reg <- locToRegTH (Proxy @arch) loc
               [| do val <- $(return e)
                     curPPCState . M.boundValue $(return reg) .= val |]
-            FunctionParameter str (WrappedOperand _ opIx) w -> do
+            FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let FreeParamF boundOperandName = SL.indexShapedList varNames opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> [| error ("Function has no definition: " ++ show $(lift str)) |]
@@ -332,12 +333,12 @@ addEltTH :: forall arch t ctp .
          -> S.Elt t ctp
          -> Q Exp
 addEltTH interps elt = case elt of
-  S.BVElt w val loc ->
+  S.BVElt w val _loc ->
     [| return (M.BVValue $(natReprTH w) $(lift val)) |]
   S.AppElt appElt -> do
-    let app = S.appEltApp appElt
-    appExpr <- crucAppToExprTH app interps
-    [| $(crucAppToExprTH (S.appEltApp appElt) interps) >>= addExpr |]
+    [| do expr <- $(crucAppToExprTH (S.appEltApp appElt) interps)
+          addExpr expr
+     |]
   S.BoundVarElt bVar ->
     case Map.lookup bVar (locVars interps) of
       Just loc -> [| getRegValue $(locToRegTH (Proxy @arch) loc) |]
@@ -347,6 +348,37 @@ addEltTH interps elt = case elt of
           Nothing -> fail $ "bound var not found: " ++ show bVar
   S.NonceAppElt n -> evalNonceAppTH interps (S.nonceEltApp n)
   S.SemiRingLiteral {} -> [| error "SemiRingLiteral Elts are not supported" |]
+
+writeMemTH :: forall arch t tp
+            . (L.Location arch ~ APPC.Location arch,
+                A.Architecture arch,
+                1 <= APPC.ArchRegWidth arch,
+                M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+           => BoundVarInterpretations arch t
+           -> S.Elt t tp
+           -> Q Exp
+writeMemTH bvi expr =
+  case expr of
+    S.NonceAppElt n ->
+      case S.nonceEltApp n of
+        S.FnApp symFn args
+          | Just memWidth <- matchWriteMemWidth (T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))) ->
+            case FC.toListFC Some args of
+              [_, Some addr, Some val] ->
+                [| do addrVal <- $(addEltTH bvi addr)
+                      writtenVal <- $(addEltTH bvi val)
+                      let memRepr = M.BVMemRepr $(natReprFromIntTH memWidth) M.BigEndian
+                      addStmt (M.WriteMem addrVal memRepr writtenVal)
+                 |]
+              _ -> fail ("Invalid memory write expression: " ++ showF expr)
+        _ -> fail ("Unexpected memory definition: " ++ showF expr)
+    _ -> fail ("Unexpected memory definition: " ++ showF expr)
+
+-- | Match a "write_mem" intrinsic and return the number of bytes written
+matchWriteMemWidth :: String -> Maybe Int
+matchWriteMemWidth s = do
+  suffix <- L.stripPrefix "write_mem_" s
+  (`div` 8) <$> readMaybe suffix
 
 evalNonceAppTH :: forall arch t tp
                 . (A.Architecture arch,
@@ -375,59 +407,6 @@ evalNonceAppTH bvi nonceApp =
       --
       -- At the top level (after cases 1 and 2), we need to call 'extractValue' *once*.
       case fnName of
-        "fp_add64" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_add32" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_sub64" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPSub M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_sub32" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPSub M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_mul64" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_mul32" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_div64" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPDiv M.DoubleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_div32" ->
-          case FC.toListFC Some args of
-            [Some lhs, Some rhs] -> do
-              [| AppExpr <$> (M.FPDiv M.SingleFloatRepr <$> $(addEltTH bvi lhs) <*> $(addEltTH bvi rhs)) |]
-        "fp_muladd64" ->
-          -- FIXME: This is very wrong - we need a separate constructor for it
-          case FC.toListFC Some args of
-            [Some a, Some b, Some c] ->
-              -- a * c + b
-              [| do prod <- AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
-                    prodE <- addExpr prod
-                    AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> pure prodE <*> $(addEltTH bvi b))
-               |]
-        "fp_muladd32" ->
-          case FC.toListFC Some args of
-            [Some a, Some b, Some c] ->
-              -- a * c + b
-              [| do prod <- AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
-                    prodE <- addExpr prod
-                    AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> pure prodE <*> $(addEltTH bvi b))
-               |]
-        "fp_round_single" ->
-          case FC.toListFC Some args of
-            [Some a] ->
-              [| AppExpr <$> (M.FPCvt M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> pure M.SingleFloatRepr) |]
         "ppc_is_r0" -> do
           case FC.toListFC Some args of
             [Some operand] -> do
@@ -452,6 +431,7 @@ evalNonceAppTH bvi nonceApp =
                               let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                               [| extractValue (PE.interpIsR0 ($(call))) |]
                     _ -> fail ("Unsupported nonce app type")
+                _ -> fail "Unsupported operand to ppc.is_r0"
             _ -> fail ("Invalid argument list for ppc.is_r0: " ++ showF args)
         _ | Just nBytes <- readMemBytes fnName -> do
             case FC.toListFC Some args of
@@ -465,6 +445,7 @@ evalNonceAppTH bvi nonceApp =
                       return (M.AssignedValue assignment)
                  |]
               _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
+          | Just fpFunc <- elementaryFPName fnName -> floatingPointTH bvi fpFunc args
           | otherwise ->
             case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
               Nothing -> [| error ("Unsupported UF: " ++ show $(litE (StringL fnName))) |]
@@ -480,11 +461,77 @@ evalNonceAppTH bvi nonceApp =
                     [| extractValue ($(call)) |]
     _ -> [| error "Unsupported NonceApp case" |]
 
--- | This is the recursive evaluator for 'evalNonceAppTH'.
---
--- The main idea is that we don't want to fully evaluate two cases: bound vars
--- and function calls.
--- recEvalNonceAppTH
+elementaryFPName :: String -> Maybe String
+elementaryFPName = L.stripPrefix "fp_"
+
+floatingPointTH :: forall arch t f c
+                 . (L.Location arch ~ APPC.Location arch,
+                     A.Architecture arch,
+                     1 <= APPC.ArchRegWidth arch,
+                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch,
+                     FC.FoldableFC f)
+                 => BoundVarInterpretations arch t
+                 -> String
+                 -> f (S.Elt t) c
+                 -> Q Exp
+floatingPointTH bvi fnName args =
+  case FC.toListFC Some args of
+    [Some a] ->
+      case fnName of
+        "round_single" ->
+          [| addExpr =<< AppExpr <$> (M.FPCvt M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> pure M.SingleFloatRepr) |]
+        "abs" ->
+          -- Note that fabs is only defined for doubles; the operation is the
+          -- same for single and double precision on PPC, so there is only a
+          -- single instruction.
+          [| do e <- AppExpr <$> (M.FPAbs M.DoubleFloatRepr <$> $(addEltTH bvi a))
+                addExpr e
+           |]
+        "negate64" ->
+          [| do val <- $(addEltTH bvi a)
+                addExpr (AppExpr (M.FPNeg M.DoubleFloatRepr val))
+           |]
+        "negate32" ->
+          [| addExpr =<< (AppExpr <$> (M.FPNeg M.SingleFloatRepr <$> $(addEltTH bvi a))) |]
+        _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
+    [Some a, Some b] ->
+      case fnName of
+        "add64" ->
+          [| addExpr =<< AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "add32" ->
+          [| addExpr =<< AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "sub64" ->
+          [| addExpr =<< AppExpr <$> (M.FPSub M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "sub32" ->
+          [| addExpr =<< AppExpr <$> (M.FPSub M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "mul64" ->
+          [| addExpr =<< AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "mul32" ->
+          [| addExpr =<< AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "div64" ->
+          [| addExpr =<< AppExpr <$> (M.FPDiv M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        "div32" ->
+          [| addExpr =<< AppExpr <$> (M.FPDiv M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+        _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
+    [Some a, Some b, Some c] ->
+      case fnName of
+        "muladd64" ->
+          -- FIXME: This is very wrong - we need a separate constructor for it
+          -- a * c + b
+          [| do prod <- AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
+                prodVal <- addExpr prod
+                e <- AppExpr <$> (M.FPAdd M.DoubleFloatRepr prodVal <$> $(addEltTH bvi b))
+                addExpr e
+           |]
+        "muladd32" ->
+          -- a * c + b
+          [| do prod <- AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
+                prodVal <- addExpr prod
+                e <- AppExpr <$> (M.FPAdd M.SingleFloatRepr prodVal <$> $(addEltTH bvi b))
+                addExpr e
+           |]
+        _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
+    _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
 
 -- | Parse the name of a memory read intrinsic and return the number of bytes
 -- that it reads.  For example
@@ -754,7 +801,7 @@ locToRegTH _  loc              = [| undefined |]
 
 -- | Given a location to modify and a crucible formula, construct a PPCGenerator that
 -- will modify the location by the function encoded in the formula.
-interpretFormula :: forall tp ppc t ctp s .
+interpretFormula :: forall ppc t ctp s .
                     (1 <= APPC.ArchRegWidth ppc,
                      M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
                  => APPC.Location ppc ctp
