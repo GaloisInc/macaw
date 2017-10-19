@@ -272,7 +272,7 @@ addExpr expr = do
       return $ M.AssignedValue assignment
 
 natReprTH :: M.NatRepr w -> Q Exp
-natReprTH w = [| knownNat :: M.NatRepr $(litT (return $ NumTyLit (natValue w))) |]
+natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
 
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
@@ -300,26 +300,24 @@ translateFormula ipVarName semantics interps varNames = do
         translateDefinition (Map.Pair param expr) = do
           case param of
             OperandParameter _w idx -> do
-              e <- addEltTH interps expr
               let FreeParamF name = varNames `SL.indexShapedList` idx
-              [| do val <- $(return e)
+              [| do val <- $(addEltTH interps expr)
                     let reg = toPPCReg $(varE name)
-                    curPPCState . M.boundValue reg .= val |]
+                    curPPCState . M.boundValue reg .= val
+               |]
             LiteralParameter APPC.LocMem -> writeMemTH interps expr
             LiteralParameter loc -> do
-              e <- addEltTH interps expr
-              reg <- locToRegTH (Proxy @arch) loc
-              [| do val <- $(return e)
-                    curPPCState . M.boundValue $(return reg) .= val |]
+              [| do val <- $(addEltTH interps expr)
+                    curPPCState . M.boundValue $(locToRegTH (Proxy @arch) loc) .= val
+               |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let FreeParamF boundOperandName = SL.indexShapedList varNames opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> [| error ("Function has no definition: " ++ show $(lift str)) |]
                 Just fi -> do
-                  e <- addEltTH interps expr
                   [| do case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
                           Just reg -> do
-                            val <- $(return e)
+                            val <- $(addEltTH interps expr)
                             curPPCState . M.boundValue (toPPCReg reg) .= val
                           Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
                    |]
@@ -349,6 +347,9 @@ addEltTH interps elt = case elt of
   S.NonceAppElt n -> evalNonceAppTH interps (S.nonceEltApp n)
   S.SemiRingLiteral {} -> [| error "SemiRingLiteral Elts are not supported" |]
 
+symFnName :: S.SimpleSymFn t args ret -> String
+symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
+
 writeMemTH :: forall arch t tp
             . (L.Location arch ~ APPC.Location arch,
                 A.Architecture arch,
@@ -362,7 +363,7 @@ writeMemTH bvi expr =
     S.NonceAppElt n ->
       case S.nonceEltApp n of
         S.FnApp symFn args
-          | Just memWidth <- matchWriteMemWidth (T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))) ->
+          | Just memWidth <- matchWriteMemWidth (symFnName symFn) ->
             case FC.toListFC Some args of
               [_, Some addr, Some val] ->
                 [| do addrVal <- $(addEltTH bvi addr)
@@ -391,7 +392,7 @@ evalNonceAppTH :: forall arch t tp
 evalNonceAppTH bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args -> do
-      let fnName = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn))
+      let fnName = symFnName symFn
       -- Recursively evaluate the arguments.  In the recursive evaluator, we
       -- expect two cases:
       --
@@ -420,14 +421,13 @@ evalNonceAppTH bvi nonceApp =
                 S.NonceAppElt nonceApp' -> do
                   case S.nonceEltApp nonceApp' of
                     S.FnApp symFn' args' -> do
-                      let recName = T.unpack (Sy.solverSymbolAsText (S.symFnName symFn'))
+                      let recName = symFnName symFn'
                       case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
                         Nothing -> fail ("Unsupported UF: " ++ recName)
                         Just fi -> do
-                          let argNames = FC.toListFC (asName fnName bvi) args'
-                          case argNames of
+                          case FC.toListFC (asName fnName bvi) args' of
                             [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
-                            _ -> do
+                            argNames -> do
                               let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                               [| extractValue (PE.interpIsR0 ($(call))) |]
                     _ -> fail ("Unsupported nonce app type")
@@ -453,10 +453,9 @@ evalNonceAppTH bvi nonceApp =
                 -- args is an assignment that contains elts; we could just generate
                 -- expressions that evaluate each one and then splat them into new names
                 -- that we apply our name to.
-                let argNames = FC.toListFC (asName fnName bvi) args
-                case argNames of
+                case FC.toListFC (asName fnName bvi) args of
                   [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
-                  _ -> do
+                  argNames -> do
                     let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                     [| extractValue ($(call)) |]
     _ -> [| error "Unsupported NonceApp case" |]
@@ -479,56 +478,86 @@ floatingPointTH bvi fnName args =
     [Some a] ->
       case fnName of
         "round_single" ->
-          [| addExpr =<< AppExpr <$> (M.FPCvt M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> pure M.SingleFloatRepr) |]
+          [| do fpval <- $(addEltTH bvi a)
+                addExpr (AppExpr (M.FPCvt M.DoubleFloatRepr fpval M.SingleFloatRepr))
+           |]
         "abs" ->
           -- Note that fabs is only defined for doubles; the operation is the
           -- same for single and double precision on PPC, so there is only a
           -- single instruction.
-          [| do e <- AppExpr <$> (M.FPAbs M.DoubleFloatRepr <$> $(addEltTH bvi a))
-                addExpr e
+          [| do fpval <- $(addEltTH bvi a)
+                addExpr (AppExpr (M.FPAbs M.DoubleFloatRepr fpval))
            |]
         "negate64" ->
-          [| do val <- $(addEltTH bvi a)
-                addExpr (AppExpr (M.FPNeg M.DoubleFloatRepr val))
+          [| do fpval <- $(addEltTH bvi a)
+                addExpr (AppExpr (M.FPNeg M.DoubleFloatRepr fpval))
            |]
         "negate32" ->
-          [| addExpr =<< (AppExpr <$> (M.FPNeg M.SingleFloatRepr <$> $(addEltTH bvi a))) |]
+          [| do fpval <- $(addEltTH bvi a)
+                addExpr (AppExpr (M.FPNeg M.SingleFloatRepr fpval))
+           |]
         _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
     [Some a, Some b] ->
       case fnName of
         "add64" ->
-          [| addExpr =<< AppExpr <$> (M.FPAdd M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPAdd M.DoubleFloatRepr valA valB))
+           |]
         "add32" ->
-          [| addExpr =<< AppExpr <$> (M.FPAdd M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPAdd M.SingleFloatRepr valA valB))
+           |]
         "sub64" ->
-          [| addExpr =<< AppExpr <$> (M.FPSub M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPSub M.DoubleFloatRepr valA valB))
+           |]
         "sub32" ->
-          [| addExpr =<< AppExpr <$> (M.FPSub M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPSub M.SingleFloatRepr valA valB))
+           |]
         "mul64" ->
-          [| addExpr =<< AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPMul M.DoubleFloatRepr valA valB))
+           |]
         "mul32" ->
-          [| addExpr =<< AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPMul M.SingleFloatRepr valA valB))
+           |]
         "div64" ->
-          [| addExpr =<< AppExpr <$> (M.FPDiv M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPDiv M.DoubleFloatRepr valA valB))
+           |]
         "div32" ->
-          [| addExpr =<< AppExpr <$> (M.FPDiv M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi b)) |]
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                addExpr (AppExpr (M.FPDiv M.SingleFloatRepr valA valB))
+           |]
         _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
     [Some a, Some b, Some c] ->
       case fnName of
         "muladd64" ->
           -- FIXME: This is very wrong - we need a separate constructor for it
           -- a * c + b
-          [| do prod <- AppExpr <$> (M.FPMul M.DoubleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
-                prodVal <- addExpr prod
-                e <- AppExpr <$> (M.FPAdd M.DoubleFloatRepr prodVal <$> $(addEltTH bvi b))
-                addExpr e
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                valC <- $(addEltTH bvi c)
+                prodVal <- addExpr (AppExpr (M.FPMul M.DoubleFloatRepr valA valC))
+                addExpr (AppExpr (M.FPAdd M.DoubleFloatRepr prodVal valB))
            |]
         "muladd32" ->
           -- a * c + b
-          [| do prod <- AppExpr <$> (M.FPMul M.SingleFloatRepr <$> $(addEltTH bvi a) <*> $(addEltTH bvi c))
-                prodVal <- addExpr prod
-                e <- AppExpr <$> (M.FPAdd M.SingleFloatRepr prodVal <$> $(addEltTH bvi b))
-                addExpr e
+          [| do valA <- $(addEltTH bvi a)
+                valB <- $(addEltTH bvi b)
+                valC <- $(addEltTH bvi c)
+                prodVal <- addExpr (AppExpr (M.FPMul M.SingleFloatRepr valA valC))
+                addExpr (AppExpr (M.FPAdd M.SingleFloatRepr prodVal valB))
            |]
         _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
     _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
@@ -577,27 +606,47 @@ crucAppToExprTH elt interps = case elt of
   S.TrueBool  -> [| return $ ValueExpr (M.BoolValue True) |]
   S.FalseBool -> [| return $ ValueExpr (M.BoolValue False) |]
   S.NotBool bool ->
-    [| AppExpr <$> (M.NotApp <$> $(addEltTH interps bool)) |]
+    [| do bval <- $(addEltTH interps bool)
+          return (AppExpr (M.NotApp bval))
+     |]
   S.AndBool bool1 bool2 ->
-    [| AppExpr <$> (M.AndApp <$> $(addEltTH interps bool1) <*> $(addEltTH interps bool2)) |]
+    [| do bval1 <- $(addEltTH interps bool1)
+          bval2 <- $(addEltTH interps bool2)
+          return (AppExpr (M.AndApp bval1 bval2))
+     |]
   S.XorBool bool1 bool2 ->
-    [| AppExpr <$> (M.XorApp <$> $(addEltTH interps bool1) <*> $(addEltTH interps bool2)) |]
+    [| do bval1 <- $(addEltTH interps bool1)
+          bval2 <- $(addEltTH interps bool2)
+          return (AppExpr (M.XorApp bval1 bval2))
+     |]
   S.IteBool test t f ->
-    [| AppExpr <$> (M.Mux M.BoolTypeRepr
-                    <$> $(addEltTH interps test)
-                    <*> $(addEltTH interps t)
-                    <*> $(addEltTH interps f)) |]
+    [| do testVal <- $(addEltTH interps test)
+          tval <- $(addEltTH interps t)
+          fval <- $(addEltTH interps f)
+          return (AppExpr (M.Mux M.BoolTypeRepr testVal tval fval))
+     |]
   S.BVIte w numBranches test t f ->
-    [| AppExpr <$> (M.Mux (M.BVTypeRepr $(natReprTH w))
-                    <$> $(addEltTH interps test)
-                    <*> $(addEltTH interps t)
-                    <*> $(addEltTH interps f)) |]
+    [| do let rep = $(natReprTH w)
+          testVal <- $(addEltTH interps test)
+          tval <- $(addEltTH interps t)
+          fval <- $(addEltTH interps f)
+          return (AppExpr (M.Mux (M.BVTypeRepr rep) testVal tval fval))
+     |]
   S.BVEq bv1 bv2 ->
-    [| AppExpr <$> (M.Eq <$> $(addEltTH interps bv1) <*> $(addEltTH interps bv2)) |]
+    [| do bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.Eq bval1 bval2))
+     |]
   S.BVSlt bv1 bv2 ->
-    [| AppExpr <$> (M.BVSignedLt   <$> $(addEltTH interps bv1) <*> $(addEltTH interps bv2)) |]
+    [| do bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVSignedLt bval1 bval2))
+     |]
   S.BVUlt bv1 bv2 ->
-    [| AppExpr <$> (M.BVUnsignedLt <$> $(addEltTH interps bv1) <*> $(addEltTH interps bv2)) |]
+    [| do bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVUnsignedLt bval1 bval2))
+     |]
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
@@ -618,8 +667,7 @@ crucAppToExprTH elt interps = case elt of
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True ->
-        [| do let foo = "BVSelect"
-              bvVal <- $(addEltTH interps bv)
+        [| do bvVal <- $(addEltTH interps bv)
               Just S.LeqProof <- return $ S.testLeq ($(natReprTH n) `addNat` (knownNat @1)) $(natReprTH w)
               pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH idx)) (S.leqProof (knownNat @1) $(natReprTH n))
               pf2@S.LeqProof <- return $ S.leqAdd (S.leqRefl (knownNat @1)) $(natReprTH idx)
@@ -637,52 +685,82 @@ crucAppToExprTH elt interps = case elt of
     -- Note: This is still untested
     [| do bvVal <- $(addEltTH interps bv)
           bvComp <- addExpr (AppExpr (M.BVComplement $(natReprTH w) bvVal))
-          return $ AppExpr (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1)) |]
+          return $ AppExpr (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1))
+     |]
   S.BVTestBit idx bv ->
     -- Note: below is untested, could be wrong.
-    [| do let bitExp = ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))
-          bitExpVal <- addExpr bitExp
-          AppExpr <$> (M.BVTestBit <$> bitExpVal <*> $(addEltTH interps bv)) |]
+    [| do bitExpVal <- addExpr (ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)))
+          bval <- $(addEltTH interps bv)
+          return (AppExpr (M.BVTestBit bitExpVal bval))
+     |]
   S.BVAdd w bv1 bv2 ->
-    [| AppExpr <$> (M.BVAdd $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVAdd rep bval1 bval2))
+     |]
   S.BVMul w bv1 bv2 ->
-    [| AppExpr <$> (M.BVMul $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVMul rep bval1 bval2))
+     |]
   S.BVShl w bv1 bv2 ->
-    [| AppExpr <$> (M.BVShl $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVShl rep bval1 bval2))
+     |]
   S.BVLshr w bv1 bv2 ->
-    [| AppExpr <$> (M.BVShr $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVShr rep bval1 bval2))
+     |]
   S.BVAshr w bv1 bv2 ->
-    [| AppExpr <$> (M.BVSar $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVSar rep bval1 bval2))
+     |]
   S.BVZext w bv ->
-    [| AppExpr <$> (M.UExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| do bval <- $(addEltTH interps bv)
+          let rep = $(natReprTH w)
+          return (AppExpr (M.UExt bval rep))
+     |]
   S.BVSext w bv ->
-    [| AppExpr <$> (M.SExt <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| do bval <- $(addEltTH interps bv)
+          let rep = $(natReprTH w)
+          return (AppExpr (M.SExt bval rep))
+     |]
   S.BVTrunc w bv ->
-    [| AppExpr <$> (M.Trunc <$> $(addEltTH interps bv) <*> (pure $(natReprTH w))) |]
+    [| do bval <- $(addEltTH interps bv)
+          let rep = $(natReprTH w)
+          return (AppExpr (M.Trunc bval rep))
+     |]
   S.BVBitNot w bv ->
-    [| AppExpr <$> (M.BVComplement $(natReprTH w) <$> $(addEltTH interps bv)) |]
+    [| do let rep = $(natReprTH w)
+          bval <- $(addEltTH interps bv)
+          return (AppExpr (M.BVComplement rep bval))
+     |]
   S.BVBitAnd w bv1 bv2 ->
-    [| AppExpr <$> (M.BVAnd $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVAnd rep bval1 bval2))
+     |]
   S.BVBitOr w bv1 bv2 ->
-    [| AppExpr <$> (M.BVOr $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVOr rep bval1 bval2))
+     |]
   S.BVBitXor w bv1 bv2 ->
-    [| AppExpr <$> (M.BVXor $(natReprTH w)
-                    <$> $(addEltTH interps bv1)
-                    <*> $(addEltTH interps bv2)) |]
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          return (AppExpr (M.BVXor rep bval1 bval2))
+     |]
   _ -> [| error "unsupported Crucible elt" |]
 
 
