@@ -37,29 +37,29 @@ import           Data.Macaw.CFG
 import           Data.Macaw.Types
 
 -- | Information needed for rewriting.
-data RewriteContext arch src tgt
-   = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST tgt) tgt)
+data RewriteContext arch s src tgt
+   = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST s) tgt)
                       -- ^ Generator for making new nonces in the target ST monad
                     , rwctxArchFn    :: !(forall tp
                                             .  ArchFn arch (Value arch src) tp
-                                            -> Rewriter arch src tgt (Value arch tgt tp))
+                                            -> Rewriter arch s src tgt (Value arch tgt tp))
                       -- ^ Rewriter for architecture-specific statements
-                    , rwctxArchStmt  :: !(ArchStmt arch src -> Rewriter arch src tgt ())
+                    , rwctxArchStmt  :: !(ArchStmt arch src -> Rewriter arch s src tgt ())
                       -- ^ Rewriter for architecture-specific statements
                     , rwctxConstraints :: (forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
                     }
 
 -- | State used by rewriter for tracking states
-data RewriteState arch src tgt
+data RewriteState arch s src tgt
    = RewriteState { -- | Access to the context for the rewriter
-                    rwContext        :: !(RewriteContext arch src tgt)
+                    rwContext        :: !(RewriteContext arch s src tgt)
                   , _rwRevStmts      :: ![Stmt arch tgt]
                   , _srcAssignedValues :: !(MapF (AssignId src) (Value arch tgt))
                   }
 
 -- | A list of statements in the current block in reverse order.
-rwRevStmts :: Simple Lens (RewriteState arch src tgt) [Stmt arch tgt]
+rwRevStmts :: Simple Lens (RewriteState arch s src tgt) [Stmt arch tgt]
 rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
 
 -- | A map from source assignment identifiers to the updated value.
@@ -67,17 +67,17 @@ rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
 -- N.B. When using the rewriter, the user should process each statement sequentially so that every
 -- assign id is mapped to a value.  If some of the assignments can be eliminated this should be
 -- done via a dead code elimination step rather than during rewriting.
-srcAssignedValues :: Simple Lens (RewriteState arch src tgt) (MapF (AssignId src) (Value arch tgt))
+srcAssignedValues :: Simple Lens (RewriteState arch s src tgt) (MapF (AssignId src) (Value arch tgt))
 srcAssignedValues = lens _srcAssignedValues (\s v -> s { _srcAssignedValues = v })
 
 -- | Monad for constant propagation within a block.
-newtype Rewriter arch src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch src tgt) (ST tgt) a }
+newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch s src tgt) (ST s) a }
   deriving (Functor, Applicative, Monad)
 
 -- | Run the rewriter with the given conteext
-runRewriter :: RewriteContext arch src tgt
-            -> Rewriter arch src tgt a
-            -> ST tgt a
+runRewriter :: RewriteContext arch s src tgt
+            -> Rewriter arch s src tgt a
+            -> ST s a
 runRewriter ctx m = evalStateT (unRewriter m) s
   where s = RewriteState { rwContext = ctx
                          , _rwRevStmts = []
@@ -85,7 +85,7 @@ runRewriter ctx m = evalStateT (unRewriter m) s
                          }
 
 -- | Add a statment to the list
-appendRewrittenStmt :: Stmt arch tgt -> Rewriter arch src tgt ()
+appendRewrittenStmt :: Stmt arch tgt -> Rewriter arch s src tgt ()
 appendRewrittenStmt stmt = Rewriter $ do
   stmts <- use rwRevStmts
   let stmts' = stmt : stmts
@@ -93,11 +93,11 @@ appendRewrittenStmt stmt = Rewriter $ do
   rwRevStmts .= stmts'
 
 -- | Add a statment to the list
-appendRewrittenArchStmt :: ArchStmt arch tgt -> Rewriter arch src tgt ()
+appendRewrittenArchStmt :: ArchStmt arch tgt -> Rewriter arch s src tgt ()
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
 
 -- | Add an assignment statement that evaluates the right hand side and return the resulting value.
-evalRewrittenRhs :: AssignRhs arch tgt tp -> Rewriter arch src tgt (Value arch tgt tp)
+evalRewrittenRhs :: AssignRhs arch tgt tp -> Rewriter arch s src tgt (Value arch tgt tp)
 evalRewrittenRhs rhs = Rewriter $ do
   gen <- gets $ rwctxNonceGen . rwContext
   aid <- lift $ AssignId <$> freshNonce gen
@@ -108,11 +108,11 @@ evalRewrittenRhs rhs = Rewriter $ do
 -- | Add an assignment statement that evaluates the architecture function.
 evalRewrittenArchFn :: HasRepr (ArchFn arch (Value arch tgt)) TypeRepr
                     => ArchFn arch (Value arch tgt) tp
-                    -> Rewriter arch src tgt (Value arch tgt tp)
+                    -> Rewriter arch s src tgt (Value arch tgt tp)
 evalRewrittenArchFn f = evalRewrittenRhs (EvalArchFn f (typeRepr f))
 
 -- | Add a binding from the source assign id to the value.
-addBinding :: AssignId src tp -> Value arch tgt tp -> Rewriter arch src tgt ()
+addBinding :: AssignId src tp -> Value arch tgt tp -> Rewriter arch s src tgt ()
 addBinding srcId val = Rewriter $ do
   m <- use srcAssignedValues
   when (MapF.member srcId m) $ do
@@ -130,7 +130,7 @@ identValue _ _ = False
 boolLitValue :: Bool -> Value arch ids BoolType
 boolLitValue = BoolValue
 
-rewriteApp :: App (Value arch tgt) tp -> Rewriter arch src tgt (Value arch tgt tp)
+rewriteApp :: App (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)
 rewriteApp app = do
   ctx <- Rewriter $ gets rwContext
   rwctxConstraints ctx $ do
@@ -346,7 +346,7 @@ rewriteApp app = do
 
     _ -> evalRewrittenRhs (EvalApp app)
 
-rewriteAssignRhs :: AssignRhs arch src tp -> Rewriter arch src tgt (Value arch tgt tp)
+rewriteAssignRhs :: AssignRhs arch src tp -> Rewriter arch s src tgt (Value arch tgt tp)
 rewriteAssignRhs rhs =
   case rhs of
     EvalApp app -> do
@@ -359,7 +359,7 @@ rewriteAssignRhs rhs =
       f <- Rewriter $ gets $ rwctxArchFn . rwContext
       f archFn
 
-rewriteValue :: Value arch src tp -> Rewriter arch src tgt (Value arch tgt tp)
+rewriteValue :: Value arch src tp -> Rewriter arch s src tgt (Value arch tgt tp)
 rewriteValue v =
   case v of
     BoolValue b -> pure (BoolValue b)
@@ -377,7 +377,7 @@ rewriteValue v =
 -- Since statements may be introduced/deleted during optimization,
 -- this should add new statements to the list of target statements
 -- rather than return the optimized statement.
-rewriteStmt :: Stmt arch src -> Rewriter arch src tgt ()
+rewriteStmt :: Stmt arch src -> Rewriter arch s src tgt ()
 rewriteStmt s =
   case s of
     AssignStmt a -> do
@@ -400,7 +400,7 @@ rewriteStmt s =
 
 -- | This runs a rewrite action, and returns the statements generated while running it
 -- along with the result of the action.
-collectRewrittenStmts :: Rewriter arch src tgt a -> Rewriter arch src tgt ([Stmt arch tgt], a)
+collectRewrittenStmts :: Rewriter arch s src tgt a -> Rewriter arch s src tgt ([Stmt arch tgt], a)
 collectRewrittenStmts action = do
   rstmts <- Rewriter $ use rwRevStmts
   Rewriter $ rwRevStmts .= []

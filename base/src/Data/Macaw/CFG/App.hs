@@ -144,7 +144,7 @@ data App (f :: Type -> *) (tp :: Type) where
                 -> !(f BoolType)
                 -> App f BoolType
 
-  -- Signed subtract with borrow overflow.
+  -- | Signed subtract with borrow overflow.
   --
   -- @SsbbOverflows w x y c@ should be true iff the result
   -- @(toInt x - toInt y) - (c ? 1 : 0)@ is not between @-2^(w-1)@ and @2^(w-1)-1@.
@@ -159,10 +159,7 @@ data App (f :: Type -> *) (tp :: Type) where
   -- | This returns the number of true bits in the input.
   PopCount :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Return true if value contains even number of true bits.
-  --EvenParity :: !(f (BVType 8)) -> App f BoolType
-
-  -- Reverse the bytes in a bitvector expression.
+  -- | Reverse the bytes in a bitvector expression.
   ReverseBytes :: (1 <= n) => !(NatRepr n) -> !(f (BVType (8*n))) -> App f (BVType (8*n))
 
   -- | bsf "bit scan forward" returns the index of the

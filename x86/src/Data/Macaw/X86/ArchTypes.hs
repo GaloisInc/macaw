@@ -347,7 +347,7 @@ type instance ArchStmt X86_64 = X86ArchStmt
 type instance ArchTermStmt X86_64 = X86TermStmt
 
 rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
-                 -> Rewriter X86_64 src tgt (Value X86_64 tgt tp)
+                 -> Rewriter X86_64 s src tgt (Value X86_64 tgt tp)
 rewriteX86PrimFn f =
   case f of
     EvenParity (BVValue _ xv) -> do
@@ -374,12 +374,12 @@ instance StmtHasRefs X86ArchStmt where
 
 
 
-rewriteX86Stmt :: X86ArchStmt src -> Rewriter X86_64 src tgt ()
+rewriteX86Stmt :: X86ArchStmt src -> Rewriter X86_64 s src tgt ()
 rewriteX86Stmt (X86Stmt f) = do
   s <- traverseF rewriteValue f
   appendRewrittenArchStmt (X86Stmt s)
 
-rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 src tgt (X86TermStmt tgt)
+rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt tgt)
 rewriteX86TermStmt f =
   case f of
     X86Syscall -> pure X86Syscall

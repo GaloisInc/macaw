@@ -33,6 +33,7 @@ module Data.Macaw.CFG.Core
   , Value(..)
   , BVValue
   , valueAsApp
+  , valueAsArchFn
   , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
@@ -404,6 +405,11 @@ bvValue i = mkLit knownNat i
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
 valueAsApp (AssignedValue (Assignment _ (EvalApp a))) = Just a
 valueAsApp _ = Nothing
+
+-- | Return the architecture-specific function associated with a value.
+valueAsArchFn :: Value arch ids tp -> Maybe (ArchFn arch (Value arch ids) tp)
+valueAsArchFn (AssignedValue (Assignment _ (EvalArchFn a _))) = Just a
+valueAsArchFn _ = Nothing
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.

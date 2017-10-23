@@ -35,9 +35,9 @@ import           Data.Macaw.Memory
 -- and any potential error that prematurely terminated translating the
 -- block.
 type DisassembleFn arch
-   = forall ids
+   = forall s ids
    .  Memory (ArchAddrWidth arch)
-   -> NonceGenerator (ST ids) ids
+   -> NonceGenerator (ST s) ids
    -> ArchSegmentOff arch
       -- ^ The offset to start reading from.
    -> ArchAddrWord arch
@@ -47,7 +47,7 @@ type DisassembleFn arch
       -- from.
       --
       -- This is used for things like the height of the x87 stack.
-   -> ST ids ([Block arch ids], MemWord (ArchAddrWidth arch), Maybe String)
+   -> ST s ([Block arch ids], MemWord (ArchAddrWidth arch), Maybe String)
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -106,14 +106,14 @@ data ArchitectureInfo arch
        -- should return 'Just stmts' if this code looks like a function return.
        -- The stmts should be a subset of the statements, but may remove unneeded memory
        -- accesses like reading the stack pointer.
-     , rewriteArchFn :: (forall src tgt tp
+     , rewriteArchFn :: (forall s src tgt tp
                          .  ArchFn arch (Value arch src) tp
-                         -> Rewriter arch src tgt (Value arch tgt tp))
+                         -> Rewriter arch s src tgt (Value arch tgt tp))
        -- ^ This rewrites an architecture specific statement
-     , rewriteArchStmt :: (forall src tgt . ArchStmt arch src -> Rewriter arch src tgt ())
+     , rewriteArchStmt :: (forall s src tgt . ArchStmt arch src -> Rewriter arch s src tgt ())
        -- ^ This rewrites an architecture specific statement
-     , rewriteArchTermStmt :: (forall src tgt . ArchTermStmt arch src
-                                             -> Rewriter arch src tgt (ArchTermStmt arch tgt))
+     , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch src
+                                             -> Rewriter arch s src tgt (ArchTermStmt arch tgt))
        -- ^ This rewrites an architecture specific statement
      , archDemandContext :: !(forall ids . DemandContext arch ids)
        -- ^ Provides architecture-specific information for computing which arguments must be

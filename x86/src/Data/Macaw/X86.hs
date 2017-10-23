@@ -1339,16 +1339,16 @@ transferAbsValue r f =
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
-tryDisassembleBlockFromAbsState :: forall s
-                             .  Memory 64
-                             -> NonceGenerator (ST s) s
-                             -> MemSegmentOff 64
-                             -- ^ Address to disassemble at
-                             -> MemWord 64
-                             -- ^ Maximum size of this block
-                             -> AbsBlockState X86Reg
-                             -- ^ Abstract state of processor for defining state.
-                             -> ExceptT String (ST s) ([Block X86_64 s], MemWord 64, Maybe String)
+tryDisassembleBlockFromAbsState :: forall s ids
+                                .  Memory 64
+                                -> NonceGenerator (ST s) ids
+                                -> MemSegmentOff 64
+                                -- ^ Address to disassemble at
+                                -> MemWord 64
+                                -- ^ Maximum size of this block
+                                -> AbsBlockState X86Reg
+                                -- ^ Abstract state of processor for defining state.
+                                -> ExceptT String (ST s) ([Block X86_64 ids], MemWord 64, Maybe String)
 tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
   t <-
     case asConcreteSingleton (ab^.absRegState^.boundValue X87_TopReg) of
@@ -1378,16 +1378,16 @@ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
-disassembleBlockFromAbsState :: forall s
+disassembleBlockFromAbsState :: forall s ids
                              .  Memory 64
-                             -> NonceGenerator (ST s) s
+                             -> NonceGenerator (ST s) ids
                              -> MemSegmentOff 64
                              -- ^ Address to disassemble at
                              -> MemWord 64
                              -- ^ Maximum size of this block
                              -> AbsBlockState X86Reg
                              -- ^ Abstract state of processor for defining state.
-                             -> ST s ([Block X86_64 s], MemWord 64, Maybe String)
+                             -> ST s ([Block X86_64 ids], MemWord 64, Maybe String)
 disassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
   mr <- runExceptT $ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab
   case mr of
