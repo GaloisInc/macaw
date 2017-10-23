@@ -44,6 +44,9 @@ module Data.Macaw.Discovery
        , State.discoveredFunAddr
        , State.discoveredFunName
        , State.parsedBlocks
+         -- * Parsed block
+       , State.ParsedBlock
+       , State.pblockAddr
          -- * SymbolAddrMap
        , State.SymbolAddrMap
        , State.emptySymbolAddrMap
