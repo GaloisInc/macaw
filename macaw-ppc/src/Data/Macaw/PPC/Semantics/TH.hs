@@ -662,7 +662,6 @@ crucAppToExprTH elt interps = case elt of
           bv1Shf <- addExpr (AppExpr (M.BVShl $(natReprTH w) bv1Ext bv1Shifter))
           return $ AppExpr (M.BVOr $(natReprTH w) bv1Shf bv2Ext)
      |]
-
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of

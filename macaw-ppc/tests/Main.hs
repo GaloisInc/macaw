@@ -1,10 +1,13 @@
 module Main ( main ) where
 
+import System.FilePath.Glob ( namesMatching )
 import qualified Test.Tasty as T
 
+import qualified PPCTests64 as PPC64
+
 main :: IO ()
-main = T.defaultMain tests
-
-tests :: T.TestTree
-tests = T.testGroup "PPC Tests" []
-
+main = do
+  testFiles <- namesMatching "tests/ppc/*.s.expected"
+  T.defaultMain $ T.testGroup "PPCMacawTests" [
+    PPC64.ppcAsmTests testFiles
+    ]

@@ -54,7 +54,7 @@ test-suite macaw-ppc-tests
   default-language: Haskell2010
   ghc-options: -Wall
   main-is: Main.hs
-  other-modules: 
+  other-modules: PPCTests64
   hs-source-dirs: tests
   build-depends: base >=4.9 && <5,
                  bytestring,
@@ -69,6 +69,7 @@ test-suite macaw-ppc-tests
                  filepath,
                  lens,
                  macaw-base,
+                 macaw-ppc,
                  parameterized-utils,
                  semmc,
                  semmc-ppc,
