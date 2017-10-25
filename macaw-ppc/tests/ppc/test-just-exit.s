@@ -1,4 +1,4 @@
-	.file	"foo.c"
+	.file	"test-just-exit.c"
 	.machine power7
 	.section	".toc","aw"
 	.section	".text"
@@ -15,10 +15,9 @@ _start:
 	stdu 1,-64(1)
 	mr 31,1
 #APP
- # 4 "foo.c" 1
-	movq $60,%rax
-movq $0,%rdi
-syscall
+ # 4 "test-just-exit.c" 1
+	li 0,1
+sc
  # 0 "" 2
 #NO_APP
 	nop
