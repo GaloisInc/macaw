@@ -5,18 +5,25 @@ Maintainer : jhendrix@galois.com
 This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , DisassembleFn
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
+  , rewriteBlock
+  , disassembleAndRewrite
   ) where
 
 import           Control.Monad.ST
 import           Data.Parameterized.Nonce
+import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
+
 import           Data.Macaw.AbsDomain.AbsState as AbsState
+import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
@@ -129,3 +136,50 @@ data ArchitectureInfo arch
        -- ^ Returns the abstract state after executing an architecture-specific
        -- terminal statement.
      }
+
+-- | Apply optimizations to a terminal statement.
+rewriteTermStmt :: ArchitectureInfo arch
+                -> TermStmt arch src
+                -> Rewriter arch s src tgt (TermStmt arch tgt)
+rewriteTermStmt info tstmt = do
+  case tstmt of
+    FetchAndExecute regs ->
+      FetchAndExecute <$> traverseF rewriteValue regs
+    Branch c t f -> do
+      tgtCond <- rewriteValue c
+      case () of
+        _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
+              pure $ Branch cn f t
+          | otherwise ->
+              pure $ Branch tgtCond t f
+    TranslateError regs msg ->
+      TranslateError <$> traverseF rewriteValue regs
+                     <*> pure msg
+    ArchTermStmt ts regs ->
+      ArchTermStmt <$> rewriteArchTermStmt info ts
+                   <*> traverseF rewriteValue regs
+
+-- | Apply optimizations to code in the block
+rewriteBlock :: ArchitectureInfo arch
+             -> RewriteContext arch s src tgt
+             -> Block arch src
+             -> ST s (Block arch tgt)
+rewriteBlock info rwctx b = do
+  (tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
+    mapM_ rewriteStmt (blockStmts b)
+    rewriteTermStmt info (blockTerm b)
+  -- Return new block
+  pure $
+    Block { blockLabel = blockLabel b
+          , blockStmts = tgtStmts
+          , blockTerm  = tgtTermStmt
+          }
+
+-- | Translate code into blocks and simplify the resulting blocks.
+disassembleAndRewrite :: ArchitectureInfo arch ->  DisassembleFn arch
+disassembleAndRewrite ainfo mem nonceGen addr max_size ab =
+  withArchConstraints ainfo $ do
+  (bs0,sz, maybeError) <- disassembleFn ainfo mem nonceGen addr max_size ab
+  ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) (rewriteArchStmt ainfo)
+  bs1 <- traverse (rewriteBlock ainfo ctx) bs0
+  pure (bs1, sz, maybeError)

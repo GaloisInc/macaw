@@ -53,6 +53,8 @@ module Data.Macaw.Discovery
        , State.symbolAddrMap
        , State.symbolAddrs
        , State.symbolAtAddr
+         -- * Simplification
+       , eliminateDeadStmts
        ) where
 
 import           Control.Lens
@@ -90,10 +92,6 @@ import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
 #define USE_REWRITER 1
-
-#ifdef USE_REWRITER
-import           Data.Macaw.CFG.Rewriter
-#endif
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -182,40 +180,6 @@ refineProcStateBounds v isTrue ps =
 -- Rewriting block
 
 #ifdef USE_REWRITER
--- | Apply optimizations to a terminal statement.
-rewriteTermStmt :: ArchitectureInfo arch
-                -> TermStmt arch src
-                -> Rewriter arch s src tgt (TermStmt arch tgt)
-rewriteTermStmt info tstmt = do
-  case tstmt of
-    FetchAndExecute regs ->
-      FetchAndExecute <$> traverseF rewriteValue regs
-    Branch c t f -> do
-      tgtCond <- rewriteValue c
-      case () of
-        _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
-              pure $ Branch cn f t
-          | otherwise ->
-              pure $ Branch tgtCond t f
-    TranslateError regs msg ->
-      TranslateError <$> traverseF rewriteValue regs
-                     <*> pure msg
-    ArchTermStmt ts regs ->
-      ArchTermStmt <$> rewriteArchTermStmt info ts
-                   <*> traverseF rewriteValue regs
-
--- | Apply optimizations to code in the block
-rewriteBlock :: ArchitectureInfo arch -> Block arch src -> Rewriter arch s src tgt (Block arch tgt)
-rewriteBlock info b = do
-  (tgtStmts, tgtTermStmt) <- collectRewrittenStmts $ do
-    mapM_ rewriteStmt (blockStmts b)
-    rewriteTermStmt info (blockTerm b)
-  -- Return new block
-  pure $
-    Block { blockLabel = blockLabel b
-          , blockStmts = tgtStmts
-          , blockTerm  = tgtTermStmt
-          }
 #endif
 
 ------------------------------------------------------------------------
@@ -242,10 +206,17 @@ addBlockDemands b = do
   addTermDemands (blockTerm b)
 
 -- | Return a block after filtering out statements not needed to compute it.
-elimDeadBlockStmts :: AssignIdSet ids -> Block arch ids -> Block arch ids
-elimDeadBlockStmts demandSet b =
+elimDeadStmtsInBlock :: AssignIdSet ids -> Block arch ids -> Block arch ids
+elimDeadStmtsInBlock demandSet b =
   b { blockStmts = filter (stmtNeeded demandSet) (blockStmts b)
     }
+
+-- | Eliminate all dead statements in blocks
+eliminateDeadStmts :: ArchitectureInfo arch -> [Block arch ids] -> [Block arch ids]
+eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
+  where demandSet =
+          runDemandComp (archDemandContext ainfo) $ do
+            traverse_ addBlockDemands bs0
 
 ------------------------------------------------------------------------
 -- Memory utilities
@@ -868,8 +839,13 @@ transfer addr = do
           Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
           _ -> segmentSize seg - off
   let ab = foundAbstractState finfo
-  (bs0, sz, maybeError) <-
-    liftST $ disassembleFn ainfo mem nonceGen addr max_size ab
+  (bs0, sz, maybeError) <- liftST $ do
+#ifdef USE_REWRITER
+    disassembleAndRewrite ainfo mem nonceGen addr max_size ab
+#else
+    disassembleFn ainfo mem nonceGen addr max_size ab
+#endif
+
   -- If no blocks are returned, then we just add an empty parsed block.
   if null bs0 then do
     let errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
@@ -888,22 +864,9 @@ transfer addr = do
     curFunBlocks %= Map.insert addr pb
    else do
     -- Rewrite returned blocks to simplify expressions
-#ifdef USE_REWRITER
-    let ctx = RewriteContext { rwctxNonceGen = nonceGen
-                             , rwctxArchFn   = rewriteArchFn ainfo
-                             , rwctxArchStmt = rewriteArchStmt ainfo
-                             , rwctxConstraints = \x -> x
-                             }
-    bs1 <- liftST $ runRewriter ctx $ traverse (rewriteBlock ainfo) bs0
-#else
-    let bs1 = bs0
-#endif
 
     -- Comute demand set
-    let demandSet =
-          runDemandComp (archDemandContext ainfo) $ do
-            traverse_ addBlockDemands bs1
-    let bs = elimDeadBlockStmts demandSet <$> bs1
+    let bs = eliminateDeadStmts ainfo bs0
     -- Call transfer blocks to calculate parsedblocks
     let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
     transferBlocks addr finfo sz block_map
