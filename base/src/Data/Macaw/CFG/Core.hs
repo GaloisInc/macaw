@@ -203,17 +203,16 @@ type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
 -- uniqueness of Nonce values that identify assignments.
 type family ArchStmt (arch :: *) :: * -> *
 
--- | A type family for defining architecture-specific statements.
+-- | A type family for defining architecture-specific statements that
+-- may have instruction-specific effects on control-flow and register state.
 --
 -- The second type parameter is the ids phantom type used to provide
 -- uniqueness of Nonce values that identify assignments.
 --
--- The architecture-specific terminal statement may have side effects, but is
--- assumed to jump to the location specified as the current instruction-pointer
--- after executing.  This location is assumed to be in the current calling context.
---
--- NOTE: Due to the restrictions on ArchTermStmt control-flow, we may
--- want to remove ArchTermStmt entirely and replace with ArchStmt.
+-- An architecture-specific terminal statement may have side effects and change register
+-- values, it may or may not return to the current function.  If it does return to the
+-- current function, it is assumed to be at most one location, and the block-translator
+-- must provide that value at translation time.
 type family ArchTermStmt (arch :: *) :: * -> *
 
 -- | Number of bits in addreses for architecture.

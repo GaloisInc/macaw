@@ -42,9 +42,11 @@ data TermStmt arch ids
     --
     -- The registers include the state of registers just before the terminal statement
     -- executes.
+    -- The address returns the address within the current function that this terminal
+    -- statement could return to (if any)
   | ArchTermStmt !(ArchTermStmt arch ids)
                  !(RegState (ArchReg arch) (Value arch ids))
-
+                 !(Maybe (ArchSegmentOff arch))
 
 instance ArchConstraints arch
       => Pretty (TermStmt arch ids) where
@@ -56,7 +58,7 @@ instance ArchConstraints arch
   pretty (TranslateError s msg) =
     text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
-  pretty (ArchTermStmt ts regs) =
+  pretty (ArchTermStmt ts regs _) =
     prettyF ts <$$> indent 2 (pretty regs)
 
 ------------------------------------------------------------------------

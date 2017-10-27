@@ -170,7 +170,7 @@ data ParsedTermStmt arch ids
      -- ^ An if-then-else
    | ParsedArchTermStmt !(ArchTermStmt arch ids)
                         !(RegState (ArchReg arch) (Value arch ids))
-                        !(ArchSegmentOff arch)
+                        !(Maybe (ArchSegmentOff arch))
      -- ^ An architecture-specific statement with the registers prior to execution, and
      -- the given next control flow address.
    | ParsedTranslateError !Text
@@ -214,9 +214,12 @@ ppTermStmt ppOff tstmt =
       text "ite" <+> pretty c <$$>
       ppStatementList ppOff t <$$>
       ppStatementList ppOff f
-    ParsedArchTermStmt ts s addr ->
-      prettyF ts <> text ", return to" <+> text (show addr) <$$>
-      indent 2 (pretty s)
+    ParsedArchTermStmt ts s maddr ->
+      let addrDoc = case maddr of
+                      Just a -> text ", return to" <+> text (show a)
+                      Nothing -> text ""
+       in prettyF ts <> addrDoc <$$>
+          indent 2 (pretty s)
     ParsedTranslateError msg ->
       text "translation error" <+> text (Text.unpack msg)
     ClassifyFailure s ->

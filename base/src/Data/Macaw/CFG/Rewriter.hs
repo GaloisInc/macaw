@@ -157,19 +157,24 @@ rewriteApp app = do
   ctx <- Rewriter $ gets rwContext
   rwctxConstraints ctx $ do
   case app of
-    Mux _ (BoolValue c) t f -> do
-      if c then
-        pure t
-       else
-        pure f
 
     Trunc (BVValue _ x) w -> do
       pure $ BVValue w $ toUnsigned w x
+
+    Trunc (valueAsApp -> Just (Mux _ c t@BVValue{} f@BVValue{})) w -> do
+      t' <- rewriteApp (Trunc t w)
+      f' <- rewriteApp (Trunc f w)
+      rewriteApp $ Mux (BVTypeRepr w) c t' f'
+
     SExt (BVValue u x) w -> do
       pure $ BVValue w $ toUnsigned w $ toSigned u x
     UExt (BVValue _ x) w -> do
       pure $ BVValue w x
 
+    Mux _ (BoolValue c) t f -> do
+      pure $ if c then t else f
+    Mux tp (valueAsApp -> Just (NotApp c)) t f -> do
+      rewriteApp (Mux tp c f t)
     -- ite c T y = (~c | T) & (c | y)
     --           = c | y
     Mux _ c (BoolValue True) y -> do
@@ -351,6 +356,11 @@ rewriteApp app = do
     -- Move constant to right hand side.
     Eq x@BVValue{} y -> do
       rewriteApp (Eq y x)
+
+    Eq (valueAsApp -> Just (Mux _ c t@BVValue{} f@BVValue{})) z@BVValue{} -> do
+      t' <- rewriteApp (Eq t z)
+      f' <- rewriteApp (Eq f z)
+      rewriteApp $ Mux BoolTypeRepr c t' f'
 
     -- x + o = y ~> x = (y - o)
     Eq (valueAsApp -> Just (BVAdd w x (BVValue _ o))) (BVValue _ yc) -> do

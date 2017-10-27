@@ -195,7 +195,7 @@ addTermDemands t = do
       addValueDemands v
     TranslateError regs _ -> do
       traverseF_ addValueDemands regs
-    ArchTermStmt _ regs -> do
+    ArchTermStmt _ regs _ -> do
       traverseF_ addValueDemands regs
 
 -- | Add any assignments needed to evaluate statements with side
@@ -747,27 +747,20 @@ parseBlock ctx b regs = do
                             , stmtsTerm = ParsedTranslateError msg
                             , stmtsAbsState = absProcState'
                             }
-    ArchTermStmt ts s' -> do
+    ArchTermStmt ts s' maddr -> do
       mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
       let abst = finalAbsBlockState absProcState' s'
-      case concretizeAbsCodePointers mem (abst^.absRegState^.curIP) of
-        [addr] -> do
-          -- Merge system call result with possible next IPs.
+      -- Compute possible next IPS.
+      case maddr of
+        Just addr -> do
           let post = postArchTermStmtAbsState arch_info abst ts addr
-
           intraJumpTargets %= ((addr, post):)
-          pure $! StatementList { stmtsIdent = idx
-                                , stmtsNonterm = blockStmts b
-                                , stmtsTerm  = ParsedArchTermStmt ts s' addr
-                                , stmtsAbsState = absProcState'
-                                }
-        _ -> do
-          mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
-          pure StatementList { stmtsIdent = idx
-                             , stmtsNonterm = blockStmts b
-                             , stmtsTerm  = ClassifyFailure s'
-                             , stmtsAbsState = absProcState'
-                             }
+        Nothing -> pure ()
+      pure $! StatementList { stmtsIdent = idx
+                            , stmtsNonterm = blockStmts b
+                            , stmtsTerm  = ParsedArchTermStmt ts s' maddr
+                            , stmtsAbsState = absProcState'
+                            }
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.

@@ -150,15 +150,15 @@ instance (KnownNat n, 1 <= n) => KnownType (BVType n) where
 type SingleFloat = 'SingleFloat
 type DoubleFloat = 'DoubleFloat
 type X86_80Float = 'X86_80Float
-type QuadFloat = 'QuadFloat
-type HalfFloat = 'HalfFloat
+type QuadFloat   = 'QuadFloat
+type HalfFloat   = 'HalfFloat
 
 data FloatInfoRepr (flt::Type) where
-  DoubleFloatRepr       :: FloatInfoRepr DoubleFloat
-  SingleFloatRepr       :: FloatInfoRepr SingleFloat
-  X86_80FloatRepr       :: FloatInfoRepr X86_80Float
-  QuadFloatRepr         :: FloatInfoRepr QuadFloat
-  HalfFloatRepr         :: FloatInfoRepr HalfFloat
+  DoubleFloatRepr :: FloatInfoRepr DoubleFloat
+  SingleFloatRepr :: FloatInfoRepr SingleFloat
+  X86_80FloatRepr :: FloatInfoRepr X86_80Float
+  QuadFloatRepr   :: FloatInfoRepr QuadFloat
+  HalfFloatRepr   :: FloatInfoRepr HalfFloat
 
 deriving instance Show (FloatInfoRepr tp)
 

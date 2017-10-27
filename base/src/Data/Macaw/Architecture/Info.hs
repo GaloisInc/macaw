@@ -155,9 +155,10 @@ rewriteTermStmt info tstmt = do
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
-    ArchTermStmt ts regs ->
+    ArchTermStmt ts regs addr ->
       ArchTermStmt <$> rewriteArchTermStmt info ts
                    <*> traverseF rewriteValue regs
+                   <*> pure addr
 
 -- | Apply optimizations to code in the block
 rewriteBlock :: ArchitectureInfo arch
