@@ -63,7 +63,7 @@ data ArchTranslateFunctions arch
                          . M.ArchFn arch (M.Value arch ids) tp
                          -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
      -- ^ Function for translating an architecture specific function
-  , archTranslateStmt :: !(forall ids s . M.ArchStmt arch ids -> CrucGen arch ids s ())
+  , archTranslateStmt :: !(forall ids s . M.ArchStmt arch (M.Value arch ids) -> CrucGen arch ids s ())
   , archTranslateTermStmt :: !(forall ids s
                                . M.ArchTermStmt arch ids
                                -> M.RegState (M.ArchReg arch) (M.Value arch ids)
@@ -437,7 +437,7 @@ addMacawTermStmt tstmt =
       t <- lookupCrucibleLabel macawTrueLbl
       f <- lookupCrucibleLabel macawFalseLbl
       addTermStmt (CR.Br p t f)
-    M.ArchTermStmt ts regs -> do
+    M.ArchTermStmt ts regs _ -> do
       fns <- translateFns <$> get
       archTranslateTermStmt fns ts regs
     M.TranslateError _regs msg -> do
