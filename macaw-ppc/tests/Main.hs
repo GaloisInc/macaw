@@ -3,7 +3,7 @@ module Main ( main ) where
 import System.FilePath.Glob ( namesMatching )
 import qualified Test.Tasty as T
 
-import qualified PPCTests64 as PPC64
+import qualified PPC64Tests as PPC64
 
 main :: IO ()
 main = do

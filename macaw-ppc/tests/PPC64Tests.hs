@@ -30,6 +30,9 @@ import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.PPC as RO
 
+import Data.List (intercalate)
+import Debug.Trace (trace)
+
 ppcAsmTests :: [FilePath] -> T.TestTree
 ppcAsmTests = T.testGroup "PPC" . map mkTest
 
@@ -54,14 +57,17 @@ mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
     asmFilename = dropExtension fp
     exeFilename = replaceExtension asmFilename "exe"
 
+showSegments :: (MM.MemWidth w) => MM.Memory w -> String
+showSegments mem = intercalate "\n" $ map show (MM.memSegments mem)
+
 -- | Given an Elf object and the corresponding Memory object, find the address of the
 -- correct entry point to the program
 findEntryPoint64 :: E.Elf 64 -> MM.Memory 64 -> MM.MemAddr 64
 findEntryPoint64 elf mem = case E.elfMachine elf of
   E.EM_PPC64 ->
     let startEntry = E.elfEntry elf
-        Right addr = MM.readAddr mem MM.LittleEndian (MM.absoluteAddr (MM.memWord (fromIntegral startEntry)))
-    in addr
+        Right addr = MM.readAddr mem MM.BigEndian (MM.absoluteAddr (MM.memWord (fromIntegral (startEntry))))
+    in trace ("addr = " ++ show addr) addr
   _          -> MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry elf)))
 
 -- | Run a test over a given expected result filename and the ELF file
@@ -69,7 +75,7 @@ findEntryPoint64 elf mem = case E.elfMachine elf of
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem (findEntryPoint64 elf mem)
+    let Just entryPoint =  trace (showSegments mem) $ MM.asSegmentOff mem (findEntryPoint64 elf mem)
         -- TODO: For some reason asSegmentOff is returning Nothing. Need to investigate.
         -- Above: Just need to convert the entry point from E.elfEntry elf to an ArchSegmentOff.
         di = MD.cfgFromAddrs RO.ppc64_linux_info mem MD.emptySymbolAddrMap [entryPoint] []
@@ -111,7 +117,7 @@ withMemory :: forall w m a
            -> E.Elf w
            -> (MM.Memory w -> m a)
            -> m a
-withMemory relaWidth e k =
+withMemory _ e k =
   case MM.memoryForElf (MM.LoadOptions MM.LoadBySegment False) e of
   -- case MM.memoryForElfSegments relaWidth e of
     Left err -> C.throwM (MemoryLoadError err)
