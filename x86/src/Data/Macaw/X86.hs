@@ -925,7 +925,7 @@ getLoc (l0 :: ImpLocation ids tp) =
       ValueExpr <$> getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
 
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
-addArchStmt s = addStmt $ ExecArchStmt (X86Stmt s)
+addArchStmt = addStmt . ExecArchStmt
 
 addWriteLoc :: X86PrimLoc tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
 addWriteLoc l v = addArchStmt $ WriteLoc l v
@@ -1483,7 +1483,7 @@ addValueListDemands = mapM_ (viewSome addValueDemands)
 
 x86DemandContext :: DemandContext X86_64 ids
 x86DemandContext =
-  DemandContext { addArchStmtDemands = addValueListDemands . valuesInX86Stmt
+  DemandContext { addArchStmtDemands = addValueListDemands . foldMapF  (\v -> [Some v])
                 , addArchFnDemands   = addValueListDemands . foldMapFC (\v -> [Some v])
                 , archFnHasSideEffects = x86PrimFnHasSideEffects
                 }

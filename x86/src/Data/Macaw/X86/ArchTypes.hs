@@ -17,10 +17,7 @@ module Data.Macaw.X86.ArchTypes
   , X86PrimFn(..)
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
-  , X86ArchStmt(..)
   , X86Stmt(..)
-  , ppX86Stmt
-  , valuesInX86Stmt
   , rewriteX86Stmt
   , X86TermStmt(..)
   , rewriteX86TermStmt
@@ -28,13 +25,10 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
-import           Data.Foldable
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Set (Set)
-import qualified Data.Set as Set
 import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
@@ -45,10 +39,6 @@ import           Data.Macaw.Types
 import           Data.Macaw.X86.Monad (SIMDWidth(..), RepValSize(..), repValSizeMemRepr)
 import           Data.Macaw.X86.X86Reg
 import           Data.Macaw.X86.X87ControlReg
-
-assignIdSetFromValues :: [Some (Value arch ids)] -> Set (Some (AssignId ids))
-assignIdSetFromValues = foldl' f Set.empty
-  where f s (Some v) = Set.union s (refsInValue v)
 
 ------------------------------------------------------------------------
 -- X86TermStmt
@@ -322,28 +312,26 @@ instance TraversableF X86Stmt where
       MemCopy bc v src dest dir -> MemCopy bc <$> go v <*> go src <*> go dest <*> go dir
       MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
 
-ppX86Stmt :: (forall tp . f tp -> Doc) -> X86Stmt f -> Doc
-ppX86Stmt pp stmt =
-  case stmt of
-    WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
-    StoreX87Control addr -> pp addr <+> text ":= x87_control"
-    MemCopy sz cnt src dest rev ->
-        text "memcopy" <+> parens (hcat $ punctuate comma args)
-      where args = [pretty sz, pp cnt, pp src, pp dest, pp rev]
-    MemSet cnt val dest d ->
-        text "memset" <+> parens (hcat $ punctuate comma args)
-      where args = [pp cnt, pp val, pp dest, pp d]
+instance IsArchStmt X86Stmt where
+  ppArchStmt pp stmt =
+    case stmt of
+      WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
+      StoreX87Control addr -> pp addr <+> text ":= x87_control"
+      MemCopy sz cnt src dest rev ->
+          text "memcopy" <+> parens (hcat $ punctuate comma args)
+        where args = [pretty sz, pp cnt, pp src, pp dest, pp rev]
+      MemSet cnt val dest d ->
+          text "memset" <+> parens (hcat $ punctuate comma args)
+        where args = [pp cnt, pp val, pp dest, pp d]
 
 ------------------------------------------------------------------------
 -- X86_64
-
-newtype X86ArchStmt ids = X86Stmt (X86Stmt (Value X86_64 ids))
 
 data X86_64
 
 type instance ArchReg  X86_64 = X86Reg
 type instance ArchFn   X86_64 = X86PrimFn
-type instance ArchStmt X86_64 = X86ArchStmt
+type instance ArchStmt X86_64 = X86Stmt
 type instance ArchTermStmt X86_64 = X86TermStmt
 
 rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
@@ -363,21 +351,10 @@ rewriteX86PrimFn f =
     _ -> do
       evalRewrittenArchFn =<< traverseFC rewriteValue f
 
-instance PrettyF X86ArchStmt where
-  prettyF (X86Stmt s) = ppX86Stmt pretty s
-
-valuesInX86Stmt :: X86ArchStmt ids -> [Some (Value X86_64 ids)]
-valuesInX86Stmt (X86Stmt s) = foldMapF (\v -> [Some v]) s
-
-instance StmtHasRefs X86ArchStmt where
-  refsInStmt = assignIdSetFromValues . valuesInX86Stmt
-
-
-
-rewriteX86Stmt :: X86ArchStmt src -> Rewriter X86_64 s src tgt ()
-rewriteX86Stmt (X86Stmt f) = do
+rewriteX86Stmt :: X86Stmt (Value X86_64 src) -> Rewriter X86_64 s src tgt ()
+rewriteX86Stmt f = do
   s <- traverseF rewriteValue f
-  appendRewrittenArchStmt (X86Stmt s)
+  appendRewrittenArchStmt s
 
 rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt tgt)
 rewriteX86TermStmt f =

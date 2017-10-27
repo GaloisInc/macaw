@@ -45,7 +45,7 @@ data RewriteContext arch s src tgt
                                             .  ArchFn arch (Value arch src) tp
                                             -> Rewriter arch s src tgt (Value arch tgt tp))
                       -- ^ Rewriter for architecture-specific statements
-                    , rwctxArchStmt  :: !(ArchStmt arch src -> Rewriter arch s src tgt ())
+                    , rwctxArchStmt  :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
                       -- ^ Rewriter for architecture-specific statements
                     , rwctxConstraints :: (forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
@@ -66,7 +66,8 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                  -> (forall tp
                      .  ArchFn arch (Value arch src) tp
                      -> Rewriter arch s src tgt (Value arch tgt tp))
-                 -> (ArchStmt arch src -> Rewriter arch s src tgt ())
+                 -> (ArchStmt arch (Value arch src)
+                     -> Rewriter arch s src tgt ())
                  -> ST s (RewriteContext arch s src tgt)
 mkRewriteContext nonceGen archFn archStmt = do
   ref <- newSTRef MapF.empty
@@ -113,7 +114,7 @@ appendRewrittenStmt stmt = Rewriter $ do
   rwRevStmts .= stmts'
 
 -- | Add a statment to the list
-appendRewrittenArchStmt :: ArchStmt arch tgt -> Rewriter arch s src tgt ()
+appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src tgt ()
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
 
 -- | Add an assignment statement that evaluates the right hand side and return the resulting value.

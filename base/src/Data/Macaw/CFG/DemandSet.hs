@@ -27,7 +27,7 @@ type AssignIdSet ids = Set (Some (AssignId ids))
 -- | This provides the architecture specific functions needed to
 -- resolve demand sets.
 data DemandContext arch ids
-   = DemandContext { addArchStmtDemands :: !(ArchStmt arch ids  -> DemandComp arch ids ())
+   = DemandContext { addArchStmtDemands :: !(ArchStmt arch (Value arch ids)  -> DemandComp arch ids ())
                    , addArchFnDemands   :: !(forall tp . ArchFn arch (Value arch ids) tp -> DemandComp arch ids ())
                    , archFnHasSideEffects :: !(forall v tp . ArchFn arch v tp -> Bool)
                      -- ^ This returns true if the architecture function has implicit

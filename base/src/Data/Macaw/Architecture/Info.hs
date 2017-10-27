@@ -84,7 +84,7 @@ data ArchitectureInfo arch
        -- ^ Evaluates an architecture-specific function
      , absEvalArchStmt :: !(forall ids
                             .  AbsProcessorState (ArchReg arch) ids
-                            -> ArchStmt arch ids
+                            -> ArchStmt arch (Value arch ids)
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
      , postCallAbsState :: AbsBlockState (ArchReg arch)
@@ -117,7 +117,9 @@ data ArchitectureInfo arch
                          .  ArchFn arch (Value arch src) tp
                          -> Rewriter arch s src tgt (Value arch tgt tp))
        -- ^ This rewrites an architecture specific statement
-     , rewriteArchStmt :: (forall s src tgt . ArchStmt arch src -> Rewriter arch s src tgt ())
+     , rewriteArchStmt :: (forall s src tgt
+                           .  ArchStmt arch (Value arch src)
+                           -> Rewriter arch s src tgt ())
        -- ^ This rewrites an architecture specific statement
      , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch src
                                              -> Rewriter arch s src tgt (ArchTermStmt arch tgt))

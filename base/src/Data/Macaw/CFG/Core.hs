@@ -59,6 +59,8 @@ module Data.Macaw.CFG.Core
   , PrettyF(..)
   , ArchConstraints
   , PrettyRegValue(..)
+  , IsArchFn(..)
+  , IsArchStmt(..)
     -- * Architecture type families
   , ArchFn
   , ArchReg
@@ -70,11 +72,9 @@ module Data.Macaw.CFG.Core
   , RegisterInfo(..)
   , asStackAddrOffset
     -- * References
-  , StmtHasRefs(..)
   , refsInValue
   , refsInApp
   , refsInAssignRhs
-  , IsArchFn(..)
     -- ** Synonyms
   , ArchAddrWidth
   , ArchAddrValue
@@ -201,7 +201,7 @@ type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
 --
 -- The second type parameter is the ids phantom type used to provide
 -- uniqueness of Nonce values that identify assignments.
-type family ArchStmt (arch :: *) :: * -> *
+type family ArchStmt (arch :: *) :: (Type -> *) -> *
 
 -- | A type family for defining architecture-specific statements that
 -- may have instruction-specific effects on control-flow and register state.
@@ -572,9 +572,26 @@ instance RegisterInfo (ArchReg arch) => Pretty (Value arch ids tp) where
 instance RegisterInfo (ArchReg arch) => Show (Value arch ids tp) where
   show = show . pretty
 
+-- | Typeclass for architecture-specific functions
+class IsArchFn (f :: (Type -> *) -> Type -> *)  where
+  -- | A function for pretty printing an archFn of a given type.
+  ppArchFn :: Applicative m
+           => (forall u . v u -> m Doc)
+              -- ^ Function for pretty printing vlaue.
+           -> f v tp
+           -> m Doc
+
+-- | Typeclass for architecture-specific statements
+class IsArchStmt (f :: (Type -> *) -> *)  where
+  -- | A function for pretty printing an architecture statement of a given type.
+  ppArchStmt :: (forall u . v u -> Doc)
+                -- ^ Function for pretty printing value.
+             -> f v
+             -> Doc
+
 type ArchConstraints arch
    = ( RegisterInfo (ArchReg arch)
-     , PrettyF  (ArchStmt arch)
+     , IsArchStmt (ArchStmt arch)
      , PrettyF  (ArchTermStmt arch)
      , FoldableFC (ArchFn arch)
      , IsArchFn (ArchFn arch)
@@ -701,7 +718,7 @@ data Stmt arch ids
      -- disassembler output if available (or empty string if unavailable)
    | Comment !Text
      -- ^ A user-level comment
-   | ExecArchStmt !(ArchStmt arch ids)
+   | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
 
 ppStmt :: ArchConstraints arch
@@ -718,27 +735,13 @@ ppStmt ppOff stmt =
       <+> parens (hcat $ punctuate comma $ viewSome (ppValue 0) <$> vals)
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
-    ExecArchStmt s -> prettyF s
-
+    ExecArchStmt s -> ppArchStmt (ppValue 10) s
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . ppStmt (\w -> text (show w))
 
 ------------------------------------------------------------------------
 -- References
-
--- | Return refernces in a stmt type.
-class StmtHasRefs f where
-  refsInStmt :: f ids -> Set (Some (AssignId ids))
-
--- | Typeclass for folding over architecture-specific values.
-class IsArchFn (f :: (k -> *) -> k -> *)  where
-  -- | A function for pretty printing an archFn of a given type.
-  ppArchFn :: Applicative m
-           => (forall u . v u -> m Doc)
-              -- ^ Function for pretty printing vlaue.
-           -> f v tp
-           -> m Doc
 
 refsInValue :: Value arch ids tp -> Set (Some (AssignId ids))
 refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
