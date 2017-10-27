@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.CFG.DemandSet
@@ -13,6 +14,7 @@ module Data.Macaw.CFG.DemandSet
 
 import           Control.Monad.State.Strict
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.Set (Set)
 import qualified Data.Set as Set
@@ -27,11 +29,12 @@ type AssignIdSet ids = Set (Some (AssignId ids))
 -- | This provides the architecture specific functions needed to
 -- resolve demand sets.
 data DemandContext arch ids
-   = DemandContext { addArchStmtDemands :: !(ArchStmt arch (Value arch ids)  -> DemandComp arch ids ())
-                   , addArchFnDemands   :: !(forall tp . ArchFn arch (Value arch ids) tp -> DemandComp arch ids ())
-                   , archFnHasSideEffects :: !(forall v tp . ArchFn arch v tp -> Bool)
+   = DemandContext { archFnHasSideEffects :: !(forall v tp . ArchFn arch v tp -> Bool)
                      -- ^ This returns true if the architecture function has implicit
                      -- side effects (and thus can be safely removed).
+                   , demandConstraints :: !(forall a
+                                           . ((FoldableFC (ArchFn arch), FoldableF (ArchStmt arch))
+                                               => a) -> a)
                    }
 
 -- | Return true if assign rhs has side effects (and thus should alwatys be demanded)
@@ -73,7 +76,8 @@ addAssignRhsDemands rhs =
       addValueDemands addr
     EvalArchFn fn _ -> do
       ctx <- DemandComp $ gets $ demandContext
-      addArchFnDemands ctx fn
+      demandConstraints ctx $
+        addValueListDemands $ foldMapFC (\v -> [Some v]) fn
 
 -- | Add the ID of this assignment to demand set and also that of any
 -- values needed to compute it.
@@ -96,6 +100,9 @@ addValueDemands v = do
     AssignedValue a -> addAssignmentDemands a
     Initial{} ->  pure ()
 
+addValueListDemands :: [Some (Value arch ids)] -> DemandComp arch ids ()
+addValueListDemands = mapM_ (viewSome addValueDemands)
+
 -- | Parse statement, and if it has side effects, add assignments
 -- needed to compute statement to demand set.
 addStmtDemands :: Stmt arch ids -> DemandComp arch ids ()
@@ -116,7 +123,8 @@ addStmtDemands s =
       pure ()
     ExecArchStmt astmt -> do
       ctx <- DemandComp $ gets $ demandContext
-      addArchStmtDemands ctx astmt
+      demandConstraints ctx $
+        addValueListDemands $ foldMapF  (\v -> [Some v]) astmt
 
 ------------------------------------------------------------------------
 -- Functions for computing demanded values

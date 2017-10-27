@@ -1477,17 +1477,11 @@ freeBSD_syscallPersonality =
                      , spResultRegisters = [ Some RAX ]
                      }
 
-
-addValueListDemands :: [Some (Value arch ids)] -> DemandComp arch ids ()
-addValueListDemands = mapM_ (viewSome addValueDemands)
-
 x86DemandContext :: DemandContext X86_64 ids
 x86DemandContext =
-  DemandContext { addArchStmtDemands = addValueListDemands . foldMapF  (\v -> [Some v])
-                , addArchFnDemands   = addValueListDemands . foldMapFC (\v -> [Some v])
+  DemandContext { demandConstraints = \a -> a
                 , archFnHasSideEffects = x86PrimFnHasSideEffects
                 }
-
 
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> AbsBlockState X86Reg

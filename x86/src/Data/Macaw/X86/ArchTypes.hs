@@ -26,7 +26,6 @@ module Data.Macaw.X86.ArchTypes
 
 import           Data.Bits
 import           Data.Parameterized.NatRepr
-import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Flexdis86 as F
