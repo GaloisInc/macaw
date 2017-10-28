@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PolyKinds #-}
@@ -62,8 +63,8 @@ import Data.Parameterized.NatRepr ( knownNat
                                   )
 
 import           Data.Macaw.PPC.Generator
-import           Data.Macaw.PPC.PPCReg
 import           Data.Macaw.PPC.Operand
+import           Data.Macaw.PPC.PPCReg
 
 -- run stack with --ghc-options=-ddump-splices
 
@@ -263,7 +264,7 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
 
 -- Add an expression in the PPCGenerator monad. This returns a Macaw value
 -- corresponding to the added expression.
-addExpr :: Expr ppc ids tp -> PPCGenerator ppc ids (M.Value ppc ids tp)
+addExpr :: M.ArchConstraints ppc => Expr ppc ids tp -> PPCGenerator ppc ids (M.Value ppc ids tp)
 addExpr expr = do
   case expr of
     ValueExpr val -> return val
@@ -764,7 +765,7 @@ crucAppToExprTH elt interps = case elt of
 
 
 
-crucAppToExpr :: S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+crucAppToExpr :: (M.ArchConstraints ppc) => S.App (S.Elt t) ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
 crucAppToExpr S.FalseBool = return $ ValueExpr (M.BoolValue False)
 crucAppToExpr (S.NotBool bool) = (AppExpr . M.NotApp) <$> addElt bool
@@ -880,7 +881,8 @@ locToRegTH _  loc              = [| undefined |]
 -- will modify the location by the function encoded in the formula.
 interpretFormula :: forall ppc t ctp s .
                     (1 <= APPC.ArchRegWidth ppc,
-                     M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
+                     M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc,
+                     M.ArchConstraints ppc)
                  => APPC.Location ppc ctp
                  -> S.Elt t ctp
                  -> PPCGenerator ppc s ()
@@ -894,16 +896,16 @@ interpretFormula loc elt = do
       curPPCState . M.boundValue reg .= M.AssignedValue assignment
 
 -- Convert a Crucible element into an expression.
-eltToExpr :: S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
+eltToExpr :: M.ArchConstraints ppc => S.Elt t ctp -> PPCGenerator ppc ids (Expr ppc ids (FromCrucibleBaseType ctp))
 eltToExpr (S.BVElt w val loc) = return $ ValueExpr (M.BVValue w val)
 eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
 eltToExpr (S.BoundVarElt sbv) = undefined
 
 -- Add a Crucible element in the PPCGenerator monad.
-addElt :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt :: M.ArchConstraints ppc => S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr
 
-addElt' :: S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt' :: M.ArchConstraints ppc => S.Elt t ctp -> PPCGenerator ppc ids (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt' elt = case elt of
   S.BVElt w val loc -> return $ M.BVValue w val
   S.AppElt appElt   -> do x <- crucAppToExpr (S.appEltApp appElt)

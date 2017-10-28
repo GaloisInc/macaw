@@ -16,6 +16,7 @@ import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo 
 
 import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.Semantics.TH ( genExecInstruction )
+import           Data.Macaw.PPC.Arch
 
 execInstruction :: MC.Value PPC s (MT.BVType 32) -> Instruction -> Maybe (PPCGenerator PPC s ())
 execInstruction = $(genExecInstruction (Proxy @PPC) (C.Sub C.Dict) allSemantics allOpcodeInfo)

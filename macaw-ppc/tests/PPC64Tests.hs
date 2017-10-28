@@ -93,10 +93,11 @@ testDiscovery expectedFilename elf =
           let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
               actualBlockStarts = S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                                             , trace (show pbr) True
                                              ]
           case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of
             (True, _) -> return ()
-            (_, Nothing) -> T.assertFailure (printf "Unexpected entry point: 0x%x" actualEntry)
+            (_, Nothing) -> T.assertFailure (printf "Unexpected block start: 0x%x" actualEntry)
             (_, Just expectedBlockStarts) ->
               T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `S.difference` ignoredBlocks)
 

@@ -2,6 +2,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Generator (
   GenResult(..),
@@ -20,6 +22,7 @@ module Data.Macaw.PPC.Generator (
   addAssignment,
   getReg,
   getRegValue,
+  simplifyCurrentBlock,
   -- * Lenses
   blockState,
   curPPCState,
@@ -42,12 +45,15 @@ import           Data.Word (Word64)
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
+import           Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
+
+import Debug.Trace (trace)
 
 -- GenResult
 
@@ -172,7 +178,7 @@ genResult = do
                    , resState = Just (s ^. blockState)
                    }
 
-addStmt :: Stmt ppc s -> PPCGenerator ppc s ()
+addStmt :: (ArchConstraints ppc) => Stmt ppc s -> PPCGenerator ppc s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
 newAssignId :: PPCGenerator ppc s (AssignId s tp)
@@ -184,7 +190,8 @@ newAssignId = do
 liftST :: ST s a -> PPCGenerator ppc s a
 liftST = PPCGenerator . lift . lift
 
-addAssignment :: AssignRhs ppc s tp
+addAssignment :: ArchConstraints ppc
+              => AssignRhs ppc s tp
               -> PPCGenerator ppc s (Assignment ppc s tp)
 addAssignment rhs = do
   l <- newAssignId
@@ -203,8 +210,26 @@ getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
 
--- evalApp :: App (Value PPC s) tp -> PPCGenerator ppc s (Value PPC s tp)
--- evalApp = undefined
+simplifyCurrentBlock :: forall ppc s . ArchConstraints ppc => PPCGenerator ppc s ()
+simplifyCurrentBlock = do
+  genState <- St.get
+  let nonceGen = assignIdGen genState
+      stmts = genState ^. blockState . pBlockStmts
+      ctx = RewriteContext { rwctxNonceGen = nonceGen
+                           , rwctxArchFn = undefined -- wrapArchFn nonceGen
+                           , rwctxArchStmt = appendRewrittenArchStmt
+                           , rwctxConstraints = withConstraints
+                           }
+  (stmts', _) <- liftST $ runRewriter ctx $ do
+    collectRewrittenStmts $ do
+      mapM_ rewriteStmt stmts
+  blockState . pBlockStmts .= Seq.fromList stmts'
+  where withConstraints :: (forall a . (RegisterInfo (ArchReg ppc) => a) -> a)
+        withConstraints x = x
+
+        -- wrapArchFn ng archFn = do
+        --   name <- NC.freshNonce ng
+        --   return $ AssignedValue (Assignment name (EvalArchFn archFn (typeRepr archFn)))
 
 -- eval :: Expr ppc s tp -> PPCGenerator ppc s (Value PPC s tp)
 -- eval (ValueExpr v) = return v

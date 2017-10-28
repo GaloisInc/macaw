@@ -38,6 +38,9 @@ import qualified Data.Parameterized.Nonce as NC
 import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.PPCReg
 
+import Debug.Trace (trace)
+import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
 -- Returns the instruction and number of bytes consumed /or/ an error.
@@ -70,7 +73,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
 disassembleBlock :: forall ppc s
-                  . (PPCWidth ppc)
+                  . (PPCWidth ppc, ArchConstraints ppc)
                  => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc s
@@ -102,6 +105,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
             transformer
+            simplifyCurrentBlock
             genResult
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
@@ -110,7 +114,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                 Just preBlock
                   | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
                   , v <- preBlock ^. (pBlockState . curIP)
-                  , v == nextIPVal
+                  , trace ("v = " ++ show (pretty v) ++ "\nnextIPVal = " ++ show nextIPVal ++ "\n") $ v == nextIPVal
                   , nextIPOffset < maxOffset
                   , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
                       let gs2 = GenState { assignIdGen = assignIdGen gs
@@ -121,7 +125,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
-tryDisassembleBlock :: (PPCWidth ppc)
+tryDisassembleBlock :: (PPCWidth ppc, ArchConstraints ppc)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
@@ -142,7 +146,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (PPCWidth ppc)
+disassembleFn :: (PPCWidth ppc, ArchConstraints ppc)
               => proxy ppc
               -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
               -- ^ A function to look up the semantics for an instruction.  The
