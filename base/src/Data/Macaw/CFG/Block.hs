@@ -46,7 +46,6 @@ data TermStmt arch ids
     -- statement could return to (if any)
   | ArchTermStmt !(ArchTermStmt arch ids)
                  !(RegState (ArchReg arch) (Value arch ids))
-                 !(Maybe (ArchSegmentOff arch))
 
 instance ArchConstraints arch
       => Pretty (TermStmt arch ids) where
@@ -58,7 +57,7 @@ instance ArchConstraints arch
   pretty (TranslateError s msg) =
     text "ERROR: " <+> text (Text.unpack msg) <$$>
     indent 2 (pretty s)
-  pretty (ArchTermStmt ts regs _) =
+  pretty (ArchTermStmt ts regs) =
     prettyF ts <$$> indent 2 (pretty regs)
 
 ------------------------------------------------------------------------

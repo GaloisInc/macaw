@@ -1073,16 +1073,12 @@ instance S.Semantics (X86Generator st_s ids) where
       -- Get last block.
       let p_b = s0 ^. blockState
       -- Create finished block.
-      let mem = genMemory s0
-      case s0^.curX86State^.curIP of
-        RelocatableValue _ addr | Just segOff <- asSegmentOff mem addr -> do
-          let fin_b = finishBlock' p_b $ \s -> ArchTermStmt X86Syscall s (Just segOff)
-          seq fin_b $ do
-          -- Return early
-          return $ GenResult { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
-                             , resState = Nothing
-                             }
-        _ -> error $ "Sycall could not interpret next IP"
+      let fin_b = finishBlock' p_b $ ArchTermStmt X86Syscall
+      seq fin_b $ do
+      -- Return early
+      return $ GenResult { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
+                         , resState = Nothing
+                         }
 
   primitive S.CPUID = do
     rax_val <- getReg RAX
@@ -1484,17 +1480,21 @@ x86DemandContext =
                 }
 
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
+                        -> Memory 64
                         -> AbsBlockState X86Reg
+                        -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
-                        -> MemSegmentOff 64
-                        -> AbsBlockState X86Reg
-postX86TermStmtAbsState preservePred s tstmt nextIP =
+                        -> Maybe (MemSegmentOff 64, AbsBlockState X86Reg)
+postX86TermStmtAbsState preservePred mem s regs tstmt =
   case tstmt of
     X86Syscall ->
-      let params = CallParams { postCallStackDelta = 0
-                              , preserveReg = preservePred
-                              }
-       in absEvalCall params s nextIP
+      case regs^.curIP of
+        RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
+          let params = CallParams { postCallStackDelta = 0
+                                  , preserveReg = preservePred
+                                  }
+          Just (nextIP, absEvalCall params s nextIP)
+        _ -> error $ "Sycall could not interpret next IP"
 
 
 -- | Common architecture information for X86_64

@@ -195,7 +195,7 @@ addTermDemands t = do
       addValueDemands v
     TranslateError regs _ -> do
       traverseF_ addValueDemands regs
-    ArchTermStmt _ regs _ -> do
+    ArchTermStmt _ regs -> do
       traverseF_ addValueDemands regs
 
 -- | Add any assignments needed to evaluate statements with side
@@ -747,18 +747,18 @@ parseBlock ctx b regs = do
                             , stmtsTerm = ParsedTranslateError msg
                             , stmtsAbsState = absProcState'
                             }
-    ArchTermStmt ts s' maddr -> do
+    ArchTermStmt ts s' -> do
       mapM_ (recordWriteStmt arch_info mem absProcState') (blockStmts b)
       let abst = finalAbsBlockState absProcState' s'
       -- Compute possible next IPS.
-      case maddr of
-        Just addr -> do
-          let post = postArchTermStmtAbsState arch_info abst ts addr
+      let r = postArchTermStmtAbsState arch_info mem abst s' ts
+      case r of
+        Just (addr,post) ->
           intraJumpTargets %= ((addr, post):)
         Nothing -> pure ()
       pure $! StatementList { stmtsIdent = idx
                             , stmtsNonterm = blockStmts b
-                            , stmtsTerm  = ParsedArchTermStmt ts s' maddr
+                            , stmtsTerm  = ParsedArchTermStmt ts s' (fst <$> r)
                             , stmtsAbsState = absProcState'
                             }
 

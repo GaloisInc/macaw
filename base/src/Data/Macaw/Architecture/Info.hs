@@ -128,15 +128,20 @@ data ArchitectureInfo arch
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
      , postArchTermStmtAbsState :: !(forall ids
+                                     .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
-                                     .  AbsBlockState (ArchReg arch)
+                                     -> AbsBlockState (ArchReg arch)
+                                        -- The registers before executing terminal statement
+                                     -> (RegState (ArchReg arch) (Value arch ids))
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids
-                                        -- The IP we are going to next.
-                                     -> ArchSegmentOff arch
-                                     -> AbsBlockState (ArchReg arch))
-       -- ^ Returns the abstract state after executing an architecture-specific
-       -- terminal statement.
+                                     -> Maybe (ArchSegmentOff arch, AbsBlockState (ArchReg arch)))
+       -- ^ This takes an abstract state from before executing an abs state, and an
+       -- architecture-specific terminal statement, and returns the next address within
+       -- the procedure that the statement jumps to along with the updated abstract state.
+       --
+       -- Note that per their documentation, architecture specific statements may return to at
+       -- most one location within a function.
      }
 
 -- | Apply optimizations to a terminal statement.
@@ -157,10 +162,9 @@ rewriteTermStmt info tstmt = do
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
-    ArchTermStmt ts regs addr ->
+    ArchTermStmt ts regs ->
       ArchTermStmt <$> rewriteArchTermStmt info ts
                    <*> traverseF rewriteValue regs
-                   <*> pure addr
 
 -- | Apply optimizations to code in the block
 rewriteBlock :: ArchitectureInfo arch
