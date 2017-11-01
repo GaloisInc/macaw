@@ -11,6 +11,7 @@ import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
 import qualified Data.Map as M
+import Data.Maybe (fromJust)
 import qualified Data.Set as S
 import Data.Typeable ( Typeable )
 import Data.Word ( Word64 )
@@ -57,7 +58,7 @@ mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
-    let Just entryPoint = MM.absoluteAddrSegment mem (fromIntegral (E.elfEntry elf))
+    let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry elf))))
         di = MD.cfgFromAddrs RO.x86_64_linux_info mem MD.emptySymbolAddrMap [entryPoint] []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
@@ -66,8 +67,9 @@ testDiscovery expectedFilename elf =
         let expectedEntries = M.fromList [ (entry, S.fromList starts) | (entry, starts) <- funcs er ]
             ignoredBlocks = S.fromList (ignoreBlocks er)
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
-          let actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
-              actualBlockStarts = S.fromList [ fromIntegral (MM.addrValue (MD.blockAddr pbr))
+          let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
+              -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
+              actualBlockStarts = S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
                                              ]
           case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of

@@ -58,7 +58,7 @@ test-suite macaw-x86-tests
     filemanip,
     filepath,
     lens,
-    macaw,
+    macaw-base,
     parameterized-utils,
     macaw-x86,
     temporary,
