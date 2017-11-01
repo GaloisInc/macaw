@@ -106,7 +106,6 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
             let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  line))
             transformer
-            simplifyCurrentBlock
             genResult
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
@@ -115,7 +114,9 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                 Just preBlock
                   | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
                   , v <- preBlock ^. (pBlockState . curIP)
-                  , trace ("v = " ++ show (pretty v) ++ "\nnextIPVal = " ++ show nextIPVal ++ "\n") $ v == nextIPVal
+                  , trace ("raw ip = " ++ show (pretty v)) True
+                  , Just simplifiedIP <- simplifyValue v
+                  , trace ("v = " ++ show (pretty simplifiedIP) ++ "\nnextIPVal = " ++ show nextIPVal ++ "\n") $ simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
                   , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
                       let gs2 = GenState { assignIdGen = assignIdGen gs
@@ -124,7 +125,25 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                                          , genAddr = nextIPSegAddr
                                          }
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
+
+
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
+
+-- | A very restricted value simplifier
+--
+-- The full rewriter is too heavyweight here, as it produces new bound values
+-- instead of fully reducing the calculation we want to a literal.
+simplifyValue :: (PPCWidth ppc, PPCArchConstraints ppc s) => Value ppc s (BVType (ArchAddrWidth ppc)) -> Maybe (Value ppc s (BVType (ArchAddrWidth ppc)))
+simplifyValue v =
+  case v of
+    BVValue {} -> Just v
+    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (BVValue _ v1) (BVValue _ v2)) }) ->
+      Just (BVValue rep (v1 + v2))
+    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (BVValue _ v1) (RelocatableValue _ addr)) }) ->
+      Just (RelocatableValue rep (MM.incAddr v1 addr))
+    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (RelocatableValue _ addr) (BVValue _ v1)) }) ->
+      Just (RelocatableValue rep (MM.incAddr v1 addr))
+    _ -> Nothing
 
 tryDisassembleBlock :: (PPCWidth ppc, PPCArchConstraints ppc s)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))

@@ -17,6 +17,7 @@ module Data.Macaw.PPC.Arch (
   PPCPrimFn(..),
   rewritePrimFn,
   ppcPrimFnHasSideEffects,
+  PPCArchStmt,
   PPCArch
   ) where
 

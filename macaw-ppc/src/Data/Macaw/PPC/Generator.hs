@@ -59,7 +59,7 @@ import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Arch (rewritePrimFn, PPCPrimFn, PPCArch)
+import           Data.Macaw.PPC.Arch (rewritePrimFn, PPCPrimFn, PPCArch, PPCArchStmt)
 
 import Debug.Trace (trace)
 
@@ -224,6 +224,7 @@ getRegValue r = do
 
 type PPCArchConstraints ppc s = ( ArchReg ppc ~ PPCReg ppc
                                 , ArchFn ppc ~ PPCPrimFn ppc
+                                , ArchStmt ppc ~ PPCArchStmt ppc
                                 , ArchWidth ppc
                                 , KnownNat (RegAddrWidth (PPCReg ppc))
                                 , Show (Block ppc s)
