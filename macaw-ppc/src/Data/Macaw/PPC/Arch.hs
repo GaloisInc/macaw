@@ -1,12 +1,13 @@
-{-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE ConstraintKinds       #-}
+{-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE DataKinds             #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE GADTs                 #-}
+{-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE TypeFamilies          #-}
 module Data.Macaw.PPC.Arch (
   PPCTermStmt(..),
   rewriteTermStmt,
@@ -40,6 +41,8 @@ data PPCTermStmt ids where
   PPCSyscall :: PPCTermStmt ids
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
   PPCTrap :: PPCTermStmt ids
+
+deriving instance Show (PPCTermStmt ids)
 
 type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt
 type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt
@@ -136,4 +139,8 @@ type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 valuesInPPCStmt :: PPCArchStmt ppc ids -> [Some (MC.Value ppc ids)]
 valuesInPPCStmt (PPCArchStmt s) = TF.foldMapF (\x -> [Some x]) s
 
-type PPCArch ppc = (PPCWidth ppc, MC.ArchStmt ppc ~ PPCArchStmt ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
+type PPCArch ppc = ( MC.ArchTermStmt ppc ~ PPCTermStmt
+                   , PPCWidth ppc
+                   , MC.ArchStmt ppc ~ PPCArchStmt ppc
+                   , MC.ArchFn ppc ~ PPCPrimFn ppc
+                   )

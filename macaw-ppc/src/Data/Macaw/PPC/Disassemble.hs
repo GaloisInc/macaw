@@ -23,6 +23,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
 import           Text.Printf ( printf )
+import           Debug.Trace
 
 import qualified Dismantle.PPC as D
 
@@ -73,7 +74,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
 disassembleBlock :: forall ppc s
-                  . (PPCWidth ppc, ArchConstraints ppc)
+                  . (PPCWidth ppc, PPCArchConstraints ppc s)
                  => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc s
@@ -125,7 +126,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
-tryDisassembleBlock :: (PPCWidth ppc, ArchConstraints ppc)
+tryDisassembleBlock :: (PPCWidth ppc, PPCArchConstraints ppc s)
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
@@ -136,7 +137,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
   (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
-  unless (nextIPOffset > startOffset) $ do
+  traceShow blocks $ unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
   return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
@@ -146,7 +147,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (PPCWidth ppc, ArchConstraints ppc)
+disassembleFn :: (PPCWidth ppc, PPCArchConstraints ppc s)
               => proxy ppc
               -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
               -- ^ A function to look up the semantics for an instruction.  The
@@ -167,7 +168,7 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
-    Right (blocks, bytes) -> return (blocks, bytes, Nothing)
+    Right (blocks, bytes) -> traceShow blocks $ return (blocks, bytes, Nothing)
 
 -- | Convert the contents of a 'PreBlock' (a block being constructed) into a
 -- full-fledged 'Block'

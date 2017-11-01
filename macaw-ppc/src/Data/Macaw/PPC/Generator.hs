@@ -1,5 +1,8 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
@@ -29,13 +32,17 @@ module Data.Macaw.PPC.Generator (
   pBlockStmts,
   pBlockState,
   frontierBlocks,
+  -- * Constraints
+  PPCArchConstraints,
   -- * Errors
   GeneratorError(..)
   ) where
 
 import           GHC.TypeLits
-
+import           Control.Monad (forM_)
+import           Debug.Trace
 import           Control.Lens
+import           Data.Parameterized.TraversableFC
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
@@ -52,6 +59,7 @@ import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.Arch (rewritePrimFn, PPCPrimFn, PPCArch)
 
 import Debug.Trace (trace)
 
@@ -77,6 +85,10 @@ data BlockSeq ppc s = BlockSeq
   , _frontierBlocks :: !(Seq.Seq (Block ppc s))
     -- ^ Blocks added to CFG
   }
+
+deriving instance Show (Block ppc s) => Show (BlockSeq ppc s)
+deriving instance (PPCWidth ppc, PPCArch ppc) => Show (Block ppc s)
+deriving instance (PPCWidth ppc, PPCArch ppc) => Show (TermStmt ppc s)
 
 -- | Control flow blocs generated so far.
 nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
@@ -210,27 +222,55 @@ getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
 
-simplifyCurrentBlock :: forall ppc s . ArchConstraints ppc => PPCGenerator ppc s ()
+type PPCArchConstraints ppc s = ( ArchReg ppc ~ PPCReg ppc
+                                , ArchFn ppc ~ PPCPrimFn ppc
+                                , ArchWidth ppc
+                                , KnownNat (RegAddrWidth (PPCReg ppc))
+                                , Show (Block ppc s)
+                                , Show (BlockSeq ppc s)
+                                , ArchConstraints ppc
+                                )
+
+simplifyCurrentBlock
+  :: forall ppc s . PPCArchConstraints ppc s => PPCGenerator ppc s ()
 simplifyCurrentBlock = do
   genState <- St.get
   let nonceGen = assignIdGen genState
       stmts = genState ^. blockState . pBlockStmts
       ctx = RewriteContext { rwctxNonceGen = nonceGen
-                           , rwctxArchFn = undefined -- wrapArchFn nonceGen
+                           , rwctxArchFn = rewritePrimFn
                            , rwctxArchStmt = appendRewrittenArchStmt
                            , rwctxConstraints = withConstraints
                            }
   (stmts', _) <- liftST $ runRewriter ctx $ do
     collectRewrittenStmts $ do
-      mapM_ rewriteStmt stmts
-  blockState . pBlockStmts .= Seq.fromList stmts'
+      forM_ stmts $ \stmt -> do
+        traceShow stmt $ rewriteStmt stmt
+  traceShow stmts' $ blockState . pBlockStmts .= Seq.fromList stmts'
   where withConstraints :: (forall a . (RegisterInfo (ArchReg ppc) => a) -> a)
         withConstraints x = x
-
-        -- wrapArchFn ng archFn = do
-        --   name <- NC.freshNonce ng
-        --   return $ AssignedValue (Assignment name (EvalArchFn archFn (typeRepr archFn)))
 
 -- eval :: Expr ppc s tp -> PPCGenerator ppc s (Value PPC s tp)
 -- eval (ValueExpr v) = return v
 -- eval (AppExpr a) = evalAp =<< traverseFC eval a
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

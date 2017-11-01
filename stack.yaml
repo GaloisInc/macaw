@@ -16,6 +16,7 @@ packages:
 - submodules/elf-edit
 extra-deps:
 - IntervalMap-0.5.2.0
+- Cabal-2.0.0.2
 - QuickCheck-2.10.0.1
 - StateVar-1.1.0.4
 - adjunctions-4.3
