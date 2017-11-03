@@ -157,28 +157,3 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
                               , KnownNat (MC.RegAddrWidth (PPCReg ppc))
                               , MC.ArchConstraints ppc
                               )
-
--- type PPCWidth ppc = (ArchWidth ppc,
---                      MC.ArchReg ppc ~ PPCReg ppc,
---                      MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
---                      1 <= MC.RegAddrWidth (PPCReg ppc),
---                      KnownNat (MC.RegAddrWidth (PPCReg ppc)))
-
--- instance ( PPCWidth ppc ) => MC.RegisterInfo (PPCReg ppc) where
---   archRegs = ppcRegs
---   sp_reg = PPC_GP (D.GPR 1)
---   ip_reg = PPC_IP
---   syscall_num_reg = PPC_GP (D.GPR 0)
---   syscallArgumentRegs = [ PPC_GP (D.GPR rnum) | rnum <- [3..10] ]
-
--- instance ( ArchWidth ppc
---          , MC.ArchReg ppc ~ PPCReg ppc
---          , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
---          , 1 <= MC.RegAddrWidth (PPCReg ppc)
---          , KnownNat (MC.RegAddrWidth (PPCReg ppc))
---          ) => MC.RegisterInfo (PPCReg ppc) where
---   archRegs = ppcRegs
---   sp_reg = PPC_GP (D.GPR 1)
---   ip_reg = PPC_IP
---   syscall_num_reg = PPC_GP (D.GPR 0)
---   syscallArgumentRegs = [ PPC_GP (D.GPR rnum) | rnum <- [3..10] ]

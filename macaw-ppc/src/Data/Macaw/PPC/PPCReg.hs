@@ -113,7 +113,6 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_CR -> BVTypeRepr n32
       PPC_XER -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
 
--- type PPCWidth ppc = ()
 
 instance ( ArchWidth ppc
          , MC.ArchReg ppc ~ PPCReg ppc
