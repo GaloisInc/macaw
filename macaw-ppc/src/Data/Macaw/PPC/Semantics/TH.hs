@@ -434,6 +434,14 @@ evalNonceAppTH bvi nonceApp =
                     _ -> fail ("Unsupported nonce app type")
                 _ -> fail "Unsupported operand to ppc.is_r0"
             _ -> fail ("Invalid argument list for ppc.is_r0: " ++ showF args)
+        "test_bit_dynamic" ->
+          case FC.toListFC Some args of
+            [Some bitNum, Some loc] -> do
+              [| do bitNumExp <- $(addEltTH bvi bitNum)
+                    locExp <- $(addEltTH bvi loc)
+                    addExpr (AppExpr (M.BVTestBit bitNumExp locExp))
+               |]
+            _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
         _ | Just nBytes <- readMemBytes fnName -> do
             case FC.toListFC Some args of
               [_, Some addrElt] -> do
