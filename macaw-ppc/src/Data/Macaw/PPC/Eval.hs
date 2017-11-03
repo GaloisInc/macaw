@@ -31,7 +31,7 @@ preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-postPPCTermStmtAbsState :: (PPCArch ppc)
+postPPCTermStmtAbsState :: (PPCArchConstraints ppc)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> AbsBlockState (PPCReg ppc)
                         -> PPCTermStmt ids
@@ -58,7 +58,7 @@ postPPCTermStmtAbsState preservePred s0 stmt nextIP =
 --
 -- One value that is definitely set is the link register, which holds the
 -- abstract return value.
-mkInitialAbsState :: (PPCWidth ppc)
+mkInitialAbsState :: (PPCArchConstraints ppc)
                   => proxy ppc
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))
                   -> ArchSegmentOff ppc
@@ -67,7 +67,7 @@ mkInitialAbsState _ _mem startAddr =
   MA.top & MA.setAbsIP startAddr
          & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
 
-absEvalArchFn :: (PPCArch ppc)
+absEvalArchFn :: (PPCArchConstraints ppc)
               => proxy ppc
               -> AbsProcessorState (ArchReg ppc) ids
               -> ArchFn ppc (Value ppc ids) tp
@@ -87,7 +87,7 @@ absEvalArchStmt _ s _ = s
 -- | There should be no difference in stack height before and after a call, as
 -- the callee pushes the return address if required.  Return values are also
 -- passed in registers.
-postCallAbsState :: (PPCWidth ppc)
+postCallAbsState :: (PPCArchConstraints ppc)
                  => proxy ppc
                  -> AbsBlockState (ArchReg ppc)
                  -> ArchSegmentOff ppc

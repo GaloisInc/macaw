@@ -42,7 +42,6 @@ import           GHC.TypeLits
 import           Control.Monad (forM_)
 import           Debug.Trace
 import           Control.Lens
-import           Data.Parameterized.TraversableFC
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
@@ -59,9 +58,11 @@ import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Arch (rewritePrimFn, PPCPrimFn, PPCArch, PPCArchStmt)
-
-import Debug.Trace (trace)
+import           Data.Macaw.PPC.Arch ( rewritePrimFn
+                                     , PPCPrimFn
+--                                     , PPCArch
+                                     , PPCArchConstraints
+                                     , PPCArchStmt)
 
 -- GenResult
 
@@ -80,19 +81,19 @@ data Expr ppc s tp where
 ------------------------------------------------------------------------
 -- BlockSeq
 data BlockSeq ppc s = BlockSeq
-  { _nextBlockID :: !Word64
+  { nextBlockID :: !Word64
     -- ^ index of next block
   , _frontierBlocks :: !(Seq.Seq (Block ppc s))
     -- ^ Blocks added to CFG
   }
 
 deriving instance Show (Block ppc s) => Show (BlockSeq ppc s)
-deriving instance (PPCWidth ppc, PPCArch ppc) => Show (Block ppc s)
-deriving instance (PPCWidth ppc, PPCArch ppc) => Show (TermStmt ppc s)
+deriving instance (PPCArchConstraints ppc) => Show (Block ppc s)
+deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc s)
 
 -- | Control flow blocs generated so far.
-nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
-nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
+-- nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
+-- nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
 -- which we need to analyze to compute new potential branch targets.
@@ -132,12 +133,16 @@ initGenState :: NC.NonceGenerator (ST s) s
              -> GenState ppc s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
-           , blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
+           , blockSeq = BlockSeq { nextBlockID = 0, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            }
 
-initRegState :: (KnownNat (RegAddrWidth (PPCReg ppc)), ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc), MM.MemWidth (RegAddrWidth (PPCReg ppc)), ArchWidth ppc)
+initRegState :: ( KnownNat (RegAddrWidth (PPCReg ppc))
+                , ArchReg ppc ~ PPCReg ppc
+                , 1 <= RegAddrWidth (PPCReg ppc)
+                , MM.MemWidth (RegAddrWidth (PPCReg ppc))
+                , ArchWidth ppc)
              => ArchSegmentOff ppc
              -> RegState (PPCReg ppc) (Value ppc s)
 initRegState startIP = mkRegState Initial
@@ -222,18 +227,8 @@ getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
 
-type PPCArchConstraints ppc s = ( ArchReg ppc ~ PPCReg ppc
-                                , ArchFn ppc ~ PPCPrimFn ppc
-                                , ArchStmt ppc ~ PPCArchStmt ppc
-                                , ArchWidth ppc
-                                , KnownNat (RegAddrWidth (PPCReg ppc))
-                                , Show (Block ppc s)
-                                , Show (BlockSeq ppc s)
-                                , ArchConstraints ppc
-                                )
-
 simplifyCurrentBlock
-  :: forall ppc s . PPCArchConstraints ppc s => PPCGenerator ppc s ()
+  :: forall ppc s . PPCArchConstraints ppc => PPCGenerator ppc s ()
 simplifyCurrentBlock = do
   genState <- St.get
   let nonceGen = assignIdGen genState
@@ -254,24 +249,3 @@ simplifyCurrentBlock = do
 -- eval :: Expr ppc s tp -> PPCGenerator ppc s (Value PPC s tp)
 -- eval (ValueExpr v) = return v
 -- eval (AppExpr a) = evalAp =<< traverseFC eval a
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

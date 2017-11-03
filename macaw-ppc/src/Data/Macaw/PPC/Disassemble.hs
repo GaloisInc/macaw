@@ -74,7 +74,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
 disassembleBlock :: forall ppc s
-                  . (PPCWidth ppc, PPCArchConstraints ppc s)
+                  . PPCArchConstraints ppc
                  => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc s
@@ -103,8 +103,8 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'PPCGenerator'.
           egs1 <- liftST $ evalGenerator gs $ do
-            let line = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
-            addStmt (Comment (T.pack  line))
+            let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
+            addStmt (Comment (T.pack  lineStr))
             transformer
             genResult
           case egs1 of
@@ -133,7 +133,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 --
 -- The full rewriter is too heavyweight here, as it produces new bound values
 -- instead of fully reducing the calculation we want to a literal.
-simplifyValue :: (PPCWidth ppc, PPCArchConstraints ppc s) => Value ppc s (BVType (ArchAddrWidth ppc)) -> Maybe (Value ppc s (BVType (ArchAddrWidth ppc)))
+simplifyValue :: PPCArchConstraints ppc => Value ppc s (BVType (ArchAddrWidth ppc)) -> Maybe (Value ppc s (BVType (ArchAddrWidth ppc)))
 simplifyValue v =
   case v of
     BVValue {} -> Just v
@@ -145,7 +145,9 @@ simplifyValue v =
       Just (RelocatableValue rep (MM.incAddr v1 addr))
     _ -> Nothing
 
-tryDisassembleBlock :: (PPCWidth ppc, PPCArchConstraints ppc s)
+tryDisassembleBlock :: ( PPCArchConstraints ppc
+                       , Show (Block ppc s)
+                       , Show (BlockSeq ppc s))
                     => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) s
@@ -166,7 +168,9 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (PPCWidth ppc, PPCArchConstraints ppc s)
+disassembleFn :: ( PPCArchConstraints ppc
+                 , Show (Block ppc s)
+                 , Show (BlockSeq ppc s))
               => proxy ppc
               -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
               -- ^ A function to look up the semantics for an instruction.  The

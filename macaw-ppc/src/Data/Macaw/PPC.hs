@@ -39,16 +39,15 @@ import Data.Macaw.PPC.Arch ( rewriteTermStmt,
                              rewritePrimFn,
                              valuesInPPCStmt,
                              ppcPrimFnHasSideEffects,
-                             PPCArch
+                             PPCArchConstraints
                            )
-import Data.Macaw.PPC.PPCReg ( PPCWidth )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
 addValueListDemands :: [Some (Value ppc ids)] -> MDS.DemandComp ppc ids ()
 addValueListDemands = mapM_ (viewSome MDS.addValueDemands)
 
-archDemandContext :: (PPCArch ppc) => proxy ppc -> MDS.DemandContext ppc ids
+archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext _ =
   MDS.DemandContext { MDS.addArchStmtDemands = addValueListDemands . valuesInPPCStmt
                     , MDS.addArchFnDemands = addValueListDemands . FC.foldMapFC (\v -> [ Some v ])
@@ -57,7 +56,7 @@ archDemandContext _ =
 
 -- | NOTE: There isn't necessarily one answer for this.  This will need to turn
 -- into a function.  With PIC jump tables, it can be smaller than the native size.
-jumpTableEntrySize :: (PPCWidth ppc) => proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
+jumpTableEntrySize :: (PPCArchConstraints ppc) => proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
 jumpTableEntrySize _ = 4
 
 ppc64_linux_info :: MI.ArchitectureInfo PPC64.PPC

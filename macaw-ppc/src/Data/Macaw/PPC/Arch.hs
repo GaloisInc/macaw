@@ -8,6 +8,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE TypeFamilies          #-}
+{-# LANGUAGE TypeOperators         #-}
 module Data.Macaw.PPC.Arch (
   PPCTermStmt(..),
   rewriteTermStmt,
@@ -18,8 +19,11 @@ module Data.Macaw.PPC.Arch (
   rewritePrimFn,
   ppcPrimFnHasSideEffects,
   PPCArchStmt,
-  PPCArch
+--  PPCArch,
+  PPCArchConstraints
   ) where
+
+import GHC.TypeLits
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Parameterized.TraversableFC as FC
@@ -27,8 +31,11 @@ import qualified Data.Parameterized.TraversableF as TF
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn )
+import           Data.Macaw.CFG.Block ( Block )
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
+import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -106,7 +113,7 @@ ppcPrimFnHasSideEffects pf =
   case pf of
     IDiv {} -> False
 
-rewritePrimFn :: (PPCWidth ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
+rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
               -> Rewriter ppc src tgt (MC.Value ppc tgt tp)
 rewritePrimFn f =
@@ -140,8 +147,38 @@ type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 valuesInPPCStmt :: PPCArchStmt ppc ids -> [Some (MC.Value ppc ids)]
 valuesInPPCStmt (PPCArchStmt s) = TF.foldMapF (\x -> [Some x]) s
 
-type PPCArch ppc = ( MC.ArchTermStmt ppc ~ PPCTermStmt
-                   , PPCWidth ppc
-                   , MC.ArchStmt ppc ~ PPCArchStmt ppc
-                   , MC.ArchFn ppc ~ PPCPrimFn ppc
-                   )
+type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
+                              , MC.ArchFn ppc ~ PPCPrimFn ppc
+                              , MC.ArchStmt ppc ~ PPCArchStmt ppc
+                              , MC.ArchTermStmt ppc ~ PPCTermStmt
+                              , ArchWidth ppc
+                              , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
+                              , 1 <= MC.RegAddrWidth (PPCReg ppc)
+                              , KnownNat (MC.RegAddrWidth (PPCReg ppc))
+                              , MC.ArchConstraints ppc
+                              )
+
+-- type PPCWidth ppc = (ArchWidth ppc,
+--                      MC.ArchReg ppc ~ PPCReg ppc,
+--                      MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
+--                      1 <= MC.RegAddrWidth (PPCReg ppc),
+--                      KnownNat (MC.RegAddrWidth (PPCReg ppc)))
+
+-- instance ( PPCWidth ppc ) => MC.RegisterInfo (PPCReg ppc) where
+--   archRegs = ppcRegs
+--   sp_reg = PPC_GP (D.GPR 1)
+--   ip_reg = PPC_IP
+--   syscall_num_reg = PPC_GP (D.GPR 0)
+--   syscallArgumentRegs = [ PPC_GP (D.GPR rnum) | rnum <- [3..10] ]
+
+-- instance ( ArchWidth ppc
+--          , MC.ArchReg ppc ~ PPCReg ppc
+--          , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
+--          , 1 <= MC.RegAddrWidth (PPCReg ppc)
+--          , KnownNat (MC.RegAddrWidth (PPCReg ppc))
+--          ) => MC.RegisterInfo (PPCReg ppc) where
+--   archRegs = ppcRegs
+--   sp_reg = PPC_GP (D.GPR 1)
+--   ip_reg = PPC_IP
+--   syscall_num_reg = PPC_GP (D.GPR 0)
+--   syscallArgumentRegs = [ PPC_GP (D.GPR rnum) | rnum <- [3..10] ]

@@ -24,7 +24,6 @@ import qualified Data.Word.Indexed as W
 import qualified Data.Int.Indexed as I
 import qualified Dismantle.PPC as D
 
-import qualified SemMC.Architecture.PPC.Location as L
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 import qualified Data.Macaw.PPC.PPCReg as R

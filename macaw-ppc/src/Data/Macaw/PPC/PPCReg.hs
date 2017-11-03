@@ -114,13 +114,14 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_CR -> BVTypeRepr n32
       PPC_XER -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
 
-type PPCWidth ppc = (ArchWidth ppc,
-                     MC.ArchReg ppc ~ PPCReg ppc,
-                     MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
-                     1 <= MC.RegAddrWidth (PPCReg ppc),
-                     KnownNat (MC.RegAddrWidth (PPCReg ppc)))
+type PPCWidth ppc = ()
 
-instance (PPCWidth ppc) => MC.RegisterInfo (PPCReg ppc) where
+instance ( ArchWidth ppc
+         , MC.ArchReg ppc ~ PPCReg ppc
+         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
+         , 1 <= MC.RegAddrWidth (PPCReg ppc)
+         , KnownNat (MC.RegAddrWidth (PPCReg ppc)))
+=> MC.RegisterInfo (PPCReg ppc) where
   archRegs = ppcRegs
   sp_reg = PPC_GP (D.GPR 1)
   ip_reg = PPC_IP

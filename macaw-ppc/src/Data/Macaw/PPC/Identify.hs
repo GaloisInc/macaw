@@ -11,6 +11,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 
 import           Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.Arch
 
 import Debug.Trace (trace)
 import Data.List (intercalate)
@@ -25,7 +26,7 @@ identifyCall _ mem stmts rs = trace ("identifyCall:\n\n" ++
                                      intercalate "\n" (map show stmts))
                               Nothing
 
-identifyReturn :: (PPCWidth ppc)
+identifyReturn :: (PPCArchConstraints ppc)
                => proxy ppc
                -> [MC.Stmt ppc ids]
                -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
