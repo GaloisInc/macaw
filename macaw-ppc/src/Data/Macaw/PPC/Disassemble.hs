@@ -10,7 +10,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
 
-import           Control.Lens ( (&), (^.), (%~) )
+import           Control.Lens ( (&), (^.), (%~), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -109,6 +109,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   case readInstruction mem curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
+      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
           nextIP = MM.relativeAddr seg nextIPOffset
           nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @ppc)) nextIP
@@ -141,9 +142,10 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                   , trace ("v = " ++ show (pretty simplifiedIP) ++ "\nnextIPVal = " ++ show nextIPVal ++ "\n") $ simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
                   , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
+                      let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , blockSeq = resBlockSeq gs1
-                                         , _blockState = preBlock
+                                         , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          }
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
