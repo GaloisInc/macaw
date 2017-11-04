@@ -1,22 +1,22 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Generator (
   GenResult(..),
   GenState(..),
   initGenState,
   initRegState,
   PPCGenerator,
+  GenCont,
   runGenerator,
-  execGenerator,
-  evalGenerator,
   genResult,
   Expr(..),
   BlockSeq(..),
@@ -26,6 +26,8 @@ module Data.Macaw.PPC.Generator (
   getReg,
   getRegValue,
   simplifyCurrentBlock,
+  finishBlock,
+  finishBlock',
   -- * Lenses
   blockState,
   curPPCState,
@@ -42,10 +44,13 @@ import           GHC.TypeLits
 import           Control.Monad (forM_)
 import           Debug.Trace
 import           Control.Lens
+import qualified Control.Monad.Cont as Ct
 import qualified Control.Monad.Except as ET
+import qualified Control.Monad.Reader as Rd
 import           Control.Monad.ST ( ST )
-import           Control.Monad.Trans ( lift )
 import qualified Control.Monad.State.Strict as St
+import           Control.Monad.Trans ( lift )
+import qualified Data.Foldable as F
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
 
@@ -170,27 +175,56 @@ curPPCState = blockState . pBlockState
 -- PPCGenerator
 
 data GeneratorError = InvalidEncoding
+                    | GeneratorMessage String
   deriving (Show)
 
-newtype PPCGenerator ppc s a = PPCGenerator { runGen :: St.StateT (GenState ppc s) (ET.ExceptT GeneratorError (ST s)) a }
-  deriving (Monad,
-            Functor,
-            Applicative,
-            ET.MonadError GeneratorError,
-            St.MonadState (GenState ppc s))
+newtype PPCGenerator ppc s a =
+  PPCGenerator { runG :: Ct.ContT (GenResult ppc s)
+                                  (Rd.ReaderT (GenState ppc s)
+                                              (ET.ExceptT GeneratorError (ST s))) a }
+                             deriving (Applicative,
+                                       Functor,
+                                       Rd.MonadReader (GenState ppc s),
+                                       Ct.MonadCont)
 
-runGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (Either GeneratorError (a, GenState ppc s))
-runGenerator s0 act = ET.runExceptT (St.runStateT (runGen act) s0)
+instance Monad (PPCGenerator ppc s) where
+  return v = PPCGenerator (return v)
+  PPCGenerator m >>= h = PPCGenerator (m >>= \v -> runG (h v))
+  PPCGenerator m >> PPCGenerator n = PPCGenerator (m >> n)
+  fail msg = PPCGenerator (Ct.ContT (\_ -> ET.throwError (GeneratorMessage msg)))
 
-execGenerator :: GenState ppc s -> PPCGenerator ppc s () -> ST s (Either GeneratorError (GenState ppc s))
-execGenerator s0 act = ET.runExceptT (St.execStateT (runGen act) s0)
+instance St.MonadState (GenState ppc s) (PPCGenerator ppc s) where
+  get = PPCGenerator Rd.ask
+  put nextState = PPCGenerator $ Ct.ContT $ \c -> Rd.ReaderT $ \_s ->
+    Rd.runReaderT (c ()) nextState
 
-evalGenerator :: GenState ppc s -> PPCGenerator ppc s a -> ST s (Either GeneratorError a)
-evalGenerator s0 act = ET.runExceptT (St.evalStateT (runGen act) s0)
+instance ET.MonadError GeneratorError (PPCGenerator ppc s) where
+  throwError e = PPCGenerator (Ct.ContT (\_ -> ET.throwError e))
+  -- catchError a hdlr = do
+  --   r <- liftST $ ET.runExceptT (unDisM a)
+  --   case r of
+  --     Left l -> do
+  --       r' <- liftST $ ET.runExceptT (unDisM (hdlr l))
+  --       case r' of
+  --         Left e -> DisM (ET.throwError e)
+  --         Right res -> return res
+  --     Right res -> return res
 
-genResult :: PPCGenerator ppc s (GenResult ppc s)
-genResult = do
-  s <- St.get
+type GenCont ppc s a = a -> GenState ppc s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc s)
+
+runGenerator :: GenCont ppc s a
+             -> GenState ppc s
+             -> PPCGenerator ppc s a
+             -> ST s (Either GeneratorError (GenResult ppc s))
+runGenerator k st (PPCGenerator m) = ET.runExceptT (Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st)
+
+shiftGen :: (GenCont ppc s a -> GenState ppc s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc s))
+         -> PPCGenerator ppc s a
+shiftGen f =
+  PPCGenerator $ Ct.ContT $ \k -> Rd.ReaderT $ \s -> f (Rd.runReaderT . k) s
+
+genResult :: (Monad m) => a -> GenState ppc s -> m (GenResult ppc s)
+genResult _ s = do
   return GenResult { resBlockSeq = blockSeq s
                    , resState = Just (s ^. blockState)
                    }
@@ -205,7 +239,7 @@ newAssignId = do
   return (AssignId n)
 
 liftST :: ST s a -> PPCGenerator ppc s a
-liftST = PPCGenerator . lift . lift
+liftST = PPCGenerator . lift . lift . lift
 
 addAssignment :: ArchConstraints ppc
               => AssignRhs ppc s tp
@@ -226,6 +260,35 @@ getRegValue :: PPCReg ppc tp -> PPCGenerator ppc s (Value ppc s tp)
 getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
+
+-- | Convert the contents of a 'PreBlock' (a block being constructed) into a
+-- full-fledged 'Block'
+--
+-- The @term@ function is used to create the terminator statement of the block.
+finishBlock' :: PreBlock ppc s
+             -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+             -> Block ppc s
+finishBlock' preBlock term =
+  Block { blockLabel = pBlockIndex preBlock
+        , blockStmts = F.toList (preBlock ^. pBlockStmts)
+        , blockTerm = term (preBlock ^. pBlockState)
+        }
+
+-- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
+-- new block to the block frontier.
+finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+            -> GenResult ppc s
+            -> BlockSeq ppc s
+finishBlock term st =
+  case resState st of
+    Nothing -> resBlockSeq st
+    Just preBlock ->
+      let b = finishBlock' preBlock term
+      in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
+
+
+-- terminateBlocks :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+--                 ->
 
 simplifyCurrentBlock
   :: forall ppc s . PPCArchConstraints ppc => PPCGenerator ppc s ()

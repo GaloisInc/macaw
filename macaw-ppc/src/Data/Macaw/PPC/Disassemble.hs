@@ -125,11 +125,10 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'PPCGenerator'.
-          egs1 <- liftST $ evalGenerator gs $ do
+          egs1 <- liftST $ runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
             transformer
-            genResult
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
@@ -277,31 +276,6 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> traceShow blocks $ return (blocks, bytes, Nothing)
-
--- | Convert the contents of a 'PreBlock' (a block being constructed) into a
--- full-fledged 'Block'
---
--- The @term@ function is used to create the terminator statement of the block.
-finishBlock' :: PreBlock ppc s
-             -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
-             -> Block ppc s
-finishBlock' preBlock term =
-  Block { blockLabel = pBlockIndex preBlock
-        , blockStmts = F.toList (preBlock ^. pBlockStmts)
-        , blockTerm = term (preBlock ^. pBlockState)
-        }
-
--- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
--- new block to the block frontier.
-finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
-            -> GenResult ppc s
-            -> BlockSeq ppc s
-finishBlock term st =
-  case resState st of
-    Nothing -> resBlockSeq st
-    Just preBlock ->
-      let b = finishBlock' preBlock term
-      in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
 
 type LocatedError ppc s = ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
 -- | This is a monad for error handling during disassembly
