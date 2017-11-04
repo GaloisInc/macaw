@@ -15,6 +15,7 @@ import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
+import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
@@ -33,7 +34,9 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
-import           Data.Macaw.Types ( BVType )
+import           Data.Macaw.Types ( BVType, BoolType )
+import           Data.Parameterized.Classes
+import           Data.Parameterized.NatRepr ( NatRepr )
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
@@ -72,6 +75,25 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
+
+{-
+
+Steps for dealing with conditional branches:
+
+ - Extend the value simplifier to handle concat (needed for interpreting branch targets)
+ - Detect ~ite~ values assigned to the IP; capture the condition and both targets
+ - Cause a split (via ~ContT~) when we find an ~ite~ in the IP
+
+Note that the extension to the value simplifier is needed to interpret
+unconditional branch targets as well, as they also have a 2 bit right extension.
+It looks like the simplifier will also need to be able to understand OR, shifts,
+extensions, and maybe even other operations.
+
+It looks like macaw-x86 has a similar rewriter.  We should write a very general
+one and export it as part of the rewriter.  It doesn't need to be in the
+rewriter monad.
+
+-}
 
 disassembleBlock :: forall ppc s
                   . PPCArchConstraints ppc
@@ -133,17 +155,78 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 --
 -- The full rewriter is too heavyweight here, as it produces new bound values
 -- instead of fully reducing the calculation we want to a literal.
-simplifyValue :: PPCArchConstraints ppc => Value ppc s (BVType (ArchAddrWidth ppc)) -> Maybe (Value ppc s (BVType (ArchAddrWidth ppc)))
+simplifyValue :: (OrdF (ArchReg arch), MM.MemWidth (ArchAddrWidth arch))
+              => Value arch ids tp
+              -> Maybe (Value arch ids tp)
 simplifyValue v =
   case v of
     BVValue {} -> Just v
-    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (BVValue _ v1) (BVValue _ v2)) }) ->
-      Just (BVValue rep (v1 + v2))
-    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (BVValue _ v1) (RelocatableValue _ addr)) }) ->
-      Just (RelocatableValue rep (MM.incAddr v1 addr))
-    AssignedValue (Assignment { assignRhs = EvalApp (BVAdd rep (RelocatableValue _ addr) (BVValue _ v1)) }) ->
-      Just (RelocatableValue rep (MM.incAddr v1 addr))
+    AssignedValue (Assignment { assignRhs = EvalApp app }) ->
+      simplifyApp app
     _ -> Nothing
+
+simplifyApp :: forall arch ids tp
+             . (OrdF (ArchReg arch), MM.MemWidth (ArchAddrWidth arch))
+            => App (Value arch ids) tp
+            -> Maybe (Value arch ids tp)
+simplifyApp a =
+  case a of
+    AndApp (BoolValue True) r         -> Just r
+    AndApp l (BoolValue True)         -> Just l
+    AndApp f@(BoolValue False) _      -> Just f
+    AndApp _ f@(BoolValue False)      -> Just f
+    OrApp t@(BoolValue True) _        -> Just t
+    OrApp _ t@(BoolValue True)        -> Just t
+    OrApp (BoolValue False) r         -> Just r
+    OrApp l (BoolValue False)         -> Just l
+    Mux _ (BoolValue c) t e           -> if c then Just t else Just e
+    BVAnd _ l r
+      | Just Refl <- testEquality l r -> Just l
+    BVAnd sz l r                      -> binopbv (.&.) sz l r
+    BVOr  sz l r                      -> binopbv (.|.) sz l r
+    BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
+    BVAdd _ l (BVValue _ 0)           -> Just l
+    BVAdd _ (BVValue _ 0) r           -> Just r
+    BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->
+      simplifyApp (BVAdd rep r l)
+    BVAdd rep (RelocatableValue _ addr) (BVValue _ off) ->
+      Just (RelocatableValue rep (MM.incAddr off addr))
+    BVAdd sz l r                      -> binopbv (+) sz l r
+    BVMul _ l (BVValue _ 1)           -> Just l
+    BVMul _ (BVValue _ 1) r           -> Just r
+    BVMul rep _ (BVValue _ 0)         -> Just (BVValue rep 0)
+    BVMul rep (BVValue _ 0) _         -> Just (BVValue rep 0)
+    BVMul rep l r                     -> binopbv (*) rep l r
+    UExt (BVValue _ n) sz             -> Just (mkLit sz n)
+    Trunc (BVValue _ x) sz            -> Just (mkLit sz x)
+
+    Eq l r                            -> boolop (==) l r
+    BVComplement sz x                 -> unop complement sz x
+    _                                 -> Nothing
+  where
+    unop :: (tp ~ BVType n)
+         => (Integer -> Integer)
+         -> NatRepr n
+         -> Value arch ids tp
+         -> Maybe (Value arch ids tp)
+    unop f sz (BVValue _ l) = Just (mkLit sz (f l))
+    unop _ _ _ = Nothing
+
+    boolop :: (Integer -> Integer -> Bool)
+           -> Value arch ids utp
+           -> Value arch ids utp
+           -> Maybe (Value arch ids BoolType)
+    boolop f (BVValue _ l) (BVValue _ r) = Just (BoolValue (f l r))
+    boolop _ _ _ = Nothing
+
+    binopbv :: (tp ~ BVType n)
+            => (Integer -> Integer -> Integer)
+            -> NatRepr n
+            -> Value arch ids tp
+            -> Value arch ids tp
+            -> Maybe (Value arch ids tp)
+    binopbv f sz (BVValue _ l) (BVValue _ r) = Just (mkLit sz (f l r))
+    binopbv _ _ _ _ = Nothing
 
 tryDisassembleBlock :: ( PPCArchConstraints ppc
                        , Show (Block ppc s)
