@@ -19,8 +19,9 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import           Control.Lens ( (.=) )
-import           Data.Proxy
+import           Control.Lens ( (.=), (&), (^.), (%~) )
+import           Data.Proxy ( Proxy(..) )
+import qualified Data.Sequence as Seq
 import qualified Data.List as L
 import qualified Data.Text as T
 import           Language.Haskell.TH
@@ -54,6 +55,7 @@ import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Architecture.PPC.Eval as PE
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
+import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
@@ -62,6 +64,7 @@ import Data.Parameterized.NatRepr ( knownNat
                                   , natValue
                                   )
 
+import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.Operand
 import           Data.Macaw.PPC.PPCReg
@@ -99,8 +102,21 @@ instructionMatcher formulas = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  let cases = map (mkSemanticsCase ipVarName operandListVar) (Map.toList formulas)
-  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) cases)
+  let normalCases = map (mkSemanticsCase ipVarName operandListVar) (Map.toList formulas)
+  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) (normalCases ++ specialSemanticsCases))
+
+specialSemanticsCases :: [MatchQ]
+specialSemanticsCases =
+  [ match (conP 'D.SC []) (normalB syscallBody) []
+  ]
+  where
+    syscallBody = [| Just $ shiftGen $ \_ s0 -> do
+                      let pre_block = s0 ^. blockState
+                      let fin_block = finishBlock' pre_block (M.ArchTermStmt PPCSyscall)
+                      return $ GenResult { resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
+                                         , resState = Nothing
+                                         }
+                   |]
 
 -- | Generate a single case for one opcode of the case expression.
 --

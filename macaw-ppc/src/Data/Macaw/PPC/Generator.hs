@@ -26,6 +26,7 @@ module Data.Macaw.PPC.Generator (
   getReg,
   getRegValue,
   simplifyCurrentBlock,
+  shiftGen,
   finishBlock,
   finishBlock',
   -- * Lenses
@@ -34,6 +35,7 @@ module Data.Macaw.PPC.Generator (
   pBlockStmts,
   pBlockState,
   frontierBlocks,
+  blockSeq,
   -- * Constraints
   PPCArchConstraints,
   -- * Errors
@@ -127,7 +129,7 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 data GenState ppc s =
   GenState { assignIdGen :: !(NC.NonceGenerator (ST s) s)
-           , blockSeq :: !(BlockSeq ppc s)
+           , _blockSeq :: !(BlockSeq ppc s)
            , _blockState :: !(PreBlock ppc s)
            , genAddr :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
            }
@@ -138,7 +140,7 @@ initGenState :: NC.NonceGenerator (ST s) s
              -> GenState ppc s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
-           , blockSeq = BlockSeq { nextBlockID = 0, _frontierBlocks = Seq.empty }
+           , _blockSeq = BlockSeq { nextBlockID = 0, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            }
@@ -164,6 +166,9 @@ emptyPreBlock s0 idx addr =
            , _pBlockState = s0
            , pBlockApps = MapF.empty
            }
+
+blockSeq :: Simple Lens (GenState ppc s) (BlockSeq ppc s)
+blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
 
 blockState :: Simple Lens (GenState ppc s) (PreBlock ppc s)
 blockState = lens _blockState (\s v -> s { _blockState = v })
@@ -225,7 +230,7 @@ shiftGen f =
 
 genResult :: (Monad m) => a -> GenState ppc s -> m (GenResult ppc s)
 genResult _ s = do
-  return GenResult { resBlockSeq = blockSeq s
+  return GenResult { resBlockSeq = s ^. blockSeq
                    , resState = Just (s ^. blockState)
                    }
 

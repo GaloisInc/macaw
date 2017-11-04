@@ -143,7 +143,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                   , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
-                                         , blockSeq = resBlockSeq gs1
+                                         , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          }
@@ -344,6 +344,6 @@ failAt gs offset curIPAddr reason = do
                              }
   let term = (`TranslateError` T.pack (show exn))
   let b = finishBlock' (gs ^. blockState) term
-  let res = blockSeq gs & frontierBlocks %~ (Seq.|> b)
+  let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
   let res' = F.toList (res ^. frontierBlocks)
   ET.throwError (res', offset, exn)
