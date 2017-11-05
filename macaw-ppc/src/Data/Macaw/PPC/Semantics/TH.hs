@@ -113,9 +113,11 @@ instructionMatcher formulas = do
 specialSemanticsCases :: [MatchQ]
 specialSemanticsCases =
   [ match (conP 'D.SC []) (normalB syscallBody) []
+  , match (conP 'D.TRAP []) (normalB trapBody) []
   ]
   where
     syscallBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCSyscall)) |]
+    trapBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCTrap)) |]
 
 -- | Generate a single case for one opcode of the case expression.
 --
