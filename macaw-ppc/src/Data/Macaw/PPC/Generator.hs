@@ -29,6 +29,7 @@ module Data.Macaw.PPC.Generator (
   shiftGen,
   finishBlock,
   finishBlock',
+  finishWithTerminator,
   -- * Lenses
   blockState,
   curPPCState,
@@ -64,12 +65,11 @@ import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
+import qualified SemMC.Architecture.PPC.Location as APPC
+
 import           Data.Macaw.PPC.PPCReg
 import           Data.Macaw.PPC.Arch ( rewritePrimFn
-                                     , PPCPrimFn
---                                     , PPCArch
-                                     , PPCArchConstraints
-                                     , PPCArchStmt)
+                                     , PPCArchConstraints)
 
 -- GenResult
 
@@ -265,6 +265,34 @@ getRegValue :: PPCReg ppc tp -> PPCGenerator ppc s (Value ppc s tp)
 getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
+
+-- | Finish a block immediately with the given terminator statement
+--
+-- This uses the underlying continuation monad to skip the normal
+-- post-instruction behavior.
+--
+-- NOTE: We have to do an explicit instruction pointer update so that macaw
+-- knows to analyze starting at the next instruction (and doesn't treat the
+-- terminator as its own basic block).
+--
+-- Other instructions handle their own IP updates explicitly.
+finishWithTerminator :: forall ppc s a
+                      . (PPCArchConstraints ppc, KnownNat (APPC.ArchRegWidth ppc))
+                     => (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
+                     -> PPCGenerator ppc s a
+finishWithTerminator term = do
+  oldIP <- getRegValue PPC_IP
+  newIPAssign <- addAssignment $ EvalApp (BVAdd ptrRep oldIP (BVValue ptrRep 0x4))
+  blockState . pBlockState . boundValue PPC_IP .= AssignedValue newIPAssign
+  shiftGen $ \_ s0 -> do
+    let pre_block = s0 ^. blockState
+    let fin_block = finishBlock' pre_block term
+    return GenResult { resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
+                     , resState = Nothing
+                     }
+  where
+    ptrRep :: NR.NatRepr (RegAddrWidth (PPCReg ppc))
+    ptrRep = NR.knownNat
 
 -- | Convert the contents of a 'PreBlock' (a block being constructed) into a
 -- full-fledged 'Block'

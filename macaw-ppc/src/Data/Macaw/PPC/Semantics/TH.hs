@@ -19,9 +19,8 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import           Control.Lens ( (.=), (&), (^.), (%~) )
+import           Control.Lens ( (.=) )
 import           Data.Proxy ( Proxy(..) )
-import qualified Data.Sequence as Seq
 import qualified Data.List as L
 import qualified Data.Text as T
 import           Language.Haskell.TH
@@ -105,18 +104,18 @@ instructionMatcher formulas = do
   let normalCases = map (mkSemanticsCase ipVarName operandListVar) (Map.toList formulas)
   lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) (normalCases ++ specialSemanticsCases))
 
+-- | Manually-provided semantics for instructions whose full semantics cannot be
+-- expressed in our semantics format.
+--
+-- This includes instructions with special side effects that we don't have a way
+-- to talk about in the semantics; especially useful for architecture-specific
+-- terminator statements.
 specialSemanticsCases :: [MatchQ]
 specialSemanticsCases =
   [ match (conP 'D.SC []) (normalB syscallBody) []
   ]
   where
-    syscallBody = [| Just $ shiftGen $ \_ s0 -> do
-                      let pre_block = s0 ^. blockState
-                      let fin_block = finishBlock' pre_block (M.ArchTermStmt PPCSyscall)
-                      return $ GenResult { resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
-                                         , resState = Nothing
-                                         }
-                   |]
+    syscallBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCSyscall)) |]
 
 -- | Generate a single case for one opcode of the case expression.
 --
