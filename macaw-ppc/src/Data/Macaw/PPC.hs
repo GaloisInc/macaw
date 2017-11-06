@@ -17,8 +17,6 @@ import qualified Data.Macaw.Architecture.Info as MI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
-import qualified Data.Parameterized.TraversableFC as FC
-import           Data.Parameterized.Some ( Some(..), viewSome )
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -37,21 +35,15 @@ import Data.Macaw.PPC.Identify ( identifyCall,
 import Data.Macaw.PPC.Arch ( rewriteTermStmt,
                              rewriteStmt,
                              rewritePrimFn,
-                             valuesInPPCStmt,
                              ppcPrimFnHasSideEffects,
                              PPCArchConstraints
                            )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
-addValueListDemands :: [Some (Value ppc ids)] -> MDS.DemandComp ppc ids ()
-addValueListDemands = mapM_ (viewSome MDS.addValueDemands)
-
 archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext _ =
   MDS.DemandContext { MDS.demandConstraints = \a -> a
-                    -- , MDS.addArchStmtDemands = addValueListDemands . valuesInPPCStmt
-                    -- , MDS.addArchFnDemands = addValueListDemands . FC.foldMapFC (\v -> [ Some v ])
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
 
