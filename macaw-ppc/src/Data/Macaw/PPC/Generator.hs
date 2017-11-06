@@ -270,19 +270,13 @@ getRegValue r = do
 -- This uses the underlying continuation monad to skip the normal
 -- post-instruction behavior.
 --
--- NOTE: We have to do an explicit instruction pointer update so that macaw
--- knows to analyze starting at the next instruction (and doesn't treat the
--- terminator as its own basic block).
---
--- Other instructions handle their own IP updates explicitly.
+-- NOTE: We do not do an explicit instruction pointer update; the handler for
+-- architecture-specific terminator statements handles that.
 finishWithTerminator :: forall ppc ids s a
                       . (PPCArchConstraints ppc, KnownNat (APPC.ArchRegWidth ppc))
                      => (RegState (PPCReg ppc) (Value ppc ids) -> TermStmt ppc ids)
                      -> PPCGenerator ppc ids s a
-finishWithTerminator term = do
-  -- oldIP <- getRegValue PPC_IP
-  -- newIPAssign <- addAssignment $ EvalApp (BVAdd ptrRep oldIP (BVValue ptrRep 0x4))
-  -- blockState . pBlockState . boundValue PPC_IP .= AssignedValue newIPAssign
+finishWithTerminator term =
   shiftGen $ \_ s0 -> do
     let pre_block = s0 ^. blockState
     let fin_block = finishBlock' pre_block term
