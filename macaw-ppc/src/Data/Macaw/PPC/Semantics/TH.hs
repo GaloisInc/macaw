@@ -514,7 +514,7 @@ floatingPointTH bvi fnName args =
           [| do fpval <- $(addEltTH bvi a)
                 addExpr (AppExpr (M.FPAbs M.DoubleFloatRepr fpval))
            |]
-        "negate64" ->
+        "negate64" -> do
           [| do fpval <- $(addEltTH bvi a)
                 addExpr (AppExpr (M.FPNeg M.DoubleFloatRepr fpval))
            |]
@@ -568,7 +568,7 @@ floatingPointTH bvi fnName args =
         _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
     [Some a, Some b, Some c] ->
       case fnName of
-        "muladd64" ->
+        "muladd64" -> do
           -- FIXME: This is very wrong - we need a separate constructor for it
           -- a * c + b
           [| do valA <- $(addEltTH bvi a)
@@ -788,14 +788,13 @@ crucAppToExprTH elt interps = case elt of
      |]
   _ -> [| error "unsupported Crucible elt" |]
 
-
-
 locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
                M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
            => proxy ppc
            -> APPC.Location ppc ctp
            -> Q Exp
 locToRegTH _ (APPC.LocGPR (D.GPR gpr)) = [| PPC_GP (D.GPR $(lift gpr)) |]
+locToRegTH _ (APPC.LocVSR (D.VSReg vsr)) = [| PPC_FR (D.VSReg $(lift vsr)) |]
 locToRegTH _  APPC.LocIP       = [| PPC_IP |]
 locToRegTH _  APPC.LocLNK      = [| PPC_LNK |]
 locToRegTH _  APPC.LocCTR      = [| PPC_CTR |]
