@@ -79,7 +79,6 @@ data GenResult ppc ids =
 
 data Expr ppc ids tp where
   ValueExpr :: !(Value ppc ids tp) -> Expr ppc ids tp
---   AppExpr   :: !(App (Value ppc s) tp) -> Expr ppc s tp
   AppExpr   :: !(App (Value ppc ids) tp) -> Expr ppc ids tp
 ------------------------------------------------------------------------
 -- BlockSeq
