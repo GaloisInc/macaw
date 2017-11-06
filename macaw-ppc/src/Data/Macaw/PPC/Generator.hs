@@ -25,7 +25,6 @@ module Data.Macaw.PPC.Generator (
   addAssignment,
   getReg,
   getRegValue,
-  simplifyCurrentBlock,
   shiftGen,
   finishBlock,
   finishBlock',
@@ -318,30 +317,3 @@ finishBlock term st =
     Just preBlock ->
       let b = finishBlock' preBlock term
       in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
-
-
--- terminateBlocks :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
---                 ->
-
-simplifyCurrentBlock
-  :: forall ppc s . PPCArchConstraints ppc => PPCGenerator ppc s ()
-simplifyCurrentBlock = do
-  genState <- St.get
-  let nonceGen = assignIdGen genState
-      stmts = genState ^. blockState . pBlockStmts
-      ctx = RewriteContext { rwctxNonceGen = nonceGen
-                           , rwctxArchFn = rewritePrimFn
-                           , rwctxArchStmt = appendRewrittenArchStmt
-                           , rwctxConstraints = withConstraints
-                           }
-  (stmts', _) <- liftST $ runRewriter ctx $ do
-    collectRewrittenStmts $ do
-      forM_ stmts $ \stmt -> do
-        traceShow stmt $ rewriteStmt stmt
-  traceShow stmts' $ blockState . pBlockStmts .= Seq.fromList stmts'
-  where withConstraints :: (forall a . (RegisterInfo (ArchReg ppc) => a) -> a)
-        withConstraints x = x
-
--- eval :: Expr ppc s tp -> PPCGenerator ppc s (Value PPC s tp)
--- eval (ValueExpr v) = return v
--- eval (AppExpr a) = evalAp =<< traverseFC eval a
