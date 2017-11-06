@@ -43,8 +43,7 @@ module Data.Macaw.PPC.Generator (
   ) where
 
 import           GHC.TypeLits
-import           Control.Monad (forM_)
-import           Debug.Trace
+
 import           Control.Lens
 import qualified Control.Monad.Cont as Ct
 import qualified Control.Monad.Except as ET
@@ -58,7 +57,6 @@ import           Data.Word (Word64)
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
-import           Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
@@ -67,8 +65,7 @@ import qualified Data.Parameterized.Nonce as NC
 import qualified SemMC.Architecture.PPC.Location as APPC
 
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Arch ( rewritePrimFn
-                                     , PPCArchConstraints)
+import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
 
 -- GenResult
 
