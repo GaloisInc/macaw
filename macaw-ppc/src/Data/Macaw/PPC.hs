@@ -49,8 +49,9 @@ addValueListDemands = mapM_ (viewSome MDS.addValueDemands)
 
 archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext _ =
-  MDS.DemandContext { MDS.addArchStmtDemands = addValueListDemands . valuesInPPCStmt
-                    , MDS.addArchFnDemands = addValueListDemands . FC.foldMapFC (\v -> [ Some v ])
+  MDS.DemandContext { MDS.demandConstraints = \a -> a
+                    -- , MDS.addArchStmtDemands = addValueListDemands . valuesInPPCStmt
+                    -- , MDS.addArchFnDemands = addValueListDemands . FC.foldMapFC (\v -> [ Some v ])
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
 

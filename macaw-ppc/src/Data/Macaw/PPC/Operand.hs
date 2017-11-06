@@ -30,7 +30,7 @@ import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Generator as G
 
 class ExtractValue arch a tp | arch a -> tp where
-  extractValue :: a -> G.PPCGenerator arch s (MC.Value arch s tp)
+  extractValue :: a -> G.PPCGenerator arch ids s (MC.Value arch ids tp)
 
 instance ExtractValue arch Bool BoolType where
   extractValue = return . MC.BoolValue

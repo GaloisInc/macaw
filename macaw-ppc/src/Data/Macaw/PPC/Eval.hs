@@ -14,7 +14,7 @@ module Data.Macaw.PPC.Eval (
 
 import           GHC.TypeLits
 
-import           Control.Lens ( (&), (.~) )
+import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
@@ -24,6 +24,7 @@ import           Data.Parameterized.Some ( Some(..) )
 
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
                          => proxy ppc
@@ -33,17 +34,22 @@ preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRe
 
 postPPCTermStmtAbsState :: (PPCArchConstraints ppc)
                         => (forall tp . PPCReg ppc tp -> Bool)
+                        -> MM.Memory (RegAddrWidth (ArchReg ppc))
                         -> AbsBlockState (PPCReg ppc)
+                        -> RegState (PPCReg ppc) (Value ppc ids)
                         -> PPCTermStmt ids
-                        -> MM.MemSegmentOff (RegAddrWidth (ArchReg ppc))
-                        -> AbsBlockState (PPCReg ppc)
-postPPCTermStmtAbsState preservePred s0 stmt nextIP =
+                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc))
+postPPCTermStmtAbsState preservePred mem s0 regState stmt =
   case stmt of
     PPCSyscall ->
-      let params = MA.CallParams { MA.postCallStackDelta = 0
-                                 , MA.preserveReg = preservePred
-                                 }
-      in MA.absEvalCall params s0 nextIP
+      case simplifyValue (regState ^. curIP) of
+        Just (RelocatableValue _ addr)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         }
+              Just (nextIP, MA.absEvalCall params s0 nextIP)
+        _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
     PPCTrap -> error "Trap isn't handled in the postPPCTermStmtAbsState function yet"
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
@@ -80,7 +86,7 @@ absEvalArchFn _ _r f =
 -- abstract value.
 absEvalArchStmt :: proxy ppc
                 -> AbsProcessorState (ArchReg ppc) ids
-                -> ArchStmt ppc ids
+                -> ArchStmt ppc (Value ppc ids)
                 -> AbsProcessorState (ArchReg ppc) ids
 absEvalArchStmt _ s _ = s
 

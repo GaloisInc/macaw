@@ -72,30 +72,30 @@ import           Data.Macaw.PPC.Arch ( rewritePrimFn
 
 -- GenResult
 
-data GenResult ppc s =
-  GenResult { resBlockSeq :: BlockSeq ppc s
-            , resState :: Maybe (PreBlock ppc s)
+data GenResult ppc ids =
+  GenResult { resBlockSeq :: BlockSeq ppc ids
+            , resState :: Maybe (PreBlock ppc ids)
             }
 
 ------------------------------------------------------------------------
 -- Expr
 
-data Expr ppc s tp where
-  ValueExpr :: !(Value ppc s tp) -> Expr ppc s tp
+data Expr ppc ids tp where
+  ValueExpr :: !(Value ppc ids tp) -> Expr ppc ids tp
 --   AppExpr   :: !(App (Value ppc s) tp) -> Expr ppc s tp
-  AppExpr   :: !(App (Value ppc s) tp) -> Expr ppc s tp
+  AppExpr   :: !(App (Value ppc ids) tp) -> Expr ppc ids tp
 ------------------------------------------------------------------------
 -- BlockSeq
-data BlockSeq ppc s = BlockSeq
+data BlockSeq ppc ids = BlockSeq
   { nextBlockID :: !Word64
     -- ^ index of next block
-  , _frontierBlocks :: !(Seq.Seq (Block ppc s))
+  , _frontierBlocks :: !(Seq.Seq (Block ppc ids))
     -- ^ Blocks added to CFG
   }
 
-deriving instance Show (Block ppc s) => Show (BlockSeq ppc s)
-deriving instance (PPCArchConstraints ppc) => Show (Block ppc s)
-deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc s)
+deriving instance Show (Block ppc ids) => Show (BlockSeq ppc ids)
+deriving instance (PPCArchConstraints ppc) => Show (Block ppc ids)
+deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc ids)
 
 -- | Control flow blocs generated so far.
 -- nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
@@ -109,34 +109,34 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 ------------------------------------------------------------------------
 -- PreBlock
 
-data PreBlock ppc s = PreBlock { pBlockIndex :: !Word64
-                               , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
-                               -- ^ Starting address of function in preblock.
-                               , _pBlockStmts :: !(Seq.Seq (Stmt ppc s))
-                               , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc s))
-                               , pBlockApps  :: !(MapF.MapF (App (Value ppc s)) (Assignment ppc s))
-                               }
+data PreBlock ppc ids = PreBlock { pBlockIndex :: !Word64
+                                 , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
+                                 -- ^ Starting address of function in preblock.
+                                 , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
+                                 , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
+                                 , pBlockApps  :: !(MapF.MapF (App (Value ppc ids)) (Assignment ppc ids))
+                                 }
 
-pBlockStmts :: Simple Lens (PreBlock ppc s) (Seq.Seq (Stmt ppc s))
+pBlockStmts :: Simple Lens (PreBlock ppc ids) (Seq.Seq (Stmt ppc ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
-pBlockState :: Simple Lens (PreBlock ppc s) (RegState (PPCReg ppc) (Value ppc s))
+pBlockState :: Simple Lens (PreBlock ppc ids) (RegState (PPCReg ppc) (Value ppc ids))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 ------------------------------------------------------------------------
 -- GenState
 
-data GenState ppc s =
-  GenState { assignIdGen :: !(NC.NonceGenerator (ST s) s)
-           , _blockSeq :: !(BlockSeq ppc s)
-           , _blockState :: !(PreBlock ppc s)
+data GenState ppc ids s =
+  GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
+           , _blockSeq :: !(BlockSeq ppc ids)
+           , _blockState :: !(PreBlock ppc ids)
            , genAddr :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
            }
 
-initGenState :: NC.NonceGenerator (ST s) s
+initGenState :: NC.NonceGenerator (ST s) ids
              -> MM.MemSegmentOff (ArchAddrWidth ppc)
-             -> RegState (PPCReg ppc) (Value ppc s)
-             -> GenState ppc s
+             -> RegState (PPCReg ppc) (Value ppc ids)
+             -> GenState ppc ids s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
            , _blockSeq = BlockSeq { nextBlockID = 0, _frontierBlocks = Seq.empty }
@@ -150,14 +150,14 @@ initRegState :: ( KnownNat (RegAddrWidth (PPCReg ppc))
                 , MM.MemWidth (RegAddrWidth (PPCReg ppc))
                 , ArchWidth ppc)
              => ArchSegmentOff ppc
-             -> RegState (PPCReg ppc) (Value ppc s)
+             -> RegState (PPCReg ppc) (Value ppc ids)
 initRegState startIP = mkRegState Initial
                      & curIP .~ RelocatableValue NR.knownNat (MM.relativeSegmentAddr startIP)
 
-emptyPreBlock :: RegState (PPCReg ppc) (Value ppc s)
+emptyPreBlock :: RegState (PPCReg ppc) (Value ppc ids)
               -> Word64
               -> MM.MemSegmentOff (RegAddrWidth (ArchReg ppc))
-              -> PreBlock ppc s
+              -> PreBlock ppc ids
 emptyPreBlock s0 idx addr =
   PreBlock { pBlockIndex = idx
            , pBlockAddr = addr
@@ -166,13 +166,13 @@ emptyPreBlock s0 idx addr =
            , pBlockApps = MapF.empty
            }
 
-blockSeq :: Simple Lens (GenState ppc s) (BlockSeq ppc s)
+blockSeq :: Simple Lens (GenState ppc ids s) (BlockSeq ppc ids)
 blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
 
-blockState :: Simple Lens (GenState ppc s) (PreBlock ppc s)
+blockState :: Simple Lens (GenState ppc ids s) (PreBlock ppc ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curPPCState :: Simple Lens (GenState ppc s) (RegState (PPCReg ppc) (Value ppc s))
+curPPCState :: Simple Lens (GenState ppc ids s) (RegState (PPCReg ppc) (Value ppc ids))
 curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
@@ -182,27 +182,27 @@ data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
   deriving (Show)
 
-newtype PPCGenerator ppc s a =
-  PPCGenerator { runG :: Ct.ContT (GenResult ppc s)
-                                  (Rd.ReaderT (GenState ppc s)
+newtype PPCGenerator ppc ids s a =
+  PPCGenerator { runG :: Ct.ContT (GenResult ppc ids)
+                                  (Rd.ReaderT (GenState ppc ids s)
                                               (ET.ExceptT GeneratorError (ST s))) a }
                              deriving (Applicative,
                                        Functor,
-                                       Rd.MonadReader (GenState ppc s),
+                                       Rd.MonadReader (GenState ppc ids s),
                                        Ct.MonadCont)
 
-instance Monad (PPCGenerator ppc s) where
+instance Monad (PPCGenerator ppc ids s) where
   return v = PPCGenerator (return v)
   PPCGenerator m >>= h = PPCGenerator (m >>= \v -> runG (h v))
   PPCGenerator m >> PPCGenerator n = PPCGenerator (m >> n)
   fail msg = PPCGenerator (Ct.ContT (\_ -> ET.throwError (GeneratorMessage msg)))
 
-instance St.MonadState (GenState ppc s) (PPCGenerator ppc s) where
+instance St.MonadState (GenState ppc ids s) (PPCGenerator ppc ids s) where
   get = PPCGenerator Rd.ask
   put nextState = PPCGenerator $ Ct.ContT $ \c -> Rd.ReaderT $ \_s ->
     Rd.runReaderT (c ()) nextState
 
-instance ET.MonadError GeneratorError (PPCGenerator ppc s) where
+instance ET.MonadError GeneratorError (PPCGenerator ppc ids s) where
   throwError e = PPCGenerator (Ct.ContT (\_ -> ET.throwError e))
   -- catchError a hdlr = do
   --   r <- liftST $ ET.runExceptT (unDisM a)
@@ -214,53 +214,53 @@ instance ET.MonadError GeneratorError (PPCGenerator ppc s) where
   --         Right res -> return res
   --     Right res -> return res
 
-type GenCont ppc s a = a -> GenState ppc s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc s)
+type GenCont ppc ids s a = a -> GenState ppc ids s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids)
 
-runGenerator :: GenCont ppc s a
-             -> GenState ppc s
-             -> PPCGenerator ppc s a
-             -> ST s (Either GeneratorError (GenResult ppc s))
+runGenerator :: GenCont ppc ids s a
+             -> GenState ppc ids s
+             -> PPCGenerator ppc ids s a
+             -> ST s (Either GeneratorError (GenResult ppc ids))
 runGenerator k st (PPCGenerator m) = ET.runExceptT (Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st)
 
-shiftGen :: (GenCont ppc s a -> GenState ppc s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc s))
-         -> PPCGenerator ppc s a
+shiftGen :: (GenCont ppc ids s a -> GenState ppc ids s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids))
+         -> PPCGenerator ppc ids s a
 shiftGen f =
   PPCGenerator $ Ct.ContT $ \k -> Rd.ReaderT $ \s -> f (Rd.runReaderT . k) s
 
-genResult :: (Monad m) => a -> GenState ppc s -> m (GenResult ppc s)
+genResult :: (Monad m) => a -> GenState ppc ids s -> m (GenResult ppc ids)
 genResult _ s = do
   return GenResult { resBlockSeq = s ^. blockSeq
                    , resState = Just (s ^. blockState)
                    }
 
-addStmt :: (ArchConstraints ppc) => Stmt ppc s -> PPCGenerator ppc s ()
+addStmt :: (ArchConstraints ppc) => Stmt ppc ids -> PPCGenerator ppc ids s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
-newAssignId :: PPCGenerator ppc s (AssignId s tp)
+newAssignId :: PPCGenerator ppc ids s (AssignId ids tp)
 newAssignId = do
   nonceGen <- St.gets assignIdGen
   n <- liftST $ NC.freshNonce nonceGen
   return (AssignId n)
 
-liftST :: ST s a -> PPCGenerator ppc s a
+liftST :: ST s a -> PPCGenerator ppc ids s a
 liftST = PPCGenerator . lift . lift . lift
 
 addAssignment :: ArchConstraints ppc
-              => AssignRhs ppc s tp
-              -> PPCGenerator ppc s (Assignment ppc s tp)
+              => AssignRhs ppc ids tp
+              -> PPCGenerator ppc ids s (Assignment ppc ids tp)
 addAssignment rhs = do
   l <- newAssignId
   let a = Assignment l rhs
   addStmt $ AssignStmt a
   return a
 
-getReg :: PPCReg ppc tp -> PPCGenerator ppc s (Expr ppc s tp)
+getReg :: PPCReg ppc tp -> PPCGenerator ppc ids s (Expr ppc ids tp)
 getReg r = do
   genState <- St.get
   let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
   return expr
 
-getRegValue :: PPCReg ppc tp -> PPCGenerator ppc s (Value ppc s tp)
+getRegValue :: PPCReg ppc tp -> PPCGenerator ppc ids s (Value ppc ids tp)
 getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
@@ -275,14 +275,14 @@ getRegValue r = do
 -- terminator as its own basic block).
 --
 -- Other instructions handle their own IP updates explicitly.
-finishWithTerminator :: forall ppc s a
+finishWithTerminator :: forall ppc ids s a
                       . (PPCArchConstraints ppc, KnownNat (APPC.ArchRegWidth ppc))
-                     => (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
-                     -> PPCGenerator ppc s a
+                     => (RegState (PPCReg ppc) (Value ppc ids) -> TermStmt ppc ids)
+                     -> PPCGenerator ppc ids s a
 finishWithTerminator term = do
-  oldIP <- getRegValue PPC_IP
-  newIPAssign <- addAssignment $ EvalApp (BVAdd ptrRep oldIP (BVValue ptrRep 0x4))
-  blockState . pBlockState . boundValue PPC_IP .= AssignedValue newIPAssign
+  -- oldIP <- getRegValue PPC_IP
+  -- newIPAssign <- addAssignment $ EvalApp (BVAdd ptrRep oldIP (BVValue ptrRep 0x4))
+  -- blockState . pBlockState . boundValue PPC_IP .= AssignedValue newIPAssign
   shiftGen $ \_ s0 -> do
     let pre_block = s0 ^. blockState
     let fin_block = finishBlock' pre_block term
@@ -297,9 +297,9 @@ finishWithTerminator term = do
 -- full-fledged 'Block'
 --
 -- The @term@ function is used to create the terminator statement of the block.
-finishBlock' :: PreBlock ppc s
-             -> (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
-             -> Block ppc s
+finishBlock' :: PreBlock ppc ids
+             -> (RegState (PPCReg ppc) (Value ppc ids) -> TermStmt ppc ids)
+             -> Block ppc ids
 finishBlock' preBlock term =
   Block { blockLabel = pBlockIndex preBlock
         , blockStmts = F.toList (preBlock ^. pBlockStmts)
@@ -308,9 +308,9 @@ finishBlock' preBlock term =
 
 -- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
 -- new block to the block frontier.
-finishBlock :: (RegState (PPCReg ppc) (Value ppc s) -> TermStmt ppc s)
-            -> GenResult ppc s
-            -> BlockSeq ppc s
+finishBlock :: (RegState (PPCReg ppc) (Value ppc ids) -> TermStmt ppc ids)
+            -> GenResult ppc ids
+            -> BlockSeq ppc ids
 finishBlock term st =
   case resState st of
     Nothing -> resBlockSeq st

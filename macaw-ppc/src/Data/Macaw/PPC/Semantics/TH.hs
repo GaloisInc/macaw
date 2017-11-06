@@ -281,7 +281,7 @@ genExecInstruction _ impl semantics captureInfo = do
 
 -- Add an expression in the PPCGenerator monad. This returns a Macaw value
 -- corresponding to the added expression.
-addExpr :: M.ArchConstraints ppc => Expr ppc ids tp -> PPCGenerator ppc ids (M.Value ppc ids tp)
+addExpr :: M.ArchConstraints ppc => Expr ppc ids tp -> PPCGenerator ppc ids s (M.Value ppc ids tp)
 addExpr expr = do
   case expr of
     ValueExpr val -> return val

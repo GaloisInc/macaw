@@ -15,7 +15,6 @@ import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
-import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
@@ -34,13 +33,12 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
-import           Data.Macaw.Types ( BVType, BoolType )
-import           Data.Parameterized.Classes
-import           Data.Parameterized.NatRepr ( NatRepr )
+import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 import Debug.Trace (trace)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
@@ -95,14 +93,14 @@ rewriter monad.
 
 -}
 
-disassembleBlock :: forall ppc s
+disassembleBlock :: forall ppc ids s
                   . PPCArchConstraints ppc
-                 => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+                 => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
                  -> MM.Memory (ArchAddrWidth ppc)
-                 -> GenState ppc s
+                 -> GenState ppc ids s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -> MM.MemWord (ArchAddrWidth ppc)
-                 -> DisM ppc s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc s)
+                 -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
 disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
@@ -152,92 +150,15 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
--- | A very restricted value simplifier
---
--- The full rewriter is too heavyweight here, as it produces new bound values
--- instead of fully reducing the calculation we want to a literal.
-simplifyValue :: (OrdF (ArchReg arch), MM.MemWidth (ArchAddrWidth arch))
-              => Value arch ids tp
-              -> Maybe (Value arch ids tp)
-simplifyValue v =
-  case v of
-    BVValue {} -> Just v
-    AssignedValue (Assignment { assignRhs = EvalApp app }) ->
-      simplifyApp app
-    _ -> Nothing
-
-simplifyApp :: forall arch ids tp
-             . (OrdF (ArchReg arch), MM.MemWidth (ArchAddrWidth arch))
-            => App (Value arch ids) tp
-            -> Maybe (Value arch ids tp)
-simplifyApp a =
-  case a of
-    AndApp (BoolValue True) r         -> Just r
-    AndApp l (BoolValue True)         -> Just l
-    AndApp f@(BoolValue False) _      -> Just f
-    AndApp _ f@(BoolValue False)      -> Just f
-    OrApp t@(BoolValue True) _        -> Just t
-    OrApp _ t@(BoolValue True)        -> Just t
-    OrApp (BoolValue False) r         -> Just r
-    OrApp l (BoolValue False)         -> Just l
-    Mux _ (BoolValue c) t e           -> if c then Just t else Just e
-    BVAnd _ l r
-      | Just Refl <- testEquality l r -> Just l
-    BVAnd sz l r                      -> binopbv (.&.) sz l r
-    BVOr  sz l r                      -> binopbv (.|.) sz l r
-    BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
-    BVAdd _ l (BVValue _ 0)           -> Just l
-    BVAdd _ (BVValue _ 0) r           -> Just r
-    BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->
-      simplifyApp (BVAdd rep r l)
-    BVAdd rep (RelocatableValue _ addr) (BVValue _ off) ->
-      Just (RelocatableValue rep (MM.incAddr off addr))
-    BVAdd sz l r                      -> binopbv (+) sz l r
-    BVMul _ l (BVValue _ 1)           -> Just l
-    BVMul _ (BVValue _ 1) r           -> Just r
-    BVMul rep _ (BVValue _ 0)         -> Just (BVValue rep 0)
-    BVMul rep (BVValue _ 0) _         -> Just (BVValue rep 0)
-    BVMul rep l r                     -> binopbv (*) rep l r
-    UExt (BVValue _ n) sz             -> Just (mkLit sz n)
-    Trunc (BVValue _ x) sz            -> Just (mkLit sz x)
-
-    Eq l r                            -> boolop (==) l r
-    BVComplement sz x                 -> unop complement sz x
-    _                                 -> Nothing
-  where
-    unop :: (tp ~ BVType n)
-         => (Integer -> Integer)
-         -> NatRepr n
-         -> Value arch ids tp
-         -> Maybe (Value arch ids tp)
-    unop f sz (BVValue _ l) = Just (mkLit sz (f l))
-    unop _ _ _ = Nothing
-
-    boolop :: (Integer -> Integer -> Bool)
-           -> Value arch ids utp
-           -> Value arch ids utp
-           -> Maybe (Value arch ids BoolType)
-    boolop f (BVValue _ l) (BVValue _ r) = Just (BoolValue (f l r))
-    boolop _ _ _ = Nothing
-
-    binopbv :: (tp ~ BVType n)
-            => (Integer -> Integer -> Integer)
-            -> NatRepr n
-            -> Value arch ids tp
-            -> Value arch ids tp
-            -> Maybe (Value arch ids tp)
-    binopbv f sz (BVValue _ l) (BVValue _ r) = Just (mkLit sz (f l r))
-    binopbv _ _ _ _ = Nothing
-
 tryDisassembleBlock :: ( PPCArchConstraints ppc
-                       , Show (Block ppc s)
-                       , Show (BlockSeq ppc s))
-                    => (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+                       , Show (Block ppc ids)
+                       , Show (BlockSeq ppc ids))
+                    => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
-                    -> NC.NonceGenerator (ST s) s
+                    -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff ppc
                     -> ArchAddrWord ppc
-                    -> DisM ppc s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc))
+                    -> DisM ppc ids s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc))
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
@@ -253,16 +174,16 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
 disassembleFn :: ( PPCArchConstraints ppc
-                 , Show (Block ppc s)
-                 , Show (BlockSeq ppc s))
+                 , Show (Block ppc ids)
+                 , Show (BlockSeq ppc ids))
               => proxy ppc
-              -> (Value ppc s (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc s ()))
+              -> (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
               -- ^ A function to look up the semantics for an instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
               -> MM.Memory (ArchAddrWidth ppc)
               -- ^ The mapped memory space
-              -> NC.NonceGenerator (ST s) s
+              -> NC.NonceGenerator (ST s) ids
               -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff ppc
               -- ^ The address to disassemble from
@@ -270,20 +191,20 @@ disassembleFn :: ( PPCArchConstraints ppc
               -- ^ Maximum size of the block (a safeguard)
               -> MA.AbsBlockState (ArchReg ppc)
               -- ^ Abstract state of the processor at the start of the block
-              -> ST s ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), Maybe String)
+              -> ST s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), Maybe String)
 disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> traceShow blocks $ return (blocks, bytes, Nothing)
 
-type LocatedError ppc s = ([Block ppc s], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+type LocatedError ppc ids = ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
 -- | This is a monad for error handling during disassembly
 --
 -- It allows for early failure that reports progress (in the form of blocks
 -- discovered and the latest address examined) along with a reason for failure
 -- (a 'TranslationError').
-newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a }
+newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (ST s) a }
   deriving (Functor,
             Applicative,
             Monad)
@@ -296,7 +217,7 @@ newtype DisM ppc s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc s) (ST s) a
 --
 -- We also can't derive this instance because of that restriction (but deriving
 -- silently fails).
-instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc s], MM.MemWord w, TranslationError w) (DisM ppc s) where
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], MM.MemWord w, TranslationError w) (DisM ppc ids s) where
   throwError e = DisM (ET.throwError e)
   catchError a hdlr = do
     r <- liftST $ ET.runExceptT (unDisM a)
@@ -321,7 +242,7 @@ data TranslationErrorReason w = InvalidNextIP Word64 Word64
 
 deriving instance (MM.MemWidth w) => Show (TranslationError w)
 
-liftST :: ST s a -> DisM ppc s a
+liftST :: ST s a -> DisM ppc ids s a
 liftST = DisM . lift
 
 -- | Early failure for 'DisM'.  This is a wrapper around 'ET.throwError' that
@@ -331,13 +252,13 @@ liftST = DisM . lift
 -- that translation of the basic block resulted in an error (with the exception
 -- string stored as its argument).  This allows macaw to carry errors in the
 -- instruction stream, which is useful for debugging and diagnostics.
-failAt :: forall ppc s a
+failAt :: forall ppc ids s a
         . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
-       => GenState ppc s
+       => GenState ppc ids s
        -> MM.MemWord (ArchAddrWidth ppc)
        -> MM.MemSegmentOff (ArchAddrWidth ppc)
        -> TranslationErrorReason (ArchAddrWidth ppc)
-       -> DisM ppc s a
+       -> DisM ppc ids s a
 failAt gs offset curIPAddr reason = do
   let exn = TranslationError { transErrorAddr = curIPAddr
                              , transErrorReason = reason

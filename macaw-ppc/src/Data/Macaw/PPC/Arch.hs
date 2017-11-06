@@ -18,8 +18,6 @@ module Data.Macaw.PPC.Arch (
   PPCPrimFn(..),
   rewritePrimFn,
   ppcPrimFnHasSideEffects,
-  PPCArchStmt,
---  PPCArch,
   PPCArchConstraints
   ) where
 
@@ -31,11 +29,9 @@ import qualified Data.Parameterized.TraversableF as TF
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn )
-import           Data.Macaw.CFG.Block ( Block )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
-import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -61,38 +57,41 @@ instance MC.PrettyF PPCTermStmt where
       PPCSyscall -> PP.text "ppc_syscall"
       PPCTrap -> PP.text "ppc_trap"
 
-rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc src tgt (PPCTermStmt tgt)
+rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc s src tgt (PPCTermStmt tgt)
 rewriteTermStmt s =
   case s of
     PPCSyscall -> pure PPCSyscall
     PPCTrap -> pure PPCTrap
 
 -- | We currently have no PPC-specific statements.  Remove 'None' if we add some.
-data PPCStmt (v :: MT.Type -> *) where
-  None :: PPCStmt v
+data PPCStmt ppc (v :: MT.Type -> *) where
+  None :: PPCStmt ppc v
 
-instance MC.PrettyF (PPCArchStmt ppc) where
-  prettyF (PPCArchStmt s) =
+instance MC.PrettyF (PPCStmt ppc) where
+  prettyF s =
     case s of
       None -> PP.text "None"
 
-instance TF.FunctorF PPCStmt where
+instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
 
-instance TF.FoldableF PPCStmt where
+instance TF.FoldableF (PPCStmt ppc) where
   foldMapF = TF.foldMapFDefault
 
-instance TF.TraversableF PPCStmt where
+instance TF.TraversableF (PPCStmt ppc) where
   traverseF _go stmt =
     case stmt of
       None -> pure None
 
-newtype PPCArchStmt ppc ids = PPCArchStmt (PPCStmt (MC.Value ppc ids))
+instance MC.IsArchStmt (PPCStmt ppc) where
+  ppArchStmt _pp stmt =
+    case stmt of
+      None -> PP.text "none"
 
-type instance MC.ArchStmt PPC64.PPC = PPCArchStmt PPC64.PPC
-type instance MC.ArchStmt PPC32.PPC = PPCArchStmt PPC32.PPC
+type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
+type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
 
-rewriteStmt :: PPCArchStmt ppc src -> Rewriter ppc src tgt ()
+rewriteStmt :: PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
 rewriteStmt _ = return ()
 
 data PPCPrimFn ppc f tp where
@@ -115,7 +114,7 @@ ppcPrimFnHasSideEffects pf =
 
 rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
-              -> Rewriter ppc src tgt (MC.Value ppc tgt tp)
+              -> Rewriter ppc s src tgt (MC.Value ppc tgt tp)
 rewritePrimFn f =
   case f of
     IDiv p lhs rhs -> do
@@ -144,12 +143,12 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 
-valuesInPPCStmt :: PPCArchStmt ppc ids -> [Some (MC.Value ppc ids)]
-valuesInPPCStmt (PPCArchStmt s) = TF.foldMapF (\x -> [Some x]) s
+valuesInPPCStmt :: PPCStmt ppc (MC.Value ppc ids) -> [Some (MC.Value ppc ids)]
+valuesInPPCStmt s = TF.foldMapF (\x -> [Some x]) s
 
 type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
                               , MC.ArchFn ppc ~ PPCPrimFn ppc
-                              , MC.ArchStmt ppc ~ PPCArchStmt ppc
+                              , MC.ArchStmt ppc ~ PPCStmt ppc
                               , MC.ArchTermStmt ppc ~ PPCTermStmt
                               , ArchWidth ppc
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
