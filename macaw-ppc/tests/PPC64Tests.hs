@@ -38,7 +38,7 @@ ppcAsmTests = T.testGroup "PPC" . map mkTest
 
 -- | The type of expected results for test cases
 data ExpectedResult =
-  R { funcs :: [(Word64, [Word64])]
+  R { funcs :: [(Word64, [(Word64, Word64)])]
     -- ^ The first element of the pair is the address of entry point
     -- of the function.  The list is a list of the addresses of the
     -- basic blocks in the function (including the first block).
@@ -91,15 +91,23 @@ testDiscovery expectedFilename elf =
             -- ignoredBlocks :: S.Set Word64
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
           let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
-              actualBlockStarts = S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+              actualBlockStarts = S.fromList [ (baddr, bsize)
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                             , trace (show pbr) True
+                                             , trace ("Parsed Block: " ++ show pbr) True
+                                             , let baddr = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+                                             , let bsize = fromIntegral (MD.blockSize pbr)
                                              ]
           case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of
             (True, _) -> return ()
             (_, Nothing) -> T.assertFailure (printf "Unexpected block start: 0x%x" actualEntry)
             (_, Just expectedBlockStarts) ->
-              T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `S.difference` ignoredBlocks)
+              T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `removeIgnored` ignoredBlocks)
+
+removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
+removeIgnored actualBlockStarts ignoredBlocks =
+  F.foldr (\v@(addr, _) acc -> if S.member addr ignoredBlocks
+                               then S.delete v acc
+                               else acc) actualBlockStarts actualBlockStarts
 
 withELF :: FilePath -> (E.Elf 64 -> IO ()) -> IO ()
 withELF fp k = do
