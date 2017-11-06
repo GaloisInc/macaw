@@ -59,7 +59,6 @@ import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
 import Data.Parameterized.NatRepr ( knownNat
-                                  , addNat
                                   , natValue
                                   )
 
@@ -278,16 +277,6 @@ genExecInstruction _ impl semantics captureInfo = do
         Just pf -> Map.insert co (PairF pf ci) m
 
 -- SemMC.Formula: instantiateFormula
-
--- Add an expression in the PPCGenerator monad. This returns a Macaw value
--- corresponding to the added expression.
-addExpr :: M.ArchConstraints ppc => Expr ppc ids tp -> PPCGenerator ppc ids s (M.Value ppc ids tp)
-addExpr expr = do
-  case expr of
-    ValueExpr val -> return val
-    AppExpr app -> do
-      assignment <- addAssignment (M.EvalApp app)
-      return $ M.AssignedValue assignment
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
@@ -678,30 +667,20 @@ crucAppToExprTH elt interps = case elt of
         v = S.bvWidth bv2
     [| do bv1Val <- $(addEltTH interps bv1)
           bv2Val <- $(addEltTH interps bv2)
-          S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH u)) (S.leqProof (knownNat @1) $(natReprTH v))
-          pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH v)) (S.leqProof (knownNat @1) $(natReprTH u))
-          Refl <- return $ S.plusComm $(natReprTH u) $(natReprTH v)
-          S.LeqProof <- return (S.leqTrans pf1 (S.leqRefl $(natReprTH w)))
-          bv1Ext <- addExpr (AppExpr (M.UExt bv1Val $(natReprTH w)))
-          bv2Ext <- addExpr (AppExpr (M.UExt bv2Val $(natReprTH w)))
-          bv1Shifter <- addExpr (ValueExpr (M.BVValue $(natReprTH w) (natValue $(natReprTH v))))
-          bv1Shf <- addExpr (AppExpr (M.BVShl $(natReprTH w) bv1Ext bv1Shifter))
-          return $ AppExpr (M.BVOr $(natReprTH w) bv1Shf bv2Ext)
+          let repV = $(natReprTH v)
+          let repU = $(natReprTH u)
+          let repW = $(natReprTH w)
+          bvconcat bv1Val bv2Val repV repU repW
      |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True ->
         [| do bvVal <- $(addEltTH interps bv)
-              Just S.LeqProof <- return $ S.testLeq ($(natReprTH n) `addNat` (knownNat @1)) $(natReprTH w)
-              pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl $(natReprTH idx)) (S.leqProof (knownNat @1) $(natReprTH n))
-              pf2@S.LeqProof <- return $ S.leqAdd (S.leqRefl (knownNat @1)) $(natReprTH idx)
-              Refl <- return $ S.plusComm (knownNat @1) $(natReprTH idx)
-              pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
-              S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof ($(natReprTH idx) `addNat` $(natReprTH n)) $(natReprTH w))
-              bvShf <- addExpr (AppExpr (M.BVShr $(natReprTH w) bvVal (M.mkLit $(natReprTH w) (natValue $(natReprTH idx)))))
-              -- return $ ValueExpr (M.mkLit $(natReprTH n) 1)
-              return $ AppExpr (M.Trunc bvShf $(natReprTH n))
+              let repW = $(natReprTH w)
+              let repN = $(natReprTH n)
+              let repI = $(natReprTH idx)
+              bvselect bvVal repN repI repW
          |]
       False -> [| do Just Refl <- return $ testEquality $(natReprTH n) $(natReprTH w)
                      return $ ValueExpr bvVal
@@ -709,8 +688,9 @@ crucAppToExprTH elt interps = case elt of
   S.BVNeg w bv -> do
     -- Note: This is still untested
     [| do bvVal <- $(addEltTH interps bv)
-          bvComp <- addExpr (AppExpr (M.BVComplement $(natReprTH w) bvVal))
-          return $ AppExpr (M.BVAdd $(natReprTH w) bvComp (M.mkLit $(natReprTH w) 1))
+          let repW = $(natReprTH w)
+          bvComp <- addExpr (AppExpr (M.BVComplement repW bvVal))
+          return $ AppExpr (M.BVAdd repW bvComp (M.mkLit repW 1))
      |]
   S.BVTestBit idx bv ->
     -- Note: below is untested, could be wrong.
