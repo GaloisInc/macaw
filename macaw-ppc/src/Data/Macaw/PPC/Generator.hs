@@ -283,9 +283,6 @@ finishWithTerminator term =
     return GenResult { resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
                      , resState = Nothing
                      }
-  where
-    ptrRep :: NR.NatRepr (RegAddrWidth (PPCReg ppc))
-    ptrRep = NR.knownNat
 
 -- | Convert the contents of a 'PreBlock' (a block being constructed) into a
 -- full-fledged 'Block'
