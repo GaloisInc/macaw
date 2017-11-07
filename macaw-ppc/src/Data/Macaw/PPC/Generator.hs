@@ -367,12 +367,13 @@ conditionalBranch condExpr t f =
 
           -- Join the results with a branch terminator
           let fin_block = finishBlock' pre_block (\_ -> Branch condv t_block_label f_block_label)
+          let frontier = mconcat [ s0 ^. blockSeq ^. frontierBlocks Seq.|> fin_block
+                                 , t_seq ^. frontierBlocks
+                                 , f_seq ^. frontierBlocks
+                                 ]
           return GenResult { resBlockSeq =
                              BlockSeq { _nextBlockID = _nextBlockID f_seq
-                                      , _frontierBlocks = mconcat [ s0 ^. blockSeq ^. frontierBlocks Seq.|> fin_block
-                                                                  , t_seq ^. frontierBlocks
-                                                                  , f_seq ^. frontierBlocks
-                                                                  ]
+                                      , _frontierBlocks = frontier
                                       }
                            , resState = Nothing
                            }
