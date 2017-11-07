@@ -18,6 +18,7 @@ import           Control.Monad.Trans ( lift )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
+import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
@@ -136,13 +137,14 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
-matchConditionalBranch :: Value arch ids tp
+matchConditionalBranch :: (PPCArchConstraints arch)
+                       => Value arch ids tp
                        -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
 matchConditionalBranch v =
   case v of
     AssignedValue (Assignment { assignRhs = EvalApp a }) ->
       case a of
-        Mux _rep cond t f -> Just (cond, t, f)
+        Mux _rep cond t f -> Just (cond, fromMaybe t (simplifyValue t), fromMaybe f (simplifyValue f))
         _ -> Nothing
     _ -> Nothing
 
