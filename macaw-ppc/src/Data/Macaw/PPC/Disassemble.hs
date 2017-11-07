@@ -74,25 +74,6 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
-{-
-
-Steps for dealing with conditional branches:
-
- - Extend the value simplifier to handle concat (needed for interpreting branch targets)
- - Detect ~ite~ values assigned to the IP; capture the condition and both targets
- - Cause a split (via ~ContT~) when we find an ~ite~ in the IP
-
-Note that the extension to the value simplifier is needed to interpret
-unconditional branch targets as well, as they also have a 2 bit right extension.
-It looks like the simplifier will also need to be able to understand OR, shifts,
-extensions, and maybe even other operations.
-
-It looks like macaw-x86 has a similar rewriter.  We should write a very general
-one and export it as part of the rewriter.  It doesn't need to be in the
-rewriter monad.
-
--}
-
 disassembleBlock :: forall ppc ids s
                   . PPCArchConstraints ppc
                  => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
