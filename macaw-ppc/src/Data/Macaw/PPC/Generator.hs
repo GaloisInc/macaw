@@ -149,7 +149,7 @@ initGenState :: NC.NonceGenerator (ST s) ids
              -> GenState ppc ids s
 initGenState nonceGen mem addr st =
   GenState { assignIdGen = nonceGen
-           , _blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
+           , _blockSeq = BlockSeq { _nextBlockID = 1, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            , genMemory = mem
