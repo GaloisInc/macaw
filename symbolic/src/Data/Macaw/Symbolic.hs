@@ -16,11 +16,11 @@ import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import           Data.Maybe
 import           Data.Parameterized.Ctx
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableFC
+import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import           Data.Word
@@ -113,21 +113,24 @@ createHandleMap ctx = MapF.foldrWithKey go C.emptyHandleMap
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
                     -> NatRepr w
-                    -> M.MemSegment w
-                    -> ST s (M.SegmentIndex, C.GlobalVar (C.BVType w))
-mkMemSegmentBinding halloc awidth seg = do
-  let nm = Text.pack ("MemSegmentBase" ++ show (M.segmentIndex seg))
+                    -> M.RegionIndex
+                    -> ST s (M.RegionIndex, C.GlobalVar (C.BVType w))
+mkMemSegmentBinding halloc awidth idx = do
+  let nm = Text.pack ("MemSegmentBase" ++ show idx)
   gv <- CR.freshGlobalVar halloc nm (C.BVRepr awidth)
-  pure $ (M.segmentIndex seg, gv)
+  pure $ (idx, gv)
 
-mkMemSegmentMap :: (1 <= w)
+mkMemBaseVarMap :: (1 <= w)
                 => C.HandleAllocator s
                 -> M.Memory w
                 -> ST s (MemSegmentMap w)
-mkMemSegmentMap halloc mem = do
-  let isVirt seg = isNothing (M.segmentBase seg)
-  let segs = filter isVirt (M.memSegments mem)
-  Map.fromList <$> traverse (mkMemSegmentBinding halloc (M.memWidth mem)) segs
+mkMemBaseVarMap halloc mem = do
+  let baseIndices = Set.fromList
+        [ M.segmentBase seg
+        | seg <- M.memSegments mem
+        , M.segmentBase seg /= 0
+        ]
+  Map.fromList <$> traverse (mkMemSegmentBinding halloc (M.memWidth mem)) (Set.toList baseIndices)
 
 stepBlocks :: forall sym arch ids
            .  (IsSymInterface sym, M.ArchConstraints arch)
@@ -158,7 +161,7 @@ stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
   let blockLabelMap :: Map Word64 (CR.Label RealWorld)
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w))
                                    | w <- M.blockLabel <$> macawBlocks ]
-  memSegmentVarMap <- stToIO $ mkMemSegmentMap halloc mem
+  memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
 
   let genCtx = CrucGenContext { archConstraints = \x -> x
                               , macawRegAssign = archRegAssignment sinfo
@@ -166,7 +169,7 @@ stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
                               , handleAlloc = halloc
                               , binaryPath = binPath
                               , macawIndexToLabelMap = blockLabelMap
-                              , memSegmentMap = memSegmentVarMap
+                              , memBaseAddrMap = memBaseVarMap
                               }
   let ps0 = initCrucPersistentState
   blockRes <- stToIO $ runStateT (runExceptT (mapM_ (addMacawBlock sinfo genCtx addr) macawBlocks)) ps0

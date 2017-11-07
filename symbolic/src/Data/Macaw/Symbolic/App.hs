@@ -32,7 +32,6 @@ import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import qualified Data.Map.Strict as Map
-import           Data.Maybe
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -294,20 +293,17 @@ valueToCrucible v = do
   case v of
     M.BVValue w c -> bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
-    M.RelocatableValue w addr -> do
-      case M.viewAddr addr of
-        Left base -> do
-          crucibleValue (C.BVLit w (toInteger base))
-        Right (seg,off) -> do
-          when (isJust (M.segmentBase seg)) $ do
-            fail "internal: Expected segment without fixed base"
-
-          let idx = M.segmentIndex seg
-          segMap <- memSegmentMap <$> getCtx
+    -- In this case,
+    M.RelocatableValue w addr
+      | M.addrBase addr == 0 ->
+        crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
+      | otherwise -> do
+          let idx = M.addrBase addr
+          segMap <- memBaseAddrMap <$> getCtx
           case Map.lookup idx segMap of
             Just g -> do
               a <- evalAtom (CR.ReadGlobal g)
-              offset <- crucibleValue (C.BVLit w (toInteger off))
+              offset <- crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
               crucibleValue (C.BVAdd w a offset)
             Nothing ->
               fail $ "internal: No Crucible address associated with segment."
@@ -437,7 +433,7 @@ addMacawTermStmt tstmt =
       t <- lookupCrucibleLabel macawTrueLbl
       f <- lookupCrucibleLabel macawFalseLbl
       addTermStmt (CR.Br p t f)
-    M.ArchTermStmt ts regs _ -> do
+    M.ArchTermStmt ts regs -> do
       fns <- translateFns <$> get
       archTranslateTermStmt fns ts regs
     M.TranslateError _regs msg -> do

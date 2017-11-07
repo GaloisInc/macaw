@@ -1230,10 +1230,7 @@ disassembleBlockImpl gs max_offset contents = do
         Just exec -> do
           gsr <-
             runExceptT $ runX86Generator (\() s -> pure (mkGenResult s)) gs $ do
-              let next_ip_word = fromIntegral $
-                    case segmentBase seg of
-                      Just base -> base + off
-                      Nothing -> off
+              let next_ip_word = fromIntegral $ segmentOffset seg + off
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction next_ip_word i)
               addStmt (Comment (Text.pack line))
               exec
