@@ -33,7 +33,7 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
-import           Data.Macaw.Types ( BVType )
+import           Data.Macaw.Types ( BVType, BoolType )
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.PPC.Generator
@@ -123,10 +123,15 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'PPCGenerator'.
-          egs1 <- liftST $ runGenerator genResult gs $ do
+          egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
             transformer
+
+            nextIPExpr <- getRegValue PPC_IP
+            case matchConditionalBranch nextIPExpr of
+              Just (cond, t_ip, f_ip) -> conditionalBranch cond (setIP t_ip) (setIP f_ip)
+              Nothing -> return ())
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
@@ -144,11 +149,21 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                                          , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
+                                         , genMemory = mem
                                          }
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
 
-
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
+
+matchConditionalBranch :: Value arch ids tp
+                       -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
+matchConditionalBranch v =
+  case v of
+    AssignedValue (Assignment { assignRhs = EvalApp a }) ->
+      case a of
+        Mux _rep cond t f -> Just (cond, t, f)
+        _ -> Nothing
+    _ -> Nothing
 
 tryDisassembleBlock :: ( PPCArchConstraints ppc
                        , Show (Block ppc ids)
@@ -160,7 +175,7 @@ tryDisassembleBlock :: ( PPCArchConstraints ppc
                     -> ArchAddrWord ppc
                     -> DisM ppc ids s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc))
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
+  let gs0 = initGenState nonceGen mem startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
   (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   traceShow blocks $ unless (nextIPOffset > startOffset) $ do

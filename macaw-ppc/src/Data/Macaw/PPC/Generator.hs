@@ -31,9 +31,11 @@ module Data.Macaw.PPC.Generator (
   finishBlock,
   finishBlock',
   finishWithTerminator,
+  conditionalBranch,
   addExpr,
   bvconcat,
   bvselect,
+  setIP,
   -- * Lenses
   blockState,
   curPPCState,
@@ -57,12 +59,13 @@ import           Control.Monad.ST ( ST )
 import qualified Control.Monad.State.Strict as St
 import           Control.Monad.Trans ( lift )
 import qualified Data.Foldable as F
+import           Data.Maybe ( fromMaybe )
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
-import           Data.Macaw.Types ( BVType )
+import           Data.Macaw.Types ( BVType, BoolType )
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
@@ -74,6 +77,7 @@ import qualified SemMC.Architecture.PPC.Location as APPC
 
 import           Data.Macaw.PPC.PPCReg
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
+import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 -- GenResult
 
@@ -91,7 +95,7 @@ data Expr ppc ids tp where
 ------------------------------------------------------------------------
 -- BlockSeq
 data BlockSeq ppc ids = BlockSeq
-  { nextBlockID :: !Word64
+  { _nextBlockID :: !Word64
     -- ^ index of next block
   , _frontierBlocks :: !(Seq.Seq (Block ppc ids))
     -- ^ Blocks added to CFG
@@ -102,8 +106,8 @@ deriving instance (PPCArchConstraints ppc) => Show (Block ppc ids)
 deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc ids)
 
 -- | Control flow blocs generated so far.
--- nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
--- nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
+nextBlockID :: Simple Lens (BlockSeq ppc s) Word64
+nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
 -- which we need to analyze to compute new potential branch targets.
@@ -135,17 +139,20 @@ data GenState ppc ids s =
            , _blockSeq :: !(BlockSeq ppc ids)
            , _blockState :: !(PreBlock ppc ids)
            , genAddr :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
+           , genMemory :: !(MM.Memory (ArchAddrWidth ppc))
            }
 
 initGenState :: NC.NonceGenerator (ST s) ids
+             -> MM.Memory (ArchAddrWidth ppc)
              -> MM.MemSegmentOff (ArchAddrWidth ppc)
              -> RegState (PPCReg ppc) (Value ppc ids)
              -> GenState ppc ids s
-initGenState nonceGen addr st =
+initGenState nonceGen mem addr st =
   GenState { assignIdGen = nonceGen
-           , _blockSeq = BlockSeq { nextBlockID = 0, _frontierBlocks = Seq.empty }
+           , _blockSeq = BlockSeq { _nextBlockID = 0, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
+           , genMemory = mem
            }
 
 initRegState :: ( KnownNat (RegAddrWidth (PPCReg ppc))
@@ -181,6 +188,9 @@ curPPCState = blockState . pBlockState
 
 ------------------------------------------------------------------------
 -- Factored-out Operations for PPCGenerator
+
+setIP :: (PPCArchConstraints ppc, RegAddrWidth (PPCReg ppc) ~ w) => Value ppc ids (BVType w) -> PPCGenerator ppc ids s ()
+setIP val = curPPCState . boundValue PPC_IP .= val
 
 -- | The implementation of bitvector concatenation
 --
@@ -274,8 +284,8 @@ type GenCont ppc ids s a = a -> GenState ppc ids s -> ET.ExceptT GeneratorError 
 runGenerator :: GenCont ppc ids s a
              -> GenState ppc ids s
              -> PPCGenerator ppc ids s a
-             -> ST s (Either GeneratorError (GenResult ppc ids))
-runGenerator k st (PPCGenerator m) = ET.runExceptT (Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st)
+             -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids)
+runGenerator k st (PPCGenerator m) = Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st
 
 shiftGen :: (GenCont ppc ids s a -> GenState ppc ids s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids))
          -> PPCGenerator ppc ids s a
@@ -319,6 +329,53 @@ getRegValue :: PPCReg ppc tp -> PPCGenerator ppc ids s (Value ppc ids tp)
 getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
+
+conditionalBranch :: (PPCArchConstraints ppc)
+                  => Value ppc ids BoolType
+                  -> PPCGenerator ppc ids s ()
+                  -> PPCGenerator ppc ids s ()
+                  -> PPCGenerator ppc ids s ()
+conditionalBranch condExpr t f =
+  go (fromMaybe condExpr (simplifyValue condExpr))
+  where
+    go condv =
+      case condv of
+        BoolValue True -> t
+        BoolValue False -> f
+        _ -> shiftGen $ \c s0 -> do
+          let pre_block = s0 ^. blockState
+          let st = pre_block ^. pBlockState
+          let t_block_label = s0 ^. blockSeq ^. nextBlockID
+          let s1 = s0 & blockSeq . nextBlockID +~ 1
+                      & blockSeq . frontierBlocks .~ Seq.empty
+                      & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
+
+          -- Explore the true block
+          t_seq <- finishBlock FetchAndExecute <$> runGenerator c s1 t
+
+          -- Explore the false block
+          let f_block_label = t_seq ^. nextBlockID
+          let s2 = GenState { assignIdGen = assignIdGen s0
+                            , _blockSeq = BlockSeq { _nextBlockID = t_seq ^. nextBlockID + 1
+                                                   , _frontierBlocks = Seq.empty
+                                                   }
+                            , _blockState = emptyPreBlock st f_block_label (genAddr s0)
+                            , genAddr = genAddr s0
+                            , genMemory = genMemory s0
+                            }
+          f_seq <- finishBlock FetchAndExecute <$> runGenerator c s2 f
+
+          -- Join the results with a branch terminator
+          let fin_block = finishBlock' pre_block (\_ -> Branch condv t_block_label f_block_label)
+          return GenResult { resBlockSeq =
+                             BlockSeq { _nextBlockID = _nextBlockID f_seq
+                                      , _frontierBlocks = mconcat [ s0 ^. blockSeq ^. frontierBlocks Seq.|> fin_block
+                                                                  , t_seq ^. frontierBlocks
+                                                                  , f_seq ^. frontierBlocks
+                                                                  ]
+                                      }
+                           , resState = Nothing
+                           }
 
 -- | Finish a block immediately with the given terminator statement
 --
