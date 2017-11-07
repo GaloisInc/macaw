@@ -134,7 +134,7 @@ ppcRegs = concat [ gprs
                  , fprs
                  ]
   where
-    sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR ]
+    sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR, Some PPC_XER ]
     gprs = [ Some (PPC_GP (D.GPR rnum))
            | rnum <- [0..31]
            ]
