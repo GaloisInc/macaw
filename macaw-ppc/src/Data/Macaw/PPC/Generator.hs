@@ -35,7 +35,7 @@ module Data.Macaw.PPC.Generator (
   addExpr,
   bvconcat,
   bvselect,
-  setIP,
+  setRegVal,
   -- * Lenses
   blockState,
   curPPCState,
@@ -189,8 +189,12 @@ curPPCState = blockState . pBlockState
 ------------------------------------------------------------------------
 -- Factored-out Operations for PPCGenerator
 
-setIP :: (PPCArchConstraints ppc, RegAddrWidth (PPCReg ppc) ~ w) => Value ppc ids (BVType w) -> PPCGenerator ppc ids s ()
-setIP val = curPPCState . boundValue PPC_IP .= val
+setRegVal :: (PPCArchConstraints ppc, RegAddrWidth (PPCReg ppc) ~ w)
+          => PPCReg ppc tp
+          -> Value ppc ids tp
+          -> PPCGenerator ppc ids s ()
+setRegVal reg val =
+  curPPCState . boundValue reg .= fromMaybe val (simplifyValue val)
 
 -- | The implementation of bitvector concatenation
 --

@@ -112,7 +112,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 
             nextIPExpr <- getRegValue PPC_IP
             case matchConditionalBranch nextIPExpr of
-              Just (cond, t_ip, f_ip) -> conditionalBranch cond (setIP t_ip) (setIP f_ip)
+              Just (cond, t_ip, f_ip) -> conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)
               Nothing -> return ())
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)

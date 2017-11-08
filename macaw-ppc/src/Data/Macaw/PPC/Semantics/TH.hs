@@ -19,7 +19,7 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import           Control.Lens ( (.=), (^.) )
+import           Control.Lens ( (^.) )
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -313,12 +313,12 @@ translateFormula ipVarName semantics interps varNames = do
               let FreeParamF name = varNames `SL.indexShapedList` idx
               [| do val <- $(addEltTH interps expr)
                     let reg = toPPCReg $(varE name)
-                    curPPCState . M.boundValue reg .= val
+                    setRegVal reg val
                |]
             LiteralParameter APPC.LocMem -> writeMemTH interps expr
             LiteralParameter loc -> do
               [| do val <- $(addEltTH interps expr)
-                    curPPCState . M.boundValue $(locToRegTH (Proxy @arch) loc) .= val
+                    setRegVal $(locToRegTH (Proxy @arch) loc) val
                |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let FreeParamF boundOperandName = SL.indexShapedList varNames opIx
@@ -328,7 +328,7 @@ translateFormula ipVarName semantics interps varNames = do
                   [| do case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
                           Just reg -> do
                             val <- $(addEltTH interps expr)
-                            curPPCState . M.boundValue (toPPCReg reg) .= val
+                            setRegVal (toPPCReg reg) val
                           Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
                    |]
 
