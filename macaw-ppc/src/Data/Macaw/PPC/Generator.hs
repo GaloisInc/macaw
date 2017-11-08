@@ -38,7 +38,6 @@ module Data.Macaw.PPC.Generator (
   setRegVal,
   -- * Lenses
   blockState,
-  curPPCState,
   pBlockStmts,
   pBlockState,
   frontierBlocks,
@@ -189,6 +188,8 @@ curPPCState = blockState . pBlockState
 ------------------------------------------------------------------------
 -- Factored-out Operations for PPCGenerator
 
+-- | Set a register to a value after attempting to simplify the value as much as
+-- possible.
 setRegVal :: (PPCArchConstraints ppc, RegAddrWidth (PPCReg ppc) ~ w)
           => PPCReg ppc tp
           -> Value ppc ids tp

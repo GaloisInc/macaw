@@ -19,7 +19,6 @@ module Data.Macaw.PPC.Semantics.Base
   , interpretFormula
   ) where
 
-import           Control.Lens ( (.=) )
 import           Data.Proxy
 import           GHC.TypeLits
 
@@ -140,10 +139,8 @@ locToReg _  _                = undefined
 
 -- | Given a location to modify and a crucible formula, construct a PPCGenerator that
 -- will modify the location by the function encoded in the formula.
-interpretFormula :: forall ppc t ctp s ids .
-                    (1 <= APPC.ArchRegWidth ppc,
-                     M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc,
-                     M.ArchConstraints ppc)
+interpretFormula :: forall ppc t ctp s ids
+                  . (PPCArchConstraints ppc, 1 <= APPC.ArchRegWidth ppc, M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
                  => APPC.Location ppc ctp
                  -> S.Elt t ctp
                  -> PPCGenerator ppc ids s ()
@@ -151,10 +148,10 @@ interpretFormula loc elt = do
   expr <- eltToExpr elt
   let reg  = (locToReg (Proxy @ppc) loc)
   case expr of
-    ValueExpr val -> curPPCState . M.boundValue reg .= val
+    ValueExpr val -> setRegVal reg val
     AppExpr app -> do
       assignment <- addAssignment (M.EvalApp app)
-      curPPCState . M.boundValue reg .= M.AssignedValue assignment
+      setRegVal reg (M.AssignedValue assignment)
 
 -- Convert a Crucible element into an expression.
 eltToExpr :: M.ArchConstraints ppc => S.Elt t ctp -> PPCGenerator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
