@@ -98,7 +98,12 @@ testDiscovery expectedFilename elf =
             -- expectedEntries maps function entry points to the set of block starts
             -- within the function.
             ignoredBlocks = S.fromList (ignoreBlocks er)
-            -- ignoredBlocks :: S.Set Word64
+            allFoundBlockAddrs :: S.Set Word64
+            allFoundBlockAddrs =
+              S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+                         | PU.Some dfi <- M.elems (di ^. MD.funInfo)
+                         , pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                         ]
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
           let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
               actualBlockStarts = S.fromList [ (baddr, bsize)
@@ -112,6 +117,9 @@ testDiscovery expectedFilename elf =
             (_, Nothing) -> T.assertFailure (printf "Unexpected block start: 0x%x" actualEntry)
             (_, Just expectedBlockStarts) ->
               T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `removeIgnored` ignoredBlocks)
+        F.forM_ (funcs er) $ \(_funcAddr, blockAddrs) ->
+          F.forM_ blockAddrs $ \(blockAddr@(Hex addr), _) -> do
+          T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
 
 removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
 removeIgnored actualBlockStarts ignoredBlocks =
