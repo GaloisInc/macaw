@@ -73,8 +73,6 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
   FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
 
--- run stack with --ghc-options=-ddump-splices
-
 -- | A different parameterized pair wrapper; the one in Data.Parameterized.Map
 -- hides the @tp@ parameter under an existential, while we need the variant that
 -- exposes it.
@@ -277,8 +275,6 @@ genExecInstruction _ impl semantics captureInfo = do
       in case Map.lookup co m0 of
         Nothing -> m
         Just pf -> Map.insert co (PairF pf ci) m
-
--- SemMC.Formula: instantiateFormula
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
