@@ -26,7 +26,6 @@ module Data.Macaw.PPC.Generator (
   addStmt,
   addAssignment,
   getRegs,
-  getReg,
   getRegValue,
   shiftGen,
   finishBlock,
@@ -325,12 +324,13 @@ getRegs = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState)
 
-getReg :: PPCReg ppc tp -> PPCGenerator ppc ids s (Expr ppc ids tp)
-getReg r = do
-  genState <- St.get
-  let expr = ValueExpr (genState ^. blockState ^. pBlockState ^. boundValue r)
-  return expr
-
+-- | Get the value of a single register.
+--
+-- NOTE: This should not be called from the generated semantics transformers.
+-- Those must get their register values through 'getRegs', which is used to take
+-- a snapshot of the register state at the beginning of each instruction.  This
+-- is required for instruction updates to register values to have the necessary
+-- atomic update behavior.
 getRegValue :: PPCReg ppc tp -> PPCGenerator ppc ids s (Value ppc ids tp)
 getRegValue r = do
   genState <- St.get
