@@ -23,7 +23,8 @@ identifyCall :: MC.ArchConstraints ppc
              -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
              -> Maybe (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
 identifyCall _ mem stmts rs = trace ("identifyCall:\n\n" ++
-                                     intercalate "\n" (map show stmts))
+                                     intercalate "\n" (map show stmts)) $
+                              trace ("reg state = " ++ show rs) $
                               Nothing
 
 identifyReturn :: (PPCArchConstraints ppc)
