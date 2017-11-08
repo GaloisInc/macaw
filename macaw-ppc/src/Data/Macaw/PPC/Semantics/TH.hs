@@ -19,7 +19,7 @@ module Data.Macaw.PPC.Semantics.TH
 import qualified Data.ByteString as BS
 import qualified Data.Constraint as C
 
-import           Control.Lens ( (.=) )
+import           Control.Lens ( (.=), (^.) )
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -175,6 +175,7 @@ mkOperandListCase ipVarName operandListVar opc semantics capInfo = do
 data BoundVarInterpretations arch t =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
                           , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                          , regsValName :: Name
                           }
 
 -- | This is the function that translates formulas (semantics) into expressions
@@ -198,8 +199,9 @@ genCaseBody :: forall a sh t arch
             -> ParameterizedFormula (Sym t) arch sh
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
-genCaseBody ipVarName _opc semantics varNames =
-  translateFormula ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap) varNames
+genCaseBody ipVarName _opc semantics varNames = do
+  regsName <- newName "_regs"
+  translateFormula ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
   where
     locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
@@ -286,8 +288,8 @@ natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))
 
 -- | Sequence a list of monadic actions without constructing an intermediate
 -- list structure
-doSequenceQ :: [ExpQ] -> Q Exp
-doSequenceQ = doE . map noBindS
+doSequenceQ :: [StmtQ] -> [ExpQ] -> Q Exp
+doSequenceQ stmts exps = doE (stmts ++ map noBindS exps)
 
 translateFormula :: forall arch t sh .
                     (L.Location arch ~ APPC.Location arch,
@@ -300,8 +302,9 @@ translateFormula :: forall arch t sh .
                  -> SL.ShapedList (FreeParamF Name) sh
                  -> Q Exp
 translateFormula ipVarName semantics interps varNames = do
+  let preamble = [ bindS (varP (regsValName interps)) [| getRegs |] ]
   let exps = map translateDefinition (Map.toList (pfDefs semantics))
-  [| Just $(doSequenceQ exps) |]
+  [| Just $(doSequenceQ preamble exps) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> Q Exp
         translateDefinition (Map.Pair param expr) = do
@@ -346,7 +349,7 @@ addEltTH interps elt = case elt of
      |]
   S.BoundVarElt bVar ->
     case Map.lookup bVar (locVars interps) of
-      Just loc -> [| getRegValue $(locToRegTH (Proxy @arch) loc) |]
+      Just loc -> [| return ($(varE (regsValName interps)) ^. M.boundValue $(locToRegTH (Proxy @arch) loc)) |]
       Nothing  ->
         case Map.lookup bVar (opVars interps) of
           Just (FreeParamF name) -> [| extractValue $(varE name) |]

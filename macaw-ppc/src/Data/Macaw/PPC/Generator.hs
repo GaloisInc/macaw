@@ -25,6 +25,7 @@ module Data.Macaw.PPC.Generator (
   -- * Generator actions
   addStmt,
   addAssignment,
+  getRegs,
   getReg,
   getRegValue,
   shiftGen,
@@ -318,6 +319,11 @@ addAssignment rhs = do
   let a = Assignment l rhs
   addStmt $ AssignStmt a
   return a
+
+getRegs :: PPCGenerator ppc ids s (RegState (PPCReg ppc) (Value ppc ids))
+getRegs = do
+  genState <- St.get
+  return (genState ^. blockState ^. pBlockState)
 
 getReg :: PPCReg ppc tp -> PPCGenerator ppc ids s (Expr ppc ids tp)
 getReg r = do
