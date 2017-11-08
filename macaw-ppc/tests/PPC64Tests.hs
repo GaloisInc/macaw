@@ -104,6 +104,7 @@ testDiscovery expectedFilename elf =
                          | PU.Some dfi <- M.elems (di ^. MD.funInfo)
                          , pbr <- M.elems (dfi ^. MD.parsedBlocks)
                          ]
+        -- Test that all discovered blocks were expected (and verify their sizes)
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
           let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
               actualBlockStarts = S.fromList [ (baddr, bsize)
@@ -117,6 +118,8 @@ testDiscovery expectedFilename elf =
             (_, Nothing) -> T.assertFailure (printf "Unexpected block start: 0x%x" actualEntry)
             (_, Just expectedBlockStarts) ->
               T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `removeIgnored` ignoredBlocks)
+
+        -- Test that all expected blocks were discovered
         F.forM_ (funcs er) $ \(_funcAddr, blockAddrs) ->
           F.forM_ blockAddrs $ \(blockAddr@(Hex addr), _) -> do
           T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
