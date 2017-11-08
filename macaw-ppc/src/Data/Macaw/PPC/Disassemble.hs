@@ -41,9 +41,6 @@ import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.PPCReg
 import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
-import Debug.Trace (trace)
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
-
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
 -- Returns the instruction and number of bytes consumed /or/ an error.
@@ -75,13 +72,31 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
 
+-- | Disassemble an instruction and terminate the current block if we run out of
+-- instructions to disassemble.  We can run out if:
+--
+-- 1) We exceed the offset that macaw has told us to disassemble to
+--
+-- 2) We can't decode the IP (i.e., it isn't a constant)
+--
+-- 3) The IP after executing the semantics transformer is not equal to the
+--    expected next IP value, which indicates a jump to another block or
+--    function
+--
+-- In most of those cases, we end the block with a simple terminator.  If the IP
+-- becomes a mux, we split execution using 'conditionalBranch'.
 disassembleBlock :: forall ppc ids s
                   . PPCArchConstraints ppc
                  => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
+                 -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc ids s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
+                 -- ^ The current instruction pointer
                  -> MM.MemWord (ArchAddrWidth ppc)
+                 -- ^ The maximum offset into the bytestring that we should
+                 -- disassemble to; in principle, macaw can tell us to limit our
+                 -- search with this.
                  -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
 disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
@@ -110,9 +125,13 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
             addStmt (Comment (T.pack  lineStr))
             transformer
 
+            -- Check to see if the IP has become conditionally-defined (by e.g.,
+            -- a mux).  If it has, we need to split execution using a primitive
+            -- provided by the PPCGenerator monad.
             nextIPExpr <- getRegValue PPC_IP
             case matchConditionalBranch nextIPExpr of
-              Just (cond, t_ip, f_ip) -> conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)
+              Just (cond, t_ip, f_ip) ->
+                conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)
               Nothing -> return ())
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
@@ -121,9 +140,8 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                 Just preBlock
                   | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
                   , v <- preBlock ^. (pBlockState . curIP)
-                  , trace ("raw ip = " ++ show (pretty v)) True
                   , Just simplifiedIP <- simplifyValue v
-                  , trace ("v = " ++ show (pretty simplifiedIP) ++ "\nnextIPVal = " ++ show nextIPVal ++ "\n") $ simplifiedIP == nextIPVal
+                  , simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
                   , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
@@ -137,6 +155,8 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
+-- | Examine a value and see if it is a mux; if it is, break the mux up and
+-- return its component values (the condition and two alternatives)
 matchConditionalBranch :: (PPCArchConstraints arch)
                        => Value arch ids tp
                        -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
@@ -161,7 +181,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen mem startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
   (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
-  traceShow blocks $ unless (nextIPOffset > startOffset) $ do
+  unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
   return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
@@ -194,7 +214,7 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
-    Right (blocks, bytes) -> traceShow blocks $ return (blocks, bytes, Nothing)
+    Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
 type LocatedError ppc ids = ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
 -- | This is a monad for error handling during disassembly

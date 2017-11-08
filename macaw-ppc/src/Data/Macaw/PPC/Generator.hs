@@ -67,7 +67,6 @@ import           Data.Macaw.CFG.Block
 import           Data.Macaw.Types ( BVType, BoolType )
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 import qualified Lang.Crucible.BaseTypes as S
@@ -116,23 +115,36 @@ frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 ------------------------------------------------------------------------
 -- PreBlock
 
-data PreBlock ppc ids = PreBlock { pBlockIndex :: !Word64
-                                 , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
-                                 -- ^ Starting address of function in preblock.
-                                 , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
-                                 , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
-                                 , pBlockApps  :: !(MapF.MapF (App (Value ppc ids)) (Assignment ppc ids))
-                                 }
+-- | A basic block that is under construction; when we get to the end of a block
+-- (by reaching a terminator statement), we turn this into a full 'Block' (added
+-- to the 'BlockSeq').
+data PreBlock ppc ids =
+  PreBlock { pBlockIndex :: !Word64
+           -- ^ The index of the block we are currently constructing
+           , pBlockAddr  :: !(MM.MemSegmentOff (ArchAddrWidth ppc))
+           -- ^ Starting address of function in preblock.
+           , _pBlockStmts :: !(Seq.Seq (Stmt ppc ids))
+           -- ^ The list of statements that we have constructed so far.  We
+           -- append to the right.
+           , _pBlockState :: !(RegState (PPCReg ppc) (Value ppc ids))
+           -- ^ The current register state, which is updated as we simulate
+           -- instructions
+           }
 
+-- | An accessor for the current statements in the 'PreBlock'
 pBlockStmts :: Simple Lens (PreBlock ppc ids) (Seq.Seq (Stmt ppc ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
+-- | An accessor for the current register state held in the 'PreBlock'
 pBlockState :: Simple Lens (PreBlock ppc ids) (RegState (PPCReg ppc) (Value ppc ids))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 ------------------------------------------------------------------------
 -- GenState
 
+-- | The state held in our state monad.  It tracks the current model of the
+-- machine state as well as a collection of discovered blocks and the current
+-- block we are constructing.
 data GenState ppc ids s =
   GenState { assignIdGen :: !(NC.NonceGenerator (ST s) ids)
            , _blockSeq :: !(BlockSeq ppc ids)
@@ -141,6 +153,11 @@ data GenState ppc ids s =
            , genMemory :: !(MM.Memory (ArchAddrWidth ppc))
            }
 
+-- | Initialize a fresh 'GenState'
+--
+-- This does most of what you would expect.  Note that the next block ID is set
+-- to 1, since we use ID 0 for the first block (assigned to the initial
+-- 'PreBlock'.
 initGenState :: NC.NonceGenerator (ST s) ids
              -> MM.Memory (ArchAddrWidth ppc)
              -> MM.MemSegmentOff (ArchAddrWidth ppc)
@@ -154,16 +171,20 @@ initGenState nonceGen mem addr st =
            , genMemory = mem
            }
 
-initRegState :: ( KnownNat (RegAddrWidth (PPCReg ppc))
-                , ArchReg ppc ~ PPCReg ppc
-                , 1 <= RegAddrWidth (PPCReg ppc)
-                , MM.MemWidth (RegAddrWidth (PPCReg ppc))
-                , ArchWidth ppc)
+-- | Create an initial register state.
+--
+-- All of the register values are set to the special 'Initial' value, which
+-- indicates that the values are not known precisely, but are some abstract
+-- initial values.
+--
+-- Aside from that, we set the initial IP to the given value (@startIP@).
+initRegState :: ( PPCArchConstraints ppc)
              => ArchSegmentOff ppc
              -> RegState (PPCReg ppc) (Value ppc ids)
 initRegState startIP = mkRegState Initial
                      & curIP .~ RelocatableValue NR.knownNat (MM.relativeSegmentAddr startIP)
 
+-- | Set up an empty initial block with a provided state, address, and block ID.
 emptyPreBlock :: RegState (PPCReg ppc) (Value ppc ids)
               -> Word64
               -> MM.MemSegmentOff (RegAddrWidth (ArchReg ppc))
@@ -173,7 +194,6 @@ emptyPreBlock s0 idx addr =
            , pBlockAddr = addr
            , _pBlockStmts = Seq.empty
            , _pBlockState = s0
-           , pBlockApps = MapF.empty
            }
 
 blockSeq :: Simple Lens (GenState ppc ids s) (BlockSeq ppc ids)
@@ -189,7 +209,7 @@ curPPCState = blockState . pBlockState
 -- Factored-out Operations for PPCGenerator
 
 -- | Set a register to a value after attempting to simplify the value as much as
--- possible.
+-- possible (using 'simplifyValue').
 setRegVal :: (PPCArchConstraints ppc, RegAddrWidth (PPCReg ppc) ~ w)
           => PPCReg ppc tp
           -> Value ppc ids tp
@@ -218,6 +238,9 @@ bvconcat bv1Val bv2Val repV repU repW = do
   bv1Shf <- addExpr (AppExpr (BVShl repW bv1Ext bv1Shifter))
   return $ AppExpr (BVOr repW bv1Shf bv2Ext)
 
+-- | Select @n@ bits from a @w@ bit bitvector starting at index @i@
+--
+-- This code is factored out of the TH module to improve compilation times.
 bvselect :: (ArchConstraints ppc, 1 <= w, 1 <= n, 1 <= i, (i+n) <= w)
          => Value ppc ids (BVType w)
          -> NR.NatRepr n
@@ -234,7 +257,7 @@ bvselect bvVal repN repI repW = do
   bvShf <- addExpr (AppExpr (BVShr repW bvVal (mkLit repW (NR.natValue repI))))
   return (AppExpr (Trunc bvShf repN))
 
--- Add an expression in the PPCGenerator monad. This returns a Macaw value
+-- | Add an expression in the PPCGenerator monad. This returns a Macaw value
 -- corresponding to the added expression.
 addExpr :: (ArchConstraints ppc) => Expr ppc ids tp -> PPCGenerator ppc ids s (Value ppc ids tp)
 addExpr expr = do
@@ -252,6 +275,19 @@ data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
   deriving (Show)
 
+-- | This is a state monad (with error termination via 'ET.ExceptT') built on
+-- top of 'Ct.ContT' and 'Rd.ReaderT'.
+--
+-- We use the 'Ct.ContT' for early termination when dealing with control flow
+-- terminators (e.g., syscall) and to split for dealing with conditional
+-- branches.
+--
+-- The state is managed by explicitly passing it through the continuation.
+--
+-- The most important operation provided is the primitive 'shiftGen', which is
+-- used to build 'conditionalBranch'.
+--
+-- The base monad is 'ST', which is used for nonce generation.
 newtype PPCGenerator ppc ids s a =
   PPCGenerator { runG :: Ct.ContT (GenResult ppc ids)
                                   (Rd.ReaderT (GenState ppc ids s)
@@ -261,6 +297,8 @@ newtype PPCGenerator ppc ids s a =
                                        Rd.MonadReader (GenState ppc ids s),
                                        Ct.MonadCont)
 
+-- | The 'Monad' instance is manually-specified so that calls to 'fail' actually
+-- use our 'ET.ExceptT' 'ET.throwError' for nicer error behavior.
 instance Monad (PPCGenerator ppc ids s) where
   return v = PPCGenerator (return v)
   PPCGenerator m >>= h = PPCGenerator (m >>= \v -> runG (h v))
@@ -284,14 +322,19 @@ instance ET.MonadError GeneratorError (PPCGenerator ppc ids s) where
   --         Right res -> return res
   --     Right res -> return res
 
+-- | The type of continuations provided by 'shiftGen'
 type GenCont ppc ids s a = a -> GenState ppc ids s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids)
 
+-- | Given a final continuation to call, run the generator (and produce a final
+-- result with the given continuation @k@).  Also takes an initial state.
 runGenerator :: GenCont ppc ids s a
              -> GenState ppc ids s
              -> PPCGenerator ppc ids s a
              -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids)
 runGenerator k st (PPCGenerator m) = Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st
 
+-- | Capture the current continuation and execute an action that gets that
+-- continuation as an argument (it can be invoked as many times as desired).
 shiftGen :: (GenCont ppc ids s a -> GenState ppc ids s -> ET.ExceptT GeneratorError (ST s) (GenResult ppc ids))
          -> PPCGenerator ppc ids s a
 shiftGen f =
@@ -303,19 +346,25 @@ genResult _ s = do
                    , resState = Just (s ^. blockState)
                    }
 
+-- | Append a statement (on the right) to the list of statements in the current
+-- 'PreBlock'.
 addStmt :: (ArchConstraints ppc) => Stmt ppc ids -> PPCGenerator ppc ids s ()
 addStmt stmt = (blockState . pBlockStmts) %= (Seq.|> stmt)
 
+-- | Generate the next unique ID for an assignment using the nonce generator
 newAssignId :: PPCGenerator ppc ids s (AssignId ids tp)
 newAssignId = do
   nonceGen <- St.gets assignIdGen
   n <- liftST $ NC.freshNonce nonceGen
   return (AssignId n)
 
+-- | Lift an 'ST' action into 'PPCGenerator'
 liftST :: ST s a -> PPCGenerator ppc ids s a
 liftST = PPCGenerator . lift . lift . lift
 
-addAssignment :: ArchConstraints ppc
+-- | Append an assignment statement to the list of statements in the current
+-- 'PreBlock'
+addAssignment :: (ArchConstraints ppc)
               => AssignRhs ppc ids tp
               -> PPCGenerator ppc ids s (Assignment ppc ids tp)
 addAssignment rhs = do
@@ -324,6 +373,11 @@ addAssignment rhs = do
   addStmt $ AssignStmt a
   return a
 
+-- | Get all of the current register values
+--
+-- This is meant to be used to snapshot the register state at the beginning of
+-- an instruction transformer so that we can perform atomic updates to the
+-- machine state (by reading values from the captured initial state).
 getRegs :: PPCGenerator ppc ids s (RegState (PPCReg ppc) (Value ppc ids))
 getRegs = do
   genState <- St.get
@@ -341,10 +395,22 @@ getRegValue r = do
   genState <- St.get
   return (genState ^. blockState ^. pBlockState ^. boundValue r)
 
+-- | A primitive for splitting execution in the presence of conditional
+-- branches.
+--
+-- This function uses the underlying continuation monad to split execution.  It
+-- captures the current continuation and builds a block for the true branch and
+-- another block for the false branch.  It manually threads the state between
+-- the two branches and makes updates to keep them consistent.  It also joins
+-- the two exploration frontiers after processing the true and false branches so
+-- that the underlying return value contains all discovered blocks.
 conditionalBranch :: (PPCArchConstraints ppc)
                   => Value ppc ids BoolType
+                  -- ^ The conditional guarding the branch
                   -> PPCGenerator ppc ids s ()
+                  -- ^ The action to take on the true branch
                   -> PPCGenerator ppc ids s ()
+                  -- ^ The action to take on the false branch
                   -> PPCGenerator ppc ids s ()
 conditionalBranch condExpr t f =
   go (fromMaybe condExpr (simplifyValue condExpr))

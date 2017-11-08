@@ -13,7 +13,6 @@ module Data.Macaw.PPC.Arch (
   PPCTermStmt(..),
   rewriteTermStmt,
   PPCStmt(..),
-  valuesInPPCStmt,
   rewriteStmt,
   PPCPrimFn(..),
   rewritePrimFn,
@@ -26,7 +25,6 @@ import GHC.TypeLits
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
-import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn )
 import qualified Data.Macaw.Memory as MM
@@ -142,9 +140,6 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
-
-valuesInPPCStmt :: PPCStmt ppc (MC.Value ppc ids) -> [Some (MC.Value ppc ids)]
-valuesInPPCStmt s = TF.foldMapF (\x -> [Some x]) s
 
 type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
                               , MC.ArchFn ppc ~ PPCPrimFn ppc

@@ -17,7 +17,13 @@ import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 import           Debug.Trace (trace)
 
-
+-- | Our current heuristic is that we are issuing a (potentially conditional)
+-- call if we see an address in the link register.
+--
+-- This seems reasonable, as the only time the link register would be populated
+-- with a constant is at a call site.  This might be a problem if we see a
+-- @mtlr@ and put a stack value into the link register.  That might look like a
+-- call...
 identifyCall :: (PPCArchConstraints ppc)
              => proxy ppc
              -> MM.Memory (MC.ArchAddrWidth ppc)
@@ -27,12 +33,11 @@ identifyCall :: (PPCArchConstraints ppc)
 identifyCall _ mem stmts0 rs
   | trace ("Identify call: " ++ unlines (map show stmts0)) False = undefined
   | not (null stmts0)
-  , MC.AssignedValue (MC.Assignment { MC.assignRhs = MC.EvalApp app }) <- rs ^. MC.boundValue PPC_LNK
-  , MC.BVAdd _ (MC.RelocatableValue {}) (MC.BVValue _ 0x4) <- app
+  , MC.RelocatableValue {} <- rs ^. MC.boundValue PPC_LNK
   , Just retVal <- simplifyValue (rs ^. MC.boundValue PPC_LNK)
   , Just retAddrVal <- MC.asLiteralAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
-    Just (Seq.fromList stmts0, retAddr)
+      Just (Seq.fromList stmts0, retAddr)
   | otherwise = Nothing
 
 identifyReturn :: (PPCArchConstraints ppc)
