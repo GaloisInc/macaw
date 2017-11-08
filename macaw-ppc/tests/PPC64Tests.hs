@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 module PPC64Tests (
@@ -18,7 +19,7 @@ import Data.Word ( Word64 )
 import System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
-import Text.Printf ( printf )
+import Text.Printf ( PrintfArg, printf )
 import Text.Read ( readMaybe )
 
 import qualified Data.ElfEdit as E
@@ -36,13 +37,22 @@ import Debug.Trace (trace)
 ppcAsmTests :: [FilePath] -> T.TestTree
 ppcAsmTests = T.testGroup "PPC" . map mkTest
 
+newtype Hex a = Hex a
+  deriving (Eq, Ord, Num, PrintfArg)
+
+instance (Num a, Show a, PrintfArg a) => Show (Hex a) where
+  show (Hex a) = printf "0x%x" a
+
+instance (Read a) => Read (Hex a) where
+  readsPrec i s = [ (Hex a, s') | (a, s') <- readsPrec i s ]
+
 -- | The type of expected results for test cases
 data ExpectedResult =
-  R { funcs :: [(Word64, [(Word64, Word64)])]
+  R { funcs :: [(Hex Word64, [(Hex Word64, Word64)])]
     -- ^ The first element of the pair is the address of entry point
     -- of the function.  The list is a list of the addresses of the
     -- basic blocks in the function (including the first block).
-    , ignoreBlocks :: [Word64]
+    , ignoreBlocks :: [Hex Word64]
     -- ^ This is a list of discovered blocks to ignore.  This is
     -- basically just the address of the instruction after the exit
     -- syscall, as macaw doesn't know that exit never returns and
