@@ -7,20 +7,20 @@ module PPC64Tests (
   ppcAsmTests
   ) where
 
-import Control.Lens ( (^.) )
+import           Control.Lens ( (^.) )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
 import qualified Data.Map as M
-import Data.Maybe ( fromJust )
+import           Data.Maybe ( fromJust )
 import qualified Data.Set as S
-import Data.Typeable ( Typeable )
-import Data.Word ( Word64 )
-import System.FilePath ( dropExtension, replaceExtension )
+import           Data.Typeable ( Typeable )
+import           Data.Word ( Word64 )
+import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
-import Text.Printf ( PrintfArg, printf )
-import Text.Read ( readMaybe )
+import           Text.Printf ( PrintfArg, printf )
+import           Text.Read ( readMaybe )
 
 import qualified Data.ElfEdit as E
 
@@ -31,8 +31,8 @@ import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.PPC as RO
 
-import Data.List (intercalate)
-import Debug.Trace (trace)
+import           Data.List (intercalate)
+import           Debug.Trace (trace)
 
 ppcAsmTests :: [FilePath] -> T.TestTree
 ppcAsmTests = T.testGroup "PPC" . map mkTest
