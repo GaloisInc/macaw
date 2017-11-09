@@ -1,0 +1,75 @@
+* Overview
+
+  This document describes the process for adding support (i.e., semantics) for
+  new instructions to a semmc-based macaw backend.
+
+* When do I need this
+
+  Missing instruction semantics will manifest in one of two ways:
+
+  - Pattern match failures in the generated ~execInstruction~ function (e.g.,
+    ~Data.Macaw.PPC.Semantics.PPC64.execInstruction~)
+  - Basic blocks returned by macaw that are terminated by a ~TranslateError~
+    terminator
+
+  The first signal will only appear in debug mode.  Later, we will add a
+  fallthrough case to prevent noisy failures and turn them into the second case.
+
+  The second case can happen for two reasons.  First, we may not have support in
+  the disassembler for the instruction.  We know we are missing some PowerPC
+  instructions, and we don't have any support right now for system management
+  instructions.
+
+* Process
+
+  1. Identify the instruction with missing semantics
+
+     This is included in the exception for a missing case in ~execInstruction~.
+     If there is no exception there, it can be determined from the address in
+     the ~TranslateError~.
+
+  2. Find the semantics for the instruction in the relevant architecture manual
+
+     PowerPC: http://www.iman1.jo/iman1/images/IMAN1-User-Site-Files/Architecure/PPC_Vers202_Book1_public.pdf
+
+  3. Implement the semantics using the semantics DSL
+
+     For PowerPC, this lives in the semmc-ppc package in the semmc repository.
+     The relevant module is ~SemMC.Architecture.PPC.Base~.  Find the most
+     appropriate sub-module under the ~Base~ hierarchy (or add a new one) and
+     add a new opcode definition.  For most instructions, you should use
+     ~defineOpcodeWithIP~, which automatically handles updating the instruction
+     pointer.
+
+  4. Regenerate the semantics files
+
+     After the definition is added to the DSL, we need to regenerate the
+     semantics files to actually put the definition on disk.  To do this, run
+     the ~genbase.sh~ script for your architecture.  For PowerPC, this script is
+     ~semmc/semmc-ppc/scripts/genbase.sh~.
+
+     Verify that the new expected file is generated.  It should be a file with a
+     ~.sem~ extension in the data directory of your architecture.  These files
+     are an extended version of the SMTLib format.
+
+  5. Force a rebuild of the opcode module
+
+     We use TH to store the contents of the semantics files as bytestrings.
+     This is inconvenient at development time, but important for distribution
+     and run-time (so that the locations of the semantics files on disk are not
+     important).  Unfortunately, TH can't tell when we add files to a directory,
+     so we have to trick it into rebuilding the necessary modules.
+
+     For PowerPC, the relevant modules are:
+
+     - ~SemMC.Architecture.PPC64.Opcodes.Internal~
+     - ~SemMC.Architecture.PPC32.Opcodes.Internal~
+
+     The easiest way to force a rebuild is just to add another newline to each
+     file and then rebuild.
+
+  6. Rebuild your macaw backend
+
+     This would be macaw-ppc or macaw-arm.  After rebuilding these, try to
+     analyze your binary again to make sure the changes worked.
+
