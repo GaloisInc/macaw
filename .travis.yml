@@ -42,13 +42,6 @@ install:
 script:
  - travis_wait stack --no-terminal --skip-ghc-check setup
  - cd x86/tests
- - cd submodules
- - cd dwarf; ls -l; cd ..
- - cd dwarf; git clone git@github.com:GaloisInc/dwarf.git
- - cd ../elf-edit; git clone git@github.com:GaloisInc/elf-edit.git
- - cd ../flexdis86; git clone git@github.com:GaloisInc/flexdis86.git
- - cd ../parameterized-utils; git clone git@github.com:GaloisInc/parameterized-utils.git
- - cd ..
  - stack build macaw-x86
  - stack test macaw-x86
  - cabal check
