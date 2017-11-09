@@ -20,7 +20,6 @@ matrix:
 before_install:
  - unset CC
  - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$PATH
- - cd x86/tests
 
 install:
  - cabal --version
@@ -39,6 +38,7 @@ install:
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
+ - cd x86/tests
  - stack build macaw-x86
  - stack test macaw-x86
  - cabal check
