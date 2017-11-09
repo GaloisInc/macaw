@@ -19,7 +19,9 @@ matrix:
 
 before_install:
  - unset CC
- - export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$PATH
+ - mkdir -p ~/.local/bin
+ - export PATH=$HOME/.local/bin:/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$PATH
+ - travis_retry curl -L https://www.stackage.org/stack/linux-x86_64 | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
 
 install:
  - cabal --version
@@ -31,6 +33,7 @@ install:
    fi
  - travis_retry cabal update -v
  - sed -i 's/^jobs:/-- jobs:/' ${HOME}/.cabal/config
+ - wget -qO- https://get.haskellstack.org/ | sh
  # - cabal install --only-dependencies --enable-tests --enable-benchmarks --dry -v > installplan.txt
  # - stack install macaw-x86 --only-dependencies --test --dry-run -v 2> installplan.txt
  # - sed -i -e '1,/^Resolving /d' installplan.txt; cat installplan.txt
