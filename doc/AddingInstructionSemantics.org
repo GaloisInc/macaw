@@ -73,3 +73,52 @@
      This would be macaw-ppc or macaw-arm.  After rebuilding these, try to
      analyze your binary again to make sure the changes worked.
 
+** Adding new operations
+
+   Sometimes, new operations are required in the formula language.  For example,
+   we will need to add support for the popcount (population count) instruction
+   at some point.  There are two cases:
+
+   1. SimpleBuilder (in crucible) supports the operation
+   2. SimpleBuilder does not support the operation
+
+*** SimpleBuilder supports the operation
+
+    In this case, we:
+
+    1. Add a wrapper in the DSL (~SemMC.DSL~ in the semmc package)
+    2. Update the formula parser to parse the new operation
+
+       The formula parser is located in the semmc package
+       (~SemMC.Formula.Parser~) and converts s-expression formulas into
+       SimpleBuilder terms.  The parser will call into SimpleBuilder, mostly via
+       the ~IsExprBuilder~ interface, to construct these terms.
+    3. Update the TH-macaw IR conversion to handle the new construct
+
+       This code is located in macaw-semmc in the architecture-specific
+       backends.  For example, the PowerPC version is in macaw-ppc under
+       ~Data.Macaw.PPC.Semantics.TH~.  The function of interest is
+       ~crucAppToExprTH~, which converts SimpleBuilder terms into macaw terms.
+       Add a new case that performs the conversion as necessary.
+    4. Rebuild
+
+*** SimpleBuilder does not support the operation
+
+    Ideally, we can modify SimpleBuilder, but that is more involved.  Sometimes
+    we can get away with the following:
+
+    1. Add a wrapper in the DSL (~SemMC.DSL~) that wraps the necessary
+       functionality into an uninterpreted function
+    2. Add a type signature for the uninterpreted function for your architecture
+
+       The signatures for PowerPC are in ~SemMC.Architecture.PPC.UF~ in the
+       semmc-ppc package.  These signatures give types to the uninterpreted
+       functions instantiated into SimpleBuilder.
+
+       Note that we don't need to update the parser, since it treats all
+       uninterpreted functions uniformly.
+    3. Add an interpretation for the uninterpreted function in the TH-macaw translator
+
+       Instantiate the necessary macaw IR fragment to implement the
+       uninterpreted function.  Right now, there are a few macaw operations not
+       supported in SimpleBuilder, so this might be necessary.
