@@ -31,8 +31,8 @@ install:
    fi
  - travis_retry cabal update -v
  - sed -i 's/^jobs:/-- jobs:/' ${HOME}/.cabal/config
- - cd x86; cabal install --only-dependencies --enable-tests --enable-benchmarks --dry -v > installplan.txt; cd ..
- - sed -i -e '1,/^Resolving /d' installplan.txt; cat installplan.txt
+ - pushd x86; cabal install --only-dependencies --enable-tests --enable-benchmarks --dry -v > installplan.txt; popd
+ - pushd x86; sed -i -e '1,/^Resolving /d' installplan.txt; cat installplan.txt; popd
 
 # check whether current requested install-plan matches cached package-db snapshot
  - if diff -u $HOME/.cabsnap/installplan.txt installplan.txt;
