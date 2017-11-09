@@ -34,7 +34,7 @@ install:
  - sed -i 's/^jobs:/-- jobs:/' ${HOME}/.cabal/config
  # - cabal install --only-dependencies --enable-tests --enable-benchmarks --dry -v > installplan.txt
  # - stack install macaw-x86 --only-dependencies --test --dry-run -v 2> installplan.txt
- - sed -i -e '1,/^Resolving /d' installplan.txt; cat installplan.txt
+ # - sed -i -e '1,/^Resolving /d' installplan.txt; cat installplan.txt
 
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
