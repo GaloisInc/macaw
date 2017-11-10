@@ -10,6 +10,7 @@ packages:
 - submodules/flexdis86/
 - submodules/parameterized-utils/
 extra-deps:
+- Cabal-2.0.0.2
 - IntervalMap-0.5.2.0
 - QuickCheck-2.10.0.1
 - StateVar-1.1.0.4
