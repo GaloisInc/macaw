@@ -44,14 +44,15 @@ script:
  - cd x86/tests
  - stack build macaw-x86
  - stack test macaw-x86
- - cabal check
- - cabal haddock # tests that documentation can be generated
- - cabal sdist   # tests that a source-distribution can be generated
+ - cd ../..
+# - cabal check
+# - cabal haddock # tests that documentation can be generated
+# - cabal sdist   # tests that a source-distribution can be generated
 
 # Check that the resulting source distribution can be built & installed.
 # If there are no other `.tar.gz` files in `dist`, this can be even simpler:
 # `cabal install --force-reinstalls dist/*-*.tar.gz`
- - SRC_TGZ=$(cabal info . | awk '{print $2;exit}').tar.gz &&
-   (cd dist && cabal install --force-reinstalls "$SRC_TGZ")
+# - SRC_TGZ=$(cabal info . | awk '{print $2;exit}').tar.gz &&
+#   (cd dist && cabal install --force-reinstalls "$SRC_TGZ")
 
 # EOF
