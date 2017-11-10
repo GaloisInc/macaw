@@ -57,6 +57,7 @@ test-suite macaw-ppc-tests
   ghc-options: -Wall
   main-is: Main.hs
   other-modules: PPC64Tests
+                 PPC64InstructionCoverage
                  Shared
   hs-source-dirs: tests
   build-depends: base >=4.9 && <5,
