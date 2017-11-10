@@ -447,6 +447,24 @@ evalNonceAppTH bvi nonceApp =
                     addExpr (AppExpr (M.BVTestBit bitNumExp locExp))
                |]
             _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
+        -- For count leading zeros, we don't have a SimpleBuilder term to reduce
+        -- it to, so we have to manually transform it to macaw here (i.e., we
+        -- can't use the more general substitution method, since that is in
+        -- terms of rewriting simplebuilder).
+        "clz_32" ->
+          case FC.toListFC Some args of
+            [Some loc] -> do
+              [| do locExp <- $(addEltTH bvi loc)
+                    addExpr (AppExpr (M.Bsr (NR.knownNat @32) locExp))
+               |]
+            _ -> fail ("Unsupported argument list for clz: " ++ showF args)
+        "clz_64" ->
+          case FC.toListFC Some args of
+            [Some loc] -> do
+              [| do locExp <- $(addEltTH bvi loc)
+                    addExpr (AppExpr (M.Bsr (NR.knownNat @64) locExp))
+               |]
+            _ -> fail ("Unsupported argument list for clz: " ++ showF args)
         _ | Just nBytes <- readMemBytes fnName -> do
             case FC.toListFC Some args of
               [_, Some addrElt] -> do
