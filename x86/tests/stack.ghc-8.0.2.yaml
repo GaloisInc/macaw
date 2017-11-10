@@ -91,6 +91,6 @@ extra-deps:
 - base16-bytestring-0.1.1.6
 - cereal-0.5.4.0
 
-
+- cabal-doctest-1.0.3
 
 resolver: ghc-8.0.2
