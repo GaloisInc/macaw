@@ -111,6 +111,9 @@ specialSemanticsCases :: [MatchQ]
 specialSemanticsCases =
   [ match (conP 'D.SC []) (normalB syscallBody) []
   , match (conP 'D.TRAP []) (normalB trapBody) []
+  , match (conP 'D.ATTN []) (normalB [| Just (addStmt (M.ExecArchStmt Attn)) |]) []
+  , match (conP 'D.SYNC []) (normalB [| Just (addStmt (M.ExecArchStmt Sync)) |]) []
+  , match (conP 'D.ISYNC []) (normalB [| Just (addStmt (M.ExecArchStmt Isync)) |]) []
   ]
   where
     syscallBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCSyscall)) |]
@@ -726,6 +729,20 @@ crucAppToExprTH elt interps = case elt of
           bval1 <- $(addEltTH interps bv1)
           bval2 <- $(addEltTH interps bv2)
           return (AppExpr (M.BVMul rep bval1 bval2))
+     |]
+  S.BVSdiv w bv1 bv2 ->
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          let divExp = SDiv rep bval1 bval2
+          (ValueExpr . M.AssignedValue) <$> addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
+     |]
+  S.BVUdiv w bv1 bv2 ->
+    [| do let rep = $(natReprTH w)
+          bval1 <- $(addEltTH interps bv1)
+          bval2 <- $(addEltTH interps bv2)
+          let divExp = UDiv rep bval1 bval2
+          (ValueExpr . M.AssignedValue) <$> addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
      |]
   S.BVShl w bv1 bv2 ->
     [| do let rep = $(natReprTH w)

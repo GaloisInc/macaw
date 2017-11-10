@@ -80,7 +80,8 @@ absEvalArchFn :: (PPCArchConstraints ppc)
               -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
 absEvalArchFn _ _r f =
   case f of
-    IDiv {} -> MA.TopV
+    SDiv {} -> MA.TopV
+    UDiv {} -> MA.TopV
 
 -- | For now, none of the architecture-specific statements have an effect on the
 -- abstract value.

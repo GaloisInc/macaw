@@ -20,20 +20,21 @@ module Data.Macaw.PPC.Arch (
   PPCArchConstraints
   ) where
 
-import GHC.TypeLits
+import           GHC.TypeLits
 
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Macaw.CFG as MC
-import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn )
+import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
-import Data.Macaw.PPC.PPCReg
+import           Data.Macaw.PPC.PPCReg
 
 data PPCTermStmt ids where
   -- | A representation of the PowerPC @sc@ instruction
@@ -61,14 +62,17 @@ rewriteTermStmt s =
     PPCSyscall -> pure PPCSyscall
     PPCTrap -> pure PPCTrap
 
--- | We currently have no PPC-specific statements.  Remove 'None' if we add some.
 data PPCStmt ppc (v :: MT.Type -> *) where
-  None :: PPCStmt ppc v
+  Attn :: PPCStmt ppc v
+  Sync :: PPCStmt ppc v
+  Isync :: PPCStmt ppc v
 
 instance MC.PrettyF (PPCStmt ppc) where
   prettyF s =
     case s of
-      None -> PP.text "None"
+      Attn -> PP.text "ppc_attn"
+      Sync -> PP.text "ppc_sync"
+      Isync -> PP.text "ppc_isync"
 
 instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
@@ -79,50 +83,66 @@ instance TF.FoldableF (PPCStmt ppc) where
 instance TF.TraversableF (PPCStmt ppc) where
   traverseF _go stmt =
     case stmt of
-      None -> pure None
+      Attn -> pure Attn
+      Sync -> pure Sync
+      Isync -> pure Isync
 
 instance MC.IsArchStmt (PPCStmt ppc) where
   ppArchStmt _pp stmt =
     case stmt of
-      None -> PP.text "none"
+      Attn -> PP.text "ppc_attn"
+      Sync -> PP.text "ppc_sync"
+      Isync -> PP.text "ppc_isync"
 
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
 
-rewriteStmt :: PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
-rewriteStmt _ = return ()
+rewriteStmt :: (MC.ArchStmt ppc ~ PPCStmt ppc) => PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
+rewriteStmt s = do
+  s' <- TF.traverseF rewriteValue s
+  appendRewrittenArchStmt s'
 
 data PPCPrimFn ppc f tp where
-  IDiv :: proxy ppc
+  UDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
+       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+       -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+  SDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
 
-instance MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
+instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
   typeRepr f =
     case f of
-      IDiv {} -> undefined
+      UDiv rep _ _ -> MT.BVTypeRepr rep
+      SDiv rep _ _ -> MT.BVTypeRepr rep
 
 -- | Right now, none of the primitive functions has a side effect.  That will
 -- probably change.
 ppcPrimFnHasSideEffects :: PPCPrimFn ppc f tp -> Bool
 ppcPrimFnHasSideEffects pf =
   case pf of
-    IDiv {} -> False
+    UDiv {} -> False
+    SDiv {} -> False
 
 rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
               -> Rewriter ppc s src tgt (MC.Value ppc tgt tp)
 rewritePrimFn f =
   case f of
-    IDiv p lhs rhs -> do
-      tgtFn <- IDiv p <$> rewriteValue lhs <*> rewriteValue rhs
+    UDiv rep lhs rhs -> do
+      tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
+      evalRewrittenArchFn tgtFn
+    SDiv rep lhs rhs -> do
+      tgtFn <- SDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
       evalRewrittenArchFn tgtFn
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f tp -> m PP.Doc
-ppPrimFn _pp f =
+ppPrimFn pp f =
   case f of
-    IDiv {} -> pure (PP.text "idiv")
+    UDiv _ lhs rhs -> (\lhs' rhs' -> PP.text "ppc_udiv " PP.<> lhs' PP.<> PP.text " " PP.<> rhs') <$> pp lhs <*> pp rhs
+    SDiv _ lhs rhs -> (\lhs' rhs' -> PP.text "ppc_sdiv " PP.<> lhs' PP.<> PP.text " " PP.<> rhs') <$> pp lhs <*> pp rhs
 
 instance MC.IsArchFn (PPCPrimFn ppc) where
   ppArchFn = ppPrimFn
@@ -136,7 +156,8 @@ instance FC.FoldableFC (PPCPrimFn ppc) where
 instance FC.TraversableFC (PPCPrimFn ppc) where
   traverseFC go f =
     case f of
-      IDiv p lhs rhs -> IDiv p <$> go lhs <*> go rhs
+      UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
+      SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
