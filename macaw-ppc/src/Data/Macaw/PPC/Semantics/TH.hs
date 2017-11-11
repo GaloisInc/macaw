@@ -468,6 +468,20 @@ evalNonceAppTH bvi nonceApp =
                     addExpr (AppExpr (M.Bsr (NR.knownNat @64) locExp))
                |]
             _ -> fail ("Unsupported argument list for clz: " ++ showF args)
+        "popcnt_32" ->
+          case FC.toListFC Some args of
+            [Some loc] -> do
+              [| do locExp <- $(addEltTH bvi loc)
+                    addExpr (AppExpr (M.PopCount (NR.knownNat @32) locExp))
+               |]
+            _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
+        "popcnt_64" ->
+          case FC.toListFC Some args of
+            [Some loc] -> do
+              [| do locExp <- $(addEltTH bvi loc)
+                    addExpr (AppExpr (M.PopCount (NR.knownNat @64) locExp))
+               |]
+            _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
         _ | Just nBytes <- readMemBytes fnName -> do
             case FC.toListFC Some args of
               [_, Some addrElt] -> do
