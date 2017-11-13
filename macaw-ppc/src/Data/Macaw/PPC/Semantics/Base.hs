@@ -37,7 +37,10 @@ import Data.Parameterized.NatRepr ( knownNat
 
 import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Semantics.TH
+
+type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
+  FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
+  FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
 
 crucAppToExpr :: (M.ArchConstraints ppc) => S.App (S.Elt t) ctp -> PPCGenerator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
