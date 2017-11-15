@@ -19,8 +19,11 @@ import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
+import           Data.Macaw.Types ( BVType )
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Some ( Some(..) )
+
+import qualified Dismantle.PPC as D
 
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
@@ -66,12 +69,17 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
 -- abstract return value.
 mkInitialAbsState :: (PPCArchConstraints ppc)
                   => proxy ppc
+                  -> (ArchSegmentOff ppc -> Maybe (MA.AbsValue (RegAddrWidth (ArchReg ppc)) (BVType (RegAddrWidth (ArchReg ppc)))))
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))
                   -> ArchSegmentOff ppc
                   -> MA.AbsBlockState (ArchReg ppc)
-mkInitialAbsState _ _mem startAddr =
-  MA.top & MA.setAbsIP startAddr
-         & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
+mkInitialAbsState _ tocMap _mem startAddr =
+  case tocMap startAddr of
+    Just tocAddr -> s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
+    Nothing -> s0
+  where
+    s0 = MA.top & MA.setAbsIP startAddr
+                & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
 
 absEvalArchFn :: (PPCArchConstraints ppc)
               => proxy ppc

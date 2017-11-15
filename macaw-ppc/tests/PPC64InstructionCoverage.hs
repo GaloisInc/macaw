@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
 module PPC64InstructionCoverage (
   ppc64InstructionCoverageTests
   ) where
@@ -6,6 +7,7 @@ module PPC64InstructionCoverage (
 import           Control.Lens ( (^.) )
 import qualified Data.Map as M
 import           Data.Maybe ( fromJust )
+import           Data.Proxy ( Proxy(..) )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
 import qualified Test.Tasty as T
@@ -17,6 +19,7 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.PPC as RO
+import qualified SemMC.Architecture.PPC64 as PPC64
 
 import           Shared
 
@@ -30,7 +33,8 @@ testMacaw :: E.Elf 64 -> IO ()
 testMacaw elf =
   withMemory MM.Addr64 elf $ \mem -> do
     let Just entryPoint = MM.asSegmentOff mem (findEntryPoint64 elf mem)
-    let di = MD.cfgFromAddrs RO.ppc64_linux_info mem MD.emptySymbolAddrMap [entryPoint] []
+    let tocBase = RO.tocBaseForELF (Proxy @PPC64.PPC) elf mem
+    let di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap [entryPoint] []
     let allFoundBlockAddrs :: S.Set Word64
         allFoundBlockAddrs =
           S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
