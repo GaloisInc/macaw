@@ -28,6 +28,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.PPC as RO
+import qualified Data.Macaw.PPC.BinaryFormat.ELF as E
 import qualified SemMC.Architecture.PPC64 as PPC64
 
 import           Data.List (intercalate)
@@ -80,7 +81,8 @@ testDiscovery expectedFilename elf =
         -- TODO: For some reason asSegmentOff is returning Nothing. Need to investigate.
         -- Above: Just need to convert the entry point from E.elfEntry elf to an ArchSegmentOff.
         tocBase = RO.tocBaseForELF (Proxy @PPC64.PPC) elf mem
-        di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap [entryPoint] []
+        otherEntries = E.tocEntryAddrsForElf (Proxy @PPC64.PPC) elf mem
+        di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap (entryPoint:otherEntries) []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
       -- Above: Read in the ExpectedResult from the contents of the file

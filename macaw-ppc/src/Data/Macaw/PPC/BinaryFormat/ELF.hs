@@ -2,7 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Data.Macaw.PPC.BinaryFormat.ELF (
-  tocBaseForELF
+  tocBaseForELF,
+  tocEntryAddrsForElf
   ) where
 
 import           GHC.TypeLits ( KnownNat, natVal )
@@ -32,22 +33,42 @@ import           Data.Macaw.Types ( BVType )
 -- stored in the @.opd@ section.  Each entry is three pointers, where the first
 -- entry is the function address and the second is the value of the TOC.  The
 -- third entry is unused in C programs (it is meant for Pascal).
-tocBaseForELF :: forall ppc proxy
-               . (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
+tocBaseForELF :: (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
               => proxy ppc
               -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
               -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
               -> MC.ArchSegmentOff ppc
               -> Maybe (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc))))
 tocBaseForELF proxy e mem =
+  case parseTOC proxy e mem of
+    Left err -> error ("Error parsing .opd section: " ++ err)
+    Right res -> \entryAddr -> M.lookup entryAddr res
+
+tocEntryAddrsForElf :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
+                         KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)))
+                    => proxy ppc
+                    -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
+                    -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
+                    -> [MM.MemSegmentOff (MC.RegAddrWidth (MC.ArchReg ppc))]
+tocEntryAddrsForElf proxy e mem =
+  case parseTOC proxy e mem of
+    Left err -> error ("Error parsing .opd section: " ++ err)
+    Right res -> M.keys res
+
+parseTOC :: forall ppc proxy
+          . (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
+         => proxy ppc
+         -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
+         -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
+         -> Either String (M.Map (MC.ArchSegmentOff ppc) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
+parseTOC proxy e mem =
   case E.findSectionByName (C8.pack ".opd") e of
     [sec] ->
-      case G.runGet (parseFunctionDescriptors proxy mem (fromIntegral ptrSize)) (E.elfSectionData sec) of
-        Left err -> error ("Error parsing .opd section: " ++ err)
-        Right res -> \entryAddr -> M.lookup entryAddr res
+      G.runGet (parseFunctionDescriptors proxy mem (fromIntegral ptrSize)) (E.elfSectionData sec)
     _ -> error "Could not find .opd section"
   where
     ptrSize = natVal (Proxy @(MC.RegAddrWidth (MC.ArchReg ppc)))
+
 
 parseFunctionDescriptors :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
                          => proxy ppc
