@@ -518,6 +518,9 @@ floatingPointTH bvi fnName args =
         "round_single" -> do
           fpval <- addEltTH bvi a
           liftQ [| addExpr (AppExpr (M.FPCvt M.DoubleFloatRepr $(return fpval) M.SingleFloatRepr)) |]
+        "single_to_double" -> do
+          fpval <- addEltTH bvi a
+          liftQ [| addExpr (AppExpr (M.FPCvt M.SingleFloatRepr $(return fpval) M.DoubleFloatRepr)) |]
         "abs" -> do
           -- Note that fabs is only defined for doubles; the operation is the
           -- same for single and double precision on PPC, so there is only a
