@@ -75,7 +75,7 @@ import qualified SemMC.Architecture.PPC.Location as APPC
 
 import           Data.Macaw.PPC.PPCReg
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
-import           Data.Macaw.PPC.Simplify ( simplifyValue )
+import           Data.Macaw.PPC.Simplify ( simplifyValue, simplifyApp )
 
 -- GenResult
 
@@ -263,9 +263,11 @@ addExpr :: (ArchConstraints ppc) => Expr ppc ids tp -> PPCGenerator ppc ids s (V
 addExpr expr = do
   case expr of
     ValueExpr val -> return val
-    AppExpr app -> do
-      assignment <- addAssignment (EvalApp app)
-      return $ AssignedValue assignment
+    AppExpr app
+      | Just val <- simplifyApp app -> return val
+      | otherwise -> do
+          assignment <- addAssignment (EvalApp app)
+          return $ AssignedValue assignment
 
 
 ------------------------------------------------------------------------
