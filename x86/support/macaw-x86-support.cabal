@@ -10,7 +10,7 @@ executable make_bsd_syscalls
   build-depends:
     base >= 4,
     bytestring,
-    language-c <= 0.5.0,
+    language-c >= 0.6,
     lens,
     pretty,
     containers,
@@ -23,7 +23,7 @@ executable make_linux_syscalls
  build-depends:
     base >= 4,
     bytestring,
-    language-c <= 0.5.0,
+    language-c >= 0.6,
     lens,
     pretty,
     containers,

@@ -113,7 +113,7 @@ typeToArgType typ =
     PtrType _ _ _            -> WordArgType
     ArrayType _ _ _ _        -> WordArgType
     FunctionType _ _         -> unhandled
-    TypeDefType (TypeDefRef _ (Just typ) _) _ _ -> typeToArgType typ
+    TypeDefType (TypeDefRef _ typ _) _ _ -> typeToArgType typ
   where
     unhandled = error ("Unhandled type: " ++ show (pretty typ))
 
