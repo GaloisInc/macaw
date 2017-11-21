@@ -14,7 +14,6 @@ import qualified Data.Map.Strict as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Serialize.Get as G
 import qualified Data.Set as S
-import           Text.Printf ( printf, PrintfArg )
 
 import qualified Data.ElfEdit as E
 import qualified Data.Macaw.AbsDomain.AbsState as MA
@@ -36,22 +35,20 @@ import           Data.Macaw.Types ( BVType )
 tocBaseForELF :: (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
               => proxy ppc
               -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-              -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
               -> MC.ArchSegmentOff ppc
               -> Maybe (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc))))
-tocBaseForELF proxy e mem =
-  case parseTOC proxy e mem of
+tocBaseForELF proxy e =
+  case parseTOC proxy e of
     Left err -> error ("Error parsing .opd section: " ++ err)
-    Right res -> \entryAddr -> M.lookup entryAddr res
+    Right res -> \entryAddr -> M.lookup (MM.relativeSegmentAddr entryAddr) res
 
 tocEntryAddrsForElf :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
                          KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)))
                     => proxy ppc
                     -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-                    -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
-                    -> [MM.MemSegmentOff (MC.RegAddrWidth (MC.ArchReg ppc))]
-tocEntryAddrsForElf proxy e mem =
-  case parseTOC proxy e mem of
+                    -> [MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))]
+tocEntryAddrsForElf proxy e =
+  case parseTOC proxy e of
     Left err -> error ("Error parsing .opd section: " ++ err)
     Right res -> M.keys res
 
@@ -59,12 +56,11 @@ parseTOC :: forall ppc proxy
           . (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
          => proxy ppc
          -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-         -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
-         -> Either String (M.Map (MC.ArchSegmentOff ppc) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
-parseTOC proxy e mem =
+         -> Either String (M.Map (MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
+parseTOC proxy e =
   case E.findSectionByName (C8.pack ".opd") e of
     [sec] ->
-      G.runGet (parseFunctionDescriptors proxy mem (fromIntegral ptrSize)) (E.elfSectionData sec)
+      G.runGet (parseFunctionDescriptors proxy (fromIntegral ptrSize)) (E.elfSectionData sec)
     _ -> error "Could not find .opd section"
   where
     ptrSize = natVal (Proxy @(MC.RegAddrWidth (MC.ArchReg ppc)))
@@ -72,15 +68,14 @@ parseTOC proxy e mem =
 
 parseFunctionDescriptors :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
                          => proxy ppc
-                         -> MM.Memory (MC.RegAddrWidth (MC.ArchReg ppc))
                          -> Int
-                         -> G.Get (M.Map (MC.ArchSegmentOff ppc) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
-parseFunctionDescriptors _ mem ptrSize = do
+                         -> G.Get (M.Map (MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
+parseFunctionDescriptors _ ptrSize = do
   let recordBytes = (3 * ptrSize) `div` 8
   let recordParser =
         case ptrSize of
-          32 -> getFunctionDescriptor mem G.getWord32be
-          64 -> getFunctionDescriptor mem G.getWord64be
+          32 -> getFunctionDescriptor G.getWord32be
+          64 -> getFunctionDescriptor G.getWord64be
           _ -> error ("Invalid pointer size: " ++ show ptrSize)
   totalBytes <- G.remaining
   unless (totalBytes `mod` recordBytes == 0) $ do
@@ -88,14 +83,12 @@ parseFunctionDescriptors _ mem ptrSize = do
   funcDescs <- replicateM (totalBytes `div` recordBytes) recordParser
   return (M.fromList funcDescs)
 
-getFunctionDescriptor :: (Integral a, PrintfArg a, MM.MemWidth w)
-                      => MM.Memory w
-                      -> G.Get a
-                      -> G.Get (MM.MemSegmentOff w, MA.AbsValue w (BVType w))
-getFunctionDescriptor mem ptrParser = do
+getFunctionDescriptor :: (Integral a, MM.MemWidth w)
+                      => G.Get a
+                      -> G.Get (MM.MemAddr w, MA.AbsValue w (BVType w))
+getFunctionDescriptor ptrParser = do
   entryAddr <- ptrParser
   tocAddr <- ptrParser
   _ <- ptrParser
-  case MM.resolveAbsoluteAddr mem (fromIntegral entryAddr) of
-    Nothing -> error (printf "Invalid function entry point: 0x%x" entryAddr)
-    Just mso -> return (mso, MA.FinSet (S.singleton (fromIntegral tocAddr)))
+  let mso = MM.absoluteAddr (fromIntegral entryAddr)
+  return (mso, MA.FinSet (S.singleton (fromIntegral tocAddr)))

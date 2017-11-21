@@ -11,7 +11,7 @@ module PPC64Tests (
 import           Control.Lens ( (^.) )
 import qualified Data.Foldable as F
 import qualified Data.Map as M
-import           Data.Maybe ( fromJust )
+import           Data.Maybe ( fromJust, mapMaybe )
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
@@ -78,10 +78,10 @@ testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
     let Just entryPoint =  trace (showSegments mem) $ MM.asSegmentOff mem (findEntryPoint64 elf mem)
-        -- TODO: For some reason asSegmentOff is returning Nothing. Need to investigate.
-        -- Above: Just need to convert the entry point from E.elfEntry elf to an ArchSegmentOff.
-        tocBase = RO.tocBaseForELF (Proxy @PPC64.PPC) elf mem
-        otherEntries = E.tocEntryAddrsForElf (Proxy @PPC64.PPC) elf mem
+        tocBase = RO.tocBaseForELF (Proxy @PPC64.PPC) elf
+        otherEntryAddrs :: [MM.MemAddr 64]
+        otherEntryAddrs = E.tocEntryAddrsForElf (Proxy @PPC64.PPC) elf
+        otherEntries = mapMaybe (MM.asSegmentOff mem) otherEntryAddrs
         di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap (entryPoint:otherEntries) []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
