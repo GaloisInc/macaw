@@ -10,8 +10,12 @@ module Data.Macaw.PPC (
   -- * Macaw configurations
   ppc32_linux_info,
   ppc64_linux_info,
+  -- * Type-level tags
+  PPC64,
+  PPC32,
   -- * ELF support
-  tocBaseForELF
+  tocBaseForELF,
+  tocEntryAddrsForElf
   ) where
 
 import           Data.Proxy ( Proxy(..) )
@@ -43,9 +47,15 @@ import Data.Macaw.PPC.Arch ( rewriteTermStmt,
                              ppcPrimFnHasSideEffects,
                              PPCArchConstraints
                            )
-import Data.Macaw.PPC.BinaryFormat.ELF ( tocBaseForELF )
+import Data.Macaw.PPC.BinaryFormat.ELF ( tocBaseForELF, tocEntryAddrsForElf )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
+
+-- | The type tag for 64 bit PowerPC
+type PPC64 = PPC64.PPC
+
+-- | The type tag for 32 bit PowerPC
+type PPC32 = PPC32.PPC
 
 archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc ids
 archDemandContext _ =
