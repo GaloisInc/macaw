@@ -97,7 +97,12 @@ instructionMatcher ltr specialCases formulas = do
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
   let normalCases = map (mkSemanticsCase ltr ipVarName operandListVar) (Map.toList formulas)
-  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) (normalCases ++ specialCases))
+  let fallthroughCase = match wildP (normalB [| error ("Unimplemented instruction: " ++ show $(varE opcodeVar)) |]) []
+  let allCases = concat [ normalCases
+                        , specialCases
+                        , [fallthroughCase]
+                        ]
+  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) allCases)
 
 -- | Generate a single case for one opcode of the case expression.
 --
