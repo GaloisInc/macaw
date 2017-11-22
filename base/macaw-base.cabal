@@ -31,11 +31,12 @@ library
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval
+    Data.Macaw.Analysis.FunctionArgs
     Data.Macaw.Architecture.Info
-    Data.Macaw.Architecture.Syscall
     Data.Macaw.CFG
     Data.Macaw.CFG.App
     Data.Macaw.CFG.Block
+    Data.Macaw.CFG.BlockLabel
     Data.Macaw.CFG.Core
     Data.Macaw.CFG.DemandSet
     Data.Macaw.CFG.Rewriter

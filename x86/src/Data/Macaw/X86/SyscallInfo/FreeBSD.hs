@@ -1,8 +1,8 @@
 -- DO NOT EDIT.  Generated from make_bsd_syscalls/Main.hs
 module Data.Macaw.X86.SyscallInfo.FreeBSD (syscallInfo) where
-import           Data.Macaw.Architecture.Syscall
 import           Data.Map (Map, fromList)
 import           Data.Word
+import           Data.Macaw.X86.SyscallInfo
 
 syscallInfo :: Map Word64 SyscallTypeInfo
 syscallInfo = fromList

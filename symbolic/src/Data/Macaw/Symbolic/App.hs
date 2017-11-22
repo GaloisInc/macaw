@@ -15,7 +15,6 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.App
   ( ArchTranslateFunctions(..)
   , MacawMonad

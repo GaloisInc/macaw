@@ -93,9 +93,9 @@ generateHSFile :: CTranslUnit -> [SyscallInfo] -> Doc
 generateHSFile tunit sis =
   vcat [ text "-- DO NOT EDIT.  Generated from make_bsd_syscalls/Main.hs"
        , text "module Data.Macaw.X86.SyscallInfo.FreeBSD (syscallInfo) where"
-       , text "import           Data.Macaw.Architecture.Syscall"
        , text "import           Data.Map (Map, fromList)"
        , text "import           Data.Word"
+       , text "import           Data.Macaw.X86.SyscallInfo"
        , text ""
        , text "syscallInfo :: Map Word64 SyscallTypeInfo"
        , text "syscallInfo =" <+> ppDoc syscallMap ]
