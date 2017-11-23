@@ -36,6 +36,7 @@ import qualified Data.Parameterized.ShapedList as SL
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.Witness ( Witness(..) )
+import qualified Lang.Crucible.BaseTypes as CT
 import qualified Lang.Crucible.Solver.Interface as SI
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import qualified Lang.Crucible.Solver.SimpleBackend as S
@@ -472,6 +473,11 @@ evalNonceAppTH bvi nonceApp =
               locExp <- addEltTH bvi loc
               liftQ [| addExpr (AppExpr (M.PopCount (NR.knownNat @64) $(return locExp))) |]
             _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
+        "undefined" -> do
+          case S.nonceAppType nonceApp of
+            CT.BaseBVRepr n ->
+              liftQ [| M.AssignedValue <$> addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH n))) |]
+            nt -> fail ("Invalid type for undefined: " ++ show nt)
         _ | Just nBytes <- readMemBytes fnName -> do
             case FC.toListFC Some args of
               [_, Some addrElt] -> do
