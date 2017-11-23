@@ -533,6 +533,12 @@ floatingPointTH bvi fnName args =
         "negate32" -> do
           fpval <- addEltTH bvi a
           liftQ [| addExpr (AppExpr (M.FPNeg M.SingleFloatRepr $(return fpval))) |]
+        "is_snan32" -> do
+          fpval <- addEltTH bvi a
+          liftQ [| addExpr (AppExpr (M.FPIsSNaN M.SingleFloatRepr $(return fpval))) |]
+        "is_snan64" -> do
+          fpval <- addEltTH bvi a
+          liftQ [| addExpr (AppExpr (M.FPIsSNaN M.DoubleFloatRepr $(return fpval))) |]
         _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
     [Some a, Some b] ->
       case fnName of
