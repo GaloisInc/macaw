@@ -11,9 +11,9 @@ import qualified Data.Sequence as Seq
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 
+import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 import           Debug.Trace (trace)
 

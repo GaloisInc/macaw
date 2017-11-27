@@ -25,9 +25,9 @@ import           Data.Parameterized.Some ( Some(..) )
 
 import qualified Dismantle.PPC as D
 
+import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
                          => proxy ppc

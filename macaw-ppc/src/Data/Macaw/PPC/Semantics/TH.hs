@@ -52,7 +52,6 @@ import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Architecture.PPC.Eval as PE
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
-import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
@@ -60,11 +59,13 @@ import Data.Parameterized.NatRepr ( knownNat
                                   , natValue
                                   )
 
+import           Data.Macaw.SemMC.Generator
+import           Data.Macaw.SemMC.Translations
+import           Data.Macaw.SemMC.TH.Monad
+
 import           Data.Macaw.PPC.Arch
-import           Data.Macaw.PPC.Generator
 import           Data.Macaw.PPC.Operand
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Semantics.TH.Monad
 
 type Sym t = S.SimpleBackend t
 
@@ -87,32 +88,16 @@ instructionMatcher :: (OrdF a, LF.LiftF a,
                        L.Location arch ~ APPC.Location arch,
                        1 <= APPC.ArchRegWidth arch,
                        M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                   => Map.MapF (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
+                   => (forall tp . L.Location arch tp -> Q Exp)
+                   -> [MatchQ]
+                   -> Map.MapF (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
                    -> Q Exp
-instructionMatcher formulas = do
+instructionMatcher ltr specialCases formulas = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  let normalCases = map (mkSemanticsCase ipVarName operandListVar) (Map.toList formulas)
-  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) (normalCases ++ specialSemanticsCases))
-
--- | Manually-provided semantics for instructions whose full semantics cannot be
--- expressed in our semantics format.
---
--- This includes instructions with special side effects that we don't have a way
--- to talk about in the semantics; especially useful for architecture-specific
--- terminator statements.
-specialSemanticsCases :: [MatchQ]
-specialSemanticsCases =
-  [ match (conP 'D.SC []) (normalB syscallBody) []
-  , match (conP 'D.TRAP []) (normalB trapBody) []
-  , match (conP 'D.ATTN []) (normalB [| Just (addStmt (M.ExecArchStmt Attn)) |]) []
-  , match (conP 'D.SYNC []) (normalB [| Just (addStmt (M.ExecArchStmt Sync)) |]) []
-  , match (conP 'D.ISYNC []) (normalB [| Just (addStmt (M.ExecArchStmt Isync)) |]) []
-  ]
-  where
-    syscallBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCSyscall)) |]
-    trapBody = [| Just (finishWithTerminator (M.ArchTermStmt PPCTrap)) |]
+  let normalCases = map (mkSemanticsCase ltr ipVarName operandListVar) (Map.toList formulas)
+  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) (normalCases ++ specialCases))
 
 -- | Generate a single case for one opcode of the case expression.
 --
@@ -124,12 +109,13 @@ mkSemanticsCase :: (LF.LiftF a,
                     L.Location arch ~ APPC.Location arch,
                     1 <= APPC.ArchRegWidth arch,
                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                => Name
+                => (forall tp . L.Location arch tp -> Q Exp)
+                -> Name
                 -> Name
                 -> Map.Pair (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
                 -> MatchQ
-mkSemanticsCase ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
-  match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ipVarName operandListVar opc semantics capInfo)) []
+mkSemanticsCase ltr ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
+  match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ltr ipVarName operandListVar opc semantics capInfo)) []
 
 -- | For each opcode case, we have a sub-case expression to destructure the
 -- operand list into names that we can reference.  This generates an expression
@@ -158,14 +144,15 @@ mkOperandListCase :: (L.Location arch ~ APPC.Location arch,
                       A.Architecture arch,
                       1 <= APPC.ArchRegWidth arch,
                       M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                  => Name
+                  => (forall tp0 . L.Location arch tp0 -> Q Exp)
+                  -> Name
                   -> Name
                   -> a tp
                   -> ParameterizedFormula (Sym t) arch tp
                   -> DT.CaptureInfo c a tp
                   -> Q Exp
-mkOperandListCase ipVarName operandListVar opc semantics capInfo = do
-  body <- genCaseBody ipVarName opc semantics (DT.capturedOperandNames capInfo)
+mkOperandListCase ltr ipVarName operandListVar opc semantics capInfo = do
+  body <- genCaseBody ltr ipVarName opc semantics (DT.capturedOperandNames capInfo)
   DT.genCase capInfo operandListVar body
 
 data BoundVarInterpretations arch t =
@@ -190,14 +177,15 @@ genCaseBody :: forall a sh t arch
                   A.Architecture arch,
                   1 <= APPC.ArchRegWidth arch,
                   M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-            => Name
+            => (forall tp . L.Location arch tp -> Q Exp)
+            -> Name
             -> a sh
             -> ParameterizedFormula (Sym t) arch sh
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
-genCaseBody ipVarName _opc semantics varNames = do
+genCaseBody ltr ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
-  translateFormula ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
+  translateFormula ltr ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
   where
     locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
@@ -249,6 +237,9 @@ genExecInstruction :: (A.Architecture arch,
                        1 <= APPC.ArchRegWidth arch,
                        M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                    => proxy arch
+                   -> (forall tp . L.Location arch tp -> Q Exp)
+                   -> [MatchQ]
+                   -- ^ Special cases to splice into the expression
                    -> (forall sh . c sh C.:- BuildOperandList arch sh)
                    -- ^ A constraint implication to let us extract/weaken the
                    -- constraint in our 'Witness' to the required 'BuildOperandList'
@@ -261,12 +252,12 @@ genExecInstruction :: (A.Architecture arch,
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Q Exp
-genExecInstruction _ impl semantics captureInfo = do
+genExecInstruction _ ltr specialCases impl semantics captureInfo = do
   Some ng <- runIO PN.newIONonceGenerator
   sym <- runIO (S.newSimpleBackend ng)
   formulas <- runIO (loadFormulas sym impl semantics)
   let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
-  instructionMatcher formulasWithInfo
+  instructionMatcher ltr specialCases formulasWithInfo
   where
     attachInfo m0 (Some ci) m =
       let co = DT.capturedOpcode ci
@@ -290,17 +281,18 @@ translateFormula :: forall arch t sh .
                      A.Architecture arch,
                      1 <= APPC.ArchRegWidth arch,
                      M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                 => Name
+                 => (forall tp . L.Location arch tp -> Q Exp)
+                 -> Name
                  -> ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
                  -> SL.ShapedList (FreeParamF Name) sh
                  -> Q Exp
-translateFormula ipVarName semantics interps varNames = do
+translateFormula ltr ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| getRegs |] ]
-  exps <- runMacawQ (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
+  exps <- runMacawQ ltr (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
   [| Just $(doSequenceQ preamble exps) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
-                            -> MacawQ t ()
+                            -> MacawQ arch t ()
         translateDefinition (Map.Pair param expr) = do
           case param of
             OperandParameter _w idx -> do
@@ -310,7 +302,7 @@ translateFormula ipVarName semantics interps varNames = do
             LiteralParameter APPC.LocMem -> writeMemTH interps expr
             LiteralParameter loc -> do
               valExp <- addEltTH interps expr
-              appendStmt [| setRegVal $(locToRegTH (Proxy @arch) loc) $(return valExp) |]
+              appendStmt [| setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let FreeParamF boundOperandName = SL.indexShapedList varNames opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
@@ -329,7 +321,7 @@ addEltTH :: forall arch t ctp .
              M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
          => BoundVarInterpretations arch t
          -> S.Elt t ctp
-         -> MacawQ t Exp
+         -> MacawQ arch t Exp
 addEltTH interps elt = do
   mexp <- lookupElt elt
   case mexp of
@@ -343,8 +335,8 @@ addEltTH interps elt = do
           bindExpr elt [| addExpr =<< $(return translatedExpr) |]
         S.BoundVarElt bVar ->
           case Map.lookup bVar (locVars interps) of
-            Just loc ->
-              bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(locToRegTH (Proxy @arch) loc)) |]
+            Just loc -> withLocToReg $ \ltr -> do
+              bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
             Nothing  ->
               case Map.lookup bVar (opVars interps) of
                 Just (FreeParamF name) -> bindExpr elt [| extractValue $(varE name) |]
@@ -364,7 +356,7 @@ writeMemTH :: forall arch t tp
                 M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
            => BoundVarInterpretations arch t
            -> S.Elt t tp
-           -> MacawQ t ()
+           -> MacawQ arch t ()
 writeMemTH bvi expr =
   case expr of
     S.NonceAppElt n ->
@@ -393,7 +385,7 @@ evalNonceAppTH :: forall arch t tp
                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                => BoundVarInterpretations arch t
                -> S.NonceApp t (S.Elt t) tp
-               -> MacawQ t Exp
+               -> MacawQ arch t Exp
 evalNonceAppTH bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args -> do
@@ -516,7 +508,7 @@ floatingPointTH :: forall arch t f c
                  => BoundVarInterpretations arch t
                  -> String
                  -> f (S.Elt t) c
-                 -> MacawQ t Exp
+                 -> MacawQ arch t Exp
 floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
     [Some a] ->
@@ -642,7 +634,7 @@ crucAppToExprTH :: (L.Location arch ~ APPC.Location arch,
                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                 => S.App (S.Elt t) ctp
                 -> BoundVarInterpretations arch t
-                -> MacawQ t Exp
+                -> MacawQ arch t Exp
 crucAppToExprTH elt interps = case elt of
   S.TrueBool  -> liftQ [| return $ ValueExpr (M.BoolValue True) |]
   S.FalseBool -> liftQ [| return $ ValueExpr (M.BoolValue False) |]
@@ -763,17 +755,3 @@ crucAppToExprTH elt interps = case elt of
     liftQ [| return (AppExpr (M.BVXor $(natReprTH w) $(return e1) $(return e2))) |]
   _ -> liftQ [| error "unsupported Crucible elt" |]
 
-locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
-               M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
-           => proxy ppc
-           -> APPC.Location ppc ctp
-           -> Q Exp
-locToRegTH _ (APPC.LocGPR (D.GPR gpr)) = [| PPC_GP (D.GPR $(lift gpr)) |]
-locToRegTH _ (APPC.LocVSR (D.VSReg vsr)) = [| PPC_FR (D.VSReg $(lift vsr)) |]
-locToRegTH _  APPC.LocIP       = [| PPC_IP |]
-locToRegTH _  APPC.LocLNK      = [| PPC_LNK |]
-locToRegTH _  APPC.LocCTR      = [| PPC_CTR |]
-locToRegTH _  APPC.LocCR       = [| PPC_CR |]
-locToRegTH _  APPC.LocXER      = [| PPC_XER |]
-locToRegTH _  _                = [| undefined |]
--- fill the rest out later

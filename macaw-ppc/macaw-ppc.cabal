@@ -21,7 +21,6 @@ library
                        Data.Macaw.PPC.BinaryFormat.ELF
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
-                       Data.Macaw.PPC.Generator
                        Data.Macaw.PPC.Identify
                        Data.Macaw.PPC.Operand
                        Data.Macaw.PPC.PPCReg
@@ -30,8 +29,6 @@ library
                        Data.Macaw.PPC.Semantics.PPC64
                        Data.Macaw.PPC.Semantics.PPC32
                        Data.Macaw.PPC.Semantics.TH
-                       Data.Macaw.PPC.Semantics.TH.Monad
-                       Data.Macaw.PPC.Simplify
   build-depends:       base >=4.9 && <5,
                        bytestring,
                        containers,
@@ -42,6 +39,7 @@ library
                        dismantle-ppc,
                        semmc,
                        semmc-ppc,
+                       macaw-semmc,
                        lens,
                        macaw-base,
                        ansi-wl-pprint,

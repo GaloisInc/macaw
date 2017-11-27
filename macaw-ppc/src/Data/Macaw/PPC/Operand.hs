@@ -27,11 +27,11 @@ import qualified Dismantle.PPC as D
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
+import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.PPC.PPCReg as R
-import qualified Data.Macaw.PPC.Generator as G
 
 class ExtractValue arch a tp | arch a -> tp where
-  extractValue :: a -> G.PPCGenerator arch ids s (MC.Value arch ids tp)
+  extractValue :: a -> G.Generator arch ids s (MC.Value arch ids tp)
 
 instance ExtractValue arch Bool BoolType where
   extractValue = return . MC.BoolValue
@@ -54,7 +54,7 @@ instance ExtractValue PPC64.PPC (Maybe D.GPR) (BVType 64) where
       Just gpr -> extractValue gpr
       Nothing -> return $ MC.BVValue NR.knownNat 0
 
-instance ExtractValue ppc D.FR (BVType 128) where
+instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.FR (BVType 128) where
   extractValue fr = G.getRegValue (R.PPC_FR fr)
 
 instance ExtractValue arch D.AbsBranchTarget (BVType 24) where

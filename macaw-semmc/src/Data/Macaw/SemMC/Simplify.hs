@@ -2,7 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module Data.Macaw.PPC.Simplify (
+module Data.Macaw.SemMC.Simplify (
   simplifyValue,
   simplifyApp
   ) where

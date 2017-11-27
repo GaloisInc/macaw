@@ -14,13 +14,16 @@ module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters,
   linuxCalleeSaveRegisters,
-  ArchWidth(..)
+  ArchWidth(..),
+  locToRegTH
   ) where
 
 import           GHC.TypeLits
 
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Set as S
+import           Language.Haskell.TH
+import           Language.Haskell.TH.Syntax ( lift )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types
@@ -29,6 +32,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
 
 import qualified Dismantle.PPC as D
+import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -141,3 +145,17 @@ ppcRegs = concat [ gprs
     fprs = [ Some (PPC_FR (D.FR rnum))
            | rnum <- [0..31]
            ]
+
+locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
+               MC.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
+           => proxy ppc
+           -> APPC.Location ppc ctp
+           -> Q Exp
+locToRegTH _ (APPC.LocGPR (D.GPR gpr)) = [| PPC_GP (D.GPR $(lift gpr)) |]
+locToRegTH _ (APPC.LocVSR (D.VSReg vsr)) = [| PPC_FR (D.VSReg $(lift vsr)) |]
+locToRegTH _  APPC.LocIP       = [| PPC_IP |]
+locToRegTH _  APPC.LocLNK      = [| PPC_LNK |]
+locToRegTH _  APPC.LocCTR      = [| PPC_CTR |]
+locToRegTH _  APPC.LocCR       = [| PPC_CR |]
+locToRegTH _  APPC.LocXER      = [| PPC_XER |]
+locToRegTH _  _                = [| undefined |]

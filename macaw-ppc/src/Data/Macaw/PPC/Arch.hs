@@ -7,6 +7,7 @@
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 module Data.Macaw.PPC.Arch (
@@ -17,20 +18,24 @@ module Data.Macaw.PPC.Arch (
   PPCPrimFn(..),
   rewritePrimFn,
   ppcPrimFnHasSideEffects,
-  PPCArchConstraints
+  PPCArchConstraints,
+  specialSemanticsCases
   ) where
 
 import           GHC.TypeLits
 
+import           Language.Haskell.TH
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.CFG.Block as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
+import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -172,3 +177,18 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
                               , KnownNat (MC.RegAddrWidth (PPCReg ppc))
                               , MC.ArchConstraints ppc
                               )
+
+-- | Manually-provided semantics for instructions whose full semantics cannot be
+-- expressed in our semantics format.
+--
+-- This includes instructions with special side effects that we don't have a way
+-- to talk about in the semantics; especially useful for architecture-specific
+-- terminator statements.
+specialSemanticsCases :: [MatchQ]
+specialSemanticsCases =
+  [ match (conP 'D.SC []) (normalB [| Just (finishWithTerminator (MC.ArchTermStmt PPCSyscall)) |]) []
+  , match (conP 'D.TRAP []) (normalB [| Just (finishWithTerminator (MC.ArchTermStmt PPCTrap)) |]) []
+  , match (conP 'D.ATTN []) (normalB [| Just (addStmt (MC.ExecArchStmt Attn)) |]) []
+  , match (conP 'D.SYNC []) (normalB [| Just (addStmt (MC.ExecArchStmt Sync)) |]) []
+  , match (conP 'D.ISYNC []) (normalB [| Just (addStmt (MC.ExecArchStmt Isync)) |]) []
+  ]

@@ -37,9 +37,10 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import           Data.Macaw.Types ( BVType, BoolType )
 import qualified Data.Parameterized.Nonce as NC
 
-import           Data.Macaw.PPC.Generator
+import           Data.Macaw.SemMC.Generator
+import           Data.Macaw.SemMC.Simplify ( simplifyValue )
+import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
 import           Data.Macaw.PPC.PPCReg
-import           Data.Macaw.PPC.Simplify ( simplifyValue )
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
@@ -87,7 +88,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
 -- becomes a mux, we split execution using 'conditionalBranch'.
 disassembleBlock :: forall ppc ids s
                   . PPCArchConstraints ppc
-                 => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
+                 => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc ids s
@@ -119,7 +120,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
         Just transformer -> do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
-          -- a result from the state of the 'PPCGenerator'.
+          -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
@@ -127,7 +128,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 
             -- Check to see if the IP has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
-            -- provided by the PPCGenerator monad.
+            -- provided by the Generator monad.
             nextIPExpr <- getRegValue PPC_IP
             case matchConditionalBranch nextIPExpr of
               Just (cond, t_ip, f_ip) ->
@@ -168,10 +169,8 @@ matchConditionalBranch v =
         _ -> Nothing
     _ -> Nothing
 
-tryDisassembleBlock :: ( PPCArchConstraints ppc
-                       , Show (Block ppc ids)
-                       , Show (BlockSeq ppc ids))
-                    => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
+tryDisassembleBlock :: (PPCArchConstraints ppc)
+                    => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                     -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff ppc
@@ -191,11 +190,9 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: ( PPCArchConstraints ppc
-                 , Show (Block ppc ids)
-                 , Show (BlockSeq ppc ids))
+disassembleFn :: (PPCArchConstraints ppc)
               => proxy ppc
-              -> (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (PPCGenerator ppc ids s ()))
+              -> (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
               -- ^ A function to look up the semantics for an instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.

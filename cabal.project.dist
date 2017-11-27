@@ -1,4 +1,5 @@
 packages: macaw-ppc/
+          macaw-semmc/
           submodules/macaw/base/
           submodules/semmc/semmc/
           submodules/semmc/semmc-ppc/
