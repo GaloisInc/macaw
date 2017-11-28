@@ -15,7 +15,7 @@ import qualified Data.Macaw.Types as MT
 import           SemMC.Architecture.PPC64 ( PPC )
 import           SemMC.Architecture.PPC64.Opcodes ( allSemantics, allOpcodeInfo )
 
-import           Data.Macaw.SemMC.Generator
+import           Data.Macaw.SemMC.Generator ( Generator )
 import           Data.Macaw.PPC.Arch ( specialSemanticsCases )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH

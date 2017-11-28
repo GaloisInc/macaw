@@ -39,6 +39,7 @@ import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
+import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.PPC.PPCReg
 
 data PPCTermStmt ids where
@@ -186,9 +187,9 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
 -- terminator statements.
 specialSemanticsCases :: [MatchQ]
 specialSemanticsCases =
-  [ match (conP 'D.SC []) (normalB [| Just (finishWithTerminator (MC.ArchTermStmt PPCSyscall)) |]) []
-  , match (conP 'D.TRAP []) (normalB [| Just (finishWithTerminator (MC.ArchTermStmt PPCTrap)) |]) []
-  , match (conP 'D.ATTN []) (normalB [| Just (addStmt (MC.ExecArchStmt Attn)) |]) []
-  , match (conP 'D.SYNC []) (normalB [| Just (addStmt (MC.ExecArchStmt Sync)) |]) []
-  , match (conP 'D.ISYNC []) (normalB [| Just (addStmt (MC.ExecArchStmt Isync)) |]) []
+  [ match (conP 'D.SC []) (normalB [| Just (G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)) |]) []
+  , match (conP 'D.TRAP []) (normalB [| Just (G.finishWithTerminator (MC.ArchTermStmt PPCTrap)) |]) []
+  , match (conP 'D.ATTN []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Attn)) |]) []
+  , match (conP 'D.SYNC []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Sync)) |]) []
+  , match (conP 'D.ISYNC []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Isync)) |]) []
   ]
