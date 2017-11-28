@@ -55,7 +55,13 @@ instance ExtractValue PPC64.PPC (Maybe D.GPR) (BVType 64) where
       Nothing -> return $ MC.BVValue NR.knownNat 0
 
 instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.FR (BVType 128) where
-  extractValue fr = G.getRegValue (R.PPC_FR fr)
+  extractValue (D.FR fr) = G.getRegValue (R.PPC_FR (D.VSReg fr))
+
+instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.VR (BVType 128) where
+  extractValue (D.VR vr) = G.getRegValue (R.PPC_FR (D.VSReg (vr + 32)))
+
+instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.VSReg (BVType 128) where
+  extractValue (D.VSReg vsr) = G.getRegValue (R.PPC_FR (D.VSReg vsr))
 
 instance ExtractValue arch D.AbsBranchTarget (BVType 24) where
   extractValue (D.ABT w) = return $ MC.BVValue NR.knownNat (toIntegerWord w)
@@ -97,6 +103,12 @@ instance ToPPCReg D.GPR PPC64.PPC (BVType 64) where
   toPPCReg = R.PPC_GP
 
 instance ToPPCReg D.FR arch (BVType 128) where
+  toPPCReg (D.FR rnum) = R.PPC_FR (D.VSReg rnum)
+
+instance ToPPCReg D.VR arch (BVType 128) where
+  toPPCReg (D.VR vrnum) = R.PPC_FR (D.VSReg (vrnum + 32))
+
+instance ToPPCReg D.VSReg arch (BVType 128) where
   toPPCReg = R.PPC_FR
 
 -- | Convert to a positive integer through a word type

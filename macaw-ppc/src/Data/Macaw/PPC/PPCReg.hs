@@ -38,7 +38,7 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 
 data PPCReg arch tp where
   PPC_GP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => D.GPR -> PPCReg arch (BVType w)
-  PPC_FR :: D.FR -> PPCReg arch (BVType 128)
+  PPC_FR :: D.VSReg -> PPCReg arch (BVType 128)
   PPC_IP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_LNK :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_CTR :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
@@ -142,8 +142,8 @@ ppcRegs = concat [ gprs
     gprs = [ Some (PPC_GP (D.GPR rnum))
            | rnum <- [0..31]
            ]
-    fprs = [ Some (PPC_FR (D.FR rnum))
-           | rnum <- [0..31]
+    fprs = [ Some (PPC_FR (D.VSReg rnum))
+           | rnum <- [0..63]
            ]
 
 locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
