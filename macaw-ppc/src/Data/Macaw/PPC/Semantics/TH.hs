@@ -536,6 +536,12 @@ floatingPointTH bvi fnName args =
         "negate32" -> do
           fpval <- addEltTH bvi a
           liftQ [| G.addExpr (G.AppExpr (M.FPNeg M.SingleFloatRepr $(return fpval))) |]
+        "is_qnan32" -> do
+          fpval <- addEltTH bvi a
+          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.SingleFloatRepr $(return fpval))) |]
+        "is_qnan64" -> do
+          fpval <- addEltTH bvi a
+          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.DoubleFloatRepr $(return fpval))) |]
         "is_snan32" -> do
           fpval <- addEltTH bvi a
           liftQ [| G.addExpr (G.AppExpr (M.FPIsSNaN M.SingleFloatRepr $(return fpval))) |]
@@ -577,6 +583,11 @@ floatingPointTH bvi fnName args =
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
           liftQ [| G.addExpr (G.AppExpr (M.FPDiv M.SingleFloatRepr $(return valA) $(return valB))) |]
+        "lt" -> do
+          valA <- addEltTH bvi a
+          valB <- addEltTH bvi b
+          -- All comparisons are done as 64-bit comparisons in PPC
+          liftQ [| G.addExpr (G.AppExpr (M.FPLt M.DoubleFloatRepr $(return valA) $(return valB))) |]
         _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
     [Some a, Some b, Some c] ->
       case fnName of
