@@ -22,16 +22,21 @@ _start:
 	addi 9,9,.LC0@toc@l
 	lfs 0,0(9)
 	stfs 0,48(31)
+	xxlxor 0,0,0
+	stfs 0,52(31)
 	addi 9,31,64
 	std 9,56(31)
 	lwz 9,48(31)
 	ld 10,56(31)
 #APP
- # 9 "test-fp.c" 1
-	 stw    9,4(10)        
+ # 10 "test-fp.c" 1
+	 stfs    9,0(10)        
 
  # 0 "" 2
- # 13 "test-fp.c" 1
+#NO_APP
+	stw 9,52(31)
+#APP
+ # 14 "test-fp.c" 1
 	li 0,1
 sc
  # 0 "" 2
