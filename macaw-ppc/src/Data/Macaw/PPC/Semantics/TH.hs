@@ -89,20 +89,25 @@ instructionMatcher :: (OrdF a, LF.LiftF a,
                        1 <= APPC.ArchRegWidth arch,
                        M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                    => (forall tp . L.Location arch tp -> Q Exp)
-                   -> [MatchQ]
+                   -> Name
+                   -- ^ The name of the architecture-specific instruction
+                   -- matcher to run before falling back to the generic one
                    -> Map.MapF (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
                    -> Q Exp
-instructionMatcher ltr specialCases formulas = do
+instructionMatcher ltr archSpecificMatcher formulas = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
   let normalCases = map (mkSemanticsCase ltr ipVarName operandListVar) (Map.toList formulas)
   let fallthroughCase = match wildP (normalB [| error ("Unimplemented instruction: " ++ show $(varE opcodeVar)) |]) []
   let allCases = concat [ normalCases
-                        , specialCases
                         , [fallthroughCase]
                         ]
-  lamE [varP ipVarName, conP 'D.Instruction [varP opcodeVar, varP operandListVar]] (caseE (varE opcodeVar) allCases)
+  [| \ $(varP ipVarName) i@(D.Instruction $(varP opcodeVar) $(varP operandListVar)) ->
+        case $(varE archSpecificMatcher) i of
+          Just action -> Just action
+          Nothing -> $(caseE (varE opcodeVar) allCases)
+   |]
 
 -- | Generate a single case for one opcode of the case expression.
 --
@@ -243,8 +248,8 @@ genExecInstruction :: (A.Architecture arch,
                        M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                    => proxy arch
                    -> (forall tp . L.Location arch tp -> Q Exp)
-                   -> [MatchQ]
-                   -- ^ Special cases to splice into the expression
+                   -> Name
+                   -- ^ The arch-specific instruction matcher
                    -> (forall sh . c sh C.:- BuildOperandList arch sh)
                    -- ^ A constraint implication to let us extract/weaken the
                    -- constraint in our 'Witness' to the required 'BuildOperandList'
@@ -257,12 +262,12 @@ genExecInstruction :: (A.Architecture arch,
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Q Exp
-genExecInstruction _ ltr specialCases impl semantics captureInfo = do
+genExecInstruction _ ltr archInsnMatcher impl semantics captureInfo = do
   Some ng <- runIO PN.newIONonceGenerator
   sym <- runIO (S.newSimpleBackend ng)
   formulas <- runIO (loadFormulas sym impl semantics)
   let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
-  instructionMatcher ltr specialCases formulasWithInfo
+  instructionMatcher ltr archInsnMatcher formulasWithInfo
   where
     attachInfo m0 (Some ci) m =
       let co = DT.capturedOpcode ci

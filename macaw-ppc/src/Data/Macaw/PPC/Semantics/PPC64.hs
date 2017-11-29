@@ -16,9 +16,9 @@ import           SemMC.Architecture.PPC64 ( PPC )
 import           SemMC.Architecture.PPC64.Opcodes ( allSemantics, allOpcodeInfo )
 
 import           Data.Macaw.SemMC.Generator ( Generator )
-import           Data.Macaw.PPC.Arch ( specialSemanticsCases )
+import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH
 
 execInstruction :: MC.Value PPC ids (MT.BVType 64) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) specialSemanticsCases (C.Sub C.Dict) allSemantics allOpcodeInfo)
+execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) 'ppcInstructionMatcher (C.Sub C.Dict) allSemantics allOpcodeInfo)

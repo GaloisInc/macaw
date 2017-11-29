@@ -7,7 +7,8 @@
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
-{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
 module Data.Macaw.PPC.Arch (
@@ -19,12 +20,11 @@ module Data.Macaw.PPC.Arch (
   rewritePrimFn,
   ppcPrimFnHasSideEffects,
   PPCArchConstraints,
-  specialSemanticsCases
+  ppcInstructionMatcher
   ) where
 
 import           GHC.TypeLits
 
-import           Language.Haskell.TH
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
@@ -38,8 +38,10 @@ import qualified Data.Macaw.Types as MT
 import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
+import qualified SemMC.Architecture.PPC.Eval as E
 
 import qualified Data.Macaw.SemMC.Generator as G
+import qualified Data.Macaw.PPC.Operand as O
 import           Data.Macaw.PPC.PPCReg
 
 data PPCTermStmt ids where
@@ -72,13 +74,15 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
-
-instance MC.PrettyF (PPCStmt ppc) where
-  prettyF s =
-    case s of
-      Attn -> PP.text "ppc_attn"
-      Sync -> PP.text "ppc_sync"
-      Isync -> PP.text "ppc_isync"
+  -- These are cache hints
+  Dcba :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbf :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbz :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbzl :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
+  Dcbtst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
 
 instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
@@ -87,18 +91,34 @@ instance TF.FoldableF (PPCStmt ppc) where
   foldMapF = TF.foldMapFDefault
 
 instance TF.TraversableF (PPCStmt ppc) where
-  traverseF _go stmt =
+  traverseF go stmt =
     case stmt of
       Attn -> pure Attn
       Sync -> pure Sync
       Isync -> pure Isync
+      Dcba ea -> Dcba <$> go ea
+      Dcbf ea -> Dcbf <$> go ea
+      Dcbi ea -> Dcbi <$> go ea
+      Dcbst ea -> Dcbst <$> go ea
+      Dcbz ea -> Dcbz <$> go ea
+      Dcbzl ea -> Dcbzl <$> go ea
+      Dcbt ea th -> Dcbt <$> go ea <*> go th
+      Dcbtst ea th -> Dcbtst <$> go ea <*> go th
 
 instance MC.IsArchStmt (PPCStmt ppc) where
-  ppArchStmt _pp stmt =
+  ppArchStmt pp stmt =
     case stmt of
       Attn -> PP.text "ppc_attn"
       Sync -> PP.text "ppc_sync"
       Isync -> PP.text "ppc_isync"
+      Dcba ea -> PP.text "ppc_dcba" PP.<+> pp ea
+      Dcbf ea -> PP.text "ppc_dcbf" PP.<+> pp ea
+      Dcbi ea -> PP.text "ppc_dcbi" PP.<+> pp ea
+      Dcbst ea -> PP.text "ppc_dcbst" PP.<+> pp ea
+      Dcbz ea -> PP.text "ppc_dcbz" PP.<+> pp ea
+      Dcbzl ea -> PP.text "ppc_dcbzl" PP.<+> pp ea
+      Dcbt ea th -> PP.text "ppc_dcbt" PP.<+> pp ea PP.<+> pp th
+      Dcbtst ea th -> PP.text "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
 
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
@@ -177,7 +197,22 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
                               , 1 <= MC.RegAddrWidth (PPCReg ppc)
                               , KnownNat (MC.RegAddrWidth (PPCReg ppc))
                               , MC.ArchConstraints ppc
+                              , O.ExtractValue ppc D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+                              , O.ExtractValue ppc (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
                               )
+
+memrrToEffectiveAddress :: forall ppc ids s n
+                         . (n ~ MC.RegAddrWidth (MC.ArchReg ppc), PPCArchConstraints ppc)
+                        => D.MemRR
+                        -> G.Generator ppc ids s (MC.Value ppc ids (MT.BVType n))
+memrrToEffectiveAddress memrr = do
+  offset <- O.extractValue (E.interpMemrrOffsetExtractor memrr)
+  base <- O.extractValue (E.interpMemrrBaseExtractor memrr)
+  isr0 <- O.extractValue (E.interpIsR0 (E.interpMemrrBaseExtractor memrr))
+  let repr = MT.knownNat @n
+  let zero = MC.BVValue repr 0
+  b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
+  G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
@@ -185,11 +220,54 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
 -- This includes instructions with special side effects that we don't have a way
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
-specialSemanticsCases :: [MatchQ]
-specialSemanticsCases =
-  [ match (conP 'D.SC []) (normalB [| Just (G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)) |]) []
-  , match (conP 'D.TRAP []) (normalB [| Just (G.finishWithTerminator (MC.ArchTermStmt PPCTrap)) |]) []
-  , match (conP 'D.ATTN []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Attn)) |]) []
-  , match (conP 'D.SYNC []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Sync)) |]) []
-  , match (conP 'D.ISYNC []) (normalB [| Just (G.addStmt (MC.ExecArchStmt Isync)) |]) []
-  ]
+ppcInstructionMatcher :: (PPCArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
+ppcInstructionMatcher (D.Instruction opc operands) =
+  case opc of
+    D.SC -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCSyscall))
+    D.TRAP -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+    D.ATTN -> Just (G.addStmt (MC.ExecArchStmt Attn))
+    D.SYNC -> Just (G.addStmt (MC.ExecArchStmt Sync))
+    D.ISYNC -> Just (G.addStmt (MC.ExecArchStmt Isync))
+    D.DCBA ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcba ea))
+    D.DCBF ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcbf ea))
+    D.DCBI ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcbi ea))
+    D.DCBST ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcbst ea))
+    D.DCBZ ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcbz ea))
+    D.DCBZL ->
+      case operands of
+        D.Memrr memrr D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Dcbzl ea))
+    D.DCBT ->
+      case operands of
+        D.Memrr memrr D.:> D.U5imm imm D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          th <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Dcbt ea th))
+    D.DCBTST ->
+      case operands of
+        D.Memrr memrr D.:> D.U5imm imm D.:> D.Nil -> Just $ do
+          ea <- memrrToEffectiveAddress memrr
+          th <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
+    _ -> Nothing
