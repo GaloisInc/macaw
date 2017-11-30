@@ -182,7 +182,7 @@ type ArchConstraints arch
 
 -- | Map from indices of segments without a fixed base address to a
 -- global variable storing the base address.
-type MemSegmentMap w = Map M.SegmentIndex (C.GlobalVar (C.BVType w))
+type MemSegmentMap w = Map M.RegionIndex (C.GlobalVar (C.BVType w))
 
 --- | Information that does not change during generating Crucible from MAcaw
 data CrucGenContext arch ids s
@@ -198,7 +198,7 @@ data CrucGenContext arch ids s
      -- ^ Name of binary these blocks come from.
    , macawIndexToLabelMap :: !(Map Word64 (CR.Label s))
      -- ^ Map from block indices to the associated label.
-   , memSegmentMap :: !(MemSegmentMap (M.ArchAddrWidth arch))
+   , memBaseAddrMap :: !(MemSegmentMap (M.ArchAddrWidth arch))
      -- ^ Map from indices of segments without a fixed base address to a global
      -- variable storing the base address.
    }

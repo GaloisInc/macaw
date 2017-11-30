@@ -6,20 +6,20 @@ This defines the primitives needed to provide architecture info for
 x86_64 programs.
 -}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE KindSignatures #-}
 module Data.Macaw.X86
        ( x86_64_freeBSD_info
        , x86_64_linux_info
@@ -30,6 +30,14 @@ module Data.Macaw.X86
        , rootLoc
        , disassembleBlock
        , X86TranslateError(..)
+       , Data.Macaw.X86.X86Reg.X86Reg(..)
+       , Data.Macaw.X86.X86Reg.x86ArgumentRegs
+       , Data.Macaw.X86.X86Reg.x86ResultRegs
+       , Data.Macaw.X86.X86Reg.x86FloatArgumentRegs
+       , Data.Macaw.X86.X86Reg.x86FloatResultRegs
+       , Data.Macaw.X86.X86Reg.x86CalleeSavedRegs
+       , pattern Data.Macaw.X86.X86Reg.RAX
+
        ) where
 
 import           Control.Exception (assert)
@@ -77,11 +85,8 @@ import           Data.Macaw.AbsDomain.AbsState
        )
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
-import           Data.Macaw.Architecture.Syscall
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
---import           Data.Macaw.Discovery.State
---import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
@@ -102,6 +107,7 @@ import           Data.Macaw.X86.Flexdis
 import           Data.Macaw.X86.Monad ( bvLit )
 import qualified Data.Macaw.X86.Monad as S
 import           Data.Macaw.X86.Semantics (execInstruction)
+import           Data.Macaw.X86.SyscallInfo
 import           Data.Macaw.X86.SyscallInfo.FreeBSD as FreeBSD
 import           Data.Macaw.X86.SyscallInfo.Linux as Linux
 import           Data.Macaw.X86.X86Reg
@@ -1230,10 +1236,7 @@ disassembleBlockImpl gs max_offset contents = do
         Just exec -> do
           gsr <-
             runExceptT $ runX86Generator (\() s -> pure (mkGenResult s)) gs $ do
-              let next_ip_word = fromIntegral $
-                    case segmentBase seg of
-                      Just base -> base + off
-                      Nothing -> off
+              let next_ip_word = fromIntegral $ segmentOffset seg + off
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction next_ip_word i)
               addStmt (Comment (Text.pack line))
               exec
@@ -1467,7 +1470,7 @@ x86PostCallAbsState =
                           }
    in absEvalCall params
 
-freeBSD_syscallPersonality :: SyscallPersonality X86_64
+freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
   SyscallPersonality { spTypeInfo = FreeBSD.syscallInfo
                      , spResultRegisters = [ Some RAX ]
@@ -1524,7 +1527,7 @@ x86_64_info preservePred =
 x86_64_freeBSD_info :: ArchitectureInfo X86_64
 x86_64_freeBSD_info = x86_64_info preserveFreeBSDSyscallReg
 
-linux_syscallPersonality :: SyscallPersonality X86_64
+linux_syscallPersonality :: SyscallPersonality
 linux_syscallPersonality =
   SyscallPersonality { spTypeInfo = Linux.syscallInfo
                      , spResultRegisters = [Some RAX]
@@ -1532,5 +1535,5 @@ linux_syscallPersonality =
 
 -- | Architecture information for X86_64.
 x86_64_linux_info :: ArchitectureInfo X86_64
-x86_64_linux_info = x86_64_info preserveReg
-  where preserveReg r = Set.member (Some r) linuxSystemCallPreservedRegisters
+x86_64_linux_info = x86_64_info preserveFn
+  where preserveFn r = Set.member (Some r) linuxSystemCallPreservedRegisters

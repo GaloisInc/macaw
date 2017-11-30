@@ -273,6 +273,9 @@ instance Pretty (MemRepr tp) where
   pretty (BVMemRepr w BigEndian)    = text "bvbe" <+> text (show w)
   pretty (BVMemRepr w LittleEndian) = text "bvle" <+> text (show w)
 
+instance Show (MemRepr tp) where
+  show = show . pretty
+
 -- | Return the number of bytes this takes up.
 memReprBytes :: MemRepr tp -> Integer
 memReprBytes (BVMemRepr x _) = natValue x

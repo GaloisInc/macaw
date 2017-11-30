@@ -66,9 +66,9 @@ generateHSFile :: [SyscallInfo] -> Doc
 generateHSFile sis =
   vcat $ [ text "-- DO NOT EDIT.  Generated from make_linux_syscalls/Main.hs"
          , text "module Data.Macaw.X86.SyscallInfo.Linux (syscallInfo) where"
-         , text "import           Data.Macaw.Architecture.Syscall"
          , text "import           Data.Map (Map, fromList)"
          , text "import           Data.Word"
+         , text "import           Data.Macaw.X86.SyscallInfo"
          , text ""
          , text "syscallInfo :: Map Word64 SyscallTypeInfo"
          , text "syscallInfo =" <+> ppDoc syscallMap ]
@@ -113,7 +113,7 @@ typeToArgType typ =
     PtrType _ _ _            -> WordArgType
     ArrayType _ _ _ _        -> WordArgType
     FunctionType _ _         -> unhandled
-    TypeDefType (TypeDefRef _ (Just typ) _) _ _ -> typeToArgType typ
+    TypeDefType (TypeDefRef _ typ _) _ _ -> typeToArgType typ
   where
     unhandled = error ("Unhandled type: " ++ show (pretty typ))
 

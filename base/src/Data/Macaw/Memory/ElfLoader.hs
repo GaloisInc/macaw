@@ -142,7 +142,6 @@ byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
 -- | Return a memory segment for elf segment if it loadable.
 memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         => LoadOptions
-                        -> SegmentIndex
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
                         -> RelocMap (MemWord w)
@@ -150,7 +149,7 @@ memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         -> Phdr w
                            -- ^ Program header entry
                         -> MemSegment w
-memSegmentForElfSegment opt idx contents relocMap phdr = mseg
+memSegmentForElfSegment opt contents relocMap phdr = mseg
   where seg = phdrSegment phdr
         dta = sliceL (phdrFileRange phdr) contents
         sz = fromIntegral $ phdrMemSize phdr
@@ -160,29 +159,24 @@ memSegmentForElfSegment opt idx contents relocMap phdr = mseg
           | otherwise = dta
         addr = fromIntegral $ elfSegmentVirtAddr seg
         flags = flagsForSegmentFlags (elfSegmentFlags seg)
-        mseg = memSegment idx (Just addr) flags (byteSegments relocMap addr fixedData)
+        mseg = memSegment 0 addr flags (byteSegments relocMap addr fixedData)
 
 -- | Create memory segment from elf section.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
-                        => SegmentIndex
-                        -> ElfSection v
+                        => ElfSection v
                         -> MemSegment w
-memSegmentForElfSection idx s = mseg
+memSegmentForElfSection s = mseg
   where base = fromIntegral (elfSectionAddr s)
         flags = flagsForSectionFlags (elfSectionFlags s)
         bytes = elfSectionData s
-        mseg = memSegment idx (Just base) flags [ByteRegion bytes]
+        mseg = memSegment 0 base flags [ByteRegion bytes]
 
 ------------------------------------------------------------------------
 -- MemLoader
 
-data MemLoaderState w = MLS { _mlsIndex :: !SegmentIndex
-                            , _mlsMemory :: !(Memory w)
+data MemLoaderState w = MLS { _mlsMemory :: !(Memory w)
                             , _mlsIndexMap :: !(SectionIndexMap w)
                             }
-
-mlsIndex :: Simple Lens (MemLoaderState w) SegmentIndex
-mlsIndex = lens _mlsIndex (\s v -> s { _mlsIndex = v })
 
 mlsMemory :: Simple Lens (MemLoaderState w) (Memory w)
 mlsMemory = lens _mlsMemory (\s v -> s { _mlsMemory = v })
@@ -191,8 +185,7 @@ mlsIndexMap :: Simple Lens (MemLoaderState w) (SectionIndexMap w)
 mlsIndexMap = lens _mlsIndexMap (\s v -> s { _mlsIndexMap = v })
 
 initState :: forall w . AddrWidthRepr w -> MemLoaderState w
-initState w = MLS { _mlsIndex = 0
-                  , _mlsMemory = emptyMemory w
+initState w = MLS { _mlsMemory = emptyMemory w
                   , _mlsIndexMap = Map.empty
                   }
 
@@ -328,9 +321,7 @@ insertElfSegment :: LoadOptions
 insertElfSegment opt shdrMap contents relocMap phdr = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  idx <- use mlsIndex
-  mlsIndex .= idx + 1
-  let seg = memSegmentForElfSegment opt idx contents relocMap phdr
+  let seg = memSegmentForElfSegment opt contents relocMap phdr
   let seg_idx = elfSegmentIndex (phdrSegment phdr)
   loadMemSegment ("Segment " ++ show seg_idx) seg
   let phdr_offset = fromFileOffset (phdrFileStart phdr)
@@ -392,9 +383,7 @@ insertElfSection sec = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
   when (elfSectionFlags sec `hasPermissions` shf_alloc) $ do
-    idx <- use mlsIndex
-    mlsIndex .= idx + 1
-    let seg = memSegmentForElfSection idx sec
+    let seg = memSegmentForElfSection sec
     loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
     let Just addr = resolveSegmentOff seg 0

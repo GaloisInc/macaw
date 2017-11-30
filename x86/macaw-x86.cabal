@@ -6,6 +6,7 @@ build-type: Simple
 cabal-version: >= 1.9.2
 license:       BSD3
 license-file:  LICENSE
+tested-with: GHC == 8.0.2
 
 library
   build-depends:
@@ -32,6 +33,7 @@ library
     Data.Macaw.X86.InstructionDef
     Data.Macaw.X86.Monad
     Data.Macaw.X86.Semantics
+    Data.Macaw.X86.SyscallInfo
     Data.Macaw.X86.SyscallInfo.FreeBSD
     Data.Macaw.X86.SyscallInfo.Linux
     Data.Macaw.X86.X86Flag

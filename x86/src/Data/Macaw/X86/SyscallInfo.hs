@@ -4,7 +4,7 @@ Maintainer : jhendrix@galois.com
 
 Data structures used for defining how system calls are interpreted.
 -}
-module Data.Macaw.Architecture.Syscall
+module Data.Macaw.X86.SyscallInfo
   ( SyscallPersonality(..)
   , SyscallTypeInfo
   , SyscallArgType(..)
@@ -14,7 +14,7 @@ import qualified Data.Map as Map
 import           Data.Parameterized.Some
 import           Data.Word
 
-import           Data.Macaw.CFG (ArchReg)
+import           Data.Macaw.X86.X86Reg
 
 data SyscallArgType = VoidArgType | WordArgType
   deriving (Eq, Show, Read)
@@ -24,7 +24,7 @@ data SyscallArgType = VoidArgType | WordArgType
 -- This contains the name, the result type, and the argument types.
 type SyscallTypeInfo = (String, SyscallArgType, [SyscallArgType])
 
-data SyscallPersonality arch =
+data SyscallPersonality =
   SyscallPersonality { spTypeInfo :: Map.Map Word64 SyscallTypeInfo
-                     , spResultRegisters :: [Some (ArchReg arch)]
+                     , spResultRegisters :: [Some X86Reg]
                      }
