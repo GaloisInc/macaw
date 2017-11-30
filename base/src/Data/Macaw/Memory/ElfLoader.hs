@@ -350,8 +350,7 @@ insertElfSegment opt shdrMap contents relocMap phdr = do
 -- | Load an elf file into memory.  This uses the Elf segments for loading.
 memoryForElfSegments
   :: forall w
-     -- | Options that affect loading
-  .  LoadOptions
+  .  LoadOptions -- ^ Options that affect loading
   -> Elf w
   -> Either String (SectionIndexMap w, Memory w)
 memoryForElfSegments opt e = do

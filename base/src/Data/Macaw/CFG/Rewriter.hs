@@ -50,7 +50,7 @@ data RewriteContext arch s src tgt
                     , rwctxConstraints :: (forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
                     , rwctxCache :: !(STRef s (MapF (AssignId src) (Value arch tgt)))
-                      -- | A reference to a  map from source assignment
+                      -- ^ A reference to a  map from source assignment
                       -- identifiers to the updated value.
                       --
                       -- N.B. When using the rewriter, the user should
