@@ -53,7 +53,15 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
                                          }
               Just (nextIP, MA.absEvalCall params s0 nextIP)
         _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
-    PPCTrap -> error "Trap isn't handled in the postPPCTermStmtAbsState function yet"
+    PPCTrap ->
+      case simplifyValue (regState ^. curIP) of
+        Just (RelocatableValue _ addr)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         }
+              Just (nextIP, MA.absEvalCall params s0 nextIP)
+        _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
 -- block.
