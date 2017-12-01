@@ -592,12 +592,14 @@ class IsArchStmt (f :: (Type -> *) -> *)  where
              -> f v
              -> Doc
 
+-- | Constructs expected by architectures type classes.
 type ArchConstraints arch
    = ( RegisterInfo (ArchReg arch)
-     , IsArchStmt (ArchStmt arch)
-     , PrettyF  (ArchTermStmt arch)
      , FoldableFC (ArchFn arch)
-     , IsArchFn (ArchFn arch)
+     , IsArchFn   (ArchFn arch)
+     , IsArchStmt (ArchStmt arch)
+     , FoldableF  (ArchStmt arch)
+     , PrettyF    (ArchTermStmt arch)
      )
 
 -- | Pretty print an assignment right-hand side using operations parameterized
@@ -666,8 +668,8 @@ ppValueAssignments v = ppValueAssignments' (collectValueRep 0 v)
 ppValueAssignmentList :: ArchConstraints arch => [Value arch ids tp] -> Doc
 ppValueAssignmentList vals =
   ppValueAssignments' $ do
-    docs <- mapM (collectValueRep 0) vals
-    return $ brackets $ hcat (punctuate comma docs)
+    brackets . hcat . punctuate comma
+      <$> traverse (collectValueRep 0) vals
 
 ------------------------------------------------------------------------
 -- Pretty printing RegState

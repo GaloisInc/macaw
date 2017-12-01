@@ -1,12 +1,9 @@
--- |
--- Module           : Reopt.Semantics.Types
--- Description      : This defines the types of machine words
--- Copyright        : (c) Galois, Inc 2015
--- Maintainer       : Joe Hendrix <jhendrix@galois.com>
--- Stability        : provisional
---
--- The type of machine words, including bit vectors and floating point
-------------------------------------------------------------------------
+{-|
+Copyright        : (c) Galois, Inc 2015
+Maintainer       : Joe Hendrix <jhendrix@galois.com>
+
+The type of machine words, including bit vectors and floating point
+-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -28,8 +25,12 @@ module Data.Macaw.Types
 
 import Data.Parameterized.Classes
 import Data.Parameterized.NatRepr
+import Data.Parameterized.TraversableFC
 import GHC.TypeLits
 import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+
+import           Data.Macaw.TypedList (TList)
+import qualified Data.Macaw.TypedList as TList
 
 -- FIXME: move
 n0 :: NatRepr 0
@@ -77,6 +78,9 @@ data Type
   | HalfFloat
     -- | A Boolean value
   | BoolType
+    -- | A tuple of types
+  | TupleType [Type]
+
 
 -- Return number of bytes in the type.
 type family TypeBytes (tp :: Type) :: Nat where
@@ -109,6 +113,7 @@ type BoolType = 'BoolType
 data TypeRepr (tp :: Type) where
   BoolTypeRepr :: TypeRepr BoolType
   BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
+  TupleTypeRepr :: !(TList TypeRepr ctx) -> TypeRepr (TupleType ctx)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
@@ -126,14 +131,18 @@ instance OrdF TypeRepr where
   compareF BoolTypeRepr _ = LTF
   compareF _ BoolTypeRepr = GTF
   compareF (BVTypeRepr m) (BVTypeRepr n) = do
-    case compareF m n of
-      LTF -> LTF
-      EQF -> EQF
-      GTF -> GTF
+    lexCompareF m n EQF
+  compareF BVTypeRepr{} _ = LTF
+  compareF _ BVTypeRepr{} = GTF
+  compareF (TupleTypeRepr x) (TupleTypeRepr y) =
+    lexCompareF x y EQF
 
 instance Show (TypeRepr tp) where
   show BoolTypeRepr = "bool"
   show (BVTypeRepr w) = "[" ++ show w ++ "]"
+  show (TupleTypeRepr TList.Empty) = "()"
+  show (TupleTypeRepr (h TList.:| z)) =
+    "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
 
 class KnownType tp where
   knownType :: TypeRepr tp

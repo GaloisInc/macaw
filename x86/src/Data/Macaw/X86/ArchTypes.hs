@@ -22,22 +22,62 @@ module Data.Macaw.X86.ArchTypes
   , X86TermStmt(..)
   , rewriteX86TermStmt
   , X86PrimLoc(..)
+  , SIMDWidth(..)
+  , RepValSize(..)
+  , repValSizeByteCount
+  , repValSizeMemRepr
   ) where
 
 import           Data.Bits
+import           Data.Macaw.CFG
+import           Data.Macaw.CFG.Rewriter
+import           Data.Macaw.Memory (Endianness(..))
+import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
-import           Data.Macaw.CFG
-import           Data.Macaw.CFG.Rewriter
-import           Data.Macaw.Types
-
-import           Data.Macaw.X86.Monad (SIMDWidth(..), RepValSize(..), repValSizeMemRepr)
 import           Data.Macaw.X86.X86Reg
 import           Data.Macaw.X86.X87ControlReg
+
+------------------------------------------------------------------------
+-- SIMDWidth
+
+-- | Defines a width of a register associated with SIMD operations
+-- (e.g., MMX, XMM, AVX)
+data SIMDWidth w
+   = (w ~  64) => SIMD_64
+   | (w ~ 128) => SIMD_128
+   | (w ~ 256) => SIMD_256
+
+-- | Return the 'NatRepr' associated with the given width.
+instance HasRepr SIMDWidth NatRepr where
+  typeRepr SIMD_64  = knownNat
+  typeRepr SIMD_128 = knownNat
+  typeRepr SIMD_256 = knownNat
+
+------------------------------------------------------------------------
+-- RepValSize
+
+-- | Rep value
+data RepValSize w
+   = (w ~  8) => ByteRepVal
+   | (w ~ 16) => WordRepVal
+   | (w ~ 32) => DWordRepVal
+   | (w ~ 64) => QWordRepVal
+
+repValSizeMemRepr :: RepValSize w -> MemRepr (BVType w)
+repValSizeMemRepr v =
+  case v of
+    ByteRepVal  -> BVMemRepr (knownNat :: NatRepr 1) LittleEndian
+    WordRepVal  -> BVMemRepr (knownNat :: NatRepr 2) LittleEndian
+    DWordRepVal -> BVMemRepr (knownNat :: NatRepr 4) LittleEndian
+    QWordRepVal -> BVMemRepr (knownNat :: NatRepr 8) LittleEndian
+
+repValSizeByteCount :: RepValSize w -> Integer
+repValSizeByteCount = memReprBytes . repValSizeMemRepr
 
 ------------------------------------------------------------------------
 -- X86TermStmt
@@ -83,96 +123,90 @@ instance Pretty (X86PrimLoc tp) where
 -- X86PrimFn
 
 -- | Defines primitive functions in the X86 format.
-data X86PrimFn f tp
-   = (tp ~ BoolType) => EvenParity (f (BVType 8))
-     -- ^ Return true if least-significant bit has even number of bits set.
-   | ReadLoc !(X86PrimLoc tp)
-     -- ^ Read from a primitive X86 location
-   | (tp ~ BVType 64) => ReadFSBase
-     -- ^ Read the 'FS' base address
-   | (tp ~ BVType 64) => ReadGSBase
-     -- ^ Read the 'GS' base address
-   | (tp ~ BVType 128) => CPUID (f (BVType 32))
-     -- ^ The CPUID instruction
-     --
-     -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
-   | (tp ~ BVType 64) => RDTSC
-     -- ^ The RDTSC instruction
-     --
-     -- This returns the current time stamp counter a 64-bit value that will
-     -- be stored in edx:eax
-   | (tp ~ BVType 64) => XGetBV (f (BVType 32))
-     -- ^ The XGetBV instruction primitive
-     --
-     -- This returns the extended control register defined in the given value
-     -- as a 64-bit value that will be stored in edx:eax
-   | forall w
-     .  (tp ~ BVType w, 1 <= w)
-     => PShufb !(SIMDWidth w) !(f (BVType w)) !(f (BVType w))
-     -- ^ @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
-     -- based on indices defined in the corresponding bytes of @s@.
-     --
-     -- Let @n@ be the number of bytes in the width @w@, and let @l = log2(n)@.
-     -- Given a byte index @i@, the value of byte @res[i]@, is defined by
-     --   @res[i] = 0 if msb(s[i]) == 1@
-     --   @res[i] = x[j] where j = s[i](0..l)
-     -- where @msb(y)@ returns the most-significant bit in byte @y@.
-   | (tp ~ BVType 64)
-     => MemCmp !Integer
-               -- /\ Number of bytes per value.
-               !(f (BVType 64))
-               -- /\ Number of values to compare
-               !(f (BVType 64))
-               -- /\ Pointer to first buffer.
-               !(f (BVType 64))
-               -- /\ Pointer to second buffer.
-               !(f BoolType)
-               -- /\ Direction flag, False means increasing
-     -- ^ Compares to memory regions
-   | forall n
-     . (tp ~ BVType 64)
-     => RepnzScas !(RepValSize n)
-                  !(f (BVType n))
-                  !(f (BVType 64))
-                  !(f (BVType 64))
-     -- ^ `RepnzScas sz val base cnt` searchs through a buffer starting at
-     -- `base` to find  an element `i` such that base[i] = val.
-     -- Each step it increments `i` by 1 and decrements `cnt` by `1`.  It returns
-     -- the final value of `cnt`.
-   | (tp ~ BVType 80)
-     => MMXExtend !(f (BVType 64))
-     -- ^ This returns a 80-bit value where the high 16-bits are all
-     -- 1s, and the low 64-bits are the given register.
-   | forall w
-     . (tp ~ BVType w)
-     => X86IDiv !(RepValSize w)
-                !(f (BVType (w+w)))
-                !(f (BVType w))
-    -- ^ This performs a signed quotient for idiv.
-    -- It raises a #DE exception if the divisor is 0 or the result overflows.
-    -- The stored result is truncated to zero.
-   | forall w
-     . (tp ~ BVType w)
-     => X86IRem !(RepValSize w)
-                !(f (BVType (w+w)))
-                !(f (BVType w))
-    -- ^ This performs a signed remainder for idiv.
-    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-    -- The stored result is truncated to zero.
-   | forall w
-     . (tp ~ BVType w)
-     => X86Div !(RepValSize w)
-                !(f (BVType (w+w)))
-                !(f (BVType w))
-    -- ^ This performs a unsigned quotient for div.
-    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-   | forall w
-     . (tp ~ BVType w)
-     => X86Rem !(RepValSize w)
-                !(f (BVType (w+w)))
-                !(f (BVType w))
-    -- ^ This performs an unsigned remainder for div.
-    -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
+data X86PrimFn f tp where
+  EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
+  -- ^ Return true if least-significant bit has even number of bits set.
+  ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
+  -- ^ Read from a primitive X86 location
+  ReadFSBase :: X86PrimFn f (BVType 64)
+  -- ^ Read the 'FS' base address
+  ReadGSBase :: X86PrimFn f (BVType 64)
+  -- ^ Read the 'GS' base address
+  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
+  -- ^ The CPUID instruction
+  --
+  -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
+  RDTSC :: X86PrimFn f (BVType 64)
+  -- ^ The RDTSC instruction
+  --
+  -- This returns the current time stamp counter a 64-bit value that will
+  -- be stored in edx:eax
+  XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+  -- ^ The XGetBV instruction primitive
+  --
+  -- This returns the extended control register defined in the given value
+  -- as a 64-bit value that will be stored in edx:eax
+  PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
+  -- ^ @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
+  -- based on indices defined in the corresponding bytes of @s@.
+  --
+  -- Let @n@ be the number of bytes in the width @w@, and let @l = log2(n)@.
+  -- Given a byte index @i@, the value of byte @res[i]@, is defined by
+  --   @res[i] = 0 if msb(s[i]) == 1@
+  --   @res[i] = x[j] where j = s[i](0..l)
+  -- where @msb(y)@ returns the most-significant bit in byte @y@.
+  MemCmp :: !Integer
+           -- /\ Number of bytes per value.
+         -> !(f (BVType 64))
+           -- /\ Number of values to compare
+         -> !(f (BVType 64))
+           -- /\ Pointer to first buffer.
+         -> !(f (BVType 64))
+           -- /\ Pointer to second buffer.
+         -> !(f BoolType)
+           -- /\ Direction flag, False means increasing
+         -> X86PrimFn f (BVType 64)
+
+  -- ^ Compares to memory regions
+  RepnzScas :: !(RepValSize n)
+            -> !(f (BVType n))
+            -> !(f (BVType 64))
+            -> !(f (BVType 64))
+            -> X86PrimFn f (BVType 64)
+
+  -- ^ `RepnzScas sz val base cnt` searchs through a buffer starting at
+  -- `base` to find  an element `i` such that base[i] = val.
+  -- Each step it increments `i` by 1 and decrements `cnt` by `1`.  It returns
+  -- the final value of `cnt`.
+  MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
+  -- ^ This returns a 80-bit value where the high 16-bits are all
+  -- 1s, and the low 64-bits are the given register.
+  X86IDiv :: !(RepValSize w)
+          -> !(f (BVType (w+w)))
+          -> !(f (BVType w))
+          -> X86PrimFn f (BVType w)
+  -- ^ This performs a signed quotient for idiv.
+  -- It raises a #DE exception if the divisor is 0 or the result overflows.
+  -- The stored result is truncated to zero.
+  X86IRem :: !(RepValSize w)
+          -> !(f (BVType (w+w)))
+          -> !(f (BVType w))
+          -> X86PrimFn f (BVType w)
+  -- ^ This performs a signed remainder for idiv.
+  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
+  -- The stored result is truncated to zero.
+  X86Div :: !(RepValSize w)
+         -> !(f (BVType (w+w)))
+         -> !(f (BVType w))
+         -> X86PrimFn f (BVType w)
+  -- ^ This performs a unsigned quotient for div.
+  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
+  X86Rem :: !(RepValSize w)
+         -> !(f (BVType (w+w)))
+         -> !(f (BVType w))
+         -> X86PrimFn f (BVType w)
+  -- ^ This performs an unsigned remainder for div.
+  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =

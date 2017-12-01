@@ -35,6 +35,8 @@ import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
+import           Data.Macaw.TypedList (TList)
+import qualified Data.Macaw.TypedList as TList
 
 -----------------------------------------------------------------------
 -- App
@@ -46,6 +48,10 @@ data App (f :: Type -> *) (tp :: Type) where
   Eq :: !(f tp) -> !(f tp) -> App f BoolType
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
+
+  -- | Extract the value out of a tuple.
+  TupleField :: !(TList TypeRepr l) -> !(TList.Index l r) -> App f r
+
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -117,27 +123,34 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Arithmetic right shift (x / 2 ^ n)
   BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Add two values and a carry bit to determine if they have an unsigned overflow.
+  -- | Add two values and a carry bit to determine if they have an
+  -- unsigned overflow.
   --
-  -- This is the sum of three three values cannot be represented as an unsigned number.
+  -- This is the sum of three three values cannot be represented as an
+  -- unsigned number.
   UadcOverflows :: (1 <= n)
                 => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
-  -- Add two values and a carry bit to determine if they have a signed
-  -- overflow.
+
+  -- | Add two values and a carry bit to determine if they have a
+  -- signed overflow.
+  --
+  -- @SadcOverflows  w x y c@ should be true iff the result
+  -- @toNat x + toNat y + (c ? 1 : 0)@ is greater than @2^w-1@.
   SadcOverflows :: (1 <= n)
                 => !(f (BVType n))
                 -> !(f (BVType n))
                 -> !(f BoolType)
                 -> App f BoolType
 
-  -- Unsigned subtract with borrow overflow
+  -- | Unsigned subtract with borrow overflow
   --
-  -- @UsbbOverflows  w x y c@ should be true iff the result
-  -- @(toNat x - toNat y) - (c ? 1 : 0)@ is not between @0@ and @2^w-1@.
-  -- Since everything is unsigned, this is equivalent to @x unsignedLt (y + (c ? 1 : 0)@.
+  -- @UsbbOverflows w x y c@ should be true iff the result
+  -- @(toNat x - toNat y) - (c ? 1 : 0)@ is non-negative.
+  -- Since everything is
+  -- unsigned, this is equivalent to @x unsignedLt (y + (c ? 1 : 0)@.
   UsbbOverflows :: (1 <= n)
                 => !(f (BVType n))
                 -> !(f (BVType n))
@@ -164,11 +177,11 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- | bsf "bit scan forward" returns the index of the
   -- least-significant bit that is 1.  An equivalent way of stating
-  -- this is that it returns the number "trailing" zero-bits.  This
-  -- returns n if the value is zero.
+  -- this is that it returns the number zero-bits starting from the
+  -- least significant bit.  This returns n if the value is zero.
   Bsf :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- | bsf "bit scan forward" returns the index of the
+  -- | bsr "bit scan reverse" returns the index of the
   -- most-significant bit that is 1.  An equivalent way of stating
   -- this is that it returns the number zero-bits starting from
   -- the most-significant bit location.  This returns n if the
@@ -297,6 +310,10 @@ instance TestEquality f => TestEquality (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|testEquality|])
+                   , (ConType [t|TList|] `TypeApp` AnyType `TypeApp` AnyType,
+                      [|testEquality|])
+                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                      [|testEquality|])
                    ]
                   )
 
@@ -306,6 +323,10 @@ instance OrdF f => OrdF (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
+                   , (ConType [t|TList|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                      [|compareF|])
+                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                      [|compareF|])
                    ]
               )
 
@@ -353,6 +374,7 @@ ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
+    TupleField _ i -> sexprA "tuple_field" [ prettyPure (TList.indexValue i) ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
@@ -410,66 +432,67 @@ ppAppA pp a0 =
 
 instance HasRepr (App f) TypeRepr where
   typeRepr a =
-   case a of
-    Mux tp _ _ _ -> tp
-    Trunc _ w -> BVTypeRepr w
-    SExt  _ w -> BVTypeRepr w
-    UExt  _ w -> BVTypeRepr w
+    case a of
+      Eq _ _       -> knownType
+      Mux tp _ _ _ -> tp
+      TupleField f i -> f TList.! i
 
-    AndApp{} -> knownType
-    OrApp{}  -> knownType
-    NotApp{} -> knownType
-    XorApp{} -> knownType
+      Trunc _ w -> BVTypeRepr w
+      SExt  _ w -> BVTypeRepr w
+      UExt  _ w -> BVTypeRepr w
 
-    BVAdd w _ _   -> BVTypeRepr w
-    BVAdc w _ _ _ -> BVTypeRepr w
-    BVSub w _ _   -> BVTypeRepr w
-    BVSbb w _ _ _ -> BVTypeRepr w
-    BVMul w _ _ -> BVTypeRepr w
+      AndApp{} -> knownType
+      OrApp{}  -> knownType
+      NotApp{} -> knownType
+      XorApp{} -> knownType
 
-    BVUnsignedLt{} -> knownType
-    BVUnsignedLe{} -> knownType
-    BVSignedLt{} -> knownType
-    BVSignedLe{} -> knownType
-    BVTestBit{} -> knownType
+      BVAdd w _ _   -> BVTypeRepr w
+      BVAdc w _ _ _ -> BVTypeRepr w
+      BVSub w _ _   -> BVTypeRepr w
+      BVSbb w _ _ _ -> BVTypeRepr w
+      BVMul w _ _ -> BVTypeRepr w
 
-    BVComplement w _ -> BVTypeRepr w
-    BVAnd w _ _ -> BVTypeRepr w
-    BVOr  w _ _ -> BVTypeRepr w
-    BVXor w _ _ -> BVTypeRepr w
-    BVShl w _ _ -> BVTypeRepr w
-    BVShr w _ _ -> BVTypeRepr w
-    BVSar w _ _ -> BVTypeRepr w
-    Eq _ _       -> knownType
+      BVUnsignedLt{} -> knownType
+      BVUnsignedLe{} -> knownType
+      BVSignedLt{} -> knownType
+      BVSignedLe{} -> knownType
+      BVTestBit{} -> knownType
 
+      BVComplement w _ -> BVTypeRepr w
+      BVAnd w _ _ -> BVTypeRepr w
+      BVOr  w _ _ -> BVTypeRepr w
+      BVXor w _ _ -> BVTypeRepr w
+      BVShl w _ _ -> BVTypeRepr w
+      BVShr w _ _ -> BVTypeRepr w
+      BVSar w _ _ -> BVTypeRepr w
 
-    UadcOverflows{} -> knownType
-    SadcOverflows{} -> knownType
-    UsbbOverflows{} -> knownType
-    SsbbOverflows{} -> knownType
+      UadcOverflows{} -> knownType
+      SadcOverflows{} -> knownType
+      UsbbOverflows{} -> knownType
+      SsbbOverflows{} -> knownType
 
-    PopCount w _ -> BVTypeRepr w
-    ReverseBytes w _ ->
-      case leqMulCongr (LeqProof :: LeqProof 1 8) (leqProof (knownNat :: NatRepr 1) w) of
-        LeqProof -> BVTypeRepr (natMultiply (knownNat :: NatRepr 8) w)
-    Bsf w _ -> BVTypeRepr w
-    Bsr w _ -> BVTypeRepr w
+      PopCount w _ -> BVTypeRepr w
+      ReverseBytes w _ ->
+        case leqMulCongr (LeqProof :: LeqProof 1 8) (leqProof (knownNat :: NatRepr 1) w) of
+          LeqProof -> BVTypeRepr (natMultiply (knownNat :: NatRepr 8) w)
+      Bsf w _ -> BVTypeRepr w
+      Bsr w _ -> BVTypeRepr w
 
-    -- Floating point
-    FPIsQNaN _ _ -> knownType
-    FPIsSNaN _ _ -> knownType
-    FPAdd rep _ _ -> floatTypeRepr rep
-    FPAddRoundedUp{} -> knownType
-    FPSub rep _ _ -> floatTypeRepr rep
-    FPSubRoundedUp{} -> knownType
-    FPMul rep _ _ -> floatTypeRepr rep
-    FPMulRoundedUp{} -> knownType
-    FPDiv rep _ _ -> floatTypeRepr rep
-    FPLt{} -> knownType
-    FPEq{} -> knownType
-    FPCvt _ _ tgt   -> floatTypeRepr tgt
-    FPCvtRoundsUp{} -> knownType
-    FPFromBV _ tgt  -> floatTypeRepr tgt
-    TruncFPToSignedBV _ _ w -> BVTypeRepr w
-    FPAbs rep _ -> floatTypeRepr rep
-    FPNeg rep _ -> floatTypeRepr rep
+      -- Floating point
+      FPIsQNaN _ _ -> knownType
+      FPIsSNaN _ _ -> knownType
+      FPAdd rep _ _ -> floatTypeRepr rep
+      FPAddRoundedUp{} -> knownType
+      FPSub rep _ _ -> floatTypeRepr rep
+      FPSubRoundedUp{} -> knownType
+      FPMul rep _ _ -> floatTypeRepr rep
+      FPMulRoundedUp{} -> knownType
+      FPDiv rep _ _ -> floatTypeRepr rep
+      FPLt{} -> knownType
+      FPEq{} -> knownType
+      FPCvt _ _ tgt   -> floatTypeRepr tgt
+      FPCvtRoundsUp{} -> knownType
+      FPFromBV _ tgt  -> floatTypeRepr tgt
+      TruncFPToSignedBV _ _ w -> BVTypeRepr w
+      FPAbs rep _ -> floatTypeRepr rep
+      FPNeg rep _ -> floatTypeRepr rep

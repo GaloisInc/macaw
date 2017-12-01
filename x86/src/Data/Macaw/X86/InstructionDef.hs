@@ -46,15 +46,19 @@ import           Data.Parameterized.Some
 import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.X86.Conditions
+import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Getters
 import           Data.Macaw.X86.Monad
+
+type Addr s = Expr s (BVType 64)
+type BVExpr s w = Expr s (BVType w)
 
 -- This is a wrapper around the semantics of an instruction.
 newtype InstructionSemantics
       = InstructionSemantics { _unInstructionSemantics
-                               :: forall m. Semantics m
-                               => F.InstructionInstance
-                               -> m ()
+                               :: forall st ids
+                               .  F.InstructionInstance
+                               -> X86Generator st ids ()
                              }
 
 -- | The information needed to define an instruction semantics.
@@ -62,32 +66,32 @@ type InstructionDef = (String, InstructionSemantics)
 
 -- | Create a instruction that potentially takes any number of arguments.
 defInstruction :: String
-            -> (forall m. Semantics m => F.InstructionInstance -> m ())
+            -> (forall st ids . F.InstructionInstance -> X86Generator st ids ())
             -> InstructionDef
 defInstruction mnemonic f = (mnemonic, InstructionSemantics f)
 
 -- | Create a instruction that potentially takes any number of arguments.
 defVariadic :: String
-            -> (forall m. Semantics m => F.LockPrefix -> [F.Value] -> m ())
+            -> (forall st ids .F.LockPrefix -> [F.Value] -> X86Generator st ids ())
             -> InstructionDef
 defVariadic mnem f = defInstruction mnem (\ii -> f (F.iiLockPrefix ii) (fst <$> F.iiArgs ii))
 
 -- | Define an instruction that expects no arguments.
 defNullary :: String
-           -> (forall m . Semantics m => m ())
+           -> (forall st ids . X86Generator st ids ())
            -> InstructionDef
 defNullary mnem f = defVariadic mnem (\_ _ -> f)
 
 -- | Define an instruction that expects no arguments other than a prefix
 defNullaryPrefix :: String
-                 -> (forall m. Semantics m => F.LockPrefix -> m ())
+                 -> (forall st ids . F.LockPrefix -> X86Generator st ids ())
                  -> InstructionDef
 defNullaryPrefix mnem f = defVariadic mnem (\pfx _ -> f pfx)
 
 -- | Define an instruction that expects a single argument
 defUnary :: String
             -- ^ Instruction mnemonic
-         -> (forall m . Semantics m => F.LockPrefix -> F.Value -> m ())
+         -> (forall st ids . F.LockPrefix -> F.Value -> X86Generator st ids ())
              -- ^ Sementic definition
          -> InstructionDef
 defUnary mnem f = defVariadic mnem $ \pfx vs ->
@@ -97,7 +101,10 @@ defUnary mnem f = defVariadic mnem $ \pfx vs ->
 
 -- | Defines an instruction that expects a single bitvec location as an argument.
 defUnaryLoc :: String
-            -> (forall m n. IsLocationBV m n => MLocation m (BVType n) -> m ())
+            -> (forall st ids n
+                . SupportedBVWidth n
+                => Location (Addr ids) (BVType n)
+                -> X86Generator st ids ())
             -> InstructionDef
 defUnaryLoc s f = defUnary s $ \_ val -> do
   SomeBV v <- getSomeBVLocation val
@@ -106,27 +113,36 @@ defUnaryLoc s f = defUnary s $ \_ val -> do
 -- | Defines an instruction that expects a bitvector location with a known fixed width.
 defUnaryKnown :: KnownNat n
               => String
-              -> (forall m . Semantics m => MLocation m (BVType n) -> m ())
+              -> (forall st ids . Location (Addr ids) (BVType n) -> X86Generator st ids ())
               -> InstructionDef
 defUnaryKnown s f = defUnary s $ \_ loc -> f =<< getBVLocation loc knownNat
 
 -- | Defines an instruction that expects a single bitvec value as an argument.
 defUnaryV :: String
-          -> (forall m n. IsLocationBV m n => Value m (BVType n) -> m ())
+          -> ( forall st ids n
+             . SupportedBVWidth n
+             => Expr ids (BVType n)
+             -> X86Generator st ids ())
           -> InstructionDef
 defUnaryV s f =  defUnary s $ \_ val -> do
   SomeBV v <- getSomeBVValue val
   f v
 
 defUnaryFPL :: String
-            -> (forall m flt. Semantics m => FloatInfoRepr flt -> MLocation m (FloatType flt) -> m ())
+            -> (forall st ids flt
+               .  FloatInfoRepr flt
+               -> Location (Addr ids) (FloatType flt)
+               -> X86Generator st ids ())
             -> InstructionDef
 defUnaryFPL mnem f = defUnary mnem $ \_ v -> do
   Some (FPLocation repr loc) <- getFPLocation v
   f repr loc
 
 defUnaryFPV :: String
-            -> (forall m flt. Semantics m => FloatInfoRepr flt -> Value m (FloatType flt) -> m ())
+            -> (forall st ids flt
+                . FloatInfoRepr flt
+                -> Expr ids (FloatType flt)
+                -> X86Generator st ids ())
             -> InstructionDef
 defUnaryFPV mnem f = defUnary mnem $ \_ v -> do
   Some (FPValue repr val) <- getFPValue v
@@ -134,7 +150,11 @@ defUnaryFPV mnem f = defUnary mnem $ \_ v -> do
 
 -- | Define an instruction that expects two arguments.
 defBinary :: String
-          -> (forall m . Semantics m => F.InstructionInstance -> F.Value -> F.Value -> m ())
+          -> (forall st ids
+               .  F.InstructionInstance
+               -> F.Value
+               -> F.Value
+               -> X86Generator st ids ())
           -> InstructionDef
 defBinary mnem f = defInstruction mnem $ \ii ->
   case F.iiArgs ii of
@@ -142,7 +162,11 @@ defBinary mnem f = defInstruction mnem $ \ii ->
     _         -> fail $ "defBinary: " ++ mnem ++ ": expecting 2 arguments, got " ++ show (length (F.iiArgs ii))
 
 defBinaryLV :: String
-      -> (forall m n. IsLocationBV m n => MLocation m (BVType n) -> Value m (BVType n) -> m ())
+      -> (forall st ids n
+          . SupportedBVWidth n
+          => Location (Addr ids) (BVType n)
+          -> Expr ids (BVType n)
+          -> X86Generator st ids ())
       -> InstructionDef
 defBinaryLV mnem f = defBinary mnem $ \_ loc val -> do
   SomeBV l <- getSomeBVLocation loc
@@ -152,9 +176,11 @@ defBinaryLV mnem f = defBinary mnem $ \_ loc val -> do
 -- | This defines a instruction that expects a location and a value that may have
 -- differing widths
 defBinaryLVpoly :: String
-                 -> (forall m n n'
-                    . (IsLocationBV m n, 1 <= n')
-                    => MLocation m (BVType n) -> Value m (BVType n') -> m ())
+                 -> (forall st ids n n'
+                    . (SupportedBVWidth n, 1 <= n')
+                    => Location (Addr ids) (BVType n)
+                    -> BVExpr ids n'
+                    -> X86Generator st ids ())
                  -> InstructionDef
 defBinaryLVpoly mnem f = defBinary mnem $ \_ loc val -> do
   SomeBV l <- getSomeBVLocation loc
@@ -164,11 +190,11 @@ defBinaryLVpoly mnem f = defBinary mnem $ \_ loc val -> do
 -- | This defines a instruction that expects a location and a value that may have
 -- differing widths, but the location must be larger than the value.
 defBinaryLVge :: String
-              -> (forall m n n'
-                  . (IsLocationBV m n, 1 <= n', n' <= n)
-                  => MLocation m (BVType n)
-                  -> Value m (BVType n')
-                  -> m ())
+              -> (forall st ids n n'
+                  . (SupportedBVWidth n, 1 <= n', n' <= n)
+                  => Location (Addr ids) (BVType n)
+                  -> Expr ids (BVType n')
+                  -> X86Generator st ids ())
               -> InstructionDef
 defBinaryLVge mnem f = defBinaryLVpoly mnem $ \l v -> do
   Just LeqProof <- return $ testLeq (bv_width v) (typeWidth l)
@@ -177,7 +203,7 @@ defBinaryLVge mnem f = defBinaryLVpoly mnem $ \l v -> do
 -- | Define an instruction from a function with fixed widths kmown at compile time/.
 defBinaryKnown :: (KnownNat n, KnownNat n')
                => String
-               -> (forall m . Semantics m => MLocation m (BVType n) -> Value m (BVType n') -> m ())
+               -> (forall st ids . Location (Addr ids) (BVType n) -> BVExpr ids n' -> X86Generator st ids ())
                -> InstructionDef
 defBinaryKnown mnem f = defBinary mnem $ \_ loc val -> do
   l  <- getBVLocation loc knownNat
@@ -188,7 +214,10 @@ defBinaryXMMV :: ( KnownNat n
                  , 1 <= n
                  )
               => String
-              -> (forall m . Semantics m => MLocation m XMMType -> Value m (BVType n) -> m ())
+              -> (forall st ids
+                  . Location (Addr ids) XMMType
+                  -> Expr ids (BVType n)
+                  -> X86Generator st ids ())
               -> InstructionDef
 defBinaryXMMV mnem f = defBinary mnem $ \_ loc val -> do
   l <- getBVLocation loc n128
@@ -196,9 +225,12 @@ defBinaryXMMV mnem f = defBinary mnem $ \_ loc val -> do
   f l v
 
 defBinaryLL :: String
-          -> (forall m n. (IsLocationBV m n, 1 <= n)
-             => F.LockPrefix
-             ->  MLocation m (BVType n) -> MLocation m (BVType n) -> m ())
+          -> (forall st ids n
+              . SupportedBVWidth n
+              => F.LockPrefix
+              -> Location (Expr ids (BVType 64)) (BVType n)
+              -> Location (Expr ids (BVType 64)) (BVType n)
+              -> X86Generator st ids ())
           -> InstructionDef
 defBinaryLL mnem f = defBinary mnem $ \ii loc loc' -> do
   SomeBV l <- getSomeBVLocation loc
@@ -210,13 +242,12 @@ defBinaryLL mnem f = defBinary mnem $ \ii loc loc' -> do
 -- If only one argument is provided, it is used as the second argument,
 -- and the first argument is implicitly the top of the floating point stack.
 defFPBinaryImplicit :: String
-                   -> (forall m flt_d flt_s
-                       .  Semantics m
-                       => FloatInfoRepr flt_d
-                       -> MLocation m (FloatType flt_d)
+                   -> (forall st ids flt_d flt_s
+                       .  FloatInfoRepr flt_d
+                       -> Location (Expr ids (BVType 64)) (FloatType flt_d)
                        -> FloatInfoRepr flt_s
-                       -> Value m (FloatType flt_s)
-                       -> m ())
+                       -> Expr ids (FloatType flt_s)
+                       -> X86Generator st ids ())
                    -> InstructionDef
 defFPBinaryImplicit mnem f = defVariadic mnem $ \_ vs -> do
   case vs of
@@ -232,7 +263,7 @@ defFPBinaryImplicit mnem f = defVariadic mnem $ \_ vs -> do
 
 -- | Define an instruction that expects three arguments.
 defTernary :: String
-           -> (forall m . Semantics m => F.LockPrefix -> F.Value -> F.Value -> F.Value -> m ())
+           -> (forall st ids . F.LockPrefix -> F.Value -> F.Value -> F.Value -> X86Generator st ids ())
            -> InstructionDef
 defTernary mnem f = defVariadic mnem $ \pfx vs -> do
   case vs of
@@ -241,12 +272,12 @@ defTernary mnem f = defVariadic mnem $ \pfx vs -> do
       fail $ "defTernary: " ++ mnem ++ ": expecting 3 arguments, got " ++ show (length vs)
 
 defTernaryLVV :: String
-              -> (forall m k n
-                  . (IsLocationBV m n, 1 <= k, k <= n)
-                  => MLocation m (BVType n)
-                  -> Value m (BVType n)
-                  -> Value m (BVType k)
-                  -> m ())
+              -> (forall st ids k n
+                  . (SupportedBVWidth n, 1 <= k, k <= n)
+                  => Location (Addr ids) (BVType n)
+                  -> BVExpr ids n
+                  -> BVExpr ids k
+                  -> X86Generator st ids ())
               -> InstructionDef
 defTernaryLVV mnem f = defTernary mnem $ \_ loc val1 val2 -> do
   SomeBV l <- getSomeBVLocation loc
@@ -258,7 +289,7 @@ defTernaryLVV mnem f = defTernary mnem $ \_ loc val1 val2 -> do
 -- | This generates a list of instruction definitinos -- one for each conditional predicate.
 defConditionals :: String
                 -> (String
-                    -> (forall m. Semantics m => m (Value m BoolType))
+                    -> (forall st ids .  X86Generator st ids (Expr ids BoolType))
                     -> InstructionDef)
                 -> [InstructionDef]
 defConditionals pfx mkop = mk <$> conditionalDefs

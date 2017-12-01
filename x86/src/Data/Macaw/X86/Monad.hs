@@ -2,8 +2,8 @@
 Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
-This defines the typeclasses that must be implemented to obtain
-semantics from x86 instructions.
+This defines various types on top of X86Generator to defined
+semantics of X86 instructions.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
@@ -21,13 +21,14 @@ semantics from x86 instructions.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.X86.Monad
   ( -- * Type
     XMMType
   , RepValSize(..)
   , repValHasSupportedWidth
-  , repValSizeMemRepr
   , repValSizeByteCount
+  , repValSizeMemRepr
   , Data.Macaw.Types.FloatInfoRepr(..)
   , Data.Macaw.Types.floatInfoBits
   , floatMemRepr
@@ -84,50 +85,82 @@ module Data.Macaw.X86.Monad
   , (.*)
   , (.&&.)
   , (.||.)
-  , Pred
+  , isQNaN
+  , isSNaN
+  , isAnyNaN
     -- * Semantics
   , SIMDWidth(..)
-  , Semantics(..)
-  , Value
-  , BVValue
-  , MLocation
-  , SupportedBVWidth
-  , IsLocationBV
+  , make_undefined
+  , set_undefined
+  , getReg
+  , get
+  , (.=)
+  , modify
+    -- * Other
+  , Data.Macaw.X86.ArchTypes.X86PrimFn(..)
+  , Data.Macaw.X86.ArchTypes.X86TermStmt(..)
+  , Data.Macaw.X86.Generator.X86Generator
+  , Data.Macaw.X86.Generator.Expr
+  , Data.Macaw.X86.Generator.eval
+  , Data.Macaw.X86.Generator.evalArchFn
+  , Data.Macaw.X86.Generator.addArchTermStmt
+  , ifte_
+  , when_
+  , unless_
+  , memcopy
+  , memcmp
+  , memset
+  , rep_scas
+  , even_parity
+  , fnstcw
+  , getSegmentBase
+  , exception
   , ExceptionClass(..)
-  , Primitive(..)
+  , x87Push
+  , x87Pop
+  , bvQuotRem
+  , bvSignedQuotRem
+
+    -- * SupportedBVWidth
+  , SupportedBVWidth
+
     -- * Re-exports
   , type (TypeLits.<=)
   , type Flexdis86.Sizes.SizeConstraint(..)
-  , module Flexdis86.Segment
   ) where
 
+import           Control.Exception
+import           Control.Lens hiding ((.=))
+import           Control.Monad
 import qualified Data.Bits as Bits
-import           Data.Char (toLower)
-import           Data.Macaw.CFG (MemRepr(..), memReprBytes)
+import           Data.Macaw.CFG
+import           Data.Macaw.CFG.Block
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
+import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
+import qualified Data.Sequence as Seq
+import qualified Flexdis86 as F
+import           Flexdis86.Segment ( Segment )
+import           Flexdis86.Sizes (SizeConstraint(..))
 import           GHC.TypeLits as TypeLits
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
-import qualified Flexdis86 as F
-import           Flexdis86.Segment
-  ( Segment
-  , pattern ES
-  , pattern CS
-  , pattern SS
-  , pattern DS
-  , pattern FS
-  , pattern GS
-  )
-import           Flexdis86.Sizes (SizeConstraint(..))
 
+import           Data.Macaw.X86.ArchTypes
+import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.X86Reg (X86Reg(..))
 import qualified Data.Macaw.X86.X86Reg as R
 import           Data.Macaw.X86.X87ControlReg
 
 type XMMType    = BVType 128
+
+ltProof :: forall f n m . (n+1 <= m) => f n -> f m -> LeqProof n m
+ltProof _ _ = leqTrans lt LeqProof
+  where lt :: LeqProof n (n+1)
+        lt = leqAdd LeqProof n1
+
 
 ------------------------------------------------------------------------
 -- Sub registers
@@ -172,6 +205,24 @@ data RegisterViewType m (b :: Nat) (n :: Nat)
     )
     => ZeroExtendOnWrite
 
+compareRegisterViewType :: RegisterViewType w b n -> RegisterViewType w' b' n' -> Ordering
+DefaultView `compareRegisterViewType` DefaultView = EQ
+DefaultView `compareRegisterViewType` _ = LT
+_ `compareRegisterViewType` DefaultView = GT
+OneExtendOnWrite `compareRegisterViewType` OneExtendOnWrite = EQ
+OneExtendOnWrite `compareRegisterViewType` _ = LT
+_ `compareRegisterViewType` OneExtendOnWrite = GT
+ZeroExtendOnWrite `compareRegisterViewType` ZeroExtendOnWrite = EQ
+
+instance Ord (RegisterViewType w b n) where
+  compare = compareRegisterViewType
+
+instance Eq (RegisterViewType w b n) where
+  rvt == rvt'
+    | EQ <- rvt `compareRegisterViewType` rvt' = True
+    | otherwise = False
+
+
 -- | A view into a register / a subregister.
 data RegisterView w b n
   = (1 <= n, b + n <= w)
@@ -182,6 +233,26 @@ data RegisterView w b n
     , _registerViewType :: RegisterViewType w b n
     }
 
+compareRegisterView :: RegisterView w b n -> RegisterView w' b' n' -> Ordering
+compareRegisterView rv rv' =
+  case ( _registerViewBase rv `compareF` _registerViewBase rv'
+       , _registerViewSize rv `compareF` _registerViewSize rv'
+       , _registerViewReg rv `compareF` _registerViewReg rv'
+       ) of
+    (LTF, _, _) -> LT
+    (GTF, _, _) -> GT
+    (EQF, LTF, _) -> LT
+    (EQF, GTF, _) -> GT
+    (EQF, EQF, LTF) -> LT
+    (EQF, EQF, GTF) -> GT
+    (EQF, EQF, EQF) ->
+      _registerViewType rv `compareRegisterViewType` _registerViewType rv'
+
+instance Eq (RegisterView w b n) where
+  x == y = compare x y == EQ
+
+instance Ord (RegisterView w b n) where
+  compare = compareRegisterView
 
 -- * Destructors for 'RegisterView's.
 
@@ -448,31 +519,81 @@ data Location addr (tp :: Type) where
   X87StackRegister :: !Int
                    -> Location addr (FloatType X86_80Float)
 
+------------------------------------------------------------------------
+-- Location
+
+-- | Type for addresses.
+type AddrExpr ids = Expr ids (BVType 64)
+
+type ImpLocation ids tp = Location (AddrExpr ids) tp
+
+readLoc :: X86PrimLoc tp -> X86Generator st_s ids (Expr ids tp)
+readLoc l = evalArchFn (ReadLoc l)
+
+getX87Offset :: Int -> X86Generator st_s ids Int
+getX87Offset i = do
+  topv <- getX87Top
+  unless (0 <= topv + i && topv + i <= 7) $ do
+    fail $ "Illegal floating point index"
+  return $! topv + i
+
+
+addWriteLoc :: X86PrimLoc tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
+addWriteLoc l v = addArchStmt $ WriteLoc l v
+
+getReg :: X86Reg tp -> X86Generator st_s ids (Expr ids tp)
+getReg r = ValueExpr <$> getRegValue r
+
+-- | Assign a value to a location
+setLoc :: forall ids st_s tp
+       .  ImpLocation ids tp
+       -> Value X86_64 ids tp
+       -> X86Generator st_s ids ()
+setLoc loc v =
+  case loc of
+   MemoryAddr w tp -> do
+     addr <- eval w
+     addStmt $ WriteMem addr tp v
+
+   ControlReg r -> do
+     addWriteLoc (ControlLoc r) v
+   DebugReg r  ->
+     addWriteLoc (DebugLoc r) v
+
+   SegmentReg s
+     | s == F.FS -> addWriteLoc FS v
+     | s == F.GS -> addWriteLoc GS v
+       -- Otherwise registers are 0.
+     | otherwise ->
+       fail $ "On x86-64 registers other than fs and gs may not be set."
+
+   X87ControlReg r ->
+     addWriteLoc (X87_ControlLoc r) v
+   FullRegister r -> do
+     setReg r v
+   Register (rv :: RegisterView m b n) -> do
+     let r = registerViewReg rv
+     v0 <- getReg r
+     v1 <- eval $ registerViewWrite rv v0 (ValueExpr v)
+     setReg r v1
+   X87StackRegister i -> do
+     off <- getX87Offset i
+     setReg (X87_FPUReg (F.mmxReg (fromIntegral off))) v
+
+------------------------------------------------------------------------
+-- Semantics
+
+getX87Top :: X86Generator st_s ids Int
+getX87Top = do
+  top_val <- getRegValue X87_TopReg
+  case top_val of
+    -- Validate that i is less than top and top +
+    BVValue _ (fromInteger -> topv) ->
+      return topv
+    _ -> fail $ "Unsupported value for top register " ++ show (pretty top_val)
+
 -- Equality and ordering.
 
-compareRegisterViewType :: RegisterViewType w b n -> RegisterViewType w' b' n' -> Ordering
-DefaultView `compareRegisterViewType` DefaultView = EQ
-DefaultView `compareRegisterViewType` _ = LT
-_ `compareRegisterViewType` DefaultView = GT
-OneExtendOnWrite `compareRegisterViewType` OneExtendOnWrite = EQ
-OneExtendOnWrite `compareRegisterViewType` _ = LT
-_ `compareRegisterViewType` OneExtendOnWrite = GT
-ZeroExtendOnWrite `compareRegisterViewType` ZeroExtendOnWrite = EQ
-
-compareRegisterView :: RegisterView w b n -> RegisterView w' b' n' -> Ordering
-compareRegisterView rv rv' =
-  case ( _registerViewBase rv `compareF` _registerViewBase rv'
-       , _registerViewSize rv `compareF` _registerViewSize rv'
-       , _registerViewReg rv `compareF` _registerViewReg rv'
-       ) of
-    (LTF, _, _) -> LT
-    (GTF, _, _) -> GT
-    (EQF, LTF, _) -> LT
-    (EQF, GTF, _) -> GT
-    (EQF, EQF, LTF) -> LT
-    (EQF, EQF, GTF) -> GT
-    (EQF, EQF, EQF) ->
-      _registerViewType rv `compareRegisterViewType` _registerViewType rv'
 
 instance Eq addr => EqF (Location addr) where
   MemoryAddr addr tp `eqF` MemoryAddr addr' tp'
@@ -485,23 +606,7 @@ instance Eq addr => EqF (Location addr) where
 instance Eq addr => Eq (Location addr tp) where
   (==) = eqF
 
-instance Ord (RegisterViewType w b n) where
-  compare = compareRegisterViewType
-
-instance Ord (RegisterView w b n) where
-  compare = compareRegisterView
-
-instance Eq (RegisterViewType w b n) where
-  rvt == rvt'
-    | EQ <- rvt `compareRegisterViewType` rvt' = True
-    | otherwise = False
-
-instance Eq (RegisterView w b n) where
-  rv == rv'
-    | EQ <- rv `compareRegisterView` rv' = True
-    | otherwise = False
-
--- | Pretty print 'S.Location'.
+-- | Pretty print 'Location'.
 --
 -- Note: this pretty printer ignores the embedded view functions in
 -- 'RegisterView's, so the pretty printed value only indicates which
@@ -722,9 +827,12 @@ rip = fullRegister R.X86_IP
 
 ------------------------------------------------------------------------
 
-packWord :: forall m n. (Semantics m, 1 <= n) => R.BitPacking n -> m (Value m (BVType n))
+packWord :: forall st ids n
+         . 1 <= n
+         => R.BitPacking n
+         -> X86Generator st ids (BVExpr ids n)
 packWord (R.BitPacking sz bits) = do
-  let getMoveBits :: R.BitConversion n -> m (Value m (BVType n))
+  let getMoveBits :: R.BitConversion n -> X86Generator st ids (Expr ids (BVType n))
       getMoveBits (R.ConstantBit b off) =
         return $ bvLit sz (if b then 1 `Bits.shiftL` widthVal off else (0 :: Integer))
       getMoveBits (R.RegisterBit reg off) = do
@@ -733,10 +841,14 @@ packWord (R.BitPacking sz bits) = do
   injs <- mapM getMoveBits bits
   return (foldl1 (.|.) injs)
 
-unpackWord :: forall m n. (Semantics m, 1 <= n) => R.BitPacking n -> Value m (BVType n) -> m ()
+unpackWord :: forall st ids n
+           . (1 <= n)
+           => R.BitPacking n
+           -> BVExpr ids n
+           -> X86Generator st ids ()
 unpackWord (R.BitPacking sz bits) v = mapM_ unpackOne bits
   where
-    unpackOne :: R.BitConversion n -> m ()
+    unpackOne :: R.BitConversion n -> X86Generator st ids ()
     unpackOne R.ConstantBit{}         = return ()
     unpackOne (R.RegisterBit reg off) = do
       let res_w = typeWidth reg
@@ -884,9 +996,9 @@ class IsValue (v  :: Type -> *) where
              -> (v (BVType k) -> v (BVType k) -> v (BVType k))
              -> v (BVType n) -> v (BVType n)
              -> v (BVType n)
-  vectorize2 sz op x y = let xs = bvVectorize sz x
-                             ys = bvVectorize sz y
-                         in bvUnvectorize (bv_width x) $ zipWith op xs ys
+  vectorize2 sz f x y = let xs = bvVectorize sz x
+                            ys = bvVectorize sz y
+                        in bvUnvectorize (bv_width x) $ zipWith f xs ys
 
   -- | Rotations
   bvRol :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
@@ -1062,13 +1174,6 @@ class IsValue (v  :: Type -> *) where
 
   -- FP stuff
 
-  -- | is NaN (quiet and signalling)
-  isQNaN :: FloatInfoRepr flt -> v (FloatType flt) -> v BoolType
-  isSNaN :: FloatInfoRepr flt -> v (FloatType flt) -> v BoolType
-
-  isNaN :: FloatInfoRepr flt -> v (FloatType flt) -> v BoolType
-  isNaN fir v = boolOr (isQNaN fir v) (isSNaN fir v)
-
   -- | Add two floating point numbers.
   -- This can throw exceptions, including:
   -- #IA Operand is an SNaN value or unsupported format.
@@ -1166,6 +1271,406 @@ class IsValue (v  :: Type -> *) where
   boolEq  :: v BoolType -> v BoolType -> v BoolType
   boolXor :: v BoolType -> v BoolType -> v BoolType
 
+bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvSle x y = app (BVSignedLe x y)
+
+instance IsValue (Expr ids) where
+
+  bv_width = typeWidth
+
+  mux c x y
+    | Just True  <- asBoolLit c = x
+    | Just False <- asBoolLit c = y
+    | x == y = x
+    | Just (NotApp cn) <- asApp c = mux cn y x
+    | otherwise = app $ Mux (typeRepr x) c x y
+
+  boolValue b = ValueExpr (BoolValue b)
+
+  bvLit n v = ValueExpr $ mkLit n (toInteger v)
+  bvAdd x y
+      -- Eliminate add 0
+    | Just 0 <- asBVLit y = x
+    | Just 0 <- asBVLit x = y
+
+      -- Constant folding.
+    | ValueExpr (BVValue w xv) <- x
+    , Just yv <- asBVLit y
+    = bvLit w (xv + yv)
+
+    | ValueExpr (RelocatableValue w a) <- x
+    , Just o <- asBVLit y
+    = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
+
+    | ValueExpr (RelocatableValue w a) <- y
+    , Just o <- asBVLit x
+    = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
+
+      -- Shift constants to right-hand-side.
+    | Just _ <- asBVLit x = bvAdd y x
+
+      -- Reorganize addition by constant to offset.
+    | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
+    , Just y_off <- asBVLit y
+    = bvAdd x_base (bvLit w (x_off + y_off))
+
+    | Just (BVAdd w y_base (asBVLit -> Just y_off)) <- asApp y
+    , Just x_off <- asBVLit x
+    = bvAdd y_base (bvLit w (x_off + y_off))
+
+    | otherwise = app $ BVAdd (typeWidth x) x y
+
+  bvSub x y
+    | Just yv <- asBVLit y = bvAdd x (bvLit (typeWidth x) (negate yv))
+    | otherwise = app $ BVSub (typeWidth x) x y
+
+  bvMul x y
+    | Just 0 <- asBVLit x = x
+    | Just 1 <- asBVLit x = y
+    | Just 0 <- asBVLit y = y
+    | Just 1 <- asBVLit y = x
+
+    | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv * yv)
+    | otherwise = app $ BVMul (typeWidth x) x y
+
+  boolNot x
+    | Just xv <- asBoolLit x = boolValue (not xv)
+      -- not (y < z) = y >= z = z <= y
+    | Just (BVUnsignedLt y z) <- asApp x = bvUle z y
+      -- not (y <= z) = y > z = z < y
+    | Just (BVUnsignedLe y z) <- asApp x = bvUlt z y
+      -- not (y < z) = y >= z = z <= y
+    | Just (BVSignedLt y z) <- asApp x = bvSle z y
+      -- not (y <= z) = y > z = z < y
+    | Just (BVSignedLe y z) <- asApp x = bvSlt z y
+      -- not (not p) = p
+    | Just (NotApp y) <- asApp x = y
+    | otherwise = app $ NotApp x
+
+  bvComplement x
+    | Just xv <- asBVLit x = bvLit (typeWidth x) (Bits.complement xv)
+      -- not (not p) = p
+    | Just (BVComplement _ y) <- asApp x = y
+    | otherwise = app $ BVComplement (typeWidth x) x
+
+  boolAnd x y
+    | Just True  <- asBoolLit x = y
+    | Just False <- asBoolLit x = x
+    | Just True  <- asBoolLit y = x
+    | Just False <- asBoolLit y = y
+       -- Idempotence
+    | x == y = x
+
+      -- x1 <= x2 & x1 ~= x2 = x1 < x2
+    | Just (BVUnsignedLe x1 x2) <- asApp x
+    , Just (NotApp yc) <- asApp y
+    , Just (Eq y1 y2) <- asApp yc
+    , BVTypeRepr w <- typeRepr y1
+    , Just Refl <- testEquality (typeWidth x1) w
+    , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
+      bvUlt x1 x2
+
+      -- x1 ~= x2 & x1 <= x2 => x1 < x2
+    | Just (BVUnsignedLe y1 y2) <- asApp y
+    , Just (NotApp xc) <- asApp x
+    , Just (Eq x1 x2) <- asApp xc
+    , BVTypeRepr w <- typeRepr x1
+    , Just Refl <- testEquality w (typeWidth y1)
+    , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
+      bvUlt y1 y2
+      -- Default case
+    | otherwise = app $ AndApp x y
+
+  x .&. y
+    | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv Bits..&. yv)
+      -- Eliminate and when one argument is maxUnsigned
+    | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = y
+    | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = x
+      -- Cancel when and with 0.
+    | Just 0 <- asBVLit x = x
+    | Just 0 <- asBVLit y = y
+      -- Idempotence
+    | x == y = x
+
+      -- Make literal the second argument (simplifies later cases)
+    | isJust (asBVLit x) = assert (isNothing (asBVLit y)) $ y .&. x
+
+      --(x1 .&. x2) .&. y = x1 .&. (x2 .&. y) -- Only apply when x2 and y is a lit
+    | isJust (asBVLit y)
+    , Just (BVAnd _ x1 x2) <- asApp x
+    , isJust (asBVLit x2) =
+      x1 .&. (x2 .&. y)
+
+      -- (x1 .|. x2) .&. y = (x1 .&. y) .|. (x2 .&. y) -- Only apply when y and x2 is a lit.
+    | isJust (asBVLit y)
+    , Just (BVOr _ x1 x2) <- asApp x
+    ,  isJust (asBVLit x2) =
+      (x1 .&. y) .|. (x2 .&. y)
+      -- x .&. (y1 .|. y2) = (y1 .&. x) .|. (y2 .&. x) -- Only apply when x and y2 is a lit.
+    | isJust (asBVLit x)
+    , Just (BVOr _ y1 y2) <- asApp y
+    , isJust (asBVLit y2) =
+      (y1 .&. x) .|. (y2 .&. x)
+
+      -- Default case
+    | otherwise = app $ BVAnd (typeWidth x) x y
+
+  boolOr x y
+    | Just True  <- asBoolLit x = x
+    | Just False <- asBoolLit x = y
+    | Just True  <- asBoolLit y = y
+    | Just False <- asBoolLit y = x
+       -- Idempotence
+    | x == y = x
+
+      -- Rewrite "x < y | x == y" to "x <= y"
+    | Just (BVUnsignedLt x1 x2) <- asApp x
+    , Just (Eq y1 y2) <- asApp y
+    , BVTypeRepr w <- typeRepr y1
+    , Just Refl <- testEquality (typeWidth x1) w
+    , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)
+    = bvUle x1 x2
+
+      -- Default case
+    | otherwise = app $ OrApp x y
+
+  x .|. y
+    | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv Bits..|. yv)
+      -- Cancel or when one argument is maxUnsigned
+    | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = x
+    | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = y
+      -- Eliminate "or" when one argument is 0
+    | Just 0 <- asBVLit x = y
+    | Just 0 <- asBVLit y = x
+      -- Idempotence
+    | x == y = x
+
+      -- Default case
+    | otherwise = app $ BVOr (typeWidth x) x y
+
+  boolXor x y
+      -- Eliminate xor with 0.
+    | Just False <- asBoolLit x = y
+    | Just True  <- asBoolLit x = boolNot y
+    | Just False <- asBoolLit y = x
+    | Just True  <- asBoolLit y = boolNot x
+      -- Eliminate xor with self.
+    | x == y = false
+      -- If this is a single bit comparison with a constant, resolve to Boolean operation.
+      -- Default case.
+    | otherwise = app $ XorApp x y
+
+  bvXor x y
+      -- Eliminate xor with 0.
+    | Just 0 <- asBVLit x = y
+    | Just 0 <- asBVLit y = x
+      -- Eliminate xor with self.
+    | x == y = bvLit (typeWidth x) (0::Integer)
+      -- If this is a single bit comparison with a constant, resolve to Boolean operation.
+    | ValueExpr (BVValue w v) <- y
+    , Just Refl <- testEquality w n1 =
+      if v /= 0 then bvComplement x else x
+      -- Default case.
+    | otherwise = app $ BVXor (typeWidth x) x y
+
+  boolEq x y
+    | Just True  <- asBoolLit x = y
+    | Just False <- asBoolLit x = y
+    | Just True  <- asBoolLit y = y
+    | Just False <- asBoolLit y = y
+    | x == y = true
+      -- General case
+    | otherwise = app $ Eq x y
+
+  x .=. y
+    | x == y = true
+      -- Statically resolve two literals
+    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv == yv)
+      -- Move constant to second argument (We implicitly know both x and y are not a constant due to previous case).
+    | Just _ <- asBVLit x, Nothing <- asBVLit y = y .=. x
+      -- Rewrite "base + offset = constant" to "base = constant - offset".
+    | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
+    , Just yv <- asBVLit y =
+      app $ Eq x_base (bvLit w (yv - x_off))
+      -- Rewrite "u - v == c" to "u = c + v".
+    | Just (BVSub _ x_1 x_2) <- asApp x = x_1 .=. bvAdd y x_2
+      -- Rewrite "c == u - v" to "u = c + v".
+    | Just (BVSub _ y_1 y_2) <- asApp y = y_1 .=. bvAdd x y_2
+      -- General case
+    | otherwise = app $ Eq x y
+
+  -- | Shifts, the semantics is undefined for shifts >= the width of the first argument
+  -- bvShr, bvSar, bvShl :: v (BVType n) -> v (BVType log_n) -> v (BVType n)
+  bvShr x y
+    | Just 0 <- asBVLit y = x
+    | Just 0 <- asBVLit x = x
+    | otherwise = app $ BVShr (typeWidth x) x y
+  bvSar x y = app $ BVSar (typeWidth x) x y
+
+  bvShl x y
+    | Just 0 <- asBVLit y = x
+
+    | Just xv <- asBVLit x
+    , Just yv <- asBVLit y =
+      assert (yv <= toInteger (maxBound :: Int)) $
+        bvLit (typeWidth x) (xv `Bits.shiftL` fromInteger yv)
+
+      -- Replace "(x >> c) << c" with (x .&. - 2^c)
+    | Just yv <- asBVLit y
+    , Just (BVShr w x_base (asBVLit -> Just x_shft)) <- asApp x
+    , x_shft == yv =
+      x_base .&. bvLit w (negate (2^x_shft) ::Integer)
+
+    | Just yv <- asBVLit y
+    , yv >= natValue (typeWidth x) = bvLit (typeWidth x) (0 :: Integer)
+
+    | otherwise = app $ BVShl (typeWidth x) x y
+
+  bvTrunc' w e0
+    | Just v <- asBVLit e0 =
+      bvLit w v
+    | Just Refl <- testEquality (typeWidth e0) w =
+      e0
+    | Just (MMXExtend e) <- asArchFn e0
+    , Just Refl <- testEquality w n64 =
+      ValueExpr e
+    | Just (UExt e _) <- asApp e0 =
+      case testLeq w (bv_width e) of
+        -- Check if original value width is less than new width.
+        Just LeqProof -> bvTrunc w e
+        Nothing ->
+          -- Runtime check to wordaround GHC typechecker
+          case testLeq (bv_width e) w of
+            Just LeqProof -> uext w e
+            Nothing -> error "bvTrunc internal error"
+      -- Trunc (x .&. y) w = trunc x w .&. trunc y w
+    | Just (BVAnd _ x y) <- asApp e0 =
+      let x' = bvTrunc' w x
+          y' = bvTrunc' w y
+       in x' .&. y'
+      -- Trunc (x .|. y) w = trunc x w .|. trunc y w
+    | Just (BVOr _ x y) <- asApp e0 =
+      let x' = bvTrunc' w x
+          y' = bvTrunc' w y
+       in x' .|. y'
+      -- trunc (Trunc e w1) w2 = trunc e w2
+    | Just (Trunc e _) <- asApp e0 =
+      -- Runtime check to workaround GHC typechecker.
+      case testLeq w (typeWidth e) of
+        Just LeqProof -> bvTrunc w e
+        Nothing -> error "bvTrunc given bad width"
+      -- Default case
+    | otherwise = app (Trunc e0 w)
+
+  bvUlt x y
+    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
+    | x == y = false
+    | otherwise =
+      case typeRepr x of
+        BVTypeRepr _ -> app $ BVUnsignedLt x y
+
+  bvSlt x y
+    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
+    | x == y = false
+    | otherwise =
+      case typeRepr x of
+        BVTypeRepr _ -> app $ BVSignedLt x y
+
+  bvBit x y
+    | Just xv <- asBVLit x
+    , Just yv <- asBVLit y =
+      boolValue (xv `Bits.testBit` fromInteger yv)
+    | Just (Trunc xe w) <- asApp x
+    , Just LeqProof <- testLeq n1 (typeWidth xe)
+    , Just yv <- asBVLit y = assert (0 <= yv && yv < natValue w) $
+      bvBit xe (ValueExpr (BVValue (typeWidth xe) yv))
+
+    | otherwise =
+      app $ BVTestBit x y
+
+  sext' w e0
+      -- Collapse duplicate extensions.
+    | Just (SExt e w0) <- asApp e0 = do
+      let we = bv_width e
+      withLeqProof (leqTrans (ltProof we w0) (ltProof w0 w)) $
+        sext w e
+    | otherwise = app (SExt e0 w)
+
+  uext' w e0
+      -- Literal case
+    | Just v <- asBVLit e0 =
+      let w0 = bv_width e0
+       in withLeqProof (leqTrans (leqProof n1 w0) (ltProof w0 w)) $
+            bvLit w v
+      -- Collapse duplicate extensions.
+    | Just (UExt e w0) <- asApp e0 = do
+      let we = bv_width e
+      withLeqProof (leqTrans (ltProof we w0) (ltProof w0 w)) $
+        uext w e
+
+      -- Default case
+    | otherwise = app (UExt e0 w)
+
+  reverse_bytes w x = app $ ReverseBytes w x
+
+  uadc_overflows x y c
+    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+    | otherwise = app $ UadcOverflows x y c
+  sadc_overflows x y c
+    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+    | otherwise = app $ SadcOverflows x y c
+
+  usbb_overflows x y c
+    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+      -- If the borrow bit is zero, this is equivalent to unsigned x < y.
+    | Just False <- asBoolLit c = bvUlt x y
+    | otherwise = app $ UsbbOverflows x y c
+
+  ssbb_overflows x y c
+    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+      -- If the borrow bit is zero, this is equivalent to signed x < y.
+      -- FIXME: not true? | Just 0 <- asBVLit c = app $ BVSignedLt x y
+    | otherwise = app $ SsbbOverflows x y c
+
+  bsf x = app $ Bsf (typeWidth x) x
+  bsr x = app $ Bsr (typeWidth x) x
+
+  fpAdd rep x y = app $ FPAdd rep x y
+  fpAddRoundedUp rep x y = app $ FPAddRoundedUp rep x y
+
+  fpSub rep x y = app $ FPSub rep x y
+  fpSubRoundedUp rep x y = app $ FPSubRoundedUp rep x y
+
+  fpMul rep x y = app $ FPMul rep x y
+  fpMulRoundedUp rep x y = app $ FPMulRoundedUp rep x y
+
+  fpDiv rep x y = app $ FPDiv rep x y
+
+  fpLt rep x y = app $ FPLt rep x y
+  fpEq rep x y = app $ FPEq rep x y
+
+  fpCvt src tgt x =
+    case testEquality src tgt of
+      Just Refl -> x
+      _ -> app $ FPCvt src x tgt
+  fpCvtRoundsUp src tgt x = app $ FPCvtRoundsUp src x tgt
+
+  fpFromBV tgt x = app $ FPFromBV x tgt
+  truncFPToSignedBV tgt src x = app $ TruncFPToSignedBV src x tgt
+
+isQNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
+isQNaN rep x = app $ FPIsQNaN rep x
+
+isSNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
+isSNaN rep x = app $ FPIsSNaN rep x
+
+-- | is NaN (quiet and signalling)
+isAnyNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
+isAnyNaN fir v = boolOr (isQNaN fir v) (isSNaN fir v)
+
 (.&&.) :: IsValue v => v BoolType -> v BoolType -> v BoolType
 (.&&.) = boolAnd
 
@@ -1196,16 +1701,6 @@ infix  4 .=
 
 ------------------------------------------------------------------------
 -- Monadic definition
-
--- | This returns the type associated with values that can be read
--- for the semantics monad.
-type family Value (m :: * -> *) :: Type -> *
-
-type Pred m = Value m BoolType
-type BVValue m w = Value m (BVType w)
-
-type MLocation m = Location (Value m (BVType 64))
-
 data ExceptionClass
    = DivideError -- #DE
    | FloatingPointError
@@ -1216,296 +1711,8 @@ data ExceptionClass
      -- -- | AlignmentCheck
   deriving (Eq, Ord, Show)
 
--- | Primitive instructions.
---
--- A primitive instruction is one whose semantics depend on the
--- underlying hardware or OS.
-data Primitive
-   = Syscall
-   | CPUID
-   | RDTSC
-   -- | The semantics of @xgetbv@ seems to depend on the semantics of @cpuid@.
-   | XGetBV
-  deriving (Eq, Show)
-
-instance Pretty Primitive where
-  pretty = text . map toLower . show
-
-------------------------------------------------------------------------
--- SIMDWidth
-
--- | Defines a width of a register associated with SIMD operations
--- (e.g., MMX, XMM, AVX)
-data SIMDWidth w
-   = (w ~  64) => SIMD_64
-   | (w ~ 128) => SIMD_128
-   | (w ~ 256) => SIMD_256
-
--- | Return the 'NatRepr' associated with the given width.
-instance HasRepr SIMDWidth NatRepr where
-  typeRepr SIMD_64  = knownNat
-  typeRepr SIMD_128 = knownNat
-  typeRepr SIMD_256 = knownNat
-
-------------------------------------------------------------------------
--- RepValSize
-
--- | Rep value
-data RepValSize w
-   = (w ~  8) => ByteRepVal
-   | (w ~ 16) => WordRepVal
-   | (w ~ 32) => DWordRepVal
-   | (w ~ 64) => QWordRepVal
-
-repValHasSupportedWidth :: RepValSize w -> (SupportedBVWidth w => a) -> a
-repValHasSupportedWidth rval x =
-  case rval of
-    ByteRepVal  -> x
-    WordRepVal  -> x
-    DWordRepVal -> x
-    QWordRepVal -> x
-
-repValSizeMemRepr :: RepValSize w -> MemRepr (BVType w)
-repValSizeMemRepr v =
-  case v of
-    ByteRepVal  -> BVMemRepr (knownNat :: NatRepr 1) LittleEndian
-    WordRepVal  -> BVMemRepr (knownNat :: NatRepr 2) LittleEndian
-    DWordRepVal -> BVMemRepr (knownNat :: NatRepr 4) LittleEndian
-    QWordRepVal -> BVMemRepr (knownNat :: NatRepr 8) LittleEndian
-
-repValSizeByteCount :: RepValSize w -> Integer
-repValSizeByteCount = memReprBytes . repValSizeMemRepr
-
 ------------------------------------------------------------------------
 -- Semantics
-
--- | The Semantics Monad defines all the operations needed for the x86
--- semantics.
-class ( Applicative m
-      , Monad m
-      , IsValue (Value m)
-      ) => Semantics m where
-
-  -- | Create a fresh "undefined" value.
-  make_undefined :: TypeRepr tp -> m (Value m tp)
-
-  -- | Mark a Boolean variable as undefined.
-  set_undefined :: KnownType tp => MLocation m tp -> m ()
-  set_undefined l = do
-    u <- make_undefined knownType
-    l .= u
-
-  -- | Read from the given location.
-  get :: MLocation m tp -> m (Value m tp)
-  -- | Assign a value to alocation.
-  (.=) :: MLocation m tp -> Value m tp -> m ()
-
-  -- | Modify the value at a location
-  modify :: MLocation m tp -> (Value m tp -> Value m tp) -> m ()
-  modify r f = do
-    x <- get r
-    r .= f x
-
-  -- | Perform an if-then-else
-  ifte_ :: Value m BoolType -> m () -> m () -> m ()
-
-  -- | Run a step if condition holds.
-  when_ :: Value m BoolType -> m () -> m ()
-  when_ p x = ifte_ p x (return ())
-
-  -- | Run a step if condition is false.
-  unless_ :: Value m BoolType -> m () -> m ()
-  unless_ p = ifte_ p (return ())
-
-  -- FIXME: use location instead?
-  -- | Move n bits at a time, with count moves
-  --
-  -- Semantic sketch. The effect on memory should be like @memcopy@
-  -- below, not like @memcopy2@. These sketches ignore the issue of
-  -- copying in chunks of size `bytes`, which should only be an
-  -- efficiency concern.
-  --
-  -- @
-  -- void memcopy(int bytes, int copies, char *src, char *dst, int reversed) {
-  --   int maybeFlip = reversed ? -1 : 1;
-  --   for (int c = 0; c < copies; ++c) {
-  --     for (int b = 0; b < bytes; ++b) {
-  --       int offset = maybeFlip * (b + c * bytes);
-  --       *(dst + offset) = *(src + offset);
-  --     }
-  --   }
-  -- }
-  -- @
-  --
-  -- Compare with:
-  --
-  -- @
-  -- void memcopy2(int bytes, int copies, char *src, char *dst, int reversed) {
-  --   int maybeFlip = reversed ? -1 : 1;
-  --   /* The only difference from `memcopy` above: here the same memory is
-  --      copied whether `reversed` is true or false -- only the order of
-  --      copies changes -- whereas above different memory is copied for
-  --      each direction. */
-  --   if (reversed) {
-  --     /* Start at the end and work backwards. */
-  --     src += copies * bytes - 1;
-  --     dst += copies * bytes - 1;
-  --   }
-  --   for (int c = 0; c < copies; ++c) {
-  --     for (int b = 0; b < bytes; ++b) {
-  --       int offset = maybeFlip * (b + c * bytes);
-  --       *(dst + offset) = *(src + offset);
-  --     }
-  --   }
-  -- }
-  -- @
-  memcopy :: Integer
-             -- ^ Number of bytes to copy at a time (1,2,4,8)
-          -> Value m (BVType 64)
-             -- ^ Number of values to move.
-          -> Value m (BVType 64)
-             -- ^ Start of source buffer
-          -> Value m (BVType 64)
-             -- ^ Start of destination buffer.
-          -> Value m BoolType
-             -- ^ Flag indicates direction of move:
-             -- True means we should decrement buffer pointers after each copy.
-             -- False means we should increment the buffer pointers after each copy.
-          -> m ()
-
-  -- | Compare the memory regions.  Returns the number of elements which are
-  -- identical.  If the direction is 0 then it is increasing, otherwise decreasing.
-  --
-  -- See `memcopy` above for explanation of which memory regions are
-  -- compared: the regions copied there are compared here.
-  memcmp :: Integer
-            -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
-            -> Value m (BVType 64)
-            -- ^ Number of elementes to compare
-            -> Value m (BVType 64)
-            -- ^ Pointer to first buffer
-            -> Value m (BVType 64)
-            -- ^ Pointer to second buffer
-            -> Value m BoolType
-             -- ^ Flag indicates direction of copy:
-             -- True means we should decrement buffer pointers after each copy.
-             -- False means we should increment the buffer pointers after each copy.
-            -> m (Value m (BVType 64))
-
-  -- | Set memory to the given value, for the number of words (nbytes
-  -- = count * bv_width v)
-  memset :: (1 <= n)
-         => Value m (BVType 64)
-            -- ^ Number of values to set
-         -> Value m (BVType n)
-            -- ^ Value to set
-         -> Value m (BVType 64)
-            -- ^ Pointer to buffer to set
-         -> Value m BoolType
-            -- ^ Direction flag
-         -> m ()
-
-  -- | This will compare a value against the contents of a memory region for equality and/or
-  -- inequality.
-  --
-  -- It accepts the value to compare, a pointer to the start of the region, and
-  -- the maximum number of elements to compare, which is decremented after each comparison.
-  -- It returns the value of the count after it has succeeded, or zero if we reached the
-  -- end without finding a value.   A return value of zero is thus ambiguous on whether
-  -- the value was found in the last iteration, or whether the value was never found.
-  rep_scas :: Bool
-              -- ^ Find first matching (True) or not matching (False)
-           -> Value m BoolType
-              -- ^ Flag indicates direction of search
-              -- True means we should decrement buffer pointers after each copy.
-              -- False means we should increment the buffer pointers after each copy.
-           -> RepValSize w
-              -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
-           -> Value m (BVType w)
-              -- ^ Value to compare
-           -> Value m (BVType 64)
-              -- ^ Pointer to first buffer
-           -> Value m (BVType 64)
-              -- ^ Maximum number of elementes to compare
-           -> m (Value m (BVType 64))
-
-  -- | Return true if value contains an even number of true bits.
-  even_parity :: Value m (BVType 8) -> m (Value m BoolType)
-
-  -- | execute a primitive instruction.
-  primitive :: Primitive -> m ()
-
-
-  -- | Store floating point control word in given address.
-  fnstcw :: Value m (BVType 64) -> m ()
-
-
-  -- | @pshufb w x s@ returns a value @res@ generated from the bytes of @x@
-  -- based on indices defined in the corresponding bytes of @s@.
-  --
-  -- Let @n@ be the number of bytes in the width @w@, and let @l = log2(n)@.
-  -- Given a byte index @i@, the value of byte @res[i]@, is defined by
-  --   @res[i] = 0 if msb(s[i]) == 1@
-  --   @res[i] = x[j] where j = s[i](0..l)
-  -- where @msb(y)@ returns the most-significant bit in byte @y@.
-  pshufb :: (1 <= w)
-         => SIMDWidth w
-         -> Value m (BVType w)
-         -> Value m (BVType w)
-         -> m (Value m (BVType w))
-
-  -- | Return the base address of the given segment.
-  getSegmentBase :: Segment -> m (Value m (BVType 64))
-
-  -- | Unsigned division.
-  --
-  -- The x86 documentation for @div@ (Intel x86 manual volume 2A,
-  -- page 3-393) says that results should be truncated towards
-  -- zero. These operations are called @quot@ and @rem@ in Haskell,
-  -- whereas @div@ and @mod@ in Haskell round towards negative
-  -- infinity.
-  --
-  -- This should raise a #DE exception if the denominator is zero or the
-  -- result is larger than maxUnsigned n.
-  bvQuotRem :: (1 <= w)
-            => RepValSize w
-            -> Value m (BVType (w+w))
-               -- ^ Numerator
-            -> Value m (BVType w)
-               -- ^ Denominator
-            -> m (BVValue m w, BVValue m w)
-
-  -- | Signed division.
-  --
-  -- The x86 documentation for @idiv@ (Intel x86 manual volume 2A,
-  -- page 3-393) says that results should be truncated towards
-  -- zero. These operations are called @quot@ and @rem@ in Haskell,
-  -- whereas @div@ and @mod@ in Haskell round towards negative
-  -- infinity.
-  --
-  -- This should raise a #DE exception if the denominator is zero or the
-  -- result is larger than maxSigned n or less than minSigned n.
-  bvSignedQuotRem :: (1 <= w)
-                  => RepValSize w
-                  -> Value m (BVType (w+w))
-                     -- ^ Numerator
-                  -> Value m (BVType w)
-                     -- ^ Denominator
-                  -> m (BVValue m w, BVValue m w)
-
-  -- | raises an exception if the predicate is true and the mask is false
-  exception :: Value m BoolType    -- mask
-            -> Value m BoolType -- predicate
-            -> ExceptionClass
-            -> m ()
-
-  -- FIXME: those should also mutate the underflow/overflow flag and
-  -- related state.
-
-  -- | X87 support --- these both affect the register stack for the
-  -- x87 state.
-  x87Push :: Value m (FloatType X86_80Float) -> m ()
-  x87Pop  :: m ()
 
 -- | Defines operations that need to be supported at a specific bitwidht.
 type SupportedBVWidth n
@@ -1515,10 +1722,370 @@ type SupportedBVWidth n
      , KnownNat n
      )
 
--- | @IsLocationBV m n@ is a constraint used to indicate that @m@
--- implements Semantics, and @Value m (BV n)@ supports the operations
--- used to assign registers.
-type IsLocationBV m n
-   = ( SupportedBVWidth n
-     , Semantics m
-     )
+repValHasSupportedWidth :: RepValSize w -> (SupportedBVWidth w => a) -> a
+repValHasSupportedWidth rval x =
+  case rval of
+    ByteRepVal  -> x
+    WordRepVal  -> x
+    DWordRepVal -> x
+    QWordRepVal -> x
+
+-- | Create a fresh "undefined" value.
+make_undefined :: TypeRepr tp -> X86Generator st ids (Expr ids tp)
+make_undefined tp =
+  evalAssignRhs (SetUndefined tp)
+
+type Addr s = Expr s (BVType 64)
+
+-- | Mark a Boolean variable as undefined.
+set_undefined :: KnownType tp => Location (Addr ids) tp -> X86Generator st ids ()
+set_undefined l = do
+  u <- make_undefined knownType
+  l .= u
+
+-- | Read from the given location.
+get :: forall st ids tp . Location (Addr ids) tp -> X86Generator st ids (Expr ids tp)
+get l0 =
+  case l0 of
+    MemoryAddr w tp -> do
+      addr <- eval w
+      evalAssignRhs (ReadMem addr tp)
+    ControlReg _ ->
+      fail $ "Do not support reading control registers."
+    DebugReg _ ->
+      fail $ "Do not support reading debug registers."
+    SegmentReg s
+      | s == F.FS -> readLoc FS
+      | s == F.GS -> readLoc GS
+        -- Otherwise registers are 0.
+      | otherwise ->
+        fail $ "On x86-64 registers other than fs and gs may not be read."
+    X87ControlReg r ->
+      readLoc (X87_ControlLoc r)
+    FullRegister r -> getReg r
+    Register rv -> do
+      registerViewRead rv <$> getReg (registerViewReg rv)
+    -- TODO
+    X87StackRegister i -> do
+      idx <- getX87Offset i
+      getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
+
+-- | Assign a value to alocation.
+(.=) :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
+l .= e = setLoc l =<< eval e
+
+-- | Modify the value at a location
+modify :: Location (Addr ids) tp
+       -> (Expr ids tp -> Expr ids tp)
+       -> X86Generator st ids ()
+modify r f = do
+  x <- get r
+  r .= f x
+
+ -- | Perform an if-then-else
+ifte_ :: Expr ids BoolType
+      -> X86Generator st ids ()
+      -> X86Generator st ids ()
+      -> X86Generator st ids ()
+-- Implement ifte_
+-- Note that this implementation will run any code appearing after the ifte_
+-- twice, once for the true branch and once for the false branch.
+--
+-- This could be changed to run the code afterwards once, but the cost would be
+-- defining a way to merge processor states from the different branches, and making
+-- sure that expression assignments generated in one branch were not referred to in
+-- another branch.
+--
+-- One potential design change, not implemented here, would be to run both branches,
+-- up to the point where they merge, and if the resulting PC is in the same location,
+-- to merge in that case, otherwise to run them separately.
+--
+-- This would support the cmov instruction, but result in divergence for branches, which
+-- I think is what we want.
+ifte_ c_expr t f = eval c_expr >>= go
+    where
+      go (BoolValue True) = t
+      go (BoolValue False) = f
+      go cond =
+        shiftX86GCont $ \c s0 -> do
+          let p_b = s0 ^.blockState
+          let st = p_b^.pBlockState
+          let t_block_label = s0^.blockSeq^.nextBlockID
+          let s2 = s0 & blockSeq . nextBlockID +~ 1
+                      & blockSeq . frontierBlocks .~ Seq.empty
+                      & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
+          -- Run true block.
+          t_seq <- finishBlock FetchAndExecute <$> runX86Generator c s2 t
+          -- Run false block
+          let f_block_label = t_seq^.nextBlockID
+          let s5 = GenState { assignIdGen = assignIdGen s0
+                            , _blockSeq =
+                                BlockSeq { _nextBlockID    = t_seq^.nextBlockID + 1
+                                         , _frontierBlocks = Seq.empty
+                                         }
+                            , _blockState = emptyPreBlock st f_block_label (genAddr s0)
+                            , genAddr = genAddr s0
+                            , genMemory = genMemory s0
+                            }
+          f_seq <- finishBlock FetchAndExecute <$> runX86Generator c s5 f
+
+          -- Join results together.
+          let fin_b = finishBlock' p_b (\_ -> Branch cond t_block_label f_block_label)
+          seq fin_b $ do
+          return $
+            GenResult { resBlockSeq =
+                         BlockSeq { _nextBlockID = _nextBlockID f_seq
+                                  , _frontierBlocks = (s0^.blockSeq^.frontierBlocks Seq.|> fin_b)
+                                               Seq.>< t_seq^.frontierBlocks
+                                               Seq.>< f_seq^.frontierBlocks
+                                  }
+                      , resState = Nothing
+                      }
+
+-- | Run a step if condition holds.
+when_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
+when_ p x = ifte_ p x (return ())
+
+-- | Run a step if condition is false.
+unless_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
+unless_ p = ifte_ p (return ())
+
+-- | Move n bits at a time, with count moves
+--
+-- Semantic sketch. The effect on memory should be like @memcopy@
+-- below, not like @memcopy2@. These sketches ignore the issue of
+-- copying in chunks of size `bytes`, which should only be an
+-- efficiency concern.
+--
+-- @
+-- void memcopy(int bytes, int copies, char *src, char *dst, int reversed) {
+--   int maybeFlip = reversed ? -1 : 1;
+--   for (int c = 0; c < copies; ++c) {
+--     for (int b = 0; b < bytes; ++b) {
+--       int offset = maybeFlip * (b + c * bytes);
+--       *(dst + offset) = *(src + offset);
+--     }
+--   }
+-- }
+-- @
+--
+-- Compare with:
+--
+-- @
+-- void memcopy2(int bytes, int copies, char *src, char *dst, int reversed) {
+--   int maybeFlip = reversed ? -1 : 1;
+--   /* The only difference from `memcopy` above: here the same memory is
+--      copied whether `reversed` is true or false -- only the order of
+--      copies changes -- whereas above different memory is copied for
+--      each direction. */
+--   if (reversed) {
+--     /* Start at the end and work backwards. */
+--     src += copies * bytes - 1;
+--     dst += copies * bytes - 1;
+--   }
+--   for (int c = 0; c < copies; ++c) {
+--     for (int b = 0; b < bytes; ++b) {
+--       int offset = maybeFlip * (b + c * bytes);
+--       *(dst + offset) = *(src + offset);
+--     }
+--   }
+-- }
+-- @
+memcopy :: Integer
+           -- ^ Number of bytes to copy at a time (1,2,4,8)
+        -> BVExpr ids 64
+           -- ^ Number of values to move.
+        -> Addr ids
+           -- ^ Start of source buffer
+        -> Addr ids
+           -- ^ Start of destination buffer.
+        -> Expr ids BoolType
+           -- ^ Flag indicates direction of move:
+           -- True means we should decrement buffer pointers after each copy.
+           -- False means we should increment the buffer pointers after each copy.
+        -> X86Generator st ids ()
+memcopy val_sz count src dest is_reverse = do
+  count_v <- eval count
+  src_v   <- eval src
+  dest_v  <- eval dest
+  is_reverse_v <- eval is_reverse
+  addArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
+
+-- | Compare the memory regions.  Returns the number of elements which are
+-- identical.  If the direction is 0 then it is increasing, otherwise decreasing.
+--
+-- See `memcopy` above for explanation of which memory regions are
+-- compared: the regions copied there are compared here.
+memcmp :: Integer
+          -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
+       -> BVExpr ids 64
+          -- ^ Number of elementes to compare
+       -> Addr ids
+          -- ^ Pointer to first buffer
+       -> Addr ids
+          -- ^ Pointer to second buffer
+       -> Expr ids BoolType
+          -- ^ Flag indicates direction of copy:
+          -- True means we should decrement buffer pointers after each copy.
+           -- False means we should increment the buffer pointers after each copy.
+       -> X86Generator st ids (BVExpr ids 64)
+memcmp sz count src dest is_reverse = do
+  count_v <- eval count
+  is_reverse_v <- eval is_reverse
+  src_v   <- eval src
+  dest_v  <- eval dest
+  evalArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
+
+-- | Set memory to the given value, for the number of words (nbytes
+-- = count * bv_width v)
+memset :: (1 <= n)
+       => BVExpr ids 64
+          -- ^ Number of values to set
+       -> BVExpr ids n
+          -- ^ Value to set
+       -> Addr ids
+          -- ^ Pointer to buffer to set
+       -> Expr ids BoolType
+          -- ^ Direction flag
+       -> X86Generator st ids ()
+memset count val dest dfl = do
+  count_v <- eval count
+  val_v   <- eval val
+  dest_v  <- eval dest
+  df_v    <- eval dfl
+  addArchStmt $ MemSet count_v val_v dest_v df_v
+
+-- | This will compare a value against the contents of a memory region for equality and/or
+-- inequality.
+--
+-- It accepts the value to compare, a pointer to the start of the region, and
+-- the maximum number of elements to compare, which is decremented after each comparison.
+-- It returns the value of the count after it has succeeded, or zero if we reached the
+-- end without finding a value.   A return value of zero is thus ambiguous on whether
+-- the value was found in the last iteration, or whether the value was never found.
+rep_scas :: Bool
+            -- ^ Find first matching (True) or not matching (False)
+         -> Expr ids BoolType
+            -- ^ Flag indicates direction of search
+            -- True means we should decrement buffer pointers after each copy.
+            -- False means we should increment the buffer pointers after each copy.
+         -> RepValSize w
+            -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
+         -> BVExpr ids w
+            -- ^ Value to compare
+         -> Addr ids
+            -- ^ Pointer to first buffer
+         -> BVExpr ids 64
+             -- ^ Maximum number of elements to compare
+         -> X86Generator st ids (BVExpr ids 64)
+rep_scas True is_reverse sz val buf count = do
+  val_v   <- eval val
+  buf_v   <- eval buf
+  count_v <- eval count
+  is_reverse_v <- eval is_reverse
+  case is_reverse_v of
+    BoolValue False ->
+      evalArchFn (RepnzScas sz val_v buf_v count_v)
+    _ ->
+      fail $ "Unsupported rep_scas value " ++ show is_reverse_v
+rep_scas False _is_reverse _sz _val _buf _count = do
+  fail $ "Semantics only currently supports finding elements."
+
+-- | Return true if value contains an even number of true bits.
+even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)
+even_parity v = do
+  val_v <- eval v
+  evalArchFn (EvenParity val_v)
+
+-- | Store floating point control word in given address.
+fnstcw :: Addr ids -> X86Generator st ids ()
+fnstcw addr = do
+  addArchStmt =<< StoreX87Control <$> eval addr
+
+-- | Return the base address of the given segment.
+getSegmentBase :: Segment -> X86Generator st ids (Addr ids)
+getSegmentBase seg =
+  case seg of
+    F.FS -> evalArchFn ReadFSBase
+    F.GS -> evalArchFn ReadGSBase
+    _ ->
+      error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
+
+-- | raises an exception if the predicate is true and the mask is false
+exception :: Expr ids BoolType    -- mask
+          -> Expr ids BoolType -- predicate
+          -> ExceptionClass
+          -> X86Generator st ids ()
+exception m p c =
+  when_ (boolNot m .&&. p)
+        (addStmt (PlaceHolderStmt [] $ "Exception " ++ (show c)))
+
+-- FIXME: those should also mutate the underflow/overflow flag and
+-- related state.
+
+-- | X87 support --- these both affect the register stack for the
+-- x87 state.
+x87Push :: Expr ids (FloatType X86_80Float) -> X86Generator st ids ()
+x87Push e = do
+  v <- eval e
+  topv <- getX87Top
+  let new_top = fromIntegral $ (topv - 1) Bits..&. 0x7
+  -- TODO: Update tagWords
+  -- Store value at new top
+  setReg (X87_FPUReg (F.mmxReg new_top)) v
+  -- Update top
+  setReg X87_TopReg (BVValue knownNat (toInteger new_top))
+
+x87Pop :: X86Generator st ids ()
+x87Pop = do
+  topv <- getX87Top
+  let new_top = (topv + 1) Bits..&. 0x7
+  -- Update top
+  setReg X87_TopReg (BVValue knownNat (toInteger new_top))
+
+type BVExpr ids w = Expr ids (BVType w)
+
+-- | Unsigned division.
+--
+-- The x86 documentation for @div@ (Intel x86 manual volume 2A,
+-- page 3-393) says that results should be truncated towards
+-- zero. These operations are called @quot@ and @rem@ in Haskell,
+-- whereas @div@ and @mod@ in Haskell round towards negative
+-- infinity.
+--
+-- This should raise a #DE exception if the denominator is zero or the
+-- result is larger than maxUnsigned n.
+bvQuotRem :: (1 <= w)
+          => RepValSize w
+          -> Expr ids (BVType (w+w))
+          -- ^ Numerator
+          -> Expr ids (BVType w)
+             -- ^ Denominator
+          -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
+bvQuotRem rep n d = do
+  nv <- eval n
+  dv <- eval d
+  (,) <$> evalArchFn (X86Div rep nv dv)
+      <*> evalArchFn (X86Rem rep nv dv)
+
+-- | Signed division.
+--
+-- The x86 documentation for @idiv@ (Intel x86 manual volume 2A, page
+-- 3-393) says that results should be truncated towards zero. These
+-- operations are called @quot@ and @rem@ in Haskell, whereas @div@
+-- and @mod@ in Haskell round towards negative infinity.
+--
+-- This should raise a #DE exception if the denominator is zero or the
+-- result is larger than maxSigned n or less than minSigned n.
+bvSignedQuotRem :: (1 <= w)
+                => RepValSize w
+                -> BVExpr ids (w+w)
+                   -- ^ Numerator
+                -> BVExpr ids w
+                   -- ^ Denominator
+                -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
+bvSignedQuotRem rep n d = do
+  nv <- eval n
+  dv <- eval d
+  (,) <$> evalArchFn (X86IDiv rep nv dv)
+      <*> evalArchFn (X86IRem rep nv dv)

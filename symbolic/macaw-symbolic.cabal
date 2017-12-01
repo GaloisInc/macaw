@@ -9,14 +9,14 @@ license-file:  LICENSE
 
 library
   build-depends:
-                base >= 4,
-                containers,
-                crucible,
-                lens,
-                macaw-base,
-                mtl,
-                parameterized-utils,
-                text
+    base >= 4,
+    containers,
+    crucible,
+    lens,
+    macaw-base,
+    mtl,
+    parameterized-utils,
+    text
 
   hs-source-dirs: src
 

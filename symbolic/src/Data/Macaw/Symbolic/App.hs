@@ -15,6 +15,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.App
   ( ArchTranslateFunctions(..)
   , MacawMonad
@@ -241,10 +242,14 @@ appToCrucible app = do
           appAtom (C.Not eq)
         M.BVTypeRepr w -> do
           appAtom =<< C.BVEq w <$> v2c x <*> v2c y
-    M.Mux M.BoolTypeRepr c t f ->
-      appAtom =<< C.BoolIte <$> v2c c <*> v2c t <*> v2c f
-    M.Mux (M.BVTypeRepr w) c t f ->
-      appAtom =<< C.BVIte <$> v2c c <*> pure w <*> v2c t <*> v2c f
+        M.TupleTypeRepr _ -> undefined -- TODO: Fix this
+    M.Mux tp c t f ->
+      case tp of
+        M.BoolTypeRepr ->
+          appAtom =<< C.BoolIte <$> v2c c <*> v2c t <*> v2c f
+        M.BVTypeRepr w ->
+          appAtom =<< C.BVIte <$> v2c c <*> pure w <*> v2c t <*> v2c f
+        M.TupleTypeRepr _ -> undefined -- TODO: Fix this
     M.Trunc x w -> appAtom =<< C.BVTrunc w (M.typeWidth x) <$> v2c x
     M.SExt x w  -> appAtom =<< C.BVSext  w (M.typeWidth x) <$> v2c x
     M.UExt x w  -> appAtom =<< C.BVZext  w (M.typeWidth x) <$> v2c x
@@ -275,6 +280,7 @@ appToCrucible app = do
     M.BVShl w x y -> appAtom =<< C.BVShl  w <$> v2c x <*> v2c y
     M.BVShr w x y -> appAtom =<< C.BVLshr w <$> v2c x <*> v2c y
     M.BVSar w x y -> appAtom =<< C.BVAshr w <$> v2c x <*> v2c y
+
     M.UadcOverflows x y c -> do
       let w  = M.typeWidth x
       let w' = incNat w
@@ -283,6 +289,20 @@ appToCrucible app = do
       LeqProof <- pure (incNatIsPos w)
       r <- bvAdc w' x' y' =<< v2c c
       msb w' r
+    M.SadcOverflows x y c -> do
+      undefined x y c
+    M.UsbbOverflows x y b -> do
+      undefined x y b
+    M.SsbbOverflows x y b -> do
+      undefined x y b
+    M.PopCount w x -> do
+      undefined w x
+    M.ReverseBytes w x -> do
+      undefined w x
+    M.Bsf w x -> do
+      undefined w x
+    M.Bsr w x -> do
+      undefined w x
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))

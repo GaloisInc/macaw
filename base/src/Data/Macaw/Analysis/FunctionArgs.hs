@@ -79,17 +79,17 @@ import           Data.Macaw.Types
 --    arguments are required, and what extra result registers are
 --    demanded?
 
--- A set of registrs
+-- | A set of registrs
 type RegisterSet (r :: Type -> *) = Set (Some r)
 
+-- | A memory segment offset compatible with the architecture registers.
 type RegSegmentOff r = MemSegmentOff (RegAddrWidth r)
 
--- | If we demand a register from a function (or block, for phase 1),
--- this results in both direct argument register demands and function
--- result demands.
+-- | This stores the registers needed by a specific address
 data DemandSet (r :: Type -> *) =
     DemandSet { registerDemands       :: !(RegisterSet r)
-                -- This maps a function address to a register that depends on its input parameters.
+                -- | This maps a function address to the registers
+                -- that it needs.
               , functionResultDemands :: !(Map (RegSegmentOff r) (RegisterSet r))
               }
 
@@ -180,29 +180,30 @@ data ArchTermStmtRegEffects arch
 
 -- | Returns information about the registers needed and modified by a terminal statement
 --
--- The first argument is the terminal statement, and the second is the state of registers
--- when it is executed.
+-- The first argument is the terminal statement.
+--
+-- The second is the state of registers when it is executed.
 type ComputeArchTermStmtEffects arch ids
    = ArchTermStmt arch ids
    -> RegState (ArchReg arch) (Value arch ids)
    -> ArchTermStmtRegEffects arch
 
 data ArchDemandInfo arch = ArchDemandInfo
-     { -- | Return the arguments expected by a function
+     { -- | Registers used as arguments to the function.
        functionArgRegs :: ![Some (ArchReg arch)]
-       -- | Return the registers returned by a function
+       -- | Registers returned by a function
      , functionRetRegs :: ![Some (ArchReg arch)]
-       -- | List of callee saved registers in function calls.
+       -- | Registers considered callee saved by functions
      , calleeSavedRegs :: !(Set (Some (ArchReg arch)))
-       -- | Return the register effects of a terminal statement
+       -- | Compute the effects of a terminal statement on registers.
      , computeArchTermStmtEffects :: !(forall ids . ComputeArchTermStmtEffects arch ids)
      }
 
 -- | This is information needed to compute dependencies for a single function.
 data FunctionArgsState arch ids = FAS
-  -- | Holds state about the set of registers that a block uses
-  -- (required by this block).
-  { _blockTransfer :: !(Map (ArchLabel arch) (ResultDemandsMap (ArchReg arch)))
+  { -- | Holds state about the set of registers that a block uses
+    -- (required by this block).
+    _blockTransfer :: !(Map (ArchLabel arch) (ResultDemandsMap (ArchReg arch)))
 
   -- | If a demand d is demanded of block lbl then the block demands S, s.t.
   -- blockDemandMap ^. at lbl ^. at d = Just S
@@ -355,12 +356,12 @@ type ArgDemandsMap r = Map (RegSegmentOff r) (Map (Some r) (AddrDemandMap r))
 -- so at the end).
 calculateGlobalFixpoint :: forall r
                         .  OrdF r
-                        => ArgDemandsMap r
-                        -> Map (RegSegmentOff r) (ResultDemandsMap r)
+                        => FunctionArgState r
                         -> AddrDemandMap r
-                        -> AddrDemandMap r
-calculateGlobalFixpoint argDemandsMap resultDemandsMap argsMap = go argsMap argsMap
+calculateGlobalFixpoint s = go (s^.alwaysDemandMap) (s^.alwaysDemandMap)
   where
+    argDemandsMap    = s^.funArgMap
+    resultDemandsMap = s^.funResMap
     go :: AddrDemandMap r
        -> AddrDemandMap r
        -> AddrDemandMap r
@@ -479,18 +480,12 @@ stmtDemandedValues stmt =
     Comment _ -> []
     ExecArchStmt astmt -> foldMapF (\v -> [Some v]) astmt
 
-type SummarizeConstraints arch
-  = ( FoldableFC (ArchFn arch)
-    , ArchConstraints arch
-    , FoldableF (ArchStmt arch)
-    )
-
 -- | This function figures out what the block requires
 -- (i.e., addresses that are stored to, and the value stored), along
 -- with a map of how demands by successor blocks map back to
 -- assignments and registers.
 summarizeBlock :: forall arch ids
-               .  SummarizeConstraints arch
+               .  ArchConstraints arch
                => Memory (ArchAddrWidth arch)
                -> DiscoveryFunInfo arch ids
                -> ArchSegmentOff arch -- ^ Address of the code.
@@ -552,7 +547,7 @@ summarizeBlock mem interp_state addr stmts = do
       traverse_ (addIntraproceduralJumpTarget interp_state lbl) vec
 
 -- | Explore states until we have reached end of frontier.
-summarizeIter :: SummarizeConstraints arch
+summarizeIter :: ArchConstraints arch
               => Memory (ArchAddrWidth arch)
               -> DiscoveryFunInfo arch ids
               -> FunctionArgsM arch ids ()
@@ -614,7 +609,7 @@ data FunctionArgState r = FunctionArgState {
 funArgMap :: Simple Lens (FunctionArgState r) (ArgDemandsMap r)
 funArgMap = lens _funArgMap (\s v -> s { _funArgMap = v })
 
--- | Get the map from function adderesses to what results are demanded.
+-- | Get the map from function addresses to what results are demanded.
 funResMap :: Simple Lens (FunctionArgState r) (Map (RegSegmentOff r) (ResultDemandsMap r))
 funResMap = lens _funResMap (\s v -> s { _funResMap = v })
 
@@ -644,7 +639,7 @@ decomposeMap ds addr acc DemandAlways v =
 -- 2. Function arguments to function arguments
 -- 3. Function results to function arguments.
 doOneFunction :: forall arch ids
-              .  SummarizeConstraints arch
+              .  ArchConstraints arch
               => ArchDemandInfo arch
               -> Set (ArchSegmentOff arch)
               -> DiscoveryState arch
@@ -694,14 +689,13 @@ doOneFunction archFns addrs ist0 acc ist = do
     return (Map.foldlWithKey' (decomposeMap calleeDemandSet addr) acc funDemands)
 
 
--- | Returns the set of argument registers and result registers for each function.
+-- | This analyzes the discovered functions and returns a mapping from each
 functionDemands :: forall arch
-                .  SummarizeConstraints arch
+                .  ArchConstraints arch
                 => ArchDemandInfo arch
                 -> DiscoveryState arch
                 -> Map (ArchSegmentOff arch) (DemandSet (ArchReg arch))
-functionDemands archFns info =
-    calculateGlobalFixpoint (m^.funArgMap) (m^.funResMap) (m^.alwaysDemandMap)
+functionDemands archFns info = calculateGlobalFixpoint (foldl f m0 entries)
   where
     entries =  exploredFunctions info
 
@@ -710,7 +704,6 @@ functionDemands archFns info =
     m0 = FunctionArgState Map.empty Map.empty Map.empty
 
     f mi (Some finfo) = doOneFunction archFns addrs info mi finfo
-    m  = foldl f m0 entries
 
 {-
 

@@ -54,8 +54,12 @@ import           GHC.TypeLits (KnownNat)
 import           Data.Macaw.CFG (MemRepr(..))
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types (FloatType, BVType, n8, n16, n32, n64, typeWidth)
+import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Monad
 import           Data.Macaw.X86.X86Reg (X86Reg(..))
+
+type BVExpr ids w = Expr ids (BVType w)
+type Addr s = Expr s (BVType 64)
 
 byteMemRepr :: MemRepr (BVType 8)
 byteMemRepr = BVMemRepr (knownNat :: NatRepr 1) LittleEndian
@@ -91,7 +95,7 @@ reg64Loc = fullRegister . X86_GP
 -- Getters
 
 -- | Calculates the address corresponding to an AddrRef
-getBVAddress :: forall m. Semantics m => F.AddrRef -> m (Value m (BVType 64))
+getBVAddress :: F.AddrRef -> X86Generator st ids (BVExpr ids 64)
 getBVAddress ar =
   case ar of
    -- FIXME: It seems that there is no sign extension here ...
@@ -127,7 +131,7 @@ getBVAddress ar =
   where
     v0_64 = bvLit n64 0
     -- | Add the segment base to compute an absolute address.
-    mk_absolute :: F.Segment -> Value m (BVType 64) -> m (Value m (BVType 64))
+    mk_absolute :: F.Segment -> Addr ids -> X86Generator st ids (Expr ids (BVType 64))
     mk_absolute seg offset
       -- In 64-bit mode the CS, DS, ES, and SS segment registers
       -- are forced to zero, and so segmentation is a nop.
@@ -142,26 +146,26 @@ getBVAddress ar =
         return $ base `bvAdd` offset
 
 -- | Translate a flexdis address-refrence into a one-byte address.
-getBV8Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 8))
+getBV8Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 8))
 getBV8Addr ar = (`MemoryAddr`  byteMemRepr) <$> getBVAddress ar
 
 -- | Translate a flexdis address-refrence into a two-byte address.
-getBV16Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 16))
+getBV16Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 16))
 getBV16Addr ar = (`MemoryAddr`  wordMemRepr) <$> getBVAddress ar
 
 -- | Translate a flexdis address-refrence into a four-byte address.
-getBV32Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 32))
+getBV32Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 32))
 getBV32Addr ar = (`MemoryAddr` dwordMemRepr) <$> getBVAddress ar
 
 -- | Translate a flexdis address-refrence into a eight-byte address.
-getBV64Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 64))
+getBV64Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 64))
 getBV64Addr ar = (`MemoryAddr` qwordMemRepr) <$> getBVAddress ar
 
 -- | Translate a flexdis address-refrence into a sixteen-byte address.
-getBV128Addr :: Semantics m => F.AddrRef -> m (MLocation m (BVType 128))
+getBV128Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 128))
 getBV128Addr ar = (`MemoryAddr` xmmMemRepr) <$> getBVAddress ar
 
-readBVAddress :: Semantics m => F.AddrRef -> MemRepr tp -> m (Value m tp)
+readBVAddress :: F.AddrRef -> MemRepr tp -> X86Generator st ids (Expr ids tp)
 readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
 
 -- | A bitvector value with a width that satisfies `SupportedBVWidth`.
@@ -169,7 +173,7 @@ data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
 
 -- | Extract the location of a bitvector value.
-getSomeBVLocation :: Semantics m => F.Value -> m (SomeBV (MLocation m))
+getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
 getSomeBVLocation v =
   case v of
     F.ControlReg cr  -> pure $ SomeBV $ ControlReg cr
@@ -208,7 +212,7 @@ getSomeBVLocation v =
     mk = pure . SomeBV
 
 -- | Translate a flexdis value to a location with a particular width.
-getBVLocation :: Semantics m => F.Value -> NatRepr n -> m (MLocation m (BVType n))
+getBVLocation :: F.Value -> NatRepr n -> X86Generator st ids (Location (Addr ids) (BVType n))
 getBVLocation l expected = do
   SomeBV v <- getSomeBVLocation l
   case testEquality (typeWidth v) expected of
@@ -218,7 +222,7 @@ getBVLocation l expected = do
       fail $ "Widths aren't equal: " ++ show (typeWidth v) ++ " and " ++ show expected
 
 -- | Return a bitvector value.
-getSomeBVValue :: Semantics m => F.Value -> m (SomeBV (Value m))
+getSomeBVValue :: F.Value -> X86Generator st ids (SomeBV (Expr ids))
 getSomeBVValue v =
   case v of
     F.ByteImm  w        -> return $ SomeBV $ bvLit n8  $ toInteger w
@@ -231,10 +235,9 @@ getSomeBVValue v =
       SomeBV <$> get l
 
 -- | Translate a flexdis value to a value with a particular width.
-getBVValue :: Semantics m
-           => F.Value
+getBVValue :: F.Value
            -> NatRepr n
-           -> m (Value m (BVType n))
+           -> X86Generator st ids (Expr ids (BVType n))
 getBVValue val expected = do
   SomeBV v <- getSomeBVValue val
   case testEquality (bv_width v) expected of
@@ -243,11 +246,11 @@ getBVValue val expected = do
       fail $ "Widths aren't equal: " ++ show (bv_width v) ++ " and " ++ show expected
 
 -- | Get a value with the given width, sign extending as necessary.
-getSignExtendedValue :: forall m w
-                     .  (Semantics m, 1 <= w)
+getSignExtendedValue :: forall st ids w
+                     .  1 <= w
                      => F.Value
                      -> NatRepr w
-                     -> m (Value m (BVType w))
+                     -> X86Generator st ids (Expr ids (BVType w))
 getSignExtendedValue v out_w =
   case v of
     -- If an instruction can take a VoidMem, it needs to get it explicitly
@@ -277,8 +280,8 @@ getSignExtendedValue v out_w =
     -- FIXME: what happens with signs etc?
     mk :: forall u
        .  (1 <= u, KnownNat u)
-       => Location (Value m (BVType 64)) (BVType u)
-       -> m (Value m (BVType w))
+       => Location (Addr ids) (BVType u)
+       -> X86Generator st ids (BVExpr ids w)
     mk l
       | Just LeqProof <- testLeq (knownNat :: NatRepr u) out_w =
         sext out_w <$> get l
@@ -296,9 +299,8 @@ truncateBVValue n (SomeBV v)
     fail $ "Widths isn't >=: " ++ show (bv_width v) ++ " and " ++ show n
 
 -- | Return the target of a call or jump instruction.
-getJumpTarget :: Semantics m
-              => F.Value
-              -> m (Value m (BVType 64))
+getJumpTarget :: F.Value
+              -> X86Generator st ids (BVExpr ids 64)
 getJumpTarget v =
   case v of
     F.Mem64 ar -> get =<< getBV64Addr ar
@@ -310,22 +312,22 @@ getJumpTarget v =
 -- Floating point
 
 -- | This describes a floating point value including the type.
-data FPLocation m flt = FPLocation (FloatInfoRepr flt) (MLocation m (FloatType flt))
+data FPLocation ids flt = FPLocation (FloatInfoRepr flt) (Location (Expr ids (BVType 64)) (FloatType flt))
 
 -- | This describes a floating point value including the type.
-data FPValue m flt = FPValue (FloatInfoRepr flt) (Value m (FloatType flt))
+data FPValue ids flt = FPValue (FloatInfoRepr flt) (Expr ids (FloatType flt))
 
-readFPLocation :: Semantics m => FPLocation m flt -> m (FPValue m flt)
+readFPLocation :: FPLocation ids flt -> X86Generator st ids (FPValue ids flt)
 readFPLocation (FPLocation repr l) = FPValue repr <$>  get l
 
 -- | Read an address as a floating point vlaue
-getFPAddrLoc :: Semantics m => FloatInfoRepr flt -> F.AddrRef -> m (FPLocation m flt)
+getFPAddrLoc :: FloatInfoRepr flt -> F.AddrRef -> X86Generator st ids (FPLocation ids flt)
 getFPAddrLoc fir f_addr = do
   FPLocation fir . (`MemoryAddr` (floatMemRepr fir))
     <$> getBVAddress f_addr
 
 -- | Get a floating point value from the argument.
-getFPLocation :: Semantics m => F.Value -> m (Some (FPLocation m))
+getFPLocation :: F.Value -> X86Generator st ids (Some (FPLocation ids))
 getFPLocation v =
   case v of
     F.FPMem32 ar -> Some <$> getFPAddrLoc SingleFloatRepr ar
@@ -335,7 +337,7 @@ getFPLocation v =
     _ -> fail $ "Bad floating point argument."
 
 -- | Get a floating point value from the argument.
-getFPValue :: Semantics m => F.Value -> m (Some (FPValue m))
+getFPValue :: F.Value -> X86Generator st ids (Some (FPValue ids))
 getFPValue v = getFPLocation v >>= \(Some l) -> Some <$> readFPLocation l
 
 ------------------------------------------------------------------------
@@ -347,7 +349,7 @@ data HasRepSize f w = HasRepSize { _ppvWidth :: !(RepValSize w)
 
 -- | Gets the location to store the value poped from.
 -- These functions only support general purpose registers/addresses and segments.
-getAddrRegOrSegment :: forall m . Semantics m => F.Value -> m (Some (HasRepSize (MLocation m)))
+getAddrRegOrSegment :: F.Value -> X86Generator st ids (Some (HasRepSize (Location (Addr ids))))
 getAddrRegOrSegment v =
   case v of
     F.SegmentValue s -> pure $ Some $ HasRepSize WordRepVal (SegmentReg s)
@@ -367,7 +369,7 @@ getAddrRegOrSegment v =
 
 -- | Gets a value that can be pushed.
 -- These functions only support general purpose registers/addresses and segments.
-getAddrRegSegmentOrImm :: forall m . Semantics m => F.Value -> m (Some (HasRepSize (Value m)))
+getAddrRegSegmentOrImm :: F.Value -> X86Generator st ids (Some (HasRepSize (Expr ids)))
 getAddrRegSegmentOrImm v =
   case v of
     F.ByteImm  w -> return $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
@@ -382,7 +384,7 @@ getAddrRegSegmentOrImm v =
 -- SSE
 
 -- | Get a XMM value
-readXMMValue :: Semantics m => F.Value -> m (Value m (BVType 128))
+readXMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 128))
 readXMMValue (F.XMMReg r) = get $ fullRegister $ X86_XMMReg r
 readXMMValue (F.Mem128 a) = readBVAddress a xmmMemRepr
 readXMMValue _ = fail "XMM Instruction given unexpected value."

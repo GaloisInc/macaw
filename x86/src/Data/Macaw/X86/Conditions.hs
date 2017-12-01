@@ -12,11 +12,12 @@ module Data.Macaw.X86.Conditions
 
 import Data.Macaw.Types (BoolType)
 
+import Data.Macaw.X86.Generator
 import Data.Macaw.X86.Monad
 
 -- Constants for defining semantics of different condition flags.
 cond_a, cond_ae, cond_b, cond_be, cond_g, cond_ge, cond_l, cond_le, cond_o, cond_p, cond_s, cond_z,
-  cond_no, cond_np, cond_ns, cond_nz :: Semantics m => m (Value m BoolType)
+  cond_no, cond_np, cond_ns, cond_nz :: X86Generator st ids (Expr ids BoolType)
 
 cond_a = (\c z -> boolAnd (boolNot c) (boolNot z)) <$> get cf_loc <*> get zf_loc
 cond_ae  = boolNot <$> get cf_loc
@@ -35,7 +36,7 @@ cond_np  = boolNot <$> cond_p
 cond_ns  = boolNot <$> cond_s
 cond_nz  = boolNot <$> cond_z
 
-newtype ConditionalDef = ConditionalDef (forall m . Semantics m => m (Value m BoolType))
+newtype ConditionalDef = ConditionalDef (forall st ids . X86Generator st ids (Expr ids BoolType))
 
 -- conditional instruction support (cmovcc, jcc)
 conditionalDefs :: [(String, ConditionalDef)]
@@ -59,6 +60,6 @@ conditionalDefs = [ mk "a"  cond_a
                   , mk "nz" cond_nz
                   ]
   where mk :: String
-          -> (forall m . Semantics m => m (Value m BoolType))
+          -> (forall st ids . X86Generator st ids (Expr ids BoolType))
           -> (String, ConditionalDef)
         mk k v = (k, ConditionalDef v)
