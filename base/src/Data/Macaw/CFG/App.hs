@@ -50,8 +50,7 @@ data App (f :: Type -> *) (tp :: Type) where
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
   -- | Extract the value out of a tuple.
-  TupleField :: !(TList TypeRepr l) -> !(TList.Index l r) -> App f r
-
+  TupleField :: !(TList TypeRepr l) -> !(f (TupleType l)) -> !(TList.Index l r) -> App f r
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -374,7 +373,7 @@ ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
-    TupleField _ i -> sexprA "tuple_field" [ prettyPure (TList.indexValue i) ]
+    TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (TList.indexValue i) ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
@@ -435,7 +434,7 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownType
       Mux tp _ _ _ -> tp
-      TupleField f i -> f TList.! i
+      TupleField f _ i -> f TList.! i
 
       Trunc _ w -> BVTypeRepr w
       SExt  _ w -> BVTypeRepr w
