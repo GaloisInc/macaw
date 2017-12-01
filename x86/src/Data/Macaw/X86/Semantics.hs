@@ -2584,10 +2584,10 @@ all_instructions =
   , def_punpck "hdq"  fst n32
   , def_punpck "hqdq" fst n64
 
-  , def_punpck "lbw" snd  n8
-  , def_punpck "lwd" snd n16
-  , def_punpck "ldq" snd n32
-  , def_punpck "ldq" snd n64
+  , def_punpck "lbw"  snd  n8
+  , def_punpck "lwd"  snd n16
+  , def_punpck "ldq"  snd n32
+  , def_punpck "lqdq" snd n64
 
   , def_padd "b" n8
   , def_padd "w" n16

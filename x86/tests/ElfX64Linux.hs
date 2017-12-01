@@ -27,7 +27,6 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.X86 as RO
 
 elfX64LinuxTests :: [FilePath] -> T.TestTree
@@ -95,8 +94,12 @@ withMemory :: forall w m a
            -> E.Elf w
            -> (MM.Memory w -> m a)
            -> m a
-withMemory relaWidth e k =
-  case MM.memoryForElf (MM.LoadOptions MM.LoadBySegment False) e of
+withMemory _relaWidth e k = do
+  let opt = MM.LoadOptions { MM.loadRegionIndex = 0
+                           , MM.loadStyle = MM.LoadBySegment
+                           , MM.includeBSS = False
+                           }
+  case MM.memoryForElf opt e of
   -- case MM.memoryForElfSegments relaWidth e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
