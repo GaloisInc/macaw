@@ -17,7 +17,6 @@ module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
 
-import           Prelude hiding (isNaN)
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import           Data.Foldable
@@ -29,11 +28,20 @@ import           Data.Parameterized.Some
 import           Data.Proxy
 import qualified Flexdis86 as F
 
-import           Data.Macaw.CFG (MemRepr(..), memReprBytes)
+import           Data.Macaw.CFG ( MemRepr(..)
+                                , memReprBytes
+                                , App(..)
+                                , Value(BoolValue)
+                                , AssignRhs(CondReadMem)
+                                , mkLit
+                                )
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
+import qualified Data.Macaw.TypedList as TList
 
---import qualified Data.Macaw.X86.ArchTypes as X86
+
+import           Data.Macaw.X86.ArchTypes
+import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Getters
 import           Data.Macaw.X86.InstructionDef
 import           Data.Macaw.X86.Monad
@@ -1147,7 +1155,8 @@ xaxValLoc QWordRepVal = rax
 
 -- The arguments to this are always rax/QWORD PTR es:[rdi], so we only
 -- need the args for the size.
-exec_scas :: Bool -- Flag indicating if RepZPrefix appeared before instruction
+exec_scas :: forall st ids n
+          .  Bool -- Flag indicating if RepZPrefix appeared before instruction
           -> Bool -- Flag indicating if RepNZPrefix appeared before instruction
           -> RepValSize n
           -> X86Generator st ids ()
@@ -1163,38 +1172,59 @@ exec_scas False False rep = repValHasSupportedWidth rep $ do
                           (bvLit n64 (memReprBytes memRepr))
   rdi   .= v_rdi `bvAdd` bytesPerOp
 -- repz or repnz prefix set
-exec_scas _repz_pfx repnz_pfx rep = repValHasSupportedWidth rep $ do
-  let mrepr = repValSizeMemRepr rep
-  let val_loc = xaxValLoc rep
+exec_scas _repz_pfx False _rep =
+  fail $ "Semantics only currently supports finding elements."
+exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
+  let val_loc = xaxValLoc sz
   -- Get the direction flag -- it will be used to determine whether to add or subtract at each step.
   -- If the flag is zero, then the register is incremented, otherwise it is incremented.
-  df    <- get df_loc
+  df    <- eval =<< get df_loc
+  case df of
+    BoolValue False ->
+      pure ()
+    _ ->
+      fail $ "Unsupported scas value " ++ show df
 
   -- Get value that we are using in comparison
-  v_rax <- get val_loc
+  v_rax <- eval =<< get val_loc
 
   --  Get the starting address for the comparsions
-  v_rdi <- get rdi
+  v_rdi <- eval =<< get rdi
   -- Get maximum number of times to execute instruction
-  count <- get rcx
-  unless_ (count .=. bvKLit 0) $ do
+  v_rcx <- eval =<< get rcx
+  count' <- evalArchFn (RepnzScas sz v_rax v_rdi v_rcx)
+  -- Get number of bytes each comparison will use
+  let bytePerOpLit = bvKLit (memReprBytes (repValSizeMemRepr sz))
 
-    count' <- rep_scas repnz_pfx df rep v_rax v_rdi count
+  -- Count the number of bytes seen.
+  let nBytesSeen    = (ValueExpr v_rcx `bvSub` count') `bvMul` bytePerOpLit
 
-    -- Get number of bytes each comparison will use
-    let bytesPerOp = memReprBytes mrepr
-    -- Get multiple of each element (negated for direction flag
-    let bytePerOpLit = mux df (bvKLit (negate bytesPerOp)) (bvKLit bytesPerOp)
+  let lastWordBytes = nBytesSeen `bvSub` bytePerOpLit
 
-    -- Count the number of bytes seen.
-    let nBytesSeen    = (count `bvSub` count') `bvMul` bytePerOpLit
+  let y = ValueExpr v_rax
 
-    let lastWordBytes = nBytesSeen `bvSub` bytePerOpLit
+  dst <- eval (ValueExpr v_rdi `bvAdd` lastWordBytes)
+  cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
+  let condExpr = ValueExpr cond
+  dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
 
-    exec_cmp (MemoryAddr (v_rdi `bvAdd` lastWordBytes) mrepr) v_rax
+  let condSet :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
+      condSet l e = modify l (mux condExpr e)
 
-    rdi .= v_rdi `bvAdd` nBytesSeen
-    rcx .= count'
+
+  condSet rcx    count'
+  condSet rdi    $ ValueExpr v_rdi `bvAdd` nBytesSeen
+  condSet of_loc $ ssub_overflows  dst_val y
+  -- Set overflow and arithmetic flags
+  condSet af_loc $ usub4_overflows dst_val y
+  condSet cf_loc $ usub_overflows  dst_val y
+  -- Set result value.
+  let res = dst_val `bvSub` y
+  condSet sf_loc $ msb res
+  condSet zf_loc $ is_zero res
+  byte <- eval (least_byte res)
+  condSet pf_loc =<< evalArchFn (EvenParity byte)
+
 
 def_scas :: InstructionDef
 def_scas = defBinary "scas" $ \ii loc loc' -> do
@@ -1836,33 +1866,47 @@ def_mulps = defBinaryXMMV "mulps" $ \l v -> do
 -- SQRTSS Compute square root of scalar single-precision floating-point values
 -- RSQRTPS Compute reciprocals of square roots of packed single-precision floating-point values
 -- RSQRTSS Compute reciprocal of square root of scalar single-precision floating-point values
--- MAXPS Return maximum packed single-precision floating-point values
+-- MAXPS Return maximum packed single-precision floating-poi1nt values
 -- MAXSS Return maximum scalar single-precision floating-point values
 -- MINPS Return minimum packed single-precision floating-point values
 -- MINSS Return minimum scalar single-precision floating-point values
 
 -- *** SSE Comparison Instructions
 
+-- | UCOMISD Perform unordered comparison of scalar double-precision
+-- floating-point values and set flags in EFLAGS register.
+def_ucomisd :: InstructionDef
+-- Invalid (if SNaN operands), Denormal.
+def_ucomisd =
+  defBinary "ucomisd" $ \_ xv yv -> do
+    x <- eval =<< readXMMOrMem64 xv
+    y <- eval =<< readXMMOrMem64 yv
+    res <- evalArchFn (UCOMIS UCOMDouble x y)
+    zf_loc .= app (TupleField knownTypeList res TList.index0)
+    pf_loc .= app (TupleField knownTypeList res TList.index1)
+    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    of_loc .= false
+    af_loc .= false
+    sf_loc .= false
+
 -- CMPPS Compare packed single-precision floating-point values
 -- CMPSS Compare scalar single-precision floating-point values
 -- COMISS Perform ordered comparison of scalar single-precision floating-point values and set flags in EFLAGS register
+
 -- | UCOMISS Perform unordered comparison of scalar single-precision floating-point values and set flags in EFLAGS register
 def_ucomiss :: InstructionDef
 -- Invalid (if SNaN operands), Denormal.
-def_ucomiss = defBinaryXMMV "ucomiss" $ \l v -> do
-  v' <- bvTrunc knownNat <$> get l
-  let fir = SingleFloatRepr
-  let unordered = (isAnyNaN fir v .||. isAnyNaN fir v')
-      lt        = fpLt fir v' v
-      eq        = fpEq fir v' v
-
-  zf_loc .= (unordered .||. eq)
-  pf_loc .= unordered
-  cf_loc .= (unordered .||. lt)
-
-  of_loc .= false
-  af_loc .= false
-  sf_loc .= false
+def_ucomiss =
+  defBinary "ucomiss" $ \_ xv yv -> do
+    x <- eval =<< readXMMOrMem32 xv
+    y <- eval =<< readXMMOrMem32 yv
+    res <- evalArchFn (UCOMIS UCOMSingle x y)
+    zf_loc .= app (TupleField knownTypeList res TList.index0)
+    pf_loc .= app (TupleField knownTypeList res TList.index1)
+    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    of_loc .= false
+    af_loc .= false
+    sf_loc .= false
 
 -- *** SSE Logical Instructions
 
@@ -2176,24 +2220,6 @@ def_cmpsd =
 
 -- COMISD Perform ordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register
 
--- | UCOMISD Perform unordered comparison of scalar double-precision
--- floating-point values and set flags in EFLAGS register.
-def_ucomisd :: InstructionDef
--- Invalid (if SNaN operands), Denormal.
-def_ucomisd = defBinaryXMMV "ucomisd" $ \l v -> do
-  let fir = DoubleFloatRepr
-  v' <- bvTrunc knownNat <$> get l
-  let unordered = (isAnyNaN fir v .||. isAnyNaN fir v')
-      lt        = fpLt fir v' v
-      eq        = fpEq fir v' v
-
-  zf_loc .= (unordered .||. eq)
-  pf_loc .= unordered
-  cf_loc .= (unordered .||. lt)
-
-  of_loc .= false
-  af_loc .= false
-  sf_loc .= false
 
 -- *** SSE2 Shuffle and Unpack Instructions
 

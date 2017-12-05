@@ -190,16 +190,6 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Floating point operations
 
-  -- | Return true if floating point value is a "quiet" NaN.
-  FPIsQNaN :: !(FloatInfoRepr flt)
-           -> !(f (FloatType flt))
-           -> App f BoolType
-
-  -- | Return true if floating point value is a "signaling" NaN.
-  FPIsSNaN :: !(FloatInfoRepr flt)
-           -> !(f (FloatType flt))
-           -> App f BoolType
-
   FPAdd :: !(FloatInfoRepr flt)
         -> !(f (FloatType flt))
         -> !(f (FloatType flt))
@@ -408,8 +398,6 @@ ppAppA pp a0 =
     Bsr _ x -> sexprA "bsr" [ pp x ]
 
     -- Floating point
-    FPIsQNaN rep x          -> sexprA "fpIsQNaN" [ prettyPure rep, pp x ]
-    FPIsSNaN rep x          -> sexprA "fpIsSNaN" [ prettyPure rep, pp x ]
     FPAdd rep x y           -> sexprA "fpAdd" [ prettyPure rep, pp x, pp y ]
     FPAddRoundedUp rep x y  -> sexprA "fpAddRoundedUp" [ prettyPure rep, pp x, pp y ]
     FPSub rep x y           -> sexprA "fpSub" [ prettyPure rep, pp x, pp y ]
@@ -478,8 +466,6 @@ instance HasRepr (App f) TypeRepr where
       Bsr w _ -> BVTypeRepr w
 
       -- Floating point
-      FPIsQNaN _ _ -> knownType
-      FPIsSNaN _ _ -> knownType
       FPAdd rep _ _ -> floatTypeRepr rep
       FPAddRoundedUp{} -> knownType
       FPSub rep _ _ -> floatTypeRepr rep

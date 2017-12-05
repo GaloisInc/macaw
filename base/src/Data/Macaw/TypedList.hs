@@ -8,6 +8,9 @@ module Data.Macaw.TypedList
   , Index(..)
   , indexValue
   , (!)
+  , index0
+  , index1
+  , index2
   ) where
 
 import Data.Parameterized.Classes
@@ -73,3 +76,12 @@ indexValue = go 0
   where go :: Integer -> Index l x -> Integer
         go i ZeroIndex = i
         go i (ConsIndex x) = go (i+1) x
+
+index0 :: Index (x:r) x
+index0 = ZeroIndex
+
+index1 :: Index (x0:x1:r) x1
+index1 = ConsIndex index0
+
+index2 :: Index (x0:x1:x2:r) x2
+index2 = ConsIndex index1

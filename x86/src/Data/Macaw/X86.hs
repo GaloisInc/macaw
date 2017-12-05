@@ -37,7 +37,7 @@ module Data.Macaw.X86
        , Data.Macaw.X86.X86Reg.x86FloatResultRegs
        , Data.Macaw.X86.X86Reg.x86CalleeSavedRegs
        , pattern Data.Macaw.X86.X86Reg.RAX
-
+       , x86DemandContext
        ) where
 
 import           Control.Exception (assert)
@@ -321,6 +321,7 @@ transferAbsValue r f =
     X86IRem{} -> TopV
     X86Div{}  -> TopV
     X86Rem{}  -> TopV
+    UCOMIS{}  -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -454,7 +455,7 @@ freeBSD_syscallPersonality =
                      , spResultRegisters = [ Some RAX ]
                      }
 
-x86DemandContext :: DemandContext X86_64 ids
+x86DemandContext :: DemandContext X86_64
 x86DemandContext =
   DemandContext { demandConstraints = \a -> a
                 , archFnHasSideEffects = x86PrimFnHasSideEffects

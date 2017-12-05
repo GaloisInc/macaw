@@ -124,7 +124,7 @@ data ArchitectureInfo arch
      , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch src
                                              -> Rewriter arch s src tgt (ArchTermStmt arch tgt))
        -- ^ This rewrites an architecture specific statement
-     , archDemandContext :: !(forall ids . DemandContext arch ids)
+     , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
      , postArchTermStmtAbsState :: !(forall ids

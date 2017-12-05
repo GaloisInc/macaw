@@ -339,6 +339,10 @@ isEmpty _ = False
 -------------------------------------------------------------------------------
 -- Joining abstract values
 
+instance MemWidth w => AbsDomain (AbsValue w tp) where
+  top = TopV
+  joinD = joinAbsValue
+
 -- | Join the old and new states and return the updated state iff
 -- the result is larger than the old state.
 -- This also returns any addresses that are discarded during joining.

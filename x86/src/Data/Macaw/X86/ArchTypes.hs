@@ -14,6 +14,7 @@ This defines the X86_64 architecture type and the supporting definitions.
 module Data.Macaw.X86.ArchTypes
   ( -- * Architecture
     X86_64
+  , UCOMType(..)
   , X86PrimFn(..)
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -173,11 +174,10 @@ data X86PrimFn f tp where
             -> !(f (BVType 64))
             -> !(f (BVType 64))
             -> X86PrimFn f (BVType 64)
-
   -- ^ `RepnzScas sz val base cnt` searchs through a buffer starting at
   -- `base` to find  an element `i` such that base[i] = val.
-  -- Each step it increments `i` by 1 and decrements `cnt` by `1`.  It returns
-  -- the final value of `cnt`.
+  -- Each step it increments `i` by 1 and decrements `cnt` by `1`.
+  -- It returns the final value of `cnt`, the
   MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
   -- ^ This returns a 80-bit value where the high 16-bits are all
   -- 1s, and the low 64-bits are the given register.
@@ -208,6 +208,35 @@ data X86PrimFn f tp where
   -- ^ This performs an unsigned remainder for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
 
+  UCOMIS :: !(UCOMType tp)
+         -> !(f tp)
+         -> !(f tp)
+         -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
+  -- ^  This performs a comparison of two floating point values and returns three flags:
+  --
+  --  * ZF is for the zero-flag and true if the arguments are equal or either argument is a NaN.
+  --
+  --  * PF records the unordered flag and is true if either value is a NaN.
+  --
+  --  * CF is the carry flag, and true if the first floating point argument is less than
+  --    second or either value is a NaN.
+  --
+  -- The order of the flags was chosen to be consistent with the Intel documentation for
+  -- UCOMISD and UCOMISS.
+  --
+  -- The documentation is a bit unclear, but it appears this function implicitly depends
+  -- on the MXCSR register and may signal if the invalid operation exception #I is
+  -- not masked or the denomal exception #D if it is not masked.
+
+-- | A single or double value for floating-point restricted to this types.
+data UCOMType tp where
+   UCOMSingle :: UCOMType (FloatType SingleFloat)
+   UCOMDouble :: UCOMType (FloatType DoubleFloat)
+
+instance HasRepr UCOMType TypeRepr where
+  typeRepr UCOMSingle = knownType
+  typeRepr UCOMDouble = knownType
+
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
@@ -226,6 +255,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
+      UCOMIS _ _ _  -> knownType
 
 instance FunctorFC X86PrimFn where
   fmapFC = fmapFCDefault
@@ -253,6 +283,7 @@ instance TraversableFC X86PrimFn where
       X86IRem w n d -> X86IRem w <$> go n <*> go d
       X86Div  w n d -> X86Div  w <$> go n <*> go d
       X86Rem  w n d -> X86Rem  w <$> go n <*> go d
+      UCOMIS tp x y -> UCOMIS tp <$> go x <*> go y
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f =
@@ -274,7 +305,7 @@ instance IsArchFn X86PrimFn where
       X86IRem w n d -> sexprA "irem" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
       X86Div  w n d -> sexprA "div"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
       X86Rem  w n d -> sexprA "rem"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-
+      UCOMIS  _ x y -> sexprA "ucomis" [ pp x, pp y ]
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -296,6 +327,7 @@ x86PrimFnHasSideEffects f =
     X86IRem{}    -> True -- /\ ..
     X86Div{}     -> True -- /\ ..
     X86Rem{}     -> True -- /\ ..
+    UCOMIS{}     -> True
 
 ------------------------------------------------------------------------
 -- X86Stmt

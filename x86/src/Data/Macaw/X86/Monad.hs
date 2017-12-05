@@ -85,9 +85,6 @@ module Data.Macaw.X86.Monad
   , (.*)
   , (.&&.)
   , (.||.)
-  , isQNaN
-  , isSNaN
-  , isAnyNaN
     -- * Semantics
   , SIMDWidth(..)
   , make_undefined
@@ -110,7 +107,6 @@ module Data.Macaw.X86.Monad
   , memcopy
   , memcmp
   , memset
-  , rep_scas
   , even_parity
   , fnstcw
   , getSegmentBase
@@ -1661,16 +1657,6 @@ instance IsValue (Expr ids) where
   fpFromBV tgt x = app $ FPFromBV x tgt
   truncFPToSignedBV tgt src x = app $ TruncFPToSignedBV src x tgt
 
-isQNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
-isQNaN rep x = app $ FPIsQNaN rep x
-
-isSNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
-isSNaN rep x = app $ FPIsSNaN rep x
-
--- | is NaN (quiet and signalling)
-isAnyNaN :: FloatInfoRepr flt -> Expr s (FloatType flt) -> Expr s BoolType
-isAnyNaN fir v = boolOr (isQNaN fir v) (isSNaN fir v)
-
 (.&&.) :: IsValue v => v BoolType -> v BoolType -> v BoolType
 (.&&.) = boolAnd
 
@@ -1954,42 +1940,6 @@ memset count val dest dfl = do
   dest_v  <- eval dest
   df_v    <- eval dfl
   addArchStmt $ MemSet count_v val_v dest_v df_v
-
--- | This will compare a value against the contents of a memory region for equality and/or
--- inequality.
---
--- It accepts the value to compare, a pointer to the start of the region, and
--- the maximum number of elements to compare, which is decremented after each comparison.
--- It returns the value of the count after it has succeeded, or zero if we reached the
--- end without finding a value.   A return value of zero is thus ambiguous on whether
--- the value was found in the last iteration, or whether the value was never found.
-rep_scas :: Bool
-            -- ^ Find first matching (True) or not matching (False)
-         -> Expr ids BoolType
-            -- ^ Flag indicates direction of search
-            -- True means we should decrement buffer pointers after each copy.
-            -- False means we should increment the buffer pointers after each copy.
-         -> RepValSize w
-            -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
-         -> BVExpr ids w
-            -- ^ Value to compare
-         -> Addr ids
-            -- ^ Pointer to first buffer
-         -> BVExpr ids 64
-             -- ^ Maximum number of elements to compare
-         -> X86Generator st ids (BVExpr ids 64)
-rep_scas True is_reverse sz val buf count = do
-  val_v   <- eval val
-  buf_v   <- eval buf
-  count_v <- eval count
-  is_reverse_v <- eval is_reverse
-  case is_reverse_v of
-    BoolValue False ->
-      evalArchFn (RepnzScas sz val_v buf_v count_v)
-    _ ->
-      fail $ "Unsupported rep_scas value " ++ show is_reverse_v
-rep_scas False _is_reverse _sz _val _buf _count = do
-  fail $ "Semantics only currently supports finding elements."
 
 -- | Return true if value contains an even number of true bits.
 even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)

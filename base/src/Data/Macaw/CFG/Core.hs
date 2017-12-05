@@ -91,6 +91,7 @@ import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
 import           Data.Maybe (isNothing, catMaybes)
+import           Data.Monoid
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -106,7 +107,8 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Data.Macaw.CFG.App
 import           Data.Macaw.Memory ( MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..)
@@ -228,38 +230,7 @@ type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
 type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
--- Value, Assignment, AssignRhs declarations.
-
--- | A value at runtime.
-data Value arch ids tp
-   = forall n
-   . (tp ~ BVType n, 1 <= n)
-   => BVValue !(NatRepr n) !Integer
-     -- ^ A constant bitvector
-   | (tp ~ BoolType)
-   => BoolValue !Bool
-     -- ^ A constant Boolean
-   | ( tp ~ BVType (ArchAddrWidth arch)
-     , 1 <= ArchAddrWidth arch
-     )
-   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
-     -- ^ A legal memory address
-   | AssignedValue !(Assignment arch ids tp)
-     -- ^ Value from an assignment statement.
-   | Initial !(ArchReg arch tp)
-     -- ^ Represents the value assigned to the register when the block started.
-
-type BVValue arch ids w = Value arch ids (BVType w)
-
--- | A address value for a specific architecture
-type ArchAddrValue arch ids = BVValue arch ids (ArchAddrWidth arch)
-
--- | An assignment consists of a unique location identifier and a right-
--- hand side that returns a value.
-data Assignment arch ids tp =
-  Assignment { assignId :: !(AssignId ids tp)
-             , assignRhs :: !(AssignRhs arch ids tp)
-             }
+-- MemRepr
 
 -- | The type stored in memory.
 --
@@ -301,37 +272,93 @@ instance HasRepr MemRepr TypeRepr where
      in case leqMulPos (Proxy :: Proxy 8) w of
           LeqProof -> BVTypeRepr r
 
+------------------------------------------------------------------------
+-- AssignRhs
+
 -- | The right hand side of an assignment is an expression that
 -- returns a value.
-data AssignRhs (arch :: *) ids tp where
+data AssignRhs (arch :: *) (f :: Type -> *) tp where
   -- An expression that is computed from evaluating subexpressions.
-  EvalApp :: !(App (Value arch ids) tp)
-          -> AssignRhs arch ids tp
+  EvalApp :: !(App f tp)
+          -> AssignRhs arch f tp
 
   -- An expression with an undefined value.
   SetUndefined :: !(TypeRepr tp)
-               -> AssignRhs arch ids tp
+               -> AssignRhs arch f tp
 
   -- Read memory at given location.
-  ReadMem :: !(ArchAddrValue arch ids)
+  ReadMem :: !(f (BVType (ArchAddrWidth arch)))
           -> !(MemRepr tp)
-          -> AssignRhs arch ids tp
+          -> AssignRhs arch f tp
+
+  CondReadMem :: !(MemRepr tp)
+              -> !(f BoolType)
+              -> !(f (BVType (ArchAddrWidth arch)))
+              -> !(f tp)
+              -> AssignRhs arch f tp
+  -- ^ @CondReadMem tp cond addr v@ reads from memory at the given address if the
+  -- condition is true and returns the value if it false.
 
   -- Call an architecture specific function that returns some result.
-  EvalArchFn :: !(ArchFn arch (Value arch ids) tp)
+  EvalArchFn :: !(ArchFn arch f tp)
              -> !(TypeRepr tp)
-             -> AssignRhs arch ids tp
+             -> AssignRhs arch f tp
 
-------------------------------------------------------------------------
--- Type operations on assignment AssignRhs, and Value
-
-instance HasRepr (AssignRhs arch ids) TypeRepr where
+instance HasRepr (AssignRhs arch f) TypeRepr where
   typeRepr rhs =
     case rhs of
       EvalApp a -> typeRepr a
       SetUndefined tp -> tp
       ReadMem _ tp -> typeRepr tp
+      CondReadMem tp _ _ _ -> typeRepr tp
       EvalArchFn _ rtp -> rtp
+
+instance FoldableFC (ArchFn arch) => FoldableFC (AssignRhs arch) where
+  foldMapFC go v =
+    case v of
+      EvalApp a -> foldMapFC go a
+      SetUndefined _w -> mempty
+      ReadMem addr _ -> go addr
+      CondReadMem _ c a d -> go c <> go a <> go d
+      EvalArchFn f _ -> foldMapFC go f
+
+------------------------------------------------------------------------
+-- Value and Assignment, AssignRhs declarations.
+
+-- | A value at runtime.
+data Value arch ids tp
+   = forall n
+   . (tp ~ BVType n, 1 <= n)
+   => BVValue !(NatRepr n) !Integer
+     -- ^ A constant bitvector
+   | (tp ~ BoolType)
+   => BoolValue !Bool
+     -- ^ A constant Boolean
+   | ( tp ~ BVType (ArchAddrWidth arch)
+     , 1 <= ArchAddrWidth arch
+     )
+   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
+     -- ^ A legal memory address
+   | AssignedValue !(Assignment arch ids tp)
+     -- ^ Value from an assignment statement.
+   | Initial !(ArchReg arch tp)
+     -- ^ Represents the value assigned to the register when the block started.
+
+-- | An assignment consists of a unique location identifier and a right-
+-- hand side that returns a value.
+data Assignment arch ids tp =
+  Assignment { assignId :: !(AssignId ids tp)
+             , assignRhs :: !(AssignRhs arch (Value arch ids) tp)
+             }
+
+-- | A  value with a bitvector type.
+type BVValue arch ids w = Value arch ids (BVType w)
+
+-- | A address value for a specific architecture
+type ArchAddrValue arch ids = BVValue arch ids (ArchAddrWidth arch)
+
+------------------------------------------------------------------------
+-- Type operations on assignment AssignRhs, and Value
 
 instance ( HasRepr (ArchReg arch) TypeRepr
          )
@@ -605,17 +632,19 @@ type ArchConstraints arch
 -- | Pretty print an assignment right-hand side using operations parameterized
 -- over an application to allow side effects.
 ppAssignRhs :: (Applicative m, ArchConstraints arch)
-            => (forall u . Value arch ids u -> m Doc)
+            => (forall u . f u -> m Doc)
                -- ^ Function for pretty printing value.
-            -> AssignRhs arch ids tp
+            -> AssignRhs arch f tp
             -> m Doc
 ppAssignRhs pp (EvalApp a) = ppAppA pp a
 ppAssignRhs _  (SetUndefined tp) = pure $ text "undef ::" <+> brackets (text (show tp))
 ppAssignRhs pp (ReadMem a repr) =
   (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
+ppAssignRhs pp (CondReadMem repr c a d) = f <$> pp c <*> pp a <*> pp d
+  where f cd ad dd = text "read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
-instance ArchConstraints arch => Pretty (AssignRhs arch ids tp) where
+instance ArchConstraints arch => Pretty (AssignRhs arch (Value arch ids) tp) where
   pretty = runIdentity . ppAssignRhs (Identity . ppValue 10)
 
 instance ArchConstraints arch => Pretty (Assignment arch ids tp) where
@@ -756,11 +785,14 @@ refsInApp :: App (Value arch ids) tp -> Set (Some (AssignId ids))
 refsInApp app = foldMapFC refsInValue app
 
 refsInAssignRhs :: FoldableFC (ArchFn arch)
-                => AssignRhs arch ids tp
+                => AssignRhs arch (Value arch ids) tp
                 -> Set (Some (AssignId ids))
 refsInAssignRhs rhs =
   case rhs of
     EvalApp v      -> refsInApp v
     SetUndefined _ -> Set.empty
     ReadMem v _    -> refsInValue v
+    CondReadMem _ c a d ->
+      Set.union (refsInValue c) $
+      Set.union (refsInValue a) (refsInValue d)
     EvalArchFn f _ -> foldMapFC refsInValue f

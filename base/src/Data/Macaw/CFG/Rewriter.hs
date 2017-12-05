@@ -118,7 +118,7 @@ appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
 
 -- | Add an assignment statement that evaluates the right hand side and return the resulting value.
-evalRewrittenRhs :: AssignRhs arch tgt tp -> Rewriter arch s src tgt (Value arch tgt tp)
+evalRewrittenRhs :: AssignRhs arch (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)
 evalRewrittenRhs rhs = Rewriter $ do
   gen <- gets $ rwctxNonceGen . rwContext
   aid <- lift $ AssignId <$> freshNonce gen
@@ -379,7 +379,8 @@ rewriteApp app = do
 
     _ -> evalRewrittenRhs (EvalApp app)
 
-rewriteAssignRhs :: AssignRhs arch src tp -> Rewriter arch s src tgt (Value arch tgt tp)
+rewriteAssignRhs :: AssignRhs arch (Value arch src) tp
+                 -> Rewriter arch s src tgt (Value arch tgt tp)
 rewriteAssignRhs rhs =
   case rhs of
     EvalApp app -> do
@@ -388,6 +389,12 @@ rewriteAssignRhs rhs =
     ReadMem addr repr -> do
       tgtAddr <- rewriteValue addr
       evalRewrittenRhs (ReadMem tgtAddr repr)
+    CondReadMem repr cond addr def -> do
+      rhs' <- CondReadMem repr
+               <$> rewriteValue cond
+               <*> rewriteValue addr
+               <*> rewriteValue def
+      evalRewrittenRhs rhs'
     EvalArchFn archFn _repr -> do
       f <- Rewriter $ gets $ rwctxArchFn . rwContext
       f archFn

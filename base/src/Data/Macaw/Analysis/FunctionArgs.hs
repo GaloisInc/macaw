@@ -46,6 +46,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.BlockLabel
+import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Discovery.State
 import           Data.Macaw.Fold
 import           Data.Macaw.Memory
@@ -197,6 +198,8 @@ data ArchDemandInfo arch = ArchDemandInfo
      , calleeSavedRegs :: !(Set (Some (ArchReg arch)))
        -- | Compute the effects of a terminal statement on registers.
      , computeArchTermStmtEffects :: !(forall ids . ComputeArchTermStmtEffects arch ids)
+       -- | Information needed to infer what values are demanded by a AssignRhs and Stmt.
+     , demandInfoCtx :: !(DemandContext arch)
      }
 
 -- | This is information needed to compute dependencies for a single function.
@@ -461,17 +464,17 @@ summarizeCall mem lbl proc_state isTailCall = do
       recordBlockDemand lbl proc_state (\_ -> DemandAlways) ([Some ip_reg] ++ argRegs)
 
 -- | Return values that must be evaluated to execute side effects.
-stmtDemandedValues :: FoldableF (ArchStmt arch)
-                   => Stmt arch ids
+stmtDemandedValues :: DemandContext arch
+                   -> Stmt arch ids
                    -> [Some (Value arch ids)]
-stmtDemandedValues stmt =
+stmtDemandedValues ctx stmt = demandConstraints ctx $
+
   case stmt of
-    -- Assignment statements are side effect free so we ignore them.
-    AssignStmt a -> case (assignRhs a) of
-      EvalApp _ -> []
-      SetUndefined _ -> []
-      ReadMem addr _ -> [Some addr]
-      EvalArchFn _ _ -> []
+    AssignStmt a
+      | hasSideEffects ctx (assignRhs a) -> do
+          foldMapFC (\v -> [Some v]) (assignRhs a)
+      | otherwise ->
+          []
     WriteMem addr _ v -> [Some addr, Some v]
     -- Place holder statements are unknown.
     PlaceHolderStmt _ _ -> []
@@ -496,9 +499,10 @@ summarizeBlock mem interp_state addr stmts = do
   -- Add this label to block demand map with empty set.
   blockDemandMap %= Map.insertWith demandMapUnion lbl mempty
 
+  ctx <- gets $ demandInfoCtx . archDemandInfo
   -- Add all values demanded by non-terminal statements in list.
-  mapM_ (\(Some v) -> demandValue lbl v)
-        (concatMap stmtDemandedValues (stmtsNonterm stmts))
+  mapM_ (mapM_ (\(Some v) -> demandValue lbl v) . stmtDemandedValues ctx)
+        (stmtsNonterm stmts)
   -- Add values demanded by terminal statements
   case stmtsTerm stmts of
     ParsedTranslateError _ -> do

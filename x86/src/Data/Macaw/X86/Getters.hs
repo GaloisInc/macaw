@@ -29,6 +29,8 @@ module Data.Macaw.X86.Getters
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
   , readXMMValue
+  , readXMMOrMem32
+  , readXMMOrMem64
     -- * Utilities
   , reg16Loc
   , reg32Loc
@@ -385,6 +387,18 @@ getAddrRegSegmentOrImm v =
 
 -- | Get a XMM value
 readXMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 128))
-readXMMValue (F.XMMReg r) = get $ fullRegister $ X86_XMMReg r
+readXMMValue (F.XMMReg r) = getReg $ X86_XMMReg r
 readXMMValue (F.Mem128 a) = readBVAddress a xmmMemRepr
 readXMMValue _ = fail "XMM Instruction given unexpected value."
+
+-- | Get the low 32-bits out of an XMM register or a 64-bit XMM address.
+readXMMOrMem32 :: F.Value -> X86Generator st ids (Expr ids (BVType 32))
+readXMMOrMem32 (F.XMMReg r) = bvTrunc n32 <$> getReg (X86_XMMReg r)
+readXMMOrMem32 (F.Mem128 a) = readBVAddress a dwordMemRepr
+readXMMOrMem32 _ = fail "XMM Instruction given unexpected value."
+
+-- | Get the low 64-bits out of an XMM register or a 64-bit XMM address.
+readXMMOrMem64 :: F.Value -> X86Generator st ids (Expr ids (BVType 64))
+readXMMOrMem64 (F.XMMReg r) = bvTrunc n64 <$> getReg (X86_XMMReg r)
+readXMMOrMem64 (F.Mem128 a) = readBVAddress a qwordMemRepr
+readXMMOrMem64 _ = fail "XMM Instruction given unexpected value."

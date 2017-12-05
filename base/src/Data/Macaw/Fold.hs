@@ -7,9 +7,12 @@ a value without revisiting shared subterms.
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Fold
   ( Data.Parameterized.TraversableFC.FoldableFC(..)
   , foldValueCached
@@ -26,24 +29,17 @@ import           Data.Macaw.CFG
 
 -- Helper that is a state monad, and also a monoid when the return value
 -- is a monoid.
-newtype StateMonadMonoid s m = SMM { getStateMonadMonoid :: State s m }
-   deriving (Functor, Applicative, Monad, MonadState s)
+newtype MonadMonoid m a = MM { getMonadMonoid :: m a }
+   deriving (Functor, Applicative, Monad)
+
+instance MonadState s m => MonadState s (MonadMonoid m) where
+  get = MM get
+  put s = MM (put s)
 
 
-instance Monoid m => Monoid (StateMonadMonoid s m) where
-  mempty = return mempty
+instance (Applicative m, Monoid a) => Monoid (MonadMonoid m a) where
+  mempty = pure mempty
   mappend m m' = mappend <$> m <*> m'
-
-foldAssignRHSValues :: (Monoid r, FoldableFC (ArchFn arch))
-                    => (forall vtp . Value arch ids vtp -> r)
-                    -> AssignRhs arch ids tp
-                    -> r
-foldAssignRHSValues go v =
-  case v of
-    EvalApp a -> foldMapFC go a
-    SetUndefined _w -> mempty
-    ReadMem addr _ -> go addr
-    EvalArchFn f _ -> foldMapFC go f
 
 -- | This folds over elements of a values in a  values.
 --
@@ -61,11 +57,11 @@ foldValueCached :: forall m arch ids tp
                    -- ^ Function for assignments
                 -> Value arch ids tp
                 -> State (Map (Some (AssignId ids)) m) m
-foldValueCached litf rwf initf assignf = getStateMonadMonoid . go
+foldValueCached litf rwf initf assignf = getMonadMonoid . go
   where
     go :: forall tp'
        .  Value arch ids tp'
-       -> StateMonadMonoid (Map (Some (AssignId ids)) m) m
+       -> MonadMonoid (State (Map (Some (AssignId ids)) m)) m
     go v =
       case v of
         BoolValue b -> return (litf (knownNat :: NatRepr 1) (if b then 1 else 0))
@@ -78,6 +74,6 @@ foldValueCached litf rwf initf assignf = getStateMonadMonoid . go
             Just v' ->
               return $ assignf a_id v'
             Nothing -> do
-              rhs_v <- foldAssignRHSValues go rhs
+              rhs_v <- foldMapFC go rhs
               modify' $ Map.insert (Some a_id) rhs_v
               return (assignf a_id rhs_v)

@@ -347,7 +347,7 @@ newAssignID = do
   gs <- getState
   liftM AssignId $ X86G $ lift $ lift $ lift $ freshNonce $ assignIdGen gs
 
-addAssignment :: AssignRhs X86_64 ids tp
+addAssignment :: AssignRhs X86_64 (Value X86_64 ids) tp
               -> X86Generator st_s ids (Assignment X86_64 ids tp)
 addAssignment rhs = do
   l <- newAssignID
@@ -355,7 +355,7 @@ addAssignment rhs = do
   addStmt $ AssignStmt a
   pure $! a
 
-evalAssignRhs :: AssignRhs X86_64 ids tp
+evalAssignRhs :: AssignRhs X86_64 (Value X86_64 ids) tp
               -> X86Generator st_s ids (Expr ids tp)
 evalAssignRhs rhs =
   ValueExpr . AssignedValue <$> addAssignment rhs

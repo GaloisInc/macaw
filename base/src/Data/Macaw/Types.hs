@@ -147,11 +147,24 @@ instance Show (TypeRepr tp) where
 class KnownType tp where
   knownType :: TypeRepr tp
 
+class KnownTypeList l where
+  knownTypeList :: TList TypeRepr l
+
+instance KnownTypeList '[] where
+  knownTypeList = TList.Empty
+
+instance (KnownType h, KnownTypeList r) => KnownTypeList (h : r) where
+  knownTypeList = knownType TList.:| knownTypeList
+
+
 instance KnownType BoolType where
   knownType = BoolTypeRepr
 
 instance (KnownNat n, 1 <= n) => KnownType (BVType n) where
   knownType = BVTypeRepr knownNat
+
+instance (KnownTypeList l) => KnownType (TupleType l) where
+  knownType = TupleTypeRepr knownTypeList
 
 ------------------------------------------------------------------------
 -- Floating point sizes

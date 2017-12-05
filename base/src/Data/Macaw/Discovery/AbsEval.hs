@@ -42,13 +42,19 @@ absEvalReadMem r a tp
 -- | Get the abstract domain for the right-hand side of an assignment.
 transferRHS :: ArchitectureInfo a
             -> AbsProcessorState (ArchReg a) ids
-            -> AssignRhs a ids tp
+            -> AssignRhs a (Value a ids) tp
             -> ArchAbsValue a tp
 transferRHS info r rhs =
   case rhs of
     EvalApp app    -> withArchConstraints info $ transferApp r app
     SetUndefined _ -> TopV
     ReadMem a tp   -> withArchConstraints info $ absEvalReadMem r a tp
+
+    -- TODO: See if we should build a mux specific version
+    CondReadMem tp _ a d ->
+      withArchConstraints info $ do
+        lub (absEvalReadMem r a tp)
+            (transferValue r d)
     EvalArchFn f _ -> absEvalArchFn info r f
 
 -- | Merge in the value of the assignment.
