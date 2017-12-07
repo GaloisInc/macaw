@@ -41,6 +41,7 @@ import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import qualified Data.Map as Map
+import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -112,10 +113,10 @@ data X86PrimLoc tp
      -- ^ One of the x87 control registers
 
 instance HasRepr X86PrimLoc TypeRepr where
-  typeRepr ControlLoc{} = knownType
-  typeRepr DebugLoc{}   = knownType
-  typeRepr FS = knownType
-  typeRepr GS = knownType
+  typeRepr ControlLoc{} = knownRepr
+  typeRepr DebugLoc{}   = knownRepr
+  typeRepr FS = knownRepr
+  typeRepr GS = knownRepr
   typeRepr (X87_ControlLoc r) =
     case x87ControlRegWidthIsPos r of
       LeqProof -> BVTypeRepr (typeRepr r)
@@ -204,8 +205,8 @@ instance Show (SSE_FloatType tp) where
   show SSE_Double = "double"
 
 instance HasRepr SSE_FloatType TypeRepr where
-  typeRepr SSE_Single = knownType
-  typeRepr SSE_Double = knownType
+  typeRepr SSE_Single = knownRepr
+  typeRepr SSE_Double = knownRepr
 
 ------------------------------------------------------------------------
 -- X87 declarations
@@ -467,32 +468,32 @@ data X86PrimFn f tp where
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
-      EvenParity{}  -> knownType
+      EvenParity{}  -> knownRepr
       ReadLoc loc   -> typeRepr loc
-      ReadFSBase    -> knownType
-      ReadGSBase    -> knownType
-      CPUID{}       -> knownType
-      RDTSC{}       -> knownType
-      XGetBV{}      -> knownType
+      ReadFSBase    -> knownRepr
+      ReadGSBase    -> knownRepr
+      CPUID{}       -> knownRepr
+      RDTSC{}       -> knownRepr
+      XGetBV{}      -> knownRepr
       PShufb w _ _  -> BVTypeRepr (typeRepr w)
-      MemCmp{}      -> knownType
-      RepnzScas{}   -> knownType
-      MMXExtend{}   -> knownType
+      MemCmp{}      -> knownRepr
+      RepnzScas{}   -> knownRepr
+      MMXExtend{}   -> knownRepr
       X86IDiv w _ _ -> typeRepr (repValSizeMemRepr w)
       X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
       SSE_VectorOp _ w tp _ _ -> packedType w tp
       SSE_CMPSX _ tp _ _  -> typeRepr tp
-      SSE_UCOMIS _ _ _  -> knownType
-      SSE_CVTSS2SD{} -> knownType
-      SSE_CVTSD2SS{} -> knownType
+      SSE_UCOMIS _ _ _  -> knownRepr
+      SSE_CVTSS2SD{} -> knownRepr
+      SSE_CVTSD2SS{} -> knownRepr
       SSE_CVTSI2SX tp _ _ -> typeRepr tp
       SSE_CVTTSX2SI w _ _ -> BVTypeRepr w
-      X87_Extend{} -> knownType
-      X87_FAdd{} -> knownType
-      X87_FSub{} -> knownType
-      X87_FMul{} -> knownType
+      X87_Extend{} -> knownRepr
+      X87_FAdd{} -> knownRepr
+      X87_FSub{} -> knownRepr
+      X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
 
 packedType :: (1 <= n, 1 <= w) => NatRepr n -> SSE_FloatType (BVType w) -> TypeRepr (BVType (n*w))

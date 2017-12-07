@@ -683,13 +683,13 @@ instance HasRepr (Location addr) TypeRepr where
   typeRepr (MemoryAddr _ tp) = typeRepr tp
   typeRepr (FullRegister r)  = typeRepr r
   typeRepr (Register rv@RegisterView{}) = BVTypeRepr $ _registerViewSize rv
-  typeRepr (ControlReg _)    = knownType
-  typeRepr (DebugReg _)    = knownType
-  typeRepr (SegmentReg _)    = knownType
+  typeRepr (ControlReg _)    = knownRepr
+  typeRepr (DebugReg _)    = knownRepr
+  typeRepr (SegmentReg _)    = knownRepr
   typeRepr (X87ControlReg r) =
     case x87ControlRegWidthIsPos r of
       LeqProof -> BVTypeRepr (typeRepr r)
-  typeRepr (X87StackRegister _) = knownType
+  typeRepr (X87StackRegister _) = knownRepr
 
 ------------------------------------------------------------------------
 -- Specific locations.
@@ -1617,9 +1617,9 @@ make_undefined tp =
 type Addr s = Expr s (BVType 64)
 
 -- | Mark a Boolean variable as undefined.
-set_undefined :: KnownType tp => Location (Addr ids) tp -> X86Generator st ids ()
+set_undefined :: KnownRepr TypeRepr tp => Location (Addr ids) tp -> X86Generator st ids ()
 set_undefined l = do
-  u <- make_undefined knownType
+  u <- make_undefined knownRepr
   l .= u
 
 -- | Read from the given location.

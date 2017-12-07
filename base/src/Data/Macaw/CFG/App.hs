@@ -29,14 +29,13 @@ module Data.Macaw.CFG.App
 
 import           Control.Monad.Identity
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
-import           Data.Macaw.TypedList (TList)
-import qualified Data.Macaw.TypedList as TList
 
 -----------------------------------------------------------------------
 -- App
@@ -50,7 +49,7 @@ data App (f :: Type -> *) (tp :: Type) where
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
   -- | Extract the value out of a tuple.
-  TupleField :: !(TList TypeRepr l) -> !(f (TupleType l)) -> !(TList.Index l r) -> App f r
+  TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -202,9 +201,9 @@ instance TestEquality f => TestEquality (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|TList|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|testEquality|])
-                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|testEquality|])
                    ]
                   )
@@ -215,9 +214,9 @@ instance OrdF f => OrdF (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|TList|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                   , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
                       [|compareF|])
-                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|compareF|])
                    ]
               )
@@ -266,7 +265,7 @@ ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
-    TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (TList.indexValue i) ]
+    TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
@@ -306,18 +305,18 @@ ppAppA pp a0 =
 instance HasRepr (App f) TypeRepr where
   typeRepr a =
     case a of
-      Eq _ _       -> knownType
+      Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
-      TupleField f _ i -> f TList.! i
+      TupleField f _ i -> f P.!! i
 
       Trunc _ w -> BVTypeRepr w
       SExt  _ w -> BVTypeRepr w
       UExt  _ w -> BVTypeRepr w
 
-      AndApp{} -> knownType
-      OrApp{}  -> knownType
-      NotApp{} -> knownType
-      XorApp{} -> knownType
+      AndApp{} -> knownRepr
+      OrApp{}  -> knownRepr
+      NotApp{} -> knownRepr
+      XorApp{} -> knownRepr
 
       BVAdd w _ _   -> BVTypeRepr w
       BVAdc w _ _ _ -> BVTypeRepr w
@@ -325,11 +324,11 @@ instance HasRepr (App f) TypeRepr where
       BVSbb w _ _ _ -> BVTypeRepr w
       BVMul w _ _ -> BVTypeRepr w
 
-      BVUnsignedLt{} -> knownType
-      BVUnsignedLe{} -> knownType
-      BVSignedLt{} -> knownType
-      BVSignedLe{} -> knownType
-      BVTestBit{} -> knownType
+      BVUnsignedLt{} -> knownRepr
+      BVUnsignedLe{} -> knownRepr
+      BVSignedLt{} -> knownRepr
+      BVSignedLe{} -> knownRepr
+      BVTestBit{} -> knownRepr
 
       BVComplement w _ -> BVTypeRepr w
       BVAnd w _ _ -> BVTypeRepr w
@@ -339,10 +338,10 @@ instance HasRepr (App f) TypeRepr where
       BVShr w _ _ -> BVTypeRepr w
       BVSar w _ _ -> BVTypeRepr w
 
-      UadcOverflows{} -> knownType
-      SadcOverflows{} -> knownType
-      UsbbOverflows{} -> knownType
-      SsbbOverflows{} -> knownType
+      UadcOverflows{} -> knownRepr
+      SadcOverflows{} -> knownRepr
+      UsbbOverflows{} -> knownRepr
+      SsbbOverflows{} -> knownRepr
 
       PopCount w _ -> BVTypeRepr w
       ReverseBytes w _ ->

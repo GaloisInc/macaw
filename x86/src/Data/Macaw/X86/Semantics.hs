@@ -23,6 +23,8 @@ import           Data.Foldable
 import           Data.Int
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import           Data.Proxy
@@ -37,7 +39,6 @@ import           Data.Macaw.CFG ( MemRepr(..)
                                 )
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
-import qualified Data.Macaw.TypedList as TList
 
 
 import           Data.Macaw.X86.ArchTypes
@@ -733,11 +734,11 @@ exec_sh lw l val val_setter cf_setter of_setter = do
   -- When the count is zero, nothing happens, in particular, no flags change
   let isNonzero = low_count .=/=. zero8
   -- Set the af flag
-  do af_new_val <- make_undefined knownType
+  do af_new_val <- make_undefined knownRepr
      modify af_loc $ mux isNonzero af_new_val
   -- Set the overflow flag based on count.
   do of_val   <- get of_loc
-     of_undef <- make_undefined knownType
+     of_undef <- make_undefined knownRepr
      -- If count is zero, then flag is unchanged
      of_loc .= mux (low_count .=. zero8) of_val
                  -- If count is one, then of is xor of initial and final values.
@@ -1446,9 +1447,9 @@ execX87BinOp op loc expr1 = do
   val0 <- eval =<< get loc
   val1 <- eval expr1
   res <- evalArchFn $ op val0 val1
-  loc .= app (TupleField knownTypeList res TList.index0)
+  loc .= app (TupleField knownRepr res P.index0)
   set_undefined c0_loc
-  c1_loc .= app (TupleField knownTypeList res TList.index1)
+  c1_loc .= app (TupleField knownRepr res P.index1)
   set_undefined c2_loc
   set_undefined c3_loc
 
@@ -1936,9 +1937,9 @@ def_ucomisd =
     x <- eval =<< get =<< getXMM_mr_low64 xv
     y <- eval =<< get =<< getXMM_mr_low64 yv
     res <- evalArchFn (SSE_UCOMIS SSE_Double x y)
-    zf_loc .= app (TupleField knownTypeList res TList.index0)
-    pf_loc .= app (TupleField knownTypeList res TList.index1)
-    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    pf_loc .= app (TupleField knownRepr res P.index1)
+    cf_loc .= app (TupleField knownRepr res P.index2)
     of_loc .= false
     af_loc .= false
     sf_loc .= false
@@ -1955,9 +1956,9 @@ def_ucomiss =
     x <- eval =<< get =<< getXMM_mr_low32 xv
     y <- eval =<< get =<< getXMM_mr_low32 yv
     res <- evalArchFn (SSE_UCOMIS SSE_Single x y)
-    zf_loc .= app (TupleField knownTypeList res TList.index0)
-    pf_loc .= app (TupleField knownTypeList res TList.index1)
-    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    pf_loc .= app (TupleField knownRepr res P.index1)
+    cf_loc .= app (TupleField knownRepr res P.index2)
     of_loc .= false
     af_loc .= false
     sf_loc .= false

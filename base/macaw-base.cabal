@@ -49,7 +49,6 @@ library
     Data.Macaw.Memory
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.Permissions
-    Data.Macaw.TypedList
     Data.Macaw.Types
 
   ghc-options: -Wall -Werror

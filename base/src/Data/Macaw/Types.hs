@@ -4,6 +4,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 The type of machine words, including bit vectors and floating point
 -}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -15,7 +16,7 @@ The type of machine words, including bit vectors and floating point
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Types
   ( module Data.Macaw.Types -- export everything
   , GHC.TypeLits.Nat
@@ -23,14 +24,13 @@ module Data.Macaw.Types
   , Data.Parameterized.NatRepr.knownNat
   ) where
 
-import Data.Parameterized.Classes
-import Data.Parameterized.NatRepr
-import Data.Parameterized.TraversableFC
-import GHC.TypeLits
-import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as P
+import           Data.Parameterized.NatRepr
+import           Data.Parameterized.TraversableFC
+import           GHC.TypeLits
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
-import           Data.Macaw.TypedList (TList)
-import qualified Data.Macaw.TypedList as TList
 
 -- FIXME: move
 n0 :: NatRepr 0
@@ -113,7 +113,7 @@ type BoolType = 'BoolType
 data TypeRepr (tp :: Type) where
   BoolTypeRepr :: TypeRepr BoolType
   BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
-  TupleTypeRepr :: !(TList TypeRepr ctx) -> TypeRepr (TupleType ctx)
+  TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
@@ -140,31 +140,18 @@ instance OrdF TypeRepr where
 instance Show (TypeRepr tp) where
   show BoolTypeRepr = "bool"
   show (BVTypeRepr w) = "[" ++ show w ++ "]"
-  show (TupleTypeRepr TList.Empty) = "()"
-  show (TupleTypeRepr (h TList.:| z)) =
+  show (TupleTypeRepr P.Nil) = "()"
+  show (TupleTypeRepr (h P.:> z)) =
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
 
-class KnownType tp where
-  knownType :: TypeRepr tp
+instance KnownRepr TypeRepr BoolType where
+  knownRepr = BoolTypeRepr
 
-class KnownTypeList l where
-  knownTypeList :: TList TypeRepr l
+instance (KnownNat n, 1 <= n) => KnownRepr TypeRepr (BVType n) where
+  knownRepr = BVTypeRepr knownNat
 
-instance KnownTypeList '[] where
-  knownTypeList = TList.Empty
-
-instance (KnownType h, KnownTypeList r) => KnownTypeList (h : r) where
-  knownTypeList = knownType TList.:| knownTypeList
-
-
-instance KnownType BoolType where
-  knownType = BoolTypeRepr
-
-instance (KnownNat n, 1 <= n) => KnownType (BVType n) where
-  knownType = BVTypeRepr knownNat
-
-instance (KnownTypeList l) => KnownType (TupleType l) where
-  knownType = TupleTypeRepr knownTypeList
+instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
+  knownRepr = TupleTypeRepr knownRepr
 
 ------------------------------------------------------------------------
 -- Floating point sizes
@@ -239,11 +226,11 @@ floatInfoBits fir = natMultiply (knownNat :: NatRepr 8) (floatInfoBytes fir)
 floatTypeRepr :: FloatInfoRepr flt -> TypeRepr (BVType (8 * TypeBytes flt))
 floatTypeRepr fir =
   case fir of
-    HalfFloatRepr         -> knownType
-    SingleFloatRepr       -> knownType
-    DoubleFloatRepr       -> knownType
-    QuadFloatRepr         -> knownType
-    X86_80FloatRepr       -> knownType
+    HalfFloatRepr         -> knownRepr
+    SingleFloatRepr       -> knownRepr
+    DoubleFloatRepr       -> knownRepr
+    QuadFloatRepr         -> knownRepr
+    X86_80FloatRepr       -> knownRepr
 
 floatInfoBitsIsPos :: FloatInfoRepr flt -> LeqProof 1 (8 * TypeBytes flt)
 floatInfoBitsIsPos fir =
