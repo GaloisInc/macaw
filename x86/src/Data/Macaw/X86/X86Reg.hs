@@ -125,12 +125,13 @@ type XMM             = BVType 128
 -- The datatype for x86 registers.
 data X86Reg tp
    = (tp ~ BVType 64)  => X86_IP
+     -- | One of 16 general purpose registers
    | (tp ~ BVType 64)  => X86_GP {-# UNPACK #-} !F.Reg64
-     -- ^ One of 16 general purpose registers
+     -- | One of 32 initial flag registers.
    | (tp ~ BoolType)   => X86_FlagReg {-# UNPACK #-} !R.X86Flag
-     -- ^ One of 32 initial flag registers.
+     -- | One of 16 x87 status registers
    | (tp ~ BoolType)   => X87_StatusReg {-# UNPACK #-} !Int
-     -- ^ One of 16 x87 status registers
+     -- | X87 tag register.
    | (tp ~ BVType 3)   => X87_TopReg
      -- X87 tag register.
    | (tp ~ BVType 2)   => X87_TagReg {-# UNPACK #-} !Int

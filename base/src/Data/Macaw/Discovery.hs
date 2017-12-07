@@ -991,7 +991,7 @@ cfgFromAddrs, cfgFromAddrsTrustFns ::
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
   -> SymbolAddrMap (ArchAddrWidth arch)
-     -- ^ Map from addresses to the associated symbol name.
+     -- ^ Ma1p from addresses to the associated symbol name.
   -> [ArchSegmentOff arch]
      -- ^ Initial function entry points.
   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]

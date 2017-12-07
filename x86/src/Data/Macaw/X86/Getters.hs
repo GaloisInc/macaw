@@ -21,16 +21,10 @@ module Data.Macaw.X86.Getters
   , getSignExtendedValue
   , truncateBVValue
   , getJumpTarget
-  , FPLocation(..)
-  , getFPLocation
-  , FPValue(..)
-  , getFPValue
   , HasRepSize(..)
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
   , readXMMValue
-  , readXMMOrMem32
-  , readXMMOrMem64
     -- * Utilities
   , reg16Loc
   , reg32Loc
@@ -39,6 +33,7 @@ module Data.Macaw.X86.Getters
   , getBV16Addr
   , getBV32Addr
   , getBV64Addr
+  , getBV80Addr
   , getBV128Addr
     -- * Reprs
   , byteMemRepr
@@ -55,7 +50,7 @@ import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.CFG (MemRepr(..))
 import           Data.Macaw.Memory (Endianness(..))
-import           Data.Macaw.Types (FloatType, BVType, n8, n16, n32, n64, typeWidth)
+import           Data.Macaw.Types (BVType, n8, n16, n32, n64, typeWidth)
 import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Monad
 import           Data.Macaw.X86.X86Reg (X86Reg(..))
@@ -74,6 +69,9 @@ dwordMemRepr = BVMemRepr (knownNat :: NatRepr 4) LittleEndian
 
 qwordMemRepr :: MemRepr (BVType 64)
 qwordMemRepr = BVMemRepr (knownNat :: NatRepr 8) LittleEndian
+
+x87MemRepr :: MemRepr (BVType 80)
+x87MemRepr = BVMemRepr (knownNat :: NatRepr 10) LittleEndian
 
 xmmMemRepr :: MemRepr (BVType 128)
 xmmMemRepr = BVMemRepr (knownNat :: NatRepr 16) LittleEndian
@@ -162,6 +160,10 @@ getBV32Addr ar = (`MemoryAddr` dwordMemRepr) <$> getBVAddress ar
 -- | Translate a flexdis address-refrence into a eight-byte address.
 getBV64Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 64))
 getBV64Addr ar = (`MemoryAddr` qwordMemRepr) <$> getBVAddress ar
+
+-- | Translate a flexdis address-refrence into a ten-byte address.
+getBV80Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 80))
+getBV80Addr ar = (`MemoryAddr` x87MemRepr) <$> getBVAddress ar
 
 -- | Translate a flexdis address-refrence into a sixteen-byte address.
 getBV128Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 128))
@@ -311,38 +313,6 @@ getJumpTarget v =
     _ -> fail "Unexpected argument"
 
 ------------------------------------------------------------------------
--- Floating point
-
--- | This describes a floating point value including the type.
-data FPLocation ids flt = FPLocation (FloatInfoRepr flt) (Location (Expr ids (BVType 64)) (FloatType flt))
-
--- | This describes a floating point value including the type.
-data FPValue ids flt = FPValue (FloatInfoRepr flt) (Expr ids (FloatType flt))
-
-readFPLocation :: FPLocation ids flt -> X86Generator st ids (FPValue ids flt)
-readFPLocation (FPLocation repr l) = FPValue repr <$>  get l
-
--- | Read an address as a floating point vlaue
-getFPAddrLoc :: FloatInfoRepr flt -> F.AddrRef -> X86Generator st ids (FPLocation ids flt)
-getFPAddrLoc fir f_addr = do
-  FPLocation fir . (`MemoryAddr` (floatMemRepr fir))
-    <$> getBVAddress f_addr
-
--- | Get a floating point value from the argument.
-getFPLocation :: F.Value -> X86Generator st ids (Some (FPLocation ids))
-getFPLocation v =
-  case v of
-    F.FPMem32 ar -> Some <$> getFPAddrLoc SingleFloatRepr ar
-    F.FPMem64 ar -> Some <$> getFPAddrLoc DoubleFloatRepr ar
-    F.FPMem80 ar -> Some <$> getFPAddrLoc X86_80FloatRepr ar
-    F.X87Register n -> pure $ Some $ FPLocation X86_80FloatRepr (X87StackRegister n)
-    _ -> fail $ "Bad floating point argument."
-
--- | Get a floating point value from the argument.
-getFPValue :: F.Value -> X86Generator st ids (Some (FPValue ids))
-getFPValue v = getFPLocation v >>= \(Some l) -> Some <$> readFPLocation l
-
-------------------------------------------------------------------------
 -- Standard memory values
 
 data HasRepSize f w = HasRepSize { _ppvWidth :: !(RepValSize w)
@@ -390,15 +360,3 @@ readXMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 128))
 readXMMValue (F.XMMReg r) = getReg $ X86_XMMReg r
 readXMMValue (F.Mem128 a) = readBVAddress a xmmMemRepr
 readXMMValue _ = fail "XMM Instruction given unexpected value."
-
--- | Get the low 32-bits out of an XMM register or a 64-bit XMM address.
-readXMMOrMem32 :: F.Value -> X86Generator st ids (Expr ids (BVType 32))
-readXMMOrMem32 (F.XMMReg r) = bvTrunc n32 <$> getReg (X86_XMMReg r)
-readXMMOrMem32 (F.Mem128 a) = readBVAddress a dwordMemRepr
-readXMMOrMem32 _ = fail "XMM Instruction given unexpected value."
-
--- | Get the low 64-bits out of an XMM register or a 64-bit XMM address.
-readXMMOrMem64 :: F.Value -> X86Generator st ids (Expr ids (BVType 64))
-readXMMOrMem64 (F.XMMReg r) = bvTrunc n64 <$> getReg (X86_XMMReg r)
-readXMMOrMem64 (F.Mem128 a) = readBVAddress a qwordMemRepr
-readXMMOrMem64 _ = fail "XMM Instruction given unexpected value."

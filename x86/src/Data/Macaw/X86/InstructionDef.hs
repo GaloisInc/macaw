@@ -23,8 +23,6 @@ module Data.Macaw.X86.InstructionDef
   , defUnaryLoc
   , defUnaryKnown
   , defUnaryV
-  , defUnaryFPL
-  , defUnaryFPV
     -- * Binary instruction helpers
   , defBinary
   , defBinaryLV
@@ -33,7 +31,6 @@ module Data.Macaw.X86.InstructionDef
   , defBinaryKnown
   , defBinaryXMMV
   , defBinaryLL
-  , defFPBinaryImplicit
     -- * Ternary instruction helpers
   , defTernary
   , defTernaryLVV
@@ -42,7 +39,6 @@ module Data.Macaw.X86.InstructionDef
 import qualified Flexdis86 as F
 import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr
-import           Data.Parameterized.Some
 import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.X86.Conditions
@@ -127,26 +123,6 @@ defUnaryV :: String
 defUnaryV s f =  defUnary s $ \_ val -> do
   SomeBV v <- getSomeBVValue val
   f v
-
-defUnaryFPL :: String
-            -> (forall st ids flt
-               .  FloatInfoRepr flt
-               -> Location (Addr ids) (FloatType flt)
-               -> X86Generator st ids ())
-            -> InstructionDef
-defUnaryFPL mnem f = defUnary mnem $ \_ v -> do
-  Some (FPLocation repr loc) <- getFPLocation v
-  f repr loc
-
-defUnaryFPV :: String
-            -> (forall st ids flt
-                . FloatInfoRepr flt
-                -> Expr ids (FloatType flt)
-                -> X86Generator st ids ())
-            -> InstructionDef
-defUnaryFPV mnem f = defUnary mnem $ \_ v -> do
-  Some (FPValue repr val) <- getFPValue v
-  f repr val
 
 -- | Define an instruction that expects two arguments.
 defBinary :: String
@@ -236,30 +212,6 @@ defBinaryLL mnem f = defBinary mnem $ \ii loc loc' -> do
   SomeBV l <- getSomeBVLocation loc
   l'       <- getBVLocation loc' (typeWidth l)
   f (F.iiLockPrefix ii) l l'
-
--- | Define a function that takes either two floating point arguments.
---
--- If only one argument is provided, it is used as the second argument,
--- and the first argument is implicitly the top of the floating point stack.
-defFPBinaryImplicit :: String
-                   -> (forall st ids flt_d flt_s
-                       .  FloatInfoRepr flt_d
-                       -> Location (Expr ids (BVType 64)) (FloatType flt_d)
-                       -> FloatInfoRepr flt_s
-                       -> Expr ids (FloatType flt_s)
-                       -> X86Generator st ids ())
-                   -> InstructionDef
-defFPBinaryImplicit mnem f = defVariadic mnem $ \_ vs -> do
-  case vs of
-    [v] -> do
-      Some (FPValue repr val) <- getFPValue v
-      f X86_80FloatRepr (X87StackRegister 0) repr val
-    [loc, val] -> do
-      l  <- getBVLocation loc knownNat
-      v  <- getBVValue val knownNat
-      f X86_80FloatRepr l X86_80FloatRepr v
-    _ -> do
-      fail $ "deFPBinImplicit " ++ mnem ++ ": expecting 2 arguments, got " ++ show (length vs)
 
 -- | Define an instruction that expects three arguments.
 defTernary :: String

@@ -321,7 +321,18 @@ transferAbsValue r f =
     X86IRem{} -> TopV
     X86Div{}  -> TopV
     X86Rem{}  -> TopV
-    UCOMIS{}  -> TopV
+    SSE_VectorOp{}  -> TopV
+    SSE_CMPSX{}  -> TopV
+    SSE_UCOMIS{}  -> TopV
+    SSE_CVTSD2SS{}  -> TopV
+    SSE_CVTSS2SD{}  -> TopV
+    SSE_CVTSI2SX{}  -> TopV
+    SSE_CVTTSX2SI{}  -> TopV
+    X87_Extend{}  -> TopV
+    X87_FST{}  -> TopV
+    X87_FAdd{}  -> TopV
+    X87_FSub{}  -> TopV
+    X87_FMul{}  -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.

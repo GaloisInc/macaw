@@ -85,6 +85,7 @@ module Data.Macaw.X86.Monad
   , (.*)
   , (.&&.)
   , (.||.)
+  , boolXor
     -- * Semantics
   , SIMDWidth(..)
   , make_undefined
@@ -526,6 +527,14 @@ type ImpLocation ids tp = Location (AddrExpr ids) tp
 readLoc :: X86PrimLoc tp -> X86Generator st_s ids (Expr ids tp)
 readLoc l = evalArchFn (ReadLoc l)
 
+getX87Top :: X86Generator st_s ids Int
+getX87Top = do
+  top_val <- getRegValue X87_TopReg
+  case top_val of
+    BVValue _ (fromInteger -> topv) ->
+      return topv
+    _ -> fail $ "Unsupported value for top register " ++ show (pretty top_val)
+
 getX87Offset :: Int -> X86Generator st_s ids Int
 getX87Offset i = do
   topv <- getX87Top
@@ -578,15 +587,6 @@ setLoc loc v =
 
 ------------------------------------------------------------------------
 -- Semantics
-
-getX87Top :: X86Generator st_s ids Int
-getX87Top = do
-  top_val <- getRegValue X87_TopReg
-  case top_val of
-    -- Validate that i is less than top and top +
-    BVValue _ (fromInteger -> topv) ->
-      return topv
-    _ -> fail $ "Unsupported value for top register " ++ show (pretty top_val)
 
 -- Equality and ordering.
 
@@ -1168,90 +1168,6 @@ class IsValue (v  :: Type -> *) where
   -- All bits at indices greater than return value must be unset.
   bsr :: (1 <= n) => v (BVType n) -> v (BVType n)
 
-  -- FP stuff
-
-  -- | Add two floating point numbers.
-  -- This can throw exceptions, including:
-  -- #IA Operand is an SNaN value or unsupported format.
-  --     Operands are infinities of unlike sign.
-  -- #D  Source operand is a denormal value.
-  -- #U  Result is too small for destination format.
-  -- #O  Result is too large for destination format.
-  -- #P  Value cannot be represented exactly in destination format.
-  fpAdd :: FloatInfoRepr flt
-        -> v (FloatType flt)
-        -> v (FloatType flt)
-        -> v (FloatType flt)
-
-  -- | Indicates whether floating point representation from addition is
-  -- larger than the actual value.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpAddRoundedUp :: FloatInfoRepr flt
-                 -> v (FloatType flt)
-                 -> v (FloatType flt)
-                 -> v BoolType
-
-  -- | Subtracts one floating point numbers from another.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpSub :: FloatInfoRepr flt
-        -> v (FloatType flt)
-        -> v (FloatType flt)
-        -> v (FloatType flt)
-
-  -- | Indicates whether floating point representation from subtraction
-  -- is larger than the actual value.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpSubRoundedUp :: FloatInfoRepr flt
-                 -> v (FloatType flt)
-                 -> v (FloatType flt)
-                 -> v BoolType
-
-  -- | Multiplies two floating point numbers.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpMul :: FloatInfoRepr flt -> v (FloatType flt) -> v (FloatType flt) -> v (FloatType flt)
-
-  -- | Whether the result of the mul was rounded up
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpMulRoundedUp :: FloatInfoRepr flt -> v (FloatType flt) -> v (FloatType flt) -> v BoolType
-
-  -- | Divides two floating point numbers.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpDiv :: FloatInfoRepr flt -> v (FloatType flt) -> v (FloatType flt) -> v (FloatType flt)
-
-  -- | Compare if one floating is strictly less than another.
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpLt :: FloatInfoRepr flt -> v (FloatType flt) -> v (FloatType flt) -> v BoolType
-
-  -- | Floating point equality (equates -0 and 0)
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpEq :: FloatInfoRepr flt -> v (FloatType flt) -> v (FloatType flt) -> v BoolType
-  fpEq fir v v' = boolNot $ boolOr (fpLt fir v v') (fpLt fir v' v)
-
-  -- | Convert between floating point values
-  -- TODO: Describe exceptions or modify usage to avoid them.
-  fpCvt :: FloatInfoRepr flt -> FloatInfoRepr flt' -> v (FloatType flt) -> v (FloatType flt')
-
-  -- | Whether roundup occurs when converting between FP formats
-  fpCvtRoundsUp :: FloatInfoRepr flt -> FloatInfoRepr flt' -> v (FloatType flt) -> v BoolType
-
-  -- | Convert a signed integer to a float. (e.g. 255 -> 255.0)
-  -- (see x86_64 CVTSI2SD instruction)
-  -- We assume that the floating point representation is large enough to hold
-  -- all the values at that bitwidth.
-  fpFromBV :: FloatInfoRepr flt -> v (BVType n) -> v (FloatType flt)
-
-  -- | Convert a floating point value to a signed integer.
-  -- * If the conversion is inexact, then the value is truncated to zero.
-  -- * If the conversion is out of the range of the bitvector, then a
-  --   floating point exception should be raised.
-  -- * If that exception is masked, then this returns -1 (as a signed bitvector).
-  truncFPToSignedBV :: (1 <= n)
-                    => NatRepr n
-                    -> FloatInfoRepr flt
-                    -> v (FloatType flt)
-                    -> v (BVType n)
-
-
   true :: v BoolType
   true = boolValue True
 
@@ -1265,7 +1181,19 @@ class IsValue (v  :: Type -> *) where
   boolAnd :: v BoolType -> v BoolType -> v BoolType
   boolOr :: v BoolType -> v BoolType -> v BoolType
   boolEq  :: v BoolType -> v BoolType -> v BoolType
-  boolXor :: v BoolType -> v BoolType -> v BoolType
+
+boolXor :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
+boolXor x y
+  -- Eliminate xor with 0.
+  | Just False <- asBoolLit x = y
+  | Just True  <- asBoolLit x = boolNot y
+  | Just False <- asBoolLit y = x
+  | Just True  <- asBoolLit y = boolNot x
+  -- Eliminate xor with self.
+  | x == y = false
+  -- If this is a single bit comparison with a constant, resolve to Boolean operation.
+  -- Default case.
+  | otherwise = app $ XorApp x y
 
 bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
 bvSle x y = app (BVSignedLe x y)
@@ -1447,18 +1375,6 @@ instance IsValue (Expr ids) where
       -- Default case
     | otherwise = app $ BVOr (typeWidth x) x y
 
-  boolXor x y
-      -- Eliminate xor with 0.
-    | Just False <- asBoolLit x = y
-    | Just True  <- asBoolLit x = boolNot y
-    | Just False <- asBoolLit y = x
-    | Just True  <- asBoolLit y = boolNot x
-      -- Eliminate xor with self.
-    | x == y = false
-      -- If this is a single bit comparison with a constant, resolve to Boolean operation.
-      -- Default case.
-    | otherwise = app $ XorApp x y
-
   bvXor x y
       -- Eliminate xor with 0.
     | Just 0 <- asBVLit x = y
@@ -1634,29 +1550,6 @@ instance IsValue (Expr ids) where
   bsf x = app $ Bsf (typeWidth x) x
   bsr x = app $ Bsr (typeWidth x) x
 
-  fpAdd rep x y = app $ FPAdd rep x y
-  fpAddRoundedUp rep x y = app $ FPAddRoundedUp rep x y
-
-  fpSub rep x y = app $ FPSub rep x y
-  fpSubRoundedUp rep x y = app $ FPSubRoundedUp rep x y
-
-  fpMul rep x y = app $ FPMul rep x y
-  fpMulRoundedUp rep x y = app $ FPMulRoundedUp rep x y
-
-  fpDiv rep x y = app $ FPDiv rep x y
-
-  fpLt rep x y = app $ FPLt rep x y
-  fpEq rep x y = app $ FPEq rep x y
-
-  fpCvt src tgt x =
-    case testEquality src tgt of
-      Just Refl -> x
-      _ -> app $ FPCvt src x tgt
-  fpCvtRoundsUp src tgt x = app $ FPCvtRoundsUp src x tgt
-
-  fpFromBV tgt x = app $ FPFromBV x tgt
-  truncFPToSignedBV tgt src x = app $ TruncFPToSignedBV src x tgt
-
 (.&&.) :: IsValue v => v BoolType -> v BoolType -> v BoolType
 (.&&.) = boolAnd
 
@@ -1755,6 +1648,7 @@ get l0 =
     X87StackRegister i -> do
       idx <- getX87Offset i
       getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
+
 
 -- | Assign a value to alocation.
 (.=) :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
