@@ -1506,7 +1506,7 @@ def_fsubp = defX87PopInstruction "fsubp" X87_FSub
 
 -- | FSUBR Subtract floating-point reverse
 def_fsubr :: InstructionDef
-def_fsubr = defX87BinaryInstruction "fsub" (flip X87_FSub)
+def_fsubr = defX87BinaryInstruction "fsubr" (flip X87_FSub)
 
 -- | FSUBRP Subtract floating-point reverse and pop
 def_fsubrp :: InstructionDef
