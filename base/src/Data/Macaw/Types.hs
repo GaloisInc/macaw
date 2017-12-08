@@ -141,7 +141,7 @@ instance Show (TypeRepr tp) where
   show BoolTypeRepr = "bool"
   show (BVTypeRepr w) = "[" ++ show w ++ "]"
   show (TupleTypeRepr P.Nil) = "()"
-  show (TupleTypeRepr (h P.:> z)) =
+  show (TupleTypeRepr (h P.:< z)) =
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
 
 instance KnownRepr TypeRepr BoolType where
