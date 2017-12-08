@@ -65,18 +65,16 @@ type Binop
   -> Expr ids (BVType n)
   -> X86Generator st ids ()
 
-uadd4_overflows :: ( 4 <= n, IsValue v)
-                => v (BVType n) -> v (BVType n) -> v BoolType
+uadd4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
 uadd4_overflows x y = uadd_overflows (least_nibble x) (least_nibble y)
 
-usub4_overflows :: (4 <= n, IsValue v)
-                => v (BVType n) -> v (BVType n) -> v BoolType
+usub4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
 usub4_overflows x y = usub_overflows (least_nibble x) (least_nibble y)
 
-uadc4_overflows :: ( 4 <= n
-                   , IsValue v
-                   )
-                => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
+uadc4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType -> Expr ids BoolType
 uadc4_overflows x y c = uadc_overflows (least_nibble x) (least_nibble y) c
 
 fmap_loc :: Location (Addr ids) (BVType n)
@@ -114,7 +112,7 @@ push :: MemRepr tp -> Expr ids tp -> X86Generator st ids ()
 push repr v = do
   old_sp <- get rsp
   let delta   = bvLit n64 $ memReprBytes repr -- delta in bytes
-      new_sp  = old_sp `bvSub` delta
+      new_sp  = old_sp .- delta
   MemoryAddr new_sp repr .= v
   rsp     .= new_sp
 
@@ -125,7 +123,7 @@ pop repr = do
   -- Get value at stack pointer.
   v   <- get (MemoryAddr old_sp repr)
   -- Increment stack pointer
-  rsp .= bvAdd old_sp (bvLit n64 (memReprBytes repr))
+  rsp .= old_sp .+ bvLit n64 (memReprBytes repr)
   -- Return value
   return v
 
@@ -308,34 +306,31 @@ regLocation sz
 
 def_cmpxchg :: InstructionDef
 def_cmpxchg  = defBinaryLV "cmpxchg" $ \d s -> do
-  let acc = regLocation (bv_width s) R.RAX
+  let acc = regLocation (typeWidth s) R.RAX
   temp <- get d
   a  <- get acc
   exec_cmp acc temp -- set flags
-  ifte_ (a .=. temp)
-        (do zf_loc .= true
-            d .= s
-        )
-        (do zf_loc .= false
-            acc .= temp
-            d   .= temp
-        )
+  let p = a .=. temp
+  zf_loc .= p
+  d .= mux p s temp
+  modify acc $ \old -> mux p temp old
 
-exec_cmpxchg8b :: Location (Addr ids) (BVType 64) -> X86Generator st ids ()
-exec_cmpxchg8b loc = do
-  temp64 <- get loc
-  edx_eax <- bvCat <$> get edx <*> get eax
-  ifte_ (edx_eax .=. temp64)
-    (do zf_loc .= true
-        ecx_ebx <- bvCat <$> get ecx <*> get ebx
-        loc .= ecx_ebx
-    )
-    (do zf_loc .= false
-        let (upper,lower) = bvSplit temp64
-        edx .= upper
-        eax .= lower
-        loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
-    )
+def_cmpxchg8b :: InstructionDef
+def_cmpxchg8b =
+  defUnaryKnown "cmpxchg8b"  $ \loc -> do
+    temp64 <- get loc
+    edx_eax <- bvCat <$> get edx <*> get eax
+    let p = edx_eax .=. temp64
+    zf_loc .= p
+    ifte_ p
+      (do ecx_ebx <- bvCat <$> get ecx <*> get ebx
+          loc .= ecx_ebx
+      )
+      (do let (upper,lower) = bvSplit temp64
+          edx .= upper
+          eax .= lower
+          loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
+      )
 
 def_movsx :: InstructionDef
 def_movsx = defBinaryLVge "movsx" $ \l v -> l .= sext (typeWidth l) v
@@ -372,7 +367,7 @@ def_adc = defBinaryLV "adc" $ \dst y -> do
   -- Set result value.
   let w = typeWidth dst
   let cbv = mux c (bvLit w 1) (bvLit w 0)
-  set_result_value dst (dst_val `bvAdd` y `bvAdd` cbv)
+  set_result_value dst (dst_val .+ y .+ cbv)
 
 exec_add :: SupportedBVWidth n
          => Location (Addr ids) (BVType n)
@@ -386,7 +381,7 @@ exec_add dst y = do
   af_loc .= uadd4_overflows dst_val y
   cf_loc .= uadd_overflows  dst_val y
   -- Set result value.
-  set_result_value dst (dst_val `bvAdd` y)
+  set_result_value dst (dst_val .+ y)
 
 -- FIXME: we don't need a location, just a value.
 exec_cmp :: SupportedBVWidth n => Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
@@ -397,18 +392,18 @@ exec_cmp dst y = do
   af_loc .= usub4_overflows dst_val y
   cf_loc .= usub_overflows  dst_val y
   -- Set result value.
-  set_result_flags (dst_val `bvSub` y)
+  set_result_flags (dst_val .- y)
 
 def_dec :: InstructionDef
 def_dec = defUnaryLoc  "dec" $ \dst -> do
   dst_val <- get dst
-  let v1 = bvLit (bv_width dst_val) 1
+  let v1 = bvLit (typeWidth dst_val) 1
   -- Set overflow and arithmetic flags
   of_loc .= ssub_overflows  dst_val v1
   af_loc .= usub4_overflows dst_val v1
   -- no carry flag
   -- Set result value.
-  set_result_value dst (dst_val `bvSub` v1)
+  set_result_value dst (dst_val .- v1)
 
 set_div_flags :: X86Generator st ids ()
 set_div_flags = do
@@ -440,7 +435,7 @@ set_div_flags = do
 -- | Unsigned (@div@ instruction) and signed (@idiv@ instruction) division.
 def_div :: InstructionDef
 def_div = defUnaryV "div" $ \d ->
-   case bv_width d of
+   case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
            num <- get ax
            (q,r) <- bvQuotRem ByteRepVal num d
@@ -466,7 +461,7 @@ def_div = defUnaryV "div" $ \d ->
 def_idiv :: InstructionDef
 def_idiv = defUnaryV "idiv" $ \d -> do
   set_div_flags
-  case bv_width d of
+  case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
            num <- get ax
            (q,r) <- bvSignedQuotRem ByteRepVal num d
@@ -499,13 +494,13 @@ def_inc :: InstructionDef
 def_inc = defUnaryLoc "inc" $ \dst -> do
   -- Get current value stored in destination.
   dst_val <- get dst
-  let y  = bvLit (bv_width dst_val) 1
+  let y  = bvLit (typeWidth dst_val) 1
   -- Set overflow and arithmetic flags
   of_loc .= sadd_overflows  dst_val y
   af_loc .= uadd4_overflows dst_val y
   -- no cf_loc
   -- Set result value.
-  set_result_value dst (dst_val `bvAdd` y)
+  set_result_value dst (dst_val .+ y)
 
 -- FIXME: is this the right way around?
 exec_mul :: forall st ids n
@@ -513,18 +508,18 @@ exec_mul :: forall st ids n
          => Expr ids (BVType n)
          -> X86Generator st ids ()
 exec_mul v
-  | Just Refl <- testEquality (bv_width v) n8  = do
+  | Just Refl <- testEquality (typeWidth v) n8  = do
     r <- go al
     ax .= r
-  | Just Refl <- testEquality (bv_width v) n16 = do
+  | Just Refl <- testEquality (typeWidth v) n16 = do
     (upper, lower) <- bvSplit <$> go ax
     dx .= upper
     ax .= lower
-  | Just Refl <- testEquality (bv_width v) n32 = do
+  | Just Refl <- testEquality (typeWidth v) n32 = do
     (upper, lower) <- bvSplit <$> go eax
     edx .= upper
     eax .= lower
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
     (upper, lower) <- bvSplit <$> go rax
     rdx .= upper
     rax .= lower
@@ -536,8 +531,8 @@ exec_mul v
        -> X86Generator st ids (BVExpr ids (n+n))
     go l = do
       v' <- get l
-      let sz = addNat (bv_width v) (bv_width v)
-          r  = uext sz v' `bvMul` uext sz v -- FIXME: uext here is OK?
+      let sz = addNat (typeWidth v) (typeWidth v)
+          r  = uext sz v' .* uext sz v -- FIXME: uext here is OK?
           upper_r = fst (bvSplit r) :: Expr ids (BVType n)
       set_undefined sf_loc
       set_undefined af_loc
@@ -554,7 +549,7 @@ really_exec_imul :: forall st ids n
                  -> BVExpr ids n
                  -> X86Generator st ids (BVExpr ids (n+n))
 really_exec_imul v v' = do
-  let w = bv_width v
+  let w = typeWidth v
   let sz = addNat w w
   let w_is_pos :: LeqProof 1 n
       w_is_pos = LeqProof
@@ -574,21 +569,21 @@ really_exec_imul v v' = do
 
 exec_imul1 :: forall st ids n . SupportedBVWidth n => BVExpr ids n -> X86Generator st ids ()
 exec_imul1 v
-  | Just Refl <- testEquality (bv_width v) n8  = do
+  | Just Refl <- testEquality (typeWidth v) n8  = do
       v' <- get al
       r <- really_exec_imul v v'
       ax .= r
-  | Just Refl <- testEquality (bv_width v) n16 = do
+  | Just Refl <- testEquality (typeWidth v) n16 = do
       v' <- get ax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       dx .= upper
       ax .= lower
-  | Just Refl <- testEquality (bv_width v) n32 = do
+  | Just Refl <- testEquality (typeWidth v) n32 = do
       v' <- get eax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       edx .= upper
       eax .= lower
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
       v' <- get rax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       rdx .= upper
@@ -605,7 +600,7 @@ exec_imul2_3 :: forall st ids n n'
              -> X86Generator st ids ()
 exec_imul2_3 l v v' = do
   withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $ do
-  r <- really_exec_imul v (sext (bv_width v) v')
+  r <- really_exec_imul v (sext (typeWidth v) v')
   l .= snd (bvSplit r)
 
 def_imul :: InstructionDef
@@ -623,7 +618,7 @@ def_imul = defVariadic "imul" $ \_ vs ->
       SomeBV l <- getSomeBVLocation loc
       v  <- getBVValue val (typeWidth l)
       SomeBV v' <- getSomeBVValue val'
-      Just LeqProof <- return $ testLeq (bv_width v') (bv_width v)
+      Just LeqProof <- return $ testLeq (typeWidth v') (typeWidth v)
       exec_imul2_3 l v v'
     _ ->
       fail "Impossible number of argument in imul"
@@ -632,9 +627,9 @@ def_imul = defVariadic "imul" $ \_ vs ->
 def_neg :: InstructionDef
 def_neg = defUnaryLoc "neg" $ \l -> do
   v <- get l
-  cf_loc .= mux (is_zero v) false true
+  cf_loc .= boolNot (is_zero v)
   let r = bvNeg v
-      zero = bvLit (bv_width v) 0
+      zero = bvLit (typeWidth v) 0
   of_loc .= ssub_overflows  zero v
   af_loc .= usub4_overflows zero v
   set_result_value l r
@@ -655,13 +650,13 @@ def_sbb = defBinaryLV "sbb" $ \l v -> do
   v0 <- get l
   let w = typeWidth l
   let cbv = mux cf (bvLit w 1) (bvLit w 0)
-  let v' = v `bvAdd` cbv
+  let v' = v .+ cbv
   -- Set overflow and arithmetic flags
   of_loc .= ssbb_overflows v0 v cf
   af_loc .= uadd4_overflows v cbv .||. usub4_overflows v0 v'
   cf_loc .= uadd_overflows v cbv .||. (usub_overflows  v0 v')
   -- Set result value.
-  let res = v0 `bvSub` v'
+  let res = v0 .- v'
   set_result_flags res
   l .= res
 
@@ -670,7 +665,7 @@ def_sub :: InstructionDef
 def_sub = defBinaryLV "sub" $ \l v -> do
   v0 <- get l
   exec_cmp l v -- set flags
-  l .= (v0 `bvSub` v)
+  l .= (v0 .- v)
 
 -- ** Decimal Arithmetic Instructions
 -- ** Logical Instructions
@@ -729,7 +724,7 @@ exec_sh lw l val val_setter cf_setter of_setter = do
   let nbits = if natValue w == 64 then 64 else 32
   let low_count = count .&. bvLit n8 (nbits - 1)
   -- Compute result.
-  let res = val_setter v (uext (bv_width v) low_count)
+  let res = val_setter v (uext (typeWidth v) low_count)
   let zero8 = bvLit n8 0
   -- When the count is zero, nothing happens, in particular, no flags change
   let isNonzero = low_count .=/=. zero8
@@ -774,14 +769,14 @@ def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
   where set_cf w v i =
            (i `bvUle` bvLit n8 (natValue w))
-             .&&. bvBit v (bvLit w (natValue w) `bvSub` uext w i)
+             .&&. bvBit v (bvLit w (natValue w) .- uext w i)
         set_of v _ =  msb v
 
 def_shr :: InstructionDef
 def_shr = def_sh "shr" bvShr set_cf set_of
   where -- Carry flag should be set to last bit shifted out.
         -- Note that if i exceeds w, bvBit v i returns false, so this does what we want.
-        set_cf w v i = bvBit v (uext w i `bvSub` bvLit w 1)
+        set_cf w v i = bvBit v (uext w i .- bvLit w 1)
         set_of v res = msb res `boolXor` msb v
 
 def_sar :: InstructionDef
@@ -793,7 +788,7 @@ def_sar = def_sh "sar" bvSar set_cf set_of
           let notInRange = bvUlt (bvLit n8 (natValue w)) i
           -- Get most-significant bit
           let msb_v = bvBit v (bvLit w (natValue w-1))
-          bvBit v (uext w i `bvSub` bvLit w 1) .||. (notInRange .&&. msb_v)
+          bvBit v (uext w i .- bvLit w 1) .||. (notInRange .&&. msb_v)
         set_of _ _ = false
 
 -- FIXME: use really_exec_shift above?
@@ -806,27 +801,30 @@ exec_rol l count = do
   -- The intel manual says that the count is masked to give an upper
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
-  let nbits = case testLeq (bv_width v) n32 of
+  let nbits = case testLeq (typeWidth v) n32 of
                 Just LeqProof -> 32
                 _             -> 64
-      countMASK = bvLit (bv_width v) (nbits - 1)
-      low_count = uext (bv_width v) count .&. countMASK
+      countMASK = bvLit (typeWidth v) (nbits - 1)
+      low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (bv_width v) (natValue (bv_width v) - 1)
-      effective = uext (bv_width v) count .&. effectiveMASK
+      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRol v effective
 
   l .= r
 
-  -- When the count is zero only the assignment happens (cf is not changed)
-  unless_ (is_zero low_count) $ do
-    let new_cf = bvBit r (bvLit (bv_width r) 0)
-    cf_loc .= new_cf
-
-    ifte_ (low_count .=. bvLit (bv_width low_count) 1)
-          (of_loc .= (msb r `boolXor` new_cf))
-          (set_undefined of_loc)
+  let p = is_zero low_count
+  let new_cf = bvBit r (bvLit (typeWidth r) 0)
+  -- When the count is zero only the assignment happens (cf and of  is not changed)
+  modify cf_loc $ \old_cf -> mux p old_cf new_cf
+  u <- make_undefined knownRepr
+  modify of_loc $ \old_of ->
+      mux p
+          old_of
+          (mux (low_count .=. bvLit (typeWidth low_count) 1)
+               (msb r `boolXor` new_cf)
+               u)
 
 -- FIXME: use really_exec_shift above?
 exec_ror :: (1 <= n', n' <= n, SupportedBVWidth n)
@@ -838,26 +836,27 @@ exec_ror l count = do
   -- The intel manual says that the count is masked to give an upper
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
-  let nbits = case testLeq (bv_width v) n32 of
+  let nbits = case testLeq (typeWidth v) n32 of
                 Just LeqProof -> 32
                 Nothing       -> 64
-      countMASK = bvLit (bv_width v) (nbits - 1)
-      low_count = uext (bv_width v) count .&. countMASK
+      countMASK = bvLit (typeWidth v) (nbits - 1)
+      low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (bv_width v) (natValue (bv_width v) - 1)
-      effective = uext (bv_width v) count .&. effectiveMASK
+      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRor v effective
 
   l .= r
-
-  unless_ (is_zero low_count) $ do
-    let new_cf = bvBit r (bvLit (bv_width r) (natValue (bv_width r) - 1))
-    cf_loc .= new_cf
-
-    ifte_ (low_count .=. bvLit (bv_width low_count) 1)
-          (of_loc .= (msb r `boolXor` bvBit r (bvLit (bv_width r) (natValue (bv_width v) - 2))))
-          (set_undefined of_loc)
+  let p = is_zero low_count
+  let new_cf = bvBit r (bvLit (typeWidth r) (natValue (typeWidth r) - 1))
+  modify cf_loc $ \old_cf -> mux p old_cf new_cf
+  u <- make_undefined knownRepr
+  modify of_loc $ \old_of ->
+    mux p old_of $
+    mux (low_count .=. bvLit (typeWidth low_count) 1)
+        (msb r `boolXor` bvBit r (bvLit (typeWidth r) (natValue (typeWidth v) - 2)))
+        u
 
 -- ** Bit and Byte Instructions
 
@@ -932,7 +931,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg16Loc ir
       base_addr <- getBVAddress base
       let word_off = sext' n64 $ bvSar off (bvLit knownNat 4)
-      let loc = MemoryAddr (bvAdd base_addr word_off) wordMemRepr
+      let loc = MemoryAddr (base_addr .+ word_off) wordMemRepr
       let iv = off .&. bvLit knownNat 15
       act knownNat loc iv
       set_bt_flags
@@ -946,7 +945,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg32Loc ir
       base_addr <- getBVAddress base
       let dword_off = sext' n64 $ bvSar off (bvLit knownNat 5)
-      let loc = MemoryAddr (bvAdd base_addr dword_off) dwordMemRepr
+      let loc = MemoryAddr (base_addr .+ dword_off) dwordMemRepr
       let iv  = off .&. bvLit knownNat 31
       act knownNat loc iv
       set_bt_flags
@@ -960,7 +959,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg64Loc ir
       let qword_off = bvSar off (bvLit knownNat 6)
       base_addr <- getBVAddress base
-      let loc = MemoryAddr (bvAdd base_addr qword_off) qwordMemRepr
+      let loc = MemoryAddr (base_addr .+ qword_off) qwordMemRepr
       let iv = off .&. bvLit knownNat 63
       act knownNat loc iv
       set_bt_flags
@@ -1020,7 +1019,7 @@ def_jcc_list =
       when_ a $ do
         old_pc <- getReg R.X86_IP
         off <- getBVValue v knownNat
-        rip .= old_pc `bvAdd` off
+        rip .= old_pc .+ off
 
 def_jmp :: InstructionDef
 def_jmp = defUnary "jmp" $ \_ v -> do
@@ -1037,7 +1036,7 @@ def_ret = defVariadic "ret"    $ \_ vs ->
     [F.WordImm off] -> do
       -- Pop IP and adjust stack pointer.
       next_ip <- pop addrRepr
-      modify rsp (bvAdd (bvLit n64 (toInteger off)))
+      modify rsp (bvLit n64 (toInteger off) .+)
       -- Set IP
       rip .= next_ip
     _ ->
@@ -1119,28 +1118,28 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
     unless_ (count .=. bvKLit 0) $ do
       nsame <- memcmp bytesPerOp count v_rsi v_rdi df
       let equal = (nsame .=. count)
-          nwordsSeen = mux equal count (count `bvSub` (nsame `bvAdd` bvKLit 1))
+          nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
       -- we need to set the flags as if the last comparison was done, hence this.
-      let lastWordBytes = (nwordsSeen `bvSub` bvKLit 1) `bvMul` bytesPerOp'
-          lastSrc  = mux df (v_rsi `bvSub` lastWordBytes) (v_rsi `bvAdd` lastWordBytes)
-          lastDest = mux df (v_rdi `bvSub` lastWordBytes) (v_rdi `bvAdd` lastWordBytes)
+      let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
+          lastSrc  = mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
+          lastDest = mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
 
       v' <- get $ MemoryAddr lastDest repr
       exec_cmp (MemoryAddr lastSrc repr) v' -- FIXME: right way around?
 
       -- we do this to make it obvious so repz cmpsb ; jz ... is clear
       zf_loc .= equal
-      let nbytesSeen = nwordsSeen `bvMul` bytesPerOp'
+      let nbytesSeen = nwordsSeen .* bytesPerOp'
 
-      rsi .= mux df (v_rsi `bvSub` nbytesSeen) (v_rsi `bvAdd` nbytesSeen)
-      rdi .= mux df (v_rdi `bvSub` nbytesSeen) (v_rdi `bvAdd` nbytesSeen)
+      rsi .= mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
+      rdi .= mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
       rcx .= (count .- nwordsSeen)
    else do
      v' <- get $ MemoryAddr v_rdi repr
      exec_cmp (MemoryAddr   v_rsi repr) v' -- FIXME: right way around?
-     rsi .= mux df (v_rsi  `bvSub` bytesPerOp') (v_rsi `bvAdd` bytesPerOp')
-     rdi .= mux df (v_rdi  `bvSub` bytesPerOp') (v_rdi `bvAdd` bytesPerOp')
+     rsi .= mux df (v_rsi  .- bytesPerOp') (v_rsi .+ bytesPerOp')
+     rdi .= mux df (v_rdi  .- bytesPerOp') (v_rdi .+ bytesPerOp')
 
 
 def_cmps :: InstructionDef
@@ -1185,7 +1184,7 @@ exec_scas False False rep = repValHasSupportedWidth rep $ do
   exec_cmp (MemoryAddr v_rdi memRepr) v_rax  -- FIXME: right way around?
   let bytesPerOp = mux df (bvLit n64 (negate (memReprBytes memRepr)))
                           (bvLit n64 (memReprBytes memRepr))
-  rdi   .= v_rdi `bvAdd` bytesPerOp
+  rdi   .= v_rdi .+ bytesPerOp
 -- repz or repnz prefix set
 exec_scas _repz_pfx False _rep =
   fail $ "Semantics only currently supports finding elements."
@@ -1212,13 +1211,13 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let bytePerOpLit = bvKLit (memReprBytes (repValSizeMemRepr sz))
 
   -- Count the number of bytes seen.
-  let nBytesSeen    = (ValueExpr v_rcx `bvSub` count') `bvMul` bytePerOpLit
+  let nBytesSeen    = (ValueExpr v_rcx .- count') .* bytePerOpLit
 
-  let lastWordBytes = nBytesSeen `bvSub` bytePerOpLit
+  let lastWordBytes = nBytesSeen .- bytePerOpLit
 
   let y = ValueExpr v_rax
 
-  dst <- eval (ValueExpr v_rdi `bvAdd` lastWordBytes)
+  dst <- eval (ValueExpr v_rdi .+ lastWordBytes)
   cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
   let condExpr = ValueExpr cond
   dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
@@ -1228,13 +1227,13 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
 
 
   condSet rcx    count'
-  condSet rdi    $ ValueExpr v_rdi `bvAdd` nBytesSeen
+  condSet rdi    $ ValueExpr v_rdi .+ nBytesSeen
   condSet of_loc $ ssub_overflows  dst_val y
   -- Set overflow and arithmetic flags
   condSet af_loc $ usub4_overflows dst_val y
   condSet cf_loc $ usub_overflows  dst_val y
   -- Set result value.
-  let res = dst_val `bvSub` y
+  let res = dst_val .- y
   condSet sf_loc $ msb res
   condSet zf_loc $ is_zero res
   byte <- eval (least_byte res)
@@ -1324,7 +1323,7 @@ exec_stos True rep = do
   v    <- get (xaxValLoc rep)
   let szv = bvLit n64 (memReprBytes mrepr)
   count <- get rcx
-  let nbytes     = count `bvMul` szv
+  let nbytes     = count .* szv
   memset count v dest df
   rdi .= mux df (dest .- nbytes) (dest .+ nbytes)
   rcx .= bvKLit 0
@@ -1626,8 +1625,8 @@ exec_movd :: (SupportedBVWidth n, 1 <= n')
           -> Expr ids (BVType n')
           -> X86Generator st ids ()
 exec_movd l v
-  | Just LeqProof <- testLeq  (typeWidth l) (bv_width v) = l .= bvTrunc (typeWidth l) v
-  | Just LeqProof <- testLeq  (bv_width v) (typeWidth l) = l .=    uext (typeWidth l) v
+  | Just LeqProof <- testLeq  (typeWidth l) (typeWidth v) = l .= bvTrunc (typeWidth l) v
+  | Just LeqProof <- testLeq  (typeWidth v) (typeWidth l) = l .=    uext (typeWidth l) v
   | otherwise = fail "movd: Unknown bit width"
 
 -- ** MMX Conversion Instructions
@@ -1655,7 +1654,7 @@ def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
 def_padd :: (1 <= w) => String -> NatRepr w -> InstructionDef
 def_padd suf w = defBinaryLV ("padd" ++ suf) $ \l v -> do
   v0 <- get l
-  l .= vectorize2 w bvAdd v0 v
+  l .= vectorize2 w (.+) v0 v
 
 -- PADDSB Add packed signed byte integers with signed saturation
 -- PADDSW Add packed signed word integers with signed saturation
@@ -1665,7 +1664,7 @@ def_padd suf w = defBinaryLV ("padd" ++ suf) $ \l v -> do
 def_psub :: (1 <= w) => String -> NatRepr w -> InstructionDef
 def_psub suf w = defBinaryLV ("psub" ++ suf) $ \l v -> do
   v0 <- get l
-  l .= vectorize2 w bvSub v0 v
+  l .= vectorize2 w (.-) v0 v
 
 -- PSUBSB Subtract packed signed byte integers with signed saturation
 -- PSUBSW Subtract packed signed word integers with signed saturation
@@ -1687,8 +1686,8 @@ def_pcmp nm op sz =
   defBinaryLV nm $ \l v -> do
     v0 <- get l
     let chkHighLow d s = mux (d `op` s)
-                             (bvLit (bv_width d) (negate 1))
-                             (bvLit (bv_width d) 0)
+                             (bvLit (typeWidth d) (negate 1))
+                             (bvLit (typeWidth d) 0)
     l .= vectorize2 sz chkHighLow v0 v
 
 -- ** MMX Logical Instructions
@@ -1728,8 +1727,8 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
       -- truncate e.g. 2^31 to 0, so we saturate if the size is over
       -- the number of bits we want to shift.  We can always fit the
       -- width into count bits (assuming we are passed 16, 32, or 64).
-      nbits   = bvLit (bv_width count) (natValue elsz)
-      countsz = case testNatCases (bv_width count) elsz of
+      nbits   = bvLit (typeWidth count) (natValue elsz)
+      countsz = case testNatCases (typeWidth count) elsz of
                   NatCaseLT LeqProof -> uext' elsz count
                   NatCaseEQ          -> count
                   NatCaseGT LeqProof -> bvTrunc' elsz count
@@ -2100,10 +2099,10 @@ exec_pmovmskb :: forall st ids n n'
               -> BVExpr ids n'
               -> X86Generator st ids ()
 exec_pmovmskb l v
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
       l .= uext (typeWidth l) (mkMask n8 v)
   | Just LeqProof <- testLeq n32 (typeWidth l)
-  , Just Refl <- testEquality (bv_width v) n128 = do
+  , Just Refl <- testEquality (typeWidth v) n128 = do
       let prf = withLeqProof (leqTrans (LeqProof :: LeqProof 16 32)
                                        (LeqProof :: LeqProof 32 n))
       l .= prf (uext (typeWidth l) (mkMask n16 v))
@@ -2323,9 +2322,9 @@ exec_pshufd :: forall st ids n k
             -> BVExpr ids k
             -> X86Generator st ids ()
 exec_pshufd l v imm
-  | Just Refl <- testEquality (bv_width imm) n8 = do
+  | Just Refl <- testEquality (typeWidth imm) n8 = do
       let shiftAmt :: BVExpr ids 2 -> BVExpr ids 128
-          shiftAmt pieceID = bvMul (uext n128 pieceID) $ bvLit n128 32
+          shiftAmt pieceID = (uext n128 pieceID .*) $ bvLit n128 32
 
           getPiece :: BVExpr ids 128 -> BVExpr ids 2 -> BVExpr ids 32
           getPiece src pieceID = bvTrunc n32 $ src `bvShr` (shiftAmt pieceID)
@@ -2339,11 +2338,11 @@ def_pslldq :: InstructionDef
 def_pslldq = defBinaryLVge "pslldq" $ \l v -> do
   v0 <- get l
   -- temp is 16 if v is greater than 15, otherwise v
-  let not15 = bvComplement $ bvLit (bv_width v) 15
+  let not15 = bvComplement $ bvLit (typeWidth v) 15
       temp = mux (is_zero $ not15 .&. v)
-                 (uext (bv_width v0) v)
-                 (bvLit (bv_width v0) 16)
-  l .= v0 `bvShl` (temp .* bvLit (bv_width v0) 8)
+                 (uext (typeWidth v0) v)
+                 (bvLit (typeWidth v0) 16)
+  l .= v0 `bvShl` (temp .* bvLit (typeWidth v0) 8)
 
 -- PSRLDQ Shift double quadword right logical
 -- PUNPCKHQDQ Unpack high quadwords
@@ -2451,8 +2450,8 @@ exec_palignr l v imm = do
   withLeqProof (leqTrans k_leq_n (leqAdd (leqRefl n) n)) $ do
 
   -- imm is # of bytes to shift, so multiply by 8 for bits to shift
-  let n_plus_n = addNat (bv_width v) (bv_width v)
-      shiftAmt = bvMul (uext n_plus_n imm) $ bvLit n_plus_n 8
+  let n_plus_n = addNat (typeWidth v) (typeWidth v)
+      shiftAmt = uext n_plus_n imm .* bvLit n_plus_n 8
 
   let (_, lower) = bvSplit $ (v0 `bvCat` v) `bvShr` shiftAmt
   l .= lower
@@ -2599,7 +2598,7 @@ all_instructions =
   , def_pop
 
   , def_cmpxchg
-  , defUnaryKnown "cmpxchg8b" exec_cmpxchg8b
+  , def_cmpxchg8b
   , def_push
   , defBinaryLVge "rol"  exec_rol
   , defBinaryLVge "ror"  exec_ror
@@ -2608,9 +2607,9 @@ all_instructions =
   , def_shl
   , def_shr
   , def_sar
-  , defNullary    "std" $ df_loc .= true
+  , defNullary  "std" $ df_loc .= true
   , def_sub
-  , defBinaryLV   "test" exec_test
+  , defBinaryLV "test" exec_test
   , def_xadd
   , defBinaryLV "xor" exec_xor
 

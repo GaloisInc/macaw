@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
+ Copyright        : (c) Galois, Inc 2015-2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This defines various types on top of X86Generator to defined
@@ -78,14 +78,58 @@ module Data.Macaw.X86.Monad
   , al, dl
   , ah
     -- * Value operations
-  , IsValue(..)
+  , bvLit
+  , (.=.)
+  , (.=/=.)
+  , mux
+  , true
+  , false
+  , boolNot
+  , boolXor
   , bvKLit
+  , bvNeg
   , (.+)
+  , uadd_overflows
+  , uadc_overflows
+  , sadd_overflows
+  , sadc_overflows
   , (.-)
+  , usub_overflows
+  , ssub_overflows
+  , ssbb_overflows
+  , bvSlt
+  , bvUlt
+  , bvUle
+  , bvShl
+  , bvShr
+  , bvBit
   , (.*)
   , (.&&.)
   , (.||.)
-  , boolXor
+  , bvComplement
+  , (.&.)
+  , (.|.)
+  , bvXor
+  , bvSar
+  , bvRol
+  , bvRor
+  , bvTrunc'
+  , bvTrunc
+  , msb
+  , least_byte
+  , least_nibble
+  , is_zero
+  , bsf
+  , bsr
+  , uext
+  , uext'
+  , sext
+  , sext'
+  , bvCat
+  , bvSplit
+  , vectorize2
+  , bvVectorize
+  , bvUnvectorize
     -- * Semantics
   , SIMDWidth(..)
   , make_undefined
@@ -268,22 +312,19 @@ registerViewType = _registerViewType
 -- * Read and write views for 'RegisterView's.
 
 -- | Extract 'n' bits starting at base 'b'.
---
--- Assumes a big-endian 'IsValue' semantics.
 defaultRegisterViewRead
-  :: forall v b n m
+  :: forall b n m ids
   .  ( 1 <= n
      , n <= m
-     , IsValue v
      )
   => NatRepr b
   -> NatRepr n
   -> X86Reg (BVType m)
-  -> v (BVType m)
-  -> v (BVType n)
+  -> Expr ids (BVType m)
+  -> Expr ids (BVType n)
 defaultRegisterViewRead b n _rn v0
   | LeqProof <- leqTrans (LeqProof :: LeqProof 1 n) (LeqProof :: LeqProof n m) =
-    bvTrunc n $ v0 `bvShr` bvLit (bv_width v0) (natValue b)
+    bvTrunc n $ v0 `bvShr` bvLit (typeWidth v0) (natValue b)
 
 -- | Read a register via a view.
 --
@@ -315,41 +356,10 @@ defaultRegisterViewRead b n _rn v0
 -- above. (But this distinction is arbitrary, and we could simplify
 -- some semantic implementations by treating the lower-half of an XMM
 -- register as a named subregister, using a 'RegisterView').
---
--- Note: there is no type-level relationship between the base @b@ and
--- size @n@ params and the read/write views, but the base and size are
--- expected to specify which bits are read by read view.
---
--- MAYBE TODO: the read and write views have an @IsValue v@
--- constraint, but the implementations only rely on a small subset of
--- the 'IsValue' operations. So, it might make sense to factor these
--- operations out into a separate class. The operations we need for
--- reads and writes are subset of the the basic bitvector operations;
--- we need:
---
--- - 'bvLit': create a literal representing a number
--- - 'bvShl', 'bvShr': logical shifts
--- - 'bvTrunc': truncation
--- - 'bv_width': number of bits in the vector
--- - 'bvComplement': complement the bits
--- - 'uext'': zero extension
--- - '(.|.)': bit-wise OR
---
--- If we factored this out into a separate class, it would probably
--- make sense to include a few more "basic bitvector operations" in
--- the new class:
---
--- - bit-wise AND
--- - arithmetic shift
--- - signed extension
---
--- Note that we don't need arithmetic on bit vectors, neither as ints
--- nor as floats.
 registerViewRead
-  :: IsValue v
-  => RegisterView m b n
-  -> v (BVType m)
-  -> v (BVType n)
+  :: RegisterView m b n
+  -> Expr ids (BVType m)
+  -> Expr ids (BVType n)
 registerViewRead v =
   case registerViewType v of
     DefaultView -> defaultRegisterViewRead b n rn
@@ -365,19 +375,18 @@ registerViewRead v =
 --
 -- Assumes a big-endian 'IsValue' semantics.
 defaultRegisterViewWrite
-  :: forall b m n v
+  :: forall b m n ids
   . ( 1 <= n
     , n <= m
-    , IsValue v
     )
   => NatRepr b
   -> NatRepr n
   -> X86Reg (BVType m)
-  -> v (BVType m)
+  -> Expr ids (BVType m)
      -- ^ Value being modified
-  -> v (BVType n)
+  -> Expr ids (BVType n)
      -- ^ Value to write
-  -> v (BVType m)
+  -> Expr ids (BVType m)
 defaultRegisterViewWrite b n rn v0 write_val
   | LeqProof <- leqTrans (LeqProof :: LeqProof 1 n) (LeqProof :: LeqProof n m) =
   -- Truncation 'bvTrunc' requires that the result vector has non-zero
@@ -396,7 +405,7 @@ defaultRegisterViewWrite b n rn v0 write_val
       -- Generate max for old bits.
       notMyMask = Bits.complement myMask
       prevBits = v0 .&. bvLit w notMyMask
-      w = bv_width v0
+      w = typeWidth v0
       cl = typeWidth rn
       b' = natValue b
       middleOrderBits = uext cl write_val `bvShl` bvLit cl b'
@@ -405,12 +414,10 @@ defaultRegisterViewWrite b n rn v0 write_val
 
 -- | Write a register via a view.
 registerViewWrite
-  :: ( IsValue v
-     )
-  => RegisterView w b x1
-  -> v (BVType w)
-  -> v (BVType x1)
-  -> v (BVType w)
+  :: RegisterView w b x1
+  -> Expr ids (BVType w)
+  -> Expr ids (BVType x1)
+  -> Expr ids (BVType w)
 registerViewWrite rv =
   case _registerViewType rv of
     DefaultView
@@ -433,14 +440,14 @@ registerViewWrite rv =
     cl = typeWidth rn
 
 constUpperBitsRegisterViewWrite
-  :: (IsValue v, 1 <= b, 1 <= e, (b + e) ~ f)
+  :: (1 <= b, 1 <= e, (b + e) ~ f)
   => NatRepr a
-  -> v (BVType b)
+  -> Expr ids (BVType b)
   -- ^ Constant bits.
   -> X86Reg (BVType c)
-  -> v (BVType d)
-  -> v (BVType e)
-  -> v (BVType f)
+  -> Expr ids (BVType d)
+  -> Expr ids (BVType e)
+  -> Expr ids (BVType f)
 constUpperBitsRegisterViewWrite _n c _rn _v0 v = bvCat c v
 
 -- | The view for subregisters which are a slice of a full register.
@@ -853,73 +860,203 @@ unpackWord (R.BitPacking sz bits) v = mapM_ unpackOne bits
 ------------------------------------------------------------------------
 -- Values
 
--- | @IsValue@ is a class used to define expressions.
+-- | Choose a value based upon the boolean (basically a pure if then else)
+mux :: Expr ids BoolType -> Expr ids tp -> Expr ids tp -> Expr ids tp
+mux c x y
+  | Just True  <- asBoolLit c = x
+  | Just False <- asBoolLit c = y
+  | x == y = x
+  | Just (NotApp cn) <- asApp c = mux cn y x
+  | otherwise = app $ Mux (typeRepr x) c x y
+
+-- | Construct a literal bit vector.  The result is undefined if the
+-- literal does not fit withint the given number of bits.
+bvLit :: 1 <= n => NatRepr n -> Integer -> Expr ids (BVType n)
+bvLit n v = ValueExpr $ mkLit n (toInteger v)
+
+-- | Add two bitvectors together dropping overflow.
+(.+) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+x .+ y
+  -- Eliminate add 0
+  | Just 0 <- asBVLit y = x
+  | Just 0 <- asBVLit x = y
+
+  -- Constant folding.
+  | ValueExpr (BVValue w xv) <- x
+  , ValueExpr (BVValue _ yv) <- y
+  = bvLit w (xv + yv)
+
+  | ValueExpr (RelocatableValue w a) <- x
+  , ValueExpr (BVValue _ o) <- y
+  = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
+
+  | ValueExpr (RelocatableValue w a) <- y
+  , ValueExpr (BVValue _ o) <- x
+
+  = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
+
+  -- Shift constants to right-hand-side.
+  | ValueExpr (BVValue _ _) <- x = y .+ x
+
+  -- Reorganize addition by constant to offset.
+  | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
+  , ValueExpr (BVValue _ y_off) <- y
+  = x_base .+ bvLit w (x_off + y_off)
+
+  | Just (BVAdd w y_base (asBVLit -> Just y_off)) <- asApp y
+  , ValueExpr (BVValue _ x_off) <- x
+  = y_base .+ bvLit w (x_off + y_off)
+
+  | otherwise = app $ BVAdd (typeWidth x) x y
+
+-- | Subtract two vectors, ignoring underflow.
+(.-) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+x .- y
+  | ValueExpr (BVValue _ yv) <- y =
+      x .+ bvLit (typeWidth x) (negate yv)
+  | otherwise = app $ BVSub (typeWidth x) x y
+
+-- | Performs a multiplication of two bitvector values.
+(.*) :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+x .* y
+  | Just 0 <- asBVLit x = x
+  | Just 1 <- asBVLit x = y
+  | Just 0 <- asBVLit y = y
+  | Just 1 <- asBVLit y = x
+
+  | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv * yv)
+  | otherwise = app $ BVMul (typeWidth x) x y
+
+-- | 2's complement
+bvNeg :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n)
+bvNeg n = bvLit (typeWidth n) 0 .- n
+
+-- | Bitwise complement
+bvComplement :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n)
+bvComplement x
+  | Just xv <- asBVLit x = bvLit (typeWidth x) (Bits.complement xv)
+    -- not (not p) = p
+  | Just (BVComplement _ y) <- asApp x = y
+  | otherwise = app $ BVComplement (typeWidth x) x
+
+-- | Bitwise and
+(.&.) :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+x .&. y
+  | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv Bits..&. yv)
+  -- Eliminate and when one argument is maxUnsigned
+  | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = y
+  | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = x
+  -- Cancel when and with 0.
+  | Just 0 <- asBVLit x = x
+  | Just 0 <- asBVLit y = y
+  -- Idempotence
+  | x == y = x
+
+  -- Make literal the second argument (simplifies later cases)
+  | isJust (asBVLit x) = assert (isNothing (asBVLit y)) $ y .&. x
+
+  --(x1 .&. x2) .&. y = x1 .&. (x2 .&. y) -- Only apply when x2 and y is a lit
+  | isJust (asBVLit y)
+  , Just (BVAnd _ x1 x2) <- asApp x
+  , isJust (asBVLit x2) =
+    x1 .&. (x2 .&. y)
+
+  -- (x1 .|. x2) .&. y = (x1 .&. y) .|. (x2 .&. y) -- Only apply when y and x2 is a lit.
+  | isJust (asBVLit y)
+  , Just (BVOr _ x1 x2) <- asApp x
+  ,  isJust (asBVLit x2) =
+      (x1 .&. y) .|. (x2 .&. y)
+  -- x .&. (y1 .|. y2) = (y1 .&. x) .|. (y2 .&. x) -- Only apply when x and y2 is a lit.
+  | isJust (asBVLit x)
+  , Just (BVOr _ y1 y2) <- asApp y
+  , isJust (asBVLit y2) =
+      (y1 .&. x) .|. (y2 .&. x)
+
+  -- Default case
+  | otherwise = app $ BVAnd (typeWidth x) x y
+
+-- | Bitwise or
+(.|.) :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+x .|. y
+  | Just xv <- asBVLit x, Just yv <- asBVLit y =
+      bvLit (typeWidth x) (xv Bits..|. yv)
+  -- Cancel or when one argument is maxUnsigned
+  | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = x
+  | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = y
+  -- Eliminate "or" when one argument is 0
+  | Just 0 <- asBVLit x = y
+  | Just 0 <- asBVLit y = x
+  -- Idempotence
+  | x == y = x
+  -- Default case
+  | otherwise = app $ BVOr (typeWidth x) x y
+
+-- | Exclusive or
+bvXor :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvXor x y
+  -- Eliminate xor with 0.
+  | Just 0 <- asBVLit x = y
+  | Just 0 <- asBVLit y = x
+  -- Eliminate xor with self.
+  | x == y = bvLit (typeWidth x) (0::Integer)
+  -- If this is a single bit comparison with a constant, resolve to Boolean operation.
+  | ValueExpr (BVValue w v) <- y
+  , Just Refl <- testEquality w n1 =
+      if v /= 0 then bvComplement x else x
+  -- Default case.
+  | otherwise = app $ BVXor (typeWidth x) x y
+
+-- | Equality
+(.=.) :: Expr ids tp -> Expr ids tp -> Expr ids BoolType
+x .=. y
+  | x == y = true
+  -- Statically resolve two literals
+  | ValueExpr (BVValue _ xv) <- x
+  , ValueExpr (BVValue _ yv) <- y =
+      boolValue (xv == yv)
+  -- Move constant to second argument (We implicitly know both x and y are not a constant due to previous case).
+  | ValueExpr BVValue{} <- x  = y .=. x
+
+  -- Rewrite "base + offset = constant" to "base = constant - offset".
+  | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
+  , ValueExpr (BVValue _ yv) <- y =
+      app $ Eq x_base (bvLit w (yv - x_off))
+      -- Rewrite "u - v == c" to "u = c + v".
+  | Just (BVSub _ x_1 x_2) <- asApp x = x_1 .=. (y .+ x_2)
+  -- Rewrite "c == u - v" to "u = c + v".
+  | Just (BVSub _ y_1 y_2) <- asApp y = y_1 .=. (x .+ y_2)
+
+  | ValueExpr (BoolValue True)  <- x = y
+  | ValueExpr (BoolValue False) <- x = boolNot y
+  | ValueExpr (BoolValue True)  <- y = x
+  | ValueExpr (BoolValue False) <- y = boolNot x
+
+  -- General case
+  | otherwise = app $ Eq x y
+
+-- | Inequality
+(.=/=.) :: Expr ids tp -> Expr ids tp -> Expr ids BoolType
+bv .=/=. bv' = boolNot (bv .=. bv')
+
+-- | Return true if value is zero.
+is_zero :: (1 <= n) => Expr ids (BVType n) -> Expr ids BoolType
+is_zero x = x .=. bvLit (typeWidth x) (0::Integer)
+
+-- | Concatentates two bit vectors.
 --
--- The @IsValue@ operations have BIG-ENDIAN semantics: the higher
--- order bits are on the left. So, for example, a left shift makes a
--- number large (ignoring truncation), a right shift makes a number
--- smaller, and the first argument to concatenation becomes the
--- high-order bits in the result.
-class IsValue (v  :: Type -> *) where
-
-  -- | Returns the width of a bit-vector value.
-  bv_width :: v (BVType n) -> NatRepr n
-
-  -- | Choose a value based upon the boolean (basically a pure if then else)
-  mux :: v BoolType -> v tp -> v tp -> v tp
-
-  -- | Construct a literal bit vector.  The result is undefined if the
-  -- literal does not fit withint the given number of bits.
-  bvLit :: 1 <= n => NatRepr n -> Integer -> v (BVType n)
-
-  -- | Add two bitvectors together dropping overflow.
-  bvAdd :: 1 <= n => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Subtract two vectors, ignoring underflow.
-  bvSub :: 1 <= n => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Performs a multiplication of two bitvector values.
-  bvMul :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | 2's complement
-  bvNeg :: (1 <= n) => v (BVType n) -> v (BVType n)
-  bvNeg n = bvLit (bv_width n) 0 `bvSub` n
-
-  -- | Bitwise complement
-  bvComplement :: (1 <= n) => v (BVType n) -> v (BVType n)
-
-  -- | Bitwise and
-  (.&.) :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Bitwise or
-  (.|.) :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Exclusive or
-  bvXor :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Equality
-  (.=.) :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  bv .=. bv' = is_zero (bv `bvXor` bv')
-
-  -- | Inequality
-  (.=/=.) :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  bv .=/=. bv' = boolNot (bv .=. bv')
-
-  -- | Return true if value is zero.
-  is_zero :: (1 <= n) => v (BVType n) -> v BoolType
-  is_zero x = x .=. bvLit (bv_width x) (0::Integer)
-
-  -- | Concatentates two bit vectors.
-  --
-  -- Big-endian, so higher-order bits come from first argument.
-  bvCat :: forall m n . (1 <= m, 1 <= n) => v (BVType m) -> v (BVType n) -> v (BVType (m + n))
-  bvCat h l =
+-- Big-endian, so higher-order bits come from first argument.
+bvCat :: forall ids m n
+      . (1 <= m, 1 <= n)
+      => Expr ids (BVType m) -> Expr ids (BVType n) -> Expr ids (BVType (m + n))
+bvCat h l =
     case _1_le_m_plus_n of
       LeqProof -> go
-    where
+  where
       -- GHC 7.10 has a context stack overflow related to @1 <= m + n@
       -- which goes away when we factor the body out like this.
-      go :: (1 <= m + n) => v (BVType (m + n))
+      go :: (1 <= m + n) => Expr ids (BVType (m + n))
       go =
         case ( m_le_m_plus_n , n_le_m_plus_n , _1_le_m_plus_n ) of
           (LeqProof, LeqProof, LeqProof) ->
@@ -929,10 +1066,10 @@ class IsValue (v  :: Type -> *) where
             in highOrderBits .|. lowOrderBits
 
       m :: NatRepr m
-      m = bv_width h
+      m = typeWidth h
 
       n :: NatRepr n
-      n = bv_width l
+      n = typeWidth l
 
       m_plus_n :: NatRepr (m + n)
       m_plus_n = addNat m n
@@ -947,482 +1084,81 @@ class IsValue (v  :: Type -> *) where
       _1_le_m_plus_n =
         leqAdd (LeqProof :: LeqProof 1 m) n
 
-  -- | Splits a bit vectors into two.
-  --
-  -- Big-endian, so higher-order bits make up first component of
-  -- result.
-  bvSplit :: forall n . (1 <= n) => v (BVType (n + n)) -> (v (BVType n), v (BVType n))
-  bvSplit v =
-    let sz = halfNat (bv_width v) :: NatRepr n
-     in case leqAdd (LeqProof :: LeqProof 1 n) sz :: LeqProof 1 (n + n) of
-          LeqProof ->
-            case leqAdd (leqRefl sz) sz :: LeqProof n (n + n) of
-              LeqProof ->
-                let sh = bvLit (bv_width v) (natValue sz)
-                 in (bvTrunc sz (v `bvShr` sh), bvTrunc sz v)
+-- | Splits a bit vectors into two.
+--
+-- Big-endian, so higher-order bits make up first component of
+-- result.
+bvSplit :: forall ids n . (1 <= n) => Expr ids (BVType (n + n)) -> (Expr ids (BVType n), Expr ids (BVType n))
+bvSplit v =
+  let sz = halfNat (typeWidth v) :: NatRepr n
+   in case leqAdd (LeqProof :: LeqProof 1 n) sz :: LeqProof 1 (n + n) of
+        LeqProof ->
+          case leqAdd (leqRefl sz) sz :: LeqProof n (n + n) of
+            LeqProof ->
+              let sh = bvLit (typeWidth v) (natValue sz)
+               in (bvTrunc sz (v `bvShr` sh), bvTrunc sz v)
 
-  -- | Vectorization
-  bvVectorize :: forall k n
+-- | Vectorization
+bvVectorize :: forall ids k n
                . (1 <= k, 1 <= n)
               => NatRepr k
-              -> v (BVType n)
-              -> [v (BVType k)]
-  bvVectorize sz bv
-    | Just Refl <- testEquality (bv_width bv) sz = [bv]
-    | Just LeqProof <- testLeq sz (bv_width bv) =
-        let bvs2n :: [v (BVType (k+k))] -- solve for size (n+n), then split into size n
-            bvs2n = withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 k)) $
+              -> Expr ids (BVType n)
+              -> [Expr ids (BVType k)]
+bvVectorize sz bv
+  | Just Refl <- testEquality (typeWidth bv) sz = [bv]
+  | Just LeqProof <- testLeq sz (typeWidth bv) =
+       let bvs2n :: [Expr ids (BVType (k+k))] -- solve for size (n+n), then split into size n
+           bvs2n = withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 k)) $
               bvVectorize (addNat sz sz) bv
         in concatMap (\v -> let (a, b) = bvSplit v in [a, b]) bvs2n
-  bvVectorize _ _ = error "Unhandled case"
+bvVectorize _ _ = error "Unhandled case"
 
-  -- | Given a list of values this concatenates them together
-  bvUnvectorize :: forall k n. (1 <= k) => NatRepr n -> [v (BVType k)] -> v (BVType n)
-  bvUnvectorize sz [x]
-    | Just Refl <- testEquality (bv_width x) sz = x
-  bvUnvectorize sz bvs = withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 k)) $
+-- | Given a list of values this concatenates them together
+bvUnvectorize :: forall ids k n. (1 <= k) => NatRepr n -> [Expr ids (BVType k)] -> Expr ids (BVType n)
+bvUnvectorize sz [x]
+  | Just Refl <- testEquality (typeWidth x) sz = x
+bvUnvectorize sz bvs = withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 k)) $
       bvUnvectorize sz $ concatBVPairs bvs
-    where concatBVPairs :: (1 <= o) => [v (BVType o)] -> [v (BVType (o+o))]
+    where concatBVPairs :: (1 <= o) => [Expr ids (BVType o)] -> [Expr ids (BVType (o+o))]
           concatBVPairs (x:y:zs) = (x `bvCat` y) : concatBVPairs zs
           concatBVPairs _ = []
 
-
-  vectorize2 :: (1 <= k, 1 <= n)
-             => NatRepr k
-             -> (v (BVType k) -> v (BVType k) -> v (BVType k))
-             -> v (BVType n) -> v (BVType n)
-             -> v (BVType n)
-  vectorize2 sz f x y = let xs = bvVectorize sz x
-                            ys = bvVectorize sz y
-                        in bvUnvectorize (bv_width x) $ zipWith f xs ys
-
-  -- | Rotations
-  bvRol :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-  bvRol v n = bvShl v n .|. bvShr v bits_less_n
-    where
-      bits_less_n = bvSub (bvLit (bv_width v) (natValue $ bv_width v)) n
-
-  bvRor :: (1 <= n) => v (BVType n) -> v (BVType n) -> v (BVType n)
-  bvRor v n = bvShr v n .|. bvShl v bits_less_n
-    where
-      bits_less_n = bvSub (bvLit (bv_width v) (natValue $ bv_width v)) n
-
-  -- | Shifts, the semantics is undefined for shifts >= the width of the first argument.
-  --
-  -- The first argument is the value to shift, and the second argument
-  -- is the number of bits to shift by.
-  --
-  -- Big-endian, so left shift moves bits to higher-order positions
-  -- and right shift moves bits to lower-order positions.
-  bvShr, bvSar, bvShl :: 1 <= n => v (BVType n) -> v (BVType n) -> v (BVType n)
-
-  -- | Truncate the value.
-  --
-  -- Returns 'm' lower order bits.
-  bvTrunc :: (1 <= m, m <= n) => NatRepr m -> v (BVType n) -> v (BVType m)
-  bvTrunc w e =
-    case testStrictLeq w (bv_width e) of
-      Left LeqProof -> bvTrunc' w e
-      Right Refl -> e
-
-  -- | Version of 'bvTrunc' that precludes trivial truncations; see
-  -- 'uext'' docs.
-  bvTrunc' :: (1 <= m, m+1 <= n) => NatRepr m -> v (BVType n) -> v (BVType m)
-
-  -- | Truncate the value.
-  --
-  -- Drops the 'm' low order bits.
-  bvDrop :: forall m n.
-    (1 <= n, 1 <= n - m, n - m <= n, m <= n) =>
-    NatRepr m -> v (BVType n) -> v (BVType (n - m))
-  bvDrop m v = bvTrunc (subNat n m) $ v `bvShr` (bvLit n (natValue m))
-    where
-      n :: NatRepr n
-      n = bv_width v
-
-  -- | Unsigned less than or equal.
-  bvUle :: v (BVType n) -> v (BVType n) -> v BoolType
-  bvUle x y = boolNot (bvUlt y x)
-
-  -- | Unsigned less than
-  bvUlt :: v (BVType n) -> v (BVType n) -> v BoolType
-
-  -- | Signed less than
-  bvSlt :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-
-  -- | Returns bit at index given by second argument, 0 being lsb
-  -- If the bit index is greater than or equal to n, then the result is zero.
-  bvBit :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-
-  -- | Return most significant bit of number.
-  msb :: (1 <= n) => v (BVType n) -> v BoolType
-  msb v = bvSlt v (bvLit (bv_width v) (0::Integer))
---  msb v = bvBit v (bvLit (bv_width v) (natValue (bv_width v) - 1))
-     -- FIXME: should be log2 (bv_width v) here
-
-  -- | Perform a signed extension of a bitvector.
-  sext :: forall m n . (1 <= m, m <= n) => NatRepr n -> v (BVType m) -> v (BVType n)
-  sext w e =
-    case ( testStrictLeq (bv_width e) w
-         , leqTrans (LeqProof :: LeqProof 1 m) (LeqProof :: LeqProof m n)
-         ) of
-      (Left LeqProof, LeqProof) -> sext' w e
-      (Right Refl,_) -> e
-
-  -- | Version of 'sext' that precludes trivial extensions; see
-  -- 'uext'' docs.
-  sext' :: (1 <= m, m+1 <= n, 1 <= n) => NatRepr n -> v (BVType m) -> v (BVType n)
-
-  -- | Perform a unsigned extension of a bitvector.
-  --
-  -- Unlike 'uext' below, this is a strict extension: the 'm+1 <= n'
-  -- means 'm < n'.
-  --
-  -- We have this strict version because constructors which reify
-  -- these ops, e.g. @App@ in Reopt and Crucible, are strict in this
-  -- sense.
-  uext' :: (1 <= m, m+1 <= n, 1 <= n) => NatRepr n -> v (BVType m) -> v (BVType n)
-
-  -- | Perform a unsigned extension of a bitvector.
-  uext :: forall m n
-        . (1 <= m, m <= n)
-        => NatRepr n
-        -> v (BVType m)
-        -> v (BVType n)
-  uext w e =
-    case ( testStrictLeq (bv_width e) w
-         , leqTrans (LeqProof :: LeqProof 1 m) (LeqProof :: LeqProof m n)
-         ) of
-      (Left LeqProof, LeqProof) ->
-        uext' w e
-      (Right Refl,_) -> e
-
-  -- | Return least-significant nibble (4 bits).
-  least_nibble :: forall n . (4 <= n) => v (BVType n) -> v (BVType 4)
-  least_nibble = bvTrunc knownNat
-
-  -- | Return least-significant byte.
-  least_byte :: forall n . (8 <= n) => v (BVType n) -> v (BVType 8)
-  least_byte = bvTrunc knownNat
-
-  -- | Reverse the bytes in a bitvector expression.
-  -- The parameter n should be a multiple of 8.
-  reverse_bytes :: (1 <= n) => NatRepr n -> v (BVType (8*n)) -> v (BVType (8*n))
-
-  -- | Return true expression is signed add overflows.  See
-  -- @sadc_overflows@ for definition.
-  sadd_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  sadd_overflows x y = sadc_overflows x y false
-
-  -- | Return true expression is unsigned add overflows.  See
-  -- @sadc_overflows@ for definition.
-  uadd_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  uadd_overflows x y = uadc_overflows x y false
-
-  -- | Return true expression if a signed add-with carry would overflow.
-  -- This holds if the sign bits of the arguments are the same, and the sign
-  -- of the result is different.
-  sadc_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
-
-  -- | Return true expression if a unsigned add-with carry would overflow.
-  uadc_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
-
-  -- | Return true expression if unsigned sub overflows.
-  -- @usub_overflows x y@ is true when @x - y@ (interpreted as unsigned numbers),
-  -- would return a negative result.
-  usub_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  usub_overflows x y = usbb_overflows x y false
-
-  -- | Return true expression is signed sub overflows.
-  ssub_overflows :: (1 <= n) => v (BVType n) -> v (BVType n) -> v BoolType
-  ssub_overflows x y = ssbb_overflows x y false
-
-  -- | Return true expression if unsigned sbb overflows.
-  -- @usbb_overflows x y c@ is true when @x - (y+c)@ with
-  -- x,y interpreted as unsigned numbers and c a borrow bit,
-  -- would return a negative result.
-  usbb_overflows :: (1 <= n)
-                 => v (BVType n)
-                 -> v (BVType n)
-                 -> v BoolType
-                 -> v BoolType
-
-  -- | Return true expression if unsigned sub overflows.
-  -- @ssbb_overflows x y c@ is true when @x - (y+c)@ with
-  -- x,y interpreted as signed numbers and c a borrow bit,
-  -- would return a number different from the expected integer due to
-  -- wrap-around.
-  ssbb_overflows :: (1 <= n)
-                 => v (BVType n)
-                 -> v (BVType n)
-                 -> v BoolType
-                 -> v BoolType
-
-  -- | bsf "bit scan forward" returns the index of the least-significant
-  -- bit that is 1.  Undefined if value is zero.
-  -- All bits at indices less than return value must be unset.
-  bsf :: (1 <= n) => v (BVType n) -> v (BVType n)
-
-  -- | bsr "bit scan reverse" returns the index of the most-significant
-  -- bit that is 1.  Undefined if value is zero.
-  -- All bits at indices greater than return value must be unset.
-  bsr :: (1 <= n) => v (BVType n) -> v (BVType n)
-
-  true :: v BoolType
-  true = boolValue True
-
-  false :: v BoolType
-  false = boolValue True
-
-  boolValue :: Bool -> v BoolType
-
-  boolNot :: v BoolType -> v BoolType
-
-  boolAnd :: v BoolType -> v BoolType -> v BoolType
-  boolOr :: v BoolType -> v BoolType -> v BoolType
-  boolEq  :: v BoolType -> v BoolType -> v BoolType
-
-boolXor :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
-boolXor x y
-  -- Eliminate xor with 0.
-  | Just False <- asBoolLit x = y
-  | Just True  <- asBoolLit x = boolNot y
-  | Just False <- asBoolLit y = x
-  | Just True  <- asBoolLit y = boolNot x
-  -- Eliminate xor with self.
-  | x == y = false
-  -- If this is a single bit comparison with a constant, resolve to Boolean operation.
-  -- Default case.
-  | otherwise = app $ XorApp x y
-
-bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
-bvSle x y = app (BVSignedLe x y)
-
-instance IsValue (Expr ids) where
-
-  bv_width = typeWidth
-
-  mux c x y
-    | Just True  <- asBoolLit c = x
-    | Just False <- asBoolLit c = y
-    | x == y = x
-    | Just (NotApp cn) <- asApp c = mux cn y x
-    | otherwise = app $ Mux (typeRepr x) c x y
-
-  boolValue b = ValueExpr (BoolValue b)
-
-  bvLit n v = ValueExpr $ mkLit n (toInteger v)
-  bvAdd x y
-      -- Eliminate add 0
-    | Just 0 <- asBVLit y = x
-    | Just 0 <- asBVLit x = y
-
-      -- Constant folding.
-    | ValueExpr (BVValue w xv) <- x
-    , Just yv <- asBVLit y
-    = bvLit w (xv + yv)
-
-    | ValueExpr (RelocatableValue w a) <- x
-    , Just o <- asBVLit y
-    = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
-
-    | ValueExpr (RelocatableValue w a) <- y
-    , Just o <- asBVLit x
-    = ValueExpr (RelocatableValue w (a & incAddr (fromInteger o)))
-
-      -- Shift constants to right-hand-side.
-    | Just _ <- asBVLit x = bvAdd y x
-
-      -- Reorganize addition by constant to offset.
-    | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
-    , Just y_off <- asBVLit y
-    = bvAdd x_base (bvLit w (x_off + y_off))
-
-    | Just (BVAdd w y_base (asBVLit -> Just y_off)) <- asApp y
-    , Just x_off <- asBVLit x
-    = bvAdd y_base (bvLit w (x_off + y_off))
-
-    | otherwise = app $ BVAdd (typeWidth x) x y
-
-  bvSub x y
-    | Just yv <- asBVLit y = bvAdd x (bvLit (typeWidth x) (negate yv))
-    | otherwise = app $ BVSub (typeWidth x) x y
-
-  bvMul x y
-    | Just 0 <- asBVLit x = x
-    | Just 1 <- asBVLit x = y
-    | Just 0 <- asBVLit y = y
-    | Just 1 <- asBVLit y = x
-
-    | Just xv <- asBVLit x, Just yv <- asBVLit y =
-      bvLit (typeWidth x) (xv * yv)
-    | otherwise = app $ BVMul (typeWidth x) x y
-
-  boolNot x
-    | Just xv <- asBoolLit x = boolValue (not xv)
-      -- not (y < z) = y >= z = z <= y
-    | Just (BVUnsignedLt y z) <- asApp x = bvUle z y
-      -- not (y <= z) = y > z = z < y
-    | Just (BVUnsignedLe y z) <- asApp x = bvUlt z y
-      -- not (y < z) = y >= z = z <= y
-    | Just (BVSignedLt y z) <- asApp x = bvSle z y
-      -- not (y <= z) = y > z = z < y
-    | Just (BVSignedLe y z) <- asApp x = bvSlt z y
-      -- not (not p) = p
-    | Just (NotApp y) <- asApp x = y
-    | otherwise = app $ NotApp x
-
-  bvComplement x
-    | Just xv <- asBVLit x = bvLit (typeWidth x) (Bits.complement xv)
-      -- not (not p) = p
-    | Just (BVComplement _ y) <- asApp x = y
-    | otherwise = app $ BVComplement (typeWidth x) x
-
-  boolAnd x y
-    | Just True  <- asBoolLit x = y
-    | Just False <- asBoolLit x = x
-    | Just True  <- asBoolLit y = x
-    | Just False <- asBoolLit y = y
-       -- Idempotence
-    | x == y = x
-
-      -- x1 <= x2 & x1 ~= x2 = x1 < x2
-    | Just (BVUnsignedLe x1 x2) <- asApp x
-    , Just (NotApp yc) <- asApp y
-    , Just (Eq y1 y2) <- asApp yc
-    , BVTypeRepr w <- typeRepr y1
-    , Just Refl <- testEquality (typeWidth x1) w
-    , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt x1 x2
-
-      -- x1 ~= x2 & x1 <= x2 => x1 < x2
-    | Just (BVUnsignedLe y1 y2) <- asApp y
-    , Just (NotApp xc) <- asApp x
-    , Just (Eq x1 x2) <- asApp xc
-    , BVTypeRepr w <- typeRepr x1
-    , Just Refl <- testEquality w (typeWidth y1)
-    , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt y1 y2
-      -- Default case
-    | otherwise = app $ AndApp x y
-
-  x .&. y
-    | Just xv <- asBVLit x, Just yv <- asBVLit y =
-      bvLit (typeWidth x) (xv Bits..&. yv)
-      -- Eliminate and when one argument is maxUnsigned
-    | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = y
-    | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = x
-      -- Cancel when and with 0.
-    | Just 0 <- asBVLit x = x
-    | Just 0 <- asBVLit y = y
-      -- Idempotence
-    | x == y = x
-
-      -- Make literal the second argument (simplifies later cases)
-    | isJust (asBVLit x) = assert (isNothing (asBVLit y)) $ y .&. x
-
-      --(x1 .&. x2) .&. y = x1 .&. (x2 .&. y) -- Only apply when x2 and y is a lit
-    | isJust (asBVLit y)
-    , Just (BVAnd _ x1 x2) <- asApp x
-    , isJust (asBVLit x2) =
-      x1 .&. (x2 .&. y)
-
-      -- (x1 .|. x2) .&. y = (x1 .&. y) .|. (x2 .&. y) -- Only apply when y and x2 is a lit.
-    | isJust (asBVLit y)
-    , Just (BVOr _ x1 x2) <- asApp x
-    ,  isJust (asBVLit x2) =
-      (x1 .&. y) .|. (x2 .&. y)
-      -- x .&. (y1 .|. y2) = (y1 .&. x) .|. (y2 .&. x) -- Only apply when x and y2 is a lit.
-    | isJust (asBVLit x)
-    , Just (BVOr _ y1 y2) <- asApp y
-    , isJust (asBVLit y2) =
-      (y1 .&. x) .|. (y2 .&. x)
-
-      -- Default case
-    | otherwise = app $ BVAnd (typeWidth x) x y
-
-  boolOr x y
-    | Just True  <- asBoolLit x = x
-    | Just False <- asBoolLit x = y
-    | Just True  <- asBoolLit y = y
-    | Just False <- asBoolLit y = x
-       -- Idempotence
-    | x == y = x
-
-      -- Rewrite "x < y | x == y" to "x <= y"
-    | Just (BVUnsignedLt x1 x2) <- asApp x
-    , Just (Eq y1 y2) <- asApp y
-    , BVTypeRepr w <- typeRepr y1
-    , Just Refl <- testEquality (typeWidth x1) w
-    , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)
-    = bvUle x1 x2
-
-      -- Default case
-    | otherwise = app $ OrApp x y
-
-  x .|. y
-    | Just xv <- asBVLit x, Just yv <- asBVLit y =
-      bvLit (typeWidth x) (xv Bits..|. yv)
-      -- Cancel or when one argument is maxUnsigned
-    | Just xv <- asBVLit x, xv == maxUnsigned (typeWidth x) = x
-    | Just yv <- asBVLit y, yv == maxUnsigned (typeWidth x) = y
-      -- Eliminate "or" when one argument is 0
-    | Just 0 <- asBVLit x = y
-    | Just 0 <- asBVLit y = x
-      -- Idempotence
-    | x == y = x
-
-      -- Default case
-    | otherwise = app $ BVOr (typeWidth x) x y
-
-  bvXor x y
-      -- Eliminate xor with 0.
-    | Just 0 <- asBVLit x = y
-    | Just 0 <- asBVLit y = x
-      -- Eliminate xor with self.
-    | x == y = bvLit (typeWidth x) (0::Integer)
-      -- If this is a single bit comparison with a constant, resolve to Boolean operation.
-    | ValueExpr (BVValue w v) <- y
-    , Just Refl <- testEquality w n1 =
-      if v /= 0 then bvComplement x else x
-      -- Default case.
-    | otherwise = app $ BVXor (typeWidth x) x y
-
-  boolEq x y
-    | Just True  <- asBoolLit x = y
-    | Just False <- asBoolLit x = y
-    | Just True  <- asBoolLit y = y
-    | Just False <- asBoolLit y = y
-    | x == y = true
-      -- General case
-    | otherwise = app $ Eq x y
-
-  x .=. y
-    | x == y = true
-      -- Statically resolve two literals
-    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv == yv)
-      -- Move constant to second argument (We implicitly know both x and y are not a constant due to previous case).
-    | Just _ <- asBVLit x, Nothing <- asBVLit y = y .=. x
-      -- Rewrite "base + offset = constant" to "base = constant - offset".
-    | Just (BVAdd w x_base (asBVLit -> Just x_off)) <- asApp x
-    , Just yv <- asBVLit y =
-      app $ Eq x_base (bvLit w (yv - x_off))
-      -- Rewrite "u - v == c" to "u = c + v".
-    | Just (BVSub _ x_1 x_2) <- asApp x = x_1 .=. bvAdd y x_2
-      -- Rewrite "c == u - v" to "u = c + v".
-    | Just (BVSub _ y_1 y_2) <- asApp y = y_1 .=. bvAdd x y_2
-      -- General case
-    | otherwise = app $ Eq x y
-
-  -- | Shifts, the semantics is undefined for shifts >= the width of the first argument
-  -- bvShr, bvSar, bvShl :: v (BVType n) -> v (BVType log_n) -> v (BVType n)
-  bvShr x y
-    | Just 0 <- asBVLit y = x
-    | Just 0 <- asBVLit x = x
-    | otherwise = app $ BVShr (typeWidth x) x y
-  bvSar x y = app $ BVSar (typeWidth x) x y
-
-  bvShl x y
+vectorize2 :: (1 <= k, 1 <= n)
+           => NatRepr k
+           -> (Expr ids (BVType k) -> Expr ids (BVType k) -> Expr ids (BVType k))
+           -> Expr ids (BVType n) -> Expr ids (BVType n)
+           -> Expr ids (BVType n)
+vectorize2 sz f x y = let xs = bvVectorize sz x
+                          ys = bvVectorize sz y
+                       in bvUnvectorize (typeWidth x) $ zipWith f xs ys
+
+-- | Rotations
+bvRol :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvRol v n = bvShl v n .|. bvShr v bits_less_n
+  where bits_less_n = bvLit (typeWidth v) (natValue $ typeWidth v) .- n
+
+bvRor :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvRor v n = bvShr v n .|. bvShl v bits_less_n
+  where bits_less_n = bvLit (typeWidth v) (natValue $ typeWidth v) .- n
+
+-- | Shifts, the semantics is undefined for shifts >= the width of the first argument.
+--
+-- The first argument is the value to shift, and the second argument
+-- is the number of bits to shift by.
+--
+-- Big-endian, so left shift moves bits to higher-order positions
+-- and right shift moves bits to lower-order positions.
+bvShr :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvShr x y
+  | Just 0 <- asBVLit y = x
+  | Just 0 <- asBVLit x = x
+  | otherwise = app $ BVShr (typeWidth x) x y
+
+bvSar :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvSar x y = app $ BVSar (typeWidth x) x y
+
+bvShl :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
+bvShl x y
     | Just 0 <- asBVLit y = x
 
     | Just xv <- asBVLit x
@@ -1441,137 +1177,329 @@ instance IsValue (Expr ids) where
 
     | otherwise = app $ BVShl (typeWidth x) x y
 
-  bvTrunc' w e0
-    | Just v <- asBVLit e0 =
+
+-- | Version of 'bvTrunc' that precludes trivial truncations; see
+-- 'uext'' docs.
+bvTrunc' :: (1 <= m, m+1 <= n) => NatRepr m -> Expr ids (BVType n) -> Expr ids (BVType m)
+bvTrunc' w e0
+  | Just v <- asBVLit e0 =
       bvLit w v
-    | Just Refl <- testEquality (typeWidth e0) w =
+  | Just Refl <- testEquality (typeWidth e0) w =
       e0
-    | Just (MMXExtend e) <- asArchFn e0
-    , Just Refl <- testEquality w n64 =
+  | Just (MMXExtend e) <- asArchFn e0
+  , Just Refl <- testEquality w n64 =
       ValueExpr e
-    | Just (UExt e _) <- asApp e0 =
-      case testLeq w (bv_width e) of
+  | Just (UExt e _) <- asApp e0 =
+      case testLeq w (typeWidth e) of
         -- Check if original value width is less than new width.
         Just LeqProof -> bvTrunc w e
         Nothing ->
           -- Runtime check to wordaround GHC typechecker
-          case testLeq (bv_width e) w of
+          case testLeq (typeWidth e) w of
             Just LeqProof -> uext w e
             Nothing -> error "bvTrunc internal error"
-      -- Trunc (x .&. y) w = trunc x w .&. trunc y w
-    | Just (BVAnd _ x y) <- asApp e0 =
+        -- Trunc (x .&. y) w = trunc x w .&. trunc y w
+  | Just (BVAnd _ x y) <- asApp e0 =
       let x' = bvTrunc' w x
           y' = bvTrunc' w y
        in x' .&. y'
       -- Trunc (x .|. y) w = trunc x w .|. trunc y w
-    | Just (BVOr _ x y) <- asApp e0 =
+  | Just (BVOr _ x y) <- asApp e0 =
       let x' = bvTrunc' w x
           y' = bvTrunc' w y
        in x' .|. y'
       -- trunc (Trunc e w1) w2 = trunc e w2
-    | Just (Trunc e _) <- asApp e0 =
+  | Just (Trunc e _) <- asApp e0 =
       -- Runtime check to workaround GHC typechecker.
       case testLeq w (typeWidth e) of
         Just LeqProof -> bvTrunc w e
         Nothing -> error "bvTrunc given bad width"
       -- Default case
-    | otherwise = app (Trunc e0 w)
+  | otherwise = app (Trunc e0 w)
 
-  bvUlt x y
-    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
-    | x == y = false
-    | otherwise =
+-- | Truncate the value.
+--
+-- Returns 'm' lower order bits.
+bvTrunc :: (1 <= m, m <= n) => NatRepr m -> Expr ids (BVType n) -> Expr ids (BVType m)
+bvTrunc w e =
+  case testStrictLeq w (typeWidth e) of
+    Left LeqProof -> bvTrunc' w e
+    Right Refl -> e
+
+-- | Unsigned less than
+bvUlt :: Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvUlt x y
+  | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
+  | x == y = false
+  | otherwise =
       case typeRepr x of
         BVTypeRepr _ -> app $ BVUnsignedLt x y
 
-  bvSlt x y
-    | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
-    | x == y = false
-    | otherwise =
+-- | Unsigned less than or equal.
+bvUle :: Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvUle x y = boolNot (bvUlt y x)
+
+-- | Signed less than
+bvSlt :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvSlt x y
+  | Just xv <- asBVLit x, Just yv <- asBVLit y = boolValue (xv < yv)
+  | x == y = false
+  | otherwise =
       case typeRepr x of
         BVTypeRepr _ -> app $ BVSignedLt x y
 
-  bvBit x y
-    | Just xv <- asBVLit x
-    , Just yv <- asBVLit y =
+-- | Returns bit at index given by second argument, 0 being lsb
+-- If the bit index is greater than or equal to n, then the result is zero.
+bvBit :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvBit x y
+  | Just xv <- asBVLit x
+  , Just yv <- asBVLit y =
       boolValue (xv `Bits.testBit` fromInteger yv)
-    | Just (Trunc xe w) <- asApp x
-    , Just LeqProof <- testLeq n1 (typeWidth xe)
-    , Just yv <- asBVLit y = assert (0 <= yv && yv < natValue w) $
-      bvBit xe (ValueExpr (BVValue (typeWidth xe) yv))
+  | Just (Trunc xe w) <- asApp x
+  , Just LeqProof <- testLeq n1 (typeWidth xe)
+  , Just yv <- asBVLit y = assert (0 <= yv && yv < natValue w) $
+    bvBit xe (ValueExpr (BVValue (typeWidth xe) yv))
 
-    | otherwise =
+  | otherwise =
       app $ BVTestBit x y
 
-  sext' w e0
-      -- Collapse duplicate extensions.
-    | Just (SExt e w0) <- asApp e0 = do
-      let we = bv_width e
+-- | Return most significant bit of number.
+msb :: (1 <= n) => Expr ids (BVType n) -> Expr ids BoolType
+msb v = bvSlt v (bvLit (typeWidth v) (0::Integer))
+  -- FIXME: should be log2 (typeWidth v) here
+
+-- | Version of 'sext' that precludes trivial extensions; see
+-- 'uext'' docs.
+sext' :: (1 <= m, m+1 <= n, 1 <= n) => NatRepr n -> Expr ids (BVType m) -> Expr ids (BVType n)
+sext' w e0
+  -- Collapse duplicate extensions.
+  | Just (SExt e w0) <- asApp e0 = do
+      let we = typeWidth e
       withLeqProof (leqTrans (ltProof we w0) (ltProof w0 w)) $
         sext w e
-    | otherwise = app (SExt e0 w)
+  | otherwise = app (SExt e0 w)
 
-  uext' w e0
-      -- Literal case
-    | Just v <- asBVLit e0 =
-      let w0 = bv_width e0
-       in withLeqProof (leqTrans (leqProof n1 w0) (ltProof w0 w)) $
-            bvLit w v
-      -- Collapse duplicate extensions.
-    | Just (UExt e w0) <- asApp e0 = do
-      let we = bv_width e
+-- | Perform a signed extension of a bitvector.
+sext :: forall ids m n . (1 <= m, m <= n) => NatRepr n -> Expr ids (BVType m) -> Expr ids (BVType n)
+sext w e =
+  case ( testStrictLeq (typeWidth e) w
+       , leqTrans (LeqProof :: LeqProof 1 m) (LeqProof :: LeqProof m n)
+       ) of
+    (Left LeqProof, LeqProof) -> sext' w e
+    (Right Refl,_) -> e
+
+-- | Perform a unsigned extension of a bitvector.
+--
+-- Unlike 'uext' below, this is a strict extension: the 'm+1 <= n' means 'm < n'.
+--
+-- We have this strict version because constructors which reify
+-- these ops, e.g. @App@ in Reopt and Crucible, are strict in this
+-- sense.
+uext' :: (1 <= m, m+1 <= n, 1 <= n) => NatRepr n -> Expr ids (BVType m) -> Expr ids (BVType n)
+uext' w e0
+  -- Literal case
+  | Just v <- asBVLit e0 =
+    let w0 = typeWidth e0
+     in withLeqProof (leqTrans (leqProof n1 w0) (ltProof w0 w)) $
+        bvLit w v
+  -- Collapse duplicate extensions.
+  | Just (UExt e w0) <- asApp e0 = do
+      let we = typeWidth e
       withLeqProof (leqTrans (ltProof we w0) (ltProof w0 w)) $
         uext w e
 
-      -- Default case
-    | otherwise = app (UExt e0 w)
+  -- Default case
+  | otherwise = app (UExt e0 w)
 
-  reverse_bytes w x = app $ ReverseBytes w x
+-- | Perform a unsigned extension of a bitvector.
+uext :: forall ids m n
+     . (1 <= m, m <= n)
+     => NatRepr n
+     -> Expr ids (BVType m)
+     -> Expr ids (BVType n)
+uext w e =
+  case ( testStrictLeq (typeWidth e) w
+       , leqTrans (LeqProof :: LeqProof 1 m) (LeqProof :: LeqProof m n)
+       ) of
+    (Left LeqProof, LeqProof) -> uext' w e
+    (Right Refl,_) -> e
 
-  uadc_overflows x y c
-    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
-    | otherwise = app $ UadcOverflows x y c
-  sadc_overflows x y c
-    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
-    | otherwise = app $ SadcOverflows x y c
+-- | Return least-significant nibble (4 bits).
+least_nibble :: forall ids n . (4 <= n) => Expr ids (BVType n) -> Expr ids (BVType 4)
+least_nibble = bvTrunc knownNat
 
-  usbb_overflows x y c
-    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
-      -- If the borrow bit is zero, this is equivalent to unsigned x < y.
-    | Just False <- asBoolLit c = bvUlt x y
-    | otherwise = app $ UsbbOverflows x y c
+-- | Return least-significant byte.
+least_byte :: forall ids n . (8 <= n) => Expr ids (BVType n) -> Expr ids (BVType 8)
+least_byte = bvTrunc knownNat
 
-  ssbb_overflows x y c
-    | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
-      -- If the borrow bit is zero, this is equivalent to signed x < y.
-      -- FIXME: not true? | Just 0 <- asBVLit c = app $ BVSignedLt x y
-    | otherwise = app $ SsbbOverflows x y c
+-- | Return true expression if a signed add-with carry would overflow.
+-- This holds if the sign bits of the arguments are the same, and the sign
+-- of the result is different.
+sadc_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType -> Expr ids BoolType
+sadc_overflows x y c
+  | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+  | otherwise = app $ SadcOverflows x y c
 
-  bsf x = app $ Bsf (typeWidth x) x
-  bsr x = app $ Bsr (typeWidth x) x
+-- | Return true expression is signed add overflows.  See
+-- @sadc_overflows@ for definition.
+sadd_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+sadd_overflows x y = sadc_overflows x y false
 
-(.&&.) :: IsValue v => v BoolType -> v BoolType -> v BoolType
-(.&&.) = boolAnd
+-- | Return true expression if a unsigned add-with carry would overflow.
+uadc_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType -> Expr ids BoolType
+uadc_overflows x y c
+  | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+  | otherwise = app $ UadcOverflows x y c
 
-(.||.) :: IsValue v => v BoolType -> v BoolType -> v BoolType
-(.||.) = boolOr
+-- | Return true expression is unsigned add overflows.  See
+-- @sadc_overflows@ for definition.
+uadd_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+uadd_overflows x y = uadc_overflows x y false
+
+-- | Return true expression if unsigned sbb overflows.
+-- @usbb_overflows x y c@ is true when @x - (y+c)@ with
+-- x,y interpreted as unsigned numbers and c a borrow bit,
+-- would return a negative result.
+usbb_overflows :: (1 <= n)
+                 => Expr ids (BVType n)
+                 -> Expr ids (BVType n)
+                 -> Expr ids BoolType
+                 -> Expr ids BoolType
+usbb_overflows x y c
+  | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+    -- If the borrow bit is zero, this is equivalent to unsigned x < y.
+  | Just False <- asBoolLit c = bvUlt x y
+  | otherwise = app $ UsbbOverflows x y c
+
+-- | Return true expression if unsigned sub overflows.
+-- @usub_overflows x y@ is true when @x - y@ (interpreted as unsigned numbers),
+-- would return a negative result.
+usub_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+usub_overflows x y = usbb_overflows x y false
+
+-- | Return true expression if unsigned sub overflows.
+-- @ssbb_overflows x y c@ is true when @x - (y+c)@ with
+-- x,y interpreted as signed numbers and c a borrow bit,
+-- would return a number different from the expected integer due to
+-- wrap-around.
+ssbb_overflows :: (1 <= n)
+                 => Expr ids (BVType n)
+                 -> Expr ids (BVType n)
+                 -> Expr ids BoolType
+                 -> Expr ids BoolType
+ssbb_overflows x y c
+  | Just 0 <- asBVLit y, Just False <- asBoolLit c = false
+    -- If the borrow bit is zero, this is equivalent to signed x < y.
+    -- FIXME: not true? | Just 0 <- asBVLit c = app $ BVSignedLt x y
+  | otherwise = app $ SsbbOverflows x y c
+
+-- | Return true expression is signed sub overflows.
+ssub_overflows :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+ssub_overflows x y = ssbb_overflows x y false
+
+-- | bsf "bit scan forward" returns the index of the least-significant
+-- bit that is 1.  Undefined if value is zero.
+-- All bits at indices less than return value must be unset.
+bsf :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n)
+bsf x = app $ Bsf (typeWidth x) x
+
+-- | bsr "bit scan reverse" returns the index of the most-significant
+-- bit that is 1.  Undefined if value is zero.
+-- All bits at indices greater than return value must be unset.
+bsr :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n)
+bsr x = app $ Bsr (typeWidth x) x
+
+boolValue :: Bool -> Expr ids BoolType
+boolValue = ValueExpr . BoolValue
+
+true :: Expr ids BoolType
+true = boolValue True
+
+false :: Expr ids BoolType
+false = boolValue True
+
+boolNot :: Expr ids BoolType -> Expr ids BoolType
+boolNot x
+  | Just xv <- asBoolLit x = boolValue (not xv)
+    -- not (y < z) = y >= z = z <= y
+  | Just (BVUnsignedLt y z) <- asApp x = bvUle z y
+    -- not (y <= z) = y > z = z < y
+  | Just (BVUnsignedLe y z) <- asApp x = bvUlt z y
+    -- not (y < z) = y >= z = z <= y
+  | Just (BVSignedLt y z) <- asApp x = bvSle z y
+    -- not (y <= z) = y > z = z < y
+  | Just (BVSignedLe y z) <- asApp x = bvSlt z y
+    -- not (not p) = p
+  | Just (NotApp y) <- asApp x = y
+  | otherwise = app $ NotApp x
+
+(.&&.) :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
+x .&&. y
+  | Just True  <- asBoolLit x = y
+  | Just False <- asBoolLit x = x
+  | Just True  <- asBoolLit y = x
+  | Just False <- asBoolLit y = y
+  -- Idempotence
+  | x == y = x
+
+  -- x1 <= x2 & x1 ~= x2 = x1 < x2
+  | Just (BVUnsignedLe x1 x2) <- asApp x
+  , Just (NotApp yc) <- asApp y
+  , Just (Eq y1 y2) <- asApp yc
+  , BVTypeRepr w <- typeRepr y1
+  , Just Refl <- testEquality (typeWidth x1) w
+  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
+      bvUlt x1 x2
+
+  -- x1 ~= x2 & x1 <= x2 => x1 < x2
+  | Just (BVUnsignedLe y1 y2) <- asApp y
+  , Just (NotApp xc) <- asApp x
+  , Just (Eq x1 x2) <- asApp xc
+  , BVTypeRepr w <- typeRepr x1
+  , Just Refl <- testEquality w (typeWidth y1)
+  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
+      bvUlt y1 y2
+  -- Default case
+  | otherwise = app $ AndApp x y
+
+(.||.) :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
+x .||. y
+  | Just True  <- asBoolLit x = x
+  | Just False <- asBoolLit x = y
+  | Just True  <- asBoolLit y = y
+  | Just False <- asBoolLit y = x
+     -- Idempotence
+  | x == y = x
+    -- Rewrite "x < y | x == y" to "x <= y"
+  | Just (BVUnsignedLt x1 x2) <- asApp x
+  , Just (Eq y1 y2) <- asApp y
+  , BVTypeRepr w <- typeRepr y1
+  , Just Refl <- testEquality (typeWidth x1) w
+  , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)
+  = bvUle x1 x2
+    -- Default case
+  | otherwise = app $ OrApp x y
+
+boolXor :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
+boolXor x y
+  -- Eliminate xor with 0.
+  | Just False <- asBoolLit x = y
+  | Just True  <- asBoolLit x = boolNot y
+  | Just False <- asBoolLit y = x
+  | Just True  <- asBoolLit y = boolNot x
+  -- Eliminate xor with self.
+  | x == y = false
+  -- If this is a single bit comparison with a constant, resolve to Boolean operation.
+  -- Default case.
+  | otherwise = app $ XorApp x y
+
+bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
+bvSle x y = app (BVSignedLe x y)
 
 -- | Construct a literal bit vector.  The result is undefined if the
 -- literal does not fit withint the given number of bits.
-bvKLit :: (IsValue v, KnownNat n, 1 <= n) => Integer -> v (BVType n)
+bvKLit :: (KnownNat n, 1 <= n) => Integer -> Expr ids (BVType n)
 bvKLit = bvLit knownNat
-
--- | Add two bitvectors together dropping overflow.
-(.+) :: (1 <= n, IsValue v) => v (BVType n) -> v (BVType n) -> v (BVType n)
-(.+) = bvAdd
-
--- | Subtract two vectors, ignoring underflow.
-(.-) :: (1 <= n, IsValue v) => v (BVType n) -> v (BVType n) -> v (BVType n)
-(.-) = bvSub
-
--- | Performs a multiplication of two bitvector values.
-(.*) :: (1 <= n, IsValue v) => v (BVType n) -> v (BVType n) -> v (BVType n)
-(.*) = bvMul
 
 infixl 7 .*
 infixl 6 .+
@@ -1817,7 +1745,7 @@ memcmp sz count src dest is_reverse = do
   evalArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
 
 -- | Set memory to the given value, for the number of words (nbytes
--- = count * bv_width v)
+-- = count * typeWidth v)
 memset :: (1 <= n)
        => BVExpr ids 64
           -- ^ Number of values to set

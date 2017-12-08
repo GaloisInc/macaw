@@ -173,7 +173,7 @@ defBinaryLVge :: String
                   -> X86Generator st ids ())
               -> InstructionDef
 defBinaryLVge mnem f = defBinaryLVpoly mnem $ \l v -> do
-  Just LeqProof <- return $ testLeq (bv_width v) (typeWidth l)
+  Just LeqProof <- return $ testLeq (typeWidth v) (typeWidth l)
   f l v
 
 -- | Define an instruction from a function with fixed widths kmown at compile time/.
@@ -235,7 +235,7 @@ defTernaryLVV mnem f = defTernary mnem $ \_ loc val1 val2 -> do
   SomeBV l <- getSomeBVLocation loc
   v1 <- getBVValue val1 (typeWidth l)
   SomeBV v2 <- getSomeBVValue val2
-  Just LeqProof <- return $ testLeq (bv_width v2) (bv_width v1)
+  Just LeqProof <- return $ testLeq (typeWidth v2) (typeWidth v1)
   f l v1 v2
 
 -- | This generates a list of instruction definitinos -- one for each conditional predicate.

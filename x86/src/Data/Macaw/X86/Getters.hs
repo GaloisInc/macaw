@@ -107,9 +107,9 @@ getBVAddress ar =
         case m_int_r32 of
           Nothing     -> return $! bvKLit 0
           Just (i, r) ->
-            bvTrunc n32 . bvMul (bvLit n32 (toInteger i))
+            bvTrunc n32 . (bvLit n32 (toInteger i) .*)
               <$> get (reg32Loc r)
-      let offset = uext n64 (base `bvAdd` scale `bvAdd` bvLit n32 (toInteger (F.displacementInt i32)))
+      let offset = uext n64 (base .+ scale .+ bvLit n32 (toInteger (F.displacementInt i32)))
       mk_absolute seg offset
     F.IP_Offset_32 _seg _i32                 -> fail "IP_Offset_32"
     F.Offset_32    _seg _w32                 -> fail "Offset_32"
@@ -121,13 +121,13 @@ getBVAddress ar =
                 Just r  -> get (reg64Loc r)
       scale <- case m_int_r64 of
                  Nothing     -> return v0_64
-                 Just (i, r) -> bvTrunc n64 . bvMul (bvLit n64 (toInteger i))
+                 Just (i, r) -> bvTrunc n64 . (bvLit n64 (toInteger i) .*)
                                  <$> get (reg64Loc r)
-      let offset = base `bvAdd` scale `bvAdd` bvLit n64 (toInteger i32)
+      let offset = base .+ scale .+ bvLit n64 (toInteger i32)
       mk_absolute seg offset
     F.IP_Offset_64 seg i32 -> do
       ip_val <- get rip
-      mk_absolute seg (bvAdd (bvLit n64 (toInteger i32)) ip_val)
+      mk_absolute seg (bvLit n64 (toInteger i32) .+ ip_val)
   where
     v0_64 = bvLit n64 0
     -- | Add the segment base to compute an absolute address.
@@ -143,7 +143,7 @@ getBVAddress ar =
       -- The FS and GS segments can be non-zero based in 64-bit mode.
       | otherwise = do
         base <- getSegmentBase seg
-        return $ base `bvAdd` offset
+        return $ base .+ offset
 
 -- | Translate a flexdis address-refrence into a one-byte address.
 getBV8Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 8))
@@ -244,10 +244,10 @@ getBVValue :: F.Value
            -> X86Generator st ids (Expr ids (BVType n))
 getBVValue val expected = do
   SomeBV v <- getSomeBVValue val
-  case testEquality (bv_width v) expected of
+  case testEquality (typeWidth v) expected of
     Just Refl -> return v
     Nothing ->
-      fail $ "Widths aren't equal: " ++ show (bv_width v) ++ " and " ++ show expected
+      fail $ "Widths aren't equal: " ++ show (typeWidth v) ++ " and " ++ show expected
 
 -- | Get a value with the given width, sign extending as necessary.
 getSignExtendedValue :: forall st ids w
@@ -292,15 +292,15 @@ getSignExtendedValue v out_w =
       | otherwise =
         fail $ "getSignExtendedValue given bad value."
 
-truncateBVValue :: (Monad m, IsValue v, 1 <= n)
+truncateBVValue :: (Monad m, 1 <= n)
                 => NatRepr n
-                -> SomeBV v
-                -> m (v (BVType n))
+                -> SomeBV (Expr ids)
+                -> m (Expr ids (BVType n))
 truncateBVValue n (SomeBV v)
-  | Just LeqProof <- testLeq n (bv_width v) = do
+  | Just LeqProof <- testLeq n (typeWidth v) = do
       return (bvTrunc n v)
   | otherwise =
-    fail $ "Widths isn't >=: " ++ show (bv_width v) ++ " and " ++ show n
+    fail $ "Widths isn't >=: " ++ show (typeWidth v) ++ " and " ++ show n
 
 -- | Return the target of a call or jump instruction.
 getJumpTarget :: F.Value
@@ -309,7 +309,7 @@ getJumpTarget v =
   case v of
     F.Mem64 ar -> get =<< getBV64Addr ar
     F.QWordReg r -> get (reg64Loc r)
-    F.JumpOffset _ off -> bvAdd (bvLit n64 (toInteger off)) <$> get rip
+    F.JumpOffset _ off -> (bvLit n64 (toInteger off) .+) <$> get rip
     _ -> fail "Unexpected argument"
 
 ------------------------------------------------------------------------
