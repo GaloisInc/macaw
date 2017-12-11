@@ -50,6 +50,7 @@ module Data.Macaw.Discovery
          -- * SymbolAddrMap
        , State.SymbolAddrMap
        , State.emptySymbolAddrMap
+       , State.symbolAddrsAsMap
        , State.symbolAddrMap
        , State.symbolAddrs
        , State.symbolAtAddr
