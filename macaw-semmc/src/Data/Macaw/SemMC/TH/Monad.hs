@@ -9,6 +9,7 @@ module Data.Macaw.SemMC.TH.Monad (
   appendStmt,
   withLocToReg,
   withNonceAppEvaluator,
+  withAppEvaluator,
   bindExpr
   ) where
 
@@ -50,16 +51,23 @@ data QState arch t = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                                                  . BoundVarInterpretations arch t
                                                 -> S.NonceApp t (S.Elt t) tp
                                                 -> Maybe (MacawQ arch t Exp)
+                            -- ^ Convert SimpleBuilder NonceApps into Macaw expressions
+                            , appEvaluator :: forall tp
+                                            . BoundVarInterpretations arch t
+                                           -> S.App (S.Elt t) tp
+                                           -> Maybe (MacawQ arch t Exp)
                             }
 
 emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
             -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+            -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
             -> QState arch t
-emptyQState ltr ena = QState { accumulatedStatements = Seq.empty
-                         , expressionCache = M.empty
-                         , locToReg = ltr
-                         , nonceAppEvaluator = ena
-                         }
+emptyQState ltr ena ae = QState { accumulatedStatements = Seq.empty
+                                , expressionCache = M.empty
+                                , locToReg = ltr
+                                , nonceAppEvaluator = ena
+                                , appEvaluator = ae
+                                }
 
 newtype MacawQ arch t a = MacawQ { unQ :: St.StateT (QState arch t) Q a }
   deriving (Functor,
@@ -69,9 +77,10 @@ newtype MacawQ arch t a = MacawQ { unQ :: St.StateT (QState arch t) Q a }
 
 runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
           -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+          -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
           -> MacawQ arch t ()
           -> Q [Stmt]
-runMacawQ ltr ena act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena)
+runMacawQ ltr ena ea act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea)
 
 -- | Lift a TH computation (in the 'Q' monad) into the monad.
 liftQ :: Q a -> MacawQ arch t a
@@ -94,6 +103,13 @@ withNonceAppEvaluator :: forall tp arch t
 withNonceAppEvaluator k = do
   nae <- St.gets nonceAppEvaluator
   k nae
+
+withAppEvaluator :: forall tp arch t
+                  . ((BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp)) -> MacawQ arch t (Maybe (MacawQ arch t Exp)))
+                 -> MacawQ arch t (Maybe (MacawQ arch t Exp))
+withAppEvaluator k = do
+  ae <- St.gets appEvaluator
+  k ae
 
 -- | Append a statement that doesn't need to bind a new name
 appendStmt :: ExpQ -> MacawQ arch t ()

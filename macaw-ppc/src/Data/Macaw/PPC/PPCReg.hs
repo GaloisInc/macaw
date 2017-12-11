@@ -10,6 +10,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+-- | Defines the register types for PowerPC, along with some helpers
 module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters,
@@ -36,6 +37,8 @@ import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
+-- | The register type for PowerPC, parameterized by architecture to support
+-- both PowerPC32 and PowerPC64
 data PPCReg arch tp where
   PPC_GP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => D.GPR -> PPCReg arch (BVType w)
   PPC_FR :: D.VSReg -> PPCReg arch (BVType 128)
@@ -149,6 +152,8 @@ ppcRegs = concat [ gprs
            | rnum <- [0..63]
            ]
 
+-- | Translate a location from the semmc semantics into a location suitable for
+-- use in macaw
 locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
                MC.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
            => proxy ppc

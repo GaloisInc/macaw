@@ -41,7 +41,8 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 import qualified SemMC.Architecture.PPC.Eval as E
 
 import qualified Data.Macaw.SemMC.Generator as G
-import qualified Data.Macaw.PPC.Operand as O
+import qualified Data.Macaw.SemMC.Operands as O
+import           Data.Macaw.PPC.Operand ()
 import           Data.Macaw.PPC.PPCReg
 
 data PPCTermStmt ids where
@@ -129,10 +130,16 @@ rewriteStmt s = do
   appendRewrittenArchStmt s'
 
 data PPCPrimFn ppc f tp where
+  -- | Unsigned division
+  --
+  -- Division by zero does not have side effects, but instead produces an undefined value
   UDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+  -- | Signed division
+  --
+  -- Division by zero does not have side effects, but instead produces an undefined value
   SDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))

@@ -7,13 +7,12 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
--- | Tools for extracting Macaw values from instruction operands
-module Data.Macaw.PPC.Operand (
-  ExtractValue,
-  extractValue,
-  ToPPCReg,
-  toPPCReg
-  ) where
+{-# OPTIONS_GHC -fno-warn-orphans #-}
+-- | Instance definitions to assist in extracting Macaw values from instruction operands
+--
+-- This module is full of orphans, as the definitions of the classes are in a
+-- package that cannot depend on the architecture-specific backends.
+module Data.Macaw.PPC.Operand () where
 
 import           GHC.TypeLits
 import           Data.Int ( Int16 )
@@ -28,10 +27,8 @@ import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 import qualified Data.Macaw.SemMC.Generator as G
+import           Data.Macaw.SemMC.Operands
 import qualified Data.Macaw.PPC.PPCReg as R
-
-class ExtractValue arch a tp | arch a -> tp where
-  extractValue :: a -> G.Generator arch ids s (MC.Value arch ids tp)
 
 instance ExtractValue arch Bool BoolType where
   extractValue = return . MC.BoolValue
@@ -93,23 +90,20 @@ instance ExtractValue arch D.CRBitRC (BVType 5) where
 instance ExtractValue arch D.CRRC (BVType 3) where
   extractValue (D.CRRC b) = return $ MC.BVValue NR.knownNat (toIntegerWord b)
 
-class ToPPCReg a arch tp | a arch -> tp where
-  toPPCReg :: a -> R.PPCReg arch tp
+instance ToRegister D.GPR (R.PPCReg PPC32.PPC) (BVType 32) where
+  toRegister = R.PPC_GP
 
-instance ToPPCReg D.GPR PPC32.PPC (BVType 32) where
-  toPPCReg = R.PPC_GP
+instance ToRegister D.GPR (R.PPCReg PPC64.PPC) (BVType 64) where
+  toRegister = R.PPC_GP
 
-instance ToPPCReg D.GPR PPC64.PPC (BVType 64) where
-  toPPCReg = R.PPC_GP
+instance ToRegister D.FR (R.PPCReg arch) (BVType 128) where
+  toRegister (D.FR rnum) = R.PPC_FR (D.VSReg rnum)
 
-instance ToPPCReg D.FR arch (BVType 128) where
-  toPPCReg (D.FR rnum) = R.PPC_FR (D.VSReg rnum)
+instance ToRegister D.VR (R.PPCReg arch) (BVType 128) where
+  toRegister (D.VR vrnum) = R.PPC_FR (D.VSReg (vrnum + 32))
 
-instance ToPPCReg D.VR arch (BVType 128) where
-  toPPCReg (D.VR vrnum) = R.PPC_FR (D.VSReg (vrnum + 32))
-
-instance ToPPCReg D.VSReg arch (BVType 128) where
-  toPPCReg = R.PPC_FR
+instance ToRegister D.VSReg (R.PPCReg arch) (BVType 128) where
+  toRegister = R.PPC_FR
 
 -- | Convert to a positive integer through a word type
 --

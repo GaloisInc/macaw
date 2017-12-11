@@ -9,8 +9,20 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeApplications #-}
+-- | Architecture-independent translation of semmc semantics (via SimpleBuilder)
+-- into macaw IR.
+--
+-- The main entry point is 'genExecInstruction', which is customized for
+-- architecture-specific backends via some parameters.
+--
+-- The other functions exposed by this module are useful for implementing
+-- architecture-specific translations.
 module Data.Macaw.SemMC.TH (
-  genExecInstruction
+  genExecInstruction,
+  addEltTH,
+  natReprTH,
+  symFnName,
+  asName
   ) where
 
 import qualified Data.ByteString as BS
@@ -22,7 +34,6 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
-import           GHC.TypeLits
 import           Text.Read ( readMaybe )
 
 import           Data.Parameterized.Classes
@@ -41,7 +52,6 @@ import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import qualified Lang.Crucible.Solver.SimpleBackend as S
 import qualified Lang.Crucible.Solver.Symbol as Sy
 
--- import qualified Dismantle.PPC as D
 import qualified Dismantle.Instruction as D
 import qualified Dismantle.Tablegen.TH.Capture as DT
 
@@ -49,8 +59,6 @@ import qualified SemMC.BoundVar as BV
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
--- import qualified SemMC.Architecture.PPC.Eval as PE
--- import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
@@ -60,12 +68,9 @@ import Data.Parameterized.NatRepr ( knownNat
                                   )
 
 import qualified Data.Macaw.SemMC.Generator as G
-import           Data.Macaw.SemMC.Translations
+import qualified Data.Macaw.SemMC.Operands as O
+import qualified Data.Macaw.SemMC.Translations as TR
 import           Data.Macaw.SemMC.TH.Monad
-
--- import           Data.Macaw.PPC.Arch
--- import           Data.Macaw.PPC.Operand
--- import           Data.Macaw.PPC.PPCReg
 
 type Sym t = S.SimpleBackend t
 
@@ -86,16 +91,17 @@ data PairF a b tp = PairF (a tp) (b tp)
 instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    => (forall tp . L.Location arch tp -> Q Exp)
                    -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
                    -> Name
                    -- ^ The name of the architecture-specific instruction
                    -- matcher to run before falling back to the generic one
                    -> Map.MapF (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
                    -> Q Exp
-instructionMatcher ltr ena archSpecificMatcher formulas = do
+instructionMatcher ltr ena ae archSpecificMatcher formulas = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  let normalCases = map (mkSemanticsCase ltr ena ipVarName operandListVar) (Map.toList formulas)
+  let normalCases = map (mkSemanticsCase ltr ena ae ipVarName operandListVar) (Map.toList formulas)
   let fallthroughCase = match wildP (normalB [| error ("Unimplemented instruction: " ++ show $(varE opcodeVar)) |]) []
   let allCases = concat [ normalCases
                         , [fallthroughCase]
@@ -114,12 +120,13 @@ instructionMatcher ltr ena archSpecificMatcher formulas = do
 mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 => (forall tp . L.Location arch tp -> Q Exp)
                 -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
                 -> Name
                 -> Name
                 -> Map.Pair (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
                 -> MatchQ
-mkSemanticsCase ltr ena ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
-  match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ltr ena ipVarName operandListVar opc semantics capInfo)) []
+mkSemanticsCase ltr ena ae ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
+  match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ltr ena ae ipVarName operandListVar opc semantics capInfo)) []
 
 -- | For each opcode case, we have a sub-case expression to destructure the
 -- operand list into names that we can reference.  This generates an expression
@@ -147,14 +154,15 @@ mkSemanticsCase ltr ena ipVarName operandListVar (Map.Pair (Witness opc) (PairF 
 mkOperandListCase :: (A.Architecture arch)
                   => (forall tp0 . L.Location arch tp0 -> Q Exp)
                   -> (forall tp0 . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp0 -> Maybe (MacawQ arch t Exp))
+                  -> (forall tp0 . BoundVarInterpretations arch t -> S.App (S.Elt t) tp0 -> Maybe (MacawQ arch t Exp))
                   -> Name
                   -> Name
                   -> a tp
                   -> ParameterizedFormula (Sym t) arch tp
                   -> DT.CaptureInfo c a tp
                   -> Q Exp
-mkOperandListCase ltr ena ipVarName operandListVar opc semantics capInfo = do
-  body <- genCaseBody ltr ena ipVarName opc semantics (DT.capturedOperandNames capInfo)
+mkOperandListCase ltr ena ae ipVarName operandListVar opc semantics capInfo = do
+  body <- genCaseBody ltr ena ae ipVarName opc semantics (DT.capturedOperandNames capInfo)
   DT.genCase capInfo operandListVar body
 
 -- | This is the function that translates formulas (semantics) into expressions
@@ -172,14 +180,15 @@ genCaseBody :: forall a sh t arch
              . (A.Architecture arch)
             => (forall tp . L.Location arch tp -> Q Exp)
             -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+            -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
             -> Name
             -> a sh
             -> ParameterizedFormula (Sym t) arch sh
             -> SL.ShapedList (FreeParamF Name) sh
             -> Q Exp
-genCaseBody ltr ena ipVarName _opc semantics varNames = do
+genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
-  translateFormula ltr ena ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
+  translateFormula ltr ena ae ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
   where
     locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
@@ -229,9 +238,24 @@ genExecInstruction :: (A.Architecture arch,
                        LF.LiftF a)
                    => proxy arch
                    -> (forall tp . L.Location arch tp -> Q Exp)
+                   -- ^ A translation of 'L.Location' references into 'Exp's
+                   -- that generate macaw IR to reference those expressions
                    -> (forall tp t . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ A translation of uninterpreted functions into macaw IR;
+                   -- returns 'Nothing' if the handler does not know how to
+                   -- translate the 'S.NonceApp'.
+                   -> (forall tp t . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
+                   -- translate division operations into architecture-specific
+                   -- statements, which have no representation in macaw.
                    -> Name
-                   -- ^ The arch-specific instruction matcher
+                   -- ^ The arch-specific instruction matcher for translating
+                   -- instructions directly into macaw IR; this is usually used
+                   -- for translating trap and system call type instructions.
+                   -- This has to be specified by 'Name' instead of as a normal
+                   -- function, as the type would actually refer to types that
+                   -- we cannot mention in this shared code (i.e.,
+                   -- architecture-specific instruction types).
                    -> (forall sh . c sh C.:- BuildOperandList arch sh)
                    -- ^ A constraint implication to let us extract/weaken the
                    -- constraint in our 'Witness' to the required 'BuildOperandList'
@@ -244,12 +268,12 @@ genExecInstruction :: (A.Architecture arch,
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Q Exp
-genExecInstruction _ ltr ena archInsnMatcher impl semantics captureInfo = do
+genExecInstruction _ ltr ena ae archInsnMatcher impl semantics captureInfo = do
   Some ng <- runIO PN.newIONonceGenerator
   sym <- runIO (S.newSimpleBackend ng)
   formulas <- runIO (loadFormulas sym impl semantics)
   let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
-  instructionMatcher ltr ena archInsnMatcher formulasWithInfo
+  instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo
   where
     attachInfo m0 (Some ci) m =
       let co = DT.capturedOpcode ci
@@ -269,21 +293,18 @@ doSequenceQ :: [StmtQ] -> [Stmt] -> Q Exp
 doSequenceQ stmts body = doE (stmts ++ map return body)
 
 translateFormula :: forall arch t sh .
-                    ( -- L.Location arch ~ APPC.Location arch,
-                     A.Architecture arch-- ,
-                     -- 1 <= APPC.ArchRegWidth arch,
-                     -- M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch
-                    )
+                    (A.Architecture arch)
                  => (forall tp . L.Location arch tp -> Q Exp)
                  -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                 -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
                  -> Name
                  -> ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
                  -> SL.ShapedList (FreeParamF Name) sh
                  -> Q Exp
-translateFormula ltr ena ipVarName semantics interps varNames = do
+translateFormula ltr ena ae ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
-  exps <- runMacawQ ltr ena (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
+  exps <- runMacawQ ltr ena ae (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
   [| Just $(doSequenceQ preamble exps) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> MacawQ arch t ()
@@ -292,7 +313,7 @@ translateFormula ltr ena ipVarName semantics interps varNames = do
             OperandParameter _w idx -> do
               let FreeParamF name = varNames `SL.indexShapedList` idx
               newVal <- addEltTH interps expr
-              appendStmt [| G.setRegVal (toPPCReg $(varE name)) $(return newVal) |]
+              appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
             LiteralParameter loc
               | L.isMemoryLocation loc -> writeMemTH interps expr
               | otherwise -> do
@@ -305,16 +326,12 @@ translateFormula ltr ena ipVarName semantics interps varNames = do
                 Just fi -> do
                   valExp <- addEltTH interps expr
                   appendStmt [| case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
-                                   Just reg -> G.setRegVal (toPPCReg reg) $(return valExp)
+                                   Just reg -> G.setRegVal (O.toRegister reg) $(return valExp)
                                    Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
                                |]
 
 addEltTH :: forall arch t ctp .
-            ( -- L.Location arch ~ APPC.Location arch,
-             A.Architecture arch-- ,
-             -- 1 <= APPC.ArchRegWidth arch,
-             -- M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch
-            )
+            (A.Architecture arch)
          => BoundVarInterpretations arch t
          -> S.Elt t ctp
          -> MacawQ arch t Exp
@@ -327,7 +344,7 @@ addEltTH interps elt = do
         S.BVElt w val _loc ->
           bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
         S.AppElt appElt -> do
-          translatedExpr <- crucAppToExprTH (S.appEltApp appElt) interps
+          translatedExpr <- appToExprTH (S.appEltApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
         S.BoundVarElt bVar ->
           case Map.lookup bVar (locVars interps) of
@@ -335,7 +352,7 @@ addEltTH interps elt = do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
             Nothing  ->
               case Map.lookup bVar (opVars interps) of
-                Just (FreeParamF name) -> bindExpr elt [| extractValue $(varE name) |]
+                Just (FreeParamF name) -> bindExpr elt [| O.extractValue $(varE name) |]
                 Nothing -> fail $ "bound var not found: " ++ show bVar
         S.NonceAppElt n -> do
           translatedExpr <- evalNonceAppTH interps (S.nonceEltApp n)
@@ -346,11 +363,7 @@ symFnName :: S.SimpleSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 
 writeMemTH :: forall arch t tp
-            . ( --L.Location arch ~ APPC.Location arch,
-                A.Architecture arch-- ,
-                -- 1 <= APPC.ArchRegWidth arch,
-                -- M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch
-              )
+            . (A.Architecture arch)
            => BoundVarInterpretations arch t
            -> S.Elt t tp
            -> MacawQ arch t ()
@@ -395,46 +408,7 @@ defaultNonceAppEvaluator bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args -> do
       let fnName = symFnName symFn
-      -- Recursively evaluate the arguments.  In the recursive evaluator, we
-      -- expect two cases:
-      --
-      -- 1) The argument is a name (via S.BoundVarElt); we want to return a
-      -- simple TH expression that just refers to that name
-      --
-      -- 2) The argument is another call, which we want to evaluate into a
-      -- simple TH expression
-      --
-      -- 3) Otherwise, we can probably just call the standard evaluator on it
-      -- (this will probably be the case for read_mem and the floating point
-      -- functions)
-      --
-      -- At the top level (after cases 1 and 2), we need to call 'extractValue' *once*.
       case fnName of
-        "ppc_is_r0" -> do
-          case FC.toListFC Some args of
-            [Some operand] -> do
-              -- The operand can be either a variable (TH name bound from
-              -- matching on the instruction operand list) or a call on such.
-              case operand of
-                S.BoundVarElt bv -> do
-                  case Map.lookup bv (opVars bvi) of
-                    Just (FreeParamF name) -> liftQ [| undefined |] -- [| extractValue (PE.interpIsR0 $(varE name)) |]
-                    Nothing -> fail ("bound var not found: " ++ show bv)
-                S.NonceAppElt nonceApp' -> do
-                  case S.nonceEltApp nonceApp' of
-                    S.FnApp symFn' args' -> do
-                      let recName = symFnName symFn'
-                      case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
-                        Nothing -> fail ("Unsupported UF: " ++ recName)
-                        Just fi -> do
-                          case FC.toListFC (asName fnName bvi) args' of
-                            [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
-                            argNames -> do
-                              let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                              liftQ [|  undefined |] -- liftQ [| extractValue (PE.interpIsR0 ($(call))) |]
-                    _ -> fail ("Unsupported nonce app type")
-                _ -> fail "Unsupported operand to ppc.is_r0"
-            _ -> fail ("Invalid argument list for ppc.is_r0: " ++ showF args)
         "test_bit_dynamic" ->
           case FC.toListFC Some args of
             [Some bitNum, Some loc] -> do
@@ -486,7 +460,6 @@ defaultNonceAppEvaluator bvi nonceApp =
                         in M.AssignedValue <$> G.addAssignment (M.ReadMem $(return addr) memRep)
                        |]
               _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
-          | Just fpFunc <- elementaryFPName fnName -> floatingPointTH bvi fpFunc args
           | otherwise ->
             case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
               Nothing -> liftQ [| error ("Unsupported UF: " ++ show $(litE (StringL fnName))) |]
@@ -498,118 +471,8 @@ defaultNonceAppEvaluator bvi nonceApp =
                   [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
                   argNames -> do
                     let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                    liftQ [| extractValue ($(call)) |]
+                    liftQ [| O.extractValue ($(call)) |]
     _ -> liftQ [| error "Unsupported NonceApp case" |]
-
-elementaryFPName :: String -> Maybe String
-elementaryFPName = L.stripPrefix "fp_"
-
-floatingPointTH :: forall arch t f c
-                 . ( -- L.Location arch ~ APPC.Location arch,
-                     A.Architecture arch,
-                     -- 1 <= APPC.ArchRegWidth arch,
-                     -- M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch,
-                     FC.FoldableFC f)
-                 => BoundVarInterpretations arch t
-                 -> String
-                 -> f (S.Elt t) c
-                 -> MacawQ arch t Exp
-floatingPointTH bvi fnName args =
-  case FC.toListFC Some args of
-    [Some a] ->
-      case fnName of
-        "round_single" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPCvt M.DoubleFloatRepr $(return fpval) M.SingleFloatRepr)) |]
-        "single_to_double" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPCvt M.SingleFloatRepr $(return fpval) M.DoubleFloatRepr)) |]
-        "abs" -> do
-          -- Note that fabs is only defined for doubles; the operation is the
-          -- same for single and double precision on PPC, so there is only a
-          -- single instruction.
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPAbs M.DoubleFloatRepr $(return fpval))) |]
-        "negate64" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPNeg M.DoubleFloatRepr $(return fpval))) |]
-        "negate32" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPNeg M.SingleFloatRepr $(return fpval))) |]
-        "is_qnan32" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.SingleFloatRepr $(return fpval))) |]
-        "is_qnan64" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.DoubleFloatRepr $(return fpval))) |]
-        "is_snan32" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsSNaN M.SingleFloatRepr $(return fpval))) |]
-        "is_snan64" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsSNaN M.DoubleFloatRepr $(return fpval))) |]
-        _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
-    [Some a, Some b] ->
-      case fnName of
-        "add64" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPAdd M.DoubleFloatRepr $(return valA) $(return valB))) |]
-        "add32" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPAdd M.SingleFloatRepr $(return valA) $(return valB))) |]
-        "sub64" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPSub M.DoubleFloatRepr $(return valA) $(return valB))) |]
-        "sub32" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPSub M.SingleFloatRepr $(return valA) $(return valB))) |]
-        "mul64" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPMul M.DoubleFloatRepr $(return valA) $(return valB))) |]
-        "mul32" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPMul M.SingleFloatRepr $(return valA) $(return valB))) |]
-        "div64" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPDiv M.DoubleFloatRepr $(return valA) $(return valB))) |]
-        "div32" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPDiv M.SingleFloatRepr $(return valA) $(return valB))) |]
-        "lt" -> do
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          -- All comparisons are done as 64-bit comparisons in PPC
-          liftQ [| G.addExpr (G.AppExpr (M.FPLt M.DoubleFloatRepr $(return valA) $(return valB))) |]
-        _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
-    [Some a, Some b, Some c] ->
-      case fnName of
-        "muladd64" -> do
-          -- FIXME: This is very wrong - we need a separate constructor for it
-          -- a * c + b
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          valC <- addEltTH bvi c
-          liftQ [| do prodVal <- G.addExpr (G.AppExpr (M.FPMul M.DoubleFloatRepr $(return valA) $(return valC)))
-                      G.addExpr (G.AppExpr (M.FPAdd M.DoubleFloatRepr prodVal $(return valB)))
-                 |]
-        "muladd32" -> do
-          -- a * c + b
-          valA <- addEltTH bvi a
-          valB <- addEltTH bvi b
-          valC <- addEltTH bvi c
-          liftQ [| do prodVal <- G.addExpr (G.AppExpr (M.FPMul M.SingleFloatRepr $(return valA) $(return valC)))
-                      G.addExpr (G.AppExpr (M.FPAdd M.SingleFloatRepr prodVal $(return valB)))
-                 |]
-        _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
-    _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
 
 -- | Parse the name of a memory read intrinsic and return the number of bytes
 -- that it reads.  For example
@@ -630,29 +493,21 @@ asName ufName bvInterps elt =
         Just (FreeParamF name) -> name
     _ -> error ("Unexpected elt as name (" ++ showF elt ++ ") in " ++ ufName)
 
--- Unimplemented:
+appToExprTH :: (A.Architecture arch)
+            => S.App (S.Elt t) tp
+            -> BoundVarInterpretations arch t
+            -> MacawQ arch t Exp
+appToExprTH app interps = do
+  mtranslator <- withAppEvaluator $ \evalApp -> return (evalApp interps app)
+  case mtranslator of
+    Just translator -> translator
+    Nothing -> defaultAppEvaluator app interps
 
--- Don't need to implement:
---   - all SemiRing operations (not using)
---   - all "Basic arithmetic operations" (not using)
---   - all "Operations that introduce irrational numbers" (not using)
---   - BVUnaryTerm (not using)
---   - all array operations (probably not using)
---   - all conversions
---   - all complex operations
---   - all structs
-
--- Might need to implement later:
---   - BVUdiv, BVUrem, BVSdiv, BVSrem
-crucAppToExprTH :: ( -- L.Location arch ~ APPC.Location arch,
-                    A.Architecture arch-- ,
-                   -- 1 <= APPC.ArchRegWidth arch,
-                   -- M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch
-                   )
-                => S.App (S.Elt t) ctp
-                -> BoundVarInterpretations arch t
-                -> MacawQ arch t Exp
-crucAppToExprTH elt interps = case elt of
+defaultAppEvaluator :: (A.Architecture arch)
+                    => S.App (S.Elt t) ctp
+                    -> BoundVarInterpretations arch t
+                    -> MacawQ arch t Exp
+defaultAppEvaluator elt interps = case elt of
   S.TrueBool  -> liftQ [| return $ G.ValueExpr (M.BoolValue True) |]
   S.FalseBool -> liftQ [| return $ G.ValueExpr (M.BoolValue False) |]
   S.NotBool bool -> do
@@ -693,13 +548,13 @@ crucAppToExprTH elt interps = case elt of
         v = S.bvWidth bv2
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
-    liftQ [| bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
+    liftQ [| TR.bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
         e <- addEltTH interps bv
-        liftQ [| bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
+        liftQ [| TR.bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
       False -> do
         e <- addEltTH interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
@@ -722,18 +577,6 @@ crucAppToExprTH elt interps = case elt of
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
     liftQ [| return (G.AppExpr (M.BVMul $(natReprTH w) $(return e1) $(return e2))) |]
-  S.BVSdiv w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| let divExp = SDiv $(natReprTH w) $(return e1) $(return e2)
-             in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
-           |]
-  S.BVUdiv w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| let divExp = UDiv $(natReprTH w) $(return e1) $(return e2)
-             in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
-           |]
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2

@@ -16,9 +16,10 @@ import           SemMC.Architecture.PPC32 ( PPC )
 import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo )
 
 import           Data.Macaw.SemMC.Generator ( Generator )
+import           Data.Macaw.SemMC.TH ( genExecInstruction )
 import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
-import           Data.Macaw.PPC.Semantics.TH ( genExecInstruction )
+import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
 
 execInstruction :: MC.Value PPC ids (MT.BVType 32) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) 'ppcInstructionMatcher (C.Sub C.Dict) allSemantics allOpcodeInfo)
+execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher (C.Sub C.Dict) allSemantics allOpcodeInfo)

@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules: Data.Macaw.SemMC.Generator
+                   Data.Macaw.SemMC.Operands
                    Data.Macaw.SemMC.Simplify
                    Data.Macaw.SemMC.Translations
                    Data.Macaw.SemMC.TH
