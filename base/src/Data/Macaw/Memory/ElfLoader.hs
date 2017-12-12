@@ -298,10 +298,10 @@ relaSymbol symtab rel =
     Just sym -> Right sym
 
 -- | Creates a map that forwards addresses to be relocated to their appropriate target.
-relaTarget :: V.Vector SymbolRef
-           -> Elf.RelaEntry Elf.X86_64_RelocationType
-           -> Either String (Maybe SymbolRef)
-relaTarget symtab rel =
+type RelaTargetFn tp = V.Vector SymbolRef -> Elf.RelaEntry tp -> Either String (Maybe SymbolRef)
+
+relaTargetX86_64 :: RelaTargetFn Elf.X86_64_RelocationType
+relaTargetX86_64 symtab rel =
   case Elf.r_type rel of
     Elf.R_X86_64_GLOB_DAT -> do
       checkZeroAddend rel
@@ -312,14 +312,26 @@ relaTarget symtab rel =
       Just <$> relaSymbol symtab rel
     tp -> Left $ "Do not yet support relocation type: " ++ show tp
 
--- | Creates a map that forwards addresses to be relocated to their appropriate target.
-relocEntry :: V.Vector SymbolRef
-           -> Elf.RelaEntry Elf.X86_64_RelocationType
-           -> Either String (Maybe (MemWord 64, SymbolRef))
-relocEntry symtab rel = fmap (fmap f) $ relaTarget symtab rel
-  where f :: a -> (MemWord 64, a)
-        f tgt = (memWord (Elf.r_offset rel), tgt)
+relaTargetARM :: RelaTargetFn Elf.ARM_RelocationType
+relaTargetARM symtab rel =
+  case Elf.r_type rel of
+    Elf.R_ARM_GLOB_DAT -> do
+      checkZeroAddend rel
+      Just <$> relaSymbol symtab rel
+    Elf.R_ARM_COPY -> Right Nothing
+    Elf.R_ARM_JUMP_SLOT -> do
+      checkZeroAddend rel
+      Just <$> relaSymbol symtab rel
+    tp -> Left $ "Do not yet support relocation type: " ++ show tp
 
+-- | Creates a map that forwards addresses to be relocated to their appropriate target.
+relocEntry :: (Elf.IsRelocationType tp, MemWidth (Elf.RelocationWidth tp), Integral (Elf.RelocationWord tp))
+           => RelaTargetFn tp
+           -> V.Vector SymbolRef
+           -> Elf.RelaEntry tp
+           -> Either String (Maybe (MemWord (Elf.RelocationWidth tp), SymbolRef))
+relocEntry relaTarget symtab rel = fmap (fmap f) $ relaTarget symtab rel
+  where f tgt = (memWord (fromIntegral (Elf.r_offset rel)), tgt)
 
 -- Given a list returns a map mapping keys to their associated values, or
 -- a key that appears in multiple elements.
@@ -331,18 +343,22 @@ mapFromListUnique = foldlM f Map.empty
             Just _ -> Left k
 
 -- | Creates a map that forwards addresses to be relocated to their appropriate target.
-mkRelocMap :: V.Vector SymbolRef
-           -> [Elf.RelaEntry Elf.X86_64_RelocationType]
-           -> Either String (RelocMap (MemWord 64))
-mkRelocMap symtab l = do
-  mentries <- traverse (relocEntry symtab) l
+mkRelocMap :: (Elf.IsRelocationType tp, MemWidth (Elf.RelocationWidth tp), Integral (Elf.RelocationWord tp))
+           => RelaTargetFn tp
+           -> V.Vector SymbolRef
+           -> [Elf.RelaEntry tp]
+           -> Either String (RelocMap (MemWord (Elf.RelocationWidth tp)))
+mkRelocMap relaTarget symtab l = do
+  mentries <- traverse (relocEntry relaTarget symtab) l
   let errMsg w = show w ++ " appears in multiple relocations."
   case mapFromListUnique $ catMaybes mentries of
     Left dup -> Left (errMsg dup)
     Right v -> Right v
 
 -- | Creates a relocation map from the contents of a dynamic section.
-relocMapOfDynamic :: ElfData
+relocMapOfDynamic :: forall w
+                  .  (MemWidth w, Integral (ElfWordType w))
+                  => ElfData
                   -> ElfClass w
                   -> ElfMachine
                   -> Elf.VirtAddrMap w
@@ -350,16 +366,23 @@ relocMapOfDynamic :: ElfData
                   -> MemLoader w (RelocMap (MemWord w))
 relocMapOfDynamic d cl mach virtMap dynContents =
   case (cl, mach) of
-    (Elf.ELFCLASS64, Elf.EM_X86_64) -> do
-      dynSection <- either (throwError . show) pure $
-        Elf.dynamicEntries d cl virtMap dynContents
-      relocs <- either (throwError . show) pure $
-        Elf.dynRelocations (dynSection :: Elf.DynamicSection Elf.X86_64_RelocationType)
-      syms <- either (throwError . show) pure $
-        Elf.dynSymTable dynSection
-      either throwError pure $
-        mkRelocMap (mkSymbolRef <$> syms) relocs
+    (Elf.ELFCLASS64, Elf.EM_X86_64) -> go relaTargetX86_64
+    (Elf.ELFCLASS32, Elf.EM_ARM)    -> go relaTargetARM
     _ -> throwError $ "Dynamic libraries are not supported on " ++ show mach ++ "."
+  where go :: forall tp
+           .  (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
+           => RelaTargetFn tp
+           -> MemLoader (Elf.RelocationWidth tp) (RelocMap (MemWord (Elf.RelocationWidth tp)))
+        go relaTarget = do
+          dynSection <- either (throwError . show) pure $
+            Elf.dynamicEntries d cl virtMap dynContents
+          relocs <- either (throwError . show) pure $
+            Elf.dynRelocations dynSection
+          syms <- either (throwError . show) pure $
+            Elf.dynSymTable dynSection
+          either throwError pure $
+            mkRelocMap relaTarget (mkSymbolRef <$> syms) relocs
+
 
 ------------------------------------------------------------------------
 -- Elf segment loading
