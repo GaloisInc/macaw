@@ -23,6 +23,8 @@ import           Data.Foldable
 import           Data.Int
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
+import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import           Data.Proxy
@@ -37,7 +39,6 @@ import           Data.Macaw.CFG ( MemRepr(..)
                                 )
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
-import qualified Data.Macaw.TypedList as TList
 
 
 import           Data.Macaw.X86.ArchTypes
@@ -64,18 +65,16 @@ type Binop
   -> Expr ids (BVType n)
   -> X86Generator st ids ()
 
-uadd4_overflows :: ( 4 <= n, IsValue v)
-                => v (BVType n) -> v (BVType n) -> v BoolType
+uadd4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
 uadd4_overflows x y = uadd_overflows (least_nibble x) (least_nibble y)
 
-usub4_overflows :: (4 <= n, IsValue v)
-                => v (BVType n) -> v (BVType n) -> v BoolType
+usub4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
 usub4_overflows x y = usub_overflows (least_nibble x) (least_nibble y)
 
-uadc4_overflows :: ( 4 <= n
-                   , IsValue v
-                   )
-                => v (BVType n) -> v (BVType n) -> v BoolType -> v BoolType
+uadc4_overflows :: 4 <= n
+                => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType -> Expr ids BoolType
 uadc4_overflows x y c = uadc_overflows (least_nibble x) (least_nibble y) c
 
 fmap_loc :: Location (Addr ids) (BVType n)
@@ -113,7 +112,7 @@ push :: MemRepr tp -> Expr ids tp -> X86Generator st ids ()
 push repr v = do
   old_sp <- get rsp
   let delta   = bvLit n64 $ memReprBytes repr -- delta in bytes
-      new_sp  = old_sp `bvSub` delta
+      new_sp  = old_sp .- delta
   MemoryAddr new_sp repr .= v
   rsp     .= new_sp
 
@@ -124,7 +123,7 @@ pop repr = do
   -- Get value at stack pointer.
   v   <- get (MemoryAddr old_sp repr)
   -- Increment stack pointer
-  rsp .= bvAdd old_sp (bvLit n64 (memReprBytes repr))
+  rsp .= old_sp .+ bvLit n64 (memReprBytes repr)
   -- Return value
   return v
 
@@ -133,15 +132,6 @@ readBV32 addr = get (MemoryAddr addr dwordMemRepr)
 
 readBV64 :: Addr ids -> X86Generator st ids (BVExpr ids 64)
 readBV64 addr = get (MemoryAddr addr qwordMemRepr)
-
--- | Read a 32 or 64-bit register
-getReg32_Reg64 :: F.Value
-               -> X86Generator st ids (Either (Location (Addr ids) (BVType 32)) (Location (Addr ids) (BVType 64)))
-getReg32_Reg64 v =
-  case v of
-    F.DWordReg r -> pure $ Left  $ reg32Loc r
-    F.QWordReg r -> pure $ Right $ reg64Loc r
-    _ -> fail "Unexpected operand"
 
 -- | Read a 32 or 64-bit register or meory value
 getRM32_RM64 :: F.Value
@@ -169,6 +159,12 @@ xmm_low32 r = subRegister n0 n32 (R.X86_XMMReg r)
 xmm_low64 :: F.XMMReg -> Location addr (BVType 64)
 xmm_low64 r = subRegister n0 n64 (R.X86_XMMReg r)
 
+-- | Location that get the low 64 bits of a XMM register,
+-- and preserves the high 64 bits on writes.
+xmm_low :: F.XMMReg -> SSE_FloatType tp -> Location addr tp
+xmm_low r SSE_Single = xmm_low32 r
+xmm_low r SSE_Double = xmm_low64 r
+
 -- | Location that get the high 64 bits of a XMM register,
 -- and preserves the low 64 bits on writes.
 xmm_high64 :: F.XMMReg -> Location addr (BVType 64)
@@ -184,7 +180,7 @@ getXMM _ = fail "Unexpected argument"
 -- If it is an XMM value, it gets the low 32bit register.
 -- If it is a memory address is gets the 32bits there.
 -- Otherwise it fails.
-getXMM_mr_low32 :: F.Value -> X86Generator st ids (Location (Addr ids) (FloatType SingleFloat))
+getXMM_mr_low32 :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 32))
 getXMM_mr_low32 (F.XMMReg r) = pure (xmm_low32 r)
 getXMM_mr_low32 (F.Mem128 src_addr) = getBV32Addr src_addr
 getXMM_mr_low32 _ = fail "Unexpected argument"
@@ -194,10 +190,27 @@ getXMM_mr_low32 _ = fail "Unexpected argument"
 -- If it is an XMM value, it gets the low 64bit register.
 -- If it is a memory address is gets the 64bits there.
 -- Otherwise it fails.
-getXMM_mr_low64 :: F.Value -> X86Generator st ids (Location (Addr ids) (FloatType DoubleFloat))
+getXMM_mr_low64 :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 64))
 getXMM_mr_low64 (F.XMMReg r) = pure (xmm_low64 r)
 getXMM_mr_low64 (F.Mem128 src_addr) = getBV64Addr src_addr
 getXMM_mr_low64 _ = fail "Unexpected argument"
+
+-- | This gets the value of a xmm/m64 field.
+--
+-- If it is an XMM value, it gets the low 64bit register.
+-- If it is a memory address is gets the 64bits there.
+-- Otherwise it fails.
+getXMM_mr_low :: F.Value -> SSE_FloatType tp -> X86Generator st ids (Location (Addr ids) tp)
+getXMM_mr_low (F.XMMReg r) tp = pure (xmm_low r tp)
+getXMM_mr_low (F.Mem128 src_addr) SSE_Single = getBV32Addr src_addr
+getXMM_mr_low (F.Mem128 src_addr) SSE_Double = getBV64Addr src_addr
+getXMM_mr_low _ _ = fail "Unexpected argument"
+
+-- | This gets the value of a xmm/m128 field.
+getXMM_mr :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 128))
+getXMM_mr (F.XMMReg r) = pure (xmm_loc r)
+getXMM_mr (F.Mem128 src_addr) = getBV128Addr src_addr
+getXMM_mr _ = fail "Unexpected argument"
 
 -- ** Condition codes
 
@@ -293,34 +306,31 @@ regLocation sz
 
 def_cmpxchg :: InstructionDef
 def_cmpxchg  = defBinaryLV "cmpxchg" $ \d s -> do
-  let acc = regLocation (bv_width s) R.RAX
+  let acc = regLocation (typeWidth s) R.RAX
   temp <- get d
   a  <- get acc
   exec_cmp acc temp -- set flags
-  ifte_ (a .=. temp)
-        (do zf_loc .= true
-            d .= s
-        )
-        (do zf_loc .= false
-            acc .= temp
-            d   .= temp
-        )
+  let p = a .=. temp
+  zf_loc .= p
+  d .= mux p s temp
+  modify acc $ \old -> mux p temp old
 
-exec_cmpxchg8b :: Location (Addr ids) (BVType 64) -> X86Generator st ids ()
-exec_cmpxchg8b loc = do
-  temp64 <- get loc
-  edx_eax <- bvCat <$> get edx <*> get eax
-  ifte_ (edx_eax .=. temp64)
-    (do zf_loc .= true
-        ecx_ebx <- bvCat <$> get ecx <*> get ebx
-        loc .= ecx_ebx
-    )
-    (do zf_loc .= false
-        let (upper,lower) = bvSplit temp64
-        edx .= upper
-        eax .= lower
-        loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
-    )
+def_cmpxchg8b :: InstructionDef
+def_cmpxchg8b =
+  defUnaryKnown "cmpxchg8b"  $ \loc -> do
+    temp64 <- get loc
+    edx_eax <- bvCat <$> get edx <*> get eax
+    let p = edx_eax .=. temp64
+    zf_loc .= p
+    ifte_ p
+      (do ecx_ebx <- bvCat <$> get ecx <*> get ebx
+          loc .= ecx_ebx
+      )
+      (do let (upper,lower) = bvSplit temp64
+          edx .= upper
+          eax .= lower
+          loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
+      )
 
 def_movsx :: InstructionDef
 def_movsx = defBinaryLVge "movsx" $ \l v -> l .= sext (typeWidth l) v
@@ -357,7 +367,7 @@ def_adc = defBinaryLV "adc" $ \dst y -> do
   -- Set result value.
   let w = typeWidth dst
   let cbv = mux c (bvLit w 1) (bvLit w 0)
-  set_result_value dst (dst_val `bvAdd` y `bvAdd` cbv)
+  set_result_value dst (dst_val .+ y .+ cbv)
 
 exec_add :: SupportedBVWidth n
          => Location (Addr ids) (BVType n)
@@ -371,7 +381,7 @@ exec_add dst y = do
   af_loc .= uadd4_overflows dst_val y
   cf_loc .= uadd_overflows  dst_val y
   -- Set result value.
-  set_result_value dst (dst_val `bvAdd` y)
+  set_result_value dst (dst_val .+ y)
 
 -- FIXME: we don't need a location, just a value.
 exec_cmp :: SupportedBVWidth n => Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
@@ -382,18 +392,18 @@ exec_cmp dst y = do
   af_loc .= usub4_overflows dst_val y
   cf_loc .= usub_overflows  dst_val y
   -- Set result value.
-  set_result_flags (dst_val `bvSub` y)
+  set_result_flags (dst_val .- y)
 
 def_dec :: InstructionDef
 def_dec = defUnaryLoc  "dec" $ \dst -> do
   dst_val <- get dst
-  let v1 = bvLit (bv_width dst_val) 1
+  let v1 = bvLit (typeWidth dst_val) 1
   -- Set overflow and arithmetic flags
   of_loc .= ssub_overflows  dst_val v1
   af_loc .= usub4_overflows dst_val v1
   -- no carry flag
   -- Set result value.
-  set_result_value dst (dst_val `bvSub` v1)
+  set_result_value dst (dst_val .- v1)
 
 set_div_flags :: X86Generator st ids ()
 set_div_flags = do
@@ -425,7 +435,7 @@ set_div_flags = do
 -- | Unsigned (@div@ instruction) and signed (@idiv@ instruction) division.
 def_div :: InstructionDef
 def_div = defUnaryV "div" $ \d ->
-   case bv_width d of
+   case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
            num <- get ax
            (q,r) <- bvQuotRem ByteRepVal num d
@@ -451,7 +461,7 @@ def_div = defUnaryV "div" $ \d ->
 def_idiv :: InstructionDef
 def_idiv = defUnaryV "idiv" $ \d -> do
   set_div_flags
-  case bv_width d of
+  case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
            num <- get ax
            (q,r) <- bvSignedQuotRem ByteRepVal num d
@@ -484,13 +494,13 @@ def_inc :: InstructionDef
 def_inc = defUnaryLoc "inc" $ \dst -> do
   -- Get current value stored in destination.
   dst_val <- get dst
-  let y  = bvLit (bv_width dst_val) 1
+  let y  = bvLit (typeWidth dst_val) 1
   -- Set overflow and arithmetic flags
   of_loc .= sadd_overflows  dst_val y
   af_loc .= uadd4_overflows dst_val y
   -- no cf_loc
   -- Set result value.
-  set_result_value dst (dst_val `bvAdd` y)
+  set_result_value dst (dst_val .+ y)
 
 -- FIXME: is this the right way around?
 exec_mul :: forall st ids n
@@ -498,18 +508,18 @@ exec_mul :: forall st ids n
          => Expr ids (BVType n)
          -> X86Generator st ids ()
 exec_mul v
-  | Just Refl <- testEquality (bv_width v) n8  = do
+  | Just Refl <- testEquality (typeWidth v) n8  = do
     r <- go al
     ax .= r
-  | Just Refl <- testEquality (bv_width v) n16 = do
+  | Just Refl <- testEquality (typeWidth v) n16 = do
     (upper, lower) <- bvSplit <$> go ax
     dx .= upper
     ax .= lower
-  | Just Refl <- testEquality (bv_width v) n32 = do
+  | Just Refl <- testEquality (typeWidth v) n32 = do
     (upper, lower) <- bvSplit <$> go eax
     edx .= upper
     eax .= lower
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
     (upper, lower) <- bvSplit <$> go rax
     rdx .= upper
     rax .= lower
@@ -521,8 +531,8 @@ exec_mul v
        -> X86Generator st ids (BVExpr ids (n+n))
     go l = do
       v' <- get l
-      let sz = addNat (bv_width v) (bv_width v)
-          r  = uext sz v' `bvMul` uext sz v -- FIXME: uext here is OK?
+      let sz = addNat (typeWidth v) (typeWidth v)
+          r  = uext sz v' .* uext sz v -- FIXME: uext here is OK?
           upper_r = fst (bvSplit r) :: Expr ids (BVType n)
       set_undefined sf_loc
       set_undefined af_loc
@@ -539,7 +549,7 @@ really_exec_imul :: forall st ids n
                  -> BVExpr ids n
                  -> X86Generator st ids (BVExpr ids (n+n))
 really_exec_imul v v' = do
-  let w = bv_width v
+  let w = typeWidth v
   let sz = addNat w w
   let w_is_pos :: LeqProof 1 n
       w_is_pos = LeqProof
@@ -559,21 +569,21 @@ really_exec_imul v v' = do
 
 exec_imul1 :: forall st ids n . SupportedBVWidth n => BVExpr ids n -> X86Generator st ids ()
 exec_imul1 v
-  | Just Refl <- testEquality (bv_width v) n8  = do
+  | Just Refl <- testEquality (typeWidth v) n8  = do
       v' <- get al
       r <- really_exec_imul v v'
       ax .= r
-  | Just Refl <- testEquality (bv_width v) n16 = do
+  | Just Refl <- testEquality (typeWidth v) n16 = do
       v' <- get ax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       dx .= upper
       ax .= lower
-  | Just Refl <- testEquality (bv_width v) n32 = do
+  | Just Refl <- testEquality (typeWidth v) n32 = do
       v' <- get eax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       edx .= upper
       eax .= lower
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
       v' <- get rax
       (upper, lower) <- bvSplit <$> really_exec_imul v v'
       rdx .= upper
@@ -590,7 +600,7 @@ exec_imul2_3 :: forall st ids n n'
              -> X86Generator st ids ()
 exec_imul2_3 l v v' = do
   withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $ do
-  r <- really_exec_imul v (sext (bv_width v) v')
+  r <- really_exec_imul v (sext (typeWidth v) v')
   l .= snd (bvSplit r)
 
 def_imul :: InstructionDef
@@ -608,7 +618,7 @@ def_imul = defVariadic "imul" $ \_ vs ->
       SomeBV l <- getSomeBVLocation loc
       v  <- getBVValue val (typeWidth l)
       SomeBV v' <- getSomeBVValue val'
-      Just LeqProof <- return $ testLeq (bv_width v') (bv_width v)
+      Just LeqProof <- return $ testLeq (typeWidth v') (typeWidth v)
       exec_imul2_3 l v v'
     _ ->
       fail "Impossible number of argument in imul"
@@ -617,9 +627,9 @@ def_imul = defVariadic "imul" $ \_ vs ->
 def_neg :: InstructionDef
 def_neg = defUnaryLoc "neg" $ \l -> do
   v <- get l
-  cf_loc .= mux (is_zero v) false true
+  cf_loc .= boolNot (is_zero v)
   let r = bvNeg v
-      zero = bvLit (bv_width v) 0
+      zero = bvLit (typeWidth v) 0
   of_loc .= ssub_overflows  zero v
   af_loc .= usub4_overflows zero v
   set_result_value l r
@@ -640,13 +650,13 @@ def_sbb = defBinaryLV "sbb" $ \l v -> do
   v0 <- get l
   let w = typeWidth l
   let cbv = mux cf (bvLit w 1) (bvLit w 0)
-  let v' = v `bvAdd` cbv
+  let v' = v .+ cbv
   -- Set overflow and arithmetic flags
   of_loc .= ssbb_overflows v0 v cf
   af_loc .= uadd4_overflows v cbv .||. usub4_overflows v0 v'
   cf_loc .= uadd_overflows v cbv .||. (usub_overflows  v0 v')
   -- Set result value.
-  let res = v0 `bvSub` v'
+  let res = v0 .- v'
   set_result_flags res
   l .= res
 
@@ -655,7 +665,7 @@ def_sub :: InstructionDef
 def_sub = defBinaryLV "sub" $ \l v -> do
   v0 <- get l
   exec_cmp l v -- set flags
-  l .= (v0 `bvSub` v)
+  l .= (v0 .- v)
 
 -- ** Decimal Arithmetic Instructions
 -- ** Logical Instructions
@@ -714,16 +724,16 @@ exec_sh lw l val val_setter cf_setter of_setter = do
   let nbits = if natValue w == 64 then 64 else 32
   let low_count = count .&. bvLit n8 (nbits - 1)
   -- Compute result.
-  let res = val_setter v (uext (bv_width v) low_count)
+  let res = val_setter v (uext (typeWidth v) low_count)
   let zero8 = bvLit n8 0
   -- When the count is zero, nothing happens, in particular, no flags change
   let isNonzero = low_count .=/=. zero8
   -- Set the af flag
-  do af_new_val <- make_undefined knownType
+  do af_new_val <- make_undefined knownRepr
      modify af_loc $ mux isNonzero af_new_val
   -- Set the overflow flag based on count.
   do of_val   <- get of_loc
-     of_undef <- make_undefined knownType
+     of_undef <- make_undefined knownRepr
      -- If count is zero, then flag is unchanged
      of_loc .= mux (low_count .=. zero8) of_val
                  -- If count is one, then of is xor of initial and final values.
@@ -759,14 +769,14 @@ def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
   where set_cf w v i =
            (i `bvUle` bvLit n8 (natValue w))
-             .&&. bvBit v (bvLit w (natValue w) `bvSub` uext w i)
+             .&&. bvBit v (bvLit w (natValue w) .- uext w i)
         set_of v _ =  msb v
 
 def_shr :: InstructionDef
 def_shr = def_sh "shr" bvShr set_cf set_of
   where -- Carry flag should be set to last bit shifted out.
         -- Note that if i exceeds w, bvBit v i returns false, so this does what we want.
-        set_cf w v i = bvBit v (uext w i `bvSub` bvLit w 1)
+        set_cf w v i = bvBit v (uext w i .- bvLit w 1)
         set_of v res = msb res `boolXor` msb v
 
 def_sar :: InstructionDef
@@ -778,7 +788,7 @@ def_sar = def_sh "sar" bvSar set_cf set_of
           let notInRange = bvUlt (bvLit n8 (natValue w)) i
           -- Get most-significant bit
           let msb_v = bvBit v (bvLit w (natValue w-1))
-          bvBit v (uext w i `bvSub` bvLit w 1) .||. (notInRange .&&. msb_v)
+          bvBit v (uext w i .- bvLit w 1) .||. (notInRange .&&. msb_v)
         set_of _ _ = false
 
 -- FIXME: use really_exec_shift above?
@@ -791,27 +801,30 @@ exec_rol l count = do
   -- The intel manual says that the count is masked to give an upper
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
-  let nbits = case testLeq (bv_width v) n32 of
+  let nbits = case testLeq (typeWidth v) n32 of
                 Just LeqProof -> 32
                 _             -> 64
-      countMASK = bvLit (bv_width v) (nbits - 1)
-      low_count = uext (bv_width v) count .&. countMASK
+      countMASK = bvLit (typeWidth v) (nbits - 1)
+      low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (bv_width v) (natValue (bv_width v) - 1)
-      effective = uext (bv_width v) count .&. effectiveMASK
+      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRol v effective
 
   l .= r
 
-  -- When the count is zero only the assignment happens (cf is not changed)
-  unless_ (is_zero low_count) $ do
-    let new_cf = bvBit r (bvLit (bv_width r) 0)
-    cf_loc .= new_cf
-
-    ifte_ (low_count .=. bvLit (bv_width low_count) 1)
-          (of_loc .= (msb r `boolXor` new_cf))
-          (set_undefined of_loc)
+  let p = is_zero low_count
+  let new_cf = bvBit r (bvLit (typeWidth r) 0)
+  -- When the count is zero only the assignment happens (cf and of  is not changed)
+  modify cf_loc $ \old_cf -> mux p old_cf new_cf
+  u <- make_undefined knownRepr
+  modify of_loc $ \old_of ->
+      mux p
+          old_of
+          (mux (low_count .=. bvLit (typeWidth low_count) 1)
+               (msb r `boolXor` new_cf)
+               u)
 
 -- FIXME: use really_exec_shift above?
 exec_ror :: (1 <= n', n' <= n, SupportedBVWidth n)
@@ -823,26 +836,27 @@ exec_ror l count = do
   -- The intel manual says that the count is masked to give an upper
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
-  let nbits = case testLeq (bv_width v) n32 of
+  let nbits = case testLeq (typeWidth v) n32 of
                 Just LeqProof -> 32
                 Nothing       -> 64
-      countMASK = bvLit (bv_width v) (nbits - 1)
-      low_count = uext (bv_width v) count .&. countMASK
+      countMASK = bvLit (typeWidth v) (nbits - 1)
+      low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (bv_width v) (natValue (bv_width v) - 1)
-      effective = uext (bv_width v) count .&. effectiveMASK
+      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRor v effective
 
   l .= r
-
-  unless_ (is_zero low_count) $ do
-    let new_cf = bvBit r (bvLit (bv_width r) (natValue (bv_width r) - 1))
-    cf_loc .= new_cf
-
-    ifte_ (low_count .=. bvLit (bv_width low_count) 1)
-          (of_loc .= (msb r `boolXor` bvBit r (bvLit (bv_width r) (natValue (bv_width v) - 2))))
-          (set_undefined of_loc)
+  let p = is_zero low_count
+  let new_cf = bvBit r (bvLit (typeWidth r) (natValue (typeWidth r) - 1))
+  modify cf_loc $ \old_cf -> mux p old_cf new_cf
+  u <- make_undefined knownRepr
+  modify of_loc $ \old_of ->
+    mux p old_of $
+    mux (low_count .=. bvLit (typeWidth low_count) 1)
+        (msb r `boolXor` bvBit r (bvLit (typeWidth r) (natValue (typeWidth v) - 2)))
+        u
 
 -- ** Bit and Byte Instructions
 
@@ -917,7 +931,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg16Loc ir
       base_addr <- getBVAddress base
       let word_off = sext' n64 $ bvSar off (bvLit knownNat 4)
-      let loc = MemoryAddr (bvAdd base_addr word_off) wordMemRepr
+      let loc = MemoryAddr (base_addr .+ word_off) wordMemRepr
       let iv = off .&. bvLit knownNat 15
       act knownNat loc iv
       set_bt_flags
@@ -931,7 +945,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg32Loc ir
       base_addr <- getBVAddress base
       let dword_off = sext' n64 $ bvSar off (bvLit knownNat 5)
-      let loc = MemoryAddr (bvAdd base_addr dword_off) dwordMemRepr
+      let loc = MemoryAddr (base_addr .+ dword_off) dwordMemRepr
       let iv  = off .&. bvLit knownNat 31
       act knownNat loc iv
       set_bt_flags
@@ -945,7 +959,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       off <- get $! reg64Loc ir
       let qword_off = bvSar off (bvLit knownNat 6)
       base_addr <- getBVAddress base
-      let loc = MemoryAddr (bvAdd base_addr qword_off) qwordMemRepr
+      let loc = MemoryAddr (base_addr .+ qword_off) qwordMemRepr
       let iv = off .&. bvLit knownNat 63
       act knownNat loc iv
       set_bt_flags
@@ -1005,7 +1019,7 @@ def_jcc_list =
       when_ a $ do
         old_pc <- getReg R.X86_IP
         off <- getBVValue v knownNat
-        rip .= old_pc `bvAdd` off
+        rip .= old_pc .+ off
 
 def_jmp :: InstructionDef
 def_jmp = defUnary "jmp" $ \_ v -> do
@@ -1022,7 +1036,7 @@ def_ret = defVariadic "ret"    $ \_ vs ->
     [F.WordImm off] -> do
       -- Pop IP and adjust stack pointer.
       next_ip <- pop addrRepr
-      modify rsp (bvAdd (bvLit n64 (toInteger off)))
+      modify rsp (bvLit n64 (toInteger off) .+)
       -- Set IP
       rip .= next_ip
     _ ->
@@ -1104,28 +1118,28 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
     unless_ (count .=. bvKLit 0) $ do
       nsame <- memcmp bytesPerOp count v_rsi v_rdi df
       let equal = (nsame .=. count)
-          nwordsSeen = mux equal count (count `bvSub` (nsame `bvAdd` bvKLit 1))
+          nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
       -- we need to set the flags as if the last comparison was done, hence this.
-      let lastWordBytes = (nwordsSeen `bvSub` bvKLit 1) `bvMul` bytesPerOp'
-          lastSrc  = mux df (v_rsi `bvSub` lastWordBytes) (v_rsi `bvAdd` lastWordBytes)
-          lastDest = mux df (v_rdi `bvSub` lastWordBytes) (v_rdi `bvAdd` lastWordBytes)
+      let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
+          lastSrc  = mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
+          lastDest = mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
 
       v' <- get $ MemoryAddr lastDest repr
       exec_cmp (MemoryAddr lastSrc repr) v' -- FIXME: right way around?
 
       -- we do this to make it obvious so repz cmpsb ; jz ... is clear
       zf_loc .= equal
-      let nbytesSeen = nwordsSeen `bvMul` bytesPerOp'
+      let nbytesSeen = nwordsSeen .* bytesPerOp'
 
-      rsi .= mux df (v_rsi `bvSub` nbytesSeen) (v_rsi `bvAdd` nbytesSeen)
-      rdi .= mux df (v_rdi `bvSub` nbytesSeen) (v_rdi `bvAdd` nbytesSeen)
+      rsi .= mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
+      rdi .= mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
       rcx .= (count .- nwordsSeen)
    else do
      v' <- get $ MemoryAddr v_rdi repr
      exec_cmp (MemoryAddr   v_rsi repr) v' -- FIXME: right way around?
-     rsi .= mux df (v_rsi  `bvSub` bytesPerOp') (v_rsi `bvAdd` bytesPerOp')
-     rdi .= mux df (v_rdi  `bvSub` bytesPerOp') (v_rdi `bvAdd` bytesPerOp')
+     rsi .= mux df (v_rsi  .- bytesPerOp') (v_rsi .+ bytesPerOp')
+     rdi .= mux df (v_rdi  .- bytesPerOp') (v_rdi .+ bytesPerOp')
 
 
 def_cmps :: InstructionDef
@@ -1170,7 +1184,7 @@ exec_scas False False rep = repValHasSupportedWidth rep $ do
   exec_cmp (MemoryAddr v_rdi memRepr) v_rax  -- FIXME: right way around?
   let bytesPerOp = mux df (bvLit n64 (negate (memReprBytes memRepr)))
                           (bvLit n64 (memReprBytes memRepr))
-  rdi   .= v_rdi `bvAdd` bytesPerOp
+  rdi   .= v_rdi .+ bytesPerOp
 -- repz or repnz prefix set
 exec_scas _repz_pfx False _rep =
   fail $ "Semantics only currently supports finding elements."
@@ -1197,13 +1211,13 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let bytePerOpLit = bvKLit (memReprBytes (repValSizeMemRepr sz))
 
   -- Count the number of bytes seen.
-  let nBytesSeen    = (ValueExpr v_rcx `bvSub` count') `bvMul` bytePerOpLit
+  let nBytesSeen    = (ValueExpr v_rcx .- count') .* bytePerOpLit
 
-  let lastWordBytes = nBytesSeen `bvSub` bytePerOpLit
+  let lastWordBytes = nBytesSeen .- bytePerOpLit
 
   let y = ValueExpr v_rax
 
-  dst <- eval (ValueExpr v_rdi `bvAdd` lastWordBytes)
+  dst <- eval (ValueExpr v_rdi .+ lastWordBytes)
   cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
   let condExpr = ValueExpr cond
   dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
@@ -1213,13 +1227,13 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
 
 
   condSet rcx    count'
-  condSet rdi    $ ValueExpr v_rdi `bvAdd` nBytesSeen
+  condSet rdi    $ ValueExpr v_rdi .+ nBytesSeen
   condSet of_loc $ ssub_overflows  dst_val y
   -- Set overflow and arithmetic flags
   condSet af_loc $ usub4_overflows dst_val y
   condSet cf_loc $ usub_overflows  dst_val y
   -- Set result value.
-  let res = dst_val `bvSub` y
+  let res = dst_val .- y
   condSet sf_loc $ msb res
   condSet zf_loc $ is_zero res
   byte <- eval (least_byte res)
@@ -1309,7 +1323,7 @@ exec_stos True rep = do
   v    <- get (xaxValLoc rep)
   let szv = bvLit n64 (memReprBytes mrepr)
   count <- get rcx
-  let nbytes     = count `bvMul` szv
+  let nbytes     = count .* szv
   memset count v dest df
   rdi .= mux df (dest .- nbytes) (dest .+ nbytes)
   rcx .= bvKLit 0
@@ -1363,30 +1377,43 @@ def_lea = defBinary "lea" $ \_ loc (F.VoidMem ar) -> do
 
 -- | FLD Load floating-point value
 def_fld :: InstructionDef
-def_fld = defUnaryFPV      "fld"   $ \fir v ->
-  x87Push (fpCvt fir X86_80FloatRepr v)
+def_fld = defUnary "fld" $ \_ v -> do
+  case v of
+    F.FPMem32 ar -> do
+      l <- getBV32Addr ar
+      x87Push =<< evalArchFn . X87_Extend SSE_Single =<< eval =<< get l
+    F.FPMem64 ar -> do
+      l <- getBV64Addr ar
+      x87Push =<< evalArchFn . X87_Extend SSE_Double =<< eval =<< get l
+    F.FPMem80 ar -> do
+      l <- getBV80Addr ar
+      x87Push =<< get l
+    F.X87Register n -> do
+      x87Push =<< get (X87StackRegister n)
+    _ -> error "fld given unexpected argument"
 
--- | FST Store floating-point value
-exec_fst :: FloatInfoRepr flt
-         -> Location (Addr ids) (FloatType flt)
-         -> X86Generator st ids ()
-exec_fst fir l = do
+-- | FST/FSTP Store floating-point value
+def_fstX :: String -> Bool -> InstructionDef
+def_fstX mnem doPop = defUnary mnem $ \_ val -> do
   v <- get (X87StackRegister 0)
-  l .= fpCvt X86_80FloatRepr fir v
+  case val of
+    F.FPMem32 ar -> do
+      l <- getBV32Addr ar
+      (l .=) =<< evalArchFn . X87_FST SSE_Single =<< eval v
+    F.FPMem64 ar -> do
+      l <- getBV64Addr ar
+      (l .=) =<< evalArchFn . X87_FST SSE_Double =<< eval v
+    F.FPMem80 ar -> do
+      l <- getBV80Addr ar
+      l .= v
+    F.X87Register n -> do
+      X87StackRegister n .= v
+    _ -> fail $ "Bad floating point argument."
+  set_undefined c1_loc
   set_undefined c0_loc
-  -- TODO: The value assigned to c1_loc seems wrong
-  -- The bit is only set if the floating-point inexact exception is thrown.
-  -- It should be set to 0 is if a stack underflow occurred.
-  c1_loc .= fpCvtRoundsUp X86_80FloatRepr fir v
   set_undefined c2_loc
   set_undefined c3_loc
-
-
--- | FSTP Store floating-point value
-def_fstp :: InstructionDef
-def_fstp = defUnaryFPL "fstp"   $ \fir l -> do
-  exec_fst fir l
-  x87Pop
+  when doPop x87Pop
 
 -- FILD Load integer
 -- FIST Store integer
@@ -1405,71 +1432,93 @@ def_fstp = defUnaryFPL "fstp"   $ \fir l -> do
 
 -- ** Basic arithmetic instructions
 
-fparith :: (forall flt
-            . FloatInfoRepr flt
-            -> Expr ids (FloatType flt)
-            -> Expr ids (FloatType flt)
-            -> Expr ids (FloatType flt))
-           -> (forall flt
-               . FloatInfoRepr flt
-               -> Expr ids (FloatType flt)
-               -> Expr ids (FloatType flt)
-               -> Expr ids BoolType)
-           -> FloatInfoRepr flt_d
-           -> Location (Addr ids) (FloatType flt_d)
-           -> FloatInfoRepr flt_s
-           -> Expr ids (FloatType flt_s)
-           -> X86Generator st ids ()
-fparith op opRoundedUp fir_d l fir_s v = do
-  v' <- get l
-  let up_v = fpCvt fir_s fir_d v
-  l .= op fir_d v' up_v
-  c1_loc .= opRoundedUp fir_d v' up_v
+type X87BinOp
+   = forall f
+   . f (FloatType X86_80Float)
+   -> f (FloatType X86_80Float)
+   -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+
+execX87BinOp :: X87BinOp
+             -> Location (Addr ids) (BVType 80)
+             -> Expr ids (BVType 80)
+             -> X86Generator st ids ()
+execX87BinOp op loc expr1 = do
+  val0 <- eval =<< get loc
+  val1 <- eval expr1
+  res <- evalArchFn $ op val0 val1
+  loc .= app (TupleField knownRepr res P.index0)
   set_undefined c0_loc
+  c1_loc .= app (TupleField knownRepr res P.index1)
   set_undefined c2_loc
   set_undefined c3_loc
 
+defX87BinaryInstruction :: String
+                        -> X87BinOp
+                        -> InstructionDef
+defX87BinaryInstruction mnem op =
+  defVariadic mnem $ \_ vs -> do
+    case vs of
+      [F.FPMem32 addr] -> do
+        addr' <- getBVAddress addr
+        sVal <- eval =<< get (MemoryAddr addr' (floatMemRepr SingleFloatRepr))
+        val  <- evalArchFn $ X87_Extend SSE_Single sVal
+        execX87BinOp op (X87StackRegister 0) val
+      [F.FPMem64 addr] -> do
+        addr' <- getBVAddress addr
+        sVal <- eval =<< get (MemoryAddr addr' (floatMemRepr DoubleFloatRepr))
+        val  <- evalArchFn $ X87_Extend SSE_Double sVal
+        execX87BinOp op (X87StackRegister 0) val
+      [F.X87Register x, F.X87Register y] -> do
+        val <- get (X87StackRegister y)
+        execX87BinOp op (X87StackRegister x) val
+      _ -> do
+        fail $ mnem ++ "had unexpected arguments: " ++ show vs
+
+defX87PopInstruction :: String
+                     -> X87BinOp
+                     -> InstructionDef
+defX87PopInstruction mnem op =
+  defVariadic mnem $ \_ vs -> do
+    case vs of
+      [F.X87Register x, F.X87Register 0] -> do
+        val <- get (X87StackRegister 0)
+        execX87BinOp op (X87StackRegister x) val
+        x87Pop
+      _ -> do
+        fail $ mnem ++ "had unexpected arguments: " ++ show vs
+
 -- | FADD Add floating-point
 def_fadd :: InstructionDef
-def_fadd = defFPBinaryImplicit "fadd" $ fparith fpAdd fpAddRoundedUp
+def_fadd = defX87BinaryInstruction "fadd" X87_FAdd
 
 -- FADDP Add floating-point and pop
 -- FIADD Add integer
 
 -- | FSUB Subtract floating-point
 def_fsub :: InstructionDef
-def_fsub = defFPBinaryImplicit "fsub"   $
-    fparith fpSub fpSubRoundedUp
+def_fsub = defX87BinaryInstruction "fsub" X87_FSub
 
 -- | FSUBP Subtract floating-point and pop
 def_fsubp :: InstructionDef
-def_fsubp =
-  defFPBinaryImplicit "fsubp" $ \fir_d l fir_s v -> do
-    fparith fpSub fpSubRoundedUp fir_d l fir_s v
-    x87Pop
+def_fsubp = defX87PopInstruction "fsubp" X87_FSub
 
 -- FISUB Subtract integer
 
 -- | FSUBR Subtract floating-point reverse
 def_fsubr :: InstructionDef
-def_fsubr = defFPBinaryImplicit "fsubr" $ do
-    let reverseOp f fir x y = f fir y x
-    fparith (reverseOp fpSub) (reverseOp fpSubRoundedUp)
+def_fsubr = defX87BinaryInstruction "fsubr" (flip X87_FSub)
 
 -- | FSUBRP Subtract floating-point reverse and pop
 def_fsubrp :: InstructionDef
-def_fsubrp = defFPBinaryImplicit "fsubrp" $ \fir_d l fir_s v -> do
-  let reverseOp f fir x y = f fir y x
-  fparith (reverseOp fpSub) (reverseOp fpSubRoundedUp) fir_d l fir_s v
-  x87Pop
+def_fsubrp = defX87PopInstruction "fsubrp" (flip X87_FSub)
 
 -- FISUBR Subtract integer reverse
 
 -- | FMUL Multiply floating-point
 def_fmul :: InstructionDef
-def_fmul = defFPBinaryImplicit "fmul" $ fparith fpMul fpMulRoundedUp
+def_fmul = defX87BinaryInstruction "fmul" X87_FMul
 
--- FMULP Multiply floating-point and pop
+-- FMULP Multiply floating-pAoint and pop
 -- FIMUL Multiply integer
 -- FDIV Divide floating-point
 -- FDIVP Divide floating-point and pop
@@ -1576,8 +1625,8 @@ exec_movd :: (SupportedBVWidth n, 1 <= n')
           -> Expr ids (BVType n')
           -> X86Generator st ids ()
 exec_movd l v
-  | Just LeqProof <- testLeq  (typeWidth l) (bv_width v) = l .= bvTrunc (typeWidth l) v
-  | Just LeqProof <- testLeq  (bv_width v) (typeWidth l) = l .=    uext (typeWidth l) v
+  | Just LeqProof <- testLeq  (typeWidth l) (typeWidth v) = l .= bvTrunc (typeWidth l) v
+  | Just LeqProof <- testLeq  (typeWidth v) (typeWidth l) = l .=    uext (typeWidth l) v
   | otherwise = fail "movd: Unknown bit width"
 
 -- ** MMX Conversion Instructions
@@ -1605,7 +1654,7 @@ def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
 def_padd :: (1 <= w) => String -> NatRepr w -> InstructionDef
 def_padd suf w = defBinaryLV ("padd" ++ suf) $ \l v -> do
   v0 <- get l
-  l .= vectorize2 w bvAdd v0 v
+  l .= vectorize2 w (.+) v0 v
 
 -- PADDSB Add packed signed byte integers with signed saturation
 -- PADDSW Add packed signed word integers with signed saturation
@@ -1615,7 +1664,7 @@ def_padd suf w = defBinaryLV ("padd" ++ suf) $ \l v -> do
 def_psub :: (1 <= w) => String -> NatRepr w -> InstructionDef
 def_psub suf w = defBinaryLV ("psub" ++ suf) $ \l v -> do
   v0 <- get l
-  l .= vectorize2 w bvSub v0 v
+  l .= vectorize2 w (.-) v0 v
 
 -- PSUBSB Subtract packed signed byte integers with signed saturation
 -- PSUBSW Subtract packed signed word integers with signed saturation
@@ -1637,8 +1686,8 @@ def_pcmp nm op sz =
   defBinaryLV nm $ \l v -> do
     v0 <- get l
     let chkHighLow d s = mux (d `op` s)
-                             (bvLit (bv_width d) (negate 1))
-                             (bvLit (bv_width d) 0)
+                             (bvLit (typeWidth d) (negate 1))
+                             (bvLit (typeWidth d) 0)
     l .= vectorize2 sz chkHighLow v0 v
 
 -- ** MMX Logical Instructions
@@ -1678,8 +1727,8 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
       -- truncate e.g. 2^31 to 0, so we saturate if the size is over
       -- the number of bits we want to shift.  We can always fit the
       -- width into count bits (assuming we are passed 16, 32, or 64).
-      nbits   = bvLit (bv_width count) (natValue elsz)
-      countsz = case testNatCases (bv_width count) elsz of
+      nbits   = bvLit (typeWidth count) (natValue elsz)
+      countsz = case testNatCases (typeWidth count) elsz of
                   NatCaseLT LeqProof -> uext' elsz count
                   NatCaseEQ          -> count
                   NatCaseGT LeqProof -> bvTrunc' elsz count
@@ -1747,9 +1796,9 @@ def_pshufb :: InstructionDef
 def_pshufb = defBinary "pshufb" $ \_ f_d f_s -> do
   case (f_d, f_s) of
     (F.XMMReg d, F.XMMReg s) -> do
-      d_val  <- get $ xmm_loc d
-      s_val  <- get $ xmm_loc s
-      r <- evalArchFn =<< PShufb SIMD_128 <$> eval d_val <*> eval s_val
+      d_val  <- eval =<< get (xmm_loc d)
+      s_val  <- eval =<< get (xmm_loc s)
+      r <- evalArchFn $ PShufb SIMD_128 d_val s_val
       xmm_loc d .= r
     _ -> do
       fail $ "pshufb only supports 2 XMM registers as arguments."
@@ -1812,52 +1861,57 @@ def_movlps = defBinary "movlps" $ \_ x y -> do
 
 -- | This evaluates an instruction that takes xmm and xmm/m64 arguments,
 -- and applies a function that updates the low 64-bits of the first argument.
-def_xmm_ss :: String
-              -- ^ Instruction mnemonic
-           -> (forall v . IsValue v
-               => v (FloatType SingleFloat)
-               -> v (FloatType SingleFloat)
-               -> v (FloatType SingleFloat))
-              -- ^ Binary operation
-           -> InstructionDef
-def_xmm_ss mnem f =
-  defBinary mnem $ \_ loc val -> do
+def_xmm_ss :: SSE_Op -> InstructionDef
+def_xmm_ss f =
+  defBinary (sseOpName f ++ "ss") $ \_ loc val -> do
     d <- getXMM loc
-    y <- get =<< getXMM_mr_low32 val
-    modify (xmm_low32 d) $ \x -> f x y
+    y <- eval =<< get =<< getXMM_mr_low32 val
+    x <- eval =<< get (xmm_low32 d)
+    res <- evalArchFn $ SSE_VectorOp f n1 SSE_Single x y
+    xmm_low32 d .= res
 
 -- ADDSS Add scalar single-precision floating-point values
 def_addss :: InstructionDef
-def_addss = def_xmm_ss "addss" $ fpAdd SingleFloatRepr
+def_addss = def_xmm_ss SSE_Add
 
 -- SUBSS Subtract scalar single-precision floating-point values
 def_subss :: InstructionDef
-def_subss = def_xmm_ss "subss" $ fpSub SingleFloatRepr
+def_subss = def_xmm_ss SSE_Sub
 
 -- MULSS Multiply scalar single-precision floating-point values
 def_mulss :: InstructionDef
-def_mulss = def_xmm_ss "mulss" $ fpMul SingleFloatRepr
+def_mulss = def_xmm_ss SSE_Mul
 
 -- | DIVSS Divide scalar single-precision floating-point values
 def_divss :: InstructionDef
-def_divss = def_xmm_ss "divss" $ fpDiv SingleFloatRepr
+def_divss = def_xmm_ss SSE_Div
+
+-- | This evaluates an instruction that takes xmm and xmm/m128 arguments,
+-- and applies a function that updates the register.
+def_xmm_packed :: SSE_Op -> InstructionDef
+def_xmm_packed f =
+  defBinary (sseOpName f ++ "ps") $ \_ loc val -> do
+    d <- xmm_loc <$> getXMM loc
+    x <- eval =<< get d
+    y <- eval =<< get =<< getXMM_mr val
+    res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
+    d .= res
 
 -- | ADDPS Add packed single-precision floating-point values
 def_addps :: InstructionDef
-def_addps = defBinaryXMMV "addps" $ \l v -> do
-  fmap_loc l $ \lv -> vectorize2 n32 (fpAdd SingleFloatRepr) lv v
+def_addps = def_xmm_packed SSE_Add
 
 -- SUBPS Subtract packed single-precision floating-point values
 def_subps :: InstructionDef
-def_subps = defBinaryXMMV "subps" $ \l v -> do
-  fmap_loc l $ \lv -> vectorize2 n32 (fpSub SingleFloatRepr) lv v
+def_subps = def_xmm_packed SSE_Sub
 
 -- | MULPS Multiply packed single-precision floating-point values
 def_mulps :: InstructionDef
-def_mulps = defBinaryXMMV "mulps" $ \l v -> do
-  fmap_loc l $ \lv -> vectorize2 n64 (fpMul DoubleFloatRepr) lv v
+def_mulps = def_xmm_packed SSE_Mul
 
--- DIVPS Divide packed single-precision floating-point values
+-- | DIVPS Divide packed single-precision floating-point values
+def_divps :: InstructionDef
+def_divps = def_xmm_packed SSE_Div
 
 
 -- RCPPS Compute reciprocals of packed single-precision floating-point values
@@ -1879,12 +1933,12 @@ def_ucomisd :: InstructionDef
 -- Invalid (if SNaN operands), Denormal.
 def_ucomisd =
   defBinary "ucomisd" $ \_ xv yv -> do
-    x <- eval =<< readXMMOrMem64 xv
-    y <- eval =<< readXMMOrMem64 yv
-    res <- evalArchFn (UCOMIS UCOMDouble x y)
-    zf_loc .= app (TupleField knownTypeList res TList.index0)
-    pf_loc .= app (TupleField knownTypeList res TList.index1)
-    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    x <- eval =<< get =<< getXMM_mr_low64 xv
+    y <- eval =<< get =<< getXMM_mr_low64 yv
+    res <- evalArchFn (SSE_UCOMIS SSE_Double x y)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    pf_loc .= app (TupleField knownRepr res P.index1)
+    cf_loc .= app (TupleField knownRepr res P.index2)
     of_loc .= false
     af_loc .= false
     sf_loc .= false
@@ -1898,12 +1952,12 @@ def_ucomiss :: InstructionDef
 -- Invalid (if SNaN operands), Denormal.
 def_ucomiss =
   defBinary "ucomiss" $ \_ xv yv -> do
-    x <- eval =<< readXMMOrMem32 xv
-    y <- eval =<< readXMMOrMem32 yv
-    res <- evalArchFn (UCOMIS UCOMSingle x y)
-    zf_loc .= app (TupleField knownTypeList res TList.index0)
-    pf_loc .= app (TupleField knownTypeList res TList.index1)
-    cf_loc .= app (TupleField knownTypeList res TList.index2)
+    x <- eval =<< get =<< getXMM_mr_low32 xv
+    y <- eval =<< get =<< getXMM_mr_low32 yv
+    res <- evalArchFn (SSE_UCOMIS SSE_Single x y)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    pf_loc .= app (TupleField knownRepr res P.index1)
+    cf_loc .= app (TupleField knownRepr res P.index2)
     of_loc .= false
     af_loc .= false
     sf_loc .= false
@@ -1962,11 +2016,10 @@ def_unpcklps = defBinaryKnown "unpcklps" exec
 
 -- *** SSE Conversion Instructions
 
--- CVTPI2PS Convert packed doubleword integers to packed single-precision floating-point values
 -- CVTSI2SS Convert doubleword integer to scalar single-precision floating-point value
-def_cvtsi2ss :: InstructionDef
-def_cvtsi2ss =
-  defBinary "cvtsi2ss" $ \_ loc val -> do
+def_cvtsi2sX :: String -> SSE_FloatType tp -> InstructionDef
+def_cvtsi2sX mnem tp =
+  defBinary mnem $ \_ loc val -> do
     -- Loc is RG_XMM_reg
     -- val is "OpType ModRM_rm YSize"
     d <- getXMM loc
@@ -1974,35 +2027,15 @@ def_cvtsi2ss =
     -- Read second argument value and coerce to single precision float.
     r <-
       case ev of
-        Left v  -> fpFromBV SingleFloatRepr <$> get v
-        Right v -> fpFromBV SingleFloatRepr <$> get v
-    -- Assign low 32-bits.
-    xmm_low32 d .= r
+        Left  v -> evalArchFn . SSE_CVTSI2SX tp n32 =<< eval =<< get v
+        Right v -> evalArchFn . SSE_CVTSI2SX tp n64 =<< eval =<< get v
+    xmm_low d tp .= r
 
--- | CVTSI2SD  Convert doubleword integer to scalar double-precision floating-point value
-def_cvtsi2sd :: InstructionDef
-def_cvtsi2sd =
-  defBinary "cvtsi2sd" $ \_ loc val -> do
-    d <- getXMM loc
-    ev <- getRM32_RM64 val
-    v <-
-      case ev of
-        Left v  -> fpFromBV DoubleFloatRepr <$> get v
-        Right v -> fpFromBV DoubleFloatRepr <$> get v
-    xmm_low64 d .= v
+-- CVTPI2PS Convert packed doubleword integers to packed single-precision floating-point values
 
 -- CVTPS2PI Convert packed single-precision floating-point values to packed doubleword integers
 -- CVTTPS2PI Convert with truncation packed single-precision floating-point values to packed doubleword integers
 -- CVTSS2SI Convert a scalar single-precision floating-point value to a doubleword integer
-
--- | CVTTSS2SI Convert with truncation a scalar single-precision floating-point value to a scalar doubleword integer
-def_cvttss2si :: InstructionDef
--- Invalid, Precision.  Returns 80000000 if exception is masked
-def_cvttss2si =
-  defBinary "cvttss2si" $ \_ loc val -> do
-    SomeBV l  <- getSomeBVLocation loc
-    v <- truncateBVValue knownNat =<< getSomeBVValue val
-    l .= truncFPToSignedBV (typeWidth l) SingleFloatRepr v
 
 -- ** SSE MXCSR State Management Instructions
 
@@ -2066,10 +2099,10 @@ exec_pmovmskb :: forall st ids n n'
               -> BVExpr ids n'
               -> X86Generator st ids ()
 exec_pmovmskb l v
-  | Just Refl <- testEquality (bv_width v) n64 = do
+  | Just Refl <- testEquality (typeWidth v) n64 = do
       l .= uext (typeWidth l) (mkMask n8 v)
   | Just LeqProof <- testLeq n32 (typeWidth l)
-  , Just Refl <- testEquality (bv_width v) n128 = do
+  , Just Refl <- testEquality (typeWidth v) n128 = do
       let prf = withLeqProof (leqTrans (LeqProof :: LeqProof 16 32)
                                        (LeqProof :: LeqProof 32 n))
       l .= prf (uext (typeWidth l) (mkMask n16 v))
@@ -2127,35 +2160,32 @@ def_movlpd = defBinaryLVpoly "movlpd" $ \l v -> do
 
 -- | This evaluates an instruction that takes xmm and xmm/m64 arguments,
 -- and applies a function that updates the low 64-bits of the first argument.
-def_xmm_sd :: String
-              -- ^ Instruction mnemonic
-           -> (forall v . IsValue v
-               => v (FloatType DoubleFloat)
-               -> v (FloatType DoubleFloat)
-               -> v (FloatType DoubleFloat))
+def_xmm_sd :: SSE_Op
               -- ^ Binary operation
            -> InstructionDef
-def_xmm_sd mnem f =
-  defBinary mnem $ \_ loc val -> do
+def_xmm_sd f =
+  defBinary (sseOpName f ++ "sd") $ \_ loc val -> do
     d <- getXMM loc
-    y <- get =<< getXMM_mr_low64 val
-    modify (xmm_low64 d) $ \x -> f x y
+    y <- eval =<< get =<< getXMM_mr_low64 val
+    x <- eval =<< get (xmm_low64 d)
+    res <- evalArchFn $ SSE_VectorOp f n1 SSE_Double x y
+    xmm_low64 d .= res
 
 -- | ADDSD Add scalar double precision floating-point values
 def_addsd :: InstructionDef
-def_addsd = def_xmm_sd "addsd" $ fpAdd DoubleFloatRepr
+def_addsd = def_xmm_sd SSE_Add
 
 -- | SUBSD Subtract scalar double-precision floating-point values
 def_subsd :: InstructionDef
-def_subsd = def_xmm_sd "subsd" $ fpSub DoubleFloatRepr
+def_subsd = def_xmm_sd SSE_Sub
 
 -- | MULSD Multiply scalar double-precision floating-point values
 def_mulsd :: InstructionDef
-def_mulsd = def_xmm_sd "mulsd" $ fpMul DoubleFloatRepr
+def_mulsd = def_xmm_sd SSE_Mul
 
 -- | DIVSD Divide scalar double-precision floating-point values
 def_divsd :: InstructionDef
-def_divsd = def_xmm_sd "divsd" $ fpDiv DoubleFloatRepr
+def_divsd = def_xmm_sd SSE_Div
 
 -- ADDPD Add packed double-precision floating-point values
 -- SUBPD Subtract scalar double-precision floating-point values
@@ -2194,29 +2224,18 @@ def_xorpd =
 
 -- CMPPD Compare packed double-precision floating-point values
 -- | CMPSD Compare scalar double-precision floating-point values
-def_cmpsd :: InstructionDef
-def_cmpsd =
-  defTernary "cmpsd" $ \_ loc f_val imm -> do
+def_cmpsX :: String -> SSE_FloatType tp -> InstructionDef
+def_cmpsX mnem tp =
+  defTernary mnem $ \_ loc f_val (F.ByteImm imm) -> do
     l  <- getXMM loc
-    v  <- get =<< getXMM_mr_low64 f_val
-    f <- case imm of
-           F.ByteImm opcode ->
-             case opcode of
-               0 -> return $ fpEq DoubleFloatRepr
-               1 -> return $ fpLt DoubleFloatRepr
-               2 -> fail "cmpsd: CMPLESD case unimplemented" -- FIXME
-               3 -> fail "cmpsd: CMPUNORDSD case unimplemented" -- FIXME
-               4 -> fail "cmpsd: CMPNEWSD case unimplemented" -- FIXME
-               5 -> return $ \x y -> boolNot (fpLt DoubleFloatRepr x y)
-               6 -> fail "cmpsd: CMPNLESD case unimplemented" -- FIXME
-               7 -> fail "cmpsd: CMPORDSD case unimplemented" -- FIXME
-               _ -> fail ("cmpsd: unexpected opcode " ++ show opcode)
-           _ -> fail "Impossible argument in cmpsd"
-    modify (xmm_low64 l) $ \lv -> do
-      let res = f lv v
-          allOnes  = bvLit knownNat (-1)
-          allZeros = bvLit knownNat 0
-      mux res allOnes allZeros
+    v  <- eval =<< get =<< getXMM_mr_low f_val tp
+    f <-
+      case lookupSSECmp imm of
+        Just f -> pure f
+        Nothing -> fail $ mnem ++ " had unsupported operator type " ++ show imm ++ "."
+    lv <- eval =<< get (xmm_low l tp)
+    res <- evalArchFn $ SSE_CMPSX f tp lv v
+    xmm_low l tp .= res
 
 -- COMISD Perform ordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register
 
@@ -2244,29 +2263,29 @@ def_cmpsd =
 def_cvtss2sd :: InstructionDef
 def_cvtss2sd = defBinary "cvtss2sd" $ \_ loc val -> do
   r <- getXMM loc
-  v <- get =<< getXMM_mr_low32 val
-  xmm_low64 r .= fpCvt SingleFloatRepr DoubleFloatRepr v
+  v <- eval =<< get =<< getXMM_mr_low32 val
+  (xmm_low64 r .=) =<< evalArchFn (SSE_CVTSS2SD v)
 
 -- | CVTSD2SS Convert scalar double-precision floating-point values to
 -- scalar single-precision floating-point values
 def_cvtsd2ss :: InstructionDef
 def_cvtsd2ss = defBinary "cvtss2ss" $ \_ loc val -> do
   r <- getXMM loc
-  v <- get =<< getXMM_mr_low64 val
-  xmm_low32 r .= fpCvt DoubleFloatRepr SingleFloatRepr  v
+  v <- eval =<< get =<< getXMM_mr_low64 val
+  (xmm_low32 r .=) =<< evalArchFn (SSE_CVTSD2SS v)
 
 -- CVTSD2SI  Convert scalar double-precision floating-point values to a doubleword integer
 
--- | CVTTSD2SI Convert with truncation scalar double-precision floating-point values to scalar doubleword integers
-def_cvttsd2si :: InstructionDef
--- Invalid, Precision.  Returns 80000000 if exception is masked
-def_cvttsd2si =
-  defBinary "cvttsd2si" $ \_ loc val -> do
-    l  <- getReg32_Reg64 loc
-    v <- get =<< getXMM_mr_low64 val
-    case l of
-      Left  r -> r .= truncFPToSignedBV n32 DoubleFloatRepr v
-      Right r -> r .= truncFPToSignedBV n64 DoubleFloatRepr v
+def_cvttsX2si :: String -> SSE_FloatType tp -> InstructionDef
+def_cvttsX2si mnem tp =
+  defBinary mnem $ \_ loc val -> do
+    v <- eval =<< get =<< getXMM_mr_low val tp
+    case loc of
+      F.DWordReg r ->
+        (reg32Loc r .=) =<< evalArchFn (SSE_CVTTSX2SI n32 tp v)
+      F.QWordReg r ->
+        (reg64Loc r .=) =<< evalArchFn (SSE_CVTTSX2SI n64 tp v)
+      _ -> fail "Unexpected operand"
 
 -- ** SSE2 Packed Single-Precision Floating-Point Instructions
 
@@ -2303,9 +2322,9 @@ exec_pshufd :: forall st ids n k
             -> BVExpr ids k
             -> X86Generator st ids ()
 exec_pshufd l v imm
-  | Just Refl <- testEquality (bv_width imm) n8 = do
+  | Just Refl <- testEquality (typeWidth imm) n8 = do
       let shiftAmt :: BVExpr ids 2 -> BVExpr ids 128
-          shiftAmt pieceID = bvMul (uext n128 pieceID) $ bvLit n128 32
+          shiftAmt pieceID = (uext n128 pieceID .*) $ bvLit n128 32
 
           getPiece :: BVExpr ids 128 -> BVExpr ids 2 -> BVExpr ids 32
           getPiece src pieceID = bvTrunc n32 $ src `bvShr` (shiftAmt pieceID)
@@ -2319,11 +2338,11 @@ def_pslldq :: InstructionDef
 def_pslldq = defBinaryLVge "pslldq" $ \l v -> do
   v0 <- get l
   -- temp is 16 if v is greater than 15, otherwise v
-  let not15 = bvComplement $ bvLit (bv_width v) 15
+  let not15 = bvComplement $ bvLit (typeWidth v) 15
       temp = mux (is_zero $ not15 .&. v)
-                 (uext (bv_width v0) v)
-                 (bvLit (bv_width v0) 16)
-  l .= v0 `bvShl` (temp .* bvLit (bv_width v0) 8)
+                 (uext (typeWidth v0) v)
+                 (bvLit (typeWidth v0) 16)
+  l .= v0 `bvShl` (temp .* bvLit (typeWidth v0) 8)
 
 -- PSRLDQ Shift double quadword right logical
 -- PUNPCKHQDQ Unpack high quadwords
@@ -2431,8 +2450,8 @@ exec_palignr l v imm = do
   withLeqProof (leqTrans k_leq_n (leqAdd (leqRefl n) n)) $ do
 
   -- imm is # of bytes to shift, so multiply by 8 for bits to shift
-  let n_plus_n = addNat (bv_width v) (bv_width v)
-      shiftAmt = bvMul (uext n_plus_n imm) $ bvLit n_plus_n 8
+  let n_plus_n = addNat (typeWidth v) (typeWidth v)
+      shiftAmt = uext n_plus_n imm .* bvLit n_plus_n 8
 
   let (_, lower) = bvSplit $ (v0 `bvCat` v) `bvShr` shiftAmt
   l .= lower
@@ -2521,14 +2540,15 @@ all_instructions =
   , def_xorpd
   , def_xorps
 
-  , def_cvtsi2ss
-  , def_cvtsd2ss
-  , def_cvtsi2sd
   , def_cvtss2sd
-  , def_cvttsd2si
-  , def_cvttss2si
+  , def_cvtsd2ss
+  , def_cvtsi2sX "cvtsi2sd" SSE_Double
+  , def_cvtsi2sX "cvtsi2ss" SSE_Single
+  , def_cvttsX2si "cvttsd2si" SSE_Double
+  , def_cvttsX2si "cvttss2si" SSE_Single
   , def_pinsrw
-  , def_cmpsd
+  , def_cmpsX "cmpsd" SSE_Double
+  , def_cmpsX "cmpss" SSE_Single
   , def_andpd
   , def_orpd
   , def_unpcklps
@@ -2578,7 +2598,7 @@ all_instructions =
   , def_pop
 
   , def_cmpxchg
-  , defUnaryKnown "cmpxchg8b" exec_cmpxchg8b
+  , def_cmpxchg8b
   , def_push
   , defBinaryLVge "rol"  exec_rol
   , defBinaryLVge "ror"  exec_ror
@@ -2587,9 +2607,9 @@ all_instructions =
   , def_shl
   , def_shr
   , def_sar
-  , defNullary    "std" $ df_loc .= true
+  , defNullary  "std" $ df_loc .= true
   , def_sub
-  , defBinaryLV   "test" exec_test
+  , defBinaryLV "test" exec_test
   , def_xadd
   , defBinaryLV "xor" exec_xor
 
@@ -2645,10 +2665,11 @@ all_instructions =
   , def_movlps
     -- SSE Packed
   , def_addps
-  , def_addss
   , def_subps
-  , def_subss
   , def_mulps
+  , def_divps
+  , def_addss
+  , def_subss
   , def_mulss
   , def_divss
     -- SSE Comparison
@@ -2687,8 +2708,8 @@ all_instructions =
   , def_fld
   , def_fmul
   , def_fnstcw -- stores to bv memory (i.e., not FP)
-  , defUnaryFPL     "fst"   $ exec_fst
-  , def_fstp
+  , def_fstX "fst"  False
+  , def_fstX "fstp" True
   , def_fsub
   , def_fsubp
   , def_fsubr

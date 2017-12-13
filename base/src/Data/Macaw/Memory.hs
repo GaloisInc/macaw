@@ -57,6 +57,7 @@ module Data.Macaw.Memory
     -- * Segment offsets
   , MemSegmentOff
   , viewSegmentOff
+  , resolveAddr
   , resolveAbsoluteAddr
   , resolveSegmentOff
   , msegSegment
@@ -529,8 +530,7 @@ data InsertError w
      -- ^ The inserted segment overlaps with the given segment.
 
 showInsertError :: InsertError w -> String
-showInsertError (OverlapSegment _base _seg) =
-  "overlaps with memory segment."
+showInsertError (OverlapSegment _base _seg) = "overlaps with memory segment."
 
 insertSegmentOffsetMap :: MemWidth w
                        => MemSegment w

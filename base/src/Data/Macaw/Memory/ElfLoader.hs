@@ -9,8 +9,9 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
-
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
@@ -36,6 +37,7 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
+import           Data.Either
 import           Data.ElfEdit
   ( SomeElf(..)
   , ElfIntType
@@ -252,8 +254,8 @@ loadMemSegment :: MemWidth w => String -> MemSegment w -> MemLoader w ()
 loadMemSegment nm seg =
   StateT $ \mls -> do
     case insertMemSegment seg (mls^.mlsMemory) of
-      Left e ->
-        throwError $ nm ++ " " ++ showInsertError e
+      Left (OverlapSegment _ old) ->
+        throwError $ nm ++ " overlaps with memory segment: " ++ show (segmentOffset old)
       Right mem' -> do
         pure ((), mls & mlsMemory .~ mem')
 
@@ -362,7 +364,9 @@ relocMapOfDynamic d cl mach virtMap dynContents =
 ------------------------------------------------------------------------
 -- Elf segment loading
 
-reprConstraints :: AddrWidthRepr w -> ((Bits (ElfWordType w), Integral (ElfWordType w), MemWidth w) => a) -> a
+reprConstraints :: AddrWidthRepr w
+                -> ((Bits (ElfWordType w), Integral (ElfWordType w), Show (ElfWordType w), MemWidth w) => a)
+                -> a
 reprConstraints Addr32 x = x
 reprConstraints Addr64 x = x
 
@@ -436,10 +440,13 @@ insertElfSection :: ElfSection (ElfWordType w)
 insertElfSection sec = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  when (elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc) $ do
+  -- Check if we should load section
+  let doLoad = elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc
+            && elfSectionName sec /= ".eh_frame"
+  when doLoad $ do
     regIdx <- gets $ loadRegionIndex . mlsOptions
     let seg = memSegmentForElfSection regIdx sec
-    loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec)) seg
+    loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
     let Just addr = resolveSegmentOff seg 0
     mlsIndexMap %= Map.insert elfIdx (addr, sec)
@@ -505,22 +512,46 @@ loadExecutable opt path = do
 ------------------------------------------------------------------------
 -- Elf symbol utilities
 
--- | The takes the elf symbol table map, creates a map from function
--- symbol addresses to the associated symbol name.
-resolvedSegmentedElfFuncSymbols :: forall w
-                                .  Memory w
-                                -> [ElfSymbolTableEntry (ElfWordType w)]
-                                -> Map (MemSegmentOff w) [BS.ByteString]
-resolvedSegmentedElfFuncSymbols mem entries = reprConstraints (memAddrWidth mem) $
-  let -- Filter out just function entries
-     func_entries =
-       [ (addr, [Elf.steName ste])
-       | ste <- entries
-       , Elf.steType ste == Elf.STT_FUNC
-       , addr <- maybeToList $ resolveAbsoluteAddr mem (fromIntegral (Elf.steValue ste))
-       , segmentFlags (msegSegment addr) `Perm.hasPerm` Perm.execute
-       ]
-  in Map.fromListWith (++) func_entries
+resolveEntry :: Memory w
+             -> SectionIndexMap w
+             -> ElfSymbolTableEntry (ElfWordType w)
+             -> Maybe (Either (ElfSymbolTableEntry (ElfWordType w))
+                              (MemSegmentOff w, [BS.ByteString]))
+resolveEntry mem secMap ste
+  | Elf.steType ste /= Elf.STT_FUNC = Nothing
+  | otherwise = reprConstraints (memAddrWidth mem) $ do
+      let val = Elf.steValue ste
+      case Elf.steIndex ste of
+        Elf.SHN_UNDEF ->
+          Nothing
+        Elf.SHN_ABS ->
+          case resolveAddr mem 0 (fromIntegral val) of
+            Just addr -> Just $ Right (addr, [Elf.steName ste])
+            Nothing   -> Just $ Left ste
+        idx ->
+          case Map.lookup idx secMap of
+            Just (base,sec)
+              | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
+              , off <- toInteger (elfSectionAddr sec) - toInteger val
+              , Just addr <- incSegmentOff base off -> do
+                  Just $ Right (addr, [Elf.steName ste])
+            _ -> Just $ Left ste
+
+-- | Resolve symbol table entries to the addresses in a memory.
+--
+-- It takes the memory constructed from the Elf file, the section
+-- index map, and the symbol table entries.  It returns unresolvable
+-- symbols and the map from segment offsets to bytestring.
+resolvedSegmentedElfFuncSymbols
+  :: forall w
+  .  Memory w
+  -> SectionIndexMap w
+  -> [ElfSymbolTableEntry (ElfWordType w)]
+  -> ( [ElfSymbolTableEntry (ElfWordType w)]
+     , Map (MemSegmentOff w) [BS.ByteString]
+     )
+resolvedSegmentedElfFuncSymbols mem secMap entries = reprConstraints (memAddrWidth mem) $
+  Map.fromList <$> partitionEithers (mapMaybe (resolveEntry mem secMap) entries)
 
 ppElfUnresolvedSymbols :: forall w
                        .  MemWidth w

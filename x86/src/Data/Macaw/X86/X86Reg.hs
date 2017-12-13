@@ -125,12 +125,13 @@ type XMM             = BVType 128
 -- The datatype for x86 registers.
 data X86Reg tp
    = (tp ~ BVType 64)  => X86_IP
+     -- | One of 16 general purpose registers
    | (tp ~ BVType 64)  => X86_GP {-# UNPACK #-} !F.Reg64
-     -- ^ One of 16 general purpose registers
+     -- | One of 32 initial flag registers.
    | (tp ~ BoolType)   => X86_FlagReg {-# UNPACK #-} !R.X86Flag
-     -- ^ One of 32 initial flag registers.
+     -- | One of 16 x87 status registers
    | (tp ~ BoolType)   => X87_StatusReg {-# UNPACK #-} !Int
-     -- ^ One of 16 x87 status registers
+     -- | X87 tag register.
    | (tp ~ BVType 3)   => X87_TopReg
      -- X87 tag register.
    | (tp ~ BVType 2)   => X87_TagReg {-# UNPACK #-} !Int
@@ -212,26 +213,14 @@ instance Ord (X86Reg cl) where
 instance HasRepr X86Reg TypeRepr where
   typeRepr r =
     case r of
-      X86_IP           -> knownType
-      X86_GP{}         -> knownType
-      X86_FlagReg{}    -> knownType
-      X87_StatusReg{}  -> knownType
-      X87_TopReg       -> knownType
-      X87_TagReg{}     -> knownType
-      X87_FPUReg{}     -> knownType
-      X86_XMMReg{}     -> knownType
-
-{-
-registerWidth :: X86Reg tp -> NatRepr (TypeBits tp)
-registerWidth X86_IP           = knownNat
-registerWidth X86_GP{}         = knownNat
-registerWidth X86_FlagReg{}    = knownNat
-registerWidth X87_StatusReg{}  = knownNat
-registerWidth X87_TopReg       = knownNat
-registerWidth X87_TagReg{}     = knownNat
-registerWidth X87_FPUReg{}     = knownNat
-registerWidth X86_XMMReg{}     = knownNat
--}
+      X86_IP           -> knownRepr
+      X86_GP{}         -> knownRepr
+      X86_FlagReg{}    -> knownRepr
+      X87_StatusReg{}  -> knownRepr
+      X87_TopReg       -> knownRepr
+      X87_TagReg{}     -> knownRepr
+      X87_FPUReg{}     -> knownRepr
+      X86_XMMReg{}     -> knownRepr
 
 ------------------------------------------------------------------------
 -- Exported constructors and their conversion to words

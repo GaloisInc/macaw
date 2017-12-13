@@ -47,6 +47,7 @@ import           Control.Monad.Except
 import           Control.Monad.ST
 import qualified Data.Foldable as Fold
 import qualified Data.Map as Map
+import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
@@ -82,8 +83,7 @@ import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
-  ( knownType
-  , n8
+  ( n8
   , n64
   , HasRepr(..)
   )
@@ -309,11 +309,11 @@ transferAbsValue r f =
     PShufb{}   -> TopV
       -- We know only that it will return up to (and including(?)) cnt
     MemCmp _sz cnt _src _dest _rev
-      | Just upper <- hasMaximum knownType (transferValue r cnt) ->
+      | Just upper <- hasMaximum knownRepr (transferValue r cnt) ->
           stridedInterval $ SI.mkStridedInterval knownNat False 0 upper 1
       | otherwise -> TopV
     RepnzScas _sz _val _buf cnt
-      | Just upper <- hasMaximum knownType (transferValue r cnt) ->
+      | Just upper <- hasMaximum knownRepr (transferValue r cnt) ->
           stridedInterval $ SI.mkStridedInterval knownNat False 0 upper 1
       | otherwise -> TopV
     MMXExtend{}   -> TopV
@@ -321,7 +321,18 @@ transferAbsValue r f =
     X86IRem{} -> TopV
     X86Div{}  -> TopV
     X86Rem{}  -> TopV
-    UCOMIS{}  -> TopV
+    SSE_VectorOp{}  -> TopV
+    SSE_CMPSX{}  -> TopV
+    SSE_UCOMIS{}  -> TopV
+    SSE_CVTSD2SS{}  -> TopV
+    SSE_CVTSS2SD{}  -> TopV
+    SSE_CVTSI2SX{}  -> TopV
+    SSE_CVTTSX2SI{}  -> TopV
+    X87_Extend{}  -> TopV
+    X87_FST{}  -> TopV
+    X87_FAdd{}  -> TopV
+    X87_FSub{}  -> TopV
+    X87_FMul{}  -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.

@@ -50,6 +50,7 @@ module Data.Macaw.Discovery
          -- * SymbolAddrMap
        , State.SymbolAddrMap
        , State.emptySymbolAddrMap
+       , State.symbolAddrsAsMap
        , State.symbolAddrMap
        , State.symbolAddrs
        , State.symbolAtAddr
@@ -991,7 +992,7 @@ cfgFromAddrs, cfgFromAddrsTrustFns ::
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
   -> SymbolAddrMap (ArchAddrWidth arch)
-     -- ^ Map from addresses to the associated symbol name.
+     -- ^ Ma1p from addresses to the associated symbol name.
   -> [ArchSegmentOff arch]
      -- ^ Initial function entry points.
   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]

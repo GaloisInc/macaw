@@ -14,8 +14,13 @@ This defines the X86_64 architecture type and the supporting definitions.
 module Data.Macaw.X86.ArchTypes
   ( -- * Architecture
     X86_64
-  , UCOMType(..)
   , X86PrimFn(..)
+  , X87_FloatType(..)
+  , SSE_FloatType(..)
+  , SSE_Cmp
+  , lookupSSECmp
+  , SSE_Op(..)
+  , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
   , X86Stmt(..)
@@ -30,10 +35,13 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
+import           Data.Int
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
+import qualified Data.Map as Map
+import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -105,10 +113,10 @@ data X86PrimLoc tp
      -- ^ One of the x87 control registers
 
 instance HasRepr X86PrimLoc TypeRepr where
-  typeRepr ControlLoc{} = knownType
-  typeRepr DebugLoc{}   = knownType
-  typeRepr FS = knownType
-  typeRepr GS = knownType
+  typeRepr ControlLoc{} = knownRepr
+  typeRepr DebugLoc{}   = knownRepr
+  typeRepr FS = knownRepr
+  typeRepr GS = knownRepr
   typeRepr (X87_ControlLoc r) =
     case x87ControlRegWidthIsPos r of
       LeqProof -> BVTypeRepr (typeRepr r)
@@ -119,6 +127,99 @@ instance Pretty (X86PrimLoc tp) where
   pretty FS = text "fs"
   pretty GS = text "gs"
   pretty (X87_ControlLoc r) = text (show r)
+
+------------------------------------------------------------------------
+-- SSE declarations
+
+-- | A comparison of two values.
+data SSE_Cmp
+   = EQ_OQ
+     -- ^ Two values are equal, no signalling on QNaN
+   | LT_OS
+     -- ^ First value less than second, signal on QNaN
+   | LE_OS
+     -- ^ First value less than or equal to second, signal on QNaN
+   | UNORD_Q
+     -- ^ Either value is a NaN, no signalling on QNaN
+   | NEQ_UQ
+     -- ^ Not equal, no signal on QNaN
+   | NLT_US
+     -- ^ Not less than, signal on QNaN
+   | NLE_US
+     -- ^ Not less than or equal, signal on QNaN
+   | ORD_Q
+     -- ^ Neither value is a NaN, no signalling on QNaN
+  deriving (Eq, Ord)
+
+sseCmpEntries :: [(Int8, SSE_Cmp, String)]
+sseCmpEntries =
+  [ (0, EQ_OQ,   "EQ_OQ")
+  , (1, LT_OS,   "LT_OS")
+  , (2, LE_OS  , "LE_OS")
+  , (3, UNORD_Q, "UNORD_Q")
+  , (4, NEQ_UQ,  "NEQ_UQ")
+  , (5, NLT_US,  "NLT_US")
+  , (6, NLE_US,  "NLE_US")
+  , (7, ORD_Q,   "ORD_Q")
+  ]
+
+sseIdxCmpMap :: Map.Map Int8 SSE_Cmp
+sseIdxCmpMap = Map.fromList [ (idx,val) | (idx, val, _) <- sseCmpEntries ]
+
+sseCmpNameMap :: Map.Map SSE_Cmp String
+sseCmpNameMap = Map.fromList [ (val, nm) | (_, val, nm) <- sseCmpEntries ]
+
+instance Show SSE_Cmp where
+  show c  =
+    case Map.lookup c sseCmpNameMap of
+      Just nm -> nm
+      -- The nothing case should never occur.
+      Nothing -> "Unexpected name"
+
+lookupSSECmp :: Int8 -> Maybe SSE_Cmp
+lookupSSECmp i = Map.lookup i sseIdxCmpMap
+
+-- | A binary SSE operation
+data SSE_Op
+   = SSE_Add
+   | SSE_Sub
+   | SSE_Mul
+   | SSE_Div
+
+-- | Return the name of the mnemonic associated with the SSE op.
+sseOpName :: SSE_Op -> String
+sseOpName f =
+  case f of
+    SSE_Add -> "add"
+    SSE_Sub -> "sub"
+    SSE_Mul -> "mul"
+    SSE_Div -> "div"
+
+-- | A single or double value for floating-point restricted to this types.
+data SSE_FloatType tp where
+   SSE_Single :: SSE_FloatType (FloatType SingleFloat)
+   SSE_Double :: SSE_FloatType (FloatType DoubleFloat)
+
+instance Show (SSE_FloatType tp) where
+  show SSE_Single = "single"
+  show SSE_Double = "double"
+
+instance HasRepr SSE_FloatType TypeRepr where
+  typeRepr SSE_Single = knownRepr
+  typeRepr SSE_Double = knownRepr
+
+------------------------------------------------------------------------
+-- X87 declarations
+
+data X87_FloatType tp where
+   X87_Single :: X87_FloatType (BVType 32)
+   X87_Double :: X87_FloatType (BVType 64)
+   X87_ExtDouble :: X87_FloatType (BVType 80)
+
+instance Show (X87_FloatType tp) where
+  show X87_Single = "single"
+  show X87_Double = "double"
+  show X87_ExtDouble = "extdouble"
 
 ------------------------------------------------------------------------
 -- X86PrimFn
@@ -208,10 +309,35 @@ data X86PrimFn f tp where
   -- ^ This performs an unsigned remainder for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
 
-  UCOMIS :: !(UCOMType tp)
-         -> !(f tp)
-         -> !(f tp)
-         -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
+  SSE_VectorOp :: (1 <= n, 1 <= w)
+               => !SSE_Op
+               -> !(NatRepr n)
+               -> !(SSE_FloatType (BVType w))
+               -> !(f (BVType (n*w)))
+               -> !(f (BVType (n*w)))
+               -> X86PrimFn f (BVType (n*w))
+  -- ^  This applies the operation pairwise to two vectors of floating point values.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions as noted in the documentation on SSE.
+
+  SSE_CMPSX :: !SSE_Cmp
+            -> !(SSE_FloatType tp)
+            -> !(f tp)
+            -> !(f tp)
+            -> X86PrimFn f tp
+  -- ^ This performs a comparison between the two instructions (as
+  -- needed by the CMPSD and CMPSS instructions.
+  --
+  -- This implicitly depends on the MXCSR register as it may throw
+  -- exceptions when given signaling NaNs or denormals when the
+  -- appropriate bits are set on the MXCSR register.
+
+
+  SSE_UCOMIS :: !(SSE_FloatType tp)
+             -> !(f tp)
+             -> !(f tp)
+             -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
   -- ^  This performs a comparison of two floating point values and returns three flags:
   --
   --  * ZF is for the zero-flag and true if the arguments are equal or either argument is a NaN.
@@ -224,38 +350,156 @@ data X86PrimFn f tp where
   -- The order of the flags was chosen to be consistent with the Intel documentation for
   -- UCOMISD and UCOMISS.
   --
-  -- The documentation is a bit unclear, but it appears this function implicitly depends
-  -- on the MXCSR register and may signal if the invalid operation exception #I is
-  -- not masked or the denomal exception #D if it is not masked.
+  -- This function implicitly depends on the MXCSR register and may signal exceptions based
+  -- on the configuration of that register.
 
--- | A single or double value for floating-point restricted to this types.
-data UCOMType tp where
-   UCOMSingle :: UCOMType (FloatType SingleFloat)
-   UCOMDouble :: UCOMType (FloatType DoubleFloat)
+  SSE_CVTSS2SD :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+  -- ^ This converts a single to a double precision number.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a exception based on the configuration of that
+  -- register.
 
-instance HasRepr UCOMType TypeRepr where
-  typeRepr UCOMSingle = knownType
-  typeRepr UCOMDouble = knownType
+  SSE_CVTSD2SS :: !(f (BVType 64)) -> X86PrimFn f (BVType 32)
+  -- ^ This converts a double to a single precision number.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a exception based on the configuration of that
+  -- register.
+
+  SSE_CVTTSX2SI
+    :: (1 <= w)
+    => !(NatRepr w)
+    -> !(SSE_FloatType tp)
+    -> !(f tp)
+    -> X86PrimFn f (BVType w)
+  -- ^ This converts a floating point value to a bitvector of the
+  -- given width (should be 32 or 64)
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions based on the configuration of that register.
+
+  SSE_CVTSI2SX    :: (1 <= w)
+    => !(SSE_FloatType tp)
+    -> !(NatRepr w)
+    -> !(f (BVType w))
+    -> X86PrimFn f tp
+  -- ^ This converts a signed integer to a floating point value of
+  -- the given type  (the input width should be 32 or 64)
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a precision exception based on the configuration of that
+  -- register.
+
+  X87_Extend :: !(SSE_FloatType tp)
+             -> !(f tp)
+             -> X86PrimFn f (BVType 80)
+  -- ^ Extends a single or double to 80-bit precision.
+  -- Guaranteed to not throw exception or have side effects.
+
+  X87_FAdd :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  -- ^ This performs an 80-bit floating point add.
+  --
+  -- This returns the result and a Boolean flag indicating if the
+  -- result was rounded up.
+  --
+  -- This computation implicitly depends on the x87 FPU control word,
+  -- and may throw any of the following exceptions:
+  -- #IA Operand is an SNaN value or unsupported format.
+  --     Operands are infinities of unlike sign.
+  -- #D  Source operand is a denormal value.
+  -- #U Result is too small for destination format.
+  -- #O Result is too large for destination format.
+  -- #P Value cannot be represented exactly in destination format.
+
+  X87_FSub :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  -- ^ This performs an 80-bit floating point add.
+  --
+  -- This returns the result and a Boolean flag indicating if the
+  -- result was rounded up.
+  --
+  -- This computation implicitly depends on the x87 FPU control word,
+  -- and may throw any of the following exceptions:
+  -- #IA Operand is an SNaN value or unsupported format.
+  --     Operands are infinities of unlike sign.
+  -- #D  Source operand is a denormal value.
+  -- #U Result is too small for destination format.
+  -- #O Result is too large for destination format.
+  -- #P Value cannot be represented exactly in destination format.
+
+  X87_FMul :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  -- ^ This performs an 80-bit floating point add.
+  --
+  -- This returns the result and a Boolean flag indicating if the
+  -- result was rounded up.
+  --
+  -- This computation implicitly depends on the x87 FPU control word,
+  -- and may throw any of the following exceptions:
+  -- #IA Operand is an SNaN value or unsupported format.
+  --     Operands are infinities of unlike sign.
+  -- #D  Source operand is a denormal value.
+  -- #U Result is too small for destination format.
+  -- #O Result is too large for destination format.
+  -- #P Value cannot be represented exactly in destination format.
+
+  X87_FST :: !(SSE_FloatType tp)
+          -> !(f (BVType 80))
+          -> X86PrimFn f tp
+  -- ^ This rounds a floating number to single or double precision.
+  --
+  -- This instruction rounds according to the x87 FPU control word
+  -- rounding mode, and may throw any of the following exceptions:
+  -- * #O is generated if the input value overflows and cannot be
+  --   stored in the output format.
+  -- * #U is generated if the computation underflows and cannot be
+  --   represented (this is in lieu of a denormal exception #D).
+  -- * #IA If destination result is an SNaN value or unsupported format.
+  -- * #P Value cannot be represented exactly in destination format.
+  --   In the #P case, the C1 register will be set 1 if rounding up,
+  --   and 0 otherwise.
+
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
-      EvenParity{}  -> knownType
+      EvenParity{}  -> knownRepr
       ReadLoc loc   -> typeRepr loc
-      ReadFSBase    -> knownType
-      ReadGSBase    -> knownType
-      CPUID{}       -> knownType
-      RDTSC{}       -> knownType
-      XGetBV{}      -> knownType
+      ReadFSBase    -> knownRepr
+      ReadGSBase    -> knownRepr
+      CPUID{}       -> knownRepr
+      RDTSC{}       -> knownRepr
+      XGetBV{}      -> knownRepr
       PShufb w _ _  -> BVTypeRepr (typeRepr w)
-      MemCmp{}      -> knownType
-      RepnzScas{}   -> knownType
-      MMXExtend{}   -> knownType
+      MemCmp{}      -> knownRepr
+      RepnzScas{}   -> knownRepr
+      MMXExtend{}   -> knownRepr
       X86IDiv w _ _ -> typeRepr (repValSizeMemRepr w)
       X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
-      UCOMIS _ _ _  -> knownType
+      SSE_VectorOp _ w tp _ _ -> packedType w tp
+      SSE_CMPSX _ tp _ _  -> typeRepr tp
+      SSE_UCOMIS _ _ _  -> knownRepr
+      SSE_CVTSS2SD{} -> knownRepr
+      SSE_CVTSD2SS{} -> knownRepr
+      SSE_CVTSI2SX tp _ _ -> typeRepr tp
+      SSE_CVTTSX2SI w _ _ -> BVTypeRepr w
+      X87_Extend{} -> knownRepr
+      X87_FAdd{} -> knownRepr
+      X87_FSub{} -> knownRepr
+      X87_FMul{} -> knownRepr
+      X87_FST tp _ -> typeRepr tp
+
+packedType :: (1 <= n, 1 <= w) => NatRepr n -> SSE_FloatType (BVType w) -> TypeRepr (BVType (n*w))
+packedType w tp =
+  case leqMulPos w (typeWidth tp) of
+    LeqProof -> BVTypeRepr (natMultiply w (typeWidth tp))
 
 instance FunctorFC X86PrimFn where
   fmapFC = fmapFCDefault
@@ -283,10 +527,23 @@ instance TraversableFC X86PrimFn where
       X86IRem w n d -> X86IRem w <$> go n <*> go d
       X86Div  w n d -> X86Div  w <$> go n <*> go d
       X86Rem  w n d -> X86Rem  w <$> go n <*> go d
-      UCOMIS tp x y -> UCOMIS tp <$> go x <*> go y
+      SSE_VectorOp op n tp x y -> SSE_VectorOp op n tp <$> go x <*> go y
+      SSE_CMPSX c tp x y -> SSE_CMPSX c tp <$> go x <*> go y
+      SSE_UCOMIS tp x y -> SSE_UCOMIS tp <$> go x <*> go y
+      SSE_CVTSS2SD x -> SSE_CVTSS2SD <$> go x
+      SSE_CVTSD2SS x -> SSE_CVTSD2SS <$> go x
+      SSE_CVTSI2SX tp w  x -> SSE_CVTSI2SX  tp w <$> go x
+      SSE_CVTTSX2SI w tp x -> SSE_CVTTSX2SI w tp <$> go x
+      X87_Extend tp x -> X87_Extend tp <$> go x
+      X87_FAdd x y -> X87_FAdd <$> go x <*> go y
+      X87_FSub x y -> X87_FSub <$> go x <*> go y
+      X87_FMul x y -> X87_FMul <$> go x <*> go y
+      X87_FST tp x -> X87_FST tp <$> go x
 
 instance IsArchFn X86PrimFn where
-  ppArchFn pp f =
+  ppArchFn pp f = do
+    let ppShow :: (Applicative m, Show a) => a -> m Doc
+        ppShow = pure . text . show
     case f of
       EvenParity x -> sexprA "even_parity" [ pp x ]
       ReadLoc loc -> pure $ pretty loc
@@ -301,11 +558,23 @@ instance IsArchFn X86PrimFn where
       RepnzScas _ val buf cnt  -> sexprA "first_byte_offset" args
         where args = [pp val, pp buf, pp cnt]
       MMXExtend e -> sexprA "mmx_extend" [ pp e ]
-      X86IDiv w n d -> sexprA "idiv" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-      X86IRem w n d -> sexprA "irem" [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-      X86Div  w n d -> sexprA "div"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-      X86Rem  w n d -> sexprA "rem"  [ pure (text $ show $ typeWidth $ repValSizeMemRepr w), pp n, pp d ]
-      UCOMIS  _ x y -> sexprA "ucomis" [ pp x, pp y ]
+      X86IDiv w n d -> sexprA "idiv" [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      X86IRem w n d -> sexprA "irem" [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      X86Div  w n d -> sexprA "div"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      X86Rem  w n d -> sexprA "rem"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      SSE_VectorOp op n tp x y ->
+        sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
+      SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]
+      SSE_UCOMIS  _ x y -> sexprA "ucomis" [ pp x, pp y ]
+      SSE_CVTSS2SD       x -> sexprA "cvtss2sd" [ pp x ]
+      SSE_CVTSD2SS       x -> sexprA "cvtsd2ss" [ pp x ]
+      SSE_CVTSI2SX  tp w x -> sexprA "cvtsi2sx" [ ppShow tp, ppShow w, pp x ]
+      SSE_CVTTSX2SI w tp x -> sexprA "cvttsx2si" [ ppShow w, ppShow tp, pp x ]
+      X87_Extend tp x -> sexprA "x87_extend" [ ppShow tp, pp x ]
+      X87_FAdd x y -> sexprA "x87_add" [ pp x, pp y ]
+      X87_FSub x y -> sexprA "x87_sub" [ pp x, pp y ]
+      X87_FMul x y -> sexprA "x87_mul" [ pp x, pp y ]
+      X87_FST tp x -> sexprA "x86_fst" [ ppShow tp, pp x]
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -327,7 +596,21 @@ x86PrimFnHasSideEffects f =
     X86IRem{}    -> True -- /\ ..
     X86Div{}     -> True -- /\ ..
     X86Rem{}     -> True -- /\ ..
-    UCOMIS{}     -> True
+
+    -- Each of these may throw exceptions based on floating point config flags.
+    SSE_VectorOp{}  -> True
+    SSE_CMPSX{}     -> True
+    SSE_UCOMIS{}    -> True
+    SSE_CVTSS2SD{}  -> True
+    SSE_CVTSD2SS{}  -> True
+    SSE_CVTSI2SX{}  -> True
+    SSE_CVTTSX2SI{} -> True
+    X87_FAdd{}   -> True
+    X87_FSub{}   -> True
+    X87_FMul{}   -> True
+    X87_FST{}    -> True
+    -- Extension never throws exception
+    X87_Extend{}  -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt

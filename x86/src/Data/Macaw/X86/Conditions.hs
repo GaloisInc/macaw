@@ -19,14 +19,14 @@ import Data.Macaw.X86.Monad
 cond_a, cond_ae, cond_b, cond_be, cond_g, cond_ge, cond_l, cond_le, cond_o, cond_p, cond_s, cond_z,
   cond_no, cond_np, cond_ns, cond_nz :: X86Generator st ids (Expr ids BoolType)
 
-cond_a = (\c z -> boolAnd (boolNot c) (boolNot z)) <$> get cf_loc <*> get zf_loc
+cond_a = (\c z -> boolNot c .&&. boolNot z) <$> get cf_loc <*> get zf_loc
 cond_ae  = boolNot <$> get cf_loc
 cond_b   = get cf_loc
-cond_be  = boolOr <$> get cf_loc <*> get zf_loc
-cond_g   = (\z s o -> boolAnd (boolNot z) (boolEq s o)) <$> get zf_loc <*> get sf_loc <*> get of_loc
-cond_le  = (\z s o -> boolOr z (boolXor s o)) <$> get zf_loc <*> get sf_loc <*> get of_loc
-cond_ge  = (\s o   -> boolEq s o)     <$> get sf_loc <*> get of_loc
-cond_l   = (\s o   -> boolXor s o) <$> get sf_loc <*> get of_loc
+cond_be  = (.||.) <$> get cf_loc <*> get zf_loc
+cond_g   = (\z s o -> boolNot z .&&. (s .=. o)) <$> get zf_loc <*> get sf_loc <*> get of_loc
+cond_le  = (\z s o -> z .||. (boolXor s o)) <$> get zf_loc <*> get sf_loc <*> get of_loc
+cond_ge  = (.=.)   <$> get sf_loc <*> get of_loc
+cond_l   = boolXor <$> get sf_loc <*> get of_loc
 cond_o   = get of_loc
 cond_p   = get pf_loc
 cond_s   = get sf_loc

@@ -29,14 +29,13 @@ module Data.Macaw.CFG.App
 
 import           Control.Monad.Identity
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
-import           Data.Macaw.TypedList (TList)
-import qualified Data.Macaw.TypedList as TList
 
 -----------------------------------------------------------------------
 -- App
@@ -50,7 +49,7 @@ data App (f :: Type -> *) (tp :: Type) where
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
   -- | Extract the value out of a tuple.
-  TupleField :: !(TList TypeRepr l) -> !(f (TupleType l)) -> !(TList.Index l r) -> App f r
+  TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -187,103 +186,6 @@ data App (f :: Type -> *) (tp :: Type) where
   -- value is zero.
   Bsr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
-  ----------------------------------------------------------------------
-  -- Floating point operations
-
-  FPAdd :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
-  FPAddRoundedUp :: !(FloatInfoRepr flt)
-                 -> !(f (FloatType flt))
-                 -> !(f (FloatType flt))
-                 -> App f BoolType
-
-  FPSub :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
-  FPSubRoundedUp
-    :: !(FloatInfoRepr flt)
-    -> !(f (FloatType flt))
-    -> !(f (FloatType flt))
-    -> App f BoolType
-
-  FPMul :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
-  FPMulRoundedUp :: !(FloatInfoRepr flt)
-                 -> !(f (FloatType flt))
-                 -> !(f (FloatType flt))
-                 -> App f BoolType
-
-  -- Divides two floating point numbers.
-  FPDiv :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
-  -- Compare if one floating is strictly less than another.
-  FPLt :: !(FloatInfoRepr flt)
-       -> !(f (FloatType flt))
-       -> !(f (FloatType flt))
-       -> App f BoolType
-
-  -- Floating point equality (equates -0 and 0)
-  FPEq :: !(FloatInfoRepr flt)
-       -> !(f (FloatType flt))
-       -> !(f (FloatType flt))
-       -> App f BoolType
-
-  -- | Convert a float from input type @flt@ to output type @flt'@
-  FPCvt :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> !(FloatInfoRepr flt')
-        -> App f (FloatType flt')
-
-  FPCvtRoundsUp :: !(FloatInfoRepr flt)
-                -> !(f (FloatType flt))
-                -> !(FloatInfoRepr flt')
-                -> App f BoolType
-
-  FPFromBV :: !(f (BVType n))
-           -> !(FloatInfoRepr flt)
-           -> App f (FloatType flt)
-
-  -- Convert a floating point value to a signed integer.
-  -- If the conversion is inexact, then the value is truncated to zero.
-  -- If the conversion is out of the range of the bitvector, then a floating
-  -- point exception should be raised.
-  -- If that exception is masked, then this returns -1 (as a signed bitvector).
-  TruncFPToSignedBV :: (1 <= n)
-                    => FloatInfoRepr flt
-                    -> f (FloatType flt)
-                    -> NatRepr n
-                    -> App f (BVType n)
-
-  -- Take the absolute value of a floating point value.
-  --
-  -- This operation clears the sign bit of the given floating point number
-  -- (including for 0 and infinite values).  If the input is a NaN, the output
-  -- is also a NaN (and the relationship between the input NaN and output NaN is
-  -- unspecified).
-  FPAbs :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
-  -- Negate a floating point value.
-  --
-  -- This operation flips the sign bit of the given floating point number
-  -- (including 0 and infinite values).  If the input is a NaN, the output is
-  -- also a NaN (with unspecified value).
-  FPNeg :: !(FloatInfoRepr flt)
-        -> !(f (FloatType flt))
-        -> App f (FloatType flt)
-
 -----------------------------------------------------------------------
 -- App utilities
 
@@ -299,9 +201,9 @@ instance TestEquality f => TestEquality (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|TList|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|testEquality|])
-                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|testEquality|])
                    ]
                   )
@@ -312,9 +214,9 @@ instance OrdF f => OrdF (App f) where
                    , (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|TList|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                   , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
                       [|compareF|])
-                   , (ConType [t|TList.Index|] `TypeApp` AnyType `TypeApp` AnyType,
+                   , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|compareF|])
                    ]
               )
@@ -363,7 +265,7 @@ ppAppA pp a0 =
   case a0 of
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
-    TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (TList.indexValue i) ]
+    TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
@@ -397,41 +299,24 @@ ppAppA pp a0 =
     Bsf _ x -> sexprA "bsf" [ pp x ]
     Bsr _ x -> sexprA "bsr" [ pp x ]
 
-    -- Floating point
-    FPAdd rep x y           -> sexprA "fpAdd" [ prettyPure rep, pp x, pp y ]
-    FPAddRoundedUp rep x y  -> sexprA "fpAddRoundedUp" [ prettyPure rep, pp x, pp y ]
-    FPSub rep x y           -> sexprA "fpSub" [ prettyPure rep, pp x, pp y ]
-    FPSubRoundedUp rep x y  -> sexprA "fpSubRoundedUp" [ prettyPure rep, pp x, pp y ]
-    FPMul rep x y           -> sexprA "fpMul" [ prettyPure rep, pp x, pp y ]
-    FPMulRoundedUp rep x y  -> sexprA "fpMulRoundedUp" [ prettyPure rep, pp x, pp y ]
-    FPDiv rep x y           -> sexprA "fpDiv" [ prettyPure rep, pp x, pp y ]
-    FPLt rep x y            -> sexprA "fpLt" [ prettyPure rep, pp x, pp y ]
-    FPEq rep x y            -> sexprA "fpEq" [ prettyPure rep, pp x, pp y ]
-    FPCvt src x tgt         -> sexprA "fpCvt" [ prettyPure src, pp x, prettyPure tgt ]
-    FPCvtRoundsUp src x tgt -> sexprA "fpCvtRoundsUp" [ prettyPure src, pp x, prettyPure tgt ]
-    FPFromBV x tgt          -> sexprA "fpFromBV" [ pp x, prettyPure tgt ]
-    TruncFPToSignedBV _ x w -> sexprA "truncFP_sbv" [ pp x, ppNat w]
-    FPAbs rep x             -> sexprA "fpAbs" [ prettyPure rep, pp x ]
-    FPNeg rep x             -> sexprA "fpNeg" [ prettyPure rep, pp x ]
-
 ------------------------------------------------------------------------
 -- appType
 
 instance HasRepr (App f) TypeRepr where
   typeRepr a =
     case a of
-      Eq _ _       -> knownType
+      Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
-      TupleField f _ i -> f TList.! i
+      TupleField f _ i -> f P.!! i
 
       Trunc _ w -> BVTypeRepr w
       SExt  _ w -> BVTypeRepr w
       UExt  _ w -> BVTypeRepr w
 
-      AndApp{} -> knownType
-      OrApp{}  -> knownType
-      NotApp{} -> knownType
-      XorApp{} -> knownType
+      AndApp{} -> knownRepr
+      OrApp{}  -> knownRepr
+      NotApp{} -> knownRepr
+      XorApp{} -> knownRepr
 
       BVAdd w _ _   -> BVTypeRepr w
       BVAdc w _ _ _ -> BVTypeRepr w
@@ -439,11 +324,11 @@ instance HasRepr (App f) TypeRepr where
       BVSbb w _ _ _ -> BVTypeRepr w
       BVMul w _ _ -> BVTypeRepr w
 
-      BVUnsignedLt{} -> knownType
-      BVUnsignedLe{} -> knownType
-      BVSignedLt{} -> knownType
-      BVSignedLe{} -> knownType
-      BVTestBit{} -> knownType
+      BVUnsignedLt{} -> knownRepr
+      BVUnsignedLe{} -> knownRepr
+      BVSignedLt{} -> knownRepr
+      BVSignedLe{} -> knownRepr
+      BVTestBit{} -> knownRepr
 
       BVComplement w _ -> BVTypeRepr w
       BVAnd w _ _ -> BVTypeRepr w
@@ -453,10 +338,10 @@ instance HasRepr (App f) TypeRepr where
       BVShr w _ _ -> BVTypeRepr w
       BVSar w _ _ -> BVTypeRepr w
 
-      UadcOverflows{} -> knownType
-      SadcOverflows{} -> knownType
-      UsbbOverflows{} -> knownType
-      SsbbOverflows{} -> knownType
+      UadcOverflows{} -> knownRepr
+      SadcOverflows{} -> knownRepr
+      UsbbOverflows{} -> knownRepr
+      SsbbOverflows{} -> knownRepr
 
       PopCount w _ -> BVTypeRepr w
       ReverseBytes w _ ->
@@ -464,20 +349,3 @@ instance HasRepr (App f) TypeRepr where
           LeqProof -> BVTypeRepr (natMultiply (knownNat :: NatRepr 8) w)
       Bsf w _ -> BVTypeRepr w
       Bsr w _ -> BVTypeRepr w
-
-      -- Floating point
-      FPAdd rep _ _ -> floatTypeRepr rep
-      FPAddRoundedUp{} -> knownType
-      FPSub rep _ _ -> floatTypeRepr rep
-      FPSubRoundedUp{} -> knownType
-      FPMul rep _ _ -> floatTypeRepr rep
-      FPMulRoundedUp{} -> knownType
-      FPDiv rep _ _ -> floatTypeRepr rep
-      FPLt{} -> knownType
-      FPEq{} -> knownType
-      FPCvt _ _ tgt   -> floatTypeRepr tgt
-      FPCvtRoundsUp{} -> knownType
-      FPFromBV _ tgt  -> floatTypeRepr tgt
-      TruncFPToSignedBV _ _ w -> BVTypeRepr w
-      FPAbs rep _ -> floatTypeRepr rep
-      FPNeg rep _ -> floatTypeRepr rep
