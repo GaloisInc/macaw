@@ -182,6 +182,7 @@ getSomeBVLocation v =
     F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
     F.XMMReg xmm     -> pure $ SomeBV $ fullRegister $ X86_XMMReg xmm
+    F.YMMReg _ymm    -> error "XXX: TODO"
     F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
     F.X87Register i -> mk (X87StackRegister i)
     F.FarPointer _      -> fail "FarPointer"
