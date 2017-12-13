@@ -916,6 +916,11 @@ addMacawStmt stmt =
     M.ExecArchStmt astmt -> do
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
+    M.ArchState {} -> do
+      -- FIXME: We want to translate the metadata in ArchState into equivalent
+      -- metadata in crucible.  We'll need to use a syntax extension to capture
+      -- it.
+      pure ()
 
 lookupCrucibleLabel :: Map Word64 (CR.Label s)
                        -- ^ Map from block index to Crucible label
