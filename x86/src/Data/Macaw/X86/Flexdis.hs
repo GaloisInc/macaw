@@ -3,7 +3,7 @@ Copyright        : (c) Galois, Inc 2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This provides a facility for disassembling x86 instructions from a
-Macaw memory objec.t
+Macaw memory object.
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
