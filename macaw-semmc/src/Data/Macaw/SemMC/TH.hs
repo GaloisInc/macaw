@@ -42,7 +42,7 @@ import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.Map as Map
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
-import qualified Data.Parameterized.ShapedList as SL
+import qualified Data.Parameterized.List as SL
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.Witness ( Witness(..) )
@@ -184,7 +184,7 @@ genCaseBody :: forall a sh t arch
             -> Name
             -> a sh
             -> ParameterizedFormula (Sym t) arch sh
-            -> SL.ShapedList (FreeParamF Name) sh
+            -> SL.List (FreeParamF Name) sh
             -> Q Exp
 genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
@@ -194,7 +194,7 @@ genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
 
     opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
-    opVarsMap = SL.foldrFCIndexed (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
+    opVarsMap = SL.ifoldr (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
 
 collectVarForLocation :: forall tp arch proxy t
                        . proxy arch
@@ -215,13 +215,13 @@ collectVarForLocation _ loc bv = Map.insert bv loc
 -- SemMC.BoundVar module for information about the nature of that change
 -- (basically, from 'Symbol' to BaseType).
 collectOperandVars :: forall sh tp arch t
-                    . SL.ShapedList (FreeParamF Name) sh
+                    . SL.List (FreeParamF Name) sh
                    -> SL.Index sh tp
                    -> BV.BoundVar (Sym t) arch tp
                    -> Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
                    -> Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
 collectOperandVars varNames ix (BV.BoundVar bv) m =
-  case SL.indexShapedList varNames ix of
+  case varNames SL.!! ix of
     FreeParamF name -> Map.insert bv (FreeParamF name) m
 
 -- | Generate an implementation of 'execInstruction' that runs in the
@@ -300,7 +300,7 @@ translateFormula :: forall arch t sh .
                  -> Name
                  -> ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
-                 -> SL.ShapedList (FreeParamF Name) sh
+                 -> SL.List (FreeParamF Name) sh
                  -> Q Exp
 translateFormula ltr ena ae ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
@@ -311,7 +311,7 @@ translateFormula ltr ena ae ipVarName semantics interps varNames = do
         translateDefinition (Map.Pair param expr) = do
           case param of
             OperandParameter _w idx -> do
-              let FreeParamF name = varNames `SL.indexShapedList` idx
+              let FreeParamF name = varNames SL.!! idx
               newVal <- addEltTH interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
             LiteralParameter loc
@@ -320,7 +320,7 @@ translateFormula ltr ena ae ipVarName semantics interps varNames = do
                   valExp <- addEltTH interps expr
                   appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
-              let FreeParamF boundOperandName = SL.indexShapedList varNames opIx
+              let FreeParamF boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> fail ("Function has no definition: " ++ str)
                 Just fi -> do

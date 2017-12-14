@@ -5,6 +5,8 @@ packages: macaw-ppc/
           submodules/semmc/semmc-ppc/
           submodules/dismantle/dismantle-tablegen/
           submodules/dismantle/dismantle-ppc/
+          submodules/dismantle/dismantle-arm/
+          submodules/dismantle/dismantle-thumb/
           submodules/parameterized-utils/
           submodules/crucible/crucible/
           submodules/crucible/galois-matlab/

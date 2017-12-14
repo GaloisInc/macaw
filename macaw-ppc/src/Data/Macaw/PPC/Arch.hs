@@ -237,43 +237,43 @@ ppcInstructionMatcher (D.Instruction opc operands) =
     D.ISYNC -> Just (G.addStmt (MC.ExecArchStmt Isync))
     D.DCBA ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcba ea))
     D.DCBF ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbf ea))
     D.DCBI ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbi ea))
     D.DCBST ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbst ea))
     D.DCBZ ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbz ea))
     D.DCBZL ->
       case operands of
-        D.Memrr memrr D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbzl ea))
     D.DCBT ->
       case operands of
-        D.Memrr memrr D.:> D.U5imm imm D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbt ea th))
     D.DCBTST ->
       case operands of
-        D.Memrr memrr D.:> D.U5imm imm D.:> D.Nil -> Just $ do
+        D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
