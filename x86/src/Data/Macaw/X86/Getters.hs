@@ -195,6 +195,7 @@ getSomeBVLocation v =
     F.Mem32  ar  -> SomeBV <$> getBV32Addr  ar
     F.Mem64  ar  -> SomeBV <$> getBV64Addr  ar
     F.Mem128 ar  -> SomeBV <$> getBV128Addr ar
+    F.Mem256 _ar -> error "XXX: TODO"
     F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
     F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
     F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
