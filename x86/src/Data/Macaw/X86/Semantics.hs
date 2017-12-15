@@ -144,20 +144,20 @@ getRM32_RM64 v =
     F.Mem64 addr -> Right <$> getBV64Addr addr
     _ -> fail "Unexpected operand"
 
--- | Location that get the high 64 bits of a XMM register,
--- and preserves the low 64 bits on writes.
+-- | Location that gets the low 128-bit of a YMM register,
+-- and preserves the upper ones when writing (SSE compatability mode)
 xmm_loc :: F.XMMReg -> Location addr (BVType 128)
-xmm_loc r = fullRegister (R.X86_XMMReg r)
+xmm_loc = xmm_sse
 
--- | Location that get the low 64 bits of a XMM register,
+-- | Location that get the low 64 bits of a YMM register,
 -- and preserves the high 64 bits on writes.
 xmm_low32 :: F.XMMReg -> Location addr (BVType 32)
-xmm_low32 r = subRegister n0 n32 (R.X86_XMMReg r)
+xmm_low32 r = subRegister n0 n32 (xmmOwner r)
 
--- | Location that get the low 64 bits of a XMM register,
+-- | Location that get the low 64 bits of a YMM register,
 -- and preserves the high 64 bits on writes.
 xmm_low64 :: F.XMMReg -> Location addr (BVType 64)
-xmm_low64 r = subRegister n0 n64 (R.X86_XMMReg r)
+xmm_low64 r = subRegister n0 n64 (xmmOwner r)
 
 -- | Location that get the low 64 bits of a XMM register,
 -- and preserves the high 64 bits on writes.
@@ -168,7 +168,7 @@ xmm_low r SSE_Double = xmm_low64 r
 -- | Location that get the high 64 bits of a XMM register,
 -- and preserves the low 64 bits on writes.
 xmm_high64 :: F.XMMReg -> Location addr (BVType 64)
-xmm_high64 r = subRegister n64 n64 (R.X86_XMMReg r)
+xmm_high64 r = subRegister n64 n64 (xmmOwner r)
 
 -- | This gets the register of a xmm field.
 getXMM :: Monad m => F.Value -> m F.XMMReg

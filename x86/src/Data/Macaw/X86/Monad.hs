@@ -25,6 +25,7 @@ semantics of X86 instructions.
 module Data.Macaw.X86.Monad
   ( -- * Type
     XMMType
+  , YMMType
   , RepValSize(..)
   , repValHasSupportedWidth
   , repValSizeByteCount
@@ -51,6 +52,8 @@ module Data.Macaw.X86.Monad
   , reg_high8
   , reg_low16
   , reg_low32
+  , reg_low128_sse
+  , reg_low128_avx
 
   , cf_loc
   , pf_loc
@@ -77,6 +80,10 @@ module Data.Macaw.X86.Monad
   , ax, bx, cx, dx
   , al, dl
   , ah
+  , ymm
+  , xmm_sse
+  , xmm_avx
+  , xmmOwner
     -- * Value operations
   , bvLit
   , (.=.)
@@ -196,6 +203,7 @@ import qualified Data.Macaw.X86.X86Reg as R
 import           Data.Macaw.X86.X87ControlReg
 
 type XMMType    = BVType 128
+type YMMType    = BVType 256
 
 ltProof :: forall f n m . (n+1 <= m) => f n -> f m -> LeqProof n m
 ltProof _ _ = leqTrans lt LeqProof
@@ -782,6 +790,16 @@ reg_low8 r = subRegister n0 n8 r
 reg_high8 :: X86Reg R.GP -> Location addr (BVType 8)
 reg_high8 r = subRegister n8 n8 r
 
+-- | The XMM part of a YMM register.
+-- Setting does not affect the upper 128 bits (SSE compatability mode)
+reg_low128_sse :: X86Reg R.YMM -> Location addr R.XMM
+reg_low128_sse r = subRegister n0 n128 r
+
+-- | The XMM part of a YMM register.
+-- Setting clears the upper 128 bits (AVX mode)
+reg_low128_avx :: X86Reg R.YMM -> Location addr R.XMM
+reg_low128_avx r = constUpperBitsOnWriteRegister n128 ZeroExtendOnWrite r
+
 rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi :: Location addr (BVType 64)
 rax = fullRegister R.RAX
 rcx = fullRegister R.RCX
@@ -827,6 +845,18 @@ ah = reg_high8 R.RAX
 
 rip :: Location addr (BVType 64)
 rip = fullRegister R.X86_IP
+
+ymm :: F.YMMReg -> Location addr (BVType 256)
+ymm = fullRegister . R.YMM
+
+xmm_sse :: F.XMMReg -> Location addr (BVType 128)
+xmm_sse = reg_low128_sse . xmmOwner
+
+xmm_avx :: F.XMMReg -> Location addr (BVType 128)
+xmm_avx = reg_low128_avx . xmmOwner
+
+xmmOwner :: F.XMMReg -> X86Reg (BVType 256)
+xmmOwner = R.YMM . F.ymmReg . F.xmmRegNo
 
 ------------------------------------------------------------------------
 
