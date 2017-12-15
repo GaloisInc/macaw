@@ -1664,6 +1664,7 @@ ifte_ c_expr t f = eval c_expr >>= go
                             , _blockState = emptyPreBlock st f_block_label (genAddr s0)
                             , genAddr = genAddr s0
                             , genMemory = genMemory s0
+                            , avxMode = avxMode s0
                             }
           f_seq <- finishBlock FetchAndExecute <$> runX86Generator c s5 f
 

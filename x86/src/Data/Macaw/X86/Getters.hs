@@ -190,6 +190,8 @@ readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
 data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
 
+
+
 -- | Extract the location of a bitvector value.
 getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
 getSomeBVLocation v =
@@ -197,9 +199,9 @@ getSomeBVLocation v =
     F.ControlReg cr  -> pure $ SomeBV $ ControlReg cr
     F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
-    F.XMMReg r       -> pure $ SomeBV $ xmm_avx r -- XXX: for writing, this depends on what
-                                                  -- sort of instruction we used to write there...
-
+    F.XMMReg r       -> do avx <- isAVX
+                           pure $ SomeBV $ if avx then xmm_avx r
+                                                  else xmm_sse r
     F.YMMReg r       -> pure $ SomeBV $ ymm r
     F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
     F.X87Register i -> mk (X87StackRegister i)
