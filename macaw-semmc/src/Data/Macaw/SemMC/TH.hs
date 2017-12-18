@@ -25,10 +25,11 @@ module Data.Macaw.SemMC.TH (
   asName
   ) where
 
+import           GHC.TypeLits ( Symbol )
 import qualified Data.ByteString as BS
-import qualified Data.Constraint as C
 
 import           Control.Lens ( (^.) )
+import qualified Data.Functor.Const as C
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import qualified Data.Text as T
@@ -37,15 +38,14 @@ import           Language.Haskell.TH.Syntax
 import           Text.Read ( readMaybe )
 
 import           Data.Parameterized.Classes
-import           Data.Parameterized.FreeParamF ( FreeParamF(..) )
 import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.Map as Map
+import qualified Data.Parameterized.HasRepr as HR
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.List as SL
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
-import           Data.Parameterized.Witness ( Witness(..) )
 import qualified Lang.Crucible.BaseTypes as CT
 import qualified Lang.Crucible.Solver.Interface as SI
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
@@ -95,7 +95,7 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -> Name
                    -- ^ The name of the architecture-specific instruction
                    -- matcher to run before falling back to the generic one
-                   -> Map.MapF (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
+                   -> Map.MapF a (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                    -> Q Exp
 instructionMatcher ltr ena ae archSpecificMatcher formulas = do
   ipVarName <- newName "ipVal"
@@ -123,9 +123,9 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
                 -> Name
                 -> Name
-                -> Map.Pair (Witness c a) (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo c a))
+                -> Map.Pair a (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                 -> MatchQ
-mkSemanticsCase ltr ena ae ipVarName operandListVar (Map.Pair (Witness opc) (PairF semantics capInfo)) =
+mkSemanticsCase ltr ena ae ipVarName operandListVar (Map.Pair opc (PairF semantics capInfo)) =
   match (conP (DT.capturedOpcodeName capInfo) []) (normalB (mkOperandListCase ltr ena ae ipVarName operandListVar opc semantics capInfo)) []
 
 -- | For each opcode case, we have a sub-case expression to destructure the
@@ -159,7 +159,7 @@ mkOperandListCase :: (A.Architecture arch)
                   -> Name
                   -> a tp
                   -> ParameterizedFormula (Sym t) arch tp
-                  -> DT.CaptureInfo c a tp
+                  -> DT.CaptureInfo a tp
                   -> Q Exp
 mkOperandListCase ltr ena ae ipVarName operandListVar opc semantics capInfo = do
   body <- genCaseBody ltr ena ae ipVarName opc semantics (DT.capturedOperandNames capInfo)
@@ -184,7 +184,7 @@ genCaseBody :: forall a sh t arch
             -> Name
             -> a sh
             -> ParameterizedFormula (Sym t) arch sh
-            -> SL.List (FreeParamF Name) sh
+            -> SL.List (C.Const Name) sh
             -> Q Exp
 genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
@@ -193,7 +193,7 @@ genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
     locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
 
-    opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+    opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
     opVarsMap = SL.ifoldr (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
 
 collectVarForLocation :: forall tp arch proxy t
@@ -210,20 +210,28 @@ collectVarForLocation _ loc bv = Map.insert bv loc
 -- operand.  The idea will be that we will look up bound variables in this map
 -- to be able to compute a TH expression to refer to it.
 --
--- We have to unwrap and rewrap the 'FreeParamF' because the type parameter
+-- We have to unwrap and rewrap the 'C.Const' because the type parameter
 -- changes when we switch from 'BV.BoundVar' to 'SI.BoundVar'.  See the
 -- SemMC.BoundVar module for information about the nature of that change
 -- (basically, from 'Symbol' to BaseType).
 collectOperandVars :: forall sh tp arch t
-                    . SL.List (FreeParamF Name) sh
+                    . SL.List (C.Const Name) sh
                    -> SL.Index sh tp
                    -> BV.BoundVar (Sym t) arch tp
-                   -> Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
-                   -> Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                   -> Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+                   -> Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
 collectOperandVars varNames ix (BV.BoundVar bv) m =
   case varNames SL.!! ix of
-    FreeParamF name -> Map.insert bv (FreeParamF name) m
+    C.Const name -> Map.insert bv (C.Const name) m
+{-
+     genExecInstruction :: forall k arch (a :: [k] -> *) (proxy :: *
+                                                                        -> *).
+                                (A.Architecture arch, OrdF a, ShowF a, LF.LiftF a) =>
+                                proxy arch
+                                -> (forall (tp :: CT.BaseType). L.Location arch tp -> Q Exp)
+                                -> (forall (tp :: CT.BaseType) t.
 
+-}
 -- | Generate an implementation of 'execInstruction' that runs in the
 -- 'G.Generator' monad.  We pass in both the original list of semantics files
 -- along with the list of opcode info objects.  We can match them up using
@@ -232,7 +240,9 @@ collectOperandVars varNames ix (BV.BoundVar bv) m =
 -- all of the things we would need to for that).
 --
 -- The structure of the term produced is documented in 'instructionMatcher'
-genExecInstruction :: (A.Architecture arch,
+genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
+                    . (A.Architecture arch,
+                       HR.HasRepr a (A.ShapeRepr arch),
                        OrdF a,
                        ShowF a,
                        LF.LiftF a)
@@ -256,22 +266,19 @@ genExecInstruction :: (A.Architecture arch,
                    -- function, as the type would actually refer to types that
                    -- we cannot mention in this shared code (i.e.,
                    -- architecture-specific instruction types).
-                   -> (forall sh . c sh C.:- BuildOperandList arch sh)
-                   -- ^ A constraint implication to let us extract/weaken the
-                   -- constraint in our 'Witness' to the required 'BuildOperandList'
-                   -> [(Some (Witness c a), BS.ByteString)]
+                   -> [(Some a, BS.ByteString)]
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
-                   -> [Some (DT.CaptureInfo c a)]
+                   -> [Some (DT.CaptureInfo a)]
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Q Exp
-genExecInstruction _ ltr ena ae archInsnMatcher impl semantics captureInfo = do
+genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo = do
   Some ng <- runIO PN.newIONonceGenerator
   sym <- runIO (S.newSimpleBackend ng)
-  formulas <- runIO (loadFormulas sym impl semantics)
+  formulas <- runIO (loadFormulas sym semantics)
   let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
   instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo
   where
@@ -300,7 +307,7 @@ translateFormula :: forall arch t sh .
                  -> Name
                  -> ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
-                 -> SL.List (FreeParamF Name) sh
+                 -> SL.List (C.Const Name) sh
                  -> Q Exp
 translateFormula ltr ena ae ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
@@ -311,7 +318,7 @@ translateFormula ltr ena ae ipVarName semantics interps varNames = do
         translateDefinition (Map.Pair param expr) = do
           case param of
             OperandParameter _w idx -> do
-              let FreeParamF name = varNames SL.!! idx
+              let C.Const name = varNames SL.!! idx
               newVal <- addEltTH interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
             LiteralParameter loc
@@ -320,7 +327,7 @@ translateFormula ltr ena ae ipVarName semantics interps varNames = do
                   valExp <- addEltTH interps expr
                   appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
-              let FreeParamF boundOperandName = varNames SL.!! opIx
+              let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> fail ("Function has no definition: " ++ str)
                 Just fi -> do
@@ -352,7 +359,7 @@ addEltTH interps elt = do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
             Nothing  ->
               case Map.lookup bVar (opVars interps) of
-                Just (FreeParamF name) -> bindExpr elt [| O.extractValue $(varE name) |]
+                Just (C.Const name) -> bindExpr elt [| O.extractValue $(varE name) |]
                 Nothing -> fail $ "bound var not found: " ++ show bVar
         S.NonceAppElt n -> do
           translatedExpr <- evalNonceAppTH interps (S.nonceEltApp n)
@@ -490,7 +497,7 @@ asName ufName bvInterps elt =
     S.BoundVarElt bVar ->
       case Map.lookup bVar (opVars bvInterps) of
         Nothing -> error ("Expected " ++ show bVar ++ " to have an interpretation")
-        Just (FreeParamF name) -> name
+        Just (C.Const name) -> name
     _ -> error ("Unexpected elt as name (" ++ showF elt ++ ") in " ++ ufName)
 
 appToExprTH :: (A.Architecture arch)

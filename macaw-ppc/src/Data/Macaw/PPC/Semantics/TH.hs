@@ -15,13 +15,13 @@ module Data.Macaw.PPC.Semantics.TH (
   ppcNonceAppEval
   ) where
 
+import qualified Data.Functor.Const as C
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import           Language.Haskell.TH
 import           GHC.TypeLits
 
 import           Data.Parameterized.Classes
-import           Data.Parameterized.FreeParamF ( FreeParamF(..) )
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
@@ -63,7 +63,7 @@ ppcNonceAppEval bvi nonceApp =
               case operand of
                 S.BoundVarElt bv -> do
                   case Map.lookup bv (opVars bvi) of
-                    Just (FreeParamF name) -> liftQ [| O.extractValue (PE.interpIsR0 $(varE name)) |]
+                    Just (C.Const name) -> liftQ [| O.extractValue (PE.interpIsR0 $(varE name)) |]
                     Nothing -> fail ("bound var not found: " ++ show bv)
                 S.NonceAppElt nonceApp' -> do
                   case S.nonceEltApp nonceApp' of

@@ -7,7 +7,6 @@ module Data.Macaw.PPC.Semantics.PPC32
   ( execInstruction
   ) where
 
-import qualified Data.Constraint as C
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.PPC
 import qualified Data.Macaw.CFG as MC
@@ -22,4 +21,4 @@ import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
 
 execInstruction :: MC.Value PPC ids (MT.BVType 32) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher (C.Sub C.Dict) allSemantics allOpcodeInfo)
+execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher allSemantics allOpcodeInfo)

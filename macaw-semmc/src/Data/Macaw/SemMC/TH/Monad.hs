@@ -15,12 +15,12 @@ module Data.Macaw.SemMC.TH.Monad (
 
 import qualified Control.Monad.State.Strict as St
 import           Control.Monad.Trans ( lift )
+import qualified Data.Functor.Const as C
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
 import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
-import           Data.Parameterized.FreeParamF ( FreeParamF(..) )
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Solver.Interface as SI
@@ -33,7 +33,7 @@ type Sym t = S.SimpleBackend t
 
 data BoundVarInterpretations arch t =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-                          , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (FreeParamF Name)
+                          , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
                           , regsValName :: Name
                           }
 

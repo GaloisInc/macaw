@@ -30,7 +30,6 @@ library
                        lens,
                        text,
                        bytestring,
-                       constraints,
                        parameterized-utils,
                        crucible,
                        macaw-base,
