@@ -54,6 +54,7 @@ module Data.Macaw.X86.Monad
   , reg_low32
   , reg_low128_sse
   , reg_low128_avx
+  , reg_high128
 
   , cf_loc
   , pf_loc
@@ -797,8 +798,11 @@ reg_low128_sse r = subRegister n0 n128 r
 
 -- | The XMM part of a YMM register.
 -- Setting clears the upper 128 bits (AVX mode)
-reg_low128_avx :: X86Reg R.YMM -> Location addr R.XMM
+reg_low128_avx :: X86Reg (BVType 256) -> Location addr (BVType 128)
 reg_low128_avx r = constUpperBitsOnWriteRegister n128 ZeroExtendOnWrite r
+
+reg_high128 :: X86Reg (BVType 256) -> Location addr (BVType 128)
+reg_high128 r = subRegister n128 n128 r
 
 rax, rcx, rdx, rbx, rsp, rbp, rsi, rdi :: Location addr (BVType 64)
 rax = fullRegister R.RAX

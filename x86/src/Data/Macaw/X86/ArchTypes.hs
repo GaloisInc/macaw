@@ -36,6 +36,7 @@ module Data.Macaw.X86.ArchTypes
 
 import           Data.Bits
 import           Data.Int
+import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory (Endianness(..))
@@ -464,6 +465,15 @@ data X86PrimFn f tp where
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
 
+  VPAlignr :: (1 <= n) =>
+              !(NatRepr n)      -> {- ^ width of inputs/result -}
+              !(f (BVType n))   -> {- ^ operand 1 (most significant) -}
+              !(f (BVType n))   -> {- ^ operand 2 (least significant) -}
+              !Word8            -> {- ^ amount to shift by -}
+              X86PrimFn f (BVType n)
+  {- ^ Concatenate the two @n@ bit operands, to get a @2*n@ bit result;
+       then shift right by the @amt@;
+       the result is the lowest @n@ bits of that. -}
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
@@ -495,6 +505,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FSub{} -> knownRepr
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
+      VPAlignr w _ _ _ -> BVTypeRepr w
 
 packedType :: (1 <= n, 1 <= w) => NatRepr n -> SSE_FloatType (BVType w) -> TypeRepr (BVType (n*w))
 packedType w tp =
@@ -539,6 +550,7 @@ instance TraversableFC X86PrimFn where
       X87_FSub x y -> X87_FSub <$> go x <*> go y
       X87_FMul x y -> X87_FMul <$> go x <*> go y
       X87_FST tp x -> X87_FST tp <$> go x
+      VPAlignr n x y i -> (\v1 v2 -> VPAlignr n v1 v2 i) <$> go x <*> go y
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
@@ -575,6 +587,7 @@ instance IsArchFn X86PrimFn where
       X87_FSub x y -> sexprA "x87_sub" [ pp x, pp y ]
       X87_FMul x y -> sexprA "x87_mul" [ pp x, pp y ]
       X87_FST tp x -> sexprA "x86_fst" [ ppShow tp, pp x]
+      VPAlignr _ x y i -> sexprA "vpalignr" [ pp x, pp y, ppShow i ]
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -611,6 +624,8 @@ x86PrimFnHasSideEffects f =
     X87_FST{}    -> True
     -- Extension never throws exception
     X87_Extend{}  -> False
+
+    VPAlignr {} -> False  -- as long as the instruciton is OK...
 
 ------------------------------------------------------------------------
 -- X86Stmt

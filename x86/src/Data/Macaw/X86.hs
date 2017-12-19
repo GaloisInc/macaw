@@ -336,6 +336,8 @@ transferAbsValue r f =
     X87_FSub{}  -> TopV
     X87_FMul{}  -> TopV
 
+    VPAlignr {} -> TopV   -- XXX: ???
+
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
 tryDisassembleBlockFromAbsState :: forall s ids
