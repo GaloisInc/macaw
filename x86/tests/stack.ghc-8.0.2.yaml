@@ -93,5 +93,9 @@ extra-deps:
 - cereal-0.5.4.0
 
 - cabal-doctest-1.0.3
+- pretty-hex-1.0
+- tasty-ant-xml-1.1.1
+- tasty-quickcheck-0.9.1
+- generic-deriving-1.12
 
 resolver: ghc-8.0.2
