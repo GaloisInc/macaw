@@ -24,7 +24,6 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
 import           Text.Printf ( printf )
-import           Debug.Trace
 
 import qualified Dismantle.PPC as D
 
@@ -105,7 +104,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
   case readInstruction mem curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
-      traceM ("II: " ++ show i)
+--      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
           nextIP = MM.relativeAddr seg nextIPOffset
           nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @ppc)) nextIP

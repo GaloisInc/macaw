@@ -15,8 +15,6 @@ import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
 
-import           Debug.Trace (trace)
-
 -- | Our current heuristic is that we are issuing a (potentially conditional)
 -- call if we see an address in the link register.
 --
@@ -31,7 +29,6 @@ identifyCall :: (PPCArchConstraints ppc)
              -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
              -> Maybe (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
 identifyCall _ mem stmts0 rs
-  | trace ("Identify call: " ++ unlines (map show stmts0)) False = undefined
   | not (null stmts0)
   , MC.RelocatableValue {} <- rs ^. MC.boundValue PPC_LNK
   , Just retVal <- simplifyValue (rs ^. MC.boundValue PPC_LNK)
