@@ -28,10 +28,20 @@ test-suite macaw-arm-tests
   ghc-options:         -Wall
   hs-source-dirs:      tests
   main-is:             TestMain.hs
+  other-modules:       ARMTests
+                     , MismatchTests
+                     , Shared
   build-depends:       base >=4.10 && <4.11
+                     , binary
+                     , bytestring
+                     , containers
+                     , elf-edit
+                     , exceptions
                      , filemanip
                      , filepath
+                     , lens
+                     , macaw-base
                      , macaw-arm
+                     , parameterized-utils
                      , tasty
                      , tasty-hunit
-  -- filepath 1.4.1.2                     
