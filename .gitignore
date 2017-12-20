@@ -1,2 +1,4 @@
 /.stack-work/
 /macaw-semmc/.stack-work/
+*~
+**/dist/
