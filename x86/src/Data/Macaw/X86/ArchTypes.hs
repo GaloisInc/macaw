@@ -20,6 +20,8 @@ module Data.Macaw.X86.ArchTypes
   , SSE_Cmp
   , lookupSSECmp
   , SSE_Op(..)
+  , AVXPointWiseBinOp(..)
+  , AVXBinOp(..)
   , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -223,6 +225,27 @@ instance Show (X87_FloatType tp) where
   show X87_ExtDouble = "extdouble"
 
 ------------------------------------------------------------------------
+
+data AVXBinOp = VPAnd
+              | VPOr
+              | VPXor
+
+instance Show AVXBinOp where
+  show x = case x of
+             VPAnd -> "vpand"
+             VPOr  -> "vpor"
+             VPXor -> "vpxor"
+
+data AVXPointWiseBinOp =
+    PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
+  | PtSub -- ^ Pointwise subtract; overflow wraps around; no overflow flags
+
+instance Show AVXPointWiseBinOp where
+  show x = case x of
+             PtAdd -> "ptadd"
+             PtSub -> "ptsub"
+
+------------------------------------------------------------------------
 -- X86PrimFn
 
 -- | Defines primitive functions in the X86 format.
@@ -321,6 +344,8 @@ data X86PrimFn f tp where
   --
   -- This function implicitly depends on the MXCSR register and may
   -- signal exceptions as noted in the documentation on SSE.
+
+
 
   SSE_CMPSX :: !SSE_Cmp
             -> !(SSE_FloatType tp)
@@ -465,15 +490,53 @@ data X86PrimFn f tp where
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
 
-  VPAlignr :: (1 <= n) =>
+  VPAlignR :: (1 <= n) =>
               !(NatRepr n)      -> {- ^ width of inputs/result -}
               !(f (BVType n))   -> {- ^ operand 1 (most significant) -}
               !(f (BVType n))   -> {- ^ operand 2 (least significant) -}
-              !Word8            -> {- ^ amount to shift by -}
+              !Word8            -> {- ^ amount to shift by (in bytes) -}
               X86PrimFn f (BVType n)
   {- ^ Concatenate the two @n@ bit operands, to get a @2*n@ bit result;
-       then shift right by the @amt@;
+       then shift right by the @amt@ bytes;
        the result is the lowest @n@ bits of that. -}
+
+  VShiftL :: (1 <= n) =>
+     !(NatRepr n)        -> {- ^ width of input/result -}
+     !(f (BVType n))     -> {- ^ shift this -}
+     !Word8              -> {- ^ amount to shift by (in bytes) -}
+     X86PrimFn f (BVType n)
+  {- ^ Shift a vector to the left, by the given number of bytes.
+     The new, shifted-in, bytes are 0 -}
+
+  VBinOp :: (1 <= n) =>
+    !(NatRepr n)    -> {-^ vector width -}
+    !AVXBinOp       -> {-^ binary operation on the whole vector -}
+    !(f (BVType n)) -> {-^ first operand -}
+    !(f (BVType n)) -> {-^ second operand -}
+    X86PrimFn f (BVType n)
+  {- ^ Binary operation on two vectors. Should not have side effects -}
+
+  PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
+    !(NatRepr elNum)               -> {- ^ Number of elements -}
+    !(NatRepr elSize)              -> {- ^ Bit width of an element -}
+    !(NatRepr sz)                  -> {- ^ Bit size of shift amount -}
+    !(f (BVType (elNum * elSize))) -> {- ^ Vector -}
+    !(f (BVType sz))               -> {- ^ Shift amount (in bits) -}
+    X86PrimFn f (BVType (elNum * elSize))
+  {- ^ Shift left each element in the vector by the given amount.
+       The new ("shifted-in") bits are 0 -}
+
+  Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
+    !(NatRepr elNum)               -> {- ^ Number of elements -}
+    !(NatRepr elSize)              -> {- ^ Bit width of an element -}
+    !AVXPointWiseBinOp             -> {- ^ Operation -}
+    !(f (BVType (elNum * elSize))) -> {- ^ Add this vector -}
+    !(f (BVType (elNum * elSize))) -> {- ^ With this vector -}
+    X86PrimFn f (BVType (elNum * elSize))
+  {- ^ Pointwise binary operation on vectors. Should not have side effects. -}
+
+
+
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
@@ -505,7 +568,17 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FSub{} -> knownRepr
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
-      VPAlignr w _ _ _ -> BVTypeRepr w
+      VPAlignR w _ _ _ -> BVTypeRepr w
+      VShiftL w _ _ -> BVTypeRepr w
+      PointwiseShiftL n w _ _ _ -> packedAVX n w
+      VBinOp w _ _ _ -> BVTypeRepr w
+      Pointwise2 n w _ _ _ -> packedAVX n w
+
+packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
+                                                  TypeRepr (BVType (n*w))
+packedAVX n w =
+  case leqMulPos n w of
+    LeqProof -> BVTypeRepr (natMultiply n w)
 
 packedType :: (1 <= n, 1 <= w) => NatRepr n -> SSE_FloatType (BVType w) -> TypeRepr (BVType (n*w))
 packedType w tp =
@@ -550,7 +623,11 @@ instance TraversableFC X86PrimFn where
       X87_FSub x y -> X87_FSub <$> go x <*> go y
       X87_FMul x y -> X87_FMul <$> go x <*> go y
       X87_FST tp x -> X87_FST tp <$> go x
-      VPAlignr n x y i -> (\v1 v2 -> VPAlignr n v1 v2 i) <$> go x <*> go y
+      VPAlignR n x y i -> (\v1 v2 -> VPAlignR n v1 v2 i) <$> go x <*> go y
+      VShiftL w x i -> (\v -> VShiftL w v i) <$> go x
+      VBinOp w o x y -> VBinOp w o <$> go x <*> go y
+      PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
+      Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
@@ -587,7 +664,13 @@ instance IsArchFn X86PrimFn where
       X87_FSub x y -> sexprA "x87_sub" [ pp x, pp y ]
       X87_FMul x y -> sexprA "x87_mul" [ pp x, pp y ]
       X87_FST tp x -> sexprA "x86_fst" [ ppShow tp, pp x]
-      VPAlignr _ x y i -> sexprA "vpalignr" [ pp x, pp y, ppShow i ]
+      VPAlignR _ x y i -> sexprA "vpalignr" [ pp x, pp y, ppShow i ]
+      VShiftL _ x i -> sexprA "shiftBytesL" [ pp x, ppShow i ]
+      VBinOp _ o x y -> sexprA (show o) [ pp x, pp y ]
+      PointwiseShiftL _ w _ x y -> sexprA "pointwiseShiftL"
+                                     [ ppShow (widthVal w), pp x, pp y ]
+      Pointwise2 _ w o x y -> sexprA (show o)
+                                [ ppShow (widthVal w) , pp x , pp y ]
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -625,7 +708,11 @@ x86PrimFnHasSideEffects f =
     -- Extension never throws exception
     X87_Extend{}  -> False
 
-    VPAlignr {} -> False  -- as long as the instruciton is OK...
+    VPAlignR {} -> False  -- as long as the instruciton is OK...
+    VShiftL {} -> False
+    VBinOp {} -> False
+    PointwiseShiftL {} -> False
+    Pointwise2 {} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt

@@ -336,7 +336,12 @@ transferAbsValue r f =
     X87_FSub{}  -> TopV
     X87_FMul{}  -> TopV
 
-    VPAlignr {} -> TopV   -- XXX: ???
+    -- XXX: Is 'TopV' the right thing for the AVX instruction below?
+    VPAlignR {} -> TopV
+    VShiftL {} -> TopV
+    VBinOp {} -> TopV
+    PointwiseShiftL {} -> TopV
+    Pointwise2 {} -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
