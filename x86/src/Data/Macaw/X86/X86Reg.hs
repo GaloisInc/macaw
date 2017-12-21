@@ -361,7 +361,7 @@ x87StatusNames = V.fromList $
 -- | The ABI defines these (http://www.x86-64.org/documentation/abi.pdf)
 -- Syscalls clobber rcx and r11, but we don't really care about these anyway.
 x86SyscallArgumentRegs :: [ X86Reg (BVType 64) ]
-x86SyscallArgumentRegs = [ RDI, RSI, RDX, R10, R8, R9 ]
+x86SyscallArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.R10, F.R8, F.R9 ]
 
 gpRegList :: [X86Reg (BVType 64)]
 gpRegList = [X86_GP (F.reg64 i) | i <- [0..15]]
@@ -402,7 +402,7 @@ instance RegisterInfo X86Reg where
   sp_reg = RSP
 
   -- The register used to store system call numbers.
-  syscall_num_reg = RAX
+  syscall_num_reg = X86_GP F.RAX
 
   -- The ABI defines these (http://www.x86-64.org/documentation/abi.pdf)
   -- Syscalls clobber rcx and r11, but we don't really care about these
@@ -428,13 +428,13 @@ x86CalleeSavedRegs = Set.fromList $
   ]
 
 x86ArgumentRegs :: [X86Reg (BVType 64)]
-x86ArgumentRegs = [ RDI, RSI, RDX, RCX, R8, R9 ]
+x86ArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
 
 x86FloatArgumentRegs :: [X86Reg (BVType 128)]
 x86FloatArgumentRegs =  X86_XMMReg . F.xmmReg <$> [0..7]
 
 x86ResultRegs :: [X86Reg (BVType 64)]
-x86ResultRegs = [ RAX, RDX ]
+x86ResultRegs = X86_GP <$> [ F.RAX, F.RDX ]
 
 x86FloatResultRegs :: [X86Reg (BVType 128)]
 x86FloatResultRegs = [ X86_XMMReg (F.xmmReg 0) ]

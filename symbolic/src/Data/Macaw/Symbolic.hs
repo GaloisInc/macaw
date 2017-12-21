@@ -164,7 +164,7 @@ stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
 
   let genCtx = CrucGenContext { archConstraints = \x -> x
-                              , macawRegAssign = archRegAssignment sinfo
+                              , macawRegAssign = regAssign
                               , regIndexMap = mkRegIndexMap regAssign (Ctx.size crucRegTypes)
                               , handleAlloc = halloc
                               , binaryPath = binPath

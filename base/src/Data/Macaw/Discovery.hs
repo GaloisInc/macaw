@@ -859,7 +859,7 @@ transfer addr = do
    else do
     -- Rewrite returned blocks to simplify expressions
 
-    -- Comute demand set
+    -- Compute demand set
     let bs = eliminateDeadStmts ainfo bs0
     -- Call transfer blocks to calculate parsedblocks
     let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]

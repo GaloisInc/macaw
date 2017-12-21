@@ -58,6 +58,7 @@ data ArchTranslateFunctions arch
   = ArchTranslateFunctions
   { archRegNameFn :: !(forall tp . M.ArchReg arch tp -> C.SolverSymbol)
   , archRegAssignment :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
+    -- ^ Map from indices in the ArchRegContext to the associated register.
   , archTranslateFn :: !(forall ids s tp
                          . M.ArchFn arch (M.Value arch ids) tp
                          -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
@@ -174,8 +175,10 @@ crucibleValue :: C.App (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
 crucibleValue app = evalAtom (CR.EvalApp app)
 
 -- | Evaluate the crucible app and return a reference to the result.
-getRegInput :: IndexPair (ArchRegContext arch) tp -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-getRegInput idx = do
+getRegInput :: Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch)
+            -> IndexPair (ArchRegContext arch) tp
+            -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
+getRegInput regAssign idx = do
   ctx <- getCtx
   archConstraints ctx $ do
   -- Make atom
@@ -184,7 +187,7 @@ getRegInput idx = do
                           , CR.atomSource = CR.FnInput
                           , CR.typeOfAtom = regStructRepr ctx
                           }
-  let tp = M.typeRepr (macawRegAssign ctx Ctx.! macawIndex idx)
+  let tp = M.typeRepr (regAssign Ctx.! macawIndex idx)
   crucibleValue (C.GetStruct regStruct (crucibleIndex idx) (typeToCrucible tp))
 
 v2c :: M.Value arch ids tp
@@ -327,9 +330,10 @@ valueToCrucible v = do
             Nothing ->
               fail $ "internal: No Crucible address associated with segment."
     M.Initial r -> do
-      regmap <- regIndexMap <$> getCtx
-      case MapF.lookup r regmap of
-        Just idx -> getRegInput idx
+      ctx <- getCtx
+      case MapF.lookup r (regIndexMap ctx) of
+        Just idx -> do
+          getRegInput (macawRegAssign ctx) idx
         Nothing -> fail $ "internal: Register is not bound."
     M.AssignedValue asgn -> do
       let idx = M.assignId asgn
@@ -389,7 +393,7 @@ writeMem addr repr val = do
   let args = Ctx.empty Ctx.%> caddr Ctx.%> cval
   void $ callFnHandle hndl args
 
-assignRhsToCrucible :: M.AssignRhs arch ids tp
+assignRhsToCrucible :: M.AssignRhs arch (M.Value arch ids) tp
                     -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 assignRhsToCrucible rhs =
   case rhs of
