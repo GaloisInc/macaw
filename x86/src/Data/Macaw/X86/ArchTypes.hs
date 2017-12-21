@@ -20,8 +20,9 @@ module Data.Macaw.X86.ArchTypes
   , SSE_Cmp
   , lookupSSECmp
   , SSE_Op(..)
-  , AVXPointWiseBinOp(..)
-  , AVXBinOp(..)
+  , AVXPointWiseOp2(..)
+  , AVXOp1(..)
+  , AVXOp2(..)
   , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -226,21 +227,51 @@ instance Show (X87_FloatType tp) where
 
 ------------------------------------------------------------------------
 
-data AVXBinOp = VPAnd
-              | VPOr
-              | VPXor
+data AVXOp1 = VShiftL Word8     -- ^ Shift left by this many bytes
+                                -- New bytes are 0.
+            | VShufD Word8      -- ^ Shuffwe 32-bit words of vector
+                                -- according to pattern in the word8
 
-instance Show AVXBinOp where
-  show x = case x of
-             VPAnd -> "vpand"
-             VPOr  -> "vpor"
-             VPXor -> "vpxor"
+data AVXOp2 = VPAnd             -- ^ Bitwise and
+            | VPOr              -- ^ Bitwise or
+            | VPXor             -- ^ Bitwise xor
+            | VPAlignR Word8    -- ^ Concatenate inputs (1st most sign)
+                                -- then shift right by the given amount
+                                -- in bytes.
+            | VPShufB           -- ^ First operand is a vector,
+                                -- second is the shuffle-control-mask
+            | VAESEnc           -- ^ 1st op: state, 2nd op: key schedule
+            | VAESEncLast       -- ^ 1st op: state, 2nd op: key schedule
+            | VPCLMULQDQ Word8
+              {- ^ Carry-less multiplication of quadwords
+                The operand specifies which 64-bit words of the input
+                vectors to multiply as follows:
+                  * lower 4 bits -> index in 1st op;
+                  * upper 4 bits -> index in 2nd op;
+                 Indexes are always 0 or 1. -}
 
-data AVXPointWiseBinOp =
+
+data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
   | PtSub -- ^ Pointwise subtract; overflow wraps around; no overflow flags
 
-instance Show AVXPointWiseBinOp where
+instance Show AVXOp1 where
+  show x = case x of
+             VShiftL i -> "vshiftl" ++ show i
+             VShufD  i -> "vshufd" ++ show i
+
+instance Show AVXOp2 where
+  show x = case x of
+             VPAnd        -> "vpand"
+             VPOr         -> "vpor"
+             VPXor        -> "vpxor"
+             VPAlignR i   -> "vpalignr" ++ show i
+             VPShufB      -> "vpshufb"
+             VAESEnc      -> "vaesenc"
+             VAESEncLast  -> "vaesenclast"
+             VPCLMULQDQ i -> "vpclmulqdq" ++ show i
+
+instance Show AVXPointWiseOp2 where
   show x = case x of
              PtAdd -> "ptadd"
              PtSub -> "ptsub"
@@ -490,27 +521,16 @@ data X86PrimFn f tp where
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
 
-  VPAlignR :: (1 <= n) =>
-              !(NatRepr n)      -> {- ^ width of inputs/result -}
-              !(f (BVType n))   -> {- ^ operand 1 (most significant) -}
-              !(f (BVType n))   -> {- ^ operand 2 (least significant) -}
-              !Word8            -> {- ^ amount to shift by (in bytes) -}
-              X86PrimFn f (BVType n)
-  {- ^ Concatenate the two @n@ bit operands, to get a @2*n@ bit result;
-       then shift right by the @amt@ bytes;
-       the result is the lowest @n@ bits of that. -}
-
-  VShiftL :: (1 <= n) =>
+  VOp1 :: (1 <= n) =>
      !(NatRepr n)        -> {- ^ width of input/result -}
-     !(f (BVType n))     -> {- ^ shift this -}
-     !Word8              -> {- ^ amount to shift by (in bytes) -}
+     !AVXOp1             -> {- ^ do this operation -}
+     !(f (BVType n))     -> {- ^ on this thing -}
      X86PrimFn f (BVType n)
-  {- ^ Shift a vector to the left, by the given number of bytes.
-     The new, shifted-in, bytes are 0 -}
+  {- ^ Unary operation on a vector.  Should have no side effects. -}
 
-  VBinOp :: (1 <= n) =>
+  VOp2 :: (1 <= n) =>
     !(NatRepr n)    -> {-^ vector width -}
-    !AVXBinOp       -> {-^ binary operation on the whole vector -}
+    !AVXOp2         -> {-^ binary operation on the whole vector -}
     !(f (BVType n)) -> {-^ first operand -}
     !(f (BVType n)) -> {-^ second operand -}
     X86PrimFn f (BVType n)
@@ -529,12 +549,18 @@ data X86PrimFn f tp where
   Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
     !(NatRepr elNum)               -> {- ^ Number of elements -}
     !(NatRepr elSize)              -> {- ^ Bit width of an element -}
-    !AVXPointWiseBinOp             -> {- ^ Operation -}
+    !AVXPointWiseOp2               -> {- ^ Operation -}
     !(f (BVType (elNum * elSize))) -> {- ^ Add this vector -}
     !(f (BVType (elNum * elSize))) -> {- ^ With this vector -}
     X86PrimFn f (BVType (elNum * elSize))
   {- ^ Pointwise binary operation on vectors. Should not have side effects. -}
 
+  VExtractF128 ::
+    !(f (BVType 256)) ->
+    !Word8 ->
+    X86PrimFn f (BVType 128)
+  {- ^ Extract 128 bits from a 256 bit value, as described by the
+       control mask -}
 
 
 
@@ -568,11 +594,11 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FSub{} -> knownRepr
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
-      VPAlignR w _ _ _ -> BVTypeRepr w
-      VShiftL w _ _ -> BVTypeRepr w
       PointwiseShiftL n w _ _ _ -> packedAVX n w
-      VBinOp w _ _ _ -> BVTypeRepr w
+      VOp1 w _ _ -> BVTypeRepr w
+      VOp2 w _ _ _ -> BVTypeRepr w
       Pointwise2 n w _ _ _ -> packedAVX n w
+      VExtractF128 {} -> knownRepr
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -623,11 +649,11 @@ instance TraversableFC X86PrimFn where
       X87_FSub x y -> X87_FSub <$> go x <*> go y
       X87_FMul x y -> X87_FMul <$> go x <*> go y
       X87_FST tp x -> X87_FST tp <$> go x
-      VPAlignR n x y i -> (\v1 v2 -> VPAlignR n v1 v2 i) <$> go x <*> go y
-      VShiftL w x i -> (\v -> VShiftL w v i) <$> go x
-      VBinOp w o x y -> VBinOp w o <$> go x <*> go y
+      VOp1 w o x   -> VOp1 w o <$> go x
+      VOp2 w o x y -> VOp2 w o <$> go x <*> go y
       PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
       Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
+      VExtractF128 x i -> (`VExtractF128` i) <$> go x
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
@@ -664,13 +690,13 @@ instance IsArchFn X86PrimFn where
       X87_FSub x y -> sexprA "x87_sub" [ pp x, pp y ]
       X87_FMul x y -> sexprA "x87_mul" [ pp x, pp y ]
       X87_FST tp x -> sexprA "x86_fst" [ ppShow tp, pp x]
-      VPAlignR _ x y i -> sexprA "vpalignr" [ pp x, pp y, ppShow i ]
-      VShiftL _ x i -> sexprA "shiftBytesL" [ pp x, ppShow i ]
-      VBinOp _ o x y -> sexprA (show o) [ pp x, pp y ]
+      VOp1 _ o x   -> sexprA (show o) [ pp x ]
+      VOp2 _ o x y -> sexprA (show o) [ pp x, pp y ]
       PointwiseShiftL _ w _ x y -> sexprA "pointwiseShiftL"
                                      [ ppShow (widthVal w), pp x, pp y ]
       Pointwise2 _ w o x y -> sexprA (show o)
                                 [ ppShow (widthVal w) , pp x , pp y ]
+      VExtractF128 x i -> sexprA "vextractf128" [ pp x, ppShow i ]
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -708,11 +734,11 @@ x86PrimFnHasSideEffects f =
     -- Extension never throws exception
     X87_Extend{}  -> False
 
-    VPAlignR {} -> False  -- as long as the instruciton is OK...
-    VShiftL {} -> False
-    VBinOp {} -> False
+    VOp1 {} -> False
+    VOp2 {} -> False
     PointwiseShiftL {} -> False
     Pointwise2 {} -> False
+    VExtractF128 {} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -748,6 +774,11 @@ data X86Stmt (v :: Type -> *)
             !(v BoolType)
             -- /\ Direction flag
 
+    | EMMS
+      -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
+      -- Probably OK to use this for both EMMS FEMMS, the second being a
+      -- a faster version from AMD 3D now.
+
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
 
@@ -761,6 +792,7 @@ instance TraversableF X86Stmt where
       StoreX87Control v -> StoreX87Control <$> go v
       MemCopy bc v src dest dir -> MemCopy bc <$> go v <*> go src <*> go dest <*> go dir
       MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
+      EMMS -> pure EMMS
 
 instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
@@ -773,6 +805,7 @@ instance IsArchStmt X86Stmt where
       MemSet cnt val dest d ->
           text "memset" <+> parens (hcat $ punctuate comma args)
         where args = [pp cnt, pp val, pp dest, pp d]
+      EMMS -> text "emms"
 
 ------------------------------------------------------------------------
 -- X86_64

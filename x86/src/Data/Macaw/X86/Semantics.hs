@@ -2724,6 +2724,8 @@ all_instructions =
   , def_fsubp
   , def_fsubr
   , def_fsubrp
+  , defNullary "emms" $ addArchStmt EMMS
+  , defNullary "femms" $ addArchStmt EMMS
   ]
   ++ def_cmov_list
   ++ def_jcc_list

@@ -11,7 +11,7 @@ import Flexdis86.Register (ymmReg)
 import qualified Flexdis86 as F
 
 import Data.Macaw.CFG.Core(Value,bvValue)
-import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32)
+import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n256)
 
 import Data.Macaw.X86.InstructionDef
 import Data.Macaw.X86.Monad((.=), ymm, reg_high128)
@@ -19,7 +19,7 @@ import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation)
 import Data.Macaw.X86.Generator(X86Generator, Expr(..),inAVX,evalArchFn,eval)
 import Data.Macaw.X86.X86Reg
 import Data.Macaw.X86.ArchTypes(X86_64,X86PrimFn(..),
-                                  AVXBinOp(..),AVXPointWiseBinOp(..))
+                                  AVXOp1(..),AVXOp2(..),AVXPointWiseOp2(..))
 
 maxReg :: Word8
 maxReg = 15 -- or 7 in 32-bit mode
@@ -70,8 +70,36 @@ loc <~ f =
        Nothing   -> fail "Value and result sizes are different"
 
 
-avxBinOp :: String -> AVXBinOp -> InstructionDef
-avxBinOp mnem op =
+avxOp1I :: String -> (Word8 -> AVXOp1) -> InstructionDef
+avxOp1I mnem op = avx3 mnem $ \arg1 arg2 arg3 ->
+  do SomeBV vec <- getSomeBVValue arg2
+     let vw = typeWidth vec
+     case arg3 of
+       F.ByteImm amt ->
+          do v <- eval vec
+             arg1 <~ VOp1 vw (op (fromIntegral amt)) v
+       _ -> fail ("[" ++ mnem ++ "]: Expected argument 3 to be immediate.")
+
+avxOp2I :: String -> (Word8 -> AVXOp2) -> InstructionDef
+avxOp2I mnem op =
+  avx4 mnem $ \dst src1 src2 amt ->
+    do SomeBV e1 <- getSomeBVValue src1
+       SomeBV e2 <- getSomeBVValue src2
+       let e1w = typeWidth e1
+           e2w = typeWidth e2
+       case testEquality e1w e2w of
+         Just Refl ->
+            do v1 <- eval e1
+               v2 <- eval e2
+               dst <~ VOp2 e1w (op (fromIntegral amt)) v1 v2
+         _ -> fail ("[" ++ mnem ++ "]: Arguements of different widths")
+
+
+
+
+
+avxOp2 :: String -> AVXOp2 -> InstructionDef
+avxOp2 mnem op =
   avx3 mnem $ \arg1 arg2 arg3 ->
     do SomeBV vec1 <- getSomeBVValue arg2
        SomeBV vec2 <- getSomeBVValue arg3
@@ -81,10 +109,10 @@ avxBinOp mnem op =
          Just Refl ->
            do v1 <- eval vec1
               v2 <- eval vec2
-              arg1 <~ VBinOp v1w op v1 v2
+              arg1 <~ VOp2 v1w op v1 v2
          _ -> fail ("[" ++ mnem ++ "] Invalid arguments")
 
-avxPointwise2 :: (1 <= n) => String -> AVXPointWiseBinOp -> NatRepr n ->
+avxPointwise2 :: (1 <= n) => String -> AVXPointWiseOp2 -> NatRepr n ->
                                                               InstructionDef
 avxPointwise2 mnem op sz =
   avx3 mnem $ \arg1 arg2 arg3 ->
@@ -121,18 +149,6 @@ all_instructions =
   , avxMov "vmovdqa"
   , avxMov "vmovdqu"
 
-  , avx4 "vpalignr" $ \dst src1 src2 amt ->
-      do SomeBV e1 <- getSomeBVValue src1
-         SomeBV e2 <- getSomeBVValue src2
-         let e1w = typeWidth e1
-             e2w = typeWidth e2
-         case testEquality e1w e2w of
-           Just Refl ->
-              do v1 <- eval e1
-                 v2 <- eval e2
-                 dst <~ VPAlignR e1w v1 v2 (fromIntegral amt)
-           _ -> fail "[vpalignr]: Arguements of different widths"
-
   , avx3 "vpslld" $ \arg1 arg2 arg3 ->
       do SomeBV vec <- getSomeBVValue arg2
          SomeBV amt <- getSomeBVValue arg3
@@ -146,24 +162,31 @@ all_instructions =
                   arg1 <~ PointwiseShiftL elN n32 amtw v a
              _ -> fail "[vpslld]: invalid arguments"
 
-    , avx3 "vpslldq" $ \arg1 arg2 arg3 ->
-        do SomeBV vec <- getSomeBVValue arg2
-           let vw = typeWidth vec
-           case arg3 of
-             F.ByteImm amt ->
-                do v <- eval vec
-                   arg1 <~ VShiftL vw v (fromIntegral amt)
-             _ -> fail "[vpslldq]: Expected argument 3 to be immediate."
+  , avxOp1I "vpslldq" VShiftL
+  , avxOp1I "vpshufd" VShufD
 
   , avxPointwise2 "vpaddd" PtAdd n32
   , avxPointwise2 "vpsubd" PtAdd n32
 
-  , avxBinOp "vpand" VPAnd
-  , avxBinOp "vpor" VPOr
-  , avxBinOp "vpxor" VPXor
+  , avxOp2 "vpand" VPAnd
+  , avxOp2 "vpor" VPOr
+  , avxOp2 "vpxor" VPXor
+  , avxOp2 "vpshufb" VPShufB
 
+  , avxOp2I "vpalignr" VPAlignR
 
+  , avxOp2 "vaesenc" VAESEnc
+  , avxOp2 "vaesenclast" VAESEncLast
 
+  , avx3 "vextractf128" $ \arg1 arg2 arg ->
+      do SomeBV vec <- getSomeBVValue arg2
+         case (testEquality (typeWidth vec) n256, arg) of
+           (Just Refl, F.ByteImm i) ->
+              do v <- eval vec
+                 arg1 <~ VExtractF128 v (fromIntegral i)
+           _ -> fail "[vextractf128] Unexpected operands"
+
+  , avxOp2I "vpclmulqdq" VPCLMULQDQ
   ]
 
 
