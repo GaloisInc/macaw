@@ -184,6 +184,7 @@ getSomeBVLocation v =
     F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
     F.XMMReg xmm     -> pure $ SomeBV $ fullRegister $ X86_XMMReg xmm
+    F.YMMReg _ymm    -> error "XXX: TODO"
     F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
     F.X87Register i -> mk (X87StackRegister i)
     F.FarPointer _      -> fail "FarPointer"
@@ -194,6 +195,7 @@ getSomeBVLocation v =
     F.Mem32  ar  -> SomeBV <$> getBV32Addr  ar
     F.Mem64  ar  -> SomeBV <$> getBV64Addr  ar
     F.Mem128 ar  -> SomeBV <$> getBV128Addr ar
+    F.Mem256 _ar -> error "XXX: TODO"
     F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
     F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
     F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
