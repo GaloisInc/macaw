@@ -13,11 +13,24 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  -- exposed-modules:     
+  exposed-modules:     Data.Macaw.ARM
+                     , Data.Macaw.ARM.ARMReg
+                     , Data.Macaw.ARM.BinaryFormat.ELF
+                     , Data.Macaw.ARM.Semantics.ARMSemantics
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <4.11
-  build-tools:         arm-none-eabi-gcc
+                     , ansi-wl-pprint
+                     , bytestring
+                     , cereal
+                     , containers
+                     , elf-edit
+                     , lens
+                     , macaw-base
+                     , macaw-semmc
+                     , semmc-arm
+                     , vector
+  -- build-tools:         arm-none-eabi-gcc
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
@@ -32,6 +45,7 @@ test-suite macaw-arm-tests
                      , MismatchTests
                      , Shared
   build-depends:       base >=4.10 && <4.11
+                     , ansi-wl-pprint
                      , binary
                      , bytestring
                      , containers
@@ -43,5 +57,6 @@ test-suite macaw-arm-tests
                      , macaw-base
                      , macaw-arm
                      , parameterized-utils
+                     , semmc-arm
                      , tasty
                      , tasty-hunit
