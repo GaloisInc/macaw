@@ -229,7 +229,7 @@ instance Show (X87_FloatType tp) where
 
 data AVXOp1 = VShiftL Word8     -- ^ Shift left by this many bytes
                                 -- New bytes are 0.
-            | VShufD Word8      -- ^ Shuffwe 32-bit words of vector
+            | VShufD Word8      -- ^ Shuffle 32-bit words of vector
                                 -- according to pattern in the word8
 
 data AVXOp2 = VPAnd             -- ^ Bitwise and
@@ -649,6 +649,8 @@ instance TraversableFC X86PrimFn where
       X87_FSub x y -> X87_FSub <$> go x <*> go y
       X87_FMul x y -> X87_FMul <$> go x <*> go y
       X87_FST tp x -> X87_FST tp <$> go x
+
+
       VOp1 w o x   -> VOp1 w o <$> go x
       VOp2 w o x y -> VOp2 w o <$> go x <*> go y
       PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
