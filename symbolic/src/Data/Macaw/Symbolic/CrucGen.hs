@@ -368,7 +368,7 @@ mkHandleVal hid = do
     Nothing -> do
       ctx <- getCtx
       let argTypes = handleIdArgTypes ctx hid
-      let retType = handleIdRetType ctx hid
+      let retType = handleIdRetType hid
       hndl <- liftST $ C.mkHandle' (handleAlloc ctx) (handleIdName hid) argTypes retType
       crucPStateLens . handleMapLens %= MapF.insert hid (HandleVal hndl)
       pure $! hndl

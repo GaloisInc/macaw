@@ -59,6 +59,7 @@ module Data.Macaw.Symbolic.PersistentState
   ) where
 
 import           Control.Lens hiding (Index, (:>), Empty)
+import           Data.List (intercalate)
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
@@ -66,6 +67,7 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Context
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -83,9 +85,18 @@ import qualified Lang.Crucible.Types as C
 ------------------------------------------------------------------------
 -- Type mappings
 
+type family ToCrucibleBaseTypeList (l :: [M.Type]) :: Ctx C.BaseType where
+  ToCrucibleBaseTypeList '[] = EmptyCtx
+  ToCrucibleBaseTypeList (h ': l) = ToCrucibleBaseTypeList l ::> ToCrucibleBaseType h
+
 type family ToCrucibleBaseType (mtp :: M.Type) :: C.BaseType where
-  ToCrucibleBaseType (M.BVType w) = C.BaseBVType w
   ToCrucibleBaseType M.BoolType   = C.BaseBoolType
+  ToCrucibleBaseType (M.BVType w) = C.BaseBVType w
+  ToCrucibleBaseType ('M.TupleType l) = C.BaseStructType (ToCrucibleBaseTypeList l)
+
+type family CtxToCrucibleBaseType (mtp :: Ctx M.Type) :: Ctx C.BaseType where
+  CtxToCrucibleBaseType EmptyCtx   = EmptyCtx
+  CtxToCrucibleBaseType (c ::> tp) = CtxToCrucibleBaseType c ::> ToCrucibleBaseType tp
 
 type ToCrucibleType tp = C.BaseToType (ToCrucibleBaseType tp)
 
@@ -129,7 +140,11 @@ typeToCrucibleBase tp =
   case tp of
     M.BoolTypeRepr  -> C.BaseBoolRepr
     M.BVTypeRepr w  -> C.BaseBVRepr w
---    M.TupleTypeRepr a -> C.BaseStructRepr (macawAssignToCruc tpyeToCrucibleBase a)
+    M.TupleTypeRepr a -> C.BaseStructRepr (typeListToCrucibleBase a)
+
+typeListToCrucibleBase :: P.List M.TypeRepr ctx -> Assignment C.BaseTypeRepr (ToCrucibleBaseTypeList ctx)
+typeListToCrucibleBase P.Nil = Empty
+typeListToCrucibleBase (h P.:< r) = typeListToCrucibleBase r :> typeToCrucibleBase h
 
 typeToCrucible :: M.TypeRepr tp -> C.TypeRepr (ToCrucibleType tp)
 typeToCrucible = C.baseToType . typeToCrucibleBase
@@ -161,10 +176,10 @@ mkRegIndexMap :: OrdF r
               => Assignment r ctx
               -> Size (CtxToCrucibleType ctx)
               -> MapF r (IndexPair ctx)
-mkRegIndexMap r0 csz =
-  case (r0, viewSize csz) of
-    (Empty, _) -> MapF.empty
-    (a :> r, IncSize csz0) ->
+mkRegIndexMap Empty _ = MapF.empty
+mkRegIndexMap (a :> r) csz =
+  case viewSize csz of
+    IncSize csz0 ->
       let m = fmapF extendIndexPair (mkRegIndexMap a csz0)
           idx = IndexPair (nextIndex (size a)) (nextIndex csz0)
        in MapF.insert r idx m
@@ -201,12 +216,8 @@ data CrucGenContext arch s
      -- variable storing the base address.
    }
 
-archWidthRepr :: forall arch ids s . CrucGenContext arch s -> NatRepr (M.ArchAddrWidth arch)
-archWidthRepr ctx = archConstraints ctx $
-  let arepr :: M.AddrWidthRepr (M.ArchAddrWidth arch)
-      arepr = M.addrWidthRepr arepr
-   in M.addrWidthNatRepr arepr
-
+archWidthRepr :: forall arch s . CrucGenContext arch s -> M.AddrWidthRepr (M.ArchAddrWidth arch)
+archWidthRepr ctx = archConstraints ctx $ M.addrWidthRepr (archWidthRepr ctx)
 
 regStructRepr :: CrucGenContext arch s -> C.TypeRepr (ArchRegStruct arch)
 regStructRepr ctx = archConstraints ctx $
@@ -229,7 +240,6 @@ data HandleId arch (ftp :: (Ctx C.CrucibleType, C.CrucibleType)) where
                           '( EmptyCtx ::> ArchAddrCrucibleType arch ::> ToCrucibleType tp
                            , C.UnitType
                            )
-  SyscallId :: HandleId arch '(EmptyCtx ::> ArchRegStruct arch, ArchRegStruct arch)
 
 instance TestEquality (HandleId arch) where
   testEquality x y = orderingF_refl (compareF x y)
@@ -244,23 +254,27 @@ instance OrdF (HandleId arch) where
   compareF _ ReadMemId{} = GTF
 
   compareF (WriteMemId xr) (WriteMemId yr) = lexCompareF xr yr $ EQF
-  compareF WriteMemId{} _ = LTF
-  compareF _ WriteMemId{} = GTF
+--  compareF WriteMemId{} _ = LTF
+--  compareF _ WriteMemId{} = GTF
 
-  compareF SyscallId SyscallId = EQF
+typeName :: M.TypeRepr tp -> String
+typeName M.BoolTypeRepr = "Bool"
+typeName (M.BVTypeRepr w) = "BV" ++ show w
+typeName (M.TupleTypeRepr ctx) = "(" ++ intercalate "," (toListFC typeName ctx)  ++ ")"
+
+endName :: M.Endianness -> String
+endName M.LittleEndian = "le"
+endName M.BigEndian = "be"
 
 handleIdName :: HandleId arch ftp -> C.FunctionName
 handleIdName h =
   case h of
     MkFreshSymId repr ->
-      case repr of
-        M.BoolTypeRepr -> "symbolicBool"
-        M.BVTypeRepr w -> fromString $ "symbolicBV" ++ show w
-    ReadMemId (M.BVMemRepr w _) ->
-      fromString $ "readMem" ++ show (8 * natValue w)
-    WriteMemId (M.BVMemRepr w _) ->
-      fromString $ "writeMem" ++ show (8 * natValue w)
-    SyscallId -> "syscall"
+      fromString $ "symbolic_" ++ typeName repr
+    ReadMemId (M.BVMemRepr w end) ->
+      fromString $ "readMem_" ++ show (8 * natValue w) ++ "_" ++ endName end
+    WriteMemId (M.BVMemRepr w end) ->
+      fromString $ "writeMem_" ++ show (8 * natValue w) ++ "_" ++ endName end
 
 handleIdArgTypes :: CrucGenContext arch s
                  -> HandleId arch '(args, ret)
@@ -269,23 +283,18 @@ handleIdArgTypes ctx h =
   case h of
     MkFreshSymId _repr -> empty
     ReadMemId _repr -> archConstraints ctx $
-      empty :> C.BVRepr (archWidthRepr ctx)
+      empty :> C.BVRepr (M.addrWidthNatRepr (archWidthRepr ctx))
     WriteMemId repr -> archConstraints ctx $
-      empty :> C.BVRepr (archWidthRepr ctx)
+      empty :> C.BVRepr (M.addrWidthNatRepr (archWidthRepr ctx))
             :> memReprToCrucible repr
-    SyscallId ->
-      empty :> regStructRepr ctx
 
-handleIdRetType :: CrucGenContext arch s
-                -> HandleId arch '(args, ret)
+handleIdRetType :: HandleId arch '(args, ret)
                 -> C.TypeRepr ret
-handleIdRetType ctx h =
+handleIdRetType h =
   case h of
     MkFreshSymId repr -> typeToCrucible repr
     ReadMemId  repr -> memReprToCrucible repr
     WriteMemId _ -> C.UnitRepr
-    SyscallId -> regStructRepr ctx
-
 
 -- | A particular handle in the UsedHandleSet
 data HandleVal (ftp :: (Ctx C.CrucibleType, C.CrucibleType)) =

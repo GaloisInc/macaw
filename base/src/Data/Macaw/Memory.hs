@@ -219,6 +219,9 @@ instance Ord (MemWord w) where
 -- | Typeclass for legal memory widths
 class (1 <= w) => MemWidth w where
 
+  -- | Returns @AddrWidthRepr@ to identify width of pointer.
+  --
+  -- The argument is ignored.
   addrWidthRepr :: p w -> AddrWidthRepr w
 
   -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.

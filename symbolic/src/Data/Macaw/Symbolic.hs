@@ -68,23 +68,27 @@ regVars sym nameFn a =
     _ -> error "internal: regVars encountered case non-exhaustive pattern"
 #endif
 
+-- | An override that creates a fresh value with the given type.
 runFreshSymOverride :: M.TypeRepr tp
                     -> C.OverrideSim MacawSimulatorState sym ret
                                      EmptyCtx
                                      (ToCrucibleType tp)
                                      (C.RegValue sym (ToCrucibleType tp))
-runFreshSymOverride = undefined
+runFreshSymOverride tp = do
+  undefined tp
 
-runReadMemOverride :: NatRepr w
-                   -> M.MemRepr tp
+-- | Run override that reads a value from memory.
+runReadMemOverride :: M.AddrWidthRepr w -- ^ Width of the address.
+                   -> M.MemRepr tp -- ^ Type of value to read.
                    -> C.OverrideSim MacawSimulatorState sym ret
                                     (EmptyCtx ::> C.BVType w)
                                     (ToCrucibleType tp)
                                     (C.RegValue sym (ToCrucibleType tp))
 runReadMemOverride = undefined
 
-runWriteMemOverride :: NatRepr w
-                    -> M.MemRepr tp
+-- | Run override that writes a value to memory.
+runWriteMemOverride :: M.AddrWidthRepr w -- ^ Width of a pointer
+                    -> M.MemRepr tp      -- ^ Type of value to write to memory.
                     -> C.OverrideSim MacawSimulatorState sym ret
                                      (EmptyCtx ::> C.BVType w ::> ToCrucibleType tp)
                                      C.UnitType
@@ -99,7 +103,6 @@ createHandleBinding ctx hid =
     MkFreshSymId repr -> runFreshSymOverride repr
     ReadMemId repr    -> runReadMemOverride (archWidthRepr ctx) repr
     WriteMemId repr   -> runWriteMemOverride (archWidthRepr ctx) repr
-    SyscallId         -> undefined
 
 -- | This function identifies all the handles needed, and returns
 -- function bindings for each one.
@@ -113,9 +116,8 @@ createHandleMap ctx = MapF.foldrWithKey go C.emptyHandleMap
            -> C.FunctionBindings MacawSimulatorState sym
            -> C.FunctionBindings MacawSimulatorState sym
         go hid (HandleVal h) b =
-          let o = C.mkOverride' (handleIdName hid) (handleIdRetType ctx hid) (createHandleBinding ctx hid)
+          let o = C.mkOverride' (handleIdName hid) (handleIdRetType hid) (createHandleBinding ctx hid)
            in  C.insertHandleMap h (C.UseOverride o) b
-
 
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
