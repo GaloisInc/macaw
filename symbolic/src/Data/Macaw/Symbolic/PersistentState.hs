@@ -123,7 +123,7 @@ macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
 macawAssignToCruc f a =
   case Ctx.view a of
     Ctx.AssignEmpty -> Ctx.empty
-    Ctx.AssignExtend b x -> macawAssignToCruc f b Ctx.%> f x
+    Ctx.AssignExtend b x -> macawAssignToCruc f b Ctx.:> f x
 
 -- | Create the variables from a collection of registers.
 macawAssignToCrucM :: Applicative m
@@ -133,7 +133,7 @@ macawAssignToCrucM :: Applicative m
 macawAssignToCrucM f a =
   case Ctx.view a of
     Ctx.AssignEmpty -> pure Ctx.empty
-    Ctx.AssignExtend b x -> (Ctx.%>) <$> macawAssignToCrucM f b <*> f x
+    Ctx.AssignExtend b x -> (Ctx.:>) <$> macawAssignToCrucM f b <*> f x
 
 
 -- Return the types associated with a register assignment.
@@ -271,12 +271,12 @@ handleIdArgTypes ctx h =
   case h of
     MkFreshSymId _repr -> Ctx.empty
     ReadMemId _repr -> archConstraints ctx $
-      Ctx.empty Ctx.%> C.BVRepr (archWidthRepr ctx)
+      Ctx.empty Ctx.:> C.BVRepr (archWidthRepr ctx)
     WriteMemId repr -> archConstraints ctx $
-      Ctx.empty Ctx.%> C.BVRepr (archWidthRepr ctx)
-                Ctx.%> memReprToCrucible repr
+      Ctx.empty Ctx.:> C.BVRepr (archWidthRepr ctx)
+                Ctx.:> memReprToCrucible repr
     SyscallId ->
-      Ctx.empty Ctx.%> regStructRepr ctx
+      Ctx.empty Ctx.:> regStructRepr ctx
 
 handleIdRetType :: CrucGenContext arch ids s
                 -> HandleId arch '(args, ret)

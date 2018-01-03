@@ -376,7 +376,7 @@ readMem :: M.ArchAddrValue arch ids
 readMem addr repr = do
   hndl <- mkHandleVal (ReadMemId repr)
   caddr <- valueToCrucible addr
-  callFnHandle hndl (Ctx.empty Ctx.%> caddr)
+  callFnHandle hndl (Ctx.empty Ctx.:> caddr)
 
 writeMem :: M.ArchAddrValue arch ids
         -> M.MemRepr tp
@@ -386,7 +386,7 @@ writeMem addr repr val = do
   hndl <- mkHandleVal (WriteMemId repr)
   caddr <- valueToCrucible addr
   cval  <- valueToCrucible val
-  let args = Ctx.empty Ctx.%> caddr Ctx.%> cval
+  let args = Ctx.empty Ctx.:> caddr Ctx.:> cval
   void $ callFnHandle hndl args
 
 assignRhsToCrucible :: M.AssignRhs arch ids tp
