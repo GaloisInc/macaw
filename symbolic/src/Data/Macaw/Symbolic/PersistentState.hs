@@ -183,7 +183,7 @@ type ArchConstraints arch
 type MemSegmentMap w = Map M.RegionIndex (C.GlobalVar (C.BVType w))
 
 --- | Information that does not change during generating Crucible from MAcaw
-data CrucGenContext arch ids s
+data CrucGenContext arch s
    = CrucGenContext
    { archConstraints :: !(forall a . (ArchConstraints arch => a) -> a)
      -- ^ Typeclass constraints for architecture
@@ -201,14 +201,14 @@ data CrucGenContext arch ids s
      -- variable storing the base address.
    }
 
-archWidthRepr :: forall arch ids s . CrucGenContext arch ids s -> NatRepr (M.ArchAddrWidth arch)
+archWidthRepr :: forall arch ids s . CrucGenContext arch s -> NatRepr (M.ArchAddrWidth arch)
 archWidthRepr ctx = archConstraints ctx $
   let arepr :: M.AddrWidthRepr (M.ArchAddrWidth arch)
       arepr = M.addrWidthRepr arepr
    in M.addrWidthNatRepr arepr
 
 
-regStructRepr :: CrucGenContext arch ids s -> C.TypeRepr (ArchRegStruct arch)
+regStructRepr :: CrucGenContext arch s -> C.TypeRepr (ArchRegStruct arch)
 regStructRepr ctx = archConstraints ctx $
   C.StructRepr (typeCtxToCrucible (fmapFC M.typeRepr (macawRegAssign ctx)))
 
@@ -262,7 +262,7 @@ handleIdName h =
       fromString $ "writeMem" ++ show (8 * natValue w)
     SyscallId -> "syscall"
 
-handleIdArgTypes :: CrucGenContext arch ids s
+handleIdArgTypes :: CrucGenContext arch s
                  -> HandleId arch '(args, ret)
                  -> Assignment C.TypeRepr args
 handleIdArgTypes ctx h =
@@ -276,7 +276,7 @@ handleIdArgTypes ctx h =
     SyscallId ->
       empty :> regStructRepr ctx
 
-handleIdRetType :: CrucGenContext arch ids s
+handleIdRetType :: CrucGenContext arch s
                 -> HandleId arch '(args, ret)
                 -> C.TypeRepr ret
 handleIdRetType ctx h =

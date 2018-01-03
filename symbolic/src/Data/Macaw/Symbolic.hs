@@ -91,7 +91,7 @@ runWriteMemOverride :: NatRepr w
                                      (C.RegValue sym C.UnitType)
 runWriteMemOverride = undefined
 
-createHandleBinding :: CrucGenContext arch ids s
+createHandleBinding :: CrucGenContext arch s
                     -> HandleId arch '(args, rtp)
                     -> C.OverrideSim MacawSimulatorState sym ret args rtp (C.RegValue sym rtp)
 createHandleBinding ctx hid =
@@ -103,8 +103,8 @@ createHandleBinding ctx hid =
 
 -- | This function identifies all the handles needed, and returns
 -- function bindings for each one.
-createHandleMap :: forall arch ids s sym
-                .  CrucGenContext arch ids s
+createHandleMap :: forall arch s sym
+                .  CrucGenContext arch s
                 -> UsedHandleSet arch
                 -> C.FunctionBindings MacawSimulatorState sym
 createHandleMap ctx = MapF.foldrWithKey go C.emptyHandleMap

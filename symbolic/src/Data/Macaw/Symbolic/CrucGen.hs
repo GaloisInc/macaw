@@ -80,7 +80,7 @@ data CrucGenArchFunctions arch
 data CrucGenState arch ids s
    = CrucGenState
    { translateFns :: !(CrucGenArchFunctions arch)
-   , crucCtx :: !(CrucGenContext arch ids s)
+   , crucCtx :: !(CrucGenContext arch s)
    , crucPState :: !(CrucPersistentState arch ids s)
      -- ^ State that persists across blocks.
    , blockLabel :: (CR.Label s)
@@ -123,7 +123,7 @@ instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
   get = CrucGen $ \s cont -> cont s s
   put s = CrucGen $ \_ cont -> cont s ()
 
-getCtx :: CrucGen arch ids s (CrucGenContext arch ids s)
+getCtx :: CrucGen arch ids s (CrucGenContext arch s)
 getCtx = gets crucCtx
 
 liftST :: ST s r -> CrucGen arch ids s r
@@ -257,20 +257,33 @@ appToCrucible app = do
         M.BVTypeRepr w ->
           appAtom =<< C.BVIte <$> v2c c <*> pure w <*> v2c t <*> v2c f
         M.TupleTypeRepr _ -> undefined -- TODO: Fix this
-    M.Trunc x w -> appAtom =<< C.BVTrunc w (M.typeWidth x) <$> v2c x
-    M.SExt x w  -> appAtom =<< C.BVSext  w (M.typeWidth x) <$> v2c x
-    M.UExt x w  -> appAtom =<< C.BVZext  w (M.typeWidth x) <$> v2c x
+    M.TupleField tps x i ->
+      undefined tps x i -- TODO: Fix this
+
+    -- Booleans
+
     M.AndApp x y  -> appAtom =<< C.And     <$> v2c x <*> v2c y
     M.OrApp  x y  -> appAtom =<< C.Or      <$> v2c x <*> v2c y
     M.NotApp x    -> appAtom =<< C.Not     <$> v2c x
     M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
+
+    -- Extension operations
+    M.Trunc x w -> appAtom =<< C.BVTrunc w (M.typeWidth x) <$> v2c x
+    M.SExt x w  -> appAtom =<< C.BVSext  w (M.typeWidth x) <$> v2c x
+    M.UExt x w  -> appAtom =<< C.BVZext  w (M.typeWidth x) <$> v2c x
+
+    -- Bitvector arithmetic
     M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
+    M.BVAdc w x y c -> undefined w x y c
     M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
+    M.BVSbb w x y c -> undefined w x y c
     M.BVMul w x y -> appAtom =<< C.BVMul w <$> v2c x <*> v2c y
     M.BVUnsignedLe x y -> appAtom =<< C.BVUle (M.typeWidth x) <$> v2c x <*> v2c y
     M.BVUnsignedLt x y -> appAtom =<< C.BVUlt (M.typeWidth x) <$> v2c x <*> v2c y
     M.BVSignedLe   x y -> appAtom =<< C.BVSle (M.typeWidth x) <$> v2c x <*> v2c y
     M.BVSignedLt   x y -> appAtom =<< C.BVSlt (M.typeWidth x) <$> v2c x <*> v2c y
+
+    -- Bitwise operations
     M.BVTestBit x i -> do
       let w = M.typeWidth x
       one <- bvLit w 1
@@ -314,8 +327,8 @@ appToCrucible app = do
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 valueToCrucible v = do
-  cns <- archConstraints <$> getCtx
-  cns $ do
+ ctx <- getCtx
+ archConstraints ctx $ do
   case v of
     M.BVValue w c -> bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
@@ -334,7 +347,6 @@ valueToCrucible v = do
             Nothing ->
               fail $ "internal: No Crucible address associated with segment."
     M.Initial r -> do
-      ctx <- getCtx
       case MapF.lookup r (regIndexMap ctx) of
         Just idx -> do
           getRegInput (macawRegAssign ctx) idx
@@ -404,6 +416,7 @@ assignRhsToCrucible rhs =
     M.EvalApp app -> appToCrucible app
     M.SetUndefined mrepr -> freshSymbolic mrepr
     M.ReadMem addr repr -> readMem addr repr
+    M.CondReadMem repr c addr def -> undefined repr c addr def
     M.EvalArchFn f _ -> do
       fns <- translateFns <$> get
       crucGenArchFn fns f
@@ -475,7 +488,7 @@ addMacawTermStmt tstmt =
 type MacawMonad arch ids s = ExceptT String (StateT (CrucPersistentState arch ids s) (ST s))
 
 addMacawBlock :: CrucGenArchFunctions arch
-              -> CrucGenContext arch ids s
+              -> CrucGenContext arch s
               -> Word64
                  -- ^ Code address
               -> M.Block arch ids
