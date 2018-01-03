@@ -58,15 +58,14 @@ module Data.Macaw.Symbolic.PersistentState
   , CrucSeenBlockMap
   ) where
 
-import           Control.Lens
+import           Control.Lens hiding (Index, (:>), Empty)
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Context as Ctx
-import           Data.Parameterized.Ctx
+import           Data.Parameterized.Context
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -94,6 +93,25 @@ type family CtxToCrucibleType (mtp :: Ctx M.Type) :: Ctx C.CrucibleType where
   CtxToCrucibleType EmptyCtx   = EmptyCtx
   CtxToCrucibleType (c ::> tp) = CtxToCrucibleType c ::> ToCrucibleType tp
 
+-- | Create the variables from a collection of registers.
+macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
+                  -> Assignment f ctx
+                  -> Assignment g (CtxToCrucibleType ctx)
+macawAssignToCruc f a =
+  case a of
+    Empty -> empty
+    b :> x -> macawAssignToCruc f b :> f x
+
+-- | Create the variables from a collection of registers.
+macawAssignToCrucM :: Applicative m
+                   => (forall tp . f tp -> m (g (ToCrucibleType tp)))
+                   -> Assignment f ctx
+                   -> m (Assignment g (CtxToCrucibleType ctx))
+macawAssignToCrucM f a =
+  case a of
+    Empty -> pure empty
+    b :> x -> (:>) <$> macawAssignToCrucM f b <*> f x
+
 -- | Type family for arm registers
 type family ArchRegContext (arch :: *) :: Ctx M.Type
 
@@ -109,36 +127,16 @@ type ArchAddrCrucibleType arch = C.BVType (M.ArchAddrWidth arch)
 typeToCrucibleBase :: M.TypeRepr tp -> C.BaseTypeRepr (ToCrucibleBaseType tp)
 typeToCrucibleBase tp =
   case tp of
-    M.BoolTypeRepr -> C.BaseBoolRepr
-    M.BVTypeRepr w -> C.BaseBVRepr w
+    M.BoolTypeRepr  -> C.BaseBoolRepr
+    M.BVTypeRepr w  -> C.BaseBVRepr w
+--    M.TupleTypeRepr a -> C.BaseStructRepr (macawAssignToCruc tpyeToCrucibleBase a)
 
 typeToCrucible :: M.TypeRepr tp -> C.TypeRepr (ToCrucibleType tp)
 typeToCrucible = C.baseToType . typeToCrucibleBase
 
-
--- | Create the variables from a collection of registers.
-macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
-                  -> Ctx.Assignment f ctx
-                  -> Ctx.Assignment g (CtxToCrucibleType ctx)
-macawAssignToCruc f a =
-  case Ctx.view a of
-    Ctx.AssignEmpty -> Ctx.empty
-    Ctx.AssignExtend b x -> macawAssignToCruc f b Ctx.%> f x
-
--- | Create the variables from a collection of registers.
-macawAssignToCrucM :: Applicative m
-                   => (forall tp . f tp -> m (g (ToCrucibleType tp)))
-                   -> Ctx.Assignment f ctx
-                   -> m (Ctx.Assignment g (CtxToCrucibleType ctx))
-macawAssignToCrucM f a =
-  case Ctx.view a of
-    Ctx.AssignEmpty -> pure Ctx.empty
-    Ctx.AssignExtend b x -> (Ctx.%>) <$> macawAssignToCrucM f b <*> f x
-
-
 -- Return the types associated with a register assignment.
-typeCtxToCrucible :: Ctx.Assignment M.TypeRepr ctx
-                  -> Ctx.Assignment C.TypeRepr (CtxToCrucibleType ctx)
+typeCtxToCrucible :: Assignment M.TypeRepr ctx
+                  -> Assignment C.TypeRepr (CtxToCrucibleType ctx)
 typeCtxToCrucible = macawAssignToCruc typeToCrucible
 
 memReprToCrucible :: M.MemRepr tp -> C.TypeRepr (ToCrucibleType tp)
@@ -148,27 +146,27 @@ memReprToCrucible = typeToCrucible . M.typeRepr
 -- RegIndexMap
 
 -- | This relates an index from macaw to Crucible.
-data IndexPair ctx tp = IndexPair { macawIndex    :: !(Ctx.Index ctx tp)
-                                  , crucibleIndex :: !(Ctx.Index (CtxToCrucibleType ctx) (ToCrucibleType tp))
+data IndexPair ctx tp = IndexPair { macawIndex    :: !(Index ctx tp)
+                                  , crucibleIndex :: !(Index (CtxToCrucibleType ctx) (ToCrucibleType tp))
                                   }
 
 -- | This extends the indices in the pair.
 extendIndexPair :: IndexPair ctx tp -> IndexPair (ctx::>utp) tp
-extendIndexPair (IndexPair i j) = IndexPair (Ctx.extendIndex i) (Ctx.extendIndex j)
+extendIndexPair (IndexPair i j) = IndexPair (extendIndex i) (extendIndex j)
 
 
 type RegIndexMap arch = MapF (M.ArchReg arch) (IndexPair (ArchRegContext arch))
 
 mkRegIndexMap :: OrdF r
-              => Ctx.Assignment r ctx
-              -> Ctx.Size (CtxToCrucibleType ctx)
+              => Assignment r ctx
+              -> Size (CtxToCrucibleType ctx)
               -> MapF r (IndexPair ctx)
 mkRegIndexMap r0 csz =
-  case (Ctx.view r0, Ctx.viewSize csz) of
-    (Ctx.AssignEmpty, _) -> MapF.empty
-    (Ctx.AssignExtend a r, Ctx.IncSize csz0) ->
+  case (r0, viewSize csz) of
+    (Empty, _) -> MapF.empty
+    (a :> r, IncSize csz0) ->
       let m = fmapF extendIndexPair (mkRegIndexMap a csz0)
-          idx = IndexPair (Ctx.nextIndex (Ctx.size a)) (Ctx.nextIndex csz0)
+          idx = IndexPair (nextIndex (size a)) (nextIndex csz0)
        in MapF.insert r idx m
 
 ------------------------------------------------------------------------
@@ -189,7 +187,7 @@ data CrucGenContext arch ids s
    = CrucGenContext
    { archConstraints :: !(forall a . (ArchConstraints arch => a) -> a)
      -- ^ Typeclass constraints for architecture
-   , macawRegAssign :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
+   , macawRegAssign :: !(Assignment (M.ArchReg arch) (ArchRegContext arch))
      -- ^ Assignment from register to the context
    , regIndexMap :: !(RegIndexMap arch)
    , handleAlloc :: !(C.HandleAllocator s)
@@ -266,17 +264,17 @@ handleIdName h =
 
 handleIdArgTypes :: CrucGenContext arch ids s
                  -> HandleId arch '(args, ret)
-                 -> Ctx.Assignment C.TypeRepr args
+                 -> Assignment C.TypeRepr args
 handleIdArgTypes ctx h =
   case h of
-    MkFreshSymId _repr -> Ctx.empty
+    MkFreshSymId _repr -> empty
     ReadMemId _repr -> archConstraints ctx $
-      Ctx.empty Ctx.%> C.BVRepr (archWidthRepr ctx)
+      empty :> C.BVRepr (archWidthRepr ctx)
     WriteMemId repr -> archConstraints ctx $
-      Ctx.empty Ctx.%> C.BVRepr (archWidthRepr ctx)
-                Ctx.%> memReprToCrucible repr
+      empty :> C.BVRepr (archWidthRepr ctx)
+            :> memReprToCrucible repr
     SyscallId ->
-      Ctx.empty Ctx.%> regStructRepr ctx
+      empty :> regStructRepr ctx
 
 handleIdRetType :: CrucGenContext arch ids s
                 -> HandleId arch '(args, ret)
@@ -326,11 +324,11 @@ data CrucPersistentState arch ids s
 initCrucPersistentState :: forall arch ids s . CrucPersistentState arch ids s
 initCrucPersistentState =
   -- Infer number of arguments to function so that we have values skip inputs.
-  let argCount :: Ctx.Size (MacawFunctionArgs arch)
-      argCount = Ctx.knownSize
+  let argCount :: Size (MacawFunctionArgs arch)
+      argCount = knownSize
    in CrucPersistentState
       { handleMap      = MapF.empty
-      , valueCount     = Ctx.sizeInt argCount
+      , valueCount     = sizeInt argCount
       , assignValueMap = MapF.empty
       , seenBlockMap   = Map.empty
       }

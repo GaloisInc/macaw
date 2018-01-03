@@ -1,14 +1,19 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Symbolic
-  ( ArchTranslateFunctions(..)
+  ( Data.Macaw.Symbolic.CrucGen.CrucGenArchFunctions(..)
+  , Data.Macaw.Symbolic.CrucGen.CrucGen
   , MacawSimulatorState
   , stepBlocks
+  , Data.Macaw.Symbolic.PersistentState.ArchRegContext
+  , Data.Macaw.Symbolic.PersistentState.ToCrucibleType
   ) where
 
 import           Control.Monad.Except
@@ -16,8 +21,7 @@ import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import           Data.Parameterized.Ctx
-import qualified Data.Parameterized.Context as Ctx
+import           Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableFC
 import qualified Data.Set as Set
@@ -42,7 +46,7 @@ import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
-import           Data.Macaw.Symbolic.App
+import           Data.Macaw.Symbolic.CrucGen
 import           Data.Macaw.Symbolic.PersistentState
 
 data MacawSimulatorState sym = MacawSimulatorState
@@ -54,16 +58,19 @@ regVars :: (IsSymInterface sym, M.HasRepr reg M.TypeRepr)
         -> Ctx.Assignment reg ctx
         -> IO (Ctx.Assignment (C.RegValue' sym) (CtxToCrucibleType ctx))
 regVars sym nameFn a =
-  case Ctx.view a of
-    Ctx.AssignEmpty -> pure Ctx.empty
-    Ctx.AssignExtend b reg -> do
+  case a of
+    Empty -> pure Ctx.empty
+    b :> reg -> do
       varAssign <- regVars sym nameFn b
       c <- freshConstant sym (nameFn reg) (typeToCrucibleBase (M.typeRepr reg))
-      pure (varAssign Ctx.%> C.RV c)
+      pure (varAssign :> C.RV c)
+#if !MIN_VERSION_base(4,10,0)
+    _ -> error "internal: regVars encountered case non-exhaustive pattern"
+#endif
 
 runFreshSymOverride :: M.TypeRepr tp
                     -> C.OverrideSim MacawSimulatorState sym ret
-                                     Ctx.EmptyCtx
+                                     EmptyCtx
                                      (ToCrucibleType tp)
                                      (C.RegValue sym (ToCrucibleType tp))
 runFreshSymOverride = undefined
@@ -135,7 +142,7 @@ mkMemBaseVarMap halloc mem = do
 stepBlocks :: forall sym arch ids
            .  (IsSymInterface sym, M.ArchConstraints arch)
            => sym
-           -> ArchTranslateFunctions arch
+           -> CrucGenArchFunctions arch
            -> M.Memory (M.ArchAddrWidth arch)
               -- ^ Memory image for executable
            -> Text
@@ -151,11 +158,11 @@ stepBlocks :: forall sym arch ids
                    sym
                    (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
 stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
-  let regAssign = archRegAssignment sinfo
+  let regAssign = crucGenRegAssignment sinfo
   let crucRegTypes = typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   let macawStructRepr = C.StructRepr crucRegTypes
   halloc <- C.newHandleAllocator
-  let argTypes = Ctx.empty Ctx.%> macawStructRepr
+  let argTypes = Empty :> macawStructRepr
   h <- stToIO $ C.mkHandle' halloc nm argTypes macawStructRepr
   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label RealWorld)
@@ -197,7 +204,7 @@ stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
   let s = C.initSimState ctx C.emptyGlobals C.defaultErrorHandler
   -- Define the arguments to call the Reopt CFG with.
   -- This should be a symbolic variable for each register in the architecture.
-  regStruct <- regVars sym (archRegNameFn sinfo) regAssign
+  regStruct <- regVars sym (crucGenArchRegName sinfo) regAssign
   let args :: C.RegMap sym (MacawFunctionArgs arch)
       args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
   -- Run the symbolic simulator.

@@ -21,7 +21,7 @@ library
   hs-source-dirs: src
 
   exposed-modules:
-    Data.Macaw.Symbolic.App
+    Data.Macaw.Symbolic.CrucGen
     Data.Macaw.Symbolic.PersistentState
     Data.Macaw.Symbolic
 
