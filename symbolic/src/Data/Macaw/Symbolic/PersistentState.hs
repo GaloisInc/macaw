@@ -121,7 +121,7 @@ macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
                   -> Ctx.Assignment f ctx
                   -> Ctx.Assignment g (CtxToCrucibleType ctx)
 macawAssignToCruc f a =
-  case Ctx.view a of
+  case Ctx.viewAssign a of
     Ctx.AssignEmpty -> Ctx.empty
     Ctx.AssignExtend b x -> macawAssignToCruc f b Ctx.:> f x
 
@@ -131,7 +131,7 @@ macawAssignToCrucM :: Applicative m
                    -> Ctx.Assignment f ctx
                    -> m (Ctx.Assignment g (CtxToCrucibleType ctx))
 macawAssignToCrucM f a =
-  case Ctx.view a of
+  case Ctx.viewAssign a of
     Ctx.AssignEmpty -> pure Ctx.empty
     Ctx.AssignExtend b x -> (Ctx.:>) <$> macawAssignToCrucM f b <*> f x
 
@@ -164,7 +164,7 @@ mkRegIndexMap :: OrdF r
               -> Ctx.Size (CtxToCrucibleType ctx)
               -> MapF r (IndexPair ctx)
 mkRegIndexMap r0 csz =
-  case (Ctx.view r0, Ctx.viewSize csz) of
+  case (Ctx.viewAssign r0, Ctx.viewSize csz) of
     (Ctx.AssignEmpty, _) -> MapF.empty
     (Ctx.AssignExtend a r, Ctx.IncSize csz0) ->
       let m = fmapF extendIndexPair (mkRegIndexMap a csz0)
