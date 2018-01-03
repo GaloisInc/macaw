@@ -32,6 +32,7 @@ import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Architecture.PPC.Eval as PE
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.SemMC.Generator as G
@@ -87,6 +88,20 @@ ppcNonceAppEval bvi nonceApp =
 elementaryFPName :: String -> Maybe String
 elementaryFPName = L.stripPrefix "fp_"
 
+addArchAssignment :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
+                  => M.ArchFn arch (M.Value arch ids) tp
+                  -> G.Generator arch ids s (G.Expr arch ids tp)
+addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
+
+addArchExpr :: (MM.MemWidth (M.RegAddrWidth (M.ArchReg arch)),
+                OrdF (M.ArchReg arch),
+                M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
+            => M.ArchFn arch (M.Value arch ids) tp
+            -> G.Generator arch ids s (M.Value arch ids tp)
+addArchExpr archfn = do
+  asgn <- G.addAssignment (M.EvalArchFn archfn (M.typeRepr archfn))
+  G.addExpr (G.ValueExpr (M.AssignedValue asgn))
+
 floatingPointTH :: forall arch t f c
                  . (L.Location arch ~ APPC.Location arch,
                      A.Architecture arch,
@@ -103,74 +118,74 @@ floatingPointTH bvi fnName args =
       case fnName of
         "round_single" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPCvt M.DoubleFloatRepr $(return fpval) M.SingleFloatRepr)) |]
+          liftQ [| addArchExpr (FPCvt M.DoubleFloatRepr $(return fpval) M.SingleFloatRepr) |]
         "single_to_double" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPCvt M.SingleFloatRepr $(return fpval) M.DoubleFloatRepr)) |]
+          liftQ [| addArchExpr (FPCvt M.SingleFloatRepr $(return fpval) M.DoubleFloatRepr) |]
         "abs" -> do
           -- Note that fabs is only defined for doubles; the operation is the
           -- same for single and double precision on PPC, so there is only a
           -- single instruction.
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPAbs M.DoubleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPAbs M.DoubleFloatRepr $(return fpval)) |]
         "negate64" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPNeg M.DoubleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPNeg M.DoubleFloatRepr $(return fpval)) |]
         "negate32" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPNeg M.SingleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPNeg M.SingleFloatRepr $(return fpval)) |]
         "is_qnan32" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.SingleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPIsQNaN M.SingleFloatRepr $(return fpval)) |]
         "is_qnan64" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsQNaN M.DoubleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPIsQNaN M.DoubleFloatRepr $(return fpval)) |]
         "is_snan32" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsSNaN M.SingleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPIsSNaN M.SingleFloatRepr $(return fpval)) |]
         "is_snan64" -> do
           fpval <- addEltTH bvi a
-          liftQ [| G.addExpr (G.AppExpr (M.FPIsSNaN M.DoubleFloatRepr $(return fpval))) |]
+          liftQ [| addArchExpr (FPIsSNaN M.DoubleFloatRepr $(return fpval)) |]
         _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
     [Some a, Some b] ->
       case fnName of
         "add64" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPAdd M.DoubleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPAdd M.DoubleFloatRepr $(return valA) $(return valB)) |]
         "add32" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPAdd M.SingleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPAdd M.SingleFloatRepr $(return valA) $(return valB)) |]
         "sub64" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPSub M.DoubleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPSub M.DoubleFloatRepr $(return valA) $(return valB)) |]
         "sub32" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPSub M.SingleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPSub M.SingleFloatRepr $(return valA) $(return valB)) |]
         "mul64" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPMul M.DoubleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPMul M.DoubleFloatRepr $(return valA) $(return valB)) |]
         "mul32" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPMul M.SingleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPMul M.SingleFloatRepr $(return valA) $(return valB)) |]
         "div64" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPDiv M.DoubleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPDiv M.DoubleFloatRepr $(return valA) $(return valB)) |]
         "div32" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
-          liftQ [| G.addExpr (G.AppExpr (M.FPDiv M.SingleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPDiv M.SingleFloatRepr $(return valA) $(return valB)) |]
         "lt" -> do
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
           -- All comparisons are done as 64-bit comparisons in PPC
-          liftQ [| G.addExpr (G.AppExpr (M.FPLt M.DoubleFloatRepr $(return valA) $(return valB))) |]
+          liftQ [| addArchExpr (FPLt M.DoubleFloatRepr $(return valA) $(return valB)) |]
         _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
     [Some a, Some b, Some c] ->
       case fnName of
@@ -180,16 +195,16 @@ floatingPointTH bvi fnName args =
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
           valC <- addEltTH bvi c
-          liftQ [| do prodVal <- G.addExpr (G.AppExpr (M.FPMul M.DoubleFloatRepr $(return valA) $(return valC)))
-                      G.addExpr (G.AppExpr (M.FPAdd M.DoubleFloatRepr prodVal $(return valB)))
+          liftQ [| do prodVal <- addArchExpr (FPMul M.DoubleFloatRepr $(return valA) $(return valC))
+                      addArchExpr (FPAdd M.DoubleFloatRepr prodVal $(return valB))
                  |]
         "muladd32" -> do
           -- a * c + b
           valA <- addEltTH bvi a
           valB <- addEltTH bvi b
           valC <- addEltTH bvi c
-          liftQ [| do prodVal <- G.addExpr (G.AppExpr (M.FPMul M.SingleFloatRepr $(return valA) $(return valC)))
-                      G.addExpr (G.AppExpr (M.FPAdd M.SingleFloatRepr prodVal $(return valB)))
+          liftQ [| do prodVal <- addArchExpr (FPMul M.SingleFloatRepr $(return valA) $(return valC))
+                      addArchExpr (FPAdd M.SingleFloatRepr prodVal $(return valB))
                  |]
         _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
     _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
@@ -205,13 +220,11 @@ ppcAppEvaluator interps elt = case elt of
   S.BVSdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
-    liftQ [| let divExp = SDiv $(natReprTH w) $(return e1) $(return e2)
-             in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
+    liftQ [| addArchAssignment (SDiv $(natReprTH w) $(return e1) $(return e2))
            |]
   S.BVUdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
-    liftQ [| let divExp = UDiv $(natReprTH w) $(return e1) $(return e2)
-             in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn divExp (M.typeRepr divExp))
+    liftQ [| addArchAssignment (UDiv $(natReprTH w) $(return e1) $(return e2))
            |]
   _ -> Nothing
