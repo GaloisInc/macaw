@@ -54,12 +54,12 @@ regVars :: (IsSymInterface sym, M.HasRepr reg M.TypeRepr)
         -> Ctx.Assignment reg ctx
         -> IO (Ctx.Assignment (C.RegValue' sym) (CtxToCrucibleType ctx))
 regVars sym nameFn a =
-  case Ctx.view a of
+  case Ctx.viewAssign a of
     Ctx.AssignEmpty -> pure Ctx.empty
     Ctx.AssignExtend b reg -> do
       varAssign <- regVars sym nameFn b
       c <- freshConstant sym (nameFn reg) (typeToCrucibleBase (M.typeRepr reg))
-      pure (varAssign Ctx.%> C.RV c)
+      pure (varAssign Ctx.:> C.RV c)
 
 runFreshSymOverride :: M.TypeRepr tp
                     -> C.OverrideSim MacawSimulatorState sym ret
@@ -155,7 +155,7 @@ stepBlocks sym sinfo mem binPath nm addr macawBlocks = do
   let crucRegTypes = typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   let macawStructRepr = C.StructRepr crucRegTypes
   halloc <- C.newHandleAllocator
-  let argTypes = Ctx.empty Ctx.%> macawStructRepr
+  let argTypes = Ctx.empty Ctx.:> macawStructRepr
   h <- stToIO $ C.mkHandle' halloc nm argTypes macawStructRepr
   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label RealWorld)

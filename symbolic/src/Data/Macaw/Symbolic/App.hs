@@ -307,7 +307,7 @@ appToCrucible app = do
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 valueToCrucible v = do
-  cns <- archConstraints <$> getCtx
+  CrucGenContext { archConstraints = cns } <- getCtx
   cns $ do
   case v of
     M.BVValue w c -> bvLit w c
@@ -389,7 +389,7 @@ writeMem addr repr val = do
   let args = Ctx.empty Ctx.:> caddr Ctx.:> cval
   void $ callFnHandle hndl args
 
-assignRhsToCrucible :: M.AssignRhs arch ids tp
+assignRhsToCrucible :: M.AssignRhs arch (M.Value arch ids) tp
                     -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 assignRhsToCrucible rhs =
   case rhs of
