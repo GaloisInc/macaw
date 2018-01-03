@@ -52,6 +52,14 @@ data App (f :: Type -> *) (tp :: Type) where
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
+  -- Boolean operations
+
+  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  NotApp :: !(f BoolType) -> App f BoolType
+  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+
+  ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
 
   -- Truncate a bitvector value.
@@ -60,14 +68,6 @@ data App (f :: Type -> *) (tp :: Type) where
   SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
   -- Unsigned extension.
   UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
-
-  ----------------------------------------------------------------------
-  -- Boolean operations
-
-  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  NotApp :: !(f BoolType) -> App f BoolType
-  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
 
   ----------------------------------------------------------------------
   -- Bitvector operations

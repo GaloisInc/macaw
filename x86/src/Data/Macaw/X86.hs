@@ -30,6 +30,10 @@ module Data.Macaw.X86
        , rootLoc
        , disassembleBlock
        , X86TranslateError(..)
+       , Data.Macaw.X86.ArchTypes.X86_64
+       , Data.Macaw.X86.ArchTypes.X86PrimFn(..)
+       , Data.Macaw.X86.ArchTypes.X86Stmt(..)
+       , Data.Macaw.X86.ArchTypes.X86TermStmt(..)
        , Data.Macaw.X86.X86Reg.X86Reg(..)
        , Data.Macaw.X86.X86Reg.x86ArgumentRegs
        , Data.Macaw.X86.X86Reg.x86ResultRegs

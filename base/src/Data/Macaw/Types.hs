@@ -31,7 +31,6 @@ import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
-
 -- FIXME: move
 n0 :: NatRepr 0
 n0 = knownNat

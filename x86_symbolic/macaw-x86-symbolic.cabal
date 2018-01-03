@@ -1,4 +1,4 @@
-name: macaw-symbolic
+name: macaw-x86-symbolic
 version: 0.0.1
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
@@ -10,20 +10,15 @@ license-file:  LICENSE
 library
   build-depends:
     base >= 4,
-    containers,
     crucible,
-    lens,
     macaw-base,
-    mtl,
-    parameterized-utils,
-    text
-
+    macaw-symbolic,
+    macaw-x86,
+    parameterized-utils
   hs-source-dirs: src
 
   exposed-modules:
-    Data.Macaw.Symbolic.CrucGen
-    Data.Macaw.Symbolic.PersistentState
-    Data.Macaw.Symbolic
+    Data.Macaw.X86.Symbolic
 
   ghc-options: -Wall -Werror
   ghc-prof-options: -O2 -fprof-auto-top

@@ -566,6 +566,7 @@ data MemSegmentOff w = MemSegmentOff { msegSegment :: !(MemSegment w)
                                      }
   deriving (Eq, Ord)
 
+{-# DEPRECATED viewSegmentOff "Use msegSegment and msegOffset." #-}
 viewSegmentOff :: MemSegmentOff w -> (MemSegment w, MemWord w)
 viewSegmentOff mseg = (msegSegment mseg, msegOffset mseg)
 
