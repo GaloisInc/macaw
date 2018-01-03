@@ -1,0 +1,24 @@
+name: macaw-x86-symbolic
+version: 0.0.1
+author: Galois, Inc.
+maintainer: jhendrix@galois.com
+build-type: Simple
+cabal-version: >= 1.9.2
+license:       BSD3
+license-file:  LICENSE
+
+library
+  build-depends:
+    base >= 4,
+    crucible,
+    macaw-base,
+    macaw-symbolic,
+    macaw-x86,
+    parameterized-utils
+  hs-source-dirs: src
+
+  exposed-modules:
+    Data.Macaw.X86.Symbolic
+
+  ghc-options: -Wall -Werror
+  ghc-prof-options: -O2 -fprof-auto-top
