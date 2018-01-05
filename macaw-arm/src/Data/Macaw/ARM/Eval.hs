@@ -8,6 +8,7 @@
 
 module Data.Macaw.ARM.Eval
     ( mkInitialAbsState
+    , absEvalArchFn
     )
     where
 
@@ -31,3 +32,13 @@ mkInitialAbsState :: (ARMArchConstraints arm, ArchStmt arm ~ ARMStmt)
                   -> MA.AbsBlockState (ArchReg arm)
 mkInitialAbsState _ _mem startAddr =
     MA.top & MA.setAbsIP startAddr
+
+
+absEvalArchFn :: (ARMArchConstraints arm)
+              => proxy arm
+              -> AbsProcessorState (ArchReg arm) ids
+              -> ArchFn arm (Value arm ids) tp
+              -> AbsValue (RegAddrWidth (ArchReg arm)) tp
+absEvalArchFn _ _r f =
+  case f of
+    NoPrimKnown _rhs -> MA.TopV
