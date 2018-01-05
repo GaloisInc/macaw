@@ -1,5 +1,5 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2017
+Copyright  : (c) Galois, Inc 2016-2018
 Maintainer : jhendrix@galois.com
 
 This defines the main data structure for storing information learned from code

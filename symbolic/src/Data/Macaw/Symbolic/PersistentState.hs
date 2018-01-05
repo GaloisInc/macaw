@@ -21,7 +21,6 @@ module Data.Macaw.Symbolic.PersistentState
     CrucPersistentState(..)
   , initCrucPersistentState
   , handleMapLens
-  , seenBlockMapLens
     -- * Types
   , ToCrucibleBaseType
   , ToCrucibleType
@@ -54,8 +53,6 @@ module Data.Macaw.Symbolic.PersistentState
   , IndexPair(..)
     -- * Values
   , MacawCrucibleValue(..)
-    -- * Blocks
-  , CrucSeenBlockMap
   ) where
 
 import           Control.Lens hiding (Index, (:>), Empty)
@@ -64,7 +61,6 @@ import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Context
 import qualified Data.Parameterized.List as P
@@ -74,8 +70,6 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.String
-import           Data.Text (Text)
-import           Data.Word
 import qualified Lang.Crucible.CFG.Common as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.FunctionHandle as C
@@ -195,6 +189,10 @@ type ArchConstraints arch
 
 -- | Map from indices of segments without a fixed base address to a
 -- global variable storing the base address.
+--
+-- This uses a global variable so that we can do the translation, and then
+-- decide where to locate it without requiring us to also pass the values
+-- around arguments.
 type MemSegmentMap w = Map M.RegionIndex (C.GlobalVar (C.BVType w))
 
 --- | Information that does not change during generating Crucible from MAcaw
@@ -203,14 +201,11 @@ data CrucGenContext arch s
    { archConstraints :: !(forall a . (ArchConstraints arch => a) -> a)
      -- ^ Typeclass constraints for architecture
    , macawRegAssign :: !(Assignment (M.ArchReg arch) (ArchRegContext arch))
-     -- ^ Assignment from register to the context
+     -- ^ Assignment from register index to the register identifier.
    , regIndexMap :: !(RegIndexMap arch)
+     -- ^ Map from register identifier to the index in Macaw/Crucible.
    , handleAlloc :: !(C.HandleAllocator s)
      -- ^ Handle allocator
-   , binaryPath :: !Text
-     -- ^ Name of binary these blocks come from.
-   , macawIndexToLabelMap :: !(Map Word64 (CR.Label s))
-     -- ^ Map from block indices to the associated label.
    , memBaseAddrMap :: !(MemSegmentMap (M.ArchAddrWidth arch))
      -- ^ Map from indices of segments without a fixed base address to a global
      -- variable storing the base address.
@@ -276,16 +271,21 @@ handleIdName h =
     WriteMemId (M.BVMemRepr w end) ->
       fromString $ "writeMem_" ++ show (8 * natValue w) ++ "_" ++ endName end
 
-handleIdArgTypes :: CrucGenContext arch s
+
+widthTypeRepr :: M.AddrWidthRepr w -> C.TypeRepr (C.BVType w)
+widthTypeRepr M.Addr32 = C.knownRepr
+widthTypeRepr M.Addr64 = C.knownRepr
+
+handleIdArgTypes :: M.AddrWidthRepr (M.ArchAddrWidth arch)
                  -> HandleId arch '(args, ret)
                  -> Assignment C.TypeRepr args
-handleIdArgTypes ctx h =
+handleIdArgTypes ptrRepr h =
   case h of
     MkFreshSymId _repr -> empty
-    ReadMemId _repr -> archConstraints ctx $
-      empty :> C.BVRepr (M.addrWidthNatRepr (archWidthRepr ctx))
-    WriteMemId repr -> archConstraints ctx $
-      empty :> C.BVRepr (M.addrWidthNatRepr (archWidthRepr ctx))
+    ReadMemId _repr ->
+      empty :> widthTypeRepr ptrRepr
+    WriteMemId repr ->
+      empty :> widthTypeRepr ptrRepr
             :> memReprToCrucible repr
 
 handleIdRetType :: HandleId arch '(args, ret)
@@ -310,9 +310,6 @@ type UsedHandleSet arch = MapF (HandleId arch) HandleVal
 -- | A Crucible value with a Macaw type.
 data MacawCrucibleValue f tp = MacawCrucibleValue (f (ToCrucibleType tp))
 
---  | Map from block indices to the associated crucible block.
-type CrucSeenBlockMap s arch = Map Word64 (CR.Block s (MacawFunctionResult arch))
-
 ------------------------------------------------------------------------
 -- CrucPersistentState
 
@@ -325,8 +322,6 @@ data CrucPersistentState arch ids s
      -- ^ Counter used to get fresh indices for Crucible atoms.
    , assignValueMap :: !(MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
      -- ^ Map Macaw assign id to associated Crucible value.
-   , seenBlockMap :: !(CrucSeenBlockMap s arch)
-     -- ^ Map Macaw block indices to the associated crucible block
    }
 
 -- | Initial crucible persistent state
@@ -339,11 +334,7 @@ initCrucPersistentState =
       { handleMap      = MapF.empty
       , valueCount     = sizeInt argCount
       , assignValueMap = MapF.empty
-      , seenBlockMap   = Map.empty
       }
 
 handleMapLens :: Simple Lens (CrucPersistentState arch ids s) (UsedHandleSet arch)
 handleMapLens = lens handleMap (\s v -> s { handleMap = v })
-
-seenBlockMapLens :: Simple Lens (CrucPersistentState arch ids s) (CrucSeenBlockMap s arch)
-seenBlockMapLens = lens seenBlockMap (\s v -> s { seenBlockMap = v })

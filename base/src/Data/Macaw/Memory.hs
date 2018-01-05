@@ -659,8 +659,8 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
 ------------------------------------------------------------------------
 -- MemAddr
 
--- | A memory address is either an absolute value in memory or an offset of segment that
--- could be relocated.
+-- | A memory address is either an absolute value in memory or an
+-- offset of segment that could be relocated.
 --
 -- This representation does not require that the address is mapped to
 -- actual memory (see `MemSegmentOff` for an address representation

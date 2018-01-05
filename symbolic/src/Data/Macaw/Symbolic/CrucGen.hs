@@ -8,19 +8,24 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.CrucGen
   ( CrucGenArchFunctions(..)
     -- ** Operations for implementing new backends.
   , CrucGen
+  , MacawMonad
+  , runMacawMonad
   , addMacawBlock
+  , addParsedBlock
+  , nextStatements
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -30,8 +35,10 @@ import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
+import qualified Data.Macaw.Discovery.State as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
+import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
@@ -83,10 +90,12 @@ data CrucGenState arch ids s
    , crucCtx :: !(CrucGenContext arch s)
    , crucPState :: !(CrucPersistentState arch ids s)
      -- ^ State that persists across blocks.
+   , macawPositionFn :: !(M.ArchAddrWord arch -> C.Position)
+     -- ^ Map from offset to Crucible position.
    , blockLabel :: (CR.Label s)
      -- ^ Label for this block we are translating
-   , crucPos   :: !C.Position
-     -- ^ Position in the crucible file.
+   , codeOff :: !(M.ArchAddrWord arch)
+     -- ^ Offset
    , prevStmts :: ![C.Posd (CR.Stmt s)]
      -- ^ List of states in reverse order
    }
@@ -98,13 +107,15 @@ assignValueMapLens :: Simple Lens (CrucPersistentState arch ids s)
                                   (MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
 assignValueMapLens = lens assignValueMap (\s v -> s { assignValueMap = v })
 
+type CrucGenRet arch ids s = (CrucGenState arch ids s, CR.TermStmt s (MacawFunctionResult arch))
+
 newtype CrucGen arch ids s r
    = CrucGen { unCrucGen
                :: CrucGenState arch ids s
                   -> (CrucGenState arch ids s
                       -> r
-                      -> ST s (CrucPersistentState arch ids s, CR.Block s (MacawFunctionResult arch)))
-                  -> ST s (CrucPersistentState arch ids s, CR.Block s (MacawFunctionResult arch))
+                      -> ST s (CrucGenRet arch ids s))
+                  -> ST s (CrucGenRet arch ids s)
              }
 
 instance Functor (CrucGen arch ids s) where
@@ -131,7 +142,7 @@ liftST m = CrucGen $ \s cont -> m >>= cont s
 
 -- | Get current position
 getPos :: CrucGen arch ids s C.Position
-getPos =  gets crucPos
+getPos = gets $ \s -> macawPositionFn s (codeOff s)
 
 addStmt :: CR.Stmt s -> CrucGen arch ids s ()
 addStmt stmt = seq stmt $ do
@@ -144,13 +155,15 @@ addStmt stmt = seq stmt $ do
 addTermStmt :: CR.TermStmt s (MacawFunctionResult arch)
             -> CrucGen arch ids s a
 addTermStmt tstmt = do
-  termPos <- getPos
-  CrucGen $ \s _ -> do
+  CrucGen $ \s _ -> pure (s, tstmt)
+{-
+  let termPos = macawPositionFn s (codeOff s)
   let lbl = blockLabel s
   let stmts = Seq.fromList (reverse (prevStmts s))
   let term = C.Posd termPos tstmt
   let blk = CR.mkBlock (CR.LabelID lbl) Set.empty stmts term
   pure $ (crucPState s, blk)
+-}
 
 freshValueIndex :: CrucGen arch ids s Int
 freshValueIndex = do
@@ -235,28 +248,18 @@ bvAdc w x y c = do
   cbv <- appAtom =<< C.BVIte c w <$> bvLit w 1 <*> bvLit w 0
   appAtom $ C.BVAdd w s cbv
 
-
 appToCrucible :: M.App (M.Value arch ids) tp
               -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 appToCrucible app = do
   ctx <- getCtx
   archConstraints ctx $ do
   case app of
-    M.Eq x y ->
-      case M.typeRepr x of
-        M.BoolTypeRepr -> do
-          eq <- appAtom =<< C.BoolXor <$> v2c x <*> v2c y
-          appAtom (C.Not eq)
-        M.BVTypeRepr w -> do
-          appAtom =<< C.BVEq w <$> v2c x <*> v2c y
-        M.TupleTypeRepr _ -> undefined -- TODO: Fix this
-    M.Mux tp c t f ->
-      case tp of
-        M.BoolTypeRepr ->
-          appAtom =<< C.BoolIte <$> v2c c <*> v2c t <*> v2c f
-        M.BVTypeRepr w ->
-          appAtom =<< C.BVIte <$> v2c c <*> pure w <*> v2c t <*> v2c f
-        M.TupleTypeRepr _ -> undefined -- TODO: Fix this
+    M.Eq x y -> do
+      let btp = typeToCrucibleBase (M.typeRepr x)
+      appAtom =<< C.BaseIsEq btp <$> v2c x <*> v2c y
+    M.Mux tp c t f -> do
+      let btp = typeToCrucibleBase tp
+      appAtom =<< C.BaseIte btp <$> v2c c <*> v2c t <*> v2c f
     M.TupleField tps x i ->
       undefined tps x i -- TODO: Fix this
 
@@ -367,7 +370,7 @@ mkHandleVal hid = do
     Just (HandleVal h) -> pure h
     Nothing -> do
       ctx <- getCtx
-      let argTypes = handleIdArgTypes ctx hid
+      let argTypes = handleIdArgTypes (archWidthRepr ctx) hid
       let retType = handleIdRetType hid
       hndl <- liftST $ C.mkHandle' (handleAlloc ctx) (handleIdName hid) argTypes retType
       crucPStateLens . handleMapLens %= MapF.insert hid (HandleVal hndl)
@@ -421,7 +424,8 @@ assignRhsToCrucible rhs =
       fns <- translateFns <$> get
       crucGenArchFn fns f
 
-addMacawStmt :: M.Stmt arch ids -> CrucGen arch ids s ()
+addMacawStmt :: M.Stmt arch ids
+             -> CrucGen arch ids s ()
 addMacawStmt stmt =
   case stmt of
     M.AssignStmt asgn -> do
@@ -433,20 +437,21 @@ addMacawStmt stmt =
     M.PlaceHolderStmt _vals msg -> do
       cmsg <- crucibleValue (C.TextLit (Text.pack msg))
       addTermStmt (CR.ErrorStmt cmsg)
-    M.InstructionStart addr _ -> do
+    M.InstructionStart off _ -> do
       -- Update the position
-      modify $ \s ->
-        crucGenArchConstraints (translateFns s) $
-          s { crucPos = C.BinaryPos (binaryPath (crucCtx s)) (fromIntegral addr) }
+      modify $ \s -> s { codeOff = off }
     M.Comment _txt -> do
       pure ()
     M.ExecArchStmt astmt -> do
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
 
-lookupCrucibleLabel :: Word64 -> CrucGen arch ids s (CR.Label s)
-lookupCrucibleLabel idx = do
-  m <- macawIndexToLabelMap <$> getCtx
+lookupCrucibleLabel :: Map Word64 (CR.Label s)
+                       -- ^ Map from block index to Crucible label
+                    -> Word64
+                       -- ^ Index of crucible block
+                    -> CrucGen arch ids s (CR.Label s)
+lookupCrucibleLabel m idx = do
   case Map.lookup idx m of
     Nothing -> fail $ "Could not find label for block " ++ show idx
     Just l -> pure l
@@ -464,16 +469,19 @@ createRegStruct regs = do
   fields <- macawAssignToCrucM valueToCrucible a
   crucibleValue $ C.MkStruct (typeCtxToCrucible tps) fields
 
-addMacawTermStmt :: M.TermStmt arch ids -> CrucGen arch ids s ()
-addMacawTermStmt tstmt =
+addMacawTermStmt :: Map Word64 (CR.Label s)
+                    -- ^ Map from block index to Crucible label
+                 -> M.TermStmt arch ids
+                 -> CrucGen arch ids s ()
+addMacawTermStmt blockLabelMap tstmt =
   case tstmt of
     M.FetchAndExecute regs -> do
       s <- createRegStruct regs
       addTermStmt (CR.Return s)
     M.Branch macawPred macawTrueLbl macawFalseLbl -> do
       p <- valueToCrucible macawPred
-      t <- lookupCrucibleLabel macawTrueLbl
-      f <- lookupCrucibleLabel macawFalseLbl
+      t <- lookupCrucibleLabel blockLabelMap macawTrueLbl
+      f <- lookupCrucibleLabel blockLabelMap macawFalseLbl
       addTermStmt (CR.Br p t f)
     M.ArchTermStmt ts regs -> do
       fns <- translateFns <$> get
@@ -485,32 +493,133 @@ addMacawTermStmt tstmt =
 -----------------
 
 -- | Monad for adding new blocks to a state.
-type MacawMonad arch ids s = ExceptT String (StateT (CrucPersistentState arch ids s) (ST s))
+newtype MacawMonad arch ids s a
+  = MacawMonad ( ExceptT String (StateT (CrucPersistentState arch ids s) (ST s)) a)
+  deriving ( Functor
+           , Applicative
+           , Monad
+           , MonadError String
+           , MonadState (CrucPersistentState arch ids s)
+           )
 
-addMacawBlock :: CrucGenArchFunctions arch
-              -> CrucGenContext arch s
-              -> Word64
-                 -- ^ Code address
-              -> M.Block arch ids
-              -> MacawMonad arch ids s ()
-addMacawBlock tfns ctx addr b = do
-  pstate <- get
-  let idx = M.blockLabel b
-  lbl <-
-    case Map.lookup idx (macawIndexToLabelMap ctx) of
-      Just lbl -> pure lbl
-      Nothing -> throwError $ "Internal: Could not find block with index " ++ show idx
+runMacawMonad :: CrucPersistentState arch ids s
+              -> MacawMonad arch ids s a
+              -> ST s (Either String a, CrucPersistentState arch ids s)
+runMacawMonad s (MacawMonad m) = runStateT (runExceptT m) s
 
+mmExecST :: ST s a -> MacawMonad arch ids s a
+mmExecST = MacawMonad . lift . lift
+
+runCrucGen :: CrucGenArchFunctions arch
+           -> CrucGenContext arch s
+           -> (M.ArchAddrWord arch -> C.Position)
+              -- ^ Function for generating position from offset from start of this block.
+           -> M.ArchAddrWord arch
+              -- ^ Offset
+           -> CR.Label s
+           -> CrucGen arch ids s ()
+           -> MacawMonad arch ids s (CR.Block s (MacawFunctionResult arch), M.ArchAddrWord arch)
+runCrucGen tfns ctx posFn off lbl action = do
+  ps <- get
   let s0 = CrucGenState { translateFns = tfns
                         , crucCtx = ctx
-                        , crucPState = pstate
+                        , crucPState = ps
+                        , macawPositionFn = posFn
                         , blockLabel = lbl
-                        , crucPos    = C.BinaryPos (binaryPath ctx) addr
+                        , codeOff    = off
                         , prevStmts  = []
                         }
   let cont _s () = fail "Unterminated crucible block"
-  let action = do
-        mapM_ addMacawStmt (M.blockStmts b)
-        addMacawTermStmt (M.blockTerm b)
-  (ps, blk)  <- lift $ lift $ unCrucGen action s0 cont
-  put $ ps & seenBlockMapLens %~ Map.insert idx blk
+  (s, tstmt)  <- mmExecST $ unCrucGen action s0 cont
+  put (crucPState s)
+  let termPos = macawPositionFn s (codeOff s)
+  let stmts = Seq.fromList (reverse (prevStmts s))
+  let term = C.Posd termPos tstmt
+  let blk = CR.mkBlock (CR.LabelID lbl) Set.empty stmts term
+  pure (blk, codeOff s)
+
+addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
+              => CrucGenArchFunctions arch
+              -> CrucGenContext arch s
+              -> Map Word64 (CR.Label s)
+                 -- ^ Map from block index to Crucible label
+              -> (M.ArchAddrWord arch -> C.Position)
+                 -- ^ Function for generating position from offset from start of this block.
+              -> M.Block arch ids
+              -> MacawMonad arch ids s (CR.Block s (MacawFunctionResult arch))
+addMacawBlock tfns ctx blockLabelMap posFn b = do
+  let idx = M.blockLabel b
+  lbl <-
+    case Map.lookup idx blockLabelMap of
+      Just lbl ->
+        pure lbl
+      Nothing ->
+        throwError $ "Internal: Could not find block with index " ++ show idx
+  fmap fst $ runCrucGen tfns ctx posFn 0 lbl $ do
+    mapM_ addMacawStmt (M.blockStmts b)
+    addMacawTermStmt blockLabelMap (M.blockTerm b)
+
+addMacawParsedTermStmt :: M.ParsedTermStmt arch ids
+                       -> CrucGen arch ids s ()
+addMacawParsedTermStmt tstmt =
+  case tstmt of
+    M.ParsedCall{} -> undefined
+    M.ParsedJump{} -> undefined
+    M.ParsedLookupTable{} -> undefined
+    M.ParsedReturn{} -> undefined
+    M.ParsedIte{} -> undefined
+    M.ParsedArchTermStmt{} -> undefined
+    M.ParsedTranslateError{} -> undefined
+    M.ClassifyFailure{} -> undefined
+
+nextStatements :: M.ParsedTermStmt arch ids -> [M.StatementList arch ids]
+nextStatements tstmt =
+  case tstmt of
+    M.ParsedIte _ x y -> [x, y]
+    _ -> []
+
+addStatementList :: M.MemWidth (M.ArchAddrWidth arch)
+                 => CrucGenArchFunctions arch
+                 -> CrucGenContext arch s
+                 -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+                 -- ^ Map from block index to Crucible label
+                 -> M.ArchSegmentOff arch
+                 -- ^ Address of statements
+                 -> (M.ArchAddrWord arch -> C.Position)
+                    -- ^ Function for generating position from offset from start of this block.
+                 -> [(M.ArchAddrWord arch, M.StatementList arch ids)]
+                 -> [CR.Block s (MacawFunctionResult arch)]
+                 -> MacawMonad arch ids s [CR.Block s (MacawFunctionResult arch)]
+addStatementList _ _ _ _ _ [] rlist =
+  pure (reverse rlist)
+addStatementList tfns ctx blockLabelMap addr posFn ((off,stmts):rest) r = do
+  let idx = M.stmtsIdent stmts
+  lbl <-
+    case Map.lookup (addr, idx) blockLabelMap of
+      Just lbl ->
+        pure lbl
+      Nothing ->
+        throwError $ "Internal: Could not find block with address " ++ show addr ++ " index " ++ show idx
+  (b,off') <-
+    runCrucGen tfns ctx posFn off lbl $ do
+      mapM_ addMacawStmt (M.stmtsNonterm stmts)
+      addMacawParsedTermStmt (M.stmtsTerm stmts)
+  let new = (off',) <$> nextStatements (M.stmtsTerm stmts)
+  addStatementList tfns ctx blockLabelMap addr posFn (new ++ rest) (b:r)
+
+addParsedBlock :: forall arch ids s
+               .  M.MemWidth (M.ArchAddrWidth arch)
+               => CrucGenArchFunctions arch
+               -> CrucGenContext arch s
+               -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+               -- ^ Map from block index to Crucible label
+               -> (M.ArchSegmentOff arch -> C.Position)
+               -- ^ Function for generating position from offset from start of this block.
+               -> M.ParsedBlock arch ids
+               -> MacawMonad arch ids s [CR.Block s (MacawFunctionResult arch)]
+addParsedBlock tfns ctx blockLabelMap posFn b = do
+  let base = M.pblockAddr b
+  let thisPosFn :: M.ArchAddrWord arch -> C.Position
+      thisPosFn off = posFn r
+        where Just r = M.incSegmentOff base (toInteger off)
+  addStatementList tfns ctx blockLabelMap (M.pblockAddr b) thisPosFn [(0, M.blockStatementList b)] []
