@@ -9,29 +9,21 @@ module ARMTests
     where
 
 
-import           Control.Lens ( (^.), to )
 import           Control.Monad.Catch (throwM, Exception)
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
-import           Data.List (intercalate)
 import qualified Data.Macaw.ARM as RO
-import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.ARM.BinaryFormat.ELF as ARMELF
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types ( BVType )
 import qualified Data.Map as M
-import           Data.Maybe ( fromJust, mapMaybe )
 import           Data.Monoid
-import           Data.Parameterized.NatRepr
-import qualified Data.Parameterized.Some as PU
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
-import           Debug.Trace (trace)
 import qualified SemMC.ARM as ARM
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )

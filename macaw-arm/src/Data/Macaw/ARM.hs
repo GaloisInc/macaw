@@ -1,12 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeApplications #-}
 
--- {-# LANGUAGE FlexibleContexts #-}
--- {-# LANGUAGE ScopedTypeVariables #-}
--- {-# LANGUAGE RankNTypes #-}
--- {-# LANGUAGE GADTs #-}
--- {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 module Data.Macaw.ARM
     ( -- * Macaw configurations
       arm_linux_info,
@@ -18,31 +12,25 @@ module Data.Macaw.ARM
     )
     where
 
-
-import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
-import qualified Data.Macaw.AbsDomain.AbsState as MA
+import           Data.Macaw.ARM.Eval
 import qualified Data.Macaw.Architecture.Info as MI
-import           Data.Macaw.CFG ( ArchSegmentOff )
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BVType )
-import qualified SemMC.ARM as ARM
 import           Data.Proxy ( Proxy(..) )
-import           Data.Macaw.ARM.ARMReg
+import qualified SemMC.ARM as ARM
 
 
 -- | The type tag for ARM (32-bit)
 type ARM = ARM.ARM
 
 
--- arm_linux_info :: (ArchSegmentOff ARM.ARM -> Maybe (MA.AbsValue 32 (BVType 32))) -> MI.ArchitectureInfo ARM.ARM
 arm_linux_info :: MI.ArchitectureInfo ARM.ARM
 arm_linux_info =
-    MI.ArchitectureInfo { MI.withArchConstraints = undefined -- id -- \x -> x
+    MI.ArchitectureInfo { MI.withArchConstraints = undefined -- \x -> x
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
-                        , MI.jumpTableEntrySize = undefined -- jumpTableEntrySize proxy
+                        , MI.jumpTableEntrySize = 0 -- undefined -- jumpTableEntrySize proxy
                         , MI.disassembleFn = undefined -- disassembleFn proxy ARMSem.execInstruction
-                        , MI.mkInitialAbsState = undefined -- mkInitialAbsState proxy tocMap
+                        , MI.mkInitialAbsState = mkInitialAbsState proxy
                         , MI.absEvalArchFn = undefined -- absEvalArchFn proxy
                         , MI.absEvalArchStmt = undefined -- absEvalArchStmt proxy
                         , MI.postCallAbsState = undefined -- postCallAbsState proxy

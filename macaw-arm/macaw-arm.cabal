@@ -14,7 +14,9 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.ARM
+                     , Data.Macaw.ARM.Arch
                      , Data.Macaw.ARM.ARMReg
+                     , Data.Macaw.ARM.Eval
                      , Data.Macaw.ARM.BinaryFormat.ELF
                      , Data.Macaw.ARM.Semantics.ARMSemantics
   -- other-modules:       
@@ -24,10 +26,12 @@ library
                      , bytestring
                      , cereal
                      , containers
+                     , dismantle-arm
                      , elf-edit
                      , lens
                      , macaw-base
                      , macaw-semmc
+                     , parameterized-utils
                      , semmc-arm
                      , vector
   -- build-tools:         arm-none-eabi-gcc
