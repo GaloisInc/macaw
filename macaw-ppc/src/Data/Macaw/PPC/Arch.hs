@@ -76,13 +76,13 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
   -- These are cache hints
-  Dcba :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbf :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbz :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbzl :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
+  Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbi   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbst  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbz   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbzl  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Dcbt   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
   Dcbtst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
 
 instance TF.FunctorF (PPCStmt ppc) where
@@ -145,11 +145,32 @@ data PPCPrimFn ppc f tp where
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
 
+  -- | Uninterpreted vector functions
+  Vec1 :: String -- ^ the name of the function
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 32)
+       -> PPCPrimFn ppc f (MT.BVType 160)
+  Vec2 :: String -- ^ the name of the function
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 32)
+       -> PPCPrimFn ppc f (MT.BVType 160)
+  Vec3 :: String -- ^ the name of the function
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 128)
+       -> f (MT.BVType 32)
+       -> PPCPrimFn ppc f (MT.BVType 160)
+
 instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
   typeRepr f =
     case f of
       UDiv rep _ _ -> MT.BVTypeRepr rep
       SDiv rep _ _ -> MT.BVTypeRepr rep
+      -- FIXME: Is this right?
+      Vec1 _   _ _      -> MT.BVTypeRepr MT.knownNat
+      Vec2 _   _ _ _    -> MT.BVTypeRepr MT.knownNat
+      Vec3 _   _ _ _ _  -> MT.BVTypeRepr MT.knownNat
 
 -- | Right now, none of the primitive functions has a side effect.  That will
 -- probably change.
@@ -158,6 +179,9 @@ ppcPrimFnHasSideEffects pf =
   case pf of
     UDiv {} -> False
     SDiv {} -> False
+    Vec1 {} -> False
+    Vec2 {} -> False
+    Vec3 {} -> False
 
 rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
@@ -170,12 +194,45 @@ rewritePrimFn f =
     SDiv rep lhs rhs -> do
       tgtFn <- SDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
       evalRewrittenArchFn tgtFn
+    Vec1 name op fpscr -> do
+      tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
+    Vec2 name op1 op2 fpscr -> do
+      tgtFn <- Vec2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
+    Vec3 name op1 op2 op3 fpscr -> do
+      tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f tp -> m PP.Doc
 ppPrimFn pp f =
   case f of
     UDiv _ lhs rhs -> (\lhs' rhs' -> PP.text "ppc_udiv " PP.<> lhs' PP.<> PP.text " " PP.<> rhs') <$> pp lhs <*> pp rhs
     SDiv _ lhs rhs -> (\lhs' rhs' -> PP.text "ppc_sdiv " PP.<> lhs' PP.<> PP.text " " PP.<> rhs') <$> pp lhs <*> pp rhs
+    Vec1 n r1 fpscr ->
+      (\r1' fpscr'
+        -> PP.text "ppc_vec1 " PP.<>
+           PP.text n PP.<> PP.text " " PP.<>
+           r1' PP.<> PP.text " " PP.<>
+           fpscr') <$>
+      pp r1 <*> pp fpscr
+    Vec2 n r1 r2 fpscr ->
+      (\r1' r2' fpscr' ->
+         PP.text "ppc_vec1 " PP.<>
+         PP.text n PP.<> PP.text " " PP.<>
+         r1' PP.<> PP.text " " PP.<>
+         r2' PP.<> PP.text " " PP.<>
+         fpscr') <$>
+      pp r1 <*> pp r2 <*> pp fpscr
+    Vec3 n r1 r2 r3 fpscr ->
+      (\r1' r2' r3' fpscr' ->
+         PP.text "ppc_vec1 " PP.<>
+         PP.text n PP.<> PP.text " " PP.<>
+         r1' PP.<> PP.text " " PP.<>
+         r2' PP.<> PP.text " " PP.<>
+         r3' PP.<> PP.text " " PP.<>
+         fpscr') <$>
+      pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
 
 instance MC.IsArchFn (PPCPrimFn ppc) where
   ppArchFn = ppPrimFn
@@ -191,6 +248,9 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
     case f of
       UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
+      Vec1 name op fpscr -> Vec1 name <$> go op <*> go fpscr
+      Vec2 name op1 op2 fpscr -> Vec2 name <$> go op1 <*> go op2 <*> go fpscr
+      Vec3 name op1 op2 op3 fpscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC

@@ -19,6 +19,7 @@ import qualified Data.Functor.Const as C
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import           Language.Haskell.TH
+import           Language.Haskell.TH.Syntax (lift)
 import           GHC.TypeLits
 
 import           Data.Parameterized.Classes
@@ -42,6 +43,10 @@ import           Data.Macaw.SemMC.TH ( natReprTH, addEltTH, symFnName, asName )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
 
+getOpName :: S.Elt t x -> Maybe String
+getOpName (S.NonceAppElt nae) = Just $ show $ S.nonceEltId nae
+getOpName _ = Nothing
+
 ppcNonceAppEval :: forall arch t tp
                  . (A.Architecture arch,
                     L.Location arch ~ APPC.Location arch,
@@ -55,6 +60,48 @@ ppcNonceAppEval bvi nonceApp =
     S.FnApp symFn args -> do
       let fnName = symFnName symFn
       case fnName of
+        "ppc_vec1" -> return $ do
+          case FC.toListFC Some args of
+            [Some op, Some rA, Some fpscr] -> do
+              case getOpName op of
+                Just name -> do
+                  valA <- addEltTH bvi rA
+                  valFpscr <- addEltTH bvi fpscr
+                  liftQ [| do let vecFn = Vec1 $(lift name) $(return valA) $(return valFpscr)
+                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
+                              return (M.AssignedValue vecExp)
+                         |]
+                Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
+            _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
+        "ppc_vec2" -> return $ do
+          case FC.toListFC Some args of
+            [Some op, Some rA, Some rB, Some fpscr] -> do
+              case getOpName op of
+                Just name -> do
+                  valA <- addEltTH bvi rA
+                  valB <- addEltTH bvi rB
+                  valFpscr <- addEltTH bvi fpscr
+                  liftQ [| do let vecFn = Vec2 $(lift name) $(return valA) $(return valB) $(return valFpscr)
+                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
+                              return (M.AssignedValue vecExp)
+                         |]
+                Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
+            _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
+        "ppc_vec3" -> return $ do
+          case FC.toListFC Some args of
+            [Some op, Some rA, Some rB, Some rC, Some fpscr] -> do
+              case getOpName op of
+                Just name -> do
+                  valA <- addEltTH bvi rA
+                  valB <- addEltTH bvi rB
+                  valC <- addEltTH bvi rC
+                  valFpscr <- addEltTH bvi fpscr
+                  liftQ [| do let vecFn = Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr)
+                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
+                              return (M.AssignedValue vecExp)
+                         |]
+                Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
+            _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
         "ppc_is_r0" -> return $ do
           case FC.toListFC Some args of
             [Some operand] -> do

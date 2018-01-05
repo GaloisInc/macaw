@@ -98,6 +98,9 @@ absEvalArchFn _ _r f =
   case f of
     SDiv {} -> MA.TopV
     UDiv {} -> MA.TopV
+    Vec1 {} -> MA.TopV
+    Vec2 {} -> MA.TopV
+    Vec3 {} -> MA.TopV
 
 -- | For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
