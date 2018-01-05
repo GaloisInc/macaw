@@ -68,10 +68,7 @@ ppcNonceAppEval bvi nonceApp =
                 Just name -> do
                   valA <- addEltTH bvi rA
                   valFpscr <- addEltTH bvi fpscr
-                  liftQ [| do let vecFn = Vec1 $(lift name) $(return valA) $(return valFpscr)
-                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
-                              return (M.AssignedValue vecExp)
-                         |]
+                  liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
         "ppc_vec2" -> return $ do
@@ -82,10 +79,7 @@ ppcNonceAppEval bvi nonceApp =
                   valA <- addEltTH bvi rA
                   valB <- addEltTH bvi rB
                   valFpscr <- addEltTH bvi fpscr
-                  liftQ [| do let vecFn = Vec2 $(lift name) $(return valA) $(return valB) $(return valFpscr)
-                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
-                              return (M.AssignedValue vecExp)
-                         |]
+                  liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
         "ppc_vec3" -> return $ do
@@ -97,10 +91,7 @@ ppcNonceAppEval bvi nonceApp =
                   valB <- addEltTH bvi rB
                   valC <- addEltTH bvi rC
                   valFpscr <- addEltTH bvi fpscr
-                  liftQ [| do let vecFn = Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr)
-                              vecExp <- G.addAssignment $ M.EvalArchFn vecFn (M.typeRepr vecFn)
-                              return (M.AssignedValue vecExp)
-                         |]
+                  liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
         "ppc_is_r0" -> return $ do
