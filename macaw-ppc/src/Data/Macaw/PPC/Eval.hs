@@ -98,6 +98,23 @@ absEvalArchFn _ _r f =
   case f of
     SDiv {} -> MA.TopV
     UDiv {} -> MA.TopV
+    FPIsQNaN {} -> MA.TopV
+    FPIsSNaN {} -> MA.TopV
+    FPAdd {} -> MA.TopV
+    FPAddRoundedUp {} -> MA.TopV
+    FPSub {} -> MA.TopV
+    FPSubRoundedUp {} -> MA.TopV
+    FPMul {} -> MA.TopV
+    FPMulRoundedUp {} -> MA.TopV
+    FPDiv {} -> MA.TopV
+    FPLt {} -> MA.TopV
+    FPEq {} -> MA.TopV
+    FPCvt {} -> MA.TopV
+    FPCvtRoundsUp {} -> MA.TopV
+    FPFromBV {} -> MA.TopV
+    TruncFPToSignedBV {} -> MA.TopV
+    FPAbs {} -> MA.TopV
+    FPNeg {} -> MA.TopV
     Vec1 {} -> MA.TopV
     Vec2 {} -> MA.TopV
     Vec3 {} -> MA.TopV
