@@ -12,7 +12,10 @@ module Data.Macaw.ARM
     )
     where
 
+
+import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
+import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.Memory as MM
 import           Data.Proxy ( Proxy(..) )
@@ -29,7 +32,7 @@ arm_linux_info =
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
                         , MI.jumpTableEntrySize = 0 -- undefined -- jumpTableEntrySize proxy
-                        , MI.disassembleFn = undefined -- disassembleFn proxy ARMSem.execInstruction
+                        , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction
                         , MI.mkInitialAbsState = mkInitialAbsState proxy
                         , MI.absEvalArchFn = undefined -- absEvalArchFn proxy
                         , MI.absEvalArchStmt = undefined -- absEvalArchStmt proxy

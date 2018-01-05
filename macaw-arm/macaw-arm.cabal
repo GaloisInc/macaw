@@ -16,6 +16,7 @@ library
   exposed-modules:     Data.Macaw.ARM
                      , Data.Macaw.ARM.Arch
                      , Data.Macaw.ARM.ARMReg
+                     , Data.Macaw.ARM.Disassemble
                      , Data.Macaw.ARM.Eval
                      , Data.Macaw.ARM.BinaryFormat.ELF
                      , Data.Macaw.ARM.Semantics.ARMSemantics
@@ -31,8 +32,10 @@ library
                      , lens
                      , macaw-base
                      , macaw-semmc
+                     , mtl
                      , parameterized-utils
                      , semmc-arm
+                     , text
                      , vector
   -- build-tools:         arm-none-eabi-gcc
   hs-source-dirs:      src
