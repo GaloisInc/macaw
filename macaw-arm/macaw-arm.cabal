@@ -20,6 +20,7 @@ library
                      , Data.Macaw.ARM.Eval
                      , Data.Macaw.ARM.BinaryFormat.ELF
                      , Data.Macaw.ARM.Semantics.ARMSemantics
+                     , Data.Macaw.ARM.Semantics.TH
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <4.11
@@ -27,6 +28,7 @@ library
                      , bytestring
                      , cereal
                      , containers
+                     , crucible
                      , dismantle-arm
                      , elf-edit
                      , lens
@@ -34,7 +36,9 @@ library
                      , macaw-semmc
                      , mtl
                      , parameterized-utils
+                     , semmc
                      , semmc-arm
+                     , template-haskell
                      , text
                      , vector
   -- build-tools:         arm-none-eabi-gcc

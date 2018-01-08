@@ -19,12 +19,12 @@ module Data.Macaw.ARM.Arch
     -- )
     where
 
-
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
-import qualified Data.Macaw.SemMC.Operands as O
+import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.Types as MT
+import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FCls
 import qualified Dismantle.ARM as D
 import           GHC.TypeLits
@@ -40,9 +40,20 @@ data ARMStmt (v :: MT.Type -> *) where
 type instance MC.ArchStmt ARM.ARM = ARMStmt
 
 instance MC.IsArchStmt ARMStmt where
-    ppArchStmt pp stmt =
+    ppArchStmt _pp stmt =
         case stmt of
           WhatShouldThisBe -> PP.text "arm_what?"
+
+instance TF.FunctorF ARMStmt where
+  fmapF = TF.fmapFDefault
+
+instance TF.FoldableF ARMStmt where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.TraversableF ARMStmt where
+  traverseF go stmt =
+    case stmt of
+      WhatShouldThisBe -> pure WhatShouldThisBe
 
 -- ----------------------------------------------------------------------
 -- ARM terminal statements (which have instruction-specific effects on
@@ -96,6 +107,12 @@ instance FCls.TraversableFC ARMPrimFn where
 
 type instance MC.ArchFn ARM.ARM = ARMPrimFn
 
+
+-- no side effects... yet
+armPrimFnHasSideEffects :: ARMPrimFn f tp -> Bool
+armPrimFnHasSideEffects = const False
+
+
 -- ----------------------------------------------------------------------
 -- The aggregate set of architectural constraints to express for ARM
 -- computations
@@ -112,3 +129,17 @@ type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
                               -- , O.ExtractValue arm D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
                               -- , O.ExtractValue arm (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
                               )
+
+
+-- ----------------------------------------------------------------------
+
+-- | Manually-provided semantics for instructions whose full semantics cannot be
+-- expressed in our semantics format.
+--
+-- This includes instructions with special side effects that we don't have a way
+-- to talk about in the semantics; especially useful for architecture-specific
+-- terminator statements.
+armInstructionMatcher :: (ARMArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
+armInstructionMatcher (D.Instruction opc operands) =
+  case opc of
+    _ -> Nothing

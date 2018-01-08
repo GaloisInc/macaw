@@ -57,8 +57,7 @@ withMemory :: forall w m a
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _ e k =
-  case MM.memoryForElf (MM.LoadOptions MM.LoadBySegment False) e of
-  -- case MM.memoryForElfSegments relaWidth e of
+  case MM.memoryForElf (MM.LoadOptions 0 MM.LoadBySegment False) e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
 
