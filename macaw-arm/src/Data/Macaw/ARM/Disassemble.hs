@@ -124,11 +124,9 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 --      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
           nextIP = MM.relativeAddr seg nextIPOffset
-          -- nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @arm)) nextIP
-          -- nextIPVal = MC.RelocatableValue (knownNat :: (BVType (ArchAddrWidth arm))) nextIP
           nextIPVal = MC.RelocatableValue (knownNat :: NatRepr (ArchAddrWidth arm)) nextIP
       -- Note: In ARM, the IP is incremented *after* an instruction
-      -- executes; pass in the -- physical address of the instruction here.
+      -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
@@ -184,16 +182,16 @@ readInstruction :: MM.Memory w
                 -> Either (MM.MemoryError w) (D.Instruction, MM.MemWord w)
 readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
   let seg = MM.msegSegment addr
-  case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
-    False -> ET.throwError (MM.PermissionsError (MM.relativeSegmentAddr addr))
-    True -> do
-      contents <- MM.addrContentsAfter mem (MM.relativeSegmentAddr addr)
+      segRelAddr = MM.relativeSegmentAddr addr
+  if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
+  then do
+      contents <- MM.addrContentsAfter mem segRelAddr
       case contents of
-        [] -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
+        [] -> ET.throwError $ MM.AccessViolation segRelAddr
         MM.SymbolicRef {} : _ ->
-          ET.throwError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr))
-        MM.ByteRegion bs : _rest
-          | BS.null bs -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
+          ET.throwError $ MM.UnexpectedRelocation segRelAddr
+        MM.ByteRegion bs : _
+          | BS.null bs -> ET.throwError $ MM.AccessViolation segRelAddr
           | otherwise -> do
             -- FIXME: Having to wrap the bytestring in a lazy wrapper is
             -- unpleasant.  We could alter the disassembler to consume strict
@@ -202,13 +200,16 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
+              Nothing -> ET.throwError $ MM.InvalidInstruction segRelAddr contents
+  else ET.throwError $ MM.PermissionsError segRelAddr
 
 -- | Examine a value and see if it is a mux; if it is, break the mux up and
 -- return its component values (the condition and two alternatives)
 matchConditionalBranch :: (ARMArchConstraints arch)
                        => Value arch ids tp
-                       -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
+                       -> Maybe (Value arch ids BoolType
+                               , Value arch ids tp
+                               , Value arch ids tp)
 matchConditionalBranch v =
   case v of
     AssignedValue (Assignment { assignRhs = EvalApp a }) ->
@@ -218,16 +219,17 @@ matchConditionalBranch v =
     _ -> Nothing
 
 
-type LocatedError ppc ids = ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+type LocatedError ppc ids = ([Block ppc ids]
+                            , MM.MemWord (ArchAddrWidth ppc)
+                            , TranslationError (ArchAddrWidth ppc))
+
 -- | This is a monad for error handling during disassembly
 --
 -- It allows for early failure that reports progress (in the form of blocks
 -- discovered and the latest address examined) along with a reason for failure
 -- (a 'TranslationError').
 newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (ST s) a }
-  deriving (Functor,
-            Applicative,
-            Monad)
+    deriving (Functor, Applicative, Monad)
 
 -- | This funny instance is required because GHC doesn't allow type function
 -- applications in instance heads, so we factor the type functions out into a
