@@ -19,6 +19,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Symbolic.CrucGen
   ( CrucGenArchFunctions(..)
+  , MacawExt
     -- ** Operations for implementing new backends.
   , CrucGen
   , MacawMonad
@@ -83,6 +84,8 @@ data CrucGenArchFunctions arch
      -- ^ Generate crucible for architecture-specific terminal statement.
   }
 
+type MacawExt = ()
+
 -- | State used for generating blocks
 data CrucGenState arch ids s
    = CrucGenState
@@ -96,7 +99,7 @@ data CrucGenState arch ids s
      -- ^ Label for this block we are translating
    , codeOff :: !(M.ArchAddrWord arch)
      -- ^ Offset
-   , prevStmts :: ![C.Posd (CR.Stmt s)]
+   , prevStmts :: ![C.Posd (CR.Stmt MacawExt s)]
      -- ^ List of states in reverse order
    }
 
@@ -144,7 +147,7 @@ liftST m = CrucGen $ \s cont -> m >>= cont s
 getPos :: CrucGen arch ids s C.Position
 getPos = gets $ \s -> macawPositionFn s (codeOff s)
 
-addStmt :: CR.Stmt s -> CrucGen arch ids s ()
+addStmt :: CR.Stmt MacawExt s -> CrucGen arch ids s ()
 addStmt stmt = seq stmt $ do
   p <- getPos
   s <- get
@@ -174,7 +177,7 @@ freshValueIndex = do
   pure $! cnt
 
 -- | Evaluate the crucible app and return a reference to the result.
-evalAtom :: CR.AtomValue s ctp -> CrucGen arch ids s (CR.Atom s ctp)
+evalAtom :: CR.AtomValue MacawExt s ctp -> CrucGen arch ids s (CR.Atom s ctp)
 evalAtom av = do
   p <- getPos
   i <- freshValueIndex
@@ -188,7 +191,7 @@ evalAtom av = do
   pure $! atom
 
 -- | Evaluate the crucible app and return a reference to the result.
-crucibleValue :: C.App (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
+crucibleValue :: C.App MacawExt (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
 crucibleValue app = evalAtom (CR.EvalApp app)
 
 -- | Evaluate the crucible app and return a reference to the result.
@@ -212,7 +215,7 @@ v2c :: M.Value arch ids tp
 v2c = valueToCrucible
 
 -- | Evaluate the crucible app and return a reference to the result.
-appAtom :: C.App (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
+appAtom :: C.App MacawExt (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
 appAtom app = evalAtom (CR.EvalApp app)
 
 -- | Create a crucible value for a bitvector literal.
@@ -394,19 +397,19 @@ freshSymbolic repr = do
   callFnHandle hndl Ctx.empty
 
 -- | Read the given memory address
-readMem :: M.ArchAddrValue arch ids
-        -> M.MemRepr tp
-        -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-readMem addr repr = do
+callReadMem :: M.ArchAddrValue arch ids
+            -> M.MemRepr tp
+            -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
+callReadMem addr repr = do
   hndl <- mkHandleVal (ReadMemId repr)
   caddr <- valueToCrucible addr
   callFnHandle hndl (Empty :> caddr)
 
-writeMem :: M.ArchAddrValue arch ids
-        -> M.MemRepr tp
-        -> M.Value arch ids tp
-        -> CrucGen arch ids s ()
-writeMem addr repr val = do
+callWriteMem :: M.ArchAddrValue arch ids
+             -> M.MemRepr tp
+             -> M.Value arch ids tp
+             -> CrucGen arch ids s ()
+callWriteMem addr repr val = do
   hndl <- mkHandleVal (WriteMemId repr)
   caddr <- valueToCrucible addr
   cval  <- valueToCrucible val
@@ -418,8 +421,9 @@ assignRhsToCrucible rhs =
   case rhs of
     M.EvalApp app -> appToCrucible app
     M.SetUndefined mrepr -> freshSymbolic mrepr
-    M.ReadMem addr repr -> readMem addr repr
-    M.CondReadMem repr c addr def -> undefined repr c addr def
+    M.ReadMem addr repr -> callReadMem addr repr
+    M.CondReadMem repr c addr def -> do
+      undefined repr c addr def
     M.EvalArchFn f _ -> do
       fns <- translateFns <$> get
       crucGenArchFn fns f
@@ -433,7 +437,7 @@ addMacawStmt stmt =
       a <- assignRhsToCrucible (M.assignRhs asgn)
       crucPStateLens . assignValueMapLens %= MapF.insert idx (MacawCrucibleValue a)
     M.WriteMem addr repr val -> do
-      writeMem addr repr val
+      callWriteMem addr repr val
     M.PlaceHolderStmt _vals msg -> do
       cmsg <- crucibleValue (C.TextLit (Text.pack msg))
       addTermStmt (CR.ErrorStmt cmsg)
@@ -518,7 +522,7 @@ runCrucGen :: CrucGenArchFunctions arch
               -- ^ Offset
            -> CR.Label s
            -> CrucGen arch ids s ()
-           -> MacawMonad arch ids s (CR.Block s (MacawFunctionResult arch), M.ArchAddrWord arch)
+           -> MacawMonad arch ids s (CR.Block MacawExt s (MacawFunctionResult arch), M.ArchAddrWord arch)
 runCrucGen tfns ctx posFn off lbl action = do
   ps <- get
   let s0 = CrucGenState { translateFns = tfns
@@ -546,7 +550,7 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
-              -> MacawMonad arch ids s (CR.Block s (MacawFunctionResult arch))
+              -> MacawMonad arch ids s (CR.Block MacawExt s (MacawFunctionResult arch))
 addMacawBlock tfns ctx blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
@@ -588,8 +592,8 @@ addStatementList :: M.MemWidth (M.ArchAddrWidth arch)
                  -> (M.ArchAddrWord arch -> C.Position)
                     -- ^ Function for generating position from offset from start of this block.
                  -> [(M.ArchAddrWord arch, M.StatementList arch ids)]
-                 -> [CR.Block s (MacawFunctionResult arch)]
-                 -> MacawMonad arch ids s [CR.Block s (MacawFunctionResult arch)]
+                 -> [CR.Block MacawExt s (MacawFunctionResult arch)]
+                 -> MacawMonad arch ids s [CR.Block MacawExt s (MacawFunctionResult arch)]
 addStatementList _ _ _ _ _ [] rlist =
   pure (reverse rlist)
 addStatementList tfns ctx blockLabelMap addr posFn ((off,stmts):rest) r = do
@@ -616,7 +620,7 @@ addParsedBlock :: forall arch ids s
                -> (M.ArchSegmentOff arch -> C.Position)
                -- ^ Function for generating position from offset from start of this block.
                -> M.ParsedBlock arch ids
-               -> MacawMonad arch ids s [CR.Block s (MacawFunctionResult arch)]
+               -> MacawMonad arch ids s [CR.Block MacawExt s (MacawFunctionResult arch)]
 addParsedBlock tfns ctx blockLabelMap posFn b = do
   let base = M.pblockAddr b
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
