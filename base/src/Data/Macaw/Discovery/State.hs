@@ -21,13 +21,6 @@ module Data.Macaw.Discovery.State
   , ParsedTermStmt(..)
   , StatementList(..)
   , ParsedBlock(..)
-     -- * SymbolAddrMap
-  , SymbolAddrMap
-  , emptySymbolAddrMap
-  , symbolAddrsAsMap
-  , symbolAddrMap
-  , symbolAddrs
-  , symbolAtAddr
     -- * The interpreter state
   , DiscoveryState
   , exploredFunctions
@@ -51,7 +44,6 @@ module Data.Macaw.Discovery.State
 
 import           Control.Lens
 import qualified Data.ByteString.Char8 as BSC
-import           Data.Char (isDigit)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
@@ -68,7 +60,6 @@ import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
-
 
 ------------------------------------------------------------------------
 -- CodeAddrReason
@@ -90,44 +81,6 @@ data CodeAddrReason w
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Eq, Show)
-
-------------------------------------------------------------------------
--- SymbolAddrMap
-
--- | Map from addresses to the associated symbol name.
-newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (MemSegmentOff w) BSC.ByteString }
-
--- | Return an empty symbol addr map
-emptySymbolAddrMap :: SymbolAddrMap w
-emptySymbolAddrMap = SymbolAddrMap Map.empty
-
--- | Return addresses in symbol name map
-symbolAddrs :: SymbolAddrMap w -> [MemSegmentOff w]
-symbolAddrs = Map.keys . symbolAddrsAsMap
-
--- | Return the symbol at the given map.
-symbolAtAddr :: MemSegmentOff w -> SymbolAddrMap w -> Maybe BSC.ByteString
-symbolAtAddr a m = Map.lookup a (symbolAddrsAsMap m)
-
--- | Check that a symbol name is well formed, returning an error message if not.
-checkSymbolName :: BSC.ByteString -> Either String ()
-checkSymbolName sym_nm =
-  case BSC.unpack sym_nm of
-    [] -> Left "Empty symbol name"
-    (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
-          | otherwise -> Right ()
-
-
--- | This creates a symbol addr map after checking the correctness of
--- symbol names.
---
--- It returns either an error message or the map.
-symbolAddrMap :: forall w
-              .  Map (MemSegmentOff w) BSC.ByteString
-              -> Either String (SymbolAddrMap w)
-symbolAddrMap symbols = do
-   mapM_ checkSymbolName (Map.elems symbols)
-   pure $! SymbolAddrMap symbols
 
 ------------------------------------------------------------------------
 -- GlobalDataInfo
@@ -309,7 +262,7 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 data DiscoveryState arch
    = DiscoveryState { memory              :: !(Memory (ArchAddrWidth arch))
                      -- ^ The initial memory when disassembly started.
-                   , symbolNames          :: !(SymbolAddrMap (ArchAddrWidth arch))
+                   , symbolNames          :: !(AddrSymMap (ArchAddrWidth arch))
                      -- ^ Map addresses to known symbol names
                    , archInfo             :: !(ArchitectureInfo arch)
                      -- ^ Architecture-specific information needed for discovery.
@@ -349,7 +302,7 @@ ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
 -- | Create empty discovery information.
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                        -- ^ State of memory
-                    -> SymbolAddrMap (ArchAddrWidth arch)
+                    -> AddrSymMap (ArchAddrWidth arch)
                        -- ^ Map from addresses
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information

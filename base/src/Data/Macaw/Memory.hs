@@ -103,6 +103,7 @@ module Data.Macaw.Memory
   , bsWord32le
   , bsWord64be
   , bsWord64le
+  , AddrSymMap
   ) where
 
 import           Control.Exception (assert)
@@ -724,6 +725,12 @@ instance MemWidth w => Show (MemAddr w) where
 
 instance MemWidth w => Pretty (MemAddr w) where
   pretty = text . show
+
+------------------------------------------------------------------------
+-- AddrSymMap
+
+-- | Maps code addresses to the associated symbol name if any.
+type AddrSymMap w = Map.Map (MemSegmentOff w) BSC.ByteString
 
 ------------------------------------------------------------------------
 -- MemoryError

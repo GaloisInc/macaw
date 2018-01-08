@@ -58,7 +58,7 @@ testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
     let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry elf))))
-        di = MD.cfgFromAddrs RO.x86_64_linux_info mem MD.emptySymbolAddrMap [entryPoint] []
+        di = MD.cfgFromAddrs RO.x86_64_linux_info mem M.empty [entryPoint] []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
       Nothing -> T.assertFailure ("Invalid expected result: " ++ show expectedString)

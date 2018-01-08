@@ -47,13 +47,6 @@ module Data.Macaw.Discovery
          -- * Parsed block
        , State.ParsedBlock
        , State.pblockAddr
-         -- * SymbolAddrMap
-       , State.SymbolAddrMap
-       , State.emptySymbolAddrMap
-       , State.symbolAddrsAsMap
-       , State.symbolAddrMap
-       , State.symbolAddrs
-       , State.symbolAtAddr
          -- * Simplification
        , eliminateDeadStmts
        ) where
@@ -913,7 +906,7 @@ mkFunInfo fs =
       s = fs^.curFunCtx
       info = archInfo s
       nm = withArchConstraints info $
-         fromMaybe (BSC.pack (show addr)) (symbolAtAddr addr (symbolNames s))
+         fromMaybe (BSC.pack (show addr)) (Map.lookup addr (symbolNames s))
    in DiscoveryFunInfo { discoveredFunAddr = addr
                        , discoveredFunName = nm
                        , _parsedBlocks = fs^.curFunBlocks
@@ -991,7 +984,7 @@ cfgFromAddrs, cfgFromAddrsTrustFns ::
      -- ^ Architecture-specific information needed for doing control-flow exploration.
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
-  -> SymbolAddrMap (ArchAddrWidth arch)
+  -> AddrSymMap (ArchAddrWidth arch)
      -- ^ Ma1p from addresses to the associated symbol name.
   -> [ArchSegmentOff arch]
      -- ^ Initial function entry points.

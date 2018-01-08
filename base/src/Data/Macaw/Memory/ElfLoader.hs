@@ -25,7 +25,7 @@ module Data.Macaw.Memory.ElfLoader
   , readElf
   , loadExecutable
     -- * Symbol resolution utilities
-  , resolvedSegmentedElfFuncSymbols
+  , resolveElfFuncSymbols
   , ppElfUnresolvedSymbols
   , elfAddrWidth
   ) where
@@ -415,9 +415,9 @@ memoryForElfSegments e = do
   relocMap <-
     case filter (Elf.hasSegmentType Elf.PT_DYNAMIC . Elf.phdrSegment) ph of
       [] -> pure Map.empty
-      [dynPhdr] ->
+      [dynPhdr] -> do
         let dynContents = sliceL (Elf.phdrFileRange dynPhdr) contents
-         in relocMapOfDynamic d (elfClass e) (elfMachine e) virtMap dynContents
+        relocMapOfDynamic d (elfClass e) (elfMachine e) virtMap dynContents
       _ -> throwError "Multiple dynamic sections"
 
   let intervals :: ElfFileSectionMap (ElfWordType w)
@@ -477,8 +477,10 @@ memoryForElf opt e =
       LoadBySegment -> memoryForElfSegments e
 
 -- | Pretty print parser errors to stderr.
-ppErrors :: (Eq (ElfWordType w), Num (ElfWordType w), Show (ElfWordType w))
-         => FilePath -> [ElfParseError w] -> IO ()
+ppErrors :: (Integral (ElfWordType w), Show (ElfWordType w))
+         => FilePath
+         -> [ElfParseError w]
+         -> IO ()
 ppErrors path errl = do
   when (not (null errl)) $ do
     hPutStrLn stderr $ "Non-fatal errors during parsing " ++ path
@@ -512,46 +514,61 @@ loadExecutable opt path = do
 ------------------------------------------------------------------------
 -- Elf symbol utilities
 
+-- | Error when resolving symbols.
+data SymbolResolutionError
+   = EmptySymbolName
+     -- ^ Symbol names must be non-empty
+   | CouldNotResolveAddr !BSC.ByteString
+     -- ^ Symbol address could not be resolved.
+
+instance Show SymbolResolutionError where
+  show EmptySymbolName = "Found empty symbol name"
+  show (CouldNotResolveAddr sym) = "Could not resolve address of " ++ BSC.unpack sym ++ "."
+
 resolveEntry :: Memory w
              -> SectionIndexMap w
              -> ElfSymbolTableEntry (ElfWordType w)
-             -> Maybe (Either (ElfSymbolTableEntry (ElfWordType w))
-                              (MemSegmentOff w, [BS.ByteString]))
+             -> Maybe (Either SymbolResolutionError
+                                (BS.ByteString, MemSegmentOff w))
 resolveEntry mem secMap ste
-  | Elf.steType ste /= Elf.STT_FUNC = Nothing
+  -- Check this is a defined function symbol
+  | (Elf.steType ste `elem` [ Elf.STT_FUNC, Elf.STT_NOTYPE ]) == False = Nothing
+    -- Check symbol is defined
+  | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
+  -- Check symbol name is non-empty
+  | Elf.steName ste /= "" = Just (Left EmptySymbolName)
+  -- Lookup absolute symbol
+  | Elf.steIndex ste == Elf.SHN_ABS = reprConstraints (memAddrWidth mem) $ do
+      let val = Elf.steValue ste
+      case resolveAddr mem 0 (fromIntegral val) of
+        Just addr -> Just $ Right (Elf.steName ste, addr)
+        Nothing   -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
+  -- Lookup symbol stored in specific section
   | otherwise = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
-      case Elf.steIndex ste of
-        Elf.SHN_UNDEF ->
-          Nothing
-        Elf.SHN_ABS ->
-          case resolveAddr mem 0 (fromIntegral val) of
-            Just addr -> Just $ Right (addr, [Elf.steName ste])
-            Nothing   -> Just $ Left ste
-        idx ->
-          case Map.lookup idx secMap of
-            Just (base,sec)
-              | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
-              , off <- toInteger (elfSectionAddr sec) - toInteger val
-              , Just addr <- incSegmentOff base off -> do
-                  Just $ Right (addr, [Elf.steName ste])
-            _ -> Just $ Left ste
+      case Map.lookup (Elf.steIndex ste) secMap of
+        Just (base,sec)
+          | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
+          , off <- toInteger (elfSectionAddr sec) - toInteger val
+          , Just addr <- incSegmentOff base off -> do
+              Just $ Right (Elf.steName ste, addr)
+        _ -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
 
 -- | Resolve symbol table entries to the addresses in a memory.
 --
 -- It takes the memory constructed from the Elf file, the section
 -- index map, and the symbol table entries.  It returns unresolvable
 -- symbols and the map from segment offsets to bytestring.
-resolvedSegmentedElfFuncSymbols
+resolveElfFuncSymbols
   :: forall w
   .  Memory w
   -> SectionIndexMap w
   -> [ElfSymbolTableEntry (ElfWordType w)]
-  -> ( [ElfSymbolTableEntry (ElfWordType w)]
-     , Map (MemSegmentOff w) [BS.ByteString]
+  -> ( [SymbolResolutionError]
+     , [(BS.ByteString, MemSegmentOff w)]
      )
-resolvedSegmentedElfFuncSymbols mem secMap entries = reprConstraints (memAddrWidth mem) $
-  Map.fromList <$> partitionEithers (mapMaybe (resolveEntry mem secMap) entries)
+resolveElfFuncSymbols mem secMap entries = reprConstraints (memAddrWidth mem) $
+    partitionEithers (mapMaybe (resolveEntry mem secMap) entries)
 
 ppElfUnresolvedSymbols :: forall w
                        .  MemWidth w
