@@ -1,7 +1,9 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -18,7 +20,6 @@ module Data.Macaw.Symbolic
   , mkFunCFG
   , Data.Macaw.Symbolic.PersistentState.ArchRegContext
   , Data.Macaw.Symbolic.PersistentState.ToCrucibleType
-  , Data.Macaw.Symbolic.PersistentState.UsedHandleSet
   ) where
 
 import           Control.Lens ((^.))
@@ -38,6 +39,7 @@ import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
 import qualified Lang.Crucible.Config as C
+import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.ProgramLoc as C
@@ -76,57 +78,6 @@ freshVarsForRegs sym nameFn a =
     _ -> error "internal: freshVarsForRegs encountered case non-exhaustive pattern"
 #endif
 
--- | An override that creates a fresh value with the given type.
-runFreshSymOverride :: M.TypeRepr tp
-                    -> C.OverrideSim MacawSimulatorState sym MacawExt ret
-                                     EmptyCtx
-                                     (ToCrucibleType tp)
-                                     (C.RegValue sym (ToCrucibleType tp))
-runFreshSymOverride tp = do
-  undefined tp
-
--- | Run override that reads a value from memory.
-runReadMemOverride :: M.AddrWidthRepr w -- ^ Width of the address.
-                   -> M.MemRepr tp -- ^ Type of value to read.
-                   -> C.OverrideSim MacawSimulatorState sym MacawExt ret
-                                    (EmptyCtx ::> C.BVType w)
-                                    (ToCrucibleType tp)
-                                    (C.RegValue sym (ToCrucibleType tp))
-runReadMemOverride = undefined
-
--- | Run override that writes a value to memory.
-runWriteMemOverride :: M.AddrWidthRepr w -- ^ Width of a pointer
-                    -> M.MemRepr tp      -- ^ Type of value to write to memory.
-                    -> C.OverrideSim MacawSimulatorState sym MacawExt ret
-                                     (EmptyCtx ::> C.BVType w ::> ToCrucibleType tp)
-                                     C.UnitType
-                                     (C.RegValue sym C.UnitType)
-runWriteMemOverride = undefined
-
-createHandleBinding :: M.AddrWidthRepr (M.ArchAddrWidth arch)
-                    -> HandleId arch '(args, rtp)
-                    -> C.OverrideSim MacawSimulatorState sym MacawExt ret args rtp (C.RegValue sym rtp)
-createHandleBinding w hid =
-  case hid of
-    MkFreshSymId repr -> runFreshSymOverride repr
-    ReadMemId repr    -> runReadMemOverride w repr
-    WriteMemId repr   -> runWriteMemOverride w repr
-
--- | This function identifies all the handles needed, and returns
--- function bindings for each one.
-createHandleMap :: forall arch sym
-                .  M.AddrWidthRepr (M.ArchAddrWidth arch)
-                -> UsedHandleSet arch
-                -> C.FunctionBindings MacawSimulatorState sym MacawExt
-createHandleMap w = MapF.foldrWithKey go C.emptyHandleMap
-  where go :: HandleId arch pair
-           -> HandleVal pair
-           -> C.FunctionBindings MacawSimulatorState sym MacawExt
-           -> C.FunctionBindings MacawSimulatorState sym MacawExt
-        go hid (HandleVal h) b =
-          let o = C.mkOverride' (handleIdName hid) (handleIdRetType hid) (createHandleBinding w hid)
-           in  C.insertHandleMap h (C.UseOverride o) b
-
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
                     -> NatRepr w
@@ -161,11 +112,9 @@ mkCrucCFG :: forall s arch ids
             -> C.FunctionName
                -- ^ Name of function for pretty print purposes.
             -> (CrucGenContext arch s
-                 -> MacawMonad arch ids s [CR.Block MacawExt s (MacawFunctionResult arch)])
+                 -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)])
                 -- ^ Action to run
-            -> ST s ( UsedHandleSet arch
-                    , C.SomeCFG MacawExt (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
-                    )
+            -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkCrucCFG halloc archFns memBaseVarMap nm action = do
   let regAssign = crucGenRegAssignment archFns
   let crucRegTypes = typeCtxToCrucible (fmapFC M.typeRepr regAssign)
@@ -178,18 +127,18 @@ mkCrucCFG halloc archFns memBaseVarMap nm action = do
                               , handleAlloc = halloc
                               , memBaseAddrMap = memBaseVarMap
                               }
-  let ps0 = initCrucPersistentState
+  let ps0 = initCrucPersistentState 1
   blockRes <- runMacawMonad ps0 (action genCtx)
-  (blks, ps) <-
+  blks <-
     case blockRes of
       (Left err, _) -> fail err
-      (Right blks, s)  -> pure (blks, s)
+      (Right blks, _)  -> pure blks
   -- Create control flow graph
-  let rg :: CR.CFG MacawExt s (MacawFunctionArgs arch) (MacawFunctionResult arch)
+  let rg :: CR.CFG (MacawExt arch) s (MacawFunctionArgs arch) (MacawFunctionResult arch)
       rg = CR.CFG { CR.cfgHandle = h
                   , CR.cfgBlocks = blks
                   }
-  pure $ (handleMap ps, C.toSSA rg)
+  pure $ C.toSSA rg
 
 -- | Create a Crucible CFG from a list of blocks
 addBlocksCFG :: forall s arch ids
@@ -201,7 +150,7 @@ addBlocksCFG :: forall s arch ids
             -- ^ Function that maps offsets from start of block to Crucible position.
             -> [M.Block arch ids]
             -- ^ List of blocks for this region.
-            -> MacawMonad arch ids s [CR.Block MacawExt s (MacawFunctionResult arch)]
+            -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
 addBlocksCFG archFns ctx posFn macawBlocks = do
   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label s)
@@ -225,9 +174,7 @@ mkBlocksCFG :: forall s arch ids
             -- ^ Function that maps offsets from start of block to Crucible position.
             -> [M.Block arch ids]
             -- ^ List of blocks for this region.
-            -> ST s ( UsedHandleSet arch
-                    , C.SomeCFG MacawExt (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
-                    )
+            -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkBlocksCFG halloc archFns memBaseVarMap nm posFn macawBlocks = do
   mkCrucCFG halloc archFns memBaseVarMap nm $ \ctx -> do
     addBlocksCFG archFns ctx posFn macawBlocks
@@ -248,9 +195,7 @@ mkFunCFG :: forall s arch ids
             -- ^ Function that maps function address to Crucible position
          -> M.DiscoveryFunInfo arch ids
          -- ^ List of blocks for this region.
-         -> ST s ( UsedHandleSet arch
-                 , C.SomeCFG MacawExt (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
-                 )
+         -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkFunCFG halloc archFns memBaseVarMap nm posFn fn = do
   mkCrucCFG halloc archFns memBaseVarMap nm $ \ctx -> do
     let insSentences :: M.ArchSegmentOff arch
@@ -270,41 +215,59 @@ mkFunCFG halloc archFns memBaseVarMap nm posFn fn = do
       forM (Map.elems (fn^.M.parsedBlocks)) $ \b -> do
         addParsedBlock archFns ctx blockLabelMap posFn b
 
+macawExecApp :: sym
+             -> (forall utp . f utp -> IO (C.RegValue sym utp))
+             -> C.EmptyExprExtension f tp
+             -> IO (C.RegValue sym tp)
+macawExecApp _ _ = \case
+
+macawExecStmt :: C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
+              -> MacawStmtExtension arch (C.RegEntry sym) tp'
+              -> IO (C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx, C.RegValue sym tp')
+macawExecStmt _st s0 =
+  case s0 of
+    MacawReadMem{} -> undefined
+    MacawWriteMem{} -> undefined
+    MacawFreshSymbolic{} -> undefined
+
+-- | Return macaw extension evaluation functions.
+macawExtensions :: sym -> C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
+macawExtensions sym =
+  C.ExtensionImpl { C.extensionEval = macawExecApp sym
+                  , C.extensionExec = macawExecStmt
+                  }
+
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
            .  (IsSymInterface sym, M.ArchConstraints arch)
            => sym
            -> CrucGenArchFunctions arch
            -> C.HandleAllocator RealWorld
-           -> UsedHandleSet arch
-              -- ^ Handle map
-           -> C.CFG MacawExt blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
+           -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (ArchCrucibleRegTypes arch)
               -- ^ Register assignment
            -> IO (C.ExecResult
                    MacawSimulatorState
                    sym
-                   MacawExt
+                   (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns halloc hmap g regStruct = do
+runCodeBlock sym archFns halloc g regStruct = do
   let regAssign = crucGenRegAssignment archFns
   let crucRegTypes = typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   let macawStructRepr = C.StructRepr crucRegTypes
   -- Run the symbolic simulator.
   cfg <- C.initialConfig 0 []
-  let ptrWidth :: M.AddrWidthRepr (M.ArchAddrWidth arch)
-      ptrWidth = M.addrWidthRepr ptrWidth
-  let ctx :: C.SimContext MacawSimulatorState sym MacawExt
+  let ctx :: C.SimContext MacawSimulatorState sym (MacawExt arch)
       ctx = C.SimContext { C._ctxSymInterface = sym
                          , C.ctxSolverProof = \a -> a
                          , C.ctxIntrinsicTypes = MapF.empty
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = undefined
+                         , C.extensionImpl = macawExtensions sym
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
-                                createHandleMap ptrWidth hmap
+                              C.emptyHandleMap
                          , C._cruciblePersonality = MacawSimulatorState
                          }
   -- Create the symbolic simulator state
@@ -333,11 +296,11 @@ runBlocks :: forall sym arch ids
            -> IO (C.ExecResult
                    MacawSimulatorState
                    sym
-                   MacawExt
+                   (MacawExt arch)
                    (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
 runBlocks sym archFns mem nm posFn macawBlocks regStruct = do
   halloc <- C.newHandleAllocator
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
-  (hmap, C.SomeCFG g) <- stToIO $ mkBlocksCFG halloc archFns memBaseVarMap nm posFn macawBlocks
+  C.SomeCFG g <- stToIO $ mkBlocksCFG halloc archFns memBaseVarMap nm posFn macawBlocks
   -- Run the symbolic simulator.
-  runCodeBlock sym archFns halloc hmap g regStruct
+  runCodeBlock sym archFns halloc g regStruct

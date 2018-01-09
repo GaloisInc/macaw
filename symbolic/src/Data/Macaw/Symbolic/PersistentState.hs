@@ -20,7 +20,6 @@ module Data.Macaw.Symbolic.PersistentState
   ( -- * CrucPersistentState
     CrucPersistentState(..)
   , initCrucPersistentState
-  , handleMapLens
     -- * Types
   , ToCrucibleBaseType
   , ToCrucibleType
@@ -36,17 +35,11 @@ module Data.Macaw.Symbolic.PersistentState
   , typeCtxToCrucible
   , regStructRepr
   , macawAssignToCrucM
+  , memReprToCrucible
     -- * CrucGenContext
   , CrucGenContext(..)
   , archWidthRepr
   , MemSegmentMap
-    -- * Handle set
-  , UsedHandleSet
-  , HandleId(..)
-  , handleIdName
-  , handleIdArgTypes
-  , handleIdRetType
-  , HandleVal(..)
     -- * Register index map
   , RegIndexMap
   , mkRegIndexMap
@@ -55,8 +48,6 @@ module Data.Macaw.Symbolic.PersistentState
   , MacawCrucibleValue(..)
   ) where
 
-import           Control.Lens hiding (Index, (:>), Empty)
-import           Data.List (intercalate)
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
@@ -66,14 +57,11 @@ import           Data.Parameterized.Context
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.String
 import qualified Lang.Crucible.CFG.Common as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.FunctionHandle as C
-import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.Types as C
 
 ------------------------------------------------------------------------
@@ -218,40 +206,7 @@ regStructRepr :: CrucGenContext arch s -> C.TypeRepr (ArchRegStruct arch)
 regStructRepr ctx = archConstraints ctx $
   C.StructRepr (typeCtxToCrucible (fmapFC M.typeRepr (macawRegAssign ctx)))
 
-------------------------------------------------------------------------
--- Handle-related definitions
-
--- | An identifier for a Handle needed to map from Reopt to Crucible
-data HandleId arch (ftp :: (Ctx C.CrucibleType, C.CrucibleType)) where
-  MkFreshSymId :: !(M.TypeRepr tp)
-                   -> HandleId arch '(EmptyCtx, ToCrucibleType tp)
-  ReadMemId  :: !(M.MemRepr tp)
-             -> HandleId arch
-                           '( EmptyCtx ::> ArchAddrCrucibleType arch
-                            , ToCrucibleType tp
-                            )
-  WriteMemId  :: !(M.MemRepr tp)
-              -> HandleId arch
-                          '( EmptyCtx ::> ArchAddrCrucibleType arch ::> ToCrucibleType tp
-                           , C.UnitType
-                           )
-
-instance TestEquality (HandleId arch) where
-  testEquality x y = orderingF_refl (compareF x y)
-
-instance OrdF (HandleId arch) where
-  compareF (MkFreshSymId xr) (MkFreshSymId yr) = lexCompareF xr yr $ EQF
-  compareF MkFreshSymId{} _ = LTF
-  compareF _ MkFreshSymId{} = GTF
-
-  compareF (ReadMemId xr) (ReadMemId yr) = lexCompareF xr yr $ EQF
-  compareF ReadMemId{} _ = LTF
-  compareF _ ReadMemId{} = GTF
-
-  compareF (WriteMemId xr) (WriteMemId yr) = lexCompareF xr yr $ EQF
---  compareF WriteMemId{} _ = LTF
---  compareF _ WriteMemId{} = GTF
-
+{-
 typeName :: M.TypeRepr tp -> String
 typeName M.BoolTypeRepr = "Bool"
 typeName (M.BVTypeRepr w) = "BV" ++ show w
@@ -261,48 +216,10 @@ endName :: M.Endianness -> String
 endName M.LittleEndian = "le"
 endName M.BigEndian = "be"
 
-handleIdName :: HandleId arch ftp -> C.FunctionName
-handleIdName h =
-  case h of
-    MkFreshSymId repr ->
-      fromString $ "symbolic_" ++ typeName repr
-    ReadMemId (M.BVMemRepr w end) ->
-      fromString $ "readMem_" ++ show (8 * natValue w) ++ "_" ++ endName end
-    WriteMemId (M.BVMemRepr w end) ->
-      fromString $ "writeMem_" ++ show (8 * natValue w) ++ "_" ++ endName end
-
-
 widthTypeRepr :: M.AddrWidthRepr w -> C.TypeRepr (C.BVType w)
 widthTypeRepr M.Addr32 = C.knownRepr
 widthTypeRepr M.Addr64 = C.knownRepr
-
-handleIdArgTypes :: M.AddrWidthRepr (M.ArchAddrWidth arch)
-                 -> HandleId arch '(args, ret)
-                 -> Assignment C.TypeRepr args
-handleIdArgTypes ptrRepr h =
-  case h of
-    MkFreshSymId _repr -> empty
-    ReadMemId _repr ->
-      empty :> widthTypeRepr ptrRepr
-    WriteMemId repr ->
-      empty :> widthTypeRepr ptrRepr
-            :> memReprToCrucible repr
-
-handleIdRetType :: HandleId arch '(args, ret)
-                -> C.TypeRepr ret
-handleIdRetType h =
-  case h of
-    MkFreshSymId repr -> typeToCrucible repr
-    ReadMemId  repr -> memReprToCrucible repr
-    WriteMemId _ -> C.UnitRepr
-
--- | A particular handle in the UsedHandleSet
-data HandleVal (ftp :: (Ctx C.CrucibleType, C.CrucibleType)) =
-  forall args res . (ftp ~ '(args, res)) => HandleVal !(C.FnHandle args res)
-
-
--- | This  getting information about what handles are used
-type UsedHandleSet arch = MapF (HandleId arch) HandleVal
+-}
 
 ------------------------------------------------------------------------
 -- Misc types
@@ -314,27 +231,19 @@ data MacawCrucibleValue f tp = MacawCrucibleValue (f (ToCrucibleType tp))
 -- CrucPersistentState
 
 -- | State that needs to be persisted across block translations
-data CrucPersistentState arch ids s
+data CrucPersistentState ids s
    = CrucPersistentState
-   { handleMap :: !(UsedHandleSet arch)
-     -- ^ Handles found so far
-   , valueCount :: !Int
+   { valueCount :: !Int
      -- ^ Counter used to get fresh indices for Crucible atoms.
    , assignValueMap :: !(MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
      -- ^ Map Macaw assign id to associated Crucible value.
    }
 
 -- | Initial crucible persistent state
-initCrucPersistentState :: forall arch ids s . CrucPersistentState arch ids s
-initCrucPersistentState =
-  -- Infer number of arguments to function so that we have values skip inputs.
-  let argCount :: Size (MacawFunctionArgs arch)
-      argCount = knownSize
-   in CrucPersistentState
-      { handleMap      = MapF.empty
-      , valueCount     = sizeInt argCount
+initCrucPersistentState :: forall ids s . Int -> CrucPersistentState ids s
+initCrucPersistentState argCount =
+  CrucPersistentState
+      { -- Count initial arguments in valie
+        valueCount     = argCount
       , assignValueMap = MapF.empty
       }
-
-handleMapLens :: Simple Lens (CrucPersistentState arch ids s) (UsedHandleSet arch)
-handleMapLens = lens handleMap (\s v -> s { handleMap = v })

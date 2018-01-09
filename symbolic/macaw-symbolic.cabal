@@ -10,6 +10,7 @@ license-file:  LICENSE
 library
   build-depends:
     base >= 4,
+    ansi-wl-pprint,
     containers,
     crucible,
     lens,
@@ -25,5 +26,5 @@ library
     Data.Macaw.Symbolic.PersistentState
     Data.Macaw.Symbolic
 
-  ghc-options: -Wall -Werror
+  ghc-options: -Wall
   ghc-prof-options: -O2 -fprof-auto-top
