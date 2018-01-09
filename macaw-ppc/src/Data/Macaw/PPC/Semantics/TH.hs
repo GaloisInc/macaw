@@ -63,35 +63,35 @@ ppcNonceAppEval bvi nonceApp =
       case fnName of
         "ppc_vec1" -> return $ do
           case FC.toListFC Some args of
-            [Some op, Some rA, Some fpscr] -> do
+            [Some op, Some rA, Some vscr] -> do
               case getOpName op of
                 Just name -> do
                   valA <- addEltTH bvi rA
-                  valFpscr <- addEltTH bvi fpscr
-                  liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valFpscr) |]
+                  valVscr <- addEltTH bvi vscr
+                  liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
         "ppc_vec2" -> return $ do
           case FC.toListFC Some args of
-            [Some op, Some rA, Some rB, Some fpscr] -> do
+            [Some op, Some rA, Some rB, Some vscr] -> do
               case getOpName op of
                 Just name -> do
                   valA <- addEltTH bvi rA
                   valB <- addEltTH bvi rB
-                  valFpscr <- addEltTH bvi fpscr
-                  liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valFpscr) |]
+                  valVscr <- addEltTH bvi vscr
+                  liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
         "ppc_vec3" -> return $ do
           case FC.toListFC Some args of
-            [Some op, Some rA, Some rB, Some rC, Some fpscr] -> do
+            [Some op, Some rA, Some rB, Some rC, Some vscr] -> do
               case getOpName op of
                 Just name -> do
                   valA <- addEltTH bvi rA
                   valB <- addEltTH bvi rB
                   valC <- addEltTH bvi rC
-                  valFpscr <- addEltTH bvi fpscr
-                  liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr) |]
+                  valVscr <- addEltTH bvi vscr
+                  liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
         "ppc_is_r0" -> return $ do

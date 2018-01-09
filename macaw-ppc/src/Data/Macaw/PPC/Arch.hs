@@ -299,14 +299,14 @@ rewritePrimFn f =
     FPNeg rep v -> do
       tgt <- FPNeg rep <$> rewriteValue v
       evalRewrittenArchFn tgt
-    Vec1 name op fpscr -> do
-      tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue fpscr
+    Vec1 name op vscr -> do
+      tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue vscr
       evalRewrittenArchFn tgtFn
-    Vec2 name op1 op2 fpscr -> do
-      tgtFn <- Vec2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr
+    Vec2 name op1 op2 vscr -> do
+      tgtFn <- Vec2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue vscr
       evalRewrittenArchFn tgtFn
-    Vec3 name op1 op2 op3 fpscr -> do
-      tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr
+    Vec3 name op1 op2 op3 vscr -> do
+      tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue vscr
       evalRewrittenArchFn tgtFn
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f tp -> m PP.Doc
@@ -331,9 +331,9 @@ ppPrimFn pp f =
     TruncFPToSignedBV _info v _rep -> ppUnary "ppc_fp_trunc_to_signed_bv" <$> pp v
     FPAbs _rep v -> ppUnary "ppc_fp_abs" <$> pp v
     FPNeg _rep v -> ppUnary "ppc_fp_neg" <$> pp v
-    Vec1 n r1 fpscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp fpscr
-    Vec2 n r1 r2 fpscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
-    Vec3 n r1 r2 r3 fpscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
+    Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp vscr
+    Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp vscr
+    Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
   where
     ppUnary s v' = PP.text s PP.<+> v'
     ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
@@ -371,9 +371,9 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
       TruncFPToSignedBV info v rep -> TruncFPToSignedBV info <$> go v <*> pure rep
       FPAbs rep v -> FPAbs rep <$> go v
       FPNeg rep v -> FPNeg rep <$> go v
-      Vec1 name op fpscr -> Vec1 name <$> go op <*> go fpscr
-      Vec2 name op1 op2 fpscr -> Vec2 name <$> go op1 <*> go op2 <*> go fpscr
-      Vec3 name op1 op2 op3 fpscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
+      Vec1 name op vscr -> Vec1 name <$> go op <*> go vscr
+      Vec2 name op1 op2 vscr -> Vec2 name <$> go op1 <*> go op2 <*> go vscr
+      Vec3 name op1 op2 op3 vscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go vscr
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
