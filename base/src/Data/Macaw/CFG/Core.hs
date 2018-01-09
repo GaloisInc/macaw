@@ -291,13 +291,13 @@ data AssignRhs (arch :: *) (f :: Type -> *) tp where
           -> !(MemRepr tp)
           -> AssignRhs arch f tp
 
+  -- | @CondReadMem tp cond addr v@ reads from memory at the given address if the
+  -- condition is true and returns the value if it false.
   CondReadMem :: !(MemRepr tp)
               -> !(f BoolType)
               -> !(f (BVType (ArchAddrWidth arch)))
               -> !(f tp)
               -> AssignRhs arch f tp
-  -- ^ @CondReadMem tp cond addr v@ reads from memory at the given address if the
-  -- condition is true and returns the value if it false.
 
   -- Call an architecture specific function that returns some result.
   EvalArchFn :: !(ArchFn arch f tp)
