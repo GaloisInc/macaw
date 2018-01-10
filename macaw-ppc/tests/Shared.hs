@@ -44,10 +44,14 @@ withMemory :: forall w m a
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _ e k =
-  case MM.memoryForElf (MM.LoadOptions MM.LoadBySegment False) e of
-  -- case MM.memoryForElfSegments relaWidth e of
+  case MM.memoryForElf loadCfg e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
+  where
+    loadCfg = MM.LoadOptions { MM.loadStyle = MM.LoadBySegment
+                             , MM.includeBSS = False
+                             , MM.loadRegionIndex = 0
+                             }
 
 data ElfException = MemoryLoadError String
   deriving (Typeable, Show)

@@ -57,7 +57,7 @@ type PPC64 = PPC64.PPC
 -- | The type tag for 32 bit PowerPC
 type PPC32 = PPC32.PPC
 
-archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc ids
+archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc
 archDemandContext _ =
   MDS.DemandContext { MDS.demandConstraints = \a -> a
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects

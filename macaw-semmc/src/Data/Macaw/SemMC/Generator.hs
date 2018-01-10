@@ -261,7 +261,7 @@ liftST = Generator . lift . lift . lift
 
 -- | Append an assignment statement to the list of statements in the current
 -- 'PreBlock'
-addAssignment :: AssignRhs arch ids tp
+addAssignment :: AssignRhs arch (Value arch ids) tp
               -> Generator arch ids s (Assignment arch ids tp)
 addAssignment rhs = do
   l <- newAssignId

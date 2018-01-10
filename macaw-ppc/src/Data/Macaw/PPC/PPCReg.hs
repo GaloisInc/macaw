@@ -48,6 +48,7 @@ data PPCReg arch tp where
   PPC_CR :: PPCReg arch (BVType 32)
   PPC_XER :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
   PPC_FPSCR :: PPCReg arch (BVType 32)
+  PPC_VSCR :: PPCReg arch (BVType 32)
 
 deriving instance Eq (PPCReg arch tp)
 deriving instance Ord (PPCReg arch tp)
@@ -63,6 +64,7 @@ instance Show (PPCReg arch tp) where
       PPC_CR -> "cr"
       PPC_XER -> "xer"
       PPC_FPSCR -> "fpscr"
+      PPC_VSCR -> "vscr"
 
 instance ShowF (PPCReg arch) where
   showF = show
@@ -122,6 +124,7 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_CR -> BVTypeRepr n32
       PPC_XER -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
       PPC_FPSCR -> BVTypeRepr n32
+      PPC_VSCR -> BVTypeRepr n32
 
 
 instance ( ArchWidth ppc
@@ -144,7 +147,7 @@ ppcRegs = concat [ gprs
                  , fprs
                  ]
   where
-    sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR, Some PPC_XER, Some PPC_FPSCR ]
+    sprs = [ Some PPC_IP, Some PPC_LNK, Some PPC_CTR, Some PPC_CR, Some PPC_XER, Some PPC_FPSCR, Some PPC_VSCR ]
     gprs = [ Some (PPC_GP (D.GPR rnum))
            | rnum <- [0..31]
            ]
@@ -167,4 +170,5 @@ locToRegTH _  APPC.LocCTR      = [| PPC_CTR |]
 locToRegTH _  APPC.LocCR       = [| PPC_CR |]
 locToRegTH _  APPC.LocXER      = [| PPC_XER |]
 locToRegTH _  APPC.LocFPSCR    = [| PPC_FPSCR |]
+locToRegTH _  APPC.LocVSCR    = [| PPC_VSCR |]
 locToRegTH _  _                = [| undefined |]
