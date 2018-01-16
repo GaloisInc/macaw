@@ -10,7 +10,7 @@ license-file:  LICENSE
 library
   build-depends: base >= 4,
                  crucible,
-                 flexdis86,
+                 flexdis86 >= 0.1.2,
                  macaw-base,
                  macaw-symbolic,
                  macaw-x86,

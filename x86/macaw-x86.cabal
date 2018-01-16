@@ -14,7 +14,7 @@ library
     ansi-wl-pprint,
     bytestring,
     containers,
-    flexdis86 >= 0.1.1,
+    flexdis86 >= 0.1.2,
     lens >= 4.7,
     macaw-base,
     mtl,
