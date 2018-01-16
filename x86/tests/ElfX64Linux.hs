@@ -58,7 +58,7 @@ mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry elf))))
+    let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (E.elfEntry elf)))
         di = MD.cfgFromAddrs RO.x86_64_linux_info mem M.empty [entryPoint] []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
@@ -66,14 +66,16 @@ testDiscovery expectedFilename elf =
       Just er -> do
         let expectedEntries = M.fromList [ (entry, S.fromList starts) | (entry, starts) <- funcs er ]
             ignoredBlocks = S.fromList (ignoreBlocks er)
+            absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr
+        T.assertEqual "Collection of discovered function starting points"
+          (M.keysSet expectedEntries `S.difference` ignoredBlocks)
+          (S.map absoluteFromSegOff (M.keysSet (di ^. MD.funInfo)))
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
-          let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
+          let actualEntry = absoluteFromSegOff (MD.discoveredFunAddr dfi)
               -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
-              actualBlockStarts = S.fromList [ ( addr
-                                               , toInteger (MD.blockSize pbr)
-                                               )
+              actualBlockStarts = S.fromList [ (addr, toInteger (MD.blockSize pbr))
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                             , let addr = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+                                             , let addr = absoluteFromSegOff (MD.pblockAddr pbr)
                                              , addr `S.notMember` ignoredBlocks
                                              ]
           case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of
