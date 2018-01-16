@@ -151,6 +151,7 @@ initGenState nonce_gen mem addr s =
              , _blockState     = emptyPreBlock s 0 addr
              , genAddr = addr
              , genMemory = mem
+             , avxMode = False
              }
 
 -- | Describes the reason the translation error occured.
@@ -241,6 +242,7 @@ disassembleBlockImpl gs max_offset contents = do
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     , genMemory = genMemory gs
+                                    , avxMode = avxMode gs
                                     }
                  case dropSegmentRangeListBytes contents (fromIntegral (next_ip_off - off)) of
                    Left msg -> do
@@ -338,6 +340,13 @@ transferAbsValue r f =
     X87_FAdd{}  -> TopV
     X87_FSub{}  -> TopV
     X87_FMul{}  -> TopV
+
+    -- XXX: Is 'TopV' the right thing for the AVX instruction below?
+    VOp1 {} -> TopV
+    VOp2 {} -> TopV
+    Pointwise2 {} -> TopV
+    PointwiseShiftL {} -> TopV
+    VExtractF128 {} -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.

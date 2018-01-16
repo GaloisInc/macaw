@@ -25,6 +25,7 @@ module Data.Macaw.X86.Getters
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
   , readXMMValue
+  , readYMMValue
     -- * Utilities
   , reg16Loc
   , reg32Loc
@@ -41,6 +42,7 @@ module Data.Macaw.X86.Getters
   , dwordMemRepr
   , qwordMemRepr
   , xmmMemRepr
+  , ymmMemRepr
   ) where
 
 import           Data.Parameterized.NatRepr
@@ -76,6 +78,11 @@ x87MemRepr = BVMemRepr (knownNat :: NatRepr 10) LittleEndian
 xmmMemRepr :: MemRepr (BVType 128)
 xmmMemRepr = BVMemRepr (knownNat :: NatRepr 16) LittleEndian
 
+ymmMemRepr :: MemRepr (BVType 256)
+ymmMemRepr = BVMemRepr (knownNat :: NatRepr 32) LittleEndian
+
+
+
 ------------------------------------------------------------------------
 -- Utilities
 
@@ -90,6 +97,7 @@ reg32Loc = reg_low32 . X86_GP . F.reg32_reg
 -- | Return a location from a 64-bit register
 reg64Loc :: F.Reg64 -> Location addr (BVType 64)
 reg64Loc = fullRegister . X86_GP
+
 
 ------------------------------------------------------------------------
 -- Getters
@@ -169,12 +177,20 @@ getBV80Addr ar = (`MemoryAddr` x87MemRepr) <$> getBVAddress ar
 getBV128Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 128))
 getBV128Addr ar = (`MemoryAddr` xmmMemRepr) <$> getBVAddress ar
 
+-- | Translate a flexdis address-refrence into a sixteen-byte address.
+getBV256Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 256))
+getBV256Addr ar = (`MemoryAddr` ymmMemRepr) <$> getBVAddress ar
+
+
+
 readBVAddress :: F.AddrRef -> MemRepr tp -> X86Generator st ids (Expr ids tp)
 readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
 
 -- | A bitvector value with a width that satisfies `SupportedBVWidth`.
 data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
+
+
 
 -- | Extract the location of a bitvector value.
 getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
@@ -183,8 +199,10 @@ getSomeBVLocation v =
     F.ControlReg cr  -> pure $ SomeBV $ ControlReg cr
     F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
-    F.XMMReg xmm     -> pure $ SomeBV $ fullRegister $ X86_XMMReg xmm
-    F.YMMReg _ymm    -> error "XXX: TODO"
+    F.XMMReg r       -> do avx <- isAVX
+                           pure $ SomeBV $ if avx then xmm_avx r
+                                                  else xmm_sse r
+    F.YMMReg r       -> pure $ SomeBV $ ymm r
     F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
     F.X87Register i -> mk (X87StackRegister i)
     F.FarPointer _      -> fail "FarPointer"
@@ -195,7 +213,7 @@ getSomeBVLocation v =
     F.Mem32  ar  -> SomeBV <$> getBV32Addr  ar
     F.Mem64  ar  -> SomeBV <$> getBV64Addr  ar
     F.Mem128 ar  -> SomeBV <$> getBV128Addr ar
-    F.Mem256 _ar -> error "XXX: TODO"
+    F.Mem256 ar  -> SomeBV <$> getBV256Addr ar
     F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
     F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
     F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
@@ -265,13 +283,16 @@ getSignExtendedValue v out_w =
     F.Mem32  ar   -> mk =<< getBV32Addr ar
     F.Mem64  ar   -> mk =<< getBV64Addr ar
     F.Mem128 ar   -> mk =<< getBV128Addr ar
+    F.Mem256 ar   -> mk =<< getBV256Addr ar
 
     F.ByteReg (F.LowReg8  r) -> mk $ reg_low8  $ X86_GP $ F.Reg64 r
     F.ByteReg (F.HighReg8 r) -> mk $ reg_high8 $ X86_GP $ F.Reg64 r
     F.WordReg  r                    -> mk (reg16Loc r)
     F.DWordReg r                    -> mk (reg32Loc r)
     F.QWordReg r                    -> mk (reg64Loc r)
-    F.XMMReg r                      -> mk (fullRegister $ X86_XMMReg r)
+
+    F.XMMReg r                      -> mk (xmm_avx r)
+    F.YMMReg r                      -> mk (ymm r)
 
     F.ByteImm  i                    -> return $! bvLit out_w (toInteger i)
     F.WordImm  i                    -> return $! bvLit out_w (toInteger i)
@@ -354,6 +375,15 @@ getAddrRegSegmentOrImm v =
 
 -- | Get a XMM value
 readXMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 128))
-readXMMValue (F.XMMReg r) = getReg $ X86_XMMReg r
+readXMMValue (F.XMMReg r) = get (xmm_avx r)
 readXMMValue (F.Mem128 a) = readBVAddress a xmmMemRepr
 readXMMValue _ = fail "XMM Instruction given unexpected value."
+
+-- | Get a YMM value
+readYMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 256))
+readYMMValue (F.YMMReg r) = get (ymm r)
+readYMMValue (F.Mem256 a) = readBVAddress a ymmMemRepr
+readYMMValue _ = fail "YMM Instruction given unexpected value."
+
+
+

@@ -57,6 +57,9 @@ module Data.Macaw.X86.Generator
   , getRegValue
   , setReg
   , incAddr
+    -- * AVX mode
+  , isAVX
+  , inAVX
   ) where
 
 import           Control.Lens
@@ -235,6 +238,15 @@ data GenState st_s ids = GenState
        , genAddr      :: !(MemSegmentOff 64)
          -- ^ Address of instruction we are translating
        , genMemory    :: !(Memory 64)
+         -- ^ The memory
+
+       , avxMode      :: !Bool
+         {- ^ This indicates if we are translating
+           an AVX instruction. If so, writing to
+           an XMM register also clears that upper
+           128-bit of the corresponding YMM register.
+           This does not happen, however, if we we
+           are working with an SSE instruction. -}
        }
 
 -- | Create a gen result from a state result.
@@ -340,6 +352,27 @@ addArchTermStmt ts = do
     return $ GenResult { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
                        , resState = Nothing
                        }
+
+-- | Are we in AVX mode?
+isAVX :: X86Generator st ids Bool
+isAVX = do gs <- getState
+           return $! avxMode gs
+
+-- | Set the AVX mode.
+-- See also: 'inAVX'.
+setAVX :: Bool -> X86Generator st ids ()
+setAVX b = modGenState $ modify $ \g -> g { avxMode = b }
+
+-- | Switch to AVX mode for the duration
+-- of the computation, then restore the
+-- original mode.
+inAVX :: X86Generator st ids a -> X86Generator st ids a
+inAVX m =
+  do old <- isAVX
+     setAVX True
+     a <- m
+     setAVX old
+     return a
 
 -- | Create a new assignment identifier
 newAssignID :: X86Generator st_s ids (AssignId ids tp)
