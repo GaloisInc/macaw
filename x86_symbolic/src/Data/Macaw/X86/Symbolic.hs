@@ -67,7 +67,7 @@ type instance ArchRegContext M.X86_64
    <+> (EmptyCtx ::> M.BVType 3)
    <+> CtxRepeat 8 (M.BVType 2)
    <+> CtxRepeat 8 (M.BVType 80)
-   <+> CtxRepeat 16 (M.BVType 128)
+   <+> CtxRepeat 16 (M.BVType 256)
 
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
 x86RegName M.X86_IP     = C.systemSymbol "!ip"
@@ -77,7 +77,7 @@ x86RegName (M.X87_StatusReg r) = C.systemSymbol $ "!x87Status" ++ show r
 x86RegName M.X87_TopReg = C.systemSymbol $ "!x87Top"
 x86RegName (M.X87_TagReg r) = C.systemSymbol $ "!x87Tag" ++ show r
 x86RegName (M.X87_FPUReg r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X86_XMMReg r) = C.systemSymbol $ "!" ++ show r
+x86RegName (M.X86_YMMReg r) = C.systemSymbol $ "!" ++ show r
 
 gpReg :: Int -> M.X86Reg (M.BVType 64)
 gpReg = M.X86_GP . F.Reg64 . fromIntegral
@@ -98,7 +98,7 @@ x86RegAssignment =
   <++> (Empty :> M.X87_TopReg)
   <++> (repeatAssign (M.X87_TagReg . fromIntegral)    :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 2)))
   <++> (repeatAssign (M.X87_FPUReg . F.mmxReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 80)))
-  <++> (repeatAssign (M.X86_XMMReg . F.xmmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 128)))
+  <++> (repeatAssign (M.X86_YMMReg . F.ymmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 256)))
 
 ------------------------------------------------------------------------
 -- Other X86 specific
