@@ -199,10 +199,9 @@ getSomeBVLocation v =
     F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
     F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
     F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
-    F.ByteReg  r
-      | Just r64 <- F.is_low_reg r  -> mk (reg_low8  $ X86_GP r64)
-      | Just r64 <- F.is_high_reg r -> mk (reg_high8 $ X86_GP r64)
-      | otherwise                   -> fail "unknown r8"
+    F.ByteReg  (F.LowReg8  r) -> mk $ reg_low8  $ X86_GP $ F.Reg64 r
+    F.ByteReg  (F.HighReg8 r) -> mk $ reg_high8 $ X86_GP $ F.Reg64 r
+    F.ByteReg  _ -> error "internal: getSomeBVLocation illegal ByteReg"
     F.WordReg  r -> mk (reg16Loc r)
     F.DWordReg r -> mk (reg32Loc r)
     F.QWordReg r -> mk (reg64Loc r)
@@ -267,10 +266,8 @@ getSignExtendedValue v out_w =
     F.Mem64  ar   -> mk =<< getBV64Addr ar
     F.Mem128 ar   -> mk =<< getBV128Addr ar
 
-    F.ByteReg  r
-      | Just r64 <- F.is_low_reg r  -> mk (reg_low8  $ X86_GP r64)
-      | Just r64 <- F.is_high_reg r -> mk (reg_high8 $ X86_GP r64)
-      | otherwise                   -> fail "unknown r8"
+    F.ByteReg (F.LowReg8  r) -> mk $ reg_low8  $ X86_GP $ F.Reg64 r
+    F.ByteReg (F.HighReg8 r) -> mk $ reg_high8 $ X86_GP $ F.Reg64 r
     F.WordReg  r                    -> mk (reg16Loc r)
     F.DWordReg r                    -> mk (reg32Loc r)
     F.QWordReg r                    -> mk (reg64Loc r)
@@ -332,10 +329,8 @@ getAddrRegOrSegment v =
     F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
     F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
 
-    F.ByteReg  r
-      | Just r64 <- F.is_low_reg r  -> pure $ Some $ HasRepSize  ByteRepVal (reg_low8 $ X86_GP r64)
-      | Just r64 <- F.is_high_reg r -> pure $ Some $ HasRepSize  ByteRepVal (reg_high8 $ X86_GP r64)
-      | otherwise                   -> fail "unknown r8"
+    F.ByteReg (F.LowReg8  r) -> pure $ Some $ HasRepSize  ByteRepVal $ reg_low8  $ X86_GP $ F.Reg64 r
+    F.ByteReg (F.HighReg8 r) -> pure $ Some $ HasRepSize  ByteRepVal $ reg_high8 $ X86_GP $ F.Reg64 r
     F.WordReg  r                    -> pure $ Some $ HasRepSize  WordRepVal (reg16Loc r)
     F.DWordReg r                    -> pure $ Some $ HasRepSize DWordRepVal (reg32Loc r)
     F.QWordReg r                    -> pure $ Some $ HasRepSize QWordRepVal (reg64Loc r)

@@ -277,14 +277,15 @@ disassembleBlock mem nonce_gen loc max_size = do
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
-initialX86AbsState addr =
-  top & setAbsIP addr
-      & absRegState . boundValue sp_reg .~ concreteStackOffset (relativeSegmentAddr addr) 0
-        -- x87 top register points to top of stack.
-      & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
-        -- Direction flag is initially zero.
-      & absRegState . boundValue DF .~ BoolConst False
-      & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
+initialX86AbsState addr
+  = top
+  & setAbsIP addr
+  & absRegState . boundValue sp_reg .~ concreteStackOffset (relativeSegmentAddr addr) 0
+  -- x87 top register points to top of stack.
+  & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
+  -- Direction flag is initially zero.
+  & absRegState . boundValue DF .~ BoolConst False
+  & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
 
 preserveFreeBSDSyscallReg :: X86Reg tp -> Bool
 preserveFreeBSDSyscallReg r
@@ -504,7 +505,7 @@ x86_64_info preservePred =
                    , archEndianness     = LittleEndian
                    , jumpTableEntrySize = 8
                    , disassembleFn      = disassembleBlockFromAbsState
-                   , mkInitialAbsState = \_ -> initialX86AbsState
+                   , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s
                    , postCallAbsState = x86PostCallAbsState

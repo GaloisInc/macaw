@@ -364,7 +364,7 @@ x86SyscallArgumentRegs :: [ X86Reg (BVType 64) ]
 x86SyscallArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.R10, F.R8, F.R9 ]
 
 gpRegList :: [X86Reg (BVType 64)]
-gpRegList = [X86_GP (F.reg64 i) | i <- [0..15]]
+gpRegList = [X86_GP (F.Reg64 i) | i <- [0..15]]
 
 flagRegList :: [X86Reg BoolType]
 flagRegList = X86_FlagReg <$> R.flagList

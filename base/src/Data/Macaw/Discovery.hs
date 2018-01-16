@@ -885,20 +885,17 @@ mkFunState :: NonceGenerator (ST s) ids
            -> ArchSegmentOff arch
            -> FunState arch s ids
 mkFunState gen s rsn addr = do
-  let info = archInfo s
-  let mem  = memory s
   let faddr = FoundAddr { foundReason = rsn
-                        , foundAbstractState = mkInitialAbsState info mem addr
+                        , foundAbstractState = mkInitialAbsState (archInfo s) (memory s) addr
                         }
-  let fs0 = FunState { funNonceGen = gen
-                     , curFunAddr  = addr
-                     , _curFunCtx  = s
-                     , _curFunBlocks = Map.empty
-                     , _foundAddrs = Map.singleton addr faddr
-                     , _reverseEdges = Map.empty
-                     , _frontier   = Set.singleton addr
-                     }
-  fs0
+   in FunState { funNonceGen = gen
+               , curFunAddr  = addr
+               , _curFunCtx  = s
+               , _curFunBlocks = Map.empty
+               , _foundAddrs = Map.singleton addr faddr
+               , _reverseEdges = Map.empty
+               , _frontier   = Set.singleton addr
+               }
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
 mkFunInfo fs =
@@ -929,7 +926,7 @@ analyzeFunction :: (ArchSegmentOff arch -> ST s ())
                 -> DiscoveryState arch
                 -- ^ The current binary information.
                 -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-analyzeFunction logFn addr rsn s = do
+analyzeFunction logFn addr rsn s =
   case Map.lookup addr (s^.funInfo) of
     Just finfo -> pure (s, finfo)
     Nothing -> do

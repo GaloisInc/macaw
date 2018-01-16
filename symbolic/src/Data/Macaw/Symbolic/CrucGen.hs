@@ -19,9 +19,15 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Symbolic.CrucGen
-  ( CrucGenArchFunctions(..)
+  ( MacawSymbolicArchFunctions(..)
+  , crucArchRegTypes
   , MacawExt
   , MacawStmtExtension(..)
+  , MacawFunctionArgs
+  , MacawFunctionResult
+  , ArchAddrCrucibleType
+  , MacawCrucibleRegTypes
+  , ArchRegStruct
     -- ** Operations for implementing new backends.
   , CrucGen
   , MacawMonad
@@ -29,6 +35,7 @@ module Data.Macaw.Symbolic.CrucGen
   , addMacawBlock
   , addParsedBlock
   , nextStatements
+  , MemSegmentMap
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -43,6 +50,7 @@ import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -61,13 +69,24 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.Symbolic.PersistentState
 
+
+-- | List of crucible types for architecture.
+type MacawCrucibleRegTypes (arch :: *) = CtxToCrucibleType (ArchRegContext arch)
+
+type ArchRegStruct (arch :: *) = C.StructType (MacawCrucibleRegTypes arch)
+
+type ArchAddrCrucibleType arch = C.BVType (M.ArchAddrWidth arch)
+
+type MacawFunctionArgs arch = EmptyCtx ::> ArchRegStruct arch
+type MacawFunctionResult arch = ArchRegStruct arch
+
 ------------------------------------------------------------------------
 -- CrucPersistentState
 
 -- | Architecture-specific information needed to translate from Macaw to Crucible
-data CrucGenArchFunctions arch
-  = CrucGenArchFunctions
-  { crucGenArchConstraints :: !(forall a . (M.MemWidth (M.ArchAddrWidth arch) => a) -> a)
+data MacawSymbolicArchFunctions arch
+  = MacawSymbolicArchFunctions
+  { crucGenArchConstraints :: !(forall a . (M.RegisterInfo (M.ArchReg arch) => a) -> a)
   , crucGenRegAssignment :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
     -- ^ Map from indices in the ArchRegContext to the associated register.
   , crucGenArchRegName :: !(forall tp . M.ArchReg arch tp -> C.SolverSymbol)
@@ -86,6 +105,13 @@ data CrucGenArchFunctions arch
      -- ^ Generate crucible for architecture-specific terminal statement.
   }
 
+-- | Return types of registers in Crucible
+crucArchRegTypes :: MacawSymbolicArchFunctions arch
+                 -> Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))
+crucArchRegTypes archFns = crucGenArchConstraints archFns $
+    typeCtxToCrucible (fmapFC M.typeRepr regAssign)
+  where regAssign = crucGenRegAssignment archFns
+
 ------------------------------------------------------------------------
 -- MacawStmtExtension
 
@@ -93,12 +119,22 @@ data MacawStmtExtension (arch :: *) (f :: C.CrucibleType -> *) (tp :: C.Crucible
   MacawReadMem :: !(M.MemRepr tp)
                -> !(f (ArchAddrCrucibleType arch))
                -> MacawStmtExtension arch f (ToCrucibleType tp)
+  MacawCondReadMem :: !(M.MemRepr tp)
+                   -> !(f C.BoolType)
+                   -> !(f (ArchAddrCrucibleType arch))
+                   -> !(f (ToCrucibleType tp))
+                   -> MacawStmtExtension arch f (ToCrucibleType tp)
   MacawWriteMem :: !(M.MemRepr tp)
                -> !(f (ArchAddrCrucibleType arch))
                -> !(f (ToCrucibleType tp))
                -> MacawStmtExtension arch f C.UnitType
   MacawFreshSymbolic :: !(M.TypeRepr tp)
                      -> MacawStmtExtension arch f (ToCrucibleType tp)
+  MacawCall :: !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch)))
+               -- ^ Types of fields in register struct
+            -> !(f (ArchRegStruct arch))
+               -- ^ Arguments to call.
+            -> MacawStmtExtension arch f (ArchRegStruct arch)
 
 instance FunctorFC (MacawStmtExtension arch) where
   fmapFC = fmapFCDefault
@@ -110,8 +146,10 @@ instance TraversableFC (MacawStmtExtension arch) where
   traverseFC f a0 =
     case a0 of
       MacawReadMem  r a   -> MacawReadMem r <$> f a
+      MacawCondReadMem r c a d -> MacawCondReadMem r <$> f c <*> f a <*> f d
       MacawWriteMem r a v -> MacawWriteMem r <$> f a <*> f v
       MacawFreshSymbolic r -> pure (MacawFreshSymbolic r)
+      MacawCall regTypes regs -> MacawCall regTypes <$> f regs
 
 sexpr :: String -> [Doc] -> Doc
 sexpr s [] = text s
@@ -120,14 +158,18 @@ sexpr s l  = parens (text s <+> hsep l)
 instance C.PrettyApp (MacawStmtExtension arch) where
   ppApp f a0 =
     case a0 of
-      MacawReadMem r a     -> sexpr "macawReadMem"  [pretty r, f a]
-      MacawWriteMem r a v  -> sexpr "macawWriteMem" [pretty r, f a, f v]
+      MacawReadMem r a     -> sexpr "macawReadMem"       [pretty r, f a]
+      MacawCondReadMem r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
+      MacawWriteMem r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
+      MacawCall _ regs -> sexpr "macawCall" [ f regs ]
 
 instance C.TypeApp (MacawStmtExtension arch) where
   appType (MacawReadMem r _) = memReprToCrucible r
+  appType (MacawCondReadMem r _ _ _) = memReprToCrucible r
   appType (MacawWriteMem _ _ _) = C.knownRepr
   appType (MacawFreshSymbolic r) = typeToCrucible r
+  appType (MacawCall regTypes _) = C.StructRepr regTypes
 
 ------------------------------------------------------------------------
 -- MacawExt
@@ -139,20 +181,32 @@ type instance C.StmtExtension (MacawExt arch) = MacawStmtExtension arch
 
 instance C.IsSyntaxExtension (MacawExt arch)
 
+-- | Map from indices of segments without a fixed base address to a
+-- global variable storing the base address.
+--
+-- This uses a global variable so that we can do the translation, and then
+-- decide where to locate it without requiring us to also pass the values
+-- around arguments.
+type MemSegmentMap w = Map M.RegionIndex (CR.GlobalVar (C.BVType w))
+
 -- | State used for generating blocks
 data CrucGenState arch ids s
    = CrucGenState
-   { translateFns :: !(CrucGenArchFunctions arch)
-   , crucCtx :: !(CrucGenContext arch s)
-   , crucPState :: !(CrucPersistentState ids s)
+   { translateFns       :: !(MacawSymbolicArchFunctions arch)
+   , crucMemBaseAddrMap :: !(MemSegmentMap (M.ArchAddrWidth arch))
+     -- ^ Map from memory region to base address
+   , crucRegIndexMap :: !(RegIndexMap arch)
+     -- ^ Map from architecture register to Crucible/Macaw index pair.
+   , crucPState      :: !(CrucPersistentState ids s)
      -- ^ State that persists across blocks.
+   , crucRegisterReg :: !(CR.Reg s (ArchRegStruct arch))
    , macawPositionFn :: !(M.ArchAddrWord arch -> C.Position)
      -- ^ Map from offset to Crucible position.
    , blockLabel :: (CR.Label s)
      -- ^ Label for this block we are translating
-   , codeOff :: !(M.ArchAddrWord arch)
+   , codeOff    :: !(M.ArchAddrWord arch)
      -- ^ Offset
-   , prevStmts :: ![C.Posd (CR.Stmt (MacawExt arch) s)]
+   , prevStmts  :: ![C.Posd (CR.Stmt (MacawExt arch) s)]
      -- ^ List of states in reverse order
    }
 
@@ -189,9 +243,6 @@ instance Monad (CrucGen arch ids s) where
 instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
   get = CrucGen $ \s cont -> cont s s
   put s = CrucGen $ \_ cont -> cont s ()
-
-getCtx :: CrucGen arch ids s (CrucGenContext arch s)
-getCtx = gets crucCtx
 
 -- | Get current position
 getPos :: CrucGen arch ids s C.Position
@@ -244,21 +295,20 @@ evalAtom av = do
 crucibleValue :: C.App (MacawExt arch) (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
 crucibleValue app = evalAtom (CR.EvalApp app)
 
--- | Evaluate the crucible app and return a reference to the result.
-getRegInput :: Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch)
-            -> IndexPair (ArchRegContext arch) tp
+-- | Return the value associated with the given register
+getRegValue :: M.ArchReg arch tp
             -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-getRegInput regAssign idx = do
-  ctx <- getCtx
-  archConstraints ctx $ do
-  -- Make atom
-  let regStruct = CR.Atom { CR.atomPosition = C.InternalPos
-                          , CR.atomId = 0
-                          , CR.atomSource = CR.FnInput
-                          , CR.typeOfAtom = regStructRepr ctx
-                          }
-  let tp = M.typeRepr (regAssign Ctx.! macawIndex idx)
-  crucibleValue (C.GetStruct regStruct (crucibleIndex idx) (typeToCrucible tp))
+getRegValue r = do
+  archFns <- gets translateFns
+  idxMap  <- gets crucRegIndexMap
+  crucGenArchConstraints archFns $ do
+  case MapF.lookup r idxMap of
+    Nothing -> fail $ "internal: Register is not bound."
+    Just idx -> do
+      reg <- gets crucRegisterReg
+      regStruct <- evalAtom (CR.ReadReg reg)
+      let tp = M.typeRepr (crucGenRegAssignment archFns Ctx.! macawIndex idx)
+      crucibleValue (C.GetStruct regStruct (crucibleIndex idx) (typeToCrucible tp))
 
 v2c :: M.Value arch ids tp
     -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
@@ -304,8 +354,8 @@ bvAdc w x y c = do
 appToCrucible :: M.App (M.Value arch ids) tp
               -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 appToCrucible app = do
-  ctx <- getCtx
-  archConstraints ctx $ do
+  archFns <- gets translateFns
+  crucGenArchConstraints archFns $ do
   case app of
     M.Eq x y -> do
       let btp = typeToCrucibleBase (M.typeRepr x)
@@ -383,18 +433,18 @@ appToCrucible app = do
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 valueToCrucible v = do
- ctx <- getCtx
- archConstraints ctx $ do
-  case v of
+ archFns <- gets translateFns
+ crucGenArchConstraints archFns $ do
+ case v of
     M.BVValue w c -> bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
     -- In this case,
     M.RelocatableValue w addr
-      | M.addrBase addr == 0 ->
-        crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
+      | M.addrBase addr == 0 -> do
+          crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
       | otherwise -> do
           let idx = M.addrBase addr
-          segMap <- memBaseAddrMap <$> getCtx
+          segMap <- gets crucMemBaseAddrMap
           case Map.lookup idx segMap of
             Just g -> do
               a <- evalAtom (CR.ReadGlobal g)
@@ -403,10 +453,7 @@ valueToCrucible v = do
             Nothing ->
               fail $ "internal: No Crucible address associated with segment."
     M.Initial r -> do
-      case MapF.lookup r (regIndexMap ctx) of
-        Just idx -> do
-          getRegInput (macawRegAssign ctx) idx
-        Nothing -> fail $ "internal: Register is not bound."
+      getRegValue r
     M.AssignedValue asgn -> do
       let idx = M.assignId asgn
       amap <- use $ crucPStateLens . assignValueMapLens
@@ -422,33 +469,20 @@ freshSymbolic repr = evalMacawStmt (MacawFreshSymbolic repr)
 evalMacawStmt :: MacawStmtExtension arch (CR.Atom s) tp -> CrucGen arch ids s (CR.Atom s tp)
 evalMacawStmt s = evalAtom (CR.EvalExt s)
 
--- | Read the given memory address
-callReadMem :: M.ArchAddrValue arch ids
-            -> M.MemRepr tp
-            -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-callReadMem addr repr = do
-  caddr <- valueToCrucible addr
-  evalMacawStmt (MacawReadMem repr caddr)
-
-callWriteMem :: M.ArchAddrValue arch ids
-             -> M.MemRepr tp
-             -> M.Value arch ids tp
-             -> CrucGen arch ids s ()
-callWriteMem addr repr val = do
-  caddr <- valueToCrucible addr
-  cval  <- valueToCrucible val
-  _ <- evalMacawStmt (MacawWriteMem repr caddr cval)
-  pure ()
-
 assignRhsToCrucible :: M.AssignRhs arch (M.Value arch ids) tp
                     -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 assignRhsToCrucible rhs =
   case rhs of
     M.EvalApp app -> appToCrucible app
     M.SetUndefined mrepr -> freshSymbolic mrepr
-    M.ReadMem addr repr -> callReadMem addr repr
-    M.CondReadMem repr c addr def -> do
-      undefined repr c addr def
+    M.ReadMem addr repr -> do
+      caddr <- valueToCrucible addr
+      evalMacawStmt (MacawReadMem repr caddr)
+    M.CondReadMem repr cond addr def -> do
+      ccond <- valueToCrucible cond
+      caddr <- valueToCrucible addr
+      cdef <- valueToCrucible def
+      evalMacawStmt (MacawCondReadMem repr ccond caddr cdef)
     M.EvalArchFn f _ -> do
       fns <- translateFns <$> get
       crucGenArchFn fns f
@@ -462,7 +496,9 @@ addMacawStmt stmt =
       a <- assignRhsToCrucible (M.assignRhs asgn)
       crucPStateLens . assignValueMapLens %= MapF.insert idx (MacawCrucibleValue a)
     M.WriteMem addr repr val -> do
-      callWriteMem addr repr val
+      caddr <- valueToCrucible addr
+      cval  <- valueToCrucible val
+      void $ evalMacawStmt (MacawWriteMem repr caddr cval)
     M.PlaceHolderStmt _vals msg -> do
       cmsg <- crucibleValue (C.TextLit (Text.pack msg))
       addTermStmt (CR.ErrorStmt cmsg)
@@ -490,9 +526,9 @@ createRegStruct :: forall arch ids s
                 .  M.RegState (M.ArchReg arch) (M.Value arch ids)
                 -> CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
 createRegStruct regs = do
-  ctx <- getCtx
-  archConstraints ctx $ do
-  let regAssign = macawRegAssign ctx
+  archFns <- gets translateFns
+  crucGenArchConstraints archFns $ do
+  let regAssign = crucGenRegAssignment archFns
   let tps = fmapFC M.typeRepr regAssign
   let a = fmapFC (\r -> regs ^. M.boundValue r) regAssign
   fields <- macawAssignToCrucM valueToCrucible a
@@ -539,20 +575,29 @@ runMacawMonad s (MacawMonad m) = runStateT (runExceptT m) s
 mmExecST :: ST s a -> MacawMonad arch ids s a
 mmExecST = MacawMonad . lift . lift
 
-runCrucGen :: CrucGenArchFunctions arch
-           -> CrucGenContext arch s
+runCrucGen :: forall arch ids s
+           .  MacawSymbolicArchFunctions arch
+           -> MemSegmentMap (M.ArchAddrWidth arch)
+              -- ^ Base address map
            -> (M.ArchAddrWord arch -> C.Position)
               -- ^ Function for generating position from offset from start of this block.
            -> M.ArchAddrWord arch
-              -- ^ Offset
+              -- ^ Offset of this block
            -> CR.Label s
+              -- ^ Label for this block
+           -> CR.Reg s (ArchRegStruct arch)
+              -- ^ Crucible register for struct containing all Macaw registers.
            -> CrucGen arch ids s ()
            -> MacawMonad arch ids s (CR.Block (MacawExt arch) s (MacawFunctionResult arch), M.ArchAddrWord arch)
-runCrucGen tfns ctx posFn off lbl action = do
+runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstraints archFns $ do
   ps <- get
-  let s0 = CrucGenState { translateFns = tfns
-                        , crucCtx = ctx
+  let regAssign = crucGenRegAssignment archFns
+  let crucRegTypes = crucArchRegTypes archFns
+  let s0 = CrucGenState { translateFns = archFns
+                        , crucMemBaseAddrMap = baseAddrMap
+                        , crucRegIndexMap = mkRegIndexMap regAssign (Ctx.size crucRegTypes)
                         , crucPState = ps
+                        , crucRegisterReg = regReg
                         , macawPositionFn = posFn
                         , blockLabel = lbl
                         , codeOff    = off
@@ -561,22 +606,23 @@ runCrucGen tfns ctx posFn off lbl action = do
   let cont _s () = fail "Unterminated crucible block"
   (s, tstmt)  <- mmExecST $ unCrucGen action s0 cont
   put (crucPState s)
-  let termPos = macawPositionFn s (codeOff s)
+  let termPos = posFn (codeOff s)
   let stmts = Seq.fromList (reverse (prevStmts s))
   let term = C.Posd termPos tstmt
   let blk = CR.mkBlock (CR.LabelID lbl) Set.empty stmts term
   pure (blk, codeOff s)
 
 addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
-              => CrucGenArchFunctions arch
-              -> CrucGenContext arch s
+              => MacawSymbolicArchFunctions arch
+              -> MemSegmentMap (M.ArchAddrWidth arch)
+              -- ^ Base address map
               -> Map Word64 (CR.Label s)
                  -- ^ Map from block index to Crucible label
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
               -> MacawMonad arch ids s (CR.Block (MacawExt arch) s (MacawFunctionResult arch))
-addMacawBlock tfns ctx blockLabelMap posFn b = do
+addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
     case Map.lookup idx blockLabelMap of
@@ -584,19 +630,59 @@ addMacawBlock tfns ctx blockLabelMap posFn b = do
         pure lbl
       Nothing ->
         throwError $ "Internal: Could not find block with index " ++ show idx
-  fmap fst $ runCrucGen tfns ctx posFn 0 lbl $ do
+  let archRegStructRepr = C.StructRepr (crucArchRegTypes archFns)
+  let regReg = CR.Reg { CR.regPosition = posFn 0
+                      , CR.regId = 0
+                      , CR.typeOfReg = archRegStructRepr
+                      }
+  let regStruct = CR.Atom { CR.atomPosition = C.InternalPos
+                          , CR.atomId = 0
+                          , CR.atomSource = CR.FnInput
+                          , CR.typeOfAtom = archRegStructRepr
+                          }
+  fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
+    addStmt $ CR.SetReg regReg regStruct
     mapM_ addMacawStmt (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
 
-addMacawParsedTermStmt :: M.ParsedTermStmt arch ids
+parsedBlockLabel :: (Ord addr, Show addr)
+                 => Map (addr, Word64) (CR.Label s)
+                    -- ^ Map from block addresses to starting label
+                 -> addr
+                 -> Word64
+                 -> CR.Label s
+parsedBlockLabel blockLabelMap addr idx =
+  fromMaybe (error $ "Could not find entry point: " ++ show addr) $
+  Map.lookup (addr, idx) blockLabelMap
+
+addMacawParsedTermStmt :: Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+                          -- ^ Map from block addresses to starting label
+                       -> M.ArchSegmentOff arch
+                          -- ^ Address of this block
+                       -> M.ParsedTermStmt arch ids
                        -> CrucGen arch ids s ()
-addMacawParsedTermStmt tstmt =
+addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
+ archFns <- translateFns <$> get
+ crucGenArchConstraints archFns $ do
   case tstmt of
-    M.ParsedCall{} -> undefined
+    M.ParsedCall regs mret -> do
+      curRegs <- createRegStruct regs
+      newRegs <- evalMacawStmt (MacawCall (crucArchRegTypes archFns) curRegs)
+      case mret of
+        Just nextAddr -> do
+          regReg <- gets crucRegisterReg
+          addStmt $ CR.SetReg regReg newRegs
+          addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
+        Nothing ->
+          addTermStmt $ CR.Return newRegs
     M.ParsedJump{} -> undefined
     M.ParsedLookupTable{} -> undefined
     M.ParsedReturn{} -> undefined
-    M.ParsedIte{} -> undefined
+    M.ParsedIte c t f -> do
+      crucCond <- valueToCrucible c
+      let tlbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent t)
+      let flbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent f)
+      addTermStmt $! CR.Br crucCond tlbl flbl
     M.ParsedArchTermStmt{} -> undefined
     M.ParsedTranslateError{} -> undefined
     M.ClassifyFailure{} -> undefined
@@ -608,47 +694,53 @@ nextStatements tstmt =
     _ -> []
 
 addStatementList :: M.MemWidth (M.ArchAddrWidth arch)
-                 => CrucGenArchFunctions arch
-                 -> CrucGenContext arch s
+                 => MacawSymbolicArchFunctions arch
+                 -> MemSegmentMap (M.ArchAddrWidth arch)
+                 -- ^ Base address map
                  -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
                  -- ^ Map from block index to Crucible label
                  -> M.ArchSegmentOff arch
-                 -- ^ Address of statements
+                 -- ^ Address of block that starts statements
                  -> (M.ArchAddrWord arch -> C.Position)
                     -- ^ Function for generating position from offset from start of this block.
+                 -> CR.Reg s (ArchRegStruct arch)
+                    -- ^ Register that stores Macaw registers
                  -> [(M.ArchAddrWord arch, M.StatementList arch ids)]
                  -> [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
                  -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addStatementList _ _ _ _ _ [] rlist =
+addStatementList _ _ _ _ _ _ [] rlist =
   pure (reverse rlist)
-addStatementList tfns ctx blockLabelMap addr posFn ((off,stmts):rest) r = do
+addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg ((off,stmts):rest) r = do
   let idx = M.stmtsIdent stmts
   lbl <-
-    case Map.lookup (addr, idx) blockLabelMap of
+    case Map.lookup (startAddr, idx) blockLabelMap of
       Just lbl ->
         pure lbl
       Nothing ->
-        throwError $ "Internal: Could not find block with address " ++ show addr ++ " index " ++ show idx
+        throwError $ "Internal: Could not find block with address " ++ show startAddr ++ " index " ++ show idx
   (b,off') <-
-    runCrucGen tfns ctx posFn off lbl $ do
+    runCrucGen archFns baseAddrMap posFn off lbl regReg $ do
       mapM_ addMacawStmt (M.stmtsNonterm stmts)
-      addMacawParsedTermStmt (M.stmtsTerm stmts)
+      addMacawParsedTermStmt blockLabelMap startAddr (M.stmtsTerm stmts)
   let new = (off',) <$> nextStatements (M.stmtsTerm stmts)
-  addStatementList tfns ctx blockLabelMap addr posFn (new ++ rest) (b:r)
+  addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg (new ++ rest) (b:r)
 
 addParsedBlock :: forall arch ids s
                .  M.MemWidth (M.ArchAddrWidth arch)
-               => CrucGenArchFunctions arch
-               -> CrucGenContext arch s
+               => MacawSymbolicArchFunctions arch
+               -> MemSegmentMap (M.ArchAddrWidth arch)
+               -- ^ Base address map
                -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
                -- ^ Map from block index to Crucible label
                -> (M.ArchSegmentOff arch -> C.Position)
                -- ^ Function for generating position from offset from start of this block.
+               -> CR.Reg s (ArchRegStruct arch)
+                    -- ^ Register that stores Macaw registers
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock tfns ctx blockLabelMap posFn b = do
+addParsedBlock tfns baseAddrMap blockLabelMap posFn regReg b = do
   let base = M.pblockAddr b
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
         where Just r = M.incSegmentOff base (toInteger off)
-  addStatementList tfns ctx blockLabelMap (M.pblockAddr b) thisPosFn [(0, M.blockStatementList b)] []
+  addStatementList tfns baseAddrMap blockLabelMap (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []

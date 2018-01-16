@@ -713,8 +713,8 @@ exec_sh lw l val val_setter cf_setter of_setter = do
     case val of
       F.ByteImm i ->
         pure (bvLit n8 (toInteger i))
-      F.ByteReg r | Just r64 <- F.is_low_reg r -> do
-        get (reg_low8  $ R.X86_GP r64)
+      F.ByteReg (F.LowReg8 r) -> do
+        get $ reg_low8  $ R.X86_GP $ F.Reg64 r
       _ -> fail "Count could not be interpreted."
   v <- get l
   -- The intel manual says that the count is masked to give an upper

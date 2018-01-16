@@ -21,9 +21,6 @@ module Data.Macaw.Memory.ElfLoader
   , LoadStyle(..)
   , LoadOptions(..)
   , memoryForElf
-    -- * High-level exports
-  , readElf
-  , loadExecutable
     -- * Symbol resolution utilities
   , resolveElfFuncSymbols
   , ppElfUnresolvedSymbols
@@ -39,10 +36,8 @@ import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
 import           Data.Either
 import           Data.ElfEdit
-  ( SomeElf(..)
-  , ElfIntType
+  ( ElfIntType
   , ElfWordType
-  , ElfGetResult(..)
 
   , Elf
   , elfSections
@@ -54,7 +49,6 @@ import           Data.ElfEdit
   , elfMachine
   , ElfData(..)
 
-  , ElfParseError
   , ElfSection
   , ElfSectionIndex(..)
   , elfSectionIndex
@@ -81,10 +75,8 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-import           Data.Parameterized.Some
 import qualified Data.Vector as V
 import           Numeric (showHex)
-import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.Memory
@@ -476,67 +468,35 @@ memoryForElf opt e =
       LoadBySection -> memoryForElfSections e
       LoadBySegment -> memoryForElfSegments e
 
--- | Pretty print parser errors to stderr.
-ppErrors :: (Integral (ElfWordType w), Show (ElfWordType w))
-         => FilePath
-         -> [ElfParseError w]
-         -> IO ()
-ppErrors path errl = do
-  when (not (null errl)) $ do
-    hPutStrLn stderr $ "Non-fatal errors during parsing " ++ path
-  forM_ errl $ \e -> do
-    hPutStrLn stderr $ "  " ++ show e
-
--- | This reads the elf file from the given path.
---
--- As a side effect it may print warnings for errors encountered during parsing
--- to stderr.
-readElf :: FilePath -> IO (SomeElf Elf)
-readElf path = do
-  bs <- BS.readFile path
-  case Elf.parseElf bs of
-    ElfHeaderError _ msg -> do
-      fail $ "Could not parse Elf header: " ++ msg
-    Elf32Res errl e -> do
-      ppErrors path errl
-      return (Elf32 e)
-    Elf64Res errl e -> do
-      ppErrors path errl
-      return (Elf64 e)
-
-loadExecutable :: LoadOptions ->  FilePath -> IO (Some Memory)
-loadExecutable opt path = do
-  se <- readElf path
-  case se of
-    Elf64 e -> either fail (return . Some . snd) $ memoryForElf opt e
-    Elf32 e -> either fail (return . Some . snd) $ memoryForElf opt e
-
 ------------------------------------------------------------------------
 -- Elf symbol utilities
 
 -- | Error when resolving symbols.
 data SymbolResolutionError
-   = EmptySymbolName
+   = EmptySymbolName !Int !Elf.ElfSymbolType
      -- ^ Symbol names must be non-empty
    | CouldNotResolveAddr !BSC.ByteString
      -- ^ Symbol address could not be resolved.
+   | MultipleSymbolTables
+     -- ^ The elf file contained multiple symbol tables
 
 instance Show SymbolResolutionError where
-  show EmptySymbolName = "Found empty symbol name"
+  show (EmptySymbolName idx tp ) = "Symbol Num " ++ show idx ++ " " ++ show tp ++ " has an empty name."
   show (CouldNotResolveAddr sym) = "Could not resolve address of " ++ BSC.unpack sym ++ "."
+  show MultipleSymbolTables = "Elf contains multiple symbol tables."
 
 resolveEntry :: Memory w
              -> SectionIndexMap w
-             -> ElfSymbolTableEntry (ElfWordType w)
+             -> (Int,ElfSymbolTableEntry (ElfWordType w))
              -> Maybe (Either SymbolResolutionError
                                 (BS.ByteString, MemSegmentOff w))
-resolveEntry mem secMap ste
+resolveEntry mem secMap (idx,ste)
   -- Check this is a defined function symbol
   | (Elf.steType ste `elem` [ Elf.STT_FUNC, Elf.STT_NOTYPE ]) == False = Nothing
     -- Check symbol is defined
   | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
   -- Check symbol name is non-empty
-  | Elf.steName ste /= "" = Just (Left EmptySymbolName)
+  | Elf.steName ste == "" = Just $ Left $ EmptySymbolName idx (Elf.steType ste)
   -- Lookup absolute symbol
   | Elf.steIndex ste == Elf.SHN_ABS = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
@@ -563,12 +523,17 @@ resolveElfFuncSymbols
   :: forall w
   .  Memory w
   -> SectionIndexMap w
-  -> [ElfSymbolTableEntry (ElfWordType w)]
+  -> Elf w
   -> ( [SymbolResolutionError]
      , [(BS.ByteString, MemSegmentOff w)]
      )
-resolveElfFuncSymbols mem secMap entries = reprConstraints (memAddrWidth mem) $
-    partitionEithers (mapMaybe (resolveEntry mem secMap) entries)
+resolveElfFuncSymbols mem secMap e =
+  case Elf.elfSymtab e of
+    [] -> ([], [])
+    [tbl] ->
+      let entries = V.toList (Elf.elfSymbolTableEntries tbl)
+       in partitionEithers (mapMaybe (resolveEntry mem secMap) (zip [0..] entries))
+    _ -> ([MultipleSymbolTables], [])
 
 ppElfUnresolvedSymbols :: forall w
                        .  MemWidth w
