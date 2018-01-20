@@ -25,7 +25,9 @@ module Data.Macaw.PPC.Arch (
 
 import           GHC.TypeLits
 
+import           Control.Lens ( (^.) )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -404,6 +406,13 @@ memrrToEffectiveAddress memrr = do
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
   G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
+incrementIP :: (PPCArchConstraints ppc) => G.Generator ppc ids s ()
+incrementIP = do
+  rs <- G.getRegs
+  let ipVal = rs ^. MC.boundValue PPC_IP
+  e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
+  G.setRegVal PPC_IP e
+
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
 --
@@ -413,50 +422,68 @@ memrrToEffectiveAddress memrr = do
 ppcInstructionMatcher :: (PPCArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =
   case opc of
-    D.SC -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCSyscall))
-    D.TRAP -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-    D.ATTN -> Just (G.addStmt (MC.ExecArchStmt Attn))
-    D.SYNC -> Just (G.addStmt (MC.ExecArchStmt Sync))
-    D.ISYNC -> Just (G.addStmt (MC.ExecArchStmt Isync))
+    D.SC -> Just $ do
+      incrementIP
+      G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
+    D.TRAP -> Just $ do
+      incrementIP
+      G.finishWithTerminator (MC.ArchTermStmt PPCTrap)
+    D.ATTN -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Attn)
+    D.SYNC -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Sync)
+    D.ISYNC -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Isync)
     D.DCBA ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcba ea))
     D.DCBF ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbf ea))
     D.DCBI ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbi ea))
     D.DCBST ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbst ea))
     D.DCBZ ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbz ea))
     D.DCBZL ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbzl ea))
     D.DCBT ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbt ea th))
     D.DCBTST ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
