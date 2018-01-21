@@ -111,6 +111,8 @@ type BVType = 'BVType
 
 type BoolType = 'BoolType
 
+type TupleType = 'TupleType
+
 -- | A runtime representation of @Type@ for case matching purposes.
 data TypeRepr (tp :: Type) where
   BoolTypeRepr :: TypeRepr BoolType

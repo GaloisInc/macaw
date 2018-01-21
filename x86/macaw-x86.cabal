@@ -42,7 +42,7 @@ library
     Data.Macaw.X86.X86Reg
     Data.Macaw.X86.X87ControlReg
 
-  ghc-options: -Wall -Werror
+  ghc-options: -Wall
   ghc-options: -fno-warn-unticked-promoted-constructors
   ghc-prof-options: -O2 -fprof-auto-top
 
