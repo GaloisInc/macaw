@@ -333,6 +333,8 @@ memrrToEffectiveAddress memrr = do
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
   G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
+-- | A helper to increment the IP by 4, meant to be used to implement
+-- arch-specific statements that need to update the IP (i.e., all but syscalls).
 incrementIP :: (PPCArchConstraints ppc) => G.Generator ppc ids s ()
 incrementIP = do
   rs <- G.getRegs
@@ -346,15 +348,15 @@ incrementIP = do
 -- This includes instructions with special side effects that we don't have a way
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
+--
+-- NOTE: For SC and TRAP (which we treat as system calls), we don't need to
+-- update the IP here, as the update is handled in the abstract interpretation
+-- of system calls in 'postPPCTermStmtAbsState'.
 ppcInstructionMatcher :: (PPCArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =
   case opc of
-    D.SC -> Just $ do
-      incrementIP
-      G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
-    D.TRAP -> Just $ do
-      incrementIP
-      G.finishWithTerminator (MC.ArchTermStmt PPCTrap)
+    D.SC -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
+    D.TRAP -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCTrap)
     D.ATTN -> Just $ do
       incrementIP
       G.addStmt (MC.ExecArchStmt Attn)
