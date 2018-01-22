@@ -77,7 +77,7 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
-  -- These are cache hints
+  -- These are data cache hints
   Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbi   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
@@ -86,6 +86,9 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Dcbzl  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbt   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
   Dcbtst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
+  -- Instruction cache hints
+  Icbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Icbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 4) -> PPCStmt ppc v
 
 instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
@@ -107,6 +110,8 @@ instance TF.TraversableF (PPCStmt ppc) where
       Dcbzl ea -> Dcbzl <$> go ea
       Dcbt ea th -> Dcbt <$> go ea <*> go th
       Dcbtst ea th -> Dcbtst <$> go ea <*> go th
+      Icbi ea -> Icbi <$> go ea
+      Icbt ea ct -> Icbt <$> go ea <*> go ct
 
 instance MC.IsArchStmt (PPCStmt ppc) where
   ppArchStmt pp stmt =
@@ -122,6 +127,8 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Dcbzl ea -> PP.text "ppc_dcbzl" PP.<+> pp ea
       Dcbt ea th -> PP.text "ppc_dcbt" PP.<+> pp ea PP.<+> pp th
       Dcbtst ea th -> PP.text "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
+      Icbi ea -> PP.text "ppc_icbi" PP.<+> pp ea
+      Icbt ea ct -> PP.text "ppc_icbt" PP.<+> pp ea PP.<+> pp ct
 
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
@@ -416,4 +423,17 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
+    D.ICBI ->
+      case operands of
+        D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Icbi ea))
+    D.ICBT ->
+      case operands of
+        D.Memrr memrr D.:< D.U4imm imm D.:< D.Nil -> Just $ do
+          incrementIP
+          ea <- memrrToEffectiveAddress memrr
+          ct <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Icbt ea ct))
     _ -> Nothing
