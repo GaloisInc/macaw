@@ -83,6 +83,8 @@ module Data.Macaw.Memory
   , incAddr
   , addrLeastBit
   , clearAddrLeastBit
+    -- * Symbols
+  , MemSymbol(..)
     -- * Reading
   , MemoryError(..)
   , addrContentsAfter
@@ -762,6 +764,15 @@ instance MemWidth w => Show (MemoryError w) where
     "Attempt to read an unexpected relocation entry at " ++ show a ++ "."
   show (InvalidAddr a)   =
     "Attempt to interpret an invalid address: " ++ show a ++ "."
+
+------------------------------------------------------------------------
+-- Memory symbol
+
+-- | Type for representing a symbol independ of object file format.
+data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
+                             , memSymbolStart :: !(MemSegmentOff w)
+                             , memSymbolSize :: !(MemWord w)
+                             }
 
 ------------------------------------------------------------------------
 -- Memory reading utilities

@@ -21,10 +21,7 @@ module Data.Macaw.Memory.ElfLoader
   , LoadStyle(..)
   , LoadOptions(..)
   , memoryForElf
-    -- * Symbol resolution utilities
   , resolveElfFuncSymbols
-  , ppElfUnresolvedSymbols
-  , elfAddrWidth
   ) where
 
 import           Control.Lens
@@ -485,14 +482,18 @@ instance Show SymbolResolutionError where
   show (CouldNotResolveAddr sym) = "Could not resolve address of " ++ BSC.unpack sym ++ "."
   show MultipleSymbolTables = "Elf contains multiple symbol tables."
 
-resolveEntry :: Memory w
-             -> SectionIndexMap w
-             -> (Int,ElfSymbolTableEntry (ElfWordType w))
-             -> Maybe (Either SymbolResolutionError
-                                (BS.ByteString, MemSegmentOff w))
-resolveEntry mem secMap (idx,ste)
+-- | This resolves an Elf symbol into a MemSymbol if it is likely a
+-- pointer to a resolved function.
+resolveElfFuncSymbol :: Memory w -- ^ Memory object from Elf file.
+                     -> SectionIndexMap w -- ^ Section index mp from memory
+                     -> Int -- ^ Index of symbol
+                     -> ElfSymbolTableEntry (ElfWordType w)
+                     -> Maybe (Either SymbolResolutionError (MemSymbol w))
+resolveElfFuncSymbol mem secMap idx ste
   -- Check this is a defined function symbol
-  | (Elf.steType ste `elem` [ Elf.STT_FUNC, Elf.STT_NOTYPE ]) == False = Nothing
+  -- Some NO_TYPE entries appear to correspond to functions, so we include those.
+  | (Elf.steType ste `elem` [ Elf.STT_FUNC, Elf.STT_NOTYPE ]) == False =
+    Nothing
     -- Check symbol is defined
   | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
   -- Check symbol name is non-empty
@@ -501,7 +502,11 @@ resolveEntry mem secMap (idx,ste)
   | Elf.steIndex ste == Elf.SHN_ABS = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
       case resolveAddr mem 0 (fromIntegral val) of
-        Just addr -> Just $ Right (Elf.steName ste, addr)
+        Just addr -> Just $ Right $
+                     MemSymbol { memSymbolName = Elf.steName ste
+                               , memSymbolStart = addr
+                               , memSymbolSize = fromIntegral (Elf.steSize ste)
+                               }
         Nothing   -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
   -- Lookup symbol stored in specific section
   | otherwise = reprConstraints (memAddrWidth mem) $ do
@@ -511,7 +516,10 @@ resolveEntry mem secMap (idx,ste)
           | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
           , off <- toInteger (elfSectionAddr sec) - toInteger val
           , Just addr <- incSegmentOff base off -> do
-              Just $ Right (Elf.steName ste, addr)
+              Just $ Right $ MemSymbol { memSymbolName = Elf.steName ste
+                                       , memSymbolStart = addr
+                                       , memSymbolSize = fromIntegral (Elf.steSize ste)
+                                       }
         _ -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
 
 -- | Resolve symbol table entries to the addresses in a memory.
@@ -524,23 +532,11 @@ resolveElfFuncSymbols
   .  Memory w
   -> SectionIndexMap w
   -> Elf w
-  -> ( [SymbolResolutionError]
-     , [(BS.ByteString, MemSegmentOff w)]
-     )
+  -> ([SymbolResolutionError], [MemSymbol w])
 resolveElfFuncSymbols mem secMap e =
   case Elf.elfSymtab e of
     [] -> ([], [])
     [tbl] ->
       let entries = V.toList (Elf.elfSymbolTableEntries tbl)
-       in partitionEithers (mapMaybe (resolveEntry mem secMap) (zip [0..] entries))
+       in partitionEithers (mapMaybe (uncurry (resolveElfFuncSymbol mem secMap)) (zip [0..] entries))
     _ -> ([MultipleSymbolTables], [])
-
-ppElfUnresolvedSymbols :: forall w
-                       .  MemWidth w
-                       => Map (MemWord w) [BS.ByteString]
-                       -> Doc
-ppElfUnresolvedSymbols m =
-    text "Could not resolve addresses of ELF symbols" <$$>
-    indent 2 (vcat $ pp <$> Map.toList m)
-  where pp :: (MemWord w, [BS.ByteString]) -> Doc
-        pp (w, nms) = text (showHex w ":") <+> hsep (text . BSC.unpack <$> nms)
