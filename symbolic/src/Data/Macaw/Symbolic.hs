@@ -216,14 +216,16 @@ mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
 
 macawExecApp :: sym
              -> (forall utp . f utp -> IO (C.RegValue sym utp))
-             -> C.EmptyExprExtension f tp
+             -> MacawExprExtension arch f tp
              -> IO (C.RegValue sym tp)
 macawExecApp _ _ = \case
 
-macawExecStmt :: C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
-              -> MacawStmtExtension arch (C.RegEntry sym) tp'
-              -> IO (C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx, C.RegValue sym tp')
-macawExecStmt _st s0 =
+macawExecStmt :: MacawStmtExtension arch (C.RegEntry sym) tp'
+              -> C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
+              -> IO (C.RegValue sym tp'
+                    , C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
+                    )
+macawExecStmt s0 _st =
   case s0 of
     MacawReadMem{} -> undefined
     MacawCondReadMem{} -> undefined
@@ -232,9 +234,9 @@ macawExecStmt _st s0 =
     MacawCall{} -> undefined
 
 -- | Return macaw extension evaluation functions.
-macawExtensions :: sym -> C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
-macawExtensions sym =
-  C.ExtensionImpl { C.extensionEval = macawExecApp sym
+macawExtensions :: C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
+macawExtensions =
+  C.ExtensionImpl { C.extensionEval = macawExecApp
                   , C.extensionExec = macawExecStmt
                   }
 
@@ -264,7 +266,7 @@ runCodeBlock sym archFns halloc g regStruct = do
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions sym
+                         , C.extensionImpl = macawExtensions
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
                               C.emptyHandleMap

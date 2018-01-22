@@ -10,6 +10,7 @@ module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   ) where
 
+import           Control.Monad.Identity
 import           Data.Parameterized.Context as Ctx
 import           GHC.TypeLits
 
@@ -107,13 +108,14 @@ crucGenX86Fn :: M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
 crucGenX86Fn fn =
   case fn of
-    _ -> undefined fn
+    _ -> error $
+      "crucGenX86Fn does not yet support: " ++ show (runIdentity (M.ppArchFn (pure . M.ppValue 0)  fn))
 
 crucGenX86Stmt :: M.X86Stmt (M.Value M.X86_64 ids)
                  -> CrucGen M.X86_64 ids s ()
 crucGenX86Stmt stmt =
   case stmt of
-    _ -> undefined stmt
+    _ -> error $ "crucGenX86Stmt does not yet support " ++ show (M.ppArchStmt (M.ppValue 0) stmt)
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)

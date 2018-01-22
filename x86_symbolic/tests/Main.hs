@@ -8,12 +8,12 @@ import           Control.Monad
 import           Control.Monad.ST
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as Elf
+import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import qualified Data.Text as Text
-import qualified Data.Map.Strict as Map
+import           GHC.IO (ioToST)
 import           System.IO
-import GHC.IO (ioToST)
 
 import qualified Data.Macaw.Architecture.Info as M
 import qualified Data.Macaw.CFG.Core as M
@@ -84,7 +84,7 @@ main = do
 
   putStrLn "Lookup addr"
   addAddr <-
-    case [ addr | ("add", addr) <- nameAddrList ] of
+    case [ M.memSymbolStart msym | msym <- nameAddrList, M.memSymbolName msym == "add" ] of
       [addr] -> pure $! addr
       [] -> fail "Could not find add function"
       _ -> fail "Found multiple add functions"
@@ -96,7 +96,8 @@ main = do
       memBaseVarMap = Map.singleton 1 memBaseVar
 
   let addrSymMap :: M.AddrSymMap 64
-      addrSymMap = Map.fromList [ (addr,nm) | (nm,addr) <- nameAddrList ]
+      addrSymMap = Map.fromList [ (M.memSymbolStart msym, M.memSymbolName msym)
+                                | msym <- nameAddrList ]
   let archInfo :: M.ArchitectureInfo MX.X86_64
       archInfo =  MX.x86_64_linux_info
 

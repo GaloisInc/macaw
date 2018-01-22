@@ -22,6 +22,8 @@ module Data.Macaw.Symbolic.CrucGen
   ( MacawSymbolicArchFunctions(..)
   , crucArchRegTypes
   , MacawExt
+  , MacawExprExtension(..)
+  , MacawOverflowOp
   , MacawStmtExtension(..)
   , MacawFunctionArgs
   , MacawFunctionResult
@@ -51,6 +53,7 @@ import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import           Data.Parameterized.Classes
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -111,6 +114,57 @@ crucArchRegTypes :: MacawSymbolicArchFunctions arch
 crucArchRegTypes archFns = crucGenArchConstraints archFns $
     typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   where regAssign = crucGenRegAssignment archFns
+
+------------------------------------------------------------------------
+-- MacawExprExtension
+
+data MacawOverflowOp
+   = Uadc
+   | Sadc
+   | Usbb
+   | Ssbb
+  deriving (Eq, Ord, Show)
+
+data MacawExprExtension (arch :: *) (f :: C.CrucibleType -> *) (tp :: C.CrucibleType) where
+  MacawOverflows :: !MacawOverflowOp
+                 -> !(f (C.BVType w))
+                 -> !(f (C.BVType w))
+                 -> !(f C.BoolType)
+                 -> MacawExprExtension arch f C.BoolType
+
+instance C.PrettyApp (MacawExprExtension arch) where
+  ppApp f a0 =
+    case a0 of
+      MacawOverflows o x y c -> sexpr "macawOverflows" [text (show o), f x, f y, f c]
+
+instance C.TypeApp (MacawExprExtension arch) where
+  appType (MacawOverflows _ _ _ _) = C.knownRepr
+
+instance TestEqualityFC (MacawExprExtension arch) where
+  testEqualityFC f (MacawOverflows xo xa xb xc)
+                   (MacawOverflows yo ya yb yc) = do
+    when (xo /= yo) $ Nothing
+    Refl <- f xa ya
+    Refl <- f xb yb
+    Refl <- f xc yc
+    pure Refl
+
+instance OrdFC (MacawExprExtension arch) where
+  compareFC f (MacawOverflows xo xa xb xc)
+              (MacawOverflows yo ya yb yc) =
+    joinOrderingF (fromOrdering (compare xo yo)) $
+     joinOrderingF (f xa ya) $
+      joinOrderingF (f xb yb) $
+       joinOrderingF (f xc yc) $
+        EQF
+
+instance FunctorFC (MacawExprExtension arch) where
+  fmapFC = fmapFCDefault
+instance FoldableFC (MacawExprExtension arch) where
+  foldMapFC = foldMapFCDefault
+instance TraversableFC (MacawExprExtension arch) where
+  traverseFC f (MacawOverflows o a b c) =
+    MacawOverflows o <$> f a <*> f b <*> f c
 
 ------------------------------------------------------------------------
 -- MacawStmtExtension
@@ -176,7 +230,7 @@ instance C.TypeApp (MacawStmtExtension arch) where
 
 data MacawExt (arch :: *)
 
-type instance C.ExprExtension (MacawExt arch) = C.EmptyExprExtension
+type instance C.ExprExtension (MacawExt arch) = MacawExprExtension arch
 type instance C.StmtExtension (MacawExt arch) = MacawStmtExtension arch
 
 instance C.IsSyntaxExtension (MacawExt arch)
@@ -293,7 +347,11 @@ evalAtom av = do
 
 -- | Evaluate the crucible app and return a reference to the result.
 crucibleValue :: C.App (MacawExt arch) (CR.Atom s) ctp -> CrucGen arch ids s (CR.Atom s ctp)
-crucibleValue app = evalAtom (CR.EvalApp app)
+crucibleValue = evalAtom . CR.EvalApp
+
+-- | Evaluate a Macaw expression extension
+evalMacawExt :: MacawExprExtension arch (CR.Atom s) tp -> CrucGen arch ids s (CR.Atom s tp)
+evalMacawExt = crucibleValue . C.ExtensionApp
 
 -- | Return the value associated with the given register
 getRegValue :: M.ArchReg arch tp
@@ -408,19 +466,17 @@ appToCrucible app = do
     M.BVSar w x y -> appAtom =<< C.BVAshr w <$> v2c x <*> v2c y
 
     M.UadcOverflows x y c -> do
-      let w  = M.typeWidth x
-      let w' = incNat w
-      x' <- zext1 w =<< v2c x
-      y' <- zext1 w =<< v2c y
-      LeqProof <- pure (incNatIsPos w)
-      r <- bvAdc w' x' y' =<< v2c c
-      msb w' r
+      r <- MacawOverflows Uadc <$> v2c x <*> v2c y <*> v2c c
+      evalMacawExt r
     M.SadcOverflows x y c -> do
-      undefined x y c
+      r <- MacawOverflows Sadc <$> v2c x <*> v2c y <*> v2c c
+      evalMacawExt r
     M.UsbbOverflows x y b -> do
-      undefined x y b
+      r <- MacawOverflows Usbb <$> v2c x <*> v2c y <*> v2c b
+      evalMacawExt r
     M.SsbbOverflows x y b -> do
-      undefined x y b
+      r <- MacawOverflows Ssbb <$> v2c x <*> v2c y <*> v2c b
+      evalMacawExt r
     M.PopCount w x -> do
       undefined w x
     M.ReverseBytes w x -> do
@@ -432,7 +488,7 @@ appToCrucible app = do
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
-valueToCrucible v = do
+  valueToCrucible v = do
  archFns <- gets translateFns
  crucGenArchConstraints archFns $ do
  case v of

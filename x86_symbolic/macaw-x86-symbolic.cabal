@@ -14,6 +14,7 @@ library
                  macaw-base,
                  macaw-symbolic,
                  macaw-x86,
+                 mtl,
                  parameterized-utils
   hs-source-dirs: src
 
