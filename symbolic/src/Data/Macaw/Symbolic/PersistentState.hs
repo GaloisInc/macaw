@@ -15,6 +15,7 @@ This defines the monad used to map Reopt blocks to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.PersistentState
   ( -- * CrucPersistentState
@@ -38,6 +39,7 @@ module Data.Macaw.Symbolic.PersistentState
   , MacawCrucibleValue(..)
   ) where
 
+
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -52,11 +54,13 @@ import qualified Lang.Crucible.Types as C
 ------------------------------------------------------------------------
 -- Type mappings
 
-type family ToCrucibleBaseTypeList (l :: [M.Type]) :: Ctx C.BaseType where
+type family ToCrucibleBaseTypeList (l :: [M.Type]) = (r :: Ctx C.BaseType)
+  | r -> l where
   ToCrucibleBaseTypeList '[] = EmptyCtx
   ToCrucibleBaseTypeList (h ': l) = ToCrucibleBaseTypeList l ::> ToCrucibleBaseType h
 
-type family ToCrucibleBaseType (mtp :: M.Type) :: C.BaseType where
+type family ToCrucibleBaseType (mtp :: M.Type) = (r :: C.BaseType)
+  | r -> mtp where
   ToCrucibleBaseType M.BoolType   = C.BaseBoolType
   ToCrucibleBaseType (M.BVType w) = C.BaseBVType w
   ToCrucibleBaseType ('M.TupleType l) = C.BaseStructType (ToCrucibleBaseTypeList l)

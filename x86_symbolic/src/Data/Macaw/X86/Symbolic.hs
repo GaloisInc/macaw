@@ -7,6 +7,9 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
@@ -97,30 +100,61 @@ x86RegAssignment =
 newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: M.Type)
   = AtomWrapper (f (ToCrucibleType tp))
 
+liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
+liftAtomMap f (AtomWrapper x) = AtomWrapper (f x)
+
+liftAtomFold :: (forall s. f s -> m) -> AtomWrapper f t -> m
+liftAtomFold f (AtomWrapper x) = f x
+
+liftAtomTrav ::
+  Applicative m =>
+  (forall s. f s -> m (g s)) -> (AtomWrapper f t -> m (AtomWrapper g t))
+liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
+
+
+
+
 -- | We currently make a type like this, we could instead a generic
 -- X86PrimFn function
-data X86StmtExtension (f :: C.CrucibleType -> *) (tp :: C.CrucibleType) where
+data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   -- | To reduce clutter, but potentially increase clutter, we just make every
   -- Macaw X86PrimFn a Macaw-Crucible statement extension.
-  X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) tp) ->  X86StmtExtension f (ToCrucibleType tp)
+  X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) t) ->
+                                        X86StmtExtension f (ToCrucibleType t)
+
+
+appT :: X86StmtExtension f t -> C.TypeRepr t
+appT (X86PrimFn x) =
+  case M.typeRepr x of
+    M.BoolTypeRepr -> C.BoolRepr
 
 
 instance C.PrettyApp X86StmtExtension where
+
 instance C.TypeApp X86StmtExtension where
+  appType = appT
+
+
 instance FunctorFC X86StmtExtension where
+  fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
+
 instance FoldableFC X86StmtExtension where
+  foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomFold f) x
+
 instance TraversableFC X86StmtExtension where
+  traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
 
-crucGenX86Fn :: M.X86PrimFn (M.Value M.X86_64 ids) tp
+crucGenX86Fn :: forall ids s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
 crucGenX86Fn fn = do
-  let f ::  M.Value arch ids tp -> CrucGen arch ids s (AtomWrapper (C.Atom s) tp)
+  let f ::  M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
       f x = AtomWrapper <$> valueToCrucible x
   r <- traverseFC f fn
   evalArchStmt (X86PrimFn r)
+
 
 crucGenX86Stmt :: M.X86Stmt (M.Value M.X86_64 ids)
                  -> CrucGen M.X86_64 ids s ()
