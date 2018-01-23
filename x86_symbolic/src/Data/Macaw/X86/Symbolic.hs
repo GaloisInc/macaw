@@ -1,17 +1,18 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   ) where
 
-import           Control.Monad.Identity
 import           Data.Parameterized.Context as Ctx
+import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
 
 import qualified Data.Macaw.CFG as M
@@ -22,6 +23,7 @@ import qualified Data.Macaw.X86.X86Reg as M
 import qualified Flexdis86.Register as F
 
 import qualified Lang.Crucible.CFG.Reg as C
+import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
 
 ------------------------------------------------------------------------
@@ -29,22 +31,7 @@ import qualified Lang.Crucible.Solver.Symbol as C
 
 type family CtxRepeat (n :: Nat) (c :: k) :: Ctx k where
   CtxRepeat  0 c = EmptyCtx
-  CtxRepeat  1 c = CtxRepeat  0 c ::> c
-  CtxRepeat  2 c = CtxRepeat  1 c ::> c
-  CtxRepeat  3 c = CtxRepeat  2 c ::> c
-  CtxRepeat  4 c = CtxRepeat  3 c ::> c
-  CtxRepeat  5 c = CtxRepeat  4 c ::> c
-  CtxRepeat  6 c = CtxRepeat  5 c ::> c
-  CtxRepeat  7 c = CtxRepeat  6 c ::> c
-  CtxRepeat  8 c = CtxRepeat  7 c ::> c
-  CtxRepeat  9 c = CtxRepeat  8 c ::> c
-  CtxRepeat 10 c = CtxRepeat  9 c ::> c
-  CtxRepeat 11 c = CtxRepeat 10 c ::> c
-  CtxRepeat 12 c = CtxRepeat 11 c ::> c
-  CtxRepeat 13 c = CtxRepeat 12 c ::> c
-  CtxRepeat 14 c = CtxRepeat 13 c ::> c
-  CtxRepeat 15 c = CtxRepeat 14 c ::> c
-  CtxRepeat 16 c = CtxRepeat 15 c ::> c
+  CtxRepeat  n c = CtxRepeat  (n-1) c ::> c
 
 class RepeatAssign (tp :: k) (ctx :: Ctx k) where
   repeatAssign :: (Int -> f tp) -> Assignment f ctx
@@ -104,12 +91,27 @@ x86RegAssignment =
 ------------------------------------------------------------------------
 -- Other X86 specific
 
+newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: M.Type)
+  = AtomWrapper (f (ToCrucibleType tp))
+
+-- | We currently make a type like this, we could instead a generic
+-- X86PrimFn function
+data X86StmtExtension (f :: C.CrucibleType -> *) (tp :: C.CrucibleType) where
+  -- | To reduce clutter, but potentially increase clutter, we just make every
+  -- Macaw X86PrimFn a Macaw-Crucible statement extension.
+  X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) tp) ->  X86StmtExtension f (ToCrucibleType tp)
+
+
+type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
+
+
 crucGenX86Fn :: M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
-crucGenX86Fn fn =
-  case fn of
-    _ -> error $
-      "crucGenX86Fn does not yet support: " ++ show (runIdentity (M.ppArchFn (pure . M.ppValue 0)  fn))
+crucGenX86Fn fn = do
+  let f ::  M.Value arch ids tp -> CrucGen arch ids s (AtomWrapper (C.Atom s) tp)
+      f x = AtomWrapper <$> valueToCrucible x
+  r <- traverseFC f fn
+  evalArchStmt (X86PrimFn r)
 
 crucGenX86Stmt :: M.X86Stmt (M.Value M.X86_64 ids)
                  -> CrucGen M.X86_64 ids s ()

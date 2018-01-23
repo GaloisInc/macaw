@@ -24,6 +24,11 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.PersistentState.macawAssignToCrucM
   , Data.Macaw.Symbolic.CrucGen.ArchRegStruct
   , Data.Macaw.Symbolic.CrucGen.MacawCrucibleRegTypes
+  , Data.Macaw.Symbolic.CrucGen.valueToCrucible
+  , Data.Macaw.Symbolic.CrucGen.evalArchStmt
+    -- * Architecture-specific extensions
+  , Data.Macaw.Symbolic.CrucGen.MacawArchStmtExtension
+  , Data.Macaw.Symbolic.CrucGen.MacawArchConstraints
   ) where
 
 import           Control.Lens ((^.))
@@ -42,7 +47,6 @@ import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
 import qualified Lang.Crucible.Config as C
-import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.ProgramLoc as C
@@ -105,8 +109,7 @@ mkMemBaseVarMap halloc mem = do
 
 -- | Create a Crucible CFG from a list of blocks
 mkCrucCFG :: forall s arch ids
-            .  M.ArchConstraints arch
-            => MacawSymbolicArchFunctions arch
+            .  MacawSymbolicArchFunctions arch
                -- ^ Crucible architecture-specific functions.
             -> C.HandleAllocator s
                -- ^ Handle allocator to make function handles
@@ -131,22 +134,23 @@ mkCrucCFG archFns halloc nm action = do
       rg = CR.CFG { CR.cfgHandle = h
                   , CR.cfgBlocks = blks
                   }
-  pure $ C.toSSA rg
+  crucGenArchConstraints archFns $
+    pure $ C.toSSA rg
 
 -- | Create a Crucible CFG from a list of blocks
 addBlocksCFG :: forall s arch ids
-            .  M.ArchConstraints arch
-            => MacawSymbolicArchFunctions arch
-               -- ^ Crucible specific functions.
-            -> MemSegmentMap (M.ArchAddrWidth arch)
+             .  MacawSymbolicArchFunctions arch
+             -- ^ Crucible specific functions.
+             -> MemSegmentMap (M.ArchAddrWidth arch)
              -- ^ Base address map
-            ->  (M.ArchAddrWord arch -> C.Position)
+             ->  (M.ArchAddrWord arch -> C.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
-            -> [M.Block arch ids]
-            -- ^ List of blocks for this region.
-            -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
+             -> [M.Block arch ids]
+             -- ^ List of blocks for this region.
+             -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
 addBlocksCFG archFns baseAddrMap posFn macawBlocks = do
-  -- Map block map to Crucible CFG
+  crucGenArchConstraints archFns $ do
+   -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label s)
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w))
                                    | w <- M.blockLabel <$> macawBlocks ]
@@ -155,8 +159,7 @@ addBlocksCFG archFns baseAddrMap posFn macawBlocks = do
 
 -- | Create a Crucible CFG from a list of blocks
 mkBlocksCFG :: forall s arch ids
-            .  M.ArchConstraints arch
-            => MacawSymbolicArchFunctions arch
+            .  MacawSymbolicArchFunctions arch
                -- ^ Crucible specific functions.
             -> C.HandleAllocator s
                -- ^ Handle allocator to make the blocks
@@ -176,8 +179,7 @@ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks = do
 type FunBlockMap arch s = Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
 
 mkFunCFG :: forall s arch ids
-         .  M.ArchConstraints arch
-         => MacawSymbolicArchFunctions arch
+         .  MacawSymbolicArchFunctions arch
             -- ^ Architecture specific functions.
          -> C.HandleAllocator s
             -- ^ Handle allocator to make the blocks
@@ -211,14 +213,22 @@ mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
                         }
     fmap concat $
       forM (Map.elems (fn^.M.parsedBlocks)) $ \b -> do
-        -- TODO: Initialize regReg
+        -- TODO: Initialize value in regReg with initial registers
         addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
 
 macawExecApp :: sym
              -> (forall utp . f utp -> IO (C.RegValue sym utp))
              -> MacawExprExtension arch f tp
              -> IO (C.RegValue sym tp)
-macawExecApp _ _ = \case
+macawExecApp sym f e0 =
+  case e0 of
+    MacawOverflows op x y c -> do
+      xv <- f x
+      yv <- f y
+      cv <- f c
+      case op of
+        _ -> undefined sym xv yv cv
+
 
 macawExecStmt :: MacawStmtExtension arch (C.RegEntry sym) tp'
               -> C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
@@ -232,6 +242,7 @@ macawExecStmt s0 _st =
     MacawWriteMem{} -> undefined
     MacawFreshSymbolic{} -> undefined
     MacawCall{} -> undefined
+    MacawArchStmtExtension{} -> undefined
 
 -- | Return macaw extension evaluation functions.
 macawExtensions :: C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
@@ -242,7 +253,7 @@ macawExtensions =
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
-           .  (IsSymInterface sym, M.ArchConstraints arch)
+           .  IsSymInterface sym
            => sym
            -> MacawSymbolicArchFunctions arch
            -> C.HandleAllocator RealWorld
@@ -277,7 +288,8 @@ runCodeBlock sym archFns halloc g regStruct = do
   C.runOverrideSim s macawStructRepr $ do
     let args :: C.RegMap sym (MacawFunctionArgs arch)
         args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
-    C.regValue <$> C.callCFG g args
+    crucGenArchConstraints archFns $
+      C.regValue <$> C.callCFG g args
 
 -- | Run the simulator over a contiguous set of code.
 runBlocks :: forall sym arch ids
