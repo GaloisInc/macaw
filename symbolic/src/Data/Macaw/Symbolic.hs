@@ -29,6 +29,8 @@ module Data.Macaw.Symbolic
     -- * Architecture-specific extensions
   , Data.Macaw.Symbolic.CrucGen.MacawArchStmtExtension
   , Data.Macaw.Symbolic.CrucGen.MacawArchConstraints
+  , MacawArchEvalFn
+  , EvalStmtFunc
   ) where
 
 import           Control.Lens ((^.))
@@ -230,25 +232,33 @@ macawExecApp sym f e0 =
         _ -> undefined sym xv yv cv
 
 
-macawExecStmt :: MacawStmtExtension arch (C.RegEntry sym) tp'
-              -> C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
-              -> IO (C.RegValue sym tp'
-                    , C.CrucibleState MacawSimulatorState sym (MacawExt arch) rtp blocks r ctx
-                    )
-macawExecStmt s0 _st =
+type EvalStmtFunc f p sym ext =
+  forall rtp blocks r ctx tp'.
+    f (C.RegEntry sym) tp'
+    -> C.CrucibleState p sym ext rtp blocks r ctx
+    -> IO (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)
+
+-- | Function for evaluating an architecture-specific statement
+type MacawArchEvalFn sym arch =
+  EvalStmtFunc (MacawArchStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+
+macawExecStmt :: MacawArchEvalFn sym arch
+              -> EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+macawExecStmt archStmtFn s0 st =
   case s0 of
     MacawReadMem{} -> undefined
     MacawCondReadMem{} -> undefined
     MacawWriteMem{} -> undefined
     MacawFreshSymbolic{} -> undefined
     MacawCall{} -> undefined
-    MacawArchStmtExtension{} -> undefined
+    MacawArchStmtExtension s -> archStmtFn s st
 
 -- | Return macaw extension evaluation functions.
-macawExtensions :: C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
-macawExtensions =
+macawExtensions :: MacawArchEvalFn sym arch
+                -> C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
+macawExtensions f =
   C.ExtensionImpl { C.extensionEval = macawExecApp
-                  , C.extensionExec = macawExecStmt
+                  , C.extensionExec = macawExecStmt f
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -256,6 +266,8 @@ runCodeBlock :: forall sym arch blocks
            .  IsSymInterface sym
            => sym
            -> MacawSymbolicArchFunctions arch
+              -- ^ Translation functions
+           -> MacawArchEvalFn sym arch
            -> C.HandleAllocator RealWorld
            -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
@@ -265,7 +277,7 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns halloc g regStruct = do
+runCodeBlock sym archFns archEval halloc g regStruct = do
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
   -- Run the symbolic simulator.
@@ -277,7 +289,7 @@ runCodeBlock sym archFns halloc g regStruct = do
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions
+                         , C.extensionImpl = macawExtensions archEval
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
                               C.emptyHandleMap
@@ -297,6 +309,7 @@ runBlocks :: forall sym arch ids
            => sym
            -> MacawSymbolicArchFunctions arch
               -- ^ Crucible specific functions.
+           -> MacawArchEvalFn sym arch
            -> M.Memory (M.ArchAddrWidth arch)
               -- ^ Memory image for executable
            -> C.FunctionName
@@ -312,9 +325,9 @@ runBlocks :: forall sym arch ids
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
-runBlocks sym archFns mem nm posFn macawBlocks regStruct = do
+runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   halloc <- C.newHandleAllocator
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
   C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks
   -- Run the symbolic simulator.
-  runCodeBlock sym archFns halloc g regStruct
+  runCodeBlock sym archFns archEval halloc g regStruct

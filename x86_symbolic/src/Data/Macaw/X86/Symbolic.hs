@@ -9,6 +9,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
+  , x86_64MacawEvalFn
   ) where
 
 import           Data.Parameterized.Context as Ctx
@@ -22,9 +23,11 @@ import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
 import qualified Flexdis86.Register as F
 
+import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
+import qualified Lang.Crucible.Solver.Interface as C
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.
@@ -102,6 +105,12 @@ data X86StmtExtension (f :: C.CrucibleType -> *) (tp :: C.CrucibleType) where
   X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) tp) ->  X86StmtExtension f (ToCrucibleType tp)
 
 
+instance C.PrettyApp X86StmtExtension where
+instance C.TypeApp X86StmtExtension where
+instance FunctorFC X86StmtExtension where
+instance FoldableFC X86StmtExtension where
+instance TraversableFC X86StmtExtension where
+
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
 
@@ -126,7 +135,7 @@ crucGenX86TermStmt tstmt regs =
   case tstmt of
     _ -> undefined regs
 
--- | The symbolic tra
+-- | X86_64 specific functions for translation Macaw into Crucible.
 x86_64MacawSymbolicFns :: MacawSymbolicArchFunctions M.X86_64
 x86_64MacawSymbolicFns =
   MacawSymbolicArchFunctions
@@ -137,3 +146,8 @@ x86_64MacawSymbolicFns =
   , crucGenArchStmt = crucGenX86Stmt
   , crucGenArchTermStmt = crucGenX86TermStmt
   }
+
+
+-- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
+x86_64MacawEvalFn :: C.IsSymInterface sym => MacawArchEvalFn sym M.X86_64
+x86_64MacawEvalFn = undefined

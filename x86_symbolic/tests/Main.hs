@@ -114,7 +114,7 @@ main = do
 
   regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns halloc g regs
+  execResult <- MS.runCodeBlock sym x86ArchFns MX.x86_64MacawEvalFn halloc g regs
   case execResult of
     C.FinishedExecution _ (C.TotalRes _pair) -> do
       putStrLn "Done"
