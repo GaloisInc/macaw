@@ -24,7 +24,7 @@ module Data.Macaw.Symbolic.CrucGen
   , crucArchRegTypes
   , MacawExt
   , MacawExprExtension(..)
-  , MacawOverflowOp
+  , MacawOverflowOp(..)
   , MacawStmtExtension(..)
   , MacawFunctionArgs
   , MacawFunctionResult
@@ -142,7 +142,9 @@ data MacawOverflowOp
   deriving (Eq, Ord, Show)
 
 data MacawExprExtension (arch :: *) (f :: C.CrucibleType -> *) (tp :: C.CrucibleType) where
-  MacawOverflows :: !MacawOverflowOp
+  MacawOverflows :: (1 <= w)
+                 => !MacawOverflowOp
+                 -> !(NatRepr w)
                  -> !(f (C.BVType w))
                  -> !(f (C.BVType w))
                  -> !(f C.BoolType)
@@ -151,36 +153,40 @@ data MacawExprExtension (arch :: *) (f :: C.CrucibleType -> *) (tp :: C.Crucible
 instance C.PrettyApp (MacawExprExtension arch) where
   ppApp f a0 =
     case a0 of
-      MacawOverflows o x y c -> sexpr "macawOverflows" [text (show o), f x, f y, f c]
+      MacawOverflows o w x y c ->
+        let mnem = "macawOverflows_" ++ show o ++ "_" ++ show w
+         in sexpr mnem [f x, f y, f c]
 
 instance C.TypeApp (MacawExprExtension arch) where
-  appType (MacawOverflows _ _ _ _) = C.knownRepr
+  appType (MacawOverflows _ _ _ _ _) = C.knownRepr
 
 instance TestEqualityFC (MacawExprExtension arch) where
-  testEqualityFC f (MacawOverflows xo xa xb xc)
-                   (MacawOverflows yo ya yb yc) = do
+  testEqualityFC f (MacawOverflows xo xw xa xb xc)
+                   (MacawOverflows yo yw ya yb yc) = do
     when (xo /= yo) $ Nothing
+    Refl <- testEquality xw yw
     Refl <- f xa ya
     Refl <- f xb yb
     Refl <- f xc yc
     pure Refl
 
 instance OrdFC (MacawExprExtension arch) where
-  compareFC f (MacawOverflows xo xa xb xc)
-              (MacawOverflows yo ya yb yc) =
+  compareFC f (MacawOverflows xo xw xa xb xc)
+              (MacawOverflows yo yw ya yb yc) =
     joinOrderingF (fromOrdering (compare xo yo)) $
-     joinOrderingF (f xa ya) $
-      joinOrderingF (f xb yb) $
-       joinOrderingF (f xc yc) $
-        EQF
+    joinOrderingF (compareF xw yw) $
+    joinOrderingF (f xa ya) $
+    joinOrderingF (f xb yb) $
+    joinOrderingF (f xc yc) $
+    EQF
 
 instance FunctorFC (MacawExprExtension arch) where
   fmapFC = fmapFCDefault
 instance FoldableFC (MacawExprExtension arch) where
   foldMapFC = foldMapFCDefault
 instance TraversableFC (MacawExprExtension arch) where
-  traverseFC f (MacawOverflows o a b c) =
-    MacawOverflows o <$> f a <*> f b <*> f c
+  traverseFC f (MacawOverflows o w a b c) =
+    MacawOverflows o w <$> f a <*> f b <*> f c
 
 ------------------------------------------------------------------------
 -- MacawStmtExtension
@@ -441,9 +447,19 @@ appToCrucible app = do
 
     -- Bitvector arithmetic
     M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
-    M.BVAdc w x y c -> undefined w x y c
+    M.BVAdc w x y c -> do
+      z <- appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
+      d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
+                                             <*> appAtom (C.BVLit w 1)
+                                             <*> appAtom (C.BVLit w 0)
+      appAtom $ C.BVAdd w z d
     M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
-    M.BVSbb w x y c -> undefined w x y c
+    M.BVSbb w x y c -> do
+      z <- appAtom =<< C.BVSub w <$> v2c x <*> v2c y
+      d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
+                                             <*> appAtom (C.BVLit w 1)
+                                             <*> appAtom (C.BVLit w 0)
+      appAtom $ C.BVSub w z d
     M.BVMul w x y -> appAtom =<< C.BVMul w <$> v2c x <*> v2c y
     M.BVUnsignedLe x y -> appAtom =<< C.BVUle (M.typeWidth x) <$> v2c x <*> v2c y
     M.BVUnsignedLt x y -> appAtom =<< C.BVUlt (M.typeWidth x) <$> v2c x <*> v2c y
@@ -469,16 +485,16 @@ appToCrucible app = do
     M.BVSar w x y -> appAtom =<< C.BVAshr w <$> v2c x <*> v2c y
 
     M.UadcOverflows x y c -> do
-      r <- MacawOverflows Uadc <$> v2c x <*> v2c y <*> v2c c
+      r <- MacawOverflows Uadc (M.typeWidth x) <$> v2c x <*> v2c y <*> v2c c
       evalMacawExt r
     M.SadcOverflows x y c -> do
-      r <- MacawOverflows Sadc <$> v2c x <*> v2c y <*> v2c c
+      r <- MacawOverflows Sadc (M.typeWidth x) <$> v2c x <*> v2c y <*> v2c c
       evalMacawExt r
     M.UsbbOverflows x y b -> do
-      r <- MacawOverflows Usbb <$> v2c x <*> v2c y <*> v2c b
+      r <- MacawOverflows Usbb (M.typeWidth x) <$> v2c x <*> v2c y <*> v2c b
       evalMacawExt r
     M.SsbbOverflows x y b -> do
-      r <- MacawOverflows Ssbb <$> v2c x <*> v2c y <*> v2c b
+      r <- MacawOverflows Ssbb (M.typeWidth x) <$> v2c x <*> v2c y <*> v2c b
       evalMacawExt r
     M.PopCount w x -> do
       undefined w x
@@ -717,6 +733,11 @@ parsedBlockLabel blockLabelMap addr idx =
   fromMaybe (error $ "Could not find entry point: " ++ show addr) $
   Map.lookup (addr, idx) blockLabelMap
 
+setMachineRegs :: CR.Atom s (ArchRegStruct arch) -> CrucGen arch ids s ()
+setMachineRegs newRegs = do
+  regReg <- gets crucRegisterReg
+  addStmt $ CR.SetReg regReg newRegs
+
 addMacawParsedTermStmt :: Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
                           -- ^ Map from block addresses to starting label
                        -> M.ArchSegmentOff arch
@@ -732,22 +753,32 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
       newRegs <- evalMacawStmt (MacawCall (crucArchRegTypes archFns) curRegs)
       case mret of
         Just nextAddr -> do
-          regReg <- gets crucRegisterReg
-          addStmt $ CR.SetReg regReg newRegs
+          setMachineRegs newRegs
           addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
         Nothing ->
           addTermStmt $ CR.Return newRegs
-    M.ParsedJump{} -> undefined
-    M.ParsedLookupTable{} -> undefined
-    M.ParsedReturn{} -> undefined
+    M.ParsedJump regs nextAddr -> do
+      setMachineRegs =<< createRegStruct regs
+      addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
+    M.ParsedLookupTable _regs _idx _possibleAddrs -> do
+      error "Crucible symbolic generator does not yet support lookup tables."
+    M.ParsedReturn regs -> do
+      regValues <- createRegStruct regs
+      addTermStmt $ CR.Return regValues
     M.ParsedIte c t f -> do
       crucCond <- valueToCrucible c
       let tlbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent t)
       let flbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent f)
       addTermStmt $! CR.Br crucCond tlbl flbl
-    M.ParsedArchTermStmt{} -> undefined
-    M.ParsedTranslateError{} -> undefined
-    M.ClassifyFailure{} -> undefined
+    M.ParsedArchTermStmt aterm regs _mret -> do
+      archFns <- gets translateFns
+      crucGenArchTermStmt archFns aterm regs
+    M.ParsedTranslateError msg -> do
+      msgVal <- crucibleValue (C.TextLit msg)
+      addTermStmt $ CR.ErrorStmt msgVal
+    M.ClassifyFailure _regs -> do
+      msgVal <- crucibleValue $ C.TextLit $ Text.pack $ "Could not identify block at " ++ show thisAddr
+      addTermStmt $ CR.ErrorStmt msgVal
 
 nextStatements :: M.ParsedTermStmt arch ids -> [M.StatementList arch ids]
 nextStatements tstmt =

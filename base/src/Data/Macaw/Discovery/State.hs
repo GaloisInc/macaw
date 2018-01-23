@@ -116,7 +116,9 @@ data ParsedTermStmt arch ids
      -- ^ A lookup table that branches to one of a vector of addresses.
      --
      -- The registers store the registers, the value contains the index to jump
-     -- to, and the possible addresses.
+     -- to, and the possible addresses as a table.  If the index (when interpreted as
+     -- an unsigned number) is larger than the number of entries in the vector, then the
+     -- result is undefined.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
      -- ^ A return with the given registers.
    | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
