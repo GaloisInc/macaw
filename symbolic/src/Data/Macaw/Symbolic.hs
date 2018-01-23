@@ -21,6 +21,7 @@ module Data.Macaw.Symbolic
   , mkFunCFG
   , Data.Macaw.Symbolic.PersistentState.ArchRegContext
   , Data.Macaw.Symbolic.PersistentState.ToCrucibleType
+  , Data.Macaw.Symbolic.PersistentState.FromCrucibleType
   , Data.Macaw.Symbolic.PersistentState.macawAssignToCrucM
   , Data.Macaw.Symbolic.CrucGen.ArchRegStruct
   , Data.Macaw.Symbolic.CrucGen.MacawCrucibleRegTypes
@@ -31,6 +32,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.MacawArchConstraints
   , MacawArchEvalFn
   , EvalStmtFunc
+  , toCrucAndBack
   ) where
 
 import           Control.Lens ((^.))

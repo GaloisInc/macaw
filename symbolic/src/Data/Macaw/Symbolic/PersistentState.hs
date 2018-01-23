@@ -15,6 +15,7 @@ This defines the monad used to map Reopt blocks to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.PersistentState
   ( -- * CrucPersistentState
@@ -23,6 +24,8 @@ module Data.Macaw.Symbolic.PersistentState
     -- * Types
   , ToCrucibleBaseType
   , ToCrucibleType
+  , FromCrucibleBaseType
+  , FromCrucibleType
   , CtxToCrucibleType
   , ArchRegContext
   , typeToCrucibleBase
@@ -30,6 +33,7 @@ module Data.Macaw.Symbolic.PersistentState
   , typeCtxToCrucible
   , macawAssignToCrucM
   , memReprToCrucible
+  , toCrucAndBack
     -- * Register index map
   , RegIndexMap
   , mkRegIndexMap
@@ -37,6 +41,9 @@ module Data.Macaw.Symbolic.PersistentState
     -- * Values
   , MacawCrucibleValue(..)
   ) where
+
+
+import Unsafe.Coerce(unsafeCoerce)
 
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
@@ -52,14 +59,25 @@ import qualified Lang.Crucible.Types as C
 ------------------------------------------------------------------------
 -- Type mappings
 
-type family ToCrucibleBaseTypeList (l :: [M.Type]) :: Ctx C.BaseType where
+type family ToCrucibleBaseTypeList (l :: [M.Type]) = (r :: Ctx C.BaseType)
+  | r -> l where
   ToCrucibleBaseTypeList '[] = EmptyCtx
   ToCrucibleBaseTypeList (h ': l) = ToCrucibleBaseTypeList l ::> ToCrucibleBaseType h
 
-type family ToCrucibleBaseType (mtp :: M.Type) :: C.BaseType where
+type family ToCrucibleBaseType (mtp :: M.Type) = (r :: C.BaseType)
+  | r -> mtp where
   ToCrucibleBaseType M.BoolType   = C.BaseBoolType
   ToCrucibleBaseType (M.BVType w) = C.BaseBVType w
   ToCrucibleBaseType ('M.TupleType l) = C.BaseStructType (ToCrucibleBaseTypeList l)
+
+type family FromCrucibleBaseType (c :: C.BaseType) :: M.Type where
+  FromCrucibleBaseType C.BaseBoolType = M.BoolType
+  FromCrucibleBaseType (C.BaseBVType w) = M.BVType w
+  FromCrucibleBaseType (C.BaseStructType xs) = 'M.TupleType (FromCrucibleBaseTypeList xs)
+
+type family FromCrucibleBaseTypeList (xs :: Ctx C.BaseType) :: [M.Type] where
+  FromCrucibleBaseTypeList EmptyCtx = '[]
+  FromCrucibleBaseTypeList (xs ::> x) = FromCrucibleBaseType x : FromCrucibleBaseTypeList xs
 
 type family CtxToCrucibleBaseType (mtp :: Ctx M.Type) :: Ctx C.BaseType where
   CtxToCrucibleBaseType EmptyCtx   = EmptyCtx
@@ -67,9 +85,15 @@ type family CtxToCrucibleBaseType (mtp :: Ctx M.Type) :: Ctx C.BaseType where
 
 type ToCrucibleType tp = C.BaseToType (ToCrucibleBaseType tp)
 
+type family FromCrucibleType (tp :: C.CrucibleType) :: M.Type where
+  FromCrucibleType (C.BaseToType t) = FromCrucibleBaseType t
+
 type family CtxToCrucibleType (mtp :: Ctx M.Type) :: Ctx C.CrucibleType where
   CtxToCrucibleType EmptyCtx   = EmptyCtx
   CtxToCrucibleType (c ::> tp) = CtxToCrucibleType c ::> ToCrucibleType tp
+
+toCrucAndBack :: FromCrucibleBaseType (ToCrucibleBaseType t) :~: t
+toCrucAndBack = unsafeCoerce Refl
 
 -- | Create the variables from a collection of registers.
 macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
