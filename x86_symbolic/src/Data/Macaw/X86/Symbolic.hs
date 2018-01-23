@@ -102,11 +102,15 @@ x86RegAssignment =
 newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: M.Type)
   = AtomWrapper (f (ToCrucibleType tp))
 
-liftAtom ::
+liftAtomTrav ::
   Applicative m =>
   (forall s. f s -> m (g s)) ->
   (AtomWrapper f t -> m (AtomWrapper g t))
-liftAtom f (AtomWrapper x) = AtomWrapper <$> f x
+liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
+
+liftAtomMap :: (forall s. f s -> g s) ->
+               AtomWrapper f t -> AtomWrapper g t
+liftAtomMap f (AtomWrapper x) = AtomWrapper (f x)
 
 
 
@@ -123,18 +127,11 @@ data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
 instance C.PrettyApp X86StmtExtension where
 instance C.TypeApp X86StmtExtension where
 instance FunctorFC X86StmtExtension where
+  fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
+
 instance FoldableFC X86StmtExtension where
 instance TraversableFC X86StmtExtension where
-  traverseFC = travFC
-
-travFC :: forall f g m c. (Applicative m) =>
-      (forall s. f s -> m (g s)) ->
-      X86StmtExtension f c -> m (X86StmtExtension g c)
-travFC f (X86PrimFn x) =
-  case toCrucAndBack @(FromCrucibleType c) of
-    Refl -> X86PrimFn <$> traverseFC (liftAtom f) x
-
-
+  traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
