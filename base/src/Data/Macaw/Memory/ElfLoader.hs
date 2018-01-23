@@ -514,7 +514,7 @@ resolveElfFuncSymbol mem secMap idx ste
       case Map.lookup (Elf.steIndex ste) secMap of
         Just (base,sec)
           | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
-          , off <- toInteger (elfSectionAddr sec) - toInteger val
+          , off <- toInteger val - toInteger (elfSectionAddr sec)
           , Just addr <- incSegmentOff base off -> do
               Just $ Right $ MemSymbol { memSymbolName = Elf.steName ste
                                        , memSymbolStart = addr
