@@ -34,7 +34,7 @@ module Data.Macaw.Symbolic
   ) where
 
 import           Control.Lens ((^.))
-import           Control.Monad (forM)
+import           Control.Monad (forM, join)
 import           Control.Monad.ST (ST, RealWorld, stToIO)
 import           Data.Foldable
 import           Data.Map.Strict (Map)
@@ -218,19 +218,46 @@ mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
         -- TODO: Initialize value in regReg with initial registers
         addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
 
-macawExecApp :: sym
-             -> (forall utp . f utp -> IO (C.RegValue sym utp))
-             -> MacawExprExtension arch f tp
-             -> IO (C.RegValue sym tp)
-macawExecApp sym f e0 =
+evalMacawExprExtension :: IsSymInterface sym
+                       => sym
+                       -> (forall utp . f utp -> IO (C.RegValue sym utp))
+                       -> MacawExprExtension arch f tp
+                       -> IO (C.RegValue sym tp)
+evalMacawExprExtension sym f e0 =
   case e0 of
-    MacawOverflows op x y c -> do
-      xv <- f x
-      yv <- f y
-      cv <- f c
+    MacawOverflows op w xv yv cv -> do
+      x <- f xv
+      y <- f yv
+      c <- f cv
+      let w' = incNat w
+      Just LeqProof <- pure $ testLeq (knownNat :: NatRepr 1) w'
+      one  <- bvLit sym w' 1
+      zero <- bvLit sym w' 0
+      cext <- baseTypeIte sym c one zero
       case op of
-        _ -> undefined sym xv yv cv
-
+        Uadc -> do
+          -- Unsigned add overflow occurs if largest bit is set.
+          xext <- bvZext sym w' x
+          yext <- bvZext sym w' y
+          zext <- join $ bvAdd sym <$> bvAdd sym xext yext <*> pure cext
+          bvIsNeg sym zext
+        Sadc -> do
+          xext <- bvSext sym w' x
+          yext <- bvSext sym w' y
+          zext <- join $ bvAdd sym <$> bvAdd sym xext yext <*> pure cext
+          znorm <- bvSext sym w' =<< bvTrunc sym w zext
+          bvNe sym zext znorm
+        Usbb -> do
+          xext <- bvZext sym w' x
+          yext <- bvZext sym w' y
+          zext <- join $ bvSub sym <$> bvSub sym xext yext <*> pure cext
+          bvIsNeg sym zext
+        Ssbb -> do
+          xext <- bvSext sym w' x
+          yext <- bvSext sym w' y
+          zext <- join $ bvSub sym <$> bvSub sym xext yext <*> pure cext
+          znorm <- bvSext sym w' =<< bvTrunc sym w zext
+          bvNe sym zext znorm
 
 type EvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
@@ -242,9 +269,11 @@ type EvalStmtFunc f p sym ext =
 type MacawArchEvalFn sym arch =
   EvalStmtFunc (MacawArchStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 
-macawExecStmt :: MacawArchEvalFn sym arch
-              -> EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
-macawExecStmt archStmtFn s0 st =
+-- | This evaluates a  Macaw statement extension in the simulator.
+execMacawStmtExtension :: MacawArchEvalFn sym arch
+                       -- ^ Function for executing
+                       -> EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+execMacawStmtExtension archStmtFn s0 st =
   case s0 of
     MacawReadMem{} -> undefined
     MacawCondReadMem{} -> undefined
@@ -257,8 +286,8 @@ macawExecStmt archStmtFn s0 st =
 macawExtensions :: MacawArchEvalFn sym arch
                 -> C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
 macawExtensions f =
-  C.ExtensionImpl { C.extensionEval = macawExecApp
-                  , C.extensionExec = macawExecStmt f
+  C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
+                  , C.extensionExec = execMacawStmtExtension f
                   }
 
 -- | Run the simulator over a contiguous set of code.
