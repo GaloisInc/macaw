@@ -18,12 +18,15 @@ module Data.Macaw.X86.Symbolic
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
+import           Data.Functor.Identity(Identity(..))
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
+import           Data.Macaw.Symbolic.PersistentState(typeToCrucible)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
+import           Data.Macaw.X86.Semantics
 import qualified Flexdis86.Register as F
 
 import qualified Lang.Crucible.CFG.Extension as C
@@ -31,6 +34,9 @@ import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Solver.Interface as C
+
+
+
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.
@@ -97,22 +103,6 @@ x86RegAssignment =
 ------------------------------------------------------------------------
 -- Other X86 specific
 
-newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: M.Type)
-  = AtomWrapper (f (ToCrucibleType tp))
-
-liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
-liftAtomMap f (AtomWrapper x) = AtomWrapper (f x)
-
-liftAtomFold :: (forall s. f s -> m) -> AtomWrapper f t -> m
-liftAtomFold f (AtomWrapper x) = f x
-
-liftAtomTrav ::
-  Applicative m =>
-  (forall s. f s -> m (g s)) -> (AtomWrapper f t -> m (AtomWrapper g t))
-liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
-
-
-
 
 -- | We currently make a type like this, we could instead a generic
 -- X86PrimFn function
@@ -123,23 +113,19 @@ data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
                                         X86StmtExtension f (ToCrucibleType t)
 
 
-appT :: X86StmtExtension f t -> C.TypeRepr t
-appT (X86PrimFn x) =
-  case M.typeRepr x of
-    M.BoolTypeRepr -> C.BoolRepr
-
 
 instance C.PrettyApp X86StmtExtension where
+  ppApp ppSub (X86PrimFn x) = d
+    where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
 
 instance C.TypeApp X86StmtExtension where
-  appType = appT
-
+  appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
 
 instance FunctorFC X86StmtExtension where
   fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
 
 instance FoldableFC X86StmtExtension where
-  foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomFold f) x
+  foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomIn f) x
 
 instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
@@ -184,4 +170,5 @@ x86_64MacawSymbolicFns =
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn :: C.IsSymInterface sym => MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn = undefined
+x86_64MacawEvalFn (X86PrimFn x) s = semantics x s
+
