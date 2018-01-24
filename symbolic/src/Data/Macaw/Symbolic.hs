@@ -178,8 +178,6 @@ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks = do
   mkCrucCFG archFns halloc nm $ do
     addBlocksCFG archFns memBaseVarMap posFn macawBlocks
 
-type FunBlockMap arch s = Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
-
 mkFunCFG :: forall s arch ids
          .  MacawSymbolicArchFunctions arch
             -- ^ Architecture specific functions.
@@ -197,17 +195,17 @@ mkFunCFG :: forall s arch ids
 mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
   mkCrucCFG archFns halloc nm $ do
     let insSentences :: M.ArchSegmentOff arch
-                     -> (FunBlockMap arch s,Int)
+                     -> (BlockLabelMap arch s,Int)
                      -> [M.StatementList arch ids]
-                     -> (FunBlockMap arch s,Int)
+                     -> (BlockLabelMap arch s,Int)
         insSentences _ m [] = m
         insSentences base (m,c) (s:r) =
           insSentences base
                        (Map.insert (base,M.stmtsIdent s) (CR.Label c) m,c+1)
                        (nextStatements (M.stmtsTerm s) ++ r)
-    let insBlock :: (FunBlockMap arch s,Int) -> M.ParsedBlock arch ids -> (FunBlockMap arch s,Int)
+    let insBlock :: (BlockLabelMap arch s,Int) -> M.ParsedBlock arch ids -> (BlockLabelMap arch s,Int)
         insBlock m b = insSentences (M.pblockAddr b) m [M.blockStatementList b]
-    let blockLabelMap :: FunBlockMap arch s
+    let blockLabelMap :: BlockLabelMap arch s
         blockLabelMap = fst $ foldl' insBlock (Map.empty,0) (Map.elems (fn^.M.parsedBlocks))
     let regReg = CR.Reg { CR.regPosition = posFn (M.discoveredFunAddr fn)
                         , CR.regId = 0
