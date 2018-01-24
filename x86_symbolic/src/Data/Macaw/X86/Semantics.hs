@@ -10,6 +10,9 @@
 module Data.Macaw.X86.Semantics where
 
 import Data.Parameterized.NatRepr
+import Data.Bits(shiftR, (.&.))
+import Data.Word(Word8)
+import GHC.TypeLits(KnownNat)
 
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.RegMap
@@ -38,24 +41,43 @@ semantics ::
 semantics x s = do v <- pureSem (stateSymInterface s) x
                    return (v,s)
 
--- | Semantics for operations that does not affect Crucible's state directly.
+-- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: (IsSymInterface sym) =>
   sym {- ^ Handle to the simulator -} ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt {- ^ Instruction -} ->
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
+
     M.VOp1 w op1 x ->
-      chunksOf n8 w $ \bytes ->
-        do let v = getVal x
-           case op1 of
-             M.VShiftL n ->
-                do let vecIn  = V.fromBV bytes n8 v
-                       vecOut = V.shiftL (fromIntegral n) (zero n8) vecIn
-                   evalE sym (V.toBV LittleEndian n8 vecOut)
+      do let v = getVal x
+         case op1 of
+           M.VShiftL n ->
+              chunksOf n8 w $ \bytes ->
+              do let vecIn = V.fromBV bytes n8 v
+                 pack sym (V.shiftL (fromIntegral n) zero vecIn)
 
-             M.VShufD _n -> undefined
+           M.VShufD mask ->
+              chunksOf n32 w $ \dwords ->
+              do let vecIn = V.fromBV dwords n32 v
+                 pack sym (shuffle mask vecIn)
 
+
+shuffle :: Word8 -> V.Vector n a -> V.Vector n a
+shuffle w = V.shuffle getField
+  where
+  -- Every 2 bits correspond to an index in the input.
+  -- The 4 fields packed in the 8 bit input mask are repeated.
+  getField x = let (d',r') = divMod x 4
+                   d = fromIntegral d'
+                   r = fromIntegral r'
+               in 4 * d + fromIntegral ((w `shiftR` (2 * r)) .&. 0x03)
+
+
+
+pack :: (IsSymInterface sym, KnownNat w, 1 <= w) =>
+  sym -> V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
+pack sym xs = evalE sym (V.toBV LittleEndian knownNat xs)
 
 chunksOf :: NatRepr c -> NatRepr w ->
            (forall n. (1 <= n, (n * c) ~ w) => NatRepr n -> IO a) -> IO a
@@ -116,8 +138,11 @@ n1 = knownNat
 n8 :: NatRepr 8
 n8 = knownNat
 
-zero :: (1 <= w) => NatRepr w -> E sym (BVType w)
-zero w = app (BVLit w 0)
+n32 :: NatRepr 32
+n32 = knownNat
+
+zero :: (KnownNat w, 1 <= w) => E sym (BVType w)
+zero = app (BVLit knownNat 0)
 
 --------------------------------------------------------------------------------
 
