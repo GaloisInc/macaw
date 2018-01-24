@@ -765,8 +765,7 @@ def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
 def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
   where set_cf w v i =
-           (i `bvUle` bvLit n8 (natValue w))
-             .&&. bvBit v (bvLit w (natValue w) .- uext w i)
+           (i `bvUle` bvLit n8 (natValue w)) .&&. bvBit v (bvLit w (natValue w) .- uext w i)
         set_of v _ =  msb v
 
 def_shr :: InstructionDef

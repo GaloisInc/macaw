@@ -38,6 +38,7 @@ module Data.Macaw.Symbolic.CrucGen
   , MacawMonad
   , runMacawMonad
   , addMacawBlock
+  , BlockLabelMap
   , addParsedBlock
   , nextStatements
   , valueToCrucible
@@ -738,8 +739,11 @@ setMachineRegs newRegs = do
   regReg <- gets crucRegisterReg
   addStmt $ CR.SetReg regReg newRegs
 
-addMacawParsedTermStmt :: Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
-                          -- ^ Map from block addresses to starting label
+-- | Map from block information to Crucible label (used to generate term statements)
+type BlockLabelMap arch s = Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+
+addMacawParsedTermStmt :: BlockLabelMap arch s
+                          -- ^ Block label map for this function
                        -> M.ArchSegmentOff arch
                           -- ^ Address of this block
                        -> M.ParsedTermStmt arch ids
@@ -760,8 +764,13 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ParsedJump regs nextAddr -> do
       setMachineRegs =<< createRegStruct regs
       addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
-    M.ParsedLookupTable _regs _idx _possibleAddrs -> do
-      error "Crucible symbolic generator does not yet support lookup tables."
+    M.ParsedLookupTable regs _idx _possibleAddrs -> do
+      setMachineRegs =<< createRegStruct regs
+      let cond = undefined
+      -- TODO: Add ability in CrucGen to generate new labels and add new blocks.
+      let tlbl = undefined
+      let flbl = undefined
+      addTermStmt $! CR.Br cond tlbl flbl
     M.ParsedReturn regs -> do
       regValues <- createRegStruct regs
       addTermStmt $ CR.Return regValues
@@ -771,7 +780,6 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
       let flbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent f)
       addTermStmt $! CR.Br crucCond tlbl flbl
     M.ParsedArchTermStmt aterm regs _mret -> do
-      archFns <- gets translateFns
       crucGenArchTermStmt archFns aterm regs
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.TextLit msg)
@@ -789,7 +797,7 @@ nextStatements tstmt =
 addStatementList :: MacawSymbolicArchFunctions arch
                  -> MemSegmentMap (M.ArchAddrWidth arch)
                  -- ^ Base address map
-                 -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+                 -> BlockLabelMap arch s
                  -- ^ Map from block index to Crucible label
                  -> M.ArchSegmentOff arch
                  -- ^ Address of block that starts statements
@@ -822,7 +830,7 @@ addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> MemSegmentMap (M.ArchAddrWidth arch)
                -- ^ Base address map
-               -> Map (M.ArchSegmentOff arch, Word64) (CR.Label s)
+               -> BlockLabelMap arch s
                -- ^ Map from block index to Crucible label
                -> (M.ArchSegmentOff arch -> C.Position)
                -- ^ Function for generating position from offset from start of this block.
@@ -836,4 +844,5 @@ addParsedBlock tfns baseAddrMap blockLabelMap posFn regReg b = do
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
         where Just r = M.incSegmentOff base (toInteger off)
-  addStatementList tfns baseAddrMap blockLabelMap (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []
+  addStatementList tfns baseAddrMap blockLabelMap
+    (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []
