@@ -35,7 +35,7 @@ liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
 liftAtomMap f (AtomWrapper x) = AtomWrapper (f x)
 
 liftAtomTrav ::
-  Applicative m =>
+  Functor m =>
   (forall s. f s -> m (g s)) -> (AtomWrapper f t -> m (AtomWrapper g t))
 liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
 
