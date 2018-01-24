@@ -50,19 +50,18 @@ pureSem sym fn =
   case fn of
 
     M.VOp1 w op1 x ->
-      do let v = getVal x
-         case op1 of
-           M.VShiftL n ->
-              chunksOf n8 w $ \bytes ->
-              do let vecIn = V.fromBV bytes n8 v
-                 pack sym (V.shiftL (fromIntegral n) zero vecIn)
+      case op1 of
+        M.VShiftL n ->
+           unpack w n8 x $ \vecIn ->
+           pack sym (V.shiftL (fromIntegral n) zero vecIn)
 
-           M.VShufD mask ->
-              chunksOf n32 w $ \dwords ->
-              do let vecIn = V.fromBV dwords n32 v
-                 pack sym (shuffle mask vecIn)
+        M.VShufD mask ->
+           unpack w n32 x $ \vecIn ->
+           pack sym (shuffle mask vecIn)
 
 
+-- | Shuffling with a mask.
+-- For more info, see `VPSHUFD` Intel instruction.
 shuffle :: Word8 -> V.Vector n a -> V.Vector n a
 shuffle w = V.shuffle getField
   where
@@ -75,18 +74,25 @@ shuffle w = V.shuffle getField
 
 
 
+-- | Package-up a vector expression to a bit-vector, and evaluate it.
 pack :: (IsSymInterface sym, KnownNat w, 1 <= w) =>
   sym -> V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
 pack sym xs = evalE sym (V.toBV LittleEndian knownNat xs)
 
-chunksOf :: NatRepr c -> NatRepr w ->
-           (forall n. (1 <= n, (n * c) ~ w) => NatRepr n -> IO a) -> IO a
-chunksOf c w k =
+-- | Split up a bit-vector into a vector.
+unpack ::
+  (1 <= c) =>
+  NatRepr w                               {- ^ Original length -} ->
+  NatRepr c                               {- ^ Size of each chunk -} ->
+  AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value -} ->
+  (forall n. (1 <= n, (n * c) ~ w) => V.Vector n (E sym (BVType c)) -> IO a) ->
+  IO a
+unpack w c v k =
   withDivModNat w c $ \n r ->
     case testEquality r n0 of
       Just Refl ->
         case testLeq n1 n of
-          Just LeqProof -> k n
+          Just LeqProof -> k (V.fromBV n c (getVal v))
           _             -> fail "Unexpected 0 size"
       _ -> fail ("Value not a multiple of " ++ show (widthVal c))
 
