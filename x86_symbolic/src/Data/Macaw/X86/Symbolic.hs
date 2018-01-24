@@ -26,6 +26,7 @@ import           Data.Macaw.Symbolic.PersistentState(typeToCrucible)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
+import           Data.Macaw.X86.Semantics
 import qualified Flexdis86.Register as F
 
 import qualified Lang.Crucible.CFG.Extension as C
@@ -33,6 +34,9 @@ import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Solver.Interface as C
+
+
+
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.
@@ -98,20 +102,6 @@ x86RegAssignment =
 
 ------------------------------------------------------------------------
 -- Other X86 specific
-
-newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: M.Type)
-  = AtomWrapper (f (ToCrucibleType tp))
-
-liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
-liftAtomMap f (AtomWrapper x) = AtomWrapper (f x)
-
-liftAtomTrav ::
-  Applicative m =>
-  (forall s. f s -> m (g s)) -> (AtomWrapper f t -> m (AtomWrapper g t))
-liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
-
-liftAtomIn :: (forall s. f s -> a) -> AtomWrapper f t -> a
-liftAtomIn f (AtomWrapper x) = f x
 
 
 -- | We currently make a type like this, we could instead a generic
@@ -180,4 +170,5 @@ x86_64MacawSymbolicFns =
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn :: C.IsSymInterface sym => MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn = undefined
+x86_64MacawEvalFn (X86PrimFn x) s = semantics x s
+
