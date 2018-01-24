@@ -331,6 +331,8 @@ data Value arch ids tp
    . (tp ~ BVType n, 1 <= n)
    => BVValue !(NatRepr n) !Integer
      -- ^ A constant bitvector
+     --
+     -- The integer should be between 0 and 2^n-1.
    | (tp ~ BoolType)
    => BoolValue !Bool
      -- ^ A constant Boolean

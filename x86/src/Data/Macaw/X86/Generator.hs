@@ -52,7 +52,8 @@ module Data.Macaw.X86.Generator
   , asApp
   , asArchFn
   , asBoolLit
-  , asBVLit
+  , asUnsignedBVLit
+  , asSignedBVLit
   , eval
   , getRegValue
   , setReg
@@ -79,6 +80,7 @@ import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableFC
 import           Data.Sequence (Seq)
@@ -137,9 +139,15 @@ asBoolLit :: Expr ids BoolType -> Maybe Bool
 asBoolLit (ValueExpr (BoolValue b)) = Just b
 asBoolLit _ = Nothing
 
-asBVLit :: Expr ids (BVType w) -> Maybe Integer
-asBVLit (ValueExpr (BVValue _ v)) = Just v
-asBVLit _ = Nothing
+-- | If expression is a literal bitvector, then return as an unsigned integer.
+asUnsignedBVLit :: Expr ids (BVType w) -> Maybe Integer
+asUnsignedBVLit (ValueExpr (BVValue w v)) = Just (toUnsigned w v)
+asUnsignedBVLit _ = Nothing
+
+-- | If expression is a literal bitvector, then return as an signed integer.
+asSignedBVLit :: Expr ids (BVType w) -> Maybe Integer
+asSignedBVLit (ValueExpr (BVValue w v)) = Just (toSigned w v)
+asSignedBVLit _ = Nothing
 
 ------------------------------------------------------------------------
 -- PreBlock
