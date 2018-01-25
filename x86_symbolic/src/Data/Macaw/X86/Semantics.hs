@@ -57,7 +57,10 @@ pureSem sym fn =
         M.VShiftL n -> vecOp1 sym BigEndian w n8 x
                         (V.shiftL (fromIntegral n) (bv 0))
 
-        M.VShufD mask -> vecOp1 sym LittleEndian w n32 x (shuffle mask)
+        M.VShufD mask -> vecOp1 sym LittleEndian w n32 x $ \xs ->
+          divExact (V.length xs) n4 $ \i ->
+            V.join n4 $ fmap (shuffleD mask)
+                      $ V.split i n4 xs
 
     M.VOp2 w op2 x y ->
       case op2 of
@@ -72,7 +75,9 @@ pureSem sym fn =
 
         M.VPShufB -> vecOp2 sym LittleEndian w n8 x y $ \xs ys ->
           divExact (V.length xs) n16 $ \i ->
-            V.join n16 $ V.zipWith shufb (V.split i n16 xs) (V.split i n16 ys)
+            V.join n16 $ V.zipWith shuffleB
+                                   (V.split i n16 xs)
+                                   (V.split i n16 ys)
 
 
 {-
@@ -95,6 +100,7 @@ divExact n x k = withDivModNat n x $ \i r ->
     Nothing -> error "divExact: not a multiple of 16"
 
 -- | Assumes big-endian split
+-- See `vpalign` Intel instruction.
 vpalign :: Word8 ->
            V.Vector 16 (E sym (BVType 8)) ->
            V.Vector 16 (E sym (BVType 8)) ->
@@ -103,21 +109,19 @@ vpalign i xs ys =
   V.slice n0 n16 (V.shiftR (fromIntegral i) (bv 0) (V.append xs ys))
 
 -- | Shuffling with a mask.
--- For more info, see `VPSHUFD` Intel instruction.
-shuffle :: Word8 -> V.Vector n a -> V.Vector n a
-shuffle w = V.shuffle getField
+-- See `vpshufd` Intel instruction.
+shuffleD :: Word8 -> V.Vector 4 (E sym (BVType 32)) ->
+                    V.Vector 4 (E sym (BVType 32))
+shuffleD w = V.shuffle getField
   where
   -- Every 2 bits correspond to an index in the input.
-  -- The 4 fields packed in the 8 bit input mask are repeated.
-  getField x = let (d',r') = divMod x 4
-                   d = fromIntegral d'
-                   r = fromIntegral r'
-               in 4 * d + fromIntegral ((w `shiftR` (2 * r)) .&. 0x03)
+  getField x = fromIntegral ((w `shiftR` (2 * x)) .&. 0x03)
 
-shufb :: V.Vector 16 (E sym (BVType 8)) ->
-         V.Vector 16 (E sym (BVType 8)) ->
-         V.Vector 16 (E sym (BVType 8))
-shufb xs is = fmap lkp is
+-- | See `vpshufb` Intel instruction.
+shuffleB :: V.Vector 16 (E sym (BVType 8)) {- ^ Input data -} ->
+            V.Vector 16 (E sym (BVType 8)) {- ^ Indexes    -} ->
+            V.Vector 16 (E sym (BVType 8))
+shuffleB xs is = fmap lkp is
   where
   lkp i = app (BVIte (bvTestBit i 7) knownNat
               (bv 0)
