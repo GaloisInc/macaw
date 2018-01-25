@@ -66,6 +66,7 @@ pureSem sym fn =
       case op2 of
         M.VPOr   -> bitOp2 sym x y (BVOr w)
         M.VPXor  -> bitOp2 sym x y (BVXor w)
+        M.VPAnd  -> bitOp2 sym x y (BVAnd w)
 
         M.VPAlignR s -> vecOp2 sym BigEndian w n8 x y $ \xs ys ->
           divExact (V.length xs) n16 $ \i ->
@@ -91,20 +92,21 @@ pureSem sym fn =
       vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
         fmap (\x -> bvShiftL elSz shSz x (getVal amt)) xs
 
+    M.Pointwise2 elNum elSz op v1 v2 ->
+      vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
+        V.zipWith (semPointwise op elSz) xs ys
 
 
-divExact ::
-  NatRepr n ->
-  NatRepr x ->
-  (forall i. ((i * x) ~ n, 1 <= i) => NatRepr i -> k) ->
-  k
-divExact n x k = withDivModNat n x $ \i r ->
-  case testEquality r n0 of
-    Just Refl ->
-      case testLeq n1 i of
-        Just LeqProof -> k i
-        Nothing       -> error "divExact: 0 input"
-    Nothing -> error "divExact: not a multiple of 16"
+
+
+
+semPointwise :: (1 <= w) =>
+  M.AVXPointWiseOp2 -> NatRepr w ->
+    E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
+semPointwise op w x y =
+  case op of
+    M.PtAdd -> app (BVAdd w x y)
+    M.PtSub -> app (BVSub w x y)
 
 -- | Assumes big-endian split
 -- See `vpalign` Intel instruction.
@@ -135,6 +137,21 @@ shuffleB xs is = fmap lkp is
               (bvLookup xs (app $ BVTrunc n4 knownNat i)))
 
 --------------------------------------------------------------------------------
+divExact ::
+  NatRepr n ->
+  NatRepr x ->
+  (forall i. ((i * x) ~ n, 1 <= i) => NatRepr i -> k) ->
+  k
+divExact n x k = withDivModNat n x $ \i r ->
+  case testEquality r n0 of
+    Just Refl ->
+      case testLeq n1 i of
+        Just LeqProof -> k i
+        Nothing       -> error "divExact: 0 input"
+    Nothing -> error "divExact: not a multiple of 16"
+
+
+
 vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   sym         {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
