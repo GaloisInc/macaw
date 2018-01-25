@@ -22,7 +22,7 @@ import           Lang.Crucible.CFG.Expr
 import           Lang.Crucible.Solver.Interface hiding (IsExpr)
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
-import           Lang.Crucible.Utils.Endian(Endian(LittleEndian))
+import           Lang.Crucible.Utils.Endian(Endian(..))
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen(MacawExt)
@@ -52,13 +52,38 @@ pureSem sym fn =
     M.VOp1 w op1 x ->
       case op1 of
         M.VShiftL n ->
-           unpack w n8 x $ \vecIn ->
-           pack sym (V.shiftL (fromIntegral n) zero vecIn)
+           unpack BigEndian w n8 x $ \vecIn ->
+           pack BigEndian sym (V.shiftL (fromIntegral n) zero vecIn)
 
         M.VShufD mask ->
-           unpack w n32 x $ \vecIn ->
-           pack sym (shuffle mask vecIn)
+           unpack LittleEndian w n32 x $ \vecIn ->
+           pack LittleEndian sym (shuffle mask vecIn)
 
+{-
+    M.VOp2 w op2 x y ->
+      case op2 of
+        M.VPOr          -> evalE sym $ app $ BVOr  w (getVal x) (getVal y)
+        M.VPXor         -> evalE sym $ app $ BVXor w (getVal x) (getVal y)
+        M.VPAlignR i    ->
+          case testEquality w n128 of
+            Just Refl ->
+              unpack BigEndian w n8 x $ \xs ->
+              unpack BigEndian w n8 y $ \ys ->
+              pack BigEndian sym (vpalign i xs ys)
+
+        M.VPShufB       -> undefined
+        M.VAESEnc       -> undefined
+        M.VAESEncLast   -> undefined
+        M.VPCLMULQDQ i  -> undefined
+-}
+
+-- | Assumes big-endian split
+vpalign :: Word8 ->
+           V.Vector 16 (E sym (BVType 8)) ->
+           V.Vector 16 (E sym (BVType 8)) ->
+           V.Vector 16 (E sym (BVType 8))
+vpalign i xs ys =
+  V.slice n0 n16 (V.shiftR (fromIntegral i) zero (V.append xs ys))
 
 -- | Shuffling with a mask.
 -- For more info, see `VPSHUFD` Intel instruction.
@@ -76,23 +101,29 @@ shuffle w = V.shuffle getField
 
 -- | Package-up a vector expression to a bit-vector, and evaluate it.
 pack :: (IsSymInterface sym, KnownNat w, 1 <= w) =>
-  sym -> V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
-pack sym xs = evalE sym (V.toBV LittleEndian knownNat xs)
+  Endian -> sym ->
+  V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
+pack e sym xs = evalE sym (V.toBV e knownNat xs)
+
 
 -- | Split up a bit-vector into a vector.
+-- Even though X86 is little endian for memory accesses, this function
+-- is parameterized by endianness, as some instructions are more naturally
+-- expressed by splitting big-endian-wise (e.g., shifts)
 unpack ::
   (1 <= c) =>
+  Endian ->
   NatRepr w                               {- ^ Original length -} ->
   NatRepr c                               {- ^ Size of each chunk -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value -} ->
   (forall n. (1 <= n, (n * c) ~ w) => V.Vector n (E sym (BVType c)) -> IO a) ->
   IO a
-unpack w c v k =
+unpack e w c v k =
   withDivModNat w c $ \n r ->
     case testEquality r n0 of
       Just Refl ->
         case testLeq n1 n of
-          Just LeqProof -> k (V.fromBV n c (getVal v))
+          Just LeqProof -> k (V.fromBV e n c (getVal v))
           _             -> fail "Unexpected 0 size"
       _ -> fail ("Value not a multiple of " ++ show (widthVal c))
 
@@ -100,6 +131,7 @@ unpack w c v k =
 
 getVal :: AtomWrapper (RegEntry sym) mt -> E sym (ToCrucibleType mt)
 getVal (AtomWrapper x) = Val x
+
 
 --------------------------------------------------------------------------------
 
@@ -135,6 +167,12 @@ instance IsExpr (E sym) where
                 Expr a -> appType a
                 Val r  -> regType r
 
+
+zero :: (KnownNat w, 1 <= w) => E sym (BVType w)
+zero = app (BVLit knownNat 0)
+
+--------------------------------------------------------------------------------
+
 n0 :: NatRepr 0
 n0 = knownNat
 
@@ -144,11 +182,14 @@ n1 = knownNat
 n8 :: NatRepr 8
 n8 = knownNat
 
+n16 :: NatRepr 16
+n16 = knownNat
+
 n32 :: NatRepr 32
 n32 = knownNat
 
-zero :: (KnownNat w, 1 <= w) => E sym (BVType w)
-zero = app (BVLit knownNat 0)
+n128 :: NatRepr 128
+n128 = knownNat
 
 --------------------------------------------------------------------------------
 
