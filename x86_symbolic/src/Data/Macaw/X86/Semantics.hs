@@ -81,10 +81,17 @@ pureSem sym fn =
 
 
 {-
+        M.VPCLMULQDQ i  -> undefined
         M.VAESEnc       -> undefined
         M.VAESEncLast   -> undefined
-        M.VPCLMULQDQ i  -> undefined
 -}
+
+
+    M.PointwiseShiftL elNum elSz shSz bits amt ->
+      vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
+        fmap (\x -> bvShiftL elSz shSz x (getVal amt)) xs
+
+
 
 divExact ::
   NatRepr n ->
@@ -268,6 +275,16 @@ bvLookup xs ind = ite 0 3
                 else app $ BVIte (bvTestBit ind b) knownNat
                                  (ite (2 * i + 1) (b - 1))
                                  (ite (2 * i)     (b - 1))
+
+bvShiftL :: (1 <= w, 1 <= i) =>
+  NatRepr w -> NatRepr i ->
+  E sym (BVType w) -> E sym (BVType i) -> E sym (BVType w)
+bvShiftL w i vw vi = app (BVShl w vw amt)
+  where amt = case testNatCases i w of
+                NatCaseEQ -> vi
+                NatCaseLT LeqProof -> app (BVZext w i vi)
+                NatCaseGT LeqProof -> app (BVTrunc w i vi)
+
 
 --------------------------------------------------------------------------------
 
