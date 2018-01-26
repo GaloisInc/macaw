@@ -257,19 +257,19 @@ data AVXPointWiseOp2 =
 
 instance Show AVXOp1 where
   show x = case x of
-             VShiftL i -> "vshiftl" ++ show i
-             VShufD  i -> "vshufd" ++ show i
+             VShiftL i -> "vshiftl_" ++ show i
+             VShufD  i -> "vshufd_" ++ show i
 
 instance Show AVXOp2 where
   show x = case x of
              VPAnd        -> "vpand"
              VPOr         -> "vpor"
              VPXor        -> "vpxor"
-             VPAlignR i   -> "vpalignr" ++ show i
+             VPAlignR i   -> "vpalignr_" ++ show i
              VPShufB      -> "vpshufb"
              VAESEnc      -> "vaesenc"
              VAESEncLast  -> "vaesenclast"
-             VPCLMULQDQ i -> "vpclmulqdq" ++ show i
+             VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
 
 instance Show AVXPointWiseOp2 where
   show x = case x of
