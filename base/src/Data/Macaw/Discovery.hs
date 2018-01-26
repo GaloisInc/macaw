@@ -304,11 +304,12 @@ addFunBlock ::
     FunState arch s ids
 addFunBlock segment block s = case Map.lookupLT segment (s ^. curFunBlocks) of
     Just (bSegment, bBlock)
-           -- if we're in the same segment
-        |  msegSegment bSegment == msegSegment segment
-           -- and the blocks overlap
-        && msegOffset bSegment + blockSize bBlock >= msegOffset segment
-           -- then put the overlapped segment back in the frontier
+        -- very sneaky way to check that they are in the same segment (a
+        -- Nothing result from diffSegmentOff will never be greater than a
+        -- Just) and that they are overlapping (the block size is bigger than
+        -- you'd expect given the address difference)
+        | diffSegmentOff bSegment segment > Just (-toInteger (blockSize bBlock))
+        -- put the overlapped segment back in the frontier
         -> s & curFunBlocks %~ (Map.insert segment block . Map.delete bSegment)
              & foundAddrs.at bSegment._Just.foundReasonL %~ SplitAt segment
              & frontier %~ Set.insert bSegment
