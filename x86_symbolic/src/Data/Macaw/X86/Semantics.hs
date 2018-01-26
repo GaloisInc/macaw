@@ -20,6 +20,7 @@ import GHC.TypeLits(KnownNat)
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.RegMap
 import qualified Lang.Crucible.Simulator.Evaluation as C
+import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
 import           Lang.Crucible.Syntax
 import           Lang.Crucible.CFG.Expr
 import           Lang.Crucible.Solver.Interface hiding (IsExpr)
@@ -41,12 +42,16 @@ semantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-semantics x s = do v <- pureSem (stateSymInterface s) x
+semantics x s = do let sym = Sym (stateSymInterface s) (stateIntrinsicTypes s)
+                   v <- pureSem sym x
                    return (v,s)
+
+data Sym s = Sym s (IntrinsicTypes s)
+
 
 -- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: (IsSymInterface sym) =>
-  sym {- ^ Handle to the simulator -} ->
+  Sym sym   {- ^ Handle to the simulator -} ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt {- ^ Instruction -} ->
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
@@ -115,8 +120,13 @@ pureSem sym fn =
 
 -- | Caryless multiplication.
 clmul :: E sym (BVType 64) -> E sym (BVType 64) -> E sym (BVType 128)
-clmul = undefined
-
+clmul temp2 temp1 = undefined
+{-
+  where
+  least i = case testLeq i n63 of
+              Just LEQ ->
+                let tmpB = bvGetBit temp1 n0
+-}
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
@@ -171,7 +181,7 @@ divExact n x k = withDivModNat n x $ \i r ->
 
 
 vecOp1 :: (IsSymInterface sym, 1 <= c) =>
-  sym         {- ^ Simulator -} ->
+  Sym sym     {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
   NatRepr w   {- ^ Total width of the bit-vector -} ->
   NatRepr c   {- ^ Width of individual elements -} ->
@@ -186,7 +196,7 @@ vecOp1 sym endian totLen elLen x f =
 
 
 vecOp2 :: (IsSymInterface sym, 1 <= c) =>
-  sym         {- ^ Simulator -} ->
+  Sym sym     {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
   NatRepr w   {- ^ Total width of the bit-vector -} ->
   NatRepr c   {- ^ Width of individual elements -} ->
@@ -204,7 +214,7 @@ vecOp2 sym endian totLen elLen x y f =
 
 
 bitOp2 :: (IsSymInterface sym) =>
-  sym                                     {- ^ The simulator -} ->
+  Sym sym                                 {- ^ The simulator -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 1 -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 2 -} ->
   (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w)) ->
@@ -214,7 +224,7 @@ bitOp2 sym x y f = evalE sym $ app $ f (getVal x) (getVal y)
 
 -- | Package-up a vector expression to a bit-vector, and evaluate it.
 pack :: (IsSymInterface sym, KnownNat w, 1 <= w) =>
-  Endian -> sym ->
+  Endian -> Sym sym ->
   V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
 pack e sym xs = evalE sym (V.toBV e knownNat xs)
 
@@ -261,16 +271,15 @@ getVal (AtomWrapper x) = Val x
 --------------------------------------------------------------------------------
 -- A small functor that allows mixing of values and Crucible expressions.
 
-evalE :: IsSymInterface sym => sym -> E sym t -> IO (RegValue sym t)
+evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
 evalE sym e = case e of
                 Val x  -> return (regValue x)
                 Expr a -> evalApp sym a
 
 evalApp :: forall sym t.  IsSymInterface sym =>
-         sym -> App () (E sym) t -> IO (RegValue sym t)
-evalApp sym = C.evalApp sym intrinsics logger evalExt (evalE sym)
+         Sym sym -> App () (E sym) t -> IO (RegValue sym t)
+evalApp x@(Sym sym i) = C.evalApp sym i logger evalExt (evalE x)
   where
-  intrinsics = undefined
   logger _ _ = return ()
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
   evalExt _ x  = case x of {}
@@ -294,9 +303,23 @@ bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
 bv i = app (BVLit knownNat (fromIntegral i))
 
 
+bvAnd :: (KnownNat w, 1 <= w) =>
+  E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
+bvAnd x y = app (BVAdd knownNat x y)
+
+bvXor :: (KnownNat w, 1 <= w) =>
+  E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
+bvXor x y = app (BVAdd knownNat x y)
+
+
+
 bvTestBit :: (KnownNat w, 1 <= w) => E sym (BVType w) -> Int -> E sym BoolType
 bvTestBit e n = app $ BVNonzero knownNat $
                 app $ BVAnd knownNat e (bv (shiftL 1 n))
+
+bvGetBit :: (KnownNat w, 1 <= w, i + 1 <= w) =>
+  E sym (BVType w) -> NatRepr i -> E sym (BVType 1)
+bvGetBit e i = app $ BVSelect i n1 knownNat e
 
 bvLookup ::
   (1 <= w, KnownNat w) =>
@@ -343,6 +366,9 @@ n16 = knownNat
 
 n32 :: NatRepr 32
 n32 = knownNat
+
+n63 :: NatRepr 63
+n63 = knownNat
 
 n64 :: NatRepr 64
 n64 = knownNat
