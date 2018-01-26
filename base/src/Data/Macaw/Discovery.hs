@@ -260,6 +260,9 @@ data FoundAddr arch
                  -- ^ The abstract state formed from post-states that reach this address.
                }
 
+foundReasonL :: Lens' (FoundAddr arch) (CodeAddrReason (ArchAddrWidth arch))
+foundReasonL = lens foundReason (\old new -> old { foundReason = new })
+
 ------------------------------------------------------------------------
 -- FunState
 
@@ -290,6 +293,27 @@ curFunBlocks = lens _curFunBlocks (\s v -> s { _curFunBlocks = v })
 
 foundAddrs :: Simple Lens (FunState arch s ids) (Map (ArchSegmentOff arch) (FoundAddr arch))
 foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
+
+-- | Add a block to the current function blocks. If this overlaps with an
+-- existing block, split them so that there's no overlap.
+addFunBlock ::
+    MemWidth (RegAddrWidth (ArchReg arch)) =>
+    ArchSegmentOff arch ->
+    ParsedBlock arch ids ->
+    FunState arch s ids ->
+    FunState arch s ids
+addFunBlock segment block s = case Map.lookupLT segment (s ^. curFunBlocks) of
+    Just (bSegment, bBlock)
+        -- very sneaky way to check that they are in the same segment (a
+        -- Nothing result from diffSegmentOff will never be greater than a
+        -- Just) and that they are overlapping (the block size is bigger than
+        -- you'd expect given the address difference)
+        | diffSegmentOff bSegment segment > Just (-toInteger (blockSize bBlock))
+        -- put the overlapped segment back in the frontier
+        -> s & curFunBlocks %~ (Map.insert segment block . Map.delete bSegment)
+             & foundAddrs.at bSegment._Just.foundReasonL %~ SplitAt segment
+             & frontier %~ Set.insert bSegment
+    _ -> s & curFunBlocks %~ Map.insert segment block
 
 type ReverseEdgeMap arch = Map (ArchSegmentOff arch) (Set (ArchSegmentOff arch))
 
@@ -758,7 +782,8 @@ parseBlock ctx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: ArchSegmentOff arch
+transferBlocks :: MemWidth (RegAddrWidth (ArchReg arch))
+               => ArchSegmentOff arch
                   -- ^ Address of theze blocks
                -> FoundAddr arch
                   -- ^ State leading to explore block
@@ -801,7 +826,7 @@ transferBlocks src finfo sz block_map =
                            , blockAbstractState = foundAbstractState finfo
                            , blockStatementList = pblock
                            }
-      curFunBlocks %= Map.insert src pb
+      id %= addFunBlock src pb
       curFunCtx %= markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
                 .  markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
@@ -848,7 +873,7 @@ transfer addr = do
                          , blockAbstractState = foundAbstractState finfo
                          , blockStatementList = stmts
                          }
-    curFunBlocks %= Map.insert addr pb
+    id %= addFunBlock addr pb
    else do
     -- Rewrite returned blocks to simplify expressions
 
