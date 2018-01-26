@@ -282,7 +282,7 @@ instance Show AVXPointWiseOp2 where
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp where
   EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
-  -- ^ Return true if least-significant bit has even number of bits set.
+  -- ^ Return true if the operatnd has has even number of bits set.
   ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
   -- ^ Read from a primitive X86 location
   ReadFSBase :: X86PrimFn f (BVType 64)
