@@ -14,7 +14,7 @@ module Data.Macaw.X86.Semantics where
 import Data.Parameterized.NatRepr
 import Data.Bits(shiftR, (.&.))
 import Data.Word(Word8)
-import Data.Bits(shiftL)
+import Data.Bits(shiftL,testBit)
 import GHC.TypeLits(KnownNat)
 
 import           Lang.Crucible.Simulator.ExecutionTree
@@ -51,6 +51,12 @@ pureSem :: (IsSymInterface sym) =>
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
+    M.EvenParity x ->
+      evalE sym  $
+       app $ Not $
+         foldr1 xor [ bvTestBit (getVal x) i | i <- [ 0 .. 7 ] ]
+      where xor a b = app (BoolXor a b)
+
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -81,8 +87,17 @@ pureSem sym fn =
                                    (V.split i n16 ys)
 
 
+        M.VPCLMULQDQ i -> unpack2 LittleEndian w n64 x y $ \xs ys ->
+          case testEquality (V.length xs) n2 of
+            Just Refl ->
+              do let v1 = if i `testBit` 0 then V.elemAt n1 xs
+                                           else V.elemAt n0 xs
+                     v2 = if i `testBit` 4 then V.elemAt n1 ys
+                                           else V.elemAt n0 ys
+                 evalE sym (clmul v2 v1)
+            _ -> fail "Unepected size for VPCLMULQDQ"
+
 {-
-        M.VPCLMULQDQ i  -> undefined
         M.VAESEnc       -> undefined
         M.VAESEncLast   -> undefined
 -}
@@ -98,6 +113,9 @@ pureSem sym fn =
 
 
 
+-- | Caryless multiplication.
+clmul :: E sym (BVType 64) -> E sym (BVType 64) -> E sym (BVType 128)
+clmul = undefined
 
 
 semPointwise :: (1 <= w) =>
@@ -325,6 +343,9 @@ n16 = knownNat
 
 n32 :: NatRepr 32
 n32 = knownNat
+
+n64 :: NatRepr 64
+n64 = knownNat
 
 n128 :: NatRepr 128
 n128 = knownNat
