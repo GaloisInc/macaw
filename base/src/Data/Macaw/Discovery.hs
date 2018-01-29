@@ -215,15 +215,13 @@ eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
 -- Memory utilities
 
 -- | Return true if range is entirely contained within a single read only segment.Q
-rangeInReadonlySegment :: Memory w
-                       -> MemAddr w -- ^ Start of range
+rangeInReadonlySegment :: MemWidth w
+                       => MemSegmentOff w -- ^ Start of range
                        -> MemWord w -- ^ The size of the range
                        -> Bool
-rangeInReadonlySegment mem base size = addrWidthClass (memAddrWidth mem) $
-  case asSegmentOff mem base of
-    Just mseg -> size <= segmentSize (msegSegment mseg) - msegOffset mseg
-                   && Perm.isReadonly (segmentFlags (msegSegment mseg))
-    Nothing -> False
+rangeInReadonlySegment mseg size =
+     size <= segmentSize (msegSegment mseg) - msegOffset mseg
+  && Perm.isReadonly (segmentFlags (msegSegment mseg))
 
 ------------------------------------------------------------------------
 -- DiscoveryState utilities
@@ -390,17 +388,16 @@ mergeIntraJump src ab tgt = do
 matchJumpTable :: MemWidth (ArchAddrWidth arch)
                => Memory (ArchAddrWidth arch)
                -> BVValue arch ids (ArchAddrWidth arch) -- ^ Memory address that IP is read from.
-               -> Maybe (ArchMemAddr arch, BVValue arch ids (ArchAddrWidth arch))
+               -> Maybe (ArchSegmentOff arch, BVValue arch ids (ArchAddrWidth arch))
 matchJumpTable mem read_addr
     -- Turn the read address into base + offset.
   | Just (BVAdd _ offset base_val) <- valueAsApp read_addr
-  , Just base <- asLiteralAddr base_val
+  , Just mseg <- valueAsSegmentOff mem base_val
     -- Turn the offset into a multiple by an index.
   , Just (BVMul _ (BVValue _ mul) jump_index) <- valueAsApp offset
   , mul == toInteger (addrSize (memAddrWidth mem))
-  , Just mseg <- asSegmentOff mem base
   , Perm.isReadonly (segmentFlags (msegSegment mseg)) = do
-    Just (base, jump_index)
+    Just (mseg, jump_index)
 matchJumpTable _ _ =
     Nothing
 
@@ -430,16 +427,15 @@ showJumpTableBoundsError err =
 -- not a block table.
 getJumpTableBounds :: ArchitectureInfo a
                    -> AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
-                   -> ArchMemAddr a -- ^ Base
+                   -> ArchSegmentOff a -- ^ Base
                    -> BVValue a ids (ArchAddrWidth a) -- ^ Index in jump table
                    -> Either (JumpTableBoundsError a ids) (ArchAddrWord a)
                    -- ^ One past last index in jump table or nothing
 getJumpTableBounds info regs base jump_index = withArchConstraints info $
   case transferValue regs jump_index of
     StridedInterval (SI.StridedInterval _ index_base index_range index_stride) -> do
-      let mem = absMem regs
       let index_end = index_base + (index_range + 1) * index_stride
-      if rangeInReadonlySegment mem base (jumpTableEntrySize info * fromInteger index_end) then
+      if rangeInReadonlySegment base (jumpTableEntrySize info * fromInteger index_end) then
         case Jmp.unsignedUpperBound (regs^.indexBounds) jump_index of
           Right (Jmp.IntegerUpperBound bnd) | bnd == index_range -> Right $! fromInteger index_end
           Right bnd -> Left (UpperBoundMismatch bnd index_range)
@@ -536,7 +532,7 @@ identifyCallTargets absState ip = do
       case assignRhs a of
         -- See if we can get a value out of a concrete memory read.
         ReadMem addr (BVMemRepr _ end)
-          | Just laddr <- asLiteralAddr addr
+          | Just laddr <- valueAsMemAddr addr
           , Right val <- readAddr mem end laddr ->
             segOffAddrs (asSegmentOff mem val) ++ def
         _ -> def
@@ -591,7 +587,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                            }
 
       -- Jump to a block within this function.
-      | Just tgt_mseg <- asSegmentOff mem =<< asLiteralAddr (s'^.boundValue ip_reg)
+      | Just tgt_mseg <- asSegmentOff mem =<< valueAsMemAddr (s'^.boundValue ip_reg)
       , segmentFlags (msegSegment tgt_mseg) `Perm.hasPerm` Perm.execute
         -- The target address cannot be this function entry point.
         --
@@ -647,7 +643,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                   -- Stop jump table when we have reached computed bounds.
                   return (reverse prev)
                 resolveJump prev idx = do
-                  let read_addr = base & incAddr (toInteger (8 * idx))
+                  let read_addr = relativeSegmentAddr base & incAddr (toInteger (8 * idx))
                   case readAddr mem (archEndianness arch_info) read_addr of
                       Right tgt_addr
                         | Just read_mseg <- asSegmentOff mem read_addr
@@ -679,7 +675,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
       -- "identifyCall" case, so this must be a tail call, assuming we trust our
       -- known function entry info.
       | pctxTrustKnownFns ctx
-      , Just tgt_mseg <- asSegmentOff mem =<< asLiteralAddr (s'^.boundValue ip_reg)
+      , Just tgt_mseg <- valueAsSegmentOff mem (s'^.boundValue ip_reg)
       , tgt_mseg `elem` pctxKnownFnEntries ctx ->
         finishWithTailCall absProcState'
 

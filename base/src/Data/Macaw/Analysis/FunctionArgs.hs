@@ -428,7 +428,7 @@ summarizeCall :: forall arch ids
               -> FunctionArgsM arch ids ()
 summarizeCall mem lbl proc_state isTailCall = do
   knownAddrs <- gets computedAddrSet
-  case asLiteralAddr (proc_state^.boundValue ip_reg) of
+  case valueAsMemAddr (proc_state^.boundValue ip_reg) of
     Just faddr0
       | Just faddr <- asSegmentOff mem faddr0
       , Set.member faddr knownAddrs -> do

@@ -387,7 +387,7 @@ dropSegmentRangeListBytes [] _ =
 -- SegmentContents
 
 -- | A sequence of values in the segment.
-newtype SegmentContents w = SegmentContents (Map.Map (MemWord w) (SegmentRange w))
+newtype SegmentContents w = SegmentContents { segContentsMap :: Map.Map (MemWord w) (SegmentRange w) }
 
 -- | Create the segment contents from a list of ranges.
 contentsFromList :: MemWidth w => [SegmentRange w] -> SegmentContents w
@@ -402,22 +402,24 @@ contentsSize (SegmentContents m) =
 
 -- | Return list of contents from given word or 'Nothing' if this can't be done
 -- due to a relocation.
-contentsAfter :: MemWidth w
-              => MemWord w
-              -> SegmentContents w
-              -> Maybe [SegmentRange w]
-contentsAfter off (SegmentContents m) = do
-  let (premap,mv,post) = Map.splitLookup off m
+contentsAfterSegmentOff :: MemWidth w
+                        => MemSegmentOff w
+                        -> Either (MemoryError w) [SegmentRange w]
+contentsAfterSegmentOff mseg = do
+  let off = msegOffset mseg
+  let contents = segmentContents (msegSegment mseg)
+  let (premap,mv,post) = Map.splitLookup off (segContentsMap contents)
   case mv of
-    Just v -> Just $ v : Map.elems post
+    Just v -> Right $ v : Map.elems post
     Nothing ->
       case Map.maxViewWithKey premap of
-        Nothing | off == 0 -> Just []
-                | otherwise -> error $ "Memory.contentsAfter invalid contents"
-        Just ((pre_off, ByteRegion bs),_) ->
+        Nothing | off == 0 -> Right []
+                | otherwise -> error $ "Memory.contentsAfterSegmentOff invalid contents"
+        Just ((pre_off, ByteRegion bs),_) -> do
           let v = ByteRegion (BS.drop (fromIntegral (off - pre_off)) bs)
-           in Just $ v : Map.elems post
-        Just ((_, SymbolicRef{}),_) -> Nothing
+          Right $ v : Map.elems post
+        Just ((_, SymbolicRef{}),_) ->
+          Left (UnexpectedRelocation (relativeSegmentAddr mseg))
 
 contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsList (SegmentContents m) = Map.toList m
@@ -776,19 +778,20 @@ data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
 ------------------------------------------------------------------------
 -- Memory reading utilities
 
+resolveMemAddr :: Memory w -> MemAddr w -> Either (MemoryError w) (MemSegmentOff w)
+resolveMemAddr mem addr =
+  case asSegmentOff mem addr of
+    Just p -> Right p
+    Nothing -> Left (InvalidAddr addr)
+
 -- | Return contents starting from location or throw a memory error if there
 -- is an unaligned relocation.
 addrContentsAfter :: Memory w
                   -> MemAddr w
                   -> Either (MemoryError w) [SegmentRange w]
-addrContentsAfter mem addr = addrWidthClass (memAddrWidth mem) $ do
-  MemSegmentOff seg off <-
-    case asSegmentOff mem addr of
-      Just p -> pure p
-      Nothing -> Left (InvalidAddr addr)
-  case contentsAfter off (segmentContents seg) of
-    Just l -> Right l
-    Nothing -> Left (UnexpectedRelocation addr)
+addrContentsAfter mem addr = do
+  addrWidthClass (memAddrWidth mem) $
+    contentsAfterSegmentOff =<< resolveMemAddr mem addr
 
 -- | Attemtp to read a bytestring of the given length
 readByteString :: Memory w -> MemAddr w -> Word64 -> Either (MemoryError w) BS.ByteString

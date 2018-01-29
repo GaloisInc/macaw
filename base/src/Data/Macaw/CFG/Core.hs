@@ -34,6 +34,8 @@ module Data.Macaw.CFG.Core
   , BVValue
   , valueAsApp
   , valueAsArchFn
+  , valueAsMemAddr
+  , valueAsSegmentOff
   , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
@@ -112,8 +114,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Data.Macaw.CFG.App
-import           Data.Macaw.Memory ( MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..)
-                                   , absoluteAddr)
+import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
 
@@ -446,12 +447,27 @@ valueAsArchFn _ = Nothing
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
+valueAsMemAddr :: MemWidth (ArchAddrWidth arch)
+               => BVValue arch ids (ArchAddrWidth arch)
+               -> Maybe (ArchMemAddr arch)
+valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
+valueAsMemAddr (RelocatableValue _ i) = Just i
+valueAsMemAddr _ = Nothing
+
 asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-              => BVValue arch ids (ArchAddrWidth arch)
-              -> Maybe (ArchMemAddr arch)
-asLiteralAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
-asLiteralAddr (RelocatableValue _ i) = Just i
-asLiteralAddr _ = Nothing
+               => BVValue arch ids (ArchAddrWidth arch)
+               -> Maybe (ArchMemAddr arch)
+asLiteralAddr = valueAsMemAddr
+
+{-# DEPRECATED asLiteralAddr "Use valueAsMemAddr" #-}
+
+-- | Returns a segment offset associated with the value if one can be defined.
+valueAsSegmentOff :: Memory (ArchAddrWidth arch)
+                  -> BVValue arch ids (ArchAddrWidth arch)
+                  -> Maybe (ArchSegmentOff arch)
+valueAsSegmentOff mem v = do
+  a <- addrWidthClass (memAddrWidth mem) (valueAsMemAddr v)
+  asSegmentOff mem a
 
 asInt64Constant :: Value arch ids (BVType 64) -> Maybe Int64
 asInt64Constant (BVValue _ o) = Just (fromInteger o)

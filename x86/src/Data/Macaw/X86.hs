@@ -427,7 +427,7 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Check this is the right length.
               , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
                 -- Check if value is a valid literal address
-              , Just val_a <- asLiteralAddr val
+              , Just val_a <- valueAsMemAddr val
                 -- Check if segment of address is marked as executable.
               , Just ret_addr <- asSegmentOff mem val_a
               , segmentFlags (msegSegment ret_addr) `Perm.hasPerm` Perm.execute ->
