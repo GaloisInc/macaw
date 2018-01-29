@@ -54,7 +54,6 @@ import           Data.Bits
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
-import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map

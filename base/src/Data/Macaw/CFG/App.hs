@@ -239,11 +239,8 @@ instance TraversableFC App where
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty
 
-ppApp :: (forall u . f u -> Doc)
-      -> App f tp
-      -> Doc
-ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
-
+-- | Pretty print an 'App' as an expression using the given function
+-- for printing arguments.
 ppAppA :: Applicative m
       => (forall u . f u -> m Doc)
       -> App f tp
@@ -285,6 +282,11 @@ ppAppA pp a0 =
     SsbbOverflows x y c -> sexprA "ssbb_overflows" [ pp x, pp y, pp c ]
     Bsf _ x -> sexprA "bsf" [ pp x ]
     Bsr _ x -> sexprA "bsr" [ pp x ]
+
+ppApp :: (forall u . f u -> Doc)
+      -> App f tp
+      -> Doc
+ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
 
 ------------------------------------------------------------------------
 -- appType

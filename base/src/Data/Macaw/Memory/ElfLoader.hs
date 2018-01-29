@@ -1,5 +1,4 @@
 {-|
-Module      : Data.Macaw.Memory.ElfLoader
 Copyright   : (c) Galois Inc, 2016
 Maintainer  : jhendrix@galois.com
 
@@ -18,10 +17,9 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
-  , LoadStyle(..)
-  , LoadOptions(..)
   , memoryForElf
   , resolveElfFuncSymbols
+  , module Data.Macaw.Memory.LoadCommon
   ) where
 
 import           Control.Lens
@@ -74,6 +72,7 @@ import           Data.Maybe
 import qualified Data.Vector as V
 
 import           Data.Macaw.Memory
+import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
 
 -- | Return a subbrange of a bytestring.
@@ -118,33 +117,7 @@ flagsForSectionFlags f =
         flagIf ef pf = if f `Elf.hasPermissions` ef then pf else Perm.none
 
 ------------------------------------------------------------------------
--- LoadOptions
-
--- | How to load Elf file.
-data LoadStyle
-   = LoadBySection
-     -- ^ Load loadable sections in Elf file.
-   | LoadBySegment
-     -- ^ Load segments in Elf file.
-  deriving (Eq)
-
--- | Options used to configure loading
-data LoadOptions
-   = LoadOptions { loadRegionIndex :: !RegionIndex
-                   -- ^ Defines the "region" to load sections and segments into.
-                   --
-                   -- This should be 0 for static libraries since their addresses are
-                   -- absolute.  It should likely be non-zero for shared library since their
-                   -- addresses are relative.  Different shared libraries loaded into the
-                   -- same memory should have different region indices.
-                 , loadStyle :: !LoadStyle
-                   -- ^ Controls whether to load by section or segment
-                 , includeBSS :: !Bool
-                   -- ^ Include data not backed by file when creating memory segments.
-                 }
-
-------------------------------------------------------------------------
--- MemSegment
+-- Loading by segment
 
 -- | Return segments for data
 byteSegments :: forall w
