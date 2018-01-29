@@ -27,6 +27,7 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
+import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.X86 as RO
 
 elfX64LinuxTests :: [FilePath] -> T.TestTree
@@ -34,7 +35,7 @@ elfX64LinuxTests = T.testGroup "ELF x64 Linux" . map mkTest
 
 -- | The type of expected results for test cases
 data ExpectedResult =
-  R { funcs :: [(Word64, [Word64])]
+  R { funcs :: [(Word64, [(Word64, Integer)])]
     -- ^ The first element of the pair is the address of entry point
     -- of the function.  The list is a list of the addresses of the
     -- basic blocks in the function (including the first block).
@@ -57,7 +58,7 @@ mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
   withMemory MM.Addr64 elf $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry elf))))
+    let Just entryPoint = MM.asSegmentOff mem (MM.absoluteAddr (MM.memWord (E.elfEntry elf)))
         di = MD.cfgFromAddrs RO.x86_64_linux_info mem M.empty [entryPoint] []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
@@ -65,17 +66,23 @@ testDiscovery expectedFilename elf =
       Just er -> do
         let expectedEntries = M.fromList [ (entry, S.fromList starts) | (entry, starts) <- funcs er ]
             ignoredBlocks = S.fromList (ignoreBlocks er)
+            absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr
+        T.assertEqual "Collection of discovered function starting points"
+          (M.keysSet expectedEntries `S.difference` ignoredBlocks)
+          (S.map absoluteFromSegOff (M.keysSet (di ^. MD.funInfo)))
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
-          let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
+          let actualEntry = absoluteFromSegOff (MD.discoveredFunAddr dfi)
               -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
-              actualBlockStarts = S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+              actualBlockStarts = S.fromList [ (addr, toInteger (MD.blockSize pbr))
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                                             , let addr = absoluteFromSegOff (MD.pblockAddr pbr)
+                                             , addr `S.notMember` ignoredBlocks
                                              ]
           case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of
             (True, _) -> return ()
             (_, Nothing) -> T.assertFailure (printf "Unexpected entry point: 0x%x" actualEntry)
             (_, Just expectedBlockStarts) ->
-              T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts (actualBlockStarts `S.difference` ignoredBlocks)
+              T.assertEqual (printf "Block starts for 0x%x" actualEntry) expectedBlockStarts actualBlockStarts
 
 withELF :: FilePath -> (E.Elf 64 -> IO ()) -> IO ()
 withELF fp k = do

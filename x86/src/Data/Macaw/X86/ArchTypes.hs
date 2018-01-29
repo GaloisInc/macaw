@@ -257,19 +257,19 @@ data AVXPointWiseOp2 =
 
 instance Show AVXOp1 where
   show x = case x of
-             VShiftL i -> "vshiftl" ++ show i
-             VShufD  i -> "vshufd" ++ show i
+             VShiftL i -> "vshiftl_" ++ show i
+             VShufD  i -> "vshufd_" ++ show i
 
 instance Show AVXOp2 where
   show x = case x of
              VPAnd        -> "vpand"
              VPOr         -> "vpor"
              VPXor        -> "vpxor"
-             VPAlignR i   -> "vpalignr" ++ show i
+             VPAlignR i   -> "vpalignr_" ++ show i
              VPShufB      -> "vpshufb"
              VAESEnc      -> "vaesenc"
              VAESEncLast  -> "vaesenclast"
-             VPCLMULQDQ i -> "vpclmulqdq" ++ show i
+             VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
 
 instance Show AVXPointWiseOp2 where
   show x = case x of
@@ -282,7 +282,7 @@ instance Show AVXPointWiseOp2 where
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp where
   EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
-  -- ^ Return true if least-significant bit has even number of bits set.
+  -- ^ Return true if the operatnd has has even number of bits set.
   ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
   -- ^ Read from a primitive X86 location
   ReadFSBase :: X86PrimFn f (BVType 64)

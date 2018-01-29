@@ -75,8 +75,8 @@ data CodeAddrReason w
      -- ^ Identified as an entry point from initial information
    | CodePointerInMem !(MemSegmentOff w)
      -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(MemAddr w)
-     -- ^ Added because the address split this block after it had been disassembled.
+   | SplitAt !(MemSegmentOff w) !(CodeAddrReason w)
+     -- ^ Added because the address split this block after it had been disassembled. Also includes the reason we thought the block should be there before we split it.
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Eq, Show)
