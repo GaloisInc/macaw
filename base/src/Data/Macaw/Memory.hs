@@ -662,8 +662,9 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
 ------------------------------------------------------------------------
 -- MemAddr
 
--- | A memory address is either an absolute value in memory or an
--- offset of segment that could be relocated.
+-- | An address in memory.  Due to our use of relocatable "regions",
+-- this internally represented by a region index for the base, and an
+-- offset.
 --
 -- This representation does not require that the address is mapped to
 -- actual memory (see `MemSegmentOff` for an address representation
@@ -679,21 +680,19 @@ data MemAddr w
 absoluteAddr :: MemWord w -> MemAddr w
 absoluteAddr = MemAddr 0
 
--- | Return an address relative to a known memory segment
--- if the memory is unmapped.
+-- | Construct an address relative to an existing memory segment.
 relativeAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
 relativeAddr seg off = MemAddr (segmentBase seg) (segmentOffset seg + off)
 
--- | Return a segmented addr using the offset of an existing segment, or 'Nothing'
--- if the memory is unmapped.
+-- | Return the address associated with a memory segment.
 relativeSegmentAddr :: MemWidth w => MemSegmentOff w -> MemAddr w
 relativeSegmentAddr (MemSegmentOff seg off) = relativeAddr seg off
 
--- | Return the offset of the address after adding the base segment value if defined.
+-- | Return an absolute address if the region of the memAddr is 0.
 asAbsoluteAddr :: MemWidth w => MemAddr w -> Maybe (MemWord w)
 asAbsoluteAddr (MemAddr i w) = if i == 0 then Just w else Nothing
 
--- | Return the resolved segment offset reference from an address.
+-- | Return a segment offset from the address if defined.
 asSegmentOff :: Memory w -> MemAddr w -> Maybe (MemSegmentOff w)
 asSegmentOff mem (MemAddr i addr) = resolveAddr mem i addr
 
@@ -709,8 +708,8 @@ addrLeastBit (MemAddr _ (MemWord off)) = off `testBit` 0
 incAddr :: MemWidth w => Integer -> MemAddr w -> MemAddr w
 incAddr o (MemAddr i off) = MemAddr i (off + fromInteger o)
 
--- | Returns the number of bytes between two addresses if they are comparable
--- or 'Nothing' if they are not.
+-- | Returns the number of bytes between two addresses if they point to
+-- the same region and `Nothing` if they are different segments.
 diffAddr :: MemWidth w => MemAddr w -> MemAddr w -> Maybe Integer
 diffAddr (MemAddr xb xoff) (MemAddr yb yoff)
   | xb == yb = Just $ toInteger xoff - toInteger yoff

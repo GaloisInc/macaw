@@ -81,7 +81,6 @@ import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
-import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 

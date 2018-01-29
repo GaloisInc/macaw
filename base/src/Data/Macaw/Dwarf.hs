@@ -1,3 +1,10 @@
+{- |
+Copyright        : (c) Galois, Inc 2018
+Maintainer       : Joe Hendrix <jhendrix@galois.com>
+
+This defines data structures for parsing Dwarf debug information from
+binaries.
+-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -11,14 +18,20 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Dwarf
-  ( dwarfInfoFromElf
-  , dwarfGlobals
+  ( -- * Compile units and declarations
+    dwarfInfoFromElf
   , CompileUnit(..)
+  , dwarfGlobals
+    -- * Variables
   , Variable(..)
-  , Location(..)
-  , DeclLoc(..)
+  , InlineVariable(..)
+    -- * Sub programs
   , Subprogram(..)
   , SubprogramDef(..)
+  , InlinedSubprogram(..)
+    -- * Locations
+  , Location(..)
+  , DeclLoc(..)
     -- * Type information
   , Type(..)
   , TypeF(..)
@@ -27,9 +40,11 @@ module Data.Macaw.Dwarf
   , UnionDecl(..)
   , Member(..)
   , EnumDecl(..)
+  , Enumerator(..)
   , SubroutineTypeDecl(..)
-  , Subrange
-    -- * Re-exports
+  , Subrange(..)
+  , Typedef(..)
+    -- * Exports of "Data.Dwarf"
   , Dwarf.DieID
   , Dwarf.DW_OP(..)
   , Dwarf.Range(..)
@@ -354,7 +369,6 @@ parseEnumerator d = runDIEParser "parseEnumerator" d $ do
 ------------------------------------------------------------------------
 -- Subrange
 
--- | Identifies a rrange
 data Subrange tp = Subrange { subrangeType :: tp
                             , subrangeUpperBound :: [DW_OP]
                             }
@@ -691,6 +705,8 @@ parseTypeMap file_vec = do
 ------------------------------------------------------------------------
 -- Type
 
+-- | A type in the Dwarf file as represented by a recursive application
+-- of 'TypeF'.
 data Type = Type { typeF :: !(TypeF Type)
                  , typeIsConst :: !Bool
                  , typeIsVolatile :: !Bool
@@ -1023,6 +1039,7 @@ parseInlinedSubprogram file_vec typeMap subprogramMap d =
 ------------------------------------------------------------------------
 -- CompileUnit
 
+-- | The output of one compilation.
 data CompileUnit = CompileUnit { cuProducer    :: String
                                , cuLanguage    :: Maybe DW_LANG
                                , cuName        :: String
@@ -1031,7 +1048,7 @@ data CompileUnit = CompileUnit { cuProducer    :: String
                                , cuSubprograms :: ![Subprogram]
                                , cuInlinedSubprograms :: ![InlinedSubprogram]
                                , cuVariables   :: ![Variable]
-                                 -- ^ Global variables defined in compile unit
+                                 -- ^ Global variables in this unit
                                , cuRanges      :: ![Dwarf.Range]
                                , cuLNE         :: ![DW_LNE]
                                }
@@ -1200,6 +1217,7 @@ dwarfInfoFromElf e = do
       warnings <- get
       pure (reverse warnings, catMaybes mdies)
 
+-- | This returns all the variables in the given compile units.
 dwarfGlobals :: [CompileUnit] -> [Variable]
 dwarfGlobals units = fmap snd (sortOn fst l)
   where l = [ (w,var)

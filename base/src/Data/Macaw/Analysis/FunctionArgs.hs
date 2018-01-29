@@ -49,7 +49,6 @@ import           Data.Macaw.CFG.BlockLabel
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Discovery.State
 import           Data.Macaw.Fold
-import           Data.Macaw.Memory
 import           Data.Macaw.Types
 
 -------------------------------------------------------------------------------

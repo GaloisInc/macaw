@@ -6,6 +6,25 @@ build-type: Simple
 cabal-version: >= 1.9.2
 license:       BSD3
 license-file:  LICENSE
+description:
+  Macaw is a multi-architecture binary analysis library written in
+  Haskell.  @macaw-base@ defines the core algorithms and data types
+  used across architectures.  This includes:
+  .
+  * The control-flow graph data structure used to represent control-flow
+    graphs is defined in "Data.Macaw.CFG".
+  .
+  * The datatypes used to add support for new architectures are defined in
+     "Data.Macaw.Architecture".
+  .
+  * The datatypes used to represent memory are defined in "Data.Macaw.Memory".
+    Functions for constructing memory objects from Elf files are in
+    "Data.Macaw.Memory.ElfLoader".
+  .
+  * The main code discovery algorithm for discovering code are in
+    "Data.Macaw.Discovery".
+  .
+  * Declarations for working with Dwarf debug information are in "Data.Macaw.Dwarf".
 
 library
   build-depends:
@@ -50,6 +69,7 @@ library
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.Permissions
     Data.Macaw.Types
+    Data.Macaw.Utils.Pretty
 
   ghc-options: -Wall
   ghc-options: -fno-warn-unticked-promoted-constructors

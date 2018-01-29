@@ -28,7 +28,6 @@ import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.State.Strict
 import           Data.Bits
-import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
 import           Data.Either
@@ -73,8 +72,6 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import qualified Data.Vector as V
-import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
@@ -131,6 +128,7 @@ data LoadStyle
      -- ^ Load segments in Elf file.
   deriving (Eq)
 
+-- | Options used to configure loading
 data LoadOptions
    = LoadOptions { loadRegionIndex :: !RegionIndex
                    -- ^ Defines the "region" to load sections and segments into.

@@ -82,6 +82,7 @@ module Data.Macaw.CFG.Core
   , ArchMemAddr
   , ArchSegmentOff
   , Data.Parameterized.TraversableFC.FoldableFC(..)
+  , module Data.Macaw.Utils.Pretty
   ) where
 
 import           Control.Exception (assert)
@@ -114,6 +115,7 @@ import           Data.Macaw.CFG.App
 import           Data.Macaw.Memory ( MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..)
                                    , absoluteAddr)
 import           Data.Macaw.Types
+import           Data.Macaw.Utils.Pretty
 
 -- Note:
 -- The declarations in this file follow a top-down order, so the top-level
@@ -223,7 +225,7 @@ type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 -- | A word for the given architecture bitwidth.
 type ArchAddrWord arch = RegAddrWord (ArchReg arch)
 
--- | A segmented addr for a given architecture.
+-- | An address for a given architecture.
 type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
 
 -- | A pair containing a segment and valid offset within the segment.
@@ -340,7 +342,7 @@ data Value arch ids tp
      , 1 <= ArchAddrWidth arch
      )
    => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
-     -- ^ A legal memory address
+     -- ^ A memory address
    | AssignedValue !(Assignment arch ids tp)
      -- ^ Value from an assignment statement.
    | Initial !(ArchReg arch tp)

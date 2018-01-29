@@ -58,7 +58,6 @@ import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------

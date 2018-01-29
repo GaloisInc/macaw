@@ -16,15 +16,9 @@ probably call it a signature.
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
-  ( -- * Constructor
-    App(..)
-    -- * Folding
+  ( App(..)
   , ppApp
   , ppAppA
-    -- * Utilities
-  , ppNat
-  , sexpr
-  , sexprA
   ) where
 
 import           Control.Monad.Identity
@@ -36,11 +30,12 @@ import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
+import           Data.Macaw.Utils.Pretty
 
 -----------------------------------------------------------------------
 -- App
 
--- | App defines builtin operations on values.
+-- | This datatype defines the primitive operations
 data App (f :: Type -> *) (tp :: Type) where
 
   -- Compare for equality.
@@ -240,14 +235,6 @@ instance TraversableFC App where
 ------------------------------------------------------------------------
 -- App pretty printing
 
-sexpr :: String -> [Doc] -> Doc
-sexpr nm d = parens (hsep (text nm : d))
-
-sexprA :: Applicative m => String -> [m Doc] -> m Doc
-sexprA nm d = sexpr nm <$> sequenceA d
-
-ppNat :: Applicative m => NatRepr n -> m Doc
-ppNat n = pure (text (show n))
 
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty
