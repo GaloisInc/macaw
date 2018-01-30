@@ -27,7 +27,6 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.Discovery.State as MD
 import qualified Data.Macaw.X86 as RO
 
 elfX64LinuxTests :: [FilePath] -> T.TestTree
@@ -102,8 +101,8 @@ withMemory :: forall w m a
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _relaWidth e k = do
-  let opt = MM.LoadOptions { MM.loadRegionIndex = 0
-                           , MM.loadStyle = MM.LoadBySegment
+  let opt = MM.LoadOptions { MM.loadRegionIndex = Just 0
+                           , MM.loadStyleOverride = Just MM.LoadBySegment
                            , MM.includeBSS = False
                            }
   case MM.memoryForElf opt e of
