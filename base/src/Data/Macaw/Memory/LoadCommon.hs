@@ -24,15 +24,20 @@ data LoadStyle
 
 -- | Options used to configure loading
 data LoadOptions
-   = LoadOptions { loadRegionIndex :: !RegionIndex
-                   -- ^ Defines the "region" to load sections and segments into.
+   = LoadOptions { loadRegionIndex :: !(Maybe RegionIndex)
+                   -- ^ Defines the /region/ to load sections and segments into.
                    --
                    -- This should be 0 for static libraries since their addresses are
                    -- absolute.  It should likely be non-zero for shared library since their
                    -- addresses are relative.  Different shared libraries loaded into the
                    -- same memory should have different region indices.
-                 , loadStyle :: !LoadStyle
+                   --
+                   -- If 'Nothing' then static executables have region index 0 and other
+                   -- files have region index 1.
+                 , loadStyleOverride :: !(Maybe LoadStyle)
                    -- ^ Controls whether to load by section or segment
+                   --
+                   -- If 'Nothing', then this determined by file information.
                  , includeBSS :: !Bool
                    -- ^ Include data not backed by file when creating memory segments.
                  }

@@ -47,6 +47,11 @@ module Data.Macaw.Discovery
          -- * Parsed block
        , State.ParsedBlock
        , State.pblockAddr
+       , State.blockSize
+       , State.blockReason
+       , State.blockStatementList
+       , State.StatementList(..)
+       , State.ParsedTermStmt(..)
          -- * Simplification
        , eliminateDeadStmts
        ) where
@@ -443,7 +448,6 @@ getJumpTableBounds info regs base jump_index = withArchConstraints info $
        else
         error $ "Jump table range is not in readonly memory"
     abs_value -> Left (CouldNotInterpretAbsValue abs_value)
-
 
 ------------------------------------------------------------------------
 -- ParseState

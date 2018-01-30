@@ -262,27 +262,27 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 -- | Information discovered about the program
 data DiscoveryState arch
    = DiscoveryState { memory              :: !(Memory (ArchAddrWidth arch))
-                     -- ^ The initial memory when disassembly started.
-                   , symbolNames          :: !(AddrSymMap (ArchAddrWidth arch))
-                     -- ^ Map addresses to known symbol names
-                   , archInfo             :: !(ArchitectureInfo arch)
-                     -- ^ Architecture-specific information needed for discovery.
-                   , _globalDataMap       :: !(Map (ArchMemAddr arch)
-                                             (GlobalDataInfo (ArchMemAddr arch)))
-                     -- ^ Maps each address that appears to be global data to information
-                     -- inferred about it.
-                   , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
-                     -- ^ Map from function addresses to discovered information about function
-                   , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ This maps addresses that have been marked as
-                     -- functions, but not yet analyzed to the reason
-                     -- they are analyzed.
-                     --
-                     -- The keys in this map and `_funInfo` should be mutually disjoint.
-                   , _trustKnownFns       :: !Bool
-                     -- ^ Should we use and depend on known function entries in
-                     -- our analysis? E.g. used to distinguish jumps vs. tail calls
-                   }
+                      -- ^ The initial memory when disassembly started.
+                    , symbolNames          :: !(AddrSymMap (ArchAddrWidth arch))
+                      -- ^ Map addresses to known symbol names
+                    , archInfo             :: !(ArchitectureInfo arch)
+                      -- ^ Architecture-specific information needed for discovery.
+                    , _globalDataMap       :: !(Map (ArchMemAddr arch)
+                                                (GlobalDataInfo (ArchMemAddr arch)))
+                      -- ^ Maps each address that appears to be global data to information
+                      -- inferred about it.
+                    , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
+                      -- ^ Map from function addresses to discovered information about function
+                    , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+                      -- ^ This maps addresses that have been marked as
+                      -- functions, but not yet analyzed to the reason
+                      -- they are analyzed.
+                      --
+                      -- The keys in this map and `_funInfo` should be mutually disjoint.
+                    , _trustKnownFns       :: !Bool
+                      -- ^ Should we use and depend on known function entries in
+                      -- our analysis? E.g. used to distinguish jumps vs. tail calls
+                    }
 
 -- | Return list of all functions discovered so far.
 exploredFunctions :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]

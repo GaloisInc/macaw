@@ -19,6 +19,7 @@ module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
   , memoryForElf
   , resolveElfFuncSymbols
+  , initElfDiscoveryInfo
   , module Data.Macaw.Memory.LoadCommon
   ) where
 
@@ -39,9 +40,6 @@ import           Data.ElfEdit
 
   , ElfClass(..)
   , elfClass
-  , ElfMachine(..)
-  , elfMachine
-  , ElfData(..)
 
   , ElfSection
   , ElfSectionIndex(..)
@@ -58,7 +56,6 @@ import           Data.ElfEdit
   , ElfSegmentFlags
   , elfSegmentFlags
   , elfLayoutBytes
-  , elfLayoutData
 
   , ElfSymbolTableEntry
   )
@@ -149,7 +146,8 @@ byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
 
 -- | Return a memory segment for elf segment if it loadable.
 memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
-                        => LoadOptions
+                        => RegionIndex -- ^ Index for segment
+                        -> Bool -- ^ Flag to control wheter we include BSS
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
                         -> RelocMap (MemWord w)
@@ -157,17 +155,17 @@ memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         -> Elf.Phdr w
                            -- ^ Program header entry
                         -> MemSegment w
-memSegmentForElfSegment opt contents relocMap phdr = mseg
+memSegmentForElfSegment regIdx incBSS contents relocMap phdr = mseg
   where seg = Elf.phdrSegment phdr
         dta = sliceL (Elf.phdrFileRange phdr) contents
         sz = fromIntegral $ Elf.phdrMemSize phdr
         fixedData
           | L.length dta > sz = L.take sz dta
-          | includeBSS opt = dta `mappend` L.replicate (sz - L.length dta) 0
+          | incBSS = dta `mappend` L.replicate (sz - L.length dta) 0
           | otherwise = dta
         addr = fromIntegral $ elfSegmentVirtAddr seg
         flags = flagsForSegmentFlags (elfSegmentFlags seg)
-        mseg = memSegment (loadRegionIndex opt) addr flags (byteSegments relocMap addr fixedData)
+        mseg = memSegment regIdx addr flags (byteSegments relocMap addr fixedData)
 
 -- | Create memory segment from elf section.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
@@ -183,8 +181,10 @@ memSegmentForElfSection reg s = mseg
 ------------------------------------------------------------------------
 -- MemLoader
 
-data MemLoaderState w = MLS { mlsOptions :: !LoadOptions
-                              -- ^ All sections and segments should be loaded in this region.
+data MemLoaderState w = MLS { mlsRegionIndex :: !RegionIndex
+                              -- ^ Region index for new segments
+                            , mlsIncludeBSS  :: !Bool
+                              -- ^ Flag whether to include BSS
                             , _mlsMemory :: !(Memory w)
                             , _mlsIndexMap :: !(SectionIndexMap w)
                             }
@@ -201,9 +201,10 @@ memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
 
 type MemLoader w = StateT (MemLoaderState w) (Except String)
 
-runMemLoader :: LoadOptions -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
-runMemLoader opt mem m = fmap memLoaderPair $ runExcept $ execStateT m s
-   where s = MLS { mlsOptions = opt
+runMemLoader :: RegionIndex -> Bool -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
+runMemLoader regIdx incBSS mem m = fmap memLoaderPair $ runExcept $ execStateT m s
+   where s = MLS { mlsRegionIndex = regIdx
+                 , mlsIncludeBSS = incBSS
                  , _mlsMemory = mem
                  , _mlsIndexMap = Map.empty
                  }
@@ -257,8 +258,10 @@ relaSymbol symtab rel =
     Nothing -> Left $ "Could not find symbol at index " ++ show (Elf.r_sym rel) ++ "."
     Just sym -> Right sym
 
--- | Creates a map that forwards addresses to be relocated to their appropriate target.
+-- | Given a relocation entry, this returns either @Left msg@ if the relocation
+-- cannot be resolved, @Right Nothing@ if
 relaTarget :: V.Vector SymbolRef
+                 -- ^ Get c
            -> Elf.RelaEntry Elf.X86_64_RelocationType
            -> Either String (Maybe SymbolRef)
 relaTarget symtab rel =
@@ -272,12 +275,11 @@ relaTarget symtab rel =
       Just <$> relaSymbol symtab rel
     tp -> Left $ "Do not yet support relocation type: " ++ show tp
 
--- | Creates a map that forwards addresses to be relocated to their appropriate target.
 relocEntry :: V.Vector SymbolRef
            -> Elf.RelaEntry Elf.X86_64_RelocationType
            -> Either String (Maybe (MemWord 64, SymbolRef))
 relocEntry symtab rel = fmap (fmap f) $ relaTarget symtab rel
-  where f :: a -> (MemWord 64, a)
+  where f :: SymbolRef -> (MemWord 64, SymbolRef)
         f tgt = (memWord (Elf.r_offset rel), tgt)
 
 
@@ -302,24 +304,22 @@ mkRelocMap symtab l = do
     Right v -> Right v
 
 -- | Creates a relocation map from the contents of a dynamic section.
-relocMapOfDynamic :: ElfData
-                  -> ElfClass w
-                  -> ElfMachine
+relocMapOfDynamic :: Elf.ElfHeader w
                   -> Elf.VirtAddrMap w
                   -> L.ByteString -- ^ Contents of .dynamic section
                   -> MemLoader w (RelocMap (MemWord w))
-relocMapOfDynamic d cl mach virtMap dynContents =
-  case (cl, mach) of
+relocMapOfDynamic hdr virtMap dynContents =
+  case (Elf.headerClass hdr, Elf.headerMachine hdr) of
     (Elf.ELFCLASS64, Elf.EM_X86_64) -> do
       dynSection <- either (throwError . show) pure $
-        Elf.dynamicEntries d cl virtMap dynContents
+        Elf.dynamicEntries (Elf.headerData hdr) Elf.ELFCLASS64 virtMap dynContents
       relocs <- either (throwError . show) pure $
         Elf.dynRelocations (dynSection :: Elf.DynamicSection Elf.X86_64_RelocationType)
       syms <- either (throwError . show) pure $
         Elf.dynSymTable dynSection
       either throwError pure $
         mkRelocMap (mkSymbolRef <$> syms) relocs
-    _ -> throwError $ "Dynamic libraries are not supported on " ++ show mach ++ "."
+    (_,mach) -> throwError $ "Dynamic libraries are not supported on " ++ show mach ++ "."
 
 ------------------------------------------------------------------------
 -- Elf segment loading
@@ -338,10 +338,11 @@ insertElfSegment :: ElfFileSectionMap (ElfWordType w)
                  -> Elf.Phdr w
                  -> MemLoader w ()
 insertElfSegment shdrMap contents relocMap phdr = do
-  opt <- gets mlsOptions
+  regIdx <- gets mlsRegionIndex
+  incBSS <- gets mlsIncludeBSS
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  let seg = memSegmentForElfSegment opt  contents relocMap phdr
+  let seg = memSegmentForElfSegment regIdx incBSS contents relocMap phdr
   let seg_idx = elfSegmentIndex (Elf.phdrSegment phdr)
   loadMemSegment ("Segment " ++ show seg_idx) seg
   let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
@@ -367,7 +368,6 @@ memoryForElfSegments e = do
   let l = elfLayout e
   let w = elfAddrWidth (elfClass e)
   reprConstraints w $ do
-  let d   = elfLayoutData l
   let ph  = Elf.allPhdrs l
   let contents = elfLayoutBytes l
   virtMap <- maybe (throwError "Overlapping loaded segments") pure $
@@ -377,7 +377,7 @@ memoryForElfSegments e = do
       [] -> pure Map.empty
       [dynPhdr] -> do
         let dynContents = sliceL (Elf.phdrFileRange dynPhdr) contents
-        relocMapOfDynamic d (elfClass e) (elfMachine e) virtMap dynContents
+        relocMapOfDynamic (Elf.elfHeader e) virtMap dynContents
       _ -> throwError "Multiple dynamic sections"
 
   let intervals :: ElfFileSectionMap (ElfWordType w)
@@ -404,7 +404,7 @@ insertElfSection sec = do
   let doLoad = elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc
             && elfSectionName sec /= ".eh_frame"
   when doLoad $ do
-    regIdx <- gets $ loadRegionIndex . mlsOptions
+    regIdx <- mlsRegionIndex <$> get
     let seg = memSegmentForElfSection regIdx sec
     loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
@@ -423,6 +423,31 @@ memoryForElfSections e = do
 ------------------------------------------------------------------------
 -- High level loading
 
+-- | Return true if Elf has a @PT_DYNAMIC@ segment (thus indicating it
+-- is relocatable.
+isRelocatable :: Elf w -> Bool
+isRelocatable e = any (Elf.hasSegmentType Elf.PT_DYNAMIC) (Elf.elfSegments e)
+
+adjustedLoadRegionIndex :: Elf w -> LoadOptions -> RegionIndex
+adjustedLoadRegionIndex e loadOpt =
+  case loadRegionIndex loadOpt of
+    Just idx -> idx
+    Nothing ->
+      case Elf.elfType e of
+        Elf.ET_REL -> 1
+        Elf.ET_EXEC -> if isRelocatable e then 1 else 0
+        Elf.ET_DYN -> 1
+        _ -> 0
+
+adjustedLoadStyle :: Elf w -> LoadOptions -> LoadStyle
+adjustedLoadStyle e loadOpt =
+  case loadStyleOverride loadOpt of
+    Just sty -> sty
+    Nothing ->
+      case Elf.elfType e of
+        Elf.ET_REL -> LoadBySection
+        _ -> LoadBySegment
+
 -- | Load allocated Elf sections into memory.
 --
 -- Normally, Elf uses segments for loading, but the segment
@@ -430,9 +455,10 @@ memoryForElfSections e = do
 memoryForElf :: LoadOptions
              -> Elf w
              -> Either String (SectionIndexMap w, Memory w)
-memoryForElf opt e =
-  runMemLoader opt (emptyMemory (elfAddrWidth (elfClass e))) $ do
-    case loadStyle opt of
+memoryForElf opt e = do
+  let regIdx = adjustedLoadRegionIndex e opt
+  runMemLoader regIdx (includeBSS opt) (emptyMemory (elfAddrWidth (elfClass e))) $ do
+    case adjustedLoadStyle e opt of
       LoadBySection -> memoryForElfSections e
       LoadBySegment -> memoryForElfSegments e
 
@@ -511,3 +537,53 @@ resolveElfFuncSymbols mem secMap e =
       let entries = V.toList (Elf.elfSymbolTableEntries tbl)
        in partitionEithers (mapMaybe (uncurry (resolveElfFuncSymbol mem secMap)) (zip [0..] entries))
     _ -> ([MultipleSymbolTables], [])
+
+------------------------------------------------------------------------
+-- initElfDiscoveryInfo
+
+-- | Return the segment offset of the elf file entry point or fail if undefined.
+getElfEntry ::  Memory w -> Elf w -> Either String (MemSegmentOff w)
+getElfEntry mem e =  addrWidthClass (memAddrWidth mem) $ do
+ Elf.elfClassInstances (Elf.elfClass e) $ do
+  case resolveAbsoluteAddr mem (fromIntegral (Elf.elfEntry e)) of
+    Nothing -> Left "Could not resolve entry"
+    Just v  -> Right v
+
+-- | This interprets the Elf file to construct the initial memory,
+-- entry points, and functions symbols.
+--
+-- If it encounters a fatal error it returns the error message in the left value,
+-- and otherwise it returns the information interred as a 4-tuple.
+initElfDiscoveryInfo :: LoadOptions
+                        -- ^ Options for loading contents
+                     -> Elf w -- ^ Elf file to create memory
+                     -> Either String
+                           ( [String] -- Warnings
+                           , Memory w -- Initial memory
+                           , Maybe (MemSegmentOff w) -- Entry point(s)
+                           , [MemSymbol w] -- Function symbols
+                           )
+initElfDiscoveryInfo loadOpts e = do
+  case Elf.elfType e of
+    Elf.ET_REL -> do
+      case loadStyleOverride loadOpts of
+        Just LoadBySegment -> do
+          Left $ "Cannot load object files by segment."
+        _ -> pure ()
+      (secMap, mem) <- memoryForElf loadOpts e
+      let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
+      pure (show <$> symErrs, mem, Nothing, funcSymbols)
+    Elf.ET_EXEC -> do
+      (secMap, mem) <- memoryForElf loadOpts e
+      entry <- getElfEntry mem e
+      let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
+      Right (show <$> symErrs, mem, Just entry, funcSymbols)
+    Elf.ET_DYN -> do
+      (secMap, mem) <- memoryForElf loadOpts e
+      entry <- getElfEntry mem e
+      let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
+      pure (show <$> symErrs, mem, Just entry, funcSymbols)
+    Elf.ET_CORE -> do
+      Left $ "Reopt does not support loading core files."
+    tp -> do
+      Left $ "Reopt does not support loading elf files with type " ++ show tp ++ "."
