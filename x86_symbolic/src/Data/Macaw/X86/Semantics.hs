@@ -12,6 +12,8 @@
 module Data.Macaw.X86.Semantics where
 
 import Data.Parameterized.NatRepr
+import Data.Parameterized.Context.Unsafe(empty,extend)
+
 import Data.Bits(shiftR, (.&.))
 import Data.Word(Word8)
 import Data.Bits(shiftL,testBit)
@@ -42,11 +44,28 @@ semantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-semantics x s = do let sym = Sym (stateSymInterface s) (stateIntrinsicTypes s)
+semantics x s = do let sym = Sym { symIface = stateSymInterface s
+                                 , symTys   = stateIntrinsicTypes s
+                                 , symFuns  = error "XXX: SymFuns"
+                                 }
                    v <- pureSem sym x
                    return (v,s)
 
-data Sym s = Sym s (IntrinsicTypes s)
+data Sym s = Sym { symIface :: s
+                 , symTys   :: IntrinsicTypes s
+                 , symFuns  :: SymFuns s
+                 }
+
+data SymFuns s = SymFuns
+  { fnAesEnc ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+
+  , fnAesEncLast ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+
+  , fnClMul ::
+      SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
+  }
 
 
 -- | Semantics for operations that do not affect Crucible's state directly.
@@ -99,13 +118,35 @@ pureSem sym fn =
                                            else V.elemAt n0 xs
                      v2 = if i `testBit` 4 then V.elemAt n1 ys
                                            else V.elemAt n0 ys
-                 evalE sym (clmul v2 v1)
+
+                 x1 <- evalE sym v1
+                 x2 <- evalE sym v2
+                 let f  = fnClMul (symFuns sym)
+                     ps = extend (extend empty x2) x1
+                 applySymFn (symIface sym) f ps
+
             _ -> fail "Unepected size for VPCLMULQDQ"
 
-{-
-        M.VAESEnc       -> undefined
-        M.VAESEncLast   -> undefined
--}
+
+        M.VAESEnc
+          | Just Refl <- testEquality w n128 ->
+            do let f      = fnAesEnc (symFuns sym)
+                   state  = toVal x
+                   key    = toVal y
+                   ps     = extend (extend empty state) key
+               applySymFn (symIface sym) f ps
+          | otherwise -> fail "Unexpecte size for AESEnc"
+
+        M.VAESEncLast
+          | Just Refl <- testEquality w n128 ->
+            do let f      = fnAesEncLast (symFuns sym)
+                   state  = toVal x
+                   key    = toVal y
+                   ps     = extend (extend empty state) key
+               applySymFn (symIface sym) f ps
+          | otherwise -> fail "Unexpecte size for AESEncLast"
+
+
 
 
     M.PointwiseShiftL elNum elSz shSz bits amt ->
@@ -117,16 +158,6 @@ pureSem sym fn =
         V.zipWith (semPointwise op elSz) xs ys
 
 
-
--- | Caryless multiplication.
-clmul :: E sym (BVType 64) -> E sym (BVType 64) -> E sym (BVType 128)
-clmul temp2 temp1 = undefined
-{-
-  where
-  least i = case testLeq i n63 of
-              Just LEQ ->
-                let tmpB = bvGetBit temp1 n0
--}
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
@@ -264,6 +295,9 @@ unpack2 e w c v1 v2 k =
 getVal :: AtomWrapper (RegEntry sym) mt -> E sym (ToCrucibleType mt)
 getVal (AtomWrapper x) = Val x
 
+toVal :: AtomWrapper (RegEntry sym) mt -> RegValue sym (ToCrucibleType mt)
+toVal (AtomWrapper x) = regValue x
+
 
 --------------------------------------------------------------------------------
 
@@ -278,11 +312,12 @@ evalE sym e = case e of
 
 evalApp :: forall sym t.  IsSymInterface sym =>
          Sym sym -> App () (E sym) t -> IO (RegValue sym t)
-evalApp x@(Sym sym i) = C.evalApp sym i logger evalExt (evalE x)
+evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   where
   logger _ _ = return ()
+
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
-  evalExt _ x  = case x of {}
+  evalExt _ y  = case y of {}
 
 data E :: * -> CrucibleType -> * where
   Val  :: RegEntry sym t -> E sym t
