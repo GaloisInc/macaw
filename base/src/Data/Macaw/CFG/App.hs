@@ -16,15 +16,9 @@ probably call it a signature.
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
-  ( -- * Constructor
-    App(..)
-    -- * Folding
+  ( App(..)
   , ppApp
   , ppAppA
-    -- * Utilities
-  , ppNat
-  , sexpr
-  , sexprA
   ) where
 
 import           Control.Monad.Identity
@@ -36,11 +30,12 @@ import           Data.Parameterized.TraversableFC
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.Types
+import           Data.Macaw.Utils.Pretty
 
 -----------------------------------------------------------------------
 -- App
 
--- | App defines builtin operations on values.
+-- | This datatype defines the primitive operations
 data App (f :: Type -> *) (tp :: Type) where
 
   -- Compare for equality.
@@ -52,6 +47,14 @@ data App (f :: Type -> *) (tp :: Type) where
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
+  -- Boolean operations
+
+  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  NotApp :: !(f BoolType) -> App f BoolType
+  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+
+  ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
 
   -- Truncate a bitvector value.
@@ -60,14 +63,6 @@ data App (f :: Type -> *) (tp :: Type) where
   SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
   -- Unsigned extension.
   UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
-
-  ----------------------------------------------------------------------
-  -- Boolean operations
-
-  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  NotApp :: !(f BoolType) -> App f BoolType
-  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
 
   ----------------------------------------------------------------------
   -- Bitvector operations
@@ -240,23 +235,12 @@ instance TraversableFC App where
 ------------------------------------------------------------------------
 -- App pretty printing
 
-sexpr :: String -> [Doc] -> Doc
-sexpr nm d = parens (hsep (text nm : d))
-
-sexprA :: Applicative m => String -> [m Doc] -> m Doc
-sexprA nm d = sexpr nm <$> sequenceA d
-
-ppNat :: Applicative m => NatRepr n -> m Doc
-ppNat n = pure (text (show n))
 
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty
 
-ppApp :: (forall u . f u -> Doc)
-      -> App f tp
-      -> Doc
-ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
-
+-- | Pretty print an 'App' as an expression using the given function
+-- for printing arguments.
 ppAppA :: Applicative m
       => (forall u . f u -> m Doc)
       -> App f tp
@@ -298,6 +282,11 @@ ppAppA pp a0 =
     SsbbOverflows x y c -> sexprA "ssbb_overflows" [ pp x, pp y, pp c ]
     Bsf _ x -> sexprA "bsf" [ pp x ]
     Bsr _ x -> sexprA "bsr" [ pp x ]
+
+ppApp :: (forall u . f u -> Doc)
+      -> App f tp
+      -> Doc
+ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
 
 ------------------------------------------------------------------------
 -- appType

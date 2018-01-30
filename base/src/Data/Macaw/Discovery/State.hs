@@ -1,5 +1,5 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2017
+Copyright  : (c) Galois, Inc 2016-2018
 Maintainer : jhendrix@galois.com
 
 This defines the main data structure for storing information learned from code
@@ -21,13 +21,6 @@ module Data.Macaw.Discovery.State
   , ParsedTermStmt(..)
   , StatementList(..)
   , ParsedBlock(..)
-     -- * SymbolAddrMap
-  , SymbolAddrMap
-  , emptySymbolAddrMap
-  , symbolAddrsAsMap
-  , symbolAddrMap
-  , symbolAddrs
-  , symbolAtAddr
     -- * The interpreter state
   , DiscoveryState
   , exploredFunctions
@@ -51,7 +44,6 @@ module Data.Macaw.Discovery.State
 
 import           Control.Lens
 import qualified Data.ByteString.Char8 as BSC
-import           Data.Char (isDigit)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
@@ -66,9 +58,7 @@ import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory
 import           Data.Macaw.Types
-
 
 ------------------------------------------------------------------------
 -- CodeAddrReason
@@ -85,49 +75,11 @@ data CodeAddrReason w
      -- ^ Identified as an entry point from initial information
    | CodePointerInMem !(MemSegmentOff w)
      -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(MemAddr w)
-     -- ^ Added because the address split this block after it had been disassembled.
+   | SplitAt !(MemSegmentOff w) !(CodeAddrReason w)
+     -- ^ Added because the address split this block after it had been disassembled. Also includes the reason we thought the block should be there before we split it.
    | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Eq, Show)
-
-------------------------------------------------------------------------
--- SymbolAddrMap
-
--- | Map from addresses to the associated symbol name.
-newtype SymbolAddrMap w = SymbolAddrMap { symbolAddrsAsMap :: Map (MemSegmentOff w) BSC.ByteString }
-
--- | Return an empty symbol addr map
-emptySymbolAddrMap :: SymbolAddrMap w
-emptySymbolAddrMap = SymbolAddrMap Map.empty
-
--- | Return addresses in symbol name map
-symbolAddrs :: SymbolAddrMap w -> [MemSegmentOff w]
-symbolAddrs = Map.keys . symbolAddrsAsMap
-
--- | Return the symbol at the given map.
-symbolAtAddr :: MemSegmentOff w -> SymbolAddrMap w -> Maybe BSC.ByteString
-symbolAtAddr a m = Map.lookup a (symbolAddrsAsMap m)
-
--- | Check that a symbol name is well formed, returning an error message if not.
-checkSymbolName :: BSC.ByteString -> Either String ()
-checkSymbolName sym_nm =
-  case BSC.unpack sym_nm of
-    [] -> Left "Empty symbol name"
-    (c:_) | isDigit c -> Left "Symbol name that starts with a digit."
-          | otherwise -> Right ()
-
-
--- | This creates a symbol addr map after checking the correctness of
--- symbol names.
---
--- It returns either an error message or the map.
-symbolAddrMap :: forall w
-              .  Map (MemSegmentOff w) BSC.ByteString
-              -> Either String (SymbolAddrMap w)
-symbolAddrMap symbols = do
-   mapM_ checkSymbolName (Map.elems symbols)
-   pure $! SymbolAddrMap symbols
 
 ------------------------------------------------------------------------
 -- GlobalDataInfo
@@ -163,7 +115,9 @@ data ParsedTermStmt arch ids
      -- ^ A lookup table that branches to one of a vector of addresses.
      --
      -- The registers store the registers, the value contains the index to jump
-     -- to, and the possible addresses.
+     -- to, and the possible addresses as a table.  If the index (when interpreted as
+     -- an unsigned number) is larger than the number of entries in the vector, then the
+     -- result is undefined.
    | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
      -- ^ A return with the given registers.
    | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
@@ -308,27 +262,27 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 -- | Information discovered about the program
 data DiscoveryState arch
    = DiscoveryState { memory              :: !(Memory (ArchAddrWidth arch))
-                     -- ^ The initial memory when disassembly started.
-                   , symbolNames          :: !(SymbolAddrMap (ArchAddrWidth arch))
-                     -- ^ Map addresses to known symbol names
-                   , archInfo             :: !(ArchitectureInfo arch)
-                     -- ^ Architecture-specific information needed for discovery.
-                   , _globalDataMap       :: !(Map (ArchMemAddr arch)
-                                             (GlobalDataInfo (ArchMemAddr arch)))
-                     -- ^ Maps each address that appears to be global data to information
-                     -- inferred about it.
-                   , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
-                     -- ^ Map from function addresses to discovered information about function
-                   , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
-                     -- ^ This maps addresses that have been marked as
-                     -- functions, but not yet analyzed to the reason
-                     -- they are analyzed.
-                     --
-                     -- The keys in this map and `_funInfo` should be mutually disjoint.
-                   , _trustKnownFns       :: !Bool
-                     -- ^ Should we use and depend on known function entries in
-                     -- our analysis? E.g. used to distinguish jumps vs. tail calls
-                   }
+                      -- ^ The initial memory when disassembly started.
+                    , symbolNames          :: !(AddrSymMap (ArchAddrWidth arch))
+                      -- ^ Map addresses to known symbol names
+                    , archInfo             :: !(ArchitectureInfo arch)
+                      -- ^ Architecture-specific information needed for discovery.
+                    , _globalDataMap       :: !(Map (ArchMemAddr arch)
+                                                (GlobalDataInfo (ArchMemAddr arch)))
+                      -- ^ Maps each address that appears to be global data to information
+                      -- inferred about it.
+                    , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
+                      -- ^ Map from function addresses to discovered information about function
+                    , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+                      -- ^ This maps addresses that have been marked as
+                      -- functions, but not yet analyzed to the reason
+                      -- they are analyzed.
+                      --
+                      -- The keys in this map and `_funInfo` should be mutually disjoint.
+                    , _trustKnownFns       :: !Bool
+                      -- ^ Should we use and depend on known function entries in
+                      -- our analysis? E.g. used to distinguish jumps vs. tail calls
+                    }
 
 -- | Return list of all functions discovered so far.
 exploredFunctions :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]
@@ -349,7 +303,7 @@ ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
 -- | Create empty discovery information.
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                        -- ^ State of memory
-                    -> SymbolAddrMap (ArchAddrWidth arch)
+                    -> AddrSymMap (ArchAddrWidth arch)
                        -- ^ Map from addresses
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information

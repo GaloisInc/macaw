@@ -10,7 +10,7 @@ executable make_bsd_syscalls
   build-depends:
     base >= 4,
     bytestring,
-    language-c >= 0.6,
+    language-c >= 0.7,
     lens,
     pretty,
     containers,

@@ -69,6 +69,7 @@ module Data.Macaw.Memory
   , memAsAddrPairs
     -- * Symbols
   , SymbolRef(..)
+  , SymbolVisibility(..)
   , SymbolVersion(..)
     -- * General purposes addrs
   , MemAddr
@@ -83,6 +84,8 @@ module Data.Macaw.Memory
   , incAddr
   , addrLeastBit
   , clearAddrLeastBit
+    -- * Symbols
+  , MemSymbol(..)
     -- * Reading
   , MemoryError(..)
   , addrContentsAfter
@@ -103,6 +106,7 @@ module Data.Macaw.Memory
   , bsWord32le
   , bsWord64be
   , bsWord64le
+  , AddrSymMap
   ) where
 
 import           Control.Exception (assert)
@@ -219,6 +223,9 @@ instance Ord (MemWord w) where
 -- | Typeclass for legal memory widths
 class (1 <= w) => MemWidth w where
 
+  -- | Returns @AddrWidthRepr@ to identify width of pointer.
+  --
+  -- The argument is ignored.
   addrWidthRepr :: p w -> AddrWidthRepr w
 
   -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
@@ -319,9 +326,19 @@ data SymbolVersion = SymbolVersion { symbolVersionFile :: !BS.ByteString
                                    , symbolVersionName :: !BS.ByteString
                                    }
 
+-- | Information about the visibility of a symbol within a binary.
+data SymbolVisibility
+   = LocalSymbol
+     -- ^ Th symbol is only visible within the module
+   | GlobalSymbol
+     -- ^ The symbol is globally visible to all modules
+   | VersionedSymbol !SymbolVersion
+     -- ^ The symbol is visible with the specific version associated
+
+
 -- | The name of a symbol along with optional version information.
 data SymbolRef = SymbolRef { symbolName :: !BS.ByteString
-                           , symbolVersion :: !(Maybe SymbolVersion)
+                           , symbolVisibility :: !SymbolVisibility
                            }
 
 -- | Defines a portion of a segment.
@@ -381,7 +398,7 @@ dropSegmentRangeListBytes [] _ =
 -- SegmentContents
 
 -- | A sequence of values in the segment.
-newtype SegmentContents w = SegmentContents (Map.Map (MemWord w) (SegmentRange w))
+newtype SegmentContents w = SegmentContents { segContentsMap :: Map.Map (MemWord w) (SegmentRange w) }
 
 -- | Create the segment contents from a list of ranges.
 contentsFromList :: MemWidth w => [SegmentRange w] -> SegmentContents w
@@ -396,22 +413,24 @@ contentsSize (SegmentContents m) =
 
 -- | Return list of contents from given word or 'Nothing' if this can't be done
 -- due to a relocation.
-contentsAfter :: MemWidth w
-              => MemWord w
-              -> SegmentContents w
-              -> Maybe [SegmentRange w]
-contentsAfter off (SegmentContents m) = do
-  let (premap,mv,post) = Map.splitLookup off m
+contentsAfterSegmentOff :: MemWidth w
+                        => MemSegmentOff w
+                        -> Either (MemoryError w) [SegmentRange w]
+contentsAfterSegmentOff mseg = do
+  let off = msegOffset mseg
+  let contents = segmentContents (msegSegment mseg)
+  let (premap,mv,post) = Map.splitLookup off (segContentsMap contents)
   case mv of
-    Just v -> Just $ v : Map.elems post
+    Just v -> Right $ v : Map.elems post
     Nothing ->
       case Map.maxViewWithKey premap of
-        Nothing | off == 0 -> Just []
-                | otherwise -> error $ "Memory.contentsAfter invalid contents"
-        Just ((pre_off, ByteRegion bs),_) ->
+        Nothing | off == 0 -> Right []
+                | otherwise -> error $ "Memory.contentsAfterSegmentOff invalid contents"
+        Just ((pre_off, ByteRegion bs),_) -> do
           let v = ByteRegion (BS.drop (fromIntegral (off - pre_off)) bs)
-           in Just $ v : Map.elems post
-        Just ((_, SymbolicRef{}),_) -> Nothing
+          Right $ v : Map.elems post
+        Just ((_, SymbolicRef{}),_) ->
+          Left (UnexpectedRelocation (relativeSegmentAddr mseg))
 
 contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsList (SegmentContents m) = Map.toList m
@@ -566,6 +585,7 @@ data MemSegmentOff w = MemSegmentOff { msegSegment :: !(MemSegment w)
                                      }
   deriving (Eq, Ord)
 
+{-# DEPRECATED viewSegmentOff "Use msegSegment and msegOffset." #-}
 viewSegmentOff :: MemSegmentOff w -> (MemSegment w, MemWord w)
 viewSegmentOff mseg = (msegSegment mseg, msegOffset mseg)
 
@@ -655,8 +675,9 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
 ------------------------------------------------------------------------
 -- MemAddr
 
--- | A memory address is either an absolute value in memory or an offset of segment that
--- could be relocated.
+-- | An address in memory.  Due to our use of relocatable "regions",
+-- this internally represented by a region index for the base, and an
+-- offset.
 --
 -- This representation does not require that the address is mapped to
 -- actual memory (see `MemSegmentOff` for an address representation
@@ -672,21 +693,19 @@ data MemAddr w
 absoluteAddr :: MemWord w -> MemAddr w
 absoluteAddr = MemAddr 0
 
--- | Return an address relative to a known memory segment
--- if the memory is unmapped.
+-- | Construct an address relative to an existing memory segment.
 relativeAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
 relativeAddr seg off = MemAddr (segmentBase seg) (segmentOffset seg + off)
 
--- | Return a segmented addr using the offset of an existing segment, or 'Nothing'
--- if the memory is unmapped.
+-- | Return the address associated with a memory segment.
 relativeSegmentAddr :: MemWidth w => MemSegmentOff w -> MemAddr w
 relativeSegmentAddr (MemSegmentOff seg off) = relativeAddr seg off
 
--- | Return the offset of the address after adding the base segment value if defined.
+-- | Return an absolute address if the region of the memAddr is 0.
 asAbsoluteAddr :: MemWidth w => MemAddr w -> Maybe (MemWord w)
 asAbsoluteAddr (MemAddr i w) = if i == 0 then Just w else Nothing
 
--- | Return the resolved segment offset reference from an address.
+-- | Return a segment offset from the address if defined.
 asSegmentOff :: Memory w -> MemAddr w -> Maybe (MemSegmentOff w)
 asSegmentOff mem (MemAddr i addr) = resolveAddr mem i addr
 
@@ -702,8 +721,8 @@ addrLeastBit (MemAddr _ (MemWord off)) = off `testBit` 0
 incAddr :: MemWidth w => Integer -> MemAddr w -> MemAddr w
 incAddr o (MemAddr i off) = MemAddr i (off + fromInteger o)
 
--- | Returns the number of bytes between two addresses if they are comparable
--- or 'Nothing' if they are not.
+-- | Returns the number of bytes between two addresses if they point to
+-- the same region and `Nothing` if they are different segments.
 diffAddr :: MemWidth w => MemAddr w -> MemAddr w -> Maybe Integer
 diffAddr (MemAddr xb xoff) (MemAddr yb yoff)
   | xb == yb = Just $ toInteger xoff - toInteger yoff
@@ -720,6 +739,12 @@ instance MemWidth w => Show (MemAddr w) where
 
 instance MemWidth w => Pretty (MemAddr w) where
   pretty = text . show
+
+------------------------------------------------------------------------
+-- AddrSymMap
+
+-- | Maps code addresses to the associated symbol name if any.
+type AddrSymMap w = Map.Map (MemSegmentOff w) BSC.ByteString
 
 ------------------------------------------------------------------------
 -- MemoryError
@@ -753,21 +778,31 @@ instance MemWidth w => Show (MemoryError w) where
     "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
+-- Memory symbol
+
+-- | Type for representing a symbol independ of object file format.
+data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
+                             , memSymbolStart :: !(MemSegmentOff w)
+                             , memSymbolSize :: !(MemWord w)
+                             }
+
+------------------------------------------------------------------------
 -- Memory reading utilities
+
+resolveMemAddr :: Memory w -> MemAddr w -> Either (MemoryError w) (MemSegmentOff w)
+resolveMemAddr mem addr =
+  case asSegmentOff mem addr of
+    Just p -> Right p
+    Nothing -> Left (InvalidAddr addr)
 
 -- | Return contents starting from location or throw a memory error if there
 -- is an unaligned relocation.
 addrContentsAfter :: Memory w
                   -> MemAddr w
                   -> Either (MemoryError w) [SegmentRange w]
-addrContentsAfter mem addr = addrWidthClass (memAddrWidth mem) $ do
-  MemSegmentOff seg off <-
-    case asSegmentOff mem addr of
-      Just p -> pure p
-      Nothing -> Left (InvalidAddr addr)
-  case contentsAfter off (segmentContents seg) of
-    Just l -> Right l
-    Nothing -> Left (UnexpectedRelocation addr)
+addrContentsAfter mem addr = do
+  addrWidthClass (memAddrWidth mem) $
+    contentsAfterSegmentOff =<< resolveMemAddr mem addr
 
 -- | Attemtp to read a bytestring of the given length
 readByteString :: Memory w -> MemAddr w -> Word64 -> Either (MemoryError w) BS.ByteString

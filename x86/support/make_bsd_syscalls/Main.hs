@@ -81,7 +81,7 @@ syscallLine idents =
 
     parseDecl bytes =
       -- FIXME: we should maybe chain through newNameSupply?  I don't think it is ever used ...
-      case execParser extDeclP bytes (position 0 "" 0 0) idents newNameSupply of
+      case execParser extDeclP bytes (position 0 "" 0 0 Nothing) idents newNameSupply of
         Left _err                   -> Nothing
         Right (cdecl, _unusedNames) -> Just cdecl
 
@@ -248,7 +248,7 @@ main = do
 
   let (syscalls, split_headers) = splitFile (filter (not . BS.null) ls)
       headers = BS.intercalate "\n" split_headers
-      Right tunit  = parseC headers (position 0 "" 0 0)
+      Right tunit  = parseC headers (position 0 "" 0 0 Nothing)
       idents       = translUnitToIdents tunit
 
   ms <- mapM (parseSyscallLine idents) (tail syscalls)

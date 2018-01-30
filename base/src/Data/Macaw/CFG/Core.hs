@@ -34,6 +34,8 @@ module Data.Macaw.CFG.Core
   , BVValue
   , valueAsApp
   , valueAsArchFn
+  , valueAsMemAddr
+  , valueAsSegmentOff
   , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
@@ -82,6 +84,7 @@ module Data.Macaw.CFG.Core
   , ArchMemAddr
   , ArchSegmentOff
   , Data.Parameterized.TraversableFC.FoldableFC(..)
+  , module Data.Macaw.Utils.Pretty
   ) where
 
 import           Control.Exception (assert)
@@ -111,9 +114,9 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Data.Macaw.CFG.App
-import           Data.Macaw.Memory ( MemWord, MemWidth, MemAddr, MemSegmentOff, Endianness(..)
-                                   , absoluteAddr)
+import           Data.Macaw.Memory
 import           Data.Macaw.Types
+import           Data.Macaw.Utils.Pretty
 
 -- Note:
 -- The declarations in this file follow a top-down order, so the top-level
@@ -223,7 +226,7 @@ type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
 -- | A word for the given architecture bitwidth.
 type ArchAddrWord arch = RegAddrWord (ArchReg arch)
 
--- | A segmented addr for a given architecture.
+-- | An address for a given architecture.
 type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
 
 -- | A pair containing a segment and valid offset within the segment.
@@ -291,13 +294,13 @@ data AssignRhs (arch :: *) (f :: Type -> *) tp where
           -> !(MemRepr tp)
           -> AssignRhs arch f tp
 
+  -- | @CondReadMem tp cond addr v@ reads from memory at the given address if the
+  -- condition is true and returns the value if it false.
   CondReadMem :: !(MemRepr tp)
               -> !(f BoolType)
               -> !(f (BVType (ArchAddrWidth arch)))
               -> !(f tp)
               -> AssignRhs arch f tp
-  -- ^ @CondReadMem tp cond addr v@ reads from memory at the given address if the
-  -- condition is true and returns the value if it false.
 
   -- Call an architecture specific function that returns some result.
   EvalArchFn :: !(ArchFn arch f tp)
@@ -331,6 +334,8 @@ data Value arch ids tp
    . (tp ~ BVType n, 1 <= n)
    => BVValue !(NatRepr n) !Integer
      -- ^ A constant bitvector
+     --
+     -- The integer should be between 0 and 2^n-1.
    | (tp ~ BoolType)
    => BoolValue !Bool
      -- ^ A constant Boolean
@@ -338,7 +343,7 @@ data Value arch ids tp
      , 1 <= ArchAddrWidth arch
      )
    => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
-     -- ^ A legal memory address
+     -- ^ A memory address
    | AssignedValue !(Assignment arch ids tp)
      -- ^ Value from an assignment statement.
    | Initial !(ArchReg arch tp)
@@ -442,12 +447,27 @@ valueAsArchFn _ = Nothing
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
+valueAsMemAddr :: MemWidth (ArchAddrWidth arch)
+               => BVValue arch ids (ArchAddrWidth arch)
+               -> Maybe (ArchMemAddr arch)
+valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
+valueAsMemAddr (RelocatableValue _ i) = Just i
+valueAsMemAddr _ = Nothing
+
 asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-              => BVValue arch ids (ArchAddrWidth arch)
-              -> Maybe (ArchMemAddr arch)
-asLiteralAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
-asLiteralAddr (RelocatableValue _ i) = Just i
-asLiteralAddr _ = Nothing
+               => BVValue arch ids (ArchAddrWidth arch)
+               -> Maybe (ArchMemAddr arch)
+asLiteralAddr = valueAsMemAddr
+
+{-# DEPRECATED asLiteralAddr "Use valueAsMemAddr" #-}
+
+-- | Returns a segment offset associated with the value if one can be defined.
+valueAsSegmentOff :: Memory (ArchAddrWidth arch)
+                  -> BVValue arch ids (ArchAddrWidth arch)
+                  -> Maybe (ArchSegmentOff arch)
+valueAsSegmentOff mem v = do
+  a <- addrWidthClass (memAddrWidth mem) (valueAsMemAddr v)
+  asSegmentOff mem a
 
 asInt64Constant :: Value arch ids (BVType 64) -> Maybe Int64
 asInt64Constant (BVValue _ o) = Just (fromInteger o)

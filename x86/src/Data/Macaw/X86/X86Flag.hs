@@ -23,22 +23,25 @@ module Data.Macaw.X86.X86Flag
 import qualified Data.Vector as V
 import           Data.Word
 
--- | X86 flag
+-- | A bit in an x86_64 flag register.
+--
+-- We only model a subset of the full 64 bits in RFLAGS.  The supported
+-- registers have pattern synonyms, and the full list is in `flagList`.
 newtype X86Flag = X86Flag { flagIndex :: Word8 }
   deriving (Eq, Ord)
 
 flagNames :: V.Vector String
 flagNames = V.fromList
-  [ "cf", "RESERVED", "pf", "RESERVED", "af", "RESERVED"
-  , "zf", "sf",       "tf", "if",       "df", "of"
-  , "iopl", "nt", "SBZ", "rf", "vm", "ac", "vif", "vip", "id"
+  [ "cf", "RESERVED_1", "pf",  "RESERVED_3", "af",    "RESERVED_5", "zf", "sf"
+  , "tf", "if",         "df",  "of",         "iopl1", "iopl2",      "nt", "RESERVED_15"
+  , "rf", "vm",         "ac",  "vif",        "vip",   "id"
   ]
 
 instance Show X86Flag where
   show (X86Flag i) =
     case flagNames V.!? fromIntegral i of
       Just nm -> nm
-      Nothing -> "Unknown" ++ show i
+      Nothing -> "RESERVED_" ++ show i
 
 pattern CF :: X86Flag
 pattern CF = X86Flag 0
@@ -69,4 +72,4 @@ pattern OF = X86Flag 11
 
 -- | Return list of x86 flags
 flagList :: [X86Flag]
-flagList = X86Flag <$> [0,2,4,6,7,8,9,10,11]
+flagList = [ CF, PF, AF, ZF, SF, TF, IF, DF, OF ]

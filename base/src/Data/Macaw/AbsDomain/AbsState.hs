@@ -83,7 +83,6 @@ import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
-import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 

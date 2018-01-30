@@ -31,7 +31,6 @@ import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
-
 -- FIXME: move
 n0 :: NatRepr 0
 n0 = knownNat
@@ -59,6 +58,9 @@ n80 = knownNat
 
 n128 :: NatRepr 128
 n128 = knownNat
+
+n256 :: NatRepr 256
+n256 = knownNat
 
 ------------------------------------------------------------------------
 -- Type
@@ -108,6 +110,8 @@ type FloatType tp = BVType (8 * TypeBytes tp)
 type BVType = 'BVType
 
 type BoolType = 'BoolType
+
+type TupleType = 'TupleType
 
 -- | A runtime representation of @Type@ for case matching purposes.
 data TypeRepr (tp :: Type) where

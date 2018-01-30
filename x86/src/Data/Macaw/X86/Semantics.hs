@@ -48,6 +48,7 @@ import           Data.Macaw.X86.InstructionDef
 import           Data.Macaw.X86.Monad
 import           Data.Macaw.X86.X86Reg (X86Reg)
 import qualified Data.Macaw.X86.X86Reg as R
+import qualified Data.Macaw.X86.Semantics.AVX as AVX
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
@@ -144,20 +145,16 @@ getRM32_RM64 v =
     F.Mem64 addr -> Right <$> getBV64Addr addr
     _ -> fail "Unexpected operand"
 
--- | Location that get the high 64 bits of a XMM register,
--- and preserves the low 64 bits on writes.
-xmm_loc :: F.XMMReg -> Location addr (BVType 128)
-xmm_loc r = fullRegister (R.X86_XMMReg r)
 
--- | Location that get the low 64 bits of a XMM register,
+-- | Location that get the low 32 bits of a XMM register,
 -- and preserves the high 64 bits on writes.
 xmm_low32 :: F.XMMReg -> Location addr (BVType 32)
-xmm_low32 r = subRegister n0 n32 (R.X86_XMMReg r)
+xmm_low32 r = subRegister n0 n32 (xmmOwner r)
 
--- | Location that get the low 64 bits of a XMM register,
+-- | Location that get the low 64 bits of a YMM register,
 -- and preserves the high 64 bits on writes.
 xmm_low64 :: F.XMMReg -> Location addr (BVType 64)
-xmm_low64 r = subRegister n0 n64 (R.X86_XMMReg r)
+xmm_low64 r = subRegister n0 n64 (xmmOwner r)
 
 -- | Location that get the low 64 bits of a XMM register,
 -- and preserves the high 64 bits on writes.
@@ -168,7 +165,7 @@ xmm_low r SSE_Double = xmm_low64 r
 -- | Location that get the high 64 bits of a XMM register,
 -- and preserves the low 64 bits on writes.
 xmm_high64 :: F.XMMReg -> Location addr (BVType 64)
-xmm_high64 r = subRegister n64 n64 (R.X86_XMMReg r)
+xmm_high64 r = subRegister n64 n64 (xmmOwner r)
 
 -- | This gets the register of a xmm field.
 getXMM :: Monad m => F.Value -> m F.XMMReg
@@ -208,8 +205,8 @@ getXMM_mr_low _ _ = fail "Unexpected argument"
 
 -- | This gets the value of a xmm/m128 field.
 getXMM_mr :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 128))
-getXMM_mr (F.XMMReg r) = pure (xmm_loc r)
-getXMM_mr (F.Mem128 src_addr) = getBV128Addr src_addr
+getXMM_mr v@(F.XMMReg {}) = getBVLocation v n128
+getXMM_mr v@(F.Mem128 {}) = getBVLocation v n128
 getXMM_mr _ = fail "Unexpected argument"
 
 -- ** Condition codes
@@ -713,8 +710,8 @@ exec_sh lw l val val_setter cf_setter of_setter = do
     case val of
       F.ByteImm i ->
         pure (bvLit n8 (toInteger i))
-      F.ByteReg r | Just r64 <- F.is_low_reg r -> do
-        get (reg_low8  $ R.X86_GP r64)
+      F.ByteReg (F.LowReg8 r) -> do
+        get $ reg_low8  $ R.X86_GP $ F.Reg64 r
       _ -> fail "Count could not be interpreted."
   v <- get l
   -- The intel manual says that the count is masked to give an upper
@@ -768,8 +765,7 @@ def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
 def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
   where set_cf w v i =
-           (i `bvUle` bvLit n8 (natValue w))
-             .&&. bvBit v (bvLit w (natValue w) .- uext w i)
+           (i `bvUle` bvLit n8 (natValue w)) .&&. bvBit v (bvLit w (natValue w) .- uext w i)
         set_of v _ =  msb v
 
 def_shr :: InstructionDef
@@ -1768,7 +1764,7 @@ def_movsd = defBinary "movsd" $ \_ v1 v2 -> do
     -- high order bits.
     (F.XMMReg dest, F.Mem128 src_addr) -> do
       v' <- readBV64 =<< getBVAddress src_addr
-      xmm_loc dest .= uext n128 v'
+      xmm_sse dest .= uext n128 v'
     _ ->
       fail $ "Unexpected arguments in FlexdisMatcher.movsd: " ++ show v1 ++ ", " ++ show v2
 
@@ -1788,18 +1784,19 @@ def_movss = defBinary "movss" $ \_ v1 v2 -> do
     -- high order bits.
     (F.XMMReg dest, F.Mem128 src_addr) -> do
       vLoc <- readBV32 =<< getBVAddress src_addr
-      xmm_loc dest .= uext n128 vLoc
+      xmm_sse dest .= uext n128 vLoc
     _ ->
       fail $ "Unexpected arguments in FlexdisMatcher.movss: " ++ show v1 ++ ", " ++ show v2
 
 def_pshufb :: InstructionDef
 def_pshufb = defBinary "pshufb" $ \_ f_d f_s -> do
   case (f_d, f_s) of
-    (F.XMMReg d, F.XMMReg s) -> do
-      d_val  <- eval =<< get (xmm_loc d)
-      s_val  <- eval =<< get (xmm_loc s)
+    (F.XMMReg {}, F.XMMReg {}) -> do
+      loc_d <- getBVLocation f_d n128
+      d_val  <- eval =<< get loc_d
+      s_val  <- eval =<< getBVValue f_s n128
       r <- evalArchFn $ PShufb SIMD_128 d_val s_val
-      xmm_loc d .= r
+      loc_d .= r
     _ -> do
       fail $ "pshufb only supports 2 XMM registers as arguments."
 
@@ -1891,7 +1888,7 @@ def_divss = def_xmm_ss SSE_Div
 def_xmm_packed :: SSE_Op -> InstructionDef
 def_xmm_packed f =
   defBinary (sseOpName f ++ "ps") $ \_ loc val -> do
-    d <- xmm_loc <$> getXMM loc
+    d <- xmm_sse <$> getXMM loc
     x <- eval =<< get d
     y <- eval =<< get =<< getXMM_mr val
     res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
@@ -2493,6 +2490,18 @@ def_xgetbv =
     eax .= bvTrunc n32 res
 
 ------------------------------------------------------------------------
+-- AVX instructions
+
+
+
+
+
+
+
+
+
+
+------------------------------------------------------------------------
 -- Instruction list
 
 
@@ -2714,10 +2723,13 @@ all_instructions =
   , def_fsubp
   , def_fsubr
   , def_fsubrp
+  , defNullary "emms" $ addArchStmt EMMS
+  , defNullary "femms" $ addArchStmt EMMS
   ]
   ++ def_cmov_list
   ++ def_jcc_list
   ++ def_set_list
+  ++ AVX.all_instructions
 
 ------------------------------------------------------------------------
 -- execInstruction

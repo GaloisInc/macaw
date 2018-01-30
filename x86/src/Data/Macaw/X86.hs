@@ -30,6 +30,10 @@ module Data.Macaw.X86
        , rootLoc
        , disassembleBlock
        , X86TranslateError(..)
+       , Data.Macaw.X86.ArchTypes.X86_64
+       , Data.Macaw.X86.ArchTypes.X86PrimFn(..)
+       , Data.Macaw.X86.ArchTypes.X86Stmt(..)
+       , Data.Macaw.X86.ArchTypes.X86TermStmt(..)
        , Data.Macaw.X86.X86Reg.X86Reg(..)
        , Data.Macaw.X86.X86Reg.x86ArgumentRegs
        , Data.Macaw.X86.X86Reg.x86ResultRegs
@@ -80,7 +84,6 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
-import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
@@ -147,6 +150,7 @@ initGenState nonce_gen mem addr s =
              , _blockState     = emptyPreBlock s 0 addr
              , genAddr = addr
              , genMemory = mem
+             , avxMode = False
              }
 
 -- | Describes the reason the translation error occured.
@@ -237,6 +241,7 @@ disassembleBlockImpl gs max_offset contents = do
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     , genMemory = genMemory gs
+                                    , avxMode = avxMode gs
                                     }
                  case dropSegmentRangeListBytes contents (fromIntegral (next_ip_off - off)) of
                    Left msg -> do
@@ -273,14 +278,15 @@ disassembleBlock mem nonce_gen loc max_size = do
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
-initialX86AbsState addr =
-  top & setAbsIP addr
-      & absRegState . boundValue sp_reg .~ concreteStackOffset (relativeSegmentAddr addr) 0
-        -- x87 top register points to top of stack.
-      & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
-        -- Direction flag is initially zero.
-      & absRegState . boundValue DF .~ BoolConst False
-      & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
+initialX86AbsState addr
+  = top
+  & setAbsIP addr
+  & absRegState . boundValue sp_reg .~ concreteStackOffset (relativeSegmentAddr addr) 0
+  -- x87 top register points to top of stack.
+  & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
+  -- Direction flag is initially zero.
+  & absRegState . boundValue DF .~ BoolConst False
+  & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
 
 preserveFreeBSDSyscallReg :: X86Reg tp -> Bool
 preserveFreeBSDSyscallReg r
@@ -333,6 +339,13 @@ transferAbsValue r f =
     X87_FAdd{}  -> TopV
     X87_FSub{}  -> TopV
     X87_FMul{}  -> TopV
+
+    -- XXX: Is 'TopV' the right thing for the AVX instruction below?
+    VOp1 {} -> TopV
+    VOp2 {} -> TopV
+    Pointwise2 {} -> TopV
+    PointwiseShiftL {} -> TopV
+    VExtractF128 {} -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -414,7 +427,7 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Check this is the right length.
               , Just Refl <- testEquality (typeRepr next_sp) (typeRepr val)
                 -- Check if value is a valid literal address
-              , Just val_a <- asLiteralAddr val
+              , Just val_a <- valueAsMemAddr val
                 -- Check if segment of address is marked as executable.
               , Just ret_addr <- asSegmentOff mem val_a
               , segmentFlags (msegSegment ret_addr) `Perm.hasPerm` Perm.execute ->
@@ -500,7 +513,7 @@ x86_64_info preservePred =
                    , archEndianness     = LittleEndian
                    , jumpTableEntrySize = 8
                    , disassembleFn      = disassembleBlockFromAbsState
-                   , mkInitialAbsState = \_ -> initialX86AbsState
+                   , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s
                    , postCallAbsState = x86PostCallAbsState
