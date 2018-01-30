@@ -113,8 +113,11 @@ main = do
   C.SomeCFG g <- stToIO $ MS.mkFunCFG x86ArchFns halloc memBaseVarMap "add" posFn funInfo
 
   regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
+
+  symFuns <- newSymFuns sym
+
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns MX.x86_64MacawEvalFn halloc g regs
+  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc g regs
   case execResult of
     C.FinishedExecution _ (C.TotalRes _pair) -> do
       putStrLn "Done"
