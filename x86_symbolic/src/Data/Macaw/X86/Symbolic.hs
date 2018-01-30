@@ -13,6 +13,7 @@
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
+  , SymFuns, newSymFuns
   ) where
 
 import           Data.Parameterized.Context as Ctx
