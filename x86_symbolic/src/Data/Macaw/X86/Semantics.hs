@@ -9,7 +9,24 @@
 {-# Language EmptyCase #-}
 {-# Language MultiWayIf #-}
 {-# Language PatternGuards #-}
-module Data.Macaw.X86.Semantics where
+{-# Language RecordWildCards #-}
+{-# Language FlexibleContexts #-}
+module Data.Macaw.X86.Semantics
+  ( -- * Uninterpreted functions
+    SymFuns, newSymFuns
+
+    -- * Instruction interpretation
+  , semantics
+
+    -- * Atom wrapper
+  , AtomWrapper(..)
+  , liftAtomMap
+  , liftAtomTrav
+  , liftAtomIn
+
+
+
+  ) where
 
 import Data.Parameterized.NatRepr
 import Data.Parameterized.Context.Unsafe(empty,extend)
@@ -26,6 +43,7 @@ import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
 import           Lang.Crucible.Syntax
 import           Lang.Crucible.CFG.Expr
 import           Lang.Crucible.Solver.Interface hiding (IsExpr)
+import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.Utils.Endian(Endian(..))
@@ -42,14 +60,15 @@ type S sym rtp bs r ctx =
 
 semantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>
+  SymFuns sym ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-semantics x s = do let sym = Sym { symIface = stateSymInterface s
-                                 , symTys   = stateIntrinsicTypes s
-                                 , symFuns  = error "XXX: SymFuns"
-                                 }
-                   v <- pureSem sym x
-                   return (v,s)
+semantics fs x s = do let sym = Sym { symIface = stateSymInterface s
+                                    , symTys   = stateIntrinsicTypes s
+                                    , symFuns  = fs
+                                    }
+                      v <- pureSem sym x
+                      return (v,s)
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
@@ -67,6 +86,26 @@ data SymFuns s = SymFuns
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
   }
 
+
+-- | Generate uninterpreted functions for some of the more complex instructions.
+newSymFuns :: forall sym. IsSymInterface sym => sym -> IO (SymFuns sym)
+newSymFuns s =
+  do fnAesEnc     <- bin "aesEnc"
+     fnAesEncLast <- bin "aesEncLast"
+     fnClMul      <- bin "clMul"
+     return SymFuns { .. }
+
+  where
+  bin :: ( KnownRepr BaseTypeRepr a
+         , KnownRepr BaseTypeRepr b
+         , KnownRepr BaseTypeRepr c
+         ) =>
+         String -> IO (SymFn sym (EmptyCtx ::> a ::> b) c)
+  bin name = case userSymbol name of
+               Right a -> freshTotalUninterpFn s a
+                              (extend (extend empty knownRepr) knownRepr)
+                              knownRepr
+               Left _ -> fail "Invalid symbol name"
 
 -- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: (IsSymInterface sym) =>
@@ -337,24 +376,10 @@ instance IsExpr (E sym) where
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
 bv i = app (BVLit knownNat (fromIntegral i))
 
-
-bvAnd :: (KnownNat w, 1 <= w) =>
-  E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
-bvAnd x y = app (BVAdd knownNat x y)
-
-bvXor :: (KnownNat w, 1 <= w) =>
-  E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
-bvXor x y = app (BVAdd knownNat x y)
-
-
-
 bvTestBit :: (KnownNat w, 1 <= w) => E sym (BVType w) -> Int -> E sym BoolType
 bvTestBit e n = app $ BVNonzero knownNat $
                 app $ BVAnd knownNat e (bv (shiftL 1 n))
 
-bvGetBit :: (KnownNat w, 1 <= w, i + 1 <= w) =>
-  E sym (BVType w) -> NatRepr i -> E sym (BVType 1)
-bvGetBit e i = app $ BVSelect i n1 knownNat e
 
 bvLookup ::
   (1 <= w, KnownNat w) =>
@@ -401,9 +426,6 @@ n16 = knownNat
 
 n32 :: NatRepr 32
 n32 = knownNat
-
-n63 :: NatRepr 63
-n63 = knownNat
 
 n64 :: NatRepr 64
 n64 = knownNat
