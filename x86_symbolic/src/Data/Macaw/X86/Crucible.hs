@@ -11,7 +11,7 @@
 {-# Language PatternGuards #-}
 {-# Language RecordWildCards #-}
 {-# Language FlexibleContexts #-}
-module Data.Macaw.X86.Semantics
+module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
     SymFuns, newSymFuns
 
@@ -291,13 +291,6 @@ bitOp2 :: (IsSymInterface sym) =>
                                           -- ^ The definition of the operation
   IO (RegValue sym (BVType w))            {- ^ The result -}
 bitOp2 sym x y f = evalE sym $ app $ f (getVal x) (getVal y)
-
--- | Package-up a vector expression to a bit-vector, and evaluate it.
-pack :: (IsSymInterface sym, KnownNat w, 1 <= w) =>
-  Endian -> Sym sym ->
-  V.Vector n (E sym (BVType w)) -> IO (RegValue sym (BVType (n*w)))
-pack e sym xs = evalE sym (V.toBV e knownNat xs)
-
 
 -- | Split up a bit-vector into a vector.
 -- Even though X86 is little endian for memory accesses, this function
