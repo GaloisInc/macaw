@@ -18,6 +18,7 @@ packages:
 - submodules/crucible/galois-matlab
 - submodules/dwarf
 - submodules/elf-edit
+- submodules/s-cargot
 extra-deps:
 - BoundedChan-1.0.3.0
 - IntervalMap-0.5.2.0
@@ -92,7 +93,7 @@ extra-deps:
 - regex-tdfa-1.2.2
 - regex-tdfa-text-1.0.0.3
 - resourcet-1.1.9
-- s-cargot-0.1.2.0
+# - s-cargot-0.1.2.0
 - scientific-0.3.5.1
 - semigroupoids-5.2.1
 - semigroups-0.18.3
