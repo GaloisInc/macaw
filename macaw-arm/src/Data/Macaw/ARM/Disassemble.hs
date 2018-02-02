@@ -38,7 +38,7 @@ import qualified Data.Parameterized.Nonce as NC
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
-import           Data.Word ( Word64 )
+import           Data.Word ( Word32 )
 import qualified Dismantle.ARM as D
 import           Text.Printf ( printf )
 
