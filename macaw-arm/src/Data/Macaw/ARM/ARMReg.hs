@@ -33,14 +33,14 @@ import qualified SemMC.Architecture.ARM.Location as Loc
 
 
 data ARMReg tp where
-    ARM_IP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+    ARM_PC :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
 
 deriving instance Eq (ARMReg tp)
 deriving instance Ord (ARMReg tp)
 
 instance Show (ARMReg tp) where
     show r = case r of
-               ARM_IP -> "ip"
+               ARM_PC -> "<PC>"
 
 instance ShowF ARMReg where
     showF = show
@@ -56,7 +56,8 @@ instance OrdF ARMReg where
 instance HasRepr ARMReg TypeRepr where
     typeRepr r =
         case r of
-          ARM_IP -> BVTypeRepr n32
+          ARM_PC -> BVTypeRepr n32
+
 
 type instance MC.ArchReg ARM.ARM = ARMReg
 type instance MC.RegAddrWidth ARMReg = 32
@@ -71,12 +72,12 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
       sp_reg = undefined
-      ip_reg = ARM_IP
+      ip_reg = ARM_PC
       syscall_num_reg = undefined
       syscallArgumentRegs = undefined
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some ARM_IP ]
+armRegs = [ Some ARM_PC ]
 
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
@@ -102,5 +103,5 @@ locToRegTH :: (1 <= Loc.ArchRegWidth arm,
            -> Loc.Location arm ctp
            -> Q Exp
 -- locToRegTH _ (Loc.LocGPR (D.GPR gpr)) = [| PPC_GP (D.GPR $(lift gpr)) |]
-locToRegTH _  Loc.LocIP       = [| ARM_IP |]
 locToRegTH _  _                = [| undefined |]
+locToRegTH _  Loc.LocPC      = [| ARM_PC |]

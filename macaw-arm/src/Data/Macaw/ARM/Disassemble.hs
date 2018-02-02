@@ -81,11 +81,11 @@ tryDisassembleBlock :: (ARMArchConstraints arm)
 tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen mem startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
-  unless (nextIPOffset > startOffset) $ do
-    let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
-    failAt gs0 nextIPOffset startAddr reason
-  return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
+  (nextPCOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
+  unless (nextPCOffset > startOffset) $ do
+    let reason = InvalidNextPC (fromIntegral nextPCOffset) (fromIntegral startOffset)
+    failAt gs0 nextPCOffset startAddr reason
+  return (F.toList (blocks ^. frontierBlocks), nextPCOffset - startOffset)
 
 
 
@@ -115,61 +115,61 @@ disassembleBlock :: forall arm ids s
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM arm ids s (MM.MemWord (ArchAddrWidth arm), BlockSeq arm ids)
-disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
-  let seg = MM.msegSegment curIPAddr
-  let off = MM.msegOffset curIPAddr
-  case readInstruction mem curIPAddr of
-    Left err -> failAt gs off curIPAddr (DecodeError err)
+disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
+  let seg = MM.msegSegment curPCAddr
+  let off = MM.msegOffset curPCAddr
+  case readInstruction mem curPCAddr of
+    Left err -> failAt gs off curPCAddr (DecodeError err)
     Right (i, bytesRead) -> do
---      traceM ("II: " ++ show i)
-      let nextIPOffset = off + bytesRead
-          nextIP = MM.relativeAddr seg nextIPOffset
-          nextIPVal = MC.RelocatableValue (knownNat :: NatRepr (ArchAddrWidth arm)) nextIP
+      -- traceM ("II: " ++ show i)
+      let nextPCOffset = off + bytesRead
+          nextPC = MM.relativeAddr seg nextPCOffset
+          nextPCVal = MC.RelocatableValue (knownNat :: NatRepr (ArchAddrWidth arm)) nextPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
-                 Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
+      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curPCAddr) of
+                 Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
       case lookupSemantics ipVal i of
-        Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
+        Nothing -> failAt gs off curPCAddr (UnsupportedInstruction i)
         Just transformer -> do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
-            let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
+            let lineStr = printf "%s: %s" (show curPCAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
             transformer
 
-            -- Check to see if the IP has become conditionally-defined (by e.g.,
+            -- Check to see if the PC has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
             -- provided by the Generator monad.
-            nextIPExpr <- getRegValue ARM_IP
-            case matchConditionalBranch nextIPExpr of
-              Just (cond, t_ip, f_ip) ->
-                conditionalBranch cond (setRegVal ARM_IP t_ip) (setRegVal ARM_IP f_ip)
+            nextPCExpr <- getRegValue ARM_PC
+            case matchConditionalBranch nextPCExpr of
+              Just (cond, t_pc, f_pc) ->
+                conditionalBranch cond (setRegVal ARM_PC t_pc) (setRegVal ARM_PC f_pc)
               Nothing -> return ())
           case egs1 of
-            Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
+            Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case resState gs1 of
                 Just preBlock
                   | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
                   , v <- preBlock ^. (pBlockState . curIP)
                   , Just simplifiedIP <- simplifyValue v
-                  , simplifiedIP == nextIPVal
-                  , nextIPOffset < maxOffset
-                  , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
+                  , simplifiedIP == nextPCVal
+                  , nextPCOffset < maxOffset
+                  , Just nextPCSegAddr <- MM.asSegmentOff mem nextPC -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
-                                         , genAddr = nextIPSegAddr
+                                         , genAddr = nextPCSegAddr
                                          , genMemory = mem
                                          }
-                      disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
+                      disassembleBlock lookupSemantics mem gs2 nextPCSegAddr maxOffset
 
-                _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
+                _ -> return (nextPCOffset, finishBlock FetchAndExecute gs1)
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
@@ -256,7 +256,7 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
                                            , transErrorReason :: TranslationErrorReason w
                                            }
 
-data TranslationErrorReason w = InvalidNextIP Word64 Word64
+data TranslationErrorReason w = InvalidNextPC Word32 Word32
                               | DecodeError (MM.MemoryError w)
                               | UnsupportedInstruction D.Instruction
                               | InstructionAtUnmappedAddr D.Instruction
@@ -283,8 +283,8 @@ failAt :: forall arm ids s a
        -> MM.MemSegmentOff (ArchAddrWidth arm)
        -> TranslationErrorReason (ArchAddrWidth arm)
        -> DisM arm ids s a
-failAt gs offset curIPAddr reason = do
-  let exn = TranslationError { transErrorAddr = curIPAddr
+failAt gs offset curPCAddr reason = do
+  let exn = TranslationError { transErrorAddr = curPCAddr
                              , transErrorReason = reason
                              }
   let term = (`TranslateError` T.pack (show exn))

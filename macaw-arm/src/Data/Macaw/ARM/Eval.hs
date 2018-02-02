@@ -74,12 +74,12 @@ postARMTermStmtAbsState preservePred mem s0 regState stmt =
     ARMSyscall ->
       case simplifyValue (regState^.curIP) of
         Just (RelocatableValue _ addr)
-          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextIP, MA.absEvalCall params s0 nextIP)
-        _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
+              Just (nextPC, MA.absEvalCall params s0 nextPC)
+        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
 
 
 preserveRegAcrossSyscall :: (ArchReg arm ~ ARMReg, 1 <= RegAddrWidth ARMReg)
