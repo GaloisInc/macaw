@@ -82,7 +82,7 @@ testDiscovery expectedFilename elf =
         otherEntryAddrs :: [MM.MemAddr 64]
         otherEntryAddrs = E.tocEntryAddrsForElf (Proxy @PPC64.PPC) elf
         otherEntries = mapMaybe (MM.asSegmentOff mem) otherEntryAddrs
-        di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap (entryPoint:otherEntries) []
+        di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem M.empty (entryPoint:otherEntries) []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
       -- Above: Read in the ExpectedResult from the contents of the file

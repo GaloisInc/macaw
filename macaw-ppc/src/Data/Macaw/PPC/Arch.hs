@@ -25,7 +25,9 @@ module Data.Macaw.PPC.Arch (
 
 import           GHC.TypeLits
 
+import           Control.Lens ( (^.) )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -75,7 +77,7 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
-  -- These are cache hints
+  -- These are data cache hints
   Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbi   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
@@ -84,6 +86,9 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Dcbzl  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbt   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
   Dcbtst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
+  -- Instruction cache hints
+  Icbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Icbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 4) -> PPCStmt ppc v
 
 instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
@@ -105,6 +110,8 @@ instance TF.TraversableF (PPCStmt ppc) where
       Dcbzl ea -> Dcbzl <$> go ea
       Dcbt ea th -> Dcbt <$> go ea <*> go th
       Dcbtst ea th -> Dcbtst <$> go ea <*> go th
+      Icbi ea -> Icbi <$> go ea
+      Icbt ea ct -> Icbt <$> go ea <*> go ct
 
 instance MC.IsArchStmt (PPCStmt ppc) where
   ppArchStmt pp stmt =
@@ -120,6 +127,8 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Dcbzl ea -> PP.text "ppc_dcbzl" PP.<+> pp ea
       Dcbt ea th -> PP.text "ppc_dcbt" PP.<+> pp ea PP.<+> pp th
       Dcbtst ea th -> PP.text "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
+      Icbi ea -> PP.text "ppc_icbi" PP.<+> pp ea
+      Icbt ea ct -> PP.text "ppc_icbt" PP.<+> pp ea PP.<+> pp ct
 
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
@@ -144,39 +153,43 @@ data PPCPrimFn ppc f tp where
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+
   FPIsQNaN :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
   FPIsSNaN :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPAdd :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
-  FPAddRoundedUp :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPSub :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
-  FPSubRoundedUp :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPMul :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
-  FPMulRoundedUp :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPDiv :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
-  FPLt :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPEq :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
   FPCvt :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(MT.FloatInfoRepr flt') -> PPCPrimFn ppc f (MT.FloatType flt')
-  FPCvtRoundsUp :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(MT.FloatInfoRepr flt') -> PPCPrimFn ppc f MT.BoolType
-  FPFromBV :: !(f (MT.BVType n)) -> !(MT.FloatInfoRepr flt) -> PPCPrimFn ppc f (MT.FloatType flt)
-  TruncFPToSignedBV :: (1 <= n) => MT.FloatInfoRepr flt -> f (MT.FloatType flt) -> NR.NatRepr n -> PPCPrimFn ppc f (MT.BVType n)
-  FPAbs :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
-  FPNeg :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f (MT.FloatType flt)
+
+  -- | Uninterpreted floating point functions
+  FP1 :: !String -- ^ the name of the function
+      -> !(f (MT.BVType 128)) -- ^ arg 1
+      -> !(f (MT.BVType 32)) -- ^ current fpscr
+      -> PPCPrimFn ppc f (MT.BVType 160)
+  FP2 :: !String
+      -> !(f (MT.BVType 128))
+      -> !(f (MT.BVType 128))
+      -> !(f (MT.BVType 32))
+      -> PPCPrimFn ppc f (MT.BVType 160)
+  FP3 :: !String
+      -> !(f (MT.BVType 128))
+      -> !(f (MT.BVType 128))
+      -> !(f (MT.BVType 128))
+      -> !(f (MT.BVType 32))
+      -> PPCPrimFn ppc f (MT.BVType 160)
 
   -- | Uninterpreted vector functions
-  Vec1 :: String -- ^ the name of the function
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 32)
+  Vec1 :: !String -- ^ the name of the function
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
   Vec2 :: String -- ^ the name of the function
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 32)
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
   Vec3 :: String -- ^ the name of the function
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 128)
-       -> f (MT.BVType 32)
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 128))
+       -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
 
 instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
@@ -187,23 +200,12 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc (M
 
       FPIsQNaN _ _ -> MT.BoolTypeRepr
       FPIsSNaN _ _ -> MT.BoolTypeRepr
-      FPAdd rep _ _ -> MT.floatTypeRepr rep
-      FPAddRoundedUp _ _ _ -> MT.BoolTypeRepr
-      FPSub rep _ _ -> MT.floatTypeRepr rep
-      FPSubRoundedUp _ _ _ -> MT.BoolTypeRepr
-      FPMul rep _ _ -> MT.floatTypeRepr rep
-      FPMulRoundedUp _ _ _ -> MT.BoolTypeRepr
-      FPDiv rep _ _ -> MT.floatTypeRepr rep
-      FPLt _ _ _ -> MT.BoolTypeRepr
-      FPEq _ _ _ -> MT.BoolTypeRepr
       FPCvt _ _ rep -> MT.floatTypeRepr rep
-      FPCvtRoundsUp _ _ _ -> MT.BoolTypeRepr
-      FPFromBV _ rep -> MT.floatTypeRepr rep
-      TruncFPToSignedBV _ _ rep -> MT.BVTypeRepr rep
-      FPAbs rep _ -> MT.floatTypeRepr rep
-      FPNeg rep _ -> MT.floatTypeRepr rep
 
-      -- FIXME: Is this right?
+      FP1 _    _ _      -> MT.BVTypeRepr MT.knownNat
+      FP2 _    _ _ _    -> MT.BVTypeRepr MT.knownNat
+      FP3 _    _ _ _ _  -> MT.BVTypeRepr MT.knownNat
+
       Vec1 _   _ _      -> MT.BVTypeRepr MT.knownNat
       Vec2 _   _ _ _    -> MT.BVTypeRepr MT.knownNat
       Vec3 _   _ _ _ _  -> MT.BVTypeRepr MT.knownNat
@@ -218,21 +220,10 @@ ppcPrimFnHasSideEffects pf =
     SDiv {} -> False
     FPIsQNaN {} -> False
     FPIsSNaN {} -> False
-    FPAdd {} -> False
-    FPAddRoundedUp {} -> False
-    FPSub {} -> False
-    FPSubRoundedUp {} -> False
-    FPMul {} -> False
-    FPMulRoundedUp {} -> False
-    FPDiv {} -> False
-    FPLt {} -> False
-    FPEq {} -> False
     FPCvt {} -> False
-    FPCvtRoundsUp {} -> False
-    FPFromBV {} -> False
-    TruncFPToSignedBV {} -> False
-    FPAbs {} -> False
-    FPNeg {} -> False
+    FP1 {} -> False
+    FP2 {} -> False
+    FP3 {} -> False
     Vec1 {} -> False
     Vec2 {} -> False
     Vec3 {} -> False
@@ -254,51 +245,18 @@ rewritePrimFn f =
     FPIsSNaN info v -> do
       tgt <- FPIsSNaN info <$> rewriteValue v
       evalRewrittenArchFn tgt
-    FPAdd rep v1 v2 -> do
-      tgt <- FPAdd rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPAddRoundedUp rep v1 v2 -> do
-      tgt <- FPAddRoundedUp rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPSub rep v1 v2 -> do
-      tgt <- FPSub rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPSubRoundedUp rep v1 v2 -> do
-      tgt <- FPSubRoundedUp rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPMul rep v1 v2 -> do
-      tgt <- FPMul rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPMulRoundedUp rep v1 v2 -> do
-      tgt <- FPMulRoundedUp rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPDiv rep v1 v2 -> do
-      tgt <- FPDiv rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPLt rep v1 v2 -> do
-      tgt <- FPLt rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
-    FPEq rep v1 v2 -> do
-      tgt <- FPEq rep <$> rewriteValue v1 <*> rewriteValue v2
-      evalRewrittenArchFn tgt
     FPCvt rep1 v rep2 -> do
       tgt <- FPCvt rep1 <$> rewriteValue v <*> pure rep2
       evalRewrittenArchFn tgt
-    FPCvtRoundsUp rep1 v rep2 -> do
-      tgt <- FPCvtRoundsUp rep1 <$> rewriteValue v <*> pure rep2
-      evalRewrittenArchFn tgt
-    FPFromBV bv rep -> do
-      tgt <- FPFromBV <$> rewriteValue bv <*> pure rep
-      evalRewrittenArchFn tgt
-    TruncFPToSignedBV info v rep -> do
-      tgt <- TruncFPToSignedBV info <$> rewriteValue v <*> pure rep
-      evalRewrittenArchFn tgt
-    FPAbs rep v -> do
-      tgt <- FPAbs rep <$> rewriteValue v
-      evalRewrittenArchFn tgt
-    FPNeg rep v -> do
-      tgt <- FPNeg rep <$> rewriteValue v
-      evalRewrittenArchFn tgt
+    FP1 name op fpscr -> do
+      tgtFn <- FP1 name <$> rewriteValue op <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
+    FP2 name op1 op2 fpscr -> do
+      tgtFn <- FP2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
+    FP3 name op1 op2 op3 fpscr -> do
+      tgtFn <- FP3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr
+      evalRewrittenArchFn tgtFn
     Vec1 name op vscr -> do
       tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue vscr
       evalRewrittenArchFn tgtFn
@@ -316,21 +274,10 @@ ppPrimFn pp f =
     SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
     FPIsQNaN _info v -> ppUnary "ppc_fp_isqnan" <$> pp v
     FPIsSNaN _info v -> ppUnary "ppc_fp_issnan" <$> pp v
-    FPAdd _rep v1 v2 -> ppBinary "ppc_fp_add" <$> pp v1 <*> pp v2
-    FPAddRoundedUp _rep v1 v2 -> ppBinary "ppc_fp_add_roundedup" <$> pp v1 <*> pp v2
-    FPSub _rep v1 v2 -> ppBinary "ppc_fp_sub" <$> pp v1 <*> pp v2
-    FPSubRoundedUp _rep v1 v2 -> ppBinary "ppc_fp_sub_roundedup" <$> pp v1 <*> pp v2
-    FPMul _rep v1 v2 -> ppBinary "ppc_fp_mul" <$> pp v1 <*> pp v2
-    FPMulRoundedUp _rep v1 v2 -> ppBinary "ppc_fp_mul_roundedup" <$> pp v1 <*> pp v2
-    FPDiv _rep v1 v2 -> ppBinary "ppc_fp_div" <$> pp v1 <*> pp v2
-    FPLt _rep v1 v2 -> ppBinary "ppc_fp_lt" <$> pp v1 <*> pp v2
-    FPEq _rep v1 v2 -> ppBinary "ppc_fp_eq" <$> pp v1 <*> pp v2
     FPCvt _rep1 v _rep2 -> ppUnary "ppc_fp_cvt" <$> pp v
-    FPCvtRoundsUp _rep1 v _rep2 -> ppUnary "ppc_fp_cvt_roundedup" <$> pp v
-    FPFromBV bv _rep -> ppUnary "ppc_fp_frombv" <$> pp bv
-    TruncFPToSignedBV _info v _rep -> ppUnary "ppc_fp_trunc_to_signed_bv" <$> pp v
-    FPAbs _rep v -> ppUnary "ppc_fp_abs" <$> pp v
-    FPNeg _rep v -> ppUnary "ppc_fp_neg" <$> pp v
+    FP1 n r1 fpscr -> ppBinary ("ppc_fp1 " ++ n) <$> pp r1 <*> pp fpscr
+    FP2 n r1 r2 fpscr -> pp3 ("ppc_fp2 " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
+    FP3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp3 " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
     Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp vscr
     Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp vscr
     Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
@@ -356,21 +303,10 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
       FPIsQNaN info v -> FPIsQNaN info <$> go v
       FPIsSNaN info v -> FPIsSNaN info <$> go v
-      FPAdd rep v1 v2 -> FPAdd rep <$> go v1 <*> go v2
-      FPAddRoundedUp rep v1 v2 -> FPAddRoundedUp rep <$> go v1 <*> go v2
-      FPSub rep v1 v2 -> FPSub rep <$> go v1 <*> go v2
-      FPSubRoundedUp rep v1 v2 -> FPSubRoundedUp rep <$> go v1 <*> go v2
-      FPMul rep v1 v2 -> FPMul rep <$> go v1 <*> go v2
-      FPMulRoundedUp rep v1 v2 -> FPMulRoundedUp rep <$> go v1 <*> go v2
-      FPDiv rep v1 v2 -> FPDiv rep <$> go v1 <*> go v2
-      FPLt rep v1 v2 -> FPLt rep <$> go v1 <*> go v2
-      FPEq rep v1 v2 -> FPEq rep <$> go v1 <*> go v2
       FPCvt rep1 v rep2 -> FPCvt rep1 <$> go v <*> pure rep2
-      FPCvtRoundsUp rep1 v rep2 -> FPCvtRoundsUp rep1 <$> go v <*> pure rep2
-      FPFromBV bv rep -> FPFromBV <$> go bv <*> pure rep
-      TruncFPToSignedBV info v rep -> TruncFPToSignedBV info <$> go v <*> pure rep
-      FPAbs rep v -> FPAbs rep <$> go v
-      FPNeg rep v -> FPNeg rep <$> go v
+      FP1 name op fpscr -> FP1 name <$> go op <*> go fpscr
+      FP2 name op1 op2 fpscr -> FP2 name <$> go op1 <*> go op2 <*> go fpscr
+      FP3 name op1 op2 op3 fpscr -> FP3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
       Vec1 name op vscr -> Vec1 name <$> go op <*> go vscr
       Vec2 name op1 op2 vscr -> Vec2 name <$> go op1 <*> go op2 <*> go vscr
       Vec3 name op1 op2 op3 vscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go vscr
@@ -404,60 +340,100 @@ memrrToEffectiveAddress memrr = do
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
   G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
+-- | A helper to increment the IP by 4, meant to be used to implement
+-- arch-specific statements that need to update the IP (i.e., all but syscalls).
+incrementIP :: (PPCArchConstraints ppc) => G.Generator ppc ids s ()
+incrementIP = do
+  rs <- G.getRegs
+  let ipVal = rs ^. MC.boundValue PPC_IP
+  e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
+  G.setRegVal PPC_IP e
+
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
 --
 -- This includes instructions with special side effects that we don't have a way
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
+--
+-- NOTE: For SC and TRAP (which we treat as system calls), we don't need to
+-- update the IP here, as the update is handled in the abstract interpretation
+-- of system calls in 'postPPCTermStmtAbsState'.
 ppcInstructionMatcher :: (PPCArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =
   case opc of
-    D.SC -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCSyscall))
-    D.TRAP -> Just (G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-    D.ATTN -> Just (G.addStmt (MC.ExecArchStmt Attn))
-    D.SYNC -> Just (G.addStmt (MC.ExecArchStmt Sync))
-    D.ISYNC -> Just (G.addStmt (MC.ExecArchStmt Isync))
+    D.SC -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
+    D.TRAP -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCTrap)
+    D.ATTN -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Attn)
+    D.SYNC -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Sync)
+    D.ISYNC -> Just $ do
+      incrementIP
+      G.addStmt (MC.ExecArchStmt Isync)
     D.DCBA ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcba ea))
     D.DCBF ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbf ea))
     D.DCBI ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbi ea))
     D.DCBST ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbst ea))
     D.DCBZ ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbz ea))
     D.DCBZL ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           G.addStmt (MC.ExecArchStmt (Dcbzl ea))
     D.DCBT ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbt ea th))
     D.DCBTST ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
           ea <- memrrToEffectiveAddress memrr
           th <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
+    D.ICBI ->
+      case operands of
+        D.Memrr memrr D.:< D.Nil -> Just $ do
+          incrementIP
+          ea <- memrrToEffectiveAddress memrr
+          G.addStmt (MC.ExecArchStmt (Icbi ea))
+    D.ICBT ->
+      case operands of
+        D.Memrr memrr D.:< D.U4imm imm D.:< D.Nil -> Just $ do
+          incrementIP
+          ea <- memrrToEffectiveAddress memrr
+          ct <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Icbt ea ct))
     _ -> Nothing

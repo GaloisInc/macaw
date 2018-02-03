@@ -3,20 +3,26 @@ flags:
     old-locale: false
 packages:
 - macaw-semmc/
+- macaw-arm/
 - macaw-ppc/
 - submodules/semmc/semmc
 - submodules/semmc/semmc-ppc
+- submodules/semmc/semmc-arm
 - submodules/dismantle/dismantle-tablegen
 - submodules/dismantle/dismantle-ppc
+- submodules/dismantle/dismantle-arm
+- submodules/dismantle/dismantle-thumb
 - submodules/macaw/base
 - submodules/parameterized-utils
 - submodules/crucible/crucible
 - submodules/crucible/galois-matlab
 - submodules/dwarf
 - submodules/elf-edit
+- submodules/s-cargot
 extra-deps:
+- BoundedChan-1.0.3.0
 - IntervalMap-0.5.2.0
-- Cabal-2.0.0.2
+- Only-0.1
 - QuickCheck-2.10.0.1
 - StateVar-1.1.0.4
 - adjunctions-4.3
@@ -24,10 +30,11 @@ extra-deps:
 - ansi-wl-pprint-0.6.8.1
 - async-2.1.1.1
 - attoparsec-0.13.2.0
+- auto-update-0.1.4
 - base-compat-0.9.3
 - base-orphans-0.6
+- base16-bytestring-0.1.1.6
 - bifunctors-5.4.2
-- binary-0.8.5.1
 - bimap-0.3.3
 - blaze-builder-0.4.0.2
 - blaze-textual-0.2.1.0
@@ -35,18 +42,22 @@ extra-deps:
 - cabal-doctest-1.0.2
 - call-stack-0.1.0
 - case-insensitive-1.2.0.10
+- cereal-0.5.4.0
 - clock-0.7.2
 - comonad-5.0.2
+- conduit-1.2.12.1
+- conduit-extra-1.1.17
 - constraints-0.9.1
-- containers-0.5.10.2
 - contravariant-1.4
 - direct-sqlite-2.3.21
 - distributive-0.5.3
+- easy-file-0.2.1
 - exceptions-0.8.3
 - fail-4.9.0.0
+- fast-logger-2.4.10
 - fgl-5.6.0.0
 - filemanip-0.3.6.3
-- fingertree-0.1.1.0
+- finite-typelits-0.1.3.0
 - free-4.12.4
 - generic-deriving-1.11.2
 - hashable-1.2.6.1
@@ -55,14 +66,19 @@ extra-deps:
 - io-streams-1.4.1.0
 - kan-extensions-5.0.2
 - lens-4.15.4
+- lifted-base-0.2.3.11
 - located-base-0.1.1.1
 - math-functions-0.2.1.0
 - megaparsec-6.1.1
+- mmorph-1.1.0
+- monad-control-1.0.2.2
 - monad-logger-0.3.25.1
+- monad-loops-0.4.3
 - mtl-2.2.1
 - mwc-random-0.13.6.0
 - network-2.6.3.2
-- Only-0.1
+- old-locale-1.0.0.7
+- old-time-1.1.0.3
 - optparse-applicative-0.14.0.0
 - parallel-3.2.1.1
 - parsec-3.1.11
@@ -77,60 +93,40 @@ extra-deps:
 - regex-tdfa-1.2.2
 - regex-tdfa-text-1.0.0.3
 - resourcet-1.1.9
-- s-cargot-0.1.2.0
+# - s-cargot-0.1.2.0
 - scientific-0.3.5.1
 - semigroupoids-5.2.1
 - semigroups-0.18.3
-- smtLib-1.0.8
 - split-0.2.3.2
 - sqlite-simple-0.4.14.0
 - stm-2.4.4.1
+- stm-chans-3.0.0.4
+- streaming-commons-0.1.18
 - tagged-0.8.5
 - tasty-0.11.2.5
 - tasty-ant-xml-1.1.0
 - tasty-expected-failure-0.11.0.4
-- tasty-hunit-0.9.2
+- tasty-hunit-0.10.0.1
 - tasty-quickcheck-0.8.4
 - temporary-1.2.1.1
 - text-1.2.2.2
 - tf-random-0.5
 - th-abstraction-0.2.5.0
 - time-locale-compat-0.1.1.3
+- transformers-base-0.4.4
 - transformers-compat-0.5.1.4
 - unbounded-delays-0.1.1.0
 - unix-compat-0.4.3.1
+- unix-time-0.3.7
 - unliftio-0.1.0.0
 - unliftio-core-0.1.0.0
 - unordered-containers-0.2.8.0
 - utf8-string-1.0.1.1
 - vector-0.12.0.1
+- vector-sized-0.6.1.0
 - vector-th-unbox-0.2.1.6
 - void-0.7.2
 - xml-1.3.14
 - zlib-0.6.1.2
 - zlib-bindings-0.1.1.5
-
-- conduit-1.2.12.1
-- conduit-extra-1.1.17
-- fast-logger-2.4.10
-- lifted-base-0.2.3.11
-- mmorph-1.1.0
-- monad-control-1.0.2.2
-- monad-loops-0.4.3
-- old-locale-1.0.0.7
-- stm-chans-3.0.0.4
-- transformers-base-0.4.4
-
-- auto-update-0.1.4
-- easy-file-0.2.1
-- streaming-commons-0.1.18
-- unix-time-0.3.7
-
-- old-time-1.1.0.3
-
-- base16-bytestring-0.1.1.6
-- cereal-0.5.4.0
-
-
-
 resolver: ghc-8.2.1

@@ -38,7 +38,7 @@ testMacaw elf =
     let otherEntryAddrs :: [MM.MemAddr 64]
         otherEntryAddrs = E.tocEntryAddrsForElf (Proxy @PPC64.PPC) elf
     let otherEntries = mapMaybe (MM.asSegmentOff mem) otherEntryAddrs
-    let di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem MD.emptySymbolAddrMap (entryPoint:otherEntries) []
+    let di = MD.cfgFromAddrs (RO.ppc64_linux_info tocBase) mem M.empty (entryPoint:otherEntries) []
     let allFoundBlockAddrs :: S.Set Word64
         allFoundBlockAddrs =
           S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
