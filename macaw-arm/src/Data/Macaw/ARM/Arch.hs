@@ -23,10 +23,12 @@ import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
+import qualified Data.Macaw.SemMC.Operands as O
 import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FCls
 import qualified Dismantle.ARM as D
+import qualified Dismantle.ARM.Operands as ARMOperands
 import           GHC.TypeLits
 import qualified SemMC.ARM as ARM
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -120,14 +122,13 @@ armPrimFnHasSideEffects = const False
 type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
                               , MC.ArchFn arm ~ ARMPrimFn
                               , MC.ArchStmt arm ~ ARMStmt
-                              -- , MC.ArchTermStmt arm ~ ARMTermStmt
-                              -- , ArchWidth arm
+                              , MC.ArchTermStmt arm ~ ARMTermStmt
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg arm))
                               , 1 <= MC.RegAddrWidth ARMReg
                               , KnownNat (MC.RegAddrWidth ARMReg)
                               , MC.ArchConstraints arm
-                              -- , O.ExtractValue arm D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
-                              -- , O.ExtractValue arm (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+                              , O.ExtractValue arm ARMOperands.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+                              , O.ExtractValue arm (Maybe ARMOperands.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
                               )
 
 

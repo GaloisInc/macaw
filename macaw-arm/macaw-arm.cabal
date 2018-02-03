@@ -16,9 +16,10 @@ library
   exposed-modules:     Data.Macaw.ARM
                      , Data.Macaw.ARM.Arch
                      , Data.Macaw.ARM.ARMReg
+                     , Data.Macaw.ARM.BinaryFormat.ELF
                      , Data.Macaw.ARM.Disassemble
                      , Data.Macaw.ARM.Eval
-                     , Data.Macaw.ARM.BinaryFormat.ELF
+                     , Data.Macaw.ARM.Operand
                      , Data.Macaw.ARM.Semantics.ARMSemantics
                      , Data.Macaw.ARM.Semantics.TH
   -- other-modules:       
@@ -36,6 +37,7 @@ library
                      , macaw-semmc
                      , mtl
                      , parameterized-utils
+                     , pretty
                      , semmc
                      , semmc-arm
                      , template-haskell
