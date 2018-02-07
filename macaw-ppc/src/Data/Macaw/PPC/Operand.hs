@@ -30,9 +30,6 @@ import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
 import qualified Data.Macaw.PPC.PPCReg as R
 
-instance ExtractValue arch Bool BoolType where
-  extractValue = return . MC.BoolValue
-
 instance ExtractValue PPC32.PPC D.GPR (BVType 32) where
   extractValue gpr = G.getRegValue (R.PPC_GP gpr)
 
@@ -71,15 +68,6 @@ instance ExtractValue arch D.AbsCondBranchTarget (BVType 14) where
 
 instance ExtractValue arch D.BranchTarget (BVType 24) where
   extractValue (D.BT i) = return $ MC.BVValue NR.knownNat (toIntegerWord i)
-
-instance (KnownNat n, 1 <= n) => ExtractValue arch (I.I n) (BVType n) where
-  extractValue (I.I i) = return $ MC.BVValue NR.knownNat (toIntegerWord i)
-
-instance (KnownNat n, 1 <= n) => ExtractValue arch (W.W n) (BVType n) where
-  extractValue w = return $ MC.BVValue NR.knownNat (toIntegerWord (W.unW w))
-
-instance ExtractValue arch Int16 (BVType 16) where
-  extractValue i = return $ MC.BVValue NR.knownNat (toIntegerWord i)
 
 instance ExtractValue arch D.CRBitM (BVType 4) where
   extractValue (D.CRBitM b) = return $ MC.BVValue NR.knownNat (toIntegerWord b)
