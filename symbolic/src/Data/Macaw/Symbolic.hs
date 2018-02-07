@@ -14,7 +14,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
   , MacawSimulatorState
-  , freshVarsForRegs
+  -- , freshVarsForRegs
   , runCodeBlock
   , runBlocks
   , mkBlocksCFG
@@ -63,13 +63,13 @@ import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.Discovery.State as M
 import qualified Data.Macaw.Memory as M
-import qualified Data.Macaw.Types as M
 
 import           Data.Macaw.Symbolic.CrucGen
 import           Data.Macaw.Symbolic.PersistentState
 
 data MacawSimulatorState sym = MacawSimulatorState
 
+{-
 -- | Create the variables from a collection of registers.
 freshVarsForRegs :: (IsSymInterface sym, M.HasRepr reg M.TypeRepr)
                  => sym
@@ -86,6 +86,7 @@ freshVarsForRegs sym nameFn a =
 #if !MIN_VERSION_base(4,10,0)
     _ -> error "internal: freshVarsForRegs encountered case non-exhaustive pattern"
 #endif
+-}
 
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
@@ -345,13 +346,15 @@ runBlocks :: forall sym arch ids
               -- ^ Function that maps offsets from start of block to Crucible position.
            -> [M.Block arch ids]
               -- ^ List of blocks for this region.
-           -> Ctx.Assignment (C.RegValue' sym) (CtxToCrucibleType (ArchRegContext arch))
+           -> Ctx.Assignment (C.RegValue' sym)
+                             (CtxToCrucibleType arch (ArchRegContext arch))
               -- ^ Register assignment
            -> IO (C.ExecResult
                    MacawSimulatorState
                    sym
                    (MacawExt arch)
-                   (C.RegEntry sym (C.StructType (CtxToCrucibleType (ArchRegContext arch)))))
+                   (C.RegEntry sym (C.StructType
+                              (CtxToCrucibleType arch (ArchRegContext arch)))))
 runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   halloc <- C.newHandleAllocator
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem

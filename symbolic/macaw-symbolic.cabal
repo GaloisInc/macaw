@@ -17,7 +17,8 @@ library
     macaw-base,
     mtl,
     parameterized-utils,
-    text
+    text,
+    crucible-llvm
 
   hs-source-dirs: src
 
