@@ -18,7 +18,7 @@ import qualified Data.Macaw.ARM.ARMReg as Reg
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
-import           Data.Macaw.Types ( BVType ) -- TypeRepr(..), HasRepr, typeRepr, n32 )
+import           Data.Macaw.Types ( BoolType, BVType )
 import qualified Data.Parameterized.NatRepr as NR
 import           Dismantle.ARM.Operands
 import qualified SemMC.ARM as ARM
@@ -38,6 +38,16 @@ instance ExtractValue ARM.ARM (Maybe GPR) (BVType 32) where
       Just r -> extractValue r
       Nothing -> return $ MC.BVValue NR.knownNat 0
 
+instance ExtractValue ARM.ARM Pred (BVType 4) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . predToBits
 
-instance ExtractValue arch AddrModeImm12 (BVType 12) where
-  extractValue i = return $ MC.BVValue NR.knownNat (toInteger $ addrModeImm12ToBits i)
+instance ExtractValue ARM.ARM SBit (BVType 1) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . sBitToBits
+
+instance ExtractValue ARM.ARM BranchExecuteTarget (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . branchExecuteTargetToBits
+
+
+
+-- instance ExtractValue arch AddrModeImm12 (BVType 12) where
+--   extractValue i = return $ MC.BVValue NR.knownNat (toInteger $ addrModeImm12ToBits i)
