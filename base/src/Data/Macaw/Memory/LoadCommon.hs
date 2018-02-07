@@ -6,6 +6,7 @@ Common datatypes for creating a memory from a binary file.
 -}
 module Data.Macaw.Memory.LoadCommon
   ( LoadOptions(..)
+  , defaultLoadOptions
   , LoadStyle(..)
   ) where
 
@@ -34,6 +35,12 @@ data LoadOptions
                    --
                    -- If 'Nothing' then static executables have region index 0 and other
                    -- files have region index 1.
+                 , loadRegionBaseOffset :: !Integer
+                   -- ^ Increment to automatically add to segment/section memory offsets
+                   -- when loading.
+                   --
+                   -- This defaults to '0', and is primarily intended to allow loading
+                   -- relocatable files at specific hard-coded offsets.
                  , loadStyleOverride :: !(Maybe LoadStyle)
                    -- ^ Controls whether to load by section or segment
                    --
@@ -41,3 +48,12 @@ data LoadOptions
                  , includeBSS :: !Bool
                    -- ^ Include data not backed by file when creating memory segments.
                  }
+
+-- | Default options for loading
+defaultLoadOptions :: LoadOptions
+defaultLoadOptions =
+  LoadOptions { loadRegionIndex = Nothing
+              , loadRegionBaseOffset = 0
+              , loadStyleOverride = Nothing
+              , includeBSS = False
+              }

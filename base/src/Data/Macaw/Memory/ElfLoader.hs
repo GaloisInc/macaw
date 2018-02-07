@@ -67,6 +67,7 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import qualified Data.Vector as V
+import           Numeric (showHex)
 
 import           Data.Macaw.Memory
 import           Data.Macaw.Memory.LoadCommon
@@ -114,6 +115,19 @@ flagsForSectionFlags f =
         flagIf ef pf = if f `Elf.hasPermissions` ef then pf else Perm.none
 
 ------------------------------------------------------------------------
+-- RegionAdjust
+
+-- | This captures how to translate addresses in the Elf file to
+-- regions in the memory object.
+data RegionAdjust
+  = RegionAdjust { regionIndex :: !RegionIndex
+                   -- ^ Region index for new segments
+                 , regionOffset :: !Integer
+                   -- ^ Offset from region to automatically add to
+                   -- segment/sections during loading.
+                 }
+
+------------------------------------------------------------------------
 -- Loading by segment
 
 -- | Return segments for data
@@ -146,7 +160,7 @@ byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
 
 -- | Return a memory segment for elf segment if it loadable.
 memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
-                        => RegionIndex -- ^ Index for segment
+                        => RegionAdjust -- ^ Index for segment
                         -> Bool -- ^ Flag to control wheter we include BSS
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
@@ -155,7 +169,7 @@ memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         -> Elf.Phdr w
                            -- ^ Program header entry
                         -> MemSegment w
-memSegmentForElfSegment regIdx incBSS contents relocMap phdr = mseg
+memSegmentForElfSegment regAdj incBSS contents relocMap phdr = mseg
   where seg = Elf.phdrSegment phdr
         dta = sliceL (Elf.phdrFileRange phdr) contents
         sz = fromIntegral $ Elf.phdrMemSize phdr
@@ -163,26 +177,27 @@ memSegmentForElfSegment regIdx incBSS contents relocMap phdr = mseg
           | L.length dta > sz = L.take sz dta
           | incBSS = dta `mappend` L.replicate (sz - L.length dta) 0
           | otherwise = dta
-        addr = fromIntegral $ elfSegmentVirtAddr seg
+        addr = regionOffset regAdj + toInteger (elfSegmentVirtAddr seg)
         flags = flagsForSegmentFlags (elfSegmentFlags seg)
-        mseg = memSegment regIdx addr flags (byteSegments relocMap addr fixedData)
+        segContents = byteSegments relocMap (fromInteger addr) fixedData
+        mseg = memSegment (regionIndex regAdj) addr flags segContents
+
 
 -- | Create memory segment from elf section.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
-                        => RegionIndex
+                        => RegionAdjust
                         -> ElfSection v
                         -> MemSegment w
-memSegmentForElfSection reg s = mseg
-  where base = fromIntegral (elfSectionAddr s)
+memSegmentForElfSection regAdj s = mseg
+  where base = regionOffset regAdj + toInteger (elfSectionAddr s)
         flags = flagsForSectionFlags (elfSectionFlags s)
         bytes = elfSectionData s
-        mseg = memSegment reg base flags [ByteRegion bytes]
+        mseg = memSegment (regionIndex regAdj) base flags [ByteRegion bytes]
 
 ------------------------------------------------------------------------
 -- MemLoader
 
-data MemLoaderState w = MLS { mlsRegionIndex :: !RegionIndex
-                              -- ^ Region index for new segments
+data MemLoaderState w = MLS { mlsRegionAdjust :: !RegionAdjust
                             , mlsIncludeBSS  :: !Bool
                               -- ^ Flag whether to include BSS
                             , _mlsMemory :: !(Memory w)
@@ -201,9 +216,9 @@ memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
 
 type MemLoader w = StateT (MemLoaderState w) (Except String)
 
-runMemLoader :: RegionIndex -> Bool -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
-runMemLoader regIdx incBSS mem m = fmap memLoaderPair $ runExcept $ execStateT m s
-   where s = MLS { mlsRegionIndex = regIdx
+runMemLoader :: RegionAdjust -> Bool -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
+runMemLoader regAdj incBSS mem m = fmap memLoaderPair $ runExcept $ execStateT m s
+   where s = MLS { mlsRegionAdjust = regAdj
                  , mlsIncludeBSS = incBSS
                  , _mlsMemory = mem
                  , _mlsIndexMap = Map.empty
@@ -370,11 +385,11 @@ insertElfSegment :: ElfFileSectionMap (ElfWordType w)
                  -> Elf.Phdr w
                  -> MemLoader w ()
 insertElfSegment shdrMap contents relocMap phdr = do
-  regIdx <- gets mlsRegionIndex
+  regAdj <- gets mlsRegionAdjust
   incBSS <- gets mlsIncludeBSS
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  let seg = memSegmentForElfSegment regIdx incBSS contents relocMap phdr
+  let seg = memSegmentForElfSegment regAdj incBSS contents relocMap phdr
   let seg_idx = elfSegmentIndex (Elf.phdrSegment phdr)
   loadMemSegment ("Segment " ++ show seg_idx) seg
   let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
@@ -436,8 +451,8 @@ insertElfSection sec = do
   let doLoad = elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc
             && elfSectionName sec /= ".eh_frame"
   when doLoad $ do
-    regIdx <- mlsRegionIndex <$> get
-    let seg = memSegmentForElfSection regIdx sec
+    regAdj <- mlsRegionAdjust <$> get
+    let seg = memSegmentForElfSection regAdj sec
     loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
     let Just addr = resolveSegmentOff seg 0
@@ -488,8 +503,10 @@ memoryForElf :: LoadOptions
              -> Elf w
              -> Either String (SectionIndexMap w, Memory w)
 memoryForElf opt e = do
-  let regIdx = adjustedLoadRegionIndex e opt
-  runMemLoader regIdx (includeBSS opt) (emptyMemory (elfAddrWidth (elfClass e))) $ do
+  let regAdj = RegionAdjust { regionIndex  = adjustedLoadRegionIndex e opt
+                            , regionOffset = loadRegionBaseOffset opt
+                            }
+  runMemLoader regAdj (includeBSS opt) (emptyMemory (elfAddrWidth (elfClass e))) $ do
     case adjustedLoadStyle e opt of
       LoadBySection -> memoryForElfSections e
       LoadBySegment -> memoryForElfSegments e
@@ -574,12 +591,17 @@ resolveElfFuncSymbols mem secMap e =
 -- initElfDiscoveryInfo
 
 -- | Return the segment offset of the elf file entry point or fail if undefined.
-getElfEntry ::  Memory w -> Elf w -> Either String (MemSegmentOff w)
-getElfEntry mem e =  addrWidthClass (memAddrWidth mem) $ do
+getElfEntry ::  LoadOptions -> Memory w -> Elf w -> ([String], Maybe (MemSegmentOff w))
+getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $ do
  Elf.elfClassInstances (Elf.elfClass e) $ do
-  case resolveAbsoluteAddr mem (fromIntegral (Elf.elfEntry e)) of
-    Nothing -> Left $ "Could not resolve entry point: " ++ show (Elf.elfEntry e)
-    Just v  -> Right v
+   let regIdx = adjustedLoadRegionIndex e loadOpts
+   let adjAddr = loadRegionBaseOffset loadOpts + toInteger (Elf.elfEntry e)
+   case resolveAddr mem regIdx (fromInteger adjAddr) of
+     Nothing ->
+       ( ["Could not resolve entry point: " ++ showHex (Elf.elfEntry e) ""]
+       , Nothing
+       )
+     Just v  -> ([], Just v)
 
 -- | This interprets the Elf file to construct the initial memory,
 -- entry points, and functions symbols.
@@ -607,14 +629,14 @@ initElfDiscoveryInfo loadOpts e = do
       pure (show <$> symErrs, mem, Nothing, funcSymbols)
     Elf.ET_EXEC -> do
       (secMap, mem) <- memoryForElf loadOpts e
-      entry <- getElfEntry mem e
+      let (entryWarn, mentry) = getElfEntry loadOpts mem e
       let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
-      Right (show <$> symErrs, mem, Just entry, funcSymbols)
+      Right (entryWarn ++ fmap show symErrs, mem, mentry, funcSymbols)
     Elf.ET_DYN -> do
       (secMap, mem) <- memoryForElf loadOpts e
-      entry <- getElfEntry mem e
+      let (entryWarn, mentry) = getElfEntry loadOpts mem e
       let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
-      pure (show <$> symErrs, mem, Just entry, funcSymbols)
+      pure (entryWarn ++ fmap show symErrs, mem, mentry, funcSymbols)
     Elf.ET_CORE -> do
       Left $ "Reopt does not support loading core files."
     tp -> do

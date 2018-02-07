@@ -608,7 +608,13 @@ ppLit w i
 -- | Pretty print a value.
 ppValue :: RegisterInfo (ArchReg arch) => Prec -> Value arch ids tp -> Doc
 ppValue _ (BoolValue b)     = text $ if b then "true" else "false"
-ppValue p (BVValue w i)     = assert (i >= 0) $ parenIf (p > colonPrec) $ ppLit w i
+ppValue p (BVValue w i)
+  | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
+  | otherwise =
+    -- TODO: We may want to report an error here.
+    parenIf (p > colonPrec) $
+    text (show i) <+> text "::" <+> brackets (text (show w))
+
 ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
 ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"

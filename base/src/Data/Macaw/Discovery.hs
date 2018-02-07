@@ -39,6 +39,12 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.analyzeFunction
        , Data.Macaw.Discovery.exploreMemPointers
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
+         -- * Top level utilities
+       , Data.Macaw.Discovery.completeDiscoveryState
+       , DiscoveryOptions(..)
+       , defaultDiscoveryOptions
+       , DiscoveryEvent(..)
+       , discoveryLogFn
          -- * DiscoveryFunInfo
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
@@ -73,6 +79,8 @@ import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           Data.Word
+import           GHC.IO (ioToST, stToIO)
+import           System.IO
 
 import           Debug.Trace
 
@@ -311,12 +319,12 @@ foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
 
 -- | Add a block to the current function blocks. If this overlaps with an
 -- existing block, split them so that there's no overlap.
-addFunBlock ::
-    MemWidth (RegAddrWidth (ArchReg arch)) =>
-    ArchSegmentOff arch ->
-    ParsedBlock arch ids ->
-    FunState arch s ids ->
-    FunState arch s ids
+addFunBlock
+  :: MemWidth (RegAddrWidth (ArchReg arch))
+  => ArchSegmentOff arch
+  -> ParsedBlock arch ids
+  -> FunState arch s ids
+  -> FunState arch s ids
 addFunBlock segment block s = case Map.lookupLT segment (s ^. curFunBlocks) of
     Just (bSegment, bBlock)
         -- very sneaky way to check that they are in the same segment (a
@@ -363,7 +371,8 @@ liftST = FunM . lift
 
 -- | Joins in the new abstract state and returns the locations for
 -- which the new state is changed.
-mergeIntraJump  :: ArchSegmentOff arch
+mergeIntraJump  :: MemWidth (ArchAddrWidth arch)
+                => ArchSegmentOff arch
                   -- ^ Source label that we are jumping from.
                 -> AbsBlockState (ArchReg arch)
                    -- ^ The state of the system after jumping to new block.
@@ -371,6 +380,7 @@ mergeIntraJump  :: ArchSegmentOff arch
                    -- ^ Address we are trying to reach.
                 -> FunM arch s ids ()
 mergeIntraJump src ab tgt = do
+-- trace ("mergeIntraJump " ++ show src ++ " " ++ show tgt) $ do
   info <- uses curFunCtx archInfo
   withArchConstraints info $ do
   when (not (absStackHasReturnAddr ab)) $ do
@@ -1019,7 +1029,7 @@ cfgFromAddrs, cfgFromAddrsTrustFns ::
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
   -> AddrSymMap (ArchAddrWidth arch)
-     -- ^ Ma1p from addresses to the associated symbol name.
+     -- ^ Map from addresses to the associated symbol name.
   -> [ArchSegmentOff arch]
      -- ^ Initial function entry points.
   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
@@ -1044,3 +1054,110 @@ cfgFromAddrsWorker initial_state init_addrs mem_words =
     & analyzeDiscoveredFunctions
     & exploreMemPointers mem_words
     & analyzeDiscoveredFunctions
+
+------------------------------------------------------------------------
+-- Resolve functions with logging
+
+-- | Event for logging function
+data DiscoveryEvent w
+   = AnalyzeFunction !(MemSegmentOff w)
+   | AnalyzeBlock !(MemSegmentOff w)
+
+resolveFuns :: MemWidth (RegAddrWidth (ArchReg arch))
+            => (DiscoveryEvent (ArchAddrWidth arch) -> ST s ())
+               -- ^ Callback for discovery events
+            -> DiscoveryState arch
+            -> ST s (DiscoveryState arch)
+resolveFuns logFn info = seq info $
+  case Map.lookupMin (info^.unexploredFunctions) of
+    Nothing -> pure info
+    Just (addr, rsn) -> do
+      logFn (AnalyzeFunction addr)
+      (info',_) <- analyzeFunction (logFn . AnalyzeBlock) addr rsn info
+      resolveFuns logFn info'
+
+------------------------------------------------------------------------
+-- Top-level discovery
+
+-- | Options controlling 'completeDiscoveryState'.
+data DiscoveryOptions
+   = DiscoveryOptions { exploreFunctionSymbols :: !Bool
+                        -- ^ If @True@, 'completeDiscoveryState'
+                        -- should automatically explore all addresses
+                        -- in the address-to-symbol map.
+                      , exploreCodeAddrInMem :: !Bool
+                        -- ^ If @True@, 'completeDiscoveryState' will
+                        -- explore all potential code addresses in
+                        -- memory after exploring other potnetial
+                        -- functions.
+                      , logAtAnalyzeFunction  :: !Bool
+                      -- ^ Print a message each time we apply
+                      -- discovery analysis to a new function.
+                      , logAtAnalyzeBlock     :: !Bool
+                      -- ^ Print a message each time we analyze a
+                      -- block within a function.
+                     }
+
+defaultDiscoveryOptions :: DiscoveryOptions
+defaultDiscoveryOptions =
+  DiscoveryOptions { exploreFunctionSymbols = True
+                   , exploreCodeAddrInMem   = False
+                   , logAtAnalyzeFunction   = True
+                   , logAtAnalyzeBlock      = False
+                   }
+
+ppSymbol :: MemWidth w => MemSegmentOff w -> AddrSymMap w -> String
+ppSymbol addr sym_map =
+  case Map.lookup addr sym_map of
+    Just fnName -> show addr ++ " (" ++ BSC.unpack fnName ++ ")"
+    Nothing  -> show addr
+
+  -- | Print out discovery event using options and address to symbol map.
+discoveryLogFn :: MemWidth w
+               => DiscoveryOptions
+               -> AddrSymMap w
+               -> DiscoveryEvent w
+               -> ST RealWorld ()
+discoveryLogFn disOpt symMap (AnalyzeFunction addr) = ioToST $ do
+  when (logAtAnalyzeFunction disOpt) $ do
+    hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap
+    hFlush stderr
+discoveryLogFn disOpt _ (AnalyzeBlock addr) = ioToST $ do
+  when (logAtAnalyzeBlock disOpt) $ do
+    hPutStrLn stderr $ "  Analyzing block: " ++ show addr
+
+    hFlush stderr
+
+-- | Explore until we have found all functions we can.
+--
+-- This function is intended to make it easy to explore functions, and
+-- can be controlled via 'DiscoveryOptions'.
+completeDiscoveryState :: forall arch
+                       .  ArchitectureInfo arch
+                       -> DiscoveryOptions
+                          -- ^ Options controlling discovery
+                       -> Memory (ArchAddrWidth arch)
+                          -- ^ Memory state used for static code discovery.
+                       -> [MemSegmentOff (ArchAddrWidth arch)]
+                          -- ^ Initial entry points to explore
+                       -> AddrSymMap (ArchAddrWidth arch)
+                          -- ^ The map from addresses to symbols
+                       -> IO (DiscoveryState arch)
+completeDiscoveryState ainfo disOpt mem initEntries symMap = stToIO $ withArchConstraints ainfo $ do
+  let initState
+        = emptyDiscoveryState mem symMap ainfo
+        & markAddrsAsFunction InitAddr initEntries
+  -- Add symbol table entries to discovery state if requested
+  let postSymState
+        | exploreFunctionSymbols disOpt =
+            initState & markAddrsAsFunction InitAddr (Map.keys symMap)
+        | otherwise = initState
+  let logFn = discoveryLogFn disOpt symMap
+  -- Discover functions
+  postPhase1Discovery <- resolveFuns logFn postSymState
+  -- Discovery functions from memory
+  if exploreCodeAddrInMem disOpt then do
+    let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
+    resolveFuns logFn $ postPhase1Discovery & exploreMemPointers mem_contents
+   else
+    return postPhase1Discovery
