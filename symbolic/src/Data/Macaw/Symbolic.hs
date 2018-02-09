@@ -9,6 +9,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE PatternGuards #-}
 module Data.Macaw.Symbolic
   ( Data.Macaw.Symbolic.CrucGen.MacawSymbolicArchFunctions(..)
   , Data.Macaw.Symbolic.CrucGen.CrucGen
@@ -56,8 +58,12 @@ import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified Lang.Crucible.Simulator.OverrideSim as C
 import qualified Lang.Crucible.Simulator.RegMap as C
+import qualified Lang.Crucible.Simulator.SimError as C
 import           Lang.Crucible.Solver.Interface
 import           System.IO (stdout)
+
+import qualified Lang.Crucible.LLVM.MemModel as MM
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
 
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
@@ -146,19 +152,21 @@ addBlocksCFG :: forall s arch ids
              -- ^ Crucible specific functions.
              -> MemSegmentMap (M.ArchAddrWidth arch)
              -- ^ Base address map
+             -> C.GlobalVar MM.Mem
+             -- ^ Memory
              ->  (M.ArchAddrWord arch -> C.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
              -> [M.Block arch ids]
              -- ^ List of blocks for this region.
              -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addBlocksCFG archFns baseAddrMap posFn macawBlocks = do
+addBlocksCFG archFns baseAddrMap mem posFn macawBlocks = do
   crucGenArchConstraints archFns $ do
    -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label s)
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w))
                                    | w <- M.blockLabel <$> macawBlocks ]
   forM macawBlocks $ \b -> do
-    addMacawBlock archFns baseAddrMap blockLabelMap posFn b
+    addMacawBlock archFns baseAddrMap mem blockLabelMap posFn b
 
 -- | Create a Crucible CFG from a list of blocks
 mkBlocksCFG :: forall s arch ids
@@ -168,6 +176,7 @@ mkBlocksCFG :: forall s arch ids
                -- ^ Handle allocator to make the blocks
             -> MemSegmentMap (M.ArchAddrWidth arch)
                -- ^ Map from region indices to their address
+            -> C.GlobalVar MM.Mem
             -> C.FunctionName
                -- ^ Name of function for pretty print purposes.
             -> (M.ArchAddrWord arch -> C.Position)
@@ -175,9 +184,9 @@ mkBlocksCFG :: forall s arch ids
             -> [M.Block arch ids]
             -- ^ List of blocks for this region.
             -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks = do
+mkBlocksCFG archFns halloc memBaseVarMap mem nm posFn macawBlocks = do
   mkCrucCFG archFns halloc nm $ do
-    addBlocksCFG archFns memBaseVarMap posFn macawBlocks
+    addBlocksCFG archFns memBaseVarMap mem posFn macawBlocks
 
 mkFunCFG :: forall s arch ids
          .  MacawSymbolicArchFunctions arch
@@ -186,6 +195,8 @@ mkFunCFG :: forall s arch ids
             -- ^ Handle allocator to make the blocks
          -> MemSegmentMap (M.ArchAddrWidth arch)
             -- ^ Map from region indices to their address
+         -> C.GlobalVar MM.Mem
+            -- ^ Memory
          -> C.FunctionName
             -- ^ Name of function for pretty print purposes.
          -> (M.ArchSegmentOff arch -> C.Position)
@@ -193,7 +204,7 @@ mkFunCFG :: forall s arch ids
          -> M.DiscoveryFunInfo arch ids
          -- ^ List of blocks for this region.
          -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
+mkFunCFG archFns halloc memBaseVarMap mem nm posFn fn = do
   mkCrucCFG archFns halloc nm $ do
     let insSentences :: M.ArchSegmentOff arch
                      -> (BlockLabelMap arch s,Int)
@@ -215,7 +226,7 @@ mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
     fmap concat $
       forM (Map.elems (fn^.M.parsedBlocks)) $ \b -> do
         -- TODO: Initialize value in regReg with initial registers
-        addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
+        addParsedBlock archFns memBaseVarMap mem blockLabelMap posFn regReg b
 
 evalMacawExprExtension :: IsSymInterface sym
                        => sym
@@ -224,6 +235,7 @@ evalMacawExprExtension :: IsSymInterface sym
                        -> IO (C.RegValue sym tp)
 evalMacawExprExtension sym f e0 =
   case e0 of
+
     MacawOverflows op w xv yv cv -> do
       x <- f xv
       y <- f yv
@@ -258,6 +270,99 @@ evalMacawExprExtension sym f e0 =
           znorm <- bvSext sym w' =<< bvTrunc sym w zext
           bvNe sym zext znorm
 
+    PtrToBits _w x  -> MM.projectLLVM_bv sym =<< f x
+    BitsToPtr _w x  -> MM.llvmPointer_bv sym =<< f x
+
+-- | Is this value a bit-vector (i.e., not a pointer).
+-- Note that the NULL pointer is actually also a bit-vector.
+isBitVec :: IsSymInterface sym => sym -> MM.LLVMPtr sym w -> IO (Pred sym)
+isBitVec sym (MM.LLVMPointer b _) = natEq sym b =<< natLit sym 0
+
+
+asBits :: MM.LLVMPtr sym w -> C.RegValue sym (C.BVType w)
+asBits = snd . MM.llvmPointerView
+
+ptrBase :: MM.LLVMPtr sym w -> C.RegValue sym C.NatType
+ptrBase = fst . MM.llvmPointerView
+
+
+-- | Classify the arguments, and continue.
+ptrOp :: 
+  (IsSymInterface sym, 16 <= w) =>
+  C.CrucibleState MacawSimulatorState sym ext rtp blocks r ctx ->
+  -- ^ The simulator state
+
+  C.GlobalVar MM.Mem      {- ^ Memory -} ->
+  NatRepr w               {- ^ Pointer width -} ->
+  C.RegEntry sym (MM.LLVMPointerType w)        {- ^ Value 1 -} ->
+  C.RegEntry sym (MM.LLVMPointerType w)        {- ^ Value 2 -} ->
+  (sym -> C.RegValue sym MM.Mem ->
+      Pred sym -> Pred sym -> Pred sym -> Pred sym ->
+      MM.LLVMPtr sym w -> MM.LLVMPtr sym w -> IO a) ->
+  IO (a, C.CrucibleState MacawSimulatorState sym ext rtp blocks r ctx)
+
+ptrOp st mvar w x0 y0 k =
+  do mem      <- getMem mvar st
+     LeqProof <- return (lemma1_16 w)
+     let sym = C.stateSymInterface st
+         x   = C.regValue x0
+         y   = C.regValue y0
+     xPtr     <- let ?ptrWidth = w in MM.isValidPointer sym x mem
+     yPtr     <- let ?ptrWidth = w in MM.isValidPointer sym y mem
+     xBits    <- isBitVec sym x
+     yBits    <- isBitVec sym x
+     a <- k sym mem xPtr xBits yPtr yBits x y
+     return (a,st)
+
+
+
+
+-- | Do a binary operation on bit-vector/pointers, where both arguments
+-- must be valid pointers or both argumnets must be bit-vectors.
+ptr2 ::
+  (IsSymInterface sym, 16 <= w) =>
+  C.CrucibleState MacawSimulatorState sym ext rtp blocks r ctx ->
+  -- ^ The simulator state
+
+  C.GlobalVar MM.Mem      {- ^ Memory -} ->
+  NatRepr w               {- ^ Pointer width -} ->
+
+
+  String                  {- ^ Name of operation (for error reporting) -} ->
+  C.RegEntry sym (MM.LLVMPointerType w)        {- ^ Value 1 -} ->
+  C.RegEntry sym (MM.LLVMPointerType w)        {- ^ Value 2 -} ->
+
+  -- | Mux the results
+  (sym -> C.RegValue sym C.BoolType -> a -> a -> IO a) ->
+
+  -- | Operation to use for bit-vector version
+  (sym -> C.RegValue sym (C.BVType w) -> C.RegValue sym (C.BVType w) -> IO a) ->
+
+  -- | Operation to use for pointer version
+  (sym -> NatRepr w -> MM.LLVMPtr sym w -> MM.LLVMPtr sym w -> IO a) ->
+  IO (a, C.CrucibleState MacawSimulatorState sym ext rtp blocks r ctx)
+ptr2 st mvar w nm x0 y0 mux ifBits ifPtr =
+  ptrOp st mvar w x0 y0 $ \sym _ xPtr xBits yPtr yBits x y ->
+  do bothPtrs <- andPred sym xPtr yPtr
+     bothBits <- andPred sym xBits yBits
+     ok       <- orPred sym bothPtrs bothBits
+     addAssertion sym ok
+       (C.AssertFailureSimError ("Invalid arguments to " ++ nm))
+     ptrRes <- ifPtr sym w x y
+     bitRes <- ifBits sym (asBits x) (asBits y)
+     mux sym bothPtrs ptrRes bitRes
+
+
+-- | Get the current model of the memory.
+getMem :: C.GlobalVar MM.Mem ->
+          C.CrucibleState MacawSimulatorState sym ext rtp blocks r ctx ->
+          IO (C.RegValue sym MM.Mem)
+getMem mvar st =
+  case C.lookupGlobal mvar (st ^. C.stateTree . C.actFrame . C.gpGlobals) of
+    Just mem -> return mem
+    Nothing  -> fail ("Global heap value not initialized: " ++ show mvar)
+
+
 type EvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
     f (C.RegEntry sym) tp'
@@ -269,9 +374,10 @@ type MacawArchEvalFn sym arch =
   EvalStmtFunc (MacawArchStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 
 -- | This evaluates a  Macaw statement extension in the simulator.
-execMacawStmtExtension :: MacawArchEvalFn sym arch
-                       -- ^ Function for executing
-                       -> EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+execMacawStmtExtension ::
+  IsSymInterface sym =>
+  MacawArchEvalFn sym arch {- ^ Function for executing -} ->
+  EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 execMacawStmtExtension archStmtFn s0 st =
   case s0 of
     MacawReadMem{} -> undefined
@@ -281,9 +387,95 @@ execMacawStmtExtension archStmtFn s0 st =
     MacawCall{} -> undefined
     MacawArchStmtExtension s -> archStmtFn s st
 
+    PtrEq mem w x y | LeqProof <- lemma1_16 w ->
+      ptr2 st mem w "ptr_eq" x y itePred bvEq MM.ptrEq
+
+    PtrLt mvar w x0 y0 | LeqProof <- lemma1_16 w ->
+      ptrOp st mvar w x0 y0 $ \sym _ xPtr xBits yPtr yBits x y ->
+        do both_bits <- andPred sym xBits yBits
+           both_ptrs <- andPred sym xPtr  yPtr
+           sameRegion <- natEq sym (ptrBase x) (ptrBase y)
+           ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
+           addAssertion sym ok
+             (C.AssertFailureSimError "Invalid arguments to ptr_lt")
+           bvUlt sym (asBits x) (asBits y)
+
+    PtrLeq mvar w x0 y0 | LeqProof <- lemma1_16 w ->
+      ptrOp st mvar w x0 y0 $ \sym _ xPtr xBits yPtr yBits x y ->
+        do both_bits <- andPred sym xBits yBits
+           both_ptrs <- andPred sym xPtr  yPtr
+           sameRegion <- natEq sym (ptrBase x) (ptrBase y)
+           ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
+           addAssertion sym ok
+             (C.AssertFailureSimError "Invalid arguments to ptr_leq")
+           bvUle sym (asBits x) (asBits y)
+
+    PtrMux mem w c x y | LeqProof <- lemma1_16 w ->
+      do let ifBits sym a b = do r <- bvIte sym (C.regValue c) a b
+                                 MM.llvmPointer_bv sym r
+             ifPtr sym _ a b = MM.muxLLVMPtr sym (C.regValue c) a b
+         ptr2 st mem w "ptr_mux" x y MM.muxLLVMPtr ifBits ifPtr
+
+    PtrAdd mvar w x0 y0 | LeqProof <- lemma1_16 w ->
+      ptrOp st mvar w x0 y0 $ \sym mem xPtr xBits yPtr yBits x y ->
+        do both_bits <- andPred sym xBits yBits     -- (1)
+           ptr_bits  <- andPred sym xPtr yBits   -- (2)
+           bits_ptr  <- andPred sym xBits yPtr   -- (3)
+           ok        <- orPred sym both_bits =<< orPred sym ptr_bits bits_ptr
+           addAssertion sym ok
+             (C.AssertFailureSimError "Invalid arguments to ptr_add")
+
+           case1 <- MM.llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
+
+           case2    <- MM.ptrAdd sym w x (asBits y)
+           valid2   <- let ?ptrWidth = w in MM.isValidPointer sym case2 mem
+           case2_ok <- impliesPred sym ptr_bits valid2
+           addAssertion sym case2_ok
+             (C.AssertFailureSimError "Invalid result of ptr_add")
+
+           case3 <- MM.ptrAdd sym w y (asBits x)
+           valid3 <- let ?ptrWidth = w in MM.isValidPointer sym case3 mem
+           case3_ok <- impliesPred sym bits_ptr valid3
+           addAssertion sym case3_ok
+             (C.AssertFailureSimError "Invalid result of ptr_add")
+
+           case23 <- MM.muxLLVMPtr sym ptr_bits case2 case3
+           MM.muxLLVMPtr sym both_bits case1 case23
+
+
+    PtrSub mvar w x0 y0 | LeqProof <- lemma1_16 w ->
+      ptrOp st mvar w x0 y0 $ \sym mem xPtr xBits yPtr yBits x y ->
+        do both_bits <- andPred sym xBits yBits    -- (1)
+           ptr_bits  <- andPred sym xPtr  yBits    -- (2)
+           ptr_ptr   <- andPred sym xPtr  yPtr     -- (3)
+           ok <- orPred sym ptr_ptr =<< orPred sym both_bits ptr_bits
+           addAssertion sym ok
+             (C.AssertFailureSimError "Invalid arguments to ptr_sub")
+
+           case1 <- MM.llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
+
+           case2 <- MM.ptrSub sym w x (asBits y)
+           valid2 <- let?ptrWidth = w in MM.isValidPointer sym case2 mem
+           case2_ok <- impliesPred sym ptr_bits valid2
+           addAssertion sym case2_ok
+             (C.AssertFailureSimError "Invalid result of ptr_sub")
+
+           case3    <- MM.llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
+           valid3   <- natEq sym (ptrBase x) (ptrBase y)
+           case3_ok <- impliesPred sym ptr_ptr valid3
+           addAssertion sym case3_ok
+             (C.AssertFailureSimError
+                "Cannot subtract pointers from different allocation.")
+
+           case23 <- MM.muxLLVMPtr sym ptr_bits case2 case3
+           MM.muxLLVMPtr sym both_bits case1 case23
+
+
 -- | Return macaw extension evaluation functions.
-macawExtensions :: MacawArchEvalFn sym arch
-                -> C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
+macawExtensions ::
+  IsSymInterface sym =>
+  MacawArchEvalFn sym arch ->
+  C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
 macawExtensions f =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
                   , C.extensionExec = execMacawStmtExtension f
@@ -347,17 +539,18 @@ runBlocks :: forall sym arch ids
            -> [M.Block arch ids]
               -- ^ List of blocks for this region.
            -> Ctx.Assignment (C.RegValue' sym)
-                             (CtxToCrucibleType arch (ArchRegContext arch))
+                             (CtxToCrucibleType (ArchRegContext arch))
               -- ^ Register assignment
            -> IO (C.ExecResult
                    MacawSimulatorState
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (C.StructType
-                              (CtxToCrucibleType arch (ArchRegContext arch)))))
+                              (CtxToCrucibleType (ArchRegContext arch)))))
 runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   halloc <- C.newHandleAllocator
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
-  C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks
+  mvar <- stToIO (MM.mkMemVar halloc)
+  C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap mvar nm posFn macawBlocks
   -- Run the symbolic simulator.
   runCodeBlock sym archFns archEval halloc g regStruct

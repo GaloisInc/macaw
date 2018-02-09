@@ -19,6 +19,8 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE PatternGuards #-}
 module Data.Macaw.Symbolic.CrucGen
   ( MacawSymbolicArchFunctions(..)
   , crucArchRegTypes
@@ -44,14 +46,16 @@ module Data.Macaw.Symbolic.CrucGen
   , valueToCrucible
   , evalArchStmt
   , MemSegmentMap
+
+  , lemma1_16
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
 import           Control.Monad.Except
 import           Control.Monad.ST
+import           GHC.TypeLits(KnownNat)
 import           Control.Monad.State.Strict
 import           Data.Bits
-import           Data.Proxy(Proxy(..))
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
@@ -60,17 +64,20 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Classes
+import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableFC
+import qualified Data.Parameterized.TH.GADT as U
+
 
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
 import qualified Lang.Crucible.CFG.Expr as C
+import qualified Lang.Crucible.CFG.Common as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import           Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Solver.Symbol as C
@@ -84,8 +91,7 @@ import           Data.Macaw.Symbolic.PersistentState
 
 
 -- | List of crucible types for architecture.
-type MacawCrucibleRegTypes (arch :: *) =
-        CtxToCrucibleType arch (ArchRegContext arch)
+type MacawCrucibleRegTypes (arch :: *) = CtxToCrucibleType (ArchRegContext arch)
 
 type ArchRegStruct (arch :: *) = C.StructType (MacawCrucibleRegTypes arch)
 
@@ -100,6 +106,8 @@ type MacawArchConstraints arch =
   ( TraversableFC (MacawArchStmtExtension arch)
   , C.TypeApp (MacawArchStmtExtension arch)
   , C.PrettyApp (MacawArchStmtExtension arch)
+  , KnownNat (M.ArchAddrWidth arch)
+  , 16 <= M.ArchAddrWidth arch
   )
 
 ------------------------------------------------------------------------
@@ -117,7 +125,7 @@ data MacawSymbolicArchFunctions arch
     -- ^ Provides a solver name to use for referring to register.
   , crucGenArchFn :: !(forall ids s tp
                          . M.ArchFn arch (M.Value arch ids) tp
-                         -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp)))
+                         -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
      -- ^ Generate crucible for architecture-specific function.
   , crucGenArchStmt
     :: !(forall ids s . M.ArchStmt arch (M.Value arch ids) -> CrucGen arch ids s ())
@@ -130,10 +138,11 @@ data MacawSymbolicArchFunctions arch
   }
 
 -- | Return types of registers in Crucible
-crucArchRegTypes :: MacawSymbolicArchFunctions arch
-                 -> Assignment C.TypeRepr (CtxToCrucibleType arch (ArchRegContext arch))
+crucArchRegTypes ::
+  MacawSymbolicArchFunctions arch ->
+  Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))
 crucArchRegTypes archFns = crucGenArchConstraints archFns $
-    typeCtxToCrucible archFns (fmapFC M.typeRepr regAssign)
+    typeCtxToCrucible (fmapFC M.typeRepr regAssign)
   where regAssign = crucGenRegAssignment archFns
 
 ------------------------------------------------------------------------
@@ -145,6 +154,9 @@ data MacawOverflowOp
    | Usbb
    | Ssbb
   deriving (Eq, Ord, Show)
+
+type BVPtr a       = MM.LLVMPointerType (M.ArchAddrWidth a)
+type ArchNatRepr a = NatRepr (M.ArchAddrWidth a)
 
 data MacawExprExtension (arch :: *)
                         (f :: C.CrucibleType -> *)
@@ -161,6 +173,7 @@ data MacawExprExtension (arch :: *)
   -- | Treat a pointer as a number.
   PtrToBits ::
     (1 <= w) =>
+    !(NatRepr w) ->
     !(f (MM.LLVMPointerType w)) ->
     MacawExprExtension arch f (C.BVType w)
 
@@ -168,10 +181,11 @@ data MacawExprExtension (arch :: *)
   -- We can never read from this pointer.
   BitsToPtr ::
     (1 <= w) =>
+    !(NatRepr w) ->
     !(f (C.BVType w)) ->
     MacawExprExtension arch f (MM.LLVMPointerType w)
 
-  
+
 
 instance C.PrettyApp (MacawExprExtension arch) where
   ppApp f a0 =
@@ -180,42 +194,16 @@ instance C.PrettyApp (MacawExprExtension arch) where
         let mnem = "macawOverflows_" ++ show o ++ "_" ++ show w
          in sexpr mnem [f x, f y, f c]
 
-      -- XXX: PtrToBits, BitsToPtr
+      PtrToBits w x  -> sexpr ("ptr_to_bits_" ++ show w) [f x]
+      BitsToPtr w x  -> sexpr ("bits_to_ptr_" ++ show w) [f x]
 
 instance C.TypeApp (MacawExprExtension arch) where
-  appType (MacawOverflows _ _ _ _ _) = C.knownRepr
-      -- XXX: PtrToBits, BitsToPtr
+  appType x =
+    case x of
+      MacawOverflows {} -> C.knownRepr
+      PtrToBits w _     -> C.BVRepr w
+      BitsToPtr w _     -> MM.LLVMPointerRepr w
 
-instance TestEqualityFC (MacawExprExtension arch) where
-  testEqualityFC f (MacawOverflows xo xw xa xb xc)
-                   (MacawOverflows yo yw ya yb yc) = do
-    when (xo /= yo) $ Nothing
-    Refl <- testEquality xw yw
-    Refl <- f xa ya
-    Refl <- f xb yb
-    Refl <- f xc yc
-    pure Refl
-      -- XXX: PtrToBits, BitsToPtr
-
-instance OrdFC (MacawExprExtension arch) where
-  compareFC f (MacawOverflows xo xw xa xb xc)
-              (MacawOverflows yo yw ya yb yc) =
-    joinOrderingF (fromOrdering (compare xo yo)) $
-    joinOrderingF (compareF xw yw) $
-    joinOrderingF (f xa ya) $
-    joinOrderingF (f xb yb) $
-    joinOrderingF (f xc yc) $
-    EQF
-  -- XXX: PtrToBits, BitsToPtr
-
-instance FunctorFC (MacawExprExtension arch) where
-  fmapFC = fmapFCDefault
-instance FoldableFC (MacawExprExtension arch) where
-  foldMapFC = foldMapFCDefault
-instance TraversableFC (MacawExprExtension arch) where
-  traverseFC f (MacawOverflows o w a b c) =
-    MacawOverflows o w <$> f a <*> f b <*> f c
-  -- XXX: PtrToBits, BitsToPtr
 
 ------------------------------------------------------------------------
 -- MacawStmtExtension
@@ -234,7 +222,7 @@ data MacawStmtExtension (arch :: *)
     -- | Pointer to read from.
     !(f (ArchAddrCrucibleType arch)) ->
 
-    MacawStmtExtension arch f (ToCrucibleType arch tp)
+    MacawStmtExtension arch f (ToCrucibleType tp)
 
 
   -- | Read from memory, if the condition is True.
@@ -251,25 +239,25 @@ data MacawStmtExtension (arch :: *)
     !(f (ArchAddrCrucibleType arch)) ->
 
     -- | Default value, returned if the condition is False.
-    !(f (ToCrucibleType arch tp)) ->
+    !(f (ToCrucibleType tp)) ->
 
-    MacawStmtExtension arch f (ToCrucibleType arch tp)
+    MacawStmtExtension arch f (ToCrucibleType tp)
 
   -- | Write to memory
   MacawWriteMem ::
     !(M.MemRepr tp) ->
     !(f (ArchAddrCrucibleType arch)) ->
-    !(f (ToCrucibleType arch tp)) ->
+    !(f (ToCrucibleType tp)) ->
     MacawStmtExtension arch f C.UnitType
 
   -- | Generate a fresh symbolic variable of the given type.
   MacawFreshSymbolic ::
-    !(M.TypeRepr tp) -> MacawStmtExtension arch f (ToCrucibleType arch tp)
+    !(M.TypeRepr tp) -> MacawStmtExtension arch f (ToCrucibleType tp)
 
   -- | Call a function.
   MacawCall ::
     -- | Types of fields in register struct
-    !(Assignment C.TypeRepr (CtxToCrucibleType arch (ArchRegContext arch))) ->
+    !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))) ->
 
     -- | Arguments to call.
     !(f (ArchRegStruct arch)) ->
@@ -281,8 +269,65 @@ data MacawStmtExtension (arch :: *)
     !(MacawArchStmtExtension arch f tp) ->
     MacawStmtExtension arch f tp
 
-stmtArch :: MacawStmtExtension arch f p -> Proxy arch
-stmtArch _ = Proxy
+  -- NOTE: The Ptr* operations below are statements and not expressions
+  -- because they need to read the memory variable, to determine if their
+  -- inputs are valid pointers.
+
+  -- | Equality for pointer or bit-vector.
+  PtrEq ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f C.BoolType
+
+  -- | Unsigned comparison for pointer/bit-vector.
+  PtrLeq ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f C.BoolType
+
+  -- | Unsigned comparison for pointer/bit-vector.
+  PtrLt ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f C.BoolType
+
+  -- | Mux for pointers or bit-vectors.
+  PtrMux ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f C.BoolType) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
+  -- | Add a pointer to a bit-vector, or two bit-vectors.
+  PtrAdd ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
+  -- | Subtract two pointers, two bit-vectors, or bit-vector from a pointer.
+  PtrSub ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
 
 
 instance TraversableFC (MacawArchStmtExtension arch)
@@ -293,17 +338,7 @@ instance TraversableFC (MacawArchStmtExtension arch)
       => FoldableFC (MacawStmtExtension arch) where
   foldMapFC = foldMapFCDefault
 
-instance TraversableFC (MacawArchStmtExtension arch)
-      => TraversableFC (MacawStmtExtension arch) where
-  traverseFC f a0 =
-    case a0 of
-      MacawReadMem  r a   -> MacawReadMem r <$> f a
-      MacawCondReadMem r c a d -> MacawCondReadMem r <$> f c <*> f a <*> f d
-      MacawWriteMem r a v -> MacawWriteMem r <$> f a <*> f v
-      MacawFreshSymbolic r -> pure (MacawFreshSymbolic r)
-      MacawCall regTypes regs -> MacawCall regTypes <$> f regs
-      MacawArchStmtExtension a ->
-        MacawArchStmtExtension <$> traverseFC f a
+
 
 
 sexpr :: String -> [Doc] -> Doc
@@ -321,14 +356,34 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       MacawCall _ regs -> sexpr "macawCall" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
 
+      PtrEq _ _ x y    -> sexpr "ptr_eq" [ f x, f y ]
+      PtrLt _ _ x y    -> sexpr "ptr_lt" [ f x, f y ]
+      PtrLeq _ _ x y   -> sexpr "ptr_leq" [ f x, f y ]
+      PtrAdd _ _ x y   -> sexpr "ptr_add" [ f x, f y ]
+      PtrSub _ _ x y   -> sexpr "ptr_sub" [ f x, f y ]
+      PtrMux _ _ c x y -> sexpr "ptr_mux" [ f c, f x, f y ]
+
+
 instance C.TypeApp (MacawArchStmtExtension arch)
       => C.TypeApp (MacawStmtExtension arch) where
-  appType s@(MacawReadMem r _) = memReprToCrucible (stmtArch s) r
-  appType s@(MacawCondReadMem r _ _ _) = memReprToCrucible (stmtArch s) r
+  appType (MacawReadMem r _) = memReprToCrucible r
+  appType (MacawCondReadMem r _ _ _) = memReprToCrucible r
   appType (MacawWriteMem _ _ _) = C.knownRepr
-  appType s@(MacawFreshSymbolic r) = typeToCrucible (stmtArch s) r
+  appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawCall regTypes _) = C.StructRepr regTypes
-  appType s@(MacawArchStmtExtension f) = C.appType f
+  appType (MacawArchStmtExtension f) = C.appType f
+  appType PtrEq {}            = C.knownRepr
+  appType PtrLt {}            = C.knownRepr
+  appType PtrLeq {}           = C.knownRepr
+  appType (PtrAdd _ w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
+  appType (PtrSub _ w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
+  appType (PtrMux _ w _ _ _) | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
+
+lemma1_16 :: (16 <= w) => p w -> LeqProof 1 w
+lemma1_16 w = leqTrans p (leqProof knownNat w)
+  where
+  p :: LeqProof 1 16
+  p = leqProof knownNat knownNat
 
 ------------------------------------------------------------------------
 -- MacawExt
@@ -357,7 +412,7 @@ data CrucGenState arch ids s
      -- ^ Map from memory region to base address
    , crucRegIndexMap :: !(RegIndexMap arch)
      -- ^ Map from architecture register to Crucible/Macaw index pair.
-   , crucPState      :: !(CrucPersistentState arch ids s)
+   , crucPState      :: !(CrucPersistentState ids s)
      -- ^ State that persists across blocks.
    , crucRegisterReg :: !(CR.Reg s (ArchRegStruct arch))
    , macawPositionFn :: !(M.ArchAddrWord arch -> C.Position)
@@ -368,15 +423,17 @@ data CrucGenState arch ids s
      -- ^ Offset
    , prevStmts  :: ![C.Posd (CR.Stmt (MacawExt arch) s)]
      -- ^ List of states in reverse order
+
+   , memory :: !(C.GlobalVar MM.Mem)
    }
 
 crucPStateLens ::
-  Simple Lens (CrucGenState arch ids s) (CrucPersistentState arch ids s)
+  Simple Lens (CrucGenState arch ids s) (CrucPersistentState ids s)
 crucPStateLens = lens crucPState (\s v -> s { crucPState = v })
 
 assignValueMapLens ::
-  Simple Lens (CrucPersistentState arch ids s)
-              (MapF (M.AssignId ids) (MacawCrucibleValue arch (CR.Atom s)))
+  Simple Lens (CrucPersistentState ids s)
+              (MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
 assignValueMapLens = lens assignValueMap (\s v -> s { assignValueMap = v })
 
 type CrucGenRet arch ids s = (CrucGenState arch ids s, CR.TermStmt s (MacawFunctionResult arch))
@@ -405,6 +462,16 @@ instance Monad (CrucGen arch ids s) where
 instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
   get = CrucGen $ \s cont -> cont s s
   put s = CrucGen $ \_ cont -> cont s ()
+
+-- | A NatRepr corresponding to the architecture width.
+archAddrWidth :: CrucGen arch ids s (NatRepr (M.ArchAddrWidth arch))
+archAddrWidth =
+  do archFns <- translateFns <$> get
+     crucGenArchConstraints archFns (return knownRepr)
+
+-- | Access the the global modelling the memory.
+getMemVar :: CrucGen arch ids s (C.GlobalVar MM.Mem)
+getMemVar = memory <$> get
 
 -- | Get current position
 getPos :: CrucGen arch ids s C.Position
@@ -466,25 +533,25 @@ evalMacawExt = crucibleValue . C.ExtensionApp
 -- | Treat a register value as a bit-vector.
 toBits ::
   (1 <= w) =>
+  NatRepr w ->
   CR.Atom s (MM.LLVMPointerType w) ->
   CrucGen arch ids s (CR.Atom s (C.BVType w))
-toBits x = evalMacawExt (PtrToBits x)
+toBits w x = evalMacawExt (PtrToBits w x)
 
 -- | Treat a bit-vector as a register value.
 fromBits ::
   (1 <= w) =>
+  NatRepr w ->
   CR.Atom s (C.BVType w) ->
   CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
-fromBits x = evalMacawExt (BitsToPtr x)
+fromBits w x = evalMacawExt (BitsToPtr w x)
 
 
-getArch :: CrucGen arch ids s (Proxy arch)
-getArch = return Proxy
 
 
 -- | Return the value associated with the given register
 getRegValue :: M.ArchReg arch tp
-            -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+            -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 getRegValue r = do
   archFns <- gets translateFns
   idxMap  <- gets crucRegIndexMap
@@ -495,23 +562,30 @@ getRegValue r = do
       reg <- gets crucRegisterReg
       regStruct <- evalAtom (CR.ReadReg reg)
       let tp = M.typeRepr (crucGenRegAssignment archFns Ctx.! macawIndex idx)
-      arch <- getArch
       crucibleValue (C.GetStruct regStruct (crucibleIndex idx)
-                    (typeToCrucible arch tp))
+                    (typeToCrucible tp))
 
 v2c :: M.Value arch ids tp
-    -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+    -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 v2c = valueToCrucible
 
 v2c' :: (1 <= w) =>
+       NatRepr w ->
        M.Value arch ids (M.BVType w) ->
        CrucGen arch ids s (CR.Atom s (C.BVType w))
-v2c' x = toBits =<< valueToCrucible x
+v2c' w x = toBits w =<< valueToCrucible x
 
 -- | Evaluate the crucible app and return a reference to the result.
 appAtom :: C.App (MacawExt arch) (CR.Atom s) ctp ->
             CrucGen arch ids s (CR.Atom s ctp)
 appAtom app = evalAtom (CR.EvalApp app)
+
+appBVAtom ::
+  (1 <= w) =>
+  NatRepr w ->
+  C.App (MacawExt arch) (CR.Atom s) (C.BVType w) ->
+  CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
+appBVAtom w app = fromBits w =<< appAtom app
 
 addLemma :: (1 <= x, x + 1 <= y) => p x -> q y -> LeqProof 1 y
 addLemma _ _ = undefined
@@ -521,61 +595,62 @@ addLemma _ _ = undefined
 bvLit :: (1 <= w) => NatRepr w -> Integer -> CrucGen arch ids s (CR.Atom s (C.BVType w))
 bvLit w i = crucibleValue (C.BVLit w (i .&. maxUnsigned w))
 
-
-bitOp1 ::
-  (1 <= v, 1 <= w) =>
-  (CR.Atom s (C.BVType v) -> C.App (MacawExt arch) (CR.Atom s) (C.BVType w)) ->
-  M.Value arch ids (M.BVType v) ->
-  CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
-bitOp1 f x =
-  do v <- v2c' x
-     res <- appAtom (f v)
-     fromBits res
-
-bitOp2' ::
-  (1 <= u, 1 <= v) =>
-  (CR.Atom s (C.BVType u) ->
-   CR.Atom s (C.BVType v) ->
-   C.App (MacawExt arch) (CR.Atom s) t) ->
-   M.Value arch ids (M.BVType u) ->
-   M.Value arch ids (M.BVType v) ->
-   CrucGen arch ids s (CR.Atom s t)
-bitOp2' f x y =
-  do x' <- v2c' x
-     y' <- v2c' y
-     appAtom (f x' y')
-
 bitOp2 ::
-  (1 <= u, 1 <= v, 1 <= w) =>
-  (CR.Atom s (C.BVType u) ->
-   CR.Atom s (C.BVType v) ->
+  (1 <= w) =>
+  NatRepr w ->
+  (CR.Atom s (C.BVType w) ->
+   CR.Atom s (C.BVType w) ->
    C.App (MacawExt arch) (CR.Atom s) (C.BVType w)) ->
-   M.Value arch ids (M.BVType u) ->
-   M.Value arch ids (M.BVType v) ->
+   M.Value arch ids (M.BVType w) ->
+   M.Value arch ids (M.BVType w) ->
    CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
-bitOp2 f x y = fromBits =<< bitOp2' f x y
+bitOp2 w f x y = fromBits w =<< appAtom =<< f <$> v2c' w x <*> v2c' w y
+
 
 
 
 
 appToCrucible :: M.App (M.Value arch ids) tp ->
-                  CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+                 CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 appToCrucible app = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   case app of
 
-{-
-    M.Eq x y -> do
-      let btp = typeToCrucible (M.typeRepr x)
-      appAtom =<< C.BaseIsEq btp <$> v2c x <*> v2c y
-    M.Mux tp c t f -> do
-      let btp = undefined -- typeToCrucibleBase tp
-      appAtom =<< C.BaseIte btp <$> v2c c <*> v2c t <*> v2c f
+    M.Eq x y ->
+      do xv <- v2c x
+         yv <- v2c y
+         case M.typeRepr x of
+           M.BoolTypeRepr -> appAtom (C.BaseIsEq C.BaseBoolRepr xv yv)
+           M.BVTypeRepr n ->
+             do rW <- archAddrWidth
+                case testEquality n rW of
+                  Just Refl -> do mem <- getMemVar
+                                  evalMacawStmt (PtrEq mem n xv yv)
+                  Nothing ->
+                    appAtom =<< C.BVEq n <$> toBits n xv <*> toBits n yv
+           M.TupleTypeRepr _ -> fail "XXX: Equality on tuples not yet done."
+
+
+    M.Mux tp c t f ->
+      do cond <- v2c c
+         tv   <- v2c t
+         fv   <- v2c f
+         case tp of
+           M.BoolTypeRepr -> appAtom (C.BaseIte C.BaseBoolRepr cond tv fv)
+           M.BVTypeRepr n ->
+             do rW <- archAddrWidth
+                case testEquality n rW of
+                  Just Refl -> do mem <- getMemVar
+                                  evalMacawStmt (PtrMux mem n cond tv fv)
+                  Nothing -> appBVAtom n =<<
+                                C.BVIte cond n <$> toBits n tv <*> toBits n fv
+           M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
+
 
     M.TupleField tps x i ->
       undefined tps x i -- TODO: Fix this
--}
+
 
     -- Booleans
 
@@ -586,74 +661,118 @@ appToCrucible app = do
 
     -- Extension operations
     M.Trunc x w ->
-      do let w1 = M.typeWidth x
-         LeqProof <- return (addLemma w w1)
-         bitOp1 (C.BVTrunc w w1) x
+      do let wx = M.typeWidth x
+         LeqProof <- return (addLemma w wx)
+         appBVAtom w =<< C.BVTrunc w wx <$> v2c' wx x
 
-    M.SExt x w -> bitOp1 (C.BVSext w (M.typeWidth x)) x
-    M.UExt x w -> bitOp1 (C.BVZext w (M.typeWidth x)) x
+    M.SExt x w ->
+      do let wx = M.typeWidth x
+         appBVAtom w =<< C.BVSext w wx <$> v2c' wx x
 
-{-
+    M.UExt x w ->
+      do let wx = M.typeWidth x
+         appBVAtom w =<< C.BVZext w wx <$> v2c' wx x
+
     -- Bitvector arithmetic
-    M.BVAdd w x y -> appAtom =<< C.BVAdd w <$> v2c x <*> v2c y
--}
+    M.BVAdd w x y ->
+      do xv <- v2c x
+         yv <- v2c y
+         aw <- archAddrWidth
+         case testEquality w aw of
+           Just Refl -> do mem <- getMemVar
+                           evalMacawStmt (PtrAdd mem w xv yv)
+           Nothing -> appBVAtom w =<< C.BVAdd w <$> toBits w xv <*> toBits w yv
 
     -- Here we assume that this does not make sense for pointers.
     M.BVAdc w x y c -> do
-      z <- appAtom =<< C.BVAdd w <$> v2c' x <*> v2c' y
+      z <- appAtom =<< C.BVAdd w <$> v2c' w x <*> v2c' w y
       d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
                                              <*> appAtom (C.BVLit w 1)
                                              <*> appAtom (C.BVLit w 0)
-      fromBits =<< appAtom (C.BVAdd w z d)
-{-
-    M.BVSub w x y -> appAtom =<< C.BVSub w <$> v2c x <*> v2c y
+      appBVAtom w (C.BVAdd w z d)
+
+    M.BVSub w x y ->
+      do xv <- v2c x
+         yv <- v2c y
+         aw <- archAddrWidth
+         case testEquality w aw of
+           Just Refl -> do mem <- getMemVar
+                           evalMacawStmt (PtrSub mem w xv yv)
+           Nothing -> appBVAtom w =<< C.BVSub w <$> toBits w xv <*> toBits w yv
+
     M.BVSbb w x y c -> do
-      z <- appAtom =<< C.BVSub w <$> v2c x <*> v2c y
+      z <- appAtom =<< C.BVSub w <$> v2c' w x <*> v2c' w y
       d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
                                              <*> appAtom (C.BVLit w 1)
                                              <*> appAtom (C.BVLit w 0)
-      appAtom $ C.BVSub w z d
+      appBVAtom w (C.BVSub w z d)
 
--}
 
-    M.BVMul w x y -> bitOp2 (C.BVMul w) x y
+    M.BVMul w x y -> bitOp2 w (C.BVMul w) x y
 
-    M.BVUnsignedLe x y -> bitOp2' (C.BVUle (M.typeWidth x)) x y
-    M.BVUnsignedLt x y -> bitOp2' (C.BVUlt (M.typeWidth x)) x y
-    M.BVSignedLe   x y -> bitOp2' (C.BVSle (M.typeWidth x)) x y
-    M.BVSignedLt   x y -> bitOp2' (C.BVSlt (M.typeWidth x)) x y
+    M.BVUnsignedLe x y ->
+      do let w = M.typeWidth x
+         ptrW <- archAddrWidth
+         xv <- v2c x
+         yv <- v2c y
+         case testEquality w ptrW of
+           Just Refl -> do mem <- getMemVar
+                           evalMacawStmt (PtrLeq mem w xv yv)
+           Nothing -> appAtom =<< C.BVUle w <$> toBits w xv <*> toBits w yv
+
+    M.BVUnsignedLt x y ->
+      do let w = M.typeWidth x
+         ptrW <- archAddrWidth
+         xv <- v2c x
+         yv <- v2c y
+         case testEquality w ptrW of
+           Just Refl -> do mem <- getMemVar
+                           evalMacawStmt (PtrLt mem w xv yv)
+           Nothing   -> appAtom =<< C.BVUlt w <$> toBits w xv <*> toBits w yv
+
+    M.BVSignedLe x y ->
+      do let w = M.typeWidth x
+         appAtom =<< C.BVSle w <$> v2c' w x <*> v2c' w y
+
+    M.BVSignedLt x y ->
+      do let w = M.typeWidth x
+         appAtom =<< C.BVSlt w <$> v2c' w x <*> v2c' w y
 
     -- Bitwise operations
     M.BVTestBit x i -> do
       let w = M.typeWidth x
       one <- bvLit w 1
       -- Create mask for ith index
-      i_mask <- appAtom =<< C.BVShl w one <$> (toBits =<< v2c i)
+      i_mask <- appAtom =<< C.BVShl w one <$> (toBits w =<< v2c i)
       -- Mask off index
-      x_mask <- appAtom =<< C.BVAnd w <$> (toBits =<< v2c x) <*> pure i_mask
+      x_mask <- appAtom =<< C.BVAnd w <$> (toBits w =<< v2c x) <*> pure i_mask
       -- Check to see if result is i_mask
       appAtom (C.BVEq w x_mask i_mask)
 
-    M.BVComplement w x -> bitOp1 (C.BVNot w) x
+    M.BVComplement w x -> appBVAtom w =<< C.BVNot w <$> v2c' w x
 
-    M.BVAnd w x y -> bitOp2 (C.BVAnd  w) x y
-    M.BVOr  w x y -> bitOp2 (C.BVOr   w) x y
-    M.BVXor w x y -> bitOp2 (C.BVXor  w) x y
-    M.BVShl w x y -> bitOp2 (C.BVShl  w) x y
-    M.BVShr w x y -> bitOp2 (C.BVLshr w) x y
-    M.BVSar w x y -> bitOp2 (C.BVAshr w) x y
+    M.BVAnd w x y -> bitOp2 w (C.BVAnd  w) x y
+    M.BVOr  w x y -> bitOp2 w (C.BVOr   w) x y
+    M.BVXor w x y -> bitOp2 w (C.BVXor  w) x y
+    M.BVShl w x y -> bitOp2 w (C.BVShl  w) x y
+    M.BVShr w x y -> bitOp2 w (C.BVLshr w) x y
+    M.BVSar w x y -> bitOp2 w (C.BVAshr w) x y
 
     M.UadcOverflows x y c -> do
-      r <- MacawOverflows Uadc (M.typeWidth x) <$> v2c' x <*> v2c' y <*> v2c c
+      let w = M.typeWidth x
+      r <- MacawOverflows Uadc w <$> v2c' w x <*> v2c' w y <*> v2c c
       evalMacawExt r
     M.SadcOverflows x y c -> do
-      r <- MacawOverflows Sadc (M.typeWidth x) <$> v2c' x <*> v2c' y <*> v2c c
+      let w = M.typeWidth x
+      r <- MacawOverflows Sadc w <$> v2c' w x <*> v2c' w y <*> v2c c
       evalMacawExt r
     M.UsbbOverflows x y b -> do
-      r <- MacawOverflows Usbb (M.typeWidth x) <$> v2c' x <*> v2c' y <*> v2c b
+      let w = M.typeWidth x
+      r <- MacawOverflows Usbb w <$> v2c' w x <*> v2c' w y <*> v2c b
       evalMacawExt r
     M.SsbbOverflows x y b -> do
-      r <- MacawOverflows Ssbb (M.typeWidth x) <$> v2c' x <*> v2c' y <*> v2c b
+      let w = M.typeWidth x
+      r <- MacawOverflows Ssbb w <$> v2c' w x <*> v2c' w y <*> v2c b
       evalMacawExt r
     M.PopCount w x -> do
       undefined w x
@@ -667,12 +786,12 @@ appToCrucible app = do
 
 
 valueToCrucible :: M.Value arch ids tp
-                -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+                -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 valueToCrucible v = do
  archFns <- gets translateFns
  crucGenArchConstraints archFns $ do
  case v of
-    M.BVValue w c -> fromBits =<< bvLit w c
+    M.BVValue w c -> fromBits w =<< bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
 
     M.RelocatableValue {} -> fail "XXX: Deal with globals"
@@ -705,7 +824,7 @@ valueToCrucible v = do
 
 -- | Create a fresh symbolic value of the given type.
 freshSymbolic :: M.TypeRepr tp
-              -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+              -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 freshSymbolic repr = evalMacawStmt (MacawFreshSymbolic repr)
 
 evalMacawStmt :: MacawStmtExtension arch (CR.Atom s) tp ->
@@ -716,7 +835,7 @@ evalArchStmt :: MacawArchStmtExtension arch (CR.Atom s) tp -> CrucGen arch ids s
 evalArchStmt = evalMacawStmt . MacawArchStmtExtension
 
 assignRhsToCrucible :: M.AssignRhs arch (M.Value arch ids) tp
-                    -> CrucGen arch ids s (CR.Atom s (ToCrucibleType arch tp))
+                    -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 assignRhsToCrucible rhs =
   case rhs of
     M.EvalApp app -> appToCrucible app
@@ -733,8 +852,7 @@ assignRhsToCrucible rhs =
       fns <- translateFns <$> get
       crucGenArchFn fns f
 
-addMacawStmt :: M.Stmt arch ids
-             -> CrucGen arch ids s ()
+addMacawStmt :: M.Stmt arch ids -> CrucGen arch ids s ()
 addMacawStmt stmt =
   case stmt of
     M.AssignStmt asgn -> do
@@ -777,9 +895,8 @@ createRegStruct regs = do
   let regAssign = crucGenRegAssignment archFns
   let tps = fmapFC M.typeRepr regAssign
   let a = fmapFC (\r -> regs ^. M.boundValue r) regAssign
-  arch <- getArch
-  fields <- macawAssignToCrucM arch valueToCrucible a
-  crucibleValue $ C.MkStruct (typeCtxToCrucible arch tps) fields
+  fields <- macawAssignToCrucM valueToCrucible a
+  crucibleValue $ C.MkStruct (typeCtxToCrucible tps) fields
 
 addMacawTermStmt :: Map Word64 (CR.Label s)
                     -- ^ Map from block index to Crucible label
@@ -806,17 +923,17 @@ addMacawTermStmt blockLabelMap tstmt =
 
 -- | Monad for adding new blocks to a state.
 newtype MacawMonad arch ids s a
-  = MacawMonad ( ExceptT String (StateT (CrucPersistentState arch ids s) (ST s)) a)
+  = MacawMonad ( ExceptT String (StateT (CrucPersistentState ids s) (ST s)) a)
   deriving ( Functor
            , Applicative
            , Monad
            , MonadError String
-           , MonadState (CrucPersistentState arch ids s)
+           , MonadState (CrucPersistentState ids s)
            )
 
-runMacawMonad :: CrucPersistentState arch ids s
+runMacawMonad :: CrucPersistentState ids s
               -> MacawMonad arch ids s a
-              -> ST s (Either String a, CrucPersistentState arch ids s)
+              -> ST s (Either String a, CrucPersistentState ids s)
 runMacawMonad s (MacawMonad m) = runStateT (runExceptT m) s
 
 mmExecST :: ST s a -> MacawMonad arch ids s a
@@ -826,6 +943,8 @@ runCrucGen :: forall arch ids s
            .  MacawSymbolicArchFunctions arch
            -> MemSegmentMap (M.ArchAddrWidth arch)
               -- ^ Base address map
+           -> C.GlobalVar MM.Mem
+              -- ^ The memory model
            -> (M.ArchAddrWord arch -> C.Position)
               -- ^ Function for generating position from offset from start of this block.
            -> M.ArchAddrWord arch
@@ -836,7 +955,7 @@ runCrucGen :: forall arch ids s
               -- ^ Crucible register for struct containing all Macaw registers.
            -> CrucGen arch ids s ()
            -> MacawMonad arch ids s (CR.Block (MacawExt arch) s (MacawFunctionResult arch), M.ArchAddrWord arch)
-runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstraints archFns $ do
+runCrucGen archFns baseAddrMap mem posFn off lbl regReg action = crucGenArchConstraints archFns $ do
   ps <- get
   let regAssign = crucGenRegAssignment archFns
   let crucRegTypes = crucArchRegTypes archFns
@@ -849,6 +968,7 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
                         , blockLabel = lbl
                         , codeOff    = off
                         , prevStmts  = []
+                        , memory     = mem
                         }
   let cont _s () = fail "Unterminated crucible block"
   (s, tstmt)  <- mmExecST $ unCrucGen action s0 cont
@@ -863,13 +983,15 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               => MacawSymbolicArchFunctions arch
               -> MemSegmentMap (M.ArchAddrWidth arch)
               -- ^ Base address map
+              -> C.GlobalVar MM.Mem
+              -- ^ Memory
               -> Map Word64 (CR.Label s)
                  -- ^ Map from block index to Crucible label
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
               -> MacawMonad arch ids s (CR.Block (MacawExt arch) s (MacawFunctionResult arch))
-addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
+addMacawBlock archFns baseAddrMap mem blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
     case Map.lookup idx blockLabelMap of
@@ -887,7 +1009,7 @@ addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
                           , CR.atomSource = CR.FnInput
                           , CR.typeOfAtom = archRegStructRepr
                           }
-  fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
+  fmap fst $ runCrucGen archFns baseAddrMap mem posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
     mapM_ addMacawStmt (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
@@ -965,6 +1087,8 @@ nextStatements tstmt =
 addStatementList :: MacawSymbolicArchFunctions arch
                  -> MemSegmentMap (M.ArchAddrWidth arch)
                  -- ^ Base address map
+                 -> C.GlobalVar MM.Mem
+                 -- ^ Memory model
                  -> BlockLabelMap arch s
                  -- ^ Map from block index to Crucible label
                  -> M.ArchSegmentOff arch
@@ -976,9 +1100,9 @@ addStatementList :: MacawSymbolicArchFunctions arch
                  -> [(M.ArchAddrWord arch, M.StatementList arch ids)]
                  -> [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
                  -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addStatementList _ _ _ _ _ _ [] rlist =
+addStatementList _ _ _ _ _ _ _ [] rlist =
   pure (reverse rlist)
-addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg ((off,stmts):rest) r = do
+addStatementList archFns baseAddrMap mem blockLabelMap startAddr posFn regReg ((off,stmts):rest) r = do
   crucGenArchConstraints archFns $ do
   let idx = M.stmtsIdent stmts
   lbl <-
@@ -988,16 +1112,18 @@ addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg ((off,
       Nothing ->
         throwError $ "Internal: Could not find block with address " ++ show startAddr ++ " index " ++ show idx
   (b,off') <-
-    runCrucGen archFns baseAddrMap posFn off lbl regReg $ do
+    runCrucGen archFns baseAddrMap mem posFn off lbl regReg $ do
       mapM_ addMacawStmt (M.stmtsNonterm stmts)
       addMacawParsedTermStmt blockLabelMap startAddr (M.stmtsTerm stmts)
   let new = (off',) <$> nextStatements (M.stmtsTerm stmts)
-  addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg (new ++ rest) (b:r)
+  addStatementList archFns baseAddrMap mem blockLabelMap startAddr posFn regReg (new ++ rest) (b:r)
 
 addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> MemSegmentMap (M.ArchAddrWidth arch)
                -- ^ Base address map
+               -> C.GlobalVar MM.Mem
+               -- ^ Memory
                -> BlockLabelMap arch s
                -- ^ Map from block index to Crucible label
                -> (M.ArchSegmentOff arch -> C.Position)
@@ -1006,11 +1132,55 @@ addParsedBlock :: forall arch ids s
                     -- ^ Register that stores Macaw registers
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock tfns baseAddrMap blockLabelMap posFn regReg b = do
+addParsedBlock tfns baseAddrMap mem blockLabelMap posFn regReg b = do
   crucGenArchConstraints tfns $ do
   let base = M.pblockAddr b
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
         where Just r = M.incSegmentOff base (toInteger off)
-  addStatementList tfns baseAddrMap blockLabelMap
+  addStatementList tfns baseAddrMap mem blockLabelMap
     (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []
+
+
+--------------------------------------------------------------------------------
+-- Auto-generated instances
+
+$(return [])
+
+instance TestEqualityFC (MacawExprExtension arch) where
+  testEqualityFC f =
+    $(U.structuralTypeEquality [t|MacawExprExtension|]
+      [ (U.DataArg 1 `U.TypeApp` U.AnyType, [|f|])
+      , (U.ConType [t|NatRepr |] `U.TypeApp` U.AnyType, [|testEquality|])
+
+      ])
+
+instance OrdFC (MacawExprExtension arch) where
+  compareFC f =
+    $(U.structuralTypeOrd [t|MacawExprExtension|]
+      [ (U.DataArg 1 `U.TypeApp` U.AnyType, [|f|])
+      , (U.ConType [t|NatRepr|] `U.TypeApp` U.AnyType, [|compareF|])
+      , (U.ConType [t|ArchNatRepr|] `U.TypeApp` U.AnyType, [|compareF|])
+
+      ])
+
+instance FunctorFC (MacawExprExtension arch) where
+  fmapFC = fmapFCDefault
+
+instance FoldableFC (MacawExprExtension arch) where
+  foldMapFC = foldMapFCDefault
+
+instance TraversableFC (MacawExprExtension arch) where
+  traverseFC =
+    $(U.structuralTraversal [t|MacawExprExtension|] [])
+
+instance TraversableFC (MacawArchStmtExtension arch)
+      => TraversableFC (MacawStmtExtension arch) where
+  traverseFC =
+    $(U.structuralTraversal [t|MacawStmtExtension|]
+      [ (U.ConType [t|MacawArchStmtExtension|] `U.TypeApp` U.DataArg 0
+                                               `U.TypeApp` U.DataArg 1
+                                               `U.TypeApp` U.DataArg 2
+        , [|traverseFC|])
+      ]
+     )
