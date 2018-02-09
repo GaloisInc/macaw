@@ -5,6 +5,8 @@
 {-# Language TypeFamilies #-}
 {-# Language ImplicitParams #-}
 {-# Language RankNTypes #-}
+{-# Language PatternSynonyms #-}
+{-# Language TypeApplications #-}
 module Data.Macaw.Symbolic.MemOps
   ( PtrOp
   , doPtrAdd
@@ -13,6 +15,7 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrEq
   , doPtrLt
   , doPtrLeq
+  , doReadMem
   ) where
 
 import Control.Lens((^.))
@@ -33,11 +36,21 @@ import Lang.Crucible.Types
 import Lang.Crucible.Solver.Interface
 
 import Lang.Crucible.LLVM.MemModel
-          (Mem, LLVMPointerType, LLVMPtr, isValidPointer)
+          ( Mem, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
+          , coerceAny
+          , doLoad)
 import Lang.Crucible.LLVM.MemModel.Pointer
-          (llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq)
+          ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
+          , pattern LLVMPointerRepr
+          )
+import Lang.Crucible.LLVM.MemModel.Type(bitvectorType)
+import Lang.Crucible.LLVM.DataLayout(toAlignment,EndianForm(..))
+import Lang.Crucible.LLVM.Bytes(toBytes)
 
 import Data.Macaw.Symbolic.CrucGen(lemma1_16)
+import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
+import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
+import qualified Data.Macaw.Memory as M (Endianness(..))
 
 -- | This is the form of binary operation needed by the simulator.
 -- Note that even though the type suggests that we might modify the
@@ -137,6 +150,40 @@ doPtrEq = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
        , both_ptrs ~> endCase =<< ptrEq sym w x y
        ]
 
+doReadMem ::
+  (IsSymInterface sym, 16 <= ptrW) =>
+  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  GlobalVar Mem ->
+  NatRepr ptrW ->
+  MemRepr ty ->
+  RegEntry sym (LLVMPointerType ptrW) ->
+  IO ( RegValue sym (ToCrucibleType ty)
+     , CrucibleState s sym ext rtp blocks r ctx
+     )
+doReadMem st mvar w (BVMemRepr bytes endian) ptr =
+  do mem <- getMem st mvar
+     case (endian, memEndian mem) of
+       (M.BigEndian, BigEndian) -> return ()
+       (M.LittleEndian, LittleEndian) -> return ()
+       (need,have) -> fail $ unlines [ "[doReadMem] Endian mismatch:"
+                                     , " *** Model: " ++ show have
+                                     , " *** Read : " ++ show need ]
+
+     let sym        = stateSymInterface st
+         ty         = bitvectorType (toBytes (widthVal bytes))
+
+         {- XXX: The alginment requirements should be part of the spec.
+         For example, on X86, there are aligned reads and unlaigned reads,
+         which makes different assumptions about the alignment of the data -}
+         Just align = toAlignment (toBytes (1::Int))
+
+     LeqProof <- return (lemma1_16 w)
+     LeqProof <- return (leqMulPos (knownNat @8) bytes)
+
+     anyval <- let ?ptrWidth = w in doLoad sym mem (regValue ptr) ty align
+     let repr = LLVMPointerRepr (natMultiply (knownNat @8) bytes)
+     a <- coerceAny sym repr anyval
+     return (a,st)
 
 
 --------------------------------------------------------------------------------

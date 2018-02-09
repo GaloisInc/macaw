@@ -215,6 +215,11 @@ data MacawStmtExtension (arch :: *)
 
   -- | Read from memory.
   MacawReadMem ::
+    (16 <= M.ArchAddrWidth arch) =>
+
+    -- | Memory model
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
 
     -- | Info about memory (endianness, size)
     !(M.MemRepr tp) ->
@@ -228,6 +233,11 @@ data MacawStmtExtension (arch :: *)
   -- | Read from memory, if the condition is True.
   -- Otherwise, just return the given value.
   MacawCondReadMem ::
+    (16 <= M.ArchAddrWidth arch) =>
+
+    -- | Memory model
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
 
     -- | Info about memory (endianness, size)
     !(M.MemRepr tp) ->
@@ -245,6 +255,9 @@ data MacawStmtExtension (arch :: *)
 
   -- | Write to memory
   MacawWriteMem ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(C.GlobalVar MM.Mem) ->
+    !(ArchNatRepr arch) ->
     !(M.MemRepr tp) ->
     !(f (ArchAddrCrucibleType arch)) ->
     !(f (ToCrucibleType tp)) ->
@@ -349,9 +362,9 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       => C.PrettyApp (MacawStmtExtension arch) where
   ppApp f a0 =
     case a0 of
-      MacawReadMem r a     -> sexpr "macawReadMem"       [pretty r, f a]
-      MacawCondReadMem r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
-      MacawWriteMem r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
+      MacawReadMem _ _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
+      MacawCondReadMem _ _ r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
+      MacawWriteMem _ _ r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
       MacawCall _ regs -> sexpr "macawCall" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
@@ -366,9 +379,9 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
 
 instance C.TypeApp (MacawArchStmtExtension arch)
       => C.TypeApp (MacawStmtExtension arch) where
-  appType (MacawReadMem r _) = memReprToCrucible r
-  appType (MacawCondReadMem r _ _ _) = memReprToCrucible r
-  appType (MacawWriteMem _ _ _) = C.knownRepr
+  appType (MacawReadMem _ _ r _) = memReprToCrucible r
+  appType (MacawCondReadMem _ _ r _ _ _) = memReprToCrucible r
+  appType (MacawWriteMem _ _ _ _ _) = C.knownRepr
   appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawCall regTypes _) = C.StructRepr regTypes
   appType (MacawArchStmtExtension f) = C.appType f
@@ -837,23 +850,31 @@ evalArchStmt = evalMacawStmt . MacawArchStmtExtension
 assignRhsToCrucible :: M.AssignRhs arch (M.Value arch ids) tp
                     -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 assignRhsToCrucible rhs =
+ gets translateFns >>= \archFns ->
+ crucGenArchConstraints archFns $
   case rhs of
     M.EvalApp app -> appToCrucible app
     M.SetUndefined mrepr -> freshSymbolic mrepr
     M.ReadMem addr repr -> do
       caddr <- valueToCrucible addr
-      evalMacawStmt (MacawReadMem repr caddr)
+      mem   <- getMemVar
+      w     <- archAddrWidth
+      evalMacawStmt (MacawReadMem mem w repr caddr)
     M.CondReadMem repr cond addr def -> do
       ccond <- valueToCrucible cond
       caddr <- valueToCrucible addr
-      cdef <- valueToCrucible def
-      evalMacawStmt (MacawCondReadMem repr ccond caddr cdef)
+      cdef  <- valueToCrucible def
+      mem   <- getMemVar
+      w     <- archAddrWidth
+      evalMacawStmt (MacawCondReadMem mem w repr ccond caddr cdef)
     M.EvalArchFn f _ -> do
       fns <- translateFns <$> get
       crucGenArchFn fns f
 
 addMacawStmt :: M.Stmt arch ids -> CrucGen arch ids s ()
 addMacawStmt stmt =
+  gets translateFns >>= \archFns ->
+  crucGenArchConstraints archFns $
   case stmt of
     M.AssignStmt asgn -> do
       let idx = M.assignId asgn
@@ -862,7 +883,9 @@ addMacawStmt stmt =
     M.WriteMem addr repr val -> do
       caddr <- valueToCrucible addr
       cval  <- valueToCrucible val
-      void $ evalMacawStmt (MacawWriteMem repr caddr cval)
+      mem   <- getMemVar
+      w     <- archAddrWidth
+      void $ evalMacawStmt (MacawWriteMem mem w repr caddr cval)
     M.PlaceHolderStmt _vals msg -> do
       cmsg <- crucibleValue (C.TextLit (Text.pack msg))
       addTermStmt (CR.ErrorStmt cmsg)

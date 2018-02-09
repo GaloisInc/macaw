@@ -290,7 +290,7 @@ execMacawStmtExtension ::
   EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 execMacawStmtExtension archStmtFn s0 st =
   case s0 of
-    MacawReadMem{} -> undefined
+    MacawReadMem mvar w mr x -> doReadMem st mvar w mr x
     MacawCondReadMem{} -> undefined
     MacawWriteMem{} -> undefined
     MacawFreshSymbolic{} -> undefined
