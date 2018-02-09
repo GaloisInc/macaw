@@ -7,6 +7,7 @@
 {-# Language RankNTypes #-}
 {-# Language PatternSynonyms #-}
 {-# Language TypeApplications #-}
+{-# Language PatternGuards #-}
 module Data.Macaw.Symbolic.MemOps
   ( PtrOp
   , doPtrAdd
@@ -16,6 +17,7 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrLt
   , doPtrLeq
   , doReadMem
+  , doCondReadMem
   ) where
 
 import Control.Lens((^.))
@@ -36,15 +38,17 @@ import Lang.Crucible.Types
 import Lang.Crucible.Solver.Interface
 
 import Lang.Crucible.LLVM.MemModel
-          ( Mem, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
-          , coerceAny
-          , doLoad)
+          ( Mem, MemImpl, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
+          , LLVMVal(LLVMValInt)
+          , loadRaw
+          , loadRawWithCondition
+          )
 import Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
-          , pattern LLVMPointerRepr
+          , pattern LLVMPointer
           )
 import Lang.Crucible.LLVM.MemModel.Type(bitvectorType)
-import Lang.Crucible.LLVM.DataLayout(toAlignment,EndianForm(..))
+import Lang.Crucible.LLVM.DataLayout(EndianForm(..))
 import Lang.Crucible.LLVM.Bytes(toBytes)
 
 import Data.Macaw.Symbolic.CrucGen(lemma1_16)
@@ -162,28 +166,68 @@ doReadMem ::
      )
 doReadMem st mvar w (BVMemRepr bytes endian) ptr =
   do mem <- getMem st mvar
-     case (endian, memEndian mem) of
-       (M.BigEndian, BigEndian) -> return ()
-       (M.LittleEndian, LittleEndian) -> return ()
-       (need,have) -> fail $ unlines [ "[doReadMem] Endian mismatch:"
-                                     , " *** Model: " ++ show have
-                                     , " *** Read : " ++ show need ]
+     checkEndian mem endian
 
-     let sym        = stateSymInterface st
-         ty         = bitvectorType (toBytes (widthVal bytes))
-
-         {- XXX: The alginment requirements should be part of the spec.
-         For example, on X86, there are aligned reads and unlaigned reads,
-         which makes different assumptions about the alignment of the data -}
-         Just align = toAlignment (toBytes (1::Int))
+     let sym   = stateSymInterface st
+         ty    = bitvectorType (toBytes (widthVal bytes))
+         bitw  = natMultiply (knownNat @8) bytes
 
      LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
-     anyval <- let ?ptrWidth = w in doLoad sym mem (regValue ptr) ty align
-     let repr = LLVMPointerRepr (natMultiply (knownNat @8) bytes)
-     a <- coerceAny sym repr anyval
+     val <- let ?ptrWidth = w in loadRaw sym mem (regValue ptr) ty
+     a   <- case valToBits bitw val of
+              Just a  -> return a
+              Nothing -> fail "[doReadMem] We read an unexpected value"
+
      return (a,st)
+
+
+
+doCondReadMem ::
+  (IsSymInterface sym, 16 <= ptrW) =>
+  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  GlobalVar Mem ->                         {- ^ Memory model -}
+  NatRepr ptrW                             {- ^ Width of ptr -} ->
+  MemRepr ty                               {- ^ What/how we are reading -} ->
+  RegEntry sym BoolType                    {- ^ Condition -} ->
+  RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
+  RegEntry sym (ToCrucibleType ty)         {- ^ Default answer -} ->
+  IO ( RegValue sym (ToCrucibleType ty)
+     , CrucibleState s sym ext rtp blocks r ctx
+     )
+doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
+  do let cond = regValue cond0
+         def  = regValue def0
+     mem <- getMem st mvar
+     checkEndian mem endian
+     let sym   = stateSymInterface st
+         ty    = bitvectorType (toBytes (widthVal bytes))
+         bitw  = natMultiply (knownNat @8) bytes
+
+     LeqProof <- return (lemma1_16 w)
+     LeqProof <- return (leqMulPos (knownNat @8) bytes)
+
+     val <- let ?ptrWidth = w in loadRawWithCondition sym mem (regValue ptr) ty
+
+     let useDefault msg =
+           do notC <- notPred sym cond
+              addAssertion sym notC
+                 (AssertFailureSimError ("[doCondReadMem] " ++ msg))
+              return def
+
+     a <- case val of
+            Right (p,r,v) | Just a <- valToBits bitw v ->
+              do grd <- impliesPred sym cond p
+                 addAssertion sym grd r
+                 muxLLVMPtr sym cond a def
+            Right _ -> useDefault "Unexpected value read from memory."
+            Left err -> useDefault err
+
+     return (a,st)
+
+
+
 
 
 --------------------------------------------------------------------------------
@@ -279,5 +323,23 @@ cases sym name mux opts =
   subCheck cp (p,msg) =
     do valid <- impliesPred sym cp p
        check valid msg
+
+
+valToBits :: (IsSymInterface sym, 1 <= w) =>
+  NatRepr w -> LLVMVal sym -> Maybe (LLVMPtr sym w)
+valToBits w val =
+  case val of
+    LLVMValInt base off | Just Refl <- testEquality (bvWidth off) w ->
+                                        return (LLVMPointer base off)
+    _ -> Nothing
+
+checkEndian :: MemImpl sym -> M.Endianness -> IO ()
+checkEndian mem endian =
+  case (endian, memEndian mem) of
+    (M.BigEndian, BigEndian) -> return ()
+    (M.LittleEndian, LittleEndian) -> return ()
+    (need,have) -> fail $ unlines [ "[doReadMem] Endian mismatch:"
+                                     , " *** Model: " ++ show have
+                                     , " *** Read : " ++ show need ]
 
 
