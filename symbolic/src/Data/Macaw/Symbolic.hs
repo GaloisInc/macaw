@@ -292,7 +292,7 @@ execMacawStmtExtension archStmtFn s0 st =
   case s0 of
     MacawReadMem mvar w mr x -> doReadMem st mvar w mr x
     MacawCondReadMem mvar w mr p x d -> doCondReadMem st mvar w mr p x d
-    MacawWriteMem{} -> undefined
+    MacawWriteMem mvar w mr x v -> doWriteMem st mvar w mr x v
     MacawFreshSymbolic{} -> undefined
     MacawCall{} -> undefined
     MacawArchStmtExtension s -> archStmtFn s st

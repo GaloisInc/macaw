@@ -18,6 +18,7 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrLeq
   , doReadMem
   , doCondReadMem
+  , doWriteMem
   ) where
 
 import Control.Lens((^.))
@@ -226,6 +227,18 @@ doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
 
      return (a,st)
 
+doWriteMem ::
+  (IsSymInterface sym, 16 <= ptrW) =>
+  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  GlobalVar Mem ->                         {- ^ Memory model -}
+  NatRepr ptrW                             {- ^ Width of ptr -} ->
+  MemRepr ty                               {- ^ What/how we are reading -} ->
+  RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
+  RegEntry sym (ToCrucibleType ty)         {- ^ Write this value -} ->
+  IO ( RegValue sym UnitType
+     , CrucibleState s sym ext rtp blocks r ctx
+     )
+doWriteMem = undefined
 
 
 
