@@ -9,6 +9,7 @@
 {-# Language EmptyCase #-}
 {-# Language MultiWayIf #-}
 {-# Language PatternGuards #-}
+{-# Language PatternSynonyms #-}
 {-# Language RecordWildCards #-}
 {-# Language FlexibleContexts #-}
 module Data.Macaw.X86.Crucible
@@ -47,6 +48,10 @@ import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.Utils.Endian(Endian(..))
+import           Lang.Crucible.LLVM.MemModel (LLVMPointerType)
+import Lang.Crucible.LLVM.MemModel.Pointer
+  (projectLLVM_bv, pattern LLVMPointerRepr, llvmPointer_bv)
+
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen(MacawExt)
@@ -78,12 +83,15 @@ data Sym s = Sym { symIface :: s
 data SymFuns s = SymFuns
   { fnAesEnc ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ One round of AES
 
   , fnAesEncLast ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ Last round of AES
 
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
+    -- ^ Carryless multiplication
   }
 
 
@@ -114,12 +122,11 @@ pureSem :: (IsSymInterface sym) =>
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
-    M.EvenParity x ->
-      evalE sym  $
-       app $ Not $
-         foldr1 xor [ bvTestBit (getVal x) i | i <- [ 0 .. 7 ] ]
-      where xor a b = app (BoolXor a b)
 
+    M.EvenParity x0 ->
+      do x <- getBitVal (symIface sym) x0
+         evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
+      where xor a b = app (BoolXor a b)
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -149,53 +156,54 @@ pureSem sym fn =
                                    (V.split i n16 xs)
                                    (V.split i n16 ys)
 
-
-        M.VPCLMULQDQ i -> unpack2 LittleEndian w n64 x y $ \xs ys ->
+        M.VPCLMULQDQ i -> unpack2 (symIface sym) LittleEndian w n64 x y $
+          \xs ys ->
           case testEquality (V.length xs) n2 of
             Just Refl ->
               do let v1 = if i `testBit` 0 then V.elemAt n1 xs
                                            else V.elemAt n0 xs
                      v2 = if i `testBit` 4 then V.elemAt n1 ys
                                            else V.elemAt n0 ys
-
                  x1 <- evalE sym v1
                  x2 <- evalE sym v2
                  let f  = fnClMul (symFuns sym)
                      ps = extend (extend empty x2) x1
-                 applySymFn (symIface sym) f ps
+                 llvmPointer_bv (symIface sym) =<<
+                                  applySymFn (symIface sym) f ps
 
             _ -> fail "Unepected size for VPCLMULQDQ"
 
-
         M.VAESEnc
           | Just Refl <- testEquality w n128 ->
-            do let f      = fnAesEnc (symFuns sym)
-                   state  = toVal x
-                   key    = toVal y
-                   ps     = extend (extend empty state) key
-               applySymFn (symIface sym) f ps
+            do let f = fnAesEnc (symFuns sym)
+                   s = symIface sym
+               state <- toValBV s x
+               key   <- toValBV s y
+               let ps = extend (extend empty state) key
+               llvmPointer_bv s =<< applySymFn s f ps
           | otherwise -> fail "Unexpecte size for AESEnc"
 
         M.VAESEncLast
           | Just Refl <- testEquality w n128 ->
-            do let f      = fnAesEncLast (symFuns sym)
-                   state  = toVal x
-                   key    = toVal y
-                   ps     = extend (extend empty state) key
-               applySymFn (symIface sym) f ps
+            do let f = fnAesEncLast (symFuns sym)
+                   s = symIface sym
+               state <- toValBV s x
+               key   <- toValBV s y
+               let ps     = extend (extend empty state) key
+               llvmPointer_bv s =<< applySymFn s f ps
           | otherwise -> fail "Unexpecte size for AESEncLast"
 
 
 
 
     M.PointwiseShiftL elNum elSz shSz bits amt ->
-      vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
-        fmap (\x -> bvShiftL elSz shSz x (getVal amt)) xs
+      do amt' <- getBitVal (symIface sym) amt
+         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
+              fmap (\x -> bvShiftL elSz shSz x amt') xs
 
     M.Pointwise2 elNum elSz op v1 v2 ->
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
-
 
 
 semPointwise :: (1 <= w) =>
@@ -249,7 +257,6 @@ divExact n x k = withDivModNat n x $ \i r ->
     Nothing -> error "divExact: not a multiple of 16"
 
 
-
 vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   Sym sym     {- ^ Simulator -} ->
   Endian      {- ^ How to split-up the bit-vector -} ->
@@ -259,10 +266,10 @@ vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   (forall n. (1 <= n, (n * c) ~ w) =>
      V.Vector n (E sym (BVType c)) -> V.Vector n (E sym (BVType c))) ->
   -- ^ Definition of operation
-  IO (RegValue sym (BVType w)) -- ^ The final result.
+  IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp1 sym endian totLen elLen x f =
-  unpack endian totLen elLen x $ \v ->
-  evalE sym (V.toBV endian elLen (f v))
+  unpack (symIface sym) endian totLen elLen x $ \v ->
+  llvmPointer_bv (symIface sym) =<< evalE sym (V.toBV endian elLen (f v))
 
 
 vecOp2 :: (IsSymInterface sym, 1 <= c) =>
@@ -277,10 +284,10 @@ vecOp2 :: (IsSymInterface sym, 1 <= c) =>
      V.Vector n (E sym (BVType c)) ->
      V.Vector n (E sym (BVType c))) ->
   -- ^ Definition of operation
-  IO (RegValue sym (BVType w)) -- ^ The final result.
+  IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp2 sym endian totLen elLen x y f =
-  unpack2 endian totLen elLen x y $ \u v ->
-  evalE sym (V.toBV endian elLen (f u v))
+  unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
+  llvmPointer_bv (symIface sym) =<< evalE sym (V.toBV endian elLen (f u v))
 
 
 bitOp2 :: (IsSymInterface sym) =>
@@ -289,26 +296,35 @@ bitOp2 :: (IsSymInterface sym) =>
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 2 -} ->
   (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w)) ->
                                           -- ^ The definition of the operation
-  IO (RegValue sym (BVType w))            {- ^ The result -}
-bitOp2 sym x y f = evalE sym $ app $ f (getVal x) (getVal y)
+  IO (RegValue sym (LLVMPointerType w))   {- ^ The result -}
+bitOp2 sym x y f =
+  do let s = symIface sym
+     x' <- getBitVal s x
+     y' <- getBitVal s y
+     llvmPointer_bv s =<< evalE sym (app (f x' y'))
+
 
 -- | Split up a bit-vector into a vector.
 -- Even though X86 is little endian for memory accesses, this function
 -- is parameterized by endianness, as some instructions are more naturally
 -- expressed by splitting big-endian-wise (e.g., shifts)
 unpack ::
-  (1 <= c) =>
+  (1 <= c, IsSymInterface sym) =>
+  sym ->
   Endian ->
   NatRepr w                               {- ^ Original length -} ->
   NatRepr c                               {- ^ Size of each chunk -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value -} ->
   (forall n. (1 <= n, (n * c) ~ w) => V.Vector n (E sym (BVType c)) -> IO a) ->
   IO a
-unpack e w c v k = divExact w c $ \n -> k (V.fromBV e n c (getVal v))
+unpack sym e w c v k = divExact w c $ \n ->
+  do b <- getBitVal sym v
+     k (V.fromBV e n c b)
 
 -- | Split up two bit-vectors into sub-chunks.
 unpack2 ::
-  (1 <= c) =>
+  (1 <= c, IsSymInterface sym) =>
+  sym ->
   Endian ->
   NatRepr w ->
   NatRepr c ->
@@ -319,16 +335,33 @@ unpack2 ::
       V.Vector n (E sym (BVType c)) ->
       IO a) ->
   IO a
-unpack2 e w c v1 v2 k =
-  divExact w c $ \n -> k (V.fromBV e n c (getVal v1))
-                         (V.fromBV e n c (getVal v2))
+unpack2 sym e w c v1 v2 k =
+  divExact w c $ \n ->
+    do v1' <- getBitVal sym v1
+       v2' <- getBitVal sym v2
+       k (V.fromBV e n c v1') (V.fromBV e n c v2')
 
 
-getVal :: AtomWrapper (RegEntry sym) mt -> E sym (ToCrucibleType mt)
-getVal (AtomWrapper x) = Val x
 
-toVal :: AtomWrapper (RegEntry sym) mt -> RegValue sym (ToCrucibleType mt)
-toVal (AtomWrapper x) = regValue x
+
+getBitVal ::
+  IsSymInterface sym =>
+  sym ->
+  AtomWrapper (RegEntry sym) (M.BVType w) ->
+  IO (E sym (BVType w))
+getBitVal sym (AtomWrapper x) =
+  do v <- projectLLVM_bv sym (regValue x)
+     case regType x of
+       LLVMPointerRepr w -> return (ValBV w v)
+       _ -> error "getBitVal: impossible"
+
+toValBV ::
+  IsSymInterface sym =>
+  sym ->
+  AtomWrapper (RegEntry sym) (M.BVType w) ->
+  IO (RegValue sym (BVType w))
+toValBV sym (AtomWrapper x) = projectLLVM_bv sym (regValue x)
+
 
 
 --------------------------------------------------------------------------------
@@ -339,8 +372,9 @@ toVal (AtomWrapper x) = regValue x
 
 evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
 evalE sym e = case e of
-                Val x  -> return (regValue x)
-                Expr a -> evalApp sym a
+                ValBool x -> return x
+                ValBV _ x -> return x
+                Expr a    -> evalApp sym a
 
 evalApp :: forall sym t.  IsSymInterface sym =>
          Sym sym -> App () (E sym) t -> IO (RegValue sym t)
@@ -352,7 +386,8 @@ evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   evalExt _ y  = case y of {}
 
 data E :: * -> CrucibleType -> * where
-  Val  :: RegEntry sym t -> E sym t
+  ValBool :: RegValue sym BoolType -> E sym BoolType
+  ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
   Expr :: App () (E sym) t -> E sym t
 
 instance IsExpr (E sym) where
@@ -363,7 +398,8 @@ instance IsExpr (E sym) where
               _      -> Nothing
   exprType e = case e of
                 Expr a -> appType a
-                Val r  -> regType r
+                ValBool _  -> knownRepr
+                ValBV n _  -> BVRepr n
 
 
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
@@ -395,6 +431,7 @@ bvShiftL w i vw vi = app (BVShl w vw amt)
                 NatCaseEQ -> vi
                 NatCaseLT LeqProof -> app (BVZext w i vi)
                 NatCaseGT LeqProof -> app (BVTrunc w i vi)
+
 
 
 --------------------------------------------------------------------------------

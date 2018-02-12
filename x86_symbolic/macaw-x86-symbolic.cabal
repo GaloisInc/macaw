@@ -15,7 +15,8 @@ library
                  macaw-symbolic,
                  macaw-x86,
                  mtl,
-                 parameterized-utils
+                 parameterized-utils,
+                 crucible-llvm
   hs-source-dirs: src
 
   exposed-modules:
