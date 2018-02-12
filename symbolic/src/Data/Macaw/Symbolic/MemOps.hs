@@ -21,7 +21,7 @@ module Data.Macaw.Symbolic.MemOps
   , doWriteMem
   ) where
 
-import Control.Lens((^.))
+import Control.Lens((^.),(&),(%~))
 
 import Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
@@ -32,7 +32,7 @@ import Lang.Crucible.Simulator.ExecutionTree
           )
 import Lang.Crucible.Simulator.RegMap(RegEntry,regValue)
 import Lang.Crucible.Simulator.RegValue(RegValue)
-import Lang.Crucible.Simulator.GlobalState(lookupGlobal)
+import Lang.Crucible.Simulator.GlobalState(lookupGlobal,insertGlobal)
 import Lang.Crucible.Simulator.SimError(SimErrorReason(AssertFailureSimError))
 import Lang.Crucible.CFG.Common(GlobalVar)
 import Lang.Crucible.Types
@@ -43,6 +43,7 @@ import Lang.Crucible.LLVM.MemModel
           , LLVMVal(LLVMValInt)
           , loadRaw
           , loadRawWithCondition
+          , storeRaw
           )
 import Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
@@ -227,18 +228,34 @@ doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
 
      return (a,st)
 
+
 doWriteMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem ->                         {- ^ Memory model -}
   NatRepr ptrW                             {- ^ Width of ptr -} ->
-  MemRepr ty                               {- ^ What/how we are reading -} ->
+  MemRepr ty                               {- ^ What/how we are writing -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
   RegEntry sym (ToCrucibleType ty)         {- ^ Write this value -} ->
   IO ( RegValue sym UnitType
      , CrucibleState s sym ext rtp blocks r ctx
      )
-doWriteMem = undefined
+doWriteMem st mvar w (BVMemRepr bytes endian) ptr val =
+  do mem <- getMem st mvar
+     checkEndian mem endian
+
+     let sym   = stateSymInterface st
+         ty    = bitvectorType (toBytes (widthVal bytes))
+
+     LeqProof <- return (lemma1_16 w)
+     LeqProof <- return (leqMulPos (knownNat @8) bytes)
+
+     let ?ptrWidth = w
+     let v0 = regValue val
+         v  = LLVMValInt (ptrBase v0) (asBits v0)
+     mem1 <- storeRaw sym mem (regValue ptr) ty v
+     return ((), setMem st mvar mem1)
+
 
 
 
@@ -301,6 +318,14 @@ getMem st mvar =
   case lookupGlobal mvar (st ^. stateTree . actFrame . gpGlobals) of
     Just mem -> return mem
     Nothing  -> fail ("Global heap value not initialized: " ++ show mvar)
+
+setMem :: CrucibleState s sym ext rtp blocks r ctx ->
+          GlobalVar Mem ->
+          MemImpl sym ->
+          CrucibleState s sym ext rtp blocks r ctx
+setMem st mvar mem =
+  st & stateTree . actFrame . gpGlobals %~ insertGlobal mvar mem
+
 
 -- | Define an operation by cases.
 cases ::

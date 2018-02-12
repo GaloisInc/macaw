@@ -290,19 +290,21 @@ execMacawStmtExtension ::
   EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 execMacawStmtExtension archStmtFn s0 st =
   case s0 of
-    MacawReadMem mvar w mr x -> doReadMem st mvar w mr x
+    MacawReadMem mvar w mr x         -> doReadMem st mvar w mr x
     MacawCondReadMem mvar w mr p x d -> doCondReadMem st mvar w mr p x d
-    MacawWriteMem mvar w mr x v -> doWriteMem st mvar w mr x v
-    MacawFreshSymbolic{} -> undefined
-    MacawCall{} -> undefined
-    MacawArchStmtExtension s -> archStmtFn s st
+    MacawWriteMem mvar w mr x v      -> doWriteMem st mvar w mr x v
 
-    PtrEq  mvar w x y   -> doPtrEq st mvar w x y
-    PtrLt  mvar w x y   -> doPtrLt st mvar w x y
-    PtrLeq mvar w x y   -> doPtrLeq st mvar w x y
-    PtrMux mvar w c x y -> doPtrMux (C.regValue c) st mvar w x y
-    PtrAdd mvar w x y   -> doPtrAdd st mvar w x y
-    PtrSub mvar w x y   -> doPtrSub st mvar w x y
+    MacawFreshSymbolic{}             -> error "XXX: FreshSymbolic"
+    MacawCall{}                      -> error "XXX: MacawCall"
+
+    MacawArchStmtExtension s         -> archStmtFn s st
+
+    PtrEq  mvar w x y                -> doPtrEq st mvar w x y
+    PtrLt  mvar w x y                -> doPtrLt st mvar w x y
+    PtrLeq mvar w x y                -> doPtrLeq st mvar w x y
+    PtrMux mvar w c x y              -> doPtrMux (C.regValue c) st mvar w x y
+    PtrAdd mvar w x y                -> doPtrAdd st mvar w x y
+    PtrSub mvar w x y                -> doPtrSub st mvar w x y
 
 
 -- | Return macaw extension evaluation functions.
