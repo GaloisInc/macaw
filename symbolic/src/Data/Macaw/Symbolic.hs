@@ -152,21 +152,19 @@ addBlocksCFG :: forall s arch ids
              -- ^ Crucible specific functions.
              -> MemSegmentMap (M.ArchAddrWidth arch)
              -- ^ Base address map
-             -> C.GlobalVar MM.Mem
-             -- ^ Memory
              ->  (M.ArchAddrWord arch -> C.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
              -> [M.Block arch ids]
              -- ^ List of blocks for this region.
              -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addBlocksCFG archFns baseAddrMap mem posFn macawBlocks = do
+addBlocksCFG archFns baseAddrMap posFn macawBlocks = do
   crucGenArchConstraints archFns $ do
    -- Map block map to Crucible CFG
   let blockLabelMap :: Map Word64 (CR.Label s)
       blockLabelMap = Map.fromList [ (w, CR.Label (fromIntegral w))
                                    | w <- M.blockLabel <$> macawBlocks ]
   forM macawBlocks $ \b -> do
-    addMacawBlock archFns baseAddrMap mem blockLabelMap posFn b
+    addMacawBlock archFns baseAddrMap blockLabelMap posFn b
 
 -- | Create a Crucible CFG from a list of blocks
 mkBlocksCFG :: forall s arch ids
@@ -176,7 +174,6 @@ mkBlocksCFG :: forall s arch ids
                -- ^ Handle allocator to make the blocks
             -> MemSegmentMap (M.ArchAddrWidth arch)
                -- ^ Map from region indices to their address
-            -> C.GlobalVar MM.Mem
             -> C.FunctionName
                -- ^ Name of function for pretty print purposes.
             -> (M.ArchAddrWord arch -> C.Position)
@@ -184,9 +181,9 @@ mkBlocksCFG :: forall s arch ids
             -> [M.Block arch ids]
             -- ^ List of blocks for this region.
             -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksCFG archFns halloc memBaseVarMap mem nm posFn macawBlocks = do
+mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks = do
   mkCrucCFG archFns halloc nm $ do
-    addBlocksCFG archFns memBaseVarMap mem posFn macawBlocks
+    addBlocksCFG archFns memBaseVarMap posFn macawBlocks
 
 mkFunCFG :: forall s arch ids
          .  MacawSymbolicArchFunctions arch
@@ -195,8 +192,6 @@ mkFunCFG :: forall s arch ids
             -- ^ Handle allocator to make the blocks
          -> MemSegmentMap (M.ArchAddrWidth arch)
             -- ^ Map from region indices to their address
-         -> C.GlobalVar MM.Mem
-            -- ^ Memory
          -> C.FunctionName
             -- ^ Name of function for pretty print purposes.
          -> (M.ArchSegmentOff arch -> C.Position)
@@ -204,7 +199,7 @@ mkFunCFG :: forall s arch ids
          -> M.DiscoveryFunInfo arch ids
          -- ^ List of blocks for this region.
          -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkFunCFG archFns halloc memBaseVarMap mem nm posFn fn = do
+mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
   mkCrucCFG archFns halloc nm $ do
     let insSentences :: M.ArchSegmentOff arch
                      -> (BlockLabelMap arch s,Int)
@@ -226,7 +221,7 @@ mkFunCFG archFns halloc memBaseVarMap mem nm posFn fn = do
     fmap concat $
       forM (Map.elems (fn^.M.parsedBlocks)) $ \b -> do
         -- TODO: Initialize value in regReg with initial registers
-        addParsedBlock archFns memBaseVarMap mem blockLabelMap posFn regReg b
+        addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
 
 evalMacawExprExtension :: IsSymInterface sym
                        => sym
@@ -287,34 +282,36 @@ type MacawArchEvalFn sym arch =
 execMacawStmtExtension ::
   IsSymInterface sym =>
   MacawArchEvalFn sym arch {- ^ Function for executing -} ->
+  C.GlobalVar MM.Mem ->
   EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
-execMacawStmtExtension archStmtFn s0 st =
+execMacawStmtExtension archStmtFn mvar s0 st =
   case s0 of
-    MacawReadMem mvar w mr x         -> doReadMem st mvar w mr x
-    MacawCondReadMem mvar w mr p x d -> doCondReadMem st mvar w mr p x d
-    MacawWriteMem mvar w mr x v      -> doWriteMem st mvar w mr x v
+    MacawReadMem w mr x         -> doReadMem st mvar w mr x
+    MacawCondReadMem w mr p x d -> doCondReadMem st mvar w mr p x d
+    MacawWriteMem w mr x v      -> doWriteMem st mvar w mr x v
 
     MacawFreshSymbolic{}             -> error "XXX: FreshSymbolic"
     MacawCall{}                      -> error "XXX: MacawCall"
 
     MacawArchStmtExtension s         -> archStmtFn s st
 
-    PtrEq  mvar w x y                -> doPtrEq st mvar w x y
-    PtrLt  mvar w x y                -> doPtrLt st mvar w x y
-    PtrLeq mvar w x y                -> doPtrLeq st mvar w x y
-    PtrMux mvar w c x y              -> doPtrMux (C.regValue c) st mvar w x y
-    PtrAdd mvar w x y                -> doPtrAdd st mvar w x y
-    PtrSub mvar w x y                -> doPtrSub st mvar w x y
+    PtrEq  w x y                -> doPtrEq st mvar w x y
+    PtrLt  w x y                -> doPtrLt st mvar w x y
+    PtrLeq w x y                -> doPtrLeq st mvar w x y
+    PtrMux w c x y              -> doPtrMux (C.regValue c) st mvar w x y
+    PtrAdd w x y                -> doPtrAdd st mvar w x y
+    PtrSub w x y                -> doPtrSub st mvar w x y
 
 
 -- | Return macaw extension evaluation functions.
 macawExtensions ::
   IsSymInterface sym =>
   MacawArchEvalFn sym arch ->
+  C.GlobalVar MM.Mem ->
   C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
-macawExtensions f =
+macawExtensions f mvar =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f
+                  , C.extensionExec = execMacawStmtExtension f mvar
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -325,6 +322,7 @@ runCodeBlock :: forall sym arch blocks
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
            -> C.HandleAllocator RealWorld
+           -> C.GlobalVar MM.Mem
            -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
               -- ^ Register assignment
@@ -333,7 +331,7 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc g regStruct = do
+runCodeBlock sym archFns archEval halloc mvar g regStruct = do
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
   -- Run the symbolic simulator.
@@ -345,7 +343,7 @@ runCodeBlock sym archFns archEval halloc g regStruct = do
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions archEval
+                         , C.extensionImpl = macawExtensions archEval mvar
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
                               C.emptyHandleMap
@@ -386,7 +384,7 @@ runBlocks :: forall sym arch ids
 runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   halloc <- C.newHandleAllocator
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
-  mvar <- stToIO (MM.mkMemVar halloc)
-  C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap mvar nm posFn macawBlocks
+  C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks
+  mvar <- stToIO $ MM.mkMemVar halloc
   -- Run the symbolic simulator.
-  runCodeBlock sym archFns archEval halloc g regStruct
+  runCodeBlock sym archFns archEval halloc mvar g regStruct
