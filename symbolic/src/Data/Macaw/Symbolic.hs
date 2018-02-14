@@ -63,6 +63,7 @@ import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
+import qualified Lang.Crucible.LLVM.DataLayout as MM
 
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
@@ -322,7 +323,7 @@ runCodeBlock :: forall sym arch blocks
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
            -> C.HandleAllocator RealWorld
-           -> C.GlobalVar MM.Mem
+           -> (C.GlobalVar MM.Mem, MM.MemImpl sym)
            -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
               -- ^ Register assignment
@@ -331,7 +332,7 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc mvar g regStruct = do
+runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct = do
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
   -- Run the symbolic simulator.
@@ -350,7 +351,8 @@ runCodeBlock sym archFns archEval halloc mvar g regStruct = do
                          , C._cruciblePersonality = MacawSimulatorState
                          }
   -- Create the symbolic simulator state
-  let s = C.initSimState ctx C.emptyGlobals C.defaultErrorHandler
+  let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
+  let s = C.initSimState ctx initGlobals C.defaultErrorHandler
   C.runOverrideSim s macawStructRepr $ do
     let args :: C.RegMap sym (MacawFunctionArgs arch)
         args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
@@ -358,6 +360,8 @@ runCodeBlock sym archFns archEval halloc mvar g regStruct = do
       C.regValue <$> C.callCFG g args
 
 -- | Run the simulator over a contiguous set of code.
+-- NOTE: this is probably not the function that shuold be called,
+-- as it has no way to initialize memory.
 runBlocks :: forall sym arch ids
            .  (IsSymInterface sym, M.ArchConstraints arch)
            => sym
@@ -386,5 +390,8 @@ runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   memBaseVarMap <- stToIO $ mkMemBaseVarMap halloc mem
   C.SomeCFG g <- stToIO $ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks
   mvar <- stToIO $ MM.mkMemVar halloc
+  initMem <- MM.emptyMem MM.LittleEndian
   -- Run the symbolic simulator.
-  runCodeBlock sym archFns archEval halloc mvar g regStruct
+  runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct
+
+
