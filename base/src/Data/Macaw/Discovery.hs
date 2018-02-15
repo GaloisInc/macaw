@@ -1058,23 +1058,26 @@ cfgFromAddrsWorker initial_state init_addrs mem_words =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
--- | Event for logging function
-data DiscoveryEvent w
-   = AnalyzeFunction !(MemSegmentOff w)
-   | AnalyzeBlock !(MemSegmentOff w)
-
 resolveFuns :: MemWidth (RegAddrWidth (ArchReg arch))
-            => (DiscoveryEvent (ArchAddrWidth arch) -> ST s ())
-               -- ^ Callback for discovery events
+            => (ArchSegmentOff arch -> CodeAddrReason (ArchAddrWidth arch) -> ST s Bool)
+               -- ^ Callback for discovered functions
+               --
+               -- Should return true if we should analyze the function and false otherwise.
+            -> (ArchSegmentOff arch -> ArchSegmentOff arch -> ST s ())
+               -- ^ Callback for logging blocks discovered within function
+               -- Arguments include the address of function and address of block.
             -> DiscoveryState arch
             -> ST s (DiscoveryState arch)
-resolveFuns logFn info = seq info $
-  case Map.lookupMin (info^.unexploredFunctions) of
+resolveFuns analyzeFun analyzeBlock info = seq info $
+  case Map.minViewWithKey (info^.unexploredFunctions) of
     Nothing -> pure info
-    Just (addr, rsn) -> do
-      logFn (AnalyzeFunction addr)
-      (info',_) <- analyzeFunction (logFn . AnalyzeBlock) addr rsn info
-      resolveFuns logFn info'
+    Just ((addr, rsn), rest) -> do
+      p <- analyzeFun addr rsn
+      if p then do
+        (info',_) <- analyzeFunction (analyzeBlock addr) addr rsn info
+        resolveFuns analyzeFun analyzeBlock info'
+       else
+        resolveFuns analyzeFun analyzeBlock (info & unexploredFunctions .~ rest)
 
 ------------------------------------------------------------------------
 -- Top-level discovery
@@ -1112,7 +1115,14 @@ ppSymbol addr sym_map =
     Just fnName -> show addr ++ " (" ++ BSC.unpack fnName ++ ")"
     Nothing  -> show addr
 
-  -- | Print out discovery event using options and address to symbol map.
+-- | Event for logging function
+data DiscoveryEvent w
+   = AnalyzeFunction !(MemSegmentOff w)
+   | AnalyzeBlock !(MemSegmentOff w)
+
+{-# DEPRECATED discoveryLogFn "02/17/2018 Stop using this" #-}
+
+-- | Print out discovery event using options and address to symbol map.
 discoveryLogFn :: MemWidth w
                => DiscoveryOptions
                -> AddrSymMap w
@@ -1142,8 +1152,12 @@ completeDiscoveryState :: forall arch
                           -- ^ Initial entry points to explore
                        -> AddrSymMap (ArchAddrWidth arch)
                           -- ^ The map from addresses to symbols
+                       -> (ArchSegmentOff arch -> Bool)
+                          -- ^ Predicate to check if we should explore a function
+                          --
+                          -- Return true to explore all functions.
                        -> IO (DiscoveryState arch)
-completeDiscoveryState ainfo disOpt mem initEntries symMap = stToIO $ withArchConstraints ainfo $ do
+completeDiscoveryState ainfo disOpt mem initEntries symMap funPred = stToIO $ withArchConstraints ainfo $ do
   let initState
         = emptyDiscoveryState mem symMap ainfo
         & markAddrsAsFunction InitAddr initEntries
@@ -1152,12 +1166,21 @@ completeDiscoveryState ainfo disOpt mem initEntries symMap = stToIO $ withArchCo
         | exploreFunctionSymbols disOpt =
             initState & markAddrsAsFunction InitAddr (Map.keys symMap)
         | otherwise = initState
-  let logFn = discoveryLogFn disOpt symMap
+  let analyzeFn addr _rsn = ioToST $ do
+        let b = funPred addr
+        when (b && logAtAnalyzeFunction disOpt) $ do
+          hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap
+          hFlush stderr
+        pure $! b
+  let analyzeBlock _ addr = ioToST $ do
+        when (logAtAnalyzeBlock disOpt) $ do
+          hPutStrLn stderr $ "  Analyzing block: " ++ show addr
+          hFlush stderr
   -- Discover functions
-  postPhase1Discovery <- resolveFuns logFn postSymState
+  postPhase1Discovery <- resolveFuns analyzeFn analyzeBlock postSymState
   -- Discovery functions from memory
   if exploreCodeAddrInMem disOpt then do
     let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
-    resolveFuns logFn $ postPhase1Discovery & exploreMemPointers mem_contents
+    resolveFuns analyzeFn analyzeBlock $ postPhase1Discovery & exploreMemPointers mem_contents
    else
     return postPhase1Discovery
