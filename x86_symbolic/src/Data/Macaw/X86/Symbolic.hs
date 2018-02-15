@@ -10,12 +10,19 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
   , SymFuns, newSymFuns
+
+  , RegAssign
+  , getReg
+  , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
+import           Control.Lens((^.))
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
@@ -61,14 +68,31 @@ instance RepeatAssign tp ctx => RepeatAssign tp (ctx ::> tp) where
 -- X86 Registers
 
 type instance ArchRegContext M.X86_64
-   =   (EmptyCtx ::> M.BVType 64)
-   <+> CtxRepeat 16 (M.BVType 64)
-   <+> CtxRepeat 9  M.BoolType
-   <+> CtxRepeat 16  M.BoolType
-   <+> (EmptyCtx ::> M.BVType 3)
-   <+> CtxRepeat 8 (M.BVType 2)
-   <+> CtxRepeat 8 (M.BVType 80)
-   <+> CtxRepeat 16 (M.BVType 256)
+   =   (EmptyCtx ::> M.BVType 64)   -- IP
+   <+> CtxRepeat 16 (M.BVType 64)   -- GP regs
+   <+> CtxRepeat 9  M.BoolType      -- Flags
+   <+> CtxRepeat 12  M.BoolType     -- X87 Status regs (x87 status word)
+   <+> (EmptyCtx ::> M.BVType 3)    -- X87 top of the stack (x87 status word)
+   <+> CtxRepeat 8 (M.BVType 2)     -- X87 tags
+   <+> CtxRepeat 8 (M.BVType 80)    -- FP regs
+   <+> CtxRepeat 16 (M.BVType 256)  -- YMM regs
+
+type RegAssign f = Assignment f (ArchRegContext M.X86_64)
+
+type IP          = 0        -- 1
+type GP n        = 1 + n    -- 16
+type Flag n      = 17 + n   -- 9
+type X87Status n = 26 + n   -- 12
+type X87Top      = 38       -- 1
+type X87Tag n    = 39 + n   -- 8
+type FPReg n     = 47 + n   -- 8
+type YMM n       = 55 + n   -- 16
+
+getReg ::
+  forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
+getReg x = x ^. (field @n)
+
+
 
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
 x86RegName M.X86_IP     = C.systemSymbol "!ip"
@@ -95,11 +119,17 @@ x86RegAssignment =
   Empty :> M.X86_IP
   <++> (repeatAssign gpReg :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 64)))
   <++> flagRegs
-  <++> (repeatAssign (M.X87_StatusReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 M.BoolType))
+  <++> (repeatAssign (M.X87_StatusReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType))
   <++> (Empty :> M.X87_TopReg)
   <++> (repeatAssign (M.X87_TagReg . fromIntegral)    :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 2)))
   <++> (repeatAssign (M.X87_FPUReg . F.mmxReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 80)))
   <++> (repeatAssign (M.X86_YMMReg . F.ymmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 256)))
+
+
+------------------------------------------------------------------------
+
+
+
 
 ------------------------------------------------------------------------
 -- Other X86 specific
