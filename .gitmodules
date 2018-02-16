@@ -22,3 +22,6 @@
 [submodule "submodules/s-cargot"]
 	path = submodules/s-cargot
 	url = git@github.com:aisamanra/s-cargot.git
+[submodule "submodules/s-cargot-letbind"]
+	path = submodules/s-cargot-letbind
+	url = https://github.com/GaloisInc/s-cargot-letbind.git
