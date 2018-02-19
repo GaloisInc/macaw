@@ -186,6 +186,23 @@ mkBlocksCFG archFns halloc memBaseVarMap nm posFn macawBlocks = do
   mkCrucCFG archFns halloc nm $ do
     addBlocksCFG archFns memBaseVarMap posFn macawBlocks
 
+-- | Create a map from Macaw @(address, index)@ pairs to Crucible labels
+mkBlockLabelMap :: [M.ParsedBlock arch ids] -> BlockLabelMap arch s
+mkBlockLabelMap blks = fst $ foldl' insBlock (Map.empty,1) blks
+ where insBlock :: (BlockLabelMap arch s,Int) -> M.ParsedBlock arch ids -> (BlockLabelMap arch s,Int)
+       insBlock m b = insSentences (M.pblockAddr b) m [M.blockStatementList b]
+
+       insSentences :: M.ArchSegmentOff arch
+                    -> (BlockLabelMap arch s, Int)
+                    -> [M.StatementList arch ids]
+                    -> (BlockLabelMap arch s, Int)
+       insSentences _ m [] = m
+       insSentences base (m,c) (s:r) =
+         insSentences base
+                      (Map.insert (base,M.stmtsIdent s) (CR.Label c) m,c+1)
+                      (nextStatements (M.stmtsTerm s) ++ r)
+
+-- | This create a Crucible CFG from a Macaw `DiscoveryFunInfo` value.
 mkFunCFG :: forall s arch ids
          .  MacawSymbolicArchFunctions arch
             -- ^ Architecture specific functions.
@@ -200,29 +217,44 @@ mkFunCFG :: forall s arch ids
          -> M.DiscoveryFunInfo arch ids
          -- ^ List of blocks for this region.
          -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkFunCFG archFns halloc memBaseVarMap nm posFn fn = do
+mkFunCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints archFns $ do
   mkCrucCFG archFns halloc nm $ do
-    let insSentences :: M.ArchSegmentOff arch
-                     -> (BlockLabelMap arch s,Int)
-                     -> [M.StatementList arch ids]
-                     -> (BlockLabelMap arch s,Int)
-        insSentences _ m [] = m
-        insSentences base (m,c) (s:r) =
-          insSentences base
-                       (Map.insert (base,M.stmtsIdent s) (CR.Label c) m,c+1)
-                       (nextStatements (M.stmtsTerm s) ++ r)
-    let insBlock :: (BlockLabelMap arch s,Int) -> M.ParsedBlock arch ids -> (BlockLabelMap arch s,Int)
-        insBlock m b = insSentences (M.pblockAddr b) m [M.blockStatementList b]
-    let blockLabelMap :: BlockLabelMap arch s
-        blockLabelMap = fst $ foldl' insBlock (Map.empty,0) (Map.elems (fn^.M.parsedBlocks))
-    let regReg = CR.Reg { CR.regPosition = posFn (M.discoveredFunAddr fn)
+    -- Get entry point address for function
+    let entryAddr = M.discoveredFunAddr fn
+    -- Get list of blocks
+    let blockList = Map.elems (fn^.M.parsedBlocks)
+    -- Get type for representing Machine registers
+    let regType = C.StructRepr (crucArchRegTypes archFns)
+    let entryPos = posFn entryAddr
+    -- Create Crucible "register" (i.e. a mutable variable) for
+    -- current value of Macaw machine registers.
+    let regReg = CR.Reg { CR.regPosition = entryPos
                         , CR.regId = 0
-                        , CR.typeOfReg = C.StructRepr (crucArchRegTypes archFns)
+                        , CR.typeOfReg = regType
                         }
-    fmap concat $
-      forM (Map.elems (fn^.M.parsedBlocks)) $ \b -> do
-        -- TODO: Initialize value in regReg with initial registers
+    -- Create atom for entry
+    let Empty :> inputAtom = CR.mkInputAtoms entryPos (Empty :> regType)
+    -- Create map from Macaw (address,blockId pairs) to Crucible labels
+    let blockLabelMap :: BlockLabelMap arch s
+        blockLabelMap = mkBlockLabelMap blockList
+    -- Get initial block for Crucible
+    let entryLabel = CR.Label 0
+    let initPosFn :: M.ArchAddrWord arch -> C.Position
+        initPosFn off = posFn r
+          where Just r = M.incSegmentOff entryAddr (toInteger off)
+    (initCrucibleBlock,_) <-
+      runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
+        -- Initialize value in regReg with initial registers
+        setMachineRegs inputAtom
+        -- Jump to function entry point
+        addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr 0)
+
+    -- Generate code for Macaw blocks after entry
+    restCrucibleBlocks <-
+      forM blockList $ \b -> do
         addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
+    -- Return initialization block followed by actual blocks.
+    pure (initCrucibleBlock : concat restCrucibleBlocks)
 
 evalMacawExprExtension :: IsSymInterface sym
                        => sym

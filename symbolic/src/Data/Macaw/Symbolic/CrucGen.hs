@@ -46,8 +46,12 @@ module Data.Macaw.Symbolic.CrucGen
   , valueToCrucible
   , evalArchStmt
   , MemSegmentMap
-
   , lemma1_16
+    -- * Additional exports
+  , runCrucGen
+  , setMachineRegs
+  , addTermStmt
+  , parsedBlockLabel
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -942,7 +946,7 @@ runCrucGen :: forall arch ids s
            -> (M.ArchAddrWord arch -> C.Position)
               -- ^ Function for generating position from offset from start of this block.
            -> M.ArchAddrWord arch
-              -- ^ Offset of this block
+              -- ^ Offset of this code relative to start of block
            -> CR.Label s
               -- ^ Label for this block
            -> CR.Reg s (ArchRegStruct arch)
@@ -1119,13 +1123,13 @@ addParsedBlock :: forall arch ids s
                     -- ^ Register that stores Macaw registers
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock tfns baseAddrMap blockLabelMap posFn regReg b = do
-  crucGenArchConstraints tfns $ do
+addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b = do
+  crucGenArchConstraints archFns $ do
   let base = M.pblockAddr b
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
         where Just r = M.incSegmentOff base (toInteger off)
-  addStatementList tfns baseAddrMap blockLabelMap
+  addStatementList archFns memBaseVarMap blockLabelMap
     (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []
 
 
