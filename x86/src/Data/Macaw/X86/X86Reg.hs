@@ -242,119 +242,122 @@ data BitPacking (n :: Nat) = BitPacking (NatRepr n) [BitConversion n]
 ------------------------------------------------------------------------
 -- General purpose register aliases.
 
-pattern RAX :: X86Reg GP
+-- NOTE: the patterns are written in this funny style, so that
+-- when we pattern match we learn the right kind of type info. Argh.
+
+pattern RAX :: () => (t ~ GP) => X86Reg t
 pattern RAX = X86_GP F.RAX
 
-pattern RBX :: X86Reg GP
+pattern RBX :: () => (t ~ GP) => X86Reg t
 pattern RBX = X86_GP F.RBX
 
-pattern RCX :: X86Reg GP
+pattern RCX :: () => (t ~ GP) => X86Reg t
 pattern RCX = X86_GP F.RCX
 
-pattern RDX :: X86Reg GP
+pattern RDX :: () => (t ~ GP) => X86Reg t
 pattern RDX = X86_GP F.RDX
 
-pattern RSI :: X86Reg GP
+pattern RSI :: () => (t ~ GP) => X86Reg t
 pattern RSI = X86_GP F.RSI
 
-pattern RDI :: X86Reg GP
+pattern RDI :: () => (t ~ GP) => X86Reg t
 pattern RDI = X86_GP F.RDI
 
-pattern RSP :: X86Reg GP
+pattern RSP :: () => (t ~ GP) => X86Reg t
 pattern RSP = X86_GP F.RSP
 
-pattern RBP :: X86Reg GP
+pattern RBP :: () => (t ~ GP) => X86Reg t
 pattern RBP = X86_GP F.RBP
 
-pattern R8  :: X86Reg GP
+pattern R8  :: () => (t ~ GP) => X86Reg t
 pattern R8  = X86_GP F.R8
 
-pattern R9  :: X86Reg GP
+pattern R9  :: () => (t ~ GP) => X86Reg t
 pattern R9  = X86_GP F.R9
 
-pattern R10 :: X86Reg GP
+pattern R10 :: () => (t ~ GP) => X86Reg t
 pattern R10 = X86_GP F.R10
 
-pattern R11 :: X86Reg GP
+pattern R11 :: () => (t ~ GP) => X86Reg t
 pattern R11 = X86_GP F.R11
 
-pattern R12 :: X86Reg GP
+pattern R12 :: () => (t ~ GP) => X86Reg t
 pattern R12 = X86_GP F.R12
 
-pattern R13 :: X86Reg GP
+pattern R13 :: () => (t ~ GP) => X86Reg t
 pattern R13 = X86_GP F.R13
 
-pattern R14 :: X86Reg GP
+pattern R14 :: () => (t ~ GP) => X86Reg t
 pattern R14 = X86_GP F.R14
 
-pattern R15 :: X86Reg GP
+pattern R15 :: () => (t ~ GP) => X86Reg t
 pattern R15 = X86_GP F.R15
 
-pattern CF :: X86Reg Flag
+pattern CF :: () => (t ~ Flag) => X86Reg t
 pattern CF = X86_FlagReg R.CF
 
-pattern PF :: X86Reg Flag
+pattern PF :: () => (t ~ Flag) => X86Reg t
 pattern PF = X86_FlagReg R.PF
 
-pattern AF :: X86Reg Flag
+pattern AF :: () => (t ~ Flag) => X86Reg t
 pattern AF = X86_FlagReg R.AF
 
-pattern ZF :: X86Reg Flag
+pattern ZF :: () => (t ~ Flag) => X86Reg t
 pattern ZF = X86_FlagReg R.ZF
 
-pattern SF :: X86Reg Flag
+pattern SF :: () => (t ~ Flag) => X86Reg t
 pattern SF = X86_FlagReg R.SF
 
-pattern TF :: X86Reg Flag
+pattern TF :: () => (t ~ Flag) => X86Reg t
 pattern TF = X86_FlagReg R.TF
 
-pattern IF :: X86Reg Flag
+pattern IF :: () => (t ~ Flag) => X86Reg t
 pattern IF = X86_FlagReg R.IF
 
-pattern DF :: X86Reg Flag
+pattern DF :: () => (t ~ Flag) => X86Reg t
 pattern DF = X86_FlagReg R.DF
 
-pattern OF :: X86Reg Flag
+pattern OF :: () => (t ~ Flag) => X86Reg t
 pattern OF = X86_FlagReg R.OF
 
 -- | x87 flags
-pattern X87_IE :: X86Reg X87_Status
+pattern X87_IE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_IE = X87_StatusReg 0
 
-pattern X87_DE :: X86Reg X87_Status
+pattern X87_DE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_DE = X87_StatusReg 1
 
-pattern X87_ZE :: X86Reg X87_Status
+pattern X87_ZE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_ZE = X87_StatusReg 2
 
-pattern X87_OE :: X86Reg X87_Status
+pattern X87_OE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_OE = X87_StatusReg 3
 
-pattern X87_UE :: X86Reg X87_Status
+pattern X87_UE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_UE = X87_StatusReg 4
 
-pattern X87_PE :: X86Reg X87_Status
+pattern X87_PE :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_PE = X87_StatusReg 5
 
-pattern X87_EF :: X86Reg X87_Status
+pattern X87_EF :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_EF = X87_StatusReg 6
 
-pattern X87_ES :: X86Reg X87_Status
+pattern X87_ES :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_ES = X87_StatusReg 7
 
-pattern X87_C0 :: X86Reg X87_Status
+pattern X87_C0 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C0 = X87_StatusReg 8
 
-pattern X87_C1 :: X86Reg X87_Status
+pattern X87_C1 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C1 = X87_StatusReg 9
 
-pattern X87_C2 :: X86Reg X87_Status
+pattern X87_C2 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C2 = X87_StatusReg 10
 
-pattern X87_C3 :: X86Reg X87_Status
+pattern X87_C3 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C3 = X87_StatusReg 14
 
-pattern YMM :: F.YMMReg -> X86Reg YMM
+pattern YMM :: () => (t ~ YMM) => F.YMMReg -> X86Reg t
 pattern YMM x = X86_YMMReg x
 
 x87StatusNames :: V.Vector String

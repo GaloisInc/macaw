@@ -16,7 +16,8 @@ library
                  macaw-x86,
                  mtl,
                  parameterized-utils,
-                 crucible-llvm
+                 crucible-llvm,
+                 lens
   hs-source-dirs: src
 
   exposed-modules:
