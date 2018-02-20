@@ -408,7 +408,14 @@ insertElfSection sec = do
     let seg = memSegmentForElfSection regIdx sec
     loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
     let elfIdx = ElfSectionIndex (elfSectionIndex sec)
-    let Just addr = resolveSegmentOff seg 0
+    addr <- case resolveSegmentOff seg 0 of
+              Just a -> return a
+              Nothing -> fail $ unlines $
+                  [ "Failed to resolved sigment offset:"
+                  , "  Section: " ++ BSC.unpack (elfSectionName sec)
+                  , "  Segment:"
+                  ] ++
+                  [ "    " ++ l | l <- lines (show seg) ]
     mlsIndexMap %= Map.insert elfIdx (addr, sec)
 
 -- | Load allocated Elf sections into memory.
