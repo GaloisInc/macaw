@@ -1,4 +1,5 @@
--- | Defines the register types for ARM, along with some helpers
+-- | Defines the register types and names/locations for ARM, along
+-- with some helpers
 
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -44,6 +45,8 @@ data ARMReg tp where
              -- so track it separately and use semantics definitions
              -- to manage the synchronization.
     ARM_PC :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+    ARM_CPSR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+
 
 deriving instance Eq (ARMReg tp)
 deriving instance Ord (ARMReg tp)
@@ -57,6 +60,7 @@ instance Show (ARMReg tp) where
                                -- 13 -> show rnum <> "=SP"
                                -- _ -> show rnum
                ARM_PC -> "<PC>"
+               ARM_CPSR -> "<CPSR>"
 
 
 instance ShowF ARMReg where
@@ -75,6 +79,7 @@ instance HasRepr ARMReg TypeRepr where
         case r of
           ARM_GP {} -> BVTypeRepr n32
           ARM_PC -> BVTypeRepr n32
+          ARM_CPSR -> BVTypeRepr n32
 
 
 type instance MC.ArchReg ARM.ARM = ARMReg
@@ -96,7 +101,9 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
 armRegs = [ Some (ARM_GP (ARMOperand.gpr n)) | n <- [0..numGPR-1] ] <>
-          [ Some ARM_PC ]
+          [ Some ARM_PC
+          , Some ARM_CPSR
+          ]
 
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
@@ -124,4 +131,5 @@ locToRegTH :: (1 <= Loc.ArchRegWidth arm,
            -> Q Exp
 locToRegTH _  Loc.LocPC      = [| ARM_PC |]
 locToRegTH _  (Loc.LocGPR g) = let rnum = unGPR g in [| ARM_GP (ARMOperand.gpr $(lift rnum)) |]
-locToRegTH _  _              = [| undefined |]
+locToRegTH _  (Loc.LocCPSR)  = [| ARM_CPSR |]
+locToRegTH _  _              = [| error "locToRegTH undefined for unrecognized location" |]
