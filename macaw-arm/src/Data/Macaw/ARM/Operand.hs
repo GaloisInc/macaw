@@ -47,6 +47,9 @@ instance ExtractValue ARM.ARM SBit (BVType 1) where
 instance ExtractValue ARM.ARM BranchExecuteTarget (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . branchExecuteTargetToBits
 
+instance ExtractValue ARM.ARM SoRegImm (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . soRegImmToBits
+
 
 
 -- instance ExtractValue arch AddrModeImm12 (BVType 12) where
