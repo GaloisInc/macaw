@@ -624,5 +624,5 @@ defaultAppEvaluator elt interps = case elt of
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
     liftQ [| return (G.AppExpr (M.BVUrem $(natReprTH w) $(return e1) $(return e2))) |]
-  _ -> liftQ [| error "unsupported Crucible elt" |]
+  _ -> error $ "unsupported Crucible elt:" ++ show elt
 
