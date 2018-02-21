@@ -318,7 +318,7 @@ ptrOp k st mvar w x0 y0 =
      xPtr     <- let ?ptrWidth = w in isValidPointer sym x mem
      yPtr     <- let ?ptrWidth = w in isValidPointer sym y mem
      xBits    <- isBitVec sym x
-     yBits    <- isBitVec sym x
+     yBits    <- isBitVec sym y
      a <- k sym mem w xPtr xBits yPtr yBits x y
      return (a,st)
 
