@@ -182,7 +182,7 @@ memSegmentForElfSegment regIdx incBSS contents relocMap phdr = mseg
 -- whether we should add relocations.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
                         => RegionIndex -- ^ Index for segment
-                        -> Bool -- ^ Flag to control wheter we include BSS
+                        -> IncludeBSS -- ^ Flag to control wheter we include BSS
                         -> ElfSection v
                         -> Maybe (MemSegment w)
 memSegmentForElfSection regIdx incBSS s
