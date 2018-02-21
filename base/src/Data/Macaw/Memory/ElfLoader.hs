@@ -61,6 +61,7 @@ import           Data.ElfEdit
   )
 import qualified Data.ElfEdit as Elf
 import           Data.Foldable
+import           Data.Int (Int64)
 import           Data.IntervalMap.Strict (Interval(..), IntervalMap)
 import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
@@ -144,10 +145,20 @@ byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
                 preseg = singleSegment (L.take (fromIntegral off) contents)
                 post   = L.drop (fromIntegral (off + ptrSize)) contents
 
+-- | Flag to control whether we include BSS
+type IncludeBSS = Bool
+
+-- | Pad zeros if we includ eBSS
+padBSSData :: IncludeBSS -> L.ByteString -> Int64 -> L.ByteString
+padBSSData incBSS dta sz
+  | L.length dta > sz = L.take sz dta
+  | incBSS = dta `mappend` L.replicate (sz - L.length dta) 0
+  | otherwise = dta
+
 -- | Return a memory segment for elf segment if it loadable.
 memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         => RegionIndex -- ^ Index for segment
-                        -> Bool -- ^ Flag to control wheter we include BSS
+                        -> IncludeBSS -- ^ Flag to control wheter we include BSS
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
                         -> RelocMap (MemWord w)
@@ -159,24 +170,28 @@ memSegmentForElfSegment regIdx incBSS contents relocMap phdr = mseg
   where seg = Elf.phdrSegment phdr
         dta = sliceL (Elf.phdrFileRange phdr) contents
         sz = fromIntegral $ Elf.phdrMemSize phdr
-        fixedData
-          | L.length dta > sz = L.take sz dta
-          | incBSS = dta `mappend` L.replicate (sz - L.length dta) 0
-          | otherwise = dta
+        fixedData = padBSSData incBSS dta sz
         addr = fromIntegral $ elfSegmentVirtAddr seg
         flags = flagsForSegmentFlags (elfSegmentFlags seg)
         mseg = memSegment regIdx addr flags (byteSegments relocMap addr fixedData)
 
 -- | Create memory segment from elf section.
+--
+-- This returns `Nothing` if the memory segment is empty.
+-- TODO: Evaluate whether we should do the same for memSegmentForElfSegment, and
+-- whether we should add relocations.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
-                        => RegionIndex
+                        => RegionIndex -- ^ Index for segment
+                        -> Bool -- ^ Flag to control wheter we include BSS
                         -> ElfSection v
-                        -> MemSegment w
-memSegmentForElfSection reg s = mseg
+                        -> Maybe (MemSegment w)
+memSegmentForElfSection regIdx incBSS s
+  | L.length fixedData == 0 = Nothing
+  | otherwise = Just (memSegment regIdx base flags [ByteRegion $ L.toStrict fixedData])
   where base = fromIntegral (elfSectionAddr s)
         flags = flagsForSectionFlags (elfSectionFlags s)
         bytes = elfSectionData s
-        mseg = memSegment reg base flags [ByteRegion bytes]
+        fixedData = padBSSData incBSS (L.fromStrict bytes) (fromIntegral (Elf.elfSectionSize s))
 
 ------------------------------------------------------------------------
 -- MemLoader
@@ -398,25 +413,20 @@ memoryForElfSegments e = do
 insertElfSection :: ElfSection (ElfWordType w)
                  -> MemLoader w ()
 insertElfSection sec = do
+  regIdx <- gets mlsRegionIndex
+  incBSS <- gets mlsIncludeBSS
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
   -- Check if we should load section
   let doLoad = elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc
             && elfSectionName sec /= ".eh_frame"
-  when doLoad $ do
-    regIdx <- mlsRegionIndex <$> get
-    let seg = memSegmentForElfSection regIdx sec
-    loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
-    let elfIdx = ElfSectionIndex (elfSectionIndex sec)
-    addr <- case resolveSegmentOff seg 0 of
-              Just a -> return a
-              Nothing -> fail $ unlines $
-                  [ "Failed to resolved sigment offset:"
-                  , "  Section: " ++ BSC.unpack (elfSectionName sec)
-                  , "  Segment:"
-                  ] ++
-                  [ "    " ++ l | l <- lines (show seg) ]
-    mlsIndexMap %= Map.insert elfIdx (addr, sec)
+  case memSegmentForElfSection regIdx incBSS sec of
+    Just seg | doLoad -> do
+      loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
+      let elfIdx = ElfSectionIndex (elfSectionIndex sec)
+      let Just addr = resolveSegmentOff seg 0
+      mlsIndexMap %= Map.insert elfIdx (addr, sec)
+    _ -> pure ()
 
 -- | Load allocated Elf sections into memory.
 --
