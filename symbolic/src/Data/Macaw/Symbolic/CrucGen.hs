@@ -586,8 +586,14 @@ appBVAtom ::
   CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
 appBVAtom w app = fromBits w =<< appAtom app
 
-addLemma :: (1 <= x, x + 1 <= y) => p x -> q y -> LeqProof 1 y
-addLemma _ _ = undefined
+addLemma :: (1 <= x, x + 1 <= y) => NatRepr x -> q y -> LeqProof 1 y
+addLemma x y =
+  leqProof n1 x `leqTrans`
+  leqAdd (leqRefl x) n1 `leqTrans`
+  leqProof (addNat x n1) y
+  where
+  n1 :: NatRepr 1
+  n1 = knownNat
 
 
 -- | Create a crucible value for a bitvector literal.
