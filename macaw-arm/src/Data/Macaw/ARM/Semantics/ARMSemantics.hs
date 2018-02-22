@@ -16,7 +16,7 @@ import           Data.Macaw.ARM.Operand
 import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.SemMC.Generator ( Generator )
-import           Data.Macaw.SemMC.TH ( genExecInstruction )
+import           Data.Macaw.SemMC.TH ( genExecInstructionLogStdErr )
 import qualified Data.Macaw.Types as MT
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.ARM -- must be present to supply definitions for genExecInstruction output
@@ -25,7 +25,7 @@ import           SemMC.Architecture.ARM.Opcodes ( allA32Semantics, allA32OpcodeI
 
 
 execInstruction :: MC.Value ARM ids (MT.BVType 32) -> Dismantle.ARM.Instruction -> Maybe (Generator ARM ids s ())
-execInstruction = $(genExecInstruction (Proxy @ARM)
+execInstruction = $(genExecInstructionLogStdErr (Proxy @ARM)
                     (locToRegTH (Proxy @ARM))
                     armNonceAppEval
                     armAppEvaluator
