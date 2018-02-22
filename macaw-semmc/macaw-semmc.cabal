@@ -24,6 +24,7 @@ library
                    Data.Macaw.SemMC.TH.Monad
   -- other-extensions:    
   build-depends:       base >=4.9 && <5,
+                       async,
                        template-haskell,
                        containers,
                        mtl,

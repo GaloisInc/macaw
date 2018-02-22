@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -17,8 +18,11 @@
 --
 -- The other functions exposed by this module are useful for implementing
 -- architecture-specific translations.
+
 module Data.Macaw.SemMC.TH (
   genExecInstruction,
+  genExecInstructionLogStdErr,
+  genExecInstructionLogging,
   addEltTH,
   natReprTH,
   symFnName,
@@ -29,6 +33,7 @@ import           GHC.TypeLits ( Symbol )
 import qualified Data.ByteString as BS
 
 import           Control.Lens ( (^.) )
+import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
@@ -59,6 +64,7 @@ import qualified SemMC.BoundVar as BV
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
+import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
@@ -232,14 +238,8 @@ collectOperandVars varNames ix (BV.BoundVar bv) m =
                                 -> (forall (tp :: CT.BaseType) t.
 
 -}
--- | Generate an implementation of 'execInstruction' that runs in the
--- 'G.Generator' monad.  We pass in both the original list of semantics files
--- along with the list of opcode info objects.  We can match them up using
--- equality on opcodes (via a MapF).  Generating a combined list up-front would
--- be ideal, but is difficult for various TH reasons (we can't call 'lift' on
--- all of the things we would need to for that).
---
--- The structure of the term produced is documented in 'instructionMatcher'
+-- | Wrapper for 'genExecInstructionLogging' which generates a no-op
+-- LogCfg to disable any logging during the generation.
 genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                     . (A.Architecture arch,
                        HR.HasRepr a (A.ShapeRepr arch),
@@ -276,17 +276,117 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- definitions in semmc.
                    -> Q Exp
 genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo = do
-  Some ng <- runIO PN.newIONonceGenerator
-  sym <- runIO (S.newSimpleBackend ng)
-  formulas <- runIO (loadFormulas sym semantics)
-  let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
-  instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo
-  where
-    attachInfo m0 (Some ci) m =
-      let co = DT.capturedOpcode ci
-      in case Map.lookup co m0 of
-        Nothing -> m
-        Just pf -> Map.insert co (PairF pf ci) m
+  logCfg <- runIO $ U.mkNonLogCfg
+  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo logCfg
+  runIO $ U.logEndWith logCfg
+  return r
+
+-- | Wrapper for 'genExecInstructionLogging' which generates a no-op
+-- LogCfg to disable any logging during the generation.
+genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
+                    . (A.Architecture arch,
+                       HR.HasRepr a (A.ShapeRepr arch),
+                       OrdF a,
+                       ShowF a,
+                       LF.LiftF a)
+                   => proxy arch
+                   -> (forall tp . L.Location arch tp -> Q Exp)
+                   -- ^ A translation of 'L.Location' references into 'Exp's
+                   -- that generate macaw IR to reference those expressions
+                   -> (forall tp t . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ A translation of uninterpreted functions into macaw IR;
+                   -- returns 'Nothing' if the handler does not know how to
+                   -- translate the 'S.NonceApp'.
+                   -> (forall tp t . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
+                   -- translate division operations into architecture-specific
+                   -- statements, which have no representation in macaw.
+                   -> Name
+                   -- ^ The arch-specific instruction matcher for translating
+                   -- instructions directly into macaw IR; this is usually used
+                   -- for translating trap and system call type instructions.
+                   -- This has to be specified by 'Name' instead of as a normal
+                   -- function, as the type would actually refer to types that
+                   -- we cannot mention in this shared code (i.e.,
+                   -- architecture-specific instruction types).
+                   -> [(Some a, BS.ByteString)]
+                   -- ^ A list of opcodes (with constraint information
+                   -- witnessed) paired with the bytestrings containing their
+                   -- semantics.  This comes from semmc.
+                   -> [Some (DT.CaptureInfo a)]
+                   -- ^ Extra information for each opcode to let us generate
+                   -- some TH to match them.  This comes from the semantics
+                   -- definitions in semmc.
+                   -> Q Exp
+genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo = do
+  logCfg <- runIO $ U.mkLogCfg "genExecInstruction"
+  logThread <- runIO $ U.asyncLinked (U.stdErrLogEventConsumer (const True) logCfg)
+  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo logCfg
+  runIO $ U.logEndWith logCfg
+  runIO $ Async.wait logThread
+  return r
+
+-- | Generate an implementation of 'execInstruction' that runs in the
+-- 'G.Generator' monad.  We pass in both the original list of semantics files
+-- along with the list of opcode info objects.  We can match them up using
+-- equality on opcodes (via a MapF).  Generating a combined list up-front would
+-- be ideal, but is difficult for various TH reasons (we can't call 'lift' on
+-- all of the things we would need to for that).
+--
+-- The structure of the term produced is documented in 'instructionMatcher'
+genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
+                             . (A.Architecture arch,
+                                HR.HasRepr a (A.ShapeRepr arch),
+                                OrdF a,
+                                ShowF a,
+                                LF.LiftF a)
+                   => proxy arch
+                   -> (forall tp . L.Location arch tp -> Q Exp)
+                   -- ^ A translation of 'L.Location' references into 'Exp's
+                   -- that generate macaw IR to reference those expressions
+                   -> (forall tp t . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ A translation of uninterpreted functions into macaw IR;
+                   -- returns 'Nothing' if the handler does not know how to
+                   -- translate the 'S.NonceApp'.
+                   -> (forall tp t . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
+                   -- translate division operations into architecture-specific
+                   -- statements, which have no representation in macaw.
+                   -> Name
+                   -- ^ The arch-specific instruction matcher for translating
+                   -- instructions directly into macaw IR; this is usually used
+                   -- for translating trap and system call type instructions.
+                   -- This has to be specified by 'Name' instead of as a normal
+                   -- function, as the type would actually refer to types that
+                   -- we cannot mention in this shared code (i.e.,
+                   -- architecture-specific instruction types).
+                   -> [(Some a, BS.ByteString)]
+                   -- ^ A list of opcodes (with constraint information
+                   -- witnessed) paired with the bytestrings containing their
+                   -- semantics.  This comes from semmc.
+                   -> [Some (DT.CaptureInfo a)]
+                   -- ^ Extra information for each opcode to let us generate
+                   -- some TH to match them.  This comes from the semantics
+                   -- definitions in semmc.
+                   -> U.LogCfg
+                   -- ^ Logging configuration (explicit rather than
+                   -- the typical implicit expression because I don't
+                   -- know how to pass implicits to TH splices
+                   -- invocations.
+                   -> Q Exp
+genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo logcfg =
+    U.withLogCfg logcfg $ do
+      Some ng <- runIO PN.newIONonceGenerator
+      sym <- runIO (S.newSimpleBackend ng)
+      formulas <- runIO (loadFormulas sym semantics)
+      let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
+      instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo
+        where
+          attachInfo m0 (Some ci) m =
+              let co = DT.capturedOpcode ci
+              in case Map.lookup co m0 of
+                   Nothing -> m
+                   Just pf -> Map.insert co (PairF pf ci) m
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
