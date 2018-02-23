@@ -66,7 +66,8 @@ disassembleFn :: (ARMArchConstraints arm)
               -- ^ Abstract state of the processor at the start of the block
               -> ST s ([Block arm ids], MM.MemWord (ArchAddrWidth arm), Maybe String)
 disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
-  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
+  mr <- ET.runExceptT (unDisM (tryDisassembleBlock
+                              lookupSemantics mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)

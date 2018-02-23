@@ -30,5 +30,5 @@ execInstruction = $(genExecInstructionLogStdErr (Proxy @ARM)
                     armNonceAppEval
                     armAppEvaluator
                     'armInstructionMatcher
-                     allA32Semantics
-                     allA32OpcodeInfo)
+                    allA32Semantics
+                    allA32OpcodeInfo)
