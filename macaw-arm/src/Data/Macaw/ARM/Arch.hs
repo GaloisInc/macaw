@@ -122,6 +122,15 @@ armPrimFnHasSideEffects :: ARMPrimFn f tp -> Bool
 armPrimFnHasSideEffects = const False
 
 
+rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn)
+              => ARMPrimFn (MC.Value arm src) tp
+              -> Rewriter arm s src tgt (MC.Value arm tgt tp)
+rewritePrimFn f =
+  case f of
+    NoPrimKnown rhs -> error "No ARM rewritePrimFn for NoPrimKnown"
+    _ -> error "No ARM rewritePrimFn for ??"
+
+
 -- ----------------------------------------------------------------------
 -- The aggregate set of architectural constraints to express for ARM
 -- computations
