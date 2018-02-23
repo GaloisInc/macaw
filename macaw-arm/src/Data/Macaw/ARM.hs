@@ -17,6 +17,7 @@ module Data.Macaw.ARM
 import           Data.Macaw.ARM.Arch
 import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
+import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn )
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
@@ -40,9 +41,9 @@ arm_linux_info =
                         , MI.absEvalArchFn = absEvalArchFn proxy
                         , MI.absEvalArchStmt = absEvalArchStmt proxy
                         , MI.postCallAbsState = error "TBD: postCallAbsState proxy"
-                        , MI.identifyCall = error "TBD: identifyCall proxy"
-                        , MI.identifyReturn = error "TBD: identifyReturn proxy"
                         , MI.rewriteArchTermStmt = error "TBD: rewriteTermStmt"
+                        , MI.identifyCall = identifyCall proxy
+                        , MI.identifyReturn = identifyReturn proxy
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
                         , MI.archDemandContext = archDemandContext proxy
