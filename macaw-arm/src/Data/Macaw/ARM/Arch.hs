@@ -86,6 +86,12 @@ instance MC.PrettyF ARMTermStmt where
 
 -- instance PrettyF (ArchTermStmt ARM.ARM))
 
+rewriteTermStmt :: ARMTermStmt src -> Rewriter arm s src tgt (ARMTermStmt tgt)
+rewriteTermStmt s =
+    case s of
+      ARMSyscall v -> pure $ ARMSyscall v
+
+
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the
 -- current state of the heap and the set of registeres defined so far

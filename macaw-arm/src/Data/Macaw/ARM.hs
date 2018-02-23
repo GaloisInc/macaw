@@ -41,11 +41,11 @@ arm_linux_info =
                         , MI.absEvalArchFn = absEvalArchFn proxy
                         , MI.absEvalArchStmt = absEvalArchStmt proxy
                         , MI.postCallAbsState = error "TBD: postCallAbsState proxy"
-                        , MI.rewriteArchTermStmt = error "TBD: rewriteTermStmt"
                         , MI.identifyCall = identifyCall proxy
                         , MI.identifyReturn = identifyReturn proxy
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
+                        , MI.rewriteArchTermStmt = rewriteTermStmt
                         , MI.archDemandContext = archDemandContext proxy
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState (preserveRegAcrossSyscall proxy)
                         }
