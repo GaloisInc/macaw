@@ -22,7 +22,7 @@ module Data.Macaw.ARM.Arch
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
-import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
+import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
@@ -171,6 +171,6 @@ armInstructionMatcher :: (ARMArchConstraints ppc) =>
 armInstructionMatcher (D.Instruction opc operands) =
   case opc of
     D.SVC -> case operands of
-               D.Pred pred D.:< D.Imm24b imm D.:< D.Nil ->
+               D.Pred _opPred D.:< D.Imm24b imm D.:< D.Nil ->
                    Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
     _ -> Nothing
