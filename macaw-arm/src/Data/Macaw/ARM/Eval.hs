@@ -15,7 +15,7 @@ module Data.Macaw.ARM.Eval
     )
     where
 
-import           Control.Lens ( (&), (^.) )
+import           Control.Lens ( (&), (^.), (.~) )
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import           Data.Macaw.AbsDomain.AbsState as MA
@@ -34,6 +34,9 @@ import           GHC.TypeLits
 --
 -- The 'ArchSegmentOff' is the start address of the basic block.
 --
+-- Note that we don't initialize the abstract stack.  On ARM, there are no
+-- initial stack entries (since the return address is in the link register).
+--
 mkInitialAbsState :: (ARMArchConstraints arm, ArchStmt arm ~ ARMStmt)
                   => proxy arm
                   -> MM.Memory (RegAddrWidth (ArchReg arm))
@@ -41,6 +44,7 @@ mkInitialAbsState :: (ARMArchConstraints arm, ArchStmt arm ~ ARMStmt)
                   -> MA.AbsBlockState (ArchReg arm)
 mkInitialAbsState _ _mem startAddr =
     MA.top & MA.setAbsIP startAddr
+           & MA.absRegState . boundValue arm_LR .~ MA.ReturnAddr
 
 
 absEvalArchFn :: (ARMArchConstraints arm)

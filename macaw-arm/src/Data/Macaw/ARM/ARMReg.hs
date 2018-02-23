@@ -14,6 +14,7 @@
 
 module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
+    , arm_LR
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
     , locToRegTH
@@ -46,6 +47,10 @@ data ARMReg tp where
              -- to manage the synchronization.
     ARM_PC :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
     ARM_CPSR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+
+-- | GPR14 is the link register for ARM
+arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+arm_LR = ARM_GP $ ARMOperand.gpr 14
 
 
 deriving instance Eq (ARMReg tp)
