@@ -60,38 +60,9 @@ armNonceAppEval bvi nonceApp =
     Nothing
 
 
-appToBoundVar :: forall arch t tp.
-                 BoundVarInterpretations arch t
-              -> S.SimpleBoundVar t tp
-              -> String
-              -> ExpQ
-              -> Maybe (MacawQ arch t Exp)
-appToBoundVar bvi bv nm fn =
-    case Map.lookup bv (opVars bvi) of
-      Just (C.Const name) -> return $ liftQ [| O.extractValue $(appE fn (varE name)) |]
-      Nothing -> error ("bound var \"" ++ show bv ++ "\" not found for passing to \"" ++ nm ++ "\"")
 
-appToCall :: forall arch t tp.
-             (A.Architecture arch) =>
-             BoundVarInterpretations arch t
-          -> S.NonceAppElt t tp
-          -> String
-          -> ExpQ
-          -> Maybe (MacawQ arch t Exp)
-appToCall bvi nonceApp' nm fn =
-  case S.nonceEltApp nonceApp' of
-    S.FnApp symFn' args' ->
-        let recName = symFnName symFn'
-        in case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
-             Nothing -> error $ "Unsupported UF: " ++ recName
-             Just fi ->
-                 case FC.toListFC (asName nm bvi) args' of
-                   [] -> error $ "zero-argument uninterpreted functions are not supported: " ++ nm
-                   argNames ->
-                       do let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                          return $ liftQ [| O.extractValue $(appE fn (call)) |]
-    _ -> error $ "Unsupported operand to " <> nm
 
+-- ----------------------------------------------------------------------
 
 armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     A.Architecture arch,
