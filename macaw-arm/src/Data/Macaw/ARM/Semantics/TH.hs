@@ -39,6 +39,10 @@ import qualified SemMC.Architecture.Location as L
 -- than fail does.
 
 
+-- | Called to evaluate architecture-specific applications in the
+-- current Nonce context.  If this is not recognized as an
+-- architecture-specific Application, return Nothing, in which case
+-- the caller will try the set of default Application evaluators.
 armNonceAppEval :: forall arch t tp
                  . (A.Architecture arch,
                     L.Location arch ~ Loc.Location arch,
@@ -48,22 +52,13 @@ armNonceAppEval :: forall arch t tp
                 -> S.NonceApp t (S.Elt t) tp
                 -> Maybe (MacawQ arch t Exp)
 armNonceAppEval bvi nonceApp =
-    case nonceApp of
-      S.FnApp symFn args ->
-          let nm = symFnName symFn
-          in case nm of
-               "arm_is_r15" ->
-                   case FC.toListFC Some args of
-                     [Some operand] ->
-                         -- The operand can be either a variable (TH name bound from
-                         -- matching on the instruction operand list) or a call on such.
-                         case operand of
-                           S.BoundVarElt bv -> appToBoundVar bvi bv nm [| AE.interpIsR15 |]
-                           S.NonceAppElt nonceApp' -> appToCall bvi nonceApp' nm [| AE.interpIsR15 |]
-                           _ -> error ("Argument to FnApp of \"" ++ nm ++ "\" is unhandled type: " ++ showF args)
-                     a -> error $ "FnApp of \"" ++ nm ++ "\" takes 1 argument, but given " ++ show (length a)
-               _ -> error $ "TBD: armNonceAppEval of FnApp \"" <> nm <> "\" is not defined"
-      _ -> error $ "TBD: armNonceAppEval of something else"
+    -- The default nonce app eval (defaultNonceAppEvaluator in
+    -- macaw-semmc:Data.Macaw.SemMC.TH) will search the
+    -- A.locationFuncInterpretation alist already, and there's nothing
+    -- beyond that needed here, so just allow the default to handle
+    -- everything.
+    Nothing
+
 
 appToBoundVar :: forall arch t tp.
                  BoundVarInterpretations arch t
