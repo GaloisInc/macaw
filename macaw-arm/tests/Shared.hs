@@ -57,9 +57,12 @@ withMemory :: forall w m a
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _ e k =
-  case MM.memoryForElf (MM.LoadOptions 0 MM.LoadBySegment False) e of
-    Left err -> C.throwM (MemoryLoadError err)
-    Right (_sim, mem) -> k mem
+    let options = MM.LoadOptions { MM.loadRegionIndex = Just 0
+                                 , MM.loadStyleOverride = Just MM.LoadBySegment
+                                 , MM.includeBSS = False}
+    in case MM.memoryForElf options e of
+         Left err -> C.throwM (MemoryLoadError err)
+         Right (_sim, mem) -> k mem
 
 
 data ElfException = MemoryLoadError String
