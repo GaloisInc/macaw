@@ -21,6 +21,8 @@ module Data.Macaw.ARM.Arch
 
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.CFG.Block as MCB
+import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
@@ -56,6 +58,11 @@ instance TF.TraversableF ARMStmt where
   traverseF go stmt =
     case stmt of
       WhatShouldThisBe -> pure WhatShouldThisBe
+
+rewriteStmt :: (MC.ArchStmt arm ~ ARMStmt) =>
+               ARMStmt (MC.Value arm src) -> Rewriter arm s src tgt ()
+rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
+
 
 -- ----------------------------------------------------------------------
 -- ARM terminal statements (which have instruction-specific effects on

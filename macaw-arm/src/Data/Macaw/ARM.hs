@@ -43,8 +43,8 @@ arm_linux_info =
                         , MI.identifyCall = error "TBD: identifyCall proxy"
                         , MI.identifyReturn = error "TBD: identifyReturn proxy"
                         , MI.rewriteArchFn = error "TBD: rewritePrimFn"
-                        , MI.rewriteArchStmt = error "TBD: rewriteStmt"
                         , MI.rewriteArchTermStmt = error "TBD: rewriteTermStmt"
+                        , MI.rewriteArchStmt = rewriteStmt
                         , MI.archDemandContext = archDemandContext proxy
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState (preserveRegAcrossSyscall proxy)
                         }
