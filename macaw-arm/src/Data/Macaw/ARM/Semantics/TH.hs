@@ -55,9 +55,45 @@ armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
     -- macaw-semmc:Data.Macaw.SemMC.TH) will search the
     -- A.locationFuncInterpretation alist already, and there's nothing
-    -- beyond that needed here, so just allow the default to handle
-    -- everything.
-    Nothing
+    -- beyond that needed here, so just handle special cases here
+    case nonceApp of
+      S.FnApp symFn args ->
+          let nm = symFnName symFn
+          in case nm of
+               "arm_is_r15" -> return $
+                   -- This requires special handling because this can
+                   -- be checking actual GPR locations or the results
+                   -- of an expression extracting a register number
+                   -- from an operand (i.e. a NonceAppElt), and the
+                   -- appropriate interpIsR15 instance should be
+                   -- applied to the result
+                   case FC.toListFC Some args of
+                     [Some operand] -> do
+                       -- The operand can be either a variable (TH name bound from
+                       -- matching on the instruction operand list) or a call on such.
+                       case operand of
+                         S.BoundVarElt bv ->
+                             case Map.lookup bv (opVars bvi) of
+                               Just (C.Const name) -> liftQ [| O.extractValue (AE.interpIsR15 $(varE name)) |]
+                               Nothing -> fail ("arm_is_15 bound var not found: " ++ show bv)
+                         S.NonceAppElt nonceApp' ->
+                             case S.nonceEltApp nonceApp' of
+                               S.FnApp symFn' args' ->
+                                   let recName = symFnName symFn' in
+                                   case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
+                                     Nothing -> fail ("Unsupported arm_is_r15 UF: " ++ recName)
+                                     Just fi ->
+                                         case FC.toListFC (asName nm bvi) args' of
+                                           [] -> fail ("zero-argument arm_is_r15 uninterpreted functions\
+                                                       \ are not supported: " ++ nm)
+                                           argNames ->
+                                               let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
+                                               in liftQ [| O.extractValue (AE.interpIsR15 ($(call))) |]
+                               _ -> fail ("Unsupported arm.is_r15 nonce app type")
+                         _ -> fail "Unsupported operand to arm.is_r15"
+                     _ -> fail ("Invalid argument list for arm.is_r15: " ++ showF args)
+               _ -> Nothing -- fallback to default handling
+      _ -> Nothing -- fallback to default handling
 
 
 
