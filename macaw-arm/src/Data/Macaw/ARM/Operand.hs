@@ -53,6 +53,9 @@ instance ExtractValue ARM.ARM SoRegImm (BVType 32) where
 instance ExtractValue ARM.ARM SoRegReg (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . soRegRegToBits
 
+instance ExtractValue ARM.ARM LdstSoReg (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . ldstSoRegToBits
+
 
 
 -- instance ExtractValue arch AddrModeImm12 (BVType 12) where
