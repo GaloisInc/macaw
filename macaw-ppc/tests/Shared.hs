@@ -48,9 +48,9 @@ withMemory _ e k =
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
   where
-    loadCfg = MM.LoadOptions { MM.loadStyle = MM.LoadBySegment
+    loadCfg = MM.LoadOptions { MM.loadStyleOverride = Just MM.LoadBySegment
                              , MM.includeBSS = False
-                             , MM.loadRegionIndex = 0
+                             , MM.loadRegionIndex = Just 0
                              }
 
 data ElfException = MemoryLoadError String
