@@ -34,6 +34,7 @@ import qualified Dismantle.ARM.Operands as ARMOperands
 import           GHC.TypeLits
 import qualified SemMC.ARM as ARM
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Text.PrettyPrint.HughesPJClass as HPP
 
 -- ----------------------------------------------------------------------
 -- ARM-specific statement definitions
@@ -69,7 +70,7 @@ rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 -- control-flow and register state).
 
 data ARMTermStmt ids where
-    ARMSyscall :: ARMTermStmt ids
+    ARMSyscall :: ARMOperands.SvcOperand -> ARMTermStmt ids
 
 deriving instance Show (ARMTermStmt ids)
 
@@ -78,7 +79,10 @@ type instance MC.ArchTermStmt ARM.ARM = ARMTermStmt
 instance MC.PrettyF ARMTermStmt where
     prettyF ts =
         case ts of
-          ARMSyscall -> PP.text "arm_syscall"
+          ARMSyscall v -> let hpp2pp = PP.text . show . HPP.pPrint
+                          -- ugh: dismantle uses HPP, Arch uses PP.
+                          in PP.text "arm_syscall" PP.<+> hpp2pp v
+
 
 -- instance PrettyF (ArchTermStmt ARM.ARM))
 
@@ -156,7 +160,11 @@ type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
 -- This includes instructions with special side effects that we don't have a way
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
-armInstructionMatcher :: (ARMArchConstraints ppc) => D.Instruction -> Maybe (G.Generator ppc ids s ())
+armInstructionMatcher :: (ARMArchConstraints ppc) =>
+                         D.Instruction -> Maybe (G.Generator ppc ids s ())
 armInstructionMatcher (D.Instruction opc operands) =
   case opc of
+    D.SVC -> case operands of
+               D.Pred pred D.:< D.Imm24b imm D.:< D.Nil ->
+                   Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
     _ -> Nothing

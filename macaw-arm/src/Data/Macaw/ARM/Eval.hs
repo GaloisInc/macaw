@@ -75,7 +75,7 @@ postARMTermStmtAbsState :: (ARMArchConstraints arm)
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg arm)), AbsBlockState ARMReg)
 postARMTermStmtAbsState preservePred mem s0 regState stmt =
   case stmt of
-    ARMSyscall ->
+    ARMSyscall _ ->
       case simplifyValue (regState^.curIP) of
         Just (RelocatableValue _ addr)
           | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
