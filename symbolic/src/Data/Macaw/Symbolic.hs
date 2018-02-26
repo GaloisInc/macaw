@@ -16,7 +16,6 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
   , MacawSimulatorState
-  -- , freshVarsForRegs
   , runCodeBlock
   , runBlocks
   , mkBlocksCFG
@@ -75,25 +74,6 @@ import           Data.Macaw.Symbolic.PersistentState
 import           Data.Macaw.Symbolic.MemOps
 
 data MacawSimulatorState sym = MacawSimulatorState
-
-{-
--- | Create the variables from a collection of registers.
-freshVarsForRegs :: (IsSymInterface sym, M.HasRepr reg M.TypeRepr)
-                 => sym
-                 -> (forall tp . reg tp -> SolverSymbol)
-                 -> Ctx.Assignment reg ctx
-                 -> IO (Ctx.Assignment (C.RegValue' sym) (CtxToCrucibleType ctx))
-freshVarsForRegs sym nameFn a =
-  case a of
-    Empty -> pure Ctx.empty
-    b :> reg -> do
-      varAssign <- freshVarsForRegs sym nameFn b
-      c <- freshConstant sym (nameFn reg) (typeToCrucibleBase (M.typeRepr reg))
-      pure (varAssign :> C.RV c)
-#if !MIN_VERSION_base(4,10,0)
-    _ -> error "internal: freshVarsForRegs encountered case non-exhaustive pattern"
-#endif
--}
 
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
@@ -425,5 +405,3 @@ runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   initMem <- MM.emptyMem MM.LittleEndian
   -- Run the symbolic simulator.
   runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct
-
-
