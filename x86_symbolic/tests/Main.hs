@@ -60,8 +60,8 @@ main = do
       posFn = C.OtherPos . Text.pack . show
 
   let loadOpt :: Elf.LoadOptions
-      loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = 1
-                                , Elf.loadStyle = Elf.LoadBySection
+      loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
+                                , Elf.loadStyleOverride = Just Elf.LoadBySection
                                 , Elf.includeBSS = False
                                 }
   putStrLn "Read elf"
@@ -113,8 +113,11 @@ main = do
   C.SomeCFG g <- stToIO $ MS.mkFunCFG x86ArchFns halloc memBaseVarMap "add" posFn funInfo
 
   regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
+
+  symFuns <- MX.newSymFuns sym
+
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns MX.x86_64MacawEvalFn halloc g regs
+  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc g regs
   case execResult of
     C.FinishedExecution _ (C.TotalRes _pair) -> do
       putStrLn "Done"

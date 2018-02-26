@@ -13,6 +13,7 @@
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
+  , SymFuns, newSymFuns
   ) where
 
 import           Data.Parameterized.Context as Ctx
@@ -26,7 +27,7 @@ import           Data.Macaw.Symbolic.PersistentState(typeToCrucible)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
-import           Data.Macaw.X86.Semantics
+import           Data.Macaw.X86.Crucible
 import qualified Flexdis86.Register as F
 
 import qualified Lang.Crucible.CFG.Extension as C
@@ -169,6 +170,7 @@ x86_64MacawSymbolicFns =
 
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
-x86_64MacawEvalFn :: C.IsSymInterface sym => MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn (X86PrimFn x) s = semantics x s
+x86_64MacawEvalFn ::
+  C.IsSymInterface sym => SymFuns sym -> MacawArchEvalFn sym M.X86_64
+x86_64MacawEvalFn fs (X86PrimFn x) s = semantics fs x s
 

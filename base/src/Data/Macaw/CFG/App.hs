@@ -82,6 +82,9 @@ data App (f :: Type -> *) (tp :: Type) where
   -- Multiply two numbers
   BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
+  -- Divide two numbers and get the remainder (i.e. mod)
+  BVUrem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+
   -- Unsigned less than or equal.
   BVUnsignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
 
@@ -261,6 +264,7 @@ ppAppA pp a0 =
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
     BVSbb _ x y b -> sexprA "bv_sbb" [ pp x, pp y, pp b ]
     BVMul _ x y -> sexprA "bv_mul" [ pp x, pp y ]
+    BVUrem _ x y -> sexprA "bv_urem" [ pp x, pp y ]
     BVUnsignedLt x y  -> sexprA "bv_ult"  [ pp x, pp y ]
     BVUnsignedLe x y  -> sexprA "bv_ule"  [ pp x, pp y ]
     BVSignedLt x y    -> sexprA "bv_slt"  [ pp x, pp y ]
@@ -307,11 +311,12 @@ instance HasRepr (App f) TypeRepr where
       NotApp{} -> knownRepr
       XorApp{} -> knownRepr
 
-      BVAdd w _ _   -> BVTypeRepr w
-      BVAdc w _ _ _ -> BVTypeRepr w
-      BVSub w _ _   -> BVTypeRepr w
-      BVSbb w _ _ _ -> BVTypeRepr w
-      BVMul w _ _ -> BVTypeRepr w
+      BVAdd  w _ _   -> BVTypeRepr w
+      BVAdc  w _ _ _ -> BVTypeRepr w
+      BVSub  w _ _   -> BVTypeRepr w
+      BVSbb  w _ _ _ -> BVTypeRepr w
+      BVMul  w _ _   -> BVTypeRepr w
+      BVUrem w _ _   -> BVTypeRepr w
 
       BVUnsignedLt{} -> knownRepr
       BVUnsignedLe{} -> knownRepr
