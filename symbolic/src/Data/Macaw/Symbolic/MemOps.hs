@@ -50,6 +50,7 @@ import Lang.Crucible.LLVM.MemModel.Pointer
           , pattern LLVMPointer
           )
 import Lang.Crucible.LLVM.MemModel.Type(bitvectorType)
+import Lang.Crucible.LLVM.MemModel.Generic(ppPtr)
 import Lang.Crucible.LLVM.DataLayout(EndianForm(..))
 import Lang.Crucible.LLVM.Bytes(toBytes)
 
@@ -71,12 +72,20 @@ type PtrOp sym w a =
   RegEntry sym (LLVMPointerType w)         {- ^ Argument 2        -} ->
   IO (a, CrucibleState s sym ext rtp blocks r ctx)
 
+binOpLabel :: IsSymInterface sym =>
+  String -> LLVMPtr sym w -> LLVMPtr sym w -> String
+binOpLabel lab x y =
+  unlines [ "{ instruction: " ++ lab
+          , ", operand 1:   " ++ show (ppPtr x)
+          , ", operand 2:   " ++ show (ppPtr y)
+          , "}"
+          ]
 
 doPtrMux :: Pred sym -> PtrOp sym w (LLVMPtr sym w)
 doPtrMux c = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
-     cases sym "ptr_mux" muxLLVMPtr
+     cases sym (binOpLabel "ptr_mux" x y) muxLLVMPtr
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvIte sym c (asBits x) (asBits y)
        , both_ptrs ~>
@@ -89,7 +98,7 @@ doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
      ptr_bits  <- andPred sym xPtr  yBits
      bits_ptr  <- andPred sym xBits yPtr
 
-     cases sym "ptr_add" muxLLVMPtr
+     cases sym (binOpLabel "ptr_add" x y) muxLLVMPtr
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
 
@@ -111,7 +120,7 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
      ptr_bits  <- andPred sym xPtr  yBits
      ptr_ptr   <- andPred sym xPtr  yPtr
 
-     cases sym "ptr_sub" muxLLVMPtr
+     cases sym (binOpLabel "ptr_sub" x y) muxLLVMPtr
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
 
@@ -133,7 +142,8 @@ doPtrLt = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
      ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
-     addAssertion sym ok (AssertFailureSimError "[ptr_lt] Invalid arguments")
+     addAssertion sym ok
+       (AssertFailureSimError (binOpLabel "ptr_lt" x y ++ " Invalid arguments"))
      bvUlt sym (asBits x) (asBits y)
 
 
@@ -143,7 +153,9 @@ doPtrLeq = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
      ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
-     addAssertion sym ok (AssertFailureSimError "[ptr_leq] Invalid arguments")
+     addAssertion sym ok
+       (AssertFailureSimError
+          (binOpLabel "ptr_leq" x y ++ "  Invalid arguments"))
      bvUle sym (asBits x) (asBits y)
 
 
@@ -151,7 +163,7 @@ doPtrEq :: PtrOp sym w (RegValue sym BoolType)
 doPtrEq = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
-     cases sym "ptr_eq" itePred
+     cases sym (binOpLabel "ptr_eq" x y) itePred
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
        , both_ptrs ~> endCase =<< ptrEq sym w x y
        ]
@@ -306,7 +318,7 @@ ptrOp k st mvar w x0 y0 =
      xPtr     <- let ?ptrWidth = w in isValidPointer sym x mem
      yPtr     <- let ?ptrWidth = w in isValidPointer sym y mem
      xBits    <- isBitVec sym x
-     yBits    <- isBitVec sym x
+     yBits    <- isBitVec sym y
      a <- k sym mem w xPtr xBits yPtr yBits x y
      return (a,st)
 
