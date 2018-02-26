@@ -103,39 +103,26 @@ import           Data.Macaw.Types
 -- Utilities
 
 -- | Get code pointers out of a abstract value.
-concretizeAbsCodePointers' :: MemWidth w
+concretizeAbsCodePointers :: MemWidth w
                           => Memory w
                           -> AbsValue w (BVType w)
                           -> [MemSegmentOff w]
-concretizeAbsCodePointers' mem (FinSet s) =
+concretizeAbsCodePointers mem (FinSet s) =
   [ sa
   | a <- Set.toList s
   , sa <- maybeToList (resolveAbsoluteAddr mem (fromInteger a))
   , segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
   ]
-concretizeAbsCodePointers' _ (CodePointers s _) =
+concretizeAbsCodePointers _ (CodePointers s _) =
   [ sa
   | sa <- Set.toList s
   , segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
   ]
   -- FIXME: this is dangerous !!
-concretizeAbsCodePointers' _mem StridedInterval{} = [] -- FIXME: this case doesn't make sense
+concretizeAbsCodePointers _mem StridedInterval{} = [] -- FIXME: this case doesn't make sense
   -- debug DCFG ("I think these are code pointers!: " ++ show s) $ []
   -- filter (isCodeAddr mem) $ fromInteger <$> SI.toList s
-concretizeAbsCodePointers' _mem _ = []
-
-
-concretizeAbsCodePointers :: MemWidth w
-                          => Memory w
-                          -> AbsValue w (BVType w)
-                          -> [MemSegmentOff w]
-concretizeAbsCodePointers mem aVal = filteredResults
-  where rval = concretizeAbsCodePointers' mem aVal
-        -- GIANT HACK: filter out known invalid addresses for current experiments only
-        filteredResults = [r | r <- rval
-                             , addr <- maybeToList (msegAddr r)
-                             , addr >= 0x1c04
-                             ]
+concretizeAbsCodePointers _mem _ = []
 
 {-
 printAddrBacktrace :: Map (ArchMemAddr arch) (FoundAddr arch)
