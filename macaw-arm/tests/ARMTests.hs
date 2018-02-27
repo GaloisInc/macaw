@@ -9,22 +9,23 @@ module ARMTests
     where
 
 
-import           Control.Monad.Catch (throwM, Exception)
+import           Control.Lens hiding ( ignored )
+import           Control.Monad ( when )
+import           Control.Monad.Catch ( throwM, Exception )
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
 import qualified Data.Macaw.ARM as RO
 import qualified Data.Macaw.ARM.BinaryFormat.ELF as ARMELF
-import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BVType )
 import qualified Data.Map as M
+import           Data.Maybe
 import           Data.Monoid
-import           Data.Proxy ( Proxy(..) )
+import qualified Data.Parameterized.Some as PU
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
-import qualified SemMC.ARM as ARM
+import           Debug.Trace
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
@@ -33,8 +34,15 @@ import           Text.PrettyPrint.ANSI.Leijen ( putDoc )
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
--- import qualified Data.Macaw.PPC.BinaryFormat.ELF as E -- KWQ: replacement should be complete
--- import qualified SemMC.Architecture.PPC64 as PPC64
+
+-- | Set to true to build with chatty output.
+isChatty :: Bool
+isChatty = True
+
+-- | Used to generate output when chatty
+chatty :: String -> IO ()
+chatty = when isChatty . putStrLn
+
 
 -- | Called with a list of paths to test files.  This will remove the
 -- file extension from the test file to find a filepath to a binary
@@ -118,15 +126,56 @@ testDiscovery32 (funcblocks, ignored) elf =
   withMemory MM.Addr32 elf $ \mem -> do
     let Just entryPoint = MM.asSegmentOff mem epinfo
         epinfo = findEntryPoint elf mem
-    putStrLn $ "entryPoint: " <> show entryPoint
+    when isChatty $
+         do chatty $ "entryPoint: " <> show entryPoint
+            chatty $ "sections = " <> show (ARMELF.getElfSections elf) <> "\n"
+            chatty $ "symbols = "
+            putDoc $ ARMELF.getELFSymbols elf
+            chatty ""
 
-    let mbAddrs :: Either String (M.Map
-                                      (MM.MemAddr 32)
-                                      (MA.AbsValue 32 (BVType 32)))
-        mbAddrs = ARMELF.parseELFInfo (Proxy @ARM.ARM) elf
+    let discoveryInfo = MD.cfgFromAddrs RO.arm_linux_info mem mempty [entryPoint] []
+    chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
-    putStrLn $ "sections = " <> show mbAddrs <> "\n"
-    putStrLn $ "symbols = "
-    putDoc $ ARMELF.getELFSymbols elf
+    let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr . MD.pblockAddr
+        getAbsFunAddr = fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr . MD.discoveredFunAddr
 
-    T.assertBool ("sections = " <> show mbAddrs) False
+
+    let allFoundBlockAddrs :: S.Set Word64
+        allFoundBlockAddrs =
+            S.fromList [ fromIntegral $ getAbsBlkAddr pbr
+                       | PU.Some dfi <- M.elems (discoveryInfo ^. MD.funInfo)
+                       , pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                       ]
+
+    -- Test that all discovered blocks were expected (and verify their sizes)
+    F.forM_ (M.elems (discoveryInfo ^. MD.funInfo)) $ \(PU.Some dfi) ->
+        do let actualEntry = fromIntegral $ getAbsFunAddr dfi
+               actualBlockStarts = S.fromList [ (baddr, bsize)
+                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                                              , trace ("Parsed Block: " ++ show pbr) True
+                                              , let baddr = fromIntegral $ getAbsBlkAddr pbr
+                                              , let bsize = fromIntegral (MD.blockSize pbr)
+                                              ]
+           chatty $ "actualEntry: " <> show actualEntry
+           chatty $ "actualBlockStarts: " <> show actualBlockStarts
+           case (S.member actualEntry ignored, M.lookup actualEntry funcblocks) of
+             (True, _) -> return ()
+             (_, Nothing) -> T.assertFailure (printf "Unexpected block start: 0x%x" actualEntry)
+             (_, Just expectedBlockStarts) ->
+                 T.assertEqual (printf "Block starts for 0x%x" actualEntry)
+                                     expectedBlockStarts (actualBlockStarts `removeIgnored` ignored)
+
+    -- Test that all expected blocks were discovered
+    F.forM_ funcblocks $ \blockAddrs ->
+        F.forM_ blockAddrs $ \(blockAddr@(Hex addr), _) ->
+            T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
+
+    T.assertBool "everything looks good" True
+
+
+removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
+removeIgnored actualBlockStarts ignoredBlocks =
+    let removeIfPresent v@(addr, _) acc = if S.member addr ignoredBlocks
+                                          then S.delete v acc
+                                          else acc
+    in F.foldr removeIfPresent actualBlockStarts actualBlockStarts
