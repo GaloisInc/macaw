@@ -36,8 +36,27 @@ import           Text.Read ( readMaybe )
 -- import qualified Data.Macaw.PPC.BinaryFormat.ELF as E -- KWQ: replacement should be complete
 -- import qualified SemMC.Architecture.PPC64 as PPC64
 
+-- | Called with a list of paths to test files.  This will remove the
+-- file extension from the test file to find a filepath to a binary
+-- (executable) corresponding to that test file.  The macaw-arm
+-- library will then be used to discover semantics on the binary and
+-- these will be compared to the semantics described in the test file.
 armAsmTests :: [FilePath] -> T.TestTree
 armAsmTests = T.testGroup "ARM" . map mkTest
+
+
+-- | Read in a test case from disk and output a test tree.
+mkTest :: FilePath -> T.TestTree
+mkTest fp = T.testCase fp $ do x <- getExpected fp
+                               withELF exeFilename $ testDiscovery x
+  where
+    asmFilename = dropExtension fp
+    exeFilename = replaceExtension asmFilename "exe"
+
+
+-- ----------------------------------------------------------------------
+-- Parser/representation for files that contain expected results of
+-- semantics discovery from a binary.
 
 newtype Hex a = Hex a
   deriving (Eq, Ord, Num, PrintfArg)
@@ -86,19 +105,10 @@ getExpected expectedFilename = do
       in return (expectedEntries, ignoredBlocks)
 
 
--- | Read in a test case from disk and output a test tree.
-mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ do x <- getExpected fp
-                               withELF exeFilename $ testDiscovery x
-  where
-    asmFilename = dropExtension fp
-    exeFilename = replaceExtension asmFilename "exe"
-
-
 testDiscovery :: ExpectedResult -> E.Elf w -> IO ()
-testDiscovery expres elf =
+testDiscovery expRes elf =
     case E.elfClass elf of
-      E.ELFCLASS32 -> testDiscovery32 expres elf
+      E.ELFCLASS32 -> testDiscovery32 expRes elf
       E.ELFCLASS64 -> error "testDiscovery64 TBD"
 
 -- | Run a test over a given expected result filename and the ELF file

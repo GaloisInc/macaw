@@ -1,4 +1,0 @@
-R { funcs = [(0x801c, [(0x801c, 20)])
-            ]
-  , ignoreBlocks = [0x803c]
-  }
