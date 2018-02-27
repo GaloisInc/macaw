@@ -102,6 +102,7 @@ withMemory :: forall w m a
            -> m a
 withMemory _relaWidth e k = do
   let opt = MM.LoadOptions { MM.loadRegionIndex = Just 0
+                           , MM.loadRegionBaseOffset = 0
                            , MM.loadStyleOverride = Just MM.LoadBySegment
                            , MM.includeBSS = False
                            }
