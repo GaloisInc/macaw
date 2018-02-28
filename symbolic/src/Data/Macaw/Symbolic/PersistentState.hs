@@ -15,18 +15,15 @@ This defines the monad used to map Reopt blocks to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeFamilyDependencies #-}
 {-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.PersistentState
   ( -- * CrucPersistentState
     CrucPersistentState(..)
   , initCrucPersistentState
     -- * Types
-  , ToCrucibleBaseType
   , ToCrucibleType
   , CtxToCrucibleType
   , ArchRegContext
-  , typeToCrucibleBase
   , typeToCrucible
   , typeCtxToCrucible
   , macawAssignToCrucM
@@ -50,35 +47,30 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.Types as C
+import qualified Lang.Crucible.LLVM.MemModel as MM
 
 ------------------------------------------------------------------------
 -- Type mappings
 
-type family ToCrucibleBaseTypeList (l :: [M.Type]) = (r :: Ctx C.BaseType)
-  | r -> l where
-  ToCrucibleBaseTypeList '[] = EmptyCtx
-  ToCrucibleBaseTypeList (h ': l) = ToCrucibleBaseTypeList l ::> ToCrucibleBaseType h
+type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
+  ToCrucibleTypeList '[]      = EmptyCtx
+  ToCrucibleTypeList (h ': l) = ToCrucibleTypeList l ::> ToCrucibleType h
 
-type family ToCrucibleBaseType (mtp :: M.Type) = (r :: C.BaseType)
-  | r -> mtp where
-  ToCrucibleBaseType M.BoolType   = C.BaseBoolType
-  ToCrucibleBaseType (M.BVType w) = C.BaseBVType w
-  ToCrucibleBaseType ('M.TupleType l) = C.BaseStructType (ToCrucibleBaseTypeList l)
+type family ToCrucibleType (tp :: M.Type) :: C.CrucibleType where
+  ToCrucibleType (M.BVType w)     = MM.LLVMPointerType w
+  ToCrucibleType ('M.TupleType l) = C.StructType (ToCrucibleTypeList l)
+  ToCrucibleType M.BoolType       = C.BaseToType C.BaseBoolType
 
-type family CtxToCrucibleBaseType (mtp :: Ctx M.Type) :: Ctx C.BaseType where
-  CtxToCrucibleBaseType EmptyCtx   = EmptyCtx
-  CtxToCrucibleBaseType (c ::> tp) = CtxToCrucibleBaseType c ::> ToCrucibleBaseType tp
-
-type ToCrucibleType tp = C.BaseToType (ToCrucibleBaseType tp)
 
 type family CtxToCrucibleType (mtp :: Ctx M.Type) :: Ctx C.CrucibleType where
   CtxToCrucibleType EmptyCtx   = EmptyCtx
   CtxToCrucibleType (c ::> tp) = CtxToCrucibleType c ::> ToCrucibleType tp
 
 -- | Create the variables from a collection of registers.
-macawAssignToCruc :: (forall tp . f tp -> g (ToCrucibleType tp))
-                  -> Assignment f ctx
-                  -> Assignment g (CtxToCrucibleType ctx)
+macawAssignToCruc ::
+  (forall tp . f tp -> g (ToCrucibleType tp)) ->
+  Assignment f ctx ->
+  Assignment g (CtxToCrucibleType ctx)
 macawAssignToCruc f a =
   case a of
     Empty -> empty
@@ -94,23 +86,25 @@ macawAssignToCrucM f a =
     Empty -> pure empty
     b :> x -> (:>) <$> macawAssignToCrucM f b <*> f x
 
-typeToCrucibleBase :: M.TypeRepr tp -> C.BaseTypeRepr (ToCrucibleBaseType tp)
-typeToCrucibleBase tp =
-  case tp of
-    M.BoolTypeRepr  -> C.BaseBoolRepr
-    M.BVTypeRepr w  -> C.BaseBVRepr w
-    M.TupleTypeRepr a -> C.BaseStructRepr (typeListToCrucibleBase a)
-
-typeListToCrucibleBase :: P.List M.TypeRepr ctx -> Assignment C.BaseTypeRepr (ToCrucibleBaseTypeList ctx)
-typeListToCrucibleBase P.Nil = Empty
-typeListToCrucibleBase (h P.:< r) = typeListToCrucibleBase r :> typeToCrucibleBase h
-
 typeToCrucible :: M.TypeRepr tp -> C.TypeRepr (ToCrucibleType tp)
-typeToCrucible = C.baseToType . typeToCrucibleBase
+typeToCrucible tp =
+  case tp of
+    M.BoolTypeRepr  -> C.BoolRepr
+    M.BVTypeRepr w  -> MM.LLVMPointerRepr w
+    M.TupleTypeRepr a -> C.StructRepr (typeListToCrucible a)
+
+typeListToCrucible ::
+    P.List M.TypeRepr ctx ->
+    Assignment C.TypeRepr (ToCrucibleTypeList ctx)
+typeListToCrucible x =
+  case x of
+    P.Nil    -> Empty
+    h P.:< r -> typeListToCrucible r :> typeToCrucible h
 
 -- Return the types associated with a register assignment.
-typeCtxToCrucible :: Assignment M.TypeRepr ctx
-                  -> Assignment C.TypeRepr (CtxToCrucibleType ctx)
+typeCtxToCrucible ::
+  Assignment M.TypeRepr ctx ->
+  Assignment C.TypeRepr (CtxToCrucibleType ctx)
 typeCtxToCrucible = macawAssignToCruc typeToCrucible
 
 memReprToCrucible :: M.MemRepr tp -> C.TypeRepr (ToCrucibleType tp)
@@ -123,9 +117,10 @@ memReprToCrucible = typeToCrucible . M.typeRepr
 type family ArchRegContext (arch :: *) :: Ctx M.Type
 
 -- | This relates an index from macaw to Crucible.
-data IndexPair ctx tp = IndexPair { macawIndex    :: !(Index ctx tp)
-                                  , crucibleIndex :: !(Index (CtxToCrucibleType ctx) (ToCrucibleType tp))
-                                  }
+data IndexPair ctx tp = IndexPair
+  { macawIndex    :: !(Index ctx tp)
+  , crucibleIndex :: !(Index (CtxToCrucibleType ctx) (ToCrucibleType tp))
+  }
 
 -- | This extends the indices in the pair.
 extendIndexPair :: IndexPair ctx tp -> IndexPair (ctx::>utp) tp
@@ -160,12 +155,13 @@ data CrucPersistentState ids s
    = CrucPersistentState
    { valueCount :: !Int
      -- ^ Counter used to get fresh indices for Crucible atoms.
-   , assignValueMap :: !(MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
+   , assignValueMap ::
+      !(MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
      -- ^ Map Macaw assign id to associated Crucible value.
    }
 
 -- | Initial crucible persistent state
-initCrucPersistentState :: forall ids s . Int -> CrucPersistentState ids s
+initCrucPersistentState :: Int -> CrucPersistentState ids s
 initCrucPersistentState argCount =
   CrucPersistentState
       { -- Count initial arguments in valie
