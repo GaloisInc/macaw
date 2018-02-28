@@ -107,7 +107,6 @@ withMemory _relaWidth e k = do
                            , MM.includeBSS = False
                            }
   case MM.memoryForElf opt e of
-  -- case MM.memoryForElfSegments relaWidth e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
 
