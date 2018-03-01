@@ -44,6 +44,9 @@ instance ExtractValue ARM.ARM Pred (BVType 4) where
 instance ExtractValue ARM.ARM SBit (BVType 1) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . sBitToBits
 
+instance ExtractValue ARM.ARM BranchTarget (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . branchTargetToBits
+
 instance ExtractValue ARM.ARM BranchExecuteTarget (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . branchExecuteTargetToBits
 
