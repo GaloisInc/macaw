@@ -20,6 +20,7 @@ import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
 import           Data.Macaw.Types ( BoolType, BVType )
 import qualified Data.Parameterized.NatRepr as NR
+import           Data.Word ( Word16 )
 import           Dismantle.ARM.Operands
 import qualified SemMC.ARM as ARM
 
@@ -58,6 +59,9 @@ instance ExtractValue ARM.ARM SoRegReg (BVType 32) where
 
 instance ExtractValue ARM.ARM LdstSoReg (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . ldstSoRegToBits
+
+instance ExtractValue arch Word16 (BVType 16) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger
 
 
 
