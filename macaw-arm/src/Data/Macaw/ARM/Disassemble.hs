@@ -39,7 +39,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word32 )
-import qualified Dismantle.ARM as D
+import qualified Dismantle.ARM as ARMD
 import           Text.Printf ( printf )
 
 
@@ -50,7 +50,7 @@ import           Text.Printf ( printf )
 -- occupied by those blocks.
 disassembleFn :: (ARMArchConstraints arm)
               => proxy arm
-              -> (Value arm ids (BVType (ArchAddrWidth arm)) -> D.Instruction -> Maybe (Generator arm ids s ()))
+              -> (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
               -- ^ A function to look up the semantics for an instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
@@ -73,7 +73,7 @@ disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
 tryDisassembleBlock :: (ARMArchConstraints arm)
-                    => (Value arm ids (BVType (ArchAddrWidth arm)) -> D.Instruction -> Maybe (Generator arm ids s ()))
+                    => (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
                     -> MM.Memory (ArchAddrWidth arm)
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff arm
@@ -105,7 +105,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 -- becomes a mux, we split execution using 'conditionalBranch'.
 disassembleBlock :: forall arm ids s
                   . ARMArchConstraints arm
-                 => (Value arm ids (BVType (ArchAddrWidth arm)) -> D.Instruction -> Maybe (Generator arm ids s ()))
+                 => (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> MM.Memory (ArchAddrWidth arm)
                  -> GenState arm ids s
@@ -138,7 +138,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
-            let lineStr = printf "%s: %s" (show curPCAddr) (show (D.ppInstruction i))
+            let lineStr = printf "%s: %s" (show curPCAddr) (show (ARMD.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
             transformer
 
@@ -180,7 +180,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
 -- are no byte regions that could be coalesced.
 readInstruction :: MM.Memory w
                 -> MM.MemSegmentOff w
-                -> Either (MM.MemoryError w) (D.Instruction, MM.MemWord w)
+                -> Either (MM.MemoryError w) (ARMD.Instruction, MM.MemWord w)
 readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
   let seg = MM.msegSegment addr
       segRelAddr = MM.relativeSegmentAddr addr
@@ -198,7 +198,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             -- unpleasant.  We could alter the disassembler to consume strict
             -- bytestrings, at the cost of possibly making it less efficient for
             -- other clients.
-            let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
+            let (bytesRead, minsn) = ARMD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError $ MM.InvalidInstruction segRelAddr contents
@@ -259,9 +259,9 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
 
 data TranslationErrorReason w = InvalidNextPC Word32 Word32
                               | DecodeError (MM.MemoryError w)
-                              | UnsupportedInstruction D.Instruction
-                              | InstructionAtUnmappedAddr D.Instruction
-                              | GenerationError D.Instruction GeneratorError
+                              | UnsupportedInstruction ARMD.Instruction
+                              | InstructionAtUnmappedAddr ARMD.Instruction
+                              | GenerationError ARMD.Instruction GeneratorError
                               deriving (Show)
 
 deriving instance (MM.MemWidth w) => Show (TranslationError w)
