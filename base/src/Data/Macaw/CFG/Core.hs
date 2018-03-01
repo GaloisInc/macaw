@@ -195,7 +195,7 @@ type family ArchReg (arch :: *) :: Type -> *
 
 -- | A type family for architecture specific functions.
 --
--- These function may return a value.  They may depend on the current state of
+-- These functions may return a value.  They may depend on the current state of
 -- the heap, but should not affect the processor state.
 --
 -- The function may depend on the set of registers defined so far, and the type
