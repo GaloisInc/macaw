@@ -20,6 +20,7 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElf
   , resolveElfFuncSymbols
   , initElfDiscoveryInfo
+  , elfAddrWidth
   , module Data.Macaw.Memory.LoadCommon
   ) where
 
