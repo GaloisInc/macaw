@@ -54,6 +54,7 @@ module Data.Macaw.Memory
   , MemWord
   , MemWidth(..)
   , memWord
+  , memWordInteger
     -- * Segment offsets
   , MemSegmentOff
   , viewSegmentOff
@@ -69,6 +70,7 @@ module Data.Macaw.Memory
   , memAsAddrPairs
     -- * Symbols
   , SymbolRef(..)
+  , SymbolVisibility(..)
   , SymbolVersion(..)
     -- * General purposes addrs
   , MemAddr
@@ -144,7 +146,7 @@ addrWidthNatRepr Addr64 = knownNat
 
 -- | Indicates whether bytes are stored in big or little endian representation.
 data Endianness = BigEndian | LittleEndian
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -206,6 +208,11 @@ bsWord64le bs
 -- Internally, the address is stored with all bits greater than the
 -- width equal to 0.
 newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
+
+-- | Treat the word as an integer.
+-- A version of `fromEnum` that won't wrap around.
+memWordInteger :: MemWord w -> Integer
+memWordInteger = fromIntegral . _memWordValue
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
@@ -287,6 +294,9 @@ instance MemWidth w => Integral (MemWord w) where
     where (q,r) = x `quotRem` y
   toInteger (MemWord x) = toInteger x
 
+instance MemWidth w => Bounded (MemWord w) where
+  minBound = 0
+  maxBound = MemWord (addrWidthMod (Proxy :: Proxy w))
 
 instance MemWidth 32 where
   addrWidthRepr _ = Addr32
@@ -325,9 +335,19 @@ data SymbolVersion = SymbolVersion { symbolVersionFile :: !BS.ByteString
                                    , symbolVersionName :: !BS.ByteString
                                    }
 
+-- | Information about the visibility of a symbol within a binary.
+data SymbolVisibility
+   = LocalSymbol
+     -- ^ Th symbol is only visible within the module
+   | GlobalSymbol
+     -- ^ The symbol is globally visible to all modules
+   | VersionedSymbol !SymbolVersion
+     -- ^ The symbol is visible with the specific version associated
+
+
 -- | The name of a symbol along with optional version information.
 data SymbolRef = SymbolRef { symbolName :: !BS.ByteString
-                           , symbolVersion :: !(Maybe SymbolVersion)
+                           , symbolVisibility :: !SymbolVisibility
                            }
 
 -- | Defines a portion of a segment.
@@ -351,37 +371,6 @@ instance Show (SegmentRange w) where
 
   showList [] = id
   showList (h : r) = showsPrec 10 h . showList r
-
-data DropError
-   = DropUnexpectedRelocation
-   | DropInvalidAddr
-
-dropErrorAsMemError :: MemAddr w -> DropError -> MemoryError w
-dropErrorAsMemError a DropUnexpectedRelocation = UnexpectedRelocation a
-dropErrorAsMemError a DropInvalidAddr          = InvalidAddr a
-
--- | Given a contiguous list of segment ranges and a number of bytes to drop, this
--- returns the remaining segment ranges or throws an error.
-dropSegmentRangeListBytes :: forall w
-                          .  MemWidth w
-                          => [SegmentRange w]
-                          -> Int
-                          -> Either DropError [SegmentRange w]
-dropSegmentRangeListBytes ranges 0 = Right ranges
-dropSegmentRangeListBytes (ByteRegion bs : rest) cnt = do
-  let sz = BS.length bs
-  if sz > cnt then
-    Right $ ByteRegion (BS.drop cnt bs) : rest
-   else
-    dropSegmentRangeListBytes rest (cnt - sz)
-dropSegmentRangeListBytes (SymbolicRef _:rest) cnt = do
-  let sz = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
-  if sz > cnt then
-    Left DropUnexpectedRelocation
-   else
-    dropSegmentRangeListBytes rest (cnt - sz)
-dropSegmentRangeListBytes [] _ =
-  Left DropInvalidAddr
 
 ------------------------------------------------------------------------
 -- SegmentContents
@@ -441,7 +430,7 @@ data MemSegment w
                   --
                   -- N.B. 0 indicates a fixed base address of zero.
                 , segmentOffset :: !(MemWord w)
-                  -- ^ Offset of segment to base
+                  -- ^ Offset of segment relative to segmentBase
                 , segmentFlags :: !Perm.Flags
                                   -- ^ Permisison flags
                 , segmentContents :: !(SegmentContents w)
@@ -450,10 +439,11 @@ data MemSegment w
                 }
 
 -- | Create a memory segment with the given values.
-memSegment :: MemWidth w
+memSegment :: forall w
+           .  MemWidth w
            => RegionIndex
               -- ^ Index of base (0=absolute address)
-           -> MemWord w
+           -> Integer
               -- ^ Offset of segment
            -> Perm.Flags
               -- ^ Flags if defined
@@ -462,11 +452,11 @@ memSegment :: MemWidth w
            -> MemSegment w
 memSegment base off flags contentsl
       -- Check for overflow in contents end
-    | off + contentsSize contents < off =
+    | off + toInteger (contentsSize contents) > toInteger (maxBound :: MemWord w) =
       error "Contents two large for base."
     | otherwise =
       MemSegment { segmentBase = base
-                 , segmentOffset = off
+                 , segmentOffset = fromInteger off
                  , segmentFlags = flags
                  , segmentContents = contents
                  }
@@ -599,11 +589,12 @@ resolveSegmentOff seg off
 
 -- | Return the absolute address associated with the segment offset pair (if any)
 msegAddr :: MemWidth w => MemSegmentOff w -> Maybe (MemWord w)
-msegAddr (MemSegmentOff seg off) =
-  if segmentBase seg == 0 then
-    Just (segmentOffset seg + off)
-   else
-    Nothing
+msegAddr mseg = do
+  let seg = msegSegment mseg
+   in if segmentBase seg == 0 then
+        Just (segmentOffset seg + msegOffset mseg)
+       else
+        Nothing
 
 -- | Clear the least-significant bit of an segment offset.
 clearSegmentOffLeastBit :: MemWidth w => MemSegmentOff w -> MemSegmentOff w
@@ -680,13 +671,13 @@ data MemAddr w
 
 -- | Given an absolute address, this returns a segment and offset into the segment.
 absoluteAddr :: MemWord w -> MemAddr w
-absoluteAddr = MemAddr 0
+absoluteAddr o = MemAddr { addrBase = 0, addrOffset = o }
 
 -- | Construct an address relative to an existing memory segment.
 relativeAddr :: MemWidth w => MemSegment w -> MemWord w -> MemAddr w
-relativeAddr seg off = MemAddr (segmentBase seg) (segmentOffset seg + off)
+relativeAddr seg off = MemAddr { addrBase = segmentBase seg, addrOffset = segmentOffset seg + off }
 
--- | Return the address associated with a memory segment.
+-- | Convert the segment offset to an address.
 relativeSegmentAddr :: MemWidth w => MemSegmentOff w -> MemAddr w
 relativeSegmentAddr (MemSegmentOff seg off) = relativeAddr seg off
 
@@ -729,11 +720,47 @@ instance MemWidth w => Show (MemAddr w) where
 instance MemWidth w => Pretty (MemAddr w) where
   pretty = text . show
 
+
 ------------------------------------------------------------------------
 -- AddrSymMap
 
 -- | Maps code addresses to the associated symbol name if any.
 type AddrSymMap w = Map.Map (MemSegmentOff w) BSC.ByteString
+
+------------------------------------------------------------------------
+-- DropError
+
+-- | An error that occured when droping byes.
+data DropError
+   = DropUnexpectedRelocation
+   | DropInvalidAddr
+
+dropErrorAsMemError :: MemAddr w -> DropError -> MemoryError w
+dropErrorAsMemError a DropUnexpectedRelocation = UnexpectedRelocation a
+dropErrorAsMemError a DropInvalidAddr          = InvalidAddr a
+
+-- | Given a contiguous list of segment ranges and a number of bytes to drop, this
+-- returns the remaining segment ranges or throws an error.
+dropSegmentRangeListBytes :: forall w
+                          .  MemWidth w
+                          => [SegmentRange w]
+                          -> Int
+                          -> Either DropError [SegmentRange w]
+dropSegmentRangeListBytes ranges 0 = Right ranges
+dropSegmentRangeListBytes (ByteRegion bs : rest) cnt = do
+  let sz = BS.length bs
+  if sz > cnt then
+    Right $ ByteRegion (BS.drop cnt bs) : rest
+   else
+    dropSegmentRangeListBytes rest (cnt - sz)
+dropSegmentRangeListBytes (SymbolicRef _:rest) cnt = do
+  let sz = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
+  if sz > cnt then
+    Left DropUnexpectedRelocation
+   else
+    dropSegmentRangeListBytes rest (cnt - sz)
+dropSegmentRangeListBytes [] _ =
+  Left DropInvalidAddr
 
 ------------------------------------------------------------------------
 -- MemoryError

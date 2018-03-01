@@ -102,11 +102,11 @@ withMemory :: forall w m a
            -> m a
 withMemory _relaWidth e k = do
   let opt = MM.LoadOptions { MM.loadRegionIndex = Just 0
+                           , MM.loadRegionBaseOffset = 0
                            , MM.loadStyleOverride = Just MM.LoadBySegment
                            , MM.includeBSS = False
                            }
   case MM.memoryForElf opt e of
-  -- case MM.memoryForElfSegments relaWidth e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
 

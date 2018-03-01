@@ -320,13 +320,13 @@ emptyDiscoveryState mem symbols info =
   }
 
 -- | Map each jump table start to the address just after the end.
-globalDataMap :: Simple Lens (DiscoveryState arch)
-                             (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
+globalDataMap
+  :: Simple Lens (DiscoveryState arch) (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
-unexploredFunctions :: Simple Lens (DiscoveryState arch)
-                              (Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+unexploredFunctions
+  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions
