@@ -54,6 +54,7 @@ module Data.Macaw.Memory
   , MemWord
   , MemWidth(..)
   , memWord
+  , memWordInteger
     -- * Segment offsets
   , MemSegmentOff
   , viewSegmentOff
@@ -207,6 +208,11 @@ bsWord64le bs
 -- Internally, the address is stored with all bits greater than the
 -- width equal to 0.
 newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
+
+-- | Treat the word as an integer.
+-- A version of `fromEnum` that won't wrap around.
+memWordInteger :: MemWord w -> Integer
+memWordInteger = fromIntegral . _memWordValue
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
@@ -713,6 +719,7 @@ instance MemWidth w => Show (MemAddr w) where
 
 instance MemWidth w => Pretty (MemAddr w) where
   pretty = text . show
+
 
 ------------------------------------------------------------------------
 -- AddrSymMap

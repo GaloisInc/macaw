@@ -19,9 +19,12 @@ module Data.Macaw.Symbolic.MemOps
   , doReadMem
   , doCondReadMem
   , doWriteMem
+  , doGetGlobal
   ) where
 
 import Control.Lens((^.),(&),(%~))
+import Data.Map(Map)
+import qualified Data.Map as Map
 
 import Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
@@ -44,6 +47,7 @@ import Lang.Crucible.LLVM.MemModel
           , loadRaw
           , loadRawWithCondition
           , storeRaw
+          , doPtrAddOffset
           )
 import Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
@@ -57,7 +61,29 @@ import Lang.Crucible.LLVM.Bytes(toBytes)
 import Data.Macaw.Symbolic.CrucGen(lemma1_16)
 import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
 import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
-import qualified Data.Macaw.Memory as M (Endianness(..))
+import qualified Data.Macaw.Memory as M
+
+doGetGlobal ::
+  (IsSymInterface sym, 16 <= w, M.MemWidth w) =>
+  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  GlobalVar Mem                            {- ^ Model of memory   -} ->
+  Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
+  M.MemAddr w                              {- ^ Address identifier -} ->
+  IO ( RegValue sym (LLVMPointerType w)
+     , CrucibleState s sym ext rtp blocks r ctx
+     )
+doGetGlobal st mvar globs addr =
+  case Map.lookup (M.addrBase addr) globs of
+    Nothing -> fail ("[doGetGlobal] Undefined global region: " ++ show addr)
+    Just region ->
+      do mem <- getMem st mvar
+         let sym = stateSymInterface st
+         let w = M.addrWidthNatRepr (M.addrWidthRepr addr)
+         off <- bvLit sym w (M.memWordInteger (M.addrOffset addr))
+         res <- let ?ptrWidth = w
+                in doPtrAddOffset sym mem region off
+         return (res, st)
+
 
 -- | This is the form of binary operation needed by the simulator.
 -- Note that even though the type suggests that we might modify the

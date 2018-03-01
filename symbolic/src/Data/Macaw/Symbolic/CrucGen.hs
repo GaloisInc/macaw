@@ -188,6 +188,11 @@ data MacawExprExtension (arch :: *)
     !(f (C.BVType w)) ->
     MacawExprExtension arch f (MM.LLVMPointerType w)
 
+  -- | A null pointer.
+  MacawNullPtr ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(ArchNatRepr arch) ->
+    MacawExprExtension arch f (BVPtr arch)
 
 
 instance C.PrettyApp (MacawExprExtension arch) where
@@ -200,12 +205,15 @@ instance C.PrettyApp (MacawExprExtension arch) where
       PtrToBits w x  -> sexpr ("ptr_to_bits_" ++ show w) [f x]
       BitsToPtr w x  -> sexpr ("bits_to_ptr_" ++ show w) [f x]
 
+      MacawNullPtr _ -> sexpr "null_ptr" []
+
 instance C.TypeApp (MacawExprExtension arch) where
   appType x =
     case x of
-      MacawOverflows {} -> C.knownRepr
-      PtrToBits w _     -> C.BVRepr w
-      BitsToPtr w _     -> MM.LLVMPointerRepr w
+      MacawOverflows {}     -> C.knownRepr
+      PtrToBits w _         -> C.BVRepr w
+      BitsToPtr w _         -> MM.LLVMPointerRepr w
+      MacawNullPtr w | LeqProof <- lemma1_16 w     -> MM.LLVMPointerRepr w
 
 
 ------------------------------------------------------------------------
@@ -260,6 +268,13 @@ data MacawStmtExtension (arch :: *)
     !(f (ArchAddrCrucibleType arch)) ->
     !(f (ToCrucibleType tp)) ->
     MacawStmtExtension arch f C.UnitType
+
+  -- | Get the pointer associated with the given global address.
+  MacawGlobalPtr ::
+    (16 <= M.ArchAddrWidth arch, M.MemWidth (M.ArchAddrWidth arch)) =>
+    !(M.MemAddr (M.ArchAddrWidth arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
 
   -- | Generate a fresh symbolic variable of the given type.
   MacawFreshSymbolic ::
@@ -357,6 +372,8 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       MacawReadMem _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
       MacawCondReadMem _ r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
       MacawWriteMem _ r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
+      MacawGlobalPtr x -> sexpr "global" [ text (show x) ]
+
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
       MacawCall _ regs -> sexpr "macawCall" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
@@ -374,6 +391,9 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawReadMem _ r _) = memReprToCrucible r
   appType (MacawCondReadMem _ r _ _ _) = memReprToCrucible r
   appType (MacawWriteMem _ _ _ _) = C.knownRepr
+  appType (MacawGlobalPtr a)
+    | let w = M.addrWidthNatRepr (M.addrWidthRepr a)
+    , LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawCall regTypes _) = C.StructRepr regTypes
   appType (MacawArchStmtExtension f) = C.appType f
@@ -793,24 +813,21 @@ valueToCrucible v = do
     M.BVValue w c -> fromBits w =<< bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
 
-    M.RelocatableValue {} -> fail "XXX: Deal with globals"
+    M.RelocatableValue w addr ->
+      do rW <- archAddrWidth
+         case testEquality w rW of
+           Just Refl
+            | M.addrBase addr == 0 && M.addrOffset addr == 0 ->
+              evalMacawExt (MacawNullPtr w)
+            | otherwise -> evalMacawStmt (MacawGlobalPtr addr)
+           Nothing ->
+             fail $ unlines [ "Unexpected relocatable value width"
+                            , "*** Expected: " ++ show rW
+                            , "*** Width:    " ++ show w
+                            , "*** Base:     " ++ show (M.addrBase addr)
+                            , "*** Offset:   " ++ show (M.addrOffset addr)
+                            ]
 
-{-
-    -- In this case,
-    M.RelocatableValue w addr
-      | M.addrBase addr == 0 -> do
-          crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
-      | otherwise -> do
-          let idx = M.addrBase addr
-          segMap <- gets crucMemBaseAddrMap
-          case Map.lookup idx segMap of
-            Just g -> do
-              a <- evalAtom (CR.ReadGlobal g)
-              offset <- crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
-              crucibleValue (C.BVAdd w a offset)
-            Nothing ->
-              fail $ "internal: No Crucible address associated with segment."
--}
     M.Initial r ->
       getRegValue r
 

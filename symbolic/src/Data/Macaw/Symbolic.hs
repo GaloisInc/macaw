@@ -17,7 +17,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
   , MacawSimulatorState
   , runCodeBlock
-  , runBlocks
+  -- , runBlocks
   , mkBlocksCFG
   , mkFunCFG
   , Data.Macaw.Symbolic.PersistentState.ArchRegContext
@@ -281,6 +281,8 @@ evalMacawExprExtension sym f e0 =
     PtrToBits _w x  -> MM.projectLLVM_bv sym =<< f x
     BitsToPtr _w x  -> MM.llvmPointer_bv sym =<< f x
 
+    MacawNullPtr w | LeqProof <- lemma1_16 w -> MM.mkNullPointer sym w
+
 type EvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
     f (C.RegEntry sym) tp'
@@ -296,17 +298,20 @@ execMacawStmtExtension ::
   IsSymInterface sym =>
   MacawArchEvalFn sym arch {- ^ Function for executing -} ->
   C.GlobalVar MM.Mem ->
+  GlobalMap sym arch ->
   EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
-execMacawStmtExtension archStmtFn mvar s0 st =
+execMacawStmtExtension archStmtFn mvar globs s0 st =
   case s0 of
     MacawReadMem w mr x         -> doReadMem st mvar w mr x
     MacawCondReadMem w mr p x d -> doCondReadMem st mvar w mr p x d
     MacawWriteMem w mr x v      -> doWriteMem st mvar w mr x v
 
-    MacawFreshSymbolic{}             -> error "XXX: FreshSymbolic"
-    MacawCall{}                      -> error "XXX: MacawCall"
+    MacawGlobalPtr addr         -> doGetGlobal st mvar globs addr
 
-    MacawArchStmtExtension s         -> archStmtFn s st
+    MacawFreshSymbolic{}        -> error "XXX: FreshSymbolic"
+    MacawCall{}                 -> error "XXX: MacawCall"
+
+    MacawArchStmtExtension s    -> archStmtFn s st
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y
@@ -321,11 +326,18 @@ macawExtensions ::
   IsSymInterface sym =>
   MacawArchEvalFn sym arch ->
   C.GlobalVar MM.Mem ->
+  GlobalMap sym arch ->
   C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
-macawExtensions f mvar =
+macawExtensions f mvar globs =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar
+                  , C.extensionExec = execMacawStmtExtension f mvar globs
                   }
+
+
+-- | Maps region indexes to the pointers representing them.
+type GlobalMap sym arch = Map M.RegionIndex
+                              (MM.LLVMPtr sym (M.ArchAddrWidth arch))
+
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
@@ -335,16 +347,18 @@ runCodeBlock :: forall sym arch blocks
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
            -> C.HandleAllocator RealWorld
-           -> (C.GlobalVar MM.Mem, MM.MemImpl sym)
+           -> (MM.MemImpl sym, GlobalMap sym arch)
            -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
               -- ^ Register assignment
-           -> IO (C.ExecResult
+           -> IO ( C.GlobalVar MM.Mem
+                 , C.ExecResult
                    MacawSimulatorState
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) g regStruct = do
+  mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
   -- Run the symbolic simulator.
@@ -356,7 +370,7 @@ runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct = do
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions archEval mvar
+                         , C.extensionImpl = macawExtensions archEval mvar globs
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
                               C.emptyHandleMap
@@ -365,12 +379,14 @@ runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct = do
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
   let s = C.initSimState ctx initGlobals C.defaultErrorHandler
-  C.runOverrideSim s macawStructRepr $ do
+  a <- C.runOverrideSim s macawStructRepr $ do
     let args :: C.RegMap sym (MacawFunctionArgs arch)
         args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
     crucGenArchConstraints archFns $
       C.regValue <$> C.callCFG g args
+  return (mvar,a)
 
+{-
 -- | Run the simulator over a contiguous set of code.
 -- NOTE: this is probably not the function that shuold be called,
 -- as it has no way to initialize memory.
@@ -405,3 +421,4 @@ runBlocks sym archFns archEval mem nm posFn macawBlocks regStruct = do
   initMem <- MM.emptyMem MM.LittleEndian
   -- Run the symbolic simulator.
   runCodeBlock sym archFns archEval halloc (mvar,initMem) g regStruct
+-}
