@@ -74,7 +74,11 @@ doGetGlobal ::
      )
 doGetGlobal st mvar globs addr =
   case Map.lookup (M.addrBase addr) globs of
-    Nothing -> fail ("[doGetGlobal] Undefined global region: " ++ show addr)
+    Nothing -> fail $ unlines
+                        [ "[doGetGlobal] Undefined global region:"
+                        , "*** Region:  " ++ show (M.addrBase addr)
+                        , "*** Address: " ++ show addr
+                        ]
     Just region ->
       do mem <- getMem st mvar
          let sym = stateSymInterface st
