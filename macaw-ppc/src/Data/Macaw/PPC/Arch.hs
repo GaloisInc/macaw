@@ -89,6 +89,27 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   -- Instruction cache hints
   Icbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Icbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 4) -> PPCStmt ppc v
+  -- Hardware Transactional Memory
+  Tabort :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
+  Tabortdc :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+           -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+           -> v (MT.BVType 5)
+           -> PPCStmt ppc v
+  Tabortdci :: v (MT.BVType 5)
+            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> v (MT.BVType 5)
+            -> PPCStmt ppc v
+  Tabortwc :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+           -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+           -> v (MT.BVType 5)
+           -> PPCStmt ppc v
+  Tabortwci :: v (MT.BVType 5)
+            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> v (MT.BVType 5)
+            -> PPCStmt ppc v
+  Tbegin :: v (MT.BVType 1) -> PPCStmt ppc v
+  Tcheck :: v (MT.BVType 3) -> PPCStmt ppc v
+  Tend :: v (MT.BVType 1) -> PPCStmt ppc v
 
 instance TF.FunctorF (PPCStmt ppc) where
   fmapF = TF.fmapFDefault
@@ -112,6 +133,14 @@ instance TF.TraversableF (PPCStmt ppc) where
       Dcbtst ea th -> Dcbtst <$> go ea <*> go th
       Icbi ea -> Icbi <$> go ea
       Icbt ea ct -> Icbt <$> go ea <*> go ct
+      Tabort r -> Tabort <$> go r
+      Tabortdc r1 r2 v -> Tabortdc <$> go r1 <*> go r2 <*> go v
+      Tabortdci v1 r v2 -> Tabortdci <$> go v1 <*> go r <*> go v2
+      Tabortwc r1 r2 v -> Tabortwc <$> go r1 <*> go r2 <*> go v
+      Tabortwci v1 r v2 -> Tabortwci <$> go v1 <*> go r <*> go v2
+      Tbegin v -> Tbegin <$> go v
+      Tcheck v -> Tcheck <$> go v
+      Tend v -> Tend <$> go v
 
 instance MC.IsArchStmt (PPCStmt ppc) where
   ppArchStmt pp stmt =
@@ -129,6 +158,14 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Dcbtst ea th -> PP.text "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
       Icbi ea -> PP.text "ppc_icbi" PP.<+> pp ea
       Icbt ea ct -> PP.text "ppc_icbt" PP.<+> pp ea PP.<+> pp ct
+      Tabort r -> PP.text "ppc_tabort" PP.<+> pp r
+      Tabortdc r1 r2 v -> PP.text "ppc_tabortdc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
+      Tabortdci v1 r v2 -> PP.text "ppc_tabortdci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
+      Tabortwc r1 r2 v -> PP.text "ppc_tabortwc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
+      Tabortwci v1 r v2 -> PP.text "ppc_tabortwci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
+      Tbegin v -> PP.text "ppc_tbegin" PP.<+> pp v
+      Tcheck v -> PP.text "ppc_tcheck" PP.<+> pp v
+      Tend v -> PP.text "ppc_tend" PP.<+> pp v
 
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
@@ -436,4 +473,60 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           ea <- memrrToEffectiveAddress memrr
           ct <- O.extractValue imm
           G.addStmt (MC.ExecArchStmt (Icbt ea ct))
+    D.TABORT ->
+      case operands of
+        D.Gprc r D.:< D.Nil -> Just $ do
+          incrementIP
+          rv <- O.extractValue r
+          G.addStmt (MC.ExecArchStmt (Tabort rv))
+    D.TABORTDC ->
+      case operands of
+        D.Gprc r1 D.:< D.Gprc r2 D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
+          rv1 <- O.extractValue r1
+          rv2 <- O.extractValue r2
+          immv <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Tabortdc rv1 rv2 immv))
+    D.TABORTDCI ->
+      case operands of
+        D.U5imm i1 D.:< D.Gprc r D.:< D.U5imm i2 D.:< D.Nil -> Just $ do
+          incrementIP
+          imm1 <- O.extractValue i1
+          rv <- O.extractValue r
+          imm2 <- O.extractValue i2
+          G.addStmt (MC.ExecArchStmt (Tabortdci imm1 rv imm2))
+    D.TABORTWC ->
+      case operands of
+        D.Gprc r1 D.:< D.Gprc r2 D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          incrementIP
+          rv1 <- O.extractValue r1
+          rv2 <- O.extractValue r2
+          immv <- O.extractValue imm
+          G.addStmt (MC.ExecArchStmt (Tabortwc rv1 rv2 immv))
+    D.TABORTWCI ->
+      case operands of
+        D.U5imm i1 D.:< D.Gprc r D.:< D.U5imm i2 D.:< D.Nil -> Just $ do
+          incrementIP
+          imm1 <- O.extractValue i1
+          rv <- O.extractValue r
+          imm2 <- O.extractValue i2
+          G.addStmt (MC.ExecArchStmt (Tabortwci imm1 rv imm2))
+    D.TBEGIN ->
+      case operands of
+        D.U1imm i D.:< D.Nil -> Just $ do
+          incrementIP
+          iv <- O.extractValue i
+          G.addStmt (MC.ExecArchStmt (Tbegin iv))
+    D.TCHECK ->
+      case operands of
+        D.Crrc r D.:< D.Nil -> Just $ do
+          incrementIP
+          rv <- O.extractValue r
+          G.addStmt (MC.ExecArchStmt (Tcheck rv))
+    D.TEND ->
+      case operands of
+        D.U1imm i D.:< D.Nil -> Just $ do
+          incrementIP
+          iv <- O.extractValue i
+          G.addStmt (MC.ExecArchStmt (Tend iv))
     _ -> Nothing
