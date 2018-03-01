@@ -48,10 +48,10 @@ withMemory _ e k =
     Left err -> C.throwM (MemoryLoadError err)
     Right (_sim, mem) -> k mem
   where
-    loadCfg = MM.LoadOptions { MM.loadStyleOverride = Just MM.LoadBySegment
-                             , MM.includeBSS = False
-                             , MM.loadRegionIndex = Just 0
-                             }
+    loadCfg = MM.defaultLoadOptions
+        { MM.loadStyleOverride = Just MM.LoadBySegment
+        , MM.loadRegionIndex = Just 0
+        }
 
 data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
