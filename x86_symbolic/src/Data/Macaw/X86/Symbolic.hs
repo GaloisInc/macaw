@@ -17,6 +17,8 @@ module Data.Macaw.X86.Symbolic
   , x86_64MacawEvalFn
   , SymFuns, newSymFuns
 
+  , lookupX86Reg
+
   , RegAssign
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
@@ -25,12 +27,16 @@ module Data.Macaw.X86.Symbolic
 import           Control.Lens((^.))
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.TraversableFC
+import           Data.Parameterized.Map as MapF
 import           GHC.TypeLits
 import           Data.Functor.Identity(Identity(..))
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
-import           Data.Macaw.Symbolic.PersistentState(typeToCrucible)
+import           Data.Macaw.Symbolic.PersistentState
+                 (typeToCrucible,RegIndexMap,mkRegIndexMap,IndexPair(..))
+import           Data.Macaw.Symbolic.CrucGen
+                    (crucArchRegTypes,MacawCrucibleRegTypes)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
@@ -112,6 +118,12 @@ flagRegs :: Assignment M.X86Reg (CtxRepeat 9 M.BoolType)
 flagRegs =
   Empty :> M.CF :> M.PF :> M.AF :> M.ZF :> M.SF :> M.TF :> M.IF :> M.DF :> M.OF
 
+x87_statusRegs :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType)
+x87_statusRegs =
+     (repeatAssign (M.X87_StatusReg . fromIntegral)
+        :: Assignment M.X86Reg (CtxRepeat 11 M.BoolType))
+  :> M.X87_StatusReg 14
+
 -- | This contains an assignment that stores the register associated with each index in the
 -- X86 register structure.
 x86RegAssignment :: Assignment M.X86Reg (ArchRegContext M.X86_64)
@@ -119,12 +131,29 @@ x86RegAssignment =
   Empty :> M.X86_IP
   <++> (repeatAssign gpReg :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 64)))
   <++> flagRegs
-  <++> (repeatAssign (M.X87_StatusReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType))
+  <++> x87_statusRegs
   <++> (Empty :> M.X87_TopReg)
   <++> (repeatAssign (M.X87_TagReg . fromIntegral)    :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 2)))
   <++> (repeatAssign (M.X87_FPUReg . F.mmxReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 80)))
   <++> (repeatAssign (M.X86_YMMReg . F.ymmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 256)))
 
+
+regIndexMap :: RegIndexMap M.X86_64
+regIndexMap = mkRegIndexMap x86RegAssignment
+            $ Ctx.size $ crucArchRegTypes x86_64MacawSymbolicFns
+
+
+{- | Lookup a Macaw register in a Crucible assignemnt.
+This function returns "Nothing" if the input register is not represented
+in the assignment.  This means that either the input register is malformed,
+or we haven't modelled this register for some reason. -}
+lookupX86Reg ::
+  M.X86Reg t                                    {- ^ Lookup this register -} ->
+  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^ Assignment -} ->
+  Maybe (f (ToCrucibleType t))  {- ^ The value of the register -}
+lookupX86Reg r asgn =
+  do pair <- MapF.lookup r regIndexMap
+     return (asgn Ctx.! crucibleIndex pair)
 
 ------------------------------------------------------------------------
 
