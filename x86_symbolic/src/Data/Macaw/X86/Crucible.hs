@@ -14,7 +14,7 @@
 {-# Language FlexibleContexts #-}
 module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
-    SymFuns, newSymFuns
+    SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
   , semantics
