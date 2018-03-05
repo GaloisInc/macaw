@@ -58,6 +58,7 @@ import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified Lang.Crucible.Simulator.OverrideSim as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import           Lang.Crucible.Solver.Interface
+import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
@@ -68,6 +69,7 @@ import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.Discovery.State as M
 import qualified Data.Macaw.Memory as M
+import qualified Data.Macaw.Types as M
 
 import           Data.Macaw.Symbolic.CrucGen
 import           Data.Macaw.Symbolic.PersistentState
@@ -308,7 +310,16 @@ execMacawStmtExtension archStmtFn mvar globs s0 st =
 
     MacawGlobalPtr addr         -> doGetGlobal st mvar globs addr
 
-    MacawFreshSymbolic{}        -> error "XXX: FreshSymbolic"
+    MacawFreshSymbolic t ->
+      do nm <- case userSymbol "macawFresh" of
+                 Right a -> return a
+                 Left err -> fail (show err)
+         v <- case t of
+               M.BoolTypeRepr -> freshConstant sym nm C.BaseBoolRepr
+               _ -> error ("MacawFreshSymbolic: XXX type " ++ show t)
+         return (v,st)
+      where sym = C.stateSymInterface st
+
     MacawCall{}                 -> error "XXX: MacawCall"
 
     MacawArchStmtExtension s    -> archStmtFn s st
