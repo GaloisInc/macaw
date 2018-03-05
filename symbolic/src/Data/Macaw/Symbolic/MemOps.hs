@@ -135,12 +135,12 @@ doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
        , ptr_bits ~>
            do r  <- ptrAdd sym w x (asBits y)
               ok <- let ?ptrWidth = w in isValidPointer sym r mem
-              endCaseCheck ok "Invalid result" r
+              endCaseCheck ok "Invalid result (ptr_bits)" r
 
        , bits_ptr ~>
            do  r <- ptrAdd sym w y (asBits x)
                ok <- let ?ptrWidth = w in isValidPointer sym r mem
-               endCaseCheck ok "Invalid result" r
+               endCaseCheck ok "Invalid result (bits_ptr)" r
        ]
 
 
@@ -345,10 +345,13 @@ ptrOp k st mvar w x0 y0 =
      let sym = stateSymInterface st
          x   = regValue x0
          y   = regValue y0
-     xPtr     <- let ?ptrWidth = w in isValidPointer sym x mem
-     yPtr     <- let ?ptrWidth = w in isValidPointer sym y mem
+     -- xPtr     <- let ?ptrWidth = w in isValidPointer sym x mem
+     -- yPtr     <- let ?ptrWidth = w in isValidPointer sym y mem
      xBits    <- isBitVec sym x
      yBits    <- isBitVec sym y
+
+     xPtr <- notPred sym xBits
+     yPtr <- notPred sym yBits
      a <- k sym mem w xPtr xBits yPtr yBits x y
      return (a,st)
 
