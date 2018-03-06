@@ -20,6 +20,7 @@ module Data.Macaw.Symbolic.MemOps
   , doCondReadMem
   , doWriteMem
   , doGetGlobal
+  , doMakeCall
   ) where
 
 import Control.Lens((^.),(&),(%~))
@@ -63,6 +64,22 @@ import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
 import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
 import qualified Data.Macaw.Memory as M
 
+doMakeCall ::
+  (IsSymInterface sym) =>
+  ((MemImpl sym, regs) -> IO (MemImpl sym, regs)) ->
+  CrucibleState s sym ext trp blocks  r ctx ->
+  GlobalVar Mem ->
+  regs ->
+  IO (regs, CrucibleState s sym ext trp blocks r ctx)
+doMakeCall k st mvar regs =
+  do mem <- getMem st mvar
+     (mem1, regs1) <- k (mem,regs)
+     let st1 = setMem st mvar mem1
+     return (regs1, st1)
+
+
+--------------------------------------------------------------------------------
+
 doGetGlobal ::
   (IsSymInterface sym, 16 <= w, M.MemWidth w) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
@@ -88,6 +105,7 @@ doGetGlobal st mvar globs addr =
                 in doPtrAddOffset sym mem region off
          return (res, st)
 
+--------------------------------------------------------------------------------
 
 -- | This is the form of binary operation needed by the simulator.
 -- Note that even though the type suggests that we might modify the
