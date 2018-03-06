@@ -21,4 +21,11 @@ import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
 
 execInstruction :: MC.Value PPC ids (MT.BVType 32) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher allSemantics allOpcodeInfo)
+execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC))
+                    ppcNonceAppEval
+                    ppcAppEvaluator
+                    'ppcInstructionMatcher
+                    allSemantics allOpcodeInfo
+                    ([t| Dismantle.PPC.Operand |], [t| PPC |])
+                   )
+
