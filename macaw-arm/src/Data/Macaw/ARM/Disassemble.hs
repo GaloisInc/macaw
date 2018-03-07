@@ -19,6 +19,7 @@ import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
+import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
@@ -40,8 +41,12 @@ import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word32 )
 import qualified Dismantle.ARM as ARMD
+import qualified Dismantle.Thumb as ThumbD
 import           Text.Printf ( printf )
 
+
+data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
+                      deriving (Eq, Show)
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
@@ -51,7 +56,11 @@ import           Text.Printf ( printf )
 disassembleFn :: (ARMArchConstraints arm)
               => proxy arm
               -> (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
-              -- ^ A function to look up the semantics for an instruction.  The
+              -- ^ A function to look up the semantics for an A32 instruction.  The
+              -- lookup is provided with the value of the IP in case IP-relative
+              -- addressing is necessary.
+              -> (Value arm ids (BVType (ArchAddrWidth arm)) -> ThumbD.Instruction -> Maybe (Generator arm ids s ()))
+              -- ^ A function to look up the semantics for a T32 instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
               -> MM.Memory (ArchAddrWidth arm)
@@ -65,15 +74,19 @@ disassembleFn :: (ARMArchConstraints arm)
               -> MA.AbsBlockState (ArchReg arm)
               -- ^ Abstract state of the processor at the start of the block
               -> ST s ([Block arm ids], MM.MemWord (ArchAddrWidth arm), Maybe String)
-disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
+disassembleFn _ lookupA32Semantics lookupT32Semantics mem nonceGen startAddr maxSize _  = do
+  let lookupSemantics ipval instr = case instr of
+                                      A32I inst -> lookupA32Semantics ipval inst
+                                      T32I inst -> lookupT32Semantics ipval inst
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock
-                              lookupSemantics mem nonceGen startAddr maxSize))
+                               lookupSemantics
+                               mem nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
 tryDisassembleBlock :: (ARMArchConstraints arm)
-                    => (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
+                    => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
                     -> MM.Memory (ArchAddrWidth arm)
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff arm
@@ -105,7 +118,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
 -- becomes a mux, we split execution using 'conditionalBranch'.
 disassembleBlock :: forall arm ids s
                   . ARMArchConstraints arm
-                 => (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
+                 => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> MM.Memory (ArchAddrWidth arm)
                  -> GenState arm ids s
@@ -138,7 +151,9 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
-            let lineStr = printf "%s: %s" (show curPCAddr) (show (ARMD.ppInstruction i))
+            let lineStr = printf "%s: %s" (show curPCAddr) (show (case i of
+                                                                    A32I i' -> ARMD.ppInstruction i'
+                                                                    T32I i' -> ThumbD.ppInstruction i'))
             addStmt (Comment (T.pack  lineStr))
             transformer
 
@@ -180,10 +195,17 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
 -- are no byte regions that could be coalesced.
 readInstruction :: MM.Memory w
                 -> MM.MemSegmentOff w
-                -> Either (MM.MemoryError w) (ARMD.Instruction, MM.MemWord w)
+                -> Either (MM.MemoryError w) (InstructionSet, MM.MemWord w)
 readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
   let seg = MM.msegSegment addr
-      segRelAddr = MM.relativeSegmentAddr addr
+      segRelAddrRaw = MM.relativeSegmentAddr addr
+      -- Addresses specified in ARM instructions have the low bit
+      -- clear, but Thumb (T32) target addresses have the low bit sit.
+      -- This is only manifested in the instruction addresses: the
+      -- actual PC for fetching instructions clears the low bit to
+      -- generate aligned memory accesses.
+      loBit = MM.addrOffset segRelAddrRaw .&. 1
+      segRelAddr = segRelAddrRaw { addrOffset = MM.addrOffset segRelAddrRaw `xor` loBit }
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
       contents <- MM.addrContentsAfter mem segRelAddr
@@ -198,7 +220,10 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             -- unpleasant.  We could alter the disassembler to consume strict
             -- bytestrings, at the cost of possibly making it less efficient for
             -- other clients.
-            let (bytesRead, minsn) = ARMD.disassembleInstruction (LBS.fromStrict bs)
+            let (bytesRead, minsn) =
+                         if msegOffset addr .&. 1 == 0
+                         then fmap (fmap A32I) $ ARMD.disassembleInstruction (LBS.fromStrict bs)
+                         else fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError $ MM.InvalidInstruction segRelAddr contents
@@ -259,9 +284,9 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
 
 data TranslationErrorReason w = InvalidNextPC Word32 Word32
                               | DecodeError (MM.MemoryError w)
-                              | UnsupportedInstruction ARMD.Instruction
-                              | InstructionAtUnmappedAddr ARMD.Instruction
-                              | GenerationError ARMD.Instruction GeneratorError
+                              | UnsupportedInstruction InstructionSet
+                              | InstructionAtUnmappedAddr InstructionSet
+                              | GenerationError InstructionSet GeneratorError
                               deriving (Show)
 
 deriving instance (MM.MemWidth w) => Show (TranslationError w)

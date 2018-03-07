@@ -30,7 +30,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
 import           Data.Semigroup
 import qualified Data.Set as Set
-import           Dismantle.ARM.Operands as ARMOperand
+import           Data.Word ( Word8 )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
@@ -41,7 +41,9 @@ import qualified Text.PrettyPrint.HughesPJClass as PP
 
 
 data ARMReg tp where
-    ARM_GP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMOperand.GPR -> ARMReg (BVType w)
+    -- n.b. The Thumb (T32) register model is the same as the ARM
+    -- (A32) model, so just use the latter to define registers.
+    ARM_GP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => Word8 -> ARMReg (BVType w)
              -- GPR15 is normally aliased with the PC, but not always,
              -- so track it separately and use semantics definitions
              -- to manage the synchronization.
@@ -50,7 +52,7 @@ data ARMReg tp where
 
 -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
-arm_LR = ARM_GP $ ARMOperand.gpr 14
+arm_LR = ARM_GP 14
 
 
 deriving instance Eq (ARMReg tp)
@@ -99,13 +101,13 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
          ) =>
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
-      sp_reg = ARM_GP (ARMOperand.gpr 13)
+      sp_reg = ARM_GP 13
       ip_reg = ARM_PC
-      syscall_num_reg = undefined
-      syscallArgumentRegs = undefined
+      syscall_num_reg = error "MC.RegisterInfo ARMReg syscall_num_reg undefined"
+      syscallArgumentRegs = error "MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some (ARM_GP (ARMOperand.gpr n)) | n <- [0..numGPR-1] ] <>
+armRegs = [ Some (ARM_GP n) | n <- [0..numGPR-1] ] <>
           [ Some ARM_PC
           , Some ARM_CPSR
           ]
@@ -121,7 +123,7 @@ linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w)
                                   => proxy arm
                                   -> Set.Set (Some ARMReg)
 linuxSystemCallPreservedRegisters _ =
-  Set.fromList [ Some (ARM_GP (ARMOperand.gpr rnum)) | rnum <- [8..numGPR-1] ]
+  Set.fromList [ Some (ARM_GP rnum) | rnum <- [8..numGPR-1] ]
   -- Currently, we are only considering the non-volatile GPRs.  There
   -- are also a set of non-volatile floating point registers.  I have
   -- to check on the vector registers.
@@ -135,6 +137,6 @@ locToRegTH :: (1 <= Loc.ArchRegWidth arm,
            -> Loc.Location arm ctp
            -> Q Exp
 locToRegTH _  Loc.LocPC      = [| ARM_PC |]
-locToRegTH _  (Loc.LocGPR g) = let rnum = unGPR g in [| ARM_GP (ARMOperand.gpr $(lift rnum)) |]
+locToRegTH _  (Loc.LocGPR g) = [| ARM_GP ($(lift g)) |]
 locToRegTH _  (Loc.LocCPSR)  = [| ARM_CPSR |]
 locToRegTH _  _              = [| error "locToRegTH undefined for unrecognized location" |]

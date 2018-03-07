@@ -58,6 +58,7 @@ withMemory :: forall w m a
            -> m a
 withMemory _ e k =
     let options = MM.LoadOptions { MM.loadRegionIndex = Just 0
+                                 , MM.loadRegionBaseOffset = 0
                                  , MM.loadStyleOverride = Just MM.LoadBySegment
                                  , MM.includeBSS = False}
     in case MM.memoryForElf options e of

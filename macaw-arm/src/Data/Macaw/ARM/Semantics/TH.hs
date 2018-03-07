@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -14,9 +15,11 @@ module Data.Macaw.ARM.Semantics.TH
 
 import qualified Data.Functor.Const as C
 import           Data.Macaw.ARM.ARMReg
+import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
+import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
-import           Data.Macaw.SemMC.TH ( symFnName, asName )
+import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, asName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -24,7 +27,6 @@ import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
-import           Data.Semigroup
 import           GHC.TypeLits
 import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import           Language.Haskell.TH
@@ -100,6 +102,14 @@ armNonceAppEval bvi nonceApp =
 
 -- ----------------------------------------------------------------------
 
+-- ----------------------------------------------------------------------
+
+addArchAssignment :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
+                  => M.ArchFn arch (M.Value arch ids) tp
+                  -> G.Generator arch ids s (G.Expr arch ids tp)
+addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
+
+
 armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     A.Architecture arch,
                     1 <= Loc.ArchRegWidth arch,
@@ -109,6 +119,11 @@ armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                 -> Maybe (MacawQ arch t Exp)
 armAppEvaluator interps elt =
     case elt of
+      S.BVUrem w bv1 bv2 -> return $ do
+                              e1 <- addEltTH interps bv1
+                              e2 <- addEltTH interps bv2
+                              liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
+                                     |]
       -- S.NoPrimKnown w rhs -> return $ do e1 <- addEltTH interps rhs
       --                                   liftQ [| let npkExp = NoPrimKnown $(natReprTH w) $(return e1)
       --                                            in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn noPrimKnown (M.typeRepr noPrimKnown))

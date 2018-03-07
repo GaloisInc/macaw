@@ -20,50 +20,85 @@ import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
 import           Data.Macaw.Types ( BoolType, BVType )
 import qualified Data.Parameterized.NatRepr as NR
-import           Data.Word ( Word16 )
-import           Dismantle.ARM.Operands
+import           Data.Word ( Word16, Word8 )
+import qualified Dismantle.ARM.Operands as A32Operand
+import qualified Dismantle.Thumb.Operands as T32Operand
 import qualified SemMC.ARM as ARM
 
 
-instance ExtractValue ARM.ARM GPR (BVType 32) where
-  extractValue r = G.getRegValue (Reg.ARM_GP r)
+instance ExtractValue ARM.ARM A32Operand.GPR (BVType 32) where
+  extractValue r = G.getRegValue (Reg.ARM_GP $ A32Operand.unGPR r)
 
 
-instance ToRegister GPR Reg.ARMReg (BVType 32) where
-  toRegister = Reg.ARM_GP
+instance ToRegister A32Operand.GPR Reg.ARMReg (BVType 32) where
+  toRegister = Reg.ARM_GP . A32Operand.unGPR
 
 
-instance ExtractValue ARM.ARM (Maybe GPR) (BVType 32) where
+instance ExtractValue ARM.ARM (Maybe A32Operand.GPR) (BVType 32) where
   extractValue mgpr =
     case mgpr of
       Just r -> extractValue r
       Nothing -> return $ MC.BVValue NR.knownNat 0
 
-instance ExtractValue ARM.ARM Pred (BVType 4) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . predToBits
+instance ExtractValue ARM.ARM A32Operand.Pred (BVType 4) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.predToBits
 
-instance ExtractValue ARM.ARM SBit (BVType 1) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . sBitToBits
+instance ExtractValue ARM.ARM A32Operand.SBit (BVType 1) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.sBitToBits
 
-instance ExtractValue ARM.ARM BranchTarget (BVType 32) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . branchTargetToBits
+instance ExtractValue ARM.ARM A32Operand.Imm5 (BVType 5) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.imm5ToBits
 
-instance ExtractValue ARM.ARM BranchExecuteTarget (BVType 32) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . branchExecuteTargetToBits
+instance ExtractValue ARM.ARM A32Operand.BranchTarget (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.branchTargetToBits
 
-instance ExtractValue ARM.ARM SoRegImm (BVType 32) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . soRegImmToBits
+instance ExtractValue ARM.ARM A32Operand.BranchExecuteTarget (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.branchExecuteTargetToBits
 
-instance ExtractValue ARM.ARM SoRegReg (BVType 32) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . soRegRegToBits
+instance ExtractValue ARM.ARM A32Operand.SoRegImm (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.soRegImmToBits
 
-instance ExtractValue ARM.ARM LdstSoReg (BVType 32) where
-  extractValue = return . MC.BVValue NR.knownNat . toInteger . ldstSoRegToBits
+instance ExtractValue ARM.ARM A32Operand.SoRegReg (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.soRegRegToBits
+
+instance ExtractValue ARM.ARM A32Operand.LdstSoReg (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.ldstSoRegToBits
 
 instance ExtractValue arch Word16 (BVType 16) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger
+
+instance ExtractValue ARM.ARM Word8 (BVType 8) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger
 
 
 
 -- instance ExtractValue arch AddrModeImm12 (BVType 12) where
 --   extractValue i = return $ MC.BVValue NR.knownNat (toInteger $ addrModeImm12ToBits i)
+
+-- ----------------------------------------------------------------------
+
+instance ExtractValue ARM.ARM T32Operand.GPR (BVType 32) where
+  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unGPR r)
+
+
+instance ToRegister T32Operand.GPR Reg.ARMReg (BVType 32) where
+  toRegister = Reg.ARM_GP . T32Operand.unGPR
+
+
+instance ExtractValue ARM.ARM (Maybe T32Operand.GPR) (BVType 32) where
+  extractValue mgpr =
+    case mgpr of
+      Just r -> extractValue r
+      Nothing -> return $ MC.BVValue NR.knownNat 0
+
+instance ExtractValue ARM.ARM T32Operand.Opcode (BVType 3) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.opcodeToBits
+
+instance ExtractValue ARM.ARM T32Operand.TImm01020S4 (BVType 8) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.tImm01020S4ToBits
+
+instance ExtractValue ARM.ARM T32Operand.LowGPR (BVType 32) where
+  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unLowGPR r)
+
+instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
+  toRegister = Reg.ARM_GP . T32Operand.unLowGPR

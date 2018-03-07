@@ -16,21 +16,25 @@
 module Data.Macaw.ARM.Arch
     -- ( ARMArchConstraints
     -- , ARMStmt(..)
+    -- , armPrimFnHasSideEffects
     -- )
     where
 
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
-import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt )
+import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
+                                         , evalRewrittenArchFn )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
 import qualified Data.Macaw.Types as MT
+import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FCls
-import qualified Dismantle.ARM as D
+import qualified Dismantle.ARM as ARMDis
 import qualified Dismantle.ARM.Operands as ARMOperands
+import qualified Dismantle.Thumb as ThumbDis
 import           GHC.TypeLits
 import qualified SemMC.ARM as ARM
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
@@ -71,17 +75,23 @@ rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
 data ARMTermStmt ids where
     ARMSyscall :: ARMOperands.SvcOperand -> ARMTermStmt ids
+    ThumbSyscall :: ThumbDis.Operand "Imm0_255" -> ARMTermStmt ids
 
 deriving instance Show (ARMTermStmt ids)
 
 type instance MC.ArchTermStmt ARM.ARM = ARMTermStmt
 
 instance MC.PrettyF ARMTermStmt where
-    prettyF ts =
-        case ts of
-          ARMSyscall v -> let hpp2pp = PP.text . show . HPP.pPrint
-                          -- ugh: dismantle uses HPP, Arch uses PP.
-                          in PP.text "arm_syscall" PP.<+> hpp2pp v
+    prettyF ts = let dpp2app :: forall a. HPP.Pretty a => a -> PP.Doc
+                     dpp2app = PP.text . show . HPP.pPrint
+                     -- ugh: dismantle uses HPP, Arch uses PP.
+                 in case ts of
+                      ARMSyscall v -> PP.text "arm_syscall" PP.<+> dpp2app v
+                      ThumbSyscall (ThumbDis.Imm0_255 v) ->
+                          -- dpp2app $ ThumbDis.ppInstruction ts
+                          PP.text "thumb_syscall" PP.<+>
+                          (PP.text $ show v)
+                          --               (PP.text $ ThumbDis.operandReprString v)
 
 
 -- instance PrettyF (ArchTermStmt ARM.ARM))
@@ -90,6 +100,7 @@ rewriteTermStmt :: ARMTermStmt src -> Rewriter arm s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
     case s of
       ARMSyscall v -> pure $ ARMSyscall v
+      ThumbSyscall v -> pure $ ThumbSyscall v
 
 
 -- ----------------------------------------------------------------------
@@ -105,40 +116,53 @@ rewriteTermStmt s =
 -- type family ArchFn :: (arch :: *) :: (Type -> *) -> Type -> *
 -- data ARMPrimFn f (tp :: (MT.Type -> *) -> MT.Type) where
 --     NoPrimKnown :: ARMPrimFn tp
-data ARMPrimFn f tp where
-    NoPrimKnown :: f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.ARM))) -> ARMPrimFn f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.ARM)))
 
-instance MC.IsArchFn ARMPrimFn where
-  ppArchFn pp f =
-      case f of
-        NoPrimKnown rhs -> (\rhs' -> PP.text "arm_noprimknown " PP.<> rhs') <$> pp rhs
+data ARMPrimFn arm f tp where
+    -- | Unsigned division remainder
+    --
+    -- Division by zero does not have side effects, but instead produces an undefined value
+    URem :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg arm))
+         -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+         -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+         -> ARMPrimFn arm f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
 
-instance FCls.FunctorFC ARMPrimFn where
+instance MC.IsArchFn (ARMPrimFn arm) where
+    ppArchFn pp f =
+        let ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
+        in case f of
+          URem _w dividend divisor -> ppBinary "arm_urem" <$> pp dividend <*> pp divisor
+
+instance FCls.FunctorFC (ARMPrimFn arm) where
   fmapFC = FCls.fmapFCDefault
 
-instance FCls.FoldableFC ARMPrimFn where
+instance FCls.FoldableFC (ARMPrimFn arm) where
   foldMapFC = FCls.foldMapFCDefault
 
-instance FCls.TraversableFC ARMPrimFn where
+instance FCls.TraversableFC (ARMPrimFn arm) where
   traverseFC go f =
     case f of
-      NoPrimKnown rhs -> NoPrimKnown <$> go rhs
+      URem w dividend divisor -> URem w <$> go dividend <*> go divisor
 
-type instance MC.ArchFn ARM.ARM = ARMPrimFn
+type instance MC.ArchFn ARM.ARM = ARMPrimFn ARM.ARM
 
+instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (MC.Value arm ids)) MT.TypeRepr where
+  typeRepr f =
+    case f of
+      URem rep _ _ -> MT.BVTypeRepr rep
 
 -- no side effects... yet
-armPrimFnHasSideEffects :: ARMPrimFn f tp -> Bool
+armPrimFnHasSideEffects :: ARMPrimFn arm f tp -> Bool
 armPrimFnHasSideEffects = const False
 
 
-rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn)
-              => ARMPrimFn (MC.Value arm src) tp
+rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn arm)
+              => ARMPrimFn arm (MC.Value arm src) tp
               -> Rewriter arm s src tgt (MC.Value arm tgt tp)
 rewritePrimFn f =
   case f of
-    NoPrimKnown rhs -> error "No ARM rewritePrimFn for NoPrimKnown"
-    _ -> error "No ARM rewritePrimFn for ??"
+    URem w dividend divisor -> do
+      tgtFn <- URem w <$> rewriteValue dividend <*> rewriteValue divisor
+      evalRewrittenArchFn tgtFn
 
 
 -- ----------------------------------------------------------------------
@@ -146,7 +170,7 @@ rewritePrimFn f =
 -- computations
 
 type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
-                              , MC.ArchFn arm ~ ARMPrimFn
+                              , MC.ArchFn arm ~ ARMPrimFn arm
                               , MC.ArchStmt arm ~ ARMStmt
                               , MC.ArchTermStmt arm ~ ARMTermStmt
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg arm))
@@ -160,17 +184,32 @@ type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
 
 -- ----------------------------------------------------------------------
 
--- | Manually-provided semantics for instructions whose full semantics cannot be
--- expressed in our semantics format.
+-- | Manually-provided semantics for A32 instructions whose full
+-- semantics cannot be expressed in our semantics format.
 --
 -- This includes instructions with special side effects that we don't have a way
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
-armInstructionMatcher :: (ARMArchConstraints ppc) =>
-                         D.Instruction -> Maybe (G.Generator ppc ids s ())
-armInstructionMatcher (D.Instruction opc operands) =
-  case opc of
-    D.SVC -> case operands of
-               D.Pred _opPred D.:< D.Imm24b imm D.:< D.Nil ->
-                   Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
-    _ -> Nothing
+a32InstructionMatcher :: (ARMArchConstraints arch) =>
+                         ARMDis.Instruction -> Maybe (G.Generator arch ids s ())
+a32InstructionMatcher (ARMDis.Instruction opc operands) =
+    case opc of
+      ARMDis.SVC -> case operands of
+                      ARMDis.Pred _opPred ARMDis.:< ARMDis.Imm24b imm ARMDis.:< ARMDis.Nil ->
+                          Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
+      _ -> Nothing
+
+-- | Manually-provided semantics for T32 (thumb) instructions whose full
+-- semantics cannot be expressed in our semantics format.
+--
+-- This includes instructions with special side effects that we don't have a way
+-- to talk about in the semantics; especially useful for architecture-specific
+-- terminator statements.
+t32InstructionMatcher :: (ARMArchConstraints arch) =>
+                         ThumbDis.Instruction -> Maybe (G.Generator arch ids s ())
+t32InstructionMatcher (ThumbDis.Instruction opc operands) =
+    case opc of
+      ThumbDis.TSVC -> case operands of
+                         ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
+                             Just $ G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall $ ThumbDis.Imm0_255 imm))
+      _ -> Nothing

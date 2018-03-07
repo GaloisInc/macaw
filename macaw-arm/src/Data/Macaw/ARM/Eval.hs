@@ -54,7 +54,7 @@ absEvalArchFn :: (ARMArchConstraints arm)
               -> AbsValue (RegAddrWidth (ArchReg arm)) tp
 absEvalArchFn _ _r f =
   case f of
-    NoPrimKnown _rhs -> MA.TopV
+    URem {} -> MA.TopV
 
 
 -- For now, none of the architecture-specific statements have an effect on the
@@ -79,6 +79,14 @@ postARMTermStmtAbsState preservePred mem s0 regState stmt =
       case simplifyValue (regState^.curIP) of
         Just (RelocatableValue _ addr)
           | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         }
+              Just (nextPC, MA.absEvalCall params s0 nextPC)
+    ThumbSyscall _ ->
+      case simplifyValue (regState^.curIP) of
+        Just (RelocatableValue _ addr)
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 2 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
