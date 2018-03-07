@@ -344,6 +344,8 @@ unpack2 sym e w c v1 v2 k =
 
 
 
+-- XXX: Do we want to be strict here (i.e., asserting that the thing is
+-- not a pointer, or should be lenent, i.e., return an undefined value?)
 getBitVal ::
   IsSymInterface sym =>
   sym ->

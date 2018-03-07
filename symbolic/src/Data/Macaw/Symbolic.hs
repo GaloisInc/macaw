@@ -281,7 +281,7 @@ evalMacawExprExtension sym f e0 =
           znorm <- bvSext sym w' =<< bvTrunc sym w zext
           bvNe sym zext znorm
 
-    PtrToBits _w x  -> MM.projectLLVM_bv sym =<< f x
+    PtrToBits  w x  -> doPtrToBits sym w =<< f x
     BitsToPtr _w x  -> MM.llvmPointer_bv sym =<< f x
 
     MacawNullPtr w | LeqProof <- lemma1_16 w -> MM.mkNullPointer sym w

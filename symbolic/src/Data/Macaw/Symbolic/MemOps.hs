@@ -21,6 +21,7 @@ module Data.Macaw.Symbolic.MemOps
   , doWriteMem
   , doGetGlobal
   , doMakeCall
+  , doPtrToBits
   ) where
 
 import Control.Lens((^.),(&),(%~))
@@ -41,6 +42,7 @@ import Lang.Crucible.Simulator.SimError(SimErrorReason(AssertFailureSimError))
 import Lang.Crucible.CFG.Common(GlobalVar)
 import Lang.Crucible.Types
 import Lang.Crucible.Solver.Interface
+import Lang.Crucible.Solver.Symbol(userSymbol)
 
 import Lang.Crucible.LLVM.MemModel
           ( Mem, MemImpl, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
@@ -64,6 +66,23 @@ import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
 import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
 import qualified Data.Macaw.Memory as M
 
+
+-- | This is called whenever a (bit-vector/pointer) is used as a bit-vector.
+-- The result is undefined (i.e., a fresh unknown value) if it is given
+-- a pointer.
+doPtrToBits ::
+  (IsSymInterface sym, 1 <= w) =>
+  sym ->
+  NatRepr w ->
+  LLVMPtr sym w ->
+  IO (RegValue sym (BVType w))
+doPtrToBits sym w p =
+  do let base = ptrBase p
+     undef <- mkUndefinedBV sym "ptr_to_bits" w
+     notPtr <- natEq sym base =<< natLit sym 0
+     bvIte sym notPtr (asBits p) undef
+
+--------------------------------------------------------------------------------
 doMakeCall ::
   (IsSymInterface sym) =>
   ((MemImpl sym, regs) -> IO (MemImpl sym, regs)) ->
@@ -130,10 +149,11 @@ binOpLabel lab x y =
           ]
 
 doPtrMux :: Pred sym -> PtrOp sym w (LLVMPtr sym w)
-doPtrMux c = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
+doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
-     cases sym (binOpLabel "ptr_mux" x y) muxLLVMPtr
+     undef     <- mkUndefinedPtr sym "ptr_mux" w
+     cases sym (binOpLabel "ptr_mux" x y) muxLLVMPtr (Just undef)
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvIte sym c (asBits x) (asBits y)
        , both_ptrs ~>
@@ -146,7 +166,7 @@ doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
      ptr_bits  <- andPred sym xPtr  yBits
      bits_ptr  <- andPred sym xBits yPtr
 
-     cases sym (binOpLabel "ptr_add" x y) muxLLVMPtr
+     a <- cases sym (binOpLabel "ptr_add" x y) muxLLVMPtr Nothing
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
 
@@ -160,6 +180,7 @@ doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
                ok <- let ?ptrWidth = w in isValidPointer sym r mem
                endCaseCheck ok "Invalid result (bits_ptr)" r
        ]
+     return a
 
 
 doPtrSub :: PtrOp sym w (LLVMPtr sym w)
@@ -168,7 +189,7 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
      ptr_bits  <- andPred sym xPtr  yBits
      ptr_ptr   <- andPred sym xPtr  yPtr
 
-     cases sym (binOpLabel "ptr_sub" x y) muxLLVMPtr
+     cases sym (binOpLabel "ptr_sub" x y) muxLLVMPtr Nothing
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
 
@@ -190,9 +211,9 @@ doPtrLt = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
      ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
-     addAssertion sym ok
-       (AssertFailureSimError (binOpLabel "ptr_lt" x y ++ " Invalid arguments"))
-     bvUlt sym (asBits x) (asBits y)
+     undef <- mkUndefinedBool sym "ptr_lt"
+     res <- bvUlt sym (asBits x) (asBits y)
+     itePred sym ok res undef
 
 
 doPtrLeq :: PtrOp sym w (RegValue sym BoolType)
@@ -201,17 +222,17 @@ doPtrLeq = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
      ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
-     addAssertion sym ok
-       (AssertFailureSimError
-          (binOpLabel "ptr_leq" x y ++ "  Invalid arguments"))
-     bvUle sym (asBits x) (asBits y)
+     undef <- mkUndefinedBool sym "ptr_leq"
+     res <- bvUle sym (asBits x) (asBits y)
+     itePred sym ok res undef
 
 
 doPtrEq :: PtrOp sym w (RegValue sym BoolType)
 doPtrEq = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
-     cases sym (binOpLabel "ptr_eq" x y) itePred
+     undef <- mkUndefinedBool sym "ptr_eq"
+     cases sym (binOpLabel "ptr_eq" x y) itePred (Just undef)
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
        , both_ptrs ~> endCase =<< ptrEq sym w x y
        ]
@@ -397,29 +418,39 @@ cases ::
   String      {- ^ Name of operation (for assertions) -} ->
   (sym -> Pred sym -> a -> a -> IO a) {- Mux results -} ->
 
+  Maybe a           {- ^ Default: use this if none of the cases matched -} ->
+
   -- | Cases: (name, predicate when valid, result + additional checks)
   [(Pred sym,  IO ([(Pred sym,String)], a))] ->
   IO a
-cases sym name mux opts =
-  do ok <- oneOf (map fst opts)
-     check ok "Invalid arguments"
-     combine =<< mapM doCase opts
+cases sym name mux def opts =
+  case def of
+    Just _ -> combine =<< mapM doCase opts
+    Nothing ->
+      do ok <- oneOf (map fst opts)
+         check ok ("Invalid arguments for " ++ show name)
+         combine =<< mapM doCase opts
   where
-  oneOf []       = return (falsePred sym)   -- shouldn't happen
-  oneOf [a]      = return a
-  oneOf (a : xs) = orPred sym a =<< oneOf xs
+  oneOf xs =
+    case xs of
+      []     -> return (falsePred sym) -- shouldn't happen
+      [p]    -> return p
+      p : ps -> orPred sym p =<< oneOf ps
 
   combine [] = fail "[bug] Empty cases"
-  combine [(_,a)] = return a
+  combine [(p,a)] = case def of
+                      Just d  -> mux sym p a d
+                      Nothing -> return a
   combine ((p,a) : more) = mux sym p a =<< combine more
-
-  check ok msg =
-    addAssertion sym ok (AssertFailureSimError ("[" ++ name ++ "] " ++ msg))
 
   doCase (p,m) =
     do (checks,a) <- m
        mapM_ (subCheck p) checks
        return (p,a)
+
+  check valid msg = addAssertion sym valid
+                      $ AssertFailureSimError
+                      $ "[" ++ name ++ "] " ++ msg
 
   subCheck cp (p,msg) =
     do valid <- impliesPred sym cp p
@@ -442,5 +473,39 @@ checkEndian mem endian =
     (need,have) -> fail $ unlines [ "[doReadMem] Endian mismatch:"
                                      , " *** Model: " ++ show have
                                      , " *** Read : " ++ show need ]
+
+
+mkUndefinedPtr :: (IsSymInterface sym, 1 <= w) =>
+  sym -> String -> NatRepr w -> IO (LLVMPtr sym w)
+mkUndefinedPtr sym nm w =
+  do base <- mkUndefined sym ("ptr_base_" ++ nm) BaseNatRepr
+     off  <- mkUndefinedBV sym ("ptr_offset_" ++ nm) w
+     return (LLVMPointer base off)
+
+-- | A fresh boolean variable
+mkUndefinedBool ::
+  (IsSymInterface sym) => sym -> String -> IO (RegValue sym BoolType)
+mkUndefinedBool sym nm =
+  mkUndefined sym (nm ++ "bool_") BaseBoolRepr
+
+-- | A fresh bit-vector variable
+mkUndefinedBV ::
+  (IsSymInterface sym, 1 <= w) =>
+  sym -> String -> NatRepr w -> IO (RegValue sym (BVType w))
+mkUndefinedBV sym nm w =
+  mkUndefined sym (nm ++ "bv" ++ show w ++ "_") (BaseBVRepr w)
+
+mkUndefined ::
+  (IsSymInterface sym) =>
+  sym -> String -> BaseTypeRepr t -> IO (RegValue sym (BaseToType t))
+mkUndefined sym unm ty =
+  do let name = "undefined_" ++ unm
+     nm <- case userSymbol name of
+             Right v -> return v
+             Left err -> fail $ unlines
+                    [ "[bug] " ++ show name ++ " is not a valid identifier?"
+                    , "*** " ++ show err
+                    ]
+     freshConstant sym nm ty
 
 
