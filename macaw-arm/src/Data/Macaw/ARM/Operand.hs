@@ -46,6 +46,9 @@ instance ExtractValue ARM.ARM A32Operand.Pred (BVType 4) where
 instance ExtractValue ARM.ARM A32Operand.SBit (BVType 1) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.sBitToBits
 
+instance ExtractValue ARM.ARM A32Operand.Imm5 (BVType 5) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.imm5ToBits
+
 instance ExtractValue ARM.ARM A32Operand.BranchTarget (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . A32Operand.branchTargetToBits
 
