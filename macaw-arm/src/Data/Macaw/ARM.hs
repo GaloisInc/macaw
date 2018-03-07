@@ -19,6 +19,7 @@ import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
 import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn )
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
+import qualified Data.Macaw.ARM.Semantics.ThumbSemantics as ThumbSem
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
@@ -26,7 +27,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified SemMC.ARM as ARM
 
 
--- | The type tag for ARM (32-bit)
+-- | The type tag for ARM (32-bit).  Note that this includes both A32 and T32 modes.
 type ARM = ARM.ARM
 
 

@@ -22,6 +22,7 @@ import           Data.Macaw.Types ( BoolType, BVType )
 import qualified Data.Parameterized.NatRepr as NR
 import           Data.Word ( Word16, Word8 )
 import qualified Dismantle.ARM.Operands as A32Operand
+import qualified Dismantle.Thumb.Operands as T32Operand
 import qualified SemMC.ARM as ARM
 
 
@@ -63,7 +64,35 @@ instance ExtractValue ARM.ARM A32Operand.LdstSoReg (BVType 32) where
 instance ExtractValue arch Word16 (BVType 16) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger
 
+instance ExtractValue ARM.ARM Word8 (BVType 8) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger
+
 
 
 -- instance ExtractValue arch AddrModeImm12 (BVType 12) where
 --   extractValue i = return $ MC.BVValue NR.knownNat (toInteger $ addrModeImm12ToBits i)
+
+-- ----------------------------------------------------------------------
+
+instance ExtractValue ARM.ARM T32Operand.GPR (BVType 32) where
+  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unGPR r)
+
+
+instance ToRegister T32Operand.GPR Reg.ARMReg (BVType 32) where
+  toRegister = Reg.ARM_GP . T32Operand.unGPR
+
+
+instance ExtractValue ARM.ARM (Maybe T32Operand.GPR) (BVType 32) where
+  extractValue mgpr =
+    case mgpr of
+      Just r -> extractValue r
+      Nothing -> return $ MC.BVValue NR.knownNat 0
+
+instance ExtractValue ARM.ARM T32Operand.Opcode (BVType 3) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.opcodeToBits
+
+instance ExtractValue ARM.ARM T32Operand.LowGPR (BVType 32) where
+  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unLowGPR r)
+
+instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
+  toRegister = Reg.ARM_GP . T32Operand.unLowGPR

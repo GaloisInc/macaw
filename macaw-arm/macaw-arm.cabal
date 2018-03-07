@@ -22,6 +22,7 @@ library
                      , Data.Macaw.ARM.Identify
                      , Data.Macaw.ARM.Operand
                      , Data.Macaw.ARM.Semantics.ARMSemantics
+                     , Data.Macaw.ARM.Semantics.ThumbSemantics
                      , Data.Macaw.ARM.Semantics.TH
   -- other-modules:       
   -- other-extensions:    
@@ -32,6 +33,8 @@ library
                      , containers
                      , crucible
                      , dismantle-arm
+                     , dismantle-thumb
+                     , dismantle-tablegen
                      , elf-edit
                      , lens
                      , macaw-base
