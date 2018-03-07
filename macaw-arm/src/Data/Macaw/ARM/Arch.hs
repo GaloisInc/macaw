@@ -105,40 +105,53 @@ rewriteTermStmt s =
 -- type family ArchFn :: (arch :: *) :: (Type -> *) -> Type -> *
 -- data ARMPrimFn f (tp :: (MT.Type -> *) -> MT.Type) where
 --     NoPrimKnown :: ARMPrimFn tp
-data ARMPrimFn f tp where
-    NoPrimKnown :: f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.ARM))) -> ARMPrimFn f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.ARM)))
 
-instance MC.IsArchFn ARMPrimFn where
-  ppArchFn pp f =
-      case f of
-        NoPrimKnown rhs -> (\rhs' -> PP.text "arm_noprimknown " PP.<> rhs') <$> pp rhs
+data ARMPrimFn arm f tp where
+    -- | Unsigned division remainder
+    --
+    -- Division by zero does not have side effects, but instead produces an undefined value
+    URem :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg arm))
+         -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+         -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+         -> ARMPrimFn arm f (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
 
-instance FCls.FunctorFC ARMPrimFn where
+instance MC.IsArchFn (ARMPrimFn arm) where
+    ppArchFn pp f =
+        let ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
+        in case f of
+          URem _w dividend divisor -> ppBinary "arm_urem" <$> pp dividend <*> pp divisor
+
+instance FCls.FunctorFC (ARMPrimFn arm) where
   fmapFC = FCls.fmapFCDefault
 
-instance FCls.FoldableFC ARMPrimFn where
+instance FCls.FoldableFC (ARMPrimFn arm) where
   foldMapFC = FCls.foldMapFCDefault
 
-instance FCls.TraversableFC ARMPrimFn where
+instance FCls.TraversableFC (ARMPrimFn arm) where
   traverseFC go f =
     case f of
-      NoPrimKnown rhs -> NoPrimKnown <$> go rhs
+      URem w dividend divisor -> URem w <$> go dividend <*> go divisor
 
-type instance MC.ArchFn ARM.ARM = ARMPrimFn
+type instance MC.ArchFn ARM.ARM = ARMPrimFn ARM.ARM
 
+instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (MC.Value arm ids)) MT.TypeRepr where
+  typeRepr f =
+    case f of
+      URem rep _ _ -> MT.BVTypeRepr rep
 
 -- no side effects... yet
-armPrimFnHasSideEffects :: ARMPrimFn f tp -> Bool
+armPrimFnHasSideEffects :: ARMPrimFn arm f tp -> Bool
 armPrimFnHasSideEffects = const False
 
 
-rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn)
-              => ARMPrimFn (MC.Value arm src) tp
+rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn arm)
+              => ARMPrimFn arm (MC.Value arm src) tp
               -> Rewriter arm s src tgt (MC.Value arm tgt tp)
 rewritePrimFn f =
   case f of
-    NoPrimKnown rhs -> error "No ARM rewritePrimFn for NoPrimKnown"
-    _ -> error "No ARM rewritePrimFn for ??"
+    URem w dividend divisor -> do
+      tgtFn <- URem w <$> rewriteValue dividend <*> rewriteValue divisor
+      evalRewrittenArchFn tgtFn
 
 
 -- ----------------------------------------------------------------------
@@ -146,7 +159,7 @@ rewritePrimFn f =
 -- computations
 
 type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
-                              , MC.ArchFn arm ~ ARMPrimFn
+                              , MC.ArchFn arm ~ ARMPrimFn arm
                               , MC.ArchStmt arm ~ ARMStmt
                               , MC.ArchTermStmt arm ~ ARMTermStmt
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg arm))

@@ -54,7 +54,7 @@ absEvalArchFn :: (ARMArchConstraints arm)
               -> AbsValue (RegAddrWidth (ArchReg arm)) tp
 absEvalArchFn _ _r f =
   case f of
-    NoPrimKnown _rhs -> MA.TopV
+    URem {} -> MA.TopV
 
 
 -- For now, none of the architecture-specific statements have an effect on the
