@@ -222,8 +222,8 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             -- other clients.
             let (bytesRead, minsn) =
                          if msegOffset addr .&. 1 == 0
-                         then let d = ARMD.disassembleInstruction (LBS.fromStrict bs) in (fst d, A32I <$> snd d)
-                         else let d = ThumbD.disassembleInstruction (LBS.fromStrict bs) in (fst d, T32I <$> snd d)
+                         then fmap (fmap A32I) $ ARMD.disassembleInstruction (LBS.fromStrict bs)
+                         else fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError $ MM.InvalidInstruction segRelAddr contents
