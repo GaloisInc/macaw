@@ -197,7 +197,7 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
       ARMDis.SVC -> case operands of
                       ARMDis.Pred _opPred ARMDis.:< ARMDis.Imm24b imm ARMDis.:< ARMDis.Nil ->
                           Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
-                      -- _ -> Nothing
+      _ -> Nothing
 
 -- | Manually-provided semantics for T32 (thumb) instructions whose full
 -- semantics cannot be expressed in our semantics format.
@@ -212,4 +212,4 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
       ThumbDis.TSVC -> case operands of
                          ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
                              Just $ G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall $ ThumbDis.Imm0_255 imm))
-                         -- _ -> Nothing
+      _ -> Nothing
