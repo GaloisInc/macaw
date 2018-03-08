@@ -163,10 +163,11 @@ pureSem sym fn =
           \xs ys ->
           case testEquality (V.length xs) n2 of
             Just Refl ->
-              do let v1 = if i `testBit` 0 then V.elemAt n1 ys
-                                           else V.elemAt n0 ys
-                     v2 = if i `testBit` 4 then V.elemAt n1 xs
+              do let v1 = if i `testBit` 0 then V.elemAt n1 xs
                                            else V.elemAt n0 xs
+                     v2 = if i `testBit` 4 then V.elemAt n1 ys
+                                           else V.elemAt n0 ys
+
                  x1 <- evalE sym v1
                  x2 <- evalE sym v2
                  let f  = fnClMul (symFuns sym)
