@@ -163,6 +163,7 @@ all_instructions =
              _ -> fail "[vpslld]: invalid arguments"
 
   , avxOp1I "vpslldq" VShiftL
+  , avxOp1I "vpsrldq" VShiftR
   , avxOp1I "vpshufd" VShufD
 
   , avxPointwise2 "vpaddd" PtAdd n32

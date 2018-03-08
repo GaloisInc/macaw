@@ -229,6 +229,8 @@ instance Show (X87_FloatType tp) where
 
 data AVXOp1 = VShiftL Word8     -- ^ Shift left by this many bytes
                                 -- New bytes are 0.
+            | VShiftR Word8     -- ^ Shift right by this many bytes.
+                                -- New bytes are 0.
             | VShufD Word8      -- ^ Shuffle 32-bit words of vector
                                 -- according to pattern in the word8
 
@@ -258,6 +260,7 @@ data AVXPointWiseOp2 =
 instance Show AVXOp1 where
   show x = case x of
              VShiftL i -> "vshiftl_" ++ show i
+             VShiftR i -> "vshiftr_" ++ show i
              VShufD  i -> "vshufd_" ++ show i
 
 instance Show AVXOp2 where

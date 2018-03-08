@@ -133,6 +133,9 @@ pureSem sym fn =
         M.VShiftL n -> vecOp1 sym BigEndian w n8 x
                         (V.shiftL (fromIntegral n) (bv 0))
 
+        M.VShiftR n -> vecOp1 sym BigEndian w n8 x
+                        (V.shiftR (fromIntegral n) (bv 0))
+
         M.VShufD mask -> vecOp1 sym LittleEndian w n32 x $ \xs ->
           divExact (V.length xs) n4 $ \i ->
             V.join n4 $ fmap (shuffleD mask)
