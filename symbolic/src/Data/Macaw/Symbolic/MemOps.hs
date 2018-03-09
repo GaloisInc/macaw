@@ -270,7 +270,7 @@ doReadMem st mvar w (BVMemRepr bytes endian) ptr =
 doCondReadMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
-  GlobalVar Mem ->                         {- ^ Memory model -}
+  GlobalVar Mem                            {- ^ Memory model -} ->
   NatRepr ptrW                             {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are reading -} ->
   RegEntry sym BoolType                    {- ^ Condition -} ->
@@ -313,7 +313,7 @@ doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
 doWriteMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
-  GlobalVar Mem ->                         {- ^ Memory model -}
+  GlobalVar Mem                            {- ^ Memory model -} ->
   NatRepr ptrW                             {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are writing -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
@@ -420,8 +420,8 @@ cases ::
 
   Maybe a           {- ^ Default: use this if none of the cases matched -} ->
 
-  -- | Cases: (name, predicate when valid, result + additional checks)
-  [(Pred sym,  IO ([(Pred sym,String)], a))] ->
+  [(Pred sym,  IO ([(Pred sym,String)], a))]
+    {- ^ Cases: (name, predicate when valid, result + additional checks) -} ->
   IO a
 cases sym name mux def opts =
   case def of

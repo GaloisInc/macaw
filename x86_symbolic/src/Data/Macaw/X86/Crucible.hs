@@ -268,8 +268,8 @@ vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   NatRepr c   {- ^ Width of individual elements -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ The input value -} ->
   (forall n. (1 <= n, (n * c) ~ w) =>
-     V.Vector n (E sym (BVType c)) -> V.Vector n (E sym (BVType c))) ->
-  -- ^ Definition of operation
+     V.Vector n (E sym (BVType c)) -> V.Vector n (E sym (BVType c)))
+  {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp1 sym endian totLen elLen x f =
   unpack (symIface sym) endian totLen elLen x $ \v ->
@@ -286,8 +286,7 @@ vecOp2 :: (IsSymInterface sym, 1 <= c) =>
   (forall n. (1 <= n, (n * c) ~ w) =>
      V.Vector n (E sym (BVType c)) ->
      V.Vector n (E sym (BVType c)) ->
-     V.Vector n (E sym (BVType c))) ->
-  -- ^ Definition of operation
+     V.Vector n (E sym (BVType c))) {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp2 sym endian totLen elLen x y f =
   unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
@@ -298,8 +297,8 @@ bitOp2 :: (IsSymInterface sym) =>
   Sym sym                                 {- ^ The simulator -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 1 -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 2 -} ->
-  (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w)) ->
-                                          -- ^ The definition of the operation
+  (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w))
+                                          {- ^ The definition of the operation -} ->
   IO (RegValue sym (LLVMPointerType w))   {- ^ The result -}
 bitOp2 sym x y f =
   do let s = symIface sym

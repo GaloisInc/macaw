@@ -230,10 +230,10 @@ data MacawStmtExtension (arch :: *)
 
     !(ArchNatRepr arch) ->
 
-    -- | Info about memory (endianness, size)
+    -- Info about memory (endianness, size)
     !(M.MemRepr tp) ->
 
-    -- | Pointer to read from.
+    -- Pointer to read from.
     !(f (ArchAddrCrucibleType arch)) ->
 
     MacawStmtExtension arch f (ToCrucibleType tp)
@@ -246,16 +246,16 @@ data MacawStmtExtension (arch :: *)
 
     !(ArchNatRepr arch) ->
 
-    -- | Info about memory (endianness, size)
+    -- Info about memory (endianness, size)
     !(M.MemRepr tp) ->
 
-    -- | Condition
+    -- Condition
     !(f C.BoolType) ->
 
-    -- | Pointer to read from
+    -- Pointer to read from
     !(f (ArchAddrCrucibleType arch)) ->
 
-    -- | Default value, returned if the condition is False.
+    -- Default value, returned if the condition is False.
     !(f (ToCrucibleType tp)) ->
 
     MacawStmtExtension arch f (ToCrucibleType tp)
@@ -282,10 +282,10 @@ data MacawStmtExtension (arch :: *)
 
   -- | Call a function.
   MacawCall ::
-    -- | Types of fields in register struct
+    -- Types of fields in register struct
     !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))) ->
 
-    -- | Arguments to call.
+    -- Arguments to call.
     !(f (ArchRegStruct arch)) ->
 
     MacawStmtExtension arch f (ArchRegStruct arch)

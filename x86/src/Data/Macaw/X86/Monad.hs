@@ -1627,7 +1627,7 @@ modify r f = do
   x <- get r
   r .= f x
 
- -- | Perform an if-then-else
+-- | Perform an if-then-else
 ifte_ :: Expr ids BoolType
       -> X86Generator st ids ()
       -> X86Generator st ids ()
