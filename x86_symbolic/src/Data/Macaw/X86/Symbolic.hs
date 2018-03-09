@@ -18,13 +18,14 @@ module Data.Macaw.X86.Symbolic
   , SymFuns(..), newSymFuns
 
   , lookupX86Reg
+  , updateX86Reg
 
   , RegAssign
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
-import           Control.Lens((^.))
+import           Control.Lens((^.),(%~),(&))
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.TraversableFC
 import           Data.Parameterized.Map as MapF
@@ -154,6 +155,16 @@ lookupX86Reg ::
 lookupX86Reg r asgn =
   do pair <- MapF.lookup r regIndexMap
      return (asgn Ctx.! crucibleIndex pair)
+
+updateX86Reg ::
+  M.X86Reg t ->
+  (f (ToCrucibleType t) -> f (ToCrucibleType t)) ->
+  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^ Assignment -} ->
+  Maybe (Assignment f (MacawCrucibleRegTypes M.X86_64))
+updateX86Reg r upd asgn =
+  do pair <- MapF.lookup r regIndexMap
+     return (asgn & ixF (crucibleIndex pair) %~ upd)
+     -- return (adjust upd (crucibleIndex pair) asgn)
 
 ------------------------------------------------------------------------
 
