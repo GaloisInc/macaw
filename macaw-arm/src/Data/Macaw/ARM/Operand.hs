@@ -94,6 +94,9 @@ instance ExtractValue ARM.ARM (Maybe T32Operand.GPR) (BVType 32) where
 instance ExtractValue ARM.ARM T32Operand.Opcode (BVType 3) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.opcodeToBits
 
+instance ExtractValue ARM.ARM T32Operand.Reglist (BVType 32) where
+  extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.regListToBits
+
 instance ExtractValue ARM.ARM T32Operand.TImm01020S4 (BVType 8) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.tImm01020S4ToBits
 
