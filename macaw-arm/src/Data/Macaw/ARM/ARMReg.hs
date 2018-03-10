@@ -35,7 +35,6 @@ import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
 import qualified SemMC.ARM as ARM
-import           SemMC.Architecture.ARM.BaseSemantics ( numGPR )
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified Text.PrettyPrint.HughesPJClass as PP
 
@@ -107,7 +106,7 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
       syscallArgumentRegs = error "MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some (ARM_GP n) | n <- [0..numGPR-1] ] <>
+armRegs = [ Some (ARM_GP n) | n <- [0..ARM.numGPR-1] ] <>
           [ Some ARM_PC
           , Some ARM_CPSR
           ]
@@ -123,7 +122,7 @@ linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w)
                                   => proxy arm
                                   -> Set.Set (Some ARMReg)
 linuxSystemCallPreservedRegisters _ =
-  Set.fromList [ Some (ARM_GP rnum) | rnum <- [8..numGPR-1] ]
+  Set.fromList [ Some (ARM_GP rnum) | rnum <- [8..ARM.numGPR-1] ]
   -- Currently, we are only considering the non-volatile GPRs.  There
   -- are also a set of non-volatile floating point registers.  I have
   -- to check on the vector registers.
