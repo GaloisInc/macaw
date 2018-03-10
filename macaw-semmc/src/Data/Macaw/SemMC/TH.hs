@@ -618,7 +618,7 @@ defaultNonceAppEvaluator bvi nonceApp =
               _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
           | otherwise ->
             case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
-              Nothing -> liftQ [| error ("Unsupported UF: " ++ show $(litE (StringL fnName))) |]
+              Nothing -> error ("Unsupported UF: " ++ show fnName)
               Just fi -> do
                 -- args is an assignment that contains elts; we could just generate
                 -- expressions that evaluate each one and then splat them into new names
@@ -628,7 +628,7 @@ defaultNonceAppEvaluator bvi nonceApp =
                   argNames -> do
                     let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                     liftQ [| O.extractValue ($(call)) |]
-    _ -> liftQ [| error "Unsupported NonceApp case" |]
+    _ -> error "Unsupported NonceApp case"
 
 -- | Parse the name of a memory read intrinsic and return the number of bytes
 -- that it reads.  For example
