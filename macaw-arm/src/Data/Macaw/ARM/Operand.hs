@@ -108,3 +108,9 @@ instance ExtractValue ARM.ARM T32Operand.LowGPR (BVType 32) where
 
 instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
   toRegister = Reg.ARM_GP . T32Operand.unLowGPR
+
+instance ExtractValue ARM.ARM (Maybe T32Operand.LowGPR) (BVType 32) where
+  extractValue mgpr =
+    case mgpr of
+      Just r -> extractValue r
+      Nothing -> return $ MC.BVValue NR.knownNat 0
