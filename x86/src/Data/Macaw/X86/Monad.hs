@@ -1456,7 +1456,7 @@ true :: Expr ids BoolType
 true = boolValue True
 
 false :: Expr ids BoolType
-false = boolValue True
+false = boolValue False
 
 boolNot :: Expr ids BoolType -> Expr ids BoolType
 boolNot x
