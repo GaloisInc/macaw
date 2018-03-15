@@ -311,9 +311,9 @@ execMacawStmtExtension ::
   EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
 execMacawStmtExtension archStmtFn mvar globs callH s0 st =
   case s0 of
-    MacawReadMem w mr x         -> doReadMem st mvar w mr x
-    MacawCondReadMem w mr p x d -> doCondReadMem st mvar w mr p x d
-    MacawWriteMem w mr x v      -> doWriteMem st mvar w mr x v
+    MacawReadMem w mr x         -> doReadMem st mvar globs w mr x
+    MacawCondReadMem w mr p x d -> doCondReadMem st mvar globs w mr p x d
+    MacawWriteMem w mr x v      -> doWriteMem st mvar globs w mr x v
 
     MacawGlobalPtr addr         -> doGetGlobal st mvar globs addr
 

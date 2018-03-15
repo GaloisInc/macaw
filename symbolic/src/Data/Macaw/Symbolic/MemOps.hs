@@ -69,7 +69,7 @@ import qualified Data.Macaw.Memory as M
 
 -- | This is called whenever a (bit-vector/pointer) is used as a bit-vector.
 -- The result is undefined (i.e., a fresh unknown value) if it is given
--- a pointer.
+-- a real pointer.
 doPtrToBits ::
   (IsSymInterface sym, 1 <= w) =>
   sym ->
@@ -241,13 +241,14 @@ doReadMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem ->
+  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
   NatRepr ptrW ->
   MemRepr ty ->
   RegEntry sym (LLVMPointerType ptrW) ->
   IO ( RegValue sym (ToCrucibleType ty)
      , CrucibleState s sym ext rtp blocks r ctx
      )
-doReadMem st mvar w (BVMemRepr bytes endian) ptr =
+doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
   do mem <- getMem st mvar
      checkEndian mem endian
 
@@ -258,7 +259,9 @@ doReadMem st mvar w (BVMemRepr bytes endian) ptr =
      LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
-     val <- let ?ptrWidth = w in loadRaw sym mem (regValue ptr) ty
+     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+
+     val <- let ?ptrWidth = w in loadRaw sym mem ptr ty
      a   <- case valToBits bitw val of
               Just a  -> return a
               Nothing -> fail "[doReadMem] We read an unexpected value"
@@ -271,6 +274,7 @@ doCondReadMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
+  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
   NatRepr ptrW                             {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are reading -} ->
   RegEntry sym BoolType                    {- ^ Condition -} ->
@@ -279,7 +283,7 @@ doCondReadMem ::
   IO ( RegValue sym (ToCrucibleType ty)
      , CrucibleState s sym ext rtp blocks r ctx
      )
-doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
+doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
   do let cond = regValue cond0
          def  = regValue def0
      mem <- getMem st mvar
@@ -291,7 +295,8 @@ doCondReadMem st mvar w (BVMemRepr bytes endian) cond0 ptr def0 =
      LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
-     val <- let ?ptrWidth = w in loadRawWithCondition sym mem (regValue ptr) ty
+     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     val <- let ?ptrWidth = w in loadRawWithCondition sym mem ptr ty
 
      let useDefault msg =
            do notC <- notPred sym cond
@@ -314,6 +319,7 @@ doWriteMem ::
   (IsSymInterface sym, 16 <= ptrW) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
+  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
   NatRepr ptrW                             {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are writing -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
@@ -321,7 +327,7 @@ doWriteMem ::
   IO ( RegValue sym UnitType
      , CrucibleState s sym ext rtp blocks r ctx
      )
-doWriteMem st mvar w (BVMemRepr bytes endian) ptr val =
+doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
   do mem <- getMem st mvar
      checkEndian mem endian
 
@@ -331,10 +337,11 @@ doWriteMem st mvar w (BVMemRepr bytes endian) ptr val =
      LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
+     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
      let ?ptrWidth = w
      let v0 = regValue val
          v  = LLVMValInt (ptrBase v0) (asBits v0)
-     mem1 <- storeRaw sym mem (regValue ptr) ty v
+     mem1 <- storeRaw sym mem ptr ty v
      return ((), setMem st mvar mem1)
 
 
@@ -384,8 +391,8 @@ ptrOp k st mvar w x0 y0 =
      let sym = stateSymInterface st
          x   = regValue x0
          y   = regValue y0
-     -- xPtr     <- let ?ptrWidth = w in isValidPointer sym x mem
-     -- yPtr     <- let ?ptrWidth = w in isValidPointer sym y mem
+
+
      xBits    <- isBitVec sym x
      yBits    <- isBitVec sym y
 
@@ -507,5 +514,33 @@ mkUndefined sym unm ty =
                     , "*** " ++ show err
                     ]
      freshConstant sym nm ty
+
+
+{- | Every now and then we encoutner memory opperations that
+just read/write to some constant.  Normally, we do not allow
+such things as we want memory to be allocated first.
+However we need to make an exception for globals.
+So, if we ever try to manipulate memory at some address
+which is statically known to be a constant, we consult
+the global map to see if we know about a correpsonding
+addres..  If so, we use that for the memory operation. -}
+tryGlobPtr ::
+  (IsSymInterface sym, 16 <= w) =>
+  sym ->
+  RegValue sym Mem ->
+  Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
+  NatRepr w ->
+  LLVMPtr sym w ->
+  IO (LLVMPtr sym w)
+tryGlobPtr sym mem globs w val
+  | Just 0 <- asNat (ptrBase val)
+  , Just r <- Map.lookup literalAddrRegion globs
+  , LeqProof <- lemma1_16 w
+    = let ?ptrWidth = w
+      in doPtrAddOffset sym mem r (asBits val)
+  | otherwise = return val
+  where
+  literalAddrRegion = 0
+
 
 
