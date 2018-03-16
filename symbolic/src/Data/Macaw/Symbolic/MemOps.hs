@@ -167,7 +167,7 @@ doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
        ]
 
 doPtrAdd :: PtrOp sym w (LLVMPtr sym w)
-doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
+doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      ptr_bits  <- andPred sym xPtr  yBits
      bits_ptr  <- andPred sym xBits yPtr
@@ -176,18 +176,22 @@ doPtrAdd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
 
-       , ptr_bits ~>
-           do r  <- ptrAdd sym w x (asBits y)
-              ok <- let ?ptrWidth = w in isValidPointer sym r mem
-              endCaseCheck ok "Invalid result (ptr_bits)" r
-
-       , bits_ptr ~>
-           do  r <- ptrAdd sym w y (asBits x)
-               ok <- let ?ptrWidth = w in isValidPointer sym r mem
-               endCaseCheck ok "Invalid result (bits_ptr)" r
+       , ptr_bits ~> endCase =<< ptrAdd sym w x (asBits y)
+       , bits_ptr ~> endCase =<< ptrAdd sym w y (asBits x)
        ]
      return a
 
+isValidPtr ::
+  (IsSymInterface sym, 16 <= w) =>
+  sym ->
+  RegValue sym Mem ->
+  NatRepr w ->
+  LLVMPtr sym w ->
+  IO (Pred sym)
+isValidPtr sym mem w p =
+ do let ?ptrWidth = w
+    LeqProof <- return (lemma1_16 w)
+    isValidPointer sym p mem
 
 doPtrSub :: PtrOp sym w (LLVMPtr sym w)
 doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
@@ -199,29 +203,33 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
 
-       , ptr_bits ~>
-           do r <- ptrSub sym w x (asBits y)
-              ok <- let?ptrWidth = w in isValidPointer sym r mem
-              endCaseCheck ok "Invalid result" r
+       , ptr_bits ~> endCase =<< ptrSub sym w x (asBits y)
 
        , ptr_ptr ~>
-           do r  <- llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
-              ok <- natEq sym (ptrBase x) (ptrBase y)
+           do okP1 <- isValidPtr sym mem w x
+              okP2 <- isValidPtr sym mem w y
+              sameAlloc <- natEq sym (ptrBase x) (ptrBase y)
+              ok <- andPred sym sameAlloc =<< andPred sym okP1 okP2
+              r  <- llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
               endCaseCheck ok "Pointers in different regions" r
        ]
 
 doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
 doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
-  let doPtrAlign amt isP isB y
-        | amt == 0          = return y
+  let doPtrAlign amt isP isB v
+        | amt == 0          = return v
         | amt == natValue w = mkNullPointer sym w
+        | Just 0 <- asNat (ptrBase v) = llvmPointer_bv sym =<<
+                                        bvAndBits sym (asBits x) (asBits y)
+
         | otherwise =
         cases sym (binOpLabel "ptr_align" x y) muxLLVMPtr Nothing
           [ isB ~>
               endCase =<< llvmPointer_bv sym =<<
                                         bvAndBits sym (asBits x) (asBits y)
           , isP ~>
-              do Just (Some n) <- return (someNat amt)
+              do -- putStrLn ("ALIGNING TO " ++ show amt ++ " bits")
+                 Just (Some n) <- return (someNat amt)
                  Just LeqProof <- return (testLeq (knownNat @1) n)
                  nm <- mkName "align_amount"
                  least <- freshConstant sym nm (BaseBVRepr n)
@@ -235,7 +243,7 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
 
                  Refl <- return (minusPlusCancel w n)
 
-                 r <- ptrSub sym w x bts
+                 r <- ptrSub sym w v bts
                  ok <- let ?ptrWidth = w in isValidPointer sym r mem
                  endCaseCheck ok "Invalid result" r
           ]
@@ -250,35 +258,45 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
 
 
 doPtrLt :: PtrOp sym w (RegValue sym BoolType)
-doPtrLt = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
+doPtrLt = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits  <- andPred sym xBits yBits
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
-     ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
+     okP1 <- isValidPtr sym mem w x
+     okP2 <- isValidPtr sym mem w y
+     ok <- andPred sym sameRegion =<< orPred sym both_bits
+                      =<< andPred sym both_ptrs =<< andPred sym okP1 okP2
      undef <- mkUndefinedBool sym "ptr_lt"
      res <- bvUlt sym (asBits x) (asBits y)
      itePred sym ok res undef
 
 
 doPtrLeq :: PtrOp sym w (RegValue sym BoolType)
-doPtrLeq = ptrOp $ \sym _ _ xPtr xBits yPtr yBits x y ->
+doPtrLeq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits  <- andPred sym xBits yBits
      both_ptrs  <- andPred sym xPtr  yPtr
      sameRegion <- natEq sym (ptrBase x) (ptrBase y)
-     ok <- andPred sym sameRegion =<< orPred sym both_bits both_ptrs
+     okP1 <- isValidPtr sym mem w x
+     okP2 <- isValidPtr sym mem w y
+     ok <- andPred sym sameRegion =<< orPred sym both_bits
+                      =<< andPred sym both_ptrs =<< andPred sym okP1 okP2
      undef <- mkUndefinedBool sym "ptr_leq"
      res <- bvUle sym (asBits x) (asBits y)
      itePred sym ok res undef
 
 
 doPtrEq :: PtrOp sym w (RegValue sym BoolType)
-doPtrEq = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
+doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
      undef <- mkUndefinedBool sym "ptr_eq"
      cases sym (binOpLabel "ptr_eq" x y) itePred (Just undef)
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
-       , both_ptrs ~> endCase =<< ptrEq sym w x y
+       , both_ptrs ~>
+            do okP1 <- isValidPtr sym mem w x
+               okP2 <- isValidPtr sym mem w y
+               ok <- andPred sym okP1 okP2
+               endCaseCheck ok "Comparing invalid pointers" =<< ptrEq sym w x y
        ]
 
 doReadMem ::
@@ -304,6 +322,10 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+
+     ok <- isValidPtr sym mem w ptr
+     check sym ok "doReadMem"
+                  $ "Reading through an invalid pointer: " ++ show (ppPtr ptr)
 
      val <- let ?ptrWidth = w in loadRaw sym mem ptr ty
      a   <- case valToBits bitw val of
@@ -340,6 +362,11 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     ok  <- isValidPtr sym mem w ptr
+     check sym ok "doCondReadMem"
+                $ "Conditional read through an invalid pointer: " ++
+                      show (ppPtr ptr)
+
      val <- let ?ptrWidth = w in loadRawWithCondition sym mem ptr ty
 
      let useDefault msg =
@@ -382,6 +409,10 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     ok <- isValidPtr sym mem w ptr
+     check sym ok "doWriteMem"
+                  $ "Write to an invalid location: " ++ show (ppPtr ptr)
+
      let ?ptrWidth = w
      let v0 = regValue val
          v  = LLVMValInt (ptrBase v0) (asBits v0)
@@ -472,14 +503,14 @@ cases ::
   Maybe a           {- ^ Default: use this if none of the cases matched -} ->
 
   [(Pred sym,  IO ([(Pred sym,String)], a))]
-    {- ^ Cases: (name, predicate when valid, result + additional checks) -} ->
+    {- ^ Cases: (predicate when valid, result + additional checks) -} ->
   IO a
 cases sym name mux def opts =
   case def of
     Just _ -> combine =<< mapM doCase opts
     Nothing ->
       do ok <- oneOf (map fst opts)
-         check ok ("Invalid arguments for " ++ show name)
+         check sym ok name ("Invalid arguments for " ++ show name)
          combine =<< mapM doCase opts
   where
   oneOf xs =
@@ -499,13 +530,16 @@ cases sym name mux def opts =
        mapM_ (subCheck p) checks
        return (p,a)
 
-  check valid msg = addAssertion sym valid
-                      $ AssertFailureSimError
-                      $ "[" ++ name ++ "] " ++ msg
-
   subCheck cp (p,msg) =
     do valid <- impliesPred sym cp p
-       check valid msg
+       check sym valid name msg
+
+
+check :: IsSymInterface sym => sym -> Pred sym -> String -> String -> IO ()
+check sym valid name msg = addAssertion sym valid
+                    $ AssertFailureSimError
+                    $ "[" ++ name ++ "] " ++ msg
+
 
 
 valToBits :: (IsSymInterface sym, 1 <= w) =>
