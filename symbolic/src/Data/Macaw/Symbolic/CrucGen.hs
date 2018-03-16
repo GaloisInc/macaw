@@ -348,6 +348,16 @@ data MacawStmtExtension (arch :: *)
     !(f (BVPtr arch)) ->
     MacawStmtExtension arch f (BVPtr arch)
 
+  -- | And together two items.  Usually these are going to be bit-vectors,
+  -- but sometimes we need to support "and"-ing a pointer with a constant,
+  -- which happens when trying to align a pointer.
+  PtrAnd ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
 
 
 instance TraversableFC (MacawArchStmtExtension arch)
@@ -383,6 +393,7 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
       PtrAdd _ x y   -> sexpr "ptr_add" [ f x, f y ]
       PtrSub _ x y   -> sexpr "ptr_sub" [ f x, f y ]
+      PtrAnd _ x y   -> sexpr "ptr_and" [ f x, f y ]
       PtrMux _ c x y -> sexpr "ptr_mux" [ f c, f x, f y ]
 
 
@@ -401,6 +412,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
   appType (PtrAdd w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
+  appType (PtrAnd w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (PtrSub w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (PtrMux w _ _ _) | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
 
@@ -770,7 +782,14 @@ appToCrucible app = do
 
     M.BVComplement w x -> appBVAtom w =<< C.BVNot w <$> v2c' w x
 
-    M.BVAnd w x y -> bitOp2 w (C.BVAnd  w) x y
+    M.BVAnd w x y ->
+      do xv <- v2c x
+         yv <- v2c y
+         aw <- archAddrWidth
+         case testEquality w aw of
+           Just Refl -> evalMacawStmt (PtrAnd w xv yv)
+           Nothing -> appBVAtom w =<< C.BVAnd w <$> toBits w xv <*> toBits w yv
+
     M.BVOr  w x y -> bitOp2 w (C.BVOr   w) x y
     M.BVXor w x y -> bitOp2 w (C.BVXor  w) x y
     M.BVShl w x y -> bitOp2 w (C.BVShl  w) x y

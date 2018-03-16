@@ -16,6 +16,7 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrEq
   , doPtrLt
   , doPtrLeq
+  , doPtrAnd
   , doReadMem
   , doCondReadMem
   , doWriteMem
@@ -25,8 +26,12 @@ module Data.Macaw.Symbolic.MemOps
   ) where
 
 import Control.Lens((^.),(&),(%~))
+import Control.Monad(guard)
+import Data.Bits(testBit)
 import Data.Map(Map)
 import qualified Data.Map as Map
+
+import Data.Parameterized(Some(..))
 
 import Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
@@ -55,6 +60,7 @@ import Lang.Crucible.LLVM.MemModel
 import Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
           , pattern LLVMPointer
+          , mkNullPointer
           )
 import Lang.Crucible.LLVM.MemModel.Type(bitvectorType)
 import Lang.Crucible.LLVM.MemModel.Generic(ppPtr)
@@ -203,6 +209,44 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
               ok <- natEq sym (ptrBase x) (ptrBase y)
               endCaseCheck ok "Pointers in different regions" r
        ]
+
+doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
+doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
+  let doPtrAlign amt isP isB y
+        | amt == 0          = return y
+        | amt == natValue w = mkNullPointer sym w
+        | otherwise =
+        cases sym (binOpLabel "ptr_align" x y) muxLLVMPtr Nothing
+          [ isB ~>
+              endCase =<< llvmPointer_bv sym =<<
+                                        bvAndBits sym (asBits x) (asBits y)
+          , isP ~>
+              do Just (Some n) <- return (someNat amt)
+                 Just LeqProof <- return (testLeq (knownNat @1) n)
+                 nm <- mkName "align_amount"
+                 least <- freshConstant sym nm (BaseBVRepr n)
+
+                 Just LeqProof <- return (testLeq n w)
+                 let mostBits = subNat w n
+                 Just LeqProof <- return (testLeq (knownNat @1) mostBits)
+                 most <- bvLit sym mostBits 0
+
+                 bts <- bvConcat sym most least
+
+                 Refl <- return (minusPlusCancel w n)
+
+                 r <- ptrSub sym w x bts
+                 ok <- let ?ptrWidth = w in isValidPointer sym r mem
+                 endCaseCheck ok "Invalid result" r
+          ]
+  in
+  case (isAlignMask x, isAlignMask y) of
+    (Just yes, _) -> doPtrAlign yes yPtr yBits y
+    (_, Just yes) -> doPtrAlign yes xPtr xBits x
+    _ -> do v1 <- doPtrToBits sym w x
+            v2 <- doPtrToBits sym w y
+            llvmPointer_bv sym =<< bvAndBits sym v1 v2
+
 
 
 doPtrLt :: PtrOp sym w (RegValue sym BoolType)
@@ -507,13 +551,18 @@ mkUndefined ::
   sym -> String -> BaseTypeRepr t -> IO (RegValue sym (BaseToType t))
 mkUndefined sym unm ty =
   do let name = "undefined_" ++ unm
-     nm <- case userSymbol name of
-             Right v -> return v
-             Left err -> fail $ unlines
-                    [ "[bug] " ++ show name ++ " is not a valid identifier?"
-                    , "*** " ++ show err
-                    ]
+     nm <- mkName name
      freshConstant sym nm ty
+
+mkName :: String -> IO SolverSymbol
+mkName x = case userSymbol x of
+             Right v -> return v
+             Left err ->
+               fail $ unlines
+                        [ "[bug] " ++ show x ++ " is not a valid identifier?"
+                        , "*** " ++ show err
+                        ]
+
 
 
 {- | Every now and then we encoutner memory opperations that
@@ -541,6 +590,17 @@ tryGlobPtr sym mem globs w val
   | otherwise = return val
   where
   literalAddrRegion = 0
+
+
+isAlignMask :: (IsSymInterface sym) => LLVMPtr sym w -> Maybe Integer
+isAlignMask v =
+  do 0 <- asNat (ptrBase v)
+     let off = asBits v
+         w   = fromInteger (natValue (bvWidth off))
+     k <- asUnsignedBV off
+     let (zeros,ones) = break (testBit k) (take w [ 0 .. ])
+     guard (all (testBit k) ones)
+     return (fromIntegral (length zeros))
 
 
 
