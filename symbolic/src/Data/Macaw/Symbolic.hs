@@ -55,6 +55,7 @@ import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
+import qualified Lang.Crucible.Simulator.Intrinsics as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified Lang.Crucible.Simulator.OverrideSim as C
 import qualified Lang.Crucible.Simulator.RegMap as C
@@ -241,10 +242,12 @@ mkFunCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints archF
 
 evalMacawExprExtension :: IsSymInterface sym
                        => sym
+                       -> C.IntrinsicTypes sym
+                       -> (Int -> String -> IO ())
                        -> (forall utp . f utp -> IO (C.RegValue sym utp))
                        -> MacawExprExtension arch f tp
                        -> IO (C.RegValue sym tp)
-evalMacawExprExtension sym f e0 =
+evalMacawExprExtension sym _iTypes _logFn f e0 =
   case e0 of
 
     MacawOverflows op w xv yv cv -> do
