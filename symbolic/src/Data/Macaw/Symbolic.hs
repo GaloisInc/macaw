@@ -35,6 +35,7 @@ module Data.Macaw.Symbolic
   , CallHandler
   , Regs
   , freshValue
+  , GlobalMap
   ) where
 
 import           Control.Lens ((^.))
