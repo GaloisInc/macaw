@@ -33,6 +33,8 @@ module Data.Macaw.Symbolic
   , MacawArchEvalFn
   , EvalStmtFunc
   , CallHandler
+  , Regs
+  , freshValue
   ) where
 
 import           Control.Lens ((^.))
@@ -317,7 +319,7 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
 
     MacawGlobalPtr addr         -> doGetGlobal st mvar globs addr
 
-    MacawFreshSymbolic t ->
+    MacawFreshSymbolic t -> -- XXX: user freshValue
       do nm <- case userSymbol "macawFresh" of
                  Right a -> return a
                  Left err -> fail (show err)
@@ -338,6 +340,51 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
     PtrAdd w x y                -> doPtrAdd st mvar w x y
     PtrSub w x y                -> doPtrSub st mvar w x y
     PtrAnd w x y                -> doPtrAnd st mvar w x y
+
+
+freshValue ::
+  (IsSymInterface sym, 1 <= ptrW) =>
+  sym ->
+  String {- ^ Name for fresh value -} ->
+  NatRepr ptrW {- ^ Width of pointers -} ->
+  M.TypeRepr tp {- ^ Type of value -} ->
+  IO (C.RegValue sym (ToCrucibleType tp))
+freshValue sym str w ty =
+  case ty of
+    M.BVTypeRepr y ->
+      case testEquality y w of
+
+        Just Refl ->
+          do nm_base <- symName (str ++ "_base")
+             nm_off  <- symName (str ++ "_off")
+             base    <- freshConstant sym nm_base C.BaseNatRepr
+             offs    <- freshConstant sym nm_off (C.BaseBVRepr y)
+             return (MM.LLVMPointer base offs)
+
+        Nothing ->
+          do nm   <- symName str
+             base <- natLit sym 0
+             offs <- freshConstant sym nm (C.BaseBVRepr y)
+             return (MM.LLVMPointer base offs)
+
+    M.BoolTypeRepr ->
+      do nm <- symName str
+         freshConstant sym nm C.BaseBoolRepr
+
+    M.TupleTypeRepr {} -> crash [ "Unexpected symbolic tuple:", show str ]
+
+  where
+  symName x =
+    case userSymbol x of
+      Left err -> crash [ "Invalid symbol name:", show x, show err ]
+      Right a -> return a
+
+  crash xs =
+    case xs of
+      [] -> crash ["(unknown)"]
+      y : ys -> fail $ unlines $ ("[freshX86Reg] " ++ y)
+                               : [ "*** " ++ z | z <- ys ]
+
 
 
 -- | Return macaw extension evaluation functions.
