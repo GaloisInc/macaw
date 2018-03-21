@@ -851,7 +851,7 @@ rip :: Location addr (BVType 64)
 rip = fullRegister R.X86_IP
 
 ymm :: F.YMMReg -> Location addr (BVType 256)
-ymm = fullRegister . R.YMM
+ymm = fullRegister . R.YMM . F.ymmRegNo
 
 xmm_sse :: F.XMMReg -> Location addr (BVType 128)
 xmm_sse = reg_low128_sse . xmmOwner
@@ -860,7 +860,7 @@ xmm_avx :: F.XMMReg -> Location addr (BVType 128)
 xmm_avx = reg_low128_avx . xmmOwner
 
 xmmOwner :: F.XMMReg -> X86Reg (BVType 256)
-xmmOwner = R.YMM . F.ymmReg . F.xmmRegNo
+xmmOwner = R.YMM . F.xmmRegNo
 
 ------------------------------------------------------------------------
 

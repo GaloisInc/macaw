@@ -157,7 +157,7 @@ all_instructions =
   , defNullary "vzeroupper" $
       inAVX $
       forM_ [ 0 .. maxReg ] $ \r ->
-        reg_high128 (YMM (ymmReg r)) .= ValueExpr (bvValue 0)
+        reg_high128 (YMM r) .= ValueExpr (bvValue 0)
 
   , avxMov "vmovaps"
   , avxMov "vmovups"
