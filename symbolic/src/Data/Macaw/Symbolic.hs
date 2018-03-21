@@ -379,7 +379,7 @@ freshValue sym str w ty =
 
   where
   symName x =
-    case userSymbol x of
+    case userSymbol ("macaw_" ++ x) of
       Left err -> crash [ "Invalid symbol name:", show x, show err ]
       Right a -> return a
 
