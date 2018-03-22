@@ -171,7 +171,7 @@ updateX86Reg r upd asgn =
 freshX86Reg :: C.IsSymInterface sym =>
   sym -> M.X86Reg t -> IO (RegValue' sym (ToCrucibleType t))
 freshX86Reg sym r =
-  RV <$> freshValue sym (show r) (C.knownNat @64)  (M.typeRepr r)
+  RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
 
 ------------------------------------------------------------------------
 

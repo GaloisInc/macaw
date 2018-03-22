@@ -350,13 +350,13 @@ freshValue ::
   (IsSymInterface sym, 1 <= ptrW) =>
   sym ->
   String {- ^ Name for fresh value -} ->
-  NatRepr ptrW {- ^ Width of pointers -} ->
+  Maybe (NatRepr ptrW) {- ^ Width of pointers; if nothing, allocate as bits -} ->
   M.TypeRepr tp {- ^ Type of value -} ->
   IO (C.RegValue sym (ToCrucibleType tp))
 freshValue sym str w ty =
   case ty of
     M.BVTypeRepr y ->
-      case testEquality y w of
+      case testEquality y =<< w of
 
         Just Refl ->
           do nm_base <- symName (str ++ "_base")
