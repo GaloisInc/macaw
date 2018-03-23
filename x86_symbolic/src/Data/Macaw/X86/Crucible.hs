@@ -14,7 +14,7 @@
 {-# Language FlexibleContexts #-}
 module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
-    SymFuns, newSymFuns
+    SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
   , semantics
@@ -133,6 +133,9 @@ pureSem sym fn =
         M.VShiftL n -> vecOp1 sym BigEndian w n8 x
                         (V.shiftL (fromIntegral n) (bv 0))
 
+        M.VShiftR n -> vecOp1 sym BigEndian w n8 x
+                        (V.shiftR (fromIntegral n) (bv 0))
+
         M.VShufD mask -> vecOp1 sym LittleEndian w n32 x $ \xs ->
           divExact (V.length xs) n4 $ \i ->
             V.join n4 $ fmap (shuffleD mask)
@@ -164,6 +167,7 @@ pureSem sym fn =
                                            else V.elemAt n0 xs
                      v2 = if i `testBit` 4 then V.elemAt n1 ys
                                            else V.elemAt n0 ys
+
                  x1 <- evalE sym v1
                  x2 <- evalE sym v2
                  let f  = fnClMul (symFuns sym)
@@ -264,8 +268,8 @@ vecOp1 :: (IsSymInterface sym, 1 <= c) =>
   NatRepr c   {- ^ Width of individual elements -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ The input value -} ->
   (forall n. (1 <= n, (n * c) ~ w) =>
-     V.Vector n (E sym (BVType c)) -> V.Vector n (E sym (BVType c))) ->
-  -- ^ Definition of operation
+     V.Vector n (E sym (BVType c)) -> V.Vector n (E sym (BVType c)))
+  {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp1 sym endian totLen elLen x f =
   unpack (symIface sym) endian totLen elLen x $ \v ->
@@ -282,8 +286,7 @@ vecOp2 :: (IsSymInterface sym, 1 <= c) =>
   (forall n. (1 <= n, (n * c) ~ w) =>
      V.Vector n (E sym (BVType c)) ->
      V.Vector n (E sym (BVType c)) ->
-     V.Vector n (E sym (BVType c))) ->
-  -- ^ Definition of operation
+     V.Vector n (E sym (BVType c))) {- ^ Definition of operation -} ->
   IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
 vecOp2 sym endian totLen elLen x y f =
   unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
@@ -294,8 +297,8 @@ bitOp2 :: (IsSymInterface sym) =>
   Sym sym                                 {- ^ The simulator -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 1 -} ->
   AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input 2 -} ->
-  (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w)) ->
-                                          -- ^ The definition of the operation
+  (E sym (BVType w) -> E sym (BVType w) -> App () (E sym) (BVType w))
+                                          {- ^ The definition of the operation -} ->
   IO (RegValue sym (LLVMPointerType w))   {- ^ The result -}
 bitOp2 sym x y f =
   do let s = symIface sym
@@ -344,6 +347,8 @@ unpack2 sym e w c v1 v2 k =
 
 
 
+-- XXX: Do we want to be strict here (i.e., asserting that the thing is
+-- not a pointer, or should be lenent, i.e., return an undefined value?)
 getBitVal ::
   IsSymInterface sym =>
   sym ->

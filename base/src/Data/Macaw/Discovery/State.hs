@@ -254,7 +254,9 @@ parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
-    text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
+    text "function" <+> text (BSC.unpack (discoveredFunName info))
+         <+> pretty "@" <+> pretty (show (discoveredFunAddr info))
+    <$$>
     vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------

@@ -15,22 +15,30 @@
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
-  , SymFuns, newSymFuns
+  , SymFuns(..), newSymFuns
+
+  , lookupX86Reg
+  , updateX86Reg
+  , freshX86Reg
 
   , RegAssign
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
-import           Control.Lens((^.))
+import           Control.Lens((^.),(%~),(&))
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.TraversableFC
+import           Data.Parameterized.Map as MapF
 import           GHC.TypeLits
 import           Data.Functor.Identity(Identity(..))
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
-import           Data.Macaw.Symbolic.PersistentState(typeToCrucible)
+import           Data.Macaw.Symbolic.PersistentState
+                 (typeToCrucible,RegIndexMap,mkRegIndexMap,IndexPair(..))
+import           Data.Macaw.Symbolic.CrucGen
+                    (crucArchRegTypes,MacawCrucibleRegTypes)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
@@ -42,6 +50,7 @@ import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Solver.Interface as C
+import Lang.Crucible.Simulator.RegValue(RegValue'(..))
 
 
 
@@ -112,6 +121,12 @@ flagRegs :: Assignment M.X86Reg (CtxRepeat 9 M.BoolType)
 flagRegs =
   Empty :> M.CF :> M.PF :> M.AF :> M.ZF :> M.SF :> M.TF :> M.IF :> M.DF :> M.OF
 
+x87_statusRegs :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType)
+x87_statusRegs =
+     (repeatAssign (M.X87_StatusReg . fromIntegral)
+        :: Assignment M.X86Reg (CtxRepeat 11 M.BoolType))
+  :> M.X87_StatusReg 14
+
 -- | This contains an assignment that stores the register associated with each index in the
 -- X86 register structure.
 x86RegAssignment :: Assignment M.X86Reg (ArchRegContext M.X86_64)
@@ -119,12 +134,44 @@ x86RegAssignment =
   Empty :> M.X86_IP
   <++> (repeatAssign gpReg :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 64)))
   <++> flagRegs
-  <++> (repeatAssign (M.X87_StatusReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 12 M.BoolType))
+  <++> x87_statusRegs
   <++> (Empty :> M.X87_TopReg)
   <++> (repeatAssign (M.X87_TagReg . fromIntegral)    :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 2)))
   <++> (repeatAssign (M.X87_FPUReg . F.mmxReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat  8 (M.BVType 80)))
   <++> (repeatAssign (M.X86_YMMReg . F.ymmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 256)))
 
+
+regIndexMap :: RegIndexMap M.X86_64
+regIndexMap = mkRegIndexMap x86RegAssignment
+            $ Ctx.size $ crucArchRegTypes x86_64MacawSymbolicFns
+
+
+{- | Lookup a Macaw register in a Crucible assignemnt.
+This function returns "Nothing" if the input register is not represented
+in the assignment.  This means that either the input register is malformed,
+or we haven't modelled this register for some reason. -}
+lookupX86Reg ::
+  M.X86Reg t                                    {- ^ Lookup this register -} ->
+  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^ Assignment -} ->
+  Maybe (f (ToCrucibleType t))  {- ^ The value of the register -}
+lookupX86Reg r asgn =
+  do pair <- MapF.lookup r regIndexMap
+     return (asgn Ctx.! crucibleIndex pair)
+
+updateX86Reg ::
+  M.X86Reg t ->
+  (f (ToCrucibleType t) -> f (ToCrucibleType t)) ->
+  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^Update this assignment -} ->
+  Maybe (Assignment f (MacawCrucibleRegTypes M.X86_64))
+updateX86Reg r upd asgn =
+  do pair <- MapF.lookup r regIndexMap
+     return (asgn & ixF (crucibleIndex pair) %~ upd)
+     -- return (adjust upd (crucibleIndex pair) asgn)
+
+freshX86Reg :: C.IsSymInterface sym =>
+  sym -> M.X86Reg t -> IO (RegValue' sym (ToCrucibleType t))
+freshX86Reg sym r =
+  RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
 
 ------------------------------------------------------------------------
 

@@ -95,6 +95,7 @@ module Data.Macaw.X86.X86Reg
   , x86FloatResultRegs
   ) where
 
+import           Data.Word(Word8)
 import           Data.Macaw.CFG (RegAddrWidth, RegisterInfo(..), PrettyF(..))
 import           Data.Macaw.Types
 import           Data.Parameterized.Classes
@@ -357,8 +358,8 @@ pattern X87_C2 = X87_StatusReg 10
 pattern X87_C3 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C3 = X87_StatusReg 14
 
-pattern YMM :: () => (t ~ YMM) => F.YMMReg -> X86Reg t
-pattern YMM x = X86_YMMReg x
+pattern YMM :: () => (t ~ YMM) => Word8 -> X86Reg t
+pattern YMM w = X86_YMMReg (F.YMMR w)
 
 x87StatusNames :: V.Vector String
 x87StatusNames = V.fromList $

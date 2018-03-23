@@ -11,7 +11,7 @@ import Flexdis86.Register (ymmReg)
 import qualified Flexdis86 as F
 
 import Data.Macaw.CFG.Core(Value,bvValue)
-import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n256)
+import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n256)
 
 import Data.Macaw.X86.InstructionDef
 import Data.Macaw.X86.Monad((.=), ymm, reg_high128)
@@ -128,6 +128,21 @@ avxPointwise2 mnem op sz =
                  arg1 <~ Pointwise2 elN sz op v1 v2
            _ -> fail ("[" ++ mnem ++ "] Invalid arguments")
 
+avxPointwiseShiftL :: (1 <= n) => String -> NatRepr n -> InstructionDef
+avxPointwiseShiftL mnem sz =
+  avx3 mnem $ \arg1 arg2 arg3 ->
+      do SomeBV vec <- getSomeBVValue arg2
+         SomeBV amt <- getSomeBVValue arg3
+         let vw   = typeWidth vec
+             amtw = typeWidth amt
+         withDivModNat vw sz $ \elN remi ->
+           case (testEquality remi n0, testLeq n1 elN) of
+             (Just Refl, Just LeqProof) ->
+               do v <- eval vec
+                  a <- eval amt
+                  arg1 <~ PointwiseShiftL elN sz amtw v a
+             _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
+
 
 
 all_instructions :: [InstructionDef]
@@ -142,27 +157,18 @@ all_instructions =
   , defNullary "vzeroupper" $
       inAVX $
       forM_ [ 0 .. maxReg ] $ \r ->
-        reg_high128 (YMM (ymmReg r)) .= ValueExpr (bvValue 0)
+        reg_high128 (YMM r) .= ValueExpr (bvValue 0)
 
   , avxMov "vmovaps"
   , avxMov "vmovups"
   , avxMov "vmovdqa"
   , avxMov "vmovdqu"
 
-  , avx3 "vpslld" $ \arg1 arg2 arg3 ->
-      do SomeBV vec <- getSomeBVValue arg2
-         SomeBV amt <- getSomeBVValue arg3
-         let vw   = typeWidth vec
-             amtw = typeWidth amt
-         withDivModNat vw n32 $ \elN remi ->
-           case (testEquality remi n0, testLeq n1 elN) of
-             (Just Refl, Just LeqProof) ->
-               do v <- eval vec
-                  a <- eval amt
-                  arg1 <~ PointwiseShiftL elN n32 amtw v a
-             _ -> fail "[vpslld]: invalid arguments"
+  , avxPointwiseShiftL "vpslld" n32
+  , avxPointwiseShiftL "vpsllq" n64
 
   , avxOp1I "vpslldq" VShiftL
+  , avxOp1I "vpsrldq" VShiftR
   , avxOp1I "vpshufd" VShufD
 
   , avxPointwise2 "vpaddd" PtAdd n32

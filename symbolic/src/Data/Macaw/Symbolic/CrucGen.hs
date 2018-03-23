@@ -188,6 +188,11 @@ data MacawExprExtension (arch :: *)
     !(f (C.BVType w)) ->
     MacawExprExtension arch f (MM.LLVMPointerType w)
 
+  -- | A null pointer.
+  MacawNullPtr ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(ArchNatRepr arch) ->
+    MacawExprExtension arch f (BVPtr arch)
 
 
 instance C.PrettyApp (MacawExprExtension arch) where
@@ -200,12 +205,15 @@ instance C.PrettyApp (MacawExprExtension arch) where
       PtrToBits w x  -> sexpr ("ptr_to_bits_" ++ show w) [f x]
       BitsToPtr w x  -> sexpr ("bits_to_ptr_" ++ show w) [f x]
 
+      MacawNullPtr _ -> sexpr "null_ptr" []
+
 instance C.TypeApp (MacawExprExtension arch) where
   appType x =
     case x of
-      MacawOverflows {} -> C.knownRepr
-      PtrToBits w _     -> C.BVRepr w
-      BitsToPtr w _     -> MM.LLVMPointerRepr w
+      MacawOverflows {}     -> C.knownRepr
+      PtrToBits w _         -> C.BVRepr w
+      BitsToPtr w _         -> MM.LLVMPointerRepr w
+      MacawNullPtr w | LeqProof <- lemma1_16 w     -> MM.LLVMPointerRepr w
 
 
 ------------------------------------------------------------------------
@@ -222,10 +230,10 @@ data MacawStmtExtension (arch :: *)
 
     !(ArchNatRepr arch) ->
 
-    -- | Info about memory (endianness, size)
+    -- Info about memory (endianness, size)
     !(M.MemRepr tp) ->
 
-    -- | Pointer to read from.
+    -- Pointer to read from.
     !(f (ArchAddrCrucibleType arch)) ->
 
     MacawStmtExtension arch f (ToCrucibleType tp)
@@ -238,16 +246,16 @@ data MacawStmtExtension (arch :: *)
 
     !(ArchNatRepr arch) ->
 
-    -- | Info about memory (endianness, size)
+    -- Info about memory (endianness, size)
     !(M.MemRepr tp) ->
 
-    -- | Condition
+    -- Condition
     !(f C.BoolType) ->
 
-    -- | Pointer to read from
+    -- Pointer to read from
     !(f (ArchAddrCrucibleType arch)) ->
 
-    -- | Default value, returned if the condition is False.
+    -- Default value, returned if the condition is False.
     !(f (ToCrucibleType tp)) ->
 
     MacawStmtExtension arch f (ToCrucibleType tp)
@@ -261,16 +269,23 @@ data MacawStmtExtension (arch :: *)
     !(f (ToCrucibleType tp)) ->
     MacawStmtExtension arch f C.UnitType
 
+  -- | Get the pointer associated with the given global address.
+  MacawGlobalPtr ::
+    (16 <= M.ArchAddrWidth arch, M.MemWidth (M.ArchAddrWidth arch)) =>
+    !(M.MemAddr (M.ArchAddrWidth arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
+
   -- | Generate a fresh symbolic variable of the given type.
   MacawFreshSymbolic ::
     !(M.TypeRepr tp) -> MacawStmtExtension arch f (ToCrucibleType tp)
 
   -- | Call a function.
   MacawCall ::
-    -- | Types of fields in register struct
+    -- Types of fields in register struct
     !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))) ->
 
-    -- | Arguments to call.
+    -- Arguments to call.
     !(f (ArchRegStruct arch)) ->
 
     MacawStmtExtension arch f (ArchRegStruct arch)
@@ -333,6 +348,16 @@ data MacawStmtExtension (arch :: *)
     !(f (BVPtr arch)) ->
     MacawStmtExtension arch f (BVPtr arch)
 
+  -- | And together two items.  Usually these are going to be bit-vectors,
+  -- but sometimes we need to support "and"-ing a pointer with a constant,
+  -- which happens when trying to align a pointer.
+  PtrAnd ::
+    (16 <= M.ArchAddrWidth arch) =>
+    !(ArchNatRepr arch) ->
+    !(f (BVPtr arch)) ->
+    !(f (BVPtr arch)) ->
+    MacawStmtExtension arch f (BVPtr arch)
+
 
 
 instance TraversableFC (MacawArchStmtExtension arch)
@@ -357,6 +382,8 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       MacawReadMem _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
       MacawCondReadMem _ r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
       MacawWriteMem _ r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
+      MacawGlobalPtr x -> sexpr "global" [ text (show x) ]
+
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
       MacawCall _ regs -> sexpr "macawCall" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
@@ -366,6 +393,7 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
       PtrAdd _ x y   -> sexpr "ptr_add" [ f x, f y ]
       PtrSub _ x y   -> sexpr "ptr_sub" [ f x, f y ]
+      PtrAnd _ x y   -> sexpr "ptr_and" [ f x, f y ]
       PtrMux _ c x y -> sexpr "ptr_mux" [ f c, f x, f y ]
 
 
@@ -374,6 +402,9 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawReadMem _ r _) = memReprToCrucible r
   appType (MacawCondReadMem _ r _ _ _) = memReprToCrucible r
   appType (MacawWriteMem _ _ _ _) = C.knownRepr
+  appType (MacawGlobalPtr a)
+    | let w = M.addrWidthNatRepr (M.addrWidthRepr a)
+    , LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawCall regTypes _) = C.StructRepr regTypes
   appType (MacawArchStmtExtension f) = C.appType f
@@ -381,6 +412,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
   appType (PtrAdd w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
+  appType (PtrAnd w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (PtrSub w _ _)   | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
   appType (PtrMux w _ _ _) | LeqProof <- lemma1_16 w = MM.LLVMPointerRepr w
 
@@ -750,7 +782,14 @@ appToCrucible app = do
 
     M.BVComplement w x -> appBVAtom w =<< C.BVNot w <$> v2c' w x
 
-    M.BVAnd w x y -> bitOp2 w (C.BVAnd  w) x y
+    M.BVAnd w x y ->
+      do xv <- v2c x
+         yv <- v2c y
+         aw <- archAddrWidth
+         case testEquality w aw of
+           Just Refl -> evalMacawStmt (PtrAnd w xv yv)
+           Nothing -> appBVAtom w =<< C.BVAnd w <$> toBits w xv <*> toBits w yv
+
     M.BVOr  w x y -> bitOp2 w (C.BVOr   w) x y
     M.BVXor w x y -> bitOp2 w (C.BVXor  w) x y
     M.BVShl w x y -> bitOp2 w (C.BVShl  w) x y
@@ -793,24 +832,21 @@ valueToCrucible v = do
     M.BVValue w c -> fromBits w =<< bvLit w c
     M.BoolValue b -> crucibleValue (C.BoolLit b)
 
-    M.RelocatableValue {} -> fail "XXX: Deal with globals"
+    M.RelocatableValue w addr ->
+      do rW <- archAddrWidth
+         case testEquality w rW of
+           Just Refl
+            | M.addrBase addr == 0 && M.addrOffset addr == 0 ->
+              evalMacawExt (MacawNullPtr w)
+            | otherwise -> evalMacawStmt (MacawGlobalPtr addr)
+           Nothing ->
+             fail $ unlines [ "Unexpected relocatable value width"
+                            , "*** Expected: " ++ show rW
+                            , "*** Width:    " ++ show w
+                            , "*** Base:     " ++ show (M.addrBase addr)
+                            , "*** Offset:   " ++ show (M.addrOffset addr)
+                            ]
 
-{-
-    -- In this case,
-    M.RelocatableValue w addr
-      | M.addrBase addr == 0 -> do
-          crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
-      | otherwise -> do
-          let idx = M.addrBase addr
-          segMap <- gets crucMemBaseAddrMap
-          case Map.lookup idx segMap of
-            Just g -> do
-              a <- evalAtom (CR.ReadGlobal g)
-              offset <- crucibleValue (C.BVLit w (toInteger (M.addrOffset addr)))
-              crucibleValue (C.BVAdd w a offset)
-            Nothing ->
-              fail $ "internal: No Crucible address associated with segment."
--}
     M.Initial r ->
       getRegValue r
 
