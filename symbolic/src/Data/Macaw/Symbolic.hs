@@ -45,7 +45,6 @@ import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.Map as MapF
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
@@ -53,7 +52,6 @@ import qualified Lang.Crucible.Analysis.Postdom as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
-import qualified Lang.Crucible.Config as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.ProgramLoc as C
@@ -69,7 +67,6 @@ import           System.IO (stdout)
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
 import           Lang.Crucible.LLVM.Intrinsics(llvmIntrinsicTypes)
-import qualified Lang.Crucible.LLVM.DataLayout as MM
 
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
