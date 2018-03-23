@@ -14,8 +14,9 @@ import Data.Macaw.CFG.Core(Value,bvValue)
 import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n256)
 
 import Data.Macaw.X86.InstructionDef
-import Data.Macaw.X86.Monad((.=), ymm, reg_high128)
-import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation)
+import Data.Macaw.X86.Monad((.=), ymm, reg_high128, uext)
+import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation
+                             , truncateBVValue )
 import Data.Macaw.X86.Generator(X86Generator, Expr(..),inAVX,evalArchFn,eval)
 import Data.Macaw.X86.X86Reg
 import Data.Macaw.X86.ArchTypes(X86_64,X86PrimFn(..),
@@ -24,6 +25,7 @@ import Data.Macaw.X86.ArchTypes(X86_64,X86PrimFn(..),
 maxReg :: Word8
 maxReg = 15 -- or 7 in 32-bit mode
 
+-- | Either 0 extend a value, or truncate it.
 avxMov :: String -> InstructionDef
 avxMov m = defBinary m def
   where
@@ -32,12 +34,11 @@ avxMov m = defBinary m def
     do SomeBV l <- getSomeBVLocation v1
        SomeBV v <- getSomeBVValue v2
        let lw = typeWidth l
-           lv = typeWidth v
-       case testEquality lw lv of
-         Just Refl -> l .= v
-         Nothing -> fail $ "Widths aren't equal: " ++ show lw ++ " and "
-                                                   ++ show lv
-
+           vw = typeWidth v
+       case testLeq vw lw of
+         Just LeqProof -> l .= uext lw v
+         Nothing -> do vTrunc <- truncateBVValue lw (SomeBV v)
+                       l .= vTrunc
 
 avx3 :: String ->
         (forall st ids.  F.Value -> F.Value -> F.Value ->
@@ -163,6 +164,8 @@ all_instructions =
   , avxMov "vmovups"
   , avxMov "vmovdqa"
   , avxMov "vmovdqu"
+
+  , avxMov "vmovq"
 
   , avxPointwiseShiftL "vpslld" n32
   , avxPointwiseShiftL "vpsllq" n64
