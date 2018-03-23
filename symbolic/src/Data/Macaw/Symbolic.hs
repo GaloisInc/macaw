@@ -68,6 +68,7 @@ import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
+import           Lang.Crucible.LLVM.Intrinsics(llvmIntrinsicTypes)
 import qualified Lang.Crucible.LLVM.DataLayout as MM
 
 import qualified Data.Macaw.CFG.Block as M
@@ -414,7 +415,8 @@ type GlobalMap sym arch = Map M.RegionIndex
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
            .  IsSymInterface sym
-           => sym
+           => C.SimConfig MacawSimulatorState sym
+           -> sym
            -> MacawSymbolicArchFunctions arch
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
@@ -430,16 +432,15 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) callH g regStruct = do
+runCodeBlock cfg sym archFns archEval halloc (initMem,globs) callH g regStruct = do
   mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
-  -- Run the symbolic simulator.
-  cfg <- C.initialConfig 0 []
+
   let ctx :: C.SimContext MacawSimulatorState sym (MacawExt arch)
       ctx = C.SimContext { C._ctxSymInterface = sym
                          , C.ctxSolverProof = \a -> a
-                         , C.ctxIntrinsicTypes = MapF.empty
+                         , C.ctxIntrinsicTypes = llvmIntrinsicTypes
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
