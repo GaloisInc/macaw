@@ -248,16 +248,20 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
+  -- Skip if function is unexlored
   | Map.member addr (s^.funInfo) = s
-  | otherwise = s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
-
+  | otherwise = addrWidthClass (memAddrWidth (memory s)) $
+    -- Only add function if the start is raw bytes.
+    case contentsAfterSegmentOff addr of
+      Right (ByteRegion _:_) ->
+        s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
+      _ -> s
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                     -> [ArchSegmentOff arch]
                     -> DiscoveryState arch
                     -> DiscoveryState arch
 markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
-
 
 ------------------------------------------------------------------------
 -- FoundAddr
@@ -815,7 +819,8 @@ transferBlocks src finfo sz block_map =
       -- undiscovered functions with entries marked InitAddr, which we assume is
       -- info we know from the symbol table or some other reliable source, and
       -- pass in. Only used in analysis if pctxTrustKnownFns is True.
-      let knownFns = Set.union (Map.keysSet $ s^.funInfo) (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
+      let knownFns = Set.union (Map.keysSet $ s^.funInfo)
+                               (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
       let ctx = ParseContext { pctxMemory         = memory s
                              , pctxArchInfo       = archInfo s
                              , pctxKnownFnEntries = knownFns

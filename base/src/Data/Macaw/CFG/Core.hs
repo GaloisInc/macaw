@@ -87,7 +87,6 @@ module Data.Macaw.CFG.Core
   , module Data.Macaw.Utils.Pretty
   ) where
 
-import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.Identity
 import           Control.Monad.State.Strict

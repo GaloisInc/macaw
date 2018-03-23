@@ -66,6 +66,7 @@ module Data.Macaw.Memory
   , msegAddr
   , incSegmentOff
   , diffSegmentOff
+  , contentsAfterSegmentOff
   , clearSegmentOffLeastBit
   , memAsAddrPairs
     -- * Symbols
@@ -357,17 +358,21 @@ data SegmentRange (w :: Nat)
    = ByteRegion !BS.ByteString
      -- ^ A region with specificed bytes
    | SymbolicRef !SymbolRef
+     -- ^ A region containing a symbolic reference.
+   | BSSRegion !(MemWord w)
+     -- ^ A region containing the given number of zero-initialized bytes.
 
 rangeSize :: forall w . MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
 rangeSize (SymbolicRef _) = fromIntegral (addrSize (error "rangeSize nat evaluated" :: NatRepr w))
-
+rangeSize (BSSRegion sz)  = sz
 
 instance Show (SegmentRange w) where
   showsPrec _ (ByteRegion bs) = \s -> foldr ppByte s (BS.unpack bs)
     where ppByte w | w < 16    = showChar '0' . showHex w
                    | otherwise = showHex w
   showsPrec _ (SymbolicRef s) = shows (BSC.unpack (symbolName s))
+  showsPrec _ (BSSRegion sz)  = showString "bss[" . shows sz . showChar ']'
 
   showList [] = id
   showList (h : r) = showsPrec 10 h . showList r
@@ -389,24 +394,40 @@ contentsSize (SegmentContents m) =
     Nothing -> 0
     Just ((start, c),_) -> start + rangeSize c
 
--- | Return list of contents from given word or 'Nothing' if this can't be done
+-- | Return list of contents from given word or an error if this we can't cleanly
+-- partition a relocation
 -- due to a relocation.
 contentsAfterSegmentOff :: MemWidth w
                         => MemSegmentOff w
                         -> Either (MemoryError w) [SegmentRange w]
 contentsAfterSegmentOff mseg = do
+  -- Get offset within segment to get
   let off = msegOffset mseg
+  -- Get complete contents of segment
   let contents = segmentContents (msegSegment mseg)
+  -- Split the map into all segments starting strictly before offset,
+  -- memory starting at offset (if any), and contents strictly after offset.
   let (premap,mv,post) = Map.splitLookup off (segContentsMap contents)
   case mv of
+    -- If something starts at offset, then return it and everything after.
     Just v -> Right $ v : Map.elems post
+    -- If no memory starts exactly at offset, then
+    -- look at the last segment starting before offset.
     Nothing ->
       case Map.maxViewWithKey premap of
-        Nothing | off == 0 -> Right []
-                | otherwise -> error $ "Memory.contentsAfterSegmentOff invalid contents"
+        -- This implies nothing starts before the segment offset, which should not be
+        -- allowed
+        Nothing -> error $ "Memory.contentsAfterSegmentOff invalid contents"
+        -- If last segment is a byte region then we drop elements before offset.
         Just ((pre_off, ByteRegion bs),_) -> do
           let v = ByteRegion (BS.drop (fromIntegral (off - pre_off)) bs)
           Right $ v : Map.elems post
+        -- If last segment is a BSS region, then we drop elements before offset.
+        Just ((pre_off, BSSRegion sz),_) -> do
+          let v = BSSRegion (sz - fromIntegral (off - pre_off))
+          Right $ v : Map.elems post
+        -- If last segment is a symbolic reference, then the code is asking
+        -- us to partition a symbolic reference in two, which we cannot do.
         Just ((_, SymbolicRef{}),_) ->
           Left (UnexpectedRelocation (relativeSegmentAddr mseg))
 
@@ -449,12 +470,13 @@ memSegment :: forall w
               -- ^ Flags if defined
            -> [SegmentRange w]
               -- ^ Range of vlaues.
-           -> MemSegment w
+           -> Maybe (MemSegment w)
 memSegment base off flags contentsl
       -- Check for overflow in contents end
     | off + toInteger (contentsSize contents) > toInteger (maxBound :: MemWord w) =
       error "Contents two large for base."
-    | otherwise =
+    | null contentsl = Nothing
+    | otherwise = Just $
       MemSegment { segmentBase = base
                  , segmentOffset = fromInteger off
                  , segmentFlags = flags
@@ -558,7 +580,8 @@ insertMemSegment seg mem = addrWidthClass (memAddrWidth mem) $ do
 -- MemSegmentOff
 -- | A pair containing a segment and offset.
 --
--- Constructrs enforce that the offset is valid
+-- Functions that return a segment-offset pair enforce that the offset
+-- is strictly less than the size of the memory segment in bytes.
 data MemSegmentOff w = MemSegmentOff { msegSegment :: !(MemSegment w)
                                      , msegOffset :: !(MemWord w)
                                      }
@@ -574,7 +597,9 @@ resolveAddr mem idx addr = addrWidthClass (memAddrWidth mem) $ do
   m <- Map.lookup idx (memSegmentMap mem)
   case Map.lookupLE addr m of
     Just (base, seg) | addr - base < segmentSize seg ->
-      Just $! MemSegmentOff seg (addr - base)
+      Just $! MemSegmentOff { msegSegment = seg
+                            , msegOffset = addr - base
+                            }
     _ -> Nothing
 
 -- | Return the segment associated with the given address if well-defined.
@@ -651,6 +676,7 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
           pure (MemSegmentOff seg off, val_ref)
         _ -> []
     SymbolicRef{} -> []
+    BSSRegion{} -> []
 
 ------------------------------------------------------------------------
 -- MemAddr
@@ -759,6 +785,11 @@ dropSegmentRangeListBytes (SymbolicRef _:rest) cnt = do
     Left DropUnexpectedRelocation
    else
     dropSegmentRangeListBytes rest (cnt - sz)
+dropSegmentRangeListBytes (BSSRegion sz : rest) cnt =
+  if toInteger sz > toInteger cnt then
+    Right $ BSSRegion (sz - fromIntegral cnt) : rest
+   else
+    dropSegmentRangeListBytes rest (cnt - fromIntegral sz)
 dropSegmentRangeListBytes [] _ =
   Left DropInvalidAddr
 
@@ -777,6 +808,8 @@ data MemoryError w
      -- ^ Memory could not be read due to insufficient permissions.
    | UnexpectedRelocation (MemAddr w)
      -- ^ Read from location that partially overlaps a relocated entry
+   | UnexpectedBSS (MemAddr w)
+     -- ^ We unexpectedly encountered a BSS segment/section.
    | InvalidAddr (MemAddr w)
      -- ^ The data at the given address did not refer to a valid memory location.
 
@@ -790,7 +823,9 @@ instance MemWidth w => Show (MemoryError w) where
     "Insufficient permissions at " ++ show a ++ "."
   show (UnexpectedRelocation a)   =
     "Attempt to read an unexpected relocation entry at " ++ show a ++ "."
-  show (InvalidAddr a)   =
+  show (UnexpectedBSS a) =
+    "Attempt to read zero initialized BSS memory at " ++ show a ++ "."
+  show (InvalidAddr a) =
     "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
@@ -820,20 +855,36 @@ addrContentsAfter mem addr = do
   addrWidthClass (memAddrWidth mem) $
     contentsAfterSegmentOff =<< resolveMemAddr mem addr
 
+readByteString' :: MemWidth w
+                => BS.ByteString
+                -> [SegmentRange w]
+                -> MemAddr w
+                -> Word64
+                -> Either (MemoryError w) BS.ByteString
+readByteString' _ _ _ 0 = pure BS.empty
+readByteString' _ [] addr _ = Left (InvalidAddr addr)
+readByteString' prev (ByteRegion bs:rest) addr sz =
+  if toInteger sz <= toInteger (BS.length bs) then
+    pure $ prev <> BS.take (fromIntegral sz) bs
+   else do
+    let addr' = incAddr (fromIntegral (BS.length bs)) addr
+    let sz' = sz - fromIntegral (BS.length bs)
+    readByteString' (prev <> bs) rest addr' sz'
+readByteString' _ (SymbolicRef{}:_) addr _ = do
+  Left (UnexpectedRelocation addr)
+readByteString' prev (BSSRegion cnt:rest) addr sz =
+  if toInteger sz <= toInteger cnt then
+    pure $ prev <> BS.replicate (fromIntegral sz) 0
+   else do
+    let addr' = incAddr (toInteger sz) addr
+    let sz' = sz - fromIntegral cnt
+    readByteString' (prev <> BS.replicate (fromIntegral cnt) 0) rest addr' sz'
+
 -- | Attemtp to read a bytestring of the given length
 readByteString :: Memory w -> MemAddr w -> Word64 -> Either (MemoryError w) BS.ByteString
 readByteString mem addr sz = do
   l <- addrContentsAfter mem addr
-  case l of
-    ByteRegion bs:_
-      |  sz <= fromIntegral (BS.length bs) -> do -- Check length
-        Right (BS.take (fromIntegral sz) bs)
-      | otherwise ->
-        Left (InvalidAddr addr)
-    SymbolicRef{}:_ ->
-      Left (UnexpectedRelocation addr)
-    [] ->
-      Left (InvalidAddr addr)
+  addrWidthClass (memAddrWidth mem) $ readByteString' BS.empty l addr sz
 
 -- | Read an address from the value in the segment or report a memory error.
 readAddr :: Memory w

@@ -45,8 +45,6 @@ data LoadOptions
                    -- ^ Controls whether to load by section or segment
                    --
                    -- If 'Nothing', then this determined by file information.
-                 , includeBSS :: !Bool
-                   -- ^ Include data not backed by file when creating memory segments.
                  }
 
 -- | Default options for loading
@@ -55,5 +53,4 @@ defaultLoadOptions =
   LoadOptions { loadRegionIndex = Nothing
               , loadRegionBaseOffset = 0
               , loadStyleOverride = Nothing
-              , includeBSS = False
               }

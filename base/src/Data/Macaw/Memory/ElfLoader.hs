@@ -132,65 +132,97 @@ data RegionAdjust
 ------------------------------------------------------------------------
 -- Loading by segment
 
--- | Return segments for data
+-- | Convert bytes into a segment range list.
+singleSegment :: L.ByteString -> [SegmentRange w]
+singleSegment contents | L.null contents = []
+                       | otherwise = [ByteRegion (L.toStrict contents)]
+
+-- | @bssSegment cnt@ creates a BSS region with size @cnt@.
+bssSegment :: MemWidth w => Int64 -> [SegmentRange w]
+bssSegment c | c <= 0 = []
+             | otherwise = [BSSRegion (fromIntegral c)]
+
+-- | Contents of segment/section before symbol folded in.
+data PresymbolData = PresymbolData !L.ByteString !Int64
+
+mkPresymbolData :: L.ByteString -> Int64 -> PresymbolData
+mkPresymbolData contents0 sz
+  | sz >= L.length contents0 = PresymbolData contents0 (sz - L.length contents0)
+  | otherwise = PresymbolData (L.take sz contents0) 0
+
+allSymbolData :: MemWidth w => PresymbolData -> [SegmentRange w]
+allSymbolData (PresymbolData contents bssSize) =
+  singleSegment contents ++ bssSegment bssSize
+
+-- | Take the given amount of data out of presymbol data.
+takeSegment :: MemWidth w => Int64 -> PresymbolData -> [SegmentRange w]
+takeSegment cnt (PresymbolData contents bssSize) =
+  singleSegment (L.take cnt contents)
+  ++ bssSegment (min (cnt - L.length contents) bssSize)
+
+-- | @dropSegment cnt dta@ drops @cnt@ bytes from @dta@.
+dropSegment :: Int64 -> PresymbolData -> PresymbolData
+dropSegment cnt (PresymbolData contents bssSize)
+  | cnt <= L.length contents = PresymbolData (L.drop cnt contents) bssSize
+  | otherwise = PresymbolData L.empty (bssSize - (cnt - L.length contents))
+
+-- | This takes a list of symbols and an address and coerces into a memory contents.
+--
+-- If the size is different from the length of file contents, then the file content
+-- buffer is truncated or zero-extended as in a BSS.
 byteSegments :: forall w
              .  MemWidth w
-             => RelocMap (MemWord w)
+             => RelocMap (MemWord w) -- ^ Map from addresses to symbolis
              -> MemWord w -- ^ Base address for segment
-             -> L.ByteString
+             -> L.ByteString -- ^ File contents for segment.
+             -> Int64 -- ^ Expected size
              -> [SegmentRange w]
-byteSegments m0 base0 contents0 = go base0 (Map.toList m) contents0
-  where end = base0 + fromIntegral (L.length contents0)
-        -- Get only those elements in m between [base0, end)
-        m = Map.takeWhileAntitone (< end)
-          $ Map.dropWhileAntitone (< base0) m0
-        -- Get size of address
+byteSegments allSymbols initBase contents0 sz =
+    bytesToSegmentsAscending symbolPairs initBase (mkPresymbolData contents0 sz)
+  where -- Parse the map to get a list of symbols starting at base0.
+        symbolPairs
+          = Map.toList
+          $ Map.dropWhileAntitone (< initBase) allSymbols
+
+        -- Get last address for this region
+        end :: MemWord w
+        end = initBase + fromIntegral sz
+
+        -- Get size of pointer
         ptrSize :: MemWord w
-        ptrSize = fromIntegral (addrSize base0)
-        -- Return segment range for contents.
-        singleSegment :: L.ByteString -> [SegmentRange w]
-        singleSegment contents | L.null contents = []
-                               | otherwise = [ByteRegion (L.toStrict contents)]
-        -- Create segments
-        go :: MemWord w -> [(MemWord w, SymbolRef)] -> L.ByteString -> [SegmentRange w]
-        go _ [] contents = singleSegment contents
-        go base ((addr,tgt):rest) contents =
-            preseg ++ [SymbolicRef tgt] ++ go (addr + ptrSize) rest post
+        ptrSize = fromIntegral (addrSize initBase)
+
+        -- Traverse the list of symbols that we should parse.
+        bytesToSegmentsAscending ::[(MemWord w, SymbolRef)] -- ^ List of symbols within the segment.
+                                 -> MemWord w -- ^ The starting address of memory
+                                 -> PresymbolData
+                                  -- ^ The remaining bytes in memory including a number extra bss.
+                                 -> [SegmentRange w]
+        bytesToSegmentsAscending ((addr,tgt):rest) base contents | addr < end =
+            takeSegment (fromIntegral off) contents
+            ++ [SymbolicRef tgt]
+            ++ bytesToSegmentsAscending rest (addr + ptrSize) post
           where off = addr - base
-                preseg = singleSegment (L.take (fromIntegral off) contents)
-                post   = L.drop (fromIntegral (off + ptrSize)) contents
-
--- | Flag to control whether we include BSS
-type IncludeBSS = Bool
-
--- | Pad zeros if we includ eBSS
-padBSSData :: IncludeBSS -> L.ByteString -> Int64 -> L.ByteString
-padBSSData incBSS dta sz
-  | L.length dta > sz = L.take sz dta
-  | incBSS = dta `mappend` L.replicate (sz - L.length dta) 0
-  | otherwise = dta
+                post   = dropSegment (fromIntegral (off + ptrSize)) contents
+        bytesToSegmentsAscending _ _ contents = allSymbolData contents
 
 -- | Return a memory segment for elf segment if it loadable.
 memSegmentForElfSegment :: (MemWidth w, Integral (ElfWordType w))
                         => RegionAdjust -- ^ Index for segment
-                        -> IncludeBSS -- ^ Flag to control wheter we include BSS
                         -> L.ByteString
                            -- ^ Complete contents of Elf file.
                         -> RelocMap (MemWord w)
                            -- ^ Relocation map
                         -> Elf.Phdr w
                            -- ^ Program header entry
-                        -> MemSegment w
-memSegmentForElfSegment regAdj incBSS contents relocMap phdr = mseg
+                        -> Maybe (MemSegment w)
+memSegmentForElfSegment regAdj contents relocMap phdr = memSegment (regionIndex regAdj) base flags segContents
   where seg = Elf.phdrSegment phdr
         dta = sliceL (Elf.phdrFileRange phdr) contents
         sz = fromIntegral $ Elf.phdrMemSize phdr
-        fixedData = padBSSData incBSS dta sz
-        addr = regionOffset regAdj + toInteger (elfSegmentVirtAddr seg)
+        base = regionOffset regAdj + toInteger (elfSegmentVirtAddr seg)
         flags = flagsForSegmentFlags (elfSegmentFlags seg)
-        segContents = byteSegments relocMap (fromInteger addr) fixedData
-        mseg = memSegment (regionIndex regAdj) addr flags segContents
-
+        segContents = byteSegments relocMap (fromInteger base) dta sz
 
 -- | Create memory segment from elf section.
 --
@@ -199,23 +231,22 @@ memSegmentForElfSegment regAdj incBSS contents relocMap phdr = mseg
 -- whether we should add relocations.
 memSegmentForElfSection :: (Integral v, Bits v, MemWidth w)
                         => RegionIndex -- ^ Index for segment
-                        -> IncludeBSS -- ^ Flag to control wheter we include BSS
+                        -> RelocMap (MemWord w)
                         -> ElfSection v
                         -> Maybe (MemSegment w)
-memSegmentForElfSection regIdx incBSS s
-  | L.length fixedData == 0 = Nothing
-  | otherwise = Just (memSegment regIdx base flags [ByteRegion $ L.toStrict fixedData])
-  where base = fromIntegral (elfSectionAddr s)
+memSegmentForElfSection regIdx relocMap s =
+    memSegment regIdx (toInteger base) flags fixedData
+  where base = elfSectionAddr s
         flags = flagsForSectionFlags (elfSectionFlags s)
         bytes = elfSectionData s
-        fixedData = padBSSData incBSS (L.fromStrict bytes) (fromIntegral (Elf.elfSectionSize s))
+        dta = L.fromStrict bytes
+        sz = fromIntegral (Elf.elfSectionSize s)
+        fixedData = byteSegments relocMap (fromIntegral base) dta sz
 
 ------------------------------------------------------------------------
 -- MemLoader
 
 data MemLoaderState w = MLS { mlsRegionAdjust :: !RegionAdjust
-                            , mlsIncludeBSS  :: !Bool
-                              -- ^ Flag whether to include BSS
                             , _mlsMemory :: !(Memory w)
                             , _mlsIndexMap :: !(SectionIndexMap w)
                             }
@@ -232,10 +263,9 @@ memLoaderPair mls = (mls^.mlsIndexMap, mls^.mlsMemory)
 
 type MemLoader w = StateT (MemLoaderState w) (Except String)
 
-runMemLoader :: RegionAdjust -> Bool -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
-runMemLoader regAdj incBSS mem m = fmap memLoaderPair $ runExcept $ execStateT m s
+runMemLoader :: RegionAdjust -> Memory  w -> MemLoader w () -> Either String (SectionIndexMap w, Memory w)
+runMemLoader regAdj mem m = fmap memLoaderPair $ runExcept $ execStateT m s
    where s = MLS { mlsRegionAdjust = regAdj
-                 , mlsIncludeBSS = incBSS
                  , _mlsMemory = mem
                  , _mlsIndexMap = Map.empty
                  }
@@ -276,7 +306,7 @@ mkSymbolRef (sym, mverId) =
 ------------------------------------------------------------------------
 -- RelocMap
 
--- | Maps symbols to their relocated target
+-- | Maps an address to the symbol that it is associated for.
 type RelocMap w = Map w SymbolRef
 
 checkZeroAddend :: ( Eq (ElfIntType (Elf.RelocationWidth tp))
@@ -402,25 +432,26 @@ insertElfSegment :: ElfFileSectionMap (ElfWordType w)
                  -> MemLoader w ()
 insertElfSegment shdrMap contents relocMap phdr = do
   regAdj <- gets mlsRegionAdjust
-  incBSS <- gets mlsIncludeBSS
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  let seg = memSegmentForElfSegment regAdj incBSS contents relocMap phdr
-  let seg_idx = elfSegmentIndex (Elf.phdrSegment phdr)
-  loadMemSegment ("Segment " ++ show seg_idx) seg
-  let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
-  let phdr_end = phdr_offset + Elf.phdrFileSize phdr
-  let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdr_offset phdr_end)
-  forM_ l $ \(i, sec) -> do
-    case i of
-      IntervalCO shdr_start _ -> do
-        let elfIdx = ElfSectionIndex (elfSectionIndex sec)
-        when (phdr_offset > shdr_start) $ do
-          fail $ "Found section header that overlaps with program header."
-        let sec_offset = fromIntegral $ shdr_start - phdr_offset
-        let Just addr = resolveSegmentOff seg sec_offset
-        mlsIndexMap %= Map.insert elfIdx (addr, sec)
-      _ -> fail "Unexpected shdr interval"
+  case memSegmentForElfSegment regAdj contents relocMap phdr of
+    Nothing -> pure ()
+    Just seg -> do
+      let seg_idx = elfSegmentIndex (Elf.phdrSegment phdr)
+      loadMemSegment ("Segment " ++ show seg_idx) seg
+      let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
+      let phdr_end = phdr_offset + Elf.phdrFileSize phdr
+      let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdr_offset phdr_end)
+      forM_ l $ \(i, sec) -> do
+        case i of
+          IntervalCO shdr_start _ -> do
+            let elfIdx = ElfSectionIndex (elfSectionIndex sec)
+            when (phdr_offset > shdr_start) $ do
+              fail $ "Found section header that overlaps with program header."
+            let sec_offset = fromIntegral $ shdr_start - phdr_offset
+            let Just addr = resolveSegmentOff seg sec_offset
+            mlsIndexMap %= Map.insert elfIdx (addr, sec)
+          _ -> fail "Unexpected shdr interval"
 
 -- | Load an elf file into memory with the given options.
 memoryForElfSegments
@@ -458,18 +489,19 @@ memoryForElfSegments e = do
 -- Elf section loading
 
 -- | Load an elf file into memory.
-insertElfSection :: ElfSection (ElfWordType w)
+insertElfSection :: RelocMap (MemWord w)
+                    -- ^ Relocations to apply in loading section.
+                 -> ElfSection (ElfWordType w)
                  -> MemLoader w ()
-insertElfSection sec = do
+insertElfSection relocMap sec = do
   regAdj <- mlsRegionAdjust <$> get
-  incBSS <- gets mlsIncludeBSS
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
   -- Check if we should load section
   let doLoad = elfSectionFlags sec `Elf.hasPermissions` Elf.shf_alloc
             && elfSectionName sec /= ".eh_frame"
   let regIdx = regionIndex regAdj
-  case memSegmentForElfSection regIdx incBSS sec of
+  case memSegmentForElfSection regIdx relocMap sec of
     Just seg | doLoad -> do
       loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec) ++ " " ++ show (Elf.elfSectionSize sec)) seg
       let elfIdx = ElfSectionIndex (elfSectionIndex sec)
@@ -481,10 +513,12 @@ insertElfSection sec = do
 --
 -- Normally, Elf uses segments for loading, but the segment
 -- information tends to be more precise.
+--
+-- TODO: Populate relocation map
 memoryForElfSections :: Elf w
                      -> MemLoader w ()
 memoryForElfSections e = do
-  traverseOf_ elfSections insertElfSection e
+  traverseOf_ elfSections (insertElfSection Map.empty) e
 
 ------------------------------------------------------------------------
 -- High level loading
@@ -525,7 +559,7 @@ memoryForElf opt e = do
   let regAdj = RegionAdjust { regionIndex  = adjustedLoadRegionIndex e opt
                             , regionOffset = loadRegionBaseOffset opt
                             }
-  runMemLoader regAdj (includeBSS opt) (emptyMemory (elfAddrWidth (elfClass e))) $ do
+  runMemLoader regAdj (emptyMemory (elfAddrWidth (elfClass e))) $ do
     case adjustedLoadStyle e opt of
       LoadBySection -> memoryForElfSections e
       LoadBySegment -> memoryForElfSegments e
