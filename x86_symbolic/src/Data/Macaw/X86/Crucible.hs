@@ -123,6 +123,36 @@ pureSem :: (IsSymInterface sym) =>
 pureSem sym fn =
   case fn of
 
+    M.XGetBV {} -> error "XGetBV"
+    M.ReadLoc {} -> error "ReadLoc"
+    M.PShufb {} -> error "PShufb"
+    M.MMXExtend {} -> error "MMXExtend"
+    M.ReadFSBase    -> error " ReadFSBase"
+    M.ReadGSBase    -> error "ReadGSBase"
+    M.CPUID{}       -> error "CPUID"
+    M.RDTSC{}       -> error "RDTSC"
+    M.MemCmp{}      -> error "MemCmp"
+    M.RepnzScas{}   -> error "RepnzScas"
+    M.X86IDiv {} -> error "X86IDiv"
+    M.X86IRem {} -> error "X86IRem"
+    M.X86Div  {} -> error "X86Div"
+    M.X86Rem  {} -> error "X86Rem"
+    M.SSE_VectorOp {} -> error "SSE_VectorOp"
+    M.SSE_CMPSX {} -> error "SSE_CMPSX"
+    M.SSE_UCOMIS {} -> error "SSE_UCOMIS"
+    M.SSE_CVTSS2SD{} -> error "SSE_CVTSS2SD"
+    M.SSE_CVTSD2SS{} -> error "SSE_CVTSD2SS"
+    M.SSE_CVTSI2SX {} -> error "SSE_CVTSI2SX"
+    M.SSE_CVTTSX2SI {} -> error "SSE_CVTTSX2SI"
+    M.X87_Extend{} ->  error "X87_Extend"
+    M.X87_FAdd{} -> error "X87_FAdd"
+    M.X87_FSub{} -> error "X87_FSub"
+    M.X87_FMul{} -> error "X87_FMul"
+    M.X87_FST {} -> error "X87_FST"
+    M.VExtractF128 {} -> error "VExtractF128"
+
+
+
     M.EvenParity x0 ->
       do x <- getBitVal (symIface sym) x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
