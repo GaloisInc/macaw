@@ -212,4 +212,8 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
       ThumbDis.TSVC -> case operands of
                          ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
                              Just $ G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall $ ThumbDis.Imm0_255 imm))
+      ThumbDis.THINT -> case operands of
+                          ThumbDis.Imm0_15 imm ThumbDis.:< ThumbDis.Nil ->
+                              Just $ return ()
+                                   -- G.finishWithTerminator (MCB.ArchTermStmt (ThumbHint $ ThumbDis.Imm0_15 imm))
       _ -> Nothing
