@@ -134,6 +134,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
   let off = MM.msegOffset curPCAddr
   case readInstruction mem curPCAddr of
     Left err -> failAt gs off curPCAddr (DecodeError err)
+    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC curPCAddr curPCAddr)
     Right (i, bytesRead) -> do
       -- traceM ("II: " ++ show i)
       let nextPCOffset = off + bytesRead
