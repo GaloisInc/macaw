@@ -230,6 +230,8 @@ pureSem sym fn =
 
 
 
+
+
     M.PointwiseShiftL elNum elSz shSz bits amt ->
       do amt' <- getBitVal (symIface sym) amt
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
@@ -239,6 +241,11 @@ pureSem sym fn =
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
 
+    M.VInsert elNum elSz vec el i ->
+      do e <- getBitVal (symIface sym) el
+         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
+           case mulCancelR elNum (V.length xs) elSz of
+             Refl -> V.insertAt i e xs
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->

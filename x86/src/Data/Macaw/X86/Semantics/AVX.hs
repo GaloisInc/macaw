@@ -6,6 +6,7 @@ import Data.Int(Int8)
 import Control.Monad(forM_)
 
 import Data.Parameterized.NatRepr
+import Data.Parameterized.Some
 
 import Flexdis86.Register (ymmReg)
 import qualified Flexdis86 as F
@@ -145,6 +146,34 @@ avxPointwiseShiftL mnem sz =
              _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
 
 
+avxInsert :: String -> InstructionDef
+avxInsert mnem =
+  avx4 mnem $ \arg1 arg2 arg3 arg4 ->
+    do SomeBV vec <- getSomeBVValue arg2
+       SomeBV el  <- getSomeBVValue arg3
+       Some i     <- case someNat (fromIntegral arg4) of
+                       Just ok -> return ok
+                       Nothing -> err "Invalid index"
+       let vw  = typeWidth vec
+           elw = typeWidth el
+
+       LeqProof <- case testLeq n1 elw of
+                     Just ok -> return ok
+                     _       -> err "Invalid element width"
+
+       withDivModNat vw elw $ \elN remi ->
+          case ( testEquality remi n0
+               , testLeq n1 elN
+               , testLeq (addNat i n1) elN
+               ) of
+            ( Just Refl, Just LeqProof, Just LeqProof ) ->
+              do v <- eval vec
+                 e <- eval el
+                 arg1 <~ VInsert elN elw v e i
+            _ -> err "Invalid operands"
+  where
+  err :: String -> X86Generator st ids a
+  err msg = fail ("[" ++ mnem ++ "] " ++ show msg)
 
 all_instructions :: [InstructionDef]
 all_instructions =
@@ -196,6 +225,8 @@ all_instructions =
            _ -> fail "[vextractf128] Unexpected operands"
 
   , avxOp2I "vpclmulqdq" VPCLMULQDQ
+
+  , avxInsert "vpinsrq"
   ]
 
 

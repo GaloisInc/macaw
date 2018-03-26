@@ -346,6 +346,7 @@ transferAbsValue r f =
     Pointwise2 {} -> TopV
     PointwiseShiftL {} -> TopV
     VExtractF128 {} -> TopV
+    VInsert {} -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
