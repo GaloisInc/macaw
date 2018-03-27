@@ -8,8 +8,13 @@ module Data.Macaw.ARM.Identify
     , identifyReturn
     ) where
 
+import           Control.Lens ( (^.) )
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
+import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
+                                               , AbsValue(..)
+                                               , transferValue
+                                               )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Sequence as Seq
@@ -30,10 +35,21 @@ identifyCall :: ARMArchConstraints arm =>
 identifyCall _ mem stmts0 rs = Nothing  -- KWQ: for now, nothing is identified as a call
 
 
--- | Intended to identify a return statement.  Currently appears to be unused.
+-- | Intended to identify a return statement.
+--
+-- The current implementation is to attempt to recognize the Macaw
+-- 'ReturnAddr' value (placed in the LR register by
+-- 'mkInitialAbsState') when it is placed in the PC (instruction
+-- pointer), but unfortunately this does not work because ARM
+-- semantics will clear the low bit (T32 mode) or the low two bits
+-- (A32 mode) when writing to the PC to discard the mode bit in target
+-- addresses.
 identifyReturn :: ARMArchConstraints arm =>
                   proxy ppc
                -> [MC.Stmt arm ids]
-               -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
-               -> Maybe [MC.Stmt arm ids]
-identifyReturn _ = error "ARM identifyReturn is TBD"
+               -> AbsProcessorState (MC.ArchReg ppc) ids
+               -> Maybe (Seq.Seq (MC.Stmt ppc ids))
+identifyReturn _ stmts s finalRegSt8 =
+    case transferValue finalRegSt8 (s^.MC.boundValue PPC_IP) of
+      ReturnAddr -> Just $ Seq.fromList stmts
+      _ -> Nothing
