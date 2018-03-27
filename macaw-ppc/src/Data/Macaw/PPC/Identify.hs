@@ -10,6 +10,10 @@ import qualified Data.Sequence as Seq
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
+import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
+                                               , AbsValue(..)
+                                               , transferValue
+                                               )
 
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
@@ -37,9 +41,20 @@ identifyCall _ mem stmts0 rs
       Just (Seq.fromList stmts0, retAddr)
   | otherwise = Nothing
 
-identifyReturn :: (PPCArchConstraints ppc)
-               => proxy ppc
+
+-- | Called to determine if the instruction sequence contains a return
+-- from the current function.
+--
+-- An instruction executing a return from a function will place the
+-- Macaw 'ReturnAddr' value (placed in the LNK register by
+-- 'mkInitialAbsState') into the instruction pointer.
+identifyReturn :: (PPCArchConstraints ppc) =>
+                  proxy ppc
                -> [MC.Stmt ppc ids]
                -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
-               -> Maybe [MC.Stmt ppc ids]
-identifyReturn _ = undefined
+               -> AbsProcessorState (MC.ArchReg ppc) ids
+               -> Maybe (Seq.Seq (MC.Stmt ppc ids))
+identifyReturn _ stmts s finalRegSt8 =
+    case transferValue finalRegSt8 (s^.MC.boundValue PPC_IP) of
+      ReturnAddr -> Just $ Seq.fromList stmts
+      _ -> Nothing
