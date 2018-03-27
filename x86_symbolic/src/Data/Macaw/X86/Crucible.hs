@@ -207,6 +207,12 @@ pureSem sym fn =
 
             _ -> fail "Unepected size for VPCLMULQDQ"
 
+        M.VPUnpackLQDQ -> vecOp2 sym LittleEndian w (knownNat @64) x y $
+          \xs ys -> let n = V.length xs
+                    in case mul2Plus n of
+                         Refl -> V.take n (V.interlieve xs ys)
+
+
         M.VAESEnc
           | Just Refl <- testEquality w n128 ->
             do let f = fnAesEnc (symFuns sym)
@@ -246,6 +252,7 @@ pureSem sym fn =
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
            case mulCancelR elNum (V.length xs) elSz of
              Refl -> V.insertAt i e xs
+
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
