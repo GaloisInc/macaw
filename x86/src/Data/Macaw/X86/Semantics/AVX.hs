@@ -215,6 +215,7 @@ all_instructions =
 
   , avxOp2 "vaesenc" VAESEnc
   , avxOp2 "vaesenclast" VAESEncLast
+  , avxOp2 "vpunpcklqdq" VPUnpackLQDQ
 
   , avx3 "vextractf128" $ \arg1 arg2 arg ->
       do SomeBV vec <- getSomeBVValue arg2
