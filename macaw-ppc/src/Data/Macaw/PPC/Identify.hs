@@ -16,7 +16,6 @@ import qualified Data.Macaw.Discovery.AbsEval as DE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
-
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
