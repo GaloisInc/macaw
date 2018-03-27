@@ -1677,8 +1677,8 @@ ifte_ c_expr t f = eval c_expr >>= go
 
           -- Join results together.
           let fin_b = finishBlock' p_b (\_ -> Branch cond t_block_label f_block_label)
-          seq fin_b $ do
-          return $
+          seq fin_b $
+            return
             GenResult { resBlockSeq =
                          BlockSeq { _nextBlockID = _nextBlockID f_seq
                                   , _frontierBlocks = (s0^.blockSeq^.frontierBlocks Seq.|> fin_b)

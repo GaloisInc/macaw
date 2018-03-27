@@ -355,11 +355,12 @@ addArchTermStmt ts = do
     let p_b = s0 ^. blockState
     -- Create finished block.
     let fin_b = finishBlock' p_b $ ArchTermStmt ts
-    seq fin_b $ do
+    seq fin_b $
     -- Return early
-    return $ GenResult { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
-                       , resState = Nothing
-                       }
+      return GenResult
+                { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
+                , resState = Nothing
+                }
 
 -- | Are we in AVX mode?
 isAVX :: X86Generator st ids Bool

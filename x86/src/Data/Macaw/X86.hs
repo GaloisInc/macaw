@@ -20,6 +20,7 @@ x86_64 programs.
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86
        ( x86_64_freeBSD_info
        , x86_64_linux_info

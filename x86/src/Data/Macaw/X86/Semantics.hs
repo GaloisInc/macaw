@@ -13,6 +13,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
