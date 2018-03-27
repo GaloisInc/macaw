@@ -439,29 +439,19 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Otherwise skip over this instruction.
               | otherwise -> go prev (stmt Seq.<| after)
 
--- | This is designed to detect returns from the register state representation.
+-- | Called to determine if the instruction sequence contains a return
+-- from the current function.
 --
--- It pattern matches on a 'RegState' to detect if it read its instruction
--- pointer from an address that stored on the stack pointer.
+-- An instruction executing a return from a function will place the
+-- ReturnAddr value (placed on the top of the stack by
+-- 'initialX86AbsState' above) into the instruction pointer.
 identifyX86Return :: [Stmt X86_64 ids]
                   -> RegState X86Reg (Value X86_64 ids)
-                  -> Maybe [Stmt X86_64 ids]
-identifyX86Return stmts s = do
-  -- How stack pointer moves when a call is made
-  let stack_adj = -8
-  let next_ip = s^.boundValue ip_reg
-      next_sp = s^.boundValue sp_reg
-  case next_ip of
-    AssignedValue (Assignment _ (ReadMem ip_addr _))
-      | let (ip_base, ip_off) = asBaseOffset ip_addr
-      , let (sp_base, sp_off) = asBaseOffset next_sp
-      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) ->
-        let isRetLoad stmt =
-              case stmt of
-                AssignStmt asgn
-                  | Just Refl <- testEquality (assignId asgn) (assignId  asgn) -> True
-                _ -> False
-         in Just $ filter (not . isRetLoad) stmts
+                  -> AbsProcessorState X86Reg ids
+                  -> Maybe (Seq (Stmt X86_64 ids))
+identifyX86Return stmts s finalRegSt8 =
+  case transferValue finalRegSt8 (s^.boundValue ip_reg) of
+    ReturnAddr -> Just $ Seq.fromList stmts
     _ -> Nothing
 
 -- | Return state post call

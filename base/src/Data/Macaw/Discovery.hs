@@ -590,12 +590,22 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                            , stmtsAbsState = absProcState'
                            }
 
-      -- This block ends with a return.
-      | ReturnAddr <- transferValue absProcState' (s'^.boundValue ip_reg) -> do
-        mapM_ (recordWriteStmt arch_info mem absProcState') stmts
+      -- This block ends with a return as identified by the
+      -- architecture-specific processing.  Basic return
+      -- identification can be performed by detecting when the
+      -- Instruction Pointer (ip_reg) contains the 'ReturnAddr'
+      -- symbolic value (initially placed on the top of the stack or
+      -- in the Link Register by the architecture-specific state
+      -- iniitializer).  However, some architectures perform
+      -- expression evaluations on this value before loading the IP
+      -- (e.g. ARM will clear the low bit in T32 mode or the low 2
+      -- bits in A32 mode), so the actual detection process is
+      -- deferred to architecture-specific functionality.
+      | Just (prev_stmts) <- identifyReturn arch_info stmts s' absProcState' -> do
+        mapM_ (recordWriteStmt arch_info mem absProcState') prev_stmts
 
         pure StatementList { stmtsIdent = lbl_idx
-                           , stmtsNonterm = stmts
+                           , stmtsNonterm = toList prev_stmts
                            , stmtsTerm = ParsedReturn s'
                            , stmtsAbsState = absProcState'
                            }
