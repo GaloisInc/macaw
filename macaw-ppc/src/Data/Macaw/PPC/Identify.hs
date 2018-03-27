@@ -36,7 +36,7 @@ identifyCall _ mem stmts0 rs
   | not (null stmts0)
   , MC.RelocatableValue {} <- rs ^. MC.boundValue PPC_LNK
   , Just retVal <- simplifyValue (rs ^. MC.boundValue PPC_LNK)
-  , Just retAddrVal <- MC.asLiteralAddr retVal
+  , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (Seq.fromList stmts0, retAddr)
   | otherwise = Nothing
