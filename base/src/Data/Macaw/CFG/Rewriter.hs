@@ -309,6 +309,7 @@ rewriteApp app = do
       pure y
     BVAnd w x (BVValue _ yc) | yc == maxUnsigned w -> do
       pure x
+    BVAnd _ x y | x == y -> pure x
 
     BVOr w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (x .|. y))
@@ -316,6 +317,7 @@ rewriteApp app = do
       rewriteApp (BVOr w y x)
     BVOr _ x (BVValue _ 0) -> pure x
     BVOr w _ y@(BVValue _ yc) | yc == maxUnsigned w -> pure y
+    BVOr _ x y | x == y -> pure x
 
     BVXor w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (x `xor` y))
