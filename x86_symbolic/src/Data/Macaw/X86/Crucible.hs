@@ -269,7 +269,7 @@ vpalign :: Word8 ->
            V.Vector 16 (E sym (BVType 8)) ->
            V.Vector 16 (E sym (BVType 8))
 vpalign i xs ys =
-  V.slice n0 n16 (V.shiftR (fromIntegral i) (bv 0) (V.append xs ys))
+  V.slice n16 n16 (V.shiftR (fromIntegral i) (bv 0) (V.append xs ys))
 
 -- | Shuffling with a mask.
 -- See `vpshufd` Intel instruction.
