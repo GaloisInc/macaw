@@ -6,14 +6,16 @@ module Data.Macaw.PPC.Identify (
   ) where
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( guard )
+import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
 
+import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Discovery.AbsEval as DE
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
-                                               , AbsValue(..)
-                                               , transferValue
-                                               )
+import qualified Data.Macaw.Types as MT
+
 
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
@@ -52,9 +54,33 @@ identifyReturn :: (PPCArchConstraints ppc) =>
                   proxy ppc
                -> [MC.Stmt ppc ids]
                -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
-               -> AbsProcessorState (MC.ArchReg ppc) ids
+               -> MA.AbsProcessorState (MC.ArchReg ppc) ids
                -> Maybe (Seq.Seq (MC.Stmt ppc ids))
-identifyReturn _ stmts s finalRegSt8 =
-    case transferValue finalRegSt8 (s^.MC.boundValue PPC_IP) of
-      ReturnAddr -> Just $ Seq.fromList stmts
+identifyReturn _ stmts regState absState = do
+  Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
+  return (Seq.fromList stmts)
+
+matchReturn :: (PPCArchConstraints ppc, MC.ArchReg ppc ~ PPCReg ppc)
+            => MA.AbsProcessorState (MC.ArchReg ppc) ids
+            -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> Maybe (Some (MA.AbsValue w))
+matchReturn absProcState' ip = do
+  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
+  guard (shiftAmt == 0x2)
+  Some addr' <- return (stripExtTrunc addr)
+  case MA.transferValue absProcState' addr' of
+    MA.ReturnAddr -> return (Some MA.ReturnAddr)
+    _ -> case addr' of
+      MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
+        | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
       _ -> Nothing
+
+-- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
+-- the underlying value.  If it isn't, just return the value
+stripExtTrunc :: MC.Value ppc ids tp -> Some (MC.Value ppc ids)
+stripExtTrunc v =
+  case v of
+    MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.Trunc v' _))) -> stripExtTrunc v'
+    MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.SExt v' _))) -> stripExtTrunc v'
+    MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.UExt v' _))) -> stripExtTrunc v'
+    _ -> Some v
