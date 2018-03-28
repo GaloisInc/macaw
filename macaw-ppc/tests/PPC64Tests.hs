@@ -9,6 +9,7 @@ module PPC64Tests (
   ) where
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( unless )
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe ( fromJust, mapMaybe )
@@ -72,6 +73,28 @@ mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
 showSegments :: (MM.MemWidth w) => MM.Memory w -> String
 showSegments mem = intercalate "\n" $ map show (MM.memSegments mem)
 
+allDiscoveredBlocks :: MD.DiscoveryState arch -> [PU.Some (MD.ParsedBlock arch)]
+allDiscoveredBlocks di =
+  [ PU.Some pbr
+  | PU.Some dfi <- M.elems (di ^. MD.funInfo)
+  , pbr <- M.elems (dfi ^. MD.parsedBlocks)
+  ]
+
+blockTerminator :: MD.ParsedBlock arch ids -> MD.ParsedTermStmt arch ids
+blockTerminator = MD.stmtsTerm . MD.blockStatementList
+
+isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
+isClassifyFailure ts =
+  case ts of
+    MD.ClassifyFailure {} -> True
+    _ -> False
+
+isTranslateError :: MD.ParsedTermStmt arch ids -> Bool
+isTranslateError ts =
+  case ts of
+    MD.ParsedTranslateError {} -> True
+    _ -> False
+
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
@@ -95,15 +118,20 @@ testDiscovery expectedFilename elf =
             allFoundBlockAddrs :: S.Set Word64
             allFoundBlockAddrs =
               S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
-                         | PU.Some dfi <- M.elems (di ^. MD.funInfo)
-                         , pbr <- M.elems (dfi ^. MD.parsedBlocks)
+                         | PU.Some pbr <- allDiscoveredBlocks di
                          ]
         -- Test that all discovered blocks were expected (and verify their sizes)
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
-          let actualEntry = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.discoveredFunAddr dfi))))
+          F.forM_ (allDiscoveredBlocks di) $ \(PU.Some pb) -> do
+            let addr = absoluteFromSegOff (MD.pblockAddr pb)
+            unless (S.member addr ignoredBlocks) $ do
+              let term = blockTerminator pb
+              T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
+              T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb)) (not (isTranslateError term))
+          let actualEntry = absoluteFromSegOff (MD.discoveredFunAddr dfi)
               actualBlockStarts = S.fromList [ (baddr, bsize)
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                             , trace ("Parsed Block: " ++ show pbr) True
+--                                             , trace ("Parsed Block: " ++ show pbr) True
                                              , let baddr = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
                                              , let bsize = fromIntegral (MD.blockSize pbr)
                                              ]
@@ -117,6 +145,9 @@ testDiscovery expectedFilename elf =
         F.forM_ (funcs er) $ \(_funcAddr, blockAddrs) ->
           F.forM_ blockAddrs $ \(blockAddr@(Hex addr), _) -> do
           T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
+
+absoluteFromSegOff :: MM.MemSegmentOff 64 -> Hex Word64
+absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr
 
 removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
 removeIgnored actualBlockStarts ignoredBlocks =
