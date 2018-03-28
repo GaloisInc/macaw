@@ -88,6 +88,7 @@ mkInitialAbsState _ tocMap _mem startAddr =
   where
     s0 = MA.top & MA.setAbsIP startAddr
                 & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
+                & MA.absRegState . boundValue (PPC_GP (D.GPR 1)) .~ MA.concreteStackOffset (relativeSegmentAddr startAddr) 0
 
 absEvalArchFn :: (PPCArchConstraints ppc)
               => proxy ppc
