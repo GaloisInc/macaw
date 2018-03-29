@@ -18,7 +18,7 @@ import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr as NR
-import           Data.Word ( Word8, Word16, Word32 )
+import           Data.Word ( Word32 )
 import qualified Data.Word.Indexed as W
 import           GHC.TypeLits
 

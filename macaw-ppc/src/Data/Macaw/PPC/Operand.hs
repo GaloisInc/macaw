@@ -14,14 +14,10 @@
 -- package that cannot depend on the architecture-specific backends.
 module Data.Macaw.PPC.Operand () where
 
-import           GHC.TypeLits
-import           Data.Int ( Int16 )
 import           Data.Word ( Word32 )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Macaw.CFG.Core as MC
 import           Data.Macaw.Types
-import qualified Data.Word.Indexed as W
-import qualified Data.Int.Indexed as I
 import qualified Dismantle.PPC as D
 
 import qualified SemMC.Architecture.PPC32 as PPC32

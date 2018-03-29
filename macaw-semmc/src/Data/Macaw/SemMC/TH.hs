@@ -67,7 +67,6 @@ import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
-import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
 import Data.Parameterized.NatRepr ( knownNat
