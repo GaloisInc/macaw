@@ -1,6 +1,7 @@
 packages: macaw-ppc/
           macaw-semmc/
           submodules/macaw/base/
+          submodules/macaw/x86/
           submodules/semmc/semmc/
           submodules/semmc/semmc-ppc/
           submodules/dismantle/dismantle-tablegen/
@@ -12,3 +13,4 @@ packages: macaw-ppc/
           submodules/crucible/galois-matlab/
           submodules/dwarf/
           submodules/elf-edit/
+          submodules/flexdis86/
