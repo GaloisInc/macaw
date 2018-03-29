@@ -162,6 +162,9 @@ blockState = lens _blockState (\s v -> s { _blockState = v })
 curRegState :: Simple Lens (GenState arch ids s) (RegState (ArchReg arch) (Value arch ids))
 curRegState = blockState . pBlockState
 
+-- | Update the value of a machine register (in the 'Generator' state) with a
+-- new macaw 'Value'.  This function applies a simplifier ('simplifyValue') to
+-- the value first, if possible.
 setRegVal :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
           => ArchReg arch tp
           -> Value arch ids tp
