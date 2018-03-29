@@ -485,6 +485,7 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
     -- Comment statements have no specific value.
     Comment _ -> []
     ExecArchStmt astmt -> foldMapF (\v -> [Some v]) astmt
+    ArchState _addr assn -> foldMapF (\v -> [Some v]) assn
 
 -- | This function figures out what the block requires
 -- (i.e., addresses that are stored to, and the value stored), along
