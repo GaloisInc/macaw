@@ -61,7 +61,6 @@ main = do
 
   let loadOpt :: Elf.LoadOptions
       loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
-                                , Elf.loadStyleOverride = Just Elf.LoadBySection
                                 , Elf.includeBSS = False
                                 }
   putStrLn "Read elf"
@@ -73,14 +72,14 @@ main = do
           fail "Error parsing Elf file"
         pure e
       _ -> fail "Expected 64-bit elf file"
-  (secIdxMap, mem) <-
-    case Elf.memoryForElf loadOpt elf of
-      Left err -> fail err
-      Right r -> pure r
 
-  let (symErrs, nameAddrList) = Elf.resolveElfFuncSymbols mem secIdxMap elf
-  forM_ symErrs $ \err -> do
-    hPutStrLn stderr $ show err
+  (mem, nameAddrList) <-
+    case resolveElfContents loadOpt elf of
+      Left err -> fail err
+      Right (warn, mem, _mentry, nameAddrList)  -> do
+        forM_ warn $ \err -> do
+          hPutStrLn stderr err
+        pure (mem, nameAddrList)
 
   putStrLn "Lookup addr"
   addAddr <-

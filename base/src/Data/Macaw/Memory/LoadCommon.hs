@@ -41,10 +41,6 @@ data LoadOptions
                    --
                    -- This defaults to '0', and is primarily intended to allow loading
                    -- relocatable files at specific hard-coded offsets.
-                 , loadStyleOverride :: !(Maybe LoadStyle)
-                   -- ^ Controls whether to load by section or segment
-                   --
-                   -- If 'Nothing', then this determined by file information.
                  }
 
 -- | Default options for loading
@@ -52,5 +48,4 @@ defaultLoadOptions :: LoadOptions
 defaultLoadOptions =
   LoadOptions { loadRegionIndex = Nothing
               , loadRegionBaseOffset = 0
-              , loadStyleOverride = Nothing
               }
