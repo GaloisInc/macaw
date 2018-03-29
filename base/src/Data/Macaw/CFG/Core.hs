@@ -779,6 +779,10 @@ data Stmt arch ids
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
+   | ArchState !(ArchAddrWord arch) !(MapF.MapF (ArchReg arch) (Value arch ids))
+     -- ^ Address of an instruction and the *machine* registers that it updates
+     -- (with their associated macaw values after the execution of the
+     -- instruction).
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
@@ -795,6 +799,10 @@ ppStmt ppOff stmt =
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
+    ArchState a m -> hang (length (show prefix)) (prefix PP.<> vcat (MapF.foldrWithKey ppUpdate [] m))
+      where
+      prefix = text "#" <+> ppOff a PP.<> text ": "
+      ppUpdate key val acc = text (showF key) <+> text ":=" <+> ppValue 0 val : acc
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . ppStmt (\w -> text (show w))

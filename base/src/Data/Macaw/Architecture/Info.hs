@@ -106,7 +106,8 @@ data ArchitectureInfo arch
      , identifyReturn :: forall ids
                       .  [Stmt arch ids]
                       -> RegState (ArchReg arch) (Value arch ids)
-                      -> Maybe [Stmt arch ids]
+                      -> AbsProcessorState (ArchReg arch) ids
+                      -> Maybe (Seq (Stmt arch ids))
        -- ^ Identify returns to the classifier.
        --
        -- Given a list of statements and the final state of the registers, this

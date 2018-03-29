@@ -45,7 +45,6 @@ import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.Map as MapF
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
@@ -53,7 +52,6 @@ import qualified Lang.Crucible.Analysis.Postdom as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
-import qualified Lang.Crucible.Config as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.FunctionName as C
 import qualified Lang.Crucible.ProgramLoc as C
@@ -68,7 +66,7 @@ import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
-import qualified Lang.Crucible.LLVM.DataLayout as MM
+import           Lang.Crucible.LLVM.Intrinsics(llvmIntrinsicTypes)
 
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
@@ -414,7 +412,8 @@ type GlobalMap sym arch = Map M.RegionIndex
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
            .  IsSymInterface sym
-           => sym
+           => C.SimConfig MacawSimulatorState sym
+           -> sym
            -> MacawSymbolicArchFunctions arch
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
@@ -430,16 +429,15 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) callH g regStruct = do
+runCodeBlock cfg sym archFns archEval halloc (initMem,globs) callH g regStruct = do
   mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
-  -- Run the symbolic simulator.
-  cfg <- C.initialConfig 0 []
+
   let ctx :: C.SimContext MacawSimulatorState sym (MacawExt arch)
       ctx = C.SimContext { C._ctxSymInterface = sym
                          , C.ctxSolverProof = \a -> a
-                         , C.ctxIntrinsicTypes = MapF.empty
+                         , C.ctxIntrinsicTypes = llvmIntrinsicTypes
                          , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout

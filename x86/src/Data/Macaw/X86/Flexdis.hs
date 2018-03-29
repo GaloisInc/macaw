@@ -106,7 +106,7 @@ runMemoryByteReader :: Memory w
                     -> MemSegmentOff w -- ^ Starting segment
                     -> MemoryByteReader w a -- ^ Byte reader to read values from.
                     -> Either (MemoryError w) (a, MemWord w)
-runMemoryByteReader mem reqPerm addr m = do
+runMemoryByteReader mem reqPerm addr m =
   addrWidthClass (memAddrWidth mem) $ do
   let seg = msegSegment addr
   if not (segmentFlags seg `Perm.hasPerm` reqPerm) then

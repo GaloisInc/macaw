@@ -86,6 +86,8 @@ absEvalStmt info stmt = withArchConstraints info $
       pure ()
     ExecArchStmt astmt ->
       modify $ \r -> absEvalArchStmt info r astmt
+    ArchState{} ->
+      pure ()
 
 -- This takes a processor state and updates it based on executing each statement.
 absEvalStmts :: ArchitectureInfo arch

@@ -6,7 +6,9 @@ module ElfX64Linux (
   elfX64LinuxTests
   ) where
 
+import           Control.Arrow ( first )
 import Control.Lens ( (^.) )
+import           Control.Monad ( unless )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
@@ -28,6 +30,24 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.X86 as RO
+
+-- | This is an offset we use to change the load address of the text section of
+-- the binary.
+--
+-- The current binaries are position independent.  This means that the load
+-- address is around 0x100.  The problem is that there are constant offsets from
+-- the stack that are in this range; the abstract interpretation in AbsState.hs
+-- then interprets stack offsets as code pointers (since small integer values
+-- look like code pointers when the code is mapped at these low addresses).
+-- This throws off the abstract interpretation by hitting a "stack offset + code
+-- pointer" case, which resolves to Top.
+--
+-- This offset forces macaw to load the binary at a higher address where this
+-- accidental overlap is less likely.  We still need a more principled solution
+-- to this problem.
+-- Note (JHx): The code appears to be working without this, so I've disableed it.
+--loadOffset :: Word64
+--loadOffset = 0x400000
 
 elfX64LinuxTests :: [FilePath] -> T.TestTree
 elfX64LinuxTests = T.testGroup "ELF x64 Linux" . map mkTest
@@ -84,9 +104,15 @@ testDiscovery expectedFilename elf =
           (M.keysSet expectedEntries `S.difference` ignoredBlocks)
           (M.keysSet (di ^. MD.funInfo))
         F.forM_ (M.elems (di ^. MD.funInfo)) $ \(PU.Some dfi) -> do
+          F.forM_ (M.elems (dfi ^. MD.parsedBlocks)) $ \pb -> do
+            let addr = MD.pblockAddr pb
+            unless (S.member addr ignoredBlocks) $ do
+              let term = blockTerminator pb
+              T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
+              T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb)) (not (isTranslateError term))
           let actualEntry = MD.discoveredFunAddr dfi
               -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
-              actualBlockStarts = S.fromList [ (addr, toInteger (MD.blockSize pbr))
+          let actualBlockStarts = S.fromList [ (addr, toInteger (MD.blockSize pbr))
                                              | pbr <- M.elems (dfi ^. MD.parsedBlocks)
                                              , let addr = MD.pblockAddr pbr
                                              , addr `S.notMember` ignoredBlocks
@@ -120,6 +146,8 @@ withMemory :: forall w m a
 withMemory _relaWidth e k = do
   let opt = MM.LoadOptions { MM.loadRegionIndex = Nothing
                            , MM.loadRegionBaseOffset = 0
+--  let opt = MM.LoadOptions { MM.loadRegionIndex = Just 0
+--                           , MM.loadRegionBaseOffset = fromIntegral loadOffset
                            }
   case MM.resolveElfContents opt e of
     Left err -> C.throwM (MemoryLoadError err)
@@ -133,3 +161,18 @@ data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
 
 instance C.Exception ElfException
+
+blockTerminator :: MD.ParsedBlock arch ids -> MD.ParsedTermStmt arch ids
+blockTerminator = MD.stmtsTerm . MD.blockStatementList
+
+isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
+isClassifyFailure ts =
+  case ts of
+    MD.ClassifyFailure {} -> True
+    _ -> False
+
+isTranslateError :: MD.ParsedTermStmt arch ids -> Bool
+isTranslateError ts =
+  case ts of
+    MD.ParsedTranslateError {} -> True
+    _ -> False
