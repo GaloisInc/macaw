@@ -28,3 +28,6 @@
 [submodule "submodules/flexdis86"]
 	path = submodules/flexdis86
 	url = git@github.com:GaloisInc/flexdis86.git
+[submodule "submodules/llvm-pretty"]
+	path = submodules/llvm-pretty
+	url = git@github.com:GaloisInc/llvm-pretty.git
