@@ -56,8 +56,8 @@ deriving instance Ord (PPCReg arch tp)
 instance Show (PPCReg arch tp) where
   show r =
     case r of
-      PPC_GP gpr -> show gpr
-      PPC_FR fr -> show fr
+      PPC_GP (D.GPR gpr) -> 'r':show gpr
+      PPC_FR (D.VSReg fr) -> 'f':show fr
       PPC_IP -> "ip"
       PPC_LNK -> "lnk"
       PPC_CTR -> "ctr"
