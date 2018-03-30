@@ -141,9 +141,9 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
           nextPCVal = MC.RelocatableValue (knownNat :: NatRepr (ArchAddrWidth arm)) nextPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
-      (ipAddr, ipVal) <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curPCAddr) of
+      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curPCAddr) of
                  Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (addr, BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
+                 Just addr -> return (BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curPCAddr (UnsupportedInstruction i)
         Just transformer -> do
@@ -155,7 +155,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
                                                                     A32I i' -> ARMD.ppInstruction i'
                                                                     T32I i' -> ThumbD.ppInstruction i'))
             addStmt (Comment (T.pack  lineStr))
-            asAtomicStateUpdate ipAddr transformer
+            asAtomicStateUpdate (MM.relativeSegmentAddr curPCAddr) transformer
 
             -- Check to see if the PC has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive

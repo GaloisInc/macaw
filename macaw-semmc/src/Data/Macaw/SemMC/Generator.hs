@@ -178,7 +178,7 @@ curRegState = blockState . pBlockState
 -- transformer is executed.  Note: if the transformer splits the state, it isn't
 -- obvious what will happen here.  The mechanism is not designed with that use
 -- case in mind.
-asAtomicStateUpdate :: ArchAddrWord arch
+asAtomicStateUpdate :: ArchMemAddr arch
                     -- ^ Instruction address
                     -> Generator arch ids s a
                     -- ^ An action recording the state transformations of the instruction
