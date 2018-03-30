@@ -46,11 +46,10 @@ withMemory :: forall w m a
 withMemory _ e k =
   case MM.memoryForElf loadCfg e of
     Left err -> C.throwM (MemoryLoadError err)
-    Right (_sim, mem) -> k mem
+    Right (_sim, mem, _loadWarn) -> k mem
   where
     loadCfg = MM.defaultLoadOptions
-        { MM.loadStyleOverride = Just MM.LoadBySegment
-        , MM.loadRegionIndex = Just 0
+        { MM.loadRegionIndex = Just 0
         }
 
 data ElfException = MemoryLoadError String

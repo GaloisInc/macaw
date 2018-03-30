@@ -31,6 +31,7 @@ module Data.Macaw.SemMC.Generator (
   addExpr,
   finishWithTerminator,
   conditionalBranch,
+  asAtomicStateUpdate,
   -- * State access
   getRegs,
   getRegValue,
@@ -65,6 +66,7 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types ( BoolType )
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
@@ -118,6 +120,7 @@ data GenState arch ids s =
            , _blockState :: !(PreBlock arch ids)
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
            , genMemory :: MM.Memory (ArchAddrWidth arch)
+           , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
            }
 
 emptyPreBlock :: RegState (ArchReg arch) (Value arch ids)
@@ -142,6 +145,7 @@ initGenState nonceGen mem addr st =
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            , genMemory = mem
+           , genRegUpdates = MapF.empty
            }
 
 initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
@@ -162,6 +166,30 @@ blockState = lens _blockState (\s v -> s { _blockState = v })
 curRegState :: Simple Lens (GenState arch ids s) (RegState (ArchReg arch) (Value arch ids))
 curRegState = blockState . pBlockState
 
+-- | This combinator collects state modifications by a single instruction into a single 'ArchState' statement
+--
+-- This function is meant to be wrapped around an atomic CPU state
+-- transformation.  It collects all of the updates to the CPU register state
+-- (which are assumed to be made through the 'setRegVal' function) and coalesces
+-- them into a new macaw 'ArchState' statement that records the updates for
+-- later analysis.
+--
+-- The state is hidden in the generator monad and collected after the
+-- transformer is executed.  Note: if the transformer splits the state, it isn't
+-- obvious what will happen here.  The mechanism is not designed with that use
+-- case in mind.
+asAtomicStateUpdate :: ArchAddrWord arch
+                    -- ^ Instruction address
+                    -> Generator arch ids s a
+                    -- ^ An action recording the state transformations of the instruction
+                    -> Generator arch ids s a
+asAtomicStateUpdate insnAddr transformer = do
+  St.modify $ \s -> s { genRegUpdates = MapF.empty }
+  res <- transformer
+  updates <- St.gets genRegUpdates
+  addStmt (ArchState insnAddr updates)
+  return res
+
 -- | Update the value of a machine register (in the 'Generator' state) with a
 -- new macaw 'Value'.  This function applies a simplifier ('simplifyValue') to
 -- the value first, if possible.
@@ -169,7 +197,8 @@ setRegVal :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
           => ArchReg arch tp
           -> Value arch ids tp
           -> Generator arch ids s ()
-setRegVal reg val =
+setRegVal reg val = do
+  St.modify $ \s -> s { genRegUpdates = MapF.insert reg val (genRegUpdates s) }
   curRegState . boundValue reg .= fromMaybe val (simplifyValue val)
 
 addExpr :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
@@ -381,6 +410,7 @@ conditionalBranch condExpr t f =
                             , _blockState = emptyPreBlock st f_block_label (genAddr s0)
                             , genAddr = genAddr s0
                             , genMemory = genMemory s0
+                            , genRegUpdates = genRegUpdates s0
                             }
           f_seq <- finishBlock FetchAndExecute <$> runGenerator c s2 f
 

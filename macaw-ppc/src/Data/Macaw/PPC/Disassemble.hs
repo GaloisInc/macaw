@@ -34,6 +34,7 @@ import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import           Data.Macaw.Types ( BVType, BoolType )
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.SemMC.Generator
@@ -111,9 +112,9 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
+      (ipWord, ipVal) <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
+                 Just addr -> return (addr, BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
@@ -123,7 +124,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
-            transformer
+            asAtomicStateUpdate ipWord transformer
 
             -- Check to see if the IP has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
@@ -150,6 +151,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          , genMemory = mem
+                                         , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
 
