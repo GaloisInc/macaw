@@ -35,6 +35,7 @@ import           Data.Macaw.SemMC.Generator
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.Types -- ( BVType, BoolType )
 import           Data.Maybe ( fromMaybe )
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
@@ -97,7 +98,7 @@ tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
   let startOffset = MM.msegOffset startAddr
   (nextPCOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
   unless (nextPCOffset > startOffset) $ do
-    let reason = InvalidNextPC (fromIntegral nextPCOffset) (fromIntegral startOffset)
+    let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
     failAt gs0 nextPCOffset startAddr reason
   return (F.toList (blocks ^. frontierBlocks), nextPCOffset - startOffset)
 
@@ -134,7 +135,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
   let off = MM.msegOffset curPCAddr
   case readInstruction mem curPCAddr of
     Left err -> failAt gs off curPCAddr (DecodeError err)
-    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC curPCAddr curPCAddr)
+    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.relativeSegmentAddr curPCAddr) (MM.relativeSegmentAddr curPCAddr))
     Right (i, bytesRead) -> do
       -- traceM ("II: " ++ show i)
       let nextPCOffset = off + bytesRead
@@ -183,6 +184,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
                                          , _blockState = preBlock'
                                          , genAddr = nextPCSegAddr
                                          , genMemory = mem
+                                         , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics mem gs2 nextPCSegAddr maxOffset
 
@@ -283,7 +285,7 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
                                            , transErrorReason :: TranslationErrorReason w
                                            }
 
-data TranslationErrorReason w = InvalidNextPC Word32 Word32
+data TranslationErrorReason w = InvalidNextPC (MM.MemAddr w) (MM.MemAddr w)
                               | DecodeError (MM.MemoryError w)
                               | UnsupportedInstruction InstructionSet
                               | InstructionAtUnmappedAddr InstructionSet

@@ -9,7 +9,6 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Lens ( (^.) )
-import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                , AbsValue(..)
@@ -32,7 +31,7 @@ identifyCall :: ARMArchConstraints arm =>
              -> [MC.Stmt arm ids]
              -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
              -> Maybe (Seq.Seq (MC.Stmt arm ids), MC.ArchSegmentOff arm)
-identifyCall _ mem stmts0 rs = Nothing  -- KWQ: for now, nothing is identified as a call
+identifyCall _ _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identified as a call
 
 
 -- | Intended to identify a return statement.
@@ -45,11 +44,12 @@ identifyCall _ mem stmts0 rs = Nothing  -- KWQ: for now, nothing is identified a
 -- (A32 mode) when writing to the PC to discard the mode bit in target
 -- addresses.
 identifyReturn :: ARMArchConstraints arm =>
-                  proxy ppc
+                  proxy arm
                -> [MC.Stmt arm ids]
-               -> AbsProcessorState (MC.ArchReg ppc) ids
-               -> Maybe (Seq.Seq (MC.Stmt ppc ids))
+               -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
+               -> AbsProcessorState (MC.ArchReg arm) ids
+               -> Maybe (Seq.Seq (MC.Stmt arm ids))
 identifyReturn _ stmts s finalRegSt8 =
-    case transferValue finalRegSt8 (s^.MC.boundValue PPC_IP) of
+    case transferValue finalRegSt8 (s^.MC.boundValue MC.ip_reg) of
       ReturnAddr -> Just $ Seq.fromList stmts
       _ -> Nothing
