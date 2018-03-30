@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.0.2
+version: 0.3
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -33,7 +33,7 @@ library
     binary,
     bytestring,
     containers >= 0.5.8.1,
-    elf-edit >= 0.28,
+    elf-edit >= 0.29,
     galois-dwarf,
     IntervalMap >= 0.5,
     lens >= 4.7,

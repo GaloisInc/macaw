@@ -35,7 +35,11 @@ import           Data.Macaw.Utils.Pretty
 -----------------------------------------------------------------------
 -- App
 
--- | This datatype defines the primitive operations
+-- | This datatype defines operations used on multiple architectures.
+--
+-- These operations are all total functions.  Different architecture tend to have
+-- different ways of raising signals or exceptions, and so partial functions are
+-- all architecture specific.
 data App (f :: Type -> *) (tp :: Type) where
 
   -- Compare for equality.

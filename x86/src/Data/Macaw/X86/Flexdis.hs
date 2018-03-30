@@ -123,8 +123,10 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       [] ->
         MBR $ throwError $ AccessViolation (msAddr ms)
       -- Throw error if we try to read a relocation as a symbolic reference
-      SymbolicRef{}:_ -> do
+      BSSRegion _:_ -> do
         MBR $ throwError $ UnexpectedRelocation (msAddr ms)
+      SymbolicRef{}:_ -> do
+        MBR $ throwError $ UnexpectedBSS (msAddr ms)
       ByteRegion bs:rest -> do
         if BS.null bs then do
           throwError $ AccessViolation (msAddr ms)
@@ -135,6 +137,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
                        , msNext   = ByteRegion (BS.tail bs) : rest
                        }
           MBR $ v <$ put ms'
+
   invalidInstruction = do
     ms <- MBR $ get
     throwError $ InvalidInstruction (msStartAddr ms) (prevSegments (msPrev ms))

@@ -286,6 +286,9 @@ initialX86AbsState addr
   -- x87 top register points to top of stack.
   & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
   -- Direction flag is initially zero.
+  -- "The direction flag DF in the %rFLAGS register
+  --- must be clear (set to “forward” direction) on function entry and
+  --- return." (AMD64 ABI Draft 1.0, p18)
   & absRegState . boundValue DF .~ BoolConst False
   & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
 

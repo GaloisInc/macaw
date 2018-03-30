@@ -33,7 +33,7 @@ module Data.Macaw.Discovery
        , State.ppDiscoveryStateBlocks
        , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
-       , Data.Macaw.Discovery.cfgFromAddrsTrustFns
+       , Data.Macaw.Discovery.cfgFromAddrsAndState
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.CodeAddrReason(..)
        , Data.Macaw.Discovery.analyzeFunction
@@ -248,16 +248,20 @@ markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
+  -- Skip if function is unexlored
   | Map.member addr (s^.funInfo) = s
-  | otherwise = s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
-
+  | otherwise = addrWidthClass (memAddrWidth (memory s)) $
+    -- Only add function if the start is raw bytes.
+    case contentsAfterSegmentOff addr of
+      Right (ByteRegion _:_) ->
+        s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
+      _ -> s
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
                     -> [ArchSegmentOff arch]
                     -> DiscoveryState arch
                     -> DiscoveryState arch
 markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
-
 
 ------------------------------------------------------------------------
 -- FoundAddr
@@ -825,7 +829,8 @@ transferBlocks src finfo sz block_map =
       -- undiscovered functions with entries marked InitAddr, which we assume is
       -- info we know from the symbol table or some other reliable source, and
       -- pass in. Only used in analysis if pctxTrustKnownFns is True.
-      let knownFns = Set.union (Map.keysSet $ s^.funInfo) (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
+      let knownFns = Set.union (Map.keysSet $ s^.funInfo)
+                               (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
       let ctx = ParseContext { pctxMemory         = memory s
                              , pctxArchInfo       = archInfo s
                              , pctxKnownFnEntries = knownFns
@@ -986,12 +991,20 @@ analyzeFunction logFn addr rsn s =
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
 -- analyzed all function entry points.
+--
+-- If an exploreFnPred function exists in the DiscoveryState, then do not
+-- analyze unexploredFunctions at addresses that do not satisfy this predicate.
 analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
-  case Map.lookupMin (info^.unexploredFunctions) of
+  case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
     Nothing -> info
     Just (addr, rsn) ->
       analyzeDiscoveredFunctions $! fst (runST ((analyzeFunction (\_ -> pure ()) addr rsn info)))
+  where exploreOK unexploredFnMap
+          -- filter unexplored functions using the predicate if present
+          | Just xpFnPred <- info^.exploreFnPred
+          = Map.filterWithKey (\addr _r -> xpFnPred addr) unexploredFnMap
+          | otherwise = unexploredFnMap
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
@@ -1017,9 +1030,9 @@ exploreMemPointers mem_words info =
     mapM_ (modify . addMemCodePointer) mem_addrs
 
 
--- | Construct a discovery info by starting with exploring from a given set of
--- function entry points.
-cfgFromAddrs, cfgFromAddrsTrustFns ::
+-- | Construct an empty discovery state and populate it by exploring from a
+-- given set of function entry points
+cfgFromAddrs ::
      forall arch
   .  ArchitectureInfo arch
      -- ^ Architecture-specific information needed for doing control-flow exploration.
@@ -1028,24 +1041,24 @@ cfgFromAddrs, cfgFromAddrsTrustFns ::
   -> AddrSymMap (ArchAddrWidth arch)
      -- ^ Map from addresses to the associated symbol name.
   -> [ArchSegmentOff arch]
-     -- ^ Initial function entry points.
   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
-     -- ^ Function entry points in memory to be explored
-     -- after exploring function entry points.
-     --
-     -- Each entry contains an address and the value stored in it.
   -> DiscoveryState arch
 cfgFromAddrs arch_info mem symbols =
-  cfgFromAddrsWorker (emptyDiscoveryState mem symbols arch_info)
-cfgFromAddrsTrustFns arch_info mem symbols =
-  cfgFromAddrsWorker (set trustKnownFns True $ emptyDiscoveryState mem symbols arch_info)
+  cfgFromAddrsAndState (emptyDiscoveryState mem symbols arch_info)
 
-cfgFromAddrsWorker :: forall arch
-                   .  DiscoveryState arch
-                   -> [ArchSegmentOff arch]
-                   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
-                   -> DiscoveryState arch
-cfgFromAddrsWorker initial_state init_addrs mem_words =
+-- | Expand an initial discovery state by exploring from a given set of function
+-- entry points.
+cfgFromAddrsAndState :: forall arch
+                     .  DiscoveryState arch
+                     -> [ArchSegmentOff arch]
+                     -- ^ Initial function entry points.
+                     -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+                     -- ^ Function entry points in memory to be explored
+                     -- after exploring function entry points.
+                     --
+                     -- Each entry contains an address and the value stored in it.
+                     -> DiscoveryState arch
+cfgFromAddrsAndState initial_state init_addrs mem_words =
   initial_state
     & markAddrsAsFunction InitAddr init_addrs
     & analyzeDiscoveredFunctions
