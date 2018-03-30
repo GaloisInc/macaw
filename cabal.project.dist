@@ -1,4 +1,5 @@
 packages: macaw-ppc/
+          macaw-arm/
           macaw-semmc/
           submodules/macaw/base/
           submodules/macaw/x86/
@@ -6,6 +7,7 @@ packages: macaw-ppc/
           submodules/macaw/x86_symbolic/
           submodules/semmc/semmc/
           submodules/semmc/semmc-ppc/
+          submodules/semmc/semmc-arm/
           submodules/dismantle/dismantle-tablegen/
           submodules/dismantle/dismantle-ppc/
           submodules/dismantle/dismantle-arm/
