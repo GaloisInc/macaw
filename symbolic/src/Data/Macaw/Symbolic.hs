@@ -13,6 +13,7 @@
 {-# LANGUAGE PatternGuards #-}
 module Data.Macaw.Symbolic
   ( Data.Macaw.Symbolic.CrucGen.MacawSymbolicArchFunctions(..)
+  , Data.Macaw.Symbolic.CrucGen.MacawExt
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
   , MacawSimulatorState
