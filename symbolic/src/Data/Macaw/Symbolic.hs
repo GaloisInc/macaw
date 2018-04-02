@@ -334,6 +334,7 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
     MacawCall _ty f -> doMakeCall callH st mvar (C.regValue f)
 
     MacawArchStmtExtension s    -> archStmtFn s st
+    MacawArchStateUpdate {}     -> return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y

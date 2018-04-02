@@ -10,6 +10,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
@@ -72,6 +73,7 @@ import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Data.Parameterized.TH.GADT as U
 
@@ -109,6 +111,8 @@ type MacawArchConstraints arch =
   ( TraversableFC (MacawArchStmtExtension arch)
   , C.TypeApp (MacawArchStmtExtension arch)
   , C.PrettyApp (MacawArchStmtExtension arch)
+  , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+  , M.PrettyF (M.ArchReg arch)
   , KnownNat (M.ArchAddrWidth arch)
   , 16 <= M.ArchAddrWidth arch
   )
@@ -295,6 +299,11 @@ data MacawStmtExtension (arch :: *)
     !(MacawArchStmtExtension arch f tp) ->
     MacawStmtExtension arch f tp
 
+  -- | Metadata about updates to machine registers
+  MacawArchStateUpdate :: !(M.ArchMemAddr arch) ->
+                          !(MapF.MapF (M.ArchReg arch) (MacawCrucibleValue f)) ->
+                          MacawStmtExtension arch f C.UnitType
+
   -- NOTE: The Ptr* operations below are statements and not expressions
   -- because they need to read the memory variable, to determine if their
   -- inputs are valid pointers.
@@ -368,15 +377,15 @@ instance TraversableFC (MacawArchStmtExtension arch)
       => FoldableFC (MacawStmtExtension arch) where
   foldMapFC = foldMapFCDefault
 
-
-
-
 sexpr :: String -> [Doc] -> Doc
 sexpr s [] = text s
 sexpr s l  = parens (text s <+> hsep l)
 
-instance C.PrettyApp (MacawArchStmtExtension arch)
+instance (C.PrettyApp (MacawArchStmtExtension arch),
+          M.PrettyF (M.ArchReg arch),
+          M.MemWidth (M.RegAddrWidth (M.ArchReg arch)))
       => C.PrettyApp (MacawStmtExtension arch) where
+  ppApp :: forall f . (forall (x :: C.CrucibleType) . f x -> Doc) -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc)
   ppApp f a0 =
     case a0 of
       MacawReadMem _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
@@ -387,6 +396,11 @@ instance C.PrettyApp (MacawArchStmtExtension arch)
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
       MacawCall _ regs -> sexpr "macawCall" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
+      MacawArchStateUpdate addr m ->
+        let prettyArchStateBinding :: forall tp . M.ArchReg arch tp -> MacawCrucibleValue f tp -> [Doc] -> [Doc]
+            prettyArchStateBinding reg (MacawCrucibleValue val) acc =
+              (M.prettyF reg <> text " => " <> f val) : acc
+        in sexpr "macawArchStateUpdate" [pretty addr, semiBraces (MapF.foldrWithKey prettyArchStateBinding [] m)]
 
       PtrEq _ x y    -> sexpr "ptr_eq" [ f x, f y ]
       PtrLt _ x y    -> sexpr "ptr_lt" [ f x, f y ]
@@ -408,6 +422,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawCall regTypes _) = C.StructRepr regTypes
   appType (MacawArchStmtExtension f) = C.appType f
+  appType MacawArchStateUpdate {} = C.knownRepr
   appType PtrEq {}            = C.knownRepr
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
@@ -891,7 +906,7 @@ assignRhsToCrucible rhs =
       fns <- translateFns <$> get
       crucGenArchFn fns f
 
-addMacawStmt :: M.Stmt arch ids -> CrucGen arch ids s ()
+addMacawStmt :: forall arch ids s . M.Stmt arch ids -> CrucGen arch ids s ()
 addMacawStmt stmt =
   gets translateFns >>= \archFns ->
   crucGenArchConstraints archFns $
@@ -916,11 +931,11 @@ addMacawStmt stmt =
     M.ExecArchStmt astmt -> do
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
-    M.ArchState {} -> do
-      -- FIXME: We want to translate the metadata in ArchState into equivalent
-      -- metadata in crucible.  We'll need to use a syntax extension to capture
-      -- it.
-      pure ()
+    M.ArchState addr macawVals -> do
+      m <- traverseF (fmap MacawCrucibleValue . valueToCrucible) macawVals
+      let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType
+          crucStmt = MacawArchStateUpdate addr m
+      void $ evalMacawStmt crucStmt
 
 lookupCrucibleLabel :: Map Word64 (CR.Label s)
                        -- ^ Map from block index to Crucible label
@@ -1179,6 +1194,11 @@ addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b = do
   addStatementList archFns memBaseVarMap blockLabelMap
     (M.pblockAddr b) thisPosFn regReg [(0, M.blockStatementList b)] []
 
+traverseArchStateUpdateMap :: (Applicative m)
+                           => (forall tp . e tp -> m (f tp))
+                           -> MapF.MapF k (MacawCrucibleValue e)
+                           -> m (MapF.MapF k (MacawCrucibleValue f))
+traverseArchStateUpdateMap f m = MapF.traverseWithKey (\_ v -> traverseFC f v) m
 
 --------------------------------------------------------------------------------
 -- Auto-generated instances
@@ -1220,5 +1240,8 @@ instance TraversableFC (MacawArchStmtExtension arch)
                                                `U.TypeApp` U.DataArg 1
                                                `U.TypeApp` U.DataArg 2
         , [|traverseFC|])
+      , (U.ConType [t|MapF.MapF|] `U.TypeApp` U.AnyType
+                                  `U.TypeApp` U.AnyType
+        , [|traverseArchStateUpdateMap|])
       ]
      )
