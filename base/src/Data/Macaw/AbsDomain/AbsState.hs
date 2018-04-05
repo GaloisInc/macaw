@@ -1092,7 +1092,8 @@ setAbsIP a b
 -- This is only a function of the address width.
 type ArchAbsValue arch = AbsValue (RegAddrWidth (ArchReg arch))
 
--- | This stores the abstract state of the system at a given point in time.
+-- | This stores the abstract state of the system which may be within
+-- a block.
 data AbsProcessorState r ids
    = AbsProcessorState { absMem       :: !(Memory (RegAddrWidth r))
                          -- ^ Recognizer for code addresses.

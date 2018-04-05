@@ -124,9 +124,9 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
         MBR $ throwError $ AccessViolation (msAddr ms)
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
-        MBR $ throwError $ UnexpectedRelocation (msAddr ms)
-      SymbolicRef{}:_ -> do
         MBR $ throwError $ UnexpectedBSS (msAddr ms)
+      RelocationRegion{}:_ -> do
+        MBR $ throwError $ UnexpectedRelocation (msAddr ms)
       ByteRegion bs:rest -> do
         if BS.null bs then do
           throwError $ AccessViolation (msAddr ms)

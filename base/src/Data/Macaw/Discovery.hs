@@ -183,12 +183,6 @@ refineProcStateBounds v isTrue ps =
     Right ps' -> ps'
 
 ------------------------------------------------------------------------
--- Rewriting block
-
-#ifdef USE_REWRITER
-#endif
-
-------------------------------------------------------------------------
 -- Demanded subterm utilities
 
 -- | Add any values needed to compute term statement to demand set.
@@ -1028,7 +1022,6 @@ exploreMemPointers mem_words info =
           = filter (\(a,v) -> isDataCodePointer a v)
           $ mem_words
     mapM_ (modify . addMemCodePointer) mem_addrs
-
 
 -- | Construct an empty discovery state and populate it by exploring from a
 -- given set of function entry points
