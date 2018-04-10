@@ -196,9 +196,9 @@ data PPCPrimFn ppc f tp where
   FPCvt :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(MT.FloatInfoRepr flt') -> PPCPrimFn ppc f (MT.FloatType flt')
 
   -- | Uninterpreted floating point functions
-  FP1 :: !String -- ^ the name of the function
-      -> !(f (MT.BVType 128)) -- ^ arg 1
-      -> !(f (MT.BVType 32)) -- ^ current fpscr
+  FP1 :: !String -- the name of the function
+      -> !(f (MT.BVType 128)) -- arg 1
+      -> !(f (MT.BVType 32)) -- current fpscr
       -> PPCPrimFn ppc f (MT.BVType 160)
   FP2 :: !String
       -> !(f (MT.BVType 128))
@@ -213,16 +213,16 @@ data PPCPrimFn ppc f tp where
       -> PPCPrimFn ppc f (MT.BVType 160)
 
   -- | Uninterpreted vector functions
-  Vec1 :: !String -- ^ the name of the function
+  Vec1 :: !String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
-  Vec2 :: String -- ^ the name of the function
+  Vec2 :: String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
-  Vec3 :: String -- ^ the name of the function
+  Vec3 :: String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
