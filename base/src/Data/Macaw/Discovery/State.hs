@@ -33,6 +33,7 @@ module Data.Macaw.Discovery.State
   , funInfo
   , unexploredFunctions
   , trustKnownFns
+  , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
   , parsedBlocks
@@ -284,6 +285,9 @@ data DiscoveryState arch
                     , _trustKnownFns       :: !Bool
                       -- ^ Should we use and depend on known function entries in
                       -- our analysis? E.g. used to distinguish jumps vs. tail calls
+                    , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
+                      -- ^ if present, this predicate decides whether to explore
+                      -- a function at the given address or not
                     }
 
 -- | Return list of all functions discovered so far.
@@ -319,6 +323,7 @@ emptyDiscoveryState mem symbols info =
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
   , _trustKnownFns       = False
+  , _exploreFnPred       = Nothing
   }
 
 -- | Map each jump table start to the address just after the end.
@@ -337,6 +342,9 @@ funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 trustKnownFns :: Simple Lens (DiscoveryState arch) Bool
 trustKnownFns = lens _trustKnownFns (\s v -> s { _trustKnownFns = v })
+
+exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
+exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
 
 ------------------------------------------------------------------------
 -- DiscoveryState utilities

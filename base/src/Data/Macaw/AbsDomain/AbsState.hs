@@ -1301,6 +1301,7 @@ transferApp r a = do
     BVMul w x y -> bvmul w (t x) (t y)
     BVAnd w x y -> bvand w (t x) (t y)
     BVOr w x y  -> bitop (.|.) w (t x) (t y)
+    BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV
 
 -- | Minimal information needed to parse a function call/system call

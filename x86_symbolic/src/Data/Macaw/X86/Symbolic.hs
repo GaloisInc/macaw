@@ -19,6 +19,7 @@ module Data.Macaw.X86.Symbolic
 
   , lookupX86Reg
   , updateX86Reg
+  , freshX86Reg
 
   , RegAssign
   , getReg
@@ -49,6 +50,7 @@ import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Solver.Interface as C
+import Lang.Crucible.Simulator.RegValue(RegValue'(..))
 
 
 
@@ -159,12 +161,17 @@ lookupX86Reg r asgn =
 updateX86Reg ::
   M.X86Reg t ->
   (f (ToCrucibleType t) -> f (ToCrucibleType t)) ->
-  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^ Assignment -} ->
+  Assignment f (MacawCrucibleRegTypes M.X86_64) {- ^Update this assignment -} ->
   Maybe (Assignment f (MacawCrucibleRegTypes M.X86_64))
 updateX86Reg r upd asgn =
   do pair <- MapF.lookup r regIndexMap
      return (asgn & ixF (crucibleIndex pair) %~ upd)
      -- return (adjust upd (crucibleIndex pair) asgn)
+
+freshX86Reg :: C.IsSymInterface sym =>
+  sym -> M.X86Reg t -> IO (RegValue' sym (ToCrucibleType t))
+freshX86Reg sym r =
+  RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
 
 ------------------------------------------------------------------------
 

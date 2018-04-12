@@ -6,6 +6,7 @@ import Data.Int(Int8)
 import Control.Monad(forM_)
 
 import Data.Parameterized.NatRepr
+import Data.Parameterized.Some
 
 import Flexdis86.Register (ymmReg)
 import qualified Flexdis86 as F
@@ -14,8 +15,9 @@ import Data.Macaw.CFG.Core(Value,bvValue)
 import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n256)
 
 import Data.Macaw.X86.InstructionDef
-import Data.Macaw.X86.Monad((.=), ymm, reg_high128)
-import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation)
+import Data.Macaw.X86.Monad((.=), ymm, reg_high128, uext)
+import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation
+                             , truncateBVValue )
 import Data.Macaw.X86.Generator(X86Generator, Expr(..),inAVX,evalArchFn,eval)
 import Data.Macaw.X86.X86Reg
 import Data.Macaw.X86.ArchTypes(X86_64,X86PrimFn(..),
@@ -24,6 +26,7 @@ import Data.Macaw.X86.ArchTypes(X86_64,X86PrimFn(..),
 maxReg :: Word8
 maxReg = 15 -- or 7 in 32-bit mode
 
+-- | Either 0 extend a value, or truncate it.
 avxMov :: String -> InstructionDef
 avxMov m = defBinary m def
   where
@@ -32,12 +35,11 @@ avxMov m = defBinary m def
     do SomeBV l <- getSomeBVLocation v1
        SomeBV v <- getSomeBVValue v2
        let lw = typeWidth l
-           lv = typeWidth v
-       case testEquality lw lv of
-         Just Refl -> l .= v
-         Nothing -> fail $ "Widths aren't equal: " ++ show lw ++ " and "
-                                                   ++ show lv
-
+           vw = typeWidth v
+       case testLeq vw lw of
+         Just LeqProof -> l .= uext lw v
+         Nothing -> do vTrunc <- truncateBVValue lw (SomeBV v)
+                       l .= vTrunc
 
 avx3 :: String ->
         (forall st ids.  F.Value -> F.Value -> F.Value ->
@@ -144,6 +146,34 @@ avxPointwiseShiftL mnem sz =
              _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
 
 
+avxInsert :: String -> InstructionDef
+avxInsert mnem =
+  avx4 mnem $ \arg1 arg2 arg3 arg4 ->
+    do SomeBV vec <- getSomeBVValue arg2
+       SomeBV el  <- getSomeBVValue arg3
+       Some i     <- case someNat (fromIntegral arg4) of
+                       Just ok -> return ok
+                       Nothing -> err "Invalid index"
+       let vw  = typeWidth vec
+           elw = typeWidth el
+
+       LeqProof <- case testLeq n1 elw of
+                     Just ok -> return ok
+                     _       -> err "Invalid element width"
+
+       withDivModNat vw elw $ \elN remi ->
+          case ( testEquality remi n0
+               , testLeq n1 elN
+               , testLeq (addNat i n1) elN
+               ) of
+            ( Just Refl, Just LeqProof, Just LeqProof ) ->
+              do v <- eval vec
+                 e <- eval el
+                 arg1 <~ VInsert elN elw v e i
+            _ -> err "Invalid operands"
+  where
+  err :: String -> X86Generator st ids a
+  err msg = fail ("[" ++ mnem ++ "] " ++ show msg)
 
 all_instructions :: [InstructionDef]
 all_instructions =
@@ -157,12 +187,14 @@ all_instructions =
   , defNullary "vzeroupper" $
       inAVX $
       forM_ [ 0 .. maxReg ] $ \r ->
-        reg_high128 (YMM (ymmReg r)) .= ValueExpr (bvValue 0)
+        reg_high128 (YMM r) .= ValueExpr (bvValue 0)
 
   , avxMov "vmovaps"
   , avxMov "vmovups"
   , avxMov "vmovdqa"
   , avxMov "vmovdqu"
+
+  , avxMov "vmovq"
 
   , avxPointwiseShiftL "vpslld" n32
   , avxPointwiseShiftL "vpsllq" n64
@@ -183,6 +215,7 @@ all_instructions =
 
   , avxOp2 "vaesenc" VAESEnc
   , avxOp2 "vaesenclast" VAESEncLast
+  , avxOp2 "vpunpcklqdq" VPUnpackLQDQ
 
   , avx3 "vextractf128" $ \arg1 arg2 arg ->
       do SomeBV vec <- getSomeBVValue arg2
@@ -193,6 +226,8 @@ all_instructions =
            _ -> fail "[vextractf128] Unexpected operands"
 
   , avxOp2I "vpclmulqdq" VPCLMULQDQ
+
+  , avxInsert "vpinsrq"
   ]
 
 

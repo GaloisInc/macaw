@@ -40,9 +40,10 @@ import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
+import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.BlockLabel
@@ -97,16 +98,19 @@ deriving instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (DemandSet r)
 deriving instance (TestEquality r) => Eq (DemandSet r)
 deriving instance (OrdF r) => Ord (DemandSet r)
 
-instance OrdF r => Monoid (DemandSet r) where
-  mempty = DemandSet { registerDemands = Set.empty
-                     , functionResultDemands = mempty
-                     }
-  mappend ds1 ds2 =
-    DemandSet { registerDemands = registerDemands ds1 `mappend` registerDemands ds2
+instance OrdF r => Semigroup (DemandSet r) where
+  ds1 <> ds2 =
+    DemandSet { registerDemands = registerDemands ds1 <> registerDemands ds2
               , functionResultDemands =
                   Map.unionWith Set.union (functionResultDemands ds1)
                                           (functionResultDemands ds2)
               }
+
+instance OrdF r => Monoid (DemandSet r) where
+  mempty = DemandSet { registerDemands = Set.empty
+                     , functionResultDemands = mempty
+                     }
+  mappend = (<>)
 
 demandSetDifference :: OrdF r => DemandSet r -> DemandSet r -> DemandSet r
 demandSetDifference ds1 ds2 =
@@ -481,6 +485,7 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
     -- Comment statements have no specific value.
     Comment _ -> []
     ExecArchStmt astmt -> foldMapF (\v -> [Some v]) astmt
+    ArchState _addr assn -> foldMapF (\v -> [Some v]) assn
 
 -- | This function figures out what the block requires
 -- (i.e., addresses that are stored to, and the value stored), along

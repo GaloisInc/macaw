@@ -243,9 +243,9 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
 
                  Refl <- return (minusPlusCancel w n)
 
-                 r <- ptrSub sym w v bts
-                 ok <- let ?ptrWidth = w in isValidPointer sym r mem
-                 endCaseCheck ok "Invalid result" r
+                 endCase =<< ptrSub sym w v bts
+                 -- We don't check for the validity of the pointer:
+                 -- this is done upon use.
           ]
   in
   case (isAlignMask x, isAlignMask y) of

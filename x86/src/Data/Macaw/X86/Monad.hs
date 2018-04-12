@@ -851,7 +851,7 @@ rip :: Location addr (BVType 64)
 rip = fullRegister R.X86_IP
 
 ymm :: F.YMMReg -> Location addr (BVType 256)
-ymm = fullRegister . R.YMM
+ymm = fullRegister . R.YMM . F.ymmRegNo
 
 xmm_sse :: F.XMMReg -> Location addr (BVType 128)
 xmm_sse = reg_low128_sse . xmmOwner
@@ -860,7 +860,7 @@ xmm_avx :: F.XMMReg -> Location addr (BVType 128)
 xmm_avx = reg_low128_avx . xmmOwner
 
 xmmOwner :: F.XMMReg -> X86Reg (BVType 256)
-xmmOwner = R.YMM . F.ymmReg . F.xmmRegNo
+xmmOwner = R.YMM . F.xmmRegNo
 
 ------------------------------------------------------------------------
 
@@ -1671,14 +1671,15 @@ ifte_ c_expr t f = eval c_expr >>= go
                             , _blockState = emptyPreBlock st f_block_label (genAddr s0)
                             , genAddr = genAddr s0
                             , genMemory = genMemory s0
+                            , _genRegUpdates = _genRegUpdates s0
                             , avxMode = avxMode s0
                             }
           f_seq <- finishBlock FetchAndExecute <$> runX86Generator c s5 f
 
           -- Join results together.
           let fin_b = finishBlock' p_b (\_ -> Branch cond t_block_label f_block_label)
-          seq fin_b $ do
-          return $
+          seq fin_b $
+            return
             GenResult { resBlockSeq =
                          BlockSeq { _nextBlockID = _nextBlockID f_seq
                                   , _frontierBlocks = (s0^.blockSeq^.frontierBlocks Seq.|> fin_b)
