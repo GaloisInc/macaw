@@ -17,6 +17,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
   , MacawSimulatorState(..)
+  , macawExtensions
   , runCodeBlock
   -- , runBlocks
   , mkBlocksCFG
