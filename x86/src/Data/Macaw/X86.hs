@@ -53,6 +53,7 @@ import           Control.Monad.ST
 import qualified Data.Foldable as Fold
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
@@ -151,6 +152,7 @@ initGenState nonce_gen mem addr s =
              , _blockState     = emptyPreBlock s 0 addr
              , genAddr = addr
              , genMemory = mem
+             , _genRegUpdates = MapF.empty
              , avxMode = False
              }
 
@@ -222,7 +224,7 @@ disassembleBlockImpl gs max_offset contents = do
               let next_ip_word = fromIntegral $ segmentOffset seg + off
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction next_ip_word i)
               addStmt (Comment (Text.pack line))
-              exec
+              asAtomicStateUpdate (relativeSegmentAddr curIPAddr) exec
           case gsr of
             Left msg -> do
               returnWithError gs (ExecInstructionError i msg)
@@ -242,6 +244,7 @@ disassembleBlockImpl gs max_offset contents = do
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     , genMemory = genMemory gs
+                                    , _genRegUpdates = _genRegUpdates gs
                                     , avxMode = avxMode gs
                                     }
                  case dropSegmentRangeListBytes contents (fromIntegral (next_ip_off - off)) of

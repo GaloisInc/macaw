@@ -545,11 +545,11 @@ data X86PrimFn f tp where
 
   {- | Update an element of a vector -}
   VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
-    !(NatRepr elNum)                {- ^ Number of elements in vector -} ->
-    !(NatRepr elSize)               {- ^ Size of each element in bits -} ->
-    !(f (BVType (elNum * elSize)))  {- ^ Insert in this vector -}        ->
-    !(f (BVType elSize))            {- ^ Insert this value -}            ->
-    !(NatRepr i)                    {- ^ At this index -}                ->
+    !(NatRepr elNum)                {- /\ Number of elements in vector -} ->
+    !(NatRepr elSize)               {- /\ Size of each element in bits -} ->
+    !(f (BVType (elNum * elSize)))  {- /\ Insert in this vector -}        ->
+    !(f (BVType elSize))            {- /\ Insert this value -}            ->
+    !(NatRepr i)                    {- /\ At this index -}                ->
     X86PrimFn f (BVType (elNum * elSize))
 
   {- | Shift left each element in the vector by the given amount.

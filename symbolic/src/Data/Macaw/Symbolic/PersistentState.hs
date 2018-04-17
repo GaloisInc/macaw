@@ -45,6 +45,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
+import           Data.Parameterized.TraversableFC
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
@@ -146,6 +147,15 @@ mkRegIndexMap (a :> r) csz =
 
 -- | A Crucible value with a Macaw type.
 data MacawCrucibleValue f tp = MacawCrucibleValue (f (ToCrucibleType tp))
+
+instance FunctorFC MacawCrucibleValue where
+  fmapFC f (MacawCrucibleValue v) = MacawCrucibleValue (f v)
+
+instance FoldableFC MacawCrucibleValue where
+  foldrFC f x (MacawCrucibleValue v) = f v x
+
+instance TraversableFC MacawCrucibleValue where
+  traverseFC f (MacawCrucibleValue v) = MacawCrucibleValue <$> f v
 
 ------------------------------------------------------------------------
 -- CrucPersistentState

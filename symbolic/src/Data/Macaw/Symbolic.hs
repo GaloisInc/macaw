@@ -13,9 +13,11 @@
 {-# LANGUAGE PatternGuards #-}
 module Data.Macaw.Symbolic
   ( Data.Macaw.Symbolic.CrucGen.MacawSymbolicArchFunctions(..)
+  , Data.Macaw.Symbolic.CrucGen.MacawExt
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
-  , MacawSimulatorState
+  , MacawSimulatorState(..)
+  , macawExtensions
   , runCodeBlock
   -- , runBlocks
   , mkBlocksCFG
@@ -334,6 +336,7 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
     MacawCall _ty f -> doMakeCall callH st mvar (C.regValue f)
 
     MacawArchStmtExtension s    -> archStmtFn s st
+    MacawArchStateUpdate {}     -> return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y
