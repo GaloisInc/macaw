@@ -1206,6 +1206,7 @@ transferValue c v = do
         FinSet $ Set.singleton $ toInteger addr
       | otherwise ->
         TopV
+    SymbolValue{} -> TopV
     -- Invariant: v is in m
     AssignedValue a ->
       fromMaybe (error $ "Missing assignment for " ++ show (assignId a))

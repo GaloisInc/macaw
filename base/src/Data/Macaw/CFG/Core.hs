@@ -70,6 +70,8 @@ module Data.Macaw.CFG.Core
   , ArchTermStmt
   , RegAddrWord
   , RegAddrWidth
+    -- * Utilities
+  , addrWidthTypeRepr
     -- * RegisterInfo
   , RegisterInfo(..)
   , asStackAddrOffset
@@ -148,6 +150,11 @@ bracketsep (h:l) = vcat $
   [text "{" <+> h]
   ++ fmap (text "," <+>) l
   ++ [text "}"]
+
+-- | A type repr for the address width
+addrWidthTypeRepr :: AddrWidthRepr w -> TypeRepr (BVType w)
+addrWidthTypeRepr Addr32 = BVTypeRepr knownNat
+addrWidthTypeRepr Addr64 = BVTypeRepr knownNat
 
 ------------------------------------------------------------------------
 -- AssignId
@@ -328,25 +335,29 @@ instance FoldableFC (ArchFn arch) => FoldableFC (AssignRhs arch) where
 -- Value and Assignment, AssignRhs declarations.
 
 -- | A value at runtime.
-data Value arch ids tp
-   = forall n
-   . (tp ~ BVType n, 1 <= n)
-   => BVValue !(NatRepr n) !Integer
-     -- ^ A constant bitvector
-     --
-     -- The integer should be between 0 and 2^n-1.
-   | (tp ~ BoolType)
-   => BoolValue !Bool
-     -- ^ A constant Boolean
-   | ( tp ~ BVType (ArchAddrWidth arch)
-     , 1 <= ArchAddrWidth arch
-     )
-   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
-     -- ^ A memory address
-   | AssignedValue !(Assignment arch ids tp)
-     -- ^ Value from an assignment statement.
-   | Initial !(ArchReg arch tp)
-     -- ^ Represents the value assigned to the register when the block started.
+data Value arch ids tp where
+  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
+  -- ^ A constant bitvector
+  --
+  -- The integer should be between 0 and 2^n-1.
+  BoolValue :: !Bool -> Value arch ids BoolType
+  -- ^ A constant Boolean
+  RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+                   -> !(ArchMemAddr arch)
+                   -> Value arch ids (BVType (ArchAddrWidth arch))
+  -- ^ A memory address
+  SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+              -> !SymbolIdentifier
+              -> Value arch ids (BVType (ArchAddrWidth arch))
+  -- ^ Reference to a symbol identifier.
+  --
+  -- This appears when dealing with relocations.
+  AssignedValue :: !(Assignment arch ids tp)
+                -> Value arch ids tp
+  -- ^ Value from an assignment statement.
+  Initial :: !(ArchReg arch tp)
+          -> Value arch ids tp
+  -- ^ Represents the value assigned to the register when the block started.
 
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
@@ -370,7 +381,8 @@ instance ( HasRepr (ArchReg arch) TypeRepr
 
   typeRepr (BoolValue _) = BoolTypeRepr
   typeRepr (BVValue w _) = BVTypeRepr w
-  typeRepr (RelocatableValue w _) = BVTypeRepr w
+  typeRepr (RelocatableValue w _) = addrWidthTypeRepr w
+  typeRepr (SymbolValue w _)      = addrWidthTypeRepr w
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
   typeRepr (Initial r) = typeRepr r
 
@@ -392,11 +404,15 @@ instance OrdF (ArchReg arch)
   compareF BVValue{} _ = LTF
   compareF _ BVValue{} = GTF
 
-
   compareF (RelocatableValue _ x) (RelocatableValue _ y) =
     fromOrdering (compare x y)
   compareF RelocatableValue{} _ = LTF
   compareF _ RelocatableValue{} = GTF
+
+  compareF (SymbolValue _ x) (SymbolValue _ y) =
+    fromOrdering (compare x y)
+  compareF SymbolValue{} _ = LTF
+  compareF _ SymbolValue{} = GTF
 
   compareF (AssignedValue x) (AssignedValue y) =
     compareF (assignId x) (assignId y)
@@ -613,8 +629,8 @@ ppValue p (BVValue w i)
     -- TODO: We may want to report an error here.
     parenIf (p > colonPrec) $
     text (show i) <+> text "::" <+> brackets (text (show w))
-
 ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
+ppValue _ (SymbolValue _ a) = text (show a)
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
 ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
 
@@ -792,7 +808,7 @@ ppStmt :: ArchConstraints arch
 ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
-    WriteMem a _ rhs -> text "*" PP.<> prettyPrec 11 a <+> text ":=" <+> ppValue 0 rhs
+    WriteMem a _ rhs -> text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     PlaceHolderStmt vals name ->
       text ("PLACEHOLDER: " ++ name)
       <+> parens (hcat $ punctuate comma $ viewSome (ppValue 0) <$> vals)

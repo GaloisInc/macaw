@@ -35,7 +35,8 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.cfgFromAddrs
        , Data.Macaw.Discovery.cfgFromAddrsAndState
        , Data.Macaw.Discovery.markAddrsAsFunction
-       , State.CodeAddrReason(..)
+       , State.FunctionExploreReason(..)
+       , State.BlockExploreReason(..)
        , Data.Macaw.Discovery.analyzeFunction
        , Data.Macaw.Discovery.exploreMemPointers
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
@@ -125,24 +126,6 @@ concretizeAbsCodePointers _mem StridedInterval{} = [] -- FIXME: this case doesn'
 concretizeAbsCodePointers _mem _ = []
 
 {-
-printAddrBacktrace :: Map (ArchMemAddr arch) (FoundAddr arch)
-                   -> ArchMemAddr arch
-                   -> CodeAddrReason (ArchAddrWidth arch)
-                   -> [String]
-printAddrBacktrace found_map addr rsn = do
-  let pp msg = show addr ++ ": " ++ msg
-  let prev prev_addr =
-        case Map.lookup prev_addr found_map of
-          Just found_info -> printAddrBacktrace found_map prev_addr (foundReason found_info)
-          Nothing -> error $ "Unknown reason for address " ++ show prev_addr
-  case rsn of
-    InWrite src            -> pp ("Written to memory in block at address " ++ show src ++ ".") : prev src
-    NextIP src             -> pp ("Target IP for " ++ show src ++ ".") : prev src
-    CallTarget src         -> pp ("Target IP of call at " ++ show src ++ ".") : prev src
-    InitAddr               -> [pp "Initial entry point."]
-    CodePointerInMem src   -> [pp ("Memory address " ++ show src ++ " contained code.")]
-    SplitAt src            -> pp ("Split from read of " ++ show src ++ ".") : prev src
-
 -- | Return true if this address was added because of the contents of a global address
 -- in memory initially.
 --
@@ -234,7 +217,7 @@ rangeInReadonlySegment mseg size =
 -- DiscoveryState utilities
 
 -- | Mark a escaped code pointer as a function entry.
-markAddrAsFunction :: CodeAddrReason (ArchAddrWidth arch)
+markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                       -- ^ Information about why the code address was discovered
                       --
                       -- Used for debugging
@@ -251,7 +234,7 @@ markAddrAsFunction rsn addr s
         s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
       _ -> s
 -- | Mark a list of addresses as function entries with the same reason.
-markAddrsAsFunction :: CodeAddrReason (ArchAddrWidth arch)
+markAddrsAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                     -> [ArchSegmentOff arch]
                     -> DiscoveryState arch
                     -> DiscoveryState arch
@@ -262,13 +245,13 @@ markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s
 
 -- | An address that has been found to be reachable.
 data FoundAddr arch
-   = FoundAddr { foundReason :: !(CodeAddrReason (ArchAddrWidth arch))
+   = FoundAddr { foundReason :: !(BlockExploreReason (ArchAddrWidth arch))
                  -- ^ The reason the address was found to be containing code.
                , foundAbstractState :: !(AbsBlockState (ArchReg arch))
                  -- ^ The abstract state formed from post-states that reach this address.
                }
 
-foundReasonL :: Lens' (FoundAddr arch) (CodeAddrReason (ArchAddrWidth arch))
+foundReasonL :: Lens' (FoundAddr arch) (BlockExploreReason (ArchAddrWidth arch))
 foundReasonL = lens foundReason (\old new -> old { foundReason = new })
 
 ------------------------------------------------------------------------
@@ -276,7 +259,8 @@ foundReasonL = lens foundReason (\old new -> old { foundReason = new })
 
 -- | The state for the function exploration monad (funM)
 data FunState arch s ids
-   = FunState { funNonceGen  :: !(NonceGenerator (ST s) ids)
+   = FunState { funReason :: !(FunctionExploreReason (ArchAddrWidth arch))
+              , funNonceGen  :: !(NonceGenerator (ST s) ids)
               , curFunAddr   :: !(ArchSegmentOff arch)
               , _curFunCtx   :: !(DiscoveryState arch)
                 -- ^ Discovery state without this function
@@ -540,6 +524,7 @@ identifyCallTargets absState ip = do
   case ip of
     BVValue _ x -> segOffAddrs $ resolveAbsoluteAddr mem (fromInteger x)
     RelocatableValue _ a -> segOffAddrs $ asSegmentOff mem a
+    SymbolValue{} -> def
     AssignedValue a ->
       case assignRhs a of
         -- See if we can get a value out of a concrete memory read.
@@ -845,8 +830,8 @@ transferBlocks src finfo sz block_map =
                            , blockStatementList = pblock
                            }
       id %= addFunBlock src pb
-      curFunCtx %= markAddrsAsFunction (InWrite src)    (ps^.writtenCodeAddrs)
-                .  markAddrsAsFunction (CallTarget src) (ps^.newFunctionAddrs)
+      curFunCtx %= markAddrsAsFunction (PossibleWriteEntry src) (ps^.writtenCodeAddrs)
+                .  markAddrsAsFunction (CallTarget src)         (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 
@@ -920,7 +905,7 @@ analyzeBlocks logBlock st =
 
 mkFunState :: NonceGenerator (ST s) ids
            -> DiscoveryState arch
-           -> CodeAddrReason (ArchAddrWidth arch)
+           -> FunctionExploreReason (ArchAddrWidth arch)
               -- ^ Reason to provide for why we are analyzing this function
               --
               -- This can be used to figure out why we decided a
@@ -928,10 +913,11 @@ mkFunState :: NonceGenerator (ST s) ids
            -> ArchSegmentOff arch
            -> FunState arch s ids
 mkFunState gen s rsn addr = do
-  let faddr = FoundAddr { foundReason = rsn
+  let faddr = FoundAddr { foundReason = FunctionEntryPoint
                         , foundAbstractState = mkInitialAbsState (archInfo s) (memory s) addr
                         }
-   in FunState { funNonceGen = gen
+   in FunState { funReason = rsn
+               , funNonceGen = gen
                , curFunAddr  = addr
                , _curFunCtx  = s
                , _curFunBlocks = Map.empty
@@ -944,10 +930,10 @@ mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
 mkFunInfo fs =
   let addr = curFunAddr fs
       s = fs^.curFunCtx
-      info = archInfo s
-      nm = withArchConstraints info $
+      nm = withArchConstraints (archInfo s) $
          fromMaybe (BSC.pack (show addr)) (Map.lookup addr (symbolNames s))
-   in DiscoveryFunInfo { discoveredFunAddr = addr
+   in DiscoveryFunInfo { discoveredFunReason = funReason fs
+                       , discoveredFunAddr = addr
                        , discoveredFunName = nm
                        , _parsedBlocks = fs^.curFunBlocks
                        }
@@ -961,7 +947,7 @@ analyzeFunction :: (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
                 -> ArchSegmentOff arch
                    -- ^ The address to explore
-                -> CodeAddrReason (ArchAddrWidth arch)
+                -> FunctionExploreReason (ArchAddrWidth arch)
                 -- ^ Reason to provide for why we are analyzing this function
                 --
                 -- This can be used to figure out why we decided a
@@ -1062,7 +1048,7 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 -- Resolve functions with logging
 
 resolveFuns :: MemWidth (RegAddrWidth (ArchReg arch))
-            => (ArchSegmentOff arch -> CodeAddrReason (ArchAddrWidth arch) -> ST s Bool)
+            => (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
                -- ^ Callback for discovered functions
                --
                -- Should return true if we should analyze the function and false otherwise.
@@ -1141,6 +1127,16 @@ discoveryLogFn disOpt _ (AnalyzeBlock addr) = ioToST $ do
 
     hFlush stderr
 
+
+ppFunReason :: MemWidth w => FunctionExploreReason w -> String
+ppFunReason rsn =
+  case rsn of
+    InitAddr -> ""
+    UserRequest -> ""
+    PossibleWriteEntry a -> " (written at " ++ show a ++ ")"
+    CallTarget a -> " (called at " ++ show a ++ ")"
+    CodePointerInMem a -> " (in initial memory at " ++ show a ++ ")"
+
 -- | Explore until we have found all functions we can.
 --
 -- This function is intended to make it easy to explore functions, and
@@ -1169,10 +1165,10 @@ completeDiscoveryState ainfo disOpt mem initEntries symMap funPred = stToIO $ wi
         | exploreFunctionSymbols disOpt =
             initState & markAddrsAsFunction InitAddr (Map.keys symMap)
         | otherwise = initState
-  let analyzeFn addr _rsn = ioToST $ do
+  let analyzeFn addr rsn = ioToST $ do
         let b = funPred addr
         when (b && logAtAnalyzeFunction disOpt) $ do
-          hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap
+          hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
           hFlush stderr
         pure $! b
   let analyzeBlock _ addr = ioToST $ do

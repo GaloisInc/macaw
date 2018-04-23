@@ -38,7 +38,6 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
-import           Data.Int
 import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -95,10 +94,20 @@ repValSizeByteCount = memReprBytes . repValSizeMemRepr
 ------------------------------------------------------------------------
 -- X86TermStmt
 
-data X86TermStmt ids = X86Syscall
+data X86TermStmt ids
+   = X86Syscall
+     -- ^ A system call
+   | Hlt
+     -- ^ The halt instruction.
+     --
+     -- In protected mode outside ring 0, this just raised a GP(0) exception.
+   | UD2
+     -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
   prettyF X86Syscall = text "x86_syscall"
+  prettyF Hlt        = text "hlt"
+  prettyF UD2        = text "ud2"
 
 ------------------------------------------------------------------------
 -- X86PrimLoc
@@ -155,7 +164,7 @@ data SSE_Cmp
      -- ^ Neither value is a NaN, no signalling on QNaN
   deriving (Eq, Ord)
 
-sseCmpEntries :: [(Int8, SSE_Cmp, String)]
+sseCmpEntries :: [(Word8, SSE_Cmp, String)]
 sseCmpEntries =
   [ (0, EQ_OQ,   "EQ_OQ")
   , (1, LT_OS,   "LT_OS")
@@ -167,7 +176,7 @@ sseCmpEntries =
   , (7, ORD_Q,   "ORD_Q")
   ]
 
-sseIdxCmpMap :: Map.Map Int8 SSE_Cmp
+sseIdxCmpMap :: Map.Map Word8 SSE_Cmp
 sseIdxCmpMap = Map.fromList [ (idx,val) | (idx, val, _) <- sseCmpEntries ]
 
 sseCmpNameMap :: Map.Map SSE_Cmp String
@@ -180,7 +189,7 @@ instance Show SSE_Cmp where
       -- The nothing case should never occur.
       Nothing -> "Unexpected name"
 
-lookupSSECmp :: Int8 -> Maybe SSE_Cmp
+lookupSSECmp :: Word8 -> Maybe SSE_Cmp
 lookupSSECmp i = Map.lookup i sseIdxCmpMap
 
 -- | A binary SSE operation
@@ -871,3 +880,5 @@ rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt 
 rewriteX86TermStmt f =
   case f of
     X86Syscall -> pure X86Syscall
+    Hlt -> pure Hlt
+    UD2 -> pure UD2

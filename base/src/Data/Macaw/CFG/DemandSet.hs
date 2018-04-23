@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.CFG.DemandSet
@@ -86,6 +87,7 @@ addValueDemands v = do
     BoolValue{} -> pure ()
     BVValue{} -> pure ()
     RelocatableValue{} -> pure ()
+    SymbolValue{} -> pure ()
     AssignedValue a -> addAssignmentDemands a
     Initial{} ->  pure ()
 

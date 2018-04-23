@@ -1,5 +1,5 @@
 {-|
-Copyright   : (c) Galois Inc, 2015-2016
+Copyright   : (c) Galois Inc, 2015-2018
 Maintainer  : jhendrix@galois.com
 
 Declares 'Memory', a type for representing segmented memory with permissions.
@@ -53,10 +53,11 @@ module Data.Macaw.Memory
   , segmentSize
   , SegmentRange(..)
   , Relocation(..)
-  , RelocationAddr(..)
+  , module Data.BinarySymbols
   , DropError(..)
   , dropErrorAsMemError
   , dropSegmentRangeListBytes
+  , takeSegmentPrefix
     -- * MemWord
   , MemWord
   , MemWidth(..)
@@ -77,9 +78,9 @@ module Data.Macaw.Memory
   , clearSegmentOffLeastBit
   , memAsAddrPairs
     -- * Symbols
-  , SymbolRef(..)
+  , SymbolInfo(..)
   , SymbolVersion(..)
-  , SymbolDef(..)
+  , SymbolBinding(..)
     -- ** Defined symbol information
   , SymbolPrecedence(..)
   , SymbolDefType(..)
@@ -125,6 +126,8 @@ module Data.Macaw.Memory
   ) where
 
 import           Control.Exception (assert)
+import           Control.Monad
+import           Data.BinarySymbols
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
@@ -274,6 +277,8 @@ class (1 <= w) => MemWidth w where
   addrRotate :: MemWord w -> Int -> MemWord w
 
   -- | Read an address with the given endianess.
+  --
+  -- This returns nothing if the bytestring is too short.
   addrRead :: Endianness -> BS.ByteString -> Maybe (MemWord w)
 
 -- | Returns number of bits in address.
@@ -358,21 +363,6 @@ addrWidthClass Addr64 x = x
 ------------------------------------------------------------------------
 -- Symbol Information
 
--- | Characterized the version information on a symbol
-data SymbolVersion
-   = UnversionedSymbol
-     -- ^ The symbol had no or the default *global* version information.
-   | ObjectSymbol
-     -- ^ The symbol comes from an object file and hence does not
-     -- have GNU version information.  Version information
-     -- may be part of the symbol name however.
-   | VersionedSymbol !BS.ByteString !BS.ByteString
-     -- ^ A symbol with version information from version information
-     -- in a shared library or executable.
-     --
-     -- The first value is the name of the shared object.  The second
-     -- is the version associated with the symbol.
-
 -- | Describes symbol precedence
 data SymbolPrecedence
    = SymbolStrong
@@ -418,13 +408,10 @@ data SymbolUndefType
    | SymbolUndefObject
      -- ^ This symbol is intended to denote some data.
 
-type SectionIndex = Word16
-
-
 -- | This defines information about the symbol related to whether
 -- it is defined (and if so how it binds) or undefined (and if so what
 -- requiremens there are for a match).
-data SymbolDef
+data SymbolBinding
    = DefinedSymbol !SymbolPrecedence !SymbolDefType
      -- ^ The symbol is defined and globally visible.
      --
@@ -433,13 +420,17 @@ data SymbolDef
      -- and the linker is not allowed to replace the symbol.  Is
      -- false, then the linker will use a strong symbol if it exists,
      -- and one of the weak symbols if it does not.
+     --
+     -- The address is the address the symbol was loaded at.  It may
+     -- not be a valid segment offset if the original binary used
+     -- symbols at unexpected addresses.
    | SymbolSection !SectionIndex
      -- ^ The symbol denotes a section in an object file with the
      -- given index.  These are primarily intended for relocations.
      --
      -- The symbol version should be @UnversionedSymbol@ with this.
-   | SymbolFile
-     -- ^ This symbol denotes a file name
+   | SymbolFile !BS.ByteString
+     -- ^ This symbol denotes a file name with the given string
      --
      -- The symbol version should be @UnversionedSymbol@ with this.
    | UndefinedSymbol !SymbolRequirement !SymbolUndefType
@@ -451,46 +442,24 @@ data SymbolDef
      -- the linker cannot find a definition, then it must throw an
      -- error.
 
-type SymbolName = BS.ByteString
-
--- | The name of a symbol along with optional version information.
---
--- Note that this is used for referencing undefined symbols, while
--- @MemSymbol@ is used for defined symbols.
-data SymbolRef =
-  SymbolRef { symbolName :: !SymbolName
-              -- ^ The name of the symbol
-            , symbolVersion :: !SymbolVersion
-              -- ^ Version information used to constrain when one
-              -- symbol matches another.
-            , symbolDef :: !SymbolDef
-            }
+-- | This provides information about a symbol in the file.
+data SymbolInfo =
+  SymbolInfo { symbolName :: !SymbolName
+               -- ^ The name of the symbol
+               --
+               -- Symbols are used for many purposes in a file.
+               -- Symbol names may not be unique, and may even be
+               -- empty.  For example, Elf files uses the empty name
+               -- for section symbols.  On ARM, "$a", "$d" and "$t"
+               -- are used to indicate regions of ARM code, data, thumb.
+             , symbolVersion :: !SymbolVersion
+               -- ^ Version information used to constrain when one
+               -- symbol matches another.
+             , symbolDef :: !SymbolBinding
+             }
 
 ------------------------------------------------------------------------
--- SegmentRange
-
--- | Denotes an address referenced by a relocation.
-data RelocationAddr
-   = SymbolRelocation !SymbolName !SymbolVersion
-     -- ^ Denotes the address of the symbol that matches the name and version constraints.
-   | SectionBaseRelocation !SectionIndex
-     -- ^ Denotes the address of the section with the given address.
-
-instance Show RelocationAddr where
-  showsPrec _ (SymbolRelocation nm ver) =
-    case ver of
-      UnversionedSymbol -> showString (BSC.unpack nm)
-      ObjectSymbol -> showString (BSC.unpack nm)
-      VersionedSymbol symName soName ->
-        showString (BSC.unpack nm)
-        . showChar '@' . showString (BSC.unpack symName)
-        . showChar '(' . showString (BSC.unpack soName) . showChar ')'
-  showsPrec _ (SectionBaseRelocation idx) =
-    showString "section_" . shows idx
-
-showOff :: Integer -> ShowS
-showOff 0   = id
-showOff off = showString " + 0x" . showHex off
+-- Relocation
 
 showEnd :: Endianness -> ShowS
 showEnd LittleEndian = showString "LE"
@@ -498,10 +467,18 @@ showEnd BigEndian = showString "BE"
 
 -- | Information about a relocation
 data Relocation w
-   = AbsoluteRelocation !RelocationAddr !(MemWord w) !Endianness
-     -- ^ Denotes the address of the relocation plus the offset stored
+   = AbsoluteRelocation !SymbolIdentifier !(MemWord w) !Endianness !Int
+     -- ^ @AbsoluteRelocation addr off end size@ denotes an
+     -- address of the relocation plus the offset stored
      -- with the given endianess.
-   | RelativeRelocation !RelocationAddr !(MemWord w) !Endianness !Int
+     --
+     -- The @size@ field is the number of bytes the relocation is stored
+     -- at, and when inserting the relocation value it should only use
+     -- that many bytes.  If the address + offset is greater than or equal to
+     -- @2^(8*n)@, then updating the relocation target should fail.  This is
+     -- used to support relocation types such as @R_X86_64_32@.  We do not
+     -- currently support signed versions like @R_X86_64_32S@.
+   | RelativeRelocation !SymbolIdentifier !(MemWord w) !Endianness !Int
      -- ^ @RelativeRelocation addr off end cnt@ denotes a relocation
      -- that stores the value of @addr + off - this_addr@ (where
      -- @this_addr@ is the address the relocation is stored at as a
@@ -509,15 +486,32 @@ data Relocation w
 
 -- | Return size of relocation in bytes
 relocSize :: forall w . MemWidth w => Relocation w -> MemWord w
-relocSize (AbsoluteRelocation _ o _)   = fromIntegral (addrSize o)
+relocSize (AbsoluteRelocation _ _ _ cnt)   = fromIntegral cnt
 relocSize (RelativeRelocation _ _ _ cnt) = fromIntegral cnt
 
 instance Show (Relocation w) where
-  showsPrec _ (AbsoluteRelocation base off end) =
-    showString "absolute(" . shows base . showOff (memWordInteger off) . showChar ')' . showEnd end
+  showsPrec _ (AbsoluteRelocation base off end cnt) =
+    showString "[areloc,"
+    . shows base
+    . showChar ','
+    . showHex (memWordInteger off)
+    . showChar ','
+    . showEnd end
+    . showChar ','
+    . shows (8*cnt)
+    . showChar ']'
   showsPrec _ (RelativeRelocation base off end cnt) =
-    showString "relative(" . shows base . showOff (memWordInteger off) . showChar ')' . showEnd end
-    . showChar '@' . shows (8*cnt)
+    showString "[rreloc,"
+    . shows base
+    . showHex (memWordInteger off)
+    . showChar ','
+    . showEnd end
+    . showChar ','
+    . shows (8*cnt)
+    . showChar ']'
+
+------------------------------------------------------------------------
+-- SegmentRange
 
 -- | Defines a portion of a segment.
 --
@@ -534,15 +528,65 @@ rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
 rangeSize (RelocationRegion r) = relocSize r
 rangeSize (BSSRegion sz)  = sz
 
+ppByte :: Word8 -> String -> String
+ppByte w | w < 16    = showChar '0' . showHex w
+         | otherwise = showHex w
+
 instance Show (SegmentRange w) where
-  showsPrec _ (ByteRegion bs) = \s -> foldr ppByte s (BS.unpack bs)
-    where ppByte w | w < 16    = showChar '0' . showHex w
-                   | otherwise = showHex w
+  showsPrec _ (ByteRegion bs)      = \s -> foldr ppByte s (BS.unpack bs)
   showsPrec p (RelocationRegion r) = showsPrec p r
-  showsPrec _ (BSSRegion sz)  = showString "bss[" . shows sz . showChar ']'
+  showsPrec _ (BSSRegion sz)       = showString "[bss," . shows sz . showChar ']'
 
   showList [] = id
   showList (h : r) = showsPrec 10 h . showList r
+
+takeSegmentPrefix :: MemWidth w => [SegmentRange w] -> MemWord w -> [SegmentRange w]
+takeSegmentPrefix _ 0 = []
+takeSegmentPrefix rngs c = do
+  let rest l d | c > d = takeSegmentPrefix l (c - d)
+               | otherwise = []
+  case rngs of
+    [] -> []
+    ByteRegion b : l ->
+      ByteRegion (BS.take (fromIntegral c) b)
+      : rest l (fromIntegral (BS.length b))
+    RelocationRegion r : l ->
+      RelocationRegion r
+      : rest l (relocSize r)
+    BSSRegion d : l ->
+      BSSRegion (min d c)
+      : rest l d
+
+------------------------------------------------------------------------
+-- MemoryError
+
+-- | Type of errors that may occur when reading memory.
+data MemoryError w
+   = AccessViolation !(MemAddr w)
+     -- ^ Memory could not be read, because it was not defined.
+   | PermissionsError !(MemAddr w)
+     -- ^ Memory could not be read due to insufficient permissions.
+   | UnexpectedRelocation !(MemAddr w) !(Relocation w) !String
+     -- ^ Read from location that partially overlaps a relocated entry
+   | UnexpectedBSS !(MemAddr w)
+     -- ^ We unexpectedly encountered a BSS segment/section.
+   | InvalidAddr !(MemAddr w)
+     -- ^ The data at the given address did not refer to a valid memory location.
+
+instance MemWidth w => Show (MemoryError w) where
+  show err =
+    case err of
+      AccessViolation a ->
+        "Access violation at " ++ show a ++ "."
+      PermissionsError a ->
+        "Insufficient permissions at " ++ show a ++ "."
+      UnexpectedRelocation a r msg ->
+        "Attempt to read an unexpected relocation entry at " ++ show a ++ ":\n"
+        ++ "  " ++ show r ++ "\n" ++ msg
+      UnexpectedBSS a ->
+        "Attempt to read zero initialized BSS memory at " ++ show a ++ "."
+      InvalidAddr a ->
+        "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
 -- SegmentContents
@@ -595,8 +639,8 @@ contentsAfterSegmentOff mseg = do
           Right $ v : Map.elems post
         -- If last segment is a symbolic reference, then the code is asking
         -- us to partition a symbolic reference in two, which we cannot do.
-        Just ((_, RelocationRegion{}),_) ->
-          Left (UnexpectedRelocation (relativeSegmentAddr mseg))
+        Just ((_, RelocationRegion r),_) ->
+          Left (UnexpectedRelocation (relativeSegmentAddr mseg) r "caso")
 
 contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsList (SegmentContents m) = Map.toList m
@@ -629,9 +673,11 @@ allSymbolData (PresymbolData contents bssSize) =
 
 -- | Take the given amount of data out of presymbol data.
 takeSegment :: MemWidth w => Int64 -> PresymbolData -> [SegmentRange w]
-takeSegment cnt (PresymbolData contents bssSize) =
-  singleSegment (L.take cnt contents)
-  ++ bssSegment (min (cnt - L.length contents) bssSize)
+takeSegment cnt (PresymbolData contents bssSize)
+  | L.null contents = bssSegment (min cnt bssSize)
+  | otherwise =
+    ByteRegion (L.toStrict (L.take cnt contents))
+    : bssSegment (min (cnt - L.length contents) bssSize)
 
 -- | @dropSegment cnt dta@ drops @cnt@ bytes from @dta@.
 dropSegment :: Int64 -> PresymbolData -> PresymbolData
@@ -664,15 +710,17 @@ byteSegments :: forall v m w
              -> L.ByteString      -- ^ File contents for segment.
              -> Int64             -- ^ Expected size
              -> m [SegmentRange w]
-byteSegments resolver relocMap initBase contents0 regionSize =
-    bytesToSegmentsAscending [] symbolPairs 0 (mkPresymbolData contents0 regionSize)
+byteSegments resolver relocMap initBase contents0 regionSize
+    | end <= initBase =
+        error $ "regionSize should be a positive number that does not overflow address space."
+    | otherwise =
+        bytesToSegmentsAscending [] symbolPairs initBase (mkPresymbolData contents0 regionSize)
   where -- Parse the map to get a list of symbols starting at base0.
         symbolPairs :: [(MemWord w, v)]
         symbolPairs
           = Map.toList
           $ Map.dropWhileAntitone (< initBase) relocMap
 
-        -- Get last address for this region
         end :: MemWord w
         end = initBase + fromIntegral regionSize
 
@@ -680,29 +728,34 @@ byteSegments resolver relocMap initBase contents0 regionSize =
         bytesToSegmentsAscending :: [SegmentRange w]
                                  -> [(MemWord w, v)]
                                     -- ^ List of relocations to process in order.
-                                 -> MemWord w -- ^ Number of bytes so far.
+                                 -> MemWord w
+                                    -- ^ Address we are currently at
+                                    -- This should be guaranteed to be at most @end@.
                                  -> PresymbolData
                                   -- ^ The remaining bytes in memory
                                   -- including a number extra bss.
                                  -> m [SegmentRange w]
         bytesToSegmentsAscending pre ((addr,v):rest) ioff contents
-          | addr >= end = do
-              pure $ reverse pre ++ allSymbolData contents
-          | addr - initBase < ioff = do
-              -- Skip relocations that are before current adddredd
-              bytesToSegmentsAscending pre rest ioff contents
-          | otherwise = do
+          -- We only consider relocations that are in the range of this segment,
+          -- so we require the difference between the address and initBase is
+          -- less than regionSize
+          | addr < end = do
+              when (addr < ioff) $ do
+                error "Encountered overlapping relocations."
               mr <- resolver v contents
-              let addrOff = addr - initBase
               case mr of
-                Just (r,rsz) | addrOff >= ioff -> do
-                  let addrDiff = addrOff - ioff
+                Just (r,rsz) -> do
+                  when (rsz < 1 || ioff + rsz > end) $ do
+                    error $ "Region size " ++ show rsz ++ " is out of range."
+                  -- Get number of bytes between this address offset and the current offset."
+                  let addrDiff = addr - ioff
                   let post   = dropSegment (fromIntegral (addrDiff + rsz)) contents
                   let pre' = [RelocationRegion r]
                         ++ reverse (takeSegment (fromIntegral addrDiff) contents)
                         ++ pre
-                  bytesToSegmentsAscending pre' rest (ioff + rsz) post
+                  bytesToSegmentsAscending pre' rest (addr + rsz) post
                 _ -> do
+                  -- Skipping relocation
                   bytesToSegmentsAscending pre  rest ioff contents
         bytesToSegmentsAscending pre _ _ contents =
           pure $ reverse pre ++ allSymbolData contents
@@ -1038,13 +1091,13 @@ type AddrSymMap w = Map.Map (MemSegmentOff w) BSC.ByteString
 ------------------------------------------------------------------------
 -- DropError
 
--- | An error that occured when droping byes.
-data DropError
-   = DropUnexpectedRelocation
+-- | An error that occured when droping bytes.
+data DropError w
+   = DropUnexpectedRelocation !(Relocation w)
    | DropInvalidAddr
 
-dropErrorAsMemError :: MemAddr w -> DropError -> MemoryError w
-dropErrorAsMemError a DropUnexpectedRelocation = UnexpectedRelocation a
+dropErrorAsMemError :: MemAddr w -> DropError w -> MemoryError w
+dropErrorAsMemError a (DropUnexpectedRelocation r) = UnexpectedRelocation a r "dropErr"
 dropErrorAsMemError a DropInvalidAddr          = InvalidAddr a
 
 -- | Given a contiguous list of segment ranges and a number of bytes to drop, this
@@ -1053,7 +1106,7 @@ dropSegmentRangeListBytes :: forall w
                           .  MemWidth w
                           => [SegmentRange w]
                           -> Int
-                          -> Either DropError [SegmentRange w]
+                          -> Either (DropError w) [SegmentRange w]
 dropSegmentRangeListBytes ranges 0 = Right ranges
 dropSegmentRangeListBytes (ByteRegion bs : rest) cnt = do
   let sz = BS.length bs
@@ -1061,10 +1114,10 @@ dropSegmentRangeListBytes (ByteRegion bs : rest) cnt = do
     Right $ ByteRegion (BS.drop cnt bs) : rest
    else
     dropSegmentRangeListBytes rest (cnt - sz)
-dropSegmentRangeListBytes (RelocationRegion{}:rest) cnt = do
-  let sz = addrSize (error "rangeSize nat evaluated" :: NatRepr w)
+dropSegmentRangeListBytes (RelocationRegion r:rest) cnt = do
+  let sz = fromIntegral (relocSize r)
   if sz > cnt then
-    Left DropUnexpectedRelocation
+    Left (DropUnexpectedRelocation r)
    else
     dropSegmentRangeListBytes rest (cnt - sz)
 dropSegmentRangeListBytes (BSSRegion sz : rest) cnt =
@@ -1074,41 +1127,6 @@ dropSegmentRangeListBytes (BSSRegion sz : rest) cnt =
     dropSegmentRangeListBytes rest (cnt - fromIntegral sz)
 dropSegmentRangeListBytes [] _ =
   Left DropInvalidAddr
-
-------------------------------------------------------------------------
--- MemoryError
-
--- | Type of errors that may occur when reading memory.
-data MemoryError w
-   = UserMemoryError (MemAddr w) !String
-     -- ^ the memory reader threw an unspecified error at the given location.
-   | InvalidInstruction (MemAddr w) ![SegmentRange w]
-     -- ^ The memory reader could not parse the value starting at the given address.
-   | AccessViolation (MemAddr w)
-     -- ^ Memory could not be read, because it was not defined.
-   | PermissionsError (MemAddr w)
-     -- ^ Memory could not be read due to insufficient permissions.
-   | UnexpectedRelocation (MemAddr w)
-     -- ^ Read from location that partially overlaps a relocated entry
-   | UnexpectedBSS (MemAddr w)
-     -- ^ We unexpectedly encountered a BSS segment/section.
-   | InvalidAddr (MemAddr w)
-     -- ^ The data at the given address did not refer to a valid memory location.
-
-instance MemWidth w => Show (MemoryError w) where
-  show (UserMemoryError _ msg) = msg
-  show (InvalidInstruction start contents) =
-    "Invalid instruction at " ++ show start ++ ": " ++ showList contents ""
-  show (AccessViolation a)   =
-    "Access violation at " ++ show a ++ "."
-  show (PermissionsError a)  =
-    "Insufficient permissions at " ++ show a ++ "."
-  show (UnexpectedRelocation a)   =
-    "Attempt to read an unexpected relocation entry at " ++ show a ++ "."
-  show (UnexpectedBSS a) =
-    "Attempt to read zero initialized BSS memory at " ++ show a ++ "."
-  show (InvalidAddr a) =
-    "Attempt to interpret an invalid address: " ++ show a ++ "."
 
 ------------------------------------------------------------------------
 -- Memory symbol
@@ -1143,14 +1161,21 @@ addrContentsAfter mem addr = do
   addrWidthClass (memAddrWidth mem) $
     contentsAfterSegmentOff =<< resolveMemAddr mem addr
 
+-- | Read a bytestring from a sequence of statements.
+--
+-- This is a helper method for @readByteString@ below.
 readByteString' :: MemWidth w
                 => BS.ByteString
+                   -- ^ Bytestring read so far (prepended to output)
                 -> [SegmentRange w]
+                   -- ^ Remaining segments to read from.
                 -> MemAddr w
+                   -- ^ Address we are reading from (used for error reporting)
                 -> Word64
+                   -- ^ Number of bytes to read.
                 -> Either (MemoryError w) BS.ByteString
 readByteString' _ _ _ 0 = pure BS.empty
-readByteString' _ [] addr _ = Left (InvalidAddr addr)
+readByteString' _ [] addr _ = Left $! InvalidAddr addr
 readByteString' prev (ByteRegion bs:rest) addr sz =
   if toInteger sz <= toInteger (BS.length bs) then
     pure $ prev <> BS.take (fromIntegral sz) bs
@@ -1158,23 +1183,26 @@ readByteString' prev (ByteRegion bs:rest) addr sz =
     let addr' = incAddr (fromIntegral (BS.length bs)) addr
     let sz' = sz - fromIntegral (BS.length bs)
     readByteString' (prev <> bs) rest addr' sz'
-readByteString' _ (RelocationRegion{}:_) addr _ = do
-  Left (UnexpectedRelocation addr)
+readByteString' _ (RelocationRegion r:_) addr _ = do
+  Left $! UnexpectedRelocation addr r "readBS"
 readByteString' prev (BSSRegion cnt:rest) addr sz =
   if toInteger sz <= toInteger cnt then
     pure $ prev <> BS.replicate (fromIntegral sz) 0
    else do
     let addr' = incAddr (toInteger sz) addr
     let sz' = sz - fromIntegral cnt
-    readByteString' (prev <> BS.replicate (fromIntegral cnt) 0) rest addr' sz'
+    seq addr' $
+      readByteString' (prev <> BS.replicate (fromIntegral cnt) 0) rest addr' sz'
 
 -- | Attemtp to read a bytestring of the given length
 readByteString :: Memory w -> MemAddr w -> Word64 -> Either (MemoryError w) BS.ByteString
-readByteString mem addr sz = do
-  l <- addrContentsAfter mem addr
-  addrWidthClass (memAddrWidth mem) $ readByteString' BS.empty l addr sz
+readByteString mem addr sz = addrWidthClass (memAddrWidth mem) $ do
+  segOff <- resolveMemAddr mem addr
+  l      <- contentsAfterSegmentOff segOff
+  readByteString' BS.empty l addr sz
 
--- | Read an address from the value in the segment or report a memory error.
+-- | Read an address from the value in the segment or report a memory
+-- error.
 readAddr :: Memory w
          -> Endianness
          -> MemAddr w
@@ -1182,10 +1210,11 @@ readAddr :: Memory w
 readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   let sz = fromIntegral (addrSize addr)
   bs <- readByteString mem addr sz
-  let Just val = addrRead end bs
-  Right $ MemAddr 0 val
+  case addrRead end bs of
+    Just val ->   Right $ MemAddr 0 val
+    Nothing -> error $ "readAddr internal error: readByteString result too short."
 
--- | Read a big endian word16
+-- | Read a single byte.
 readWord8 :: Memory w -> MemAddr w -> Either (MemoryError w) Word8
 readWord8 mem addr = bsWord8 <$> readByteString mem addr 1
 

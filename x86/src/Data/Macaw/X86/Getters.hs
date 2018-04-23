@@ -20,13 +20,16 @@ module Data.Macaw.X86.Getters
   , getBVValue
   , getSignExtendedValue
   , truncateBVValue
+  , getCallTarget
   , getJumpTarget
   , HasRepSize(..)
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
   , readXMMValue
   , readYMMValue
+  , getImm32
     -- * Utilities
+  , reg8Loc
   , reg16Loc
   , reg32Loc
   , reg64Loc
@@ -50,8 +53,7 @@ import           Data.Parameterized.Some
 import qualified Flexdis86 as F
 import           GHC.TypeLits (KnownNat)
 
-import           Data.Macaw.CFG (MemRepr(..))
-import           Data.Macaw.Memory (Endianness(..))
+import           Data.Macaw.CFG
 import           Data.Macaw.Types (BVType, n8, n16, n32, n64, typeWidth)
 import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Monad
@@ -81,10 +83,14 @@ xmmMemRepr = BVMemRepr (knownNat :: NatRepr 16) LittleEndian
 ymmMemRepr :: MemRepr (BVType 256)
 ymmMemRepr = BVMemRepr (knownNat :: NatRepr 32) LittleEndian
 
-
-
 ------------------------------------------------------------------------
 -- Utilities
+
+-- | Return a location from a 16-bit register
+reg8Loc :: F.Reg8 -> Location addr (BVType 8)
+reg8Loc (F.LowReg8 r)  = reg_low8  $ X86_GP $ F.Reg64 r
+reg8Loc (F.HighReg8 r) = reg_high8 $ X86_GP $ F.Reg64 r
+reg8Loc _ = error "internal: Unepxected byteReg"
 
 -- | Return a location from a 16-bit register
 reg16Loc :: F.Reg16 -> Location addr (BVType 16)
@@ -97,7 +103,6 @@ reg32Loc = reg_low32 . X86_GP . F.reg32_reg
 -- | Return a location from a 64-bit register
 reg64Loc :: F.Reg64 -> Location addr (BVType 64)
 reg64Loc = fullRegister . X86_GP
-
 
 ------------------------------------------------------------------------
 -- Getters
@@ -120,8 +125,9 @@ getBVAddress ar =
       let offset = uext n64 (base .+ scale .+ bvLit n32 (toInteger (F.displacementInt i32)))
       mk_absolute seg offset
     F.IP_Offset_32 _seg _i32                 -> fail "IP_Offset_32"
-    F.Offset_32    _seg _w32                 -> fail "Offset_32"
-    F.Offset_64    seg w64 -> do
+    F.Offset_32    _seg _w32 ->
+      fail "Offset_32"
+    F.Offset_64 seg w64 -> do
       mk_absolute seg (bvLit n64 (toInteger w64))
     F.Addr_64      seg m_r64 m_int_r64 i32 -> do
       base <- case m_r64 of
@@ -147,7 +153,8 @@ getBVAddress ar =
       -- We could nevertheless call 'getSegmentBase' in all cases
       -- here, but that adds a lot of noise to the AST in the common
       -- case of segments other than FS or GS.
-      | seg == F.CS || seg == F.DS || seg == F.ES || seg == F.SS = return offset
+      | seg == F.CS || seg == F.DS || seg == F.ES || seg == F.SS =
+        return offset
       -- The FS and GS segments can be non-zero based in 64-bit mode.
       | otherwise = do
         base <- getSegmentBase seg
@@ -217,16 +224,17 @@ getSomeBVLocation v =
     F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
     F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
     F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
-    F.ByteReg  (F.LowReg8  r) -> mk $ reg_low8  $ X86_GP $ F.Reg64 r
-    F.ByteReg  (F.HighReg8 r) -> mk $ reg_high8 $ X86_GP $ F.Reg64 r
-    F.ByteReg  _ -> error "internal: getSomeBVLocation illegal ByteReg"
-    F.WordReg  r -> mk (reg16Loc r)
-    F.DWordReg r -> mk (reg32Loc r)
-    F.QWordReg r -> mk (reg64Loc r)
+    F.ByteReg  r -> mk $ reg8Loc  r
+    F.WordReg  r -> mk $ reg16Loc r
+    F.DWordReg r -> mk $ reg32Loc r
+    F.QWordReg r -> mk $ reg64Loc r
     F.ByteImm  _ -> noImm
     F.WordImm  _ -> noImm
     F.DWordImm _ -> noImm
     F.QWordImm _ -> noImm
+    F.ByteSignedImm  _ -> noImm
+    F.WordSignedImm  _ -> noImm
+    F.DWordSignedImm _ -> noImm
     F.JumpOffset{}  -> fail "Jump Offset is not a location."
   where
     noImm :: Monad m => m a
@@ -244,15 +252,23 @@ getBVLocation l expected = do
     Nothing ->
       fail $ "Widths aren't equal: " ++ show (typeWidth v) ++ " and " ++ show expected
 
+getImm32 :: F.Imm32 -> X86Generator st ids (BVExpr ids 32)
+getImm32 (F.Imm32Concrete w) =
+  pure $ bvLit n32 (toInteger w)
+getImm32 (F.Imm32SymbolOffset sym off) = do
+  let symExpr = ValueExpr $ SymbolValue Addr64 sym
+  let offExpr = bvLit n64 (toInteger off)
+  pure $ bvTrunc' n32 (symExpr .+ offExpr)
+
 -- | Return a bitvector value.
 getSomeBVValue :: F.Value -> X86Generator st ids (SomeBV (Expr ids))
 getSomeBVValue v =
   case v of
-    F.ByteImm  w        -> return $ SomeBV $ bvLit n8  $ toInteger w
-    F.WordImm  w        -> return $ SomeBV $ bvLit n16 $ toInteger w
-    F.DWordImm w        -> return $ SomeBV $ bvLit n32 $ toInteger w
-    F.QWordImm w        -> return $ SomeBV $ bvLit n64 $ toInteger w
-    F.JumpOffset _ off  -> return $ SomeBV $ bvLit n64 $ toInteger off
+    F.ByteImm  w      -> pure $! SomeBV $ bvLit n8  $ toInteger w
+    F.WordImm  w      -> pure $! SomeBV $ bvLit n16 $ toInteger w
+    F.DWordImm i      -> SomeBV <$> getImm32 i
+    F.QWordImm w      -> pure $! SomeBV $ bvLit n64 $ toInteger w
+    F.JumpOffset _ _  -> fail "Jump Offset should not be treated as a BVValue."
     _ -> do
       SomeBV l <- getSomeBVLocation v
       SomeBV <$> get l
@@ -284,20 +300,30 @@ getSignExtendedValue v out_w =
     F.Mem64  ar   -> mk =<< getBV64Addr ar
     F.Mem128 ar   -> mk =<< getBV128Addr ar
     F.Mem256 ar   -> mk =<< getBV256Addr ar
-
-    F.ByteReg (F.LowReg8  r) -> mk $ reg_low8  $ X86_GP $ F.Reg64 r
-    F.ByteReg (F.HighReg8 r) -> mk $ reg_high8 $ X86_GP $ F.Reg64 r
-    F.WordReg  r                    -> mk (reg16Loc r)
-    F.DWordReg r                    -> mk (reg32Loc r)
-    F.QWordReg r                    -> mk (reg64Loc r)
-
     F.XMMReg r                      -> mk (xmm_avx r)
     F.YMMReg r                      -> mk (ymm r)
 
-    F.ByteImm  i                    -> return $! bvLit out_w (toInteger i)
-    F.WordImm  i                    -> return $! bvLit out_w (toInteger i)
-    F.DWordImm i                    -> return $! bvLit out_w (toInteger i)
-    F.QWordImm i                    -> return $! bvLit out_w (toInteger i)
+    F.ByteImm  i
+      | Just Refl <- testEquality n8 out_w ->
+        pure $! bvLit n8 (toInteger i)
+    F.WordImm  i
+      | Just Refl <- testEquality n16 out_w ->
+        pure $! bvLit n16 (toInteger i)
+    F.DWordImm (F.Imm32Concrete i)
+      | Just Refl <- testEquality n32 out_w ->
+        pure $! bvLit n32 (toInteger i)
+    F.QWordImm i
+      | Just Refl <- testEquality n64 out_w ->
+        pure $! bvLit n64 (toInteger i)
+
+    F.ByteSignedImm  i -> pure $! bvLit out_w (toInteger i)
+    F.WordSignedImm  i -> pure $! bvLit out_w (toInteger i)
+    F.DWordSignedImm i -> pure $! bvLit out_w (toInteger i)
+
+    F.ByteReg  r -> mk $ reg8Loc  r
+    F.WordReg  r -> mk $ reg16Loc r
+    F.DWordReg r -> mk $ reg32Loc r
+    F.QWordReg r -> mk $ reg64Loc r
 
     _ -> fail $ "getSignExtendedValue given unexpected width: " ++ show v
   where
@@ -322,14 +348,34 @@ truncateBVValue n (SomeBV v)
   | otherwise =
     fail $ "Widths isn't >=: " ++ show (typeWidth v) ++ " and " ++ show n
 
+resolveJumpOffset :: F.JumpOffset -> X86Generator s ids (BVExpr ids 64)
+resolveJumpOffset (F.FixedOffset off) =
+  pure $ bvLit n64 (toInteger off)
+resolveJumpOffset (F.RelativeOffset symId insOff off) = do
+  arepr <- memAddrWidth . genMemory <$> getState
+  let symVal = ValueExpr (SymbolValue arepr symId)
+  addrOff <- genAddr <$> getState
+  let relocAddr = relativeAddr (msegSegment addrOff) (msegOffset addrOff + fromIntegral insOff)
+  pure $ symVal .+ bvLit n64 (toInteger off) .- ValueExpr (RelocatableValue arepr relocAddr)
+
+-- | Return the target of a call or jump instruction.
+getCallTarget :: F.Value
+              -> X86Generator st ids (BVExpr ids 64)
+getCallTarget v =
+  case v of
+    F.Mem64 ar -> get =<< getBV64Addr ar
+    F.QWordReg r -> get (reg64Loc r)
+    F.JumpOffset _ joff -> do
+      (.+) <$> get rip <*> resolveJumpOffset joff
+    _ -> fail "Unexpected argument"
+
 -- | Return the target of a call or jump instruction.
 getJumpTarget :: F.Value
               -> X86Generator st ids (BVExpr ids 64)
 getJumpTarget v =
   case v of
-    F.Mem64 ar -> get =<< getBV64Addr ar
-    F.QWordReg r -> get (reg64Loc r)
-    F.JumpOffset _ off -> (bvLit n64 (toInteger off) .+) <$> get rip
+    F.JumpOffset _ joff -> do
+      (.+) <$> get rip <*> resolveJumpOffset joff
     _ -> fail "Unexpected argument"
 
 ------------------------------------------------------------------------
@@ -350,11 +396,10 @@ getAddrRegOrSegment v =
     F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
     F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
 
-    F.ByteReg (F.LowReg8  r) -> pure $ Some $ HasRepSize  ByteRepVal $ reg_low8  $ X86_GP $ F.Reg64 r
-    F.ByteReg (F.HighReg8 r) -> pure $ Some $ HasRepSize  ByteRepVal $ reg_high8 $ X86_GP $ F.Reg64 r
-    F.WordReg  r                    -> pure $ Some $ HasRepSize  WordRepVal (reg16Loc r)
-    F.DWordReg r                    -> pure $ Some $ HasRepSize DWordRepVal (reg32Loc r)
-    F.QWordReg r                    -> pure $ Some $ HasRepSize QWordRepVal (reg64Loc r)
+    F.ByteReg  r -> pure $ Some $ HasRepSize  ByteRepVal $ reg8Loc  r
+    F.WordReg  r -> pure $ Some $ HasRepSize  WordRepVal $ reg16Loc r
+    F.DWordReg r -> pure $ Some $ HasRepSize DWordRepVal $ reg32Loc r
+    F.QWordReg r -> pure $ Some $ HasRepSize QWordRepVal $ reg64Loc r
     _  -> fail $ "Argument " ++ show v ++ " not supported."
 
 -- | Gets a value that can be pushed.
@@ -362,10 +407,10 @@ getAddrRegOrSegment v =
 getAddrRegSegmentOrImm :: F.Value -> X86Generator st ids (Some (HasRepSize (Expr ids)))
 getAddrRegSegmentOrImm v =
   case v of
-    F.ByteImm  w -> return $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
-    F.WordImm  w -> return $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
-    F.DWordImm w -> return $ Some $ HasRepSize DWordRepVal $ bvLit n32 (toInteger w)
-    F.QWordImm w -> return $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+    F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
+    F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
+    F.DWordImm i -> Some . HasRepSize DWordRepVal <$> getImm32 i
+    F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
     _ -> do
       Some (HasRepSize rep l) <- getAddrRegOrSegment v
       Some . HasRepSize rep <$> get l
@@ -384,6 +429,3 @@ readYMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 256))
 readYMMValue (F.YMMReg r) = get (ymm r)
 readYMMValue (F.Mem256 a) = readBVAddress a ymmMemRepr
 readYMMValue _ = fail "YMM Instruction given unexpected value."
-
-
-

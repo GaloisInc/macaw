@@ -26,6 +26,7 @@ module Data.Macaw.X86.Generator
   , evalAssignRhs
   , shiftX86GCont
   , asAtomicStateUpdate
+  , getState
     -- * GenResult
   , GenResult(..)
   , finishBlock
@@ -320,6 +321,7 @@ runX86Generator :: X86GCont st_s ids a
                 -> X86Generator st_s ids a
                 -> ExceptT Text (ST st_s) (GenResult ids)
 runX86Generator k st (X86G m) = runReaderT (runContT m (ReaderT . k)) st
+
 
 -- | Capture the current continuation and 'GenState' in an 'X86Generator'
 shiftX86GCont :: (X86GCont st_s ids a
