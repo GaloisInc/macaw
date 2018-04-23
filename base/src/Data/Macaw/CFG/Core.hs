@@ -781,11 +781,6 @@ data Stmt arch ids
    | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
      -- ^ This denotes a write to memory, and consists of an address to write to, a `MemRepr` defining
      -- how the value should be stored in memory, and the value to be written.
-   | PlaceHolderStmt !([Some (Value arch ids)]) !String
-     -- ^ A placeholder to indicate something the
-     -- architecture-specific backend does not support.
-     --
-     -- Note that we plan to remove this eventually
    | InstructionStart !(ArchAddrWord arch) !Text
      -- ^ The start of an instruction
      --
@@ -809,9 +804,6 @@ ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
     WriteMem a _ rhs -> text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
-    PlaceHolderStmt vals name ->
-      text ("PLACEHOLDER: " ++ name)
-      <+> parens (hcat $ punctuate comma $ viewSome (ppValue 0) <$> vals)
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s

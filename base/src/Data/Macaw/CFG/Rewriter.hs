@@ -436,9 +436,6 @@ rewriteStmt s =
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
       appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
-    PlaceHolderStmt args nm -> do
-      args' <- traverse (traverseSome rewriteValue) args
-      appendRewrittenStmt $ PlaceHolderStmt args' nm
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
     InstructionStart off mnem ->

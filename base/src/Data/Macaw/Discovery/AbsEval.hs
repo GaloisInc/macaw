@@ -78,8 +78,6 @@ absEvalStmt info stmt = withArchConstraints info $
       modify $ addAssignment info a
     WriteMem addr memRepr v ->
       modify $ addMemWrite addr memRepr v
-    PlaceHolderStmt{} ->
-      pure ()
     InstructionStart _ _ ->
       pure ()
     Comment{} ->

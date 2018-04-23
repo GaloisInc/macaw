@@ -474,8 +474,6 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
       | otherwise ->
           []
     WriteMem addr _ v -> [Some addr, Some v]
-    -- Place holder statements are unknown.
-    PlaceHolderStmt _ _ -> []
     InstructionStart _ _ -> []
     -- Comment statements have no specific value.
     Comment _ -> []
