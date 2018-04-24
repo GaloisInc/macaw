@@ -920,9 +920,6 @@ addMacawStmt stmt =
       cval  <- valueToCrucible val
       w     <- archAddrWidth
       void $ evalMacawStmt (MacawWriteMem w repr caddr cval)
-    M.PlaceHolderStmt _vals msg -> do
-      cmsg <- crucibleValue (C.TextLit (Text.pack msg))
-      addTermStmt (CR.ErrorStmt cmsg)
     M.InstructionStart off _ -> do
       -- Update the position
       modify $ \s -> s { codeOff = off }

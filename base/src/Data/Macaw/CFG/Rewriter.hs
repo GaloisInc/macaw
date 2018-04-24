@@ -240,6 +240,11 @@ rewriteApp app = do
     BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
       rewriteApp (BVSub w (BVValue w (toUnsigned w (xc + zc))) y)
 
+    -- addr a + (c - addr b) => c + (addr a - addr b)
+    BVAdd w (RelocatableValue _ a) (valueAsApp -> Just (BVSub _ c (RelocatableValue _ b)))
+      | Just d <- diffAddr a b ->
+        rewriteApp $ BVAdd w c (BVValue w (toUnsigned w d))
+
     -- x - yc = x + (negate yc)
     BVSub w x (BVValue _ yc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (negate yc))))
@@ -407,6 +412,7 @@ rewriteValue v =
     BoolValue b -> pure (BoolValue b)
     BVValue w i -> pure (BVValue w i)
     RelocatableValue w a -> pure (RelocatableValue w a)
+    SymbolValue w a -> pure (SymbolValue w a)
     AssignedValue (Assignment aid _) -> Rewriter $ do
       ref <- gets $ rwctxCache . rwContext
       srcMap <- lift $ readSTRef ref
@@ -430,9 +436,6 @@ rewriteStmt s =
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
       appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
-    PlaceHolderStmt args nm -> do
-      args' <- traverse (traverseSome rewriteValue) args
-      appendRewrittenStmt $ PlaceHolderStmt args' nm
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
     InstructionStart off mnem ->

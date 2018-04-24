@@ -2,7 +2,7 @@
 Copyright        : (c) Galois, Inc 2017
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
-This exports the pre-clasisification term statement and block data
+This exports the pre-classification term statement and block data
 types.
 -}
 {-# LANGUAGE FlexibleContexts #-}
