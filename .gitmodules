@@ -1,12 +1,12 @@
 [submodule "x86/tests/submodules/dwarf"]
-	path = x86/tests/submodules/dwarf
+	path = deps/dwarf
 	url = https://github.com/GaloisInc/dwarf.git
 [submodule "x86/tests/submodules/elf-edit"]
-	path = x86/tests/submodules/elf-edit
+	path = deps/elf-edit
 	url = https://github.com/GaloisInc/elf-edit.git
 [submodule "x86/tests/submodules/flexdis86"]
-	path = x86/tests/submodules/flexdis86
+	path = deps/flexdis86
 	url = https://github.com/GaloisInc/flexdis86.git
 [submodule "x86/tests/submodules/parameterized-utils"]
-	path = x86/tests/submodules/parameterized-utils
+	path = deps/parameterized-utils
 	url = https://github.com/GaloisInc/parameterized-utils.git

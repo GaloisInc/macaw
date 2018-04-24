@@ -1,0 +1,17 @@
+flags:
+  time-locale-compat:
+    old-locale: false
+
+packages:
+- base
+- x86
+- symbolic
+- x86_symbolic
+- deps/dwarf
+- deps/elf-edit
+- deps/flexdis86
+- deps/flexdis86/binary-symbols
+- deps/parameterized-utils
+
+resolver: lts-11.5
+allow-newer: true
