@@ -67,7 +67,6 @@ import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types ( BoolType )
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
-import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as NC
 
 import           Data.Macaw.SemMC.Simplify ( simplifyValue, simplifyApp )
@@ -155,7 +154,7 @@ initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
              => MM.MemSegmentOff (RegAddrWidth (ArchReg arch))
              -> RegState (ArchReg arch) (Value arch ids)
 initRegState startIP =
-  mkRegState Initial & curIP .~ RelocatableValue NR.knownNat (MM.relativeSegmentAddr startIP)
+  mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.relativeSegmentAddr startIP)
 
 blockSeq :: Simple Lens (GenState arch ids s) (BlockSeq arch ids)
 blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })

@@ -50,19 +50,21 @@ import           Data.Macaw.PPC.PPCReg
 -- are no byte regions that could be coalesced.
 readInstruction :: MM.Memory w
                 -> MM.MemSegmentOff w
-                -> Either (MM.MemoryError w) (D.Instruction, MM.MemWord w)
+                -> Either (PPCMemoryError w) (D.Instruction, MM.MemWord w)
 readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
   let seg = MM.msegSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
-    False -> ET.throwError (MM.PermissionsError (MM.relativeSegmentAddr addr))
+    False -> ET.throwError (PPCMemoryError (MM.PermissionsError (MM.relativeSegmentAddr addr)))
     True -> do
-      contents <- MM.addrContentsAfter mem (MM.relativeSegmentAddr addr)
+      contents <- liftMemError $ MM.addrContentsAfter mem (MM.relativeSegmentAddr addr)
       case contents of
-        [] -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
-        MM.SymbolicRef {} : _ ->
-          ET.throwError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr))
+        [] -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
+        MM.RelocationRegion r : _ ->
+          ET.throwError (PPCMemoryError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr) r "Disassembling from relocation"))
+        MM.BSSRegion {} : _ ->
+          ET.throwError (PPCMemoryError (MM.UnexpectedBSS (MM.relativeSegmentAddr addr)))
         MM.ByteRegion bs : _rest
-          | BS.null bs -> ET.throwError (MM.AccessViolation (MM.relativeSegmentAddr addr))
+          | BS.null bs -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
           | otherwise -> do
             -- FIXME: Having to wrap the bytestring in a lazy wrapper is
             -- unpleasant.  We could alter the disassembler to consume strict
@@ -71,7 +73,19 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
             let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError (MM.InvalidInstruction (MM.relativeSegmentAddr addr) contents)
+              Nothing -> ET.throwError (PPCInvalidInstruction (MM.relativeSegmentAddr addr) contents)
+
+liftMemError :: Either (MM.MemoryError w) a -> Either (PPCMemoryError w) a
+liftMemError e =
+  case e of
+    Left err -> Left (PPCMemoryError err)
+    Right a -> Right a
+
+-- | A wrapper around the 'MM.MemoryError' that lets us add in information about
+-- invalid instructions.
+data PPCMemoryError w = PPCInvalidInstruction !(MM.MemAddr w) [MM.SegmentRange w]
+                      | PPCMemoryError !(MM.MemoryError w)
+                      deriving (Show)
 
 -- | Disassemble an instruction and terminate the current block if we run out of
 -- instructions to disassemble.  We can run out if:
@@ -108,7 +122,7 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
 --      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
           nextIP = MM.relativeAddr seg nextIPOffset
-          nextIPVal = MC.RelocatableValue (pointerNatRepr (Proxy @ppc)) nextIP
+          nextIPVal = MC.RelocatableValue (MM.addrWidthRepr curIPAddr) nextIP
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
@@ -250,7 +264,7 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
                                            }
 
 data TranslationErrorReason w = InvalidNextIP Word64 Word64
-                              | DecodeError (MM.MemoryError w)
+                              | DecodeError (PPCMemoryError w)
                               | UnsupportedInstruction D.Instruction
                               | InstructionAtUnmappedAddr D.Instruction
                               | GenerationError D.Instruction GeneratorError

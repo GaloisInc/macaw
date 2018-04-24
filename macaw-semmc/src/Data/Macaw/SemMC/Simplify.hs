@@ -53,8 +53,8 @@ simplifyApp a =
     BVAdd _ (BVValue _ 0) r           -> Just r
     BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->
       simplifyApp (BVAdd rep r l)
-    BVAdd rep (RelocatableValue _ addr) (BVValue _ off) ->
-      Just (RelocatableValue rep (MM.incAddr off addr))
+    BVAdd _rep (RelocatableValue _ addr) (BVValue _ off) ->
+      Just (RelocatableValue (addrWidthRepr addr) (MM.incAddr off addr))
     BVAdd sz l r                      -> binopbv (+) sz l r
     BVMul _ l (BVValue _ 1)           -> Just l
     BVMul _ (BVValue _ 1) r           -> Just r

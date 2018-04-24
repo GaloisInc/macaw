@@ -138,7 +138,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
       -- traceM ("II: " ++ show i)
       let nextPCOffset = off + bytesRead
           nextPC = MM.relativeAddr seg nextPCOffset
-          nextPCVal = MC.RelocatableValue (knownNat :: NatRepr (ArchAddrWidth arm)) nextPC
+          nextPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curPCAddr) of
@@ -196,7 +196,7 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
 -- are no byte regions that could be coalesced.
 readInstruction :: MM.Memory w
                 -> MM.MemSegmentOff w
-                -> Either (MM.MemoryError w) (InstructionSet, MM.MemWord w)
+                -> Either (ARMMemoryError w) (InstructionSet, MM.MemWord w)
 readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
   let seg = MM.msegSegment addr
       segRelAddrRaw = MM.relativeSegmentAddr addr
@@ -209,13 +209,15 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
       segRelAddr = segRelAddrRaw { addrOffset = MM.addrOffset segRelAddrRaw `xor` loBit }
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
-      contents <- MM.addrContentsAfter mem segRelAddr
+      contents <- liftMemError $ MM.addrContentsAfter mem segRelAddr
       case contents of
-        [] -> ET.throwError $ MM.AccessViolation segRelAddr
-        MM.SymbolicRef {} : _ ->
-          ET.throwError $ MM.UnexpectedRelocation segRelAddr
+        [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
+        MM.BSSRegion {} : _ ->
+          ET.throwError $ ARMMemoryError (MM.UnexpectedBSS segRelAddr)
+        MM.RelocationRegion r : _ ->
+          ET.throwError $ ARMMemoryError (MM.UnexpectedRelocation segRelAddr r "Disassembling from relocation")
         MM.ByteRegion bs : _
-          | BS.null bs -> ET.throwError $ MM.AccessViolation segRelAddr
+          | BS.null bs -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
           | otherwise -> do
             -- FIXME: Having to wrap the bytestring in a lazy wrapper is
             -- unpleasant.  We could alter the disassembler to consume strict
@@ -227,8 +229,20 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
                          else fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError $ MM.InvalidInstruction segRelAddr contents
-  else ET.throwError $ MM.PermissionsError segRelAddr
+              Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents
+  else ET.throwError $ ARMMemoryError (MM.PermissionsError segRelAddr)
+
+liftMemError :: Either (MM.MemoryError w) a -> Either (ARMMemoryError w) a
+liftMemError e =
+  case e of
+    Left err -> Left (ARMMemoryError err)
+    Right a -> Right a
+
+-- | A wrapper around the 'MM.MemoryError' that lets us add in information about
+-- invalid instructions.
+data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.SegmentRange w]
+                      | ARMMemoryError !(MM.MemoryError w)
+                      deriving (Show)
 
 -- | Examine a value and see if it is a mux; if it is, break the mux up and
 -- return its component values (the condition and two alternatives)
@@ -284,7 +298,7 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
                                            }
 
 data TranslationErrorReason w = InvalidNextPC (MM.MemAddr w) (MM.MemAddr w)
-                              | DecodeError (MM.MemoryError w)
+                              | DecodeError (ARMMemoryError w)
                               | UnsupportedInstruction InstructionSet
                               | InstructionAtUnmappedAddr InstructionSet
                               | GenerationError InstructionSet GeneratorError

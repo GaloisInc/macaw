@@ -19,4 +19,5 @@ packages: macaw-ppc/
           submodules/dwarf/
           submodules/elf-edit/
           submodules/flexdis86/
+          submodules/flexdis86/binary-symbols/
           submodules/llvm-pretty/
