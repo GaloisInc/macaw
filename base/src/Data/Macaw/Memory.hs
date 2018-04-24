@@ -142,6 +142,7 @@ import           GHC.TypeLits
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
+import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 
 import qualified Data.Macaw.Memory.Permissions as Perm
@@ -155,6 +156,17 @@ data AddrWidthRepr w
      -- ^ A 32-bit address
    | (w ~ 64) => Addr64
      -- ^ A 64-bit address
+
+instance TestEquality AddrWidthRepr where
+  testEquality Addr32 Addr32 = Just Refl
+  testEquality Addr64 Addr64 = Just Refl
+  testEquality _ _ = Nothing
+
+instance OrdF AddrWidthRepr where
+  compareF Addr32 Addr32 = EQF
+  compareF Addr32 Addr64 = LTF
+  compareF Addr64 Addr32 = GTF
+  compareF Addr64 Addr64 = EQF
 
 -- | The nat representation of this address.
 addrWidthNatRepr :: AddrWidthRepr w -> NatRepr w

@@ -132,6 +132,7 @@ addUpperBound v u bnds
     BVValue _ c | c <= u -> Right bnds
                 | otherwise -> Left "Constant given upper bound that is statically less than given bounds"
     RelocatableValue{} -> Left "Relocatable value does not have upper bounds."
+    SymbolValue{}      -> Left "Symbol value does not have upper bounds."
     AssignedValue a ->
       case assignRhs a of
         EvalApp (UExt x _) -> addUpperBound x u bnds
