@@ -376,6 +376,9 @@ getJumpTarget v =
   case v of
     F.JumpOffset _ joff -> do
       (.+) <$> get rip <*> resolveJumpOffset joff
+    F.QWordReg r -> get (reg64Loc r)
+    F.Mem64 ar -> get =<< getBV64Addr ar
+    F.QWordImm w -> return (ValueExpr (BVValue knownNat (toInteger w)))
     _ -> fail "Unexpected argument"
 
 ------------------------------------------------------------------------
