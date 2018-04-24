@@ -591,6 +591,7 @@ data MemoryError w
      -- ^ We unexpectedly encountered a BSS segment/section.
    | InvalidAddr !(MemAddr w)
      -- ^ The data at the given address did not refer to a valid memory location.
+   | forall n. InvalidSize !(MemAddr w) !(NatRepr n)
 
 instance MemWidth w => Show (MemoryError w) where
   show err =
@@ -606,6 +607,8 @@ instance MemWidth w => Show (MemoryError w) where
         "Attempt to read zero initialized BSS memory at " ++ show a ++ "."
       InvalidAddr a ->
         "Attempt to interpret an invalid address: " ++ show a ++ "."
+      InvalidSize a n ->
+        "Attempt to read an invalid number of bytes (" ++ show n ++ ") from address " ++ show a ++ "."
 
 ------------------------------------------------------------------------
 -- SegmentContents

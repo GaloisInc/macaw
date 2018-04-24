@@ -279,8 +279,7 @@ readMemReprDyn :: Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (Memory
 readMemReprDyn mem addr repr@(BVMemRepr size _) = case () of
   _ | Just Refl <- testEquality size (knownNat :: NatRepr 4) -> readMemRepr mem addr repr
     | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> readMemRepr mem addr repr
-    | otherwise -> Left . UserMemoryError addr
-        $ "Tried to read weird byte count " ++ show size ++ " (expected 4 or 8)"
+    | otherwise -> Left $ InvalidSize addr size
 
 instance TestEquality MemRepr where
   testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =
