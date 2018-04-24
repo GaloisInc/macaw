@@ -736,10 +736,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                       Right shortOffset
                         | Just offset <- extendDyn repr ext shortOffset
                         , let tgt_addr = relativeSegmentAddr base & incAddr offset
-                        , traceShow ("base, read_addr, *read_addr", base, read_addr, offset) True
-                        , traceShow ("jump target", tgt_addr, isJust (asSegmentOff mem tgt_addr)) True
                         , Just tgt_mseg <- asSegmentOff mem tgt_addr
-                        , traceShow (Perm.isExecutable (segmentFlags (msegSegment tgt_mseg))) True
                         , Perm.isExecutable (segmentFlags (msegSegment tgt_mseg))
                         -> Just tgt_mseg
                       _ -> Nothing
