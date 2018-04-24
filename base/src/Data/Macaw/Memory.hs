@@ -45,6 +45,8 @@ module Data.Macaw.Memory
   , segmentOffset
   , segmentFlags
   , segmentContents
+  , SegmentContents
+  , contentsRanges
   , ppMemSegment
   , segmentSize
   , SegmentRange(..)
@@ -442,6 +444,10 @@ contentsSize (SegmentContents m) =
   case Map.maxViewWithKey m of
     Nothing -> 0
     Just ((start, c),_) -> start + rangeSize c
+
+-- | De-construct a 'SegmentContents' into its constituent ranges
+contentsRanges :: SegmentContents w -> [(MemWord w, SegmentRange w)]
+contentsRanges = Map.toList . segContentsMap
 
 -- | Return list of contents from given word or an error if this we can't cleanly
 -- partition a relocation
