@@ -4,7 +4,9 @@ flags:
 
 packages:
 - ../../base/
-- ../
+- ../../x86/
+- ../../symbolic
+- ../../x86_symbolic
 - submodules/dwarf
 - submodules/elf-edit/
 - submodules/flexdis86/
