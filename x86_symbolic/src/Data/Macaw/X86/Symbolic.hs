@@ -101,8 +101,6 @@ getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
 getReg x = x ^. (field @n)
 
-
-
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
 x86RegName M.X86_IP     = C.systemSymbol "!ip"
 x86RegName (M.X86_GP r) = C.systemSymbol $ "!" ++ show r
@@ -250,4 +248,3 @@ x86_64MacawSymbolicFns =
 x86_64MacawEvalFn ::
   C.IsSymInterface sym => SymFuns sym -> MacawArchEvalFn sym M.X86_64
 x86_64MacawEvalFn fs (X86PrimFn x) s = semantics fs x s
-

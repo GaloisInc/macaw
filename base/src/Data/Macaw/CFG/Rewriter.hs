@@ -30,7 +30,6 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
-import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 

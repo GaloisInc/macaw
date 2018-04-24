@@ -67,7 +67,7 @@ import Lang.Crucible.LLVM.MemModel.Generic(ppPtr)
 import Lang.Crucible.LLVM.DataLayout(EndianForm(..))
 import Lang.Crucible.LLVM.Bytes(toBytes)
 
-import Data.Macaw.Symbolic.CrucGen(lemma1_16)
+import Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
 import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
 import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
 import qualified Data.Macaw.Memory as M
@@ -105,8 +105,12 @@ doMakeCall k st mvar regs =
 
 --------------------------------------------------------------------------------
 
+addrWidthAtLeast16 :: M.AddrWidthRepr w -> LeqProof 16 w
+addrWidthAtLeast16 M.Addr32 = LeqProof
+addrWidthAtLeast16 M.Addr64 = LeqProof
+
 doGetGlobal ::
-  (IsSymInterface sym, 16 <= w, M.MemWidth w) =>
+  (IsSymInterface sym, M.MemWidth w) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Model of memory   -} ->
   Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
@@ -124,10 +128,11 @@ doGetGlobal st mvar globs addr =
     Just region ->
       do mem <- getMem st mvar
          let sym = stateSymInterface st
-         let w = M.addrWidthNatRepr (M.addrWidthRepr addr)
-         off <- bvLit sym w (M.memWordInteger (M.addrOffset addr))
-         res <- let ?ptrWidth = w
-                in doPtrAddOffset sym mem region off
+         let w = M.addrWidthRepr addr
+         LeqProof <- pure $ addrWidthAtLeast16 w
+         let ?ptrWidth = M.addrWidthNatRepr w
+         off <- bvLit sym ?ptrWidth (M.memWordInteger (M.addrOffset addr))
+         res <- doPtrAddOffset sym mem region off
          return (res, st)
 
 --------------------------------------------------------------------------------
@@ -137,10 +142,10 @@ doGetGlobal st mvar globs addr =
 -- state, we don't actually do it.
 type PtrOp sym w a =
   forall s ext rtp blocks r ctx.
-  (IsSymInterface sym, 16 <= w)                                      =>
+  IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model      -} ->
-  NatRepr w                                {- ^ Width of pointer  -} ->
+  M.AddrWidthRepr w                        {- ^ Width of pointer  -} ->
   RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -} ->
   RegEntry sym (LLVMPointerType w)         {- ^ Argument 2        -} ->
   IO (a, CrucibleState s sym ext rtp blocks r ctx)
@@ -154,11 +159,18 @@ binOpLabel lab x y =
           , "}"
           ]
 
+mkUndefinedPtr :: (IsSymInterface sym, 1 <= w) =>
+  sym -> String -> NatRepr w -> IO (LLVMPtr sym w)
+mkUndefinedPtr sym nm w =
+  do base <- mkUndefined sym ("ptr_base_" ++ nm) BaseNatRepr
+     off  <- mkUndefinedBV sym ("ptr_offset_" ++ nm) w
+     return (LLVMPointer base off)
+
 doPtrMux :: Pred sym -> PtrOp sym w (LLVMPtr sym w)
 doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
-     undef     <- mkUndefinedPtr sym "ptr_mux" w
+     undef     <- mkUndefinedPtr sym "ptr_mux" (M.addrWidthNatRepr w)
      cases sym (binOpLabel "ptr_mux" x y) muxLLVMPtr (Just undef)
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvIte sym c (asBits x) (asBits y)
@@ -171,26 +183,27 @@ doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      ptr_bits  <- andPred sym xPtr  yBits
      bits_ptr  <- andPred sym xBits yPtr
-
+     let nw = M.addrWidthNatRepr w
      a <- cases sym (binOpLabel "ptr_add" x y) muxLLVMPtr Nothing
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
 
-       , ptr_bits ~> endCase =<< ptrAdd sym w x (asBits y)
-       , bits_ptr ~> endCase =<< ptrAdd sym w y (asBits x)
+       , ptr_bits ~> endCase =<< ptrAdd sym nw x (asBits y)
+       , bits_ptr ~> endCase =<< ptrAdd sym nw y (asBits x)
        ]
      return a
 
 isValidPtr ::
-  (IsSymInterface sym, 16 <= w) =>
+  (IsSymInterface sym) =>
   sym ->
   RegValue sym Mem ->
-  NatRepr w ->
+  M.AddrWidthRepr w ->
   LLVMPtr sym w ->
   IO (Pred sym)
 isValidPtr sym mem w p =
- do let ?ptrWidth = w
-    LeqProof <- return (lemma1_16 w)
+ do LeqProof <- pure $ addrWidthIsPos w
+    LeqProof <- pure $ addrWidthAtLeast16 w
+    let ?ptrWidth = M.addrWidthNatRepr w
     isValidPointer sym p mem
 
 doPtrSub :: PtrOp sym w (LLVMPtr sym w)
@@ -198,12 +211,13 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      ptr_bits  <- andPred sym xPtr  yBits
      ptr_ptr   <- andPred sym xPtr  yPtr
+     let nw = M.addrWidthNatRepr w
 
      cases sym (binOpLabel "ptr_sub" x y) muxLLVMPtr Nothing
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
 
-       , ptr_bits ~> endCase =<< ptrSub sym w x (asBits y)
+       , ptr_bits ~> endCase =<< ptrSub sym nw x (asBits y)
 
        , ptr_ptr ~>
            do okP1 <- isValidPtr sym mem w x
@@ -215,10 +229,11 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
        ]
 
 doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
-doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
-  let doPtrAlign amt isP isB v
+doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
+  let nw = M.addrWidthNatRepr w
+      doPtrAlign amt isP isB v
         | amt == 0          = return v
-        | amt == natValue w = mkNullPointer sym w
+        | amt == natValue nw = mkNullPointer sym nw
         | Just 0 <- asNat (ptrBase v) = llvmPointer_bv sym =<<
                                         bvAndBits sym (asBits x) (asBits y)
 
@@ -234,26 +249,25 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
                  nm <- mkName "align_amount"
                  least <- freshConstant sym nm (BaseBVRepr n)
 
-                 Just LeqProof <- return (testLeq n w)
-                 let mostBits = subNat w n
+                 Just LeqProof <- return (testLeq n nw)
+                 let mostBits = subNat nw n
                  Just LeqProof <- return (testLeq (knownNat @1) mostBits)
                  most <- bvLit sym mostBits 0
 
                  bts <- bvConcat sym most least
 
-                 Refl <- return (minusPlusCancel w n)
+                 Refl <- return (minusPlusCancel nw n)
 
-                 endCase =<< ptrSub sym w v bts
+                 endCase =<< ptrSub sym nw v bts
                  -- We don't check for the validity of the pointer:
                  -- this is done upon use.
           ]
-  in
-  case (isAlignMask x, isAlignMask y) of
-    (Just yes, _) -> doPtrAlign yes yPtr yBits y
-    (_, Just yes) -> doPtrAlign yes xPtr xBits x
-    _ -> do v1 <- doPtrToBits sym w x
-            v2 <- doPtrToBits sym w y
-            llvmPointer_bv sym =<< bvAndBits sym v1 v2
+  in case (isAlignMask x, isAlignMask y) of
+       (Just yes, _) -> doPtrAlign yes yPtr yBits y
+       (_, Just yes) -> doPtrAlign yes xPtr xBits x
+       _ -> do v1 <- doPtrToBits sym nw x
+               v2 <- doPtrToBits sym nw y
+               llvmPointer_bv sym =<< bvAndBits sym v1 v2
 
 
 
@@ -290,21 +304,22 @@ doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
      undef <- mkUndefinedBool sym "ptr_eq"
+     let nw = M.addrWidthNatRepr w
      cases sym (binOpLabel "ptr_eq" x y) itePred (Just undef)
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
        , both_ptrs ~>
             do okP1 <- isValidPtr sym mem w x
                okP2 <- isValidPtr sym mem w y
                ok <- andPred sym okP1 okP2
-               endCaseCheck ok "Comparing invalid pointers" =<< ptrEq sym w x y
+               endCaseCheck ok "Comparing invalid pointers" =<< ptrEq sym nw x y
        ]
 
 doReadMem ::
-  (IsSymInterface sym, 16 <= ptrW) =>
+  IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem ->
   Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
-  NatRepr ptrW ->
+  M.AddrWidthRepr ptrW ->
   MemRepr ty ->
   RegEntry sym (LLVMPointerType ptrW) ->
   IO ( RegValue sym (ToCrucibleType ty)
@@ -318,16 +333,18 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
          ty    = bitvectorType (toBytes (widthVal bytes))
          bitw  = natMultiply (knownNat @8) bytes
 
-     LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
 
+     let ?ptrWidth = M.addrWidthNatRepr w
      ok <- isValidPtr sym mem w ptr
      check sym ok "doReadMem"
                   $ "Reading through an invalid pointer: " ++ show (ppPtr ptr)
 
-     val <- let ?ptrWidth = w in loadRaw sym mem ptr ty
+     LeqProof <- pure $ addrWidthIsPos w
+     LeqProof <- pure $ addrWidthAtLeast16 w
+     val <- loadRaw sym mem ptr ty
      a   <- case valToBits bitw val of
               Just a  -> return a
               Nothing -> fail "[doReadMem] We read an unexpected value"
@@ -337,11 +354,11 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
 
 
 doCondReadMem ::
-  (IsSymInterface sym, 16 <= ptrW) =>
+  IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
   Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
-  NatRepr ptrW                             {- ^ Width of ptr -} ->
+  M.AddrWidthRepr ptrW                     {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are reading -} ->
   RegEntry sym BoolType                    {- ^ Condition -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
@@ -358,7 +375,6 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
          ty    = bitvectorType (toBytes (widthVal bytes))
          bitw  = natMultiply (knownNat @8) bytes
 
-     LeqProof <- return (lemma1_16 w)
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
@@ -367,7 +383,9 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
                 $ "Conditional read through an invalid pointer: " ++
                       show (ppPtr ptr)
 
-     val <- let ?ptrWidth = w in loadRawWithCondition sym mem ptr ty
+     LeqProof <- pure $ addrWidthIsPos w
+     LeqProof <- pure $ addrWidthAtLeast16 w
+     val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty
 
      let useDefault msg =
            do notC <- notPred sym cond
@@ -387,11 +405,11 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
 
 doWriteMem ::
-  (IsSymInterface sym, 16 <= ptrW) =>
+  IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
   Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
-  NatRepr ptrW                             {- ^ Width of ptr -} ->
+  M.AddrWidthRepr ptrW                     {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are writing -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
   RegEntry sym (ToCrucibleType ty)         {- ^ Write this value -} ->
@@ -405,7 +423,8 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      let sym   = stateSymInterface st
          ty    = bitvectorType (toBytes (widthVal bytes))
 
-     LeqProof <- return (lemma1_16 w)
+     LeqProof <- pure $ addrWidthIsPos w
+     LeqProof <- pure $ addrWidthAtLeast16 w
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
      ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
@@ -413,15 +432,11 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      check sym ok "doWriteMem"
                   $ "Write to an invalid location: " ++ show (ppPtr ptr)
 
-     let ?ptrWidth = w
+     let ?ptrWidth = M.addrWidthNatRepr w
      let v0 = regValue val
          v  = LLVMValInt (ptrBase v0) (asBits v0)
      mem1 <- storeRaw sym mem ptr ty v
      return ((), setMem st mvar mem1)
-
-
-
-
 
 --------------------------------------------------------------------------------
 -- Utilities
@@ -455,14 +470,14 @@ ptrOp ::
   ( (1 <= w) =>
     sym ->
     RegValue sym Mem ->
-    NatRepr w ->
+    M.AddrWidthRepr w ->
     Pred sym -> Pred sym -> Pred sym -> Pred sym ->
     LLVMPtr sym w -> LLVMPtr sym w -> IO a
   ) ->
   PtrOp sym w a
 ptrOp k st mvar w x0 y0 =
   do mem <- getMem st mvar
-     LeqProof <- return (lemma1_16 w)
+     LeqProof <- return (addrWidthIsPos w)
      let sym = stateSymInterface st
          x   = regValue x0
          y   = regValue y0
@@ -560,13 +575,6 @@ checkEndian mem endian =
                                      , " *** Read : " ++ show need ]
 
 
-mkUndefinedPtr :: (IsSymInterface sym, 1 <= w) =>
-  sym -> String -> NatRepr w -> IO (LLVMPtr sym w)
-mkUndefinedPtr sym nm w =
-  do base <- mkUndefined sym ("ptr_base_" ++ nm) BaseNatRepr
-     off  <- mkUndefinedBV sym ("ptr_offset_" ++ nm) w
-     return (LLVMPointer base off)
-
 -- | A fresh boolean variable
 mkUndefinedBool ::
   (IsSymInterface sym) => sym -> String -> IO (RegValue sym BoolType)
@@ -608,18 +616,19 @@ which is statically known to be a constant, we consult
 the global map to see if we know about a correpsonding
 addres..  If so, we use that for the memory operation. -}
 tryGlobPtr ::
-  (IsSymInterface sym, 16 <= w) =>
+  IsSymInterface sym =>
   sym ->
   RegValue sym Mem ->
   Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
-  NatRepr w ->
+  M.AddrWidthRepr w ->
   LLVMPtr sym w ->
   IO (LLVMPtr sym w)
 tryGlobPtr sym mem globs w val
   | Just 0 <- asNat (ptrBase val)
   , Just r <- Map.lookup literalAddrRegion globs
-  , LeqProof <- lemma1_16 w
-    = let ?ptrWidth = w
+  , LeqProof <- addrWidthIsPos w
+  , LeqProof <- addrWidthAtLeast16 w =
+     let ?ptrWidth = M.addrWidthNatRepr w
       in doPtrAddOffset sym mem r (asBits val)
   | otherwise = return val
   where
@@ -635,6 +644,3 @@ isAlignMask v =
      let (zeros,ones) = break (testBit k) (take w [ 0 .. ])
      guard (all (testBit k) ones)
      return (fromIntegral (length zeros))
-
-
-

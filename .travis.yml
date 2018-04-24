@@ -42,7 +42,7 @@ install:
 script:
  - travis_wait stack --no-terminal --skip-ghc-check setup
  - cd x86/tests
- - stack build macaw-x86
+ - stack build macaw-x86 macaw-x86-symbolic
  - stack test macaw-x86
  - cd ../..
 # - cabal check
