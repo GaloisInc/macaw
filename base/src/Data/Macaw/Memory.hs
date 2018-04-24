@@ -63,6 +63,7 @@ module Data.Macaw.Memory
   , MemWidth(..)
   , memWord
   , memWordInteger
+  , memWordSigned
     -- * Segment offsets
   , MemSegmentOff
   , viewSegmentOff
@@ -256,6 +257,12 @@ newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
 -- A version of `fromEnum` that won't wrap around.
 memWordInteger :: MemWord w -> Integer
 memWordInteger = fromIntegral . _memWordValue
+
+-- | Treat the word as a signed integer.
+memWordSigned :: MemWidth w => MemWord w -> Integer
+memWordSigned w = if i >= bound then i-2*bound else i where
+  i = memWordInteger w
+  bound = 2^(8*addrSize w-1)
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
