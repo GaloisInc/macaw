@@ -10,3 +10,9 @@
 [submodule "x86/tests/submodules/parameterized-utils"]
 	path = deps/parameterized-utils
 	url = https://github.com/GaloisInc/parameterized-utils.git
+[submodule "deps/crucible"]
+	path = deps/crucible
+	url = git@github.com:GaloisInc/crucible.git
+[submodule "deps/llvm-pretty"]
+	path = deps/llvm-pretty
+	url = git@github.com:elliottt/llvm-pretty.git

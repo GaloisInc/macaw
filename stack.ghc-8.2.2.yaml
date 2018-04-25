@@ -7,11 +7,15 @@ packages:
 - x86
 - symbolic
 - x86_symbolic
+- deps/crucible/crucible
+- deps/crucible/crucible-llvm
 - deps/dwarf
 - deps/elf-edit
 - deps/flexdis86
 - deps/flexdis86/binary-symbols
+- deps/llvm-pretty
 - deps/parameterized-utils
 
+extra-deps:
+- monadLib-3.7.3
 resolver: lts-11.5
-allow-newer: true
