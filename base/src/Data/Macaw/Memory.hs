@@ -65,6 +65,7 @@ module Data.Macaw.Memory
   , MemWidth(..)
   , memWord
   , memWordInteger
+  , memWordSigned
     -- * Segment offsets
   , MemSegmentOff
   , viewSegmentOff
@@ -258,6 +259,12 @@ newtype MemWord (w :: Nat) = MemWord { _memWordValue :: Word64 }
 -- A version of `fromEnum` that won't wrap around.
 memWordInteger :: MemWord w -> Integer
 memWordInteger = fromIntegral . _memWordValue
+
+-- | Treat the word as a signed integer.
+memWordSigned :: MemWidth w => MemWord w -> Integer
+memWordSigned w = if i >= bound then i-2*bound else i where
+  i = memWordInteger w
+  bound = 2^(8*addrSize w-1)
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
@@ -586,6 +593,7 @@ data MemoryError w
      -- ^ We unexpectedly encountered a BSS segment/section.
    | InvalidAddr !(MemAddr w)
      -- ^ The data at the given address did not refer to a valid memory location.
+   | forall n. InvalidSize !(MemAddr w) !(NatRepr n)
 
 instance MemWidth w => Show (MemoryError w) where
   show err =
@@ -601,6 +609,8 @@ instance MemWidth w => Show (MemoryError w) where
         "Attempt to read zero initialized BSS memory at " ++ show a ++ "."
       InvalidAddr a ->
         "Attempt to interpret an invalid address: " ++ show a ++ "."
+      InvalidSize a n ->
+        "Attempt to read an invalid number of bytes (" ++ show n ++ ") from address " ++ show a ++ "."
 
 ------------------------------------------------------------------------
 -- SegmentContents

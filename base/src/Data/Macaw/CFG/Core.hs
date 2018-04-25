@@ -29,13 +29,18 @@ module Data.Macaw.CFG.Core
   , AssignRhs(..)
   , MemRepr(..)
   , memReprBytes
+  , readMemRepr
+  , readMemReprDyn
     -- * Value
   , Value(..)
   , BVValue
   , valueAsApp
   , valueAsArchFn
+  , valueAsRhs
   , valueAsMemAddr
   , valueAsSegmentOff
+  , valueAsArrayOffset
+  , valueAsStaticMultiplication
   , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
@@ -260,6 +265,22 @@ instance Show (MemRepr tp) where
 memReprBytes :: MemRepr tp -> Integer
 memReprBytes (BVMemRepr x _) = natValue x
 
+-- | Read a word with a dynamically-chosen endianness and size
+readMemRepr :: MemWidth w' => Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
+readMemRepr mem addr (BVMemRepr size endianness) = do
+  bs <- readByteString mem addr (fromInteger (natValue size))
+  let Just val = addrRead endianness bs
+  Right val
+
+-- | Like 'readMemRepr', but has a short static list of sizes for which it can
+-- dispatch the 'MemWidth' constraint. Returns 'Left' for sizes other than 4 or
+-- 8 bytes.
+readMemReprDyn :: Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
+readMemReprDyn mem addr repr@(BVMemRepr size _) = case () of
+  _ | Just Refl <- testEquality size (knownNat :: NatRepr 4) -> readMemRepr mem addr repr
+    | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> readMemRepr mem addr repr
+    | otherwise -> Left $ InvalidSize addr size
+
 instance TestEquality MemRepr where
   testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =
     if xe == ye then do
@@ -460,6 +481,10 @@ valueAsArchFn :: Value arch ids tp -> Maybe (ArchFn arch (Value arch ids) tp)
 valueAsArchFn (AssignedValue (Assignment _ (EvalArchFn a _))) = Just a
 valueAsArchFn _ = Nothing
 
+valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
+valueAsRhs (AssignedValue (Assignment _ v)) = Just v
+valueAsRhs _ = Nothing
+
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
 valueAsMemAddr :: MemWidth (ArchAddrWidth arch)
@@ -468,6 +493,33 @@ valueAsMemAddr :: MemWidth (ArchAddrWidth arch)
 valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
+
+valueAsArrayOffset ::
+  Memory (ArchAddrWidth arch) ->
+  ArchAddrValue arch ids ->
+  Maybe (ArchSegmentOff arch, ArchAddrValue arch ids)
+valueAsArrayOffset mem v
+  | Just (BVAdd w base offset) <- valueAsApp v
+  , Just Refl <- testEquality w (memWidth mem)
+  , Just ptr <- valueAsSegmentOff mem base
+  = Just (ptr, offset)
+
+  -- and with the other argument order
+  | Just (BVAdd w offset base) <- valueAsApp v
+  , Just Refl <- testEquality w (memWidth mem)
+  , Just ptr <- valueAsSegmentOff mem base
+  = Just (ptr, offset)
+
+  | otherwise = Nothing
+
+valueAsStaticMultiplication ::
+  BVValue arch ids w ->
+  Maybe (Integer, BVValue arch ids w)
+valueAsStaticMultiplication v
+  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
+  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
+  | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
+  | otherwise = Nothing
 
 asLiteralAddr :: MemWidth (ArchAddrWidth arch)
                => BVValue arch ids (ArchAddrWidth arch)
