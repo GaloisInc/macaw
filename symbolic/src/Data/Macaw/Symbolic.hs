@@ -16,7 +16,8 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.MacawExt
   , Data.Macaw.Symbolic.CrucGen.CrucGen
   , Data.Macaw.Symbolic.CrucGen.MemSegmentMap
-  , MacawSimulatorState
+  , MacawSimulatorState(..)
+  , macawExtensions
   , runCodeBlock
   -- , runBlocks
   , mkBlocksCFG
@@ -46,8 +47,8 @@ import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Context as Ctx
-import qualified Data.Set as Set
-import qualified Data.Text as Text
+--import qualified Data.Set as Set
+--import qualified Data.Text as Text
 import           Data.Word
 import qualified Lang.Crucible.Analysis.Postdom as C
 import qualified Lang.Crucible.CFG.Core as C
@@ -81,6 +82,7 @@ import           Data.Macaw.Symbolic.MemOps
 
 data MacawSimulatorState sym = MacawSimulatorState
 
+{-
 mkMemSegmentBinding :: (1 <= w)
                     => C.HandleAllocator s
                     -> NatRepr w
@@ -102,6 +104,7 @@ mkMemBaseVarMap halloc mem = do
         , M.segmentBase seg /= 0
         ]
   Map.fromList <$> traverse (mkMemSegmentBinding halloc (M.memWidth mem)) (Set.toList baseIndices)
+-}
 
 -- | Create a Crucible CFG from a list of blocks
 mkCrucCFG :: forall s arch ids
@@ -289,7 +292,7 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
     PtrToBits  w x  -> doPtrToBits sym w =<< f x
     BitsToPtr _w x  -> MM.llvmPointer_bv sym =<< f x
 
-    MacawNullPtr w | LeqProof <- lemma1_16 w -> MM.mkNullPointer sym w
+    MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.mkNullPointer sym (M.addrWidthNatRepr w)
 
 type EvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
@@ -320,7 +323,7 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
     MacawCondReadMem w mr p x d -> doCondReadMem st mvar globs w mr p x d
     MacawWriteMem w mr x v      -> doWriteMem st mvar globs w mr x v
 
-    MacawGlobalPtr addr         -> doGetGlobal st mvar globs addr
+    MacawGlobalPtr w addr       -> M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
     MacawFreshSymbolic t -> -- XXX: user freshValue
       do nm <- case userSymbol "macawFresh" of

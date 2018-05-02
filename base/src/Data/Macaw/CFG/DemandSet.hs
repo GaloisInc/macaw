@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.CFG.DemandSet
@@ -86,6 +87,7 @@ addValueDemands v = do
     BoolValue{} -> pure ()
     BVValue{} -> pure ()
     RelocatableValue{} -> pure ()
+    SymbolValue{} -> pure ()
     AssignedValue a -> addAssignmentDemands a
     Initial{} ->  pure ()
 
@@ -101,8 +103,6 @@ addStmtDemands s =
     WriteMem addr _repr val -> do
       addValueDemands addr
       addValueDemands val
-    PlaceHolderStmt l _ ->
-      mapM_ (\(Some v) -> addValueDemands v) l
     InstructionStart{} ->
       pure ()
     Comment _ ->
@@ -123,7 +123,6 @@ stmtNeeded demandSet stmt =
   case stmt of
     AssignStmt a -> Set.member (Some (assignId a)) demandSet
     WriteMem{} -> True
-    PlaceHolderStmt{} -> True
     InstructionStart{} -> True
     Comment{} -> True
     ExecArchStmt{} -> True

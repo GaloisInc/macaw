@@ -37,8 +37,9 @@ module Data.Macaw.Discovery.State
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
   , parsedBlocks
-    -- * CodeAddrRegion
-  , CodeAddrReason(..)
+    -- * Reasons for exploring
+  , FunctionExploreReason(..)
+  , BlockExploreReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
   )  where
@@ -62,23 +63,38 @@ import           Data.Macaw.CFG
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------
--- CodeAddrReason
+-- BlockExploreReason
 
--- | This describes the source of an address that was marked as containing code.
-data CodeAddrReason w
-   = InWrite !(MemSegmentOff w)
-     -- ^ Exploring because the given block writes it to memory.
-   | NextIP !(MemSegmentOff w)
-     -- ^ Exploring because the given block jumps here.
+-- | This describes why we started exploring a given function.
+data FunctionExploreReason w
+   = PossibleWriteEntry !(MemSegmentOff w)
+     -- ^ Exploring because code at the given block writes it to memory.
    | CallTarget !(MemSegmentOff w)
      -- ^ Exploring because address terminates with a call that jumps here.
    | InitAddr
      -- ^ Identified as an entry point from initial information
    | CodePointerInMem !(MemSegmentOff w)
      -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(MemSegmentOff w) !(CodeAddrReason w)
-     -- ^ Added because the address split this block after it had been disassembled. Also includes the reason we thought the block should be there before we split it.
    | UserRequest
+     -- ^ The user requested that we analyze this address as a function.
+  deriving (Eq, Show)
+
+------------------------------------------------------------------------
+-- BlockExploreReason
+
+-- | This describes why we are exploring a given block within a function.
+data BlockExploreReason w
+  --  =- InWrite !(MemSegmentOff w)
+     -- ^ Exploring because the given block writes it to memory.
+   = NextIP !(MemSegmentOff w)
+     -- ^ Exploring because the given block jumps here.
+   | FunctionEntryPoint
+     -- ^ Identified as an entry point from initial information
+   | SplitAt !(MemSegmentOff w) !(BlockExploreReason w)
+     -- ^ Added because the address split this block after it had been
+     -- disassembled.  Also includes the reason we thought the block
+     -- should be there before we split it.
+   --  | UserRequest
      -- ^ The user requested that we analyze this address as a function.
   deriving (Eq, Show)
 
@@ -215,7 +231,7 @@ data ParsedBlock arch ids
                    -- ^ Address of region
                  , blockSize :: !(ArchAddrWord arch)
                    -- ^ The size of the region of memory covered by this.
-                 , blockReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                 , blockReason :: !(BlockExploreReason (ArchAddrWidth arch))
                    -- ^ Reason that we marked this address as
                    -- the start of a basic block.
                  , blockAbstractState :: !(AbsBlockState (ArchReg arch))
@@ -241,7 +257,8 @@ instance ArchConstraints arch
 
 -- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
-   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentOff arch)
+   = DiscoveryFunInfo { discoveredFunReason :: !(FunctionExploreReason (ArchAddrWidth arch))
+                      , discoveredFunAddr :: !(ArchSegmentOff arch)
                         -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
@@ -276,7 +293,8 @@ data DiscoveryState arch
                       -- inferred about it.
                     , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
                       -- ^ Map from function addresses to discovered information about function
-                    , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+                    , _unexploredFunctions
+                      :: !(Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch)))
                       -- ^ This maps addresses that have been marked as
                       -- functions, but not yet analyzed to the reason
                       -- they are analyzed.
@@ -333,7 +351,7 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions
-  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch)))
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions

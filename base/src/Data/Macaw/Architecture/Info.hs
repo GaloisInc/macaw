@@ -137,12 +137,17 @@ data ArchitectureInfo arch
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids
                                      -> Maybe (ArchSegmentOff arch, AbsBlockState (ArchReg arch)))
-       -- ^ This takes an abstract state from before executing an abs state, and an
-       -- architecture-specific terminal statement, and returns the next address within
-       -- the procedure that the statement jumps to along with the updated abstract state.
+       -- ^ This takes an abstract state from before executing an abs
+       -- state, and an architecture-specific terminal statement.
        --
-       -- Note that per their documentation, architecture specific statements may return to at
-       -- most one location within a function.
+       -- If the statement does not return to this function, this
+       -- function should return `Nothing`.  Otherwise, it should
+       -- returns the next address within the procedure that the
+       -- statement jumps to along with the updated abstract state.
+       --
+       -- Note that per their documentation, architecture specific
+       -- statements may return to at most one location within a
+       -- function.
      }
 
 -- | Apply optimizations to a terminal statement.

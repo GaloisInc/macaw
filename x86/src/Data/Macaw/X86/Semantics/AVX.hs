@@ -2,7 +2,6 @@
 module Data.Macaw.X86.Semantics.AVX (all_instructions) where
 
 import Data.Word(Word8)
-import Data.Int(Int8)
 import Control.Monad(forM_)
 
 import Data.Parameterized.NatRepr
@@ -53,7 +52,7 @@ avx3 m k = defInstruction m $ \ii ->
 
 avx4 :: String ->
         (forall st ids.
-            F.Value -> F.Value -> F.Value -> Int8 -> X86Generator st ids ()) ->
+            F.Value -> F.Value -> F.Value -> Word8 -> X86Generator st ids ()) ->
         InstructionDef
 avx4 m k = defInstruction m $ \ii ->
     case F.iiArgs ii of
@@ -229,5 +228,3 @@ all_instructions =
 
   , avxInsert "vpinsrq"
   ]
-
-

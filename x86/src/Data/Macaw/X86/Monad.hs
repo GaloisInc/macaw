@@ -163,8 +163,6 @@ module Data.Macaw.X86.Monad
   , even_parity
   , fnstcw
   , getSegmentBase
-  , exception
-  , ExceptionClass(..)
   , x87Push
   , x87Pop
   , bvQuotRem
@@ -906,7 +904,7 @@ mux c x y
 -- | Construct a literal bit vector.  The result is undefined if the
 -- literal does not fit withint the given number of bits.
 bvLit :: 1 <= n => NatRepr n -> Integer -> Expr ids (BVType n)
-bvLit n v = ValueExpr $ mkLit n (toInteger v)
+bvLit n v = ValueExpr $ mkLit n v
 
 -- | Add two bitvectors together dropping overflow.
 (.+) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
@@ -1544,18 +1542,6 @@ infixl 6 .-
 infix  4 .=
 
 ------------------------------------------------------------------------
--- Monadic definition
-data ExceptionClass
-   = DivideError -- #DE
-   | FloatingPointError
-   | SIMDFloatingPointException
-   | GeneralProtectionException Int
-   | UndefinedInstructionError -- basically for ud2
-     -- ^ A general protection exception with the given error code.
-     -- -- | AlignmentCheck
-  deriving (Eq, Ord, Show)
-
-------------------------------------------------------------------------
 -- Semantics
 
 -- | Defines operations that need to be supported at a specific bitwidht.
@@ -1821,15 +1807,6 @@ getSegmentBase seg =
     F.GS -> evalArchFn ReadGSBase
     _ ->
       error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
-
--- | raises an exception if the predicate is true and the mask is false
-exception :: Expr ids BoolType    -- mask
-          -> Expr ids BoolType -- predicate
-          -> ExceptionClass
-          -> X86Generator st ids ()
-exception m p c =
-  when_ (boolNot m .&&. p)
-        (addStmt (PlaceHolderStmt [] $ "Exception " ++ (show c)))
 
 -- FIXME: those should also mutate the underflow/overflow flag and
 -- related state.

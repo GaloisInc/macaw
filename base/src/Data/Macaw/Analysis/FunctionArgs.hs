@@ -297,13 +297,8 @@ addIntraproceduralJumpTarget fun_info src_block dest_addr = do  -- record the ed
 valueUses :: (OrdF (ArchReg arch), FoldableFC (ArchFn arch))
           => Value arch ids tp
           -> FunctionArgsM arch ids (RegisterSet (ArchReg arch))
-valueUses v =
-  zoom assignmentCache $
-            foldValueCached (\_ _    -> mempty)
-                            (\_      -> mempty)
-                            (\r      -> Set.singleton (Some r))
-                            (\_ regs -> regs)
-                            v
+valueUses v = zoom assignmentCache $ foldValueCached fns v
+  where fns = emptyValueFold { foldInput = Set.singleton . Some }
 
 -- | Record that a block demands the value of certain registers.
 recordBlockDemand :: ( OrdF (ArchReg arch)
@@ -479,8 +474,6 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
       | otherwise ->
           []
     WriteMem addr _ v -> [Some addr, Some v]
-    -- Place holder statements are unknown.
-    PlaceHolderStmt _ _ -> []
     InstructionStart _ _ -> []
     -- Comment statements have no specific value.
     Comment _ -> []
