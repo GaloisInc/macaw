@@ -46,6 +46,7 @@ import Lang.Crucible.Simulator.GlobalState(lookupGlobal,insertGlobal)
 import Lang.Crucible.Simulator.SimError(SimErrorReason(AssertFailureSimError))
 import Lang.Crucible.CFG.Common(GlobalVar)
 import Lang.Crucible.Types
+import Lang.Crucible.Solver.BoolInterface
 import Lang.Crucible.Solver.Interface
 import Lang.Crucible.Solver.Symbol(userSymbol)
 

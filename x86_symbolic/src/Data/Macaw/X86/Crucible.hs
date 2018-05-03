@@ -43,6 +43,7 @@ import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
 import           Lang.Crucible.Syntax
 import           Lang.Crucible.CFG.Expr
+import           Lang.Crucible.Solver.BoolInterface (IsSymInterface)
 import           Lang.Crucible.Solver.Interface hiding (IsExpr)
 import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           Lang.Crucible.Types
@@ -61,7 +62,7 @@ import qualified Data.Macaw.X86.ArchTypes as M
 
 
 type S sym rtp bs r ctx =
-  CrucibleState MacawSimulatorState sym (MacawExt M.X86_64) rtp bs r ctx
+  CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
 
 semantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>

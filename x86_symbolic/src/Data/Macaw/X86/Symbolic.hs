@@ -49,7 +49,7 @@ import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.Solver.Symbol as C
-import qualified Lang.Crucible.Solver.Interface as C
+import qualified Lang.Crucible.Solver.BoolInterface as C
 import Lang.Crucible.Simulator.RegValue(RegValue'(..))
 
 

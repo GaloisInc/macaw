@@ -62,6 +62,7 @@ import qualified Lang.Crucible.Simulator.Intrinsics as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified Lang.Crucible.Simulator.OverrideSim as C
 import qualified Lang.Crucible.Simulator.RegMap as C
+import           Lang.Crucible.Solver.BoolInterface
 import           Lang.Crucible.Solver.Interface
 import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           System.IO (stdout)
@@ -302,7 +303,7 @@ type EvalStmtFunc f p sym ext =
 
 -- | Function for evaluating an architecture-specific statement
 type MacawArchEvalFn sym arch =
-  EvalStmtFunc (MacawArchStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+  EvalStmtFunc (MacawArchStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 
 type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
                                     (MacawCrucibleRegTypes arch)
@@ -316,7 +317,7 @@ execMacawStmtExtension ::
   C.GlobalVar MM.Mem ->
   GlobalMap sym arch ->
   CallHandler sym arch ->
-  EvalStmtFunc (MacawStmtExtension arch) MacawSimulatorState sym (MacawExt arch)
+  EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 execMacawStmtExtension archStmtFn mvar globs callH s0 st =
   case s0 of
     MacawReadMem w mr x         -> doReadMem st mvar globs w mr x
@@ -401,7 +402,7 @@ macawExtensions ::
   C.GlobalVar MM.Mem ->
   GlobalMap sym arch ->
   CallHandler sym arch ->
-  C.ExtensionImpl MacawSimulatorState sym (MacawExt arch)
+  C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
 macawExtensions f mvar globs callH =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
                   , C.extensionExec = execMacawStmtExtension f mvar globs callH
@@ -417,8 +418,7 @@ type GlobalMap sym arch = Map M.RegionIndex
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
            .  IsSymInterface sym
-           => C.SimConfig MacawSimulatorState sym
-           -> sym
+           => sym
            -> MacawSymbolicArchFunctions arch
               -- ^ Translation functions
            -> MacawArchEvalFn sym arch
@@ -430,20 +430,19 @@ runCodeBlock :: forall sym arch blocks
               -- ^ Register assignment
            -> IO ( C.GlobalVar MM.Mem
                  , C.ExecResult
-                   MacawSimulatorState
+                   (MacawSimulatorState sym)
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock cfg sym archFns archEval halloc (initMem,globs) callH g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) callH g regStruct = do
   mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
 
-  let ctx :: C.SimContext MacawSimulatorState sym (MacawExt arch)
+  let ctx :: C.SimContext (MacawSimulatorState sym) sym (MacawExt arch)
       ctx = C.SimContext { C._ctxSymInterface = sym
                          , C.ctxSolverProof = \a -> a
                          , C.ctxIntrinsicTypes = llvmIntrinsicTypes
-                         , C.simConfig = cfg
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
                          , C.extensionImpl = macawExtensions archEval mvar globs
