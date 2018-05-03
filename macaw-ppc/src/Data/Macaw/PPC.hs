@@ -13,6 +13,11 @@ module Data.Macaw.PPC (
   -- * Type-level tags
   PPC64,
   PPC32,
+  -- * PPC Types
+  R.PPCReg(..),
+  A.PPCTermStmt(..),
+  A.PPCStmt(..),
+  A.PPCPrimFn(..),
   -- * ELF support
   tocBaseForELF,
   tocEntryAddrsForElf
@@ -50,6 +55,8 @@ import Data.Macaw.PPC.Arch ( rewriteTermStmt,
 import Data.Macaw.PPC.BinaryFormat.ELF ( tocBaseForELF, tocEntryAddrsForElf )
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
+import qualified Data.Macaw.PPC.PPCReg as R
+import qualified Data.Macaw.PPC.Arch as A
 
 -- | The type tag for 64 bit PowerPC
 type PPC64 = PPC64.PPC
