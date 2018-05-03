@@ -31,6 +31,7 @@ import           Data.Macaw.Types
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC.Location as APPC
@@ -68,6 +69,9 @@ instance Show (PPCReg arch tp) where
 
 instance ShowF (PPCReg arch) where
   showF = show
+
+instance MC.PrettyF (PPCReg arch) where
+  prettyF = PP.text . showF
 
 $(return [])
 
