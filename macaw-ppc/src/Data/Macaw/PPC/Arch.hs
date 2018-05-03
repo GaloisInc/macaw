@@ -229,7 +229,7 @@ data PPCPrimFn ppc f tp where
        -> !(f (MT.BVType 32))
        -> PPCPrimFn ppc f (MT.BVType 160)
 
-instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc (MC.Value ppc ids)) MT.TypeRepr where
+instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v) MT.TypeRepr where
   typeRepr f =
     case f of
       UDiv rep _ _ -> MT.BVTypeRepr rep
