@@ -22,6 +22,7 @@ library
                    Data.Macaw.PPC.Symbolic.Repeat
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
+                       containers,
                        lens,
                        parameterized-utils,
                        dismantle-ppc,
