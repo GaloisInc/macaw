@@ -143,12 +143,12 @@ ppcGenFn fn = do
 
 ppcGenStmt :: MP.PPCStmt ppc (MC.Value ppc ids)
            -> MS.CrucGen ppc ids s ()
-ppcGenStmt = undefined
+ppcGenStmt _s = error "ppcGenStmt is not yet implemented"
 
 ppcGenTermStmt :: MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
                -> MS.CrucGen ppc ids s ()
-ppcGenTermStmt = undefined
+ppcGenTermStmt _ts _rs = error "ppcGenTermStmt is not yet implemented"
 
 data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   PPCPrimFn :: MP.PPCPrimFn ppc (A.AtomWrapper f) t
