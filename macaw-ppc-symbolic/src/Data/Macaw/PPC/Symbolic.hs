@@ -32,8 +32,10 @@ module Data.Macaw.PPC.Symbolic (
 import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( void )
 import qualified Data.Functor.Identity as I
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Dismantle.PPC as D
 import qualified Lang.Crucible.CFG.Extension as C
@@ -141,9 +143,15 @@ ppcGenFn fn = do
   r <- FC.traverseFC f fn
   MS.evalArchStmt (PPCPrimFn r)
 
-ppcGenStmt :: MP.PPCStmt ppc (MC.Value ppc ids)
+ppcGenStmt :: forall ppc ids s
+            . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
+           => MP.PPCStmt ppc (MC.Value ppc ids)
            -> MS.CrucGen ppc ids s ()
-ppcGenStmt _s = error "ppcGenStmt is not yet implemented"
+ppcGenStmt s = do
+  let f :: MC.Value ppc ids a -> MS.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
+      f x = A.AtomWrapper <$> MS.valueToCrucible x
+  s' <- TF.traverseF f s
+  void (MS.evalArchStmt (PPCPrimStmt s'))
 
 ppcGenTermStmt :: MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
@@ -153,22 +161,30 @@ ppcGenTermStmt _ts _rs = error "ppcGenTermStmt is not yet implemented"
 data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   PPCPrimFn :: MP.PPCPrimFn ppc (A.AtomWrapper f) t
             -> PPCStmtExtension ppc f (MS.ToCrucibleType t)
+  PPCPrimStmt :: MP.PPCStmt ppc (A.AtomWrapper f)
+              -> PPCStmtExtension ppc f C.UnitType
 
 instance FC.FunctorFC (PPCStmtExtension ppc) where
   fmapFC f (PPCPrimFn x) = PPCPrimFn (FC.fmapFC (A.liftAtomMap f) x)
+  fmapFC f (PPCPrimStmt s) = PPCPrimStmt (TF.fmapF (A.liftAtomMap f) s)
 
 instance FC.FoldableFC (PPCStmtExtension ppc) where
   foldMapFC f (PPCPrimFn x) = FC.foldMapFC (A.liftAtomIn f) x
+  foldMapFC f (PPCPrimStmt s) = TF.foldMapF (A.liftAtomIn f) s
 
 instance FC.TraversableFC (PPCStmtExtension ppc) where
   traverseFC f (PPCPrimFn x) = PPCPrimFn <$> FC.traverseFC (A.liftAtomTrav f) x
+  traverseFC f (PPCPrimStmt s) = PPCPrimStmt <$> TF.traverseF (A.liftAtomTrav f) s
 
 instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => C.TypeApp (PPCStmtExtension ppc) where
   appType (PPCPrimFn x) = MS.typeToCrucible (MT.typeRepr x)
+  appType (PPCPrimStmt _s) = C.UnitRepr
 
 instance C.PrettyApp (PPCStmtExtension ppc) where
   ppApp ppSub (PPCPrimFn x) =
     I.runIdentity (MC.ppArchFn (I.Identity . A.liftAtomIn ppSub) x)
+  ppApp ppSub (PPCPrimStmt s) =
+    MC.ppArchStmt (A.liftAtomIn ppSub) s
 
 type instance MS.MacawArchStmtExtension MP.PPC64 = PPCStmtExtension MP.PPC64
 type instance MS.MacawArchStmtExtension MP.PPC32 = PPCStmtExtension MP.PPC32
