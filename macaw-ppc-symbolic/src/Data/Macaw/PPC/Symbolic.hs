@@ -105,14 +105,14 @@ getReg :: forall n t f ppc . (Ctx.Idx n (MS.ArchRegContext ppc) t) => RegAssign 
 getReg = (^. (Ctx.field @n))
 
 ppc64MacawEvalFn :: (C.IsSymInterface sym)
-                 => F.SymFuns ppc sym
+                 => F.SymFuns MP.PPC64 sym
                  -> MS.MacawArchEvalFn sym MP.PPC64
-ppc64MacawEvalFn = undefined
+ppc64MacawEvalFn fs = \(PPCPrimFn x) s -> F.semantics fs x s
 
 ppc32MacawEvalFn :: (C.IsSymInterface sym)
-                 => F.SymFuns ppc sym
+                 => F.SymFuns MP.PPC32 sym
                  -> MS.MacawArchEvalFn sym MP.PPC32
-ppc32MacawEvalFn = undefined
+ppc32MacawEvalFn fs = \(PPCPrimFn x) s -> F.semantics fs x s
 
 ppcRegName :: MP.PPCReg ppc tp -> C.SolverSymbol
 ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
