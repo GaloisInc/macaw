@@ -15,6 +15,7 @@ module Data.Macaw.PPC.Symbolic (
   ppc32MacawSymbolicFns,
   ppc32MacawEvalFn,
   F.SymFuns,
+  F.newSymFuns,
   getReg,
   -- * Register names
   IP,
