@@ -109,12 +109,18 @@ getReg = (^. (Ctx.field @n))
 ppc64MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC64 sym
                  -> MS.MacawArchEvalFn sym MP.PPC64
-ppc64MacawEvalFn fs = \(PPCPrimFn x) s -> F.semantics fs x s
+ppc64MacawEvalFn fs = \xt s -> case xt of
+  PPCPrimFn fn -> F.funcSemantics fs fn s
+  PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
+  PPCPrimTerm term -> F.termSemantics fs term s
 
 ppc32MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC32 sym
                  -> MS.MacawArchEvalFn sym MP.PPC32
-ppc32MacawEvalFn fs = \(PPCPrimFn x) s -> F.semantics fs x s
+ppc32MacawEvalFn fs = \xt s -> case xt of
+  PPCPrimFn fn -> F.funcSemantics fs fn s
+  PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
+  PPCPrimTerm term -> F.termSemantics fs term s
 
 ppcRegName :: MP.PPCReg ppc tp -> C.SolverSymbol
 ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
@@ -159,32 +165,46 @@ ppcGenTermStmt :: MP.PPCTermStmt ids
 ppcGenTermStmt _ts _rs = error "ppcGenTermStmt is not yet implemented"
 
 data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
+  -- | Wrappers around the arch-specific functions in PowerPC; these are
+  -- interpreted in 'funcSemantics'.
   PPCPrimFn :: MP.PPCPrimFn ppc (A.AtomWrapper f) t
             -> PPCStmtExtension ppc f (MS.ToCrucibleType t)
+  -- | Wrappers around the arch-specific statements in PowerPC; these are
+  -- interpreted in 'stmtSemantics'
   PPCPrimStmt :: MP.PPCStmt ppc (A.AtomWrapper f)
               -> PPCStmtExtension ppc f C.UnitType
+  -- | Wrappers around the arch-specific terminators in PowerPC; these are
+  -- interpreted in 'termSemantics'
+  PPCPrimTerm :: MP.PPCTermStmt ids -> PPCStmtExtension ppc f C.UnitType
 
 instance FC.FunctorFC (PPCStmtExtension ppc) where
   fmapFC f (PPCPrimFn x) = PPCPrimFn (FC.fmapFC (A.liftAtomMap f) x)
   fmapFC f (PPCPrimStmt s) = PPCPrimStmt (TF.fmapF (A.liftAtomMap f) s)
+  fmapFC _f (PPCPrimTerm t) = PPCPrimTerm t
 
 instance FC.FoldableFC (PPCStmtExtension ppc) where
   foldMapFC f (PPCPrimFn x) = FC.foldMapFC (A.liftAtomIn f) x
   foldMapFC f (PPCPrimStmt s) = TF.foldMapF (A.liftAtomIn f) s
+  -- There are no contents in any of the terminator statements for now, so there
+  -- is no traversal here
+  foldMapFC _f (PPCPrimTerm _t) = mempty
 
 instance FC.TraversableFC (PPCStmtExtension ppc) where
   traverseFC f (PPCPrimFn x) = PPCPrimFn <$> FC.traverseFC (A.liftAtomTrav f) x
   traverseFC f (PPCPrimStmt s) = PPCPrimStmt <$> TF.traverseF (A.liftAtomTrav f) s
+  traverseFC _f (PPCPrimTerm t) = pure (PPCPrimTerm t)
 
 instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => C.TypeApp (PPCStmtExtension ppc) where
   appType (PPCPrimFn x) = MS.typeToCrucible (MT.typeRepr x)
   appType (PPCPrimStmt _s) = C.UnitRepr
+  appType (PPCPrimTerm _t) = C.UnitRepr
 
 instance C.PrettyApp (PPCStmtExtension ppc) where
   ppApp ppSub (PPCPrimFn x) =
     I.runIdentity (MC.ppArchFn (I.Identity . A.liftAtomIn ppSub) x)
   ppApp ppSub (PPCPrimStmt s) =
     MC.ppArchStmt (A.liftAtomIn ppSub) s
+  ppApp _ppSub (PPCPrimTerm t) = MC.prettyF t
 
 type instance MS.MacawArchStmtExtension MP.PPC64 = PPCStmtExtension MP.PPC64
 type instance MS.MacawArchStmtExtension MP.PPC32 = PPCStmtExtension MP.PPC32

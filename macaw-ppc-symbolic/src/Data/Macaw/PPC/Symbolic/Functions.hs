@@ -9,7 +9,9 @@
 module Data.Macaw.PPC.Symbolic.Functions (
   SymFuns,
   newSymFuns,
-  semantics,
+  funcSemantics,
+  stmtSemantics,
+  termSemantics,
   -- * Exceptions
   SemanticsError(..)
   ) where
@@ -56,12 +58,26 @@ data SemanticsError = NonUserSymbol String
 
 instance X.Exception SemanticsError
 
-semantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= MC.ArchAddrWidth ppc)
-          => SymFuns ppc sym
-          -> MP.PPCPrimFn ppc (A.AtomWrapper (C.RegEntry sym)) mt
-          -> S ppc sym rtp bs r ctx
-          -> IO (C.RegValue sym t, S ppc sym rtp bs r ctx)
-semantics sf pf s =
+termSemantics :: (C.IsSymInterface sym, 1 <= MC.ArchAddrWidth ppc)
+              => SymFuns ppc sym
+              -> MP.PPCTermStmt ids
+              -> S ppc sym rtp bs r ctx
+              -> IO (C.RegValue sym C.UnitType, S ppc sym rtp bs r ctx)
+termSemantics = error "Terminator statement semantics not yet implemented"
+
+stmtSemantics :: (C.IsSymInterface sym, 1 <= MC.ArchAddrWidth ppc)
+              => SymFuns ppc sym
+              -> MP.PPCStmt ppc (A.AtomWrapper (C.RegEntry sym))
+              -> S ppc sym rtp bs r ctx
+              -> IO (C.RegValue sym C.UnitType, S ppc sym rtp bs r ctx)
+stmtSemantics = error "Statement semantics not yet implemented"
+
+funcSemantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= MC.ArchAddrWidth ppc)
+              => SymFuns ppc sym
+              -> MP.PPCPrimFn ppc (A.AtomWrapper (C.RegEntry sym)) mt
+              -> S ppc sym rtp bs r ctx
+              -> IO (C.RegValue sym t, S ppc sym rtp bs r ctx)
+funcSemantics sf pf s =
   case pf of
     MP.UDiv _rep lhs rhs -> do
       let sym = C.stateSymInterface s
