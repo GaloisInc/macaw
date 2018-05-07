@@ -40,9 +40,10 @@ import qualified Data.Parameterized.TraversableFC as FC
 import qualified Dismantle.PPC as D
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
-import qualified Lang.Crucible.Types as C
-import qualified Lang.Crucible.Solver.Symbol as C
+import qualified Lang.Crucible.Solver.BoolInterface as C
 import qualified Lang.Crucible.Solver.Interface as C
+import qualified Lang.Crucible.Solver.Symbol as C
+import qualified Lang.Crucible.Types as C
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT

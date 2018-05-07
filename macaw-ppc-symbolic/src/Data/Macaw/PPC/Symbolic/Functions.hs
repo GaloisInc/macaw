@@ -26,13 +26,14 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.NatRepr as NR
 import           Text.Printf ( printf )
 
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as LL
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import qualified Lang.Crucible.Simulator.SimError as C
-import qualified Lang.Crucible.Solver.Symbol as C
+import qualified Lang.Crucible.Solver.BoolInterface as C
 import qualified Lang.Crucible.Solver.Interface as C
+import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Types as C
-import qualified Lang.Crucible.LLVM.MemModel.Pointer as LL
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
@@ -229,5 +230,4 @@ toValBV :: (C.IsSymInterface sym)
         -> IO (C.RegValue sym (C.BVType w))
 toValBV sym (A.AtomWrapper x) = LL.projectLLVM_bv sym (C.regValue x)
 
-type S ppc sym rtp bs r ctx = C.CrucibleState MS.MacawSimulatorState sym (MS.MacawExt ppc) rtp bs r ctx
-
+type S ppc sym rtp bs r ctx = C.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt ppc) rtp bs r ctx
