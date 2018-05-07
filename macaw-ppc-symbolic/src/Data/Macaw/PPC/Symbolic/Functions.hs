@@ -28,6 +28,7 @@ import           Text.Printf ( printf )
 
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegMap as C
+import qualified Lang.Crucible.Simulator.SimError as C
 import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Solver.Interface as C
 import qualified Lang.Crucible.Types as C
@@ -63,14 +64,49 @@ termSemantics :: (C.IsSymInterface sym, 1 <= MC.ArchAddrWidth ppc)
               -> MP.PPCTermStmt ids
               -> S ppc sym rtp bs r ctx
               -> IO (C.RegValue sym C.UnitType, S ppc sym rtp bs r ctx)
-termSemantics = error "Terminator statement semantics not yet implemented"
+termSemantics = error "PowerPC-specific terminator statement semantics not yet implemented"
 
 stmtSemantics :: (C.IsSymInterface sym, 1 <= MC.ArchAddrWidth ppc)
               => SymFuns ppc sym
               -> MP.PPCStmt ppc (A.AtomWrapper (C.RegEntry sym))
               -> S ppc sym rtp bs r ctx
               -> IO (C.RegValue sym C.UnitType, S ppc sym rtp bs r ctx)
-stmtSemantics = error "Statement semantics not yet implemented"
+stmtSemantics _sf stmt s =
+  case stmt of
+    MP.Attn -> do
+      let reason = C.GenericSimError "ppc_attn"
+      C.addFailedAssertion (C.stateSymInterface s) reason
+    -- These are cache hints that can't be observed in our current memory model
+    -- (i.e., they require concurrency to be observed).
+    --
+    -- Some take memory addresses as arguments.  We don't actually touch those
+    -- addresses here, as they might not be valid (the instructions don't fault
+    -- on invalid addresses).
+    MP.Sync -> return ((), s)
+    MP.Isync -> return ((), s)
+    MP.Dcba {} -> return ((), s)
+    MP.Dcbf {} -> return ((), s)
+    MP.Dcbi {} -> return ((), s)
+    MP.Dcbst {} -> return ((), s)
+    MP.Dcbz {} -> return ((), s)
+    MP.Dcbzl {} -> return ((), s)
+    MP.Dcbt {} -> return ((), s)
+    MP.Dcbtst {} -> return ((), s)
+    MP.Icbi {} -> return ((), s)
+    MP.Icbt {} -> return ((), s)
+    -- These are transactional memory instructions.  These also can't really
+    -- fail without concurrency, so we don't have them do anything.  FIXME: That
+    -- might not be entirely correct - there could be some interesting side
+    -- effects that need to be captured somehow.  We could, for example, model
+    -- Tcheck as both failing and succeeding to explore both paths.
+    MP.Tabort {} -> return ((), s)
+    MP.Tabortdc {} -> return ((), s)
+    MP.Tabortdci {} -> return ((), s)
+    MP.Tabortwc {} -> return ((), s)
+    MP.Tabortwci {} -> return ((), s)
+    MP.Tbegin {} -> return ((), s)
+    MP.Tcheck {} -> return ((), s)
+    MP.Tend {} -> return ((), s)
 
 funcSemantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= MC.ArchAddrWidth ppc)
               => SymFuns ppc sym
@@ -83,12 +119,14 @@ funcSemantics sf pf s =
       let sym = C.stateSymInterface s
       lhs' <- toValBV sym lhs
       rhs' <- toValBV sym rhs
+      -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvUdiv sym lhs' rhs'
       return (v, s)
     MP.SDiv _rep lhs rhs -> do
       let sym = C.stateSymInterface s
       lhs' <- toValBV sym lhs
       rhs' <- toValBV sym rhs
+      -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvSdiv sym lhs' rhs'
       return (v, s)
     MP.FP1 name v fpscr -> do
