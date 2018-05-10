@@ -27,7 +27,9 @@ module Data.Macaw.X86.Symbolic
   ) where
 
 import           Control.Lens((^.),(%~),(&))
+import           Control.Monad ( void )
 import           Data.Parameterized.Context as Ctx
+import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.Parameterized.Map as MapF
 import           GHC.TypeLits
@@ -187,24 +189,37 @@ data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   -- Macaw X86PrimFn a Macaw-Crucible statement extension.
   X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) t) ->
                                         X86StmtExtension f (ToCrucibleType t)
-
+  X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
+              -> X86StmtExtension f C.UnitType
+  X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
 
 
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
+  ppApp ppSub (X86PrimStmt stmt) = M.ppArchStmt (liftAtomIn ppSub) stmt
+  ppApp _ppSub (X86PrimTerm term) = M.prettyF term
 
 instance C.TypeApp X86StmtExtension where
   appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
+  appType (X86PrimStmt _) = C.UnitRepr
+  appType (X86PrimTerm _) = C.UnitRepr
 
 instance FunctorFC X86StmtExtension where
   fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
+  fmapFC f (X86PrimStmt stmt) = X86PrimStmt (fmapF (liftAtomMap f) stmt)
+  fmapFC _f (X86PrimTerm term) = X86PrimTerm term
 
 instance FoldableFC X86StmtExtension where
   foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomIn f) x
+  foldMapFC f (X86PrimStmt stmt) = foldMapF (liftAtomIn f) stmt
+  -- There are no contents in terminator statements for now
+  foldMapFC _f (X86PrimTerm _term) = mempty
 
 instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
+  traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
+  traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
@@ -218,18 +233,20 @@ crucGenX86Fn fn = do
   evalArchStmt (X86PrimFn r)
 
 
-crucGenX86Stmt :: M.X86Stmt (M.Value M.X86_64 ids)
-                 -> CrucGen M.X86_64 ids s ()
-crucGenX86Stmt stmt =
-  case stmt of
-    _ -> error $ "crucGenX86Stmt does not yet support " ++ show (M.ppArchStmt (M.ppValue 0) stmt)
+crucGenX86Stmt :: forall ids s
+                . M.X86Stmt (M.Value M.X86_64 ids)
+               -> CrucGen M.X86_64 ids s ()
+crucGenX86Stmt stmt = do
+  let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
+      f x = AtomWrapper <$> valueToCrucible x
+  stmt' <- traverseF f stmt
+  void (evalArchStmt (X86PrimStmt stmt'))
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
                    -> CrucGen M.X86_64 ids s ()
-crucGenX86TermStmt tstmt regs =
-  case tstmt of
-    _ -> undefined regs
+crucGenX86TermStmt tstmt _regs =
+  void (evalArchStmt (X86PrimTerm tstmt))
 
 -- | X86_64 specific functions for translation Macaw into Crucible.
 x86_64MacawSymbolicFns :: MacawSymbolicArchFunctions M.X86_64
@@ -247,4 +264,6 @@ x86_64MacawSymbolicFns =
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn ::
   C.IsSymInterface sym => SymFuns sym -> MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn fs (X86PrimFn x) s = semantics fs x s
+x86_64MacawEvalFn fs (X86PrimFn x) s = funcSemantics fs x s
+x86_64MacawEvalFn fs (X86PrimStmt stmt) s = stmtSemantics fs stmt s
+x86_64MacawEvalFn fs (X86PrimTerm term) s = termSemantics fs term s

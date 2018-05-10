@@ -17,7 +17,9 @@ module Data.Macaw.X86.Crucible
     SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
-  , semantics
+  , funcSemantics
+  , stmtSemantics
+  , termSemantics
 
     -- * Atom wrapper
   , AtomWrapper(..)
@@ -64,17 +66,31 @@ import qualified Data.Macaw.X86.ArchTypes as M
 type S sym rtp bs r ctx =
   CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
 
-semantics ::
+funcSemantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>
   SymFuns sym ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-semantics fs x s = do let sym = Sym { symIface = stateSymInterface s
-                                    , symTys   = stateIntrinsicTypes s
-                                    , symFuns  = fs
-                                    }
-                      v <- pureSem sym x
-                      return (v,s)
+funcSemantics fs x s = do let sym = Sym { symIface = stateSymInterface s
+                                        , symTys   = stateIntrinsicTypes s
+                                        , symFuns  = fs
+                                        }
+                          v <- pureSem sym x
+                          return (v,s)
+
+stmtSemantics :: (IsSymInterface sym)
+              => SymFuns sym
+              -> M.X86Stmt (AtomWrapper (RegEntry sym))
+              -> S sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+stmtSemantics = error "Symbolic-execution time semantics for x86 statements are not implemented yet"
+
+termSemantics :: (IsSymInterface sym)
+              => SymFuns sym
+              -> M.X86TermStmt ids
+              -> S sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+termSemantics = error "Symbolic-execution time semantics for x86 terminators are not implemented yet"
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
