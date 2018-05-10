@@ -357,28 +357,28 @@ instance FoldableFC (ArchFn arch) => FoldableFC (AssignRhs arch) where
 
 -- | A value at runtime.
 data Value arch ids tp where
-  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
-  -- ^ A constant bitvector
+  -- | A constant bitvector
   --
   -- The integer should be between 0 and 2^n-1.
+  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
+  -- | A constant Boolean
   BoolValue :: !Bool -> Value arch ids BoolType
-  -- ^ A constant Boolean
+  -- | A memory address
   RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
                    -> !(ArchMemAddr arch)
                    -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- ^ A memory address
+  -- | Reference to a symbol identifier.
+  --
+  -- This appears when dealing with relocations.
   SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
               -> !SymbolIdentifier
               -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- ^ Reference to a symbol identifier.
-  --
-  -- This appears when dealing with relocations.
+  -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)
                 -> Value arch ids tp
-  -- ^ Value from an assignment statement.
+  -- | Represents the value assigned to the register when the block started.
   Initial :: !(ArchReg arch tp)
           -> Value arch ids tp
-  -- ^ Represents the value assigned to the register when the block started.
 
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
