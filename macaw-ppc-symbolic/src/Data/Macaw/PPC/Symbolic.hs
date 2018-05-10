@@ -160,10 +160,13 @@ ppcGenStmt s = do
   s' <- TF.traverseF f s
   void (MS.evalArchStmt (PPCPrimStmt s'))
 
-ppcGenTermStmt :: MP.PPCTermStmt ids
+ppcGenTermStmt :: forall ppc ids s
+                . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
+               => MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
                -> MS.CrucGen ppc ids s ()
-ppcGenTermStmt _ts _rs = error "ppcGenTermStmt is not yet implemented"
+ppcGenTermStmt ts _rs =
+  void (MS.evalArchStmt (PPCPrimTerm ts))
 
 data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   -- | Wrappers around the arch-specific functions in PowerPC; these are
