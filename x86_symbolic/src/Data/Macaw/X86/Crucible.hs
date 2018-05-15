@@ -39,22 +39,23 @@ import Data.Word(Word8)
 import Data.Bits(shiftL,testBit)
 import GHC.TypeLits(KnownNat)
 
+import           What4.Interface hiding (IsExpr)
+import           What4.Symbol(userSymbol)
+import           What4.Utils.Endian(Endian(..))
+
+import           Lang.Crucible.Backend (IsSymInterface)
+import           Lang.Crucible.CFG.Expr
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.RegMap
 import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
 import           Lang.Crucible.Syntax
-import           Lang.Crucible.CFG.Expr
-import           Lang.Crucible.Solver.BoolInterface (IsSymInterface)
-import           Lang.Crucible.Solver.Interface hiding (IsExpr)
-import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
-import           Lang.Crucible.Utils.Endian(Endian(..))
+
 import           Lang.Crucible.LLVM.MemModel (LLVMPointerType)
 import Lang.Crucible.LLVM.MemModel.Pointer
   (projectLLVM_bv, pattern LLVMPointerRepr, llvmPointer_bv)
-
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen(MacawExt)

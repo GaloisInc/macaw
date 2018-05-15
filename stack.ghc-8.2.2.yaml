@@ -7,6 +7,7 @@ packages:
 - x86
 - symbolic
 - x86_symbolic
+- deps/crucible/what4
 - deps/crucible/crucible
 - deps/crucible/crucible-llvm
 - deps/dwarf

@@ -33,6 +33,9 @@ import qualified Data.Map as Map
 
 import Data.Parameterized(Some(..))
 
+import What4.Interface
+import What4.Symbol(userSymbol)
+
 import Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
           , stateSymInterface
@@ -46,9 +49,7 @@ import Lang.Crucible.Simulator.GlobalState(lookupGlobal,insertGlobal)
 import Lang.Crucible.Simulator.SimError(SimErrorReason(AssertFailureSimError))
 import Lang.Crucible.CFG.Common(GlobalVar)
 import Lang.Crucible.Types
-import Lang.Crucible.Solver.BoolInterface
-import Lang.Crucible.Solver.Interface
-import Lang.Crucible.Solver.Symbol(userSymbol)
+import Lang.Crucible.Backend
 
 import Lang.Crucible.LLVM.MemModel
           ( Mem, MemImpl, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
@@ -390,14 +391,14 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
      let useDefault msg =
            do notC <- notPred sym cond
-              addAssertion sym notC
+              assert sym notC
                  (AssertFailureSimError ("[doCondReadMem] " ++ msg))
               return def
 
      a <- case val of
             Right (p,r,v) | Just a <- valToBits bitw v ->
               do grd <- impliesPred sym cond p
-                 addAssertion sym grd r
+                 assert sym grd r
                  muxLLVMPtr sym cond a def
             Right _ -> useDefault "Unexpected value read from memory."
             Left err -> useDefault err
@@ -552,7 +553,7 @@ cases sym name mux def opts =
 
 
 check :: IsSymInterface sym => sym -> Pred sym -> String -> String -> IO ()
-check sym valid name msg = addAssertion sym valid
+check sym valid name msg = assert sym valid
                     $ AssertFailureSimError
                     $ "[" ++ name ++ "] " ++ msg
 
