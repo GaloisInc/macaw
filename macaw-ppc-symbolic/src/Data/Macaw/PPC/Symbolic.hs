@@ -17,6 +17,8 @@ module Data.Macaw.PPC.Symbolic (
   F.SymFuns,
   F.newSymFuns,
   getReg,
+  lookupReg,
+  updateReg,
   -- * Register names
   IP,
   LNK,
@@ -26,15 +28,18 @@ module Data.Macaw.PPC.Symbolic (
   FPSCR,
   VSCR,
   GP,
-  FR
+  FR,
+  -- * Other types
+  RegContext
   ) where
 
 import           GHC.TypeLits
 
-import           Control.Lens ( (^.) )
+import           Control.Lens ( (^.), (%~), (&) )
 import           Control.Monad ( void )
 import qualified Data.Functor.Identity as I
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Dismantle.PPC as D
@@ -50,6 +55,7 @@ import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.PersistentState as MS
 import qualified Data.Macaw.PPC as MP
+import           Data.Macaw.PPC.PPCReg ( ArchWidth )
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
 import qualified Data.Macaw.PPC.Symbolic.Functions as F
@@ -139,6 +145,40 @@ ppcRegAssignment =
             Ctx.:> MP.PPC_VSCR)
   Ctx.<++> (R.repeatAssign (MP.PPC_GP . D.GPR . fromIntegral) :: Ctx.Assignment (MP.PPCReg ppc) (R.CtxRepeat 32 (MT.BVType (RegSize ppc))))
   Ctx.<++> (R.repeatAssign (MP.PPC_FR . D.VSReg . fromIntegral) :: Ctx.Assignment (MP.PPCReg ppc) (R.CtxRepeat 64 (MT.BVType 128)))
+
+regIndexMap :: forall ppc
+             . (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
+                MS.ArchRegContext ppc ~ RegContext ppc,
+                MC.ArchReg ppc ~ MP.PPCReg ppc,
+                ArchWidth ppc)
+            => MS.RegIndexMap ppc
+regIndexMap = MS.mkRegIndexMap assgn sz
+  where
+    assgn = ppcRegAssignment @ppc
+    sz = Ctx.size (MS.typeCtxToCrucible (FC.fmapFC MT.typeRepr assgn))
+
+lookupReg :: (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
+                MS.ArchRegContext ppc ~ RegContext ppc,
+                MC.ArchReg ppc ~ MP.PPCReg ppc,
+                ArchWidth ppc)
+          => MP.PPCReg ppc tp
+          -> Ctx.Assignment f (MS.MacawCrucibleRegTypes ppc)
+          -> Maybe (f (MS.ToCrucibleType tp))
+lookupReg r asgn = do
+  pair <- MapF.lookup r regIndexMap
+  return (asgn Ctx.! MS.crucibleIndex pair)
+
+updateReg :: (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
+                MS.ArchRegContext ppc ~ RegContext ppc,
+                MC.ArchReg ppc ~ MP.PPCReg ppc,
+                ArchWidth ppc)
+          => MP.PPCReg ppc tp
+          -> (f (MS.ToCrucibleType tp) -> f (MS.ToCrucibleType tp))
+          -> Ctx.Assignment f (MS.MacawCrucibleRegTypes ppc)
+          -> Maybe (Ctx.Assignment f (MS.MacawCrucibleRegTypes ppc))
+updateReg r upd asgn = do
+  pair <- MapF.lookup r regIndexMap
+  return (asgn & MapF.ixF (MS.crucibleIndex pair) %~ upd)
 
 ppcGenFn :: forall ids s tp ppc
           . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
