@@ -39,6 +39,7 @@ test-suite macaw-x86-symbolic-tests
     bytestring,
     containers,
     crucible,
+    crucible-llvm,
     elf-edit,
     macaw-base,
     macaw-symbolic,
