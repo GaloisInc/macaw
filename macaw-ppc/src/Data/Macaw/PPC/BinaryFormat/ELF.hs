@@ -2,24 +2,24 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Data.Macaw.PPC.BinaryFormat.ELF (
-  tocBaseForELF,
-  tocEntryAddrsForElf
+  parseTOC,
+  TOCException(..)
   ) where
 
 import           GHC.TypeLits ( KnownNat, natVal )
 
 import           Control.Monad ( replicateM, unless )
+import qualified Control.Monad.Catch as X
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Serialize.Get as G
-import qualified Data.Set as S
+import qualified Data.Word.Indexed as W
 
 import qualified Data.ElfEdit as E
-import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BVType )
+import qualified Data.Macaw.PPC.TOC as TOC
 
 -- | Given an ELF file, extract a mapping from function entry points to the
 -- value of the TOC pointer (which is to be stored in r2) for that function.
@@ -32,44 +32,32 @@ import           Data.Macaw.Types ( BVType )
 -- stored in the @.opd@ section.  Each entry is three pointers, where the first
 -- entry is the function address and the second is the value of the TOC.  The
 -- third entry is unused in C programs (it is meant for Pascal).
-tocBaseForELF :: (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
-              => proxy ppc
-              -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-              -> MC.ArchSegmentOff ppc
-              -> Maybe (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc))))
-tocBaseForELF proxy e =
-  case parseTOC proxy e of
-    Left err -> error ("Error parsing .opd section: " ++ err)
-    Right res -> \entryAddr -> M.lookup (MM.relativeSegmentAddr entryAddr) res
-
-tocEntryAddrsForElf :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)),
-                         KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)))
-                    => proxy ppc
-                    -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-                    -> [MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))]
-tocEntryAddrsForElf proxy e =
-  case parseTOC proxy e of
-    Left err -> error ("Error parsing .opd section: " ++ err)
-    Right res -> M.keys res
-
-parseTOC :: forall ppc proxy
-          . (KnownNat (MC.RegAddrWidth (MC.ArchReg ppc)), MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
-         => proxy ppc
-         -> E.Elf (MC.RegAddrWidth (MC.ArchReg ppc))
-         -> Either String (M.Map (MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
-parseTOC proxy e =
+parseTOC :: forall ppc m
+          . (KnownNat (MC.ArchAddrWidth ppc),
+             MM.MemWidth (MC.ArchAddrWidth ppc),
+             X.MonadThrow m)
+         => E.Elf (MC.ArchAddrWidth ppc)
+         -> m (TOC.TOC ppc)
+parseTOC e =
   case E.findSectionByName (C8.pack ".opd") e of
     [sec] ->
-      G.runGet (parseFunctionDescriptors proxy (fromIntegral ptrSize)) (E.elfSectionData sec)
-    _ -> error "Could not find .opd section"
+      case G.runGet (parseFunctionDescriptors (Proxy @ppc) (fromIntegral ptrSize)) (E.elfSectionData sec) of
+        Left msg -> X.throwM (TOCParseError msg)
+        Right t -> return (TOC.toc t)
+    _ -> X.throwM (MissingTOCSection ".opd")
   where
-    ptrSize = natVal (Proxy @(MC.RegAddrWidth (MC.ArchReg ppc)))
+    ptrSize = natVal (Proxy @(MC.ArchAddrWidth ppc))
 
+data TOCException = MissingTOCSection String
+                  | TOCParseError String
+                  deriving (Show)
 
-parseFunctionDescriptors :: (MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc)))
+instance X.Exception TOCException
+
+parseFunctionDescriptors :: (KnownNat (MC.ArchAddrWidth ppc), MM.MemWidth (MC.ArchAddrWidth ppc))
                          => proxy ppc
                          -> Int
-                         -> G.Get (M.Map (MM.MemAddr (MC.RegAddrWidth (MC.ArchReg ppc))) (MA.AbsValue (MC.RegAddrWidth (MC.ArchReg ppc)) (BVType (MC.RegAddrWidth (MC.ArchReg ppc)))))
+                         -> G.Get (M.Map (MM.MemAddr (MC.ArchAddrWidth ppc)) (W.W (MC.ArchAddrWidth ppc)))
 parseFunctionDescriptors _ ptrSize = do
   let recordBytes = (3 * ptrSize) `div` 8
   let recordParser =
@@ -83,12 +71,12 @@ parseFunctionDescriptors _ ptrSize = do
   funcDescs <- replicateM (totalBytes `div` recordBytes) recordParser
   return (M.fromList funcDescs)
 
-getFunctionDescriptor :: (Integral a, MM.MemWidth w)
+getFunctionDescriptor :: (KnownNat w, Integral a, MM.MemWidth w)
                       => G.Get a
-                      -> G.Get (MM.MemAddr w, MA.AbsValue w (BVType w))
+                      -> G.Get (MM.MemAddr w, W.W w)
 getFunctionDescriptor ptrParser = do
   entryAddr <- ptrParser
   tocAddr <- ptrParser
   _ <- ptrParser
   let mso = MM.absoluteAddr (fromIntegral entryAddr)
-  return (mso, MA.FinSet (S.singleton (fromIntegral tocAddr)))
+  return (mso, fromIntegral tocAddr)

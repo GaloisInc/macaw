@@ -28,10 +28,13 @@ library
                        Data.Macaw.PPC.Semantics.PPC64
                        Data.Macaw.PPC.Semantics.PPC32
                        Data.Macaw.PPC.Semantics.TH
+                       Data.Macaw.PPC.Loader
+  other-modules:       Data.Macaw.PPC.TOC
   build-depends:       base >=4.9 && <5,
                        bytestring,
                        containers,
                        constraints,
+                       exceptions,
                        crucible,
                        text,
                        dismantle-tablegen,
@@ -46,8 +49,7 @@ library
                        mtl,
                        parameterized-utils,
                        elf-edit,
-                       template-haskell,
-                       text
+                       template-haskell
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall

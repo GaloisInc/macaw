@@ -19,18 +19,21 @@ module Data.Macaw.PPC (
   A.PPCStmt(..),
   A.PPCPrimFn(..),
   -- * ELF support
-  tocBaseForELF,
-  tocEntryAddrsForElf
+  PL.PPCLoadException(..),
+  TOC.TOC,
+  TOC.lookupTOC,
+  TOC.lookupTOCAbs,
+  TOC.entryPoints,
+  BE.parseTOC,
+  BE.TOCException(..)
   ) where
 
 import           Data.Proxy ( Proxy(..) )
 
-import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.Architecture.Info as MI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BVType )
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -52,11 +55,13 @@ import Data.Macaw.PPC.Arch ( rewriteTermStmt,
                              ppcPrimFnHasSideEffects,
                              PPCArchConstraints
                            )
-import Data.Macaw.PPC.BinaryFormat.ELF ( tocBaseForELF, tocEntryAddrsForElf )
+import qualified Data.Macaw.PPC.BinaryFormat.ELF as BE
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Arch as A
+import qualified Data.Macaw.PPC.Loader as PL
+import qualified Data.Macaw.PPC.TOC as TOC
 
 -- | The type tag for 64 bit PowerPC
 type PPC64 = PPC64.PPC
@@ -75,7 +80,8 @@ archDemandContext _ =
 jumpTableEntrySize :: (PPCArchConstraints ppc) => proxy ppc -> MM.MemWord (ArchAddrWidth ppc)
 jumpTableEntrySize _ = 4
 
-ppc64_linux_info :: (ArchSegmentOff PPC64.PPC -> Maybe (MA.AbsValue 64 (BVType 64))) -> MI.ArchitectureInfo PPC64.PPC
+ppc64_linux_info :: TOC.TOC PPC64.PPC
+                 -> MI.ArchitectureInfo PPC64.PPC
 ppc64_linux_info tocMap =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr64
@@ -97,7 +103,8 @@ ppc64_linux_info tocMap =
   where
     proxy = Proxy @PPC64.PPC
 
-ppc32_linux_info :: (ArchSegmentOff PPC32.PPC -> Maybe (MA.AbsValue 32 (BVType 32))) -> MI.ArchitectureInfo PPC32.PPC
+ppc32_linux_info :: TOC.TOC PPC32.PPC
+                 -> MI.ArchitectureInfo PPC32.PPC
 ppc32_linux_info tocMap =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32

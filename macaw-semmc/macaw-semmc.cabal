@@ -22,6 +22,8 @@ library
                    Data.Macaw.SemMC.Translations
                    Data.Macaw.SemMC.TH
                    Data.Macaw.SemMC.TH.Monad
+                   Data.Macaw.BinaryLoader
+                   Data.Macaw.BinaryLoader.X86
   -- other-extensions:    
   build-depends:       base >=4.9 && <5,
                        async,
@@ -35,7 +37,10 @@ library
                        crucible,
                        macaw-base,
                        dismantle-tablegen,
-                       semmc
+                       semmc,
+                       -- Temporary
+                       macaw-x86,
+                       elf-edit
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
