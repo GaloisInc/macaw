@@ -26,14 +26,14 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.NatRepr as NR
 import           Text.Printf ( printf )
 
+import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as LL
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import qualified Lang.Crucible.Simulator.SimError as C
-import qualified Lang.Crucible.Solver.BoolInterface as C
-import qualified Lang.Crucible.Solver.Interface as C
-import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Types as C
+import qualified What4.Interface as C
+import qualified What4.Symbol as C
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT

@@ -28,12 +28,12 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits
-import qualified Lang.Crucible.Solver.SimpleBuilder as S
 import           Language.Haskell.TH
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.ARM.Eval as AE
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified SemMC.Architecture.Location as L
+import qualified What4.Expr.Builder as S
 
 
 -- n.b. although MacawQ is a monad and therefore has a fail
@@ -51,7 +51,7 @@ armNonceAppEval :: forall arch t tp
                     1 <= Loc.ArchRegWidth arch,
                     M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
                 => BoundVarInterpretations arch t
-                -> S.NonceApp t (S.Elt t) tp
+                -> S.NonceApp t (S.Expr t) tp
                 -> Maybe (MacawQ arch t Exp)
 armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
@@ -66,7 +66,7 @@ armNonceAppEval bvi nonceApp =
                    -- This requires special handling because this can
                    -- be checking actual GPR locations or the results
                    -- of an expression extracting a register number
-                   -- from an operand (i.e. a NonceAppElt), and the
+                   -- from an operand (i.e. a NonceAppExpr), and the
                    -- appropriate interpIsR15 instance should be
                    -- applied to the result
                    case FC.toListFC Some args of
@@ -74,12 +74,12 @@ armNonceAppEval bvi nonceApp =
                        -- The operand can be either a variable (TH name bound from
                        -- matching on the instruction operand list) or a call on such.
                        case operand of
-                         S.BoundVarElt bv ->
+                         S.BoundVarExpr bv ->
                              case Map.lookup bv (opVars bvi) of
                                Just (C.Const name) -> liftQ [| O.extractValue (AE.interpIsR15 $(varE name)) |]
                                Nothing -> fail ("arm_is_15 bound var not found: " ++ show bv)
-                         S.NonceAppElt nonceApp' ->
-                             case S.nonceEltApp nonceApp' of
+                         S.NonceAppExpr nonceApp' ->
+                             case S.nonceExprApp nonceApp' of
                                S.FnApp symFn' args' ->
                                    let recName = symFnName symFn' in
                                    case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
@@ -115,7 +115,7 @@ armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     1 <= Loc.ArchRegWidth arch,
                     M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
                 => BoundVarInterpretations arch t
-                -> S.App (S.Elt t) ctp
+                -> S.App (S.Expr t) ctp
                 -> Maybe (MacawQ arch t Exp)
 armAppEvaluator interps elt =
     case elt of

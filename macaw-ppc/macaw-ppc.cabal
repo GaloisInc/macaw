@@ -49,7 +49,8 @@ library
                        mtl,
                        parameterized-utils,
                        elf-edit,
-                       template-haskell
+                       template-haskell,
+                       what4
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
@@ -84,4 +85,5 @@ test-suite macaw-ppc-tests
                  temporary,
                  tasty,
                  tasty-hunit,
-                 text
+                 text,
+                 what4

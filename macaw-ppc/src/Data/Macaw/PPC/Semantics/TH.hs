@@ -26,7 +26,7 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
-import qualified Lang.Crucible.Solver.SimpleBuilder as S
+import qualified What4.Expr.Builder as S
 
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
@@ -44,8 +44,8 @@ import           Data.Macaw.SemMC.TH ( natReprTH, addEltTH, symFnName, asName )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
 
-getOpName :: S.Elt t x -> Maybe String
-getOpName (S.NonceAppElt nae) = Just $ show $ S.nonceEltId nae
+getOpName :: S.Expr t x -> Maybe String
+getOpName (S.NonceAppExpr nae) = Just $ show $ S.nonceExprId nae
 getOpName _ = Nothing
 
 ppcNonceAppEval :: forall arch t tp
@@ -54,7 +54,7 @@ ppcNonceAppEval :: forall arch t tp
                     1 <= APPC.ArchRegWidth arch,
                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                 => BoundVarInterpretations arch t
-                -> S.NonceApp t (S.Elt t) tp
+                -> S.NonceApp t (S.Expr t) tp
                 -> Maybe (MacawQ arch t Exp)
 ppcNonceAppEval bvi nonceApp =
   case nonceApp of
@@ -133,12 +133,12 @@ ppcNonceAppEval bvi nonceApp =
               -- The operand can be either a variable (TH name bound from
               -- matching on the instruction operand list) or a call on such.
               case operand of
-                S.BoundVarElt bv -> do
+                S.BoundVarExpr bv -> do
                   case Map.lookup bv (opVars bvi) of
                     Just (C.Const name) -> liftQ [| O.extractValue (PE.interpIsR0 $(varE name)) |]
                     Nothing -> fail ("bound var not found: " ++ show bv)
-                S.NonceAppElt nonceApp' -> do
-                  case S.nonceEltApp nonceApp' of
+                S.NonceAppExpr nonceApp' -> do
+                  case S.nonceExprApp nonceApp' of
                     S.FnApp symFn' args' -> do
                       let recName = symFnName symFn'
                       case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
@@ -181,7 +181,7 @@ floatingPointTH :: forall arch t f c
                      FC.FoldableFC f)
                  => BoundVarInterpretations arch t
                  -> String
-                 -> f (S.Elt t) c
+                 -> f (S.Expr t) c
                  -> MacawQ arch t Exp
 floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
@@ -219,7 +219,7 @@ ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                     1 <= APPC.ArchRegWidth arch,
                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
                 => BoundVarInterpretations arch t
-                -> S.App (S.Elt t) ctp
+                -> S.App (S.Expr t) ctp
                 -> Maybe (MacawQ arch t Exp)
 ppcAppEvaluator interps elt = case elt of
   S.BVSdiv w bv1 bv2 -> return $ do
