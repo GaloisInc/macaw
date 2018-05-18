@@ -23,9 +23,9 @@ import           Language.Haskell.TH
 
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
-import qualified Lang.Crucible.Solver.Interface as SI
-import qualified Lang.Crucible.Solver.SimpleBuilder as S
-import qualified Lang.Crucible.Solver.SimpleBackend as S
+import qualified Lang.Crucible.Backend.Simple as S
+import qualified What4.Expr.Builder as S
+import qualified What4.Interface as SI
 
 import qualified SemMC.Architecture.Location as L
 
@@ -41,7 +41,7 @@ data QState arch t = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             -- ^ The list of template haskell statements accumulated
                             -- for this monadic context.  At the end of the context, we
                             -- can extract these and wrap them in a @do@ expression.
-                            , expressionCache :: !(M.Map (Some (S.Elt t)) Exp)
+                            , expressionCache :: !(M.Map (Some (S.Expr t)) Exp)
                             -- ^ A cache of translations of SimpleBuilder terms into
                             -- TH.  The cached values are not the translated exprs;
                             -- instead, they are names that are bound for those
@@ -49,18 +49,18 @@ data QState arch t = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             , locToReg :: forall tp . L.Location arch tp -> Q Exp
                             , nonceAppEvaluator :: forall tp
                                                  . BoundVarInterpretations arch t
-                                                -> S.NonceApp t (S.Elt t) tp
+                                                -> S.NonceApp t (S.Expr t) tp
                                                 -> Maybe (MacawQ arch t Exp)
                             -- ^ Convert SimpleBuilder NonceApps into Macaw expressions
                             , appEvaluator :: forall tp
                                             . BoundVarInterpretations arch t
-                                           -> S.App (S.Elt t) tp
+                                           -> S.App (S.Expr t) tp
                                            -> Maybe (MacawQ arch t Exp)
                             }
 
 emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
-            -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
-            -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+            -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+            -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
             -> QState arch t
 emptyQState ltr ena ae = QState { accumulatedStatements = Seq.empty
                                 , expressionCache = M.empty
@@ -76,8 +76,8 @@ newtype MacawQ arch t a = MacawQ { unQ :: St.StateT (QState arch t) Q a }
             St.MonadState (QState arch t))
 
 runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
-          -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
-          -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp))
+          -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+          -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
           -> MacawQ arch t ()
           -> Q [Stmt]
 runMacawQ ltr ena ea act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea)
@@ -91,21 +91,21 @@ withLocToReg k = do
   f <- St.gets locToReg
   k f
 
--- | Look up an 'S.Elt' in the cache
-lookupElt :: S.Elt t tp -> MacawQ arch t (Maybe Exp)
+-- | Look up an 'S.Expr' in the cache
+lookupElt :: S.Expr t tp -> MacawQ arch t (Maybe Exp)
 lookupElt elt = do
   c <- St.gets expressionCache
   return (M.lookup (Some elt) c)
 
 withNonceAppEvaluator :: forall tp arch t
-                       . ((BoundVarInterpretations arch t -> S.NonceApp t (S.Elt t) tp -> Maybe (MacawQ arch t Exp)) -> MacawQ arch t (Maybe (MacawQ arch t Exp)))
+                       . ((BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp)) -> MacawQ arch t (Maybe (MacawQ arch t Exp)))
                       -> MacawQ arch t (Maybe (MacawQ arch t Exp))
 withNonceAppEvaluator k = do
   nae <- St.gets nonceAppEvaluator
   k nae
 
 withAppEvaluator :: forall tp arch t
-                  . ((BoundVarInterpretations arch t -> S.App (S.Elt t) tp -> Maybe (MacawQ arch t Exp)) -> MacawQ arch t (Maybe (MacawQ arch t Exp)))
+                  . ((BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp)) -> MacawQ arch t (Maybe (MacawQ arch t Exp)))
                  -> MacawQ arch t (Maybe (MacawQ arch t Exp))
 withAppEvaluator k = do
   ae <- St.gets appEvaluator
@@ -127,7 +127,7 @@ appendStmt eq = do
 -- > newName <- expr
 --
 -- and the new name is returned.
-bindExpr :: S.Elt t tp -> ExpQ -> MacawQ arch t Exp
+bindExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t Exp
 bindExpr elt eq = do
   e <- liftQ eq
   n <- liftQ (newName "val")

@@ -15,7 +15,7 @@ packages: macaw-ppc/
           submodules/parameterized-utils/
           submodules/crucible/crucible/
           submodules/crucible/crucible-llvm/
-          submodules/crucible/galois-matlab/
+          submodules/crucible/what4/
           submodules/dwarf/
           submodules/elf-edit/
           submodules/flexdis86/

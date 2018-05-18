@@ -23,8 +23,8 @@ import           Data.Proxy
 import           GHC.TypeLits
 
 import           Data.Parameterized.Classes
-import qualified Lang.Crucible.Solver.SimpleBuilder as S
-import qualified Lang.Crucible.BaseTypes as S
+import qualified What4.Expr.Builder as S
+import qualified What4.BaseTypes as S
 
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
@@ -43,7 +43,7 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
   FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
 
-crucAppToExpr :: (M.ArchConstraints ppc) => S.App (S.Elt t) ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
+crucAppToExpr :: (M.ArchConstraints ppc) => S.App (S.Expr t) ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
 crucAppToExpr S.FalseBool = return $ ValueExpr (M.BoolValue False)
 crucAppToExpr (S.NotBool bool) = (AppExpr . M.NotApp) <$> addElt bool
@@ -146,7 +146,7 @@ locToReg _  _                = undefined
 interpretFormula :: forall ppc t ctp s ids
                   . (PPCArchConstraints ppc, 1 <= APPC.ArchRegWidth ppc, M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
                  => APPC.Location ppc ctp
-                 -> S.Elt t ctp
+                 -> S.Expr t ctp
                  -> Generator ppc ids s ()
 interpretFormula loc elt = do
   expr <- eltToExpr elt
@@ -158,11 +158,11 @@ interpretFormula loc elt = do
       setRegVal reg (M.AssignedValue assignment)
 
 -- Convert a Crucible element into an expression.
-eltToExpr :: M.ArchConstraints ppc => S.Elt t ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
-eltToExpr (S.BVElt w val _) = return $ ValueExpr (M.BVValue w val)
-eltToExpr (S.AppElt appElt) = crucAppToExpr (S.appEltApp appElt)
+eltToExpr :: M.ArchConstraints ppc => S.Expr t ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
+eltToExpr (S.BVExpr w val _) = return $ ValueExpr (M.BVValue w val)
+eltToExpr (S.AppExpr appElt) = crucAppToExpr (S.appExprApp appElt)
 eltToExpr _ = undefined
 
 -- Add a Crucible element in the Generator monad.
-addElt :: M.ArchConstraints ppc => S.Elt t ctp -> Generator ppc ids s (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt :: M.ArchConstraints ppc => S.Expr t ctp -> Generator ppc ids s (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr

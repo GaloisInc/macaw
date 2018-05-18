@@ -15,7 +15,7 @@ import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types ( BVType )
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.NatRepr as NR
-import qualified Lang.Crucible.BaseTypes as S
+import qualified What4.BaseTypes as S
 
 import           Data.Macaw.SemMC.Generator
 

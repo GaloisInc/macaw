@@ -39,6 +39,7 @@ library
                        macaw-base,
                        dismantle-tablegen,
                        semmc,
+                       what4,
                        -- Temporary
                        macaw-x86,
                        elf-edit
