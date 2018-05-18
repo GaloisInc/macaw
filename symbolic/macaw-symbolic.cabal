@@ -13,6 +13,7 @@ library
     ansi-wl-pprint,
     containers,
     crucible >= 0.3.2,
+    what4 >= 0.4,
     lens,
     macaw-base,
     mtl,

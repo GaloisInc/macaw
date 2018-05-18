@@ -17,6 +17,7 @@ library
                  mtl,
                  parameterized-utils,
                  crucible-llvm,
+                 what4 >= 0.4,
                  lens
   hs-source-dirs: src
 
@@ -38,6 +39,7 @@ test-suite macaw-x86-symbolic-tests
     bytestring,
     containers,
     crucible,
+    crucible-llvm,
     elf-edit,
     macaw-base,
     macaw-symbolic,
@@ -45,4 +47,5 @@ test-suite macaw-x86-symbolic-tests
     macaw-x86-symbolic,
     parameterized-utils,
     text,
+    what4,
     vector

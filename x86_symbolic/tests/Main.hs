@@ -25,13 +25,17 @@ import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as MX
 import qualified Data.Macaw.X86.Symbolic as MX
 
+import qualified What4.ProgramLoc as C
+import qualified What4.Interface as C
+
+import qualified Lang.Crucible.Backend as C
+import qualified Lang.Crucible.Backend.Simple as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
-import qualified Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegValue as C
-import qualified Lang.Crucible.Solver.Interface as C
-import qualified Lang.Crucible.Solver.SimpleBackend as C
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as C
+
 
 mkReg :: (C.IsSymInterface sym, M.HasRepr (M.ArchReg arch) M.TypeRepr)
       => MS.MacawSymbolicArchFunctions arch
@@ -43,7 +47,7 @@ mkReg archFns sym r =
     M.BoolTypeRepr ->
       C.RV <$> C.freshConstant sym (MS.crucGenArchRegName archFns r) C.BaseBoolRepr
     M.BVTypeRepr w ->
-      C.RV <$> C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w)
+      C.RV <$> (C.llvmPointer_bv sym =<< C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w))
     M.TupleTypeRepr{}  ->
       error "macaw-symbolic do not support tuple types."
 
@@ -61,7 +65,8 @@ main = do
 
   let loadOpt :: Elf.LoadOptions
       loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
-                                , Elf.includeBSS = False
+                                , Elf.loadRegionBaseOffset = ???
+--                                , Elf.includeBSS = False
                                 }
   putStrLn "Read elf"
   elfContents <- BS.readFile "tests/add_ubuntu64.o"
@@ -74,7 +79,7 @@ main = do
       _ -> fail "Expected 64-bit elf file"
 
   (mem, nameAddrList) <-
-    case resolveElfContents loadOpt elf of
+    case Elf.resolveElfContents loadOpt elf of
       Left err -> fail err
       Right (warn, mem, _mentry, nameAddrList)  -> do
         forM_ warn $ \err -> do
@@ -116,9 +121,9 @@ main = do
   symFuns <- MX.newSymFuns sym
 
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc g regs
+  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc ??? ??? g regs
   case execResult of
-    C.FinishedExecution _ (C.TotalRes _pair) -> do
+    (_,C.FinishedExecution _ (C.TotalRes _pair))-> do
       putStrLn "Done"
     _ -> do
       fail "Partial execution returned."

@@ -79,14 +79,15 @@ import qualified Data.Parameterized.TH.GADT as U
 import           Data.Proxy
 
 
+import           What4.ProgramLoc as C
+import qualified What4.Symbol as C
+
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as CR
-import           Lang.Crucible.ProgramLoc as C
-import qualified Lang.Crucible.Solver.Symbol as C
 import qualified Lang.Crucible.Types as C
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
