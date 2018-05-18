@@ -33,6 +33,7 @@ library
                        lens,
                        text,
                        bytestring,
+                       exceptions,
                        parameterized-utils,
                        crucible,
                        macaw-base,

@@ -10,7 +10,7 @@ module Data.Macaw.PPC.Loader (
 
 import           GHC.TypeLits
 
-import qualified Control.Exception as X
+import qualified Control.Monad.Catch as X
 import qualified Data.ElfEdit as E
 import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.CFG as MC
@@ -28,34 +28,37 @@ instance BL.BinaryLoader PPC32.PPC (E.Elf 32) where
   type ArchBinaryData PPC32.PPC = TOC.TOC PPC32.PPC
   type BinaryFormatData (E.Elf 32) = EL.SectionIndexMap 32
   type Diagnostic (E.Elf 32) = EL.MemLoadWarning
-  loadBinary = loadPPCBinary
+  loadBinary = loadPPCBinary BL.Elf32Repr
 
 instance BL.BinaryLoader PPC64.PPC (E.Elf 64) where
   type ArchBinaryData PPC64.PPC = TOC.TOC PPC64.PPC
   type BinaryFormatData (E.Elf 64) = EL.SectionIndexMap 64
   type Diagnostic (E.Elf 64) = EL.MemLoadWarning
-  loadBinary = loadPPCBinary
+  loadBinary = loadPPCBinary BL.Elf64Repr
 
 loadPPCBinary :: (w ~ MC.ArchAddrWidth ppc,
+                  X.MonadThrow m,
                   BL.ArchBinaryData ppc ~ TOC.TOC ppc,
                   BL.BinaryFormatData (E.Elf w) ~ EL.SectionIndexMap w,
                   BL.Diagnostic (E.Elf w) ~ EL.MemLoadWarning,
                   MC.MemWidth w,
                   KnownNat w)
-              => LC.LoadOptions
+              => BL.BinaryRepr (E.Elf w)
+              -> LC.LoadOptions
               -> E.Elf (MC.ArchAddrWidth ppc)
-              -> IO (BL.LoadedBinary ppc (E.Elf (MC.ArchAddrWidth ppc)))
-loadPPCBinary lopts e = do
+              -> m (BL.LoadedBinary ppc (E.Elf (MC.ArchAddrWidth ppc)))
+loadPPCBinary binRep lopts e = do
   case EL.memoryForElf lopts e of
-    Left err -> X.throwIO (PPCElfLoadError err)
+    Left err -> X.throwM (PPCElfLoadError err)
     Right (sim, mem, warnings) ->
       case BE.parseTOC e of
-        Left err -> X.throwIO (PPCTOCLoadError err)
+        Left err -> X.throwM (PPCTOCLoadError err)
         Right toc ->
           return BL.LoadedBinary { BL.memoryImage = mem
                                  , BL.archBinaryData = toc
                                  , BL.binaryFormatData = sim
                                  , BL.loadDiagnostics = warnings
+                                 , BL.binaryRepr = binRep
                                  }
 
 data PPCLoadException = PPCElfLoadError String
