@@ -28,9 +28,9 @@ toc = TOC
 
 -- | A variant of 'lookupTOC' that returns a macaw 'MA.AbsValue'
 lookupTOCAbs :: (MC.MemWidth (MC.ArchAddrWidth ppc))
-          => TOC ppc
-          -> MC.ArchSegmentOff ppc
-          -> Maybe (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
+             => TOC ppc
+             -> MC.ArchSegmentOff ppc
+             -> Maybe (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
 lookupTOCAbs t addr = toAbsVal <$> lookupTOC t addr
   where
     toAbsVal = MA.FinSet . S.singleton . W.unW
