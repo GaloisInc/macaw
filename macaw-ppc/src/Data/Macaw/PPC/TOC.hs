@@ -21,11 +21,19 @@ import qualified Data.Word.Indexed as W
 -- in the TOC and not their representation on disk.
 newtype TOC ppc =
   TOC (M.Map (MC.MemAddr (MC.ArchAddrWidth ppc)) (W.W (MC.ArchAddrWidth ppc)))
-  -- (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc))))
 
-toc :: M.Map (MC.MemAddr (MC.ArchAddrWidth ppc)) (W.W (MC.ArchAddrWidth ppc)) -- (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
+toc :: M.Map (MC.MemAddr (MC.ArchAddrWidth ppc)) (W.W (MC.ArchAddrWidth ppc))
     -> TOC ppc
 toc = TOC
+
+-- | A variant of 'lookupTOC' that returns a macaw 'MA.AbsValue'
+lookupTOCAbs :: (MC.MemWidth (MC.ArchAddrWidth ppc))
+          => TOC ppc
+          -> MC.ArchSegmentOff ppc
+          -> Maybe (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
+lookupTOCAbs t addr = toAbsVal <$> lookupTOC t addr
+  where
+    toAbsVal = MA.FinSet . S.singleton . W.unW
 
 -- | Look up the value of the TOC base pointer for the function with the given address
 --
@@ -36,15 +44,6 @@ toc = TOC
 -- Returns the value of the TOC base pointer (i.e., the value in @r2@ when a
 -- function begins executing) for the function whose entry point is at address
 -- @addr@.
---
--- This variant returns a Macaw 'MA.AbsValue'
-lookupTOCAbs :: (MC.MemWidth (MC.ArchAddrWidth ppc))
-          => TOC ppc
-          -> MC.ArchSegmentOff ppc
-          -> Maybe (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
-lookupTOCAbs (TOC m) addr = (MA.FinSet . S.singleton . W.unW) <$> M.lookup (MC.relativeSegmentAddr addr) m
-
--- | Like 'lookupTOCAbs', but this variant returns a plain size-indexed word
 lookupTOC :: (MC.MemWidth (MC.ArchAddrWidth ppc))
           => TOC ppc
           -> MC.ArchSegmentOff ppc
