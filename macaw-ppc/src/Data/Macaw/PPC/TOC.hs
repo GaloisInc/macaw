@@ -1,18 +1,34 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Data.Macaw.PPC.TOC (
   TOC,
   toc,
   lookupTOC,
   lookupTOCAbs,
-  entryPoints
+  entryPoints,
+  TOCException(..)
   ) where
 
+import qualified Control.Monad.Catch as X
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import           Data.Typeable ( Typeable )
 import qualified Data.Word.Indexed as W
+
+data TOCException ppc = MissingTOCEntry (MC.ArchSegmentOff ppc)
+                      | MissingTOCSection String
+                      | TOCParseError String
+
+deriving instance (MC.MemWidth (MC.ArchAddrWidth ppc)) => Show (TOCException ppc)
+
+instance (Typeable ppc, MC.MemWidth (MC.ArchAddrWidth ppc)) => X.Exception (TOCException ppc)
 
 -- | The Table of Contents (TOC) of a PowerPC binary
 --
@@ -27,10 +43,10 @@ toc :: M.Map (MC.MemAddr (MC.ArchAddrWidth ppc)) (W.W (MC.ArchAddrWidth ppc))
 toc = TOC
 
 -- | A variant of 'lookupTOC' that returns a macaw 'MA.AbsValue'
-lookupTOCAbs :: (MC.MemWidth (MC.ArchAddrWidth ppc))
+lookupTOCAbs :: (MC.MemWidth (MC.ArchAddrWidth ppc), X.MonadThrow m, Typeable ppc)
              => TOC ppc
              -> MC.ArchSegmentOff ppc
-             -> Maybe (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
+             -> m (MA.AbsValue (MC.ArchAddrWidth ppc) (MT.BVType (MC.ArchAddrWidth ppc)))
 lookupTOCAbs t addr = toAbsVal <$> lookupTOC t addr
   where
     toAbsVal = MA.FinSet . S.singleton . W.unW
@@ -44,11 +60,18 @@ lookupTOCAbs t addr = toAbsVal <$> lookupTOC t addr
 -- Returns the value of the TOC base pointer (i.e., the value in @r2@ when a
 -- function begins executing) for the function whose entry point is at address
 -- @addr@.
-lookupTOC :: (MC.MemWidth (MC.ArchAddrWidth ppc))
+lookupTOC :: forall ppc m
+           . (MC.MemWidth (MC.ArchAddrWidth ppc), X.MonadThrow m, Typeable ppc)
           => TOC ppc
           -> MC.ArchSegmentOff ppc
-          -> Maybe (W.W (MC.ArchAddrWidth ppc))
-lookupTOC (TOC m) addr = M.lookup (MC.relativeSegmentAddr addr) m
+          -> m (W.W (MC.ArchAddrWidth ppc))
+lookupTOC (TOC m) addr =
+  case M.lookup (MC.relativeSegmentAddr addr) m of
+    Nothing ->
+      let x :: TOCException ppc
+          x = MissingTOCEntry addr
+      in X.throwM x
+    Just entry -> return entry
 
 -- | Return the addresses of all of the functions present in the TOC
 --

@@ -2,8 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Data.Macaw.PPC.BinaryFormat.ELF (
-  parseTOC,
-  TOCException(..)
+  parseTOC
   ) where
 
 import           GHC.TypeLits ( KnownNat, natVal )
@@ -14,6 +13,7 @@ import qualified Data.ByteString.Char8 as C8
 import qualified Data.Map.Strict as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Serialize.Get as G
+import           Data.Typeable ( Typeable )
 import qualified Data.Word.Indexed as W
 
 import qualified Data.ElfEdit as E
@@ -35,6 +35,7 @@ import qualified Data.Macaw.PPC.TOC as TOC
 parseTOC :: forall ppc m
           . (KnownNat (MC.ArchAddrWidth ppc),
              MM.MemWidth (MC.ArchAddrWidth ppc),
+             Typeable ppc,
              X.MonadThrow m)
          => E.Elf (MC.ArchAddrWidth ppc)
          -> m (TOC.TOC ppc)
@@ -42,17 +43,11 @@ parseTOC e =
   case E.findSectionByName (C8.pack ".opd") e of
     [sec] ->
       case G.runGet (parseFunctionDescriptors (Proxy @ppc) (fromIntegral ptrSize)) (E.elfSectionData sec) of
-        Left msg -> X.throwM (TOCParseError msg)
+        Left msg -> X.throwM ((TOC.TOCParseError msg) :: TOC.TOCException ppc)
         Right t -> return (TOC.toc t)
-    _ -> X.throwM (MissingTOCSection ".opd")
+    _ -> X.throwM ((TOC.MissingTOCSection ".opd") :: TOC.TOCException ppc)
   where
     ptrSize = natVal (Proxy @(MC.ArchAddrWidth ppc))
-
-data TOCException = MissingTOCSection String
-                  | TOCParseError String
-                  deriving (Show)
-
-instance X.Exception TOCException
 
 parseFunctionDescriptors :: (KnownNat (MC.ArchAddrWidth ppc), MM.MemWidth (MC.ArchAddrWidth ppc))
                          => proxy ppc

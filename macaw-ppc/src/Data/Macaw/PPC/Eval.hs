@@ -16,6 +16,7 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
+import           Data.Typeable ( Typeable )
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
@@ -75,7 +76,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
 --
 -- One value that is definitely set is the link register, which holds the
 -- abstract return value.
-mkInitialAbsState :: (PPCArchConstraints ppc)
+mkInitialAbsState :: (PPCArchConstraints ppc, Typeable ppc)
                   => proxy ppc
                   -> TOC.TOC ppc
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))

@@ -25,7 +25,7 @@ module Data.Macaw.PPC (
   TOC.lookupTOCAbs,
   TOC.entryPoints,
   BE.parseTOC,
-  BE.TOCException(..)
+  TOC.TOCException(..)
   ) where
 
 import           Data.Proxy ( Proxy(..) )

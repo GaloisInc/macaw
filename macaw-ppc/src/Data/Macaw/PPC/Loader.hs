@@ -17,6 +17,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import           Data.Macaw.PPC.PPCReg ()
+import           Data.Typeable ( Typeable )
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -42,6 +43,7 @@ loadPPCBinary :: (w ~ MC.ArchAddrWidth ppc,
                   BL.BinaryFormatData (E.Elf w) ~ EL.SectionIndexMap w,
                   BL.Diagnostic (E.Elf w) ~ EL.MemLoadWarning,
                   MC.MemWidth w,
+                  Typeable ppc,
                   KnownNat w)
               => BL.BinaryRepr (E.Elf w)
               -> LC.LoadOptions
