@@ -77,6 +77,7 @@ test-suite macaw-ppc-tests
                  filepath,
                  lens,
                  macaw-base,
+                 macaw-semmc,
                  macaw-ppc,
                  parameterized-utils,
                  semmc,
