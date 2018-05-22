@@ -1,0 +1,203 @@
+* Detailed approach
+
+  We will implement a /macaw/ ~ArchitectureInfo~ for each backend, starting with
+  PowerPC.  There is a lot in this structure, so we will start by just
+  implementing a ~DisassembleFn~, which has the type:
+
+  #+BEGIN_SRC haskell
+    type DisassembleFn arch
+     = forall ids
+     .  Memory (ArchAddrWidth arch)
+     -> NonceGenerator (ST ids) ids
+     -> ArchSegmentOff arch
+        -- ^ The offset to start reading from.
+     -> ArchAddrWord arch
+        -- ^ Maximum offset for this to read from.
+     -> AbsBlockState (ArchReg arch)
+        -- ^ Abstract state associated with address that we are disassembling
+        -- from.
+        --
+        -- This is used for things like the height of the x87 stack.
+     -> ST ids ([Block arch ids], MemWord (ArchAddrWidth arch), Maybe String)
+  #+END_SRC
+
+  Take the implementation of ~disassembleBlockFromAbsState~ in ~Data.Macaw.X86~.
+  Note that we can ignore the ~AbsBlockState~ parameter, which is only used for
+  x86.  We also don't need to implement the entire function.  We can start by
+  focusing on the equivalent of the ~execInstruction~ function.  The surrounding
+  code we can most likely adapt without many changes.
+
+  The ~execInstruction~ function is defined in ~Data.Macaw.X86.Semantics~.  The
+  signature of this function is more interesting than its implementation:
+
+  #+BEGIN_SRC haskell
+    execInstruction :: FullSemantics m
+                    => Value m (BVType 64)
+                       -- ^ Next ip address
+                    -> F.InstructionInstance
+                    -> Maybe (m ())
+  #+END_SRC
+
+  This signature is more general than necessary: we can concretize the typeclass
+  constraint to a concrete ~Monad~ in the style of the ~X86Generator~ Monad.  We
+  should create a simple Monad based on the ~State~ Monad from /mtl/ and provide
+  some functions on it that mirror those of the ~Semantics~ typeclass from
+  /macaw-x86/. An example Monad declaration might be:
+
+  #+BEGIN_SRC haskell
+    {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+    import           Control.Monad.ST ( ST )
+    import qualified Control.Monad.State.Strict as St
+    data PreBlock ids = PreBlock { pBlockIndex :: !Word64
+                                 , pBlockAddr  :: !(MemSegmentOff 64)
+                                   -- ^ Starting address of function in preblock.
+                                 , pBlockStmts :: !(Seq (Stmt X86_64 ids))
+                                 , pBlockState :: !(RegState X86Reg (Value X86_64 ids))
+                                 , pBlockApps  :: !(MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
+                                 }
+    data GenState w s ids = GenState { assignIdGen :: !(NonceGenerator (ST s) ids)
+                                     , blockSeq :: !(BlockSeq ids)
+                                     , blockState :: !(PreBlock ids)
+                                     , genAddr :: !(MemSegmentOff w)
+                                     }
+    newtype MCGenerator w s ids a = MCGenerator { runGen :: St.StateT (GenState w s ids) (ST s) a }
+                                  deriving (Monad,
+                                            Functor,
+                                            Applicative,
+                                            St.MonadState (GenState w s ids))
+  #+END_SRC
+
+  The ~PreBlock~ type is the key: it is the block *currently* being constructed
+  (at any given time).  It has a ~RegState~, which is one of the key things we
+  will be modifying.  Many of the combinators relating to the ~X86Generator~ in
+  /macaw-x86/ are defined in service of updating this state as machine code
+  instructions are encountered.  It is a ~PreBlock~ because it isn't yet a
+  block.  It becomes a block once we encounter a terminator instruction (e.g., a
+  jump of some kind).  At that point, we add it to the underlying collection of
+  blocks.
+
+  We will need many of the helpers in the ~Data.Macaw.X86~ module that operate
+  on the ~X86Generator~ Monad.  It may also be helpful to have an additional
+  component to the Monad to signal errors (e.g, ~Control.Monad.Except.ExceptT~).
+  We need the base of the Monad transformer stack to be ~ST~ so that we can
+  allocate nonces.
+
+  Since we are specializing our ~execInstruction~ to this Monad, its type will
+  look something like:
+
+  #+BEGIN_SRC haskell
+    execInstruction :: Value PPC.PPC ids (BVType w)
+                       -- ^ Next ip address
+                    -> PPC.Instruction
+                    -- ^ An instruction from Dismantle
+                    -> Maybe (MCGenerator w s ids ())
+  #+END_SRC
+
+  Think of this as the action that we take given an instruction and the value of
+  the instruction pointer (IP) when that instruction is executed.  We pass in
+  the instruction pointer to accommodate IP-relative addressing (i.e., addresses
+  that are computed relative to the address of the instruction computing the
+  address).  ~execInstruction~ returns a ~Maybe~ in case the instruction is
+  invalid.  That is not especially likely given our encoding, but it is possible.
+
+  As an example of what an implementation of this function might look like is:
+
+  #+BEGIN_SRC haskell
+    execInstruction :: Value PPC.PPC ids (BVType w)
+                       -- ^ Next ip address
+                    -> PPC.Instruction
+                    -- ^ An instruction from Dismantle
+                    -> Maybe (MCGenerator w s ids ())
+    execInstruction ip (PPC.Instruction opcode operands) =
+      case opcode of
+        PPC.ADD4 ->
+          case operands of
+            (r1 :> r2 :> r3 :> Nil) -> Just $ do
+              v2 <- get r2
+              v3 <- get r3
+              define r1 (BVAdd v2 v3)
+
+  #+END_SRC
+
+  For appropriate definitions of ~get~ and ~define~, which read from and write
+  to (respectively) the ~RegState~ in the ~PreBlock~ of the ~GenState~ in the
+  ~MCGenerator~ Monad.
+* Modules of note
+
+  - macaw: ~Data.Macaw.Architecture.Info~
+
+    This contains the machine-specific interface that must be implemented for
+    each backend to /macaw/: ~ArchitectureInfo~.  There are many details, but
+    the main workhorse is ~disassembleFn~, which disassembles bytes into blocks
+    (sequences of statements with no branches).
+
+  - macaw: ~Data.Macaw.CFG.Core~
+
+    This defines some key types for the translation we will have to do:
+
+    - ~Stmt~: statements that comprise basic blocks (a three-address code style
+      representation).
+    - ~Value~: Values that can live in registers or memory, represented using an
+      expression language defined in /macaw/ (see ~App~ and ~Expr~).  Most
+      values are bitvectors of various lengths.
+    - ~ArchFn~, ~ArchReg~, ~ArchStmt~, which are for representing
+      architecture-specific behavior that can't be represented with the ~Stmt~
+      type.  These are type families that are instantiated for each backend.
+    - ~RegState~, which is a map from registers to ~Value~.  The register type
+      is a parameter and is architecture-specific (e.g., ~X86Reg~).  While this
+      is basically a map (parameterized map from /parameterized-utils/), it has
+      an additional invariant where it is always full (i.e., it has an entry for
+      every register).
+
+
+    Note that our goal is to translate machine instructions into one or more
+    /macaw/ statements (the ~Stmt~ type).  We will arrange these statements into
+    basic blocks (linear sequences of blocks with no branches).  The bridge
+    between statements and the expression language is through the ~AssignStmt~
+    constructor of ~Stmt~, which establishes an assignment (similarly the
+    ~WriteMem~ statement).  An assignment defines a new virtual register in
+    /macaw/ IR (via the ~Assignment~ type).  The ~Assignment~ names the virtual
+    register it defines through the ~assignId~ field.  The ~assignRhs~ contains
+    expressions through the ~EvalApp~ constructor (~App~ being the expression
+    language).  The ~ReadMem~ constructor corresponds to reads from memory.
+
+  - macaw: ~Data.Macaw.CFG.App~
+
+    This module defines the expression language that is referenced by the
+    ~Value~ type.
+
+  - macaw-x86: ~Data.Macaw.X86~
+
+    This module contains the /macaw/ backend for x86_64: ~x86_64_linux_info~.
+    The most important function in this definition is probably
+    ~disassembleBlockFromAbsState~, which disassembles instructions into basic
+    blocks.
+
+    This module also contains implementations of the two important interfaces in
+    /macaw-x86/: ~Semantics~ and ~IsValue~.  We won't need the classes, but the
+    underlying ~X86Generator~ Monad is instructive, as is the representation of
+    expressions.
+
+  - macaw-x86: ~Data.Macaw.X86.X86Reg~
+
+    This module defines a representation of all of the parts of the machine
+    state for X86.  Each backend will have something analogous.  Note that the
+    definition of ~X86Reg~ is a GADT [fn:GADTs] (despite the unusual definition
+    style).  This is important, as 1) /macaw/ expects the register type to have
+    a type parameter, and 2) the extra size guarantees are somewhat useful.
+
+    Note that the strange form of the declaration is most likely historical.
+    Before GHC 8.2, haddock could not parse documentation comments on GADT
+    constructors.
+
+  - semmc: ~SemMC.Formula.Load~
+
+    Load learned formulas from disk into a map from opcodes to formulas.
+
+  - crucible: ~Lang.Crucible.Solver.SimpleBuilder~
+
+    This module defines a different ~App~ type that is the expression language
+    for our parameterized formulas (i.e., instruction semantics).  This is the
+    AST we'll be walking in the Template Haskell code.  By and large, we only
+    use the bitvector operations.  We also use a few uninterpreted functions to
+    represent floating point operations.
