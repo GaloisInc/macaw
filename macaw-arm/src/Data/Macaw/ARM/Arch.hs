@@ -36,7 +36,7 @@ import qualified Dismantle.ARM as ARMDis
 import qualified Dismantle.ARM.Operands as ARMOperands
 import qualified Dismantle.Thumb as ThumbDis
 import           GHC.TypeLits
-import qualified SemMC.ARM as ARM
+import qualified SemMC.Architecture.AArch32 as ARM
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import qualified Text.PrettyPrint.HughesPJClass as HPP
 
@@ -46,7 +46,7 @@ import qualified Text.PrettyPrint.HughesPJClass as HPP
 data ARMStmt (v :: MT.Type -> *) where
     WhatShouldThisBe :: ARMStmt v
 
-type instance MC.ArchStmt ARM.ARM = ARMStmt
+type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
@@ -79,7 +79,7 @@ data ARMTermStmt ids where
 
 deriving instance Show (ARMTermStmt ids)
 
-type instance MC.ArchTermStmt ARM.ARM = ARMTermStmt
+type instance MC.ArchTermStmt ARM.AArch32 = ARMTermStmt
 
 instance MC.PrettyF ARMTermStmt where
     prettyF ts = let dpp2app :: forall a. HPP.Pretty a => a -> PP.Doc
@@ -94,7 +94,7 @@ instance MC.PrettyF ARMTermStmt where
                           --               (PP.text $ ThumbDis.operandReprString v)
 
 
--- instance PrettyF (ArchTermStmt ARM.ARM))
+-- instance PrettyF (ArchTermStmt ARM.AArch32))
 
 rewriteTermStmt :: ARMTermStmt src -> Rewriter arm s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
@@ -111,7 +111,7 @@ rewriteTermStmt s =
 -- type family ArchStmt (arch :: *) :: (Type -> *) -> *
 -- data ARMStmt (v :: MT.Type -> *) where
 --     WhatShouldThisBe :: ARMStmt v
--- type instance MC.ArchStmt ARM.ARM = ARMStmt
+-- type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
 -- type family ArchFn :: (arch :: *) :: (Type -> *) -> Type -> *
 -- data ARMPrimFn f (tp :: (MT.Type -> *) -> MT.Type) where
@@ -143,7 +143,7 @@ instance FCls.TraversableFC (ARMPrimFn arm) where
     case f of
       URem w dividend divisor -> URem w <$> go dividend <*> go divisor
 
-type instance MC.ArchFn ARM.ARM = ARMPrimFn ARM.ARM
+type instance MC.ArchFn ARM.AArch32 = ARMPrimFn ARM.AArch32
 
 instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (MC.Value arm ids)) MT.TypeRepr where
   typeRepr f =

@@ -34,7 +34,7 @@ import           Data.Word ( Word8 )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
-import qualified SemMC.ARM as ARM
+import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified Text.PrettyPrint.HughesPJClass as PP
 
@@ -88,14 +88,14 @@ instance HasRepr ARMReg TypeRepr where
           ARM_CPSR -> BVTypeRepr n32
 
 
-type instance MC.ArchReg ARM.ARM = ARMReg
+type instance MC.ArchReg ARM.AArch32 = ARMReg
 type instance MC.RegAddrWidth ARMReg = 32
 
 
 instance ( 1 <= MC.RegAddrWidth ARMReg
          , KnownNat (MC.RegAddrWidth ARMReg)
-         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ARM.ARM))
-         , MC.ArchReg ARM.ARM ~ ARMReg
+         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ARM.AArch32))
+         , MC.ArchReg ARM.AArch32 ~ ARMReg
          -- , ArchWidth arm
          ) =>
     MC.RegisterInfo ARMReg where

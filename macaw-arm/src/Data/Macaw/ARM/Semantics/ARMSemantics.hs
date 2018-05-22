@@ -20,19 +20,19 @@ import           Data.Macaw.SemMC.TH ( genExecInstructionLogStdErr )
 import qualified Data.Macaw.Types as MT
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.ARM -- must be present to supply definitions for genExecInstruction output
-import qualified SemMC.ARM as ARMSem
+import qualified SemMC.Architecture.AArch32 as ARMSem
 import           SemMC.Architecture.ARM.Opcodes ( allA32Semantics, allA32OpcodeInfo )
 
 
-execInstruction :: MC.Value ARMSem.ARM ids (MT.BVType 32)
+execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Dismantle.ARM.Instruction
-                -> Maybe (Generator ARMSem.ARM ids s ())
-execInstruction = $(genExecInstructionLogStdErr (Proxy @ARMSem.ARM)
-                    (locToRegTH (Proxy @ARMSem.ARM))
+                -> Maybe (Generator ARMSem.AArch32 ids s ())
+execInstruction = $(genExecInstructionLogStdErr (Proxy @ARMSem.AArch32)
+                    (locToRegTH (Proxy @ARMSem.AArch32))
                     armNonceAppEval
                     armAppEvaluator
                     'a32InstructionMatcher
                     allA32Semantics
                     allA32OpcodeInfo
-                    ([t| Dismantle.ARM.Operand |], [t| ARMSem.ARM |])
+                    ([t| Dismantle.ARM.Operand |], [t| ARMSem.AArch32 |])
                    )
