@@ -30,4 +30,4 @@
 	url = git@github.com:GaloisInc/flexdis86.git
 [submodule "submodules/llvm-pretty"]
 	path = submodules/llvm-pretty
-	url = git@github.com:GaloisInc/llvm-pretty.git
+	url = git@github.com:elliottt/llvm-pretty.git
