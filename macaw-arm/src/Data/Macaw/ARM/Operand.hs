@@ -18,7 +18,7 @@ import qualified Data.Macaw.ARM.ARMReg as Reg
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
-import           Data.Macaw.Types ( BoolType, BVType )
+import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.NatRepr as NR
 import           Data.Word ( Word16, Word8 )
 import qualified Dismantle.ARM.Operands as A32Operand
