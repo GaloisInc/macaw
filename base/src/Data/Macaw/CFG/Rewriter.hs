@@ -344,6 +344,15 @@ rewriteApp app = do
       let s = min y (natValue w)
       pure (BVValue w (toUnsigned w (toSigned w x `shiftR` fromInteger s)))
 
+    BVShl _ v (BVValue _ 0) -> pure v
+    BVShr _ v (BVValue _ 0) -> pure v
+    BVSar _ v (BVValue _ 0) -> pure v
+
+    BVShl w _ (BVValue _ n) | n >= natValue w ->
+      pure (BVValue w 0)
+    BVShr w _ (BVValue _ n) | n >= natValue w ->
+      pure (BVValue w 0)
+
     Eq (BoolValue x) (BoolValue y) -> do
       pure $! boolLitValue (x == y)
 
