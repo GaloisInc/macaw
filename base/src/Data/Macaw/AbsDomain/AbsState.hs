@@ -614,6 +614,15 @@ bvadc w (FinSet t) (StackOffset a s) c
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
     StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
+-- Two finite sets
+bvadc w (FinSet l) (FinSet r) (BoolConst b)
+  | ls <- Set.toList l
+  , rs <- Set.toList r
+  = case Set.fromList [bottomBits $ lval+rval+if b then 1 else 0 | lval <- ls, rval <- rs] of
+      s | Set.size s <= maxSetSize -> FinSet s
+      _ -> TopV
+  where
+  bottomBits v = v .&. (bit (fromInteger (natValue w)) - 1)
 -- Strided intervals
 bvadc w v v' c
   | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2
