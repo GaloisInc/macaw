@@ -12,14 +12,19 @@ packages:
 - submodules/dismantle/dismantle-ppc
 - submodules/dismantle/dismantle-arm
 - submodules/dismantle/dismantle-thumb
+- submodules/flexdis86
+- submodules/flexdis86/binary-symbols
 - submodules/macaw/base
+- submodules/macaw/x86
 - submodules/parameterized-utils
 - submodules/crucible/crucible
-- submodules/crucible/galois-matlab
+- submodules/crucible/what4
+# - submodules/crucible/galois-matlab
 - submodules/dwarf
 - submodules/elf-edit
 - submodules/s-cargot
 extra-deps:
+- s-cargot-letbind-0.2.2.0
 - BoundedChan-1.0.3.0
 - IntervalMap-0.5.2.0
 - Only-0.1

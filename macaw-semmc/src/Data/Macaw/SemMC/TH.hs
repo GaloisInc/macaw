@@ -35,9 +35,10 @@ import qualified Data.ByteString as BS
 import           Control.Lens ( (^.) )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
+import           Data.Functor.Product
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
-import           Data.Semigroup
+import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
@@ -80,11 +81,6 @@ import           Data.Macaw.SemMC.TH.Monad
 
 type Sym t = S.SimpleBackend t
 
--- | A different parameterized pair wrapper; the one in Data.Parameterized.Map
--- hides the @tp@ parameter under an existential, while we need the variant that
--- exposes it.
-data PairF a b tp = PairF (a tp) (b tp)
-
 -- | Generate the top-level lambda with a case expression over an instruction
 -- (casing on opcode)
 --
@@ -101,7 +97,7 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -> Name
                    -- ^ The name of the architecture-specific instruction
                    -- matcher to run before falling back to the generic one
-                   -> Map.MapF a (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
+                   -> Map.MapF a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                    -> (Q Type, Q Type)
                    -> Q Exp
 instructionMatcher ltr ena ae archSpecificMatcher formulas operandResultType = do
@@ -159,9 +155,9 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> Name
                 -> Name
                 -> (Q Type, Q Type)
-                -> Map.Pair a (PairF (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
+                -> Map.Pair a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                 -> Q (Match, (Dec, Dec))
-mkSemanticsCase ltr ena ae ipVarName operandListVar operandResultType (Map.Pair opc (PairF semantics capInfo)) =
+mkSemanticsCase ltr ena ae ipVarName operandListVar operandResultType (Map.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
@@ -434,7 +430,7 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo ope
               let co = DT.capturedOpcode ci
               in case Map.lookup co m0 of
                    Nothing -> m
-                   Just pf -> Map.insert co (PairF pf ci) m
+                   Just pf -> Map.insert co (Pair pf ci) m
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
