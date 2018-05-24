@@ -150,6 +150,12 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (M
     case f of
       URem rep _ _ -> MT.BVTypeRepr rep
 
+instance MC.IPAlignment ARM.AArch32 where
+  -- TODO: When computing an address to jump to, how is the address "cleaned
+  -- up" to handle instruction alignment? Some minor googling suggests all ARM
+  -- instructions are aligned on two-byte boundaries, is that right?
+  fromIPAligned _ = error "IP alignment rules are not yet implemented for ARM"
+
 -- no side effects... yet
 armPrimFnHasSideEffects :: ARMPrimFn arm f tp -> Bool
 armPrimFnHasSideEffects = const False

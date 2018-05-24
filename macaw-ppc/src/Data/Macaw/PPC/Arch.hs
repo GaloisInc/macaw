@@ -170,6 +170,32 @@ instance MC.IsArchStmt (PPCStmt ppc) where
 type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
 type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
 
+instance MC.IPAlignment PPC64.PPC where
+  fromIPAligned cleanAddr
+    | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
+    , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
+    , Just (MC.Trunc dirtyAddr _) <- MC.valueAsApp smallAddrDiv4
+    , Just NR.Refl <- NR.testEquality (MT.typeWidth dirtyAddr) (MT.knownNat :: NR.NatRepr 64)
+    , MC.BVValue _ 2 <- two
+    = Just dirtyAddr
+
+    | otherwise = Nothing
+    where
+      valueAsExtTwo :: MC.BVValue PPC64.PPC ids 64 -> Maybe (MC.BVValue PPC64.PPC ids 62)
+      valueAsExtTwo v
+        | Just (MC.SExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 62)
+        = Just v'
+
+        | Just (MC.UExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 62)
+        = Just v'
+
+        | otherwise = Nothing
+
+instance MC.IPAlignment PPC32.PPC where
+  fromIPAligned _ = error "IP alignment rules are not yet implemented for PPC32"
+
 rewriteStmt :: (MC.ArchStmt ppc ~ PPCStmt ppc) => PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
 rewriteStmt s = do
   s' <- TF.traverseF rewriteValue s
