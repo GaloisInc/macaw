@@ -22,6 +22,8 @@ This provides information about code discovered in binaries.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE TypeApplications #-}
 module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState
@@ -91,6 +93,7 @@ import           Debug.Trace
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.AbsDomain.Refine
+import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
@@ -408,6 +411,8 @@ extendDyn (BVMemRepr size _) ext w = case ext of
               | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> Just (memWordSigned w)
   _ -> Nothing
 
+-- Beware: on some architectures, after reading from the jump table, the
+-- resulting addresses must be aligned. See the IPAlignment class.
 data JumpTable arch ids
   -- the result of the array read gives the address to jump to
   = Absolute (ArrayRead arch ids) (Maybe Extension)
@@ -432,15 +437,65 @@ jumpTableExtension (Relative _ _ e) = e
 ensure :: Alternative f => (a -> Bool) -> a -> f a
 ensure p x = x <$ guard (p x)
 
-matchArrayRead, matchReadOnlyArrayRead ::
-  MemWidth (ArchAddrWidth arch) =>
+absValueAsSegmentOff ::
+  forall arch.
   Memory (ArchAddrWidth arch) ->
+  ArchAbsValue arch (BVType (ArchAddrWidth arch)) ->
+  Maybe (ArchSegmentOff arch)
+absValueAsSegmentOff mem av = case av of
+  FinSet s | Set.size s == 1 -> resolveAbsoluteIntegerAddr (shead s)
+  CodePointers s False | Set.size s == 1 -> Just (shead s)
+  CodePointers s True  | Set.size s == 0 -> resolveAbsoluteIntegerAddr 0
+  StridedInterval si -> SI.isSingleton si >>= resolveAbsoluteIntegerAddr
+  _ -> Nothing
+  where
+  shead :: Set a -> a
+  shead = Set.findMin
+
+  resolveAbsoluteIntegerAddr :: Integer -> Maybe (ArchSegmentOff arch)
+  resolveAbsoluteIntegerAddr = resolveAbsoluteAddr mem . addrWidthClass (memAddrWidth mem) fromInteger
+
+valueAsSegmentOffWithTransfer ::
+  forall arch ids.
+  RegisterInfo (ArchReg arch) =>
+  Memory (ArchAddrWidth arch) ->
+  AbsProcessorState (ArchReg arch) ids ->
+  BVValue arch ids (ArchAddrWidth arch) ->
+  Maybe (ArchSegmentOff arch)
+valueAsSegmentOffWithTransfer mem aps v
+  =   valueAsSegmentOff mem v
+  <|> absValueAsSegmentOff @arch mem (transferValue aps v)
+
+valueAsArrayOffset ::
+  RegisterInfo (ArchReg arch) =>
+  Memory (ArchAddrWidth arch) ->
+  AbsProcessorState (ArchReg arch) ids ->
+  ArchAddrValue arch ids ->
+  Maybe (ArchSegmentOff arch, ArchAddrValue arch ids)
+valueAsArrayOffset mem aps v
+  | Just (BVAdd w base offset) <- valueAsApp v
+  , Just Refl <- testEquality w (memWidth mem)
+  , Just ptr <- valueAsSegmentOffWithTransfer mem aps base
+  = Just (ptr, offset)
+
+  -- and with the other argument order
+  | Just (BVAdd w offset base) <- valueAsApp v
+  , Just Refl <- testEquality w (memWidth mem)
+  , Just ptr <- valueAsSegmentOffWithTransfer mem aps base
+  = Just (ptr, offset)
+
+  | otherwise = Nothing
+
+matchArrayRead, matchReadOnlyArrayRead ::
+  (MemWidth (ArchAddrWidth arch), RegisterInfo (ArchReg arch)) =>
+  Memory (ArchAddrWidth arch) ->
+  AbsProcessorState (ArchReg arch) ids ->
   BVValue arch ids w ->
   Maybe (ArrayRead arch ids)
-matchArrayRead mem val
+matchArrayRead mem aps val
 
   | Just (ReadMem addr size) <- valueAsRhs val
-  , Just (base, offset) <- valueAsArrayOffset mem addr
+  , Just (base, offset) <- valueAsArrayOffset mem aps addr
   , Just (stride, ixVal) <- valueAsStaticMultiplication offset
   = Just ArrayRead
     { arBase   = base
@@ -451,8 +506,8 @@ matchArrayRead mem val
 
   | otherwise = Nothing
 
-matchReadOnlyArrayRead mem val =
-  matchArrayRead mem val >>=
+matchReadOnlyArrayRead mem aps val =
+  matchArrayRead mem aps val >>=
   ensure (Perm.isReadonly . segmentFlags . msegSegment . arBase)
 
 -- | Just like Some (BVValue arch ids), but doesn't run into trouble with
@@ -466,26 +521,28 @@ matchExtension val
   | otherwise = (Nothing, SomeBVValue val)
 
 -- | Figure out if this is a jump table.
-matchJumpTable :: MemWidth (ArchAddrWidth arch)
+matchJumpTable :: (IPAlignment arch, MemWidth (ArchAddrWidth arch), RegisterInfo (ArchReg arch))
                => Memory (ArchAddrWidth arch)
+               -> AbsProcessorState (ArchReg arch) ids
                -> ArchAddrValue arch ids -- ^ Value that's assigned to the IP.
                -> Maybe (JumpTable arch ids)
-matchJumpTable mem ip
+matchJumpTable mem aps ip
 
     -- Turn a plain read address into base + offset.
   | (ext, SomeBVValue ipShort) <- matchExtension ip
-  , Just arrayRead <- matchReadOnlyArrayRead mem ipShort
+  , Just arrayRead <- matchReadOnlyArrayRead mem aps ipShort
   = Just (Absolute arrayRead ext)
 
   -- gcc-style PIC jump tables on x86 use, roughly,
   --     ip = jmptbl + jmptbl[index]
   -- where jmptbl is a pointer to the lookup table.
-  | Just (tgtBase, tgtOffset) <- valueAsArrayOffset mem ip
+  | Just unalignedIP <- fromIPAligned ip
+  , Just (tgtBase, tgtOffset) <- valueAsArrayOffset mem aps unalignedIP
   , (ext, SomeBVValue shortOffset) <- matchExtension tgtOffset
-  , Just arrayRead <- matchReadOnlyArrayRead mem shortOffset
+  , Just arrayRead <- matchReadOnlyArrayRead mem aps shortOffset
   = Just (Relative tgtBase arrayRead ext)
 
-matchJumpTable _ _ = Nothing
+matchJumpTable _ _ _ = Nothing
 
 -- | This describes why we could not infer the bounds of code that looked like it
 -- was accessing a jump table.
@@ -514,7 +571,7 @@ showJumpTableBoundsError err =
 getJumpTableBounds :: ArchitectureInfo a
                    -> AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
                    -> ArrayRead a ids
-                   -> Either (JumpTableBoundsError a ids) (ArchAddrWord a)
+                   -> Either String (ArchAddrWord a)
                    -- ^ One past last index in jump table or nothing
 getJumpTableBounds info regs arrayRead = withArchConstraints info $
   case Jmp.unsignedUpperBound (regs ^. indexBounds) (arIx arrayRead) of
@@ -522,8 +579,10 @@ getJumpTableBounds info regs arrayRead = withArchConstraints info $
       let arrayByteSize = maxIx * arStride arrayRead + arSizeBytes arrayRead in
       if rangeInReadonlySegment (arBase arrayRead) (fromInteger arrayByteSize)
       then Right $! fromInteger maxIx
-      else error $ "Jump table range is not in readonly memory"
-    Left msg -> Left (CouldNotFindBound msg (arIx arrayRead))
+      else Left $ "Jump table range is not in readonly memory: "
+                ++ show maxIx ++ " entries/" ++ show arrayByteSize ++ " bytes"
+                ++ " starting at " ++ show (arBase arrayRead)
+    Left msg -> Left (showJumpTableBoundsError (CouldNotFindBound msg (arIx arrayRead)))
 
 ------------------------------------------------------------------------
 -- ParseState
@@ -700,11 +759,11 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                             , stmtsAbsState = absProcState'
                             }
       -- Block ends with what looks like a jump table.
-      | Just jt <- debug DCFG "try jump table" $ matchJumpTable mem (s'^.curIP) ->
+      | Just jt <- debug DCFG "try jump table" $ matchJumpTable mem absProcState' (s'^.curIP) ->
         let arrayRead = jumpTableRead jt in
         case getJumpTableBounds arch_info absProcState' arrayRead of
           Left err ->
-            trace (show src ++ ": Could not compute bounds: " ++ showJumpTableBoundsError err) $ do
+            trace (show src ++ ": Could not compute bounds: " ++ err) $ do
             mapM_ (recordWriteStmt arch_info mem absProcState') stmts
             pure StatementList { stmtsIdent = lbl_idx
                                , stmtsNonterm = stmts
@@ -827,7 +886,8 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-parseBlock :: ParseContext arch ids
+parseBlock :: IPAlignment arch
+           => ParseContext arch ids
               -- ^ Context for parsing blocks.
            -> Block arch ids
               -- ^ Block to parse
@@ -890,7 +950,7 @@ parseBlock ctx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: MemWidth (RegAddrWidth (ArchReg arch))
+transferBlocks :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
                => ArchSegmentOff arch
                   -- ^ Address of theze blocks
                -> FoundAddr arch
@@ -941,7 +1001,7 @@ transferBlocks src finfo sz block_map =
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 
-transfer :: ArchSegmentOff arch -> FunM arch s ids ()
+transfer :: IPAlignment arch => ArchSegmentOff arch -> FunM arch s ids ()
 transfer addr = do
   s <- use curFunCtx
   let ainfo = archInfo s
@@ -997,7 +1057,8 @@ transfer addr = do
 
 -- | Loop that repeatedly explore blocks until we have explored blocks
 -- on the frontier.
-analyzeBlocks :: (ArchSegmentOff arch -> ST s ())
+analyzeBlocks :: IPAlignment arch
+              => (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
               -> FunState arch s ids
               -> ST s (FunState arch s ids)
@@ -1049,7 +1110,8 @@ mkFunInfo fs =
 --
 -- This returns the updated state and the discovered control flow
 -- graph for this function.
-analyzeFunction :: (ArchSegmentOff arch -> ST s ())
+analyzeFunction :: IPAlignment arch
+                => (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
                 -> ArchSegmentOff arch
                    -- ^ The address to explore
@@ -1080,7 +1142,7 @@ analyzeFunction logFn addr rsn s =
 --
 -- If an exploreFnPred function exists in the DiscoveryState, then do not
 -- analyze unexploredFunctions at addresses that do not satisfy this predicate.
-analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
+analyzeDiscoveredFunctions :: IPAlignment arch => DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
   case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
     Nothing -> info
@@ -1119,7 +1181,8 @@ exploreMemPointers mem_words info =
 -- given set of function entry points
 cfgFromAddrs ::
      forall arch
-  .  ArchitectureInfo arch
+  .  IPAlignment arch
+  => ArchitectureInfo arch
      -- ^ Architecture-specific information needed for doing control-flow exploration.
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
@@ -1134,7 +1197,8 @@ cfgFromAddrs arch_info mem symbols =
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
 cfgFromAddrsAndState :: forall arch
-                     .  DiscoveryState arch
+                     .  IPAlignment arch
+                     => DiscoveryState arch
                      -> [ArchSegmentOff arch]
                      -- ^ Initial function entry points.
                      -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
@@ -1153,7 +1217,7 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-resolveFuns :: MemWidth (RegAddrWidth (ArchReg arch))
+resolveFuns :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
             => (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
                -- ^ Callback for discovered functions
                --
@@ -1248,7 +1312,8 @@ ppFunReason rsn =
 -- This function is intended to make it easy to explore functions, and
 -- can be controlled via 'DiscoveryOptions'.
 completeDiscoveryState :: forall arch
-                       .  ArchitectureInfo arch
+                       .  IPAlignment arch
+                       => ArchitectureInfo arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
                        -> Memory (ArchAddrWidth arch)

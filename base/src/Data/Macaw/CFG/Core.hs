@@ -39,11 +39,11 @@ module Data.Macaw.CFG.Core
   , valueAsRhs
   , valueAsMemAddr
   , valueAsSegmentOff
-  , valueAsArrayOffset
   , valueAsStaticMultiplication
   , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
+  , IPAlignment(..)
   , mkLit
   , bvValue
   , ppValueAssignments
@@ -494,24 +494,6 @@ valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
-valueAsArrayOffset ::
-  Memory (ArchAddrWidth arch) ->
-  ArchAddrValue arch ids ->
-  Maybe (ArchSegmentOff arch, ArchAddrValue arch ids)
-valueAsArrayOffset mem v
-  | Just (BVAdd w base offset) <- valueAsApp v
-  , Just Refl <- testEquality w (memWidth mem)
-  , Just ptr <- valueAsSegmentOff mem base
-  = Just (ptr, offset)
-
-  -- and with the other argument order
-  | Just (BVAdd w offset base) <- valueAsApp v
-  , Just Refl <- testEquality w (memWidth mem)
-  , Just ptr <- valueAsSegmentOff mem base
-  = Just (ptr, offset)
-
-  | otherwise = Nothing
-
 valueAsStaticMultiplication ::
   BVValue arch ids w ->
   Maybe (Integer, BVValue arch ids w)
@@ -519,6 +501,14 @@ valueAsStaticMultiplication v
   | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
   | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
   | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
+  -- the PowerPC way to shift left is a bit obtuse...
+  | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
+  , Just (BVOr _ l r) <- valueAsApp v'
+  , Just (BVShl _ l' (BVValue _ shl)) <- valueAsApp l
+  , Just (BVShr _ _ (BVValue _ shr)) <- valueAsApp r
+  , c == complement (2^shl-1) `mod` bit (fromInteger (natValue w))
+  , shr >= natValue w - shl
+  = Just (2^shl, l')
   | otherwise = Nothing
 
 asLiteralAddr :: MemWidth (ArchAddrWidth arch)
@@ -544,6 +534,11 @@ asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
+
+class IPAlignment arch where
+  -- | Take an aligned value and strip away the bits of the semantics that
+  -- align it, leaving behind a (potentially unaligned) value.
+  fromIPAligned :: ArchAddrValue arch ids -> Maybe (ArchAddrValue arch ids)
 
 ------------------------------------------------------------------------
 -- RegState
@@ -720,6 +715,7 @@ type ArchConstraints arch
      , IsArchStmt (ArchStmt arch)
      , FoldableF  (ArchStmt arch)
      , PrettyF    (ArchTermStmt arch)
+     , IPAlignment arch
      )
 
 -- | Pretty print an assignment right-hand side using operations parameterized
