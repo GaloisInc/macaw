@@ -270,6 +270,8 @@ rewriteApp app = do
       | w <- typeWidth x
       , ic + 1 == natValue w -> do
       rewriteApp (BVSignedLt x (BVValue w 0))
+      | w <- typeWidth x
+      , ic >= natValue w -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (UExt x _)) (BVValue _ ic) -> do
       let xw = typeWidth x
       if ic < natValue xw then
@@ -296,10 +298,18 @@ rewriteApp app = do
       yb <- rewriteApp (BVTestBit y i)
       rewriteApp (Mux BoolTypeRepr c xb yb)
 
-    -- (x >> j) testBit i ~> x testBit (j+i)
+    -- (x >> j) testBit i ~> x testBit (i+j)
+    -- (x << j) testBit i ~> x testBit (i-j)
+    -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | j + i < natValue w, j + i <= maxUnsigned w -> do
+      | j + i <= maxUnsigned w -> do
       rewriteApp (BVTestBit x (BVValue w (j + i)))
+    BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
+      | i < natValue w -> do
+      rewriteApp (BVTestBit x (BVValue w (min (j + i) (natValue w-1))))
+    BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
+      | j <= i -> rewriteApp (BVTestBit x (BVValue w (i - j)))
+      | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
       pure (BVValue w (toUnsigned w (complement x)))
