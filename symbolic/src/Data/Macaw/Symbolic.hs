@@ -34,7 +34,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.MacawArchConstraints
   , MacawArchEvalFn
   , EvalStmtFunc
-  , CallHandler
+  , LookupFunctionHandle
   , Regs
   , freshValue
   , GlobalMap
@@ -310,8 +310,9 @@ type MacawArchEvalFn sym arch =
 
 type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
                                     (MacawCrucibleRegTypes arch)
-type CallHandler sym arch =
-     (MM.MemImpl sym, Regs sym arch) -> IO (MM.MemImpl sym, Regs sym arch)
+
+type LookupFunctionHandle sym arch =
+  MM.MemImpl sym -> Regs sym arch -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch))
 
 -- | This evaluates a  Macaw statement extension in the simulator.
 execMacawStmtExtension ::
@@ -319,9 +320,9 @@ execMacawStmtExtension ::
   MacawArchEvalFn sym arch {- ^ Function for executing -} ->
   C.GlobalVar MM.Mem ->
   GlobalMap sym arch ->
-  CallHandler sym arch ->
+  LookupFunctionHandle sym arch ->
   EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension archStmtFn mvar globs callH s0 st =
+execMacawStmtExtension archStmtFn mvar globs lookupH s0 st =
   case s0 of
     MacawReadMem w mr x         -> doReadMem st mvar globs w mr x
     MacawCondReadMem w mr p x d -> doCondReadMem st mvar globs w mr p x d
@@ -339,7 +340,9 @@ execMacawStmtExtension archStmtFn mvar globs callH s0 st =
          return (v,st)
       where sym = C.stateSymInterface st
 
-    MacawCall _ty f -> doMakeCall callH st mvar (C.regValue f)
+    MacawLookupFunctionHandle _ args -> do
+      hv <- C.HandleFnVal <$> doLookupFunctionHandle lookupH st mvar (C.regValue args)
+      return (hv, st)
 
     MacawArchStmtExtension s    -> archStmtFn s st
     MacawArchStateUpdate {}     -> return ((), st)
@@ -404,11 +407,11 @@ macawExtensions ::
   MacawArchEvalFn sym arch ->
   C.GlobalVar MM.Mem ->
   GlobalMap sym arch ->
-  CallHandler sym arch ->
+  LookupFunctionHandle sym arch ->
   C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs callH =
+macawExtensions f mvar globs lookupH =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs callH
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH
                   }
 
 
@@ -427,7 +430,7 @@ runCodeBlock :: forall sym arch blocks
            -> MacawArchEvalFn sym arch
            -> C.HandleAllocator RealWorld
            -> (MM.MemImpl sym, GlobalMap sym arch)
-           -> CallHandler sym arch
+           -> LookupFunctionHandle sym arch
            -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
            -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
               -- ^ Register assignment
@@ -437,7 +440,7 @@ runCodeBlock :: forall sym arch blocks
                    sym
                    (MacawExt arch)
                    (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) callH g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = do
   mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -448,8 +451,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) callH g regStruct = do
                          , C.ctxIntrinsicTypes = llvmIntrinsicTypes
                          , C.simHandleAllocator = halloc
                          , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions archEval mvar globs
-                                                          callH
+                         , C.extensionImpl = macawExtensions archEval mvar globs lookupH
                          , C._functionBindings =
                               C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
                               C.emptyHandleMap

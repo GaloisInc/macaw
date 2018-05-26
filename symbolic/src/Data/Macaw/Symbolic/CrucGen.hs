@@ -281,15 +281,10 @@ data MacawStmtExtension (arch :: *)
     :: !(M.TypeRepr tp)
     -> MacawStmtExtension arch f (ToCrucibleType tp)
 
-  -- | Call a function.
-  MacawCall ::
-    -- Types of fields in register struct
-    !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))) ->
-
-    -- Arguments to call.
-    !(f (ArchRegStruct arch)) ->
-
-    MacawStmtExtension arch f (ArchRegStruct arch)
+  -- | Look up the function handle for the current call given the entire register and memory state
+  MacawLookupFunctionHandle :: !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch)))
+                            -> !(f (ArchRegStruct arch))
+                            -> MacawStmtExtension arch f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch))
 
   -- | A machine instruction.
   MacawArchStmtExtension ::
@@ -384,7 +379,7 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       MacawGlobalPtr _ x -> sexpr "global" [ text (show x) ]
 
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
-      MacawCall _ regs -> sexpr "macawCall" [ f regs ]
+      MacawLookupFunctionHandle _ regs -> sexpr "macawLookupFunctionHandle" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
       MacawArchStateUpdate addr m ->
         let prettyArchStateBinding :: forall tp . M.ArchReg arch tp -> MacawCrucibleValue f tp -> [Doc] -> [Doc]
@@ -409,7 +404,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawGlobalPtr w _)
     | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (MacawFreshSymbolic r) = typeToCrucible r
-  appType (MacawCall regTypes _) = C.StructRepr regTypes
+  appType (MacawLookupFunctionHandle regTypes _) = C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
   appType PtrEq {}            = C.knownRepr
@@ -920,13 +915,21 @@ createRegStruct :: forall arch ids s
                 .  M.RegState (M.ArchReg arch) (M.Value arch ids)
                 -> CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
 createRegStruct regs = do
+  (tps, fields) <- createRegStructAssignment regs
+  crucibleValue (C.MkStruct tps fields)
+
+createRegStructAssignment :: forall arch ids s
+                           .  M.RegState (M.ArchReg arch) (M.Value arch ids)
+                          -> CrucGen arch ids s (C.CtxRepr (CtxToCrucibleType (ArchRegContext arch)),
+                                                 Assignment (CR.Atom s) (CtxToCrucibleType (ArchRegContext arch)))
+createRegStructAssignment regs = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   let regAssign = crucGenRegAssignment archFns
   let tps = fmapFC M.typeRepr regAssign
   let a = fmapFC (\r -> regs ^. M.boundValue r) regAssign
   fields <- macawAssignToCrucM valueToCrucible a
-  crucibleValue $ C.MkStruct (typeCtxToCrucible tps) fields
+  return (typeCtxToCrucible tps, fields)
 
 addMacawTermStmt :: Map Word64 (CR.Label s)
                     -- ^ Map from block index to Crucible label
@@ -1068,8 +1071,10 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
  crucGenArchConstraints archFns $ do
   case tstmt of
     M.ParsedCall regs mret -> do
-      curRegs <- createRegStruct regs
-      newRegs <- evalMacawStmt (MacawCall (crucArchRegTypes archFns) curRegs)
+      (tps, fields) <- createRegStructAssignment regs
+      curRegs <- crucibleValue (C.MkStruct tps fields)
+      fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
+      newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (C.StructRepr tps)
       case mret of
         Just nextAddr -> do
           setMachineRegs newRegs

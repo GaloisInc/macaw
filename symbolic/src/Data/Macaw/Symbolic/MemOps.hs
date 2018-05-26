@@ -21,7 +21,7 @@ module Data.Macaw.Symbolic.MemOps
   , doCondReadMem
   , doWriteMem
   , doGetGlobal
-  , doMakeCall
+  , doLookupFunctionHandle
   , doPtrToBits
   ) where
 
@@ -91,21 +91,18 @@ doPtrToBits sym w p =
      bvIte sym notPtr (asBits p) undef
 
 --------------------------------------------------------------------------------
-doMakeCall ::
-  (IsSymInterface sym) =>
-  ((MemImpl sym, regs) -> IO (MemImpl sym, regs)) ->
-  CrucibleState s sym ext trp blocks  r ctx ->
-  GlobalVar Mem ->
-  regs ->
-  IO (regs, CrucibleState s sym ext trp blocks r ctx)
-doMakeCall k st mvar regs =
-  do mem <- getMem st mvar
-     (mem1, regs1) <- k (mem,regs)
-     let st1 = setMem st mvar mem1
-     return (regs1, st1)
-
-
+doLookupFunctionHandle :: (IsSymInterface sym)
+                       => (MemImpl sym -> regs -> IO a)
+                       -> CrucibleState s sym ext trp blocks r ctx
+                       -> GlobalVar Mem
+                       -> regs
+                       -> IO a
+doLookupFunctionHandle k st mvar regs = do
+  mem <- getMem st mvar
+  k mem regs
 --------------------------------------------------------------------------------
+
+
 
 addrWidthAtLeast16 :: M.AddrWidthRepr w -> LeqProof 16 w
 addrWidthAtLeast16 M.Addr32 = LeqProof
