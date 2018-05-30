@@ -1214,7 +1214,7 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let y = ValueExpr v_rax
 
   dst <- eval (ValueExpr v_rdi .+ lastWordBytes)
-  cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
+  cond <- eval (ValueExpr v_rcx .=/=. bvKLit 0)
   let condExpr = ValueExpr cond
   dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
 
