@@ -170,6 +170,7 @@ assertPred (AssignedValue a) isTrue bnds =
     EvalApp (AndApp l r) | isTrue     -> (assertPred l isTrue >=> assertPred r isTrue) bnds
     -- Given not (x || y), assert not x, then assert not y
     EvalApp (OrApp  l r) | not isTrue -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    EvalApp (NotApp p) -> assertPred p (not isTrue) bnds
     _ -> Right bnds
 assertPred _ _ bnds = Right bnds
 
