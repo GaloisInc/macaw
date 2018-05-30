@@ -200,6 +200,27 @@ rewriteApp app = do
        else
         pure (BoolValue False)
     AndApp x y@BoolValue{} -> rewriteApp (AndApp y x)
+    -- x < y && x <= y   =   x < y
+    AndApp   (valueAsApp -> Just (BVUnsignedLe x  y ))
+           v@(valueAsApp -> Just (BVUnsignedLt x' y'))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp v@(valueAsApp -> Just (BVUnsignedLt x' y'))
+             (valueAsApp -> Just (BVUnsignedLe x  y ))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp   (valueAsApp -> Just (BVSignedLe x  y ))
+           v@(valueAsApp -> Just (BVSignedLt x' y'))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp v@(valueAsApp -> Just (BVSignedLt x' y'))
+             (valueAsApp -> Just (BVSignedLe x  y ))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
 
     OrApp (BoolValue xc) y -> do
       if xc then
@@ -207,10 +228,20 @@ rewriteApp app = do
        else
         pure y
     OrApp x y@BoolValue{} -> rewriteApp (OrApp y x)
+
     NotApp (BoolValue b) ->
       pure $! boolLitValue (not b)
     NotApp (valueAsApp -> Just (NotApp c)) ->
       pure $! c
+    NotApp (valueAsApp -> Just (BVUnsignedLe x y)) ->
+      rewriteApp (BVUnsignedLt y x)
+    NotApp (valueAsApp -> Just (BVUnsignedLt x y)) ->
+      rewriteApp (BVUnsignedLe y x)
+    NotApp (valueAsApp -> Just (BVSignedLe x y)) ->
+      rewriteApp (BVSignedLt y x)
+    NotApp (valueAsApp -> Just (BVSignedLt x y)) ->
+      rewriteApp (BVSignedLe y x)
+
     XorApp (BoolValue b) x ->
       if b then
         rewriteApp (NotApp x)
@@ -248,20 +279,16 @@ rewriteApp app = do
     BVSub w x (BVValue _ yc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (negate yc))))
 
-    -- x < y => x -> not (y <= x)
-    BVUnsignedLt x y -> do
-      r <- rewriteApp (BVUnsignedLe y x)
-      rewriteApp (NotApp r)
     BVUnsignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x <= toUnsigned w y
+    BVUnsignedLt (BVValue w x) (BVValue _ y) -> do
+      pure $ boolLitValue $ toUnsigned w x < toUnsigned w y
 
-    -- x < y => x -> not (y <= x)
-    BVSignedLt x y -> do
-      r <- rewriteApp (BVSignedLe y x)
-      rewriteApp (NotApp r)
     BVSignedLe (BVValue w x) (BVValue _ y) -> do
-
       pure $ boolLitValue $ toSigned w x <= toSigned w y
+    BVSignedLt (BVValue w x) (BVValue _ y) -> do
+      pure $ boolLitValue $ toSigned w x < toSigned w y
+
     BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic
       pure $! boolLitValue v
