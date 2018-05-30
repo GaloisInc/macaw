@@ -132,6 +132,7 @@ addUpperBound v u bnds
     BVValue _ c | c <= u -> Right bnds
                 | otherwise -> Left "Constant given upper bound that is statically less than given bounds"
     RelocatableValue{} -> Left "Relocatable value does not have upper bounds."
+    SymbolValue{}      -> Left "Symbol value does not have upper bounds."
     AssignedValue a ->
       case assignRhs a of
         EvalApp (UExt x _) -> addUpperBound x u bnds
@@ -180,6 +181,8 @@ unsignedUpperBound bnds v =
     BVValue _ i -> Right (IntegerUpperBound i)
     RelocatableValue{} ->
       Left "Relocatable values do not have bounds."
+    SymbolValue{} ->
+      Left "Symbol values do not have bounds."
     AssignedValue a ->
       case MapF.lookup (assignId a) (bnds^.assignUpperBound) of
         Just bnd -> Right bnd

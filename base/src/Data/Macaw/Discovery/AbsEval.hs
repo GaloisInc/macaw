@@ -78,14 +78,14 @@ absEvalStmt info stmt = withArchConstraints info $
       modify $ addAssignment info a
     WriteMem addr memRepr v ->
       modify $ addMemWrite addr memRepr v
-    PlaceHolderStmt{} ->
-      pure ()
     InstructionStart _ _ ->
       pure ()
     Comment{} ->
       pure ()
     ExecArchStmt astmt ->
       modify $ \r -> absEvalArchStmt info r astmt
+    ArchState{} ->
+      pure ()
 
 -- This takes a processor state and updates it based on executing each statement.
 absEvalStmts :: ArchitectureInfo arch

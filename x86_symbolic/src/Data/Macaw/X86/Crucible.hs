@@ -17,7 +17,9 @@ module Data.Macaw.X86.Crucible
     SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
-  , semantics
+  , funcSemantics
+  , stmtSemantics
+  , termSemantics
 
     -- * Atom wrapper
   , AtomWrapper(..)
@@ -37,21 +39,23 @@ import Data.Word(Word8)
 import Data.Bits(shiftL,testBit)
 import GHC.TypeLits(KnownNat)
 
+import           What4.Interface hiding (IsExpr)
+import           What4.Symbol(userSymbol)
+import           What4.Utils.Endian(Endian(..))
+
+import           Lang.Crucible.Backend (IsSymInterface)
+import           Lang.Crucible.CFG.Expr
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.RegMap
 import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
 import           Lang.Crucible.Syntax
-import           Lang.Crucible.CFG.Expr
-import           Lang.Crucible.Solver.Interface hiding (IsExpr)
-import           Lang.Crucible.Solver.Symbol(userSymbol)
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
-import           Lang.Crucible.Utils.Endian(Endian(..))
+
 import           Lang.Crucible.LLVM.MemModel (LLVMPointerType)
 import Lang.Crucible.LLVM.MemModel.Pointer
   (projectLLVM_bv, pattern LLVMPointerRepr, llvmPointer_bv)
-
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen(MacawExt)
@@ -61,19 +65,33 @@ import qualified Data.Macaw.X86.ArchTypes as M
 
 
 type S sym rtp bs r ctx =
-  CrucibleState MacawSimulatorState sym (MacawExt M.X86_64) rtp bs r ctx
+  CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
 
-semantics ::
+funcSemantics ::
   (IsSymInterface sym, ToCrucibleType mt ~ t) =>
   SymFuns sym ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-semantics fs x s = do let sym = Sym { symIface = stateSymInterface s
-                                    , symTys   = stateIntrinsicTypes s
-                                    , symFuns  = fs
-                                    }
-                      v <- pureSem sym x
-                      return (v,s)
+funcSemantics fs x s = do let sym = Sym { symIface = stateSymInterface s
+                                        , symTys   = stateIntrinsicTypes s
+                                        , symFuns  = fs
+                                        }
+                          v <- pureSem sym x
+                          return (v,s)
+
+stmtSemantics :: (IsSymInterface sym)
+              => SymFuns sym
+              -> M.X86Stmt (AtomWrapper (RegEntry sym))
+              -> S sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+stmtSemantics = error "Symbolic-execution time semantics for x86 statements are not implemented yet"
+
+termSemantics :: (IsSymInterface sym)
+              => SymFuns sym
+              -> M.X86TermStmt ids
+              -> S sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+termSemantics = error "Symbolic-execution time semantics for x86 terminators are not implemented yet"
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
@@ -122,6 +140,36 @@ pureSem :: (IsSymInterface sym) =>
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
+
+    M.XGetBV {} -> error "XGetBV"
+    M.ReadLoc {} -> error "ReadLoc"
+    M.PShufb {} -> error "PShufb"
+    M.MMXExtend {} -> error "MMXExtend"
+    M.ReadFSBase    -> error " ReadFSBase"
+    M.ReadGSBase    -> error "ReadGSBase"
+    M.CPUID{}       -> error "CPUID"
+    M.RDTSC{}       -> error "RDTSC"
+    M.MemCmp{}      -> error "MemCmp"
+    M.RepnzScas{}   -> error "RepnzScas"
+    M.X86IDiv {} -> error "X86IDiv"
+    M.X86IRem {} -> error "X86IRem"
+    M.X86Div  {} -> error "X86Div"
+    M.X86Rem  {} -> error "X86Rem"
+    M.SSE_VectorOp {} -> error "SSE_VectorOp"
+    M.SSE_CMPSX {} -> error "SSE_CMPSX"
+    M.SSE_UCOMIS {} -> error "SSE_UCOMIS"
+    M.SSE_CVTSS2SD{} -> error "SSE_CVTSS2SD"
+    M.SSE_CVTSD2SS{} -> error "SSE_CVTSD2SS"
+    M.SSE_CVTSI2SX {} -> error "SSE_CVTSI2SX"
+    M.SSE_CVTTSX2SI {} -> error "SSE_CVTTSX2SI"
+    M.X87_Extend{} ->  error "X87_Extend"
+    M.X87_FAdd{} -> error "X87_FAdd"
+    M.X87_FSub{} -> error "X87_FSub"
+    M.X87_FMul{} -> error "X87_FMul"
+    M.X87_FST {} -> error "X87_FST"
+    M.VExtractF128 {} -> error "VExtractF128"
+
+
 
     M.EvenParity x0 ->
       do x <- getBitVal (symIface sym) x0
@@ -177,6 +225,12 @@ pureSem sym fn =
 
             _ -> fail "Unepected size for VPCLMULQDQ"
 
+        M.VPUnpackLQDQ -> vecOp2 sym LittleEndian w (knownNat @64) x y $
+          \xs ys -> let n = V.length xs
+                    in case mul2Plus n of
+                         Refl -> V.take n (V.interlieve xs ys)
+
+
         M.VAESEnc
           | Just Refl <- testEquality w n128 ->
             do let f = fnAesEnc (symFuns sym)
@@ -200,6 +254,8 @@ pureSem sym fn =
 
 
 
+
+
     M.PointwiseShiftL elNum elSz shSz bits amt ->
       do amt' <- getBitVal (symIface sym) amt
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
@@ -208,6 +264,12 @@ pureSem sym fn =
     M.Pointwise2 elNum elSz op v1 v2 ->
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
+
+    M.VInsert elNum elSz vec el i ->
+      do e <- getBitVal (symIface sym) el
+         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
+           case mulCancelR elNum (V.length xs) elSz of
+             Refl -> V.insertAt i e xs
 
 
 semPointwise :: (1 <= w) =>
@@ -225,7 +287,7 @@ vpalign :: Word8 ->
            V.Vector 16 (E sym (BVType 8)) ->
            V.Vector 16 (E sym (BVType 8))
 vpalign i xs ys =
-  V.slice n0 n16 (V.shiftR (fromIntegral i) (bv 0) (V.append xs ys))
+  V.slice n16 n16 (V.shiftR (fromIntegral i) (bv 0) (V.append xs ys))
 
 -- | Shuffling with a mask.
 -- See `vpshufd` Intel instruction.

@@ -38,7 +38,6 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
-import           Data.Int
 import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -95,10 +94,20 @@ repValSizeByteCount = memReprBytes . repValSizeMemRepr
 ------------------------------------------------------------------------
 -- X86TermStmt
 
-data X86TermStmt ids = X86Syscall
+data X86TermStmt ids
+   = X86Syscall
+     -- ^ A system call
+   | Hlt
+     -- ^ The halt instruction.
+     --
+     -- In protected mode outside ring 0, this just raised a GP(0) exception.
+   | UD2
+     -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
   prettyF X86Syscall = text "x86_syscall"
+  prettyF Hlt        = text "hlt"
+  prettyF UD2        = text "ud2"
 
 ------------------------------------------------------------------------
 -- X86PrimLoc
@@ -155,7 +164,7 @@ data SSE_Cmp
      -- ^ Neither value is a NaN, no signalling on QNaN
   deriving (Eq, Ord)
 
-sseCmpEntries :: [(Int8, SSE_Cmp, String)]
+sseCmpEntries :: [(Word8, SSE_Cmp, String)]
 sseCmpEntries =
   [ (0, EQ_OQ,   "EQ_OQ")
   , (1, LT_OS,   "LT_OS")
@@ -167,7 +176,7 @@ sseCmpEntries =
   , (7, ORD_Q,   "ORD_Q")
   ]
 
-sseIdxCmpMap :: Map.Map Int8 SSE_Cmp
+sseIdxCmpMap :: Map.Map Word8 SSE_Cmp
 sseIdxCmpMap = Map.fromList [ (idx,val) | (idx, val, _) <- sseCmpEntries ]
 
 sseCmpNameMap :: Map.Map SSE_Cmp String
@@ -180,7 +189,7 @@ instance Show SSE_Cmp where
       -- The nothing case should never occur.
       Nothing -> "Unexpected name"
 
-lookupSSECmp :: Int8 -> Maybe SSE_Cmp
+lookupSSECmp :: Word8 -> Maybe SSE_Cmp
 lookupSSECmp i = Map.lookup i sseIdxCmpMap
 
 -- | A binary SSE operation
@@ -252,6 +261,12 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
                   * upper 4 bits -> index in 2nd op;
                  Indexes are always 0 or 1. -}
 
+            | VPUnpackLQDQ
+              -- ^ A,B,C,D + P,Q,R,S = C,R,D,S
+              -- This one is for DQ, i.e., 64-bit things
+              -- but there are equivalents for all sizes, so we should
+              -- probably parameterize on size.
+
 
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
@@ -273,6 +288,7 @@ instance Show AVXOp2 where
              VAESEnc      -> "vaesenc"
              VAESEncLast  -> "vaesenclast"
              VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
+             VPUnpackLQDQ -> "vpunpacklqdq"
 
 instance Show AVXPointWiseOp2 where
   show x = case x of
@@ -536,6 +552,15 @@ data X86PrimFn f tp where
     !(f (BVType n)) -> {- /\ second operand -}
     X86PrimFn f (BVType n)
 
+  {- | Update an element of a vector -}
+  VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
+    !(NatRepr elNum)                {- /\ Number of elements in vector -} ->
+    !(NatRepr elSize)               {- /\ Size of each element in bits -} ->
+    !(f (BVType (elNum * elSize)))  {- /\ Insert in this vector -}        ->
+    !(f (BVType elSize))            {- /\ Insert this value -}            ->
+    !(NatRepr i)                    {- /\ At this index -}                ->
+    X86PrimFn f (BVType (elNum * elSize))
+
   {- | Shift left each element in the vector by the given amount.
        The new ("shifted-in") bits are 0 -}
   PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
@@ -595,6 +620,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
       PointwiseShiftL n w _ _ _ -> packedAVX n w
+      VInsert n w _ _ _ -> packedAVX n w
       VOp1 w _ _ -> BVTypeRepr w
       VOp2 w _ _ _ -> BVTypeRepr w
       Pointwise2 n w _ _ _ -> packedAVX n w
@@ -656,6 +682,7 @@ instance TraversableFC X86PrimFn where
       PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
       Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
       VExtractF128 x i -> (`VExtractF128` i) <$> go x
+      VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
@@ -699,6 +726,13 @@ instance IsArchFn X86PrimFn where
       Pointwise2 _ w o x y -> sexprA (show o)
                                 [ ppShow (widthVal w) , pp x , pp y ]
       VExtractF128 x i -> sexprA "vextractf128" [ pp x, ppShow i ]
+      VInsert n w v e i -> sexprA "vinsert" [ ppShow (widthVal n)
+                                            , ppShow (widthVal w)
+                                            , pp v
+                                            , pp e
+                                            , ppShow (widthVal i)
+                                            ]
+
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -741,6 +775,7 @@ x86PrimFnHasSideEffects f =
     PointwiseShiftL {} -> False
     Pointwise2 {} -> False
     VExtractF128 {} -> False
+    VInsert {} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -845,3 +880,5 @@ rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt 
 rewriteX86TermStmt f =
   case f of
     X86Syscall -> pure X86Syscall
+    Hlt -> pure Hlt
+    UD2 -> pure UD2

@@ -40,9 +40,10 @@ import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
+import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.BlockLabel
@@ -97,16 +98,19 @@ deriving instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (DemandSet r)
 deriving instance (TestEquality r) => Eq (DemandSet r)
 deriving instance (OrdF r) => Ord (DemandSet r)
 
-instance OrdF r => Monoid (DemandSet r) where
-  mempty = DemandSet { registerDemands = Set.empty
-                     , functionResultDemands = mempty
-                     }
-  mappend ds1 ds2 =
-    DemandSet { registerDemands = registerDemands ds1 `mappend` registerDemands ds2
+instance OrdF r => Semigroup (DemandSet r) where
+  ds1 <> ds2 =
+    DemandSet { registerDemands = registerDemands ds1 <> registerDemands ds2
               , functionResultDemands =
                   Map.unionWith Set.union (functionResultDemands ds1)
                                           (functionResultDemands ds2)
               }
+
+instance OrdF r => Monoid (DemandSet r) where
+  mempty = DemandSet { registerDemands = Set.empty
+                     , functionResultDemands = mempty
+                     }
+  mappend = (<>)
 
 demandSetDifference :: OrdF r => DemandSet r -> DemandSet r -> DemandSet r
 demandSetDifference ds1 ds2 =
@@ -293,13 +297,8 @@ addIntraproceduralJumpTarget fun_info src_block dest_addr = do  -- record the ed
 valueUses :: (OrdF (ArchReg arch), FoldableFC (ArchFn arch))
           => Value arch ids tp
           -> FunctionArgsM arch ids (RegisterSet (ArchReg arch))
-valueUses v =
-  zoom assignmentCache $
-            foldValueCached (\_ _    -> mempty)
-                            (\_      -> mempty)
-                            (\r      -> Set.singleton (Some r))
-                            (\_ regs -> regs)
-                            v
+valueUses v = zoom assignmentCache $ foldValueCached fns v
+  where fns = emptyValueFold { foldInput = Set.singleton . Some }
 
 -- | Record that a block demands the value of certain registers.
 recordBlockDemand :: ( OrdF (ArchReg arch)
@@ -475,12 +474,11 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
       | otherwise ->
           []
     WriteMem addr _ v -> [Some addr, Some v]
-    -- Place holder statements are unknown.
-    PlaceHolderStmt _ _ -> []
     InstructionStart _ _ -> []
     -- Comment statements have no specific value.
     Comment _ -> []
     ExecArchStmt astmt -> foldMapF (\v -> [Some v]) astmt
+    ArchState _addr assn -> foldMapF (\v -> [Some v]) assn
 
 -- | This function figures out what the block requires
 -- (i.e., addresses that are stored to, and the value stored), along

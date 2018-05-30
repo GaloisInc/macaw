@@ -25,6 +25,8 @@ module Data.Macaw.X86.Generator
   , evalArchFn
   , evalAssignRhs
   , shiftX86GCont
+  , asAtomicStateUpdate
+  , getState
     -- * GenResult
   , GenResult(..)
   , finishBlock
@@ -247,7 +249,9 @@ data GenState st_s ids = GenState
          -- ^ Address of instruction we are translating
        , genMemory    :: !(Memory 64)
          -- ^ The memory
-
+       , _genRegUpdates :: !(MapF.MapF X86Reg (Value X86_64 ids))
+         -- ^ The registers updated (along with their new macaw values) during
+         -- the evaluation of a single instruction
        , avxMode      :: !Bool
          {- ^ This indicates if we are translating
            an AVX instruction. If so, writing to
@@ -266,6 +270,9 @@ mkGenResult s = GenResult { resBlockSeq = s^.blockSeq
 -- | Control flow blocs generated so far.
 blockSeq :: Simple Lens (GenState st_s ids) (BlockSeq ids)
 blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
+
+genRegUpdates :: Simple Lens (GenState st_s ids) (MapF.MapF X86Reg (Value X86_64 ids))
+genRegUpdates = lens _genRegUpdates (\s v -> s { _genRegUpdates = v })
 
 -- | Blocks that are not in CFG that end with a FetchAndExecute,
 -- which we need to analyze to compute new potential branch targets.
@@ -315,6 +322,7 @@ runX86Generator :: X86GCont st_s ids a
                 -> ExceptT Text (ST st_s) (GenResult ids)
 runX86Generator k st (X86G m) = runReaderT (runContT m (ReaderT . k)) st
 
+
 -- | Capture the current continuation and 'GenState' in an 'X86Generator'
 shiftX86GCont :: (X86GCont st_s ids a
                   -> GenState st_s ids
@@ -337,7 +345,30 @@ getRegValue r = view (curX86State . boundValue r) <$> getState
 
 -- | Set the value associated with the given register.
 setReg :: X86Reg tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
-setReg r v = modGenState $ curX86State . boundValue r .= v
+setReg r v = modGenState $ do
+  genRegUpdates %= MapF.insert r v
+  curX86State . boundValue r .= v
+
+-- | This combinator collects state modifications by a single instruction into a single 'ArchState' statement
+--
+-- This function is meant to be wrapped around an atomic CPU state
+-- transformation.  It collects all of the updates to the CPU register state
+-- (which are assumed to be made through the 'setRegVal' function) and coalesces
+-- them into a new macaw 'ArchState' statement that records the updates for
+-- later analysis.
+--
+-- The state is hidden in the generator monad and collected after the
+-- transformer is executed.  Note: if the transformer splits the state, it isn't
+-- obvious what will happen here.  The mechanism is not designed with that use
+-- case in mind.  I think that it will collect the *union* of possible updates
+-- by that instruction.
+asAtomicStateUpdate :: ArchMemAddr X86_64 -> X86Generator st_s ids a -> X86Generator st_s ids a
+asAtomicStateUpdate insnAddr exec = do
+  modGenState (genRegUpdates .= MapF.empty)
+  res <- exec
+  updates <- _genRegUpdates <$> getState
+  addStmt (ArchState insnAddr updates)
+  return res
 
 -- | Add a statement to the list of statements.
 addStmt :: Stmt X86_64 ids -> X86Generator st_s ids ()
@@ -355,11 +386,12 @@ addArchTermStmt ts = do
     let p_b = s0 ^. blockState
     -- Create finished block.
     let fin_b = finishBlock' p_b $ ArchTermStmt ts
-    seq fin_b $ do
+    seq fin_b $
     -- Return early
-    return $ GenResult { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
-                       , resState = Nothing
-                       }
+      return GenResult
+                { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
+                , resState = Nothing
+                }
 
 -- | Are we in AVX mode?
 isAVX :: X86Generator st ids Bool

@@ -13,6 +13,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
@@ -20,7 +21,6 @@ module Data.Macaw.X86.Semantics
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import           Data.Foldable
-import           Data.Int
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes
@@ -28,6 +28,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import           Data.Proxy
+import           Data.Word
 import qualified Flexdis86 as F
 
 import           Data.Macaw.CFG ( MemRepr(..)
@@ -290,8 +291,118 @@ def_cqo = defNullary "cqo" $ do
 
 -- FIXME: special segment stuff?
 -- FIXME: CR and debug regs?
-exec_mov :: Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
-exec_mov l v = l .= v
+def_mov :: InstructionDef
+def_mov =
+  defBinary "mov" $ \_ loc val -> do
+    case (loc, val) of
+      (F.ByteReg r, F.ByteReg src) -> do
+        v <- get $ reg8Loc  src
+        reg8Loc r .= v
+      (F.ByteReg r, F.ByteImm i) -> do
+        reg8Loc r .= bvLit n8 (toInteger i)
+      (F.ByteReg r, F.Mem8 src) -> do
+        v <- get =<< getBV8Addr src
+        reg8Loc r  .= v
+      (F.Mem8 a, F.ByteReg src) -> do
+        l <- getBV8Addr a
+        v <- get $ reg8Loc  src
+        l .= v
+      (F.Mem8 a, F.ByteImm i) -> do
+        l <- getBV8Addr a
+        l .= bvLit n8 (toInteger i)
+
+      (F.WordReg r, F.WordReg src) -> do
+        v <- get $ reg16Loc src
+        reg16Loc r .= v
+      (F.WordReg r, F.WordSignedImm i) -> do
+        reg16Loc r .= bvLit n16 (toInteger i)
+      (F.WordReg r, F.WordImm i) -> do
+        reg16Loc r .= bvLit n16 (toInteger i)
+      (F.WordReg r, F.Mem16 src) -> do
+        v <- get =<< getBV16Addr src
+        reg16Loc r .= v
+      (F.Mem16 a, F.WordReg src) -> do
+        l <- getBV16Addr a
+        v <- get $ reg16Loc src
+        l .= v
+      (F.Mem16 a, F.WordSignedImm i) -> do
+        l <- getBV16Addr a
+        l .= bvLit n16 (toInteger i)
+
+      (F.DWordReg r, F.DWordReg src) -> do
+        v <- get $ reg32Loc src
+        reg32Loc r .= v
+      (F.DWordReg r, F.DWordSignedImm i) -> do
+        reg32Loc r .= bvLit n32 (toInteger i)
+      (F.DWordReg r, F.DWordImm i) -> do
+        (reg32Loc r .=) =<< getImm32 i
+      (F.DWordReg r, F.Mem32 src) -> do
+        v <- get =<< getBV32Addr src
+        reg32Loc r .= v
+      (F.Mem32 a, F.DWordReg src) -> do
+        l <- getBV32Addr a
+        v <- get $ reg32Loc src
+        l .= v
+      (F.Mem32 a, F.DWordSignedImm i) -> do
+        l <- getBV32Addr a
+        l .= bvLit n32 (toInteger i)
+
+      (F.QWordReg r, F.QWordReg src) -> do
+        v <- get $ reg64Loc src
+        reg64Loc r .= v
+      (F.QWordReg r, F.Mem64 src) -> do
+        v <- get =<< getBV64Addr src
+        reg64Loc r .= v
+      (F.QWordReg r, F.QWordImm i) -> do
+        reg64Loc r .= bvLit n64 (toInteger i)
+      (F.QWordReg r, F.DWordSignedImm i) -> do
+        reg64Loc r .= bvLit n64 (toInteger i)
+      (F.Mem64 a, F.DWordSignedImm i) -> do
+        l <- getBV64Addr a
+        l .= bvLit n64 (toInteger i)
+      (F.Mem64 a, F.QWordReg src) -> do
+        l <- getBV64Addr a
+        v <- get $ reg64Loc src
+        l .= v
+
+      (F.Mem16 a, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        l <- getBV16Addr  a
+        l .= v
+      (F.WordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        reg16Loc r .= v
+      (F.DWordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        reg_low16 (R.X86_GP (F.reg32_reg r)) .= v
+      (F.QWordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        fullRegister (R.X86_GP r) .= uext' n64 v
+
+      (F.SegmentValue s, F.Mem16 a) -> do
+        v <- get =<< getBV16Addr a
+        SegmentReg s .= v
+      (F.SegmentValue s, F.WordReg r) -> do
+        v <- get (fullRegister (R.X86_GP (F.reg16_reg r)))
+        SegmentReg s .= bvTrunc' n16 v
+      (F.SegmentValue s, F.DWordReg r) -> do
+        v <- get (fullRegister (R.X86_GP (F.reg32_reg r)))
+        SegmentReg s .= bvTrunc' n16 v
+      (F.SegmentValue s, F.QWordReg r) -> do
+        v <- get (fullRegister (R.X86_GP r))
+        SegmentReg s .= bvTrunc' n16 v
+
+      (_, F.ControlReg _) -> do
+        error "Do not support moving from/to control registers."
+      (F.ControlReg _, _) -> do
+        error "Do not support moving from/to control registers."
+      (_, F.DebugReg _) -> do
+        error "Do not support moving from/to debug registers."
+      (F.DebugReg _, _) -> do
+        error "Do not support moving from/to debug registers."
+
+      _ -> do
+        error $ "Unexpected arguments to mov: " ++ show loc ++ " " ++ show val
 
 regLocation :: NatRepr n -> X86Reg (BVType 64) -> Location addr (BVType n)
 regLocation sz
@@ -485,7 +596,7 @@ def_idiv = defUnaryV "idiv" $ \d -> do
 --
 -- This code assumes that we are not running in kernel mode.
 def_hlt :: InstructionDef
-def_hlt = defNullary "hlt" $ exception false true (GeneralProtectionException 0)
+def_hlt = defNullary "hlt" $ addArchTermStmt Hlt
 
 def_inc :: InstructionDef
 def_inc = defUnaryLoc "inc" $ \dst -> do
@@ -1003,7 +1114,7 @@ def_call = defUnary "call" $ \_ v -> do
   old_pc <- getReg R.X86_IP
   push addrRepr old_pc
   -- Set IP
-  tgt <- getJumpTarget v
+  tgt <- getCallTarget v
   rip .= tgt
 
 -- | Conditional jumps
@@ -1013,9 +1124,8 @@ def_jcc_list =
     defUnary mnem $ \_ v -> do
       a <- cc
       when_ a $ do
-        old_pc <- getReg R.X86_IP
-        off <- getBVValue v knownNat
-        rip .= old_pc .+ off
+        tgt <- getJumpTarget v
+        rip .= tgt
 
 def_jmp :: InstructionDef
 def_jmp = defUnary "jmp" $ \_ v -> do
@@ -2057,7 +2167,7 @@ def_pselect mnem op sz = defBinaryLV mnem $ \l v -> do
 -- PEXTRW Extract word
 
 -- | PINSRW Insert word
-exec_pinsrw :: Location (Addr ids) XMMType -> BVExpr ids 16 -> Int8 -> X86Generator st ids ()
+exec_pinsrw :: Location (Addr ids) XMMType -> BVExpr ids 16 -> Word8 -> X86Generator st ids ()
 exec_pinsrw l v off = do
   lv <- get l
   -- FIXME: is this the right way around?
@@ -2597,7 +2707,7 @@ all_instructions =
   , def_imul
   , def_inc
   , def_leave
-  , defBinaryLV "mov"   $ exec_mov
+  , def_mov
   , defUnaryV   "mul"   $ exec_mul
   , def_neg
   , defNullary  "nop"   $ return ()
@@ -2622,7 +2732,7 @@ all_instructions =
   , def_xadd
   , defBinaryLV "xor" exec_xor
 
-  , defNullary "ud2" $ exception false true UndefinedInstructionError
+  , defNullary "ud2" $ addArchTermStmt UD2
 
     -- Primitive instructions
   , def_syscall

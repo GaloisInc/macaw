@@ -30,7 +30,6 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
-import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 
@@ -240,6 +239,11 @@ rewriteApp app = do
     BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
       rewriteApp (BVSub w (BVValue w (toUnsigned w (xc + zc))) y)
 
+    -- addr a + (c - addr b) => c + (addr a - addr b)
+    BVAdd w (RelocatableValue _ a) (valueAsApp -> Just (BVSub _ c (RelocatableValue _ b)))
+      | Just d <- diffAddr a b ->
+        rewriteApp $ BVAdd w c (BVValue w (toUnsigned w d))
+
     -- x - yc = x + (negate yc)
     BVSub w x (BVValue _ yc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (negate yc))))
@@ -309,6 +313,7 @@ rewriteApp app = do
       pure y
     BVAnd w x (BVValue _ yc) | yc == maxUnsigned w -> do
       pure x
+    BVAnd _ x y | x == y -> pure x
 
     BVOr w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (x .|. y))
@@ -316,6 +321,7 @@ rewriteApp app = do
       rewriteApp (BVOr w y x)
     BVOr _ x (BVValue _ 0) -> pure x
     BVOr w _ y@(BVValue _ yc) | yc == maxUnsigned w -> pure y
+    BVOr _ x y | x == y -> pure x
 
     BVXor w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (x `xor` y))
@@ -405,6 +411,7 @@ rewriteValue v =
     BoolValue b -> pure (BoolValue b)
     BVValue w i -> pure (BVValue w i)
     RelocatableValue w a -> pure (RelocatableValue w a)
+    SymbolValue w a -> pure (SymbolValue w a)
     AssignedValue (Assignment aid _) -> Rewriter $ do
       ref <- gets $ rwctxCache . rwContext
       srcMap <- lift $ readSTRef ref
@@ -428,9 +435,6 @@ rewriteStmt s =
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
       appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
-    PlaceHolderStmt args nm -> do
-      args' <- traverse (traverseSome rewriteValue) args
-      appendRewrittenStmt $ PlaceHolderStmt args' nm
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
     InstructionStart off mnem ->
@@ -438,3 +442,6 @@ rewriteStmt s =
     ExecArchStmt astmt -> do
       f <- Rewriter $ gets $ rwctxArchStmt . rwContext
       f astmt
+    ArchState addr updates -> do
+      tgtUpdates <- MapF.traverseWithKey (const rewriteValue) updates
+      appendRewrittenStmt $ ArchState addr tgtUpdates

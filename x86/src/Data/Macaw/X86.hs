@@ -20,6 +20,7 @@ x86_64 programs.
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86
        ( x86_64_freeBSD_info
        , x86_64_linux_info
@@ -52,13 +53,13 @@ import           Control.Monad.ST
 import qualified Data.Foldable as Fold
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
-import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
@@ -87,7 +88,6 @@ import           Data.Macaw.CFG.DemandSet
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
-  , n64
   , HasRepr(..)
   )
 import           Data.Macaw.X86.ArchTypes
@@ -127,7 +127,7 @@ rootLoc ip = ExploreLoc { loc_ip      = ip
 initX86State :: ExploreLoc -- ^ Location to explore from.
              -> RegState X86Reg (Value X86_64 ids)
 initX86State loc = mkRegState Initial
-                 & curIP     .~ RelocatableValue knownNat (relativeSegmentAddr (loc_ip loc))
+                 & curIP     .~ RelocatableValue Addr64 (relativeSegmentAddr (loc_ip loc))
                  & boundValue X87_TopReg .~ mkLit knownNat (toInteger (loc_x87_top loc))
                  & boundValue DF         .~ BoolValue (loc_df_flag loc)
 
@@ -151,40 +151,14 @@ initGenState nonce_gen mem addr s =
              , genAddr = addr
              , genMemory = mem
              , avxMode = False
+             , _genRegUpdates = MapF.empty
              }
 
--- | Describes the reason the translation error occured.
-data X86TranslateErrorReason
-   = DecodeError (MemoryError 64)
-     -- ^ A memory error occured in decoding with Flexdis
-   | UnsupportedInstruction F.InstructionInstance
-     -- ^ The instruction is not supported by the translator
-   | ExecInstructionError F.InstructionInstance Text
-     -- ^ An error occured when trying to translate the instruction
-
--- | Describes an error that occured in translation
-data X86TranslateError = X86TranslateError { transErrorAddr :: !(MemSegmentOff 64)
-                                           , transErrorReason :: !X86TranslateErrorReason
-                                           }
-
-instance Show X86TranslateError where
-  show err =
-      case transErrorReason err of
-        DecodeError me ->
-          "Memory error at " ++ addr ++ ": " ++ show me
-        UnsupportedInstruction i ->
-          "Unsupported instruction at " ++ addr ++ ": " ++ show i
-        ExecInstructionError i msg ->
-          "Error in interpretting instruction at " ++ addr ++ ": " ++ show i ++ "\n  "
-          ++ Text.unpack msg
-    where addr = show (transErrorAddr err)
-
 returnWithError :: GenState st_s ids
-                -> X86TranslateErrorReason
-                -> ST st_s (BlockSeq ids, MemWord 64, Maybe X86TranslateError)
-returnWithError gs rsn =
+                -> X86TranslateError 64
+                -> ST st_s (BlockSeq ids, MemWord 64, Maybe (X86TranslateError 64))
+returnWithError gs err =
   let curIPAddr = genAddr gs
-      err = X86TranslateError curIPAddr rsn
       term = (`TranslateError` Text.pack (show err))
       b = finishBlock' (gs^.blockState) term
       res = seq b $ gs^.blockSeq & frontierBlocks %~ (Seq.|> b)
@@ -199,22 +173,22 @@ disassembleBlockImpl :: forall st_s ids
                          -- ^ Maximum offset for this addr.
                      -> [SegmentRange 64]
                         -- ^ List of contents to read next.
-                     -> ST st_s (BlockSeq ids, MemWord 64, Maybe X86TranslateError)
+                     -> ST st_s (BlockSeq ids, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlockImpl gs max_offset contents = do
   let curIPAddr = genAddr gs
   case readInstruction' curIPAddr contents of
     Left msg -> do
-      returnWithError gs (DecodeError msg)
+      returnWithError gs msg
     Right (i, next_ip_off) -> do
       let seg = msegSegment curIPAddr
       let off = msegOffset curIPAddr
       let next_ip :: MemAddr 64
           next_ip = relativeAddr seg next_ip_off
       let next_ip_val :: BVValue X86_64 ids 64
-          next_ip_val = RelocatableValue n64 next_ip
+          next_ip_val = RelocatableValue Addr64 next_ip
       case execInstruction (ValueExpr next_ip_val) i of
         Nothing -> do
-          returnWithError gs (UnsupportedInstruction i)
+          returnWithError gs (UnsupportedInstruction (genAddr gs) i)
         Just exec -> do
           gsr <-
             runExceptT $ runX86Generator (\() s -> pure (mkGenResult s)) gs $ do
@@ -224,7 +198,7 @@ disassembleBlockImpl gs max_offset contents = do
               exec
           case gsr of
             Left msg -> do
-              returnWithError gs (ExecInstructionError i msg)
+              returnWithError gs (ExecInstructionError (genAddr gs) i msg)
             Right res -> do
               case resState res of
                 -- If IP after interpretation is the next_ip, there are no blocks, and we
@@ -241,12 +215,14 @@ disassembleBlockImpl gs max_offset contents = do
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     , genMemory = genMemory gs
+                                    , _genRegUpdates = _genRegUpdates gs
                                     , avxMode = avxMode gs
                                     }
+
                  case dropSegmentRangeListBytes contents (fromIntegral (next_ip_off - off)) of
                    Left msg -> do
                      let err = dropErrorAsMemError (relativeSegmentAddr curIPAddr) msg
-                     returnWithError gs (DecodeError err)
+                     returnWithError gs (FlexdisMemoryError err)
                    Right contents' ->
                      disassembleBlockImpl gs2 max_offset contents'
                 _ -> do
@@ -261,7 +237,7 @@ disassembleBlock :: forall s
                  -> ExploreLoc
                  -> MemWord 64
                     -- ^ Maximum number of bytes in ths block.
-                 -> ST s ([Block X86_64 s], MemWord 64, Maybe X86TranslateError)
+                 -> ST s ([Block X86_64 s], MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlock mem nonce_gen loc max_size = do
   let addr = loc_ip loc
   let gs = initGenState nonce_gen mem addr (initX86State loc)
@@ -269,7 +245,7 @@ disassembleBlock mem nonce_gen loc max_size = do
   (gs', next_ip_off, maybeError) <-
     case addrContentsAfter mem (relativeSegmentAddr addr) of
       Left msg ->
-        returnWithError gs (DecodeError msg)
+        returnWithError gs (FlexdisMemoryError msg)
       Right contents ->
         disassembleBlockImpl gs sz contents
   assert (next_ip_off > msegOffset addr) $ do
@@ -285,6 +261,9 @@ initialX86AbsState addr
   -- x87 top register points to top of stack.
   & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
   -- Direction flag is initially zero.
+  -- "The direction flag DF in the %rFLAGS register
+  --- must be clear (set to “forward” direction) on function entry and
+  --- return." (AMD64 ABI Draft 1.0, p18)
   & absRegState . boundValue DF .~ BoolConst False
   & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
 
@@ -346,6 +325,7 @@ transferAbsValue r f =
     Pointwise2 {} -> TopV
     PointwiseShiftL {} -> TopV
     VExtractF128 {} -> TopV
+    VInsert {} -> TopV
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -378,7 +358,7 @@ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
   (gs', next_ip_off, maybeError) <- lift $
     case addrContentsAfter mem (relativeSegmentAddr addr) of
       Left msg ->
-        returnWithError gs (DecodeError msg)
+        returnWithError gs (FlexdisMemoryError msg)
       Right contents -> do
         disassembleBlockImpl gs (off + max_size) contents
   assert (next_ip_off > off) $ do
@@ -438,29 +418,19 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Otherwise skip over this instruction.
               | otherwise -> go prev (stmt Seq.<| after)
 
--- | This is designed to detect returns from the register state representation.
+-- | Called to determine if the instruction sequence contains a return
+-- from the current function.
 --
--- It pattern matches on a 'RegState' to detect if it read its instruction
--- pointer from an address that stored on the stack pointer.
+-- An instruction executing a return from a function will place the
+-- ReturnAddr value (placed on the top of the stack by
+-- 'initialX86AbsState' above) into the instruction pointer.
 identifyX86Return :: [Stmt X86_64 ids]
                   -> RegState X86Reg (Value X86_64 ids)
-                  -> Maybe [Stmt X86_64 ids]
-identifyX86Return stmts s = do
-  -- How stack pointer moves when a call is made
-  let stack_adj = -8
-  let next_ip = s^.boundValue ip_reg
-      next_sp = s^.boundValue sp_reg
-  case next_ip of
-    AssignedValue (Assignment _ (ReadMem ip_addr _))
-      | let (ip_base, ip_off) = asBaseOffset ip_addr
-      , let (sp_base, sp_off) = asBaseOffset next_sp
-      , (ip_base, ip_off) == (sp_base, sp_off + stack_adj) ->
-        let isRetLoad stmt =
-              case stmt of
-                AssignStmt asgn
-                  | Just Refl <- testEquality (assignId asgn) (assignId  asgn) -> True
-                _ -> False
-         in Just $ filter (not . isRetLoad) stmts
+                  -> AbsProcessorState X86Reg ids
+                  -> Maybe (Seq (Stmt X86_64 ids))
+identifyX86Return stmts s finalRegSt8 =
+  case transferValue finalRegSt8 (s^.boundValue ip_reg) of
+    ReturnAddr -> Just $ Seq.fromList stmts
     _ -> Nothing
 
 -- | Return state post call
@@ -501,6 +471,10 @@ postX86TermStmtAbsState preservePred mem s regs tstmt =
                                   }
           Just (nextIP, absEvalCall params s nextIP)
         _ -> error $ "Sycall could not interpret next IP"
+    Hlt ->
+      Nothing
+    UD2 ->
+      Nothing
 
 
 -- | Common architecture information for X86_64
