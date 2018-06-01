@@ -24,14 +24,14 @@ import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
 import           Data.Proxy ( Proxy(..) )
-import qualified SemMC.ARM as ARM
+import qualified SemMC.Architecture.AArch32 as ARM
 
 
 -- | The type tag for ARM (32-bit).  Note that this includes both A32 and T32 modes.
-type ARM = ARM.ARM
+type ARM = ARM.AArch32
 
 
-arm_linux_info :: MI.ArchitectureInfo ARM.ARM
+arm_linux_info :: MI.ArchitectureInfo ARM.AArch32
 arm_linux_info =
     MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                         , MI.archAddrWidth = MM.Addr32
@@ -51,7 +51,7 @@ arm_linux_info =
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState (preserveRegAcrossSyscall proxy)
                         }
         where
-          proxy = Proxy @ARM.ARM
+          proxy = Proxy @ARM.AArch32
 
 
 archDemandContext :: (ARMArchConstraints arm) => proxy arm

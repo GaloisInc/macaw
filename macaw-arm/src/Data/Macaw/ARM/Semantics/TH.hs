@@ -75,9 +75,12 @@ armNonceAppEval bvi nonceApp =
                        -- matching on the instruction operand list) or a call on such.
                        case operand of
                          S.BoundVarExpr bv ->
-                             case Map.lookup bv (opVars bvi) of
-                               Just (C.Const name) -> liftQ [| O.extractValue (AE.interpIsR15 $(varE name)) |]
-                               Nothing -> fail ("arm_is_15 bound var not found: " ++ show bv)
+                             case (Map.lookup bv (locVars bvi), Map.lookup bv (opVars bvi)) of
+                               (Just _, Just _) -> fail ("arm_is_r15 bound var is location and operand: " ++ show bv)
+                               (Just loc, Nothing) -> withLocToReg $ \locToReg ->
+                                 liftQ [| O.extractValue (AE.interpIsR15 (armRegToGPR $(locToReg loc))) |]
+                               (Nothing, Just (C.Const name)) -> liftQ [| O.extractValue (AE.interpIsR15 $(varE name)) |]
+                               (Nothing, Nothing) -> fail ("arm_is_r15 bound var not found: " ++ show bv)
                          S.NonceAppExpr nonceApp' ->
                              case S.nonceExprApp nonceApp' of
                                S.FnApp symFn' args' ->

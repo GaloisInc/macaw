@@ -14,6 +14,7 @@
 
 module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
+    , armRegToGPR
     , arm_LR
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
@@ -31,6 +32,7 @@ import qualified Data.Parameterized.TH.GADT as TH
 import           Data.Semigroup
 import qualified Data.Set as Set
 import           Data.Word ( Word8 )
+import qualified Dismantle.ARM.Operands as ARMOperands
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
@@ -53,6 +55,9 @@ data ARMReg tp where
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
 arm_LR = ARM_GP 14
 
+armRegToGPR :: ARMReg tp -> Maybe ARMOperands.GPR
+armRegToGPR (ARM_GP gp) = Just (ARMOperands.gpr gp)
+armRegToGPR _ = Nothing
 
 deriving instance Eq (ARMReg tp)
 deriving instance Ord (ARMReg tp)
