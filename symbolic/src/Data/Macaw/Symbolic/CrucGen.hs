@@ -54,6 +54,7 @@ module Data.Macaw.Symbolic.CrucGen
   , parsedBlockLabel
   , ArchAddrWidthRepr
   , addrWidthIsPos
+  , getRegs
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -568,8 +569,8 @@ fromBits ::
   CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
 fromBits w x = evalMacawExt (BitsToPtr w x)
 
-
-
+getRegs :: CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
+getRegs = gets crucRegisterReg >>= evalAtom . CR.ReadReg
 
 -- | Return the value associated with the given register
 getRegValue :: M.ArchReg arch tp
