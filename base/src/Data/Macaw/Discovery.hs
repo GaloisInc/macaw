@@ -428,11 +428,13 @@ jumpTableRead :: JumpTable arch ids -> ArrayRead arch ids
 jumpTableRead (Absolute r _) = r
 jumpTableRead (Relative _ r _) = r
 
+{-
 -- | After reading from the array, the result may be extended to address width;
 -- if so, this says how.
 jumpTableExtension :: JumpTable arch ids -> Maybe Extension
 jumpTableExtension (Absolute _ e) = e
 jumpTableExtension (Relative _ _ e) = e
+-}
 
 ensure :: Alternative f => (a -> Bool) -> a -> f a
 ensure p x = x <$ guard (p x)
@@ -677,6 +679,20 @@ identifyCallTargets absState ip = do
             segOffAddrs (asSegmentOff mem val) ++ def
         _ -> def
     Initial _ -> def
+
+-- | Read an address using the @MemRepr@ for format information, which should be 4 or 8 bytes.
+-- Returns 'Left' for sizes other than 4 or 8 bytes.
+readMemReprDyn :: Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
+readMemReprDyn mem addr (BVMemRepr size endianness) = do
+  bs <- readByteString mem addr (fromInteger (natValue size))
+  case () of
+    _ | Just Refl <- testEquality size (knownNat :: NatRepr 4) -> do
+          let Just val = addrRead endianness bs
+          Right val
+      | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> do
+          let Just val = addrRead endianness bs
+          Right val
+      | otherwise -> Left $ InvalidSize addr size
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
@@ -1001,7 +1017,7 @@ transferBlocks src finfo sz block_map =
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 
-transfer :: IPAlignment arch => ArchSegmentOff arch -> FunM arch s ids ()
+transfer :: ArchSegmentOff arch -> FunM arch s ids ()
 transfer addr = do
   s <- use curFunCtx
   let ainfo = archInfo s
@@ -1057,8 +1073,7 @@ transfer addr = do
 
 -- | Loop that repeatedly explore blocks until we have explored blocks
 -- on the frontier.
-analyzeBlocks :: IPAlignment arch
-              => (ArchSegmentOff arch -> ST s ())
+analyzeBlocks :: (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
               -> FunState arch s ids
               -> ST s (FunState arch s ids)
@@ -1110,8 +1125,7 @@ mkFunInfo fs =
 --
 -- This returns the updated state and the discovered control flow
 -- graph for this function.
-analyzeFunction :: IPAlignment arch
-                => (ArchSegmentOff arch -> ST s ())
+analyzeFunction :: (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
                 -> ArchSegmentOff arch
                    -- ^ The address to explore

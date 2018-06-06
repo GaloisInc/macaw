@@ -55,6 +55,7 @@ library
     Data.Macaw.Architecture.Info
     Data.Macaw.CFG
     Data.Macaw.CFG.App
+    Data.Macaw.CFG.AssignRhs
     Data.Macaw.CFG.Block
     Data.Macaw.CFG.BlockLabel
     Data.Macaw.CFG.Core
@@ -70,6 +71,7 @@ library
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
+    Data.Macaw.SCFG
     Data.Macaw.Types
     Data.Macaw.Utils.Pretty
 
