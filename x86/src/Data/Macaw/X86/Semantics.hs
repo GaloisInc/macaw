@@ -1331,7 +1331,6 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let condSet :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
       condSet l e = modify l (mux condExpr e)
 
-
   condSet rcx    count'
   condSet rdi    $ ValueExpr v_rdi .+ nBytesSeen
   condSet of_loc $ ssub_overflows  dst_val y

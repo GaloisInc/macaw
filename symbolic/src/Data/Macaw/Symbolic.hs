@@ -49,14 +49,12 @@ import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Context as Ctx
---import qualified Data.Set as Set
---import qualified Data.Text as Text
 import           Data.Word
 
 import qualified What4.FunctionName as C
 import           What4.Interface
 import qualified What4.ProgramLoc as C
-import           What4.Symbol(userSymbol)
+import           What4.Symbol (userSymbol)
 
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
@@ -74,7 +72,7 @@ import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
-import           Lang.Crucible.LLVM.Intrinsics(llvmIntrinsicTypes)
+import           Lang.Crucible.LLVM.Intrinsics (llvmIntrinsicTypes)
 
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.CFG.Core as M
@@ -220,7 +218,7 @@ termStmtToReturn sl = sl { M.stmtsTerm = tm }
       M.ParsedLookupTable r _ _ -> M.ParsedReturn r
       M.ParsedIte b l r -> M.ParsedIte b (termStmtToReturn l) (termStmtToReturn r)
       tm0 -> tm0
-      
+
 -- | This create a Crucible CFG from a Macaw block.  Note that the
 -- term statement of the block is updated to make it a return.
 mkParsedBlockCFG :: forall s arch ids
@@ -240,7 +238,7 @@ mkParsedBlockCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraints a
     let strippedBlock = b { M.blockStatementList = termStmtToReturn (M.blockStatementList b) }
 
     let entryAddr = M.pblockAddr strippedBlock
-    
+
     -- Get type for representing Machine registers
     let regType = C.StructRepr (crucArchRegTypes archFns)
     let entryPos = posFn entryAddr
@@ -255,7 +253,7 @@ mkParsedBlockCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraints a
     -- Create map from Macaw (address,blockId pairs) to Crucible labels
     let blockLabelMap :: BlockLabelMap arch s
         blockLabelMap = mkBlockLabelMap [strippedBlock]
-        
+
     -- Get initial block for Crucible
     let entryLabel = CR.Label 0
     let initPosFn :: M.ArchAddrWord arch -> C.Position
@@ -270,13 +268,13 @@ mkParsedBlockCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraints a
 
     -- Generate code for Macaw block after entry
     crucibleBlock <- addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg strippedBlock
-    
+
     -- (stubCrucibleBlocks,_) <- unzip <$>
     --   (forM (Map.elems stubMap)$ \c -> do
     --      runCrucGen archFns memBaseVarMap initPosFn 0 c regReg $ do
     --        r <- getRegs
     --        addTermStmt (CR.Return r))
-    
+
     -- Return initialization block followed by actual blocks.
     pure (initCrucibleBlock : crucibleBlock)
 

@@ -26,14 +26,14 @@ module Data.Macaw.X86.Symbolic
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
-import           Control.Lens((^.),(%~),(&))
+import           Control.Lens ((^.),(%~),(&))
 import           Control.Monad ( void )
+import           Data.Functor.Identity (Identity(..))
 import           Data.Parameterized.Context as Ctx
+import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Parameterized.Map as MapF
 import           GHC.TypeLits
-import           Data.Functor.Identity(Identity(..))
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
@@ -52,9 +52,8 @@ import qualified What4.Symbol as C
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
+import           Lang.Crucible.Simulator.RegValue (RegValue'(..))
 import qualified Lang.Crucible.Types as C
-import Lang.Crucible.Simulator.RegValue(RegValue'(..))
-
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.

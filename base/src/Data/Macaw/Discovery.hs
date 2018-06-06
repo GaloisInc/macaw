@@ -294,12 +294,12 @@ foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
 -- | Add a block to the current function blocks. If this overlaps with an
 -- existing block, split them so that there's no overlap.
 addFunBlock
-  :: MemWidth (RegAddrWidth (ArchReg arch))
-  => ArchSegmentOff arch
+  :: ArchSegmentOff arch
   -> ParsedBlock arch ids
   -> FunState arch s ids
   -> FunState arch s ids
-addFunBlock segment block s = case Map.lookupLT segment (s ^. curFunBlocks) of
+addFunBlock segment block s = withArchConstraints (archInfo (s^.curFunCtx)) $
+  case Map.lookupLT segment (s ^. curFunBlocks) of
     Just (bSegment, bBlock)
         -- very sneaky way to check that they are in the same segment (a
         -- Nothing result from diffSegmentOff will never be greater than a
@@ -345,8 +345,7 @@ liftST = FunM . lift
 
 -- | Joins in the new abstract state and returns the locations for
 -- which the new state is changed.
-mergeIntraJump  :: MemWidth (ArchAddrWidth arch)
-                => ArchSegmentOff arch
+mergeIntraJump  :: ArchSegmentOff arch
                   -- ^ Source label that we are jumping from.
                 -> AbsBlockState (ArchReg arch)
                    -- ^ The state of the system after jumping to new block.
@@ -902,8 +901,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-parseBlock :: IPAlignment arch
-           => ParseContext arch ids
+parseBlock :: ParseContext arch ids
               -- ^ Context for parsing blocks.
            -> Block arch ids
               -- ^ Block to parse
@@ -966,8 +964,7 @@ parseBlock ctx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
-               => ArchSegmentOff arch
+transferBlocks :: ArchSegmentOff arch
                   -- ^ Address of theze blocks
                -> FoundAddr arch
                   -- ^ State leading to explore block
@@ -1156,7 +1153,7 @@ analyzeFunction logFn addr rsn s =
 --
 -- If an exploreFnPred function exists in the DiscoveryState, then do not
 -- analyze unexploredFunctions at addresses that do not satisfy this predicate.
-analyzeDiscoveredFunctions :: IPAlignment arch => DiscoveryState arch -> DiscoveryState arch
+analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
   case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
     Nothing -> info
@@ -1195,8 +1192,7 @@ exploreMemPointers mem_words info =
 -- given set of function entry points
 cfgFromAddrs ::
      forall arch
-  .  IPAlignment arch
-  => ArchitectureInfo arch
+  .  ArchitectureInfo arch
      -- ^ Architecture-specific information needed for doing control-flow exploration.
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
@@ -1211,8 +1207,7 @@ cfgFromAddrs arch_info mem symbols =
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
 cfgFromAddrsAndState :: forall arch
-                     .  IPAlignment arch
-                     => DiscoveryState arch
+                     .  DiscoveryState arch
                      -> [ArchSegmentOff arch]
                      -- ^ Initial function entry points.
                      -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
@@ -1231,8 +1226,7 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-resolveFuns :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
-            => (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
+resolveFuns :: (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
                -- ^ Callback for discovered functions
                --
                -- Should return true if we should analyze the function and false otherwise.
@@ -1326,8 +1320,7 @@ ppFunReason rsn =
 -- This function is intended to make it easy to explore functions, and
 -- can be controlled via 'DiscoveryOptions'.
 completeDiscoveryState :: forall arch
-                       .  IPAlignment arch
-                       => ArchitectureInfo arch
+                       .  ArchitectureInfo arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
                        -> Memory (ArchAddrWidth arch)
