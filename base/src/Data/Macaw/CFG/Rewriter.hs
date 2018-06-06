@@ -166,6 +166,15 @@ rewriteApp app = do
       f' <- rewriteApp (Trunc f w)
       rewriteApp $ Mux (BVTypeRepr w) c t' f'
 
+    Trunc (valueAsApp -> Just (UExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ UExt v w
+    Trunc (valueAsApp -> Just (SExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ UExt v w
+
     SExt (BVValue u x) w -> do
       pure $ BVValue w $ toUnsigned w $ toSigned u x
     UExt (BVValue _ x) w -> do
