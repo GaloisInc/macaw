@@ -173,10 +173,12 @@ type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
 instance MC.IPAlignment PPC64.PPC where
   fromIPAligned cleanAddr
     | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
-    , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
-    , Just (MC.Trunc dirtyAddr _) <- MC.valueAsApp smallAddrDiv4
-    , Just NR.Refl <- NR.testEquality (MT.typeWidth dirtyAddr) (MT.knownNat :: NR.NatRepr 64)
     , MC.BVValue _ 2 <- two
+    , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
+    , Just (MC.Trunc addrDiv4' _) <- MC.valueAsApp smallAddrDiv4
+    , Just NR.Refl <- NR.testEquality (MT.typeWidth addrDiv4') (MT.knownNat :: NR.NatRepr 64)
+    , Just (MC.BVShr _ dirtyAddr two') <- MC.valueAsApp addrDiv4'
+    , MC.BVValue _ 2 <- two'
     = Just dirtyAddr
 
     | otherwise = Nothing
