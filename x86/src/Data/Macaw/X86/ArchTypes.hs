@@ -855,7 +855,9 @@ type instance ArchStmt X86_64 = X86Stmt
 type instance ArchTermStmt X86_64 = X86TermStmt
 
 -- x86 instructions can start at any byte
-instance IPAlignment X86_64 where fromIPAligned = Just
+instance IPAlignment X86_64 where
+  fromIPAligned = Just
+  toIPAligned = id
 
 rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
                  -> Rewriter X86_64 s src tgt (Value X86_64 tgt tp)
