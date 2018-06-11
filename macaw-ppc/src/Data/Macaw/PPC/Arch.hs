@@ -26,6 +26,7 @@ module Data.Macaw.PPC.Arch (
 import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
+import           Data.Bits
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
@@ -195,8 +196,11 @@ instance MC.IPAlignment PPC64.PPC where
 
         | otherwise = Nothing
 
+  toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
+
 instance MC.IPAlignment PPC32.PPC where
   fromIPAligned _ = error "IP alignment rules are not yet implemented for PPC32"
+  toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
 rewriteStmt :: (MC.ArchStmt ppc ~ PPCStmt ppc) => PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
 rewriteStmt s = do
