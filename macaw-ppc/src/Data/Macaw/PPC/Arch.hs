@@ -182,6 +182,12 @@ instance MC.IPAlignment PPC64.PPC where
     , MC.BVValue _ 2 <- two'
     = Just dirtyAddr
 
+    | Just (MC.BVAnd _ dirtyAddr (MC.BVValue _ 0xfffffffffffffffc)) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
+    | Just (MC.BVAnd _ (MC.BVValue _ 0xfffffffffffffffc) dirtyAddr) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
     | otherwise = Nothing
     where
       valueAsExtTwo :: MC.BVValue PPC64.PPC ids 64 -> Maybe (MC.BVValue PPC64.PPC ids 62)
