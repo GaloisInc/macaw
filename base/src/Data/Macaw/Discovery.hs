@@ -800,7 +800,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                       let read_addr = relativeSegmentAddr (arBase arrayRead) & incAddr (arStride arrayRead * toInteger idx)
                       in case readAddr mem endianness read_addr of
                         Right tgt_addr
-                          | Just tgt_mseg <- asSegmentOff mem tgt_addr
+                          | Just tgt_mseg <- asSegmentOff mem (toIPAligned @arch tgt_addr)
                           , Perm.isExecutable (segmentFlags (msegSegment tgt_mseg))
                           -> Just tgt_mseg
                         _ -> Nothing
@@ -810,7 +810,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
                       Right shortOffset
                         | Just offset <- extendDyn repr ext shortOffset
                         , let tgt_addr = relativeSegmentAddr base & incAddr offset
-                        , Just tgt_mseg <- asSegmentOff mem tgt_addr
+                        , Just tgt_mseg <- asSegmentOff mem (toIPAligned @arch tgt_addr)
                         , Perm.isExecutable (segmentFlags (msegSegment tgt_mseg))
                         -> Just tgt_mseg
                       _ -> Nothing

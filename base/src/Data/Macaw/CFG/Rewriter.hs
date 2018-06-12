@@ -166,6 +166,15 @@ rewriteApp app = do
       f' <- rewriteApp (Trunc f w)
       rewriteApp $ Mux (BVTypeRepr w) c t' f'
 
+    Trunc (valueAsApp -> Just (UExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ UExt v w
+    Trunc (valueAsApp -> Just (SExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ SExt v w
+
     SExt (BVValue u x) w -> do
       pure $ BVValue w $ toUnsigned w $ toSigned u x
     UExt (BVValue _ x) w -> do
@@ -281,13 +290,116 @@ rewriteApp app = do
 
     BVUnsignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x <= toUnsigned w y
+    -- in uext(x) <= uext(y) we can eliminate one or both uext's.
+    -- same for sext's, even with unsigned comparisons!
+    -- uext(x) <= yc = true    if yc >= 2^width(x)-1
+    -- uext(x) <= yc = x <= yc if yc <  2^width(x)-1
+    -- similar shortcuts exist for the other inequalities
+    BVUnsignedLe (BVValue _ x) (valueAsApp -> Just (UExt y _)) -> do
+      let wShort = typeWidth y
+      if x <= maxUnsigned wShort
+        then rewriteApp (BVUnsignedLe (BVValue wShort x) y)
+        else pure $ boolLitValue False
+    BVUnsignedLe (valueAsApp -> Just (UExt x _)) (BVValue _ y) -> do
+      let wShort = typeWidth x
+      if y < maxUnsigned wShort
+        then rewriteApp (BVUnsignedLe x (BVValue wShort y))
+        else pure $ boolLitValue True
+    BVUnsignedLe (valueAsApp -> Just (UExt x _)) (valueAsApp -> Just (UExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (UExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (UExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
+    BVUnsignedLe (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
+
     BVUnsignedLt (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x < toUnsigned w y
+    BVUnsignedLt (BVValue _ x) (valueAsApp -> Just (UExt y _)) -> do
+      let wShort = typeWidth y
+      if x < maxUnsigned wShort
+        then rewriteApp (BVUnsignedLt (BVValue wShort x) y)
+        else pure $ boolLitValue False
+    BVUnsignedLt (valueAsApp -> Just (UExt x _)) (BVValue _ y) -> do
+      let wShort = typeWidth x
+      if y <= maxUnsigned wShort
+        then rewriteApp (BVUnsignedLt x (BVValue wShort y))
+        else pure $ boolLitValue True
+    BVUnsignedLt (valueAsApp -> Just (UExt x _)) (valueAsApp -> Just (UExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (UExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (UExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
+    BVUnsignedLt (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
 
     BVSignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toSigned w x <= toSigned w y
+    BVSignedLe (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
+      let wShort = typeWidth y
+          xv = toSigned w x
+      if xv <= minSigned wShort
+        then pure $ boolLitValue True
+        else if xv > maxSigned wShort
+          then pure $ boolLitValue False
+          else rewriteApp (BVSignedLe (BVValue wShort x) y)
+    BVSignedLe (valueAsApp -> Just (SExt x _)) (BVValue w y) -> do
+      let wShort = typeWidth x
+          yv = toSigned w y
+      if yv < minSigned wShort
+        then pure $ boolLitValue False
+        else if yv >= maxSigned wShort
+          then pure $ boolLitValue True
+          else rewriteApp (BVSignedLe x (BVValue wShort y))
+    BVSignedLe (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
+    -- for signed comparisons, uext(x) <= uext(y) is not necessarily equivalent
+    -- to either x <= uext(y) or uext(x) <= y, so no rewrite for that!
+
     BVSignedLt (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toSigned w x < toSigned w y
+    BVSignedLt (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
+      let wShort = typeWidth y
+          xv = toSigned w x
+      if xv < minSigned wShort
+        then pure $ boolLitValue True
+        else if xv >= maxSigned wShort
+          then pure $ boolLitValue False
+          else rewriteApp (BVSignedLt (BVValue wShort x) y)
+    BVSignedLt (valueAsApp -> Just (SExt x _)) (BVValue w y) -> do
+      let wShort = typeWidth x
+          yv = toSigned w y
+      if yv <= minSigned wShort
+        then pure $ boolLitValue False
+        else if yv > maxSigned wShort
+          then pure $ boolLitValue True
+          else rewriteApp (BVSignedLt x (BVValue wShort y))
+    BVSignedLt (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
 
     BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic

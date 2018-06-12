@@ -21,6 +21,7 @@ single CFG.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -358,8 +359,14 @@ asBaseOffset x
 
 class IPAlignment arch where
   -- | Take an aligned value and strip away the bits of the semantics that
-  -- align it, leaving behind a (potentially unaligned) value.
+  -- align it, leaving behind a (potentially unaligned) value. Return 'Nothing'
+  -- if the input value does not appear to be a valid value for the instruction
+  -- pointer.
   fromIPAligned :: ArchAddrValue arch ids -> Maybe (ArchAddrValue arch ids)
+
+  -- | Take an unaligned memory address and clean it up so that it is a valid
+  -- value for the instruction pointer.
+  toIPAligned :: MemAddr (ArchAddrWidth arch) -> MemAddr (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
 -- RegState
