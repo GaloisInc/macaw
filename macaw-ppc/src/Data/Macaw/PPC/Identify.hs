@@ -66,7 +66,8 @@ matchReturn :: (PPCArchConstraints ppc, MC.ArchReg ppc ~ PPCReg ppc)
 matchReturn absProcState' ip = do
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
   guard (shiftAmt == 0x2)
-  Some addr' <- return (stripExtTrunc addr)
+  Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
+  guard (shiftAmt' == 0x2)
   case MA.transferValue absProcState' addr' of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)
     _ -> case addr' of
