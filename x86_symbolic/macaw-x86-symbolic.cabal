@@ -9,16 +9,16 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4,
-                 crucible,
+                 crucible >= 0.4,
+                 crucible-llvm,
                  flexdis86 >= 0.1.2,
+                 lens,
                  macaw-base,
                  macaw-symbolic,
                  macaw-x86,
                  mtl,
                  parameterized-utils,
-                 crucible-llvm,
-                 what4 >= 0.4,
-                 lens
+                 what4 >= 0.4
   hs-source-dirs: src
 
   exposed-modules:

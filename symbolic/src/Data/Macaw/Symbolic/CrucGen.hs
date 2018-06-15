@@ -70,30 +70,28 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Classes
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.NatRepr
+import qualified Data.Parameterized.TH.GADT as U
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import qualified Data.Parameterized.TH.GADT as U
 import           Data.Proxy
-
-
-import           What4.ProgramLoc as C
-import qualified What4.Symbol as C
-
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+
+import           What4.ProgramLoc as C
+import qualified What4.Symbol as C
+
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.Types as C
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
-
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.Symbolic.PersistentState
 

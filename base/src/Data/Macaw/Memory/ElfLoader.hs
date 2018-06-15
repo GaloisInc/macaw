@@ -25,6 +25,7 @@ module Data.Macaw.Memory.ElfLoader
   , resolveElfContents
   , elfAddrWidth
   , module Data.Macaw.Memory.LoadCommon
+  , module Data.Macaw.Memory
   ) where
 
 import           Control.Lens
@@ -54,10 +55,7 @@ import           Data.ElfEdit
   , elfSectionAddr
   , elfSectionData
 
-  , elfSegmentIndex
-  , elfSegmentVirtAddr
   , ElfSegmentFlags
-  , elfSegmentFlags
   , elfLayoutBytes
 
   , ElfSymbolTableEntry
@@ -339,11 +337,11 @@ resolveSymbol (SymbolVector symtab) symIdx = do
 resolveRelocationAddr :: SymbolVector
                       -- ^ A vector mapping symbol indices to the
                       -- associated symbol information.
-                      -> Elf.RelEntry tp
-                      -- ^ A relocation entry
+                      -> Word32
+                      -- ^ Index in the symbol table this refers to.
                       -> RelocResolver SymbolIdentifier
-resolveRelocationAddr symtab rel = do
-  sym <- resolveSymbol symtab (Elf.relSym rel)
+resolveRelocationAddr symtab symIdx = do
+  sym <- resolveSymbol symtab symIdx
   case symbolDef sym of
     DefinedSymbol{} -> do
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
@@ -358,26 +356,30 @@ resolveRelocationAddr symtab rel = do
 relaTargetX86_64 :: SomeRelocationResolver 64
 relaTargetX86_64 = SomeRelocationResolver $ \symtab rel off ->
   case Elf.relType rel of
--- JHX Note.  These have been commented out until we can validate them.
---    Elf.R_X86_64_GLOB_DAT  -> do
---      checkZeroAddend
---      TargetSymbol <$> resolveSymbol symtab rel
---    Elf.R_X86_64_COPY      -> TargetCopy
---    Elf.R_X86_64_JUMP_SLOT -> do
---      checkZeroAddend
---      TargetSymbol <$> resolveSymbol symtab rel
+    Elf.R_X86_64_JUMP_SLOT -> do
+      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
+      pure $ AbsoluteRelocation addr off LittleEndian 8
     Elf.R_X86_64_PC32 -> do
-      addr <- resolveRelocationAddr symtab rel
+      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
       pure $ RelativeRelocation addr off LittleEndian 4
     Elf.R_X86_64_32 -> do
-      addr <- resolveRelocationAddr symtab rel
+      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
       pure $ AbsoluteRelocation addr off LittleEndian 4
     Elf.R_X86_64_64 -> do
-      addr <- resolveRelocationAddr symtab rel
+      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
       pure $ AbsoluteRelocation addr off LittleEndian 8
- -- Jhx Note. These will be needed to support thread local variables.
- --   Elf.R_X86_64_TPOFF32 -> undefined
- --   Elf.R_X86_64_GOTTPOFF -> undefined
+    -- R_X86_64_GLOB_DAT are used to update GOT entries with their
+    -- target address.  They are similar to R_x86_64_64 except appear
+    -- inside dynamically linked executables/libraries, and are often
+    -- loaded lazily.  We just use the eager AbsoluteRelocation here.
+    Elf.R_X86_64_GLOB_DAT -> do
+      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
+      pure $ AbsoluteRelocation addr off LittleEndian 8
+
+    -- Jhx Note. These will be needed to support thread local variables.
+    --   Elf.R_X86_64_TPOFF32 -> undefined
+    --   Elf.R_X86_64_GOTTPOFF -> undefined
+
     tp -> relocError $ RelocationUnsupportedType (show tp)
 
 {-
@@ -396,6 +398,11 @@ relaTargetARM = SomeRelocationResolver $ \_symtab rel _maddend ->
 --      TargetSymbol <$> resolveSymbol symtab rel
     tp -> relocError $ RelocationUnsupportedType (show tp)
 -}
+{-
+000000613ff8  003c00000006 R_X86_64_GLOB_DAT 0000000000000000 __gmon_start__ + 0
+-}
+
+
 
 -- | Creates a relocation map from the contents of a dynamic section.
 withRelocationResolver
@@ -634,7 +641,7 @@ dynamicRelocationMap :: Elf.ElfHeader w
                      -> L.ByteString
                      -> MemLoader w (Some (RelocMap w))
 dynamicRelocationMap hdr ph contents =
-  case filter (Elf.hasSegmentType Elf.PT_DYNAMIC . Elf.phdrSegment) ph of
+  case filter (\p -> Elf.phdrSegmentType p == Elf.PT_DYNAMIC) ph of
     [] -> pure $ Some emptyRelocMap
     dynPhdr:dynRest -> do
       when (not (null dynRest)) $ do
@@ -687,11 +694,11 @@ memSegmentForElfSegment :: (MemWidth w, Monad m, Integral (ElfWordType w))
                         -> m (MemSegment w)
 memSegmentForElfSegment resolver regAdj contents relocMap phdr =
     memSegment resolver (regionIndex regAdj) relocMap (fromInteger base) flags dta sz
-  where seg = Elf.phdrSegment phdr
+  where {- seg = Elf.phdrSegment phdr -}
         dta = sliceL (Elf.phdrFileRange phdr) contents
         sz = fromIntegral $ Elf.phdrMemSize phdr
-        base = regionOffset regAdj + toInteger (elfSegmentVirtAddr seg)
-        flags = flagsForSegmentFlags (elfSegmentFlags seg)
+        base = regionOffset regAdj + toInteger (Elf.phdrSegmentVirtAddr phdr)
+        flags = flagsForSegmentFlags (Elf.phdrSegmentFlags phdr)
 
 -- | Load an elf file into memory.
 insertElfSegment :: RegionAdjust
@@ -707,7 +714,7 @@ insertElfSegment regAdj shdrMap contents (RelocMap relocMap resolver) phdr = do
   reprConstraints w $ do
   when (Elf.phdrMemSize phdr > 0) $ do
     seg <- memSegmentForElfSegment resolver regAdj contents relocMap phdr
-    let seg_idx = elfSegmentIndex (Elf.phdrSegment phdr)
+    let seg_idx = Elf.phdrSegmentIndex phdr
     loadMemSegment ("Segment " ++ show seg_idx) seg
     let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
     let phdr_end = phdr_offset + Elf.phdrFileSize phdr
@@ -749,7 +756,7 @@ memoryForElfSegments regAdj e = do
           , let end = start + elfSectionFileSize sec
           ]
   mapM_ (insertElfSegment regAdj intervals contents relocMap)
-        (filter (Elf.hasSegmentType Elf.PT_LOAD . Elf.phdrSegment) ph)
+        (filter (\p -> Elf.phdrSegmentType p == Elf.PT_LOAD) ph)
 
 ------------------------------------------------------------------------
 -- Elf section loading

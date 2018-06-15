@@ -12,14 +12,14 @@ library
     base >= 4,
     ansi-wl-pprint,
     containers,
-    crucible >= 0.3.2,
-    what4 >= 0.4,
+    crucible >= 0.4,
+    crucible-llvm,
     lens,
     macaw-base,
     mtl,
     parameterized-utils,
     text,
-    crucible-llvm
+    what4 >= 0.4.0
 
   hs-source-dirs: src
 

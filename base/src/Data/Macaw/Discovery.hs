@@ -294,12 +294,12 @@ foundAddrs = lens _foundAddrs (\s v -> s { _foundAddrs = v })
 -- | Add a block to the current function blocks. If this overlaps with an
 -- existing block, split them so that there's no overlap.
 addFunBlock
-  :: MemWidth (RegAddrWidth (ArchReg arch))
-  => ArchSegmentOff arch
+  :: ArchSegmentOff arch
   -> ParsedBlock arch ids
   -> FunState arch s ids
   -> FunState arch s ids
-addFunBlock segment block s = case Map.lookupLT segment (s ^. curFunBlocks) of
+addFunBlock segment block s = withArchConstraints (archInfo (s^.curFunCtx)) $
+  case Map.lookupLT segment (s ^. curFunBlocks) of
     Just (bSegment, bBlock)
         -- very sneaky way to check that they are in the same segment (a
         -- Nothing result from diffSegmentOff will never be greater than a
@@ -345,8 +345,7 @@ liftST = FunM . lift
 
 -- | Joins in the new abstract state and returns the locations for
 -- which the new state is changed.
-mergeIntraJump  :: MemWidth (ArchAddrWidth arch)
-                => ArchSegmentOff arch
+mergeIntraJump  :: ArchSegmentOff arch
                   -- ^ Source label that we are jumping from.
                 -> AbsBlockState (ArchReg arch)
                    -- ^ The state of the system after jumping to new block.
@@ -428,11 +427,13 @@ jumpTableRead :: JumpTable arch ids -> ArrayRead arch ids
 jumpTableRead (Absolute r _) = r
 jumpTableRead (Relative _ r _) = r
 
+{-
 -- | After reading from the array, the result may be extended to address width;
 -- if so, this says how.
 jumpTableExtension :: JumpTable arch ids -> Maybe Extension
 jumpTableExtension (Absolute _ e) = e
 jumpTableExtension (Relative _ _ e) = e
+-}
 
 ensure :: Alternative f => (a -> Bool) -> a -> f a
 ensure p x = x <$ guard (p x)
@@ -678,6 +679,20 @@ identifyCallTargets absState ip = do
         _ -> def
     Initial _ -> def
 
+-- | Read an address using the @MemRepr@ for format information, which should be 4 or 8 bytes.
+-- Returns 'Left' for sizes other than 4 or 8 bytes.
+readMemReprDyn :: Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
+readMemReprDyn mem addr (BVMemRepr size endianness) = do
+  bs <- readByteString mem addr (fromInteger (natValue size))
+  case () of
+    _ | Just Refl <- testEquality size (knownNat :: NatRepr 4) -> do
+          let Just val = addrRead endianness bs
+          Right val
+      | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> do
+          let Just val = addrRead endianness bs
+          Right val
+      | otherwise -> Left $ InvalidSize addr size
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ParseContext arch ids
@@ -886,8 +901,7 @@ parseFetchAndExecute ctx lbl_idx stmts regs s' = do
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-parseBlock :: IPAlignment arch
-           => ParseContext arch ids
+parseBlock :: ParseContext arch ids
               -- ^ Context for parsing blocks.
            -> Block arch ids
               -- ^ Block to parse
@@ -950,8 +964,7 @@ parseBlock ctx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
-               => ArchSegmentOff arch
+transferBlocks :: ArchSegmentOff arch
                   -- ^ Address of theze blocks
                -> FoundAddr arch
                   -- ^ State leading to explore block
@@ -1001,7 +1014,7 @@ transferBlocks src finfo sz block_map =
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 
-transfer :: IPAlignment arch => ArchSegmentOff arch -> FunM arch s ids ()
+transfer :: ArchSegmentOff arch -> FunM arch s ids ()
 transfer addr = do
   s <- use curFunCtx
   let ainfo = archInfo s
@@ -1057,8 +1070,7 @@ transfer addr = do
 
 -- | Loop that repeatedly explore blocks until we have explored blocks
 -- on the frontier.
-analyzeBlocks :: IPAlignment arch
-              => (ArchSegmentOff arch -> ST s ())
+analyzeBlocks :: (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
               -> FunState arch s ids
               -> ST s (FunState arch s ids)
@@ -1110,8 +1122,7 @@ mkFunInfo fs =
 --
 -- This returns the updated state and the discovered control flow
 -- graph for this function.
-analyzeFunction :: IPAlignment arch
-                => (ArchSegmentOff arch -> ST s ())
+analyzeFunction :: (ArchSegmentOff arch -> ST s ())
                  -- ^ Logging function to call when analyzing a new block.
                 -> ArchSegmentOff arch
                    -- ^ The address to explore
@@ -1142,7 +1153,7 @@ analyzeFunction logFn addr rsn s =
 --
 -- If an exploreFnPred function exists in the DiscoveryState, then do not
 -- analyze unexploredFunctions at addresses that do not satisfy this predicate.
-analyzeDiscoveredFunctions :: IPAlignment arch => DiscoveryState arch -> DiscoveryState arch
+analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
   case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
     Nothing -> info
@@ -1181,8 +1192,7 @@ exploreMemPointers mem_words info =
 -- given set of function entry points
 cfgFromAddrs ::
      forall arch
-  .  IPAlignment arch
-  => ArchitectureInfo arch
+  .  ArchitectureInfo arch
      -- ^ Architecture-specific information needed for doing control-flow exploration.
   -> Memory (ArchAddrWidth arch)
      -- ^ Memory to use when decoding instructions.
@@ -1197,8 +1207,7 @@ cfgFromAddrs arch_info mem symbols =
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
 cfgFromAddrsAndState :: forall arch
-                     .  IPAlignment arch
-                     => DiscoveryState arch
+                     .  DiscoveryState arch
                      -> [ArchSegmentOff arch]
                      -- ^ Initial function entry points.
                      -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
@@ -1217,8 +1226,7 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-resolveFuns :: (MemWidth (RegAddrWidth (ArchReg arch)), IPAlignment arch)
-            => (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
+resolveFuns :: (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
                -- ^ Callback for discovered functions
                --
                -- Should return true if we should analyze the function and false otherwise.
@@ -1312,8 +1320,7 @@ ppFunReason rsn =
 -- This function is intended to make it easy to explore functions, and
 -- can be controlled via 'DiscoveryOptions'.
 completeDiscoveryState :: forall arch
-                       .  IPAlignment arch
-                       => ArchitectureInfo arch
+                       .  ArchitectureInfo arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
                        -> Memory (ArchAddrWidth arch)

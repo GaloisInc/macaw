@@ -1,5 +1,6 @@
 -- This module deals with the fact that a number of operations work differently,
 -- depending on if they are applied to pointers or bit-vectors.
+{-# LANGUAGE ConstraintKinds #-}
 {-# Language DataKinds #-}
 {-# Language TypeOperators #-}
 {-# Language TypeFamilies #-}
@@ -25,33 +26,33 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrToBits
   ) where
 
-import Control.Lens((^.),(&),(%~))
-import Control.Monad(guard)
-import Data.Bits(testBit)
-import Data.Map(Map)
+import           Control.Lens ((^.),(&),(%~))
+import           Control.Monad (guard)
+import           Data.Bits (testBit)
+import           Data.Map (Map)
 import qualified Data.Map as Map
 
-import Data.Parameterized(Some(..))
+import           Data.Parameterized (Some(..))
 
-import What4.Interface
-import What4.Symbol(userSymbol)
+import           What4.Interface
+import           What4.Symbol (userSymbol)
 
-import Lang.Crucible.Simulator.ExecutionTree
+import           Lang.Crucible.Backend
+import           Lang.Crucible.CFG.Common (GlobalVar)
+import           Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
           , stateSymInterface
           , stateTree
           , actFrame
           , gpGlobals
           )
-import Lang.Crucible.Simulator.RegMap(RegEntry,regValue)
-import Lang.Crucible.Simulator.RegValue(RegValue)
-import Lang.Crucible.Simulator.GlobalState(lookupGlobal,insertGlobal)
-import Lang.Crucible.Simulator.SimError(SimErrorReason(AssertFailureSimError))
-import Lang.Crucible.CFG.Common(GlobalVar)
-import Lang.Crucible.Types
-import Lang.Crucible.Backend
+import           Lang.Crucible.Simulator.GlobalState (lookupGlobal,insertGlobal)
+import           Lang.Crucible.Simulator.RegMap (RegEntry,regValue)
+import           Lang.Crucible.Simulator.RegValue (RegValue)
+import           Lang.Crucible.Simulator.SimError (SimErrorReason(AssertFailureSimError))
+import           Lang.Crucible.Types
 
-import Lang.Crucible.LLVM.MemModel
+import           Lang.Crucible.LLVM.MemModel
           ( Mem, MemImpl, LLVMPointerType, LLVMPtr, isValidPointer, memEndian
           , LLVMVal(LLVMValInt)
           , loadRaw
@@ -59,21 +60,20 @@ import Lang.Crucible.LLVM.MemModel
           , storeRaw
           , doPtrAddOffset
           )
-import Lang.Crucible.LLVM.MemModel.Pointer
+import           Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
           , pattern LLVMPointer
           , mkNullPointer
           )
-import Lang.Crucible.LLVM.MemModel.Type(bitvectorType)
-import Lang.Crucible.LLVM.MemModel.Generic(ppPtr)
-import Lang.Crucible.LLVM.DataLayout(EndianForm(..))
-import Lang.Crucible.LLVM.Bytes(toBytes)
+import           Lang.Crucible.LLVM.MemModel.Type (bitvectorType)
+import           Lang.Crucible.LLVM.MemModel.Generic (ppPtr)
+import           Lang.Crucible.LLVM.DataLayout (EndianForm(..))
+import           Lang.Crucible.LLVM.Bytes (toBytes)
 
-import Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
-import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
-import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
+import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
+import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
+import           Data.Macaw.CFG.Core (MemRepr(BVMemRepr))
 import qualified Data.Macaw.Memory as M
-
 
 -- | This is called whenever a (bit-vector/pointer) is used as a bit-vector.
 -- The result is undefined (i.e., a fresh unknown value) if it is given
