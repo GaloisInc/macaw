@@ -4,7 +4,7 @@ architectures.
 
 The main algorithm implemented so far is a code discovery procedure
 which will discover reachable code in the binary given one or more
-entry points such as _start, or the current symbols.
+entry points such as `_start` or the current symbols.
 
 The core libraries are:
 
