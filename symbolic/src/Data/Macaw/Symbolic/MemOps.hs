@@ -11,6 +11,7 @@
 {-# Language PatternGuards #-}
 module Data.Macaw.Symbolic.MemOps
   ( PtrOp
+  , GlobalMap
   , doPtrAdd
   , doPtrSub
   , doPtrMux
@@ -29,8 +30,7 @@ module Data.Macaw.Symbolic.MemOps
 import           Control.Lens ((^.),(&),(%~))
 import           Control.Monad (guard)
 import           Data.Bits (testBit)
-import           Data.Map (Map)
-import qualified Data.Map as Map
+import           Data.Maybe ( fromMaybe )
 
 import           Data.Parameterized (Some(..))
 
@@ -58,7 +58,6 @@ import           Lang.Crucible.LLVM.MemModel
           , loadRaw
           , loadRawWithCondition
           , storeRaw
-          , doPtrAddOffset
           )
 import           Lang.Crucible.LLVM.MemModel.Pointer
           ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
@@ -73,7 +72,66 @@ import           Lang.Crucible.LLVM.Bytes (toBytes)
 import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
 import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
 import           Data.Macaw.CFG.Core (MemRepr(BVMemRepr))
-import qualified Data.Macaw.Memory as M
+import qualified Data.Macaw.CFG as M
+
+-- | The 'GlobalMap' is a function that maps from (possibly segmented) program
+-- virtual addresses into pointers into the LLVM memory model heap (the
+-- 'LLVMPtr' type).
+--
+-- There are two types of value translated here:
+--
+-- 1. Bitvectors treated as pointers, and
+-- 2. Segmented addresses (e.g., from object files or shared libraries)
+--
+-- To set up the memory model to verify parts of a program, callers need to
+-- allocate regions of memory to store data including the initial program state.
+-- The user-facing API for allocating memory is the 'doMalloc' primitive from
+-- Lang.Crucible.LLVM.MemModel.  This allocates fresh memory that is distinct
+-- from all other memory in the system.  The distinctness is guaranteed because
+-- each allocation has a unique region identifier.  Each freshly allocated
+-- region of memory has a base address of zero and a size.
+--
+-- In a machine code program, there are a few different kinds of memory to map
+-- into the address space: 1) a *stack*, 2) the *data* segment, 3) and the
+-- program *text* segment.
+--
+-- The *stack* should be logically separate from everything else, so an
+-- allocation with 'doMalloc' is natural.  It is the responsibility of the
+-- caller to place the pointer to the stack (that is the LLVM memory model
+-- pointer) into the appropriate register in the machine state for their
+-- architecture.
+--
+-- The *data* and *text* segments are static data in the original binary image
+-- being analyzed.  They are usually disjoint, so it usually makes sense to
+-- allocate one region of memory for each one using 'doMalloc'.  To resolve a
+-- computed address (which will be a bitvector, i.e., an LLVMPtr value with a
+-- zero region index) that refers to either, a typical workflow in the
+-- 'GlobalMap' function is:
+--
+-- 1. Inspect the region index (the @'RegValue' sym 'NatType'@ parameter)
+-- 2. If the region index is zero, it is a bitvector to translate into an
+--    LLVM memory model pointer ('LLVMPtr')
+-- 3. Look up the offset of the pointer from zero (the @'RegValue' sym ('BVType'
+--    w)@) in a map (probably an IntervalMap); that map should return the base
+--    address of the allocation (which is an 'LLVMPtr')
+-- 4. Depending on the representation of that pointer chosen by the
+--    frontend/setup code, the 'LLVMPtr' may need to be corrected to rebase it,
+--    as the segment being represented by that allocation may not actually start
+--    at address 0 (while the LLVM offset does start at 0).
+--
+-- That discussion describes the translation of raw bitvectors into pointers.
+-- This mapping is also used in another case (see 'doGetGlobal'): translating
+-- the address of a relocatable value (which doesn't necessarily have a
+-- well-defined absolute address) into an address in the LLVM memory model.
+-- Relocatable values in this setting have a non-zero region index as an input.
+-- The 'GlobalMap' is responsible for 1) determining which LLVM allocation
+-- contains the relocatable value, and 2) returning the corresponding address in
+-- that allocation.
+type GlobalMap sym w = sym                        {-^ The symbolic backend -} ->
+                       RegValue sym Mem           {-^ The global handle to the memory model -} ->
+                       RegValue sym NatType       {-^ The region index of the pointer being translated -} ->
+                       RegValue sym (BVType w)    {-^ The offset of the pointer into the region -} ->
+                       IO (Maybe (LLVMPtr sym w))
 
 -- | This is called whenever a (bit-vector/pointer) is used as a bit-vector.
 -- The result is undefined (i.e., a fresh unknown value) if it is given
@@ -112,27 +170,24 @@ doGetGlobal ::
   (IsSymInterface sym, M.MemWidth w) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Model of memory   -} ->
-  Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
+  GlobalMap sym w ->
   M.MemAddr w                              {- ^ Address identifier -} ->
   IO ( RegValue sym (LLVMPointerType w)
      , CrucibleState s sym ext rtp blocks r ctx
      )
-doGetGlobal st mvar globs addr =
-  case Map.lookup (M.addrBase addr) globs of
+doGetGlobal st mvar globs addr = do
+  let sym = stateSymInterface st
+  mem <- getMem st mvar
+  regionNum <- natLit sym (fromIntegral (M.addrBase addr))
+  offset <- bvLit sym (M.addrWidthNatRepr (M.addrWidthRepr addr)) (M.memWordInteger (M.addrOffset addr))
+  mptr <- globs sym mem regionNum offset
+  case mptr of
     Nothing -> fail $ unlines
                         [ "[doGetGlobal] Undefined global region:"
                         , "*** Region:  " ++ show (M.addrBase addr)
                         , "*** Address: " ++ show addr
                         ]
-    Just region ->
-      do mem <- getMem st mvar
-         let sym = stateSymInterface st
-         let w = M.addrWidthRepr addr
-         LeqProof <- pure $ addrWidthAtLeast16 w
-         let ?ptrWidth = M.addrWidthNatRepr w
-         off <- bvLit sym ?ptrWidth (M.memWordInteger (M.addrOffset addr))
-         res <- doPtrAddOffset sym mem region off
-         return (res, st)
+    Just ptr -> return (ptr, st)
 
 --------------------------------------------------------------------------------
 
@@ -317,7 +372,7 @@ doReadMem ::
   IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem ->
-  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
+  GlobalMap sym ptrW ->
   M.AddrWidthRepr ptrW ->
   MemRepr ty ->
   RegEntry sym (LLVMPointerType ptrW) ->
@@ -333,8 +388,7 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
          bitw  = natMultiply (knownNat @8) bytes
 
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
-
-     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     ptr <- tryGlobPtr sym mem globs (regValue ptr0)
 
      let ?ptrWidth = M.addrWidthNatRepr w
      ok <- isValidPtr sym mem w ptr
@@ -347,7 +401,6 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
      a   <- case valToBits bitw val of
               Just a  -> return a
               Nothing -> fail "[doReadMem] We read an unexpected value"
-
      return (a,st)
 
 
@@ -356,7 +409,7 @@ doCondReadMem ::
   IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
-  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
+  GlobalMap sym ptrW                       {- ^ Translate machine addresses to memory model addresses -} ->
   M.AddrWidthRepr ptrW                     {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are reading -} ->
   RegEntry sym BoolType                    {- ^ Condition -} ->
@@ -376,7 +429,7 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
 
-     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     ptr <- tryGlobPtr sym mem globs (regValue ptr0)
      ok  <- isValidPtr sym mem w ptr
      check sym ok "doCondReadMem"
                 $ "Conditional read through an invalid pointer: " ++
@@ -407,7 +460,7 @@ doWriteMem ::
   IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
   GlobalVar Mem                            {- ^ Memory model -} ->
-  Map M.RegionIndex (RegValue sym (LLVMPointerType ptrW)) {- ^ Region ptrs -} ->
+  GlobalMap sym ptrW ->
   M.AddrWidthRepr ptrW                     {- ^ Width of ptr -} ->
   MemRepr ty                               {- ^ What/how we are writing -} ->
   RegEntry sym (LLVMPointerType ptrW)      {- ^ Pointer -} ->
@@ -425,8 +478,7 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
      LeqProof <- return (leqMulPos (knownNat @8) bytes)
-
-     ptr <- tryGlobPtr sym mem globs w (regValue ptr0)
+     ptr <- tryGlobPtr sym mem globs (regValue ptr0)
      ok <- isValidPtr sym mem w ptr
      check sym ok "doWriteMem"
                   $ "Write to an invalid location: " ++ show (ppPtr ptr)
@@ -606,33 +658,30 @@ mkName x = case userSymbol x of
 
 
 
-{- | Every now and then we encoutner memory opperations that
+{- | Every now and then we encounter memory opperations that
 just read/write to some constant.  Normally, we do not allow
 such things as we want memory to be allocated first.
 However we need to make an exception for globals.
 So, if we ever try to manipulate memory at some address
 which is statically known to be a constant, we consult
 the global map to see if we know about a correpsonding
-addres..  If so, we use that for the memory operation. -}
+address.  If so, we use that for the memory operation.
+
+See the documentation of 'GlobalMap' for details about how that translation can
+be handled.
+-}
 tryGlobPtr ::
   IsSymInterface sym =>
   sym ->
   RegValue sym Mem ->
-  Map M.RegionIndex (RegValue sym (LLVMPointerType w)) {- ^ Region ptrs -} ->
-  M.AddrWidthRepr w ->
+  GlobalMap sym w ->
   LLVMPtr sym w ->
   IO (LLVMPtr sym w)
-tryGlobPtr sym mem globs w val
-  | Just 0 <- asNat (ptrBase val)
-  , Just r <- Map.lookup literalAddrRegion globs
-  , LeqProof <- addrWidthIsPos w
-  , LeqProof <- addrWidthAtLeast16 w =
-     let ?ptrWidth = M.addrWidthNatRepr w
-      in doPtrAddOffset sym mem r (asBits val)
+tryGlobPtr sym mem mapBVAddress val
+  | Just 0 <- asNat (ptrBase val) = do
+      maddr <- mapBVAddress sym mem (ptrBase val) (asBits val)
+      return (fromMaybe val maddr)
   | otherwise = return val
-  where
-  literalAddrRegion = 0
-
 
 isAlignMask :: (IsSymInterface sym) => LLVMPtr sym w -> Maybe Integer
 isAlignMask v =
