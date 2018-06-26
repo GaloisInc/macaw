@@ -62,7 +62,7 @@ armNonceAppEval bvi nonceApp =
       S.FnApp symFn args ->
           let nm = symFnName symFn
           in case nm of
-               "arm_is_r15" -> return $
+               "uf_arm_is_r15" -> return $
                    -- This requires special handling because this can
                    -- be checking actual GPR locations or the results
                    -- of an expression extracting a register number

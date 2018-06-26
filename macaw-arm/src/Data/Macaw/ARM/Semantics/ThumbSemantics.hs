@@ -21,7 +21,7 @@ import qualified Data.Macaw.Types as MT
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.Thumb -- as ThumbDis -- must be present to supply definitions for genExecInstruction output
 import qualified SemMC.Architecture.AArch32 as ARMSem
-import           SemMC.Architecture.ARM.Opcodes ( allT32Semantics, allT32OpcodeInfo )
+import           SemMC.Architecture.ARM.Opcodes ( allT32Semantics, allT32OpcodeInfo, t32DefinedFunctions )
 
 
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
@@ -34,5 +34,6 @@ execInstruction = $(genExecInstructionLogStdErr (Proxy @ARMSem.AArch32)
                     't32InstructionMatcher
                     allT32Semantics
                     allT32OpcodeInfo
+                    t32DefinedFunctions
                     ([t| Dismantle.Thumb.Operand |], [t| ARMSem.AArch32 |])
                    )
