@@ -36,8 +36,10 @@ import           Control.Lens ( (^.) )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
+
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
+import qualified Data.Map -- no abbreviation; Map already used
 import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
@@ -51,6 +53,7 @@ import qualified Data.Parameterized.List as SL
 import qualified Data.Parameterized.Map as Map
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
+import qualified Data.Parameterized.Pair as Pair
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Lang.Crucible.Backend.Simple as S
@@ -94,17 +97,19 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    => (forall tp . L.Location arch tp -> Q Exp)
                    -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
                    -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                   -> Library (Sym t)
                    -> Name
                    -- ^ The name of the architecture-specific instruction
                    -- matcher to run before falling back to the generic one
                    -> Map.MapF a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                    -> (Q Type, Q Type)
                    -> Q Exp
-instructionMatcher ltr ena ae archSpecificMatcher formulas operandResultType = do
+instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae ipVarName operandListVar operandResultType) (Map.toList formulas)
+  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType)  lib
+  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType) (Map.toList formulas)
   (fallthruNm, unimp) <- unimplementedInstruction
   fallthroughCase <- match wildP (normalB (appE (varE fallthruNm) (varE opcodeVar))) []
   let allCases :: [Match]
@@ -116,7 +121,7 @@ instructionMatcher ltr ena ae archSpecificMatcher formulas operandResultType = d
   matcherRes <- appE (varE archSpecificMatcher) (varE instrVar)
   actionVar <- newName "action"
   let instrCase = LetE (unimp : fullDefs) $ CaseE (VarE opcodeVar) allCases
-      fullDefs = concatMap (\(t,i) -> [t,i]) bodyDefs
+      fullDefs = libDefs ++ concatMap (\(t,i) -> [t,i]) bodyDefs
   return $ LamE [(VarP ipVarName), instrArg] $
          CaseE matcherRes
                    [ Match (ConP 'Just [VarP actionVar])
@@ -137,6 +142,30 @@ unimplementedInstruction = do
     return (fname, fdecl)
 
 
+-- | Create a function declaration for each function in the library.
+-- Generates the declarations and a lookup function to use to generate
+-- calls.
+libraryDefinitions :: (A.Architecture arch)
+                   => (forall tp . L.Location arch tp -> Q Exp)
+                   -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                   -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                   -> Q Type
+                   -> Library (Sym t)
+                   -> Q ([Dec], String -> Maybe (MacawQ arch t Exp))
+libraryDefinitions ltr ena ae archType lib = do
+  (decs, pairs) :: ([[Dec]], [(String, Name)])
+    <- unzip <$> mapM translate (Map.toList lib)
+  let varMap :: Data.Map.Map String Name
+                -- Would use a MapF (Const String) (Const Name), but there's no
+                -- OrdF instance for Const
+      varMap = Data.Map.fromList pairs
+      look name = (liftQ . varE) <$> Data.Map.lookup name varMap
+  return (concat decs, look)
+  where
+    translate (Pair.Pair _ ff@(FunctionFormula { ffName = name })) = do
+      (var, sig, def) <- translateFunction ltr ena ae archType ff
+      return ([sig, def], (name, var))
+
 -- | Generate a single case for one opcode of the case expression.
 -- Generates two parts: the case match, which calls a function to
 -- handle the match, and the function definition for handling the
@@ -152,12 +181,13 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 => (forall tp . L.Location arch tp -> Q Exp)
                 -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
                 -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                -> (String -> Maybe (MacawQ arch t Exp))
                 -> Name
                 -> Name
                 -> (Q Type, Q Type)
                 -> Map.Pair a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                 -> Q (Match, (Dec, Dec))
-mkSemanticsCase ltr ena ae ipVarName operandListVar operandResultType (Map.Pair opc (Pair semantics capInfo)) =
+mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (Map.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
@@ -169,7 +199,7 @@ mkSemanticsCase ltr ena ae ipVarName operandListVar operandResultType (Map.Pair 
                                                         $(varT sTypeVar) ()) |]
        ofdef <- funD ofname
                  [clause [varP arg1Nm]
-                  (normalB (mkOperandListCase ltr ena ae ipVarName arg1Nm opc semantics capInfo))
+                  (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo))
                   []]
        mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (varE ofname) (varE operandListVar))) []
        return (mtch, (ofsig, ofdef))
@@ -202,14 +232,15 @@ mkOperandListCase :: (A.Architecture arch)
                   => (forall tp0 . L.Location arch tp0 -> Q Exp)
                   -> (forall tp0 . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp0 -> Maybe (MacawQ arch t Exp))
                   -> (forall tp0 . BoundVarInterpretations arch t -> S.App (S.Expr t) tp0 -> Maybe (MacawQ arch t Exp))
+                  -> (String -> Maybe (MacawQ arch t Exp))
                   -> Name
                   -> Name
                   -> a tp
                   -> ParameterizedFormula (Sym t) arch tp
                   -> DT.CaptureInfo a tp
                   -> Q Exp
-mkOperandListCase ltr ena ae ipVarName operandListVar opc semantics capInfo = do
-  body <- genCaseBody ltr ena ae ipVarName opc semantics (DT.capturedOperandNames capInfo)
+mkOperandListCase ltr ena ae df ipVarName operandListVar opc semantics capInfo = do
+  body <- genCaseBody ltr ena ae df ipVarName opc semantics (DT.capturedOperandNames capInfo)
   DT.genCase capInfo operandListVar body
 
 -- | This is the function that translates formulas (semantics) into expressions
@@ -228,20 +259,24 @@ genCaseBody :: forall a sh t arch
             => (forall tp . L.Location arch tp -> Q Exp)
             -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
             -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+            -> (String -> Maybe (MacawQ arch t Exp))
             -> Name
             -> a sh
             -> ParameterizedFormula (Sym t) arch sh
             -> SL.List (C.Const Name) sh
             -> Q Exp
-genCaseBody ltr ena ae ipVarName _opc semantics varNames = do
+genCaseBody ltr ena ae df ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
-  translateFormula ltr ena ae ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap regsName) varNames
+  translateFormula ltr ena ae df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames
   where
     locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
     locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
 
     opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
     opVarsMap = SL.ifoldr (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
+
+    argVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+    argVarsMap = Map.empty
 
 collectVarForLocation :: forall tp arch proxy t
                        . proxy arch
@@ -315,11 +350,14 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
+                   -> [(String, BS.ByteString)]
+                   -- ^ A list of defined function names paired with the
+                   -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
                    -> Q Exp
-genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo operandResultType = do
+genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
   logCfg <- runIO $ U.mkNonLogCfg
-  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo operandResultType logCfg
+  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
   runIO $ U.logEndWith logCfg
   return r
 
@@ -359,12 +397,15 @@ genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
+                   -> [(String, BS.ByteString)]
+                   -- ^ A list of defined function names paired with the
+                   -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
                    -> Q Exp
-genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo operandResultType = do
+genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
   logCfg <- runIO $ U.mkLogCfg "genExecInstruction"
   logThread <- runIO $ U.asyncLinked (U.stdErrLogEventConsumer (const True) logCfg)
-  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo operandResultType logCfg
+  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
   runIO $ U.logEndWith logCfg
   runIO $ Async.wait logThread
   return r
@@ -411,6 +452,9 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
+                   -> [(String, BS.ByteString)]
+                   -- ^ A list of defined function names paired with the
+                   -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
                    -> U.LogCfg
                    -- ^ Logging configuration (explicit rather than
@@ -418,13 +462,14 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- know how to pass implicits to TH splices
                    -- invocations.
                    -> Q Exp
-genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo operandResultType logcfg =
+genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg =
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
       sym <- runIO (S.newSimpleBackend ng)
-      formulas <- runIO (loadFormulas sym semantics)
+      lib <- runIO (loadLibrary (Proxy @arch) sym functions)
+      formulas <- runIO (loadFormulas sym lib semantics)
       let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
-      instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo operandResultType
+      instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType
         where
           attachInfo m0 (Some ci) m =
               let co = DT.capturedOpcode ci
@@ -448,14 +493,15 @@ translateFormula :: forall arch t sh .
                  => (forall tp . L.Location arch tp -> Q Exp)
                  -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
                  -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                 -> (String -> Maybe (MacawQ arch t Exp))
                  -> Name
                  -> ParameterizedFormula (Sym t) arch sh
                  -> BoundVarInterpretations arch t
                  -> SL.List (C.Const Name) sh
                  -> Q Exp
-translateFormula ltr ena ae ipVarName semantics interps varNames = do
+translateFormula ltr ena ae df ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
-  exps <- runMacawQ ltr ena ae (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
+  exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
   [| Just $(doSequenceQ preamble exps) |]
   where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> MacawQ arch t ()
@@ -481,6 +527,58 @@ translateFormula ltr ena ae ipVarName semantics interps varNames = do
                                    Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
                                |]
 
+
+translateFunction :: forall arch t args ret .
+                     (A.Architecture arch)
+                  => (forall tp . L.Location arch tp -> Q Exp)
+                  -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                  -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+                  -> Q Type
+                  -> FunctionFormula (Sym t) '(args, ret)
+                  -> Q (Name, Dec, Dec)
+translateFunction ltr ena ae archType ff = do
+  var <- newName ("_df_" ++ (ffName ff))
+  argVars :: [Name]
+    <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
+  let argVarMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+      argVarMap = Map.fromList $ zipWith pair bvs argVars
+        where
+          bvs :: [Some (SI.BoundVar (Sym t))]
+          bvs = FC.toListFC Some (ffArgVars ff)
+          pair (Some bv) v = Pair.Pair bv (C.Const v)
+      interps = BoundVarInterpretations { locVars = Map.empty
+                                        , regsValName = mkName "<invalid>"
+                                        -- only used for loc vars; we have none
+                                        , opVars = Map.empty
+                                        , valVars = argVarMap }
+      expr = case S.symFnInfo (ffDef ff) of
+        S.DefinedFnInfo _ e _ -> e
+        _ -> error $ "expected a defined function; found " ++ show (ffDef ff)
+  stmts <- runMacawQ ltr ena ae (const Nothing) $ do
+    val <- addEltTH interps expr
+    appendStmt [| return $(return val) |]
+  idsTy <- varT <$> newName "ids"
+  sTy <- varT <$> newName "s"
+  let translate :: forall tp. CT.BaseTypeRepr tp -> Q Type
+      translate tp =
+        [t| M.Value $(archType) $(idsTy) $(translateBaseType tp) |]
+      argHsTys = FC.toListFC translate (ffArgTypes ff)
+      retHsTy = [t| G.Generator $(archType) $(idsTy) $(sTy)
+                     $(translate (ffRetType ff)) |]
+      ty = foldr (\a r -> [t| $(a) -> $(r) |]) retHsTy argHsTys
+      body = doE (map return stmts)
+  sig <- sigD var ty
+  def <- funD var [clause (map varP argVars) (normalB body) []]
+  return (var, sig, def)
+
+translateBaseType :: CT.BaseTypeRepr tp -> Q Type
+translateBaseType tp =
+  case tp of
+    CT.BaseBoolRepr -> [t| M.BoolType |]
+    CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (natValue n)))
+    -- S.BaseStructRepr -> -- hard because List versus Assignment
+    _ -> fail $ "unsupported base type: " ++ show tp
+
 addEltTH :: forall arch t ctp .
             (A.Architecture arch)
          => BoundVarInterpretations arch t
@@ -497,14 +595,15 @@ addEltTH interps elt = do
         S.AppExpr appElt -> do
           translatedExpr <- appToExprTH (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
-        S.BoundVarExpr bVar ->
-          case Map.lookup bVar (locVars interps) of
-            Just loc -> withLocToReg $ \ltr -> do
+        S.BoundVarExpr bVar
+          | Just loc <- Map.lookup bVar (locVars interps) ->
+            withLocToReg $ \ltr -> do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
-            Nothing  ->
-              case Map.lookup bVar (opVars interps) of
-                Just (C.Const name) -> bindExpr elt [| O.extractValue $(varE name) |]
-                Nothing -> fail $ "bound var not found: " ++ show bVar
+          | Just (C.Const name) <- Map.lookup bVar (opVars interps) ->
+            bindExpr elt [| O.extractValue $(varE name) |]
+          | Just (C.Const name) <- Map.lookup bVar (valVars interps) ->
+            bindExpr elt [| return $(varE name) |]
+          | otherwise -> fail $ "bound var not found: " ++ show bVar
         S.NonceAppExpr n -> do
           translatedExpr <- evalNonceAppTH interps (S.nonceExprApp n)
           bindExpr elt (return translatedExpr)
@@ -512,6 +611,9 @@ addEltTH interps elt = do
 
 symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
+
+bvarName :: S.ExprBoundVar t tp -> String
+bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 
 writeMemTH :: forall arch t tp
             . (A.Architecture arch)
@@ -536,7 +638,7 @@ writeMemTH bvi expr =
 -- | Match a "write_mem" intrinsic and return the number of bytes written
 matchWriteMemWidth :: String -> Maybe Int
 matchWriteMemWidth s = do
-  suffix <- L.stripPrefix "write_mem_" s
+  suffix <- L.stripPrefix "uf_write_mem_" s
   (`div` 8) <$> readMaybe suffix
 
 evalNonceAppTH :: forall arch t tp
@@ -557,81 +659,89 @@ defaultNonceAppEvaluator :: forall arch t tp
                          -> MacawQ arch t Exp
 defaultNonceAppEvaluator bvi nonceApp =
   case nonceApp of
-    S.FnApp symFn args -> do
-      let fnName = symFnName symFn
-      case fnName of
-        "test_bit_dynamic" ->
-          case FC.toListFC Some args of
-            [Some bitNum, Some loc] -> do
-              bitNumExp <- addEltTH bvi bitNum
-              locExp <- addEltTH bvi loc
-              liftQ [| G.addExpr (G.AppExpr (M.BVTestBit $(return bitNumExp) $(return locExp))) |]
-            _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
-        -- For count leading zeros, we don't have a SimpleBuilder term to reduce
-        -- it to, so we have to manually transform it to macaw here (i.e., we
-        -- can't use the more general substitution method, since that is in
-        -- terms of rewriting simplebuilder).
-        "clz_32" ->
-          case FC.toListFC Some args of
-            [Some loc] -> do
-              locExp <- addEltTH bvi loc
-              liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @32) $(return locExp))) |]
-            _ -> fail ("Unsupported argument list for clz: " ++ showF args)
-        "clz_64" ->
-          case FC.toListFC Some args of
-            [Some loc] -> do
-              locExp <- addEltTH bvi loc
-              liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @64) $(return locExp))) |]
-            _ -> fail ("Unsupported argument list for clz: " ++ showF args)
-        "popcnt_32" ->
-          case FC.toListFC Some args of
-            [Some loc] -> do
-              locExp <- addEltTH bvi loc
-              liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @32) $(return locExp))) |]
-            _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
-        "popcnt_64" ->
-          case FC.toListFC Some args of
-            [Some loc] -> do
-              locExp <- addEltTH bvi loc
-              liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @64) $(return locExp))) |]
-            _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
-        "undefined" -> do
-          case S.nonceAppType nonceApp of
-            CT.BaseBVRepr n ->
-              liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH n))) |]
-            nt -> fail ("Invalid type for undefined: " ++ show nt)
-        _ | Just nBytes <- readMemBytes fnName -> do
-            case FC.toListFC Some args of
-              [_, Some addrElt] -> do
-                -- read_mem has a shape such that we expect two arguments; the
-                -- first is just a stand-in in the semantics to represent the
-                -- memory.
-                addr <- addEltTH bvi addrElt
-                liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) M.BigEndian
-                        in M.AssignedValue <$> G.addAssignment (M.ReadMem $(return addr) memRep)
-                       |]
-              _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
-          | otherwise ->
-            case lookup fnName (A.locationFuncInterpretation (Proxy @arch)) of
-              Nothing -> error ("Unsupported UF: " ++ show fnName)
-              Just fi -> do
-                -- args is an assignment that contains elts; we could just generate
-                -- expressions that evaluate each one and then splat them into new names
-                -- that we apply our name to.
-                case FC.toListFC (asName fnName bvi) args of
-                  [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
-                  argNames -> do
-                    let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                    liftQ [| O.extractValue ($(call)) |]
+    S.FnApp symFn args
+      | S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
+          let fnName = symFnName symFn
+          funMaybe <- definedFunction fnName
+          case funMaybe of
+            Just fun -> do
+              argExprs <- sequence $ FC.toListFC (addEltTH bvi) args
+              return $ foldl AppE fun argExprs
+            Nothing -> fail ("Unknown defined function: " ++ fnName)
+      | otherwise -> do
+          let fnName = symFnName symFn
+          case fnName of
+            "uf_test_bit_dynamic" ->
+              case FC.toListFC Some args of
+                [Some bitNum, Some loc] -> do
+                  bitNumExp <- addEltTH bvi bitNum
+                  locExp <- addEltTH bvi loc
+                  liftQ [| G.addExpr (G.AppExpr (M.BVTestBit $(return bitNumExp) $(return locExp))) |]
+                _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
+            -- For count leading zeros, we don't have a SimpleBuilder term to reduce
+            -- it to, so we have to manually transform it to macaw here (i.e., we
+            -- can't use the more general substitution method, since that is in
+            -- terms of rewriting simplebuilder).
+            "uf_clz_32" ->
+              case FC.toListFC Some args of
+                [Some loc] -> do
+                  locExp <- addEltTH bvi loc
+                  liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @32) $(return locExp))) |]
+                _ -> fail ("Unsupported argument list for clz: " ++ showF args)
+            "uf_clz_64" ->
+              case FC.toListFC Some args of
+                [Some loc] -> do
+                  locExp <- addEltTH bvi loc
+                  liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @64) $(return locExp))) |]
+                _ -> fail ("Unsupported argument list for clz: " ++ showF args)
+            "uf_popcnt_32" ->
+              case FC.toListFC Some args of
+                [Some loc] -> do
+                  locExp <- addEltTH bvi loc
+                  liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @32) $(return locExp))) |]
+                _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
+            "uf_popcnt_64" ->
+              case FC.toListFC Some args of
+                [Some loc] -> do
+                  locExp <- addEltTH bvi loc
+                  liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @64) $(return locExp))) |]
+                _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
+            "uf_undefined" -> do
+              case S.nonceAppType nonceApp of
+                CT.BaseBVRepr n ->
+                  liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH n))) |]
+                nt -> fail ("Invalid type for undefined: " ++ show nt)
+            _ | Just nBytes <- readMemBytes fnName -> do
+                case FC.toListFC Some args of
+                  [_, Some addrElt] -> do
+                    -- read_mem has a shape such that we expect two arguments; the
+                    -- first is just a stand-in in the semantics to represent the
+                    -- memory.
+                    addr <- addEltTH bvi addrElt
+                    liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) M.BigEndian
+                            in M.AssignedValue <$> G.addAssignment (M.ReadMem $(return addr) memRep)
+                           |]
+                  _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
+              | let interp = A.locationFuncInterpretation (Proxy @arch)
+              , Just fi <- lookup fnName interp -> do
+                  -- args is an assignment that contains elts; we could just generate
+                  -- expressions that evaluate each one and then splat them into new names
+                  -- that we apply our name to.
+                  case FC.toListFC (asName fnName bvi) args of
+                    [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
+                    argNames -> do
+                      let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
+                      liftQ [| O.extractValue ($(call)) |]
+              | otherwise -> error $ "Unsupported function: " ++ show fnName
     _ -> error "Unsupported NonceApp case"
-
+  
 -- | Parse the name of a memory read intrinsic and return the number of bytes
 -- that it reads.  For example
 --
 -- > readMemBytes "read_mem_8" == Just 1
 readMemBytes :: String -> Maybe Int
 readMemBytes s = do
-  nBitsStr <- L.stripPrefix "read_mem_" s
+  nBitsStr <- L.stripPrefix "uf_read_mem_" s
   nBits <- readMaybe nBitsStr
   return (nBits `div` 8)
 
