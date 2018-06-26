@@ -10,7 +10,8 @@ module Data.Macaw.SemMC.TH.Monad (
   withLocToReg,
   withNonceAppEvaluator,
   withAppEvaluator,
-  bindExpr
+  bindExpr,
+  definedFunction
   ) where
 
 import qualified Control.Monad.State.Strict as St
@@ -34,6 +35,9 @@ type Sym t = S.SimpleBackend t
 data BoundVarInterpretations arch t =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
                           , opVars  :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+                          , valVars :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+                          -- TODO If there's no worry about name conflicts,
+                          -- combine all three into one map.
                           , regsValName :: Name
                           }
 
@@ -56,18 +60,22 @@ data QState arch t = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                                             . BoundVarInterpretations arch t
                                            -> S.App (S.Expr t) tp
                                            -> Maybe (MacawQ arch t Exp)
+                            , definedFunctionEvaluator :: String
+                                                       -> Maybe (MacawQ arch t Exp)
                             }
 
 emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
             -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
             -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+            -> (String -> Maybe (MacawQ arch t Exp))
             -> QState arch t
-emptyQState ltr ena ae = QState { accumulatedStatements = Seq.empty
-                                , expressionCache = M.empty
-                                , locToReg = ltr
-                                , nonceAppEvaluator = ena
-                                , appEvaluator = ae
-                                }
+emptyQState ltr ena ae df = QState { accumulatedStatements = Seq.empty
+                                   , expressionCache = M.empty
+                                   , locToReg = ltr
+                                   , nonceAppEvaluator = ena
+                                   , appEvaluator = ae
+                                   , definedFunctionEvaluator = df
+                                   }
 
 newtype MacawQ arch t a = MacawQ { unQ :: St.StateT (QState arch t) Q a }
   deriving (Functor,
@@ -78,9 +86,10 @@ newtype MacawQ arch t a = MacawQ { unQ :: St.StateT (QState arch t) Q a }
 runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
           -> (forall tp . BoundVarInterpretations arch t -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
           -> (forall tp . BoundVarInterpretations arch t -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t Exp))
+          -> (String -> Maybe (MacawQ arch t Exp))
           -> MacawQ arch t ()
           -> Q [Stmt]
-runMacawQ ltr ena ea act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea)
+runMacawQ ltr ena ea df act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea df)
 
 -- | Lift a TH computation (in the 'Q' monad) into the monad.
 liftQ :: Q a -> MacawQ arch t a
@@ -136,3 +145,11 @@ bindExpr elt eq = do
                        , expressionCache = M.insert (Some elt) res (expressionCache s)
                        }
   return res
+
+
+definedFunction :: String -> MacawQ arch t (Maybe Exp)
+definedFunction name = do
+  df <- St.gets definedFunctionEvaluator
+  case df name of
+    Just expr -> Just <$> expr
+    Nothing -> return Nothing
