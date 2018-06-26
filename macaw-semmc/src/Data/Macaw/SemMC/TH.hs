@@ -108,7 +108,7 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType)  lib
+  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib
   (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType) (Map.toList formulas)
   (fallthruNm, unimp) <- unimplementedInstruction
   fallthroughCase <- match wildP (normalB (appE (varE fallthruNm) (varE opcodeVar))) []
