@@ -422,6 +422,7 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo ope
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
       sym <- runIO (S.newSimpleBackend ng)
+      runIO (S.startCaching sym)
       formulas <- runIO (loadFormulas sym semantics)
       let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
       instructionMatcher ltr ena ae archInsnMatcher formulasWithInfo operandResultType
