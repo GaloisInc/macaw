@@ -61,7 +61,7 @@ ppcNonceAppEval bvi nonceApp =
     S.FnApp symFn args -> do
       let fnName = symFnName symFn
       case fnName of
-        "ppc_fp1" -> return $ do
+        "uf_ppc_fp1" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some frA, Some fpscr] -> do
               case getOpName op of
@@ -71,7 +71,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ FP1 $(lift name) $(return valA) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
-        "ppc_fp2" -> return $ do
+        "uf_ppc_fp2" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some frA, Some frB, Some fpscr] -> do
               case getOpName op of
@@ -82,7 +82,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ FP2 $(lift name) $(return valA) $(return valB) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
-        "ppc_fp3" -> return $ do
+        "uf_ppc_fp3" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some frA, Some frB, Some frC, Some fpscr] -> do
               case getOpName op of
@@ -94,7 +94,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ FP3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
-        "ppc_vec1" -> return $ do
+        "uf_ppc_vec1" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some rA, Some vscr] -> do
               case getOpName op of
@@ -104,7 +104,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
-        "ppc_vec2" -> return $ do
+        "uf_ppc_vec2" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some rA, Some rB, Some vscr] -> do
               case getOpName op of
@@ -115,7 +115,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
-        "ppc_vec3" -> return $ do
+        "uf_ppc_vec3" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some rA, Some rB, Some rC, Some vscr] -> do
               case getOpName op of
@@ -127,7 +127,7 @@ ppcNonceAppEval bvi nonceApp =
                   liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
-        "ppc_is_r0" -> return $ do
+        "uf_ppc_is_r0" -> return $ do
           case FC.toListFC Some args of
             [Some operand] -> do
               -- The operand can be either a variable (TH name bound from
@@ -157,7 +157,7 @@ ppcNonceAppEval bvi nonceApp =
     _ -> Nothing
 
 elementaryFPName :: String -> Maybe String
-elementaryFPName = L.stripPrefix "fp_"
+elementaryFPName = L.stripPrefix "uf_fp_"
 
 addArchAssignment :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
                   => M.ArchFn arch (M.Value arch ids) tp
