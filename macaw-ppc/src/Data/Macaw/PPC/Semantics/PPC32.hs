@@ -12,7 +12,7 @@ import           Dismantle.PPC
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import           SemMC.Architecture.PPC32 ( PPC )
-import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo )
+import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo, allDefinedFunctions )
 
 import           Data.Macaw.SemMC.Generator ( Generator )
 import           Data.Macaw.SemMC.TH ( genExecInstruction )
@@ -25,7 +25,7 @@ execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC))
                     ppcNonceAppEval
                     ppcAppEvaluator
                     'ppcInstructionMatcher
-                    allSemantics allOpcodeInfo
+                    allSemantics allOpcodeInfo allDefinedFunctions
                     ([t| Dismantle.PPC.Operand |], [t| PPC |])
                    )
 
