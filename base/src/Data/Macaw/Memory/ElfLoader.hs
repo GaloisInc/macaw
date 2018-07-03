@@ -935,28 +935,27 @@ instance Show SymbolResolutionError where
   show (CouldNotResolveAddr sym) = "Could not resolve address of " ++ BSC.unpack sym ++ "."
   show MultipleSymbolTables = "Elf contains multiple symbol tables."
 
--- | Find an absolute symbol, of any time, not just function.
-resolveElfFuncSymbolAny' ::
-  Memory w -- ^ Memory object from Elf file.
-                     -> SectionIndexMap w -- ^ Section index mp from memory
-                     -> Int -- ^ Index of symbol
-                     -> ElfSymbolTableEntry (ElfWordType w)
-                     -> Either SymbolResolutionError (MemSymbol w)
-resolveElfFuncSymbolAny' mem secMap idx ste
+-- | Find an symbol of any type -- not just functions.
+resolveElfSymbol :: Memory w -- ^ Memory object from Elf file.
+                        -> SectionIndexMap w -- ^ Section index mp from memory
+                        -> Int -- ^ Index of symbol
+                        -> ElfSymbolTableEntry (ElfWordType w)
+                        -> Maybe (Either SymbolResolutionError (MemSymbol w))
+resolveElfSymbol mem secMap idx ste
     -- Check symbol is defined
-  | Elf.steIndex ste == Elf.SHN_UNDEF = Left $ UndefSymbol (Elf.steName ste)
+  | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
   -- Check symbol name is non-empty
-  | Elf.steName ste == "" = Left $ EmptySymbolName idx (Elf.steType ste)
+  | Elf.steName ste == "" = Just $ Left $ EmptySymbolName idx (Elf.steType ste)
   -- Lookup absolute symbol
   | Elf.steIndex ste == Elf.SHN_ABS = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
       case resolveAddr mem 0 (fromIntegral val) of
-        Just addr -> Right $
+        Just addr -> Just $ Right $
           MemSymbol { memSymbolName = Elf.steName ste
                     , memSymbolStart = addr
                     , memSymbolSize = fromIntegral (Elf.steSize ste)
                     }
-        Nothing   -> Left $ CouldNotResolveAddr (Elf.steName ste)
+        Nothing   -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
   -- Lookup symbol stored in specific section
   | otherwise = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
@@ -964,41 +963,12 @@ resolveElfFuncSymbolAny' mem secMap idx ste
         Just (base,sec)
           | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
           , off <- toInteger val - toInteger (elfSectionAddr sec)
-          , Just addr <- incSegmentOff base off -> do
+          , Just addr <- incSegmentOff base off -> Just $ do
               Right $ MemSymbol { memSymbolName = Elf.steName ste
-                                       , memSymbolStart = addr
-                                       , memSymbolSize = fromIntegral (Elf.steSize ste)
-                                       }
-        _ -> Left $ CouldNotResolveAddr (Elf.steName ste)
-
--- | Find an absolute symbol, of any time, not just function.
-resolveElfFuncSymbolAny ::
-  Memory w -- ^ Memory object from Elf file.
-                     -> SectionIndexMap w -- ^ Section index mp from memory
-                     -> Int -- ^ Index of symbol
-                     -> ElfSymbolTableEntry (ElfWordType w)
-                     -> Maybe (Either SymbolResolutionError (MemSymbol w))
-resolveElfFuncSymbolAny mem secMap idx ste
-  | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
-  | otherwise = Just (resolveElfFuncSymbolAny' mem secMap idx ste)
-
--- | This resolves an Elf symbol into a MemSymbol if it is likely a
--- pointer to a resolved function.
-resolveElfFuncSymbol :: Memory w -- ^ Memory object from Elf file.
-                     -> SectionIndexMap w -- ^ Section index mp from memory
-                     -> Int -- ^ Index of symbol
-                     -> ElfSymbolTableEntry (ElfWordType w)
-                     -> Maybe (Either SymbolResolutionError (MemSymbol w))
-resolveElfFuncSymbol mem secMap idx ste
-  -- Check this is a defined function symbol
-  -- Some NO_TYPE entries appear to correspond to functions, so we include those.
-  | (Elf.steType ste `elem` [ Elf.STT_FUNC, Elf.STT_NOTYPE ]) == False =
-    Nothing
-    -- Check symbol is defined
-  | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
-  -- Check symbol name is non-empty
-  | Elf.steName ste == "" = Just $ (resolveElfFuncSymbolAny' mem secMap idx ste)
-  | otherwise = Just (resolveElfFuncSymbolAny' mem secMap idx ste)
+                                , memSymbolStart = addr
+                                , memSymbolSize = fromIntegral (Elf.steSize ste)
+                                }
+        _ -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
 
 -- | Resolve symbol table entries defined in this Elf file to
 -- a mem symbol
@@ -1016,10 +986,11 @@ resolveElfFuncSymbols mem secMap e =
   case Elf.elfSymtab e of
     [] -> ([], [])
     [tbl] ->
-      let entries = V.toList (Elf.elfSymbolTableEntries tbl)
-       in partitionEithers (mapMaybe (uncurry (resolveElfFuncSymbol mem secMap)) (zip [0..] entries))
+      let entries = zip [0..] (V.toList (Elf.elfSymbolTableEntries tbl))
+          isRelevant (_,ste) = Elf.steType ste == Elf.STT_FUNC
+          funcEntries = filter isRelevant entries
+       in partitionEithers (mapMaybe (uncurry (resolveElfSymbol mem secMap)) funcEntries)
     _ -> ([MultipleSymbolTables], [])
-
 
 -- | Resolve symbol table entries to the addresses in a memory.
 --
@@ -1037,10 +1008,8 @@ resolveElfFuncSymbolsAny mem secMap e =
     [] -> ([], [])
     [tbl] ->
       let entries = V.toList (Elf.elfSymbolTableEntries tbl)
-       in partitionEithers (mapMaybe (uncurry (resolveElfFuncSymbolAny mem secMap)) (zip [0..] entries))
+       in partitionEithers (mapMaybe (uncurry (resolveElfSymbol mem secMap)) (zip [0..] entries))
     _ -> ([MultipleSymbolTables], [])
-
-
 
 ------------------------------------------------------------------------
 -- resolveElfContents
