@@ -538,7 +538,7 @@ translateFunction :: forall arch t args ret .
                   -> FunctionFormula (Sym t) '(args, ret)
                   -> Q (Name, Dec, Dec)
 translateFunction ltr ena ae archType ff = do
-  var <- newName ("_df_" ++ (ffName ff))
+  var <- newName ("df_" ++ (ffName ff))
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
   let argVarMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
