@@ -528,7 +528,6 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames = do
                                    Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
                                |]
 
-
 translateFunction :: forall arch t args ret .
                      (A.Architecture arch)
                   => (forall tp . L.Location arch tp -> Q Exp)
@@ -538,7 +537,7 @@ translateFunction :: forall arch t args ret .
                   -> FunctionFormula (Sym t) '(args, ret)
                   -> Q (Name, Dec, Dec)
 translateFunction ltr ena ae archType ff = do
-  var <- newName ("df_" ++ (ffName ff))
+  var <- newName ("_df_" ++ (ffName ff))
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
   let argVarMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
