@@ -561,7 +561,14 @@ defaultNonceAppEvaluator bvi nonceApp =
     S.FnApp symFn args -> do
       let fnName = symFnName symFn
       case fnName of
-        "test_bit_dynamic" ->
+        "test_bit_dynamic_32" ->
+          case FC.toListFC Some args of
+            [Some bitNum, Some loc] -> do
+              bitNumExp <- addEltTH bvi bitNum
+              locExp <- addEltTH bvi loc
+              liftQ [| G.addExpr (G.AppExpr (M.BVTestBit $(return bitNumExp) $(return locExp))) |]
+            _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
+        "test_bit_dynamic_64" ->
           case FC.toListFC Some args of
             [Some bitNum, Some loc] -> do
               bitNumExp <- addEltTH bvi bitNum
