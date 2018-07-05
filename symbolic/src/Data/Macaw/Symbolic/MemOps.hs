@@ -25,6 +25,9 @@ module Data.Macaw.Symbolic.MemOps
   , doGetGlobal
   , doLookupFunctionHandle
   , doPtrToBits
+  , Regs
+  , MacawSimulatorState(..)
+  , LookupFunctionHandle(..)
   ) where
 
 import           Control.Lens ((^.),(&),(%~))
@@ -33,12 +36,15 @@ import           Data.Bits (testBit)
 import           Data.Maybe ( fromMaybe )
 
 import           Data.Parameterized (Some(..))
+import qualified Data.Parameterized.Context as Ctx
 
 import           What4.Interface
 import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend
 import           Lang.Crucible.CFG.Common (GlobalVar)
+import qualified Lang.Crucible.FunctionHandle as C
+import qualified Lang.Crucible.Simulator.RegMap as C
 import           Lang.Crucible.Simulator.ExecutionTree
           ( CrucibleState
           , stateSymInterface
@@ -69,7 +75,7 @@ import           Lang.Crucible.LLVM.MemModel.Generic (ppPtr)
 import           Lang.Crucible.LLVM.DataLayout (EndianForm(..))
 import           Lang.Crucible.LLVM.Bytes (toBytes)
 
-import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
+import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
 import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
 import           Data.Macaw.CFG.Core (MemRepr(BVMemRepr))
 import qualified Data.Macaw.CFG as M
@@ -148,16 +154,28 @@ doPtrToBits sym w p =
      notPtr <- natEq sym base =<< natLit sym 0
      bvIte sym notPtr (asBits p) undef
 
+data MacawSimulatorState sym = MacawSimulatorState
+
+type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
+                                    (MacawCrucibleRegTypes arch)
+
+data LookupFunctionHandle sym arch = LFH
+     (forall rtp blocks r ctx
+   . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+  -> MemImpl sym
+  -> Regs sym arch
+  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
+
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)
-                       => (MemImpl sym -> regs -> IO a)
+                       => (CrucibleState s sym ext trp blocks r ctx -> MemImpl sym -> regs -> IO (a, CrucibleState s sym ext trp blocks r ctx))
                        -> CrucibleState s sym ext trp blocks r ctx
                        -> GlobalVar Mem
                        -> regs
-                       -> IO a
+                       -> IO (a, CrucibleState s sym ext trp blocks r ctx)
 doLookupFunctionHandle k st mvar regs = do
   mem <- getMem st mvar
-  k mem regs
+  k st mem regs
 --------------------------------------------------------------------------------
 
 

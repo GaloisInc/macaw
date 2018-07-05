@@ -36,7 +36,7 @@ module Data.Macaw.Symbolic
   , Data.Macaw.Symbolic.CrucGen.MacawArchConstraints
   , MacawArchEvalFn
   , EvalStmtFunc
-  , LookupFunctionHandle
+  , LookupFunctionHandle(..)
   , Regs
   , freshValue
   , GlobalMap
@@ -84,7 +84,6 @@ import           Data.Macaw.Symbolic.CrucGen
 import           Data.Macaw.Symbolic.PersistentState
 import           Data.Macaw.Symbolic.MemOps
 
-data MacawSimulatorState sym = MacawSimulatorState
 
 {-
 mkMemSegmentBinding :: (1 <= w)
@@ -391,11 +390,6 @@ type EvalStmtFunc f p sym ext =
 type MacawArchEvalFn sym arch =
   EvalStmtFunc (MacawArchStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 
-type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
-                                    (MacawCrucibleRegTypes arch)
-
-type LookupFunctionHandle sym arch =
-  MM.MemImpl sym -> Regs sym arch -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch))
 
 -- | This evaluates a  Macaw statement extension in the simulator.
 execMacawStmtExtension ::
@@ -405,7 +399,7 @@ execMacawStmtExtension ::
   GlobalMap sym (M.ArchAddrWidth arch) ->
   LookupFunctionHandle sym arch ->
   EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension archStmtFn mvar globs lookupH s0 st =
+execMacawStmtExtension archStmtFn mvar globs (LFH lookupH) s0 st =
   case s0 of
     MacawReadMem w mr x         -> doReadMem st mvar globs w mr x
     MacawCondReadMem w mr p x d -> doCondReadMem st mvar globs w mr p x d
@@ -424,8 +418,8 @@ execMacawStmtExtension archStmtFn mvar globs lookupH s0 st =
       where sym = C.stateSymInterface st
 
     MacawLookupFunctionHandle _ args -> do
-      hv <- C.HandleFnVal <$> doLookupFunctionHandle lookupH st mvar (C.regValue args)
-      return (hv, st)
+      (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
+      return (C.HandleFnVal hv, st')
 
     MacawArchStmtExtension s    -> archStmtFn s st
     MacawArchStateUpdate {}     -> return ((), st)
