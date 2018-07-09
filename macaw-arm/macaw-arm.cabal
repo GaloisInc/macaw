@@ -26,7 +26,7 @@ library
                      , Data.Macaw.ARM.Semantics.TH
   -- other-modules:       
   -- other-extensions:    
-  build-depends:       base >=4.10 && <4.11
+  build-depends:       base >=4.10 && <5
                      , ansi-wl-pprint
                      , bytestring
                      , cereal
@@ -62,7 +62,7 @@ test-suite macaw-arm-tests
   other-modules:       ARMTests
                      , MismatchTests
                      , Shared
-  build-depends:       base >=4.10 && <4.11
+  build-depends:       base >=4.10 && <5
                      , ansi-wl-pprint
                      , binary
                      , bytestring
