@@ -11,11 +11,13 @@ module Data.Macaw.BinaryLoader.X86 (
 
 import qualified Control.Monad.Catch as X
 import qualified Data.ElfEdit as E
+import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
+import           Data.Maybe ( mapMaybe )
 
 import qualified Data.Macaw.X86 as MX
 
@@ -34,11 +36,17 @@ x86EntryPoints :: (X.MonadThrow m)
                => BL.LoadedBinary MX.X86_64 (E.Elf 64)
                -> m (NEL.NonEmpty (MC.MemSegmentOff 64))
 x86EntryPoints loadedBinary = do
-  case MC.asSegmentOff (BL.memoryImage loadedBinary) addr of
-    Just entryPoint -> return (entryPoint NEL.:| [])
+  case MC.asSegmentOff mem addr of
+    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (MC.asSegmentOff mem) symbols)
     Nothing -> X.throwM (InvalidEntryPoint addr)
   where
+    mem = BL.memoryImage loadedBinary
     addr = MC.absoluteAddr (MC.memWord (fromIntegral (E.elfEntry (elf (BL.binaryFormatData loadedBinary)))))
+    elfData = elf (BL.binaryFormatData loadedBinary)
+    symbols = [ MC.absoluteAddr (MC.memWord (fromIntegral (E.steValue entry)))
+              | st <- E.elfSymtab elfData
+              , entry <- F.toList (E.elfSymbolTableEntries st)
+              ]
 
 loadX86Binary :: (X.MonadThrow m)
               => LC.LoadOptions
