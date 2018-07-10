@@ -46,6 +46,7 @@ x86EntryPoints loadedBinary = do
     symbols = [ MC.absoluteAddr (MC.memWord (fromIntegral (E.steValue entry)))
               | st <- E.elfSymtab elfData
               , entry <- F.toList (E.elfSymbolTableEntries st)
+              , E.steType entry == E.STT_FUNC
               ]
 
 loadX86Binary :: (X.MonadThrow m)
