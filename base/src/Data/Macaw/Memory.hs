@@ -541,8 +541,11 @@ data SegmentRange (w :: Nat)
    = ByteRegion !BS.ByteString
      -- ^ A region with specificed bytes
    | RelocationRegion !(Relocation w)
+     -- ^ A region whose contents are computed using the expression
+     -- denoted by the relocation.
    | BSSRegion !(MemWord w)
-     -- ^ A region containing the given number of zero-initialized bytes.
+     -- ^ A region containing the given number of zero-initialized
+     -- bytes.
 
 rangeSize :: forall w . MemWidth w => SegmentRange w -> MemWord w
 rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
@@ -629,7 +632,7 @@ contentsSize (SegmentContents m) =
     Nothing -> 0
     Just ((start, c),_) -> start + rangeSize c
 
--- | De-construct a 'SegmentContents' into its constituent ranges
+-- | Deconstruct a 'SegmentContents' into its constituent ranges
 contentsRanges :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsRanges = Map.toList . segContentsMap
 
@@ -670,8 +673,6 @@ contentsAfterSegmentOff mseg = do
         Just ((_, RelocationRegion r),_) ->
           Left (UnexpectedRelocation (relativeSegmentAddr mseg) r "caso")
 
-contentsList :: SegmentContents w -> [(MemWord w, SegmentRange w)]
-contentsList (SegmentContents m) = Map.toList m
 
 ------------------------------------------------------------------------
 -- Code for injecting relocations into segments.
@@ -1026,7 +1027,7 @@ memAsAddrPairs :: Memory w
                -> [(MemSegmentOff w, MemSegmentOff w)]
 memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
   seg <- memSegments mem
-  (contents_offset,r) <- contentsList (segmentContents seg)
+  (contents_offset,r) <- contentsRanges (segmentContents seg)
   let sz = addrSize mem
   case r of
     ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
