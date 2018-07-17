@@ -131,15 +131,16 @@ mkCrucRegCFG archFns halloc nm action = do
   let argTypes = Empty :> macawStructRepr
   h <- C.mkHandle' halloc nm argTypes macawStructRepr
   let ps0 = initCrucPersistentState 1
-  blockRes <- runMacawMonad ps0 action
+  (blockRes, ps') <- runMacawMonad ps0 action
   blks <-
     case blockRes of
-      (Left err, _) -> fail err
-      (Right blks, _)  -> pure blks
+      Left err -> fail err
+      Right blks -> pure blks
   -- Create control flow graph
   let rg :: CR.CFG (MacawExt arch) s (MacawFunctionArgs arch) (MacawFunctionResult arch)
       rg = CR.CFG { CR.cfgHandle = h
                   , CR.cfgBlocks = blks
+                  , CR.cfgNextValue = valueCount ps'
                   }
   pure $ CR.SomeCFG rg
 
