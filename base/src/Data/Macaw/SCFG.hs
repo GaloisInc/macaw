@@ -13,8 +13,12 @@ optimization.
 module Data.Macaw.SCFG
   ( SCFG(..)
   , SCFGBlock(..)
-  , CallingConvention(..)
+  , CallingConvention
+  , Stmt(..)
   , TermStmt(..)
+  , Value(..)
+  , AssignId(..)
+  , BlockIndex(..)
   , module Data.Macaw.CFG.App
   ) where
 

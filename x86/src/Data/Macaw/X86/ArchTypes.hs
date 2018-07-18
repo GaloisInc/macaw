@@ -309,9 +309,31 @@ data X86PrimFn f tp where
   -- | Read the 'GS' base address.
   ReadGSBase :: X86PrimFn f (BVType 64)
   -- | The CPUID instruction.
-  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
   --
   -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
+  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
+
+  -- | This implements the logic for the cmpxchg8b instruction
+  --
+  -- Given a statement, `CMPXCHG8B addr eax ebx ecx edx` this executes the following logic:
+  --   temp64 <- read addr
+  --   if edx:eax == tmp then do
+  --     *addr := ecx:ebx
+  --     return (true, eax, edx)
+  --   else
+  --     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
+  CMPXCHG8B :: !(f (BVType 64))
+               -- ^ Address to read
+            -> !(f (BVType 32))
+               -- ^ Value in EAX
+            -> !(f (BVType 32))
+               -- ^ Value in EBX
+            -> !(f (BVType 32))
+               -- ^ Value in ECX
+            -> !(f (BVType 32))
+               -- ^ Value in EDX
+            -> X86PrimFn f (TupleType [BoolType, BVType 32, BVType 32])
+
   -- | The RDTSC instruction.
   --
   -- This returns the current time stamp counter a 64-bit value that will
@@ -331,7 +353,7 @@ data X86PrimFn f tp where
   --   @res[i] = x[j] where j = s[i](0..l)
   -- where @msb(y)@ returns the most-significant bit in byte @y@.
   PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
-  -- | Compares to memory regions
+  -- | Compares to memory regions and return the number of bytes that were the same.
   MemCmp :: !Integer
            -- /\ Number of bytes per value.
          -> !(f (BVType 64))
@@ -537,7 +559,7 @@ data X86PrimFn f tp where
           -> !(f (BVType 80))
           -> X86PrimFn f tp
 
-  {- | Unary operation on a vector.  Should have no side effects. -}
+  -- | Unary operation on a vector.  Should have no side effects.
   VOp1 :: (1 <= n) =>
      !(NatRepr n)        -> {- /\ width of input/result -}
      !AVXOp1             -> {- /\ do this operation -}
@@ -597,6 +619,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       ReadFSBase    -> knownRepr
       ReadGSBase    -> knownRepr
       CPUID{}       -> knownRepr
+      CMPXCHG8B{}   -> knownRepr
       RDTSC{}       -> knownRepr
       XGetBV{}      -> knownRepr
       PShufb w _ _  -> BVTypeRepr (typeRepr w)
@@ -651,6 +674,7 @@ instance TraversableFC X86PrimFn where
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
       CPUID v    -> CPUID <$> go v
+      CMPXCHG8B a ax bx cx dx  -> CMPXCHG8B <$> go a <*> go ax <*> go bx <*> go cx <*> go dx
       RDTSC      -> pure RDTSC
       XGetBV v   -> XGetBV <$> go v
       PShufb w x y -> PShufb w <$> go x <*> go y
@@ -694,6 +718,7 @@ instance IsArchFn X86PrimFn where
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
       CPUID code  -> sexprA "cpuid" [ pp code ]
+      CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
       RDTSC       -> pure $ text "rdtsc"
       XGetBV code -> sexprA "xgetbv" [ pp code ]
       PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
@@ -744,6 +769,7 @@ x86PrimFnHasSideEffects f =
     ReadFSBase   -> False
     ReadGSBase   -> False
     CPUID{}      -> False
+    CMPXCHG8B{}  -> True
     RDTSC        -> False
     XGetBV{}     -> False
     PShufb{}     -> False

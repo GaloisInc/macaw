@@ -266,18 +266,22 @@ rewriteApp app = do
       pure x
     BVAdd w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (toUnsigned w (x + y)))
-    -- Move constant to right
+    -- If first argument is constant and second is not, then commute.
     BVAdd w (BVValue _ x) y -> do
-      rewriteApp (BVAdd w y (BVValue w x))
+      rewriteApp $ BVAdd w y (BVValue w x)
     -- (x + yc) + zc -> x + (yc + zc)
     BVAdd w (valueAsApp -> Just (BVAdd _ x (BVValue _ yc))) (BVValue _ zc) -> do
-      rewriteApp (BVAdd w x (BVValue w (toUnsigned w (yc + zc))))
+      rewriteApp $ BVAdd w x (BVValue w (toUnsigned w (yc + zc)))
     -- (x - yc) + zc -> x + (zc - yc)
     BVAdd w (valueAsApp -> Just (BVSub _ x (BVValue _ yc))) (BVValue _ zc) -> do
-      rewriteApp (BVAdd w x (BVValue w (toUnsigned w (zc - yc))))
+      rewriteApp $ BVAdd w x (BVValue w (toUnsigned w (zc - yc)))
     -- (xc - y) + zc => (xc + zc) - y
     BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
-      rewriteApp (BVSub w (BVValue w (toUnsigned w (xc + zc))) y)
+      rewriteApp $ BVSub w (BVValue w (toUnsigned w (xc + zc))) y
+
+    -- Increment address by a constant.
+    BVAdd w (RelocatableValue r a) (BVValue _ c) ->
+      pure $ RelocatableValue r (incAddr c a)
 
     -- addr a + (c - addr b) => c + (addr a - addr b)
     BVAdd w (RelocatableValue _ a) (valueAsApp -> Just (BVSub _ c (RelocatableValue _ b)))

@@ -21,7 +21,7 @@ module Data.Macaw.X86.Getters
   , getSignExtendedValue
   , truncateBVValue
   , getCallTarget
-  , getJumpTarget
+  , doJump
   , HasRepSize(..)
   , getAddrRegOrSegment
   , getAddrRegSegmentOrImm
@@ -54,7 +54,7 @@ import qualified Flexdis86 as F
 import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.CFG
-import           Data.Macaw.Types (BVType, n8, n16, n32, n64, typeWidth)
+import           Data.Macaw.Types
 import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Monad
 import           Data.Macaw.X86.X86Reg (X86Reg(..))
@@ -107,6 +107,20 @@ reg64Loc = fullRegister . X86_GP
 ------------------------------------------------------------------------
 -- Getters
 
+getImm32 :: F.Imm32 -> X86Generator st ids (BVExpr ids 32)
+getImm32 (F.Imm32Concrete w) =
+  pure $ bvLit n32 (toInteger w)
+getImm32 (F.Imm32SymbolOffset sym off _) = do
+  let symExpr = ValueExpr $ SymbolValue Addr64 sym
+  let offExpr = bvLit n64 (toInteger off)
+  pure $ bvTrunc' n32 (symExpr .+ offExpr)
+
+-- | Return the value of a 32-bit displacement.
+getDisplacement :: F.Displacement -> X86Generator st ids (BVExpr ids 32)
+getDisplacement F.NoDisplacement = pure (bvLit n32 0)
+getDisplacement (F.Disp8 x) = pure (bvLit n32 (toInteger x))
+getDisplacement (F.Disp32 x) =  getImm32 x
+
 -- | Calculates the address corresponding to an AddrRef
 getBVAddress :: F.AddrRef -> X86Generator st ids (BVExpr ids 64)
 getBVAddress ar =
@@ -122,7 +136,9 @@ getBVAddress ar =
           Just (i, r) ->
             bvTrunc n32 . (bvLit n32 (toInteger i) .*)
               <$> get (reg32Loc r)
-      let offset = uext n64 (base .+ scale .+ bvLit n32 (toInteger (F.displacementInt i32)))
+      dispVal <- getDisplacement i32
+
+      let offset = uext n64 (base .+ scale .+ dispVal)
       mk_absolute seg offset
     F.IP_Offset_32 _seg _i32                 -> fail "IP_Offset_32"
     F.Offset_32    _seg _w32 ->
@@ -137,11 +153,13 @@ getBVAddress ar =
                  Nothing     -> return v0_64
                  Just (i, r) -> bvTrunc n64 . (bvLit n64 (toInteger i) .*)
                                  <$> get (reg64Loc r)
-      let offset = base .+ scale .+ bvLit n64 (toInteger i32)
+      dispVal <- getDisplacement i32
+      let offset = base .+ scale .+ sext n64 dispVal
       mk_absolute seg offset
     F.IP_Offset_64 seg i32 -> do
       ip_val <- get rip
-      mk_absolute seg (bvLit n64 (toInteger i32) .+ ip_val)
+      dispVal <- getDisplacement i32
+      mk_absolute seg (ip_val .+ sext n64 dispVal)
   where
     v0_64 = bvLit n64 0
     -- | Add the segment base to compute an absolute address.
@@ -187,8 +205,6 @@ getBV128Addr ar = (`MemoryAddr` xmmMemRepr) <$> getBVAddress ar
 -- | Translate a flexdis address-refrence into a sixteen-byte address.
 getBV256Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 256))
 getBV256Addr ar = (`MemoryAddr` ymmMemRepr) <$> getBVAddress ar
-
-
 
 readBVAddress :: F.AddrRef -> MemRepr tp -> X86Generator st ids (Expr ids tp)
 readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
@@ -251,14 +267,6 @@ getBVLocation l expected = do
       return v
     Nothing ->
       fail $ "Widths aren't equal: " ++ show (typeWidth v) ++ " and " ++ show expected
-
-getImm32 :: F.Imm32 -> X86Generator st ids (BVExpr ids 32)
-getImm32 (F.Imm32Concrete w) =
-  pure $ bvLit n32 (toInteger w)
-getImm32 (F.Imm32SymbolOffset sym off) = do
-  let symExpr = ValueExpr $ SymbolValue Addr64 sym
-  let offExpr = bvLit n64 (toInteger off)
-  pure $ bvTrunc' n32 (symExpr .+ offExpr)
 
 -- | Return a bitvector value.
 getSomeBVValue :: F.Value -> X86Generator st ids (SomeBV (Expr ids))
@@ -348,15 +356,15 @@ truncateBVValue n (SomeBV v)
   | otherwise =
     fail $ "Widths isn't >=: " ++ show (typeWidth v) ++ " and " ++ show n
 
-resolveJumpOffset :: F.JumpOffset -> X86Generator s ids (BVExpr ids 64)
-resolveJumpOffset (F.FixedOffset off) =
-  pure $ bvLit n64 (toInteger off)
-resolveJumpOffset (F.RelativeOffset symId insOff off) = do
-  arepr <- memAddrWidth . genMemory <$> getState
-  let symVal = ValueExpr (SymbolValue arepr symId)
-  addrOff <- genAddr <$> getState
-  let relocAddr = relativeAddr (msegSegment addrOff) (msegOffset addrOff + fromIntegral insOff)
-  pure $ symVal .+ bvLit n64 (toInteger off) .- ValueExpr (RelocatableValue arepr relocAddr)
+resolveJumpOffset :: GenState st_s ids -> F.JumpOffset -> BVExpr ids 64
+resolveJumpOffset _ (F.FixedOffset off) = bvLit n64 (toInteger off)
+resolveJumpOffset s (F.RelativeOffset symId insOff off) =
+    symVal .+ bvLit n64 (toInteger off) .- ValueExpr (RelocatableValue arepr relocAddr)
+  where arepr = memAddrWidth (genMemory s)
+        symVal = ValueExpr (SymbolValue arepr symId)
+        addrOff = genAddr s
+        relocAddr = relativeAddr (msegSegment addrOff) (msegOffset addrOff + fromIntegral insOff)
+
 
 -- | Return the target of a call or jump instruction.
 getCallTarget :: F.Value
@@ -366,19 +374,33 @@ getCallTarget v =
     F.Mem64 ar -> get =<< getBV64Addr ar
     F.QWordReg r -> get (reg64Loc r)
     F.JumpOffset _ joff -> do
-      (.+) <$> get rip <*> resolveJumpOffset joff
+      s <- getState
+      (.+ resolveJumpOffset s joff) <$> get rip
     _ -> fail "Unexpected argument"
 
 -- | Return the target of a call or jump instruction.
-getJumpTarget :: F.Value
-              -> X86Generator st ids (BVExpr ids 64)
-getJumpTarget v =
+doJump :: Expr ids BoolType -> F.Value -> X86Generator st ids ()
+doJump cond v =
   case v of
     F.JumpOffset _ joff -> do
-      (.+) <$> get rip <*> resolveJumpOffset joff
-    F.QWordReg r -> get (reg64Loc r)
-    F.Mem64 ar -> get =<< getBV64Addr ar
-    F.QWordImm w -> return (ValueExpr (BVValue knownNat (toInteger w)))
+      s <- getState
+      modify rip $ \ipVal -> mux cond (ipVal .+ resolveJumpOffset s joff) ipVal
+
+    F.QWordReg r -> do
+      ipVal <- get (reg64Loc r)
+      modify rip $ mux cond ipVal
+    F.Mem64 ar -> do
+      condVal <- eval cond
+      -- Address to read jump target from
+      ipAddr <- eval =<< getBVAddress ar
+      -- Get exiting ip value if we need it.
+      oldIpVal <- eval =<< get rip
+      -- Read the new memory if cond is true, and otherwise return old value.
+      ipVal <- evalAssignRhs $ CondReadMem qwordMemRepr condVal ipAddr oldIpVal
+      -- Set the ip value.
+      rip .= ipVal
+    F.QWordImm w -> do
+      modify rip $ mux cond $ bvKLit (toInteger w)
     _ -> fail "Unexpected argument"
 
 ------------------------------------------------------------------------

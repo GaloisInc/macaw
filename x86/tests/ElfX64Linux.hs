@@ -6,7 +6,6 @@ module ElfX64Linux (
   elfX64LinuxTests
   ) where
 
-import           Control.Arrow ( first )
 import Control.Lens ( (^.) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Catch as C
@@ -152,7 +151,7 @@ withMemory _relaWidth e k = do
   case MM.resolveElfContents opt e of
     Left err -> C.throwM (MemoryLoadError err)
     Right (warn, mem, mentry, _sym) ->
-      if length warn >= 3 then
+      if null warn then
         k mem mentry
        else
         error $ "Warnings while loading Elf " ++ show warn

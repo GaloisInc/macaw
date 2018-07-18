@@ -133,7 +133,7 @@ data ParsedTermStmt arch ids
   -- an unsigned number) is larger than the number of entries in the vector, then the
   -- result is undefined.
   | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
-                      !(BVValue arch ids (ArchAddrWidth arch))
+                      !(ArchAddrValue arch ids)
                       !(V.Vector (ArchSegmentOff arch))
   -- | A return with the given registers.
   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
@@ -279,6 +279,9 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
 ------------------------------------------------------------------------
 -- DiscoveryState
 
+type UnexploredFunctionMap arch =
+  Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch))
+
 -- | Information discovered about the program
 data DiscoveryState arch
    = DiscoveryState { memory              :: !(Memory (ArchAddrWidth arch))
@@ -294,7 +297,7 @@ data DiscoveryState arch
                     , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
                       -- ^ Map from function addresses to discovered information about function
                     , _unexploredFunctions
-                      :: !(Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch)))
+                      :: !(UnexploredFunctionMap arch)
                       -- ^ This maps addresses that have been marked as
                       -- functions, but not yet analyzed to the reason
                       -- they are analyzed.
@@ -351,7 +354,7 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions
-  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch)))
+  :: Simple Lens (DiscoveryState arch) (UnexploredFunctionMap arch)
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions

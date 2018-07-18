@@ -312,6 +312,7 @@ type RelocationResolver tp
   = SymbolVector
   -> Elf.RelEntry tp
   -> MemWord (Elf.RelocationWidth tp)
+     -- ^ Offset
   -> RelocResolver (Relocation (Elf.RelocationWidth tp))
 
 data SomeRelocationResolver w
@@ -334,13 +335,15 @@ resolveSymbol (SymbolVector symtab) symIdx = do
       relocError $ RelocationBadSymbolIndex $ fromIntegral symIdx
     Just sym -> pure $ sym
 
-resolveRelocationAddr :: SymbolVector
+-- | This attempts to resolve an index in the symbol table to the
+-- identifier information needed to resolve its loaded address.
+resolveRelocationSym :: SymbolVector
                       -- ^ A vector mapping symbol indices to the
                       -- associated symbol information.
                       -> Word32
                       -- ^ Index in the symbol table this refers to.
                       -> RelocResolver SymbolIdentifier
-resolveRelocationAddr symtab symIdx = do
+resolveRelocationSym symtab symIdx = do
   sym <- resolveSymbol symtab symIdx
   case symbolDef sym of
     DefinedSymbol{} -> do
@@ -353,28 +356,71 @@ resolveRelocationAddr symtab symIdx = do
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
 
 -- | Attempt to resolve an X86_64 specific symbol.
-relaTargetX86_64 :: SomeRelocationResolver 64
-relaTargetX86_64 = SomeRelocationResolver $ \symtab rel off ->
+relaTargetX86_64 :: SymbolVector
+                 -> Elf.RelEntry Elf.X86_64_RelocationType
+                 -> MemWord 64
+                 -- ^ Offset of symbol
+                 -> RelocResolver (Relocation 64)
+relaTargetX86_64 symtab rel off =
   case Elf.relType rel of
     Elf.R_X86_64_JUMP_SLOT -> do
-      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
-      pure $ AbsoluteRelocation addr off LittleEndian 8
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym = sym
+                        , relocationOffset = off
+                        , relocationIsRel = False
+                        , relocationSize  = 8
+                        , relocationIsSigned = False
+                        , relocationEndianness = LittleEndian
+                        }
     Elf.R_X86_64_PC32 -> do
-      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
-      pure $ RelativeRelocation addr off LittleEndian 4
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = off
+                        , relocationIsRel      = True
+                        , relocationSize       = 4
+                        , relocationIsSigned = False
+                        , relocationEndianness = LittleEndian
+                        }
     Elf.R_X86_64_32 -> do
-      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
-      pure $ AbsoluteRelocation addr off LittleEndian 4
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = off
+                        , relocationIsRel      = False
+                        , relocationSize       = 4
+                        , relocationIsSigned = False
+                        , relocationEndianness = LittleEndian
+                        }
+    Elf.R_X86_64_32S -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = off
+                        , relocationIsRel      = False
+                        , relocationSize       = 4
+                        , relocationIsSigned   = True
+                        , relocationEndianness = LittleEndian
+                        }
     Elf.R_X86_64_64 -> do
-      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
-      pure $ AbsoluteRelocation addr off LittleEndian 8
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = off
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        }
     -- R_X86_64_GLOB_DAT are used to update GOT entries with their
     -- target address.  They are similar to R_x86_64_64 except appear
     -- inside dynamically linked executables/libraries, and are often
     -- loaded lazily.  We just use the eager AbsoluteRelocation here.
     Elf.R_X86_64_GLOB_DAT -> do
-      addr <- resolveRelocationAddr symtab (Elf.relSym rel)
-      pure $ AbsoluteRelocation addr off LittleEndian 8
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = off
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        }
 
     -- Jhx Note. These will be needed to support thread local variables.
     --   Elf.R_X86_64_TPOFF32 -> undefined
@@ -398,10 +444,6 @@ relaTargetARM = SomeRelocationResolver $ \_symtab rel _maddend ->
 --      TargetSymbol <$> resolveSymbol symtab rel
     tp -> relocError $ RelocationUnsupportedType (show tp)
 -}
-{-
-000000613ff8  003c00000006 R_X86_64_GLOB_DAT 0000000000000000 __gmon_start__ + 0
--}
-
 
 
 -- | Creates a relocation map from the contents of a dynamic section.
@@ -413,7 +455,7 @@ withRelocationResolver
   -> MemLoader w a
 withRelocationResolver hdr f =
   case (Elf.headerClass hdr, Elf.headerMachine hdr) of
-    (Elf.ELFCLASS64, Elf.EM_X86_64) -> f relaTargetX86_64
+    (Elf.ELFCLASS64, Elf.EM_X86_64) -> f (SomeRelocationResolver relaTargetX86_64)
 --    (Elf.ELFCLASS32, Elf.EM_ARM)    -> f relaTargetARM
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
 
@@ -761,22 +803,37 @@ memoryForElfSegments regAdj e = do
 ------------------------------------------------------------------------
 -- Elf section loading
 
+-- | Contains the name of a section we allocate and whether
+-- relocations are used.
+type AllocatedSectionInfo = (B.ByteString, Bool)
+
+allocatedNames :: AllocatedSectionInfo -> [B.ByteString]
+allocatedNames (nm,False) = [nm]
+allocatedNames (nm,True) = [nm, ".rela" <> nm]
+
+allocatedSectionInfo :: [AllocatedSectionInfo]
+allocatedSectionInfo =
+  [ (,) ".text"   True
+  , (,) ".eh_frame" True
+  , (,) ".data"   True
+  , (,) ".bss"    False
+  , (,) ".rodata" True
+  ]
+
 allowedSectionNames :: Set B.ByteString
 allowedSectionNames = Set.fromList
-  [ ""
-  , ".text", ".rela.text"
-  , ".data", ".rela.data"
-  , ".bss"
-  , ".tbss"
-  , ".tdata", ".rela.tdata"
-  , ".rodata", ".rela.rodata"
-  , ".comment"
-  , ".note.GNU-stack"
-  , ".eh_frame", ".rela.eh_frame"
-  , ".shstrtab"
-  , ".symtab"
-  , ".strtab"
-  ]
+  $ concatMap allocatedNames allocatedSectionInfo
+  ++ [ ""
+     , ".text.hot"
+     , ".text.unlikely"
+     , ".tbss"
+     , ".tdata", ".rela.tdata"
+     , ".comment"
+     , ".note.GNU-stack"
+     , ".shstrtab"
+     , ".symtab"
+     , ".strtab"
+     ]
 
 -- | Map from section names to information about them.
 type SectionNameMap w =  Map SectionName [ElfSection (ElfWordType w)]
@@ -864,10 +921,8 @@ memoryForElfSections e = do
       sectionMap = foldlOf elfSections insSec Map.empty e
         where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
   symtab <- symtabSymbolVector e
-  insertAllocatedSection hdr symtab sectionMap 1 ".text"
-  insertAllocatedSection hdr symtab sectionMap 2 ".data"
-  insertAllocatedSection hdr symtab sectionMap 3 ".bss"
-  insertAllocatedSection hdr symtab sectionMap 4 ".rodata"
+  forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
+    insertAllocatedSection hdr symtab sectionMap idx nm
   -- TODO: Figure out what to do about .tdata and .tbss
   -- Check for other section names that we do not support."
   let unsupportedKeys = Map.keysSet sectionMap `Set.difference ` allowedSectionNames
