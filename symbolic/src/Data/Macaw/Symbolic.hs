@@ -141,8 +141,14 @@ mkCrucRegCFG archFns halloc nm action = do
       rg = CR.CFG { CR.cfgHandle = h
                   , CR.cfgBlocks = blks
                   , CR.cfgNextValue = valueCount ps'
+                  , CR.cfgNextLabel = nextLabel blks
                   }
   pure $ CR.SomeCFG rg
+  where
+    -- Unlike valueCount, we don't keep this handy, so just compute it
+    nextLabel blks = 1 + maximum (map (blockIDInt . CR.blockID) blks)
+    blockIDInt (CR.LabelID l) = CR.labelInt l
+    blockIDInt (CR.LambdaID l) = CR.lambdaInt l
 
 -- | Generate the final SSA CFG from a registerized CFG. Offered
 -- separately in case post-processing on the registerized CFG is
