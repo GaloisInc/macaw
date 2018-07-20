@@ -188,7 +188,7 @@ data Value arch ids tp where
   RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
                    -> !(ArchMemAddr arch)
                    -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | Reference to a symbol identifier.
+  -- | This denotes the address of a symbol identifier in the binary.
   --
   -- This appears when dealing with relocations.
   SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))

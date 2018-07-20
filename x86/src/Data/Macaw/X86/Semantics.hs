@@ -335,7 +335,7 @@ def_mov =
       (F.DWordReg r, F.DWordSignedImm i) -> do
         reg32Loc r .= bvLit n32 (toInteger i)
       (F.DWordReg r, F.DWordImm i) -> do
-        (reg32Loc r .=) =<< getImm32 i
+        reg32Loc r .= getImm32 i
       (F.DWordReg r, F.Mem32 src) -> do
         v <- get =<< getBV32Addr src
         reg32Loc r .= v

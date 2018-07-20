@@ -23,9 +23,11 @@ module Data.Macaw.CFG.Rewriter
   ) where
 
 import           Control.Lens
-import           Control.Monad.State.Strict
 import           Control.Monad.ST
+import           Control.Monad.State.Strict
 import           Data.Bits
+import           Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -40,14 +42,22 @@ import           Data.Macaw.Types
 data RewriteContext arch s src tgt
    = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST s) tgt)
                       -- ^ Generator for making new nonces in the target ST monad
-                    , rwctxArchFn    :: !(forall tp
-                                            .  ArchFn arch (Value arch src) tp
-                                            -> Rewriter arch s src tgt (Value arch tgt tp))
+                    , rwctxArchFn
+                      :: !(forall tp
+                            .  ArchFn arch (Value arch src) tp
+                            -> Rewriter arch s src tgt (Value arch tgt tp))
+                      -- ^ Rewriter for architecture-specific functions
+                    , rwctxArchStmt
+                      :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
                       -- ^ Rewriter for architecture-specific statements
-                    , rwctxArchStmt  :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
-                      -- ^ Rewriter for architecture-specific statements
-                    , rwctxConstraints :: (forall a . (RegisterInfo (ArchReg arch) => a) -> a)
+                    , rwctxConstraints
+                      :: !(forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
+                    , rwctxSectionAddrMap
+                      :: !(Map SectionIndex (ArchSegmentOff arch))
+                      -- ^ Map from section indices to the address they are loaded at
+                      -- if any.
+                      -- This is used to replace section references with their address.
                     , rwctxCache :: !(STRef s (MapF (AssignId src) (Value arch tgt)))
                       -- ^ A reference to a  map from source assignment
                       -- identifiers to the updated value.
@@ -67,13 +77,16 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                      -> Rewriter arch s src tgt (Value arch tgt tp))
                  -> (ArchStmt arch (Value arch src)
                      -> Rewriter arch s src tgt ())
+                 -> Map SectionIndex (ArchSegmentOff arch)
+                    -- ^ Map from loaded section indices to their address.
                  -> ST s (RewriteContext arch s src tgt)
-mkRewriteContext nonceGen archFn archStmt = do
+mkRewriteContext nonceGen archFn archStmt secAddrMap = do
   ref <- newSTRef MapF.empty
   pure $! RewriteContext { rwctxNonceGen = nonceGen
                          , rwctxArchFn = archFn
                          , rwctxArchStmt = archStmt
                          , rwctxConstraints = \a -> a
+                         , rwctxSectionAddrMap = secAddrMap
                          , rwctxCache = ref
                          }
 
@@ -280,7 +293,7 @@ rewriteApp app = do
       rewriteApp $ BVSub w (BVValue w (toUnsigned w (xc + zc))) y
 
     -- Increment address by a constant.
-    BVAdd w (RelocatableValue r a) (BVValue _ c) ->
+    BVAdd _ (RelocatableValue r a) (BVValue _ c) ->
       pure $ RelocatableValue r (incAddr c a)
 
     -- addr a + (c - addr b) => c + (addr a - addr b)
@@ -557,12 +570,18 @@ rewriteAssignRhs rhs =
     ReadMem addr repr -> do
       tgtAddr <- rewriteValue addr
       evalRewrittenRhs (ReadMem tgtAddr repr)
-    CondReadMem repr cond addr def -> do
-      rhs' <- CondReadMem repr
-               <$> rewriteValue cond
-               <*> rewriteValue addr
-               <*> rewriteValue def
-      evalRewrittenRhs rhs'
+    CondReadMem repr cond0 addr0 def0 -> do
+      cond <- rewriteValue cond0
+      addr <- rewriteValue addr0
+      case () of
+        _ | BoolValue b <- cond ->
+            if b then
+              evalRewrittenRhs (ReadMem addr repr)
+             else
+              rewriteValue def0
+        _ -> do
+          def  <- rewriteValue def0
+          evalRewrittenRhs (CondReadMem repr cond addr def)
     EvalArchFn archFn _repr -> do
       f <- Rewriter $ gets $ rwctxArchFn . rwContext
       f archFn
@@ -573,7 +592,16 @@ rewriteValue v =
     BoolValue b -> pure (BoolValue b)
     BVValue w i -> pure (BVValue w i)
     RelocatableValue w a -> pure (RelocatableValue w a)
-    SymbolValue w a -> pure (SymbolValue w a)
+    SymbolValue repr sym -> do
+      ctx <- Rewriter $ gets rwContext
+      rwctxConstraints ctx $ do
+        let secIdxAddrMap = rwctxSectionAddrMap ctx
+        case sym of
+          SectionIdentifier secIdx
+            | Just val <- Map.lookup secIdx secIdxAddrMap -> do
+                pure $! RelocatableValue repr (relativeSegmentAddr val)
+          _ -> do
+            pure $! SymbolValue repr sym
     AssignedValue (Assignment aid _) -> Rewriter $ do
       ref <- gets $ rwctxCache . rwContext
       srcMap <- lift $ readSTRef ref

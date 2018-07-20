@@ -25,13 +25,10 @@ This provides information about code discovered in binaries.
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
-         State.DiscoveryState
+         State.DiscoveryState(..)
        , State.emptyDiscoveryState
-       , State.archInfo
-       , State.memory
        , State.funInfo
        , State.exploredFunctions
-       , State.symbolNames
        , State.ppDiscoveryStateBlocks
        , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
@@ -95,6 +92,7 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
@@ -351,7 +349,6 @@ mergeIntraJump  :: ArchSegmentOff arch
                    -- ^ Address we are trying to reach.
                 -> FunM arch s ids ()
 mergeIntraJump src ab tgt = do
--- trace ("mergeIntraJump " ++ show src ++ " " ++ show tgt) $ do
   info <- uses curFunCtx archInfo
   withArchConstraints info $ do
   when (not (absStackHasReturnAddr ab)) $ do
@@ -750,11 +747,19 @@ resolveJumps mem (AbsoluteJumpTable arrayRead) slices = do
 
   forM slices $ \l -> do
     case l of
-      [ByteRegion bs]
-        | Just val <- addrRead endianness bs
-        , Just tgt <- asSegmentOff mem (toIPAligned @arch (absoluteAddr val))
-        , Perm.isExecutable (segmentFlags (msegSegment tgt))
-          -> Just tgt
+      [ByteRegion bs] -> do
+        val <- addrRead endianness bs
+        tgt <- asSegmentOff mem (toIPAligned @arch (absoluteAddr val))
+        unless (Perm.isExecutable (segmentFlags (msegSegment tgt))) $ Nothing
+        pure tgt
+      [RelocationRegion r] -> do
+        let off = relocationOffset r
+        when (relocationIsRel r) $ Nothing
+        case relocationSym r of
+          SymbolRelocation{} -> Nothing
+          SectionIdentifier idx -> do
+            addr <- Map.lookup idx (memSectionAddrMap mem)
+            incSegmentOff addr (toInteger off)
       _ -> Nothing
 resolveJumps mem (RelativeJumpTable base arrayRead ext) slices = do
   BVMemRepr sz endianness <- pure $ arSize arrayRead
@@ -889,10 +894,13 @@ parseFetchAndExecute ctx idx stmts regs s = do
       | Just jt <- matchJumpTable mem absProcState' (s^.curIP)
       , Some arrayRead <- jumpTableRead jt
       , Right maxIdx <- getJumpTableBounds absProcState' arrayRead
-      , Just slices <- getJumpTableContents (arBase arrayRead) (toInteger maxIdx+1)
-                         (arStride arrayRead)
+      , Just slices <-
+          getJumpTableContents (arBase arrayRead)
+                               (toInteger maxIdx+1)
+                               (arStride arrayRead)
       -- Read addresses
-      , Just readAddrs <- resolveJumps (pctxMemory ctx) jt slices -> do
+      , Just readAddrs <-
+               resolveJumps (pctxMemory ctx) jt slices -> do
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
           let abst :: AbsBlockState (ArchReg arch)
@@ -1084,7 +1092,6 @@ transferBlocks src finfo sz block_map =
                 .  markAddrsAsFunction (CallTarget src)         (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
-
 transfer :: ArchSegmentOff arch -> FunM arch s ids ()
 transfer addr = do
   s <- use curFunCtx
@@ -1099,20 +1106,26 @@ transfer addr = do
   -- Get maximum number of bytes to disassemble
   let seg = msegSegment addr
       off = msegOffset addr
-  let max_size =
+  let maxSize =
         case Map.lookupGT addr prev_block_map of
           Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
           _ -> segmentSize seg - off
   let ab = foundAbstractState finfo
-  (bs0, sz, maybeError) <- liftST $ do
+  (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo mem nonceGen addr maxSize ab
+
 #ifdef USE_REWRITER
-    disassembleAndRewrite ainfo mem nonceGen addr max_size ab
+  bs1 <- do
+    let archStmt = rewriteArchStmt ainfo
+    let secAddrMap = memSectionAddrMap mem
+    liftST $ do
+      ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt secAddrMap
+      traverse (rewriteBlock ainfo ctx) bs0
 #else
-    disassembleFn ainfo mem nonceGen addr max_size ab
+  bs1 <- pure bs0
 #endif
 
   -- If no blocks are returned, then we just add an empty parsed block.
-  if null bs0 then do
+  if null bs1 then do
     let errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
     let stmts = StatementList
           { stmtsIdent = 0
@@ -1131,7 +1144,7 @@ transfer addr = do
     -- Rewrite returned blocks to simplify expressions
 
     -- Compute demand set
-    let bs = eliminateDeadStmts ainfo bs0
+    let bs = eliminateDeadStmts ainfo bs1
     -- Call transfer blocks to calculate parsedblocks
     let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
     transferBlocks addr finfo sz block_map
@@ -1391,24 +1404,19 @@ ppFunReason rsn =
 -- This function is intended to make it easy to explore functions, and
 -- can be controlled via 'DiscoveryOptions'.
 completeDiscoveryState :: forall arch
-                       .  ArchitectureInfo arch
+                       .  DiscoveryState arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
-                       -> Memory (ArchAddrWidth arch)
-                          -- ^ Memory state used for static code discovery.
-                       -> [MemSegmentOff (ArchAddrWidth arch)]
-                          -- ^ Initial entry points to explore
-                       -> AddrSymMap (ArchAddrWidth arch)
-                          -- ^ The map from addresses to symbols
                        -> (ArchSegmentOff arch -> Bool)
                           -- ^ Predicate to check if we should explore a function
                           --
                           -- Return true to explore all functions.
                        -> IO (DiscoveryState arch)
-completeDiscoveryState ainfo disOpt mem initEntries symMap funPred = stToIO $ withArchConstraints ainfo $ do
-  let initState
-        = emptyDiscoveryState mem symMap ainfo
-        & markAddrsAsFunction InitAddr initEntries
+completeDiscoveryState initState disOpt funPred = do
+ let ainfo = archInfo initState
+ let mem = memory initState
+ let symMap = symbolNames initState
+ stToIO $ withArchConstraints ainfo $ do
   -- Add symbol table entries to discovery state if requested
   let postSymState
         | exploreFunctionSymbols disOpt =

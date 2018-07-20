@@ -92,10 +92,11 @@ module Data.Macaw.Memory
     -- ** Undefined symbol infomration
   , SymbolRequirement(..)
   , SymbolUndefType(..)
+    -- * Section addresses
+  , memAddSectionAddr
+  , memSectionAddrMap
     -- * General purposes addrs
-  , MemAddr
-  , addrBase
-  , addrOffset
+  , MemAddr(..)
   , absoluteAddr
   , relativeAddr
   , relativeSegmentAddr
@@ -805,12 +806,16 @@ instance MemWidth w => Show (MemSegment w) where
 ------------------------------------------------------------------------
 -- Memory
 
+-- | Map from region index to map of offset to segment.
 type SegmentOffsetMap w = Map.Map RegionIndex (Map.Map (MemWord w) (MemSegment w))
 
 -- | The state of the memory.
 data Memory w = Memory { memAddrWidth :: !(AddrWidthRepr w)
                          -- ^ Return the address width of the memory
                        , memSegmentMap :: !(SegmentOffsetMap w)
+                         -- ^ Segment map
+                       , memSectionAddrMap :: !(Map SectionIndex (MemSegmentOff w))
+                         -- ^ Map from section indices to addresses.
                        }
 
 -- | Get memory segments.
@@ -821,6 +826,14 @@ memSegments m = concatMap Map.elems (Map.elems (memSegmentMap m))
 memWidth :: Memory w -> NatRepr w
 memWidth = addrWidthNatRepr . memAddrWidth
 
+-- | Add a new section index to address entry.
+memAddSectionAddr :: SectionIndex -> MemSegmentOff w -> Memory w -> Memory w
+memAddSectionAddr idx addr mem
+  | Map.member idx (memSectionAddrMap mem) =
+      error $ "memAddSectionAddr: duplicate index " ++ show idx
+  | otherwise =
+      mem { memSectionAddrMap = Map.insert idx addr (memSectionAddrMap mem) }
+
 instance MemWidth w => Show (Memory w) where
   show = show . memSegments
 
@@ -828,6 +841,7 @@ instance MemWidth w => Show (Memory w) where
 emptyMemory :: AddrWidthRepr w -> Memory w
 emptyMemory w = Memory { memAddrWidth = w
                        , memSegmentMap = Map.empty
+                       , memSectionAddrMap = Map.empty
                        }
 
 -- | Get executable segments.
@@ -865,9 +879,7 @@ insertMemSegment :: MemSegment w
                  -> Either (InsertError w) (Memory w)
 insertMemSegment seg mem = addrWidthClass (memAddrWidth mem) $ do
   absMap <- insertSegmentOffsetMap seg (memSegmentMap mem)
-  pure $ Memory { memAddrWidth = memAddrWidth mem
-                , memSegmentMap = absMap
-                }
+  pure $ mem { memSegmentMap = absMap }
 
 ------------------------------------------------------------------------
 -- MemSegmentOff
@@ -930,7 +942,8 @@ clearSegmentOffLeastBit (MemSegmentOff seg off) = MemSegmentOff seg (off .&. com
 -- Returns 'Nothing' if the result would be out of range.
 incSegmentOff :: MemWidth w => MemSegmentOff w -> Integer -> Maybe (MemSegmentOff w)
 incSegmentOff (MemSegmentOff seg off) inc
-  | 0 <= next && next <= toInteger (segmentSize seg) = Just $ MemSegmentOff seg (fromInteger next)
+  | 0 <= next && next <= toInteger (segmentSize seg) =
+      Just $ MemSegmentOff seg (fromInteger next)
   | otherwise = Nothing
   where next = toInteger off + inc
 

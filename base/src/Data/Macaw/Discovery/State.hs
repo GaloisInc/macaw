@@ -331,7 +331,7 @@ ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                        -- ^ State of memory
                     -> AddrSymMap (ArchAddrWidth arch)
-                       -- ^ Map from addresses
+                       -- ^ Map from addresses to their symbol name (if any)
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information
                     -> DiscoveryState arch

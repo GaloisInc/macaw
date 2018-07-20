@@ -107,19 +107,26 @@ reg64Loc = fullRegister . X86_GP
 ------------------------------------------------------------------------
 -- Getters
 
-getImm32 :: F.Imm32 -> X86Generator st ids (BVExpr ids 32)
-getImm32 (F.Imm32Concrete w) =
-  pure $ bvLit n32 (toInteger w)
-getImm32 (F.Imm32SymbolOffset sym off _) = do
-  let symExpr = ValueExpr $ SymbolValue Addr64 sym
-  let offExpr = bvLit n64 (toInteger off)
-  pure $ bvTrunc' n32 (symExpr .+ offExpr)
+getImm32 :: F.Imm32 -> BVExpr ids 32
+getImm32 (F.Imm32Concrete w) = bvLit n32 (toInteger w)
+getImm32 (F.Imm32SymbolOffset sym off _) =
+  bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
+  .+ bvLit n32 (toInteger off)
 
 -- | Return the value of a 32-bit displacement.
-getDisplacement :: F.Displacement -> X86Generator st ids (BVExpr ids 32)
-getDisplacement F.NoDisplacement = pure (bvLit n32 0)
-getDisplacement (F.Disp8 x) = pure (bvLit n32 (toInteger x))
-getDisplacement (F.Disp32 x) =  getImm32 x
+getDisplacement32 :: F.Displacement -> BVExpr ids 32
+getDisplacement32 F.NoDisplacement = bvLit n32 0
+getDisplacement32 (F.Disp8 x) = bvLit n32 (toInteger x)
+getDisplacement32 (F.Disp32 x) =  getImm32 x
+
+-- | Return the value of a 32-bit displacement.
+getDisplacement64 :: F.Displacement -> BVExpr ids 64
+getDisplacement64 F.NoDisplacement = bvLit n64 0
+getDisplacement64 (F.Disp8 x)      = bvLit n64 (toInteger x)
+getDisplacement64 (F.Disp32 (F.Imm32Concrete x)) = bvLit n64 (toInteger x)
+getDisplacement64 (F.Disp32 (F.Imm32SymbolOffset sym off _)) =
+  ValueExpr (SymbolValue Addr64 sym)
+    .+ bvLit n64 (toInteger off)
 
 -- | Calculates the address corresponding to an AddrRef
 getBVAddress :: F.AddrRef -> X86Generator st ids (BVExpr ids 64)
@@ -136,30 +143,28 @@ getBVAddress ar =
           Just (i, r) ->
             bvTrunc n32 . (bvLit n32 (toInteger i) .*)
               <$> get (reg32Loc r)
-      dispVal <- getDisplacement i32
 
-      let offset = uext n64 (base .+ scale .+ dispVal)
+      let offset = uext n64 (base .+ scale .+ getDisplacement32 i32)
       mk_absolute seg offset
-    F.IP_Offset_32 _seg _i32                 -> fail "IP_Offset_32"
+    F.IP_Offset_32 _seg _i32 -> fail "IP_Offset_32"
     F.Offset_32    _seg _w32 ->
       fail "Offset_32"
     F.Offset_64 seg w64 -> do
       mk_absolute seg (bvLit n64 (toInteger w64))
-    F.Addr_64      seg m_r64 m_int_r64 i32 -> do
+    F.Addr_64 seg m_r64 m_int_r64 disp -> do
       base <- case m_r64 of
                 Nothing -> return v0_64
                 Just r  -> get (reg64Loc r)
-      scale <- case m_int_r64 of
-                 Nothing     -> return v0_64
-                 Just (i, r) -> bvTrunc n64 . (bvLit n64 (toInteger i) .*)
-                                 <$> get (reg64Loc r)
-      dispVal <- getDisplacement i32
-      let offset = base .+ scale .+ sext n64 dispVal
+      scale <-
+        case m_int_r64 of
+          Nothing     -> return v0_64
+          Just (i, r) ->
+            bvTrunc n64 . (bvLit n64 (toInteger i) .*) <$> get (reg64Loc r)
+      let offset = base .+ scale .+ getDisplacement64 disp
       mk_absolute seg offset
-    F.IP_Offset_64 seg i32 -> do
-      ip_val <- get rip
-      dispVal <- getDisplacement i32
-      mk_absolute seg (ip_val .+ sext n64 dispVal)
+    F.IP_Offset_64 seg disp -> do
+      ipVal <- get rip
+      mk_absolute seg (ipVal .+ getDisplacement64 disp)
   where
     v0_64 = bvLit n64 0
     -- | Add the segment base to compute an absolute address.
@@ -274,7 +279,7 @@ getSomeBVValue v =
   case v of
     F.ByteImm  w      -> pure $! SomeBV $ bvLit n8  $ toInteger w
     F.WordImm  w      -> pure $! SomeBV $ bvLit n16 $ toInteger w
-    F.DWordImm i      -> SomeBV <$> getImm32 i
+    F.DWordImm i      -> pure $! SomeBV $ getImm32 i
     F.QWordImm w      -> pure $! SomeBV $ bvLit n64 $ toInteger w
     F.JumpOffset _ _  -> fail "Jump Offset should not be treated as a BVValue."
     _ -> do
@@ -434,7 +439,7 @@ getAddrRegSegmentOrImm v =
   case v of
     F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
     F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
-    F.DWordImm i -> Some . HasRepSize DWordRepVal <$> getImm32 i
+    F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
     F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
     _ -> do
       Some (HasRepSize rep l) <- getAddrRegOrSegment v

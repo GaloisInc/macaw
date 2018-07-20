@@ -224,15 +224,17 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
         let isGood
               =  relocationIsRel r == False
               && relocationSize r == 4
-              && relocationIsSigned r == False
               && relocationEndianness r == LittleEndian
         when (not isGood) $ do
           throwMemoryError $ Unsupported32ImmRelocation (msAddr ms) r
+        -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
+        let signed = relocationIsSigned r
+
         let ms' = ms { msOffset = msOffset ms + 4
                      , msNext   = rest
                      }
         seq ms' $ MBR $ put ms'
-        pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off) False
+        pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off) signed
 
       ByteRegion bs:rest -> do
         v <- getUnsigned32 bs
