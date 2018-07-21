@@ -6,21 +6,21 @@ module ElfX64Linux (
   elfX64LinuxTests
   ) where
 
-import Control.Lens ( (^.) )
+import           Control.Lens ( (^.) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
 import qualified Data.Foldable as F
 import qualified Data.Map as M
+import           Data.Maybe
 import qualified Data.Set as S
-import Data.Typeable ( Typeable )
-import Data.Word ( Word64 )
-import System.FilePath ( dropExtension, replaceExtension )
+import           Data.Typeable ( Typeable )
+import           Data.Word ( Word64 )
+import           System.FilePath
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
-import Text.Printf ( printf )
-import Text.Read ( readMaybe )
-import Numeric (showHex)
+import           Text.Printf ( printf )
+import           Text.Read ( readMaybe )
 
 import qualified Data.ElfEdit as E
 
@@ -30,34 +30,22 @@ import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.X86 as RO
 
--- | This is an offset we use to change the load address of the text section of
--- the binary.
---
--- The current binaries are position independent.  This means that the load
--- address is around 0x100.  The problem is that there are constant offsets from
--- the stack that are in this range; the abstract interpretation in AbsState.hs
--- then interprets stack offsets as code pointers (since small integer values
--- look like code pointers when the code is mapped at these low addresses).
--- This throws off the abstract interpretation by hitting a "stack offset + code
--- pointer" case, which resolves to Top.
---
--- This offset forces macaw to load the binary at a higher address where this
--- accidental overlap is less likely.  We still need a more principled solution
--- to this problem.
--- Note (JHx): The code appears to be working without this, so I've disableed it.
---loadOffset :: Word64
---loadOffset = 0x400000
-
+-- |
 elfX64LinuxTests :: [FilePath] -> T.TestTree
 elfX64LinuxTests = T.testGroup "ELF x64 Linux" . map mkTest
 
+data Addr = Addr Int Word64
+  deriving (Read,Show,Eq)
+-- ^ An address is a region index and offset
+
 -- | The type of expected results for test cases
 data ExpectedResult =
-  R { funcs :: [(Word64, [(Word64, Integer)])]
+  R { funcs :: [(Addr, [(Addr, Integer)])]
     -- ^ The first element of the pair is the address of entry point
     -- of the function.  The list is a list of the addresses of the
-    -- basic blocks in the function (including the first block).
-    , ignoreBlocks :: [Word64]
+    -- basic blocks in the function (including the first block) and the
+    -- size of the block
+    , ignoreBlocks :: [Addr]
     -- ^ This is a list of discovered blocks to ignore.  This is
     -- basically just the address of the instruction after the exit
     -- syscall, as macaw doesn't know that exit never returns and
@@ -65,32 +53,32 @@ data ExpectedResult =
     }
   deriving (Read, Show, Eq)
 
+-- | Given a path to an expected file, this
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
+mkTest fp = T.testCase fp $ withELF elfFilename (testDiscovery fp)
   where
-    asmFilename = dropExtension fp
-    exeFilename = replaceExtension asmFilename "exe"
+    elfFilename = dropExtension fp
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf =
-  withMemory MM.Addr64 elf $ \mem mentry -> do
-    let Just entryPoint = mentry
-        di = MD.cfgFromAddrs RO.x86_64_linux_info mem M.empty [entryPoint] []
-    let memIdx = case E.elfType elf of
-                   E.ET_DYN -> 1
-                   E.ET_EXEC -> 0
-                   eidx -> error $ "Unexpected elf type " ++ show eidx
+  withMemory MM.Addr64 elf $ \mem entries -> do
+    let di = MD.cfgFromAddrs RO.x86_64_linux_info mem M.empty entries []
     expectedString <- readFile expectedFilename
     case readMaybe expectedString of
       Nothing -> T.assertFailure ("Invalid expected result: " ++ show expectedString)
       Just er -> do
-        let toSegOff :: Word64 -> MM.MemSegmentOff 64
-            toSegOff off =
-                case MM.resolveAddr mem memIdx (fromIntegral off) of
+        let toSegOff :: Addr -> MM.MemSegmentOff 64
+            toSegOff (Addr idx off) = do
+                let addr :: MM.MemAddr 64
+                    addr = MM.MemAddr idx (fromIntegral off)
+                case MM.asSegmentOff mem addr  of
                   Just a -> a
-                  Nothing -> error $ "Could not resolve offset " ++ showHex off ""
+                  Nothing -> do
+                    let ppSeg seg = "  Segment: " ++ show (MM.relativeAddr seg 0)
+                    error $ "Could not resolve address : " ++ show addr ++ "\n"
+                          ++ unlines (fmap ppSeg (MM.memSegments mem))
         let expectedEntries = M.fromList
               [ (toSegOff entry
                 , S.fromList ((\(s,sz) -> (toSegOff s, sz)) <$> starts)
@@ -140,7 +128,7 @@ withMemory :: forall w m a
             . (C.MonadThrow m, MM.MemWidth w, Integral (E.ElfWordType w))
            => MM.AddrWidthRepr w
            -> E.Elf w
-           -> (MM.Memory w -> Maybe (MM.MemSegmentOff w) -> m a)
+           -> (MM.Memory w -> [MM.MemSegmentOff w] -> m a)
            -> m a
 withMemory _relaWidth e k = do
   let opt = MM.LoadOptions { MM.loadRegionIndex = Nothing
@@ -150,9 +138,9 @@ withMemory _relaWidth e k = do
                            }
   case MM.resolveElfContents opt e of
     Left err -> C.throwM (MemoryLoadError err)
-    Right (warn, mem, mentry, _sym) ->
+    Right (warn, mem, mentry, syms) ->
       if null warn then
-        k mem mentry
+        k mem (maybeToList mentry ++ fmap MM.memSymbolStart syms)
        else
         error $ "Warnings while loading Elf " ++ show warn
 

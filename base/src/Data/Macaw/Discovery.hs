@@ -1272,22 +1272,6 @@ exploreMemPointers mem_words info =
           $ mem_words
     mapM_ (modify . addMemCodePointer) mem_addrs
 
--- | Construct an empty discovery state and populate it by exploring from a
--- given set of function entry points
-cfgFromAddrs ::
-     forall arch
-  .  ArchitectureInfo arch
-     -- ^ Architecture-specific information needed for doing control-flow exploration.
-  -> Memory (ArchAddrWidth arch)
-     -- ^ Memory to use when decoding instructions.
-  -> AddrSymMap (ArchAddrWidth arch)
-     -- ^ Map from addresses to the associated symbol name.
-  -> [ArchSegmentOff arch]
-  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
-  -> DiscoveryState arch
-cfgFromAddrs ainfo mem symbols =
-  cfgFromAddrsAndState (emptyDiscoveryState mem symbols ainfo)
-
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
 cfgFromAddrsAndState :: forall arch
@@ -1306,6 +1290,27 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
     & analyzeDiscoveredFunctions
     & exploreMemPointers mem_words
     & analyzeDiscoveredFunctions
+
+-- | Construct an empty discovery state and populate it by exploring from a
+-- given set of function entry points
+cfgFromAddrs ::
+     forall arch
+  .  ArchitectureInfo arch
+     -- ^ Architecture-specific information needed for doing control-flow exploration.
+  -> Memory (ArchAddrWidth arch)
+     -- ^ Memory to use when decoding instructions.
+  -> AddrSymMap (ArchAddrWidth arch)
+     -- ^ Map from addresses to the associated symbol name.
+  -> [ArchSegmentOff arch]
+     -- ^ Initial function entry points.
+     -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+     -- ^ Function entry points in memory to be explored
+     -- after exploring function entry points.
+     --
+     -- Each entry contains an address and the value stored in it.
+  -> DiscoveryState arch
+cfgFromAddrs ainfo mem symbols =
+  cfgFromAddrsAndState (emptyDiscoveryState mem symbols ainfo)
 
 ------------------------------------------------------------------------
 -- Resolve functions with logging
