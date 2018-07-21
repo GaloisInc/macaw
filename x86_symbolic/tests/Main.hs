@@ -131,7 +131,7 @@ main = do
      MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
         halloc (initMem, globalMap) lookupFn g regs
   case execResult of
-    (_,C.FinishedExecution _ (C.TotalRes _pair))-> do
+    (_,C.FinishedResult _ (C.TotalRes _pair))-> do
       putStrLn "Done"
     _ -> do
       fail "Partial execution returned."
