@@ -139,7 +139,7 @@ pureSem :: (IsSymInterface sym) =>
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
-
+    M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.XGetBV {} -> error "XGetBV"
     M.ReadLoc {} -> error "ReadLoc"
     M.PShufb {} -> error "PShufb"
