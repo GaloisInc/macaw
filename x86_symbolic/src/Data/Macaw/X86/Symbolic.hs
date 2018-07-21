@@ -101,15 +101,18 @@ getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
 getReg x = x ^. (field @n)
 
+x86RegName' :: M.X86Reg tp -> String
+x86RegName' M.X86_IP     = "ip"
+x86RegName' (M.X86_GP r) = show r
+x86RegName' (M.X86_FlagReg r) = show r
+x86RegName' (M.X87_StatusReg r) = show r
+x86RegName' M.X87_TopReg = "x87Top"
+x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
+x86RegName' (M.X87_FPUReg r) = show r
+x86RegName' (M.X86_YMMReg r) = show r
+
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
-x86RegName M.X86_IP     = C.systemSymbol "!ip"
-x86RegName (M.X86_GP r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X86_FlagReg r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X87_StatusReg r) = C.systemSymbol $ "!x87Status" ++ show r
-x86RegName M.X87_TopReg = C.systemSymbol $ "!x87Top"
-x86RegName (M.X87_TagReg r) = C.systemSymbol $ "!x87Tag" ++ show r
-x86RegName (M.X87_FPUReg r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X86_YMMReg r) = C.systemSymbol $ "!" ++ show r
+x86RegName r = C.systemSymbol $ "r!" ++ x86RegName' r
 
 gpReg :: Int -> M.X86Reg (M.BVType 64)
 gpReg = M.X86_GP . F.Reg64 . fromIntegral
