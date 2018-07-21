@@ -129,7 +129,7 @@ doGetGlobal st mvar globs addr =
                         ]
     Just region ->
       do mem <- getMem st mvar
-         let sym = stateSymInterface st
+         let sym = st^.stateSymInterface
          let w = M.addrWidthRepr addr
          LeqProof <- pure $ addrWidthAtLeast16 w
          let ?ptrWidth = M.addrWidthNatRepr w
@@ -331,7 +331,7 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
   do mem <- getMem st mvar
      checkEndian mem endian
 
-     let sym   = stateSymInterface st
+     let sym   = st^.stateSymInterface
          ty    = bitvectorType (toBytes (widthVal bytes))
          bitw  = natMultiply (knownNat @8) bytes
 
@@ -373,7 +373,7 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
          def  = regValue def0
      mem <- getMem st mvar
      checkEndian mem endian
-     let sym   = stateSymInterface st
+     let sym   = st^.stateSymInterface
          ty    = bitvectorType (toBytes (widthVal bytes))
          bitw  = natMultiply (knownNat @8) bytes
 
@@ -422,7 +422,7 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
   do mem <- getMem st mvar
      checkEndian mem endian
 
-     let sym   = stateSymInterface st
+     let sym   = st^.stateSymInterface
          ty    = bitvectorType (toBytes (widthVal bytes))
 
      LeqProof <- pure $ addrWidthIsPos w
@@ -480,7 +480,7 @@ ptrOp ::
 ptrOp k st mvar w x0 y0 =
   do mem <- getMem st mvar
      LeqProof <- return (addrWidthIsPos w)
-     let sym = stateSymInterface st
+     let sym = st^.stateSymInterface
          x   = regValue x0
          y   = regValue y0
 

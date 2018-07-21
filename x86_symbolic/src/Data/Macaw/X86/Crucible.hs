@@ -31,6 +31,7 @@ module Data.Macaw.X86.Crucible
 
   ) where
 
+import Control.Lens ((^.))
 import Data.Parameterized.NatRepr
 import Data.Parameterized.Context.Unsafe(empty,extend)
 
@@ -72,8 +73,8 @@ funcSemantics ::
   SymFuns sym ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-funcSemantics fs x s = do let sym = Sym { symIface = stateSymInterface s
-                                        , symTys   = stateIntrinsicTypes s
+funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
+                                        , symTys   = s^.stateIntrinsicTypes
                                         , symFuns  = fs
                                         }
                           v <- pureSem sym x
