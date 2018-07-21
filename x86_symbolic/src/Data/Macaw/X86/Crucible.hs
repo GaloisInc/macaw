@@ -31,12 +31,11 @@ module Data.Macaw.X86.Crucible
 
   ) where
 
-import           Data.Parameterized.NatRepr
+import           Control.Lens ((^.))
+import           Data.Bits hiding (xor)
 import           Data.Parameterized.Context.Unsafe (empty,extend)
-
-import           Data.Bits (shiftR, (.&.))
+import           Data.Parameterized.NatRepr
 import           Data.Word (Word8)
-import           Data.Bits (shiftL,testBit)
 import           GHC.TypeLits (KnownNat)
 
 import           What4.Interface hiding (IsExpr)
@@ -72,8 +71,8 @@ funcSemantics ::
   SymFuns sym ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt ->
   S sym rtp bs r ctx -> IO (RegValue sym t, S sym rtp bs r ctx)
-funcSemantics fs x s = do let sym = Sym { symIface = stateSymInterface s
-                                        , symTys   = stateIntrinsicTypes s
+funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
+                                        , symTys   = s^.stateIntrinsicTypes
                                         , symFuns  = fs
                                         }
                           v <- pureSem sym x

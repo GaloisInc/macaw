@@ -50,7 +50,6 @@ import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
 import           Control.Monad.ST
-import qualified Data.Foldable as Fold
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
@@ -144,9 +143,6 @@ initGenState :: NonceGenerator (ST st_s) ids
              -> GenState st_s ids
 initGenState nonce_gen mem addr s =
     GenState { assignIdGen = nonce_gen
-             , _blockSeq = BlockSeq { _nextBlockID    = 1
-                                    , _frontierBlocks = Seq.empty
-                                    }
              , _blockState     = emptyPreBlock s 0 addr
              , genAddr = addr
              , genMemory = mem
@@ -156,13 +152,12 @@ initGenState nonce_gen mem addr s =
 
 returnWithError :: GenState st_s ids
                 -> X86TranslateError 64
-                -> ST st_s (BlockSeq ids, MemWord 64, Maybe (X86TranslateError 64))
+                -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
 returnWithError gs err =
   let curIPAddr = genAddr gs
-      term = (`TranslateError` Text.pack (show err))
-      b = finishBlock' (gs^.blockState) term
-      res = seq b $ gs^.blockSeq & frontierBlocks %~ (Seq.|> b)
-   in return (res, msegOffset curIPAddr, Just err)
+      term s = TranslateError s (Text.pack (show err))
+      b = finishBlock (gs^.blockState) term
+   in return (b, msegOffset curIPAddr, Just err)
 
 -- | Translate block, returning blocks read, ending
 -- PC, and an optional error.  and ending PC.
@@ -173,7 +168,7 @@ disassembleBlockImpl :: forall st_s ids
                          -- ^ Maximum offset for this addr.
                      -> [SegmentRange 64]
                         -- ^ List of contents to read next.
-                     -> ST st_s (BlockSeq ids, MemWord 64, Maybe (X86TranslateError 64))
+                     -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlockImpl gs max_offset contents = do
   let curIPAddr = genAddr gs
   case readInstruction' curIPAddr contents of
@@ -191,7 +186,7 @@ disassembleBlockImpl gs max_offset contents = do
           returnWithError gs (UnsupportedInstruction (genAddr gs) i)
         Just exec -> do
           gsr <-
-            runExceptT $ runX86Generator (\() s -> pure (mkGenResult s)) gs $ do
+            runExceptT $ runX86Generator gs $ do
               let next_ip_word = fromIntegral $ segmentOffset seg + off
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction next_ip_word i)
               addStmt (Comment (Text.pack line))
@@ -200,18 +195,16 @@ disassembleBlockImpl gs max_offset contents = do
             Left msg -> do
               returnWithError gs (ExecInstructionError (genAddr gs) i msg)
             Right res -> do
-              case resState res of
+              case res of
                 -- If IP after interpretation is the next_ip, there are no blocks, and we
                 -- haven't crossed max_offset, then keep running.
-                Just p_b
-                  | Seq.null (resBlockSeq res ^. frontierBlocks)
-                  , RelocatableValue _ v <- p_b^.(pBlockState . curIP)
+                UnfinishedGenResult p_b
+                  | RelocatableValue _ v <- p_b^.(pBlockState . curIP)
                   , v == next_ip
                     -- Check to see if we should continue
                   , next_ip_off < max_offset
                   , Just next_ip_segaddr <- resolveSegmentOff seg next_ip_off -> do
                  let gs2 = GenState { assignIdGen = assignIdGen gs
-                                    , _blockSeq = resBlockSeq res
                                     , _blockState = p_b
                                     , genAddr = next_ip_segaddr
                                     , genMemory = genMemory gs
@@ -226,8 +219,7 @@ disassembleBlockImpl gs max_offset contents = do
                    Right contents' ->
                      disassembleBlockImpl gs2 max_offset contents'
                 _ -> do
-                  let gs3 = finishBlock FetchAndExecute res
-                  return (gs3, next_ip_off, Nothing)
+                  return (finishGenResult res, next_ip_off, Nothing)
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -237,12 +229,12 @@ disassembleBlock :: forall s
                  -> ExploreLoc
                  -> MemWord 64
                     -- ^ Maximum number of bytes in ths block.
-                 -> ST s ([Block X86_64 s], MemWord 64, Maybe (X86TranslateError 64))
+                 -> ST s (Block X86_64 s, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlock mem nonce_gen loc max_size = do
   let addr = loc_ip loc
   let gs = initGenState nonce_gen mem addr (initX86State loc)
   let sz = msegOffset addr + max_size
-  (gs', next_ip_off, maybeError) <-
+  (b, next_ip_off, maybeError) <-
     case addrContentsAfter mem (relativeSegmentAddr addr) of
       Left msg ->
         returnWithError gs (FlexdisMemoryError msg)
@@ -250,7 +242,7 @@ disassembleBlock mem nonce_gen loc max_size = do
         disassembleBlockImpl gs sz contents
   assert (next_ip_off > msegOffset addr) $ do
   let block_sz = next_ip_off - msegOffset addr
-  pure (Fold.toList (gs'^.frontierBlocks), block_sz, maybeError)
+  pure (b, block_sz, maybeError)
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
@@ -289,6 +281,7 @@ transferAbsValue r f =
     ReadFSBase -> TopV
     ReadGSBase -> TopV
     CPUID _    -> TopV
+    CMPXCHG8B{} -> TopV
     RDTSC      -> TopV
     XGetBV _   -> TopV
     PShufb{}   -> TopV
@@ -338,7 +331,7 @@ tryDisassembleBlockFromAbsState :: forall s ids
                                 -- ^ Maximum size of this block
                                 -> AbsBlockState X86Reg
                                 -- ^ Abstract state of processor for defining state.
-                                -> ExceptT String (ST s) ([Block X86_64 ids], MemWord 64, Maybe String)
+                                -> ExceptT String (ST s) (Block X86_64 ids, MemWord 64, Maybe String)
 tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
   t <-
     case asConcreteSingleton (ab^.absRegState^.boundValue X87_TopReg) of
@@ -355,7 +348,7 @@ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
                        }
   let gs = initGenState nonce_gen mem addr (initX86State loc)
   let off = msegOffset  addr
-  (gs', next_ip_off, maybeError) <- lift $
+  (b, next_ip_off, maybeError) <- lift $
     case addrContentsAfter mem (relativeSegmentAddr addr) of
       Left msg ->
         returnWithError gs (FlexdisMemoryError msg)
@@ -363,8 +356,7 @@ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
         disassembleBlockImpl gs (off + max_size) contents
   assert (next_ip_off > off) $ do
   let sz = next_ip_off - off
-  let blocks = Fold.toList (gs'^.frontierBlocks)
-  pure $! (blocks, sz, show <$> maybeError)
+  pure $! (b, sz, show <$> maybeError)
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -382,7 +374,7 @@ disassembleBlockFromAbsState mem nonce_gen addr max_size ab = do
   mr <- runExceptT $ tryDisassembleBlockFromAbsState mem nonce_gen addr max_size ab
   case mr of
     Left msg -> pure ([], 0, Just msg)
-    Right r ->  pure r
+    Right (b,sz, merr) ->  pure ([b],sz,merr)
 
 -- | Attempt to identify the write to a stack return address, returning
 -- instructions prior to that write and return  values.
