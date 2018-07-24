@@ -36,7 +36,6 @@ module Data.Macaw.CFG.Core
   , valueAsMemAddr
   , valueAsSegmentOff
   , valueAsStaticMultiplication
-  , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
   , IPAlignment(..)
@@ -189,7 +188,7 @@ data Value arch ids tp where
   RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
                    -> !(ArchMemAddr arch)
                    -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | Reference to a symbol identifier.
+  -- | This denotes the address of a symbol identifier in the binary.
   --
   -- This appears when dealing with relocations.
   SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
@@ -294,6 +293,12 @@ mkLit n v = BVValue n (v .&. mask)
 bvValue :: (KnownNat n, 1 <= n) => Integer -> Value arch ids (BVType n)
 bvValue i = mkLit knownNat i
 
+-- | Return the right-hand side if this is an assignment.
+valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
+valueAsRhs (AssignedValue (Assignment _ v)) = Just v
+valueAsRhs _ = Nothing
+
+-- | Return the value evaluated if this is from an `App`.
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
 valueAsApp (AssignedValue (Assignment _ (EvalApp a))) = Just a
 valueAsApp _ = Nothing
@@ -302,10 +307,6 @@ valueAsApp _ = Nothing
 valueAsArchFn :: Value arch ids tp -> Maybe (ArchFn arch (Value arch ids) tp)
 valueAsArchFn (AssignedValue (Assignment _ (EvalArchFn a _))) = Just a
 valueAsArchFn _ = Nothing
-
-valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
-valueAsRhs (AssignedValue (Assignment _ v)) = Just v
-valueAsRhs _ = Nothing
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
@@ -332,13 +333,6 @@ valueAsStaticMultiplication v
   , shr >= natValue w - shl
   = Just (2^shl, l')
   | otherwise = Nothing
-
-asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-               => BVValue arch ids (ArchAddrWidth arch)
-               -> Maybe (ArchMemAddr arch)
-asLiteralAddr = valueAsMemAddr
-
-{-# DEPRECATED asLiteralAddr "Use valueAsMemAddr" #-}
 
 -- | Returns a segment offset associated with the value if one can be defined.
 valueAsSegmentOff :: Memory (ArchAddrWidth arch)

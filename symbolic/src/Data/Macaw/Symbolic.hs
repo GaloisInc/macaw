@@ -59,14 +59,14 @@ import           What4.Symbol (userSymbol)
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
 import qualified Lang.Crucible.CFG.Core as C
+import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
 import qualified Lang.Crucible.FunctionHandle as C
+
+import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
-import qualified Lang.Crucible.Simulator.Intrinsics as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
-import qualified Lang.Crucible.Simulator.OverrideSim as C
-import qualified Lang.Crucible.Simulator.RegMap as C
 
 import           System.IO (stdout)
 
@@ -415,7 +415,7 @@ execMacawStmtExtension archStmtFn mvar globs (LFH lookupH) s0 st =
                M.BoolTypeRepr -> freshConstant sym nm C.BaseBoolRepr
                _ -> error ("MacawFreshSymbolic: XXX type " ++ show t)
          return (v,st)
-      where sym = C.stateSymInterface st
+      where sym = st^.C.stateSymInterface
 
     MacawLookupFunctionHandle _ args -> do
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
@@ -493,7 +493,7 @@ macawExtensions f mvar globs lookupH =
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock :: forall sym arch blocks
-           .  IsSymInterface sym
+           .  (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym)
            => sym
            -> MacawSymbolicArchFunctions arch
               -- ^ Translation functions
@@ -529,8 +529,8 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
                          }
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
-  let s = C.initSimState ctx initGlobals C.defaultErrorHandler
-  a <- C.runOverrideSim s macawStructRepr $ do
+  let s = C.initSimState ctx initGlobals C.defaultAbortHandler
+  a <- C.executeCrucible s $ C.runOverrideSim macawStructRepr $ do
     let args :: C.RegMap sym (MacawFunctionArgs arch)
         args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
     crucGenArchConstraints archFns $

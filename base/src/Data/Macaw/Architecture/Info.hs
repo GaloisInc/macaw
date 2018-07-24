@@ -14,7 +14,6 @@ module Data.Macaw.Architecture.Info
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
-  , disassembleAndRewrite
   ) where
 
 import           Control.Monad.ST
@@ -187,12 +186,3 @@ rewriteBlock info rwctx b = do
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }
-
--- | Translate code into blocks and simplify the resulting blocks.
-disassembleAndRewrite :: ArchitectureInfo arch ->  DisassembleFn arch
-disassembleAndRewrite ainfo mem nonceGen addr max_size ab =
-  withArchConstraints ainfo $ do
-  (bs0,sz, maybeError) <- disassembleFn ainfo mem nonceGen addr max_size ab
-  ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) (rewriteArchStmt ainfo)
-  bs1 <- traverse (rewriteBlock ainfo ctx) bs0
-  pure (bs1, sz, maybeError)

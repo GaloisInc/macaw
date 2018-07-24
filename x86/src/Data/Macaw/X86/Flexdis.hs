@@ -199,8 +199,8 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
-      RelocationRegion r:_ -> do
-        throwMemoryError $ UnexpectedRelocation (msAddr ms) r "byte0"
+      RelocationRegion r:_ ->
+        throwMemoryError $ UnexpectedByteRelocation (msAddr ms) r
       ByteRegion bs:rest -> do
         if BS.null bs then do
           throwMemoryError $ AccessViolation (msAddr ms)
@@ -219,23 +219,27 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
       RelocationRegion r:rest -> do
-        case r of
-          AbsoluteRelocation sym off end szCnt -> do
-            unless (szCnt == 4 && end == LittleEndian) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "dimm0"
-            let ms' = ms { msOffset = msOffset ms + 4
-                         , msNext   = rest
-                         }
-            seq ms' $ MBR $ put ms'
-            pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off)
-            -- RelativeOffset addr ioff (fromIntegral off)
-          RelativeRelocation _addr _off _end _szCnt -> do
-            throwMemoryError $ UnexpectedRelocation (msAddr ms) r "dimm1"
+        let sym = relocationSym r
+        let off = relocationOffset r
+        let isGood
+              =  relocationIsRel r == False
+              && relocationSize r == 4
+              && relocationEndianness r == LittleEndian
+        when (not isGood) $ do
+          throwMemoryError $ Unsupported32ImmRelocation (msAddr ms) r
+        -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
+        let signed = relocationIsSigned r
+
+        let ms' = ms { msOffset = msOffset ms + 4
+                     , msNext   = rest
+                     }
+        seq ms' $ MBR $ put ms'
+        pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off) signed
 
       ByteRegion bs:rest -> do
         v <- getUnsigned32 bs
         updateMSByteString ms bs rest 4
-        pure $! Flexdis.Imm32Concrete v
+        pure $! Flexdis.Imm32Concrete (fromIntegral v)
 
   readJump sz = do
     ms <- MBR get
@@ -247,20 +251,22 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
       RelocationRegion r:rest -> do
-        case r of
-          AbsoluteRelocation{} -> do
-            throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump0"
-          RelativeRelocation addr off end szCnt -> do
-            when (szCnt /= jsizeCount sz) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump1"
-            when (end /= LittleEndian) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump2"
-            let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
-                         , msNext   = rest
-                         }
-            seq ms' $ MBR $ put ms'
-            let ioff = fromIntegral $ msOffset ms - msStart ms
-            pure $ Flexdis.RelativeOffset addr ioff (fromIntegral off)
+        let sym = relocationSym r
+        let off = relocationOffset r
+        -- Sanity checks
+        let isGood
+              =  relocationIsRel r
+              && relocationSize r == jsizeCount sz
+              && relocationIsSigned r == False
+              && relocationEndianness r == LittleEndian
+        when (not isGood) $ do
+          throwMemoryError $ UnsupportedJumpOffsetRelocation (msAddr ms) r
+        let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
+                     , msNext   = rest
+                     }
+        seq ms' $ MBR $ put ms'
+        let ioff = fromIntegral $ msOffset ms - msStart ms
+        pure $ Flexdis.RelativeOffset sym ioff (fromIntegral off)
       ByteRegion bs:rest -> do
         (v,c) <- getJumpBytes bs sz
         updateMSByteString ms bs rest (fromIntegral c)
@@ -274,7 +280,6 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
 
 ------------------------------------------------------------------------
 -- readInstruction
-
 
 -- | Read instruction at a given memory address.
 readInstruction' :: MemSegmentOff 64
