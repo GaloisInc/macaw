@@ -18,6 +18,7 @@ module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
 
+import           Control.Lens ((^.))
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import           Data.Foldable
@@ -27,6 +28,7 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Proxy
 import           Data.Word
 import qualified Flexdis86 as F
@@ -1159,54 +1161,51 @@ def_ret = defVariadic "ret"    $ \_ vs ->
 
 -- FIXME: probably doesn't work for 32 bit address sizes
 -- arguments are only for the size, they are fixed at rsi/rdi
-exec_movs :: 1 <= w
-          => Bool -- Flag indicating if RepPrefix appeared before instruction
-          -> NatRepr w -- Number of bytes to move at a time.
-          -> X86Generator st ids ()
-exec_movs False w = do
-  let bytesPerOp = bvLit n64 (natValue w)
-  let repr = BVMemRepr w LittleEndian
-  -- The direction flag indicates post decrement or post increment.
-  df <- get df_loc
-  src  <- get rsi
-  dest <- get rdi
-  v' <- get $ MemoryAddr src repr
-  MemoryAddr dest repr .= v'
-
-  rsi .= mux df (src  .- bytesPerOp) (src  .+ bytesPerOp)
-  rdi .= mux df (dest .- bytesPerOp) (dest .+ bytesPerOp)
-exec_movs True w = do
-    -- FIXME: aso modifies this
-  let count_reg = rcx
-      bytesPerOp = natValue w
-      bytesPerOpv = bvLit n64 bytesPerOp
-  -- The direction flag indicates post decrement or post increment.
-  df <- get df_loc
-  src   <- get rsi
-  dest  <- get rdi
-  count <- get count_reg
-  let total_bytes = count .* bytesPerOpv
-  -- FIXME: we might need direction for overlapping regions
-  count_reg .= bvLit n64 (0::Integer)
-  memcopy bytesPerOp count src dest df
-  rsi .= mux df (src   .- total_bytes) (src   .+ total_bytes)
-  rdi .= mux df (dest  .- total_bytes) (dest  .+ total_bytes)
 
 def_movs :: InstructionDef
 def_movs = defBinary "movs" $ \ii loc _ -> do
-  case loc of
-    F.Mem8 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 1)
-    F.Mem16 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 2)
-    F.Mem32 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 4)
-    F.Mem64 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 8)
-    _ -> fail "Bad argument to movs"
+  let pfx = F.iiPrefixes ii
+  Some w <-
+        case loc of
+          F.Mem8{}  -> pure (Some ByteRepVal)
+          F.Mem16{} -> pure (Some WordRepVal)
+          F.Mem32{} -> pure (Some DWordRepVal)
+          F.Mem64{} -> pure (Some QWordRepVal)
+          _ -> error "Bad argument to movs"
+  let bytesPerOp = bvLit n64 (repValSizeByteCount w)
+  df   <- get df_loc
+  src  <- get rsi
+  dest <- get rdi
+  case pfx^.F.prLockPrefix of
+    F.RepPrefix -> do
+      when (pfx^.F.prASO) $ do
+        fail "Rep prefix semantics not defined when address size override is true."
+      -- The direction flag indicates post decrement or post increment.
+      count <- get rcx
+      addArchStmt =<< traverseF eval (RepMovs w count src dest df)
 
--- FIXME: can also take rep prefix
--- FIXME: we ignore the aso here.
+      -- We adjust rsi and rdi by a negative value if df is true.
+      -- The formula is organized so that the bytesPerOp literal is
+      -- passed to the multiply and we can avoid non-linear arithmetic.
+      let adj = bytesPerOp .* mux df (bvNeg count) count
+      rcx .= bvLit n64 (0::Integer)
+      rsi .= src  .+ adj
+      rdi .= dest .+ adj
+    F.NoLockPrefix -> do
+      let repr = repValSizeMemRepr w
+      -- The direction flag indicates post decrement or post increment.
+      v' <- get $ MemoryAddr src repr
+      MemoryAddr dest repr .= v'
+      -- We adjust rsi and rdi by a negative value if df is true.
+      -- The formula is organized so that the bytesPerOp literal is
+      -- passed to the multiply and we can avoid non-linear arithmetic.
+      let adj = mux df (bvNeg bytesPerOp) bytesPerOp
+      rsi .= src  .+ adj
+      rdi .= dest .+ adj
+    _ -> do
+      fail "movs given unsupported lock prefix"
+
+
 -- | CMPS/CMPSB Compare string/Compare byte string
 -- CMPS/CMPSW Compare string/Compare word string
 -- CMPS/CMPSD Compare string/Compare doubleword string

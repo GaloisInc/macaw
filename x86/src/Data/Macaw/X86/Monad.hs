@@ -154,7 +154,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.eval
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
-  , memcopy
   , memset
   , even_parity
   , fnstcw
@@ -1605,67 +1604,6 @@ modify :: Location (Addr ids) tp
 modify r f = do
   x <- get r
   r .= f x
-
--- | Move n bits at a time, with count moves
---
--- Semantic sketch. The effect on memory should be like @memcopy@
--- below, not like @memcopy2@. These sketches ignore the issue of
--- copying in chunks of size `bytes`, which should only be an
--- efficiency concern.
---
--- @
--- void memcopy(int bytes, int copies, char *src, char *dst, int reversed) {
---   int maybeFlip = reversed ? -1 : 1;
---   for (int c = 0; c < copies; ++c) {
---     for (int b = 0; b < bytes; ++b) {
---       int offset = maybeFlip * (b + c * bytes);
---       *(dst + offset) = *(src + offset);
---     }
---   }
--- }
--- @
---
--- Compare with:
---
--- @
--- void memcopy2(int bytes, int copies, char *src, char *dst, int reversed) {
---   int maybeFlip = reversed ? -1 : 1;
---   /* The only difference from `memcopy` above: here the same memory is
---      copied whether `reversed` is true or false -- only the order of
---      copies changes -- whereas above different memory is copied for
---      each direction. */
---   if (reversed) {
---     /* Start at the end and work backwards. */
---     src += copies * bytes - 1;
---     dst += copies * bytes - 1;
---   }
---   for (int c = 0; c < copies; ++c) {
---     for (int b = 0; b < bytes; ++b) {
---       int offset = maybeFlip * (b + c * bytes);
---       *(dst + offset) = *(src + offset);
---     }
---   }
--- }
--- @
-memcopy :: Integer
-           -- ^ Number of bytes to copy at a time (1,2,4,8)
-        -> BVExpr ids 64
-           -- ^ Number of values to move.
-        -> Addr ids
-           -- ^ Start of source buffer
-        -> Addr ids
-           -- ^ Start of destination buffer.
-        -> Expr ids BoolType
-           -- ^ Flag indicates direction of move:
-           -- True means we should decrement buffer pointers after each copy.
-           -- False means we should increment the buffer pointers after each copy.
-        -> X86Generator st ids ()
-memcopy val_sz count src dest is_reverse = do
-  count_v <- eval count
-  src_v   <- eval src
-  dest_v  <- eval dest
-  is_reverse_v <- eval is_reverse
-  addArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
 
 -- | Set memory to the given value, for the number of words (nbytes
 -- = count * typeWidth v)
