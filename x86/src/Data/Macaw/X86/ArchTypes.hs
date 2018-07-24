@@ -73,7 +73,7 @@ instance HasRepr SIMDWidth NatRepr where
 ------------------------------------------------------------------------
 -- RepValSize
 
--- | Rep value
+-- | A value for distinguishing between 1,2,4 and 8 byte values.
 data RepValSize w
    = (w ~  8) => ByteRepVal
    | (w ~ 16) => WordRepVal
@@ -807,40 +807,40 @@ x86PrimFnHasSideEffects f =
 -- X86Stmt
 
 -- | An X86 specific statement.
-data X86Stmt (v :: Type -> *)
-   = forall tp .
-     WriteLoc !(X86PrimLoc tp) !(v tp)
-   | StoreX87Control !(v (BVType 64))
-     -- ^ Store the X87 control register in the given location.
-   | MemCopy !Integer
-             !(v (BVType 64))
-             !(v (BVType 64))
-             !(v (BVType 64))
-             !(v BoolType)
-     -- ^ Copy a region of memory from a source buffer to a destination buffer.
-     --
-     -- In an expression @MemCopy bc v src dest dir@
-     -- * @bc@ is the number of bytes to copy at a time (1,2,4,8)
-     -- * @v@ is the number of values to move.
-     -- * @src@ is the start of source buffer.
-     -- * @dest@ is the start of destination buffer.
-     -- * @dir@ is a flag that indicates whether direction of move:
-     --   * 'True' means we should decrement buffer pointers after each copy.
-     --   * 'False' means we should increment the buffer pointers after each copy.
-   | forall n .
-     MemSet !(v (BVType 64))
-            -- /\ Number of values to assign
-            !(v (BVType n))
-            -- /\ Value to assign
-            !(v (BVType 64))
-            -- /\ Address to start assigning from.
-            !(v BoolType)
-            -- /\ Direction flag
+data X86Stmt (v :: Type -> *) where
+  WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
+  StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
+  -- ^ Store the X87 control register in the given address.
 
-    | EMMS
-      -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
-      -- Probably OK to use this for both EMMS FEMMS, the second being a
-      -- a faster version from AMD 3D now.
+  RepMovs :: !(RepValSize w)
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v BoolType)
+          -> X86Stmt v
+  -- ^ Copy a region of memory from a source buffer to a destination buffer.
+  --
+  -- In an expression @RepMovs bc cnt src dest dir@
+  -- * @bc@ denotes the bytes to copy at a time.
+  -- * @cnt@ is the number of values to move.
+  -- * @src@ is the start of source buffer.
+  -- * @dest@ is the start of destination buffer.
+  -- * @dir@ is a flag that indicates whether direction of move:
+  --   * 'True' means we should decrement buffer pointers after each copy.
+  --   * 'False' means we should increment the buffer pointers after each copy.
+  MemSet :: !(v (BVType 64))
+             -- /\ Number of values to assign
+          -> !(v (BVType n))
+             -- /\ Value to assign
+          -> !(v (BVType 64))
+             -- /\ Address to start assigning from.
+          -> !(v BoolType)
+            -- /\ Direction flag
+          -> X86Stmt v
+  EMMS :: X86Stmt v
+  -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
+  -- Probably OK to use this for both EMMS FEMMS, the second being a a
+  -- faster version from AMD 3D now.
 
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
@@ -853,7 +853,7 @@ instance TraversableF X86Stmt where
     case stmt of
       WriteLoc loc v    -> WriteLoc loc <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
-      MemCopy bc v src dest dir -> MemCopy bc <$> go v <*> go src <*> go dest <*> go dir
+      RepMovs bc v src dest dir -> RepMovs bc <$> go v <*> go src <*> go dest <*> go dir
       MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
       EMMS -> pure EMMS
 
@@ -862,9 +862,9 @@ instance IsArchStmt X86Stmt where
     case stmt of
       WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
-      MemCopy sz cnt src dest rev ->
-          text "memcopy" <+> parens (hcat $ punctuate comma args)
-        where args = [pretty sz, pp cnt, pp src, pp dest, pp rev]
+      RepMovs sz cnt src dest rev ->
+          text "repMovs" <+> parens (hcat $ punctuate comma args)
+        where args = [pretty (repValSizeByteCount sz), pp cnt, pp src, pp dest, pp rev]
       MemSet cnt val dest d ->
           text "memset" <+> parens (hcat $ punctuate comma args)
         where args = [pp cnt, pp val, pp dest, pp d]
