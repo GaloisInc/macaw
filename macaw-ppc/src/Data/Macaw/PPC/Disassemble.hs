@@ -60,7 +60,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
       case contents of
         [] -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
         MM.RelocationRegion r : _ ->
-          ET.throwError (PPCMemoryError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr) r "Disassembling from relocation"))
+          ET.throwError (PPCMemoryError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr) r))
         MM.BSSRegion {} : _ ->
           ET.throwError (PPCMemoryError (MM.UnexpectedBSS (MM.relativeSegmentAddr addr)))
         MM.ByteRegion bs : _rest

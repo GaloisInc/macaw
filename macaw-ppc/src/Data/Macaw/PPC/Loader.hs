@@ -30,7 +30,7 @@ import qualified Data.Macaw.PPC.BinaryFormat.ELF as BE
 import qualified Data.Macaw.PPC.TOC as TOC
 
 data PPCElfData w = PPCElfData { elf :: E.Elf w
-                               , secIndexMap :: EL.SectionIndexMap w
+                               , memSymbols :: [EL.MemSymbol w]
                                }
 
 instance BL.BinaryLoader PPC32.PPC (E.Elf 32) where
@@ -93,7 +93,7 @@ loadPPCBinary :: (w ~ MC.ArchAddrWidth ppc,
 loadPPCBinary binRep lopts e = do
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (PPCElfLoadError err)
-    Right (sim, mem, warnings) ->
+    Right (mem, symbols, warnings, _) ->
       case BE.parseTOC e of
         Left err -> X.throwM (PPCTOCLoadError err)
         Right toc ->
@@ -101,7 +101,7 @@ loadPPCBinary binRep lopts e = do
                                  , BL.archBinaryData = toc
                                  , BL.binaryFormatData =
                                    PPCElfData { elf = e
-                                              , secIndexMap = sim
+                                              , memSymbols = symbols
                                               }
                                  , BL.loadDiagnostics = warnings
                                  , BL.binaryRepr = binRep

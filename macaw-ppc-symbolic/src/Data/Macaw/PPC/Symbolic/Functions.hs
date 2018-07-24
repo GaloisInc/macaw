@@ -19,6 +19,7 @@ module Data.Macaw.PPC.Symbolic.Functions (
 import           GHC.TypeLits
 
 import qualified Control.Exception as X
+import           Control.Lens ( (^.) )
 import qualified Data.IORef as IO
 import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes ( (:~:)( Refl ), testEquality )
@@ -76,7 +77,7 @@ stmtSemantics _sf stmt s =
   case stmt of
     MP.Attn -> do
       let reason = C.GenericSimError "ppc_attn"
-      C.addFailedAssertion (C.stateSymInterface s) reason
+      C.addFailedAssertion (s ^. C.stateSymInterface) reason
     -- These are cache hints that can't be observed in our current memory model
     -- (i.e., they require concurrency to be observed).
     --
@@ -117,21 +118,21 @@ funcSemantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= MC.ArchAd
 funcSemantics sf pf s =
   case pf of
     MP.UDiv _rep lhs rhs -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       lhs' <- toValBV sym lhs
       rhs' <- toValBV sym rhs
       -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvUdiv sym lhs' rhs'
       return (v, s)
     MP.SDiv _rep lhs rhs -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       lhs' <- toValBV sym lhs
       rhs' <- toValBV sym rhs
       -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvSdiv sym lhs' rhs'
       return (v, s)
     MP.FP1 name v fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v' <- toValBV sym v
       fpscr' <- toValBV sym fpscr
       let argTypes = Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
@@ -141,7 +142,7 @@ funcSemantics sf pf s =
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP2 name v1 v2 fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
@@ -152,7 +153,7 @@ funcSemantics sf pf s =
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP3 name v1 v2 v3 fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3
@@ -164,7 +165,7 @@ funcSemantics sf pf s =
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec1 name v fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v' <- toValBV sym v
       fpscr' <- toValBV sym fpscr
       let argTypes = Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
@@ -174,7 +175,7 @@ funcSemantics sf pf s =
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec2 name v1 v2 fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
@@ -185,7 +186,7 @@ funcSemantics sf pf s =
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec3 name v1 v2 v3 fpscr -> do
-      let sym = C.stateSymInterface s
+      let sym = s ^. C.stateSymInterface
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3

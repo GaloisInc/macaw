@@ -22,7 +22,7 @@ import           Data.Maybe ( mapMaybe )
 import qualified Data.Macaw.X86 as MX
 
 data X86ElfData w = X86ElfData { elf :: E.Elf w
-                               , secIndexMap :: EL.SectionIndexMap 64
+                               , memSymbols :: [EL.MemSymbol w]
                                }
 
 instance BL.BinaryLoader MX.X86_64 (E.Elf 64) where
@@ -56,12 +56,12 @@ loadX86Binary :: (X.MonadThrow m)
 loadX86Binary lopts e = do
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (X86ElfLoadError err)
-    Right (sim, mem, warnings) ->
+    Right (mem, symbols, warnings, _) ->
       return BL.LoadedBinary { BL.memoryImage = mem
                              , BL.archBinaryData = ()
                              , BL.binaryFormatData =
                                X86ElfData { elf = e
-                                          , secIndexMap = sim
+                                          , memSymbols = symbols
                                           }
                              , BL.loadDiagnostics = warnings
                              , BL.binaryRepr = BL.Elf64Repr
