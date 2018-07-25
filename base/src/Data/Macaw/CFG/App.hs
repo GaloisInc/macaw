@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
+Copyright        : (c) Galois, Inc 2015-2018
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This defines a data type `App` for representing operations that can be

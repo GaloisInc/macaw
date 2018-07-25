@@ -73,7 +73,7 @@ instance HasRepr SIMDWidth NatRepr where
 ------------------------------------------------------------------------
 -- RepValSize
 
--- | Rep value
+-- | A value for distinguishing between 1,2,4 and 8 byte values.
 data RepValSize w
    = (w ~  8) => ByteRepVal
    | (w ~ 16) => WordRepVal
@@ -309,9 +309,31 @@ data X86PrimFn f tp where
   -- | Read the 'GS' base address.
   ReadGSBase :: X86PrimFn f (BVType 64)
   -- | The CPUID instruction.
-  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
   --
   -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
+  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
+
+  -- | This implements the logic for the cmpxchg8b instruction
+  --
+  -- Given a statement, `CMPXCHG8B addr eax ebx ecx edx` this executes the following logic:
+  --   temp64 <- read addr
+  --   if edx:eax == tmp then do
+  --     *addr := ecx:ebx
+  --     return (true, eax, edx)
+  --   else
+  --     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
+  CMPXCHG8B :: !(f (BVType 64))
+               -- ^ Address to read
+            -> !(f (BVType 32))
+               -- ^ Value in EAX
+            -> !(f (BVType 32))
+               -- ^ Value in EBX
+            -> !(f (BVType 32))
+               -- ^ Value in ECX
+            -> !(f (BVType 32))
+               -- ^ Value in EDX
+            -> X86PrimFn f (TupleType [BoolType, BVType 32, BVType 32])
+
   -- | The RDTSC instruction.
   --
   -- This returns the current time stamp counter a 64-bit value that will
@@ -331,7 +353,7 @@ data X86PrimFn f tp where
   --   @res[i] = x[j] where j = s[i](0..l)
   -- where @msb(y)@ returns the most-significant bit in byte @y@.
   PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
-  -- | Compares to memory regions
+  -- | Compares to memory regions and return the number of bytes that were the same.
   MemCmp :: !Integer
            -- /\ Number of bytes per value.
          -> !(f (BVType 64))
@@ -537,7 +559,7 @@ data X86PrimFn f tp where
           -> !(f (BVType 80))
           -> X86PrimFn f tp
 
-  {- | Unary operation on a vector.  Should have no side effects. -}
+  -- | Unary operation on a vector.  Should have no side effects.
   VOp1 :: (1 <= n) =>
      !(NatRepr n)        -> {- /\ width of input/result -}
      !AVXOp1             -> {- /\ do this operation -}
@@ -597,6 +619,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       ReadFSBase    -> knownRepr
       ReadGSBase    -> knownRepr
       CPUID{}       -> knownRepr
+      CMPXCHG8B{}   -> knownRepr
       RDTSC{}       -> knownRepr
       XGetBV{}      -> knownRepr
       PShufb w _ _  -> BVTypeRepr (typeRepr w)
@@ -651,6 +674,7 @@ instance TraversableFC X86PrimFn where
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
       CPUID v    -> CPUID <$> go v
+      CMPXCHG8B a ax bx cx dx  -> CMPXCHG8B <$> go a <*> go ax <*> go bx <*> go cx <*> go dx
       RDTSC      -> pure RDTSC
       XGetBV v   -> XGetBV <$> go v
       PShufb w x y -> PShufb w <$> go x <*> go y
@@ -694,6 +718,7 @@ instance IsArchFn X86PrimFn where
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
       CPUID code  -> sexprA "cpuid" [ pp code ]
+      CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
       RDTSC       -> pure $ text "rdtsc"
       XGetBV code -> sexprA "xgetbv" [ pp code ]
       PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
@@ -744,6 +769,7 @@ x86PrimFnHasSideEffects f =
     ReadFSBase   -> False
     ReadGSBase   -> False
     CPUID{}      -> False
+    CMPXCHG8B{}  -> True
     RDTSC        -> False
     XGetBV{}     -> False
     PShufb{}     -> False
@@ -781,40 +807,40 @@ x86PrimFnHasSideEffects f =
 -- X86Stmt
 
 -- | An X86 specific statement.
-data X86Stmt (v :: Type -> *)
-   = forall tp .
-     WriteLoc !(X86PrimLoc tp) !(v tp)
-   | StoreX87Control !(v (BVType 64))
-     -- ^ Store the X87 control register in the given location.
-   | MemCopy !Integer
-             !(v (BVType 64))
-             !(v (BVType 64))
-             !(v (BVType 64))
-             !(v BoolType)
-     -- ^ Copy a region of memory from a source buffer to a destination buffer.
-     --
-     -- In an expression @MemCopy bc v src dest dir@
-     -- * @bc@ is the number of bytes to copy at a time (1,2,4,8)
-     -- * @v@ is the number of values to move.
-     -- * @src@ is the start of source buffer.
-     -- * @dest@ is the start of destination buffer.
-     -- * @dir@ is a flag that indicates whether direction of move:
-     --   * 'True' means we should decrement buffer pointers after each copy.
-     --   * 'False' means we should increment the buffer pointers after each copy.
-   | forall n .
-     MemSet !(v (BVType 64))
-            -- /\ Number of values to assign
-            !(v (BVType n))
-            -- /\ Value to assign
-            !(v (BVType 64))
-            -- /\ Address to start assigning from.
-            !(v BoolType)
-            -- /\ Direction flag
+data X86Stmt (v :: Type -> *) where
+  WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
+  StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
+  -- ^ Store the X87 control register in the given address.
 
-    | EMMS
-      -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
-      -- Probably OK to use this for both EMMS FEMMS, the second being a
-      -- a faster version from AMD 3D now.
+  RepMovs :: !(RepValSize w)
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v BoolType)
+          -> X86Stmt v
+  -- ^ Copy a region of memory from a source buffer to a destination buffer.
+  --
+  -- In an expression @RepMovs bc cnt src dest dir@
+  -- * @bc@ denotes the bytes to copy at a time.
+  -- * @cnt@ is the number of values to move.
+  -- * @src@ is the start of source buffer.
+  -- * @dest@ is the start of destination buffer.
+  -- * @dir@ is a flag that indicates whether direction of move:
+  --   * 'True' means we should decrement buffer pointers after each copy.
+  --   * 'False' means we should increment the buffer pointers after each copy.
+  MemSet :: !(v (BVType 64))
+             -- /\ Number of values to assign
+          -> !(v (BVType n))
+             -- /\ Value to assign
+          -> !(v (BVType 64))
+             -- /\ Address to start assigning from.
+          -> !(v BoolType)
+            -- /\ Direction flag
+          -> X86Stmt v
+  EMMS :: X86Stmt v
+  -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
+  -- Probably OK to use this for both EMMS FEMMS, the second being a a
+  -- faster version from AMD 3D now.
 
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
@@ -827,7 +853,7 @@ instance TraversableF X86Stmt where
     case stmt of
       WriteLoc loc v    -> WriteLoc loc <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
-      MemCopy bc v src dest dir -> MemCopy bc <$> go v <*> go src <*> go dest <*> go dir
+      RepMovs bc v src dest dir -> RepMovs bc <$> go v <*> go src <*> go dest <*> go dir
       MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
       EMMS -> pure EMMS
 
@@ -836,9 +862,9 @@ instance IsArchStmt X86Stmt where
     case stmt of
       WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
-      MemCopy sz cnt src dest rev ->
-          text "memcopy" <+> parens (hcat $ punctuate comma args)
-        where args = [pretty sz, pp cnt, pp src, pp dest, pp rev]
+      RepMovs sz cnt src dest rev ->
+          text "repMovs" <+> parens (hcat $ punctuate comma args)
+        where args = [pretty (repValSizeByteCount sz), pp cnt, pp src, pp dest, pp rev]
       MemSet cnt val dest d ->
           text "memset" <+> parens (hcat $ punctuate comma args)
         where args = [pp cnt, pp val, pp dest, pp d]

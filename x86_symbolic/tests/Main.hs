@@ -32,10 +32,11 @@ import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.Backend.Simple as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
+import           Lang.Crucible.LLVM.DataLayout (EndianForm(LittleEndian))
+import qualified Lang.Crucible.LLVM.MemModel as C
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegValue as C
-import qualified Lang.Crucible.LLVM.MemModel.Pointer as C
-
 
 mkReg :: (C.IsSymInterface sym, M.HasRepr (M.ArchReg arch) M.TypeRepr)
       => MS.MacawSymbolicArchFunctions arch
@@ -65,8 +66,7 @@ main = do
 
   let loadOpt :: Elf.LoadOptions
       loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
-                                , Elf.loadRegionBaseOffset = ???
---                                , Elf.includeBSS = False
+                                , Elf.loadRegionBaseOffset = 0
                                 }
   putStrLn "Read elf"
   elfContents <- BS.readFile "tests/add_ubuntu64.o"
@@ -121,9 +121,17 @@ main = do
   symFuns <- MX.newSymFuns sym
 
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc ??? ??? g regs
+  initMem <- C.emptyMem LittleEndian
+  let globalMap :: MS.GlobalMap sym MX.X86_64
+      globalMap = Map.empty
+  let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
+      lookupFn _mem _regs = do
+        fail "Could not find function handle."
+  execResult <-
+     MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
+        halloc (initMem, globalMap) lookupFn g regs
   case execResult of
-    (_,C.FinishedExecution _ (C.TotalRes _pair))-> do
+    (_,C.FinishedResult _ (C.TotalRes _pair))-> do
       putStrLn "Done"
     _ -> do
       fail "Partial execution returned."
