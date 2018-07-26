@@ -39,7 +39,7 @@ import           Data.Functor.Product
 
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
-import qualified Data.Map -- no abbreviation; Map already used
+import qualified Data.Map as Map
 import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
@@ -50,7 +50,7 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.HasRepr as HR
 import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.List as SL
-import qualified Data.Parameterized.Map as Map
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.Pair as Pair
@@ -101,7 +101,7 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -> Name
                    -- ^ The name of the architecture-specific instruction
                    -- matcher to run before falling back to the generic one
-                   -> Map.MapF a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
+                   -> MapF.MapF a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                    -> (Q Type, Q Type)
                    -> Q Exp
 instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType = do
@@ -109,7 +109,7 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
   (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib
-  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType) (Map.toList formulas)
+  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType) (MapF.toList formulas)
   (fallthruNm, unimp) <- unimplementedInstruction
   fallthroughCase <- match wildP (normalB (appE (varE fallthruNm) (varE opcodeVar))) []
   let allCases :: [Match]
@@ -154,12 +154,12 @@ libraryDefinitions :: (A.Architecture arch)
                    -> Q ([Dec], String -> Maybe (MacawQ arch t Exp))
 libraryDefinitions ltr ena ae archType lib = do
   (decs, pairs) :: ([[Dec]], [(String, Name)])
-    <- unzip <$> mapM translate (Map.toList lib)
-  let varMap :: Data.Map.Map String Name
+    <- unzip <$> mapM translate (MapF.toList lib)
+  let varMap :: Map.Map String Name
                 -- Would use a MapF (Const String) (Const Name), but there's no
                 -- OrdF instance for Const
-      varMap = Data.Map.fromList pairs
-      look name = (liftQ . varE) <$> Data.Map.lookup name varMap
+      varMap = Map.fromList pairs
+      look name = (liftQ . varE) <$> Map.lookup name varMap
   return (concat decs, look)
   where
     translate (Pair.Pair _ ff@(FunctionFormula { ffName = name })) = do
@@ -185,9 +185,9 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> Name
                 -> Name
                 -> (Q Type, Q Type)
-                -> Map.Pair a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
+                -> MapF.Pair a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                 -> Q (Match, (Dec, Dec))
-mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (Map.Pair opc (Pair semantics capInfo)) =
+mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
@@ -269,22 +269,22 @@ genCaseBody ltr ena ae df ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
   translateFormula ltr ena ae df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames
   where
-    locVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-    locVarsMap = Map.foldrWithKey (collectVarForLocation (Proxy @arch)) Map.empty (pfLiteralVars semantics)
+    locVarsMap :: MapF.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+    locVarsMap = MapF.foldrWithKey (collectVarForLocation (Proxy @arch)) MapF.empty (pfLiteralVars semantics)
 
-    opVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
-    opVarsMap = SL.ifoldr (collectOperandVars varNames) Map.empty (pfOperandVars semantics)
+    opVarsMap :: MapF.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+    opVarsMap = SL.ifoldr (collectOperandVars varNames) MapF.empty (pfOperandVars semantics)
 
-    argVarsMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
-    argVarsMap = Map.empty
+    argVarsMap :: MapF.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+    argVarsMap = MapF.empty
 
 collectVarForLocation :: forall tp arch proxy t
                        . proxy arch
                       -> L.Location arch tp
                       -> SI.BoundVar (Sym t) tp
-                      -> Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-                      -> Map.MapF (SI.BoundVar (Sym t)) (L.Location arch)
-collectVarForLocation _ loc bv = Map.insert bv loc
+                      -> MapF.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+                      -> MapF.MapF (SI.BoundVar (Sym t)) (L.Location arch)
+collectVarForLocation _ loc bv = MapF.insert bv loc
 
 -- | Index variables that map to operands
 --
@@ -300,11 +300,11 @@ collectOperandVars :: forall sh tp arch t
                     . SL.List (C.Const Name) sh
                    -> SL.Index sh tp
                    -> BV.BoundVar (Sym t) arch tp
-                   -> Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
-                   -> Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+                   -> MapF.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+                   -> MapF.MapF (SI.BoundVar (Sym t)) (C.Const Name)
 collectOperandVars varNames ix (BV.BoundVar bv) m =
   case varNames SL.!! ix of
-    C.Const name -> Map.insert bv (C.Const name) m
+    C.Const name -> MapF.insert bv (C.Const name) m
 {-
      genExecInstruction :: forall k arch (a :: [k] -> *) (proxy :: *
                                                                         -> *).
@@ -469,14 +469,14 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo fun
       runIO (S.startCaching sym)
       lib <- runIO (loadLibrary (Proxy @arch) sym functions)
       formulas <- runIO (loadFormulas sym lib semantics)
-      let formulasWithInfo = foldr (attachInfo formulas) Map.empty captureInfo
+      let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
       instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType
         where
           attachInfo m0 (Some ci) m =
               let co = DT.capturedOpcode ci
-              in case Map.lookup co m0 of
+              in case MapF.lookup co m0 of
                    Nothing -> m
-                   Just pf -> Map.insert co (Pair pf ci) m
+                   Just pf -> MapF.insert co (Pair pf ci) m
 
 natReprTH :: M.NatRepr w -> Q Exp
 natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
@@ -502,11 +502,11 @@ translateFormula :: forall arch t sh .
                  -> Q Exp
 translateFormula ltr ena ae df ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
-  exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (Map.toList (pfDefs semantics)))
+  exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (MapF.toList (pfDefs semantics)))
   [| Just $(doSequenceQ preamble exps) |]
-  where translateDefinition :: Map.Pair (Parameter arch sh) (S.SymExpr (Sym t))
+  where translateDefinition :: MapF.Pair (Parameter arch sh) (S.SymExpr (Sym t))
                             -> MacawQ arch t ()
-        translateDefinition (Map.Pair param expr) = do
+        translateDefinition (MapF.Pair param expr) = do
           case param of
             OperandParameter _w idx -> do
               let C.Const name = varNames SL.!! idx
@@ -540,16 +540,16 @@ translateFunction ltr ena ae archType ff = do
   var <- newName ("_df_" ++ (ffName ff))
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
-  let argVarMap :: Map.MapF (SI.BoundVar (Sym t)) (C.Const Name)
-      argVarMap = Map.fromList $ zipWith pair bvs argVars
+  let argVarMap :: MapF.MapF (SI.BoundVar (Sym t)) (C.Const Name)
+      argVarMap = MapF.fromList $ zipWith pair bvs argVars
         where
           bvs :: [Some (SI.BoundVar (Sym t))]
           bvs = FC.toListFC Some (ffArgVars ff)
           pair (Some bv) v = Pair.Pair bv (C.Const v)
-      interps = BoundVarInterpretations { locVars = Map.empty
+      interps = BoundVarInterpretations { locVars = MapF.empty
                                         , regsValName = mkName "<invalid>"
                                         -- only used for loc vars; we have none
-                                        , opVars = Map.empty
+                                        , opVars = MapF.empty
                                         , valVars = argVarMap }
       expr = case S.symFnInfo (ffDef ff) of
         S.DefinedFnInfo _ e _ -> e
@@ -596,12 +596,12 @@ addEltTH interps elt = do
           translatedExpr <- appToExprTH (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
         S.BoundVarExpr bVar
-          | Just loc <- Map.lookup bVar (locVars interps) ->
+          | Just loc <- MapF.lookup bVar (locVars interps) ->
             withLocToReg $ \ltr -> do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
-          | Just (C.Const name) <- Map.lookup bVar (opVars interps) ->
+          | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
             bindExpr elt [| O.extractValue $(varE name) |]
-          | Just (C.Const name) <- Map.lookup bVar (valVars interps) ->
+          | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
             bindExpr elt [| return $(varE name) |]
           | otherwise -> fail $ "bound var not found: " ++ show bVar
         S.NonceAppExpr n -> do
@@ -757,7 +757,7 @@ asName :: String -> BoundVarInterpretations arch t -> S.Expr t tp -> Name
 asName ufName bvInterps elt =
   case elt of
     S.BoundVarExpr bVar ->
-      case Map.lookup bVar (opVars bvInterps) of
+      case MapF.lookup bVar (opVars bvInterps) of
         Nothing -> error ("Expected " ++ show bVar ++ " to have an interpretation")
         Just (C.Const name) -> name
     _ -> error ("Unexpected elt as name (" ++ showF elt ++ ") in " ++ ufName)
