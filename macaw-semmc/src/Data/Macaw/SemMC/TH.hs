@@ -608,6 +608,7 @@ addEltTH interps elt = do
           translatedExpr <- evalNonceAppTH interps (S.nonceExprApp n)
           bindExpr elt (return translatedExpr)
         S.SemiRingLiteral {} -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
+        S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
 
 symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
