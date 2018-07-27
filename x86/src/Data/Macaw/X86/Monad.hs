@@ -154,7 +154,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.eval
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
-  , memset
   , even_parity
   , fnstcw
   , getSegmentBase
@@ -1604,25 +1603,6 @@ modify :: Location (Addr ids) tp
 modify r f = do
   x <- get r
   r .= f x
-
--- | Set memory to the given value, for the number of words (nbytes
--- = count * typeWidth v)
-memset :: (1 <= n)
-       => BVExpr ids 64
-          -- ^ Number of values to set
-       -> BVExpr ids n
-          -- ^ Value to set
-       -> Addr ids
-          -- ^ Pointer to buffer to set
-       -> Expr ids BoolType
-          -- ^ Direction flag
-       -> X86Generator st ids ()
-memset count val dest dfl = do
-  count_v <- eval count
-  val_v   <- eval val
-  dest_v  <- eval dest
-  df_v    <- eval dfl
-  addArchStmt $ MemSet count_v val_v dest_v df_v
 
 -- | Return true if value contains an even number of true bits.
 even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)

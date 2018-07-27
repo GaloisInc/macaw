@@ -820,23 +820,35 @@ data X86Stmt (v :: Type -> *) where
           -> X86Stmt v
   -- ^ Copy a region of memory from a source buffer to a destination buffer.
   --
-  -- In an expression @RepMovs bc cnt src dest dir@
+  -- In an expression @RepMovs bc dest src cnt dir@
   -- * @bc@ denotes the bytes to copy at a time.
-  -- * @cnt@ is the number of values to move.
-  -- * @src@ is the start of source buffer.
   -- * @dest@ is the start of destination buffer.
+  -- * @src@ is the start of source buffer.
+  -- * @cnt@ is the number of values to move.
   -- * @dir@ is a flag that indicates whether direction of move:
   --   * 'True' means we should decrement buffer pointers after each copy.
   --   * 'False' means we should increment the buffer pointers after each copy.
-  MemSet :: !(v (BVType 64))
-             -- /\ Number of values to assign
-          -> !(v (BVType n))
+  RepStos :: !(RepValSize w)
+          -> !(v (BVType 64))
+             -- /\ Address to start assigning to.
+          -> !(v (BVType w))
              -- /\ Value to assign
           -> !(v (BVType 64))
-             -- /\ Address to start assigning from.
+             -- /\ Number of values to assign
           -> !(v BoolType)
             -- /\ Direction flag
           -> X86Stmt v
+  -- ^ Assign all elements in an array in memory a specific value.
+  --
+  -- In an expression @RepMovs bc dest val cnt dir@
+  -- * @bc@ denotes the bytes to copy at a time.
+  -- * @dest@ is the start of destination buffer.
+  -- * @val@ is the value to write to.
+  -- * @cnt@ is the number of values to move.
+  -- * @dir@ is a flag that indicates whether direction of move:
+  --   * 'True' means we should decrement buffer pointers after each copy.
+  --   * 'False' means we should increment the buffer pointers after each copy.
+
   EMMS :: X86Stmt v
   -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
   -- Probably OK to use this for both EMMS FEMMS, the second being a a
@@ -853,8 +865,8 @@ instance TraversableF X86Stmt where
     case stmt of
       WriteLoc loc v    -> WriteLoc loc <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
-      RepMovs bc v src dest dir -> RepMovs bc <$> go v <*> go src <*> go dest <*> go dir
-      MemSet  v src dest dir    -> MemSet <$> go v <*> go src <*> go dest <*> go dir
+      RepMovs bc dest src cnt dir -> RepMovs bc <$> go dest <*> go src <*> go cnt <*> go dir
+      RepStos bc dest val cnt dir -> RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
       EMMS -> pure EMMS
 
 instance IsArchStmt X86Stmt where
@@ -862,12 +874,12 @@ instance IsArchStmt X86Stmt where
     case stmt of
       WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
-      RepMovs sz cnt src dest rev ->
+      RepMovs bc dest src cnt dir ->
           text "repMovs" <+> parens (hcat $ punctuate comma args)
-        where args = [pretty (repValSizeByteCount sz), pp cnt, pp src, pp dest, pp rev]
-      MemSet cnt val dest d ->
-          text "memset" <+> parens (hcat $ punctuate comma args)
-        where args = [pp cnt, pp val, pp dest, pp d]
+        where args = [pretty (repValSizeByteCount bc), pp dest, pp src, pp cnt, pp dir]
+      RepStos bc dest val cnt dir ->
+          text "repStos" <+> parens (hcat $ punctuate comma args)
+        where args = [pretty (repValSizeByteCount bc), pp dest, pp val, pp cnt, pp dir]
       EMMS -> text "emms"
 
 ------------------------------------------------------------------------

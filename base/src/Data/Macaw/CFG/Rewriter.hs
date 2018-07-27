@@ -1,5 +1,5 @@
 {-|
-Copyright  : (c) Galois, Inc 2017
+Copyright  : (c) Galois, Inc 2017-2018
 Maintainer : jhendrix@galois.com
 
 This provides a rewriter for simplifying values.

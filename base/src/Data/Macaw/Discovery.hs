@@ -167,7 +167,7 @@ refineProcStateBounds v isTrue ps =
     Right ps' -> ps'
 
 ------------------------------------------------------------------------
--- Demanded subterm utilities
+-- Eliminate dead code in blocks
 
 -- | Add any values needed to compute term statement to demand set.
 addTermDemands :: TermStmt arch ids -> DemandComp arch ids ()
@@ -203,6 +203,65 @@ eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
             traverse_ addBlockDemands bs0
 
 ------------------------------------------------------------------------
+-- Eliminate dead code in blocks
+
+-- | Add any assignments needed to evaluate statements with side
+-- effects and terminal statement to demand set.
+addStatementListDemands :: StatementList arch ids -> DemandComp arch ids ()
+addStatementListDemands sl = do
+  mapM_ addStmtDemands (stmtsNonterm sl)
+  case stmtsTerm sl of
+    ParsedCall regs _ -> do
+      traverseF_ addValueDemands regs
+    ParsedJump regs _ -> do
+      traverseF_ addValueDemands regs
+    ParsedLookupTable regs _idx _tbl  -> do
+      traverseF_ addValueDemands regs
+    ParsedReturn regs -> do
+      traverseF_ addValueDemands regs
+    ParsedIte b x y -> do
+      addValueDemands b
+      addStatementListDemands x
+      addStatementListDemands y
+    ParsedArchTermStmt _ regs _ -> do
+      traverseF_ addValueDemands regs
+    ParsedTranslateError _ -> do
+      pure ()
+    ClassifyFailure regs -> do
+      traverseF_ addValueDemands regs
+
+-- | Apply the given predicate to all statements in the list and only
+-- include statements that pass.
+--
+-- Note. This may break the program if one is not careful.
+filterStmtList :: (Stmt arch ids -> Bool)
+               -> StatementList arch ids
+               -> StatementList arch ids
+filterStmtList stmtPred s = do
+  let term' =
+        case stmtsTerm s of
+          ParsedIte b x y ->
+            let x' = filterStmtList stmtPred x
+                y' = filterStmtList stmtPred y
+             in ParsedIte b x' y'
+          term -> term
+   in s { stmtsNonterm = filter stmtPred (stmtsNonterm s)
+        , stmtsTerm = term'
+        }
+
+-- | Eliminate all dead statements in blocks
+dropUnusedCodeInParsedBlock :: ArchitectureInfo arch
+                          -> ParsedBlock arch ids
+                          -> ParsedBlock arch ids
+dropUnusedCodeInParsedBlock ainfo b =
+    b { blockStatementList = filterStmtList stmtPred l }
+  where l = blockStatementList b
+        demandSet =
+          runDemandComp (archDemandContext ainfo) $ do
+            addStatementListDemands l
+        stmtPred = stmtNeeded demandSet
+
+------------------------------------------------------------------------
 -- Memory utilities
 
 -- | Return true if range is entirely contained within a single read only segment.Q
@@ -226,20 +285,23 @@ markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
-  -- Skip if function is unexlored
-  | Map.member addr (s^.funInfo) = s
+  -- Do nothing if function is already explored.
+  | Map.member addr (s^.funInfo) || Map.member addr (s^.unexploredFunctions) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
-    -- Only add function if the start is raw bytes.
+    -- We check that the function address ignores bytes so that we do
+    -- not start disassembling at a relocation or BSS region.
     case contentsAfterSegmentOff addr of
       Right (ByteRegion _:_) ->
-        s & unexploredFunctions %~ Map.insertWith (\_ old -> old) addr rsn
+        s & unexploredFunctions %~ Map.insert addr rsn
       _ -> s
+
 -- | Mark a list of addresses as function entries with the same reason.
 markAddrsAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                     -> [ArchSegmentOff arch]
                     -> DiscoveryState arch
                     -> DiscoveryState arch
-markAddrsAsFunction rsn addrs s0 = foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
+markAddrsAsFunction rsn addrs s0 =
+  foldl' (\s a -> markAddrAsFunction rsn a s) s0 addrs
 
 ------------------------------------------------------------------------
 -- FoundAddr
@@ -1049,8 +1111,8 @@ transferBlocks :: ArchSegmentOff arch
                -> Map Word64 (Block arch ids)
                   -- ^ Map from labelIndex to associated block
                -> FunM arch s ids ()
-transferBlocks src finfo sz block_map =
-  case Map.lookup 0 block_map of
+transferBlocks src finfo sz blockMap =
+  case Map.lookup 0 blockMap of
     Nothing -> do
       error $ "transferBlocks given empty blockRegion."
     Just b -> do
@@ -1074,7 +1136,7 @@ transferBlocks src finfo sz block_map =
                              , pctxKnownFnEntries = knownFns
                              , pctxFunAddr        = funAddr
                              , pctxAddr           = src
-                             , pctxBlockMap       = block_map
+                             , pctxBlockMap       = blockMap
                              }
       let ps0 = ParseState { _writtenCodeAddrs = []
                            , _intraJumpTargets = []
@@ -1087,7 +1149,8 @@ transferBlocks src finfo sz block_map =
                            , blockAbstractState = foundAbstractState finfo
                            , blockStatementList = pblock
                            }
-      id %= addFunBlock src pb
+      let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
+      id %= addFunBlock src pb'
       curFunCtx %= markAddrsAsFunction (PossibleWriteEntry src) (ps^.writtenCodeAddrs)
                 .  markAddrsAsFunction (CallTarget src)         (ps^.newFunctionAddrs)
       mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
@@ -1144,10 +1207,10 @@ transfer addr = do
     -- Rewrite returned blocks to simplify expressions
 
     -- Compute demand set
-    let bs = eliminateDeadStmts ainfo bs1
+    let bs = bs1 -- eliminateDeadStmts ainfo bs1
     -- Call transfer blocks to calculate parsedblocks
-    let block_map = Map.fromList [ (blockLabel b, b) | b <- bs ]
-    transferBlocks addr finfo sz block_map
+    let blockMap = Map.fromList [ (blockLabel b, b) | b <- bs ]
+    transferBlocks addr finfo sz blockMap
 
 ------------------------------------------------------------------------
 -- Main loop
