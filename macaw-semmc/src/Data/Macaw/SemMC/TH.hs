@@ -105,7 +105,7 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -> (Q Type, Q Type)
                    -> Q (Exp, [Dec])
 instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType = do
-  ipVarName <- newName "ipVal"
+  ipVarName <- newName "_ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
   (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib
