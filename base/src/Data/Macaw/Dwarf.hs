@@ -817,8 +817,21 @@ parseVariable :: V.Vector FilePath
               -> Map DieID Type
               -> DIE
               -> Parser Variable
-parseVariable file_vec typeMap d = runDIEParser "parseVariable" d $ do
-  checkTag DW_TAG_variable
+parseVariable = parseVariableOrParameter DW_TAG_variable
+
+parseParameter :: V.Vector FilePath
+               -> Map DieID Type
+               -> DIE
+               -> Parser Variable
+parseParameter = parseVariableOrParameter DW_TAG_formal_parameter
+
+parseVariableOrParameter :: Dwarf.DW_TAG
+                         -> V.Vector FilePath
+                         -> Map DieID Type
+                         -> DIE
+                         -> Parser Variable
+parseVariableOrParameter tag file_vec typeMap d = runDIEParser "parseVariable" d $ do
+  checkTag tag
 
   mloc       <- getMaybeAttribute DW_AT_location $ \case
                   DW_ATVAL_BLOB b -> ComputedLoc <$> parseDwarfExpr b
@@ -911,6 +924,8 @@ data Subprogram = Subprogram { subExternal   :: !Bool
                              , subPrototyped :: !Bool
                              , subDef        :: !(Maybe SubprogramDef)
                              , subVars :: !(Map DieID Variable)
+                             , subParams :: !(Map DieID Variable)
+                             , subRetType :: !(Maybe Type)
                              }
 
 
@@ -923,6 +938,8 @@ instance Pretty Subprogram where
          , text "prototyped: " <+> text (show (subPrototyped sub))
          , maybe (text "") pretty (subDef sub)
          , ppList "variables" (pretty <$> Map.elems (subVars sub))
+         , ppList "parameters" (pretty <$> Map.elems (subParams sub))
+         , text "return type: " <+> text (show (subRetType sub))
          ]
 
 instance Show Subprogram where
@@ -963,6 +980,10 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
   typeMap' <- Map.union typeMap <$> parseTypeMap file_vec
 
   vars <- parseChildrenList DW_TAG_variable (parseVariable file_vec typeMap')
+  params <- parseChildrenList DW_TAG_formal_parameter $
+    parseParameter file_vec typeMap'
+  retType <- getMaybeAttribute DW_AT_type $
+    parseType typeMap' <=< attributeAsDieID
 
   ignoreAttribute DW_AT_GNU_all_tail_call_sites
   ignoreAttribute DW_AT_sibling
@@ -979,6 +1000,8 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
                   , subPrototyped = fromMaybe False prototyped
                   , subDef        = def
                   , subVars       = Map.fromList [ (varDieID v, v) | v <- vars ]
+                  , subParams     = Map.fromList [ (varDieID p, p) | p <- params ]
+                  , subRetType    = retType
                   }
 
 ------------------------------------------------------------------------
