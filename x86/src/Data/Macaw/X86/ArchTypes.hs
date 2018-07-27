@@ -323,15 +323,15 @@ data X86PrimFn f tp where
   --   else
   --     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
   CMPXCHG8B :: !(f (BVType 64))
-               -- ^ Address to read
+               -- Address to read
             -> !(f (BVType 32))
-               -- ^ Value in EAX
+               -- Value in EAX
             -> !(f (BVType 32))
-               -- ^ Value in EBX
+               -- Value in EBX
             -> !(f (BVType 32))
-               -- ^ Value in ECX
+               -- Value in ECX
             -> !(f (BVType 32))
-               -- ^ Value in EDX
+               -- Value in EDX
             -> X86PrimFn f (TupleType [BoolType, BVType 32, BVType 32])
 
   -- | The RDTSC instruction.
@@ -809,16 +809,10 @@ x86PrimFnHasSideEffects f =
 -- | An X86 specific statement.
 data X86Stmt (v :: Type -> *) where
   WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
+  -- | Store the X87 control register in the given address.
   StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
-  -- ^ Store the X87 control register in the given address.
 
-  RepMovs :: !(RepValSize w)
-          -> !(v (BVType 64))
-          -> !(v (BVType 64))
-          -> !(v (BVType 64))
-          -> !(v BoolType)
-          -> X86Stmt v
-  -- ^ Copy a region of memory from a source buffer to a destination buffer.
+  -- | Copy a region of memory from a source buffer to a destination buffer.
   --
   -- In an expression @RepMovs bc cnt src dest dir@
   -- * @bc@ denotes the bytes to copy at a time.
@@ -828,6 +822,12 @@ data X86Stmt (v :: Type -> *) where
   -- * @dir@ is a flag that indicates whether direction of move:
   --   * 'True' means we should decrement buffer pointers after each copy.
   --   * 'False' means we should increment the buffer pointers after each copy.
+  RepMovs :: !(RepValSize w)
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v (BVType 64))
+          -> !(v BoolType)
+          -> X86Stmt v
   MemSet :: !(v (BVType 64))
              -- /\ Number of values to assign
           -> !(v (BVType n))
@@ -837,10 +837,10 @@ data X86Stmt (v :: Type -> *) where
           -> !(v BoolType)
             -- /\ Direction flag
           -> X86Stmt v
-  EMMS :: X86Stmt v
-  -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
+  -- | Empty MMX technology State. Sets the x87 FPU tag word to empty.
   -- Probably OK to use this for both EMMS FEMMS, the second being a a
   -- faster version from AMD 3D now.
+  EMMS :: X86Stmt v
 
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
