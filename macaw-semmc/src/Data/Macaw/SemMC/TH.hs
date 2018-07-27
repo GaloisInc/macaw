@@ -103,7 +103,7 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -- matcher to run before falling back to the generic one
                    -> MapF.MapF a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
                    -> (Q Type, Q Type)
-                   -> Q Exp
+                   -> Q (Exp, [Dec])
 instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType = do
   ipVarName <- newName "ipVal"
   opcodeVar <- newName "opcode"
@@ -120,16 +120,16 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
   instrArg <- asP instrVar [p| D.Instruction $(varP opcodeVar) $(varP operandListVar) |]
   matcherRes <- appE (varE archSpecificMatcher) (varE instrVar)
   actionVar <- newName "action"
-  let instrCase = LetE (unimp : fullDefs) $ CaseE (VarE opcodeVar) allCases
-      fullDefs = libDefs ++ concatMap (\(t,i) -> [t,i]) bodyDefs
-  return $ LamE [(VarP ipVarName), instrArg] $
+  let fullDefs = libDefs ++ concatMap (\(t,i,p) -> [t,i,p]) bodyDefs
+  let instrCase = LetE [unimp] $ CaseE (VarE opcodeVar) allCases
+  let lam = LamE [(VarP ipVarName), instrArg] $
          CaseE matcherRes
                    [ Match (ConP 'Just [VarP actionVar])
                                (NormalB $ AppE (ConE 'Just) (VarE actionVar)) []
                    , Match (ConP 'Nothing [])
                                (NormalB instrCase) []
                    ]
-
+  return (lam, fullDefs)
 
 unimplementedInstruction :: Q (Name, Dec)
 unimplementedInstruction = do
@@ -186,23 +186,28 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> Name
                 -> (Q Type, Q Type)
                 -> MapF.Pair a (Product (ParameterizedFormula (Sym t) arch) (DT.CaptureInfo a))
-                -> Q (Match, (Dec, Dec))
+                -> Q (Match, (Dec, Dec, Dec))
 mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
        idsTypeVar <- newName "ids"
        sTypeVar <- newName "s"
-       ofsig <- sigD ofname [t| SL.List $(fst operandResultType) $(varT lTypeVar)
+       archTypeVar <- newName "arch"
+       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(varT archTypeVar)))
+                                  => M.Value $(varT archTypeVar) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(varT archTypeVar)))
+                                  -> SL.List $(fst operandResultType) $(varT lTypeVar)
                                   -> Maybe (G.Generator $(snd operandResultType)
                                                         $(varT idsTypeVar)
-                                                        $(varT sTypeVar) ()) |]
+                                                        $(varT sTypeVar) ())
+                              |]
        ofdef <- funD ofname
-                 [clause [varP arg1Nm]
+                 [clause [varP ipVarName, varP arg1Nm]
                   (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo))
                   []]
-       mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (varE ofname) (varE operandListVar))) []
-       return (mtch, (ofsig, ofdef))
+       mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (appE (varE ofname) (varE ipVarName)) (varE operandListVar))) []
+       let pgma = PragmaD (InlineP ofname NoInline FunLike AllPhases)
+       return (mtch, (ofsig, ofdef, pgma))
 
 
 -- | For each opcode case, we have a sub-case expression to destructure the
@@ -357,8 +362,9 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -> Q Exp
 genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
   logCfg <- runIO $ U.mkNonLogCfg
-  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
+  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
   runIO $ U.logEndWith logCfg
+  addTopDecls decs
   return r
 
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
@@ -405,9 +411,10 @@ genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *
 genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
   logCfg <- runIO $ U.mkLogCfg "genExecInstruction"
   logThread <- runIO $ U.asyncLinked (U.stdErrLogEventConsumer (const True) logCfg)
-  r <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
+  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
   runIO $ U.logEndWith logCfg
   runIO $ Async.wait logThread
+  addTopDecls decs
   return r
 
 -- | Generate an implementation of 'execInstruction' that runs in the
@@ -461,7 +468,7 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- the typical implicit expression because I don't
                    -- know how to pass implicits to TH splices
                    -- invocations.
-                   -> Q Exp
+                   -> Q (Exp, [Dec])
 genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg =
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
