@@ -215,7 +215,7 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
         MM.BSSRegion {} : _ ->
           ET.throwError $ ARMMemoryError (MM.UnexpectedBSS segRelAddr)
         MM.RelocationRegion r : _ ->
-          ET.throwError $ ARMMemoryError (MM.UnexpectedRelocation segRelAddr r "Disassembling from relocation")
+          ET.throwError $ ARMMemoryError (MM.UnexpectedRelocation segRelAddr r)
         MM.ByteRegion bs : _
           | BS.null bs -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
           | otherwise -> do
