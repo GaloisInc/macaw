@@ -92,9 +92,9 @@ import           Data.Macaw.X86.X86Reg
 
 -- | A pure expression for isValue.
 data Expr ids tp where
-  -- An expression obtained from some value.
+  -- | An expression obtained from some value.
   ValueExpr :: !(Value X86_64 ids tp) -> Expr ids tp
-  -- An expression that is computed from evaluating subexpressions.
+  -- | An expression that is computed from evaluating subexpressions.
   AppExpr :: !(App (Expr ids) tp) -> Expr ids tp
 
 instance Show (Expr ids tp) where

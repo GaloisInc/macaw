@@ -494,7 +494,7 @@ constUpperBitsOnWriteRegisterView n rt rn  =
 -- | This returns the type associated with values that can be read
 -- or assigned for the semantics monad.
 data Location addr (tp :: Type) where
-  -- A location in the virtual address space of the process.
+  -- | A location in the virtual address space of the process.
   MemoryAddr :: !addr -> !(MemRepr tp) -> Location addr tp
 
   FullRegister :: !(X86Reg tp)
@@ -515,7 +515,7 @@ data Location addr (tp :: Type) where
   X87ControlReg :: !(X87_ControlReg w)
                 -> Location addr (BVType w)
 
-  -- The register stack: the argument is an offset from the stack
+  -- | The register stack: the argument is an offset from the stack
   -- top, so X87Register 0 is the top, X87Register 1 is the second,
   -- and so forth.
   X87StackRegister :: !Int
@@ -1535,7 +1535,7 @@ infix  4 .=
 ------------------------------------------------------------------------
 -- Semantics
 
--- | Defines operations that need to be supported at a specific bitwidht.
+-- | Defines operations that need to be supported at a specific bitwidth.
 type SupportedBVWidth n
    = ( 1 <= n
      , 4 <= n
@@ -1592,7 +1592,7 @@ get l0 =
       getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
 
 
--- | Assign a value to alocation.
+-- | Assign a value to a location.
 (.=) :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
 l .= e = setLoc l =<< eval e
 
