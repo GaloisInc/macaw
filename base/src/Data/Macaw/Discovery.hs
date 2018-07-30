@@ -543,7 +543,7 @@ matchBoundedMemArray mem aps val
       <- Jmp.unsignedUpperBound (aps^.indexBounds) ixVal
   , cnt <- bnd+1
     -- Check array actually fits in memory.
-  , msegByteCountAfter base < cnt * toInteger stride
+  , cnt * toInteger stride <= msegByteCountAfter base
     -- Get memory contents after base
   , Right contents <- contentsAfterSegmentOff base
     -- Break up contents into a list of slices each with size stide
@@ -698,7 +698,6 @@ matchJumpTableRef mem aps ip
   | Just (arrayRead,idx) <- matchBoundedMemArray mem aps ip
   , isReadOnlyBoundedMemArray arrayRead
   , BVMemRepr _arByteCount endianness <- arEltType arrayRead = do
-
       let go :: [SegmentRange (ArchAddrWidth arch)] -> Maybe (MemSegmentOff (ArchAddrWidth arch))
           go contents = do
             addr <- resolveAsAbsoluteAddr mem endianness contents
