@@ -287,7 +287,7 @@ markAddrAsFunction rsn addr s
   -- Do nothing if function is already explored.
   | Map.member addr (s^.funInfo) || Map.member addr (s^.unexploredFunctions) = s
   -- Ignore if address is not in an executable segment.
-  | isExecutableSegOff addr = s
+  | not (isExecutableSegOff addr) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
