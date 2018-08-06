@@ -68,6 +68,7 @@ library
     Data.Macaw.Dwarf
     Data.Macaw.Fold
     Data.Macaw.Memory
+    Data.Macaw.Memory.Common
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions

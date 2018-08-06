@@ -24,8 +24,8 @@ module Data.Macaw.Memory.ElfLoader
   , resolveElfFuncSymbolsAny
   , resolveElfContents
   , elfAddrWidth
+  , module Data.Macaw.Memory.Common
   , module Data.Macaw.Memory.LoadCommon
-  , module Data.Macaw.Memory
   ) where
 
 import           Control.Lens
@@ -74,7 +74,7 @@ import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
 
-import           Data.Macaw.Memory
+import           Data.Macaw.Memory.Common
 import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
 

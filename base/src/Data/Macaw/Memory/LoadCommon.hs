@@ -10,7 +10,7 @@ module Data.Macaw.Memory.LoadCommon
   , LoadStyle(..)
   ) where
 
-import Data.Macaw.Memory
+import Data.Macaw.Memory.Common
 
 ------------------------------------------------------------------------
 -- LoadOptions
