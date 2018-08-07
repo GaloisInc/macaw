@@ -257,12 +257,14 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
               {- ^ Carry-less multiplication of quadwords
                 The operand specifies which 64-bit words of the input
                 vectors to multiply as follows:
+
                   * lower 4 bits -> index in 1st op;
                   * upper 4 bits -> index in 2nd op;
+
                  Indexes are always 0 or 1. -}
 
             | VPUnpackLQDQ
-              -- ^ A,B,C,D + P,Q,R,S = C,R,D,S
+              -- ^ @A,B,C,D + P,Q,R,S = C,R,D,S@
               -- This one is for DQ, i.e., 64-bit things
               -- but there are equivalents for all sizes, so we should
               -- probably parameterize on size.
@@ -300,14 +302,19 @@ instance Show AVXPointWiseOp2 where
 
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp where
+
   -- | Return true if the operand has an even number of bits set.
   EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
+
   -- | Read from a primitive X86 location.
   ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
+
   -- | Read the 'FS' base address.
   ReadFSBase :: X86PrimFn f (BVType 64)
+
   -- | Read the 'GS' base address.
   ReadGSBase :: X86PrimFn f (BVType 64)
+
   -- | The CPUID instruction.
   --
   -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
@@ -316,12 +323,14 @@ data X86PrimFn f tp where
   -- | This implements the logic for the cmpxchg8b instruction
   --
   -- Given a statement, `CMPXCHG8B addr eax ebx ecx edx` this executes the following logic:
-  --   temp64 <- read addr
-  --   if edx:eax == tmp then do
-  --     *addr := ecx:ebx
-  --     return (true, eax, edx)
-  --   else
-  --     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
+  --
+  -- >   temp64 <- read addr
+  -- >   if edx:eax == tmp then do
+  -- >     *addr := ecx:ebx
+  -- >     return (true, eax, edx)
+  -- >   else
+  -- >     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
+  --
   CMPXCHG8B :: !(f (BVType 64))
                -- Address to read
             -> !(f (BVType 32))
@@ -339,11 +348,13 @@ data X86PrimFn f tp where
   -- This returns the current time stamp counter a 64-bit value that will
   -- be stored in edx:eax
   RDTSC :: X86PrimFn f (BVType 64)
+
   -- | The XGetBV instruction primitive
   --
   -- This returns the extended control register defined in the given value
   -- as a 64-bit value that will be stored in edx:eax
   XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+
   -- | @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
   -- based on indices defined in the corresponding bytes of @s@.
   --
@@ -353,31 +364,39 @@ data X86PrimFn f tp where
   --   @res[i] = x[j] where j = s[i](0..l)
   -- where @msb(y)@ returns the most-significant bit in byte @y@.
   PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
-  -- | Compares to memory regions and return the number of bytes that were the same.
+
+  -- | Compares two memory regions and return the number of bytes that were the same.
+  --
+  -- In an expression @MemCmp bpv nv p1 p2 dir@:
+  --
+  -- * @bpv@ is the number of bytes per value
+  -- * @nv@ is the number of values to compare
+  -- * @p1@ is the pointer to the first buffer
+  -- * @p2@ is the pointer to the second buffer
+  -- * @dir@ is a flag that indicates the direction of comparison ('True' ==
+  --   decrement, 'False' == increment) for updating the buffer
+  --   pointers.
   MemCmp :: !Integer
-           -- /\ Number of bytes per value.
          -> !(f (BVType 64))
-           -- /\ Number of values to compare
          -> !(f (BVType 64))
-           -- /\ Pointer to first buffer.
          -> !(f (BVType 64))
-           -- /\ Pointer to second buffer.
          -> !(f BoolType)
-           -- /\ Direction flag, False means increasing
          -> X86PrimFn f (BVType 64)
 
   -- | `RepnzScas sz val base cnt` searchs through a buffer starting at
   -- `base` to find  an element `i` such that base[i] = val.
   -- Each step it increments `i` by 1 and decrements `cnt` by `1`.
-  -- It returns the final value of `cnt`, the
+  -- It returns the final value of `cnt`.
   RepnzScas :: !(RepValSize n)
             -> !(f (BVType n))
             -> !(f (BVType 64))
             -> !(f (BVType 64))
             -> X86PrimFn f (BVType 64)
+
   -- | This returns a 80-bit value where the high 16-bits are all
   -- 1s, and the low 64-bits are the given register.
   MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
+
   -- | This performs a signed quotient for idiv.
   -- It raises a #DE exception if the divisor is 0 or the result overflows.
   -- The stored result is truncated to zero.
@@ -385,19 +404,23 @@ data X86PrimFn f tp where
           -> !(f (BVType (w+w)))
           -> !(f (BVType w))
           -> X86PrimFn f (BVType w)
+
   -- | This performs a signed remainder for idiv.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
   -- The stored result is truncated to zero.
+
   X86IRem :: !(RepValSize w)
           -> !(f (BVType (w+w)))
           -> !(f (BVType w))
           -> X86PrimFn f (BVType w)
+
   -- | This performs a unsigned quotient for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
   X86Div :: !(RepValSize w)
          -> !(f (BVType (w+w)))
          -> !(f (BVType w))
          -> X86PrimFn f (BVType w)
+
   -- | This performs an unsigned remainder for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
   X86Rem :: !(RepValSize w)
@@ -499,46 +522,49 @@ data X86PrimFn f tp where
   --
   -- This computation implicitly depends on the x87 FPU control word,
   -- and may throw any of the following exceptions:
-  -- #IA Operand is an SNaN value or unsupported format.
+  --
+  -- * @#IA@ Operand is an SNaN value or unsupported format.
   --     Operands are infinities of unlike sign.
-  -- #D  Source operand is a denormal value.
-  -- #U Result is too small for destination format.
-  -- #O Result is too large for destination format.
-  -- #P Value cannot be represented exactly in destination format.
+  -- * @#D@  Source operand is a denormal value.
+  -- * @#U@ Result is too small for destination format.
+  -- * @#O@ Result is too large for destination format.
+  -- * @#P@ Value cannot be represented exactly in destination format.
   X87_FAdd :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
-  -- | This performs an 80-bit floating point add.
+  -- | This performs an 80-bit floating point subtraction.
   --
   -- This returns the result and a Boolean flag indicating if the
   -- result was rounded up.
   --
   -- This computation implicitly depends on the x87 FPU control word,
   -- and may throw any of the following exceptions:
-  -- #IA Operand is an SNaN value or unsupported format.
+  --
+  -- * @#IA@ Operand is an SNaN value or unsupported format.
   --     Operands are infinities of unlike sign.
-  -- #D  Source operand is a denormal value.
-  -- #U Result is too small for destination format.
-  -- #O Result is too large for destination format.
-  -- #P Value cannot be represented exactly in destination format.
+  -- * @#D@  Source operand is a denormal value.
+  -- * @#U@ Result is too small for destination format.
+  -- * @#O@ Result is too large for destination format.
+  -- * @#P@ Value cannot be represented exactly in destination format.
   X87_FSub :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
-  -- | This performs an 80-bit floating point add.
+  -- | This performs an 80-bit floating point multiply.
   --
   -- This returns the result and a Boolean flag indicating if the
   -- result was rounded up.
   --
   -- This computation implicitly depends on the x87 FPU control word,
   -- and may throw any of the following exceptions:
-  -- #IA Operand is an SNaN value or unsupported format.
+  --
+  -- * @#IA@ Operand is an SNaN value or unsupported format.
   --     Operands are infinities of unlike sign.
-  -- #D  Source operand is a denormal value.
-  -- #U Result is too small for destination format.
-  -- #O Result is too large for destination format.
-  -- #P Value cannot be represented exactly in destination format.
+  -- * @#D@  Source operand is a denormal value.
+  -- * @#U@ Result is too small for destination format.
+  -- * @#O@ Result is too large for destination format.
+  -- * @#P@ Value cannot be represented exactly in destination format.
   X87_FMul :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
@@ -547,12 +573,13 @@ data X86PrimFn f tp where
   --
   -- This instruction rounds according to the x87 FPU control word
   -- rounding mode, and may throw any of the following exceptions:
-  -- * #O is generated if the input value overflows and cannot be
+  --
+  -- * @#O@ is generated if the input value overflows and cannot be
   --   stored in the output format.
-  -- * #U is generated if the computation underflows and cannot be
+  -- * @#U@ is generated if the computation underflows and cannot be
   --   represented (this is in lieu of a denormal exception #D).
-  -- * #IA If destination result is an SNaN value or unsupported format.
-  -- * #P Value cannot be represented exactly in destination format.
+  -- * @#IA@ If destination result is an SNaN value or unsupported format.
+  -- * @#P@ Value cannot be represented exactly in destination format.
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
   X87_FST :: !(SSE_FloatType tp)
@@ -560,47 +587,84 @@ data X86PrimFn f tp where
           -> X86PrimFn f tp
 
   -- | Unary operation on a vector.  Should have no side effects.
+  --
+  -- For the expression @VOp1 w op tgt@:
+  --
+  -- * @w@ is the width of the input/result vector
+  -- * @op@ is the operation to perform
+  -- * @tgt@ is the target vector of the operation
   VOp1 :: (1 <= n) =>
-     !(NatRepr n)        -> {- /\ width of input/result -}
-     !AVXOp1             -> {- /\ do this operation -}
-     !(f (BVType n))     -> {- /\ on this thing -}
+     !(NatRepr n)        ->
+     !AVXOp1             ->
+     !(f (BVType n))     ->
      X86PrimFn f (BVType n)
 
-  {- | Binary operation on two vectors. Should not have side effects. -}
+  -- | Binary operation on two vectors. Should not have side effects.
+  --
+  -- For the expression @VOp2 w op vec1 vec2@:
+  --
+  -- * @w@ is the width of the vectors
+  -- * @op@ is the binary operation to perform on the vectors
+  -- * @vec1@ is the first vector
+  -- * @vec2@ is the second vector
   VOp2 :: (1 <= n) =>
-    !(NatRepr n)    -> {- /\ vector width -}
-    !AVXOp2         -> {- /\ binary operation on the whole vector -}
-    !(f (BVType n)) -> {- /\ first operand -}
-    !(f (BVType n)) -> {- /\ second operand -}
+    !(NatRepr n)    ->
+    !AVXOp2         ->
+    !(f (BVType n)) ->
+    !(f (BVType n)) ->
     X86PrimFn f (BVType n)
 
-  {- | Update an element of a vector -}
+  -- | Update an element of a vector.
+  --
+  -- For the expression @VInsert n w vec val idx@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @val@ is the value to be inserted
+  -- * @idx@ is the index to insert at
   VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
-    !(NatRepr elNum)                {- /\ Number of elements in vector -} ->
-    !(NatRepr elSize)               {- /\ Size of each element in bits -} ->
-    !(f (BVType (elNum * elSize)))  {- /\ Insert in this vector -}        ->
-    !(f (BVType elSize))            {- /\ Insert this value -}            ->
-    !(NatRepr i)                    {- /\ At this index -}                ->
-    X86PrimFn f (BVType (elNum * elSize))
+             !(NatRepr elNum)
+          -> !(NatRepr elSize)
+          -> !(f (BVType (elNum * elSize)))
+          -> !(f (BVType elSize))
+          -> !(NatRepr i)
+          -> X86PrimFn f (BVType (elNum * elSize))
 
-  {- | Shift left each element in the vector by the given amount.
-       The new ("shifted-in") bits are 0 -}
+  -- | Shift left each element in the vector by the given amount.
+  -- The new ("shifted-in") bits are 0.
+  --
+  -- For the expression @PointwiseShiftL n w amtw vec amt@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @amtw@ is the size of the shift amount in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @amt@ is the shift amount in bits
   PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
-    !(NatRepr elNum)               -> {- /\ Number of elements -}
-    !(NatRepr elSize)              -> {- /\ Bit width of an element -}
-    !(NatRepr sz)                  -> {- /\ Bit size of shift amount -}
-    !(f (BVType (elNum * elSize))) -> {- /\ Vector -}
-    !(f (BVType sz))               -> {- /\ Shift amount (in bits) -}
-    X86PrimFn f (BVType (elNum * elSize))
+                     !(NatRepr elNum)
+                  -> !(NatRepr elSize)
+                  -> !(NatRepr sz)
+                  -> !(f (BVType (elNum * elSize)))
+                  -> !(f (BVType sz))
+                  -> X86PrimFn f (BVType (elNum * elSize))
 
-  {- | Pointwise binary operation on vectors. Should not have side effects. -}
+  -- | Pointwise binary operation on vectors. Should not have side effects.
+  --
+  -- For the expression @Pointwise2 n w op vec1 vec2@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @op@ is the binary operation to perform on the vectors
+  -- * @vec1@ is the first vector
+  -- * @vec2@ is the second vector
   Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
-    !(NatRepr elNum)               -> {- /\ Number of elements -}
-    !(NatRepr elSize)              -> {- /\ Bit width of an element -}
-    !AVXPointWiseOp2               -> {- /\ Operation -}
-    !(f (BVType (elNum * elSize))) -> {- /\ Add this vector -}
-    !(f (BVType (elNum * elSize))) -> {- /\ With this vector -}
-    X86PrimFn f (BVType (elNum * elSize))
+                !(NatRepr elNum)
+             -> !(NatRepr elSize)
+             -> !AVXPointWiseOp2
+             -> !(f (BVType (elNum * elSize)))
+             -> !(f (BVType (elNum * elSize)))
+             -> X86PrimFn f (BVType (elNum * elSize))
 
   {- | Extract 128 bits from a 256 bit value, as described by the
        control mask -}
@@ -809,26 +873,38 @@ x86PrimFnHasSideEffects f =
 -- | An X86 specific statement.
 data X86Stmt (v :: Type -> *) where
   WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
-  StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
-  -- ^ Store the X87 control register in the given address.
 
+  -- | Store the X87 control register in the given address.
+  StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
+
+  -- | Copy a region of memory from a source buffer to a destination buffer.
+  --
+  -- In an expression @RepMovs bc dest src cnt dir@:
+  --
+  -- * @bc@ denotes the bytes to copy at a time.
+  -- * @dest@ is the start of destination buffer.
+  -- * @src@ is the start of source buffer.
+  -- * @cnt@ is the number of values to move.
+  -- * @dir@ is a flag that indicates the direction of move ('True' ==
+  --   decrement, 'False' == increment) for updating the buffer
+  --   pointers.
   RepMovs :: !(RepValSize w)
           -> !(v (BVType 64))
           -> !(v (BVType 64))
           -> !(v (BVType 64))
           -> !(v BoolType)
           -> X86Stmt v
-  -- ^ Copy a region of memory from a source buffer to a destination buffer.
+
+  -- | Assign all elements in an array in memory a specific value.
   --
-  -- In an expression @RepMovs bc dest src cnt dir@
+  -- In an expression @RepStos bc dest val cnt dir@:
   -- * @bc@ denotes the bytes to copy at a time.
   -- * @dest@ is the start of destination buffer.
-  -- * @src@ is the start of source buffer.
+  -- * @val@ is the value to write to.
   -- * @cnt@ is the number of values to move.
-  -- * @dir@ is a flag that indicates whether direction of move:
-  --   * 'True' means we should decrement buffer pointers after each copy.
-  --   * 'False' means we should increment the buffer pointers after each copy.
-
+  -- * @dir@ is a flag that indicates the direction of move ('True' ==
+  --   decrement, 'False' == increment) for updating the buffer
+  --   pointers.
   RepStos :: !(RepValSize w)
           -> !(v (BVType 64))
              -- /\ Address to start assigning to.
@@ -839,22 +915,12 @@ data X86Stmt (v :: Type -> *) where
           -> !(v BoolType)
             -- /\ Direction flag
           -> X86Stmt v
-  -- ^ Assign all elements in an array in memory a specific value.
-  --
-  -- In an expression @RepMovs bc dest val cnt dir@
-  -- * @bc@ denotes the bytes to copy at a time.
-  -- * @dest@ is the start of destination buffer.
-  -- * @val@ is the value to write to.
-  -- * @cnt@ is the number of values to move.
-  -- * @dir@ is a flag that indicates whether direction of move:
-  --   * 'True' means we should decrement buffer pointers after each copy.
-  --   * 'False' means we should increment the buffer pointers after each copy.
 
-  EMMS :: X86Stmt v
-  -- ^ Empty MMX technology State. Sets the x87 FPU tag word to empty.
+  -- | Empty MMX technology State. Sets the x87 FPU tag word to empty.
   --
-  -- Probably OK to use this for both EMMS FEMMS, the second being a a
+  -- Probably OK to use this for both EMMS FEMMS, the second being a
   -- faster version from AMD 3D now.
+  EMMS :: X86Stmt v
 
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
