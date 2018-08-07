@@ -679,20 +679,6 @@ defaultNonceAppEvaluator bvi nonceApp =
       | otherwise -> do
           let fnName = symFnName symFn
           case fnName of
-            "uf_test_bit_dynamic_32" ->
-              case FC.toListFC Some args of
-                [Some bitNum, Some loc] -> do
-                  bitNumExp <- addEltTH bvi bitNum
-                  locExp <- addEltTH bvi loc
-                  liftQ [| G.addExpr (G.AppExpr (M.BVTestBit $(return bitNumExp) $(return locExp))) |]
-                _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
-            "uf_test_bit_dynamic_64" ->
-              case FC.toListFC Some args of
-                [Some bitNum, Some loc] -> do
-                  bitNumExp <- addEltTH bvi bitNum
-                  locExp <- addEltTH bvi loc
-                  liftQ [| G.addExpr (G.AppExpr (M.BVTestBit $(return bitNumExp) $(return locExp))) |]
-                _ -> fail ("Unsupported argument list for test_bit_dynamic: " ++ showF args)
             -- For count leading zeros, we don't have a SimpleBuilder term to reduce
             -- it to, so we have to manually transform it to macaw here (i.e., we
             -- can't use the more general substitution method, since that is in
