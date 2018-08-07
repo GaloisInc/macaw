@@ -18,6 +18,7 @@ some value while regions define a unknown offset in memory.
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Memory
   ( Memory
@@ -113,6 +114,7 @@ module Data.Macaw.Memory
   , addrContentsAfter
   , readByteString
   , readAddr
+  , readSegmentOff
   , readWord8
   , readWord16be
   , readWord16le
@@ -133,7 +135,6 @@ module Data.Macaw.Memory
   , AddrSymMap
   ) where
 
-import           Control.Exception (assert)
 import           Control.Monad
 import           Data.BinarySymbols
 import           Data.Bits
@@ -164,6 +165,8 @@ data AddrWidthRepr w
      -- ^ A 32-bit address
    | (w ~ 64) => Addr64
      -- ^ A 64-bit address
+
+deriving instance Show (AddrWidthRepr w)
 
 instance TestEquality AddrWidthRepr where
   testEquality Addr32 Addr32 = Just Refl
@@ -294,8 +297,8 @@ class (1 <= w) => MemWidth w where
   -- The argument is ignored.
   addrWidthRepr :: p w -> AddrWidthRepr w
 
-  -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
-  addrWidthMod :: p w -> Word64
+  -- | @addrWidthMask w@ returns @2^(8 * addrSize w) - 1@.
+  addrWidthMask :: p w -> Word64
 
   -- | Returns number of bytes in addr.
   --
@@ -322,7 +325,7 @@ addrBitSize w = 8 * addrSize w
 
 -- | Convert word64 @x@ into mem word @x mod 2^w-1@.
 memWord :: forall w . MemWidth w => Word64 -> MemWord w
-memWord x = MemWord (x .&. addrWidthMod p)
+memWord x = MemWord (x .&. addrWidthMask p)
   where p :: Proxy w
         p = Proxy
 
@@ -364,11 +367,11 @@ instance MemWidth w => Integral (MemWord w) where
 
 instance MemWidth w => Bounded (MemWord w) where
   minBound = 0
-  maxBound = MemWord (addrWidthMod (Proxy :: Proxy w))
+  maxBound = MemWord (addrWidthMask (Proxy :: Proxy w))
 
 instance MemWidth 32 where
   addrWidthRepr _ = Addr32
-  addrWidthMod _ = 0xffffffff
+  addrWidthMask _ = 0xffffffff
   addrRotate (MemWord w) i =
     MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
   addrSize _ = 4
@@ -378,7 +381,7 @@ instance MemWidth 32 where
 
 instance MemWidth 64 where
   addrWidthRepr _ = Addr64
-  addrWidthMod _ = 0xffffffffffffffff
+  addrWidthMask _ = 0xffffffffffffffff
   addrRotate (MemWord w) i = MemWord (w `rotate` i)
   addrSize _ = 8
   addrRead e s
@@ -976,17 +979,23 @@ memAsAddrPairs :: Memory w
                -> [(MemSegmentOff w, MemSegmentOff w)]
 memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
   seg <- memSegments mem
-  (contents_offset,r) <- contentsRanges (segmentContents seg)
-  let sz = addrSize mem
+  (contentsOffset,r) <- contentsRanges (segmentContents seg)
+  let sz :: Int
+      sz = addrSize mem
   case r of
-    ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
-      (off,w) <-
-        zip [contents_offset..]
-            (regularChunks (fromIntegral sz) bs)
+    ByteRegion bs -> do
+      -- contentsOffset
+      -- Check offset if a multiple
+      let mask = sz - 1
+      when (BS.length bs .&. mask /= 0) $
+        error "Unexpected offset."
+      (byteOff,w) <-
+        zip [contentsOffset,contentsOffset+fromIntegral sz..]
+            (regularChunks sz bs)
       let Just val = addrRead end w
       case resolveAbsoluteAddr mem val of
         Just val_ref -> do
-          pure (MemSegmentOff seg off, val_ref)
+          pure (MemSegmentOff seg byteOff, val_ref)
         _ -> []
     RelocationRegion{} -> []
     BSSRegion{} -> []
@@ -1343,6 +1352,23 @@ readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   case addrRead end bs of
     Just val -> Right $ MemAddr 0 val
     Nothing -> error $ "readAddr internal error: readByteString result too short."
+
+-- | Read the given address as a reference to a memory segment offset, or report a
+-- memory read error.
+readSegmentOff :: Memory w
+               -> Endianness
+               -> MemAddr w
+               -> Either (MemoryError w) (MemSegmentOff w)
+readSegmentOff mem end addr = addrWidthClass (memAddrWidth mem) $ do
+  let sz = fromIntegral (addrSize addr)
+  bs <- readByteString mem addr sz
+  case addrRead end bs of
+    Just val -> do
+      let addrInMem = MemAddr 0 val
+      case asSegmentOff mem addrInMem of
+        Just res -> pure res
+        Nothing -> Left (InvalidAddr addrInMem)
+    Nothing -> error $ "readSegmentOff internal error: readByteString result too short."
 
 -- | Read a single byte.
 readWord8 :: Memory w -> MemAddr w -> Either (MemoryError w) Word8

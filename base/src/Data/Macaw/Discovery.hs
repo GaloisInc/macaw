@@ -4,25 +4,16 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.
 
 This provides information about code discovered in binaries.
 -}
-{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DoAndIfThenElse #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState(..)
@@ -104,27 +95,20 @@ import           Data.Macaw.Types
 ------------------------------------------------------------------------
 -- Utilities
 
+isExecutableSegOff :: MemSegmentOff w -> Bool
+isExecutableSegOff sa =
+  segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
+
 -- | Get code pointers out of a abstract value.
-concretizeAbsCodePointers :: MemWidth w
+identifyConcreteAddresses :: MemWidth w
                           => Memory w
                           -> AbsValue w (BVType w)
                           -> [MemSegmentOff w]
-concretizeAbsCodePointers mem (FinSet s) =
-  [ sa
-  | a <- Set.toList s
-  , sa <- maybeToList (resolveAbsoluteAddr mem (fromInteger a))
-  , segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
-  ]
-concretizeAbsCodePointers _ (CodePointers s _) =
-  [ sa
-  | sa <- Set.toList s
-  , segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
-  ]
-  -- FIXME: this is dangerous !!
-concretizeAbsCodePointers _mem StridedInterval{} = [] -- FIXME: this case doesn't make sense
-  -- debug DCFG ("I think these are code pointers!: " ++ show s) $ []
-  -- filter (isCodeAddr mem) $ fromInteger <$> SI.toList s
-concretizeAbsCodePointers _mem _ = []
+identifyConcreteAddresses mem (FinSet s) =
+  mapMaybe (resolveAbsoluteAddr mem . fromInteger) (Set.toList s)
+identifyConcreteAddresses _ (CodePointers s _) = Set.toList s
+identifyConcreteAddresses _mem StridedInterval{} = []
+identifyConcreteAddresses _mem _ = []
 
 {-
 -- | Return true if this address was added because of the contents of a global address
@@ -264,14 +248,29 @@ dropUnusedCodeInParsedBlock ainfo b =
 ------------------------------------------------------------------------
 -- Memory utilities
 
--- | Return true if range is entirely contained within a single read only segment.Q
-rangeInReadonlySegment :: MemWidth w
-                       => MemSegmentOff w -- ^ Start of range
-                       -> MemWord w -- ^ The size of the range
-                       -> Bool
-rangeInReadonlySegment mseg size =
-     size <= segmentSize (msegSegment mseg) - msegOffset mseg
-  && Perm.isReadonly (segmentFlags (msegSegment mseg))
+sliceMemContents'
+  :: MemWidth w
+  => Int -- ^ Number of bytes in each slice.
+  -> [[SegmentRange w]] -- ^ Previous slices
+  -> Integer -- ^ Number of slices to return
+  -> [SegmentRange w] -- ^ Ranges to process next
+  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
+sliceMemContents' stride prev c next
+  | c <= 0 = pure (reverse prev, next)
+  | otherwise =
+    case splitSegmentRangeList next stride of
+      Left e -> Left e
+      Right (this, rest) -> sliceMemContents' stride (this:prev) (c-1) rest
+
+-- | `sliceMemContents stride cnt contents` splits contents up into `cnt`
+-- memory regions each with size `stride`.
+sliceMemContents
+  :: MemWidth w
+  => Int -- ^ Number of bytes in each slice.
+  -> Integer -- ^ Number of slices to return
+  -> [SegmentRange w] -- ^ Ranges to process next
+  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
+sliceMemContents stride c next = sliceMemContents' stride [] c next
 
 ------------------------------------------------------------------------
 -- DiscoveryState utilities
@@ -287,6 +286,8 @@ markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
 markAddrAsFunction rsn addr s
   -- Do nothing if function is already explored.
   | Map.member addr (s^.funInfo) || Map.member addr (s^.unexploredFunctions) = s
+  -- Ignore if address is not in an executable segment.
+  | not (isExecutableSegOff addr) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
@@ -440,63 +441,39 @@ mergeIntraJump src ab tgt = do
       foundAddrs %= Map.insert tgt found_info
 
 -------------------------------------------------------------------------------
--- Jump table bounds
+-- BoundedMemArray
 
--- | A memory read that looks like array indexing. It read 'arSize' bytes from
+-- | This describes a region of memory dereferenced in some array read.
+--
+-- These regions may be be sparse, given an index `i`, the
 -- the address given by 'arBase' + 'arIx'*'arStride'.
-data ArrayRead arch ids w = ArrayRead
-  { arBase   :: ArchSegmentOff arch
-  , arIx     :: ArchAddrValue arch ids
-  , arStride :: Integer
-  , arSize   :: MemRepr (BVType w)
-    -- ^ Type of element in this array.
+data BoundedMemArray arch tp = BoundedMemArray
+  { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
+    -- ^ The base address for array accesses.
+  , arStride :: !Integer
+    -- ^ Space between elements of the array.
+    --
+    -- This will typically be the number of bytes denoted by `arEltType`,
+    -- but may be larger for sparse arrays.  `matchBoundedMemArray` will fail
+    -- if stride is less than the number of bytes read.
+  , arEltType   :: !(MemRepr tp)
+    -- ^ Resolved type of elements in this array.
+  , arSlices       :: !(V.Vector [SegmentRange (ArchAddrWidth arch)])
+    -- ^ The slices of memory in the array.
+    --
+    -- The `i`th element in the vector corresponds to the first `size`
+    -- bytes at address `base + stride * i`.
+    --
+    -- This could be computed from the previous fields, but we check we
+    -- can create it when creating the array read, so we store it to
+    -- avoid recomputing it.
   }
 
-deriving instance RegisterInfo (ArchReg arch) => Show (ArrayRead arch ids w)
+deriving instance RegisterInfo (ArchReg arch) => Show (BoundedMemArray arch tp)
 
 -- | Return true if the address stored is readable and not writable.
-isReadOnlyArrayRead :: ArrayRead arch ids w -> Bool
-isReadOnlyArrayRead = Perm.isReadonly . segmentFlags . msegSegment . arBase
-
--- | Number of bytes of size.
-arSizeBytes :: ArrayRead arch ids w -> Integer
-arSizeBytes = memReprBytes . arSize
-
-------------------------------------------------------------------------
--- Extension
-
--- | Used to denote how a value should be extended to a full address.
-data Extension = Signed | Unsigned
-  deriving (Bounded, Enum, Eq, Ord, Read, Show)
-
--- | `extendDyn w ext v` treats `v` as a `w`-bit number and returns the underlying
-extendDyn :: (1 <= w, Integral x) => NatRepr w -> Extension -> x ->Integer
-extendDyn _ Unsigned = toInteger
-extendDyn w Signed   = toSigned w . toInteger
-
-------------------------------------------------------------------------
--- JumpTable
-
-
--- Beware: on some architectures, after reading from the jump table, the
--- resulting addresses must be aligned. See the IPAlignment class.
-data JumpTable arch ids
-  = AbsoluteJumpTable (ArrayRead arch ids (ArchAddrWidth arch))
-  -- | `RelativeJumpTable base read ext` describes information about a jump table read.
-  --
-  -- The value is computed as `baseVal + readVal` where
-  --
-  -- `baseVal = fromMaybe 0 base`, `readVal` is the value stored at the memory
-  -- read described by `read` with the sign of `ext`.
-  | forall w . RelativeJumpTable (ArchSegmentOff arch) (ArrayRead arch ids w) Extension
-
-deriving instance RegisterInfo (ArchReg arch) => Show (JumpTable arch ids)
-
--- | The array read done when computing the jump table. N.B. other processing
--- may be needed on the value read in this way to know the address to jump to.
-jumpTableRead :: JumpTable arch ids -> Some (ArrayRead arch ids)
-jumpTableRead (AbsoluteJumpTable r) = Some r
-jumpTableRead (RelativeJumpTable _ r _) = Some r
+isReadOnlyBoundedMemArray :: BoundedMemArray arch  tp -> Bool
+isReadOnlyBoundedMemArray = Perm.isReadonly . segmentFlags . msegSegment . arBase
 
 absValueAsSegmentOff
   :: forall w
@@ -529,14 +506,14 @@ valueAsSegmentOffWithTransfer mem aps base
   =   valueAsSegmentOff mem base
   <|> absValueAsSegmentOff mem (transferValue aps base)
 
--- | This interprets a value as a memory segment offset plus value.
-valueAsArrayOffset
+-- | This attempts to pattern match a value as a memory address plus a value.
+valueAsMemOffset
   :: RegisterInfo (ArchReg arch)
   => Memory (ArchAddrWidth arch)
   -> AbsProcessorState (ArchReg arch) ids
   -> ArchAddrValue arch ids
   -> Maybe (ArchSegmentOff arch, ArchAddrValue arch ids)
-valueAsArrayOffset mem aps v
+valueAsMemOffset mem aps v
   | Just (BVAdd _ base offset) <- valueAsApp v
   , Just ptr <- valueAsSegmentOffWithTransfer mem aps base
   = Just (ptr, offset)
@@ -548,109 +525,201 @@ valueAsArrayOffset mem aps v
 
   | otherwise = Nothing
 
-
-
 -- | See if the value can be interpreted as a read of memory
-matchArrayRead
+matchBoundedMemArray
   :: (MemWidth (ArchAddrWidth arch), RegisterInfo (ArchReg arch))
   => Memory (ArchAddrWidth arch)
   -> AbsProcessorState (ArchReg arch) ids
   -> BVValue arch ids w
-  -> Maybe (ArrayRead arch ids w)
-matchArrayRead mem aps val
-
-  | Just (ReadMem addr size) <- valueAsRhs val
-  , Just (base, offset) <- valueAsArrayOffset mem aps addr
+  -> Maybe (BoundedMemArray arch (BVType w), ArchAddrValue arch ids)
+matchBoundedMemArray mem aps val
+  | Just (ReadMem addr tp) <- valueAsRhs val
+  , Just (base, offset) <- valueAsMemOffset mem aps addr
   , Just (stride, ixVal) <- valueAsStaticMultiplication offset
-  , memReprBytes size <= stride
-  = Just $ ArrayRead
-    { arBase   = base
-    , arIx     = ixVal
-    , arStride = stride
-    , arSize   = size
-    }
+    -- Check stride covers at least number of bytes read.
+  , memReprBytes tp <= stride
+    -- Resolve a static upper bound to array.
+  , Right (Jmp.IntegerUpperBound bnd)
+      <- Jmp.unsignedUpperBound (aps^.indexBounds) ixVal
+  , cnt <- bnd+1
+    -- Check array actually fits in memory.
+  , cnt * toInteger stride <= msegByteCountAfter base
+    -- Get memory contents after base
+  , Right contents <- contentsAfterSegmentOff base
+    -- Break up contents into a list of slices each with size stide
+  , Right (strideSlices,_) <- sliceMemContents (fromInteger stride) cnt contents
+    -- Take the given number of bytes out of each slices
+  , Right slices <- traverse (\s -> fst <$> splitSegmentRangeList s (fromInteger (memReprBytes tp)))
+                             (V.fromList strideSlices)
+  = let r = BoundedMemArray
+          { arBase     = base
+          , arStride   = stride
+          , arEltType  = tp
+          , arSlices   = slices
+          }
+     in Just (r, ixVal)
 
   | otherwise = Nothing
 
+------------------------------------------------------------------------
+-- Extension
+
+-- | Information about a value that is the signed or unsigned extension of another
+-- value.
+--
+-- This is used for jump tables, and only supports widths that are in memory
+data Extension w = Extension { _extIsSigned :: !Bool
+                             , _extWidth :: !(AddrWidthRepr w)
+                               -- ^ Width of argument. is to.
+                             }
+  deriving (Show)
+
 -- | Just like Some (BVValue arch ids), but doesn't run into trouble with
 -- partially applying the BVValue type synonym.
-data SomeBVValue arch ids = forall tp. SomeBVValue (BVValue arch ids tp)
+data SomeExt arch ids = forall m . SomeExt !(BVValue arch ids m) !(Extension m)
 
--- | Identify how value is extended.
-matchExtension :: ArchAddrValue arch ids
-               -> (Extension, SomeBVValue arch ids)
-matchExtension offset =
-  case valueAsApp offset of
-    Just (SExt val' _) -> (Signed, SomeBVValue val')
-    Just (UExt val' _) -> (Unsigned, SomeBVValue val')
-    _ -> (Unsigned, SomeBVValue offset)
+matchAddr :: NatRepr w -> Maybe (AddrWidthRepr w)
+matchAddr w
+  | Just Refl <- testEquality w n32 = Just Addr32
+  | Just Refl <- testEquality w n64 = Just Addr64
+  | otherwise = Nothing
 
--- | Figure out if this is a jump table.
-matchJumpTable :: ( IPAlignment arch
-                  , MemWidth (ArchAddrWidth arch)
-                  , RegisterInfo (ArchReg arch)
-                  )
-               => Memory (ArchAddrWidth arch)
-               -> AbsProcessorState (ArchReg arch) ids
-               -> ArchAddrValue arch ids -- ^ Value that's assigned to the IP.
-               -> Maybe (JumpTable arch ids)
-matchJumpTable mem aps ip
+-- | `matchExtension x` matches in `x` has the form `(uext y w)` or `(sext y w)` and returns
+-- a description about the extension as well as the pattern `y`.
+matchExtension :: forall arch ids
+               .  ( MemWidth (ArchAddrWidth arch)
+                  , HasRepr (ArchReg arch) TypeRepr)
+               => ArchAddrValue arch ids
+               -> SomeExt arch ids
+matchExtension val =
+  case valueAsApp val of
+    Just (SExt val' _w) | Just repr <- matchAddr (typeWidth val') -> SomeExt val' (Extension True  repr)
+    Just (UExt val' _w) | Just repr <- matchAddr (typeWidth val') -> SomeExt val' (Extension False repr)
+    _ -> SomeExt val (Extension False (addrWidthRepr @(ArchAddrWidth arch) undefined))
+
+-- | `extendDyn ext end bs` parses the bytestring using the extension
+-- and endianness information, and returns the extended value.
+extendDyn :: Extension w -> Endianness -> BS.ByteString -> Integer
+extendDyn (Extension True Addr32) end bs  = toInteger (bsWord32 end bs)
+extendDyn (Extension True Addr64) end bs  = toInteger (bsWord64 end bs)
+extendDyn (Extension False Addr32) end bs = toSigned n32 (toInteger (bsWord32 end bs))
+extendDyn (Extension False Addr64) end bs = toSigned n64 (toInteger (bsWord64 end bs))
+
+------------------------------------------------------------------------
+-- JumpTableLayout
+
+-- | This describes the layout of a jump table.
+-- Beware: on some architectures, after reading from the jump table, the
+-- resulting addresses must be aligned. See the IPAlignment class.
+data JumpTableLayout arch
+  = AbsoluteJumpTable !(BoundedMemArray arch (BVType (ArchAddrWidth arch)))
+  -- ^ `AbsoluteJumpTable r` describes a jump table where the jump
+  -- target is directly stored in the array read `r`.
+  | forall w . RelativeJumpTable !(ArchSegmentOff arch)
+                                 !(BoundedMemArray arch (BVType w))
+                                 !(Extension w)
+  -- ^ `RelativeJumpTable base read ext` describes information about a
+  -- jump table where all jump targets are relative to a fixed base
+  -- address.
+  --
+  -- The value is computed as `baseVal + readVal` where
+  --
+  -- `baseVal = fromMaybe 0 base`, `readVal` is the value stored at
+  -- the memory read described by `read` with the sign of `ext`.
+
+deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
+
+-- This function resolves jump table entries.
+-- It is a recursive function that has an index into the jump table.
+-- If the current index can be interpreted as a intra-procedural jump,
+-- then it will add that to the current procedure.
+-- This returns the last address read.
+resolveAsAbsoluteAddr :: forall w
+                    .  Memory w
+                    -> Endianness
+                    -> [SegmentRange w]
+                    -> Maybe (MemAddr w)
+resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
+  case l of
+    [ByteRegion bs] -> do
+        absoluteAddr <$> addrRead endianness bs
+    [RelocationRegion r] -> do
+        let off = relocationOffset r
+        when (relocationIsRel r) $ Nothing
+        case relocationSym r of
+          SymbolRelocation{} -> Nothing
+          SectionIdentifier idx -> do
+            addr <- Map.lookup idx (memSectionAddrMap mem)
+            pure $ relativeSegmentAddr addr & incAddr (toInteger off)
+    _ -> Nothing
+
+-- This function resolves jump table entries.
+-- It is a recursive function that has an index into the jump table.
+-- If the current index can be interpreted as a intra-procedural jump,
+-- then it will add that to the current procedure.
+-- This returns the last address read.
+resolveRelativeJumps :: forall arch w
+                        .  ( MemWidth (ArchAddrWidth arch)
+                        , IPAlignment arch
+                        , RegisterInfo (ArchReg arch)
+                        )
+                     => Memory (ArchAddrWidth arch)
+                     -> ArchSegmentOff arch
+           --          -> MemRepr (BVType w)
+                     -> BoundedMemArray arch (BVType w)
+                     -> Extension w
+                     -> Maybe (V.Vector (ArchSegmentOff arch))
+resolveRelativeJumps mem base arrayRead ext = do
+  let slices = arSlices arrayRead
+  BVMemRepr _sz endianness <- pure $ arEltType arrayRead
+  forM slices $ \l -> do
+    case l of
+      [ByteRegion bs]
+        | tgtAddr <- relativeSegmentAddr base
+                     & incAddr (extendDyn ext endianness bs)
+        , Just tgt <- asSegmentOff mem (toIPAligned @arch tgtAddr)
+        , Perm.isExecutable (segmentFlags (msegSegment tgt))
+          -> Just tgt
+      _ -> Nothing
+
+-- | Resolve an ip to a jump table.
+matchJumpTableRef :: forall arch ids
+                  .  ( IPAlignment arch
+                     , MemWidth (ArchAddrWidth arch)
+                     , RegisterInfo (ArchReg arch)
+                     )
+                  => Memory (ArchAddrWidth arch)
+                  -> AbsProcessorState (ArchReg arch) ids
+                  -> ArchAddrValue arch ids -- ^ Value that's assigned to the IP.
+                  -> Maybe (JumpTableLayout arch, V.Vector (ArchSegmentOff arch), ArchAddrValue arch ids)
+matchJumpTableRef mem aps ip
 
     -- Turn a plain read address into base + offset.
-  | Just arrayRead <- matchArrayRead mem aps ip
-  , isReadOnlyArrayRead arrayRead
-  = Just (AbsoluteJumpTable arrayRead)
+  | Just (arrayRead,idx) <- matchBoundedMemArray mem aps ip
+  , isReadOnlyBoundedMemArray arrayRead
+  , BVMemRepr _arByteCount endianness <- arEltType arrayRead = do
+      let go :: [SegmentRange (ArchAddrWidth arch)] -> Maybe (MemSegmentOff (ArchAddrWidth arch))
+          go contents = do
+            addr <- resolveAsAbsoluteAddr mem endianness contents
+            tgt <- asSegmentOff mem (toIPAligned @arch addr)
+            unless (Perm.isExecutable (segmentFlags (msegSegment tgt))) $ Nothing
+            pure tgt
+      tbl <- traverse go (arSlices arrayRead)
+      pure (AbsoluteJumpTable arrayRead, tbl, idx)
 
   -- gcc-style PIC jump tables on x86 use, roughly,
   --     ip = jmptbl + jmptbl[index]
   -- where jmptbl is a pointer to the lookup table.
   | Just unalignedIP <- fromIPAligned ip
-  , Just (tgtBase, tgtOffset) <- valueAsArrayOffset mem aps unalignedIP
-  , (ext, SomeBVValue shortOffset) <- matchExtension tgtOffset
-  , Just arrayRead <- matchArrayRead mem aps shortOffset
-  , isReadOnlyArrayRead arrayRead
-  = Just (RelativeJumpTable tgtBase arrayRead ext)
+  , Just (tgtBase, tgtOffset) <- valueAsMemOffset mem aps unalignedIP
+  , SomeExt shortOffset ext <- matchExtension tgtOffset
+  , Just (arrayRead, idx) <- matchBoundedMemArray mem aps shortOffset
+  , isReadOnlyBoundedMemArray arrayRead
+  , Just tbl <- resolveRelativeJumps mem tgtBase arrayRead ext
+  = Just (RelativeJumpTable tgtBase arrayRead ext, tbl, idx)
+
   | otherwise
   = Nothing
-
--- | This describes why we could not infer the bounds of code that looked like it
--- was accessing a jump table.
-data JumpTableBoundsError arch ids
-   = CouldNotInterpretAbsValue !(AbsValue (ArchAddrWidth arch) (BVType (ArchAddrWidth arch)))
-   | UpperBoundMismatch !(Jmp.UpperBound (BVType (ArchAddrWidth arch))) !Integer
-   | CouldNotFindBound String !(ArchAddrValue arch ids)
-
--- | Show the jump table bounds
-showJumpTableBoundsError :: ArchConstraints arch => JumpTableBoundsError arch ids -> String
-showJumpTableBoundsError err =
-  case err of
-    CouldNotInterpretAbsValue val ->
-      "Index <" ++ show val ++ "> is not a stride."
-    UpperBoundMismatch bnd index_range ->
-      "Upper bound mismatch at jumpbounds "
-                ++ show bnd
-                ++ " domain "
-                ++ show index_range
-    CouldNotFindBound msg jump_index ->
-      show "Could not find  jump table: " ++ msg ++ "\n"
-      ++ show (ppValueAssignments jump_index)
-
--- | Returns the index bounds for a jump table of 'Nothing' if this is
--- not a block table.
-getJumpTableBounds :: ArchConstraints a
-                   => AbsProcessorState (ArchReg a) ids -- ^ Current processor registers.
-                   -> ArrayRead a ids w
-                   -> Either String (ArchAddrWord a)
-getJumpTableBounds regs arrayRead =
-  case Jmp.unsignedUpperBound (regs ^. indexBounds) (arIx arrayRead) of
-    Right (Jmp.IntegerUpperBound maxIx) ->
-      let arrayByteSize = maxIx * arStride arrayRead + arSizeBytes arrayRead in
-      if rangeInReadonlySegment (arBase arrayRead) (fromInteger arrayByteSize)
-      then Right $! fromInteger maxIx
-      else Left $ "Jump table range is not in readonly memory: "
-                ++ show maxIx ++ " entries/" ++ show arrayByteSize ++ " bytes"
-                ++ " starting at " ++ show (arBase arrayRead)
-    Left msg -> Left (showJumpTableBoundsError (CouldNotFindBound msg (arIx arrayRead)))
 
 ------------------------------------------------------------------------
 -- ParseState
@@ -663,6 +732,10 @@ data ParseState arch ids =
              , _intraJumpTargets ::
                  ![(ArchSegmentOff arch, AbsBlockState (ArchReg arch))]
              , _newFunctionAddrs :: ![ArchSegmentOff arch]
+               -- ^ List of candidate functions found when parsing block.
+               --
+               -- Note. In a binary, these could denote the non-executable
+               -- segments, so they are filtered before traversing.
              }
 
 -- | Code addresses written to memory.
@@ -688,10 +761,9 @@ recordWriteStmt arch_info mem regs stmt = do
     WriteMem _addr repr v
       | Just Refl <- testEquality repr (addrMemRepr arch_info) -> do
           withArchConstraints arch_info $ do
-          let addrs = concretizeAbsCodePointers mem (transferValue regs v)
-          writtenCodeAddrs %= (addrs ++)
+          let addrs = identifyConcreteAddresses mem (transferValue regs v)
+          writtenCodeAddrs %= (filter isExecutableSegOff addrs ++)
     _ -> return ()
-
 
 ------------------------------------------------------------------------
 -- ParseContext
@@ -721,126 +793,34 @@ addrMemRepr arch_info =
 
 identifyCallTargets :: forall arch ids
                     .  (RegisterInfo (ArchReg arch))
-                    => AbsProcessorState (ArchReg arch) ids
+                    => Memory (ArchAddrWidth arch)
+                    -> AbsBlockState (ArchReg arch)
                        -- ^ Abstract processor state just before call.
-                    -> BVValue arch ids (ArchAddrWidth arch)
+                    -> RegState (ArchReg arch) (Value arch ids)
                     -> [ArchSegmentOff arch]
-identifyCallTargets absState ip = do
+identifyCallTargets mem absState s = do
   -- Code pointers from abstract domains.
-  let mem = absMem absState
-  let def = concretizeAbsCodePointers mem (transferValue absState ip)
-  let segOffAddrs :: Maybe (ArchSegmentOff arch) -> [ArchSegmentOff arch]
-      segOffAddrs (Just addr)
-        | segmentFlags (msegSegment addr) `Perm.hasPerm` Perm.execute =
-            [addr]
-      segOffAddrs _ = []
-  case ip of
-    BVValue _ x -> segOffAddrs $ resolveAbsoluteAddr mem (fromInteger x)
-    RelocatableValue _ a -> segOffAddrs $ asSegmentOff mem a
+  let def = identifyConcreteAddresses mem (absState^.absRegState^.curIP)
+  case s^.boundValue ip_reg of
+    BVValue _ x ->
+      maybeToList $ resolveAbsoluteAddr mem (fromInteger x)
+    RelocatableValue _ a ->
+      maybeToList $ asSegmentOff mem a
     SymbolValue{} -> def
     AssignedValue a ->
       case assignRhs a of
         -- See if we can get a value out of a concrete memory read.
         ReadMem addr (BVMemRepr _ end)
           | Just laddr <- valueAsMemAddr addr
-          , Right val <- readAddr mem end laddr ->
-            segOffAddrs (asSegmentOff mem val) ++ def
+          , Right val <- readSegmentOff mem end laddr ->
+            val : def
         _ -> def
     Initial _ -> def
 
-sliceMemContents'
-  :: MemWidth w
-  => Int -- ^ Number of bytes in each slice.
-  -> [[SegmentRange w]] -- ^ Previous slices
-  -> Integer -- ^ Number of slices to return
-  -> [SegmentRange w] -- ^ Ranges to process next
-  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
-sliceMemContents' stride prev c next
-  | c <= 0 = pure (reverse prev, next)
-  | otherwise =
-    case splitSegmentRangeList next stride of
-      Left e -> Left e
-      Right (this, rest) -> sliceMemContents' stride (this:prev) (c-1) rest
-
--- | `sliceMemContents stride cnt contents` splits contents up into `cnt`
--- memory regions each with size `stride`.
-sliceMemContents
-  :: MemWidth w
-  => Int -- ^ Number of bytes in each slice.
-  -> Integer -- ^ Number of slices to return
-  -> [SegmentRange w] -- ^ Ranges to process next
-  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
-sliceMemContents stride c next = sliceMemContents' stride [] c next
-
--- `getJumpTableContents base cnt stride` returns a list with
-getJumpTableContents :: MemWidth w
-                     => MemSegmentOff w
-                     -> Integer
-                     -> Integer
-                     -> Maybe [[SegmentRange w]]
-getJumpTableContents base cnt stride = do
-  let totalSize = cnt * stride
-  when (msegByteCountAfter base < totalSize) $
-    Nothing
-  contents <-
-    case contentsAfterSegmentOff base of
-      Left _ -> Nothing
-      Right l -> pure l
-  case sliceMemContents (fromInteger stride) cnt contents of
-    Left _ -> Nothing
-    Right (s,_) -> Just s
-
--- This function resolves jump table entries.
--- It is a recursive function that has an index into the jump table.
--- If the current index can be interpreted as a intra-procedural jump,
--- then it will add that to the current procedure.
--- This returns the last address read.
-resolveJumps :: forall arch ids
-             .  ( MemWidth (ArchAddrWidth arch)
-                , IPAlignment arch
-                , RegisterInfo (ArchReg arch)
-                )
-             => Memory (ArchAddrWidth arch)
-             -> JumpTable arch ids
-             -> [[SegmentRange (ArchAddrWidth arch)]]
-             -> Maybe [ArchSegmentOff arch]
-resolveJumps mem (AbsoluteJumpTable arrayRead) slices = do
-  BVMemRepr _arByteCount endianness <- pure $ arSize arrayRead
-
-  forM slices $ \l -> do
-    case l of
-      [ByteRegion bs] -> do
-        val <- addrRead endianness bs
-        tgt <- asSegmentOff mem (toIPAligned @arch (absoluteAddr val))
-        unless (Perm.isExecutable (segmentFlags (msegSegment tgt))) $ Nothing
-        pure tgt
-      [RelocationRegion r] -> do
-        let off = relocationOffset r
-        when (relocationIsRel r) $ Nothing
-        case relocationSym r of
-          SymbolRelocation{} -> Nothing
-          SectionIdentifier idx -> do
-            addr <- Map.lookup idx (memSectionAddrMap mem)
-            incSegmentOff addr (toInteger off)
-      _ -> Nothing
-resolveJumps mem (RelativeJumpTable base arrayRead ext) slices = do
-  BVMemRepr sz endianness <- pure $ arSize arrayRead
-  let readFn
-        | Just Refl <- testEquality sz (knownNat :: NatRepr 4) =
-          extendDyn (knownNat :: NatRepr 32) ext . bsWord32 endianness
-        | Just Refl <- testEquality sz (knownNat :: NatRepr 8) =
-          extendDyn (knownNat :: NatRepr 64) ext . bsWord64 endianness
-        | otherwise =
-          error "Do not support this width."
-  forM slices $ \l -> do
-    case l of
-      [ByteRegion bs]
-        | tgtAddr <- relativeSegmentAddr base
-                     & incAddr (readFn (BS.take (fromInteger (natValue sz)) bs))
-        , Just tgt <- asSegmentOff mem (toIPAligned @arch tgtAddr)
-        , Perm.isExecutable (segmentFlags (msegSegment tgt))
-          -> Just tgt
-      _ -> Nothing
+addNewFunctionAddrs :: [ArchSegmentOff arch]
+                    -> State (ParseState arch ids) ()
+addNewFunctionAddrs addrs =
+  newFunctionAddrs %= (++addrs)
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
@@ -896,8 +876,8 @@ parseFetchAndExecute ctx idx stmts regs s = do
         -- Merge caller return information
         intraJumpTargets %= ((ret, postCallAbsState ainfo abst ret):)
         -- Use the abstract domain to look for new code pointers for the current IP.
-        let addrs = identifyCallTargets absProcState' (s^.boundValue ip_reg)
-        newFunctionAddrs %= (++ addrs)
+        addNewFunctionAddrs $
+          identifyCallTargets mem abst s
         -- Use the call-specific code to look for new IPs.
 
         let r = StatementList { stmtsIdent = idx
@@ -953,16 +933,8 @@ parseFetchAndExecute ctx idx stmts regs s = do
                                  }
          pure (ret, idx+1)
       -- Block ends with what looks like a jump table.
-      | Just jt <- matchJumpTable mem absProcState' (s^.curIP)
-      , Some arrayRead <- jumpTableRead jt
-      , Right maxIdx <- getJumpTableBounds absProcState' arrayRead
-      , Just slices <-
-          getJumpTableContents (arBase arrayRead)
-                               (toInteger maxIdx+1)
-                               (arStride arrayRead)
-      -- Read addresses
-      , Just readAddrs <-
-               resolveJumps (pctxMemory ctx) jt slices -> do
+      | Just (_jt, entries, jumpIndex) <- matchJumpTableRef mem absProcState' (s^.curIP) -> do
+
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
           let abst :: AbsBlockState (ArchReg arch)
@@ -970,11 +942,11 @@ parseFetchAndExecute ctx idx stmts regs s = do
 
           seq abst $ do
 
-            forM_ readAddrs $ \tgtAddr -> do
+            forM_ entries $ \tgtAddr -> do
               let abst' = abst & setAbsIP tgtAddr
               intraJumpTargets %= ((tgtAddr, abst'):)
 
-            let term = ParsedLookupTable s (arIx arrayRead) (V.fromList readAddrs)
+            let term = ParsedLookupTable s jumpIndex entries
             let ret = StatementList { stmtsIdent = idx
                                     , stmtsNonterm = stmts
                                     , stmtsTerm = term
@@ -982,20 +954,20 @@ parseFetchAndExecute ctx idx stmts regs s = do
                                     }
             pure (ret,idx+1)
 
-      -- Check for tail call (anything where we are right at stack height)
+      -- Check for tail call when the stack pointer points to the return address.
       --
       -- TODO: this makes sense for x86, but is not correct for all architectures
       | ptrType    <- addrMemRepr ainfo
       , sp_val     <- s^.boundValue sp_reg
       , ReturnAddr <- absEvalReadMem absProcState' sp_val ptrType -> do
-        (,idx+1) <$> finishWithTailCall absProcState'
+        finishWithTailCall absProcState'
 
       -- Is this a jump to a known function entry? We're already past the
       -- "identifyCall" case, so this must be a tail call, assuming we trust our
       -- known function entry info.
       | Just tgt_mseg <- valueAsSegmentOff mem (s^.boundValue ip_reg)
       , tgt_mseg `Set.member` pctxKnownFnEntries ctx -> do
-        (,idx+1) <$> finishWithTailCall absProcState'
+        finishWithTailCall absProcState'
 
       -- Block that ends with some unknown
       | otherwise -> do
@@ -1009,7 +981,7 @@ parseFetchAndExecute ctx idx stmts regs s = do
 
   where finishWithTailCall :: RegisterInfo (ArchReg arch)
                            => AbsProcessorState (ArchReg arch) ids
-                           -> State (ParseState arch ids) (StatementList arch ids)
+                           -> State (ParseState arch ids) (StatementList arch ids, Word64)
         finishWithTailCall absProcState' = do
           let mem = pctxMemory ctx
           mapM_ (recordWriteStmt (pctxArchInfo ctx) mem absProcState') stmts
@@ -1019,14 +991,15 @@ parseFetchAndExecute ctx idx stmts regs s = do
           seq abst $ do
 
           -- Look for new instruction pointers
-          let addrs = concretizeAbsCodePointers mem (abst^.absRegState^.curIP)
-          newFunctionAddrs %= (++ addrs)
+          addNewFunctionAddrs $
+            identifyConcreteAddresses mem (abst^.absRegState^.curIP)
 
-          pure StatementList { stmtsIdent = idx
-                             , stmtsNonterm = stmts
-                             , stmtsTerm  = ParsedCall s Nothing
-                             , stmtsAbsState = absProcState'
-                             }
+          let ret = StatementList { stmtsIdent = idx
+                                  , stmtsNonterm = stmts
+                                  , stmtsTerm  = ParsedCall s Nothing
+                                  , stmtsAbsState = absProcState'
+                                  }
+          seq ret $ pure (ret,idx+1)
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -1410,16 +1383,22 @@ data DiscoveryOptions
                       , exploreCodeAddrInMem :: !Bool
                         -- ^ If @True@, 'completeDiscoveryState' will
                         -- explore all potential code addresses in
-                        -- memory after exploring other potnetial
+                        -- memory after exploring other potential
                         -- functions.
+                        --
+                        -- This is effectively a hack that sometimes
+                        -- allows discovering functions.  If you need
+                        -- it, let the author's of Macaw know so that
+                        -- we can find a more principled way.
                       , logAtAnalyzeFunction  :: !Bool
-                      -- ^ Print a message each time we apply
-                      -- discovery analysis to a new function.
+                        -- ^ Print a message each time we apply
+                        -- discovery analysis to a new function.
                       , logAtAnalyzeBlock     :: !Bool
-                      -- ^ Print a message each time we analyze a
-                      -- block within a function.
-                     }
+                        -- ^ Print a message each time we analyze a
+                        -- block within a function.
+                      }
 
+-- | Some default options
 defaultDiscoveryOptions :: DiscoveryOptions
 defaultDiscoveryOptions =
   DiscoveryOptions { exploreFunctionSymbols = True
@@ -1504,6 +1483,7 @@ completeDiscoveryState initState disOpt funPred = do
   postPhase1Discovery <- resolveFuns analyzeFn analyzeBlock postSymState
   -- Discovery functions from memory
   if exploreCodeAddrInMem disOpt then do
+    -- Execute hack of just searching for pointers in memory.
     let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
     resolveFuns analyzeFn analyzeBlock $ postPhase1Discovery & exploreMemPointers mem_contents
    else
