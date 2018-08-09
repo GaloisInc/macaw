@@ -38,7 +38,6 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
-import           Data.Int
 import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -95,10 +94,20 @@ repValSizeByteCount = memReprBytes . repValSizeMemRepr
 ------------------------------------------------------------------------
 -- X86TermStmt
 
-data X86TermStmt ids = X86Syscall
+data X86TermStmt ids
+   = X86Syscall
+     -- ^ A system call
+   | Hlt
+     -- ^ The halt instruction.
+     --
+     -- In protected mode outside ring 0, this just raised a GP(0) exception.
+   | UD2
+     -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
   prettyF X86Syscall = text "x86_syscall"
+  prettyF Hlt        = text "hlt"
+  prettyF UD2        = text "ud2"
 
 ------------------------------------------------------------------------
 -- X86PrimLoc
@@ -155,7 +164,7 @@ data SSE_Cmp
      -- ^ Neither value is a NaN, no signalling on QNaN
   deriving (Eq, Ord)
 
-sseCmpEntries :: [(Int8, SSE_Cmp, String)]
+sseCmpEntries :: [(Word8, SSE_Cmp, String)]
 sseCmpEntries =
   [ (0, EQ_OQ,   "EQ_OQ")
   , (1, LT_OS,   "LT_OS")
@@ -167,7 +176,7 @@ sseCmpEntries =
   , (7, ORD_Q,   "ORD_Q")
   ]
 
-sseIdxCmpMap :: Map.Map Int8 SSE_Cmp
+sseIdxCmpMap :: Map.Map Word8 SSE_Cmp
 sseIdxCmpMap = Map.fromList [ (idx,val) | (idx, val, _) <- sseCmpEntries ]
 
 sseCmpNameMap :: Map.Map SSE_Cmp String
@@ -180,7 +189,7 @@ instance Show SSE_Cmp where
       -- The nothing case should never occur.
       Nothing -> "Unexpected name"
 
-lookupSSECmp :: Int8 -> Maybe SSE_Cmp
+lookupSSECmp :: Word8 -> Maybe SSE_Cmp
 lookupSSECmp i = Map.lookup i sseIdxCmpMap
 
 -- | A binary SSE operation
@@ -229,6 +238,8 @@ instance Show (X87_FloatType tp) where
 
 data AVXOp1 = VShiftL Word8     -- ^ Shift left by this many bytes
                                 -- New bytes are 0.
+            | VShiftR Word8     -- ^ Shift right by this many bytes.
+                                -- New bytes are 0.
             | VShufD Word8      -- ^ Shuffle 32-bit words of vector
                                 -- according to pattern in the word8
 
@@ -250,6 +261,12 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
                   * upper 4 bits -> index in 2nd op;
                  Indexes are always 0 or 1. -}
 
+            | VPUnpackLQDQ
+              -- ^ A,B,C,D + P,Q,R,S = C,R,D,S
+              -- This one is for DQ, i.e., 64-bit things
+              -- but there are equivalents for all sizes, so we should
+              -- probably parameterize on size.
+
 
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
@@ -258,6 +275,7 @@ data AVXPointWiseOp2 =
 instance Show AVXOp1 where
   show x = case x of
              VShiftL i -> "vshiftl_" ++ show i
+             VShiftR i -> "vshiftr_" ++ show i
              VShufD  i -> "vshufd_" ++ show i
 
 instance Show AVXOp2 where
@@ -270,6 +288,7 @@ instance Show AVXOp2 where
              VAESEnc      -> "vaesenc"
              VAESEncLast  -> "vaesenclast"
              VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
+             VPUnpackLQDQ -> "vpunpacklqdq"
 
 instance Show AVXPointWiseOp2 where
   show x = case x of
@@ -281,30 +300,51 @@ instance Show AVXPointWiseOp2 where
 
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp where
+  -- | Return true if the operand has an even number of bits set.
   EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
-  -- ^ Return true if the operatnd has has even number of bits set.
+  -- | Read from a primitive X86 location.
   ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
-  -- ^ Read from a primitive X86 location
+  -- | Read the 'FS' base address.
   ReadFSBase :: X86PrimFn f (BVType 64)
-  -- ^ Read the 'FS' base address
+  -- | Read the 'GS' base address.
   ReadGSBase :: X86PrimFn f (BVType 64)
-  -- ^ Read the 'GS' base address
-  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
-  -- ^ The CPUID instruction
+  -- | The CPUID instruction.
   --
   -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
-  RDTSC :: X86PrimFn f (BVType 64)
-  -- ^ The RDTSC instruction
+  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
+
+  -- | This implements the logic for the cmpxchg8b instruction
+  --
+  -- Given a statement, `CMPXCHG8B addr eax ebx ecx edx` this executes the following logic:
+  --   temp64 <- read addr
+  --   if edx:eax == tmp then do
+  --     *addr := ecx:ebx
+  --     return (true, eax, edx)
+  --   else
+  --     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
+  CMPXCHG8B :: !(f (BVType 64))
+               -- ^ Address to read
+            -> !(f (BVType 32))
+               -- ^ Value in EAX
+            -> !(f (BVType 32))
+               -- ^ Value in EBX
+            -> !(f (BVType 32))
+               -- ^ Value in ECX
+            -> !(f (BVType 32))
+               -- ^ Value in EDX
+            -> X86PrimFn f (TupleType [BoolType, BVType 32, BVType 32])
+
+  -- | The RDTSC instruction.
   --
   -- This returns the current time stamp counter a 64-bit value that will
   -- be stored in edx:eax
-  XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
-  -- ^ The XGetBV instruction primitive
+  RDTSC :: X86PrimFn f (BVType 64)
+  -- | The XGetBV instruction primitive
   --
   -- This returns the extended control register defined in the given value
   -- as a 64-bit value that will be stored in edx:eax
-  PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
-  -- ^ @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
+  XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+  -- | @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
   -- based on indices defined in the corresponding bytes of @s@.
   --
   -- Let @n@ be the number of bytes in the width @w@, and let @l = log2(n)@.
@@ -312,6 +352,8 @@ data X86PrimFn f tp where
   --   @res[i] = 0 if msb(s[i]) == 1@
   --   @res[i] = x[j] where j = s[i](0..l)
   -- where @msb(y)@ returns the most-significant bit in byte @y@.
+  PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
+  -- | Compares to memory regions and return the number of bytes that were the same.
   MemCmp :: !Integer
            -- /\ Number of bytes per value.
          -> !(f (BVType 64))
@@ -324,46 +366,49 @@ data X86PrimFn f tp where
            -- /\ Direction flag, False means increasing
          -> X86PrimFn f (BVType 64)
 
-  -- ^ Compares to memory regions
+  -- | `RepnzScas sz val base cnt` searchs through a buffer starting at
+  -- `base` to find  an element `i` such that base[i] = val.
+  -- Each step it increments `i` by 1 and decrements `cnt` by `1`.
+  -- It returns the final value of `cnt`, the
   RepnzScas :: !(RepValSize n)
             -> !(f (BVType n))
             -> !(f (BVType 64))
             -> !(f (BVType 64))
             -> X86PrimFn f (BVType 64)
-  -- ^ `RepnzScas sz val base cnt` searchs through a buffer starting at
-  -- `base` to find  an element `i` such that base[i] = val.
-  -- Each step it increments `i` by 1 and decrements `cnt` by `1`.
-  -- It returns the final value of `cnt`, the
-  MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
-  -- ^ This returns a 80-bit value where the high 16-bits are all
+  -- | This returns a 80-bit value where the high 16-bits are all
   -- 1s, and the low 64-bits are the given register.
+  MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
+  -- | This performs a signed quotient for idiv.
+  -- It raises a #DE exception if the divisor is 0 or the result overflows.
+  -- The stored result is truncated to zero.
   X86IDiv :: !(RepValSize w)
           -> !(f (BVType (w+w)))
           -> !(f (BVType w))
           -> X86PrimFn f (BVType w)
-  -- ^ This performs a signed quotient for idiv.
-  -- It raises a #DE exception if the divisor is 0 or the result overflows.
+  -- | This performs a signed remainder for idiv.
+  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
   -- The stored result is truncated to zero.
   X86IRem :: !(RepValSize w)
           -> !(f (BVType (w+w)))
           -> !(f (BVType w))
           -> X86PrimFn f (BVType w)
-  -- ^ This performs a signed remainder for idiv.
+  -- | This performs a unsigned quotient for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-  -- The stored result is truncated to zero.
   X86Div :: !(RepValSize w)
          -> !(f (BVType (w+w)))
          -> !(f (BVType w))
          -> X86PrimFn f (BVType w)
-  -- ^ This performs a unsigned quotient for div.
+  -- | This performs an unsigned remainder for div.
   -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
   X86Rem :: !(RepValSize w)
          -> !(f (BVType (w+w)))
          -> !(f (BVType w))
          -> X86PrimFn f (BVType w)
-  -- ^ This performs an unsigned remainder for div.
-  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
 
+  -- | This applies the operation pairwise to two vectors of floating point values.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions as noted in the documentation on SSE.
   SSE_VectorOp :: (1 <= n, 1 <= w)
                => !SSE_Op
                -> !(NatRepr n)
@@ -371,31 +416,20 @@ data X86PrimFn f tp where
                -> !(f (BVType (n*w)))
                -> !(f (BVType (n*w)))
                -> X86PrimFn f (BVType (n*w))
-  -- ^  This applies the operation pairwise to two vectors of floating point values.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions as noted in the documentation on SSE.
 
-
-
-  SSE_CMPSX :: !SSE_Cmp
-            -> !(SSE_FloatType tp)
-            -> !(f tp)
-            -> !(f tp)
-            -> X86PrimFn f tp
-  -- ^ This performs a comparison between the two instructions (as
+  -- | This performs a comparison between the two instructions (as
   -- needed by the CMPSD and CMPSS instructions.
   --
   -- This implicitly depends on the MXCSR register as it may throw
   -- exceptions when given signaling NaNs or denormals when the
   -- appropriate bits are set on the MXCSR register.
+  SSE_CMPSX :: !SSE_Cmp
+            -> !(SSE_FloatType tp)
+            -> !(f tp)
+            -> !(f tp)
+            -> X86PrimFn f tp
 
-
-  SSE_UCOMIS :: !(SSE_FloatType tp)
-             -> !(f tp)
-             -> !(f tp)
-             -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
-  -- ^  This performs a comparison of two floating point values and returns three flags:
+  -- |  This performs a comparison of two floating point values and returns three flags:
   --
   --  * ZF is for the zero-flag and true if the arguments are equal or either argument is a NaN.
   --
@@ -409,55 +443,73 @@ data X86PrimFn f tp where
   --
   -- This function implicitly depends on the MXCSR register and may signal exceptions based
   -- on the configuration of that register.
+  SSE_UCOMIS :: !(SSE_FloatType tp)
+             -> !(f tp)
+             -> !(f tp)
+             -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
 
+  -- | This converts a single to a double precision number.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a exception based on the configuration of that
+  -- register.
   SSE_CVTSS2SD :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
-  -- ^ This converts a single to a double precision number.
+
+  -- | This converts a double to a single precision number.
   --
   -- This function implicitly depends on the MXCSR register and may
   -- signal a exception based on the configuration of that
   -- register.
-
   SSE_CVTSD2SS :: !(f (BVType 64)) -> X86PrimFn f (BVType 32)
-  -- ^ This converts a double to a single precision number.
+
+  -- | This converts a floating point value to a bitvector of the
+  -- given width (should be 32 or 64)
   --
   -- This function implicitly depends on the MXCSR register and may
-  -- signal a exception based on the configuration of that
-  -- register.
-
+  -- signal exceptions based on the configuration of that register.
   SSE_CVTTSX2SI
     :: (1 <= w)
     => !(NatRepr w)
     -> !(SSE_FloatType tp)
     -> !(f tp)
     -> X86PrimFn f (BVType w)
-  -- ^ This converts a floating point value to a bitvector of the
-  -- given width (should be 32 or 64)
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions based on the configuration of that register.
 
-  SSE_CVTSI2SX    :: (1 <= w)
-    => !(SSE_FloatType tp)
-    -> !(NatRepr w)
-    -> !(f (BVType w))
-    -> X86PrimFn f tp
-  -- ^ This converts a signed integer to a floating point value of
+  -- | This converts a signed integer to a floating point value of
   -- the given type  (the input width should be 32 or 64)
   --
   -- This function implicitly depends on the MXCSR register and may
   -- signal a precision exception based on the configuration of that
   -- register.
+  SSE_CVTSI2SX    :: (1 <= w)
+    => !(SSE_FloatType tp)
+    -> !(NatRepr w)
+    -> !(f (BVType w))
+    -> X86PrimFn f tp
 
+  -- | Extends a single or double to 80-bit precision.
+  -- Guaranteed to not throw exception or have side effects.
   X87_Extend :: !(SSE_FloatType tp)
              -> !(f tp)
              -> X86PrimFn f (BVType 80)
-  -- ^ Extends a single or double to 80-bit precision.
-  -- Guaranteed to not throw exception or have side effects.
 
+  -- | This performs an 80-bit floating point add.
+  --
+  -- This returns the result and a Boolean flag indicating if the
+  -- result was rounded up.
+  --
+  -- This computation implicitly depends on the x87 FPU control word,
+  -- and may throw any of the following exceptions:
+  -- #IA Operand is an SNaN value or unsupported format.
+  --     Operands are infinities of unlike sign.
+  -- #D  Source operand is a denormal value.
+  -- #U Result is too small for destination format.
+  -- #O Result is too large for destination format.
+  -- #P Value cannot be represented exactly in destination format.
   X87_FAdd :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
-  -- ^ This performs an 80-bit floating point add.
+
+  -- | This performs an 80-bit floating point add.
   --
   -- This returns the result and a Boolean flag indicating if the
   -- result was rounded up.
@@ -470,11 +522,11 @@ data X86PrimFn f tp where
   -- #U Result is too small for destination format.
   -- #O Result is too large for destination format.
   -- #P Value cannot be represented exactly in destination format.
-
   X87_FSub :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
-  -- ^ This performs an 80-bit floating point add.
+
+  -- | This performs an 80-bit floating point add.
   --
   -- This returns the result and a Boolean flag indicating if the
   -- result was rounded up.
@@ -487,28 +539,11 @@ data X86PrimFn f tp where
   -- #U Result is too small for destination format.
   -- #O Result is too large for destination format.
   -- #P Value cannot be represented exactly in destination format.
-
   X87_FMul :: !(f (FloatType X86_80Float))
            -> !(f (FloatType X86_80Float))
            -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
-  -- ^ This performs an 80-bit floating point add.
-  --
-  -- This returns the result and a Boolean flag indicating if the
-  -- result was rounded up.
-  --
-  -- This computation implicitly depends on the x87 FPU control word,
-  -- and may throw any of the following exceptions:
-  -- #IA Operand is an SNaN value or unsupported format.
-  --     Operands are infinities of unlike sign.
-  -- #D  Source operand is a denormal value.
-  -- #U Result is too small for destination format.
-  -- #O Result is too large for destination format.
-  -- #P Value cannot be represented exactly in destination format.
 
-  X87_FST :: !(SSE_FloatType tp)
-          -> !(f (BVType 80))
-          -> X86PrimFn f tp
-  -- ^ This rounds a floating number to single or double precision.
+  -- | This rounds a floating number to single or double precision.
   --
   -- This instruction rounds according to the x87 FPU control word
   -- rounding mode, and may throw any of the following exceptions:
@@ -520,47 +555,59 @@ data X86PrimFn f tp where
   -- * #P Value cannot be represented exactly in destination format.
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
+  X87_FST :: !(SSE_FloatType tp)
+          -> !(f (BVType 80))
+          -> X86PrimFn f tp
 
+  -- | Unary operation on a vector.  Should have no side effects.
   VOp1 :: (1 <= n) =>
-     !(NatRepr n)        -> {- ^ width of input/result -}
-     !AVXOp1             -> {- ^ do this operation -}
-     !(f (BVType n))     -> {- ^ on this thing -}
+     !(NatRepr n)        -> {- /\ width of input/result -}
+     !AVXOp1             -> {- /\ do this operation -}
+     !(f (BVType n))     -> {- /\ on this thing -}
      X86PrimFn f (BVType n)
-  {- ^ Unary operation on a vector.  Should have no side effects. -}
 
+  {- | Binary operation on two vectors. Should not have side effects. -}
   VOp2 :: (1 <= n) =>
-    !(NatRepr n)    -> {-^ vector width -}
-    !AVXOp2         -> {-^ binary operation on the whole vector -}
-    !(f (BVType n)) -> {-^ first operand -}
-    !(f (BVType n)) -> {-^ second operand -}
+    !(NatRepr n)    -> {- /\ vector width -}
+    !AVXOp2         -> {- /\ binary operation on the whole vector -}
+    !(f (BVType n)) -> {- /\ first operand -}
+    !(f (BVType n)) -> {- /\ second operand -}
     X86PrimFn f (BVType n)
-  {- ^ Binary operation on two vectors. Should not have side effects -}
 
-  PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
-    !(NatRepr elNum)               -> {- ^ Number of elements -}
-    !(NatRepr elSize)              -> {- ^ Bit width of an element -}
-    !(NatRepr sz)                  -> {- ^ Bit size of shift amount -}
-    !(f (BVType (elNum * elSize))) -> {- ^ Vector -}
-    !(f (BVType sz))               -> {- ^ Shift amount (in bits) -}
+  {- | Update an element of a vector -}
+  VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
+    !(NatRepr elNum)                {- /\ Number of elements in vector -} ->
+    !(NatRepr elSize)               {- /\ Size of each element in bits -} ->
+    !(f (BVType (elNum * elSize)))  {- /\ Insert in this vector -}        ->
+    !(f (BVType elSize))            {- /\ Insert this value -}            ->
+    !(NatRepr i)                    {- /\ At this index -}                ->
     X86PrimFn f (BVType (elNum * elSize))
-  {- ^ Shift left each element in the vector by the given amount.
+
+  {- | Shift left each element in the vector by the given amount.
        The new ("shifted-in") bits are 0 -}
-
-  Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
-    !(NatRepr elNum)               -> {- ^ Number of elements -}
-    !(NatRepr elSize)              -> {- ^ Bit width of an element -}
-    !AVXPointWiseOp2               -> {- ^ Operation -}
-    !(f (BVType (elNum * elSize))) -> {- ^ Add this vector -}
-    !(f (BVType (elNum * elSize))) -> {- ^ With this vector -}
+  PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
+    !(NatRepr elNum)               -> {- /\ Number of elements -}
+    !(NatRepr elSize)              -> {- /\ Bit width of an element -}
+    !(NatRepr sz)                  -> {- /\ Bit size of shift amount -}
+    !(f (BVType (elNum * elSize))) -> {- /\ Vector -}
+    !(f (BVType sz))               -> {- /\ Shift amount (in bits) -}
     X86PrimFn f (BVType (elNum * elSize))
-  {- ^ Pointwise binary operation on vectors. Should not have side effects. -}
 
+  {- | Pointwise binary operation on vectors. Should not have side effects. -}
+  Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
+    !(NatRepr elNum)               -> {- /\ Number of elements -}
+    !(NatRepr elSize)              -> {- /\ Bit width of an element -}
+    !AVXPointWiseOp2               -> {- /\ Operation -}
+    !(f (BVType (elNum * elSize))) -> {- /\ Add this vector -}
+    !(f (BVType (elNum * elSize))) -> {- /\ With this vector -}
+    X86PrimFn f (BVType (elNum * elSize))
+
+  {- | Extract 128 bits from a 256 bit value, as described by the
+       control mask -}
   VExtractF128 ::
     !(f (BVType 256)) ->
     !Word8 ->
     X86PrimFn f (BVType 128)
-  {- ^ Extract 128 bits from a 256 bit value, as described by the
-       control mask -}
 
 
 
@@ -572,6 +619,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       ReadFSBase    -> knownRepr
       ReadGSBase    -> knownRepr
       CPUID{}       -> knownRepr
+      CMPXCHG8B{}   -> knownRepr
       RDTSC{}       -> knownRepr
       XGetBV{}      -> knownRepr
       PShufb w _ _  -> BVTypeRepr (typeRepr w)
@@ -595,6 +643,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> typeRepr tp
       PointwiseShiftL n w _ _ _ -> packedAVX n w
+      VInsert n w _ _ _ -> packedAVX n w
       VOp1 w _ _ -> BVTypeRepr w
       VOp2 w _ _ _ -> BVTypeRepr w
       Pointwise2 n w _ _ _ -> packedAVX n w
@@ -625,6 +674,7 @@ instance TraversableFC X86PrimFn where
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
       CPUID v    -> CPUID <$> go v
+      CMPXCHG8B a ax bx cx dx  -> CMPXCHG8B <$> go a <*> go ax <*> go bx <*> go cx <*> go dx
       RDTSC      -> pure RDTSC
       XGetBV v   -> XGetBV <$> go v
       PShufb w x y -> PShufb w <$> go x <*> go y
@@ -656,6 +706,7 @@ instance TraversableFC X86PrimFn where
       PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
       Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
       VExtractF128 x i -> (`VExtractF128` i) <$> go x
+      VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
@@ -667,6 +718,7 @@ instance IsArchFn X86PrimFn where
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
       CPUID code  -> sexprA "cpuid" [ pp code ]
+      CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
       RDTSC       -> pure $ text "rdtsc"
       XGetBV code -> sexprA "xgetbv" [ pp code ]
       PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
@@ -699,6 +751,13 @@ instance IsArchFn X86PrimFn where
       Pointwise2 _ w o x y -> sexprA (show o)
                                 [ ppShow (widthVal w) , pp x , pp y ]
       VExtractF128 x i -> sexprA "vextractf128" [ pp x, ppShow i ]
+      VInsert n w v e i -> sexprA "vinsert" [ ppShow (widthVal n)
+                                            , ppShow (widthVal w)
+                                            , pp v
+                                            , pp e
+                                            , ppShow (widthVal i)
+                                            ]
+
 
 -- | This returns true if evaluating the primitive function implicitly
 -- changes the processor state in some way.
@@ -710,6 +769,7 @@ x86PrimFnHasSideEffects f =
     ReadFSBase   -> False
     ReadGSBase   -> False
     CPUID{}      -> False
+    CMPXCHG8B{}  -> True
     RDTSC        -> False
     XGetBV{}     -> False
     PShufb{}     -> False
@@ -741,6 +801,7 @@ x86PrimFnHasSideEffects f =
     PointwiseShiftL {} -> False
     Pointwise2 {} -> False
     VExtractF128 {} -> False
+    VInsert {} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -819,6 +880,11 @@ type instance ArchFn   X86_64 = X86PrimFn
 type instance ArchStmt X86_64 = X86Stmt
 type instance ArchTermStmt X86_64 = X86TermStmt
 
+-- x86 instructions can start at any byte
+instance IPAlignment X86_64 where
+  fromIPAligned = Just
+  toIPAligned = id
+
 rewriteX86PrimFn :: X86PrimFn (Value X86_64 src) tp
                  -> Rewriter X86_64 s src tgt (Value X86_64 tgt tp)
 rewriteX86PrimFn f =
@@ -845,3 +911,5 @@ rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt 
 rewriteX86TermStmt f =
   case f of
     X86Syscall -> pure X86Syscall
+    Hlt -> pure Hlt
+    UD2 -> pure UD2

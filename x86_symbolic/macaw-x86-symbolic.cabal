@@ -9,15 +9,16 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4,
-                 crucible,
+                 crucible >= 0.4,
+                 crucible-llvm,
                  flexdis86 >= 0.1.2,
+                 lens,
                  macaw-base,
                  macaw-symbolic,
                  macaw-x86,
                  mtl,
                  parameterized-utils,
-                 crucible-llvm,
-                 lens
+                 what4 >= 0.4
   hs-source-dirs: src
 
   exposed-modules:
@@ -38,6 +39,7 @@ test-suite macaw-x86-symbolic-tests
     bytestring,
     containers,
     crucible,
+    crucible-llvm,
     elf-edit,
     macaw-base,
     macaw-symbolic,
@@ -45,4 +47,5 @@ test-suite macaw-x86-symbolic-tests
     macaw-x86-symbolic,
     parameterized-utils,
     text,
+    what4,
     vector

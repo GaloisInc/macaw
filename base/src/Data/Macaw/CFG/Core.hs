@@ -21,24 +21,24 @@ single CFG.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
   , Assignment(..)
   , AssignId(..)
-  , AssignRhs(..)
-  , MemRepr(..)
-  , memReprBytes
     -- * Value
   , Value(..)
   , BVValue
   , valueAsApp
   , valueAsArchFn
+  , valueAsRhs
   , valueAsMemAddr
   , valueAsSegmentOff
-  , asLiteralAddr
+  , valueAsStaticMultiplication
   , asBaseOffset
   , asInt64Constant
+  , IPAlignment(..)
   , mkLit
   , bvValue
   , ppValueAssignments
@@ -63,13 +63,8 @@ module Data.Macaw.CFG.Core
   , PrettyRegValue(..)
   , IsArchFn(..)
   , IsArchStmt(..)
-    -- * Architecture type families
-  , ArchFn
-  , ArchReg
-  , ArchStmt
-  , ArchTermStmt
-  , RegAddrWord
-  , RegAddrWidth
+    -- * Utilities
+  , addrWidthTypeRepr
     -- * RegisterInfo
   , RegisterInfo(..)
   , asStackAddrOffset
@@ -78,23 +73,18 @@ module Data.Macaw.CFG.Core
   , refsInApp
   , refsInAssignRhs
     -- ** Synonyms
-  , ArchAddrWidth
   , ArchAddrValue
-  , ArchAddrWord
-  , ArchMemAddr
-  , ArchSegmentOff
   , Data.Parameterized.TraversableFC.FoldableFC(..)
+  , module Data.Macaw.CFG.AssignRhs
   , module Data.Macaw.Utils.Pretty
   ) where
 
-import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.Identity
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
 import           Data.Maybe (isNothing, catMaybes)
-import           Data.Monoid
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -103,7 +93,6 @@ import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC (FoldableFC(..))
-import           Data.Proxy
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
@@ -114,6 +103,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.AssignRhs
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
@@ -150,6 +140,11 @@ bracketsep (h:l) = vcat $
   ++ fmap (text "," <+>) l
   ++ [text "}"]
 
+-- | A type repr for the address width
+addrWidthTypeRepr :: AddrWidthRepr w -> TypeRepr (BVType w)
+addrWidthTypeRepr Addr32 = BVTypeRepr knownNat
+addrWidthTypeRepr Addr64 = BVTypeRepr knownNat
+
 ------------------------------------------------------------------------
 -- AssignId
 
@@ -179,175 +174,32 @@ instance Show (AssignId ids tp) where
   show (AssignId n) = show n
 
 ------------------------------------------------------------------------
--- Type families for architecture specific components.
-
--- | Width of register used to store addresses.
-type family RegAddrWidth (r :: Type -> *) :: Nat
-
--- | A word for the given architecture register type.
-type RegAddrWord r = MemWord (RegAddrWidth r)
-
--- | Type family for defining what a "register" is for this architecture.
---
--- Registers include things like the general purpose registers, any flag
--- registers that can be read and written without side effects,
-type family ArchReg (arch :: *) :: Type -> *
-
--- | A type family for architecture specific functions.
---
--- These function may return a value.  They may depend on the current state of
--- the heap, but should not affect the processor state.
---
--- The function may depend on the set of registers defined so far, and the type
--- of the result.
-type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
-
--- | A type family for defining architecture-specific statements.
---
--- The second type parameter is the ids phantom type used to provide
--- uniqueness of Nonce values that identify assignments.
-type family ArchStmt (arch :: *) :: (Type -> *) -> *
-
--- | A type family for defining architecture-specific statements that
--- may have instruction-specific effects on control-flow and register state.
---
--- The second type parameter is the ids phantom type used to provide
--- uniqueness of Nonce values that identify assignments.
---
--- An architecture-specific terminal statement may have side effects and change register
--- values, it may or may not return to the current function.  If it does return to the
--- current function, it is assumed to be at most one location, and the block-translator
--- must provide that value at translation time.
-type family ArchTermStmt (arch :: *) :: * -> *
-
--- | Number of bits in addreses for architecture.
-type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
-
--- | A word for the given architecture bitwidth.
-type ArchAddrWord arch = RegAddrWord (ArchReg arch)
-
--- | An address for a given architecture.
-type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
-
--- | A pair containing a segment and valid offset within the segment.
-type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
-
-------------------------------------------------------------------------
--- MemRepr
-
--- | The type stored in memory.
---
--- The endianess indicates whether the address stores the most
--- or least significant byte.  The following indices either store
--- the next lower or higher bytes.
-data MemRepr (tp :: Type) where
-  BVMemRepr :: (1 <= w) => !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
-
-instance Pretty (MemRepr tp) where
-  pretty (BVMemRepr w BigEndian)    = text "bvbe" <+> text (show w)
-  pretty (BVMemRepr w LittleEndian) = text "bvle" <+> text (show w)
-
-instance Show (MemRepr tp) where
-  show = show . pretty
-
--- | Return the number of bytes this takes up.
-memReprBytes :: MemRepr tp -> Integer
-memReprBytes (BVMemRepr x _) = natValue x
-
-instance TestEquality MemRepr where
-  testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =
-    if xe == ye then do
-      Refl <- testEquality xw yw
-      Just Refl
-     else
-      Nothing
-
-instance OrdF MemRepr where
-  compareF (BVMemRepr xw xe) (BVMemRepr yw ye) =
-    case compareF xw yw of
-      LTF -> LTF
-      GTF -> GTF
-      EQF -> fromOrdering (compare xe ye)
-
-instance HasRepr MemRepr TypeRepr where
-  typeRepr (BVMemRepr w _) =
-    let r = (natMultiply n8 w)
-     in case leqMulPos (Proxy :: Proxy 8) w of
-          LeqProof -> BVTypeRepr r
-
-------------------------------------------------------------------------
--- AssignRhs
-
--- | The right hand side of an assignment is an expression that
--- returns a value.
-data AssignRhs (arch :: *) (f :: Type -> *) tp where
-  -- An expression that is computed from evaluating subexpressions.
-  EvalApp :: !(App f tp)
-          -> AssignRhs arch f tp
-
-  -- An expression with an undefined value.
-  SetUndefined :: !(TypeRepr tp)
-               -> AssignRhs arch f tp
-
-  -- Read memory at given location.
-  ReadMem :: !(f (BVType (ArchAddrWidth arch)))
-          -> !(MemRepr tp)
-          -> AssignRhs arch f tp
-
-  -- | @CondReadMem tp cond addr v@ reads from memory at the given address if the
-  -- condition is true and returns the value if it false.
-  CondReadMem :: !(MemRepr tp)
-              -> !(f BoolType)
-              -> !(f (BVType (ArchAddrWidth arch)))
-              -> !(f tp)
-              -> AssignRhs arch f tp
-
-  -- Call an architecture specific function that returns some result.
-  EvalArchFn :: !(ArchFn arch f tp)
-             -> !(TypeRepr tp)
-             -> AssignRhs arch f tp
-
-instance HasRepr (AssignRhs arch f) TypeRepr where
-  typeRepr rhs =
-    case rhs of
-      EvalApp a -> typeRepr a
-      SetUndefined tp -> tp
-      ReadMem _ tp -> typeRepr tp
-      CondReadMem tp _ _ _ -> typeRepr tp
-      EvalArchFn _ rtp -> rtp
-
-instance FoldableFC (ArchFn arch) => FoldableFC (AssignRhs arch) where
-  foldMapFC go v =
-    case v of
-      EvalApp a -> foldMapFC go a
-      SetUndefined _w -> mempty
-      ReadMem addr _ -> go addr
-      CondReadMem _ c a d -> go c <> go a <> go d
-      EvalArchFn f _ -> foldMapFC go f
-
-------------------------------------------------------------------------
--- Value and Assignment, AssignRhs declarations.
+-- Value and Assignment
 
 -- | A value at runtime.
-data Value arch ids tp
-   = forall n
-   . (tp ~ BVType n, 1 <= n)
-   => BVValue !(NatRepr n) !Integer
-     -- ^ A constant bitvector
-     --
-     -- The integer should be between 0 and 2^n-1.
-   | (tp ~ BoolType)
-   => BoolValue !Bool
-     -- ^ A constant Boolean
-   | ( tp ~ BVType (ArchAddrWidth arch)
-     , 1 <= ArchAddrWidth arch
-     )
-   => RelocatableValue !(NatRepr (ArchAddrWidth arch)) !(ArchMemAddr arch)
-     -- ^ A memory address
-   | AssignedValue !(Assignment arch ids tp)
-     -- ^ Value from an assignment statement.
-   | Initial !(ArchReg arch tp)
-     -- ^ Represents the value assigned to the register when the block started.
+data Value arch ids tp where
+  -- | A constant bitvector
+  --
+  -- The integer should be between 0 and 2^n-1.
+  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
+  -- | A constant Boolean
+  BoolValue :: !Bool -> Value arch ids BoolType
+  -- | A memory address
+  RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+                   -> !(ArchMemAddr arch)
+                   -> Value arch ids (BVType (ArchAddrWidth arch))
+  -- | This denotes the address of a symbol identifier in the binary.
+  --
+  -- This appears when dealing with relocations.
+  SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+              -> !SymbolIdentifier
+              -> Value arch ids (BVType (ArchAddrWidth arch))
+  -- | Value from an assignment statement.
+  AssignedValue :: !(Assignment arch ids tp)
+                -> Value arch ids tp
+  -- | Represents the value assigned to the register when the block started.
+  Initial :: !(ArchReg arch tp)
+          -> Value arch ids tp
 
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
@@ -371,7 +223,8 @@ instance ( HasRepr (ArchReg arch) TypeRepr
 
   typeRepr (BoolValue _) = BoolTypeRepr
   typeRepr (BVValue w _) = BVTypeRepr w
-  typeRepr (RelocatableValue w _) = BVTypeRepr w
+  typeRepr (RelocatableValue w _) = addrWidthTypeRepr w
+  typeRepr (SymbolValue w _)      = addrWidthTypeRepr w
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
   typeRepr (Initial r) = typeRepr r
 
@@ -393,11 +246,15 @@ instance OrdF (ArchReg arch)
   compareF BVValue{} _ = LTF
   compareF _ BVValue{} = GTF
 
-
   compareF (RelocatableValue _ x) (RelocatableValue _ y) =
     fromOrdering (compare x y)
   compareF RelocatableValue{} _ = LTF
   compareF _ RelocatableValue{} = GTF
+
+  compareF (SymbolValue _ x) (SymbolValue _ y) =
+    fromOrdering (compare x y)
+  compareF SymbolValue{} _ = LTF
+  compareF _ SymbolValue{} = GTF
 
   compareF (AssignedValue x) (AssignedValue y) =
     compareF (assignId x) (assignId y)
@@ -436,6 +293,12 @@ mkLit n v = BVValue n (v .&. mask)
 bvValue :: (KnownNat n, 1 <= n) => Integer -> Value arch ids (BVType n)
 bvValue i = mkLit knownNat i
 
+-- | Return the right-hand side if this is an assignment.
+valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
+valueAsRhs (AssignedValue (Assignment _ v)) = Just v
+valueAsRhs _ = Nothing
+
+-- | Return the value evaluated if this is from an `App`.
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
 valueAsApp (AssignedValue (Assignment _ (EvalApp a))) = Just a
 valueAsApp _ = Nothing
@@ -454,12 +317,22 @@ valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
-asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-               => BVValue arch ids (ArchAddrWidth arch)
-               -> Maybe (ArchMemAddr arch)
-asLiteralAddr = valueAsMemAddr
-
-{-# DEPRECATED asLiteralAddr "Use valueAsMemAddr" #-}
+valueAsStaticMultiplication ::
+  BVValue arch ids w ->
+  Maybe (Integer, BVValue arch ids w)
+valueAsStaticMultiplication v
+  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
+  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
+  | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
+  -- the PowerPC way to shift left is a bit obtuse...
+  | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
+  , Just (BVOr _ l r) <- valueAsApp v'
+  , Just (BVShl _ l' (BVValue _ shl)) <- valueAsApp l
+  , Just (BVShr _ _ (BVValue _ shr)) <- valueAsApp r
+  , c == complement (2^shl-1) `mod` bit (fromInteger (natValue w))
+  , shr >= natValue w - shl
+  = Just (2^shl, l')
+  | otherwise = Nothing
 
 -- | Returns a segment offset associated with the value if one can be defined.
 valueAsSegmentOff :: Memory (ArchAddrWidth arch)
@@ -477,6 +350,17 @@ asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
+
+class IPAlignment arch where
+  -- | Take an aligned value and strip away the bits of the semantics that
+  -- align it, leaving behind a (potentially unaligned) value. Return 'Nothing'
+  -- if the input value does not appear to be a valid value for the instruction
+  -- pointer.
+  fromIPAligned :: ArchAddrValue arch ids -> Maybe (ArchAddrValue arch ids)
+
+  -- | Take an unaligned memory address and clean it up so that it is a valid
+  -- value for the instruction pointer.
+  toIPAligned :: MemAddr (ArchAddrWidth arch) -> MemAddr (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
 -- RegState
@@ -614,8 +498,8 @@ ppValue p (BVValue w i)
     -- TODO: We may want to report an error here.
     parenIf (p > colonPrec) $
     text (show i) <+> text "::" <+> brackets (text (show w))
-
 ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
+ppValue _ (SymbolValue _ a) = text (show a)
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
 ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
 
@@ -653,6 +537,7 @@ type ArchConstraints arch
      , IsArchStmt (ArchStmt arch)
      , FoldableF  (ArchStmt arch)
      , PrettyF    (ArchTermStmt arch)
+     , IPAlignment arch
      )
 
 -- | Pretty print an assignment right-hand side using operations parameterized
@@ -766,11 +651,6 @@ data Stmt arch ids
    | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
      -- ^ This denotes a write to memory, and consists of an address to write to, a `MemRepr` defining
      -- how the value should be stored in memory, and the value to be written.
-   | PlaceHolderStmt !([Some (Value arch ids)]) !String
-     -- ^ A placeholder to indicate something the
-     -- architecture-specific backend does not support.
-     --
-     -- Note that we plan to remove this eventually
    | InstructionStart !(ArchAddrWord arch) !Text
      -- ^ The start of an instruction
      --
@@ -780,6 +660,10 @@ data Stmt arch ids
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
+   | ArchState !(ArchMemAddr arch) !(MapF.MapF (ArchReg arch) (Value arch ids))
+     -- ^ Address of an instruction and the *machine* registers that it updates
+     -- (with their associated macaw values after the execution of the
+     -- instruction).
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
@@ -789,13 +673,18 @@ ppStmt :: ArchConstraints arch
 ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
-    WriteMem a _ rhs -> text "*" PP.<> prettyPrec 11 a <+> text ":=" <+> ppValue 0 rhs
-    PlaceHolderStmt vals name ->
-      text ("PLACEHOLDER: " ++ name)
-      <+> parens (hcat $ punctuate comma $ viewSome (ppValue 0) <$> vals)
+    WriteMem a _ rhs -> text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
+    ArchState a m -> hang (length (show prefix)) (prefix PP.<> PP.semiBraces (MapF.foldrWithKey ppUpdate [] m))
+      where
+      ppAddr addr =
+        case asAbsoluteAddr addr of
+          Just absAddr -> ppOff absAddr
+          Nothing -> PP.braces (PP.int (addrBase addr)) PP.<> ppOff (addrOffset addr)
+      prefix = text "#" <+> ppAddr a PP.<> text ": "
+      ppUpdate key val acc = text (showF key) <+> text "=>" <+> ppValue 0 val : acc
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . ppStmt (\w -> text (show w))

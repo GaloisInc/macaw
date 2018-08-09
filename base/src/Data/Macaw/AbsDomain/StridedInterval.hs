@@ -47,7 +47,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), empty)
 data StridedInterval (w :: Nat) =
   StridedInterval { typ    :: !(NatRepr w) -- ^ number of bits in type.
                   , base   :: !Integer
-                  , range  :: !Integer -- ^ This is the number of elements in the interval + 1
+                  , range  :: !Integer -- ^ This is the number of elements in the interval - 1
                   , stride :: !Integer
                   }
 

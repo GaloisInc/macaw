@@ -25,13 +25,18 @@ import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as MX
 import qualified Data.Macaw.X86.Symbolic as MX
 
+import qualified What4.ProgramLoc as C
+import qualified What4.Interface as C
+
+import qualified Lang.Crucible.Backend as C
+import qualified Lang.Crucible.Backend.Simple as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
-import qualified Lang.Crucible.ProgramLoc as C
+import           Lang.Crucible.LLVM.DataLayout (EndianForm(LittleEndian))
+import qualified Lang.Crucible.LLVM.MemModel as C
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegValue as C
-import qualified Lang.Crucible.Solver.Interface as C
-import qualified Lang.Crucible.Solver.SimpleBackend as C
 
 mkReg :: (C.IsSymInterface sym, M.HasRepr (M.ArchReg arch) M.TypeRepr)
       => MS.MacawSymbolicArchFunctions arch
@@ -43,7 +48,7 @@ mkReg archFns sym r =
     M.BoolTypeRepr ->
       C.RV <$> C.freshConstant sym (MS.crucGenArchRegName archFns r) C.BaseBoolRepr
     M.BVTypeRepr w ->
-      C.RV <$> C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w)
+      C.RV <$> (C.llvmPointer_bv sym =<< C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w))
     M.TupleTypeRepr{}  ->
       error "macaw-symbolic do not support tuple types."
 
@@ -61,8 +66,7 @@ main = do
 
   let loadOpt :: Elf.LoadOptions
       loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
-                                , Elf.loadStyleOverride = Just Elf.LoadBySection
-                                , Elf.includeBSS = False
+                                , Elf.loadRegionBaseOffset = 0
                                 }
   putStrLn "Read elf"
   elfContents <- BS.readFile "tests/add_ubuntu64.o"
@@ -73,14 +77,14 @@ main = do
           fail "Error parsing Elf file"
         pure e
       _ -> fail "Expected 64-bit elf file"
-  (secIdxMap, mem) <-
-    case Elf.memoryForElf loadOpt elf of
-      Left err -> fail err
-      Right r -> pure r
 
-  let (symErrs, nameAddrList) = Elf.resolveElfFuncSymbols mem secIdxMap elf
-  forM_ symErrs $ \err -> do
-    hPutStrLn stderr $ show err
+  (mem, nameAddrList) <-
+    case Elf.resolveElfContents loadOpt elf of
+      Left err -> fail err
+      Right (warn, mem, _mentry, nameAddrList)  -> do
+        forM_ warn $ \err -> do
+          hPutStrLn stderr err
+        pure (mem, nameAddrList)
 
   putStrLn "Lookup addr"
   addAddr <-
@@ -117,9 +121,17 @@ main = do
   symFuns <- MX.newSymFuns sym
 
   putStrLn "Run code block"
-  execResult <- MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns) halloc g regs
+  initMem <- C.emptyMem LittleEndian
+  let globalMap :: MS.GlobalMap sym MX.X86_64
+      globalMap = Map.empty
+  let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
+      lookupFn _mem _regs = do
+        fail "Could not find function handle."
+  execResult <-
+     MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
+        halloc (initMem, globalMap) lookupFn g regs
   case execResult of
-    C.FinishedExecution _ (C.TotalRes _pair) -> do
+    (_,C.FinishedResult _ (C.TotalRes _pair))-> do
       putStrLn "Done"
     _ -> do
       fail "Partial execution returned."

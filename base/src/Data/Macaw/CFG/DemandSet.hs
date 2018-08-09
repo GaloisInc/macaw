@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.CFG.DemandSet
@@ -18,6 +19,7 @@ import           Control.Monad.State.Strict
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
+import           Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -85,6 +87,7 @@ addValueDemands v = do
     BoolValue{} -> pure ()
     BVValue{} -> pure ()
     RelocatableValue{} -> pure ()
+    SymbolValue{} -> pure ()
     AssignedValue a -> addAssignmentDemands a
     Initial{} ->  pure ()
 
@@ -100,8 +103,6 @@ addStmtDemands s =
     WriteMem addr _repr val -> do
       addValueDemands addr
       addValueDemands val
-    PlaceHolderStmt l _ ->
-      mapM_ (\(Some v) -> addValueDemands v) l
     InstructionStart{} ->
       pure ()
     Comment _ ->
@@ -110,6 +111,8 @@ addStmtDemands s =
       ctx <- DemandComp $ gets $ demandContext
       demandConstraints ctx $
         traverseF_ addValueDemands astmt
+    ArchState _a updates ->
+      MapF.traverseWithKey_ (const addValueDemands) updates
 
 ------------------------------------------------------------------------
 -- Functions for computing demanded values
@@ -120,7 +123,7 @@ stmtNeeded demandSet stmt =
   case stmt of
     AssignStmt a -> Set.member (Some (assignId a)) demandSet
     WriteMem{} -> True
-    PlaceHolderStmt{} -> True
     InstructionStart{} -> True
     Comment{} -> True
     ExecArchStmt{} -> True
+    ArchState{} -> True

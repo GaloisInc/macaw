@@ -13,9 +13,9 @@ before_cache:
 
 matrix:
   include:
-    - env: CABALVER=1.24 GHCVER=8.0.2
-      compiler: ": #GHC 8.0.2"
-      addons: {apt: {packages: [cabal-install-1.24,ghc-8.0.2], sources: [hvr-ghc]}}
+    - env: CABALVER=1.24 GHCVER=8.2.2
+      compiler: ": #GHC 8.2.2"
+      addons: {apt: {packages: [cabal-install-1.24,ghc-8.2.2], sources: [hvr-ghc]}}
 
 before_install:
  - unset CC
@@ -41,13 +41,8 @@ install:
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
  - travis_wait stack --no-terminal --skip-ghc-check setup
- - cd x86/tests
- - stack build macaw-x86
+ - stack build macaw-x86 macaw-x86-symbolic
  - stack test macaw-x86
- - cd ../..
-# - cabal check
-# - cabal haddock # tests that documentation can be generated
-# - cabal sdist   # tests that a source-distribution can be generated
 
 # Check that the resulting source distribution can be built & installed.
 # If there are no other `.tar.gz` files in `dist`, this can be even simpler:

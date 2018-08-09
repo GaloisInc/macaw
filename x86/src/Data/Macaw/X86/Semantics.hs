@@ -13,6 +13,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
@@ -20,7 +21,6 @@ module Data.Macaw.X86.Semantics
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import           Data.Foldable
-import           Data.Int
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes
@@ -28,6 +28,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import           Data.Proxy
+import           Data.Word
 import qualified Flexdis86 as F
 
 import           Data.Macaw.CFG ( MemRepr(..)
@@ -290,8 +291,118 @@ def_cqo = defNullary "cqo" $ do
 
 -- FIXME: special segment stuff?
 -- FIXME: CR and debug regs?
-exec_mov :: Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
-exec_mov l v = l .= v
+def_mov :: InstructionDef
+def_mov =
+  defBinary "mov" $ \_ loc val -> do
+    case (loc, val) of
+      (F.ByteReg r, F.ByteReg src) -> do
+        v <- get $ reg8Loc  src
+        reg8Loc r .= v
+      (F.ByteReg r, F.ByteImm i) -> do
+        reg8Loc r .= bvLit n8 (toInteger i)
+      (F.ByteReg r, F.Mem8 src) -> do
+        v <- get =<< getBV8Addr src
+        reg8Loc r  .= v
+      (F.Mem8 a, F.ByteReg src) -> do
+        l <- getBV8Addr a
+        v <- get $ reg8Loc  src
+        l .= v
+      (F.Mem8 a, F.ByteImm i) -> do
+        l <- getBV8Addr a
+        l .= bvLit n8 (toInteger i)
+
+      (F.WordReg r, F.WordReg src) -> do
+        v <- get $ reg16Loc src
+        reg16Loc r .= v
+      (F.WordReg r, F.WordSignedImm i) -> do
+        reg16Loc r .= bvLit n16 (toInteger i)
+      (F.WordReg r, F.WordImm i) -> do
+        reg16Loc r .= bvLit n16 (toInteger i)
+      (F.WordReg r, F.Mem16 src) -> do
+        v <- get =<< getBV16Addr src
+        reg16Loc r .= v
+      (F.Mem16 a, F.WordReg src) -> do
+        l <- getBV16Addr a
+        v <- get $ reg16Loc src
+        l .= v
+      (F.Mem16 a, F.WordSignedImm i) -> do
+        l <- getBV16Addr a
+        l .= bvLit n16 (toInteger i)
+
+      (F.DWordReg r, F.DWordReg src) -> do
+        v <- get $ reg32Loc src
+        reg32Loc r .= v
+      (F.DWordReg r, F.DWordSignedImm i) -> do
+        reg32Loc r .= bvLit n32 (toInteger i)
+      (F.DWordReg r, F.DWordImm i) -> do
+        reg32Loc r .= getImm32 i
+      (F.DWordReg r, F.Mem32 src) -> do
+        v <- get =<< getBV32Addr src
+        reg32Loc r .= v
+      (F.Mem32 a, F.DWordReg src) -> do
+        l <- getBV32Addr a
+        v <- get $ reg32Loc src
+        l .= v
+      (F.Mem32 a, F.DWordSignedImm i) -> do
+        l <- getBV32Addr a
+        l .= bvLit n32 (toInteger i)
+
+      (F.QWordReg r, F.QWordReg src) -> do
+        v <- get $ reg64Loc src
+        reg64Loc r .= v
+      (F.QWordReg r, F.Mem64 src) -> do
+        v <- get =<< getBV64Addr src
+        reg64Loc r .= v
+      (F.QWordReg r, F.QWordImm i) -> do
+        reg64Loc r .= bvLit n64 (toInteger i)
+      (F.QWordReg r, F.DWordSignedImm i) -> do
+        reg64Loc r .= bvLit n64 (toInteger i)
+      (F.Mem64 a, F.DWordSignedImm i) -> do
+        l <- getBV64Addr a
+        l .= bvLit n64 (toInteger i)
+      (F.Mem64 a, F.QWordReg src) -> do
+        l <- getBV64Addr a
+        v <- get $ reg64Loc src
+        l .= v
+
+      (F.Mem16 a, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        l <- getBV16Addr  a
+        l .= v
+      (F.WordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        reg16Loc r .= v
+      (F.DWordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        reg_low16 (R.X86_GP (F.reg32_reg r)) .= v
+      (F.QWordReg r, F.SegmentValue s) -> do
+        v <- get (SegmentReg s)
+        fullRegister (R.X86_GP r) .= uext' n64 v
+
+      (F.SegmentValue s, F.Mem16 a) -> do
+        v <- get =<< getBV16Addr a
+        SegmentReg s .= v
+      (F.SegmentValue s, F.WordReg r) -> do
+        v <- get (fullRegister (R.X86_GP (F.reg16_reg r)))
+        SegmentReg s .= bvTrunc' n16 v
+      (F.SegmentValue s, F.DWordReg r) -> do
+        v <- get (fullRegister (R.X86_GP (F.reg32_reg r)))
+        SegmentReg s .= bvTrunc' n16 v
+      (F.SegmentValue s, F.QWordReg r) -> do
+        v <- get (fullRegister (R.X86_GP r))
+        SegmentReg s .= bvTrunc' n16 v
+
+      (_, F.ControlReg _) -> do
+        error "Do not support moving from/to control registers."
+      (F.ControlReg _, _) -> do
+        error "Do not support moving from/to control registers."
+      (_, F.DebugReg _) -> do
+        error "Do not support moving from/to debug registers."
+      (F.DebugReg _, _) -> do
+        error "Do not support moving from/to debug registers."
+
+      _ -> do
+        error $ "Unexpected arguments to mov: " ++ show loc ++ " " ++ show val
 
 regLocation :: NatRepr n -> X86Reg (BVType 64) -> Location addr (BVType n)
 regLocation sz
@@ -310,24 +421,24 @@ def_cmpxchg  = defBinaryLV "cmpxchg" $ \d s -> do
   let p = a .=. temp
   zf_loc .= p
   d .= mux p s temp
-  modify acc $ \old -> mux p temp old
+  modify acc $ mux p temp
 
 def_cmpxchg8b :: InstructionDef
 def_cmpxchg8b =
-  defUnaryKnown "cmpxchg8b"  $ \loc -> do
-    temp64 <- get loc
-    edx_eax <- bvCat <$> get edx <*> get eax
-    let p = edx_eax .=. temp64
-    zf_loc .= p
-    ifte_ p
-      (do ecx_ebx <- bvCat <$> get ecx <*> get ebx
-          loc .= ecx_ebx
-      )
-      (do let (upper,lower) = bvSplit temp64
-          edx .= upper
-          eax .= lower
-          loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
-      )
+  defUnary "cmpxchg8b" $ \_ bloc -> do
+    loc <-
+      case bloc of
+        F.Mem64 ar -> eval =<< getBVAddress ar
+        F.VoidMem ar -> eval =<< getBVAddress ar
+        _ -> fail "Unexpected argument to cmpxchg8b"
+    eaxVal <- eval =<< get eax
+    ebxVal <- eval =<< get ebx
+    ecxVal <- eval =<< get ecx
+    edxVal <- eval =<< get edx
+    res <- evalArchFn (CMPXCHG8B loc eaxVal ebxVal ecxVal edxVal)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    eax    .= app (TupleField knownRepr res P.index1)
+    edx    .= app (TupleField knownRepr res P.index2)
 
 def_movsx :: InstructionDef
 def_movsx = defBinaryLVge "movsx" $ \l v -> l .= sext (typeWidth l) v
@@ -485,7 +596,7 @@ def_idiv = defUnaryV "idiv" $ \d -> do
 --
 -- This code assumes that we are not running in kernel mode.
 def_hlt :: InstructionDef
-def_hlt = defNullary "hlt" $ exception false true (GeneralProtectionException 0)
+def_hlt = defNullary "hlt" $ addArchTermStmt Hlt
 
 def_inc :: InstructionDef
 def_inc = defUnaryLoc "inc" $ \dst -> do
@@ -857,8 +968,8 @@ exec_ror l count = do
 -- ** Bit and Byte Instructions
 
 getBT16RegOffset :: F.Value -> X86Generator st ids (BVExpr ids 16)
-getBT16RegOffset val =
-  case val of
+getBT16RegOffset idx =
+  case idx of
     F.ByteImm i -> do
       pure $ bvLit n16 $ toInteger $ i Bits..&. 0xF
     F.WordReg ir -> do
@@ -918,18 +1029,24 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       iv  <- getBT64RegOffset idx
       act knownNat (reg64Loc r) iv
       set_bt_flags
-    (F.Mem16 base, F.ByteImm  i) -> do
-      when (i >= 16) $ fail $ mnem ++ " given invalid index."
-      loc <- getBV16Addr base
-      act knownNat loc (bvLit knownNat (toInteger i))
-      set_bt_flags
-    (F.Mem16 base, F.WordReg ir) -> do
-      off <- get $! reg16Loc ir
-      base_addr <- getBVAddress base
-      let word_off = sext' n64 $ bvSar off (bvLit knownNat 4)
-      let loc = MemoryAddr (base_addr .+ word_off) wordMemRepr
-      let iv = off .&. bvLit knownNat 15
-      act knownNat loc iv
+    (F.Mem16 base, _) -> do
+      case idx of
+        F.ByteImm i -> do
+          when (i >= 16) $ fail $ mnem ++ " given invalid index."
+          baseAddr <- getBVAddress base
+          let loc = MemoryAddr baseAddr wordMemRepr
+          act knownNat loc (bvLit knownNat (toInteger i))
+        F.WordReg ir -> do
+          off <- get $! reg16Loc ir
+
+          loc <- do
+            baseAddr <- getBVAddress base
+            let wordOff = sext' n64 $ bvSar off (bvLit knownNat 4)
+            pure $! MemoryAddr (baseAddr .+ wordOff) wordMemRepr
+
+          let iv = off .&. bvLit knownNat 15
+          act knownNat loc iv
+        _ -> error $ "bt given unexpected index."
       set_bt_flags
     (F.Mem32 base, F.ByteImm  i) -> do
       when (i >= 32) $ fail $ mnem ++ " given invalid index."
@@ -939,9 +1056,9 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       set_bt_flags
     (F.Mem32 base, F.DWordReg  ir) -> do
       off <- get $! reg32Loc ir
-      base_addr <- getBVAddress base
-      let dword_off = sext' n64 $ bvSar off (bvLit knownNat 5)
-      let loc = MemoryAddr (base_addr .+ dword_off) dwordMemRepr
+      baseAddr <- getBVAddress base
+      let dwordOff = sext' n64 $ bvSar off (bvLit knownNat 5)
+      let loc = MemoryAddr (baseAddr .+ dwordOff) dwordMemRepr
       let iv  = off .&. bvLit knownNat 31
       act knownNat loc iv
       set_bt_flags
@@ -953,9 +1070,9 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       set_bt_flags
     (F.Mem64 base, F.QWordReg  ir) -> do
       off <- get $! reg64Loc ir
-      let qword_off = bvSar off (bvLit knownNat 6)
-      base_addr <- getBVAddress base
-      let loc = MemoryAddr (base_addr .+ qword_off) qwordMemRepr
+      let qwordOff = bvSar off (bvLit knownNat 6)
+      baseAddr <- getBVAddress base
+      let loc = MemoryAddr (baseAddr .+ qwordOff) qwordMemRepr
       let iv = off .&. bvLit knownNat 63
       act knownNat loc iv
       set_bt_flags
@@ -1003,7 +1120,7 @@ def_call = defUnary "call" $ \_ v -> do
   old_pc <- getReg R.X86_IP
   push addrRepr old_pc
   -- Set IP
-  tgt <- getJumpTarget v
+  tgt <- getCallTarget v
   rip .= tgt
 
 -- | Conditional jumps
@@ -1012,15 +1129,11 @@ def_jcc_list =
   defConditionals "j" $ \mnem cc ->
     defUnary mnem $ \_ v -> do
       a <- cc
-      when_ a $ do
-        old_pc <- getReg R.X86_IP
-        off <- getBVValue v knownNat
-        rip .= old_pc .+ off
+      doJump a v
 
 def_jmp :: InstructionDef
 def_jmp = defUnary "jmp" $ \_ v -> do
-  tgt <- getJumpTarget v
-  rip .= tgt
+  doJump true v
 
 def_ret :: InstructionDef
 def_ret = defVariadic "ret"    $ \_ vs ->
@@ -1111,26 +1224,39 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
   let bytesPerOp' = bvLit n64 bytesPerOp
   if repz_pfx then do
     count <- get rcx
-    unless_ (count .=. bvKLit 0) $ do
-      nsame <- memcmp bytesPerOp count v_rsi v_rdi df
-      let equal = (nsame .=. count)
-          nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
+    count_v <- eval count
+    src_v   <- eval v_rsi
+    dest_v  <- eval v_rdi
+    is_reverse_v <- eval df
+    nsame <- evalArchFn $ MemCmp bytesPerOp count_v src_v dest_v is_reverse_v
+    let equal = (nsame .=. count)
+        nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
-      -- we need to set the flags as if the last comparison was done, hence this.
-      let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
-          lastSrc  = mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
-          lastDest = mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
+    -- we need to set the flags as if the last comparison was done, hence this.
+    let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
+    lastSrc1 <- eval $ mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
+    lastSrc2 <- eval $ mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
+    -- we do this to make it obvious so repz cmpsb ; jz ... is clear
+    let nbytesSeen = nwordsSeen .* bytesPerOp'
 
-      v' <- get $ MemoryAddr lastDest repr
-      exec_cmp (MemoryAddr lastSrc repr) v' -- FIXME: right way around?
+    -- Determine if count ever ran.
+    nzCount <- eval $ count .=/=. bvKLit 0
 
-      -- we do this to make it obvious so repz cmpsb ; jz ... is clear
-      zf_loc .= equal
-      let nbytesSeen = nwordsSeen .* bytesPerOp'
+    src1Val <- evalAssignRhs $ CondReadMem repr nzCount lastSrc1 (mkLit knownNat 0)
+    src2Val <- evalAssignRhs $ CondReadMem repr nzCount lastSrc2 (mkLit knownNat 0)
 
-      rsi .= mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
-      rdi .= mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
-      rcx .= (count .- nwordsSeen)
+    -- Set result value.
+    let res = src1Val .- src2Val
+    -- Set flags
+    pf_val <- even_parity (least_byte res)
+    modify of_loc $ mux (ValueExpr nzCount) $ ssub_overflows  src1Val src2Val
+    modify af_loc $ mux (ValueExpr nzCount) $ usub4_overflows src1Val src2Val
+    modify cf_loc $ mux (ValueExpr nzCount) $ usub_overflows  src1Val src2Val
+    modify sf_loc $ mux (ValueExpr nzCount) $ msb res
+    modify pf_loc $ mux (ValueExpr nzCount) $ pf_val
+    modify rsi    $ mux (ValueExpr nzCount) $ mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
+    modify rdi    $ mux (ValueExpr nzCount) $ mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
+    modify rcx    $ mux (ValueExpr nzCount) $ count .- nwordsSeen
    else do
      v' <- get $ MemoryAddr v_rdi repr
      exec_cmp (MemoryAddr   v_rsi repr) v' -- FIXME: right way around?
@@ -1214,13 +1340,12 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let y = ValueExpr v_rax
 
   dst <- eval (ValueExpr v_rdi .+ lastWordBytes)
-  cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
+  cond <- eval (ValueExpr v_rcx .=/=. bvKLit 0)
   let condExpr = ValueExpr cond
   dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
 
   let condSet :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
       condSet l e = modify l (mux condExpr e)
-
 
   condSet rcx    count'
   condSet rdi    $ ValueExpr v_rdi .+ nBytesSeen
@@ -2057,7 +2182,7 @@ def_pselect mnem op sz = defBinaryLV mnem $ \l v -> do
 -- PEXTRW Extract word
 
 -- | PINSRW Insert word
-exec_pinsrw :: Location (Addr ids) XMMType -> BVExpr ids 16 -> Int8 -> X86Generator st ids ()
+exec_pinsrw :: Location (Addr ids) XMMType -> BVExpr ids 16 -> Word8 -> X86Generator st ids ()
 exec_pinsrw l v off = do
   lv <- get l
   -- FIXME: is this the right way around?
@@ -2597,7 +2722,7 @@ all_instructions =
   , def_imul
   , def_inc
   , def_leave
-  , defBinaryLV "mov"   $ exec_mov
+  , def_mov
   , defUnaryV   "mul"   $ exec_mul
   , def_neg
   , defNullary  "nop"   $ return ()
@@ -2622,7 +2747,7 @@ all_instructions =
   , def_xadd
   , defBinaryLV "xor" exec_xor
 
-  , defNullary "ud2" $ exception false true UndefinedInstructionError
+  , defNullary "ud2" $ addArchTermStmt UD2
 
     -- Primitive instructions
   , def_syscall

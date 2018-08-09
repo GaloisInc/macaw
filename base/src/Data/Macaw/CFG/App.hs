@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
+Copyright        : (c) Galois, Inc 2015-2018
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This defines a data type `App` for representing operations that can be
@@ -35,7 +35,11 @@ import           Data.Macaw.Utils.Pretty
 -----------------------------------------------------------------------
 -- App
 
--- | This datatype defines the primitive operations
+-- | This datatype defines operations used on multiple architectures.
+--
+-- These operations are all total functions.  Different architecture tend to have
+-- different ways of raising signals or exceptions, and so partial functions are
+-- all architecture specific.
 data App (f :: Type -> *) (tp :: Type) where
 
   -- Compare for equality.
@@ -57,11 +61,16 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
 
-  -- Truncate a bitvector value.
+  -- | Given a @m@-bit bitvector and a natural number @n@ less than @m@, this returns
+  -- the bitvector with the @n@ least significant bits.
   Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
-  -- Signed extension.
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
+  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
+  -- the same as the most significant bit in @x@.
   SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
-  -- Unsigned extension.
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
+  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
+  -- all @false@.
   UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
 
   ----------------------------------------------------------------------
@@ -81,9 +90,6 @@ data App (f :: Type -> *) (tp :: Type) where
 
   -- Multiply two numbers
   BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-
-  -- Divide two numbers and get the remainder (i.e. mod)
-  BVUrem :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- Unsigned less than or equal.
   BVUnsignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType
@@ -264,7 +270,6 @@ ppAppA pp a0 =
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
     BVSbb _ x y b -> sexprA "bv_sbb" [ pp x, pp y, pp b ]
     BVMul _ x y -> sexprA "bv_mul" [ pp x, pp y ]
-    BVUrem _ x y -> sexprA "bv_urem" [ pp x, pp y ]
     BVUnsignedLt x y  -> sexprA "bv_ult"  [ pp x, pp y ]
     BVUnsignedLe x y  -> sexprA "bv_ule"  [ pp x, pp y ]
     BVSignedLt x y    -> sexprA "bv_slt"  [ pp x, pp y ]
@@ -311,12 +316,11 @@ instance HasRepr (App f) TypeRepr where
       NotApp{} -> knownRepr
       XorApp{} -> knownRepr
 
-      BVAdd  w _ _   -> BVTypeRepr w
-      BVAdc  w _ _ _ -> BVTypeRepr w
-      BVSub  w _ _   -> BVTypeRepr w
-      BVSbb  w _ _ _ -> BVTypeRepr w
-      BVMul  w _ _   -> BVTypeRepr w
-      BVUrem w _ _   -> BVTypeRepr w
+      BVAdd w _ _   -> BVTypeRepr w
+      BVAdc w _ _ _ -> BVTypeRepr w
+      BVSub w _ _   -> BVTypeRepr w
+      BVSbb w _ _ _ -> BVTypeRepr w
+      BVMul w _ _ -> BVTypeRepr w
 
       BVUnsignedLt{} -> knownRepr
       BVUnsignedLe{} -> knownRepr

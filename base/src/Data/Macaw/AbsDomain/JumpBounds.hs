@@ -18,6 +18,7 @@ module Data.Macaw.AbsDomain.JumpBounds
 
 import           Control.Lens
 import           Control.Monad.State
+import           Data.Bits
 import           Data.Functor
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
@@ -132,6 +133,7 @@ addUpperBound v u bnds
     BVValue _ c | c <= u -> Right bnds
                 | otherwise -> Left "Constant given upper bound that is statically less than given bounds"
     RelocatableValue{} -> Left "Relocatable value does not have upper bounds."
+    SymbolValue{}      -> Left "Symbol value does not have upper bounds."
     AssignedValue a ->
       case assignRhs a of
         EvalApp (UExt x _) -> addUpperBound x u bnds
@@ -164,12 +166,18 @@ assertPred (AssignedValue a) isTrue bnds =
     EvalApp (BVUnsignedLe x (BVValue _ c)) | isTrue     -> addUpperBound x c bnds
     -- Given not (c <= y), assert y <= (c-1)
     EvalApp (BVUnsignedLe (BVValue _ c) y) | not isTrue -> addUpperBound y (c-1) bnds
+    -- Given x && y, assert x, then assert y
+    EvalApp (AndApp l r) | isTrue     -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    -- Given not (x || y), assert not x, then assert not y
+    EvalApp (OrApp  l r) | not isTrue -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    EvalApp (NotApp p) -> assertPred p (not isTrue) bnds
     _ -> Right bnds
 assertPred _ _ bnds = Right bnds
 
 -- | Lookup an upper bound or return analysis for why it is not defined.
 unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
                       , MapF.ShowF (ArchReg arch)
+                      , RegisterInfo (ArchReg arch)
                       )
                   => IndexBounds (ArchReg arch) ids
                   -> Value arch ids tp
@@ -180,6 +188,8 @@ unsignedUpperBound bnds v =
     BVValue _ i -> Right (IntegerUpperBound i)
     RelocatableValue{} ->
       Left "Relocatable values do not have bounds."
+    SymbolValue{} ->
+      Left "Symbol values do not have bounds."
     AssignedValue a ->
       case MapF.lookup (assignId a) (bnds^.assignUpperBound) of
         Just bnd -> Right bnd
@@ -191,6 +201,13 @@ unsignedUpperBound bnds v =
                   Right (IntegerUpperBound (min xb yb))
                 (Right xb, Left{}) -> Right xb
                 (Left{}, yb)       -> yb
+            EvalApp (SExt x w) -> do
+              IntegerUpperBound r <- unsignedUpperBound bnds x
+              -- sign-extend r
+              pure . IntegerUpperBound
+                $ if r < 2^(natValue w-1)
+                  then r
+                  else maxUnsigned (typeWidth v) .&. r
             EvalApp (UExt x _) -> do
               IntegerUpperBound r <- unsignedUpperBound bnds x
               pure (IntegerUpperBound r)
@@ -211,6 +228,7 @@ eitherToMaybe Left{}    = Nothing
 nextBlockBounds :: forall arch ids
                 .  ( MapF.OrdF (ArchReg arch)
                    , MapF.ShowF (ArchReg arch)
+                   , RegisterInfo (ArchReg arch)
                    )
                 => IndexBounds (ArchReg arch) ids
                    -- ^ Index bounds at end of this state.

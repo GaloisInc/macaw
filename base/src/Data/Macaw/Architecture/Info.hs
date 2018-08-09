@@ -14,7 +14,6 @@ module Data.Macaw.Architecture.Info
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
-  , disassembleAndRewrite
   ) where
 
 import           Control.Monad.ST
@@ -106,7 +105,8 @@ data ArchitectureInfo arch
      , identifyReturn :: forall ids
                       .  [Stmt arch ids]
                       -> RegState (ArchReg arch) (Value arch ids)
-                      -> Maybe [Stmt arch ids]
+                      -> AbsProcessorState (ArchReg arch) ids
+                      -> Maybe (Seq (Stmt arch ids))
        -- ^ Identify returns to the classifier.
        --
        -- Given a list of statements and the final state of the registers, this
@@ -136,12 +136,17 @@ data ArchitectureInfo arch
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids
                                      -> Maybe (ArchSegmentOff arch, AbsBlockState (ArchReg arch)))
-       -- ^ This takes an abstract state from before executing an abs state, and an
-       -- architecture-specific terminal statement, and returns the next address within
-       -- the procedure that the statement jumps to along with the updated abstract state.
+       -- ^ This takes an abstract state from before executing an abs
+       -- state, and an architecture-specific terminal statement.
        --
-       -- Note that per their documentation, architecture specific statements may return to at
-       -- most one location within a function.
+       -- If the statement does not return to this function, this
+       -- function should return `Nothing`.  Otherwise, it should
+       -- returns the next address within the procedure that the
+       -- statement jumps to along with the updated abstract state.
+       --
+       -- Note that per their documentation, architecture specific
+       -- statements may return to at most one location within a
+       -- function.
      }
 
 -- | Apply optimizations to a terminal statement.
@@ -181,12 +186,3 @@ rewriteBlock info rwctx b = do
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }
-
--- | Translate code into blocks and simplify the resulting blocks.
-disassembleAndRewrite :: ArchitectureInfo arch ->  DisassembleFn arch
-disassembleAndRewrite ainfo mem nonceGen addr max_size ab =
-  withArchConstraints ainfo $ do
-  (bs0,sz, maybeError) <- disassembleFn ainfo mem nonceGen addr max_size ab
-  ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) (rewriteArchStmt ainfo)
-  bs1 <- traverse (rewriteBlock ainfo ctx) bs0
-  pure (bs1, sz, maybeError)

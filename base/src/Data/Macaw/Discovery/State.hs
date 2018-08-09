@@ -37,8 +37,9 @@ module Data.Macaw.Discovery.State
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
   , parsedBlocks
-    -- * CodeAddrRegion
-  , CodeAddrReason(..)
+    -- * Reasons for exploring
+  , FunctionExploreReason(..)
+  , BlockExploreReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
   )  where
@@ -62,24 +63,39 @@ import           Data.Macaw.CFG
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------
--- CodeAddrReason
+-- BlockExploreReason
 
--- | This describes the source of an address that was marked as containing code.
-data CodeAddrReason w
-   = InWrite !(MemSegmentOff w)
-     -- ^ Exploring because the given block writes it to memory.
-   | NextIP !(MemSegmentOff w)
-     -- ^ Exploring because the given block jumps here.
-   | CallTarget !(MemSegmentOff w)
-     -- ^ Exploring because address terminates with a call that jumps here.
-   | InitAddr
-     -- ^ Identified as an entry point from initial information
-   | CodePointerInMem !(MemSegmentOff w)
-     -- ^ A code pointer that was stored at the given address.
-   | SplitAt !(MemSegmentOff w) !(CodeAddrReason w)
-     -- ^ Added because the address split this block after it had been disassembled. Also includes the reason we thought the block should be there before we split it.
-   | UserRequest
-     -- ^ The user requested that we analyze this address as a function.
+-- | This describes why we started exploring a given function.
+data FunctionExploreReason w
+     -- | Exploring because code at the given block writes it to memory.
+  = PossibleWriteEntry !(MemSegmentOff w)
+    -- | Exploring because address terminates with a call that jumps here.
+  | CallTarget !(MemSegmentOff w)
+    -- | Identified as an entry point from initial information
+  | InitAddr
+    -- | A code pointer that was stored at the given address.
+  | CodePointerInMem !(MemSegmentOff w)
+    -- | The user requested that we analyze this address as a function.
+  | UserRequest
+  deriving (Eq, Show)
+
+------------------------------------------------------------------------
+-- BlockExploreReason
+
+-- | This describes why we are exploring a given block within a function.
+data BlockExploreReason w
+     -- | Exploring because the given block writes it to memory.
+  --  =- InWrite !(MemSegmentOff w)
+     -- | Exploring because the given block jumps here.
+   = NextIP !(MemSegmentOff w)
+     -- | Identified as an entry point from initial information
+   | FunctionEntryPoint
+     -- | Added because the address split this block after it had been
+     -- disassembled.  Also includes the reason we thought the block
+     -- should be there before we split it.
+   | SplitAt !(MemSegmentOff w) !(BlockExploreReason w)
+     -- The user requested that we analyze this address as a function.
+     -- UserRequest
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -87,10 +103,10 @@ data CodeAddrReason w
 
 -- | Information about a region of memory.
 data GlobalDataInfo w
-     -- | A jump table that appears to end just before the given address.
-   = JumpTable !(Maybe w)
-     -- | A value that appears in the program text.
-   | ReferencedValue
+  -- | A jump table that appears to end just before the given address.
+  = JumpTable !(Maybe w)
+  -- | A value that appears in the program text.
+  | ReferencedValue
 
 instance (Integral w, Show w) => Show (GlobalDataInfo w) where
   show (JumpTable Nothing) = "unbound jump table"
@@ -105,33 +121,33 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 -- of how block ending with a a FetchAndExecute statement should be
 -- interpreted.
 data ParsedTermStmt arch ids
-   = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
-                !(Maybe (ArchSegmentOff arch))
-    -- ^ A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
-   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
-     -- ^ A jump to an explicit address within a function.
-   | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
-                       !(BVValue arch ids (ArchAddrWidth arch))
-                       !(V.Vector (ArchSegmentOff arch))
-     -- ^ A lookup table that branches to one of a vector of addresses.
-     --
-     -- The registers store the registers, the value contains the index to jump
-     -- to, and the possible addresses as a table.  If the index (when interpreted as
-     -- an unsigned number) is larger than the number of entries in the vector, then the
-     -- result is undefined.
-   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
-     -- ^ A return with the given registers.
-   | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
-     -- ^ An if-then-else
-   | ParsedArchTermStmt !(ArchTermStmt arch ids)
-                        !(RegState (ArchReg arch) (Value arch ids))
-                        !(Maybe (ArchSegmentOff arch))
-     -- ^ An architecture-specific statement with the registers prior to execution, and
-     -- the given next control flow address.
-   | ParsedTranslateError !Text
-     -- ^ An error occured in translating the block
-   | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
-     -- ^ The classifier failed to identity the block.
+  -- | A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
+  = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
+               !(Maybe (ArchSegmentOff arch))
+  -- | A jump to an explicit address within a function.
+  | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
+  -- | A lookup table that branches to one of a vector of addresses.
+  --
+  -- The registers store the registers, the value contains the index to jump
+  -- to, and the possible addresses as a table.  If the index (when interpreted as
+  -- an unsigned number) is larger than the number of entries in the vector, then the
+  -- result is undefined.
+  | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
+                      !(ArchAddrValue arch ids)
+                      !(V.Vector (ArchSegmentOff arch))
+  -- | A return with the given registers.
+  | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
+  -- | An if-then-else
+  | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
+  -- | An architecture-specific statement with the registers prior to execution, and
+  -- the given next control flow address.
+  | ParsedArchTermStmt !(ArchTermStmt arch ids)
+                       !(RegState (ArchReg arch) (Value arch ids))
+                       !(Maybe (ArchSegmentOff arch))
+  -- | An error occured in translating the block
+  | ParsedTranslateError !Text
+  -- | The classifier failed to identity the block.
+  | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
 
 -- | Pretty print the block contents indented inside brackets.
 ppStatementList :: ArchConstraints arch => (ArchAddrWord arch -> Doc) -> StatementList arch ids -> Doc
@@ -215,7 +231,7 @@ data ParsedBlock arch ids
                    -- ^ Address of region
                  , blockSize :: !(ArchAddrWord arch)
                    -- ^ The size of the region of memory covered by this.
-                 , blockReason :: !(CodeAddrReason (ArchAddrWidth arch))
+                 , blockReason :: !(BlockExploreReason (ArchAddrWidth arch))
                    -- ^ Reason that we marked this address as
                    -- the start of a basic block.
                  , blockAbstractState :: !(AbsBlockState (ArchReg arch))
@@ -241,7 +257,8 @@ instance ArchConstraints arch
 
 -- | Information discovered about a particular function
 data DiscoveryFunInfo arch ids
-   = DiscoveryFunInfo { discoveredFunAddr :: !(ArchSegmentOff arch)
+   = DiscoveryFunInfo { discoveredFunReason :: !(FunctionExploreReason (ArchAddrWidth arch))
+                      , discoveredFunAddr :: !(ArchSegmentOff arch)
                         -- ^ Address of function entry block.
                       , discoveredFunName :: !BSC.ByteString
                         -- ^ Name of function should be unique for program
@@ -254,11 +271,16 @@ parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
-    text "function" <+> text (BSC.unpack (discoveredFunName info)) <$$>
+    text "function" <+> text (BSC.unpack (discoveredFunName info))
+         <+> pretty "@" <+> pretty (show (discoveredFunAddr info))
+    <$$>
     vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
 -- DiscoveryState
+
+type UnexploredFunctionMap arch =
+  Map (ArchSegmentOff arch) (FunctionExploreReason (ArchAddrWidth arch))
 
 -- | Information discovered about the program
 data DiscoveryState arch
@@ -274,7 +296,8 @@ data DiscoveryState arch
                       -- inferred about it.
                     , _funInfo             :: !(Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
                       -- ^ Map from function addresses to discovered information about function
-                    , _unexploredFunctions :: !(Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+                    , _unexploredFunctions
+                      :: !(UnexploredFunctionMap arch)
                       -- ^ This maps addresses that have been marked as
                       -- functions, but not yet analyzed to the reason
                       -- they are analyzed.
@@ -308,7 +331,7 @@ ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
 emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                        -- ^ State of memory
                     -> AddrSymMap (ArchAddrWidth arch)
-                       -- ^ Map from addresses
+                       -- ^ Map from addresses to their symbol name (if any)
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information
                     -> DiscoveryState arch
@@ -331,7 +354,7 @@ globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
 unexploredFunctions
-  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (CodeAddrReason (ArchAddrWidth arch)))
+  :: Simple Lens (DiscoveryState arch) (UnexploredFunctionMap arch)
 unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunctions = v })
 
 -- | Get information for specific functions

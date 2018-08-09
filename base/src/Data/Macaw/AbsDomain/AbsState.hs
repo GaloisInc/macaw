@@ -614,6 +614,15 @@ bvadc w (FinSet t) (StackOffset a s) c
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
     StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
+-- Two finite sets
+bvadc w (FinSet l) (FinSet r) (BoolConst b)
+  | ls <- Set.toList l
+  , rs <- Set.toList r
+  = case Set.fromList [bottomBits $ lval+rval+if b then 1 else 0 | lval <- ls, rval <- rs] of
+      s | Set.size s <= maxSetSize -> FinSet s
+      _ -> TopV
+  where
+  bottomBits v = v .&. (bit (fromInteger (natValue w)) - 1)
 -- Strided intervals
 bvadc w v v' c
   | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2
@@ -1092,7 +1101,8 @@ setAbsIP a b
 -- This is only a function of the address width.
 type ArchAbsValue arch = AbsValue (RegAddrWidth (ArchReg arch))
 
--- | This stores the abstract state of the system at a given point in time.
+-- | This stores the abstract state of the system which may be within
+-- a block.
 data AbsProcessorState r ids
    = AbsProcessorState { absMem       :: !(Memory (RegAddrWidth r))
                          -- ^ Recognizer for code addresses.
@@ -1205,6 +1215,7 @@ transferValue c v = do
         FinSet $ Set.singleton $ toInteger addr
       | otherwise ->
         TopV
+    SymbolValue{} -> TopV
     -- Invariant: v is in m
     AssignedValue a ->
       fromMaybe (error $ "Missing assignment for " ++ show (assignId a))
@@ -1301,6 +1312,7 @@ transferApp r a = do
     BVMul w x y -> bvmul w (t x) (t y)
     BVAnd w x y -> bvand w (t x) (t y)
     BVOr w x y  -> bitop (.|.) w (t x) (t y)
+    BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV
 
 -- | Minimal information needed to parse a function call/system call

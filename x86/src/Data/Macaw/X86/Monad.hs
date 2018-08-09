@@ -154,17 +154,11 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.eval
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
-  , ifte_
-  , when_
-  , unless_
   , memcopy
-  , memcmp
   , memset
   , even_parity
   , fnstcw
   , getSegmentBase
-  , exception
-  , ExceptionClass(..)
   , x87Push
   , x87Pop
   , bvQuotRem
@@ -183,15 +177,12 @@ import           Control.Lens hiding ((.=))
 import           Control.Monad
 import qualified Data.Bits as Bits
 import           Data.Macaw.CFG
-import           Data.Macaw.CFG.Block
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
-import qualified Data.Sequence as Seq
 import qualified Flexdis86 as F
-import           Flexdis86.Segment ( Segment )
 import           Flexdis86.Sizes (SizeConstraint(..))
 import           GHC.TypeLits as TypeLits
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
@@ -520,7 +511,7 @@ data Location addr (tp :: Type) where
   DebugReg :: !F.DebugReg
            -> Location addr (BVType 64)
 
-  SegmentReg :: !Segment
+  SegmentReg :: !F.Segment
              -> Location addr (BVType 16)
 
   X87ControlReg :: !(X87_ControlReg w)
@@ -851,7 +842,7 @@ rip :: Location addr (BVType 64)
 rip = fullRegister R.X86_IP
 
 ymm :: F.YMMReg -> Location addr (BVType 256)
-ymm = fullRegister . R.YMM
+ymm = fullRegister . R.YMM . F.ymmRegNo
 
 xmm_sse :: F.XMMReg -> Location addr (BVType 128)
 xmm_sse = reg_low128_sse . xmmOwner
@@ -860,7 +851,7 @@ xmm_avx :: F.XMMReg -> Location addr (BVType 128)
 xmm_avx = reg_low128_avx . xmmOwner
 
 xmmOwner :: F.XMMReg -> X86Reg (BVType 256)
-xmmOwner = R.YMM . F.ymmReg . F.xmmRegNo
+xmmOwner = R.YMM . F.xmmRegNo
 
 ------------------------------------------------------------------------
 
@@ -906,7 +897,7 @@ mux c x y
 -- | Construct a literal bit vector.  The result is undefined if the
 -- literal does not fit withint the given number of bits.
 bvLit :: 1 <= n => NatRepr n -> Integer -> Expr ids (BVType n)
-bvLit n v = ValueExpr $ mkLit n (toInteger v)
+bvLit n v = ValueExpr $ mkLit n v
 
 -- | Add two bitvectors together dropping overflow.
 (.+) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
@@ -1456,7 +1447,7 @@ true :: Expr ids BoolType
 true = boolValue True
 
 false :: Expr ids BoolType
-false = boolValue True
+false = boolValue False
 
 boolNot :: Expr ids BoolType -> Expr ids BoolType
 boolNot x
@@ -1544,18 +1535,6 @@ infixl 6 .-
 infix  4 .=
 
 ------------------------------------------------------------------------
--- Monadic definition
-data ExceptionClass
-   = DivideError -- #DE
-   | FloatingPointError
-   | SIMDFloatingPointException
-   | GeneralProtectionException Int
-   | UndefinedInstructionError -- basically for ud2
-     -- ^ A general protection exception with the given error code.
-     -- -- | AlignmentCheck
-  deriving (Eq, Ord, Show)
-
-------------------------------------------------------------------------
 -- Semantics
 
 -- | Defines operations that need to be supported at a specific bitwidht.
@@ -1627,75 +1606,6 @@ modify r f = do
   x <- get r
   r .= f x
 
- -- | Perform an if-then-else
-ifte_ :: Expr ids BoolType
-      -> X86Generator st ids ()
-      -> X86Generator st ids ()
-      -> X86Generator st ids ()
--- Implement ifte_
--- Note that this implementation will run any code appearing after the ifte_
--- twice, once for the true branch and once for the false branch.
---
--- This could be changed to run the code afterwards once, but the cost would be
--- defining a way to merge processor states from the different branches, and making
--- sure that expression assignments generated in one branch were not referred to in
--- another branch.
---
--- One potential design change, not implemented here, would be to run both branches,
--- up to the point where they merge, and if the resulting PC is in the same location,
--- to merge in that case, otherwise to run them separately.
---
--- This would support the cmov instruction, but result in divergence for branches, which
--- I think is what we want.
-ifte_ c_expr t f = eval c_expr >>= go
-    where
-      go (BoolValue True) = t
-      go (BoolValue False) = f
-      go cond =
-        shiftX86GCont $ \c s0 -> do
-          let p_b = s0 ^.blockState
-          let st = p_b^.pBlockState
-          let t_block_label = s0^.blockSeq^.nextBlockID
-          let s2 = s0 & blockSeq . nextBlockID +~ 1
-                      & blockSeq . frontierBlocks .~ Seq.empty
-                      & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
-          -- Run true block.
-          t_seq <- finishBlock FetchAndExecute <$> runX86Generator c s2 t
-          -- Run false block
-          let f_block_label = t_seq^.nextBlockID
-          let s5 = GenState { assignIdGen = assignIdGen s0
-                            , _blockSeq =
-                                BlockSeq { _nextBlockID    = t_seq^.nextBlockID + 1
-                                         , _frontierBlocks = Seq.empty
-                                         }
-                            , _blockState = emptyPreBlock st f_block_label (genAddr s0)
-                            , genAddr = genAddr s0
-                            , genMemory = genMemory s0
-                            , avxMode = avxMode s0
-                            }
-          f_seq <- finishBlock FetchAndExecute <$> runX86Generator c s5 f
-
-          -- Join results together.
-          let fin_b = finishBlock' p_b (\_ -> Branch cond t_block_label f_block_label)
-          seq fin_b $ do
-          return $
-            GenResult { resBlockSeq =
-                         BlockSeq { _nextBlockID = _nextBlockID f_seq
-                                  , _frontierBlocks = (s0^.blockSeq^.frontierBlocks Seq.|> fin_b)
-                                               Seq.>< t_seq^.frontierBlocks
-                                               Seq.>< f_seq^.frontierBlocks
-                                  }
-                      , resState = Nothing
-                      }
-
--- | Run a step if condition holds.
-when_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
-when_ p x = ifte_ p x (return ())
-
--- | Run a step if condition is false.
-unless_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
-unless_ p = ifte_ p (return ())
-
 -- | Move n bits at a time, with count moves
 --
 -- Semantic sketch. The effect on memory should be like @memcopy@
@@ -1757,31 +1667,6 @@ memcopy val_sz count src dest is_reverse = do
   is_reverse_v <- eval is_reverse
   addArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
 
--- | Compare the memory regions.  Returns the number of elements which are
--- identical.  If the direction is 0 then it is increasing, otherwise decreasing.
---
--- See `memcopy` above for explanation of which memory regions are
--- compared: the regions copied there are compared here.
-memcmp :: Integer
-          -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
-       -> BVExpr ids 64
-          -- ^ Number of elementes to compare
-       -> Addr ids
-          -- ^ Pointer to first buffer
-       -> Addr ids
-          -- ^ Pointer to second buffer
-       -> Expr ids BoolType
-          -- ^ Flag indicates direction of copy:
-          -- True means we should decrement buffer pointers after each copy.
-           -- False means we should increment the buffer pointers after each copy.
-       -> X86Generator st ids (BVExpr ids 64)
-memcmp sz count src dest is_reverse = do
-  count_v <- eval count
-  is_reverse_v <- eval is_reverse
-  src_v   <- eval src
-  dest_v  <- eval dest
-  evalArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
-
 -- | Set memory to the given value, for the number of words (nbytes
 -- = count * typeWidth v)
 memset :: (1 <= n)
@@ -1813,22 +1698,13 @@ fnstcw addr = do
   addArchStmt =<< StoreX87Control <$> eval addr
 
 -- | Return the base address of the given segment.
-getSegmentBase :: Segment -> X86Generator st ids (Addr ids)
+getSegmentBase :: F.Segment -> X86Generator st ids (Addr ids)
 getSegmentBase seg =
   case seg of
     F.FS -> evalArchFn ReadFSBase
     F.GS -> evalArchFn ReadGSBase
     _ ->
       error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
-
--- | raises an exception if the predicate is true and the mask is false
-exception :: Expr ids BoolType    -- mask
-          -> Expr ids BoolType -- predicate
-          -> ExceptionClass
-          -> X86Generator st ids ()
-exception m p c =
-  when_ (boolNot m .&&. p)
-        (addStmt (PlaceHolderStmt [] $ "Exception " ++ (show c)))
 
 -- FIXME: those should also mutate the underflow/overflow flag and
 -- related state.
