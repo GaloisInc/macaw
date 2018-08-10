@@ -27,11 +27,11 @@ import qualified SemMC.Architecture.AArch32 as ARM
 
 
 instance ExtractValue ARM.AArch32 A32Operand.GPR (BVType 32) where
-  extractValue r = G.getRegValue (Reg.ARM_GP $ A32Operand.unGPR r)
+  extractValue r = G.getRegValue (Reg.ARM_GP $ fromIntegral $ A32Operand.unGPR r)
 
 
 instance ToRegister A32Operand.GPR Reg.ARMReg (BVType 32) where
-  toRegister = Reg.ARM_GP . A32Operand.unGPR
+  toRegister = Reg.ARM_GP  . fromIntegral . A32Operand.unGPR
 
 
 instance ExtractValue ARM.AArch32 (Maybe A32Operand.GPR) (BVType 32) where
@@ -78,11 +78,11 @@ instance ExtractValue ARM.AArch32 Word8 (BVType 8) where
 -- ----------------------------------------------------------------------
 
 instance ExtractValue ARM.AArch32 T32Operand.GPR (BVType 32) where
-  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unGPR r)
+  extractValue r = G.getRegValue (Reg.ARM_GP $ fromIntegral $ T32Operand.unGPR r)
 
 
 instance ToRegister T32Operand.GPR Reg.ARMReg (BVType 32) where
-  toRegister = Reg.ARM_GP . T32Operand.unGPR
+  toRegister = Reg.ARM_GP . fromIntegral . T32Operand.unGPR
 
 
 instance ExtractValue ARM.AArch32 (Maybe T32Operand.GPR) (BVType 32) where
@@ -104,10 +104,10 @@ instance ExtractValue ARM.AArch32 T32Operand.AddrModeIs4 (BVType 32) where
   extractValue = return . MC.BVValue NR.knownNat . toInteger . T32Operand.addrModeIs4ToBits
 
 instance ExtractValue ARM.AArch32 T32Operand.LowGPR (BVType 32) where
-  extractValue r = G.getRegValue (Reg.ARM_GP $ T32Operand.unLowGPR r)
+  extractValue r = G.getRegValue (Reg.ARM_GP $ fromIntegral $ T32Operand.unLowGPR r)
 
 instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
-  toRegister = Reg.ARM_GP . T32Operand.unLowGPR
+  toRegister = Reg.ARM_GP . fromIntegral . T32Operand.unLowGPR
 
 instance ExtractValue ARM.AArch32 (Maybe T32Operand.LowGPR) (BVType 32) where
   extractValue mgpr =

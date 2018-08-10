@@ -31,7 +31,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
 import           Data.Semigroup
 import qualified Data.Set as Set
-import           Data.Word ( Word8 )
+import           Data.Word ( Word32 )
 import qualified Dismantle.ARM.Operands as ARMOperands
 import           GHC.TypeLits
 import           Language.Haskell.TH
@@ -44,7 +44,7 @@ import qualified Text.PrettyPrint.HughesPJClass as PP
 data ARMReg tp where
     -- n.b. The Thumb (T32) register model is the same as the ARM
     -- (A32) model, so just use the latter to define registers.
-    ARM_GP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => Word8 -> ARMReg (BVType w)
+    ARM_GP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => Word32 -> ARMReg (BVType w)
              -- GPR15 is normally aliased with the PC, but not always,
              -- so track it separately and use semantics definitions
              -- to manage the synchronization.
