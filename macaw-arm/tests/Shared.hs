@@ -62,7 +62,7 @@ withMemory _ e k =
                                  }
     in case MM.memoryForElf options e of
          Left err -> C.throwM (MemoryLoadError err)
-         Right (_sim, mem, _) -> k mem
+         Right (mem, _sym, _warn, _err) -> k mem
 
 
 data ElfException = MemoryLoadError String
