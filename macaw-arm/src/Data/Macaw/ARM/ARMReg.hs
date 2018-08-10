@@ -40,7 +40,7 @@ import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified Text.PrettyPrint.HughesPJClass as PP
 
-
+-- | Defines the Register set for the ARM processor.
 data ARMReg tp where
     -- n.b. The Thumb (T32) register model is the same as the ARM
     -- (A32) model, so just use the latter to define registers.
@@ -48,7 +48,29 @@ data ARMReg tp where
              -- GPR15 is normally aliased with the PC, but not always,
              -- so track it separately and use semantics definitions
              -- to manage the synchronization.
+
+    -- | The Program Counter (often referred to by Macaw as the "IP"
+    -- or Instruction Pointer, but ARM documentation refers to this as
+    -- the PC).
+    --
+    -- Note that this is generally also GPR15, but there are
+    -- oddities in the definition (see "Writing to the PC" in E.1.2.3,
+    -- pg E1-2295, and particularly the note at the top of that page:
+    -- "The A32 instruction set provides more general access to the
+    -- PC, and many A32 instructions can use the PC as a
+    -- general-purpose register.  However, ARM deprecates the use of
+    -- PC for any purpose other than as the program counter."
+    --
+    -- Due to this ambiguity, the PC is currently modelled as separate
+    -- and distinct from GPR15 in Macaw.  The SemMC semantics also
+    -- make a distinction between GPR15 and PC and the semantics often
+    -- simply update the latter (based on the ARM documentation),
+    -- ignoring the former.
     ARM_PC :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+
+    -- | The CPSR is the Current Processor Status Register, which is
+    -- the current value of the Application Program Status Register
+    -- (E1.2.4, page E1-2297).
     ARM_CPSR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
 
 -- | GPR14 is the link register for ARM
