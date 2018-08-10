@@ -1,3 +1,4 @@
+{-# LANGUAGE BinaryLiterals #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -20,6 +21,7 @@ module Data.Macaw.ARM.Arch
     -- )
     where
 
+import           Data.Bits ( (.&.) )
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
@@ -150,11 +152,57 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (M
     case f of
       URem rep _ _ -> MT.BVTypeRepr rep
 
+
 instance MC.IPAlignment ARM.AArch32 where
-  -- TODO: When computing an address to jump to, how is the address "cleaned
-  -- up" to handle instruction alignment? Some minor googling suggests all ARM
-  -- instructions are aligned on two-byte boundaries, is that right?
-  fromIPAligned _ = error "IP alignment rules are not yet implemented for ARM"
+  -- A formula which results in an address that will be loaded into
+  -- the IP (PC) masks the lower bits based on the current and target
+  -- mode.  See bxWritePC for more details.  The fromIPAligned
+  -- attempts to recognize these formulas and remove the part of the
+  -- formula that performs the masking/adjustment.
+  --
+  -- This current implementation is not fully correct (notably the
+  -- current and target state are not known), but at present it is
+  -- thought that it will suffice based on the following assumptions:
+  --
+  --   1. The expectation is that these are only used when working
+  --      with values that would be loaded into the PC, so recognizing
+  --      all forms of the bxWritePC/maskPCForSubArch manipulation
+  --      (see
+  --      SemMC.Architecture.ARM.BaseSemantics.Pseudocode.Registers)
+  --      of the PC value should be correct enough without necessarily
+  --      knowing what the current ITSTATE is (A32 or T32 or other).
+  --
+  --   2. That this will not generally be used for general equations
+  --      whose target is not the IP (PC).
+  --
+  --   3. That the current instruction is one that has these specific
+  --      effects on writing to the PC (see "Writing to the PC" on
+  --      Page E1-2295).
+  --
+  fromIPAligned cleanedAddrVal
+    | Just (MC.BVAnd _ mask dirtyAddrVal) <- MC.valueAsApp cleanedAddrVal
+    , MC.BVValue natS v <- mask
+    , s <- natVal natS
+    = if v `elem` [ ((2^s) - 1) - 1  -- bxWritePC toT32
+                  , ((2^s) - 1) - 2  -- bxWritePC !toT32, branchWritePC T32, branchWritePCRel T32
+                  , ((2^s) - 1) - 3  -- branchWritePC A32, branchWritePCRel A32
+                  ]
+      then Just dirtyAddrVal else Nothing
+    | otherwise = Nothing
+
+  toIPAligned addrVal =
+    -- Optimally, the conversion of a generic MemoryAddr into a
+    -- suitable IP/PC value would mask based on the current InstrSet
+    -- state (A32 masking 0b11 or T32 masking 0b01), but at present
+    -- the current InstrSet is not known.  Since the current use of
+    -- 'toIPAligned' is on addresses that are generally taken from
+    -- jumptables, and these are not usually stocked with unaligned
+    -- addresses, so the current implementation just performs the
+    -- minimal common functionality in the hopes that it will be
+    -- sufficient.
+    let mask = 0b01
+    in addrVal { MM.addrOffset = MM.addrOffset addrVal .&. mask }
+
 
 -- no side effects... yet
 armPrimFnHasSideEffects :: ARMPrimFn arm f tp -> Bool
