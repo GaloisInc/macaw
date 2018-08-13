@@ -133,6 +133,9 @@ module Data.Macaw.Memory
   , bsWord64be
   , bsWord64le
   , AddrSymMap
+  -- * Memory search
+  , findByteStringMatches
+  , relativeSegmentContents
   ) where
 
 import           Control.Monad
@@ -1397,3 +1400,75 @@ readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
 -- | Read a little endian word64
 readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
 readWord64le mem addr = bsWord64le <$> readByteString mem addr 8
+
+------------------------------------------------------------------------
+-- Memory finding utilities
+
+-- | Return list of segment content memory segment ranges with its
+-- content's address offset relative to segment offsets
+relativeSegmentContents :: (MemWidth w) => [MemSegment w] -> [(MemAddr w, SegmentRange w)]
+relativeSegmentContents memSegs = concatMap relativeOffset memSegs
+  where
+    -- Each MemSegment has a segmentOffset indicating the offset from segmentBase its located.
+    -- This makes the offsets within the SegmentRange relative to that segmentOffset.
+    relativeOffset :: (MemWidth w) => MemSegment w -> [(MemAddr w, SegmentRange w)]
+    relativeOffset seg = map (\(contentOffset,r) -> (relativeAddr seg contentOffset, r)) $ (contentsRanges . segmentContents) seg
+
+-- | Naive string matching algorithm identifies matches to given
+-- pattern within the list of memory segments and their corresponding
+-- offset within memory. Relocations are treated as wildcards.
+findByteStringMatches :: MemWidth w
+                      => BS.ByteString
+                      -- ^ Pattern to search for within memory segments
+                      -> Integer
+                      -- ^ Offset within the contents region where search is to start
+                      -> [(MemAddr w, SegmentRange w)]
+                      -- ^ Contents of memory along with its relative
+                      -- address from the segment base address.
+                      -> [MemAddr w]
+findByteStringMatches _ _ [] = []
+findByteStringMatches pat curIndex segs@((relOffset, chunk) : rest)
+  | BS.length pat == 0 = []
+  | otherwise =
+    if matchPrefix pat (map snd segs) then
+      (currentAddr : findByteStringMatches pat nextIndex remainingElems)
+    else
+      findByteStringMatches pat nextIndex remainingElems
+  where
+    currentAddr = incAddr curIndex relOffset
+    (nextIndex, remainingElems) = case chunk of
+      -- drop byte in region
+      ByteRegion bs ->
+        if BS.length bs > 0 then
+          (curIndex + 1, (relOffset, ByteRegion (BS.drop 1 bs)) : rest)
+        else (0, rest)
+      -- TODO: Increments within a relocation region
+      _  -> (0, rest)
+
+
+-- | Returns True when the given ByteString matches the bytes at the
+-- beginning of this segment range and false otherwise.
+matchPrefix :: MemWidth w => BS.ByteString -> [SegmentRange w] -> Bool
+matchPrefix _ [] = False
+matchPrefix _ (BSSRegion _ : _) = False
+matchPrefix pat (rel@(RelocationRegion r) : rest)
+  -- When pattern is greater than size of the relocation, skip
+  -- relocation bytes in the pattern and look for match in beginning
+  -- of the next range.
+  | BS.length pat > (fromIntegral sz) = matchPrefix (BS.drop (fromIntegral sz) pat) rest
+  -- When length of pattern is less than or equal to the size of the relocation => match
+  | otherwise = True
+  where sz = rangeSize rel
+matchPrefix pat (ByteRegion bs : rest)
+  -- Enough bytes in region to check for match directly.  This also
+  -- returns true when the search pattern is empty and stops recursion
+  | matchLen == prefixLen = pat == regionPrefix
+    -- There aren't enough bytes in region; we need to check that
+    -- the elems that do exist match the pattern prefix and
+    -- that a following regions contain the remaining search pattern.
+    -- NOTE: Assumes the regions are adjacent to each other.
+  | otherwise = regionPrefix == (BS.take prefixLen pat) && matchPrefix (BS.drop prefixLen pat) rest
+  where
+    matchLen     = BS.length pat
+    regionPrefix = BS.take matchLen bs
+    prefixLen    = BS.length regionPrefix
