@@ -48,6 +48,7 @@ module Data.Macaw.X86.Getters
   , ymmMemRepr
   ) where
 
+import           Control.Lens ((&))
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
 import qualified Flexdis86 as F
@@ -361,15 +362,19 @@ truncateBVValue n (SomeBV v)
   | otherwise =
     fail $ "Widths isn't >=: " ++ show (typeWidth v) ++ " and " ++ show n
 
-resolveJumpOffset :: GenState st_s ids -> F.JumpOffset -> BVExpr ids 64
-resolveJumpOffset _ (F.FixedOffset off) = bvLit n64 (toInteger off)
-resolveJumpOffset s (F.RelativeOffset symId insOff off) =
-    symVal .+ bvLit n64 (toInteger off) .- ValueExpr (RelocatableValue arepr relocAddr)
-  where arepr = memAddrWidth (genMemory s)
-        symVal = ValueExpr (SymbolValue arepr symId)
-        addrOff = genAddr s
-        relocAddr = relativeAddr (msegSegment addrOff) (msegOffset addrOff + fromIntegral insOff)
-
+-- | Resolve the address we jump to in the current program.
+resolveJumpOffset :: GenState st_s ids
+                  -> F.JumpOffset
+                  -> BVExpr ids 64
+resolveJumpOffset s (F.FixedOffset off) =
+  ValueExpr $ RelocatableValue Addr64 $
+     relativeSegmentAddr (genInitPCAddr s)
+     & incAddr (toInteger (genInstructionSize s) + toInteger off)
+resolveJumpOffset s (F.RelativeOffset insOff symId off)
+  = ValueExpr (SymbolValue Addr64 symId)
+  -- We add the offset and the offset within the instruction of this offset,
+    -- but have to subtract the current IP
+  .+ bvLit n64 (toInteger off + toInteger (genInstructionSize s) - toInteger insOff)
 
 -- | Return the target of a call or jump instruction.
 getCallTarget :: F.Value
@@ -380,7 +385,7 @@ getCallTarget v =
     F.QWordReg r -> get (reg64Loc r)
     F.JumpOffset _ joff -> do
       s <- getState
-      (.+ resolveJumpOffset s joff) <$> get rip
+      pure $! resolveJumpOffset s joff
     _ -> fail "Unexpected argument"
 
 -- | Return the target of a call or jump instruction.
@@ -389,8 +394,7 @@ doJump cond v =
   case v of
     F.JumpOffset _ joff -> do
       s <- getState
-      modify rip $ \ipVal -> mux cond (ipVal .+ resolveJumpOffset s joff) ipVal
-
+      modify rip $ mux cond (resolveJumpOffset s joff)
     F.QWordReg r -> do
       ipVal <- get (reg64Loc r)
       modify rip $ mux cond ipVal

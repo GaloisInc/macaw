@@ -967,8 +967,8 @@ memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
           memoryForElfSections e
         _ -> do
           let base = MemAddr { addrBase = adjustedLoadRegionIndex e opt
-                               , addrOffset = fromInteger (loadRegionBaseOffset opt)
-                               }
+                             , addrOffset = fromInteger (loadRegionBaseOffset opt)
+                             }
           memoryForElfSegments base e
   let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
   pure (mem, funcSymbols, warnings, symErrs)

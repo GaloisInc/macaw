@@ -1075,19 +1075,19 @@ parseBlock ctx idx b regs = do
 
 -- | This evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
-transferBlocks :: ArchSegmentOff arch
+addBlocks :: ArchSegmentOff arch
                   -- ^ Address of theze blocks
                -> FoundAddr arch
                   -- ^ State leading to explore block
-               -> ArchAddrWord arch
-                  -- ^ Size of the region these blocks cover.
+               -> Int
+                  -- ^ Number of blocks covered
                -> Map Word64 (Block arch ids)
                   -- ^ Map from labelIndex to associated block
                -> FunM arch s ids ()
-transferBlocks src finfo sz blockMap =
+addBlocks src finfo sz blockMap =
   case Map.lookup 0 blockMap of
     Nothing -> do
-      error $ "transferBlocks given empty blockRegion."
+      error $ "addBlocks given empty blockRegion."
     Just b -> do
       mem       <- uses curFunCtx memory
       let regs = initAbsProcessorState mem (foundAbstractState finfo)
@@ -1142,12 +1142,13 @@ transfer addr = do
   -- Get maximum number of bytes to disassemble
   let seg = msegSegment addr
       off = msegOffset addr
-  let maxSize =
+  let maxSize :: Int
+      maxSize =
         case Map.lookupGT addr prev_block_map of
           Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
-          _ -> segmentSize seg - off
+          _ -> fromIntegral $ segmentSize seg - off
   let ab = foundAbstractState finfo
-  (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo mem nonceGen addr maxSize ab
+  (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo nonceGen addr maxSize ab
 
 #ifdef USE_REWRITER
   bs1 <- do
@@ -1183,7 +1184,7 @@ transfer addr = do
     let bs = bs1 -- eliminateDeadStmts ainfo bs1
     -- Call transfer blocks to calculate parsedblocks
     let blockMap = Map.fromList [ (blockLabel b, b) | b <- bs ]
-    transferBlocks addr finfo sz blockMap
+    addBlocks addr finfo sz blockMap
 
 ------------------------------------------------------------------------
 -- Main loop

@@ -291,7 +291,6 @@ rewriteApp app = do
     -- (xc - y) + zc => (xc + zc) - y
     BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
       rewriteApp $ BVSub w (BVValue w (toUnsigned w (xc + zc))) y
-
     -- Increment address by a constant.
     BVAdd _ (RelocatableValue r a) (BVValue _ c) ->
       pure $ RelocatableValue r (incAddr c a)
