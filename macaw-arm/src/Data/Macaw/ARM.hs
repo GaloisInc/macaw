@@ -36,7 +36,6 @@ arm_linux_info =
     MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
-                        , MI.jumpTableEntrySize = 0 -- jumpTableEntrySize proxy
                         , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
                         , MI.mkInitialAbsState = mkInitialAbsState proxy
                         , MI.absEvalArchFn = absEvalArchFn proxy

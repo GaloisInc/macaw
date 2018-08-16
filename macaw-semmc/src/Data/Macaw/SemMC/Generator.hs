@@ -118,7 +118,6 @@ data GenState arch ids s =
            , _blockSeq :: !(BlockSeq arch ids)
            , _blockState :: !(PreBlock arch ids)
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
-           , genMemory :: MM.Memory (ArchAddrWidth arch)
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
            }
 
@@ -134,16 +133,14 @@ emptyPreBlock s0 idx addr =
            }
 
 initGenState :: NC.NonceGenerator (ST s) ids
-             -> MM.Memory (ArchAddrWidth arch)
              -> MM.MemSegmentOff (ArchAddrWidth arch)
              -> RegState (ArchReg arch) (Value arch ids)
              -> GenState arch ids s
-initGenState nonceGen mem addr st =
+initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
            , _blockSeq = BlockSeq { _nextBlockID = 1, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
-           , genMemory = mem
            , genRegUpdates = MapF.empty
            }
 
@@ -408,7 +405,6 @@ conditionalBranch condExpr t f =
                                                    }
                             , _blockState = emptyPreBlock st f_block_label (genAddr s0)
                             , genAddr = genAddr s0
-                            , genMemory = genMemory s0
                             , genRegUpdates = genRegUpdates s0
                             }
           f_seq <- finishBlock FetchAndExecute <$> runGenerator c s2 f

@@ -48,15 +48,15 @@ import           Data.Macaw.PPC.PPCReg
 --
 -- This code assumes that the 'MM.ByteRegion' is maximal; that is, that there
 -- are no byte regions that could be coalesced.
-readInstruction :: MM.Memory w
-                -> MM.MemSegmentOff w
+readInstruction :: (MM.MemWidth w)
+                => MM.MemSegmentOff w
                 -> Either (PPCMemoryError w) (D.Instruction, MM.MemWord w)
-readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
+readInstruction addr = do
   let seg = MM.msegSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
     False -> ET.throwError (PPCMemoryError (MM.PermissionsError (MM.relativeSegmentAddr addr)))
     True -> do
-      contents <- liftMemError $ MM.addrContentsAfter mem (MM.relativeSegmentAddr addr)
+      contents <- liftMemError $ MM.contentsAfterSegmentOff addr
       case contents of
         [] -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
         MM.RelocationRegion r : _ ->
@@ -104,7 +104,6 @@ disassembleBlock :: forall ppc ids s
                   . PPCArchConstraints ppc
                  => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
-                 -> MM.Memory (ArchAddrWidth ppc)
                  -> GenState ppc ids s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -- ^ The current instruction pointer
@@ -113,10 +112,10 @@ disassembleBlock :: forall ppc ids s
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
-disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
+disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
   let seg = MM.msegSegment curIPAddr
   let off = MM.msegOffset curIPAddr
-  case readInstruction mem curIPAddr of
+  case readInstruction curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
 --      traceM ("II: " ++ show i)
@@ -158,16 +157,15 @@ disassembleBlock lookupSemantics mem gs curIPAddr maxOffset = do
                   , Just simplifiedIP <- simplifyValue v
                   , simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
-                  , Just nextIPSegAddr <- MM.asSegmentOff mem nextIP -> do
+                  , Just nextIPSegAddr <- MM.incSegmentOff curIPAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
-                                         , genMemory = mem
                                          , genRegUpdates = MapF.empty
                                          }
-                      disassembleBlock lookupSemantics mem gs2 nextIPSegAddr maxOffset
+                      disassembleBlock lookupSemantics gs2 nextIPSegAddr maxOffset
 
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
@@ -186,19 +184,18 @@ matchConditionalBranch v =
 
 tryDisassembleBlock :: (PPCArchConstraints ppc)
                     => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
-                    -> MM.Memory (ArchAddrWidth ppc)
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff ppc
-                    -> ArchAddrWord ppc
-                    -> DisM ppc ids s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc))
-tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen mem startAddr (initRegState startAddr)
+                    -> Int
+                    -> DisM ppc ids s ([Block ppc ids], Int)
+tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
+  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
+  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
-  return (F.toList (blocks ^. frontierBlocks), nextIPOffset - startOffset)
+  return (F.toList (blocks ^. frontierBlocks), fromIntegral (nextIPOffset - startOffset))
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
@@ -211,24 +208,22 @@ disassembleFn :: (PPCArchConstraints ppc)
               -- ^ A function to look up the semantics for an instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
-              -> MM.Memory (ArchAddrWidth ppc)
-              -- ^ The mapped memory space
               -> NC.NonceGenerator (ST s) ids
               -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff ppc
               -- ^ The address to disassemble from
-              -> ArchAddrWord ppc
+              -> Int
               -- ^ Maximum size of the block (a safeguard)
               -> MA.AbsBlockState (ArchReg ppc)
               -- ^ Abstract state of the processor at the start of the block
-              -> ST s ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), Maybe String)
-disassembleFn _ lookupSemantics mem nonceGen startAddr maxSize _  = do
-  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize))
+              -> ST s ([Block ppc ids], Int, Maybe String)
+disassembleFn _ lookupSemantics nonceGen startAddr maxSize _  = do
+  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
-type LocatedError ppc ids = ([Block ppc ids], MM.MemWord (ArchAddrWidth ppc), TranslationError (ArchAddrWidth ppc))
+type LocatedError ppc ids = ([Block ppc ids], Int, TranslationError (ArchAddrWidth ppc))
 -- | This is a monad for error handling during disassembly
 --
 -- It allows for early failure that reports progress (in the form of blocks
@@ -247,7 +242,7 @@ newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (S
 --
 -- We also can't derive this instance because of that restriction (but deriving
 -- silently fails).
-instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], MM.MemWord w, TranslationError w) (DisM ppc ids s) where
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], Int, TranslationError w) (DisM ppc ids s) where
   throwError e = DisM (ET.throwError e)
   catchError a hdlr = do
     r <- liftST $ ET.runExceptT (unDisM a)
@@ -297,4 +292,4 @@ failAt gs offset curIPAddr reason = do
   let b = finishBlock' (gs ^. blockState) term
   let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
   let res' = F.toList (res ^. frontierBlocks)
-  ET.throwError (res', offset, exn)
+  ET.throwError (res', fromIntegral offset, exn)

@@ -62,43 +62,40 @@ disassembleFn :: (ARMArchConstraints arm)
               -- ^ A function to look up the semantics for a T32 instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
-              -> MM.Memory (ArchAddrWidth arm)
-              -- ^ The mapped memory space
               -> NC.NonceGenerator (ST s) ids
               -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff arm
               -- ^ The address to disassemble from
-              -> ArchAddrWord arm
+              -> Int
               -- ^ Maximum size of the block (a safeguard)
               -> MA.AbsBlockState (ArchReg arm)
               -- ^ Abstract state of the processor at the start of the block
-              -> ST s ([Block arm ids], MM.MemWord (ArchAddrWidth arm), Maybe String)
-disassembleFn _ lookupA32Semantics lookupT32Semantics mem nonceGen startAddr maxSize _  = do
+              -> ST s ([Block arm ids], Int, Maybe String)
+disassembleFn _ lookupA32Semantics lookupT32Semantics nonceGen startAddr maxSize _  = do
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
                                       T32I inst -> lookupT32Semantics ipval inst
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock
                                lookupSemantics
-                               mem nonceGen startAddr maxSize))
+                               nonceGen startAddr maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
 tryDisassembleBlock :: (ARMArchConstraints arm)
                     => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
-                    -> MM.Memory (ArchAddrWidth arm)
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff arm
-                    -> ArchAddrWord arm
-                    -> DisM arm ids s ([Block arm ids], MM.MemWord (ArchAddrWidth arm))
-tryDisassembleBlock lookupSemantics mem nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen mem startAddr (initRegState startAddr)
+                    -> Int
+                    -> DisM arm ids s ([Block arm ids], Int)
+tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
+  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextPCOffset, blocks) <- disassembleBlock lookupSemantics mem gs0 startAddr (startOffset + maxSize)
+  (nextPCOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do
     let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
     failAt gs0 nextPCOffset startAddr reason
-  return (F.toList (blocks ^. frontierBlocks), nextPCOffset - startOffset)
+  return (F.toList (blocks ^. frontierBlocks), fromIntegral (nextPCOffset - startOffset))
 
 
 
@@ -119,7 +116,6 @@ disassembleBlock :: forall arm ids s
                   . ARMArchConstraints arm
                  => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
-                 -> MM.Memory (ArchAddrWidth arm)
                  -> GenState arm ids s
                  -> MM.MemSegmentOff (ArchAddrWidth arm)
                  -- ^ The current instruction pointer
@@ -128,10 +124,10 @@ disassembleBlock :: forall arm ids s
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM arm ids s (MM.MemWord (ArchAddrWidth arm), BlockSeq arm ids)
-disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
+disassembleBlock lookupSemantics gs curPCAddr maxOffset = do
   let seg = MM.msegSegment curPCAddr
   let off = MM.msegOffset curPCAddr
-  case readInstruction mem curPCAddr of
+  case readInstruction curPCAddr of
     Left err -> failAt gs off curPCAddr (DecodeError err)
     Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.relativeSegmentAddr curPCAddr) (MM.relativeSegmentAddr curPCAddr))
     Right (i, bytesRead) -> do
@@ -175,16 +171,15 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
                   , Just simplifiedIP <- simplifyValue v
                   , simplifiedIP == nextPCVal
                   , nextPCOffset < maxOffset
-                  , Just nextPCSegAddr <- MM.asSegmentOff mem nextPC -> do
+                  , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextPCSegAddr
-                                         , genMemory = mem
                                          , genRegUpdates = MapF.empty
                                          }
-                      disassembleBlock lookupSemantics mem gs2 nextPCSegAddr maxOffset
+                      disassembleBlock lookupSemantics gs2 nextPCSegAddr maxOffset
 
                 _ -> return (nextPCOffset, finishBlock FetchAndExecute gs1)
 
@@ -194,10 +189,10 @@ disassembleBlock lookupSemantics mem gs curPCAddr maxOffset = do
 --
 -- This code assumes that the 'MM.ByteRegion' is maximal; that is, that there
 -- are no byte regions that could be coalesced.
-readInstruction :: MM.Memory w
-                -> MM.MemSegmentOff w
+readInstruction :: (MM.MemWidth w)
+                => MM.MemSegmentOff w
                 -> Either (ARMMemoryError w) (InstructionSet, MM.MemWord w)
-readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
+readInstruction addr = do
   let seg = MM.msegSegment addr
       segRelAddrRaw = MM.relativeSegmentAddr addr
       -- Addresses specified in ARM instructions have the low bit
@@ -209,7 +204,9 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
       segRelAddr = segRelAddrRaw { addrOffset = MM.addrOffset segRelAddrRaw `xor` loBit }
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
-      contents <- liftMemError $ MM.addrContentsAfter mem segRelAddr
+      let ao = addrOffset segRelAddr
+      alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
+      contents <- liftMemError $ MM.contentsAfterSegmentOff alignedMsegOff
       case contents of
         [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
         MM.BSSRegion {} : _ ->
@@ -232,6 +229,12 @@ readInstruction mem addr = MM.addrWidthClass (MM.memAddrWidth mem) $ do
               Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents
   else ET.throwError $ ARMMemoryError (MM.PermissionsError segRelAddr)
 
+liftMaybe :: ARMMemoryError w -> Maybe a -> Either (ARMMemoryError w) a
+liftMaybe err ma =
+  case ma of
+    Just a -> Right a
+    Nothing -> Left err
+
 liftMemError :: Either (MM.MemoryError w) a -> Either (ARMMemoryError w) a
 liftMemError e =
   case e of
@@ -242,6 +245,7 @@ liftMemError e =
 -- invalid instructions.
 data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.SegmentRange w]
                       | ARMMemoryError !(MM.MemoryError w)
+                      | ARMInvalidInstructionAddress !(MM.MemSegment w) !(MM.MemWord w)
                       deriving (Show)
 
 -- | Examine a value and see if it is a mux; if it is, break the mux up and
@@ -261,7 +265,7 @@ matchConditionalBranch v =
 
 
 type LocatedError ppc ids = ([Block ppc ids]
-                            , MM.MemWord (ArchAddrWidth ppc)
+                            , Int
                             , TranslationError (ArchAddrWidth ppc))
 
 -- | This is a monad for error handling during disassembly
@@ -280,7 +284,7 @@ newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (S
 --
 -- We also can't derive this instance because of that restriction (but deriving
 -- silently fails).
-instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], MM.MemWord w, TranslationError w) (DisM ppc ids s) where
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], Int, TranslationError w) (DisM ppc ids s) where
   throwError e = DisM (ET.throwError e)
   catchError a hdlr = do
     r <- liftST $ ET.runExceptT (unDisM a)
@@ -332,4 +336,4 @@ failAt gs offset curPCAddr reason = do
   let b = finishBlock' (gs ^. blockState) term
   let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
   let res' = F.toList (res ^. frontierBlocks)
-  ET.throwError (res', offset, exn)
+  ET.throwError (res', fromIntegral offset, exn)
