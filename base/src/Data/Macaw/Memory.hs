@@ -564,7 +564,7 @@ instance Show (Relocation w) where
 -- The parameter denotes the width of a memory address.
 data SegmentRange (w :: Nat)
    = ByteRegion !BS.ByteString
-     -- ^ A region with specificed bytes
+     -- ^ A region with specific bytes
    | RelocationRegion !(Relocation w)
      -- ^ A region whose contents are computed using the expression
      -- denoted by the relocation.
@@ -744,7 +744,7 @@ data MemSegment w
                 , segmentOffset :: !(MemWord w)
                   -- ^ Offset of segment relative to segmentBase
                 , segmentFlags :: !Perm.Flags
-                                  -- ^ Permisison flags
+                                  -- ^ Permission flags
                 , segmentContents :: !(SegmentContents w)
                                      -- ^ Map from offsets to the contents of
                                      -- the segment.
@@ -1329,7 +1329,7 @@ readByteString' initAddr prev (BSSRegion sz:rest) cnt =
     seq cnt' $ seq next $
       readByteString' initAddr next rest cnt'
 
--- | Attemtp to read a bytestring of the given length
+-- | Attempt to read a bytestring of the given length
 readByteString :: Memory w
                -> MemAddr w
                -> Word64 -- ^ Number of bytes to read
