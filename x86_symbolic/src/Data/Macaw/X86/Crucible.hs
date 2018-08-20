@@ -54,9 +54,9 @@ import           Lang.Crucible.Syntax
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 
-import           Lang.Crucible.LLVM.MemModel (LLVMPointerType)
-import Lang.Crucible.LLVM.MemModel.Pointer
-  (projectLLVM_bv, pattern LLVMPointerRepr, llvmPointer_bv)
+import           Lang.Crucible.LLVM.MemModel
+                   (LLVMPointerType, projectLLVM_bv,
+                    pattern LLVMPointerRepr, llvmPointer_bv)
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen(MacawExt)

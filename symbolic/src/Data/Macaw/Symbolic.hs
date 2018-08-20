@@ -71,7 +71,6 @@ import qualified Lang.Crucible.Simulator.GlobalState as C
 import           System.IO (stdout)
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
-import qualified Lang.Crucible.LLVM.MemModel.Pointer as MM
 import           Lang.Crucible.LLVM.Intrinsics(llvmIntrinsicTypes)
 
 import qualified Data.Macaw.CFG.Block as M
