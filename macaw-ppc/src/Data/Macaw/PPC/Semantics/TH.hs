@@ -48,14 +48,14 @@ getOpName :: S.Expr t x -> Maybe String
 getOpName (S.NonceAppExpr nae) = Just $ show $ S.nonceExprId nae
 getOpName _ = Nothing
 
-ppcNonceAppEval :: forall arch t tp
+ppcNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
                     L.Location arch ~ APPC.Location arch,
                     1 <= APPC.ArchRegWidth arch,
                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                => BoundVarInterpretations arch t
+                => BoundVarInterpretations arch t fs
                 -> S.NonceApp t (S.Expr t) tp
-                -> Maybe (MacawQ arch t Exp)
+                -> Maybe (MacawQ arch t fs Exp)
 ppcNonceAppEval bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args -> do
@@ -173,16 +173,16 @@ addArchExpr archfn = do
   asgn <- G.addAssignment (M.EvalArchFn archfn (M.typeRepr archfn))
   G.addExpr (G.ValueExpr (M.AssignedValue asgn))
 
-floatingPointTH :: forall arch t f c
+floatingPointTH :: forall arch t fs f c
                  . (L.Location arch ~ APPC.Location arch,
                      A.Architecture arch,
                      1 <= APPC.ArchRegWidth arch,
                      M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch,
                      FC.FoldableFC f)
-                 => BoundVarInterpretations arch t
+                 => BoundVarInterpretations arch t fs
                  -> String
                  -> f (S.Expr t) c
-                 -> MacawQ arch t Exp
+                 -> MacawQ arch t fs Exp
 floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
     [Some a] ->
@@ -218,9 +218,9 @@ ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                     A.Architecture arch,
                     1 <= APPC.ArchRegWidth arch,
                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
-                => BoundVarInterpretations arch t
+                => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp
-                -> Maybe (MacawQ arch t Exp)
+                -> Maybe (MacawQ arch t fs Exp)
 ppcAppEvaluator interps elt = case elt of
   S.BVSdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH interps bv1

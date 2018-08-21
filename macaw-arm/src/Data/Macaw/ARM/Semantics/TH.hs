@@ -45,14 +45,14 @@ import qualified What4.Expr.Builder as S
 -- current Nonce context.  If this is not recognized as an
 -- architecture-specific Application, return Nothing, in which case
 -- the caller will try the set of default Application evaluators.
-armNonceAppEval :: forall arch t tp
+armNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
                     L.Location arch ~ Loc.Location arch,
                     1 <= Loc.ArchRegWidth arch,
                     M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
-                => BoundVarInterpretations arch t
+                => BoundVarInterpretations arch t fs
                 -> S.NonceApp t (S.Expr t) tp
-                -> Maybe (MacawQ arch t Exp)
+                -> Maybe (MacawQ arch t fs Exp)
 armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
     -- macaw-semmc:Data.Macaw.SemMC.TH) will search the
@@ -117,9 +117,9 @@ armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     A.Architecture arch,
                     1 <= Loc.ArchRegWidth arch,
                     M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
-                => BoundVarInterpretations arch t
+                => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp
-                -> Maybe (MacawQ arch t Exp)
+                -> Maybe (MacawQ arch t fs Exp)
 armAppEvaluator interps elt =
     case elt of
       S.BVUrem w bv1 bv2 -> return $ do
