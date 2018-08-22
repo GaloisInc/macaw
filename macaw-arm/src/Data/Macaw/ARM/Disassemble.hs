@@ -9,6 +9,57 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+{-
+
+General notes regarding the disassembly process for ARM.
+
+ARM disassembly is complicated by the different instruction set states
+that an ARM processor supports.  There are technically 4 different
+instruction sets: ARM32, Thumb32, Thumb32EE, and Jazelle.  At the
+present time, only the first two are supported by macaw-arm
+(identified hereafter as A32 and T32).
+
+When macaw base's Discovery is attempting to discover code to
+construct the CFG and attach it to the semantics, it is unaware of
+these different instruction set modes.
+
+Normally a switch from one instruction set to another is accomplished
+via a cross-mode branch (e.g. BRX), which will be identified by normal
+processes as the end of a particular code block.  However, there are
+many instructions which can target R15 (i.e. the PC) and therefore
+potentially cause an ISETSTATE (Instruction Set State) switch.
+
+To handle the above:
+
+  * At the beginning of disassembly, a current mode must be known.
+    Although macaw-base could be extended to allow the
+    architecture-specific module to persist information across calls
+    to disassembly, this value can also be extracted from the initial
+    AbsProcessorState.
+
+  * The disassembly should only try to disassemble for the current
+    mode, and should exit (with the FetchAndExecute status) whenever
+    the ISETSTATE changes. (This may require enhancing the
+    post-semantics disassembleBlock functionality below to detect
+    ISETSTATE differences).
+
+  * The macaw-base functionality will then create a block up to this
+    point, and the FetchAndExecute status will cause the instructions
+    at this point to be declared as another frontier for subsequent
+    block discovery.  The AbsProcessorState associated with this
+    frontier will inform the subsequent call to disassemblyFn which
+    ISETSTATE is applicable for that disassembly.
+
+Notes:
+
+  * At the present time (Aug 15 2018), the code below *improperly*
+    attempts to use the low bit of the PC register to determine which
+    operational mode is newly in effect.  This is wrong because the
+    semantics for an instruction will effect the ISETSTATE change and
+    then clear the bits when writing to the PC.  This should be
+    re-worked to use the above described functionality instead.
+-}
+
 module Data.Macaw.ARM.Disassemble
     ( disassembleFn
     )
