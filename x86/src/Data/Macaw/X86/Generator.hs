@@ -24,7 +24,6 @@ module Data.Macaw.X86.Generator
   , addArchTermStmt
   , evalArchFn
   , evalAssignRhs
-  , asAtomicStateUpdate
   , getState
     -- * GenResult
   , GenResult(..)
@@ -92,9 +91,9 @@ import           Data.Macaw.X86.X86Reg
 
 -- | A pure expression for isValue.
 data Expr ids tp where
-  -- An expression obtained from some value.
+  -- | An expression obtained from some value.
   ValueExpr :: !(Value X86_64 ids tp) -> Expr ids tp
-  -- An expression that is computed from evaluating subexpressions.
+  -- | An expression that is computed from evaluating subexpressions.
   AppExpr :: !(App (Expr ids) tp) -> Expr ids tp
 
 instance Show (Expr ids tp) where
@@ -149,8 +148,6 @@ asSignedBVLit _ = Nothing
 
 -- | A block that we have not yet finished.
 data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , pBlockAddr  :: !(MemSegmentOff 64)
-                               -- ^ Starting address of function in preblock.
                              , _pBlockStmts :: !(Seq (Stmt X86_64 ids))
                              , _pBlockState :: !(RegState X86Reg (Value X86_64 ids))
                              , _pBlockApps  :: !(MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
@@ -159,11 +156,9 @@ data PreBlock ids = PreBlock { pBlockIndex :: !Word64
 -- | Create a new pre block.
 emptyPreBlock :: RegState X86Reg (Value X86_64 ids)
               -> Word64
-              -> MemSegmentOff 64
               -> PreBlock ids
-emptyPreBlock s idx addr =
+emptyPreBlock s idx =
   PreBlock { pBlockIndex  = idx
-           , pBlockAddr   = addr
            , _pBlockStmts = Seq.empty
            , _pBlockApps  = MapF.empty
            , _pBlockState = s
@@ -211,10 +206,10 @@ data GenState st_s ids = GenState
          -- ^ 'NonceGenerator' for generating 'AssignId's
        , _blockState   :: !(PreBlock ids)
          -- ^ Block that we are processing.
-       , genAddr      :: !(MemSegmentOff 64)
-         -- ^ Address of instruction we are translating
-       , genMemory    :: !(Memory 64)
-         -- ^ The memory
+       , genInitPCAddr  :: !(MemSegmentOff 64)
+         -- ^ This is the address of the instruction we are translating.
+       , genInstructionSize :: !Int
+         -- ^ Number of bytes of instruction we are translating.
        , _genRegUpdates :: !(MapF.MapF X86Reg (Value X86_64 ids))
          -- ^ The registers updated (along with their new macaw values) during
          -- the evaluation of a single instruction
@@ -295,27 +290,6 @@ setReg :: X86Reg tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
 setReg r v = modGenState $ do
   genRegUpdates %= MapF.insert r v
   curX86State . boundValue r .= v
-
--- | This combinator collects state modifications by a single instruction into a single 'ArchState' statement
---
--- This function is meant to be wrapped around an atomic CPU state
--- transformation.  It collects all of the updates to the CPU register state
--- (which are assumed to be made through the 'setRegVal' function) and coalesces
--- them into a new macaw 'ArchState' statement that records the updates for
--- later analysis.
---
--- The state is hidden in the generator monad and collected after the
--- transformer is executed.  Note: if the transformer splits the state, it isn't
--- obvious what will happen here.  The mechanism is not designed with that use
--- case in mind.  I think that it will collect the *union* of possible updates
--- by that instruction.
-asAtomicStateUpdate :: ArchMemAddr X86_64 -> X86Generator st_s ids a -> X86Generator st_s ids a
-asAtomicStateUpdate insnAddr exec = do
-  modGenState (genRegUpdates .= MapF.empty)
-  res <- exec
-  updates <- _genRegUpdates <$> getState
-  addStmt (ArchState insnAddr updates)
-  return res
 
 -- | Add a statement to the list of statements.
 addStmt :: Stmt X86_64 ids -> X86Generator st_s ids ()

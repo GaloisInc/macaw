@@ -229,7 +229,7 @@ deriving instance ArchConstraints arch
 data ParsedBlock arch ids
    = ParsedBlock { pblockAddr :: !(ArchSegmentOff arch)
                    -- ^ Address of region
-                 , blockSize :: !(ArchAddrWord arch)
+                 , blockSize :: !Int
                    -- ^ The size of the region of memory covered by this.
                  , blockReason :: !(BlockExploreReason (ArchAddrWidth arch))
                    -- ^ Reason that we marked this address as

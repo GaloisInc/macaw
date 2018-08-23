@@ -1173,16 +1173,16 @@ def_movs = defBinary "movs" $ \ii loc _ -> do
           F.Mem64{} -> pure (Some QWordRepVal)
           _ -> error "Bad argument to movs"
   let bytesPerOp = bvLit n64 (repValSizeByteCount w)
-  df   <- get df_loc
-  src  <- get rsi
   dest <- get rdi
+  src  <- get rsi
+  df   <- get df_loc
   case pfx^.F.prLockPrefix of
     F.RepPrefix -> do
       when (pfx^.F.prASO) $ do
         fail "Rep prefix semantics not defined when address size override is true."
       -- The direction flag indicates post decrement or post increment.
       count <- get rcx
-      addArchStmt =<< traverseF eval (RepMovs w count src dest df)
+      addArchStmt =<< traverseF eval (RepMovs w dest src count df)
 
       -- We adjust rsi and rdi by a negative value if df is true.
       -- The formula is organized so that the bytesPerOp literal is
@@ -1421,45 +1421,40 @@ def_lodsx suf elsz = defNullaryPrefix ("lods" ++ suf) $ \pfx -> do
 -- | STOS/STOSB Store string/Store byte string
 -- STOS/STOSW Store string/Store word string
 -- STOS/STOSD Store string/Store doubleword string
-exec_stos :: 1 <= w
-          => Bool -- Flag indicating if RepPrefix appeared before instruction
-          -> RepValSize w
-          -> X86Generator st ids ()
-exec_stos False rep = do
-  let mrepr = repValSizeMemRepr rep
-  -- The direction flag indicates post decrement or post increment.
-  df   <- get df_loc
-  dest <- get rdi
-  v    <- get (xaxValLoc rep)
-  let neg_szv = bvLit n64 (negate (memReprBytes mrepr))
-  let szv     = bvLit n64 (memReprBytes mrepr)
-  MemoryAddr dest mrepr .= v
-  rdi .= dest .+ mux df neg_szv szv
-exec_stos True rep = do
-  let mrepr = repValSizeMemRepr rep
-  -- The direction flag indicates post decrement or post increment.
-  df   <- get df_loc
-  dest <- get rdi
-  v    <- get (xaxValLoc rep)
-  let szv = bvLit n64 (memReprBytes mrepr)
-  count <- get rcx
-  let nbytes     = count .* szv
-  memset count v dest df
-  rdi .= mux df (dest .- nbytes) (dest .+ nbytes)
-  rcx .= bvKLit 0
+-- STOS/STOSQ Store string/Store quadword string
 
 def_stos :: InstructionDef
 def_stos = defBinary "stos" $ \ii loc loc' -> do
-  case (loc, loc') of
-    (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) ByteRepVal
-    (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) WordRepVal
-    (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) DWordRepVal
-    (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) QWordRepVal
-    _ -> error $ "stos given bad arguments " ++ show (loc, loc')
+  let pfx = F.iiPrefixes ii
+  Some rep <-
+    case (loc, loc') of
+      (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
+        pure (Some ByteRepVal)
+      (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
+        pure (Some WordRepVal)
+      (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
+        pure (Some DWordRepVal)
+      (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
+        pure (Some QWordRepVal)
+      _ -> error $ "stos given bad arguments " ++ show (loc, loc')
+  -- The direction flag indicates post decrement or post increment.
+  dest <- get rdi
+  v    <- get (xaxValLoc rep)
+  df   <- get df_loc
+  case pfx^.F.prLockPrefix of
+    F.RepPrefix -> do
+      let mrepr = repValSizeMemRepr rep
+      count <- get rcx
+      addArchStmt =<< traverseF eval (RepStos rep dest v count df)
+      rdi .= dest .+ bvKLit (memReprBytes mrepr) .* mux df (bvNeg count) count
+      rcx .= bvKLit 0
+    F.NoLockPrefix -> do
+        let mrepr = repValSizeMemRepr rep
+        let neg_szv = bvLit n64 (negate (memReprBytes mrepr))
+        let szv     = bvLit n64 (memReprBytes mrepr)
+        MemoryAddr dest mrepr .= v
+        rdi .= dest .+ mux df neg_szv szv
+    lockPrefix -> fail $ "stos unexpected lock/rep prefix: " ++ show lockPrefix
 
 -- REP        Repeat while ECX not zero
 -- REPE/REPZ  Repeat while equal/Repeat while zero

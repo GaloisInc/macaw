@@ -18,6 +18,7 @@ some value while regions define a unknown offset in memory.
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.Memory
   ( Memory
@@ -113,6 +114,7 @@ module Data.Macaw.Memory
   , addrContentsAfter
   , readByteString
   , readAddr
+  , readSegmentOff
   , readWord8
   , readWord16be
   , readWord16le
@@ -131,9 +133,11 @@ module Data.Macaw.Memory
   , bsWord64be
   , bsWord64le
   , AddrSymMap
+  -- * Memory search
+  , findByteStringMatches
+  , relativeSegmentContents
   ) where
 
-import           Control.Exception (assert)
 import           Control.Monad
 import           Data.BinarySymbols
 import           Data.Bits
@@ -164,6 +168,8 @@ data AddrWidthRepr w
      -- ^ A 32-bit address
    | (w ~ 64) => Addr64
      -- ^ A 64-bit address
+
+deriving instance Show (AddrWidthRepr w)
 
 instance TestEquality AddrWidthRepr where
   testEquality Addr32 Addr32 = Just Refl
@@ -294,8 +300,8 @@ class (1 <= w) => MemWidth w where
   -- The argument is ignored.
   addrWidthRepr :: p w -> AddrWidthRepr w
 
-  -- | @addrWidthMod w@ returns @2^(8 * addrSize w - 1)@.
-  addrWidthMod :: p w -> Word64
+  -- | @addrWidthMask w@ returns @2^(8 * addrSize w) - 1@.
+  addrWidthMask :: p w -> Word64
 
   -- | Returns number of bytes in addr.
   --
@@ -322,7 +328,7 @@ addrBitSize w = 8 * addrSize w
 
 -- | Convert word64 @x@ into mem word @x mod 2^w-1@.
 memWord :: forall w . MemWidth w => Word64 -> MemWord w
-memWord x = MemWord (x .&. addrWidthMod p)
+memWord x = MemWord (x .&. addrWidthMask p)
   where p :: Proxy w
         p = Proxy
 
@@ -364,11 +370,11 @@ instance MemWidth w => Integral (MemWord w) where
 
 instance MemWidth w => Bounded (MemWord w) where
   minBound = 0
-  maxBound = MemWord (addrWidthMod (Proxy :: Proxy w))
+  maxBound = MemWord (addrWidthMask (Proxy :: Proxy w))
 
 instance MemWidth 32 where
   addrWidthRepr _ = Addr32
-  addrWidthMod _ = 0xffffffff
+  addrWidthMask _ = 0xffffffff
   addrRotate (MemWord w) i =
     MemWord (fromIntegral ((fromIntegral w :: Word32) `rotate` i))
   addrSize _ = 4
@@ -378,7 +384,7 @@ instance MemWidth 32 where
 
 instance MemWidth 64 where
   addrWidthRepr _ = Addr64
-  addrWidthMod _ = 0xffffffffffffffff
+  addrWidthMask _ = 0xffffffffffffffff
   addrRotate (MemWord w) i = MemWord (w `rotate` i)
   addrSize _ = 8
   addrRead e s
@@ -558,7 +564,7 @@ instance Show (Relocation w) where
 -- The parameter denotes the width of a memory address.
 data SegmentRange (w :: Nat)
    = ByteRegion !BS.ByteString
-     -- ^ A region with specificed bytes
+     -- ^ A region with specific bytes
    | RelocationRegion !(Relocation w)
      -- ^ A region whose contents are computed using the expression
      -- denoted by the relocation.
@@ -738,7 +744,7 @@ data MemSegment w
                 , segmentOffset :: !(MemWord w)
                   -- ^ Offset of segment relative to segmentBase
                 , segmentFlags :: !Perm.Flags
-                                  -- ^ Permisison flags
+                                  -- ^ Permission flags
                 , segmentContents :: !(SegmentContents w)
                                      -- ^ Map from offsets to the contents of
                                      -- the segment.
@@ -976,17 +982,23 @@ memAsAddrPairs :: Memory w
                -> [(MemSegmentOff w, MemSegmentOff w)]
 memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
   seg <- memSegments mem
-  (contents_offset,r) <- contentsRanges (segmentContents seg)
-  let sz = addrSize mem
+  (contentsOffset,r) <- contentsRanges (segmentContents seg)
+  let sz :: Int
+      sz = addrSize mem
   case r of
-    ByteRegion bs -> assert (BS.length bs `rem` fromIntegral sz == 0) $ do
-      (off,w) <-
-        zip [contents_offset..]
-            (regularChunks (fromIntegral sz) bs)
+    ByteRegion bs -> do
+      -- contentsOffset
+      -- Check offset if a multiple
+      let mask = sz - 1
+      when (BS.length bs .&. mask /= 0) $
+        error "Unexpected offset."
+      (byteOff,w) <-
+        zip [contentsOffset,contentsOffset+fromIntegral sz..]
+            (regularChunks sz bs)
       let Just val = addrRead end w
       case resolveAbsoluteAddr mem val of
         Just val_ref -> do
-          pure (MemSegmentOff seg off, val_ref)
+          pure (MemSegmentOff seg byteOff, val_ref)
         _ -> []
     RelocationRegion{} -> []
     BSSRegion{} -> []
@@ -1317,7 +1329,7 @@ readByteString' initAddr prev (BSSRegion sz:rest) cnt =
     seq cnt' $ seq next $
       readByteString' initAddr next rest cnt'
 
--- | Attemtp to read a bytestring of the given length
+-- | Attempt to read a bytestring of the given length
 readByteString :: Memory w
                -> MemAddr w
                -> Word64 -- ^ Number of bytes to read
@@ -1343,6 +1355,23 @@ readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   case addrRead end bs of
     Just val -> Right $ MemAddr 0 val
     Nothing -> error $ "readAddr internal error: readByteString result too short."
+
+-- | Read the given address as a reference to a memory segment offset, or report a
+-- memory read error.
+readSegmentOff :: Memory w
+               -> Endianness
+               -> MemAddr w
+               -> Either (MemoryError w) (MemSegmentOff w)
+readSegmentOff mem end addr = addrWidthClass (memAddrWidth mem) $ do
+  let sz = fromIntegral (addrSize addr)
+  bs <- readByteString mem addr sz
+  case addrRead end bs of
+    Just val -> do
+      let addrInMem = MemAddr 0 val
+      case asSegmentOff mem addrInMem of
+        Just res -> pure res
+        Nothing -> Left (InvalidAddr addrInMem)
+    Nothing -> error $ "readSegmentOff internal error: readByteString result too short."
 
 -- | Read a single byte.
 readWord8 :: Memory w -> MemAddr w -> Either (MemoryError w) Word8
@@ -1371,3 +1400,75 @@ readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
 -- | Read a little endian word64
 readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
 readWord64le mem addr = bsWord64le <$> readByteString mem addr 8
+
+------------------------------------------------------------------------
+-- Memory finding utilities
+
+-- | Return list of segment content memory segment ranges with its
+-- content's address offset relative to segment offsets
+relativeSegmentContents :: (MemWidth w) => [MemSegment w] -> [(MemAddr w, SegmentRange w)]
+relativeSegmentContents memSegs = concatMap relativeOffset memSegs
+  where
+    -- Each MemSegment has a segmentOffset indicating the offset from segmentBase its located.
+    -- This makes the offsets within the SegmentRange relative to that segmentOffset.
+    relativeOffset :: (MemWidth w) => MemSegment w -> [(MemAddr w, SegmentRange w)]
+    relativeOffset seg = map (\(contentOffset,r) -> (relativeAddr seg contentOffset, r)) $ (contentsRanges . segmentContents) seg
+
+-- | Naive string matching algorithm identifies matches to given
+-- pattern within the list of memory segments and their corresponding
+-- offset within memory. Relocations are treated as wildcards.
+findByteStringMatches :: MemWidth w
+                      => BS.ByteString
+                      -- ^ Pattern to search for within memory segments
+                      -> Integer
+                      -- ^ Offset within the contents region where search is to start
+                      -> [(MemAddr w, SegmentRange w)]
+                      -- ^ Contents of memory along with its relative
+                      -- address from the segment base address.
+                      -> [MemAddr w]
+findByteStringMatches _ _ [] = []
+findByteStringMatches pat curIndex segs@((relOffset, chunk) : rest)
+  | BS.length pat == 0 = []
+  | otherwise =
+    if matchPrefix pat (map snd segs) then
+      (currentAddr : findByteStringMatches pat nextIndex remainingElems)
+    else
+      findByteStringMatches pat nextIndex remainingElems
+  where
+    currentAddr = incAddr curIndex relOffset
+    (nextIndex, remainingElems) = case chunk of
+      -- drop byte in region
+      ByteRegion bs ->
+        if BS.length bs > 0 then
+          (curIndex + 1, (relOffset, ByteRegion (BS.drop 1 bs)) : rest)
+        else (0, rest)
+      -- TODO: Increments within a relocation region
+      _  -> (0, rest)
+
+
+-- | Returns True when the given ByteString matches the bytes at the
+-- beginning of this segment range and false otherwise.
+matchPrefix :: MemWidth w => BS.ByteString -> [SegmentRange w] -> Bool
+matchPrefix _ [] = False
+matchPrefix _ (BSSRegion _ : _) = False
+matchPrefix pat (rel@(RelocationRegion r) : rest)
+  -- When pattern is greater than size of the relocation, skip
+  -- relocation bytes in the pattern and look for match in beginning
+  -- of the next range.
+  | BS.length pat > (fromIntegral sz) = matchPrefix (BS.drop (fromIntegral sz) pat) rest
+  -- When length of pattern is less than or equal to the size of the relocation => match
+  | otherwise = True
+  where sz = rangeSize rel
+matchPrefix pat (ByteRegion bs : rest)
+  -- Enough bytes in region to check for match directly.  This also
+  -- returns true when the search pattern is empty and stops recursion
+  | matchLen == prefixLen = pat == regionPrefix
+    -- There aren't enough bytes in region; we need to check that
+    -- the elems that do exist match the pattern prefix and
+    -- that a following regions contain the remaining search pattern.
+    -- NOTE: Assumes the regions are adjacent to each other.
+  | otherwise = regionPrefix == (BS.take prefixLen pat) && matchPrefix (BS.drop prefixLen pat) rest
+  where
+    matchLen     = BS.length pat
+    regionPrefix = BS.take matchLen bs
+    prefixLen    = BS.length regionPrefix

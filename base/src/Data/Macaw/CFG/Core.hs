@@ -351,6 +351,32 @@ asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
 
+-- | During the jump-table detection phase of code discovery, we have the
+-- following problem: we are given a value which represents the computation
+-- done to create an address to jump to. We'd like to look at the shape of that
+-- computation and check whether it "looks like a jump table" -- say, whether
+-- it is the computation @array_base + pointer_size * i@ for some unknown index
+-- @i@.
+--
+-- However, some architectures have special rules about what addresses are
+-- valid jump targets, and so there is frequently a sort of "standard prelude"
+-- which converts an arbitrary address into a valid jump target. For example,
+-- on PowerPC, the instruction pointer is always a multiple of four, so any
+-- computed jump strips off the bottom two bits. We'd like the jump-table
+-- detection code to be able to ignore that standard prelude when looking for
+-- jump-table-like computations (without having to know that the right thing to
+-- look for is "ignore the bottom two bits").
+--
+-- The 'fromIPAligned' method below gives specific architectures a hook for
+-- stripping away the prelude and leaving the underlying computed value (which
+-- is potentially an invalid jump target!).
+--
+-- Of course, after stripping away the cleanup parts of the computation,
+-- checking the unclean computation for specific patterns, and finding
+-- particular concrete values that the unclean computation could evaluate to,
+-- the discovery code then needs to be able to re-clean the concrete values.
+-- The 'toIPAligned' method gives architectures a hook to do that direction of
+-- translation.
 class IPAlignment arch where
   -- | Take an aligned value and strip away the bits of the semantics that
   -- align it, leaving behind a (potentially unaligned) value. Return 'Nothing'

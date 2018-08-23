@@ -415,6 +415,15 @@ relaTargetX86_64 symtab rel off =
 
     tp -> relocError $ RelocationUnsupportedType (show tp)
 
+-- | Attempt to resolve an X86_64 specific symbol.
+relaTargetARM :: SymbolVector
+              -> Elf.RelEntry Elf.ARM_RelocationType
+              -> MemWord 32
+              -- ^ Offset of symbol
+              -> RelocResolver (Relocation 32)
+relaTargetARM _ rel _ =
+  relocError $ RelocationUnsupportedType (show (Elf.relType rel))
+
 {-
 This has been diabled until we get actual ARM support.
 
@@ -432,18 +441,15 @@ relaTargetARM = SomeRelocationResolver $ \_symtab rel _maddend ->
     tp -> relocError $ RelocationUnsupportedType (show tp)
 -}
 
-
 -- | Creates a relocation map from the contents of a dynamic section.
-withRelocationResolver
+getRelocationResolver
   :: forall w a
   .  Elf.ElfHeader w
-  -> (SomeRelocationResolver w
-      -> MemLoader w a)
-  -> MemLoader w a
-withRelocationResolver hdr f =
+  -> MemLoader w (SomeRelocationResolver w)
+getRelocationResolver hdr =
   case (Elf.headerClass hdr, Elf.headerMachine hdr) of
-    (Elf.ELFCLASS64, Elf.EM_X86_64) -> f (SomeRelocationResolver relaTargetX86_64)
---    (Elf.ELFCLASS32, Elf.EM_ARM)    -> f relaTargetARM
+    (Elf.ELFCLASS64, Elf.EM_X86_64) -> pure (SomeRelocationResolver relaTargetX86_64)
+    (Elf.ELFCLASS32, Elf.EM_ARM)    -> pure (SomeRelocationResolver relaTargetARM)
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
 
 data RelocMap w v = RelocMap !(AddrOffsetMap w v) !(ResolveFn v (MemLoader w) w)
@@ -522,7 +528,7 @@ mkRelocMap _dta _hdr _symtab Nothing Nothing = do
 mkRelocMap dta hdr symtab _mrelBuffer (Just relaBuffer) = do
  w <- uses mlsMemory memAddrWidth
  reprConstraints w $ do
-  withRelocationResolver hdr $ \(SomeRelocationResolver resolver) -> do
+   SomeRelocationResolver resolver <- getRelocationResolver hdr
    case Elf.elfRelaEntries dta relaBuffer of
     Left msg -> do
       addWarning (RelocationParseFailure msg)
@@ -534,7 +540,7 @@ mkRelocMap dta hdr symtab _mrelBuffer (Just relaBuffer) = do
 mkRelocMap dta hdr symtab (Just relBuffer) Nothing = do
  w <- uses mlsMemory memAddrWidth
  reprConstraints w $ do
-  withRelocationResolver hdr $ \(SomeRelocationResolver resolver) -> do
+   SomeRelocationResolver resolver <- getRelocationResolver hdr
    case Elf.elfRelEntries dta relBuffer of
     Left msg -> do
       addWarning (RelocationParseFailure msg)
@@ -961,8 +967,8 @@ memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
           memoryForElfSections e
         _ -> do
           let base = MemAddr { addrBase = adjustedLoadRegionIndex e opt
-                               , addrOffset = fromInteger (loadRegionBaseOffset opt)
-                               }
+                             , addrOffset = fromInteger (loadRegionBaseOffset opt)
+                             }
           memoryForElfSegments base e
   let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
   pure (mem, funcSymbols, warnings, symErrs)

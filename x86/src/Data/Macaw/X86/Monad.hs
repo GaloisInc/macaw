@@ -154,7 +154,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.eval
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
-  , memset
   , even_parity
   , fnstcw
   , getSegmentBase
@@ -495,7 +494,7 @@ constUpperBitsOnWriteRegisterView n rt rn  =
 -- | This returns the type associated with values that can be read
 -- or assigned for the semantics monad.
 data Location addr (tp :: Type) where
-  -- A location in the virtual address space of the process.
+  -- | A location in the virtual address space of the process.
   MemoryAddr :: !addr -> !(MemRepr tp) -> Location addr tp
 
   FullRegister :: !(X86Reg tp)
@@ -516,7 +515,7 @@ data Location addr (tp :: Type) where
   X87ControlReg :: !(X87_ControlReg w)
                 -> Location addr (BVType w)
 
-  -- The register stack: the argument is an offset from the stack
+  -- | The register stack: the argument is an offset from the stack
   -- top, so X87Register 0 is the top, X87Register 1 is the second,
   -- and so forth.
   X87StackRegister :: !Int
@@ -1536,7 +1535,7 @@ infix  4 .=
 ------------------------------------------------------------------------
 -- Semantics
 
--- | Defines operations that need to be supported at a specific bitwidht.
+-- | Defines operations that need to be supported at a specific bitwidth.
 type SupportedBVWidth n
    = ( 1 <= n
      , 4 <= n
@@ -1593,7 +1592,7 @@ get l0 =
       getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
 
 
--- | Assign a value to alocation.
+-- | Assign a value to a location.
 (.=) :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
 l .= e = setLoc l =<< eval e
 
@@ -1604,25 +1603,6 @@ modify :: Location (Addr ids) tp
 modify r f = do
   x <- get r
   r .= f x
-
--- | Set memory to the given value, for the number of words (nbytes
--- = count * typeWidth v)
-memset :: (1 <= n)
-       => BVExpr ids 64
-          -- ^ Number of values to set
-       -> BVExpr ids n
-          -- ^ Value to set
-       -> Addr ids
-          -- ^ Pointer to buffer to set
-       -> Expr ids BoolType
-          -- ^ Direction flag
-       -> X86Generator st ids ()
-memset count val dest dfl = do
-  count_v <- eval count
-  val_v   <- eval val
-  dest_v  <- eval dest
-  df_v    <- eval dfl
-  addArchStmt $ MemSet count_v val_v dest_v df_v
 
 -- | Return true if value contains an even number of true bits.
 even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)
