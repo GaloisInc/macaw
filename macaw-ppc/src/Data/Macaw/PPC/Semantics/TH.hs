@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -27,6 +28,7 @@ import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified What4.Expr.Builder as S
+import qualified What4.Interface as S
 
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
@@ -39,7 +41,7 @@ import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
 import           Data.Macaw.SemMC.TH.Monad
-import           Data.Macaw.SemMC.TH ( natReprTH, addEltTH, symFnName, asName )
+import           Data.Macaw.SemMC.TH ( natReprTH, floatInfoFromPrecisionTH, addEltTH, symFnName, asName )
 
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
@@ -61,6 +63,56 @@ ppcNonceAppEval bvi nonceApp =
     S.FnApp symFn args -> do
       let fnName = symFnName symFn
       case fnName of
+        "uf_fp_un_op_fpscr" -> return $
+          case FC.toListFC Some args of
+            [Some op, Some frA, Some fpscr] -> case getOpName op of
+              Just name -> do
+                valA <- addEltTH bvi frA
+                valFpscr <- addEltTH bvi fpscr
+                liftQ [|
+                    addArchExpr $
+                      FPSCR1 $(lift name) $(return valA) $(return valFpscr)
+                  |]
+              Nothing ->
+                fail $ "Invalid argument list for un_op_fpscr: " ++ showF args
+            _ -> fail $ "Invalid argument list for un_op_fpscr: " ++ showF args
+        "uf_fp_bin_op_fpscr" -> return $
+          case FC.toListFC Some args of
+            [Some op, Some frA, Some frB, Some fpscr] -> case getOpName op of
+              Just name -> do
+                valA <- addEltTH bvi frA
+                valB <- addEltTH bvi frB
+                valFpscr <- addEltTH bvi fpscr
+                liftQ [|
+                    addArchExpr $ FPSCR2
+                      $(lift name)
+                      $(return valA)
+                      $(return valB)
+                      $(return valFpscr)
+                  |]
+              Nothing ->
+                fail $ "Invalid argument list for un_op_fpscr: " ++ showF args
+            _ -> fail $ "Invalid argument list for bin_op_fpscr: " ++ showF args
+        "uf_fp_tern_op_fpscr" -> return $
+          case FC.toListFC Some args of
+            [Some op, Some frA, Some frB, Some frC, Some fpscr] ->
+              case getOpName op of
+                Just name -> do
+                  valA <- addEltTH bvi frA
+                  valB <- addEltTH bvi frB
+                  valC <- addEltTH bvi frC
+                  valFpscr <- addEltTH bvi fpscr
+                  liftQ [|
+                      addArchExpr $ FPSCR3
+                        $(lift name)
+                        $(return valA)
+                        $(return valB)
+                        $(return valC)
+                        $(return valFpscr)
+                    |]
+                Nothing -> fail $
+                  "Invalid argument list for un_op_fpscr: " ++ showF args
+            _ -> fail $ "Invalid argument list for tern_op_fpscr: " ++ showF args
         "uf_ppc_fp1" -> return $ do
           case FC.toListFC Some args of
             [Some op, Some frA, Some fpscr] -> do
@@ -159,19 +211,21 @@ ppcNonceAppEval bvi nonceApp =
 elementaryFPName :: String -> Maybe String
 elementaryFPName = L.stripPrefix "uf_fp_"
 
-addArchAssignment :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
-                  => M.ArchFn arch (M.Value arch ids) tp
-                  -> G.Generator arch ids s (G.Expr arch ids tp)
-addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
+addArchAssignment
+  :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
+  => M.ArchFn arch (M.Value arch ids) tp
+  -> G.Generator arch ids s (G.Expr arch ids tp)
+addArchAssignment expr = G.ValueExpr . M.AssignedValue <$>
+  G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
 
-addArchExpr :: (MM.MemWidth (M.RegAddrWidth (M.ArchReg arch)),
-                OrdF (M.ArchReg arch),
-                M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
-            => M.ArchFn arch (M.Value arch ids) tp
-            -> G.Generator arch ids s (M.Value arch ids tp)
-addArchExpr archfn = do
-  asgn <- G.addAssignment (M.EvalArchFn archfn (M.typeRepr archfn))
-  G.addExpr (G.ValueExpr (M.AssignedValue asgn))
+addArchExpr
+  :: ( MM.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+     , OrdF (M.ArchReg arch)
+     , M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr
+     )
+  => M.ArchFn arch (M.Value arch ids) tp
+  -> G.Generator arch ids s (M.Value arch ids tp)
+addArchExpr expr = G.addExpr =<< addArchAssignment expr
 
 floatingPointTH :: forall arch t fs f c
                  . (L.Location arch ~ APPC.Location arch,
@@ -185,31 +239,18 @@ floatingPointTH :: forall arch t fs f c
                  -> MacawQ arch t fs Exp
 floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
-    [Some a] ->
-      case fnName of
-        "round_single" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPCvt M.DoubleFloatRepr $(return fpval) M.SingleFloatRepr) |]
-        "single_to_double" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPCvt M.SingleFloatRepr $(return fpval) M.DoubleFloatRepr) |]
-        "is_qnan32" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPIsQNaN M.SingleFloatRepr $(return fpval)) |]
-        "is_qnan64" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPIsQNaN M.DoubleFloatRepr $(return fpval)) |]
-        "is_snan32" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPIsSNaN M.SingleFloatRepr $(return fpval)) |]
-        "is_snan64" -> do
-          fpval <- addEltTH bvi a
-          liftQ [| addArchExpr (FPIsSNaN M.DoubleFloatRepr $(return fpval)) |]
-        _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
-    [Some a, Some b] ->
+    [Some a] -> case fnName of
+      "double_to_single" -> do
+        fpval <- addEltTH bvi a
+        liftQ [|
+            addArchExpr $
+              FPCoerce M.SingleFloatRepr M.DoubleFloatRepr $(return fpval)
+          |]
+      _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
+    [Some _a, Some _b] ->
       case fnName of
         _ -> fail ("Unsupported binary floating point intrinsic: " ++ fnName)
-    [Some a, Some b, Some c] ->
+    [Some _a, Some _b, Some _c] ->
       case fnName of
         _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
     _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
@@ -221,7 +262,7 @@ ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                 => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp
                 -> Maybe (MacawQ arch t fs Exp)
-ppcAppEvaluator interps elt = case elt of
+ppcAppEvaluator interps = \case
   S.BVSdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
@@ -232,4 +273,111 @@ ppcAppEvaluator interps elt = case elt of
     e2 <- addEltTH interps bv2
     liftQ [| addArchAssignment (UDiv $(natReprTH w) $(return e1) $(return e2))
            |]
+
+  S.FloatNeg fpp fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPNeg $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.FloatAbs fpp fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPAbs $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.FloatSqrt fpp S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPSqrt $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+
+  S.FloatAdd fpp S.RNE fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [|
+        addArchAssignment $
+          FPAdd $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+      |]
+  S.FloatSub fpp S.RNE fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [|
+        addArchAssignment $
+          FPSub $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+      |]
+  S.FloatMul fpp S.RNE fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [|
+        addArchAssignment $
+          FPMul $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+      |]
+  S.FloatDiv fpp S.RNE fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [|
+        addArchAssignment $
+          FPDiv $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+      |]
+
+  S.FloatFMA fpp S.RNE fp1 fp2 fp3 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    e3 <- addEltTH interps fp3
+    liftQ [|
+        addArchAssignment $ FPFMA
+          $(floatInfoFromPrecisionTH fpp)
+          $(return e1)
+          $(return e2)
+          $(return e3)
+      |]
+
+  S.FloatLt fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [| addArchAssignment $ FPLt $(return e1) $(return e2) |]
+  S.FloatFpEq fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [| addArchAssignment $ FPEq $(return e1) $(return e2) |]
+
+  S.FloatIsNaN fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [| addArchAssignment $ FPIsNaN $(return e) |]
+
+  S.FloatCast fpp S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPCast $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.FloatToBinary fpp fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $
+          FPToBinary $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.FloatFromBinary fpp fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $
+          FPFromBinary $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.FloatToSBV w S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [| addArchAssignment $ FPToSBV $(natReprTH w) $(return e) |]
+  S.FloatToBV w S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [| addArchAssignment $ FPToUBV $(natReprTH w) $(return e) |]
+  S.SBVToFloat fpp S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $
+          FPFromUBV $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+  S.BVToFloat fpp S.RNE fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $
+          FPFromUBV $(floatInfoFromPrecisionTH fpp) $(return e)
+      |]
+
   _ -> Nothing

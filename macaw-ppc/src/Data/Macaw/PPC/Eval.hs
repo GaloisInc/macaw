@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Eval (
@@ -96,19 +97,37 @@ absEvalArchFn :: (PPCArchConstraints ppc)
               -> AbsProcessorState (ArchReg ppc) ids
               -> ArchFn ppc (Value ppc ids) tp
               -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
-absEvalArchFn _ _r f =
-  case f of
-    SDiv {} -> MA.TopV
-    UDiv {} -> MA.TopV
-    FPIsQNaN {} -> MA.TopV
-    FPIsSNaN {} -> MA.TopV
-    FPCvt {} -> MA.TopV
-    FP1 {} -> MA.TopV
-    FP2 {} -> MA.TopV
-    FP3 {} -> MA.TopV
-    Vec1 {} -> MA.TopV
-    Vec2 {} -> MA.TopV
-    Vec3 {} -> MA.TopV
+absEvalArchFn _ _r = \case
+  SDiv{}         -> MA.TopV
+  UDiv{}         -> MA.TopV
+  FPNeg{}        -> MA.TopV
+  FPAbs{}        -> MA.TopV
+  FPSqrt{}       -> MA.TopV
+  FPAdd{}        -> MA.TopV
+  FPSub{}        -> MA.TopV
+  FPMul{}        -> MA.TopV
+  FPDiv{}        -> MA.TopV
+  FPFMA{}        -> MA.TopV
+  FPLt{}         -> MA.TopV
+  FPEq{}         -> MA.TopV
+  FPIsNaN{}      -> MA.TopV
+  FPCast{}       -> MA.TopV
+  FPToBinary{}   -> MA.TopV
+  FPFromBinary{} -> MA.TopV
+  FPToSBV{}      -> MA.TopV
+  FPToUBV{}      -> MA.TopV
+  FPFromSBV{}    -> MA.TopV
+  FPFromUBV{}    -> MA.TopV
+  FPCoerce{}     -> MA.TopV
+  FPSCR1{}       -> MA.TopV
+  FPSCR2{}       -> MA.TopV
+  FPSCR3{}       -> MA.TopV
+  FP1{}          -> MA.TopV
+  FP2{}          -> MA.TopV
+  FP3{}          -> MA.TopV
+  Vec1{}         -> MA.TopV
+  Vec2{}         -> MA.TopV
+  Vec3{}         -> MA.TopV
 
 -- | For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
