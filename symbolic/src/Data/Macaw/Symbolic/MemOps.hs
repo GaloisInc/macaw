@@ -69,12 +69,12 @@ import           Lang.Crucible.LLVM.MemModel
           , mkNullPointer
           , bitvectorType
           , ppPtr )
-import Lang.Crucible.LLVM.DataLayout(EndianForm(..))
-import Lang.Crucible.LLVM.Bytes(toBytes)
+import           Lang.Crucible.LLVM.DataLayout (EndianForm(..))
+import           Lang.Crucible.LLVM.Bytes (toBytes)
 
-import Data.Macaw.Symbolic.CrucGen (addrWidthIsPos)
-import Data.Macaw.Symbolic.PersistentState(ToCrucibleType)
-import Data.Macaw.CFG.Core(MemRepr(BVMemRepr))
+import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
+import           Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
+import           Data.Macaw.CFG.Core (MemRepr(BVMemRepr))
 import qualified Data.Macaw.CFG as M
 
 -- | The 'GlobalMap' is a function that maps from (possibly segmented) program
