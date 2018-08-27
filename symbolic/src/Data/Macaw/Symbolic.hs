@@ -26,6 +26,8 @@ module Data.Macaw.Symbolic
   , mkFunCFG
   , Data.Macaw.Symbolic.PersistentState.ArchRegContext
   , Data.Macaw.Symbolic.PersistentState.ToCrucibleType
+  , Data.Macaw.Symbolic.PersistentState.ToCrucibleFloatInfo
+  , Data.Macaw.Symbolic.PersistentState.floatInfoToCrucible
   , Data.Macaw.Symbolic.PersistentState.macawAssignToCrucM
   , Data.Macaw.Symbolic.CrucGen.ArchRegStruct
   , Data.Macaw.Symbolic.CrucGen.MacawCrucibleRegTypes
@@ -52,6 +54,7 @@ import           Data.Parameterized.Context as Ctx
 import           Data.Word
 
 import qualified What4.FunctionName as C
+import           What4.InterpretedFloatingPoint
 import           What4.Interface
 import qualified What4.ProgramLoc as C
 import           What4.Symbol (userSymbol)
@@ -458,6 +461,10 @@ freshValue sym str w ty =
              base <- natLit sym 0
              offs <- freshConstant sym nm (C.BaseBVRepr y)
              return (MM.LLVMPointer base offs)
+
+    M.FloatTypeRepr fi -> do
+      nm <- symName str
+      freshFloatConstant sym nm $ floatInfoToCrucible fi
 
     M.BoolTypeRepr ->
       do nm <- symName str

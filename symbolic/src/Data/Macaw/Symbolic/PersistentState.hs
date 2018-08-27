@@ -8,6 +8,7 @@ This defines the monad used to map Reopt blocks to Crucible.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
@@ -22,9 +23,13 @@ module Data.Macaw.Symbolic.PersistentState
   , initCrucPersistentState
     -- * Types
   , ToCrucibleType
+  , ToCrucibleFloatInfo
+  , FromCrucibleFloatInfo
   , CtxToCrucibleType
   , ArchRegContext
   , typeToCrucible
+  , floatInfoToCrucible
+  , floatInfoFromCrucible
   , typeCtxToCrucible
   , macawAssignToCrucM
   , memReprToCrucible
@@ -59,9 +64,23 @@ type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
 
 type family ToCrucibleType (tp :: M.Type) :: C.CrucibleType where
   ToCrucibleType (M.BVType w)     = MM.LLVMPointerType w
+  ToCrucibleType (M.FloatType fi) = C.FloatType (ToCrucibleFloatInfo fi)
   ToCrucibleType ('M.TupleType l) = C.StructType (ToCrucibleTypeList l)
   ToCrucibleType M.BoolType       = C.BaseToType C.BaseBoolType
 
+type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
+  ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
+  ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
+  ToCrucibleFloatInfo M.DoubleFloat = C.DoubleFloat
+  ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
+  ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
+
+type family FromCrucibleFloatInfo (fi :: C.FloatInfo) :: M.FloatInfo where
+  FromCrucibleFloatInfo C.HalfFloat   = M.HalfFloat
+  FromCrucibleFloatInfo C.SingleFloat = M.SingleFloat
+  FromCrucibleFloatInfo C.DoubleFloat = M.DoubleFloat
+  FromCrucibleFloatInfo C.QuadFloat   = M.QuadFloat
+  FromCrucibleFloatInfo C.X86_80Float = M.X86_80Float
 
 type family CtxToCrucibleType (mtp :: Ctx M.Type) :: Ctx C.CrucibleType where
   CtxToCrucibleType EmptyCtx   = EmptyCtx
@@ -92,7 +111,28 @@ typeToCrucible tp =
   case tp of
     M.BoolTypeRepr  -> C.BoolRepr
     M.BVTypeRepr w  -> MM.LLVMPointerRepr w
+    M.FloatTypeRepr fi -> C.FloatRepr $ floatInfoToCrucible fi
     M.TupleTypeRepr a -> C.StructRepr (typeListToCrucible a)
+
+floatInfoToCrucible
+  :: M.FloatInfoRepr fi -> C.FloatInfoRepr (ToCrucibleFloatInfo fi)
+floatInfoToCrucible = \case
+  M.HalfFloatRepr   -> knownRepr
+  M.SingleFloatRepr -> knownRepr
+  M.DoubleFloatRepr -> knownRepr
+  M.QuadFloatRepr   -> knownRepr
+  M.X86_80FloatRepr -> knownRepr
+
+floatInfoFromCrucible
+  :: C.FloatInfoRepr fi -> M.FloatInfoRepr (FromCrucibleFloatInfo fi)
+floatInfoFromCrucible = \case
+  C.HalfFloatRepr   -> knownRepr
+  C.SingleFloatRepr -> knownRepr
+  C.DoubleFloatRepr -> knownRepr
+  C.QuadFloatRepr   -> knownRepr
+  C.X86_80FloatRepr -> knownRepr
+  fi ->
+    error $ "Unsupported Crucible floating-point format in Macaw: " ++ show fi
 
 typeListToCrucible ::
     P.List M.TypeRepr ctx ->
