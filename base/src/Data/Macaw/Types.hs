@@ -6,15 +6,20 @@ The type of machine words, including bit vectors and floating point
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveLift #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Types
@@ -27,8 +32,10 @@ module Data.Macaw.Types
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
+import qualified Language.Haskell.TH.Syntax as TH
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 -- FIXME: move
@@ -68,16 +75,8 @@ n256 = knownNat
 data Type
   = -- | A bitvector with the given number of bits.
     BVType Nat
-    -- | 64 bit binary IEE754
-  | DoubleFloat
-    -- | 32 bit binary IEE754
-  | SingleFloat
-    -- | X86 80-bit extended floats
-  | X86_80Float
-    -- | 128 bit binary IEE754
-  | QuadFloat
-    -- | 16 bit binary IEE754
-  | HalfFloat
+    -- | A floating point in the given format.
+  | FloatType FloatInfo
     -- | A Boolean value
   | BoolType
     -- | A tuple of types
@@ -86,28 +85,20 @@ data Type
 
 -- Return number of bytes in the type.
 type family TypeBytes (tp :: Type) :: Nat where
-  TypeBytes (BVType  8) =  1
-  TypeBytes (BVType 16) =  2
-  TypeBytes (BVType 32) =  4
-  TypeBytes (BVType 64) =  8
-  TypeBytes HalfFloat   =  2
-  TypeBytes SingleFloat =  4
-  TypeBytes DoubleFloat =  8
-  TypeBytes QuadFloat   = 16
-  TypeBytes X86_80Float = 10
+  TypeBytes (BVType  8) = 1
+  TypeBytes (BVType 16) = 2
+  TypeBytes (BVType 32) = 4
+  TypeBytes (BVType 64) = 8
+  TypeBytes (FloatType fi) = FloatInfoBytes fi
 
 -- Return number of bits in the type.
 type family TypeBits (tp :: Type) :: Nat where
-  TypeBits (BVType n)  = n
-  TypeBits HalfFloat   = 16
-  TypeBits SingleFloat = 32
-  TypeBits DoubleFloat = 64
-  TypeBits QuadFloat   = 128
-  TypeBits X86_80Float = 80
-
-type FloatType tp = BVType (8 * TypeBytes tp)
+  TypeBits (BVType n) = n
+  TypeBits (FloatType fi) = 8 * FloatInfoBytes fi
 
 type BVType = 'BVType
+
+type FloatType = 'FloatType
 
 type BoolType = 'BoolType
 
@@ -117,33 +108,16 @@ type TupleType = 'TupleType
 data TypeRepr (tp :: Type) where
   BoolTypeRepr :: TypeRepr BoolType
   BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
+  FloatTypeRepr :: !(FloatInfoRepr fi) -> TypeRepr (FloatType fi)
   TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
 
-instance TestEquality TypeRepr where
-  testEquality BoolTypeRepr BoolTypeRepr = do
-    return Refl
-  testEquality (BVTypeRepr m) (BVTypeRepr n) = do
-    Refl <- testEquality m n
-    return Refl
-  testEquality _ _ = Nothing
-
-instance OrdF TypeRepr where
-  compareF BoolTypeRepr BoolTypeRepr = EQF
-  compareF BoolTypeRepr _ = LTF
-  compareF _ BoolTypeRepr = GTF
-  compareF (BVTypeRepr m) (BVTypeRepr n) = do
-    lexCompareF m n EQF
-  compareF BVTypeRepr{} _ = LTF
-  compareF _ BVTypeRepr{} = GTF
-  compareF (TupleTypeRepr x) (TupleTypeRepr y) =
-    lexCompareF x y EQF
-
 instance Show (TypeRepr tp) where
   show BoolTypeRepr = "bool"
   show (BVTypeRepr w) = "[" ++ show w ++ "]"
+  show (FloatTypeRepr fi) = show fi ++ "_float"
   show (TupleTypeRepr P.Nil) = "()"
   show (TupleTypeRepr (h P.:< z)) =
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
@@ -154,96 +128,123 @@ instance KnownRepr TypeRepr BoolType where
 instance (KnownNat n, 1 <= n) => KnownRepr TypeRepr (BVType n) where
   knownRepr = BVTypeRepr knownNat
 
+instance (KnownRepr FloatInfoRepr fi) => KnownRepr TypeRepr (FloatType fi) where
+  knownRepr = FloatTypeRepr knownRepr
+
 instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
   knownRepr = TupleTypeRepr knownRepr
 
 ------------------------------------------------------------------------
 -- Floating point sizes
 
+data FloatInfo
+  = HalfFloat   -- ^ 16 bit binary IEE754
+  | SingleFloat -- ^ 32 bit binary IEE754
+  | DoubleFloat -- ^ 64 bit binary IEE754
+  | QuadFloat   -- ^ 128 bit binary IEE754
+  | X86_80Float -- ^ X86 80-bit extended floats
+
+type HalfFloat   = 'HalfFloat
 type SingleFloat = 'SingleFloat
 type DoubleFloat = 'DoubleFloat
-type X86_80Float = 'X86_80Float
 type QuadFloat   = 'QuadFloat
-type HalfFloat   = 'HalfFloat
+type X86_80Float = 'X86_80Float
 
-data FloatInfoRepr (flt::Type) where
-  DoubleFloatRepr :: FloatInfoRepr DoubleFloat
-  SingleFloatRepr :: FloatInfoRepr SingleFloat
-  X86_80FloatRepr :: FloatInfoRepr X86_80Float
-  QuadFloatRepr   :: FloatInfoRepr QuadFloat
+data FloatInfoRepr (fi :: FloatInfo) where
   HalfFloatRepr   :: FloatInfoRepr HalfFloat
+  SingleFloatRepr :: FloatInfoRepr SingleFloat
+  DoubleFloatRepr :: FloatInfoRepr DoubleFloat
+  QuadFloatRepr   :: FloatInfoRepr QuadFloat
+  X86_80FloatRepr :: FloatInfoRepr X86_80Float
 
-deriving instance Show (FloatInfoRepr tp)
+instance KnownRepr FloatInfoRepr HalfFloat where
+  knownRepr = HalfFloatRepr
+instance KnownRepr FloatInfoRepr SingleFloat where
+  knownRepr = SingleFloatRepr
+instance KnownRepr FloatInfoRepr DoubleFloat where
+  knownRepr = DoubleFloatRepr
+instance KnownRepr FloatInfoRepr QuadFloat where
+  knownRepr = QuadFloatRepr
+instance KnownRepr FloatInfoRepr X86_80Float where
+  knownRepr = X86_80FloatRepr
+
+instance Show (FloatInfoRepr fi) where
+  show HalfFloatRepr   = "half"
+  show SingleFloatRepr = "single"
+  show DoubleFloatRepr = "double"
+  show QuadFloatRepr   = "quad"
+  show X86_80FloatRepr = "x87_80"
+
+instance Pretty (FloatInfoRepr fi) where
+  pretty = text . show
+
+deriving instance TH.Lift (FloatInfoRepr fi)
+
+type family FloatInfoBytes (fi :: FloatInfo) :: Nat where
+  FloatInfoBytes HalfFloat   = 2
+  FloatInfoBytes SingleFloat = 4
+  FloatInfoBytes DoubleFloat = 8
+  FloatInfoBytes QuadFloat   = 16
+  FloatInfoBytes X86_80Float = 10
+
+floatInfoBytes :: FloatInfoRepr fi -> NatRepr (FloatInfoBytes fi)
+floatInfoBytes = \case
+  HalfFloatRepr   -> knownNat
+  SingleFloatRepr -> knownNat
+  DoubleFloatRepr -> knownNat
+  QuadFloatRepr   -> knownNat
+  X86_80FloatRepr -> knownNat
+
+floatInfoBytesIsPos :: FloatInfoRepr fi -> LeqProof 1 (FloatInfoBytes fi)
+floatInfoBytesIsPos = \case
+  HalfFloatRepr   -> LeqProof
+  SingleFloatRepr -> LeqProof
+  DoubleFloatRepr -> LeqProof
+  QuadFloatRepr   -> LeqProof
+  X86_80FloatRepr -> LeqProof
+
+type FloatInfoBits (fi :: FloatInfo) = 8 * FloatInfoBytes fi
+
+floatInfoBits :: FloatInfoRepr fi -> NatRepr (FloatInfoBits fi)
+floatInfoBits = natMultiply (knownNat @8) . floatInfoBytes
+
+floatInfoBitsIsPos :: FloatInfoRepr fi -> LeqProof 1 (FloatInfoBits fi)
+floatInfoBitsIsPos = \case
+  HalfFloatRepr   -> LeqProof
+  SingleFloatRepr -> LeqProof
+  DoubleFloatRepr -> LeqProof
+  QuadFloatRepr   -> LeqProof
+  X86_80FloatRepr -> LeqProof
+
+-- | The bitvector associted with the given floating-point format.
+type FloatBVType (fi :: FloatInfo) = BVType (FloatInfoBits fi)
+
+floatBVTypeRepr :: FloatInfoRepr fi -> TypeRepr (FloatBVType fi)
+floatBVTypeRepr fi | LeqProof <- floatInfoBitsIsPos fi =
+  BVTypeRepr $ floatInfoBits fi
+
+$(return [])
+
+instance TestEquality TypeRepr where
+  testEquality = $(structuralTypeEquality [t|TypeRepr|]
+    [ (ConType [t|NatRepr|] `TypeApp` AnyType, [|testEquality|])
+    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
+    , ( ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType
+      , [|testEquality|]
+      )
+    ])
+
+instance OrdF TypeRepr where
+  compareF = $(structuralTypeOrd [t|TypeRepr|]
+    [ (ConType [t|NatRepr|] `TypeApp` AnyType, [|compareF|])
+    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
+    , (ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType, [|compareF|])
+    ])
 
 instance TestEquality FloatInfoRepr where
-  testEquality x y = orderingF_refl (compareF x y)
-
+  testEquality = $(structuralTypeEquality [t|FloatInfoRepr|] [])
 instance OrdF FloatInfoRepr where
-  compareF DoubleFloatRepr DoubleFloatRepr = EQF
-  compareF DoubleFloatRepr _               = LTF
-  compareF _               DoubleFloatRepr = GTF
-
-  compareF SingleFloatRepr SingleFloatRepr = EQF
-  compareF SingleFloatRepr _               = LTF
-  compareF _               SingleFloatRepr = GTF
-
-  compareF X86_80FloatRepr X86_80FloatRepr = EQF
-  compareF X86_80FloatRepr _               = LTF
-  compareF _               X86_80FloatRepr = GTF
-
-  compareF QuadFloatRepr   QuadFloatRepr   = EQF
-  compareF QuadFloatRepr   _               = LTF
-  compareF _               QuadFloatRepr   = GTF
-
-  compareF HalfFloatRepr   HalfFloatRepr   = EQF
-
-instance Pretty (FloatInfoRepr flt) where
-  pretty DoubleFloatRepr = text "double"
-  pretty SingleFloatRepr = text "single"
-  pretty X86_80FloatRepr = text "x87_80"
-  pretty QuadFloatRepr   = text "quad"
-  pretty HalfFloatRepr   = text "half"
-
-
-floatInfoBytes :: FloatInfoRepr flt -> NatRepr (TypeBytes flt)
-floatInfoBytes fir =
-  case fir of
-    HalfFloatRepr         -> knownNat
-    SingleFloatRepr       -> knownNat
-    DoubleFloatRepr       -> knownNat
-    QuadFloatRepr         -> knownNat
-    X86_80FloatRepr       -> knownNat
-
-floatInfoBytesIsPos :: FloatInfoRepr flt -> LeqProof 1 (TypeBytes flt)
-floatInfoBytesIsPos fir =
-  case fir of
-    HalfFloatRepr         -> LeqProof
-    SingleFloatRepr       -> LeqProof
-    DoubleFloatRepr       -> LeqProof
-    QuadFloatRepr         -> LeqProof
-    X86_80FloatRepr       -> LeqProof
-
-
-floatInfoBits :: FloatInfoRepr flt -> NatRepr (8 * TypeBytes flt)
-floatInfoBits fir = natMultiply (knownNat :: NatRepr 8) (floatInfoBytes fir)
-
-floatTypeRepr :: FloatInfoRepr flt -> TypeRepr (BVType (8 * TypeBytes flt))
-floatTypeRepr fir =
-  case fir of
-    HalfFloatRepr         -> knownRepr
-    SingleFloatRepr       -> knownRepr
-    DoubleFloatRepr       -> knownRepr
-    QuadFloatRepr         -> knownRepr
-    X86_80FloatRepr       -> knownRepr
-
-floatInfoBitsIsPos :: FloatInfoRepr flt -> LeqProof 1 (8 * TypeBytes flt)
-floatInfoBitsIsPos fir =
-  case fir of
-    HalfFloatRepr         -> LeqProof
-    SingleFloatRepr       -> LeqProof
-    DoubleFloatRepr       -> LeqProof
-    QuadFloatRepr         -> LeqProof
-    X86_80FloatRepr       -> LeqProof
+  compareF = $(structuralTypeOrd [t|FloatInfoRepr|] [])
 
 ------------------------------------------------------------------------
 --
