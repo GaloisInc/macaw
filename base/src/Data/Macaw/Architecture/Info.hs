@@ -14,7 +14,6 @@ module Data.Macaw.Architecture.Info
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
-  , disassembleAndRewrite
   ) where
 
 import           Control.Monad.ST
@@ -43,18 +42,17 @@ import           Data.Macaw.Memory
 -- block.
 type DisassembleFn arch
    = forall s ids
-   .  Memory (ArchAddrWidth arch)
-   -> NonceGenerator (ST s) ids
+   .  NonceGenerator (ST s) ids
    -> ArchSegmentOff arch
       -- ^ The offset to start reading from.
-   -> ArchAddrWord arch
+   -> Int
       -- ^ Maximum offset for this to read from.
    -> AbsBlockState (ArchReg arch)
       -- ^ Abstract state associated with address that we are disassembling
       -- from.
       --
       -- This is used for things like the height of the x87 stack.
-   -> ST s ([Block arch ids], MemWord (ArchAddrWidth arch), Maybe String)
+   -> ST s ([Block arch ids], Int, Maybe String)
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -66,8 +64,6 @@ data ArchitectureInfo arch
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
-     , jumpTableEntrySize :: !(MemWord (ArchAddrWidth arch))
-       -- ^ The size of each entry in a jump table.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disasembling a block.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
@@ -187,12 +183,3 @@ rewriteBlock info rwctx b = do
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
           }
-
--- | Translate code into blocks and simplify the resulting blocks.
-disassembleAndRewrite :: ArchitectureInfo arch ->  DisassembleFn arch
-disassembleAndRewrite ainfo mem nonceGen addr max_size ab =
-  withArchConstraints ainfo $ do
-  (bs0,sz, maybeError) <- disassembleFn ainfo mem nonceGen addr max_size ab
-  ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) (rewriteArchStmt ainfo)
-  bs1 <- traverse (rewriteBlock ainfo ctx) bs0
-  pure (bs1, sz, maybeError)

@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3
+version: 0.3.1
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -39,7 +39,7 @@ library
     IntervalMap >= 0.5,
     lens >= 4.7,
     mtl,
-    parameterized-utils >= 0.1.6,
+    parameterized-utils >= 1.0.1,
     text,
     vector,
     QuickCheck >= 2.7
@@ -55,6 +55,7 @@ library
     Data.Macaw.Architecture.Info
     Data.Macaw.CFG
     Data.Macaw.CFG.App
+    Data.Macaw.CFG.AssignRhs
     Data.Macaw.CFG.Block
     Data.Macaw.CFG.BlockLabel
     Data.Macaw.CFG.Core
@@ -70,6 +71,7 @@ library
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
+    Data.Macaw.SCFG
     Data.Macaw.Types
     Data.Macaw.Utils.Pretty
 

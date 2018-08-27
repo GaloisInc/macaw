@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
+Copyright        : (c) Galois, Inc 2015-2018
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This defines a data type `App` for representing operations that can be
@@ -61,11 +61,16 @@ data App (f :: Type -> *) (tp :: Type) where
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
 
-  -- Truncate a bitvector value.
+  -- | Given a @m@-bit bitvector and a natural number @n@ less than @m@, this returns
+  -- the bitvector with the @n@ least significant bits.
   Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
-  -- Signed extension.
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
+  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
+  -- the same as the most significant bit in @x@.
   SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
-  -- Unsigned extension.
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
+  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
+  -- all @false@.
   UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
 
   ----------------------------------------------------------------------

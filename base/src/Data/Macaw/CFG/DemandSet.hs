@@ -1,3 +1,9 @@
+{-|
+Copyright  : (c) Galois, Inc 2017-2018
+Maintainer : jhendrix@galois.com
+
+This module provides a rewriter for simplifying values.
+-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -28,6 +34,7 @@ import           Data.Macaw.CFG
 ------------------------------------------------------------------------
 -- Functions for computing demanded values
 
+-- | Denotes a set of assignments
 type AssignIdSet ids = Set (Some (AssignId ids))
 
 -- | This provides the architecture specific functions needed to

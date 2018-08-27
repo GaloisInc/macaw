@@ -1,5 +1,5 @@
 {-|
-Copyright  : (c) Galois, Inc 2017
+Copyright  : (c) Galois, Inc 2017-2018
 Maintainer : jhendrix@galois.com
 
 This provides a rewriter for simplifying values.
@@ -23,9 +23,11 @@ module Data.Macaw.CFG.Rewriter
   ) where
 
 import           Control.Lens
-import           Control.Monad.State.Strict
 import           Control.Monad.ST
+import           Control.Monad.State.Strict
 import           Data.Bits
+import           Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -40,14 +42,22 @@ import           Data.Macaw.Types
 data RewriteContext arch s src tgt
    = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST s) tgt)
                       -- ^ Generator for making new nonces in the target ST monad
-                    , rwctxArchFn    :: !(forall tp
-                                            .  ArchFn arch (Value arch src) tp
-                                            -> Rewriter arch s src tgt (Value arch tgt tp))
+                    , rwctxArchFn
+                      :: !(forall tp
+                            .  ArchFn arch (Value arch src) tp
+                            -> Rewriter arch s src tgt (Value arch tgt tp))
+                      -- ^ Rewriter for architecture-specific functions
+                    , rwctxArchStmt
+                      :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
                       -- ^ Rewriter for architecture-specific statements
-                    , rwctxArchStmt  :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
-                      -- ^ Rewriter for architecture-specific statements
-                    , rwctxConstraints :: (forall a . (RegisterInfo (ArchReg arch) => a) -> a)
+                    , rwctxConstraints
+                      :: !(forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
+                    , rwctxSectionAddrMap
+                      :: !(Map SectionIndex (ArchSegmentOff arch))
+                      -- ^ Map from section indices to the address they are loaded at
+                      -- if any.
+                      -- This is used to replace section references with their address.
                     , rwctxCache :: !(STRef s (MapF (AssignId src) (Value arch tgt)))
                       -- ^ A reference to a  map from source assignment
                       -- identifiers to the updated value.
@@ -67,13 +77,16 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                      -> Rewriter arch s src tgt (Value arch tgt tp))
                  -> (ArchStmt arch (Value arch src)
                      -> Rewriter arch s src tgt ())
+                 -> Map SectionIndex (ArchSegmentOff arch)
+                    -- ^ Map from loaded section indices to their address.
                  -> ST s (RewriteContext arch s src tgt)
-mkRewriteContext nonceGen archFn archStmt = do
+mkRewriteContext nonceGen archFn archStmt secAddrMap = do
   ref <- newSTRef MapF.empty
   pure $! RewriteContext { rwctxNonceGen = nonceGen
                          , rwctxArchFn = archFn
                          , rwctxArchStmt = archStmt
                          , rwctxConstraints = \a -> a
+                         , rwctxSectionAddrMap = secAddrMap
                          , rwctxCache = ref
                          }
 
@@ -166,6 +179,15 @@ rewriteApp app = do
       f' <- rewriteApp (Trunc f w)
       rewriteApp $ Mux (BVTypeRepr w) c t' f'
 
+    Trunc (valueAsApp -> Just (UExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ UExt v w
+    Trunc (valueAsApp -> Just (SExt v _)) w -> case compareNat w (typeWidth v) of
+      NatLT _ -> rewriteApp $ Trunc v w
+      NatEQ   -> pure v
+      NatGT _ -> rewriteApp $ SExt v w
+
     SExt (BVValue u x) w -> do
       pure $ BVValue w $ toUnsigned w $ toSigned u x
     UExt (BVValue _ x) w -> do
@@ -200,6 +222,27 @@ rewriteApp app = do
        else
         pure (BoolValue False)
     AndApp x y@BoolValue{} -> rewriteApp (AndApp y x)
+    -- x < y && x <= y   =   x < y
+    AndApp   (valueAsApp -> Just (BVUnsignedLe x  y ))
+           v@(valueAsApp -> Just (BVUnsignedLt x' y'))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp v@(valueAsApp -> Just (BVUnsignedLt x' y'))
+             (valueAsApp -> Just (BVUnsignedLe x  y ))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp   (valueAsApp -> Just (BVSignedLe x  y ))
+           v@(valueAsApp -> Just (BVSignedLt x' y'))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
+    AndApp v@(valueAsApp -> Just (BVSignedLt x' y'))
+             (valueAsApp -> Just (BVSignedLe x  y ))
+      | Just Refl <- testEquality (typeWidth x) (typeWidth x')
+      , (x,y) == (x',y')
+      -> pure v
 
     OrApp (BoolValue xc) y -> do
       if xc then
@@ -207,10 +250,20 @@ rewriteApp app = do
        else
         pure y
     OrApp x y@BoolValue{} -> rewriteApp (OrApp y x)
+
     NotApp (BoolValue b) ->
       pure $! boolLitValue (not b)
     NotApp (valueAsApp -> Just (NotApp c)) ->
       pure $! c
+    NotApp (valueAsApp -> Just (BVUnsignedLe x y)) ->
+      rewriteApp (BVUnsignedLt y x)
+    NotApp (valueAsApp -> Just (BVUnsignedLt x y)) ->
+      rewriteApp (BVUnsignedLe y x)
+    NotApp (valueAsApp -> Just (BVSignedLe x y)) ->
+      rewriteApp (BVSignedLt y x)
+    NotApp (valueAsApp -> Just (BVSignedLt x y)) ->
+      rewriteApp (BVSignedLe y x)
+
     XorApp (BoolValue b) x ->
       if b then
         rewriteApp (NotApp x)
@@ -226,18 +279,21 @@ rewriteApp app = do
       pure x
     BVAdd w (BVValue _ x) (BVValue _ y) -> do
       pure (BVValue w (toUnsigned w (x + y)))
-    -- Move constant to right
+    -- If first argument is constant and second is not, then commute.
     BVAdd w (BVValue _ x) y -> do
-      rewriteApp (BVAdd w y (BVValue w x))
+      rewriteApp $ BVAdd w y (BVValue w x)
     -- (x + yc) + zc -> x + (yc + zc)
     BVAdd w (valueAsApp -> Just (BVAdd _ x (BVValue _ yc))) (BVValue _ zc) -> do
-      rewriteApp (BVAdd w x (BVValue w (toUnsigned w (yc + zc))))
+      rewriteApp $ BVAdd w x (BVValue w (toUnsigned w (yc + zc)))
     -- (x - yc) + zc -> x + (zc - yc)
     BVAdd w (valueAsApp -> Just (BVSub _ x (BVValue _ yc))) (BVValue _ zc) -> do
-      rewriteApp (BVAdd w x (BVValue w (toUnsigned w (zc - yc))))
+      rewriteApp $ BVAdd w x (BVValue w (toUnsigned w (zc - yc)))
     -- (xc - y) + zc => (xc + zc) - y
     BVAdd w (valueAsApp -> Just (BVSub _ (BVValue _ xc) y)) (BVValue _ zc) -> do
-      rewriteApp (BVSub w (BVValue w (toUnsigned w (xc + zc))) y)
+      rewriteApp $ BVSub w (BVValue w (toUnsigned w (xc + zc))) y
+    -- Increment address by a constant.
+    BVAdd _ (RelocatableValue r a) (BVValue _ c) ->
+      pure $ RelocatableValue r (incAddr c a)
 
     -- addr a + (c - addr b) => c + (addr a - addr b)
     BVAdd w (RelocatableValue _ a) (valueAsApp -> Just (BVSub _ c (RelocatableValue _ b)))
@@ -248,20 +304,119 @@ rewriteApp app = do
     BVSub w x (BVValue _ yc) -> do
       rewriteApp (BVAdd w x (BVValue w (toUnsigned w (negate yc))))
 
-    -- x < y => x -> not (y <= x)
-    BVUnsignedLt x y -> do
-      r <- rewriteApp (BVUnsignedLe y x)
-      rewriteApp (NotApp r)
     BVUnsignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x <= toUnsigned w y
+    -- in uext(x) <= uext(y) we can eliminate one or both uext's.
+    -- same for sext's, even with unsigned comparisons!
+    -- uext(x) <= yc = true    if yc >= 2^width(x)-1
+    -- uext(x) <= yc = x <= yc if yc <  2^width(x)-1
+    -- similar shortcuts exist for the other inequalities
+    BVUnsignedLe (BVValue _ x) (valueAsApp -> Just (UExt y _)) -> do
+      let wShort = typeWidth y
+      if x <= maxUnsigned wShort
+        then rewriteApp (BVUnsignedLe (BVValue wShort x) y)
+        else pure $ boolLitValue False
+    BVUnsignedLe (valueAsApp -> Just (UExt x _)) (BVValue _ y) -> do
+      let wShort = typeWidth x
+      if y < maxUnsigned wShort
+        then rewriteApp (BVUnsignedLe x (BVValue wShort y))
+        else pure $ boolLitValue True
+    BVUnsignedLe (valueAsApp -> Just (UExt x _)) (valueAsApp -> Just (UExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (UExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (UExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
+    BVUnsignedLe (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
 
-    -- x < y => x -> not (y <= x)
-    BVSignedLt x y -> do
-      r <- rewriteApp (BVSignedLe y x)
-      rewriteApp (NotApp r)
+    BVUnsignedLt (BVValue w x) (BVValue _ y) -> do
+      pure $ boolLitValue $ toUnsigned w x < toUnsigned w y
+    BVUnsignedLt (BVValue _ x) (valueAsApp -> Just (UExt y _)) -> do
+      let wShort = typeWidth y
+      if x < maxUnsigned wShort
+        then rewriteApp (BVUnsignedLt (BVValue wShort x) y)
+        else pure $ boolLitValue False
+    BVUnsignedLt (valueAsApp -> Just (UExt x _)) (BVValue _ y) -> do
+      let wShort = typeWidth x
+      if y <= maxUnsigned wShort
+        then rewriteApp (BVUnsignedLt x (BVValue wShort y))
+        else pure $ boolLitValue True
+    BVUnsignedLt (valueAsApp -> Just (UExt x _)) (valueAsApp -> Just (UExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (UExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (UExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
+    BVUnsignedLt (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
+
     BVSignedLe (BVValue w x) (BVValue _ y) -> do
-
       pure $ boolLitValue $ toSigned w x <= toSigned w y
+    BVSignedLe (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
+      let wShort = typeWidth y
+          xv = toSigned w x
+      if xv <= minSigned wShort
+        then pure $ boolLitValue True
+        else if xv > maxSigned wShort
+          then pure $ boolLitValue False
+          else rewriteApp (BVSignedLe (BVValue wShort x) y)
+    BVSignedLe (valueAsApp -> Just (SExt x _)) (BVValue w y) -> do
+      let wShort = typeWidth x
+          yv = toSigned w y
+      if yv < minSigned wShort
+        then pure $ boolLitValue False
+        else if yv >= maxSigned wShort
+          then pure $ boolLitValue True
+          else rewriteApp (BVSignedLe x (BVValue wShort y))
+    BVSignedLe (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLe x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLe x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLe x y')
+    -- for signed comparisons, uext(x) <= uext(y) is not necessarily equivalent
+    -- to either x <= uext(y) or uext(x) <= y, so no rewrite for that!
+
+    BVSignedLt (BVValue w x) (BVValue _ y) -> do
+      pure $ boolLitValue $ toSigned w x < toSigned w y
+    BVSignedLt (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
+      let wShort = typeWidth y
+          xv = toSigned w x
+      if xv < minSigned wShort
+        then pure $ boolLitValue True
+        else if xv >= maxSigned wShort
+          then pure $ boolLitValue False
+          else rewriteApp (BVSignedLt (BVValue wShort x) y)
+    BVSignedLt (valueAsApp -> Just (SExt x _)) (BVValue w y) -> do
+      let wShort = typeWidth x
+          yv = toSigned w y
+      if yv <= minSigned wShort
+        then pure $ boolLitValue False
+        else if yv > maxSigned wShort
+          then pure $ boolLitValue True
+          else rewriteApp (BVSignedLt x (BVValue wShort y))
+    BVSignedLt (valueAsApp -> Just (SExt x _)) (valueAsApp -> Just (SExt y _)) -> do
+      let wx = typeWidth x
+          wy = typeWidth y
+      case compareNat wx wy of
+        NatLT _ -> rewriteApp (SExt x wy) >>= \x' -> rewriteApp (BVUnsignedLt x' y)
+        NatEQ   -> rewriteApp (BVUnsignedLt x y)
+        NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
+
     BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic
       pure $! boolLitValue v
@@ -270,6 +425,8 @@ rewriteApp app = do
       | w <- typeWidth x
       , ic + 1 == natValue w -> do
       rewriteApp (BVSignedLt x (BVValue w 0))
+      | w <- typeWidth x
+      , ic >= natValue w -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (UExt x _)) (BVValue _ ic) -> do
       let xw = typeWidth x
       if ic < natValue xw then
@@ -296,10 +453,18 @@ rewriteApp app = do
       yb <- rewriteApp (BVTestBit y i)
       rewriteApp (Mux BoolTypeRepr c xb yb)
 
-    -- (x >> j) testBit i ~> x testBit (j+i)
+    -- (x >> j) testBit i ~> x testBit (i+j)
+    -- (x << j) testBit i ~> x testBit (i-j)
+    -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | j + i < natValue w, j + i <= maxUnsigned w -> do
+      | j + i <= maxUnsigned w -> do
       rewriteApp (BVTestBit x (BVValue w (j + i)))
+    BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
+      | i < natValue w -> do
+      rewriteApp (BVTestBit x (BVValue w (min (j + i) (natValue w-1))))
+    BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
+      | j <= i -> rewriteApp (BVTestBit x (BVValue w (i - j)))
+      | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
       pure (BVValue w (toUnsigned w (complement x)))
@@ -343,6 +508,15 @@ rewriteApp app = do
     BVSar w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
       let s = min y (natValue w)
       pure (BVValue w (toUnsigned w (toSigned w x `shiftR` fromInteger s)))
+
+    BVShl _ v (BVValue _ 0) -> pure v
+    BVShr _ v (BVValue _ 0) -> pure v
+    BVSar _ v (BVValue _ 0) -> pure v
+
+    BVShl w _ (BVValue _ n) | n >= natValue w ->
+      pure (BVValue w 0)
+    BVShr w _ (BVValue _ n) | n >= natValue w ->
+      pure (BVValue w 0)
 
     Eq (BoolValue x) (BoolValue y) -> do
       pure $! boolLitValue (x == y)
@@ -395,12 +569,18 @@ rewriteAssignRhs rhs =
     ReadMem addr repr -> do
       tgtAddr <- rewriteValue addr
       evalRewrittenRhs (ReadMem tgtAddr repr)
-    CondReadMem repr cond addr def -> do
-      rhs' <- CondReadMem repr
-               <$> rewriteValue cond
-               <*> rewriteValue addr
-               <*> rewriteValue def
-      evalRewrittenRhs rhs'
+    CondReadMem repr cond0 addr0 def0 -> do
+      cond <- rewriteValue cond0
+      addr <- rewriteValue addr0
+      case () of
+        _ | BoolValue b <- cond ->
+            if b then
+              evalRewrittenRhs (ReadMem addr repr)
+             else
+              rewriteValue def0
+        _ -> do
+          def  <- rewriteValue def0
+          evalRewrittenRhs (CondReadMem repr cond addr def)
     EvalArchFn archFn _repr -> do
       f <- Rewriter $ gets $ rwctxArchFn . rwContext
       f archFn
@@ -411,7 +591,16 @@ rewriteValue v =
     BoolValue b -> pure (BoolValue b)
     BVValue w i -> pure (BVValue w i)
     RelocatableValue w a -> pure (RelocatableValue w a)
-    SymbolValue w a -> pure (SymbolValue w a)
+    SymbolValue repr sym -> do
+      ctx <- Rewriter $ gets rwContext
+      rwctxConstraints ctx $ do
+        let secIdxAddrMap = rwctxSectionAddrMap ctx
+        case sym of
+          SectionIdentifier secIdx
+            | Just val <- Map.lookup secIdx secIdxAddrMap -> do
+                pure $! RelocatableValue repr (relativeSegmentAddr val)
+          _ -> do
+            pure $! SymbolValue repr sym
     AssignedValue (Assignment aid _) -> Rewriter $ do
       ref <- gets $ rwctxCache . rwContext
       srcMap <- lift $ readSTRef ref

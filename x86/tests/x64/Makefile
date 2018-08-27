@@ -14,7 +14,10 @@ test-tail-call.exe: test-tail-call.c
 %.s: %.c
 	gcc -fno-stack-protector -foptimize-sibling-calls -S -c $< -o $@
 
+%.o: %.c
+	gcc -fno-stack-protector -c $< -o $@
+
 .PRECIOUS: %.s
 
 clean:
-	rm *.s *.exe
+	rm -f *.o *.s *.exe

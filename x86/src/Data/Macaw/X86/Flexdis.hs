@@ -14,20 +14,18 @@ module Data.Macaw.X86.Flexdis
   , X86TranslateError(..)
   , runMemoryByteReader
   , readInstruction
-  , readInstruction'
   ) where
 
 import           Control.Monad.Except
 import           Control.Monad.State.Strict
-import Data.Bits
+import           Data.Bits
 import qualified Data.ByteString as BS
-import Data.Int
+import           Data.Int
 import           Data.Text (Text)
 import           Data.Text as Text
-import Data.Word
+import           Data.Word
 
 import           Data.Macaw.Memory
-import qualified Data.Macaw.Memory.Permissions as Perm
 
 import qualified Flexdis86 as Flexdis
 import           Flexdis86.ByteReader
@@ -37,6 +35,7 @@ import           Flexdis86.ByteReader
 
 -- | A stream of memory
 data MemStream w = MS { msInitial :: ![SegmentRange w]
+                        -- ^ Initial memory contents.  Used for error messages.
                       , msSegment :: !(MemSegment w)
                         -- ^ The current segment
                       , msStart :: !(MemWord w)
@@ -95,12 +94,15 @@ instance MemWidth w => Monad (MemoryByteReader w) where
     addr <- MBR $ gets msAddr
     throwError $ UserMemoryError addr msg
 
--- | Run a memory byte reader starting from the given offset and offset for next.
-runMemoryByteReader' :: MemSegmentOff w -- ^ Starting segment
-                     -> [SegmentRange w] -- ^ Data to read next.
-                     -> MemoryByteReader w a -- ^ Byte reader to read values from.
-                     -> Either (X86TranslateError w) (a, MemWord w)
-runMemoryByteReader' addr contents (MBR m) = do
+-- | Run a memory byte reader starting from the given offset.
+--
+-- This returns either the translate error or the value read, the offset read to, and
+-- the next data.
+runMemoryByteReader :: MemSegmentOff w -- ^ Starting segment
+                    -> [SegmentRange w] -- ^ Data to read next.
+                    -> MemoryByteReader w a -- ^ Byte reader to read values from.
+                    -> Either (X86TranslateError w) (a, MemWord w, [SegmentRange w])
+runMemoryByteReader addr contents (MBR m) = do
   let ms0 = MS { msInitial = contents
                , msSegment = msegSegment addr
                , msStart   = msegOffset addr
@@ -109,28 +111,7 @@ runMemoryByteReader' addr contents (MBR m) = do
                }
   case runState (runExceptT m) ms0 of
     (Left e, _) -> Left e
-    (Right v, ms) -> Right (v, msOffset ms)
-
--- | Create a memory stream pointing to given address, and return pair whose
--- first element is the value read or an error, and whose second element is
--- the address of the next value to read.
-runMemoryByteReader :: Memory w
-                    -> Perm.Flags
-                       -- ^ Permissions that memory accesses are expected to
-                       -- satisfy.
-                       -- Added so we can check for read and/or execute permission.
-                    -> MemSegmentOff w -- ^ Starting segment
-                    -> MemoryByteReader w a -- ^ Byte reader to read values from.
-                    -> Either (X86TranslateError w) (a, MemWord w)
-runMemoryByteReader mem reqPerm addr m =
-  addrWidthClass (memAddrWidth mem) $ do
-  let seg = msegSegment addr
-  if not (segmentFlags seg `Perm.hasPerm` reqPerm) then
-    Left $ FlexdisMemoryError $ PermissionsError (relativeSegmentAddr addr)
-   else
-    case addrContentsAfter mem (relativeSegmentAddr addr) of
-      Right contents -> runMemoryByteReader' addr contents m
-      Left e -> Left (FlexdisMemoryError e)
+    (Right v, ms) -> Right (v, msOffset ms, msNext ms)
 
 throwMemoryError :: MemoryError w -> MemoryByteReader w a
 throwMemoryError e = MBR $ throwError (FlexdisMemoryError e)
@@ -199,8 +180,8 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
-      RelocationRegion r:_ -> do
-        throwMemoryError $ UnexpectedRelocation (msAddr ms) r "byte0"
+      RelocationRegion r:_ ->
+        throwMemoryError $ UnexpectedByteRelocation (msAddr ms) r
       ByteRegion bs:rest -> do
         if BS.null bs then do
           throwMemoryError $ AccessViolation (msAddr ms)
@@ -219,23 +200,27 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
       RelocationRegion r:rest -> do
-        case r of
-          AbsoluteRelocation sym off end szCnt -> do
-            unless (szCnt == 4 && end == LittleEndian) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "dimm0"
-            let ms' = ms { msOffset = msOffset ms + 4
-                         , msNext   = rest
-                         }
-            seq ms' $ MBR $ put ms'
-            pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off)
-            -- RelativeOffset addr ioff (fromIntegral off)
-          RelativeRelocation _addr _off _end _szCnt -> do
-            throwMemoryError $ UnexpectedRelocation (msAddr ms) r "dimm1"
+        let sym = relocationSym r
+        let off = relocationOffset r
+        let isGood
+              =  relocationIsRel r == False
+              && relocationSize r == 4
+              && relocationEndianness r == LittleEndian
+        when (not isGood) $ do
+          throwMemoryError $ Unsupported32ImmRelocation (msAddr ms) r
+        -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
+        let signed = relocationIsSigned r
+
+        let ms' = ms { msOffset = msOffset ms + 4
+                     , msNext   = rest
+                     }
+        seq ms' $ MBR $ put ms'
+        pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off) signed
 
       ByteRegion bs:rest -> do
         v <- getUnsigned32 bs
         updateMSByteString ms bs rest 4
-        pure $! Flexdis.Imm32Concrete v
+        pure $! Flexdis.Imm32Concrete (fromIntegral v)
 
   readJump sz = do
     ms <- MBR get
@@ -247,20 +232,22 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
       BSSRegion _:_ -> do
         throwMemoryError $ UnexpectedBSS (msAddr ms)
       RelocationRegion r:rest -> do
-        case r of
-          AbsoluteRelocation{} -> do
-            throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump0"
-          RelativeRelocation addr off end szCnt -> do
-            when (szCnt /= jsizeCount sz) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump1"
-            when (end /= LittleEndian) $ do
-              throwMemoryError $ UnexpectedRelocation (msAddr ms) r "jump2"
-            let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
-                         , msNext   = rest
-                         }
-            seq ms' $ MBR $ put ms'
-            let ioff = fromIntegral $ msOffset ms - msStart ms
-            pure $ Flexdis.RelativeOffset addr ioff (fromIntegral off)
+        let sym = relocationSym r
+        let off = relocationOffset r
+        -- Sanity checks
+        let isGood
+              =  relocationIsRel r
+              && relocationSize r == jsizeCount sz
+              && relocationIsSigned r == False
+              && relocationEndianness r == LittleEndian
+        when (not isGood) $ do
+          throwMemoryError $ UnsupportedJumpOffsetRelocation (msAddr ms) r
+        let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
+                     , msNext   = rest
+                     }
+        seq ms' $ MBR $ put ms'
+        let ioff = fromIntegral $ msOffset ms - msStart ms
+        pure $ Flexdis.RelativeOffset ioff sym (fromIntegral off)
       ByteRegion bs:rest -> do
         (v,c) <- getJumpBytes bs sz
         updateMSByteString ms bs rest (fromIntegral c)
@@ -275,27 +262,14 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
 ------------------------------------------------------------------------
 -- readInstruction
 
-
 -- | Read instruction at a given memory address.
-readInstruction' :: MemSegmentOff 64
-                    -- ^ Address to read from.
-                 -> [SegmentRange 64] -- ^ Data to read next.
-                 -> Either (X86TranslateError 64)
-                           (Flexdis.InstructionInstance, MemWord 64)
-readInstruction' addr contents = do
-  let seg = msegSegment addr
-  if not (segmentFlags seg `Perm.hasPerm` Perm.execute) then
-    Left $ FlexdisMemoryError $ PermissionsError (relativeSegmentAddr addr)
-   else do
-    runMemoryByteReader' addr contents Flexdis.disassembleInstruction
-
--- | Read instruction at a given memory address.
-readInstruction :: Memory 64
-                -> MemSegmentOff 64
+readInstruction :: MemSegmentOff 64
                    -- ^ Address to read from.
+                -> [SegmentRange 64] -- ^ Data to read next.
                 -> Either (X86TranslateError 64)
-                          (Flexdis.InstructionInstance, MemWord 64)
-readInstruction mem addr = do
-  case addrContentsAfter mem (relativeSegmentAddr addr) of
-    Left e -> Left (FlexdisMemoryError e)
-    Right l -> readInstruction' addr l
+                          (Flexdis.InstructionInstance
+                          , MemWord 64
+                          , [SegmentRange 64]
+                          )
+readInstruction addr contents = do
+  runMemoryByteReader addr contents Flexdis.disassembleInstruction

@@ -26,14 +26,14 @@ module Data.Macaw.X86.Symbolic
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
 
-import           Control.Lens((^.),(%~),(&))
+import           Control.Lens ((^.),(%~),(&))
 import           Control.Monad ( void )
+import           Data.Functor.Identity (Identity(..))
 import           Data.Parameterized.Context as Ctx
+import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Parameterized.Map as MapF
 import           GHC.TypeLits
-import           Data.Functor.Identity(Identity(..))
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
@@ -52,9 +52,8 @@ import qualified What4.Symbol as C
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
+import           Lang.Crucible.Simulator.RegValue (RegValue'(..))
 import qualified Lang.Crucible.Types as C
-import Lang.Crucible.Simulator.RegValue(RegValue'(..))
-
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.
@@ -102,15 +101,18 @@ getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
 getReg x = x ^. (field @n)
 
+x86RegName' :: M.X86Reg tp -> String
+x86RegName' M.X86_IP     = "ip"
+x86RegName' (M.X86_GP r) = show r
+x86RegName' (M.X86_FlagReg r) = show r
+x86RegName' (M.X87_StatusReg r) = show r
+x86RegName' M.X87_TopReg = "x87Top"
+x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
+x86RegName' (M.X87_FPUReg r) = show r
+x86RegName' (M.X86_YMMReg r) = show r
+
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
-x86RegName M.X86_IP     = C.systemSymbol "!ip"
-x86RegName (M.X86_GP r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X86_FlagReg r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X87_StatusReg r) = C.systemSymbol $ "!x87Status" ++ show r
-x86RegName M.X87_TopReg = C.systemSymbol $ "!x87Top"
-x86RegName (M.X87_TagReg r) = C.systemSymbol $ "!x87Tag" ++ show r
-x86RegName (M.X87_FPUReg r) = C.systemSymbol $ "!" ++ show r
-x86RegName (M.X86_YMMReg r) = C.systemSymbol $ "!" ++ show r
+x86RegName r = C.systemSymbol $ "r!" ++ x86RegName' r
 
 gpReg :: Int -> M.X86Reg (M.BVType 64)
 gpReg = M.X86_GP . F.Reg64 . fromIntegral

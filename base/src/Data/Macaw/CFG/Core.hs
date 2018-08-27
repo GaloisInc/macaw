@@ -21,16 +21,12 @@ single CFG.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
   , Assignment(..)
   , AssignId(..)
-  , AssignRhs(..)
-  , MemRepr(..)
-  , memReprBytes
-  , readMemRepr
-  , readMemReprDyn
     -- * Value
   , Value(..)
   , BVValue
@@ -39,11 +35,10 @@ module Data.Macaw.CFG.Core
   , valueAsRhs
   , valueAsMemAddr
   , valueAsSegmentOff
-  , valueAsArrayOffset
   , valueAsStaticMultiplication
-  , asLiteralAddr
   , asBaseOffset
   , asInt64Constant
+  , IPAlignment(..)
   , mkLit
   , bvValue
   , ppValueAssignments
@@ -68,13 +63,6 @@ module Data.Macaw.CFG.Core
   , PrettyRegValue(..)
   , IsArchFn(..)
   , IsArchStmt(..)
-    -- * Architecture type families
-  , ArchFn
-  , ArchReg
-  , ArchStmt
-  , ArchTermStmt
-  , RegAddrWord
-  , RegAddrWidth
     -- * Utilities
   , addrWidthTypeRepr
     -- * RegisterInfo
@@ -85,12 +73,9 @@ module Data.Macaw.CFG.Core
   , refsInApp
   , refsInAssignRhs
     -- ** Synonyms
-  , ArchAddrWidth
   , ArchAddrValue
-  , ArchAddrWord
-  , ArchMemAddr
-  , ArchSegmentOff
   , Data.Parameterized.TraversableFC.FoldableFC(..)
+  , module Data.Macaw.CFG.AssignRhs
   , module Data.Macaw.Utils.Pretty
   ) where
 
@@ -100,7 +85,6 @@ import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
 import           Data.Maybe (isNothing, catMaybes)
-import           Data.Monoid
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -109,7 +93,6 @@ import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC (FoldableFC(..))
-import           Data.Proxy
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
@@ -120,6 +103,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.AssignRhs
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
@@ -190,170 +174,7 @@ instance Show (AssignId ids tp) where
   show (AssignId n) = show n
 
 ------------------------------------------------------------------------
--- Type families for architecture specific components.
-
--- | Width of register used to store addresses.
-type family RegAddrWidth (r :: Type -> *) :: Nat
-
--- | A word for the given architecture register type.
-type RegAddrWord r = MemWord (RegAddrWidth r)
-
--- | Type family for defining what a "register" is for this architecture.
---
--- Registers include things like the general purpose registers, any flag
--- registers that can be read and written without side effects,
-type family ArchReg (arch :: *) :: Type -> *
-
--- | A type family for architecture specific functions.
---
--- These functions may return a value.  They may depend on the current state of
--- the heap, but should not affect the processor state.
---
--- The function may depend on the set of registers defined so far, and the type
--- of the result.
-type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
-
--- | A type family for defining architecture-specific statements.
---
--- The second type parameter is the ids phantom type used to provide
--- uniqueness of Nonce values that identify assignments.
-type family ArchStmt (arch :: *) :: (Type -> *) -> *
-
--- | A type family for defining architecture-specific statements that
--- may have instruction-specific effects on control-flow and register state.
---
--- The second type parameter is the ids phantom type used to provide
--- uniqueness of Nonce values that identify assignments.
---
--- An architecture-specific terminal statement may have side effects and change register
--- values, it may or may not return to the current function.  If it does return to the
--- current function, it is assumed to be at most one location, and the block-translator
--- must provide that value at translation time.
-type family ArchTermStmt (arch :: *) :: * -> *
-
--- | Number of bits in addreses for architecture.
-type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
-
--- | A word for the given architecture bitwidth.
-type ArchAddrWord arch = RegAddrWord (ArchReg arch)
-
--- | An address for a given architecture.
-type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
-
--- | A pair containing a segment and valid offset within the segment.
-type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
-
-------------------------------------------------------------------------
--- MemRepr
-
--- | The type stored in memory.
---
--- The endianess indicates whether the address stores the most
--- or least significant byte.  The following indices either store
--- the next lower or higher bytes.
-data MemRepr (tp :: Type) where
-  BVMemRepr :: (1 <= w) => !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
-
-instance Pretty (MemRepr tp) where
-  pretty (BVMemRepr w BigEndian)    = text "bvbe" <+> text (show w)
-  pretty (BVMemRepr w LittleEndian) = text "bvle" <+> text (show w)
-
-instance Show (MemRepr tp) where
-  show = show . pretty
-
--- | Return the number of bytes this takes up.
-memReprBytes :: MemRepr tp -> Integer
-memReprBytes (BVMemRepr x _) = natValue x
-
--- | Read a word with a dynamically-chosen endianness and size
-readMemRepr :: MemWidth w' => Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
-readMemRepr mem addr (BVMemRepr size endianness) = do
-  bs <- readByteString mem addr (fromInteger (natValue size))
-  let Just val = addrRead endianness bs
-  Right val
-
--- | Like 'readMemRepr', but has a short static list of sizes for which it can
--- dispatch the 'MemWidth' constraint. Returns 'Left' for sizes other than 4 or
--- 8 bytes.
-readMemReprDyn :: Memory w -> MemAddr w -> MemRepr (BVType w') -> Either (MemoryError w) (MemWord w')
-readMemReprDyn mem addr repr@(BVMemRepr size _) = case () of
-  _ | Just Refl <- testEquality size (knownNat :: NatRepr 4) -> readMemRepr mem addr repr
-    | Just Refl <- testEquality size (knownNat :: NatRepr 8) -> readMemRepr mem addr repr
-    | otherwise -> Left $ InvalidSize addr size
-
-instance TestEquality MemRepr where
-  testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =
-    if xe == ye then do
-      Refl <- testEquality xw yw
-      Just Refl
-     else
-      Nothing
-
-instance OrdF MemRepr where
-  compareF (BVMemRepr xw xe) (BVMemRepr yw ye) =
-    case compareF xw yw of
-      LTF -> LTF
-      GTF -> GTF
-      EQF -> fromOrdering (compare xe ye)
-
-instance HasRepr MemRepr TypeRepr where
-  typeRepr (BVMemRepr w _) =
-    let r = (natMultiply n8 w)
-     in case leqMulPos (Proxy :: Proxy 8) w of
-          LeqProof -> BVTypeRepr r
-
-------------------------------------------------------------------------
--- AssignRhs
-
--- | The right hand side of an assignment is an expression that
--- returns a value.
-data AssignRhs (arch :: *) (f :: Type -> *) tp where
-  -- An expression that is computed from evaluating subexpressions.
-  EvalApp :: !(App f tp)
-          -> AssignRhs arch f tp
-
-  -- An expression with an undefined value.
-  SetUndefined :: !(TypeRepr tp)
-               -> AssignRhs arch f tp
-
-  -- Read memory at given location.
-  ReadMem :: !(f (BVType (ArchAddrWidth arch)))
-          -> !(MemRepr tp)
-          -> AssignRhs arch f tp
-
-  -- | @CondReadMem tp cond addr v@ reads from memory at the given address if the
-  -- condition is true and returns the value if it false.
-  CondReadMem :: !(MemRepr tp)
-              -> !(f BoolType)
-              -> !(f (BVType (ArchAddrWidth arch)))
-              -> !(f tp)
-              -> AssignRhs arch f tp
-
-  -- Call an architecture specific function that returns some result.
-  EvalArchFn :: !(ArchFn arch f tp)
-             -> !(TypeRepr tp)
-             -> AssignRhs arch f tp
-
-instance HasRepr (AssignRhs arch f) TypeRepr where
-  typeRepr rhs =
-    case rhs of
-      EvalApp a -> typeRepr a
-      SetUndefined tp -> tp
-      ReadMem _ tp -> typeRepr tp
-      CondReadMem tp _ _ _ -> typeRepr tp
-      EvalArchFn _ rtp -> rtp
-
-instance FoldableFC (ArchFn arch) => FoldableFC (AssignRhs arch) where
-  foldMapFC go v =
-    case v of
-      EvalApp a -> foldMapFC go a
-      SetUndefined _w -> mempty
-      ReadMem addr _ -> go addr
-      CondReadMem _ c a d -> go c <> go a <> go d
-      EvalArchFn f _ -> foldMapFC go f
-
-------------------------------------------------------------------------
--- Value and Assignment, AssignRhs declarations.
+-- Value and Assignment
 
 -- | A value at runtime.
 data Value arch ids tp where
@@ -367,7 +188,7 @@ data Value arch ids tp where
   RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
                    -> !(ArchMemAddr arch)
                    -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | Reference to a symbol identifier.
+  -- | This denotes the address of a symbol identifier in the binary.
   --
   -- This appears when dealing with relocations.
   SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
@@ -472,6 +293,12 @@ mkLit n v = BVValue n (v .&. mask)
 bvValue :: (KnownNat n, 1 <= n) => Integer -> Value arch ids (BVType n)
 bvValue i = mkLit knownNat i
 
+-- | Return the right-hand side if this is an assignment.
+valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
+valueAsRhs (AssignedValue (Assignment _ v)) = Just v
+valueAsRhs _ = Nothing
+
+-- | Return the value evaluated if this is from an `App`.
 valueAsApp :: Value arch ids tp -> Maybe (App (Value arch ids) tp)
 valueAsApp (AssignedValue (Assignment _ (EvalApp a))) = Just a
 valueAsApp _ = Nothing
@@ -480,10 +307,6 @@ valueAsApp _ = Nothing
 valueAsArchFn :: Value arch ids tp -> Maybe (ArchFn arch (Value arch ids) tp)
 valueAsArchFn (AssignedValue (Assignment _ (EvalArchFn a _))) = Just a
 valueAsArchFn _ = Nothing
-
-valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
-valueAsRhs (AssignedValue (Assignment _ v)) = Just v
-valueAsRhs _ = Nothing
 
 -- | This returns a segmented address if the value can be interpreted as a literal memory
 -- address, and returns nothing otherwise.
@@ -494,24 +317,6 @@ valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
-valueAsArrayOffset ::
-  Memory (ArchAddrWidth arch) ->
-  ArchAddrValue arch ids ->
-  Maybe (ArchSegmentOff arch, ArchAddrValue arch ids)
-valueAsArrayOffset mem v
-  | Just (BVAdd w base offset) <- valueAsApp v
-  , Just Refl <- testEquality w (memWidth mem)
-  , Just ptr <- valueAsSegmentOff mem base
-  = Just (ptr, offset)
-
-  -- and with the other argument order
-  | Just (BVAdd w offset base) <- valueAsApp v
-  , Just Refl <- testEquality w (memWidth mem)
-  , Just ptr <- valueAsSegmentOff mem base
-  = Just (ptr, offset)
-
-  | otherwise = Nothing
-
 valueAsStaticMultiplication ::
   BVValue arch ids w ->
   Maybe (Integer, BVValue arch ids w)
@@ -519,14 +324,15 @@ valueAsStaticMultiplication v
   | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
   | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
   | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
+  -- the PowerPC way to shift left is a bit obtuse...
+  | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
+  , Just (BVOr _ l r) <- valueAsApp v'
+  , Just (BVShl _ l' (BVValue _ shl)) <- valueAsApp l
+  , Just (BVShr _ _ (BVValue _ shr)) <- valueAsApp r
+  , c == complement (2^shl-1) `mod` bit (fromInteger (natValue w))
+  , shr >= natValue w - shl
+  = Just (2^shl, l')
   | otherwise = Nothing
-
-asLiteralAddr :: MemWidth (ArchAddrWidth arch)
-               => BVValue arch ids (ArchAddrWidth arch)
-               -> Maybe (ArchMemAddr arch)
-asLiteralAddr = valueAsMemAddr
-
-{-# DEPRECATED asLiteralAddr "Use valueAsMemAddr" #-}
 
 -- | Returns a segment offset associated with the value if one can be defined.
 valueAsSegmentOff :: Memory (ArchAddrWidth arch)
@@ -544,6 +350,43 @@ asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
+
+-- | During the jump-table detection phase of code discovery, we have the
+-- following problem: we are given a value which represents the computation
+-- done to create an address to jump to. We'd like to look at the shape of that
+-- computation and check whether it "looks like a jump table" -- say, whether
+-- it is the computation @array_base + pointer_size * i@ for some unknown index
+-- @i@.
+--
+-- However, some architectures have special rules about what addresses are
+-- valid jump targets, and so there is frequently a sort of "standard prelude"
+-- which converts an arbitrary address into a valid jump target. For example,
+-- on PowerPC, the instruction pointer is always a multiple of four, so any
+-- computed jump strips off the bottom two bits. We'd like the jump-table
+-- detection code to be able to ignore that standard prelude when looking for
+-- jump-table-like computations (without having to know that the right thing to
+-- look for is "ignore the bottom two bits").
+--
+-- The 'fromIPAligned' method below gives specific architectures a hook for
+-- stripping away the prelude and leaving the underlying computed value (which
+-- is potentially an invalid jump target!).
+--
+-- Of course, after stripping away the cleanup parts of the computation,
+-- checking the unclean computation for specific patterns, and finding
+-- particular concrete values that the unclean computation could evaluate to,
+-- the discovery code then needs to be able to re-clean the concrete values.
+-- The 'toIPAligned' method gives architectures a hook to do that direction of
+-- translation.
+class IPAlignment arch where
+  -- | Take an aligned value and strip away the bits of the semantics that
+  -- align it, leaving behind a (potentially unaligned) value. Return 'Nothing'
+  -- if the input value does not appear to be a valid value for the instruction
+  -- pointer.
+  fromIPAligned :: ArchAddrValue arch ids -> Maybe (ArchAddrValue arch ids)
+
+  -- | Take an unaligned memory address and clean it up so that it is a valid
+  -- value for the instruction pointer.
+  toIPAligned :: MemAddr (ArchAddrWidth arch) -> MemAddr (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
 -- RegState
@@ -720,6 +563,7 @@ type ArchConstraints arch
      , IsArchStmt (ArchStmt arch)
      , FoldableF  (ArchStmt arch)
      , PrettyF    (ArchTermStmt arch)
+     , IPAlignment arch
      )
 
 -- | Pretty print an assignment right-hand side using operations parameterized

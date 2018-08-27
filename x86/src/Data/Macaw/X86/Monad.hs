@@ -154,12 +154,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.eval
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
-  , ifte_
-  , when_
-  , unless_
-  , memcopy
-  , memcmp
-  , memset
   , even_parity
   , fnstcw
   , getSegmentBase
@@ -181,15 +175,12 @@ import           Control.Lens hiding ((.=))
 import           Control.Monad
 import qualified Data.Bits as Bits
 import           Data.Macaw.CFG
-import           Data.Macaw.CFG.Block
 import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
-import qualified Data.Sequence as Seq
 import qualified Flexdis86 as F
-import           Flexdis86.Segment ( Segment )
 import           Flexdis86.Sizes (SizeConstraint(..))
 import           GHC.TypeLits as TypeLits
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
@@ -503,7 +494,7 @@ constUpperBitsOnWriteRegisterView n rt rn  =
 -- | This returns the type associated with values that can be read
 -- or assigned for the semantics monad.
 data Location addr (tp :: Type) where
-  -- A location in the virtual address space of the process.
+  -- | A location in the virtual address space of the process.
   MemoryAddr :: !addr -> !(MemRepr tp) -> Location addr tp
 
   FullRegister :: !(X86Reg tp)
@@ -518,13 +509,13 @@ data Location addr (tp :: Type) where
   DebugReg :: !F.DebugReg
            -> Location addr (BVType 64)
 
-  SegmentReg :: !Segment
+  SegmentReg :: !F.Segment
              -> Location addr (BVType 16)
 
   X87ControlReg :: !(X87_ControlReg w)
                 -> Location addr (BVType w)
 
-  -- The register stack: the argument is an offset from the stack
+  -- | The register stack: the argument is an offset from the stack
   -- top, so X87Register 0 is the top, X87Register 1 is the second,
   -- and so forth.
   X87StackRegister :: !Int
@@ -1544,7 +1535,7 @@ infix  4 .=
 ------------------------------------------------------------------------
 -- Semantics
 
--- | Defines operations that need to be supported at a specific bitwidht.
+-- | Defines operations that need to be supported at a specific bitwidth.
 type SupportedBVWidth n
    = ( 1 <= n
      , 4 <= n
@@ -1601,7 +1592,7 @@ get l0 =
       getReg (X87_FPUReg (F.mmxReg (fromIntegral idx)))
 
 
--- | Assign a value to alocation.
+-- | Assign a value to a location.
 (.=) :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
 l .= e = setLoc l =<< eval e
 
@@ -1612,181 +1603,6 @@ modify :: Location (Addr ids) tp
 modify r f = do
   x <- get r
   r .= f x
-
--- | Perform an if-then-else
-ifte_ :: Expr ids BoolType
-      -> X86Generator st ids ()
-      -> X86Generator st ids ()
-      -> X86Generator st ids ()
--- Implement ifte_
--- Note that this implementation will run any code appearing after the ifte_
--- twice, once for the true branch and once for the false branch.
---
--- This could be changed to run the code afterwards once, but the cost would be
--- defining a way to merge processor states from the different branches, and making
--- sure that expression assignments generated in one branch were not referred to in
--- another branch.
---
--- One potential design change, not implemented here, would be to run both branches,
--- up to the point where they merge, and if the resulting PC is in the same location,
--- to merge in that case, otherwise to run them separately.
---
--- This would support the cmov instruction, but result in divergence for branches, which
--- I think is what we want.
-ifte_ c_expr t f = eval c_expr >>= go
-    where
-      go (BoolValue True) = t
-      go (BoolValue False) = f
-      go cond =
-        shiftX86GCont $ \c s0 -> do
-          let p_b = s0 ^.blockState
-          let st = p_b^.pBlockState
-          let t_block_label = s0^.blockSeq^.nextBlockID
-          let s2 = s0 & blockSeq . nextBlockID +~ 1
-                      & blockSeq . frontierBlocks .~ Seq.empty
-                      & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
-          -- Run true block.
-          t_seq <- finishBlock FetchAndExecute <$> runX86Generator c s2 t
-          -- Run false block
-          let f_block_label = t_seq^.nextBlockID
-          let s5 = GenState { assignIdGen = assignIdGen s0
-                            , _blockSeq =
-                                BlockSeq { _nextBlockID    = t_seq^.nextBlockID + 1
-                                         , _frontierBlocks = Seq.empty
-                                         }
-                            , _blockState = emptyPreBlock st f_block_label (genAddr s0)
-                            , genAddr = genAddr s0
-                            , genMemory = genMemory s0
-                            , _genRegUpdates = _genRegUpdates s0
-                            , avxMode = avxMode s0
-                            }
-          f_seq <- finishBlock FetchAndExecute <$> runX86Generator c s5 f
-
-          -- Join results together.
-          let fin_b = finishBlock' p_b (\_ -> Branch cond t_block_label f_block_label)
-          seq fin_b $
-            return
-            GenResult { resBlockSeq =
-                         BlockSeq { _nextBlockID = _nextBlockID f_seq
-                                  , _frontierBlocks = (s0^.blockSeq^.frontierBlocks Seq.|> fin_b)
-                                               Seq.>< t_seq^.frontierBlocks
-                                               Seq.>< f_seq^.frontierBlocks
-                                  }
-                      , resState = Nothing
-                      }
-
--- | Run a step if condition holds.
-when_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
-when_ p x = ifte_ p x (return ())
-
--- | Run a step if condition is false.
-unless_ :: Expr ids BoolType -> X86Generator st ids () -> X86Generator st ids ()
-unless_ p = ifte_ p (return ())
-
--- | Move n bits at a time, with count moves
---
--- Semantic sketch. The effect on memory should be like @memcopy@
--- below, not like @memcopy2@. These sketches ignore the issue of
--- copying in chunks of size `bytes`, which should only be an
--- efficiency concern.
---
--- @
--- void memcopy(int bytes, int copies, char *src, char *dst, int reversed) {
---   int maybeFlip = reversed ? -1 : 1;
---   for (int c = 0; c < copies; ++c) {
---     for (int b = 0; b < bytes; ++b) {
---       int offset = maybeFlip * (b + c * bytes);
---       *(dst + offset) = *(src + offset);
---     }
---   }
--- }
--- @
---
--- Compare with:
---
--- @
--- void memcopy2(int bytes, int copies, char *src, char *dst, int reversed) {
---   int maybeFlip = reversed ? -1 : 1;
---   /* The only difference from `memcopy` above: here the same memory is
---      copied whether `reversed` is true or false -- only the order of
---      copies changes -- whereas above different memory is copied for
---      each direction. */
---   if (reversed) {
---     /* Start at the end and work backwards. */
---     src += copies * bytes - 1;
---     dst += copies * bytes - 1;
---   }
---   for (int c = 0; c < copies; ++c) {
---     for (int b = 0; b < bytes; ++b) {
---       int offset = maybeFlip * (b + c * bytes);
---       *(dst + offset) = *(src + offset);
---     }
---   }
--- }
--- @
-memcopy :: Integer
-           -- ^ Number of bytes to copy at a time (1,2,4,8)
-        -> BVExpr ids 64
-           -- ^ Number of values to move.
-        -> Addr ids
-           -- ^ Start of source buffer
-        -> Addr ids
-           -- ^ Start of destination buffer.
-        -> Expr ids BoolType
-           -- ^ Flag indicates direction of move:
-           -- True means we should decrement buffer pointers after each copy.
-           -- False means we should increment the buffer pointers after each copy.
-        -> X86Generator st ids ()
-memcopy val_sz count src dest is_reverse = do
-  count_v <- eval count
-  src_v   <- eval src
-  dest_v  <- eval dest
-  is_reverse_v <- eval is_reverse
-  addArchStmt $ MemCopy val_sz count_v src_v dest_v is_reverse_v
-
--- | Compare the memory regions.  Returns the number of elements which are
--- identical.  If the direction is 0 then it is increasing, otherwise decreasing.
---
--- See `memcopy` above for explanation of which memory regions are
--- compared: the regions copied there are compared here.
-memcmp :: Integer
-          -- ^ Number of bytes to compare at a time {1, 2, 4, 8}
-       -> BVExpr ids 64
-          -- ^ Number of elementes to compare
-       -> Addr ids
-          -- ^ Pointer to first buffer
-       -> Addr ids
-          -- ^ Pointer to second buffer
-       -> Expr ids BoolType
-          -- ^ Flag indicates direction of copy:
-          -- True means we should decrement buffer pointers after each copy.
-           -- False means we should increment the buffer pointers after each copy.
-       -> X86Generator st ids (BVExpr ids 64)
-memcmp sz count src dest is_reverse = do
-  count_v <- eval count
-  is_reverse_v <- eval is_reverse
-  src_v   <- eval src
-  dest_v  <- eval dest
-  evalArchFn (MemCmp sz count_v src_v dest_v is_reverse_v)
-
--- | Set memory to the given value, for the number of words (nbytes
--- = count * typeWidth v)
-memset :: (1 <= n)
-       => BVExpr ids 64
-          -- ^ Number of values to set
-       -> BVExpr ids n
-          -- ^ Value to set
-       -> Addr ids
-          -- ^ Pointer to buffer to set
-       -> Expr ids BoolType
-          -- ^ Direction flag
-       -> X86Generator st ids ()
-memset count val dest dfl = do
-  count_v <- eval count
-  val_v   <- eval val
-  dest_v  <- eval dest
-  df_v    <- eval dfl
-  addArchStmt $ MemSet count_v val_v dest_v df_v
 
 -- | Return true if value contains an even number of true bits.
 even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)
@@ -1800,7 +1616,7 @@ fnstcw addr = do
   addArchStmt =<< StoreX87Control <$> eval addr
 
 -- | Return the base address of the given segment.
-getSegmentBase :: Segment -> X86Generator st ids (Addr ids)
+getSegmentBase :: F.Segment -> X86Generator st ids (Addr ids)
 getSegmentBase seg =
   case seg of
     F.FS -> evalArchFn ReadFSBase

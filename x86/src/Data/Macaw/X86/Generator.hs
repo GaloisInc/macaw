@@ -24,12 +24,10 @@ module Data.Macaw.X86.Generator
   , addArchTermStmt
   , evalArchFn
   , evalAssignRhs
-  , shiftX86GCont
-  , asAtomicStateUpdate
   , getState
     -- * GenResult
   , GenResult(..)
-  , finishBlock
+  , finishGenResult
     -- * PreBlock
   , PreBlock
   , emptyPreBlock
@@ -37,15 +35,9 @@ module Data.Macaw.X86.Generator
   , pBlockState
   , pBlockStmts
   , pBlockApps
-  , finishBlock'
-    -- * Misc
-  , BlockSeq(..)
-  , nextBlockID
-  , frontierBlocks
+  , finishBlock
     -- * GenState
   , GenState(..)
-  , mkGenResult
-  , blockSeq
   , blockState
   , curX86State
     -- * Expr
@@ -99,9 +91,9 @@ import           Data.Macaw.X86.X86Reg
 
 -- | A pure expression for isValue.
 data Expr ids tp where
-  -- An expression obtained from some value.
+  -- | An expression obtained from some value.
   ValueExpr :: !(Value X86_64 ids tp) -> Expr ids tp
-  -- An expression that is computed from evaluating subexpressions.
+  -- | An expression that is computed from evaluating subexpressions.
   AppExpr :: !(App (Expr ids) tp) -> Expr ids tp
 
 instance Show (Expr ids tp) where
@@ -156,8 +148,6 @@ asSignedBVLit _ = Nothing
 
 -- | A block that we have not yet finished.
 data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , pBlockAddr  :: !(MemSegmentOff 64)
-                               -- ^ Starting address of function in preblock.
                              , _pBlockStmts :: !(Seq (Stmt X86_64 ids))
                              , _pBlockState :: !(RegState X86Reg (Value X86_64 ids))
                              , _pBlockApps  :: !(MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
@@ -166,11 +156,9 @@ data PreBlock ids = PreBlock { pBlockIndex :: !Word64
 -- | Create a new pre block.
 emptyPreBlock :: RegState X86Reg (Value X86_64 ids)
               -> Word64
-              -> MemSegmentOff 64
               -> PreBlock ids
-emptyPreBlock s idx addr =
+emptyPreBlock s idx =
   PreBlock { pBlockIndex  = idx
-           , pBlockAddr   = addr
            , _pBlockStmts = Seq.empty
            , _pBlockApps  = MapF.empty
            , _pBlockState = s
@@ -186,53 +174,28 @@ pBlockApps  :: Simple Lens (PreBlock ids) (MapF (App (Value X86_64 ids)) (Assign
 pBlockApps = lens _pBlockApps (\s v -> s { _pBlockApps = v })
 
 -- | Finishes the current block, if it is started.
-finishBlock' :: PreBlock ids
+finishBlock :: PreBlock ids
              -> (RegState X86Reg (Value X86_64 ids) -> TermStmt X86_64 ids)
              -> Block X86_64 ids
-finishBlock' pre_b term =
-  Block { blockLabel = pBlockIndex pre_b
-        , blockStmts = toList (pre_b^.pBlockStmts)
-        , blockTerm  = term (pre_b^.pBlockState)
+finishBlock preBlock term =
+  Block { blockLabel = pBlockIndex preBlock
+        , blockStmts = toList (preBlock^.pBlockStmts)
+        , blockTerm  = term (preBlock^.pBlockState)
         }
-
-------------------------------------------------------------------------
--- BlockSeq
-
--- | List of blocks generated so far, and an index for generating new block labels.
-data BlockSeq ids  = BlockSeq
-       { _nextBlockID  :: !Word64
-         -- ^ Index of next block
-       , _frontierBlocks :: !(Seq (Block X86_64 ids))
-         -- ^ Blocks added to CFG
-       }
-
--- | Control flow blocs generated so far.
-nextBlockID :: Simple Lens (BlockSeq ids) Word64
-nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
-
--- | Blocks that are not in CFG that end with a FetchAndExecute,
--- which we need to analyze to compute new potential branch targets.
-frontierBlocks :: Simple Lens (BlockSeq ids) (Seq (Block X86_64 ids))
-frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 
 ------------------------------------------------------------------------
 -- GenResult
 
 -- | The final result from the block generator.
-data GenResult ids = GenResult { resBlockSeq :: !(BlockSeq ids)
-                               , resState :: !(Maybe (PreBlock ids))
-                               }
+data GenResult ids
+   = UnfinishedGenResult !(PreBlock ids)
+   | FinishedGenResult !(Block X86_64 ids)
 
 -- | Finishes the current block, if it is started.
-finishBlock :: (RegState X86Reg (Value X86_64 ids) -> TermStmt X86_64 ids)
-            -> GenResult ids
-            -> BlockSeq ids
-finishBlock term st =
-  case resState st of
-    Nothing    -> resBlockSeq st
-    Just pre_b ->
-      let b = finishBlock' pre_b term
-       in seq b $ resBlockSeq st & frontierBlocks %~ (Seq.|> b)
+finishGenResult :: GenResult ids
+            -> Block X86_64 ids
+finishGenResult (UnfinishedGenResult pre_b) = finishBlock pre_b FetchAndExecute
+finishGenResult (FinishedGenResult blk) = blk
 
 ------------------------------------------------------------------------
 -- GenState
@@ -241,14 +204,12 @@ finishBlock term st =
 data GenState st_s ids = GenState
        { assignIdGen   :: !(NonceGenerator (ST st_s) ids)
          -- ^ 'NonceGenerator' for generating 'AssignId's
-       , _blockSeq     :: !(BlockSeq ids)
-         -- ^ Blocks generated so far.
        , _blockState   :: !(PreBlock ids)
-         -- ^ Current block
-       , genAddr      :: !(MemSegmentOff 64)
-         -- ^ Address of instruction we are translating
-       , genMemory    :: !(Memory 64)
-         -- ^ The memory
+         -- ^ Block that we are processing.
+       , genInitPCAddr  :: !(MemSegmentOff 64)
+         -- ^ This is the address of the instruction we are translating.
+       , genInstructionSize :: !Int
+         -- ^ Number of bytes of instruction we are translating.
        , _genRegUpdates :: !(MapF.MapF X86Reg (Value X86_64 ids))
          -- ^ The registers updated (along with their new macaw values) during
          -- the evaluation of a single instruction
@@ -260,16 +221,6 @@ data GenState st_s ids = GenState
            This does not happen, however, if we we
            are working with an SSE instruction. -}
        }
-
--- | Create a gen result from a state result.
-mkGenResult :: GenState st_s ids -> GenResult ids
-mkGenResult s = GenResult { resBlockSeq = s^.blockSeq
-                          , resState = Just (s^.blockState)
-                          }
-
--- | Control flow blocs generated so far.
-blockSeq :: Simple Lens (GenState st_s ids) (BlockSeq ids)
-blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
 
 genRegUpdates :: Simple Lens (GenState st_s ids) (MapF.MapF X86Reg (Value X86_64 ids))
 genRegUpdates = lens _genRegUpdates (\s v -> s { _genRegUpdates = v })
@@ -316,20 +267,11 @@ type X86GCont st_s ids a
   -> ExceptT Text (ST st_s) (GenResult ids)
 
 -- | Run an 'X86Generator' starting from a given state
-runX86Generator :: X86GCont st_s ids a
-                -> GenState st_s ids
-                -> X86Generator st_s ids a
+runX86Generator :: GenState st_s ids
+                -> X86Generator st_s ids ()
                 -> ExceptT Text (ST st_s) (GenResult ids)
-runX86Generator k st (X86G m) = runReaderT (runContT m (ReaderT . k)) st
-
-
--- | Capture the current continuation and 'GenState' in an 'X86Generator'
-shiftX86GCont :: (X86GCont st_s ids a
-                  -> GenState st_s ids
-                  -> ExceptT Text (ST st_s) (GenResult ids))
-              -> X86Generator st_s ids a
-shiftX86GCont f =
-  X86G $ ContT $ \k -> ReaderT $ \s -> f (runReaderT . k) s
+runX86Generator st (X86G m) = runReaderT (runContT m (ReaderT . k)) st
+  where k () s = pure $! UnfinishedGenResult (s^.blockState)
 
 getState :: X86Generator st_s ids (GenState st_s ids)
 getState = X86G ask
@@ -349,27 +291,6 @@ setReg r v = modGenState $ do
   genRegUpdates %= MapF.insert r v
   curX86State . boundValue r .= v
 
--- | This combinator collects state modifications by a single instruction into a single 'ArchState' statement
---
--- This function is meant to be wrapped around an atomic CPU state
--- transformation.  It collects all of the updates to the CPU register state
--- (which are assumed to be made through the 'setRegVal' function) and coalesces
--- them into a new macaw 'ArchState' statement that records the updates for
--- later analysis.
---
--- The state is hidden in the generator monad and collected after the
--- transformer is executed.  Note: if the transformer splits the state, it isn't
--- obvious what will happen here.  The mechanism is not designed with that use
--- case in mind.  I think that it will collect the *union* of possible updates
--- by that instruction.
-asAtomicStateUpdate :: ArchMemAddr X86_64 -> X86Generator st_s ids a -> X86Generator st_s ids a
-asAtomicStateUpdate insnAddr exec = do
-  modGenState (genRegUpdates .= MapF.empty)
-  res <- exec
-  updates <- _genRegUpdates <$> getState
-  addStmt (ArchState insnAddr updates)
-  return res
-
 -- | Add a statement to the list of statements.
 addStmt :: Stmt X86_64 ids -> X86Generator st_s ids ()
 addStmt stmt = seq stmt $
@@ -381,17 +302,13 @@ addArchStmt = addStmt . ExecArchStmt
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
 addArchTermStmt ts = do
-  shiftX86GCont $ \_ s0 -> do
+  X86G $ ContT $ \_ -> ReaderT $ \s0 -> do
     -- Get last block.
     let p_b = s0 ^. blockState
     -- Create finished block.
-    let fin_b = finishBlock' p_b $ ArchTermStmt ts
-    seq fin_b $
+    let fin_b = finishBlock p_b $ ArchTermStmt ts
     -- Return early
-      return GenResult
-                { resBlockSeq = s0 ^.blockSeq & frontierBlocks %~ (Seq.|> fin_b)
-                , resState = Nothing
-                }
+    return $! FinishedGenResult fin_b
 
 -- | Are we in AVX mode?
 isAVX :: X86Generator st ids Bool

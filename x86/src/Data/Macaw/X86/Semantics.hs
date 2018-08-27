@@ -18,6 +18,7 @@ module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
 
+import           Control.Lens ((^.))
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
 import           Data.Foldable
@@ -27,6 +28,7 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
+import           Data.Parameterized.TraversableF
 import           Data.Proxy
 import           Data.Word
 import qualified Flexdis86 as F
@@ -335,7 +337,7 @@ def_mov =
       (F.DWordReg r, F.DWordSignedImm i) -> do
         reg32Loc r .= bvLit n32 (toInteger i)
       (F.DWordReg r, F.DWordImm i) -> do
-        (reg32Loc r .=) =<< getImm32 i
+        reg32Loc r .= getImm32 i
       (F.DWordReg r, F.Mem32 src) -> do
         v <- get =<< getBV32Addr src
         reg32Loc r .= v
@@ -421,24 +423,24 @@ def_cmpxchg  = defBinaryLV "cmpxchg" $ \d s -> do
   let p = a .=. temp
   zf_loc .= p
   d .= mux p s temp
-  modify acc $ \old -> mux p temp old
+  modify acc $ mux p temp
 
 def_cmpxchg8b :: InstructionDef
 def_cmpxchg8b =
-  defUnaryKnown "cmpxchg8b"  $ \loc -> do
-    temp64 <- get loc
-    edx_eax <- bvCat <$> get edx <*> get eax
-    let p = edx_eax .=. temp64
-    zf_loc .= p
-    ifte_ p
-      (do ecx_ebx <- bvCat <$> get ecx <*> get ebx
-          loc .= ecx_ebx
-      )
-      (do let (upper,lower) = bvSplit temp64
-          edx .= upper
-          eax .= lower
-          loc .= edx_eax -- FIXME: this store is redundant, but it is in the ISA, so we do it.
-      )
+  defUnary "cmpxchg8b" $ \_ bloc -> do
+    loc <-
+      case bloc of
+        F.Mem64 ar -> eval =<< getBVAddress ar
+        F.VoidMem ar -> eval =<< getBVAddress ar
+        _ -> fail "Unexpected argument to cmpxchg8b"
+    eaxVal <- eval =<< get eax
+    ebxVal <- eval =<< get ebx
+    ecxVal <- eval =<< get ecx
+    edxVal <- eval =<< get edx
+    res <- evalArchFn (CMPXCHG8B loc eaxVal ebxVal ecxVal edxVal)
+    zf_loc .= app (TupleField knownRepr res P.index0)
+    eax    .= app (TupleField knownRepr res P.index1)
+    edx    .= app (TupleField knownRepr res P.index2)
 
 def_movsx :: InstructionDef
 def_movsx = defBinaryLVge "movsx" $ \l v -> l .= sext (typeWidth l) v
@@ -968,8 +970,8 @@ exec_ror l count = do
 -- ** Bit and Byte Instructions
 
 getBT16RegOffset :: F.Value -> X86Generator st ids (BVExpr ids 16)
-getBT16RegOffset val =
-  case val of
+getBT16RegOffset idx =
+  case idx of
     F.ByteImm i -> do
       pure $ bvLit n16 $ toInteger $ i Bits..&. 0xF
     F.WordReg ir -> do
@@ -1029,18 +1031,24 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       iv  <- getBT64RegOffset idx
       act knownNat (reg64Loc r) iv
       set_bt_flags
-    (F.Mem16 base, F.ByteImm  i) -> do
-      when (i >= 16) $ fail $ mnem ++ " given invalid index."
-      loc <- getBV16Addr base
-      act knownNat loc (bvLit knownNat (toInteger i))
-      set_bt_flags
-    (F.Mem16 base, F.WordReg ir) -> do
-      off <- get $! reg16Loc ir
-      base_addr <- getBVAddress base
-      let word_off = sext' n64 $ bvSar off (bvLit knownNat 4)
-      let loc = MemoryAddr (base_addr .+ word_off) wordMemRepr
-      let iv = off .&. bvLit knownNat 15
-      act knownNat loc iv
+    (F.Mem16 base, _) -> do
+      case idx of
+        F.ByteImm i -> do
+          when (i >= 16) $ fail $ mnem ++ " given invalid index."
+          baseAddr <- getBVAddress base
+          let loc = MemoryAddr baseAddr wordMemRepr
+          act knownNat loc (bvLit knownNat (toInteger i))
+        F.WordReg ir -> do
+          off <- get $! reg16Loc ir
+
+          loc <- do
+            baseAddr <- getBVAddress base
+            let wordOff = sext' n64 $ bvSar off (bvLit knownNat 4)
+            pure $! MemoryAddr (baseAddr .+ wordOff) wordMemRepr
+
+          let iv = off .&. bvLit knownNat 15
+          act knownNat loc iv
+        _ -> error $ "bt given unexpected index."
       set_bt_flags
     (F.Mem32 base, F.ByteImm  i) -> do
       when (i >= 32) $ fail $ mnem ++ " given invalid index."
@@ -1050,9 +1058,9 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       set_bt_flags
     (F.Mem32 base, F.DWordReg  ir) -> do
       off <- get $! reg32Loc ir
-      base_addr <- getBVAddress base
-      let dword_off = sext' n64 $ bvSar off (bvLit knownNat 5)
-      let loc = MemoryAddr (base_addr .+ dword_off) dwordMemRepr
+      baseAddr <- getBVAddress base
+      let dwordOff = sext' n64 $ bvSar off (bvLit knownNat 5)
+      let loc = MemoryAddr (baseAddr .+ dwordOff) dwordMemRepr
       let iv  = off .&. bvLit knownNat 31
       act knownNat loc iv
       set_bt_flags
@@ -1064,9 +1072,9 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       set_bt_flags
     (F.Mem64 base, F.QWordReg  ir) -> do
       off <- get $! reg64Loc ir
-      let qword_off = bvSar off (bvLit knownNat 6)
-      base_addr <- getBVAddress base
-      let loc = MemoryAddr (base_addr .+ qword_off) qwordMemRepr
+      let qwordOff = bvSar off (bvLit knownNat 6)
+      baseAddr <- getBVAddress base
+      let loc = MemoryAddr (baseAddr .+ qwordOff) qwordMemRepr
       let iv = off .&. bvLit knownNat 63
       act knownNat loc iv
       set_bt_flags
@@ -1123,14 +1131,11 @@ def_jcc_list =
   defConditionals "j" $ \mnem cc ->
     defUnary mnem $ \_ v -> do
       a <- cc
-      when_ a $ do
-        tgt <- getJumpTarget v
-        rip .= tgt
+      doJump a v
 
 def_jmp :: InstructionDef
 def_jmp = defUnary "jmp" $ \_ v -> do
-  tgt <- getJumpTarget v
-  rip .= tgt
+  doJump true v
 
 def_ret :: InstructionDef
 def_ret = defVariadic "ret"    $ \_ vs ->
@@ -1156,54 +1161,51 @@ def_ret = defVariadic "ret"    $ \_ vs ->
 
 -- FIXME: probably doesn't work for 32 bit address sizes
 -- arguments are only for the size, they are fixed at rsi/rdi
-exec_movs :: 1 <= w
-          => Bool -- Flag indicating if RepPrefix appeared before instruction
-          -> NatRepr w -- Number of bytes to move at a time.
-          -> X86Generator st ids ()
-exec_movs False w = do
-  let bytesPerOp = bvLit n64 (natValue w)
-  let repr = BVMemRepr w LittleEndian
-  -- The direction flag indicates post decrement or post increment.
-  df <- get df_loc
-  src  <- get rsi
-  dest <- get rdi
-  v' <- get $ MemoryAddr src repr
-  MemoryAddr dest repr .= v'
-
-  rsi .= mux df (src  .- bytesPerOp) (src  .+ bytesPerOp)
-  rdi .= mux df (dest .- bytesPerOp) (dest .+ bytesPerOp)
-exec_movs True w = do
-    -- FIXME: aso modifies this
-  let count_reg = rcx
-      bytesPerOp = natValue w
-      bytesPerOpv = bvLit n64 bytesPerOp
-  -- The direction flag indicates post decrement or post increment.
-  df <- get df_loc
-  src   <- get rsi
-  dest  <- get rdi
-  count <- get count_reg
-  let total_bytes = count .* bytesPerOpv
-  -- FIXME: we might need direction for overlapping regions
-  count_reg .= bvLit n64 (0::Integer)
-  memcopy bytesPerOp count src dest df
-  rsi .= mux df (src   .- total_bytes) (src   .+ total_bytes)
-  rdi .= mux df (dest  .- total_bytes) (dest  .+ total_bytes)
 
 def_movs :: InstructionDef
 def_movs = defBinary "movs" $ \ii loc _ -> do
-  case loc of
-    F.Mem8 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 1)
-    F.Mem16 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 2)
-    F.Mem32 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 4)
-    F.Mem64 F.Addr_64{} ->
-      exec_movs (F.iiLockPrefix ii == F.RepPrefix) (knownNat :: NatRepr 8)
-    _ -> fail "Bad argument to movs"
+  let pfx = F.iiPrefixes ii
+  Some w <-
+        case loc of
+          F.Mem8{}  -> pure (Some ByteRepVal)
+          F.Mem16{} -> pure (Some WordRepVal)
+          F.Mem32{} -> pure (Some DWordRepVal)
+          F.Mem64{} -> pure (Some QWordRepVal)
+          _ -> error "Bad argument to movs"
+  let bytesPerOp = bvLit n64 (repValSizeByteCount w)
+  dest <- get rdi
+  src  <- get rsi
+  df   <- get df_loc
+  case pfx^.F.prLockPrefix of
+    F.RepPrefix -> do
+      when (pfx^.F.prASO) $ do
+        fail "Rep prefix semantics not defined when address size override is true."
+      -- The direction flag indicates post decrement or post increment.
+      count <- get rcx
+      addArchStmt =<< traverseF eval (RepMovs w dest src count df)
 
--- FIXME: can also take rep prefix
--- FIXME: we ignore the aso here.
+      -- We adjust rsi and rdi by a negative value if df is true.
+      -- The formula is organized so that the bytesPerOp literal is
+      -- passed to the multiply and we can avoid non-linear arithmetic.
+      let adj = bytesPerOp .* mux df (bvNeg count) count
+      rcx .= bvLit n64 (0::Integer)
+      rsi .= src  .+ adj
+      rdi .= dest .+ adj
+    F.NoLockPrefix -> do
+      let repr = repValSizeMemRepr w
+      -- The direction flag indicates post decrement or post increment.
+      v' <- get $ MemoryAddr src repr
+      MemoryAddr dest repr .= v'
+      -- We adjust rsi and rdi by a negative value if df is true.
+      -- The formula is organized so that the bytesPerOp literal is
+      -- passed to the multiply and we can avoid non-linear arithmetic.
+      let adj = mux df (bvNeg bytesPerOp) bytesPerOp
+      rsi .= src  .+ adj
+      rdi .= dest .+ adj
+    _ -> do
+      fail "movs given unsupported lock prefix"
+
+
 -- | CMPS/CMPSB Compare string/Compare byte string
 -- CMPS/CMPSW Compare string/Compare word string
 -- CMPS/CMPSD Compare string/Compare doubleword string
@@ -1221,26 +1223,39 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
   let bytesPerOp' = bvLit n64 bytesPerOp
   if repz_pfx then do
     count <- get rcx
-    unless_ (count .=. bvKLit 0) $ do
-      nsame <- memcmp bytesPerOp count v_rsi v_rdi df
-      let equal = (nsame .=. count)
-          nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
+    count_v <- eval count
+    src_v   <- eval v_rsi
+    dest_v  <- eval v_rdi
+    is_reverse_v <- eval df
+    nsame <- evalArchFn $ MemCmp bytesPerOp count_v src_v dest_v is_reverse_v
+    let equal = (nsame .=. count)
+        nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
-      -- we need to set the flags as if the last comparison was done, hence this.
-      let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
-          lastSrc  = mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
-          lastDest = mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
+    -- we need to set the flags as if the last comparison was done, hence this.
+    let lastWordBytes = (nwordsSeen .- bvKLit 1) .* bytesPerOp'
+    lastSrc1 <- eval $ mux df (v_rsi .- lastWordBytes) (v_rsi .+ lastWordBytes)
+    lastSrc2 <- eval $ mux df (v_rdi .- lastWordBytes) (v_rdi .+ lastWordBytes)
+    -- we do this to make it obvious so repz cmpsb ; jz ... is clear
+    let nbytesSeen = nwordsSeen .* bytesPerOp'
 
-      v' <- get $ MemoryAddr lastDest repr
-      exec_cmp (MemoryAddr lastSrc repr) v' -- FIXME: right way around?
+    -- Determine if count ever ran.
+    nzCount <- eval $ count .=/=. bvKLit 0
 
-      -- we do this to make it obvious so repz cmpsb ; jz ... is clear
-      zf_loc .= equal
-      let nbytesSeen = nwordsSeen .* bytesPerOp'
+    src1Val <- evalAssignRhs $ CondReadMem repr nzCount lastSrc1 (mkLit knownNat 0)
+    src2Val <- evalAssignRhs $ CondReadMem repr nzCount lastSrc2 (mkLit knownNat 0)
 
-      rsi .= mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
-      rdi .= mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
-      rcx .= (count .- nwordsSeen)
+    -- Set result value.
+    let res = src1Val .- src2Val
+    -- Set flags
+    pf_val <- even_parity (least_byte res)
+    modify of_loc $ mux (ValueExpr nzCount) $ ssub_overflows  src1Val src2Val
+    modify af_loc $ mux (ValueExpr nzCount) $ usub4_overflows src1Val src2Val
+    modify cf_loc $ mux (ValueExpr nzCount) $ usub_overflows  src1Val src2Val
+    modify sf_loc $ mux (ValueExpr nzCount) $ msb res
+    modify pf_loc $ mux (ValueExpr nzCount) $ pf_val
+    modify rsi    $ mux (ValueExpr nzCount) $ mux df (v_rsi .- nbytesSeen) (v_rsi .+ nbytesSeen)
+    modify rdi    $ mux (ValueExpr nzCount) $ mux df (v_rdi .- nbytesSeen) (v_rdi .+ nbytesSeen)
+    modify rcx    $ mux (ValueExpr nzCount) $ count .- nwordsSeen
    else do
      v' <- get $ MemoryAddr v_rdi repr
      exec_cmp (MemoryAddr   v_rsi repr) v' -- FIXME: right way around?
@@ -1324,13 +1339,12 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   let y = ValueExpr v_rax
 
   dst <- eval (ValueExpr v_rdi .+ lastWordBytes)
-  cond <- eval (ValueExpr v_rcx .=. bvKLit 0)
+  cond <- eval (ValueExpr v_rcx .=/=. bvKLit 0)
   let condExpr = ValueExpr cond
   dst_val <- evalAssignRhs $ CondReadMem (repValSizeMemRepr sz) cond dst (mkLit knownNat 0)
 
   let condSet :: Location (Addr ids) tp -> Expr ids tp -> X86Generator st ids ()
       condSet l e = modify l (mux condExpr e)
-
 
   condSet rcx    count'
   condSet rdi    $ ValueExpr v_rdi .+ nBytesSeen
@@ -1407,45 +1421,40 @@ def_lodsx suf elsz = defNullaryPrefix ("lods" ++ suf) $ \pfx -> do
 -- | STOS/STOSB Store string/Store byte string
 -- STOS/STOSW Store string/Store word string
 -- STOS/STOSD Store string/Store doubleword string
-exec_stos :: 1 <= w
-          => Bool -- Flag indicating if RepPrefix appeared before instruction
-          -> RepValSize w
-          -> X86Generator st ids ()
-exec_stos False rep = do
-  let mrepr = repValSizeMemRepr rep
-  -- The direction flag indicates post decrement or post increment.
-  df   <- get df_loc
-  dest <- get rdi
-  v    <- get (xaxValLoc rep)
-  let neg_szv = bvLit n64 (negate (memReprBytes mrepr))
-  let szv     = bvLit n64 (memReprBytes mrepr)
-  MemoryAddr dest mrepr .= v
-  rdi .= dest .+ mux df neg_szv szv
-exec_stos True rep = do
-  let mrepr = repValSizeMemRepr rep
-  -- The direction flag indicates post decrement or post increment.
-  df   <- get df_loc
-  dest <- get rdi
-  v    <- get (xaxValLoc rep)
-  let szv = bvLit n64 (memReprBytes mrepr)
-  count <- get rcx
-  let nbytes     = count .* szv
-  memset count v dest df
-  rdi .= mux df (dest .- nbytes) (dest .+ nbytes)
-  rcx .= bvKLit 0
+-- STOS/STOSQ Store string/Store quadword string
 
 def_stos :: InstructionDef
 def_stos = defBinary "stos" $ \ii loc loc' -> do
-  case (loc, loc') of
-    (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) ByteRepVal
-    (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) WordRepVal
-    (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) DWordRepVal
-    (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
-      exec_stos (F.iiLockPrefix ii == F.RepPrefix) QWordRepVal
-    _ -> error $ "stos given bad arguments " ++ show (loc, loc')
+  let pfx = F.iiPrefixes ii
+  Some rep <-
+    case (loc, loc') of
+      (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
+        pure (Some ByteRepVal)
+      (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
+        pure (Some WordRepVal)
+      (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
+        pure (Some DWordRepVal)
+      (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
+        pure (Some QWordRepVal)
+      _ -> error $ "stos given bad arguments " ++ show (loc, loc')
+  -- The direction flag indicates post decrement or post increment.
+  dest <- get rdi
+  v    <- get (xaxValLoc rep)
+  df   <- get df_loc
+  case pfx^.F.prLockPrefix of
+    F.RepPrefix -> do
+      let mrepr = repValSizeMemRepr rep
+      count <- get rcx
+      addArchStmt =<< traverseF eval (RepStos rep dest v count df)
+      rdi .= dest .+ bvKLit (memReprBytes mrepr) .* mux df (bvNeg count) count
+      rcx .= bvKLit 0
+    F.NoLockPrefix -> do
+        let mrepr = repValSizeMemRepr rep
+        let neg_szv = bvLit n64 (negate (memReprBytes mrepr))
+        let szv     = bvLit n64 (memReprBytes mrepr)
+        MemoryAddr dest mrepr .= v
+        rdi .= dest .+ mux df neg_szv szv
+    lockPrefix -> fail $ "stos unexpected lock/rep prefix: " ++ show lockPrefix
 
 -- REP        Repeat while ECX not zero
 -- REPE/REPZ  Repeat while equal/Repeat while zero

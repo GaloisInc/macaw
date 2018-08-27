@@ -18,6 +18,7 @@ module Data.Macaw.AbsDomain.JumpBounds
 
 import           Control.Lens
 import           Control.Monad.State
+import           Data.Bits
 import           Data.Functor
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
@@ -165,12 +166,18 @@ assertPred (AssignedValue a) isTrue bnds =
     EvalApp (BVUnsignedLe x (BVValue _ c)) | isTrue     -> addUpperBound x c bnds
     -- Given not (c <= y), assert y <= (c-1)
     EvalApp (BVUnsignedLe (BVValue _ c) y) | not isTrue -> addUpperBound y (c-1) bnds
+    -- Given x && y, assert x, then assert y
+    EvalApp (AndApp l r) | isTrue     -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    -- Given not (x || y), assert not x, then assert not y
+    EvalApp (OrApp  l r) | not isTrue -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    EvalApp (NotApp p) -> assertPred p (not isTrue) bnds
     _ -> Right bnds
 assertPred _ _ bnds = Right bnds
 
 -- | Lookup an upper bound or return analysis for why it is not defined.
 unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
                       , MapF.ShowF (ArchReg arch)
+                      , RegisterInfo (ArchReg arch)
                       )
                   => IndexBounds (ArchReg arch) ids
                   -> Value arch ids tp
@@ -194,6 +201,13 @@ unsignedUpperBound bnds v =
                   Right (IntegerUpperBound (min xb yb))
                 (Right xb, Left{}) -> Right xb
                 (Left{}, yb)       -> yb
+            EvalApp (SExt x w) -> do
+              IntegerUpperBound r <- unsignedUpperBound bnds x
+              -- sign-extend r
+              pure . IntegerUpperBound
+                $ if r < 2^(natValue w-1)
+                  then r
+                  else maxUnsigned (typeWidth v) .&. r
             EvalApp (UExt x _) -> do
               IntegerUpperBound r <- unsignedUpperBound bnds x
               pure (IntegerUpperBound r)
@@ -214,6 +228,7 @@ eitherToMaybe Left{}    = Nothing
 nextBlockBounds :: forall arch ids
                 .  ( MapF.OrdF (ArchReg arch)
                    , MapF.ShowF (ArchReg arch)
+                   , RegisterInfo (ArchReg arch)
                    )
                 => IndexBounds (ArchReg arch) ids
                    -- ^ Index bounds at end of this state.

@@ -1,0 +1,13 @@
+R { funcs = [(Addr 1 0
+    	     , [ (Addr 1 0, 9), (Addr 1 9,9), (Addr 1 0x18, 6)
+	       , (Addr 1 0x20, 6)
+	       , (Addr 1 0x30, 6)
+	       , (Addr 1 0x40, 6)
+	       , (Addr 1 0x50, 10)
+	       , (Addr 1 0x60, 7)
+	       , (Addr 1 0x70, 7)
+	       , (Addr 1 0x80, 7)
+	       , (Addr 1 0x90, 7)
+	       , (Addr 1 0xa0, 3)])]
+  , ignoreBlocks = []
+  }

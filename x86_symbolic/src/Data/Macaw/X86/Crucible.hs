@@ -31,25 +31,24 @@ module Data.Macaw.X86.Crucible
 
   ) where
 
-import Control.Lens ((^.))
-import Data.Parameterized.NatRepr
-import Data.Parameterized.Context.Unsafe(empty,extend)
-
-import Data.Bits(shiftR, (.&.))
-import Data.Word(Word8)
-import Data.Bits(shiftL,testBit)
-import GHC.TypeLits(KnownNat)
+import           Control.Lens ((^.))
+import           Data.Bits hiding (xor)
+import           Data.Parameterized.Context.Unsafe (empty,extend)
+import           Data.Parameterized.Utils.Endian (Endian(..))
+import           Data.Parameterized.NatRepr
+import qualified Data.Parameterized.Vector as PV
+import           Data.Word (Word8)
+import           GHC.TypeLits (KnownNat)
 
 import           What4.Interface hiding (IsExpr)
-import           What4.Symbol(userSymbol)
-import           What4.Utils.Endian(Endian(..))
+import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend (IsSymInterface)
 import           Lang.Crucible.CFG.Expr
-import           Lang.Crucible.Simulator.ExecutionTree
-import           Lang.Crucible.Simulator.RegMap
 import qualified Lang.Crucible.Simulator.Evaluation as C
-import           Lang.Crucible.Simulator.Intrinsics(IntrinsicTypes)
+import           Lang.Crucible.Simulator.ExecutionTree
+import           Lang.Crucible.Simulator.Intrinsics (IntrinsicTypes)
+import           Lang.Crucible.Simulator.RegMap
 import           Lang.Crucible.Syntax
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
@@ -59,7 +58,7 @@ import           Lang.Crucible.LLVM.MemModel
                     pattern LLVMPointerRepr, llvmPointer_bv)
 
 import qualified Data.Macaw.Types as M
-import           Data.Macaw.Symbolic.CrucGen(MacawExt)
+import           Data.Macaw.Symbolic.CrucGen (MacawExt)
 import           Data.Macaw.Symbolic
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
@@ -141,7 +140,7 @@ pureSem :: (IsSymInterface sym) =>
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn =
   case fn of
-
+    M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.XGetBV {} -> error "XGetBV"
     M.ReadLoc {} -> error "ReadLoc"
     M.PShufb {} -> error "PShufb"
@@ -229,7 +228,7 @@ pureSem sym fn =
         M.VPUnpackLQDQ -> vecOp2 sym LittleEndian w (knownNat @64) x y $
           \xs ys -> let n = V.length xs
                     in case mul2Plus n of
-                         Refl -> V.take n (V.interlieve xs ys)
+                         Refl -> V.take n (PV.interleave xs ys)
 
 
         M.VAESEnc
@@ -546,6 +545,3 @@ liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
 
 liftAtomIn :: (forall s. f s -> a) -> AtomWrapper f t -> a
 liftAtomIn f (AtomWrapper x) = f x
-
-
-
