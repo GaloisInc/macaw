@@ -28,7 +28,7 @@ import qualified Data.Parameterized.NatRepr as NR
 import           Text.Printf ( printf )
 
 import qualified Lang.Crucible.Backend as C
-import qualified Lang.Crucible.LLVM.MemModel.Pointer as LL
+import qualified Lang.Crucible.LLVM.MemModel as LL
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import qualified Lang.Crucible.Simulator.SimError as C
