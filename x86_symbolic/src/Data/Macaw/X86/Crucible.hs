@@ -34,13 +34,14 @@ module Data.Macaw.X86.Crucible
 import           Control.Lens ((^.))
 import           Data.Bits hiding (xor)
 import           Data.Parameterized.Context.Unsafe (empty,extend)
+import           Data.Parameterized.Utils.Endian (Endian(..))
 import           Data.Parameterized.NatRepr
+import qualified Data.Parameterized.Vector as PV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
 
 import           What4.Interface hiding (IsExpr)
 import           What4.Symbol (userSymbol)
-import           What4.Utils.Endian (Endian(..))
 
 import           Lang.Crucible.Backend (IsSymInterface)
 import           Lang.Crucible.CFG.Expr
@@ -52,9 +53,9 @@ import           Lang.Crucible.Syntax
 import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 
-import           Lang.Crucible.LLVM.MemModel (LLVMPointerType)
-import           Lang.Crucible.LLVM.MemModel.Pointer
-  (projectLLVM_bv, pattern LLVMPointerRepr, llvmPointer_bv)
+import           Lang.Crucible.LLVM.MemModel
+                   (LLVMPointerType, projectLLVM_bv,
+                    pattern LLVMPointerRepr, llvmPointer_bv)
 
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen (MacawExt)
@@ -227,7 +228,7 @@ pureSem sym fn =
         M.VPUnpackLQDQ -> vecOp2 sym LittleEndian w (knownNat @64) x y $
           \xs ys -> let n = V.length xs
                     in case mul2Plus n of
-                         Refl -> V.take n (V.interlieve xs ys)
+                         Refl -> V.take n (PV.interleave xs ys)
 
 
         M.VAESEnc
