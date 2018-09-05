@@ -86,6 +86,7 @@ import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
 import qualified Data.Macaw.Memory.Permissions as Perm
+import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types
   ( n8
   , HasRepr(..)
@@ -203,7 +204,7 @@ disassembleBlockImpl nonceGen pblock curIPAddr max_offset contents = do
             runExceptT $ runX86Generator gs $ do
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction i)
               addStmt (Comment (Text.pack line))
-              exec
+              asAtomicStateUpdate (MM.relativeSegmentAddr curIPAddr) exec
           case gsr of
             Left msg -> do
               returnWithError pblock curIPAddr (ExecInstructionError curIPAddr i msg)

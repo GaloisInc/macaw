@@ -22,6 +22,7 @@ module Data.Macaw.X86.Generator
   , addStmt
   , addArchStmt
   , addArchTermStmt
+  , asAtomicStateUpdate
   , evalArchFn
   , evalAssignRhs
   , getState
@@ -284,6 +285,23 @@ modGenState m = X86G $ ContT $ \c -> ReaderT $ \s ->
 -- | Return the value associated with the given register.
 getRegValue :: X86Reg tp -> X86Generator st_s ids (Value X86_64 ids tp)
 getRegValue r = view (curX86State . boundValue r) <$> getState
+
+-- | Collect state modifications by a single instruction into a single 'ArchState' statement
+--
+-- See @Data.Macaw.SemMC.Generator.asATomicStateUpdate@, which this is
+-- based on and analogous to. The @setRegVal@ mentioned there
+-- corresponds to 'setReg' in this module.
+asAtomicStateUpdate :: MemAddr 64
+                       -- ^ Instruction address
+                    -> X86Generator st_s ids a
+                       -- ^ An action recording the state transformations of the instruction
+                    -> X86Generator st_s ids a
+asAtomicStateUpdate insnAddr transformer = do
+  modGenState $ genRegUpdates .= MapF.empty
+  res <- transformer
+  updates <- _genRegUpdates <$> getState
+  addStmt (ArchState insnAddr updates)
+  return res
 
 -- | Set the value associated with the given register.
 setReg :: X86Reg tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
