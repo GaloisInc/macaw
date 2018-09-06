@@ -868,9 +868,6 @@ defaultAppEvaluator elt interps = case elt of
   S.BVSext w bv -> do
     e <- addEltTH interps bv
     liftQ [| return (G.AppExpr (M.SExt $(return e) $(natReprTH w))) |]
-  S.BVTrunc w bv -> do
-    e <- addEltTH interps bv
-    liftQ [| return (G.AppExpr (M.Trunc $(return e) $(natReprTH w))) |]
   S.BVBitNot w bv -> do
     e <- addEltTH interps bv
     liftQ [| return (G.AppExpr (M.BVComplement $(natReprTH w) $(return e))) |]

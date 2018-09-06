@@ -115,8 +115,6 @@ crucAppToExpr (S.BVZext repr bv) = AppExpr <$> do
   M.UExt <$> addElt bv <*> pure repr
 crucAppToExpr (S.BVSext repr bv) = AppExpr <$> do
   M.SExt <$> addElt bv <*> pure repr
-crucAppToExpr (S.BVTrunc repr bv) = AppExpr <$> do
-  M.Trunc <$> addElt bv <*> pure repr
 crucAppToExpr (S.BVBitNot repr bv) = AppExpr <$> do
   M.BVComplement <$> pure repr <*> addElt bv
 crucAppToExpr (S.BVBitAnd repr bv1 bv2) = AppExpr <$> do
