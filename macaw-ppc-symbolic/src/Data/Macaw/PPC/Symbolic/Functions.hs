@@ -26,6 +26,7 @@ import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes ( (:~:)( Refl ), testEquality )
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.NatRepr as NR
+import qualified Data.Text as Text
 import           Text.Printf ( printf )
 
 import qualified Lang.Crucible.Backend as C
@@ -36,7 +37,6 @@ import qualified Lang.Crucible.Simulator.SimError as C
 import qualified Lang.Crucible.Types as C
 import qualified What4.Interface as C
 import qualified What4.InterpretedFloatingPoint as C
-import qualified What4.Symbol as C
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
@@ -231,102 +231,114 @@ funcSemantics sf pf s =
           ++ show (MS.floatInfoToCrucible fi)
         return res
     MP.FPSCR1 name x fpscr -> withSym s $ \sym -> do
+      name' <- C.stringLit sym $ Text.pack name
       x' <- toValBV sym x
       fpscr' <- toValBV sym fpscr
-      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf name
+      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr1"
         (Ctx.empty
+          Ctx.:> C.BaseStringRepr
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @32))
-        (Ctx.empty Ctx.:> x' Ctx.:> fpscr')
+        (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> fpscr')
         (C.BaseBVRepr (NR.knownNat @32))
     MP.FPSCR2 name x y fpscr -> withSym s $ \sym -> do
+      name' <- C.stringLit sym $ Text.pack name
       x' <- toValBV sym x
       y' <- toValBV sym y
       fpscr' <- toValBV sym fpscr
-      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf name
+      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr2"
         (Ctx.empty
+          Ctx.:> C.BaseStringRepr
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @32))
-        (Ctx.empty Ctx.:> x' Ctx.:> y' Ctx.:> fpscr')
+        (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> y' Ctx.:> fpscr')
         (C.BaseBVRepr (NR.knownNat @32))
     MP.FPSCR3 name x y z fpscr -> withSym s $ \sym -> do
+      name' <- C.stringLit sym $ Text.pack name
       x' <- toValBV sym x
       y' <- toValBV sym y
       z' <- toValBV sym z
       fpscr' <- toValBV sym fpscr
-      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf name
+      LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr3"
         (Ctx.empty
+          Ctx.:> C.BaseStringRepr
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @128)
           Ctx.:> C.BaseBVRepr (NR.knownNat @32))
-        (Ctx.empty Ctx.:> x' Ctx.:> y' Ctx.:> z' Ctx.:> fpscr')
+        (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> y' Ctx.:> z' Ctx.:> fpscr')
         (C.BaseBVRepr (NR.knownNat @32))
     MP.FP1 name v fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v' <- toValBV sym v
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend Ctx.empty v') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "fp1" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP2 name v1 v2 fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v1') v2') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "fp2" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP3 name v1 v2 v3 fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') v3') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v1') v2') v3') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "fp3" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec1 name v fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v' <- toValBV sym v
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend Ctx.empty v') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "vec1" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec2 name v1 v2 fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v1') v2') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "vec2" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec3 name v1 v2 v3 fpscr -> do
       let sym = s ^. C.stateSymInterface
+      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3
       fpscr' <- toValBV sym fpscr
-      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
-      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') v3') fpscr'
+      let argTypes = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty C.BaseStringRepr) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @128))) (C.BaseBVRepr (NR.knownNat @32))
+      let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty name') v1') v2') v3') fpscr'
       let rType = C.BaseBVRepr (NR.knownNat @160)
-      fval <- lookupApplySymFun sym sf name argTypes args rType
+      fval <- lookupApplySymFun sym sf "vec3" argTypes args rType
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
 
