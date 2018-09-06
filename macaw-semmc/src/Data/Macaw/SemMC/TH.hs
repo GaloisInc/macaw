@@ -25,6 +25,8 @@ module Data.Macaw.SemMC.TH (
   genExecInstructionLogging,
   addEltTH,
   natReprTH,
+  floatInfoTH,
+  floatInfoFromPrecisionTH,
   symFnName,
   asName
   ) where
@@ -60,6 +62,7 @@ import qualified Lang.Crucible.Backend.Simple as S
 import qualified What4.BaseTypes as CT
 import qualified What4.Expr.Builder as S
 import qualified What4.Interface as SI
+import qualified What4.InterpretedFloatingPoint as SI
 import qualified What4.Symbol as Sy
 
 import qualified Dismantle.Instruction as D
@@ -72,6 +75,7 @@ import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
+import qualified Data.Macaw.Symbolic.PersistentState as M
 
 import Data.Parameterized.NatRepr ( knownNat
                                   , natValue
@@ -491,6 +495,13 @@ natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
+floatInfoTH :: M.FloatInfoRepr fi -> Q Exp
+floatInfoTH fi = [| fi |]
+
+floatInfoFromPrecisionTH :: CT.FloatPrecisionRepr fpp -> Q Exp
+floatInfoFromPrecisionTH =
+  floatInfoTH . M.floatInfoFromCrucible . SI.floatPrecisionToInfoRepr
+
 -- | Sequence a list of monadic actions without constructing an intermediate
 -- list structure
 doSequenceQ :: [StmtQ] -> [Stmt] -> Q Exp
@@ -857,9 +868,6 @@ defaultAppEvaluator elt interps = case elt of
   S.BVSext w bv -> do
     e <- addEltTH interps bv
     liftQ [| return (G.AppExpr (M.SExt $(return e) $(natReprTH w))) |]
-  S.BVTrunc w bv -> do
-    e <- addEltTH interps bv
-    liftQ [| return (G.AppExpr (M.Trunc $(return e) $(natReprTH w))) |]
   S.BVBitNot w bv -> do
     e <- addEltTH interps bv
     liftQ [| return (G.AppExpr (M.BVComplement $(natReprTH w) $(return e))) |]

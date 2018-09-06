@@ -45,7 +45,7 @@ bvconcat bv1Val bv2Val repV repU repW = do
 --
 -- This code is factored out of the TH module to improve compilation times.
 bvselect :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
-         => (1 <= w, 1 <= n, 1 <= i, (i+n) <= w)
+         => (1 <= w, 1 <= n, i + n <= w)
          => Value arch ids (BVType w)
          -> NR.NatRepr n
          -> NR.NatRepr i

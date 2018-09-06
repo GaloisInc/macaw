@@ -25,6 +25,7 @@ library
                        containers,
                        lens,
                        exceptions,
+                       text,
                        parameterized-utils,
                        dismantle-ppc,
                        crucible,

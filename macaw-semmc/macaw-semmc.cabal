@@ -37,6 +37,7 @@ library
                        parameterized-utils,
                        crucible,
                        macaw-base,
+                       macaw-symbolic,
                        dismantle-tablegen,
                        semmc,
                        what4,

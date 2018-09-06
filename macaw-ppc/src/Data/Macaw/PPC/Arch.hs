@@ -5,6 +5,7 @@
 {-# LANGUAGE FlexibleInstances     #-}
 {-# LANGUAGE GADTs                 #-}
 {-# LANGUAGE KindSignatures        #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
@@ -230,9 +231,121 @@ data PPCPrimFn ppc f tp where
        -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
        -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
 
-  FPIsQNaN :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPIsSNaN :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> PPCPrimFn ppc f MT.BoolType
-  FPCvt :: !(MT.FloatInfoRepr flt) -> !(f (MT.FloatType flt)) -> !(MT.FloatInfoRepr flt') -> PPCPrimFn ppc f (MT.FloatType flt')
+  -- | Interpreted floating point functions.
+  FPNeg
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPAbs
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPSqrt
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+
+  FPAdd
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPSub
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPMul
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPDiv
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPFMA
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+
+  FPLt
+    :: !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f MT.BoolType
+  FPEq
+    :: !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f MT.BoolType
+
+  FPIsNaN :: !(f (MT.FloatType fi)) -> PPCPrimFn ppc f MT.BoolType
+
+  FPCast
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi'))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  -- | Treat a floating-point as a bitvector.
+  FPToBinary
+    :: (1 <= MT.FloatInfoBits fi)
+    => !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatBVType fi)
+  -- | Treat a bitvector as a floating-point.
+  FPFromBinary
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.FloatBVType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPToSBV
+    :: (1 <= w)
+    => !(MT.NatRepr w)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.BVType w)
+  FPToUBV
+    :: (1 <= w)
+    => !(MT.NatRepr w)
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.BVType w)
+  FPFromSBV
+    :: (1 <= w)
+    => !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType w))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPFromUBV
+    :: (1 <= w)
+    => !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType w))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+
+  -- | Coerce a floating-point to another precision format without
+  --   precision loss.
+  FPCoerce
+    :: !(MT.FloatInfoRepr fi)
+    -> !(MT.FloatInfoRepr fi')
+    -> !(f (MT.FloatType fi'))
+    -> PPCPrimFn ppc f (MT.FloatType fi)
+
+  -- | Uninterpreted floating point functions
+  FPSCR1
+    :: !String
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 32))
+    -> PPCPrimFn ppc f (MT.BVType 32)
+  FPSCR2
+    :: !String
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 32))
+    -> PPCPrimFn ppc f (MT.BVType 32)
+  FPSCR3
+    :: !String
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 128))
+    -> !(f (MT.BVType 32))
+    -> PPCPrimFn ppc f (MT.BVType 32)
 
   -- | Uninterpreted floating point functions
   FP1 :: !String -- the name of the function
@@ -269,99 +382,176 @@ data PPCPrimFn ppc f tp where
        -> PPCPrimFn ppc f (MT.BVType 160)
 
 instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v) MT.TypeRepr where
-  typeRepr f =
-    case f of
-      UDiv rep _ _ -> MT.BVTypeRepr rep
-      SDiv rep _ _ -> MT.BVTypeRepr rep
+  typeRepr = \case
+    UDiv rep _ _ -> MT.BVTypeRepr rep
+    SDiv rep _ _ -> MT.BVTypeRepr rep
 
-      FPIsQNaN _ _ -> MT.BoolTypeRepr
-      FPIsSNaN _ _ -> MT.BoolTypeRepr
-      FPCvt _ _ rep -> MT.floatTypeRepr rep
+    FPNeg  fi _    -> MT.FloatTypeRepr fi
+    FPAbs  fi _    -> MT.FloatTypeRepr fi
+    FPSqrt fi _    -> MT.FloatTypeRepr fi
+    FPAdd fi _ _   -> MT.FloatTypeRepr fi
+    FPSub fi _ _   -> MT.FloatTypeRepr fi
+    FPMul fi _ _   -> MT.FloatTypeRepr fi
+    FPDiv fi _ _   -> MT.FloatTypeRepr fi
+    FPFMA fi _ _ _ -> MT.FloatTypeRepr fi
+    FPLt{}    -> knownRepr
+    FPEq{}    -> knownRepr
+    FPIsNaN{} -> knownRepr
+    FPCast       fi _ -> MT.FloatTypeRepr fi
+    FPToBinary   fi _ -> MT.floatBVTypeRepr fi
+    FPFromBinary fi _ -> MT.FloatTypeRepr fi
+    FPToSBV      w  _ -> MT.BVTypeRepr w
+    FPToUBV      w  _ -> MT.BVTypeRepr w
+    FPFromSBV    fi _ -> MT.FloatTypeRepr fi
+    FPFromUBV    fi _ -> MT.FloatTypeRepr fi
+    FPCoerce fi _ _ -> MT.FloatTypeRepr fi
+    FPSCR1{} -> MT.BVTypeRepr MT.knownNat
+    FPSCR2{} -> MT.BVTypeRepr MT.knownNat
+    FPSCR3{} -> MT.BVTypeRepr MT.knownNat
 
-      FP1 _    _ _      -> MT.BVTypeRepr MT.knownNat
-      FP2 _    _ _ _    -> MT.BVTypeRepr MT.knownNat
-      FP3 _    _ _ _ _  -> MT.BVTypeRepr MT.knownNat
+    FP1{} -> MT.BVTypeRepr MT.knownNat
+    FP2{} -> MT.BVTypeRepr MT.knownNat
+    FP3{} -> MT.BVTypeRepr MT.knownNat
 
-      Vec1 _   _ _      -> MT.BVTypeRepr MT.knownNat
-      Vec2 _   _ _ _    -> MT.BVTypeRepr MT.knownNat
-      Vec3 _   _ _ _ _  -> MT.BVTypeRepr MT.knownNat
-
+    Vec1{} -> MT.BVTypeRepr MT.knownNat
+    Vec2{} -> MT.BVTypeRepr MT.knownNat
+    Vec3{} -> MT.BVTypeRepr MT.knownNat
 
 -- | Right now, none of the primitive functions has a side effect.  That will
 -- probably change.
 ppcPrimFnHasSideEffects :: PPCPrimFn ppc f tp -> Bool
-ppcPrimFnHasSideEffects pf =
-  case pf of
-    UDiv {} -> False
-    SDiv {} -> False
-    FPIsQNaN {} -> False
-    FPIsSNaN {} -> False
-    FPCvt {} -> False
-    FP1 {} -> False
-    FP2 {} -> False
-    FP3 {} -> False
-    Vec1 {} -> False
-    Vec2 {} -> False
-    Vec3 {} -> False
+ppcPrimFnHasSideEffects = \case
+  UDiv{}         -> False
+  SDiv{}         -> False
+  FPNeg{}        -> False
+  FPAbs{}        -> False
+  FPSqrt{}       -> False
+  FPAdd{}        -> False
+  FPSub{}        -> False
+  FPMul{}        -> False
+  FPDiv{}        -> False
+  FPFMA{}        -> False
+  FPLt{}         -> False
+  FPEq{}         -> False
+  FPIsNaN{}      -> False
+  FPCast{}       -> False
+  FPToBinary{}   -> False
+  FPFromBinary{} -> False
+  FPToSBV{}      -> False
+  FPToUBV{}      -> False
+  FPFromSBV{}    -> False
+  FPFromUBV{}    -> False
+  FPCoerce{}     -> False
+  FPSCR1{}       -> False
+  FPSCR2{}       -> False
+  FPSCR3{}       -> False
+  FP1{}          -> False
+  FP2{}          -> False
+  FP3{}          -> False
+  Vec1{}         -> False
+  Vec2{}         -> False
+  Vec3{}         -> False
 
 rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
               => PPCPrimFn ppc (MC.Value ppc src) tp
               -> Rewriter ppc s src tgt (MC.Value ppc tgt tp)
-rewritePrimFn f =
-  case f of
-    UDiv rep lhs rhs -> do
-      tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
-      evalRewrittenArchFn tgtFn
-    SDiv rep lhs rhs -> do
-      tgtFn <- SDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
-      evalRewrittenArchFn tgtFn
-    FPIsQNaN info v -> do
-      tgt <- FPIsQNaN info <$> rewriteValue v
-      evalRewrittenArchFn tgt
-    FPIsSNaN info v -> do
-      tgt <- FPIsSNaN info <$> rewriteValue v
-      evalRewrittenArchFn tgt
-    FPCvt rep1 v rep2 -> do
-      tgt <- FPCvt rep1 <$> rewriteValue v <*> pure rep2
-      evalRewrittenArchFn tgt
-    FP1 name op fpscr -> do
-      tgtFn <- FP1 name <$> rewriteValue op <*> rewriteValue fpscr
-      evalRewrittenArchFn tgtFn
-    FP2 name op1 op2 fpscr -> do
-      tgtFn <- FP2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr
-      evalRewrittenArchFn tgtFn
-    FP3 name op1 op2 op3 fpscr -> do
-      tgtFn <- FP3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr
-      evalRewrittenArchFn tgtFn
-    Vec1 name op vscr -> do
-      tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue vscr
-      evalRewrittenArchFn tgtFn
-    Vec2 name op1 op2 vscr -> do
-      tgtFn <- Vec2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue vscr
-      evalRewrittenArchFn tgtFn
-    Vec3 name op1 op2 op3 vscr -> do
-      tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue vscr
-      evalRewrittenArchFn tgtFn
+rewritePrimFn = \case
+  UDiv rep lhs rhs -> do
+    tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
+    evalRewrittenArchFn tgtFn
+  SDiv rep lhs rhs -> do
+    tgtFn <- SDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
+    evalRewrittenArchFn tgtFn
+  FPNeg  fi x -> evalRewrittenArchFn =<< (FPNeg fi <$> rewriteValue x)
+  FPAbs  fi x -> evalRewrittenArchFn =<< (FPAbs fi <$> rewriteValue x)
+  FPSqrt fi x -> evalRewrittenArchFn =<< (FPSqrt fi <$> rewriteValue x)
+  FPAdd fi x y ->
+    evalRewrittenArchFn =<< (FPAdd fi <$> rewriteValue x <*> rewriteValue y)
+  FPSub fi x y ->
+    evalRewrittenArchFn =<< (FPSub fi <$> rewriteValue x <*> rewriteValue y)
+  FPMul fi x y ->
+    evalRewrittenArchFn =<< (FPMul fi <$> rewriteValue x <*> rewriteValue y)
+  FPDiv fi x y ->
+    evalRewrittenArchFn =<< (FPDiv fi <$> rewriteValue x <*> rewriteValue y)
+  FPFMA fi x y z ->
+    evalRewrittenArchFn
+      =<< (FPFMA fi <$> rewriteValue x <*> rewriteValue y <*> rewriteValue z)
+  FPLt x y ->
+    evalRewrittenArchFn =<< (FPLt <$> rewriteValue x <*> rewriteValue y)
+  FPEq x y ->
+    evalRewrittenArchFn =<< (FPEq <$> rewriteValue x <*> rewriteValue y)
+  FPIsNaN x -> evalRewrittenArchFn =<< (FPIsNaN <$> rewriteValue x)
+  FPCast fi x -> evalRewrittenArchFn =<< (FPCast fi <$> rewriteValue x)
+  FPToBinary fi x -> evalRewrittenArchFn =<< (FPToBinary fi <$> rewriteValue x)
+  FPFromBinary fi x ->
+    evalRewrittenArchFn =<< (FPFromBinary fi <$> rewriteValue x)
+  FPToSBV   w  x -> evalRewrittenArchFn =<< (FPToSBV w <$> rewriteValue x)
+  FPToUBV   w  x -> evalRewrittenArchFn =<< (FPToUBV w <$> rewriteValue x)
+  FPFromSBV fi x -> evalRewrittenArchFn =<< (FPFromSBV fi <$> rewriteValue x)
+  FPFromUBV fi x -> evalRewrittenArchFn =<< (FPFromUBV fi <$> rewriteValue x)
+  FPCoerce fi fi' x -> evalRewrittenArchFn =<< (FPCoerce fi fi' <$> rewriteValue x)
+  FPSCR1 name op fpscr ->
+    evalRewrittenArchFn =<< (FPSCR1 name <$> rewriteValue op <*> rewriteValue fpscr)
+  FPSCR2 name op1 op2 fpscr ->
+    evalRewrittenArchFn =<< (FPSCR2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr)
+  FPSCR3 name op1 op2 op3 fpscr ->
+    evalRewrittenArchFn =<< (FPSCR3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr)
+  FP1 name op fpscr -> do
+    tgtFn <- FP1 name <$> rewriteValue op <*> rewriteValue fpscr
+    evalRewrittenArchFn tgtFn
+  FP2 name op1 op2 fpscr -> do
+    tgtFn <- FP2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue fpscr
+    evalRewrittenArchFn tgtFn
+  FP3 name op1 op2 op3 fpscr -> do
+    tgtFn <- FP3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue fpscr
+    evalRewrittenArchFn tgtFn
+  Vec1 name op vscr -> do
+    tgtFn <- Vec1 name <$> rewriteValue op <*> rewriteValue vscr
+    evalRewrittenArchFn tgtFn
+  Vec2 name op1 op2 vscr -> do
+    tgtFn <- Vec2 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue vscr
+    evalRewrittenArchFn tgtFn
+  Vec3 name op1 op2 op3 vscr -> do
+    tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue vscr
+    evalRewrittenArchFn tgtFn
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f tp -> m PP.Doc
-ppPrimFn pp f =
-  case f of
-    UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
-    SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
-    FPIsQNaN _info v -> ppUnary "ppc_fp_isqnan" <$> pp v
-    FPIsSNaN _info v -> ppUnary "ppc_fp_issnan" <$> pp v
-    FPCvt _rep1 v _rep2 -> ppUnary "ppc_fp_cvt" <$> pp v
-    FP1 n r1 fpscr -> ppBinary ("ppc_fp1 " ++ n) <$> pp r1 <*> pp fpscr
-    FP2 n r1 r2 fpscr -> pp3 ("ppc_fp2 " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
-    FP3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp3 " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
-    Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp vscr
-    Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp vscr
-    Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
-  where
-    ppUnary s v' = PP.text s PP.<+> v'
-    ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
-    pp3 s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
-    pp4 s v1' v2' v3' v4' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
+ppPrimFn pp = \case
+  UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
+  SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
+  FPNeg  _fi x -> ppUnary "ppc_fp_neg" <$> pp x
+  FPAbs  _fi x -> ppUnary "ppc_fp_abs" <$> pp x
+  FPSqrt _fi x -> ppUnary "ppc_fp_sqrt" <$> pp x
+  FPAdd _fi x y -> ppBinary "ppc_fp_add" <$> pp x <*> pp y
+  FPSub _fi x y -> ppBinary "ppc_fp_sub" <$> pp x <*> pp y
+  FPMul _fi x y -> ppBinary "ppc_fp_mul" <$> pp x <*> pp y
+  FPDiv _fi x y -> ppBinary "ppc_fp_div" <$> pp x <*> pp y
+  FPFMA _fi x y z -> pp3 "ppc_fp_fma" <$> pp x <*> pp y <*> pp z
+  FPLt x y -> ppBinary "ppc_fp_lt" <$> pp x <*> pp y
+  FPEq x y -> ppBinary "ppc_fp_eq" <$> pp x <*> pp y
+  FPIsNaN x -> ppUnary "ppc_fp_is_nan" <$> pp x
+  FPCast       _fi x -> ppUnary "ppc_fp_cast" <$> pp x
+  FPToBinary   _fi x -> ppUnary "ppc_fp_to_binary" <$> pp x
+  FPFromBinary _fi x -> ppUnary "ppc_fp_from_binary" <$> pp x
+  FPToSBV      _w  x -> ppUnary "ppc_fp_to_sbv" <$> pp x
+  FPToUBV      _w  x -> ppUnary "ppc_fp_to_ubv" <$> pp x
+  FPFromSBV    _fi x -> ppUnary "ppc_fp_from_sbv" <$> pp x
+  FPFromUBV    _fi x -> ppUnary "ppc_fp_from_ubv" <$> pp x
+  FPCoerce _fi _fi' x -> ppUnary "ppc_fp_coerce" <$> pp x
+  FPSCR1 n r1 fpscr -> ppBinary ("ppc_fp_un_op_fpscr " ++ n) <$> pp r1 <*> pp fpscr
+  FPSCR2 n r1 r2 fpscr -> pp3 ("ppc_fp_bin_op_fpscr " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
+  FPSCR3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp_tern_op_fpscr " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
+  FP1 n r1 fpscr -> ppBinary ("ppc_fp1 " ++ n) <$> pp r1 <*> pp fpscr
+  FP2 n r1 r2 fpscr -> pp3 ("ppc_fp2 " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
+  FP3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp3 " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
+  Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp vscr
+  Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp vscr
+  Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
+ where
+  ppUnary s v' = PP.text s PP.<+> v'
+  ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
+  pp3 s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
+  pp4 s v1' v2' v3' v4' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
 
 instance MC.IsArchFn (PPCPrimFn ppc) where
   ppArchFn = ppPrimFn
@@ -373,19 +563,37 @@ instance FC.FoldableFC (PPCPrimFn ppc) where
   foldMapFC = FC.foldMapFCDefault
 
 instance FC.TraversableFC (PPCPrimFn ppc) where
-  traverseFC go f =
-    case f of
-      UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
-      SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
-      FPIsQNaN info v -> FPIsQNaN info <$> go v
-      FPIsSNaN info v -> FPIsSNaN info <$> go v
-      FPCvt rep1 v rep2 -> FPCvt rep1 <$> go v <*> pure rep2
-      FP1 name op fpscr -> FP1 name <$> go op <*> go fpscr
-      FP2 name op1 op2 fpscr -> FP2 name <$> go op1 <*> go op2 <*> go fpscr
-      FP3 name op1 op2 op3 fpscr -> FP3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
-      Vec1 name op vscr -> Vec1 name <$> go op <*> go vscr
-      Vec2 name op1 op2 vscr -> Vec2 name <$> go op1 <*> go op2 <*> go vscr
-      Vec3 name op1 op2 op3 vscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go vscr
+  traverseFC go = \case
+    UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
+    SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
+    FPNeg  fi x -> FPNeg fi <$> go x
+    FPAbs  fi x -> FPAbs fi <$> go x
+    FPSqrt fi x -> FPSqrt fi <$> go x
+    FPAdd fi x y -> FPAdd fi <$> go x <*> go y
+    FPSub fi x y -> FPSub fi <$> go x <*> go y
+    FPMul fi x y -> FPMul fi <$> go x <*> go y
+    FPDiv fi x y -> FPDiv fi <$> go x <*> go y
+    FPFMA fi x y z -> FPFMA fi <$> go x <*> go y <*> go z
+    FPLt x y -> FPLt <$> go x <*> go y
+    FPEq x y -> FPEq <$> go x <*> go y
+    FPIsNaN x -> FPIsNaN <$> go x
+    FPCast       fi x -> FPCast fi <$> go x
+    FPToBinary   fi x -> FPToBinary fi <$> go x
+    FPFromBinary fi x -> FPFromBinary fi <$> go x
+    FPToSBV      w  x -> FPToSBV w <$> go x
+    FPToUBV      w  x -> FPToUBV w <$> go x
+    FPFromSBV    fi x -> FPFromSBV fi <$> go x
+    FPFromUBV    fi x -> FPFromUBV fi <$> go x
+    FPCoerce fi fi' x -> FPCoerce fi fi' <$> go x
+    FPSCR1 name op fpscr -> FPSCR1 name <$> go op <*> go fpscr
+    FPSCR2 name op1 op2 fpscr -> FPSCR2 name <$> go op1 <*> go op2 <*> go fpscr
+    FPSCR3 name op1 op2 op3 fpscr -> FPSCR3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
+    FP1 name op fpscr -> FP1 name <$> go op <*> go fpscr
+    FP2 name op1 op2 fpscr -> FP2 name <$> go op1 <*> go op2 <*> go fpscr
+    FP3 name op1 op2 op3 fpscr -> FP3 name <$> go op1 <*> go op2 <*> go op3 <*> go fpscr
+    Vec1 name op vscr -> Vec1 name <$> go op <*> go vscr
+    Vec2 name op1 op2 vscr -> Vec2 name <$> go op1 <*> go op2 <*> go vscr
+    Vec3 name op1 op2 op3 vscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go vscr
 
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
