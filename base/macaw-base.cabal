@@ -40,6 +40,7 @@ library
     lens >= 4.7,
     mtl,
     parameterized-utils >= 1.0.1,
+    template-haskell,
     text,
     vector,
     QuickCheck >= 2.7

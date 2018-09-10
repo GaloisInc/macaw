@@ -64,14 +64,11 @@ import           Lang.Crucible.LLVM.MemModel
           , loadRaw
           , loadRawWithCondition
           , storeRaw
-          )
-import           Lang.Crucible.LLVM.MemModel.Pointer
-          ( llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
+          , llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
           , pattern LLVMPointer
           , mkNullPointer
-          )
-import           Lang.Crucible.LLVM.MemModel.Type (bitvectorType)
-import           Lang.Crucible.LLVM.MemModel.Generic (ppPtr)
+          , bitvectorType
+          , ppPtr )
 import           Lang.Crucible.LLVM.DataLayout (EndianForm(..))
 import           Lang.Crucible.LLVM.Bytes (toBytes)
 

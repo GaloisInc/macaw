@@ -34,7 +34,6 @@ import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
 import           Lang.Crucible.LLVM.DataLayout (EndianForm(LittleEndian))
 import qualified Lang.Crucible.LLVM.MemModel as C
-import qualified Lang.Crucible.LLVM.MemModel.Pointer as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.RegValue as C
 

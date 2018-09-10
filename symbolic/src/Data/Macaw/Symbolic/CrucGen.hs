@@ -655,6 +655,7 @@ appToCrucible app = do
                   Just Refl -> evalMacawStmt (PtrEq rW xv yv)
                   Nothing ->
                     appAtom =<< C.BVEq n <$> toBits n xv <*> toBits n yv
+           M.FloatTypeRepr _ -> appAtom $ C.FloatEq xv yv
            M.TupleTypeRepr _ -> fail "XXX: Equality on tuples not yet done."
 
 
@@ -670,6 +671,8 @@ appToCrucible app = do
                   Just Refl -> evalMacawStmt (PtrMux rW cond tv fv)
                   Nothing -> appBVAtom n =<<
                                 C.BVIte cond n <$> toBits n tv <*> toBits n fv
+           M.FloatTypeRepr fi ->
+             appAtom $ C.FloatIte (floatInfoToCrucible fi) cond tv fv
            M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
 
 
