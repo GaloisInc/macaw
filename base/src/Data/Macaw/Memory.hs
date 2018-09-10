@@ -39,18 +39,15 @@ module Data.Macaw.Memory
   , Endianness(..)
   , bytesToInteger
     -- * MemSegment operations
-  , MemSegment
+  , MemSegment(..)
   , RegionIndex
   , AddrOffsetMap
   , PresymbolData
   , takePresymbolBytes
   , ResolveFn
-  , memSegment
-  , segmentBase
-  , segmentOffset
-  , segmentFlags
-  , segmentContents
+  , byteSegments
   , SegmentContents
+  , contentsFromList
   , contentsRanges
   , ppMemSegment
   , segmentSize
@@ -95,7 +92,9 @@ module Data.Macaw.Memory
   , SymbolUndefType(..)
     -- * Section addresses
   , memAddSectionAddr
+  , memAddSegmentAddr
   , memSectionAddrMap
+  , memSegmentAddrMap
     -- * General purposes addrs
   , MemAddr(..)
   , absoluteAddr
@@ -671,23 +670,23 @@ byteSegments :: forall v m w
              .  (Monad m, MemWidth w)
              => ResolveFn v m w
              -> AddrOffsetMap w v -- ^ Map from addresses to symbolis
-             -> MemWord w         -- ^ Base address for segment
+             -> MemWord w         -- ^ Base address for segment at link time.
              -> L.ByteString      -- ^ File contents for segment.
              -> Int64             -- ^ Expected size
              -> m [SegmentRange w]
-byteSegments resolver relocMap initBase contents0 regionSize
-    | end <= initBase =
+byteSegments resolver relocMap linktimeBase contents0 regionSize
+    | end <= linktimeBase =
         error $ "regionSize should be a positive number that does not overflow address space."
     | otherwise =
-        bytesToSegmentsAscending [] symbolPairs initBase (mkPresymbolData contents0 regionSize)
+        bytesToSegmentsAscending [] symbolPairs linktimeBase (mkPresymbolData contents0 regionSize)
   where -- Parse the map to get a list of symbols starting at base0.
         symbolPairs :: [(MemWord w, v)]
         symbolPairs
           = Map.toList
-          $ Map.dropWhileAntitone (< initBase) relocMap
+          $ Map.dropWhileAntitone (< linktimeBase) relocMap
 
         end :: MemWord w
-        end = initBase + fromIntegral regionSize
+        end = linktimeBase + fromIntegral regionSize
 
         -- Traverse the list of symbols that we should parse.
         bytesToSegmentsAscending :: [SegmentRange w]
@@ -702,7 +701,7 @@ byteSegments resolver relocMap initBase contents0 regionSize
                                  -> m [SegmentRange w]
         bytesToSegmentsAscending pre ((addr,v):rest) ioff contents
           -- We only consider relocations that are in the range of this segment,
-          -- so we require the difference between the address and initBase is
+          -- so we require the difference between the address and linktimeBase is
           -- less than regionSize
           | addr < end = do
               when (addr < ioff) $ do
@@ -750,40 +749,6 @@ data MemSegment w
                                      -- the segment.
                 }
 
--- | This creates a memory segment.
-memSegment :: forall v m w
-           .  (Monad m, MemWidth w)
-           => ResolveFn v m w
-              -- ^ Function for resolving relocation entries.
-           -> RegionIndex
-              -- ^ Index of base (0=absolute address)
-           -> AddrOffsetMap w v
-              -- ^ Relocations we may need to apply when creating the
-              -- segment.  These are all relative to the given region.
-           -> MemWord w
-              -- ^ Offset of segment
-           -> Perm.Flags
-              -- ^ Flags if defined
-           -> L.ByteString
-           -- ^ File contents for segment.
-           -> Int64
-           -- ^ Expected size (must be positive)
-           -> m (MemSegment w)
-memSegment resolve base allSymbols off flags bytes sz
-      -- Return nothing if size is not positive
-    | not (sz > 0) = error $ "Memory segments must have a positive size."
-      -- Check for overflow in contents end
-    | toInteger off + toInteger sz > toInteger (maxBound :: MemWord w) =
-      error "Contents two large for base."
-    | otherwise = do
-      contents <- byteSegments resolve allSymbols off bytes sz
-      pure $
-        MemSegment { segmentBase = base
-                   , segmentOffset = off
-                   , segmentFlags = flags
-                   , segmentContents = contentsFromList contents
-                   }
-
 instance Eq (MemSegment w) where
   x == y = segmentBase   x == segmentBase y
         && segmentOffset x == segmentOffset y
@@ -822,6 +787,8 @@ data Memory w = Memory { memAddrWidth :: !(AddrWidthRepr w)
                          -- ^ Segment map
                        , memSectionAddrMap :: !(Map SectionIndex (MemSegmentOff w))
                          -- ^ Map from section indices to addresses.
+                       , memSegmentAddrMap  :: !(Map SegmentIndex (MemSegmentOff w))
+                         -- ^ Map from segment indices to addresses.
                        }
 
 -- | Get memory segments.
@@ -840,14 +807,23 @@ memAddSectionAddr idx addr mem
   | otherwise =
       mem { memSectionAddrMap = Map.insert idx addr (memSectionAddrMap mem) }
 
+-- | Add a new segment index to address binding
+memAddSegmentAddr :: SegmentIndex -> MemSegmentOff w -> Memory w -> Memory w
+memAddSegmentAddr idx addr mem
+  | Map.member idx (memSegmentAddrMap mem) =
+      error $ "memAddSegmentAddr: duplicate index " ++ show idx
+  | otherwise =
+      mem { memSegmentAddrMap = Map.insert idx addr (memSegmentAddrMap mem) }
+
 instance MemWidth w => Show (Memory w) where
   show = show . memSegments
 
 -- | A memory with no segments.
 emptyMemory :: AddrWidthRepr w -> Memory w
-emptyMemory w = Memory { memAddrWidth = w
-                       , memSegmentMap = Map.empty
+emptyMemory w = Memory { memAddrWidth      = w
+                       , memSegmentMap     = Map.empty
                        , memSectionAddrMap = Map.empty
+                       , memSegmentAddrMap = Map.empty
                        }
 
 -- | Get executable segments.
@@ -1451,7 +1427,7 @@ findByteStringMatches pat curIndex segs@((relOffset, chunk) : rest)
 matchPrefix :: MemWidth w => BS.ByteString -> [SegmentRange w] -> Bool
 matchPrefix _ [] = False
 matchPrefix _ (BSSRegion _ : _) = False
-matchPrefix pat (rel@(RelocationRegion r) : rest)
+matchPrefix pat (rel@(RelocationRegion _r) : rest)
   -- When pattern is greater than size of the relocation, skip
   -- relocation bytes in the pattern and look for match in beginning
   -- of the next range.
