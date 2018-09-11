@@ -131,9 +131,11 @@ data RelocationError
    | RelocationBadSymbolIndex !Int
      -- ^ A relocation entry referenced a bad symbol index.
    | RelocationUnsupportedType !String
-     -- ^ We do not support relocations with this architecture.
+     -- ^ We do not support this type of relocation.
    | RelocationFileUnsupported
      -- ^ We do not allow relocations to refer to the "file" as in Elf.
+   | RelocationInvalidAddend !String !Integer
+     -- ^ The relocation type given does not allow the adddend with the given value.
 
 instance Show RelocationError where
   show RelocationZeroSymbol =
@@ -144,6 +146,8 @@ instance Show RelocationError where
     "Do not yet support relocation type " ++ tp ++ "."
   show RelocationFileUnsupported =
     "Do not support relocations referring to file entry."
+  show (RelocationInvalidAddend tp v) =
+    "Do not support addend of " ++ show v ++ " with relocation type " ++ tp ++ "."
 
 ------------------------------------------------------------------------
 -- MemLoader
@@ -425,16 +429,29 @@ relaTargetX86_64 _ symtab rel off =
     tp -> relocError $ RelocationUnsupportedType (show tp)
 
 -- | Attempt to resolve an X86_64 specific symbol.
-relaTargetARM :: Maybe SegmentIndex
+relaTargetARM :: Endianness
+                 -- ^ Endianness of relocations
+              -> Maybe SegmentIndex
                  -- ^ Index of segment for dynamic relocations
               -> SymbolTable -- ^ Symbol table
               -> Elf.RelEntry Elf.ARM_RelocationType -- ^ Relocaiton entry
               -> MemWord 32
                  -- ^ Addend of symbol
               -> RelocResolver (Relocation 32)
-relaTargetARM msegIndex symtab rel off =
+relaTargetARM end msegIndex symtab rel addend =
   case Elf.relType rel of
-
+    Elf.R_ARM_GLOB_DAT -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      -- Check that addend is 0 so that we do not change thumb bit of symbol
+      when (addend `testBit` 0) $ do
+        relocError $RelocationInvalidAddend (show (Elf.relType rel)) (toInteger addend)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         }
     Elf.R_ARM_RELATIVE -> do
       -- This relocation has the value B(S) + A where
       -- - A is the addend for the relocation, and
@@ -452,24 +469,23 @@ relaTargetARM msegIndex symtab rel off =
       -- Get the address at which it was linked so we can subtract from offset.
       let linktimeAddr = Elf.relAddr rel
 
-      -- Given this we need to
-
+      -- Resolve the symbol using the index in the relocation.
       sym <-
         if Elf.relSym rel == 0 then do
           case msegIndex of
+            Nothing -> do
+              relocError $ RelocationZeroSymbol
             Just idx ->
               pure $! SegmentBaseAddr idx
-            Nothing -> do
-              relocError $ RelocationBadSymbolIndex 0
         else do
           resolveRelocationSym symtab (Elf.relSym rel)
 
       pure $! Relocation { relocationSym        = sym
-                         , relocationOffset     = off - fromIntegral linktimeAddr
+                         , relocationOffset     = addend - fromIntegral linktimeAddr
                          , relocationIsRel      = False
                          , relocationSize       = 4
                          , relocationIsSigned   = False
-                         , relocationEndianness = LittleEndian
+                         , relocationEndianness = end
                          }
     tp -> do
       relocError $ RelocationUnsupportedType (show tp)
@@ -491,6 +507,10 @@ relaTargetARM = SomeRelocationResolver $ \_symtab rel _maddend ->
     tp -> relocError $ RelocationUnsupportedType (show tp)
 -}
 
+toEndianness :: Elf.ElfData -> Endianness
+toEndianness Elf.ELFDATA2LSB = LittleEndian
+toEndianness Elf.ELFDATA2MSB = BigEndian
+
 -- | Creates a relocation map from the contents of a dynamic section.
 getRelocationResolver
   :: forall w
@@ -498,8 +518,11 @@ getRelocationResolver
   -> MemLoader w (SomeRelocationResolver w)
 getRelocationResolver hdr =
   case (Elf.headerClass hdr, Elf.headerMachine hdr) of
-    (Elf.ELFCLASS64, Elf.EM_X86_64) -> pure (SomeRelocationResolver relaTargetX86_64)
-    (Elf.ELFCLASS32, Elf.EM_ARM)    -> pure (SomeRelocationResolver relaTargetARM)
+    (Elf.ELFCLASS64, Elf.EM_X86_64) ->
+      pure $ SomeRelocationResolver relaTargetX86_64
+    (Elf.ELFCLASS32, Elf.EM_ARM) -> do
+      let end = toEndianness (Elf.headerData hdr)
+      pure $ SomeRelocationResolver $ relaTargetARM end
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
 
 
@@ -1061,9 +1084,7 @@ memoryForElf :: LoadOptions
                               , [SymbolResolutionError]
                               )
 memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
-  let end = case Elf.elfData e of
-              Elf.ELFDATA2LSB -> LittleEndian
-              Elf.ELFDATA2MSB -> BigEndian
+  let end = toEndianness (Elf.elfData e)
   (secMap, mem, warnings) <-
     runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $ do
       case Elf.elfType e of
