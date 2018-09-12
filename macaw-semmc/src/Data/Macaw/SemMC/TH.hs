@@ -883,5 +883,16 @@ defaultAppEvaluator elt interps = case elt of
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
     liftQ [| return (G.AppExpr (M.BVXor $(natReprTH w) $(return e1) $(return e2))) |]
+  S.FloatIte fpp cond fp1 fp2 -> do
+    c  <- addEltTH interps cond
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [|
+        return $ G.AppExpr $ M.Mux
+          (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp))
+          $(return c)
+          $(return e1)
+          $(return e2)
+      |]
   _ -> error $ "unsupported Crucible elt:" ++ show elt
 

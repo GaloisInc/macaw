@@ -242,31 +242,37 @@ data PPCPrimFn ppc f tp where
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPSqrt
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.FloatType fi)
 
   FPAdd
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPSub
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPMul
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPDiv
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPFMA
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
@@ -285,6 +291,7 @@ data PPCPrimFn ppc f tp where
 
   FPCast
     :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi'))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   -- | Treat a floating-point as a bitvector.
@@ -301,21 +308,25 @@ data PPCPrimFn ppc f tp where
   FPToSBV
     :: (1 <= w)
     => !(MT.NatRepr w)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.BVType w)
   FPToUBV
     :: (1 <= w)
     => !(MT.NatRepr w)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f (MT.BVType w)
   FPFromSBV
     :: (1 <= w)
     => !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.BVType w))
     -> PPCPrimFn ppc f (MT.FloatType fi)
   FPFromUBV
     :: (1 <= w)
     => !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
     -> !(f (MT.BVType w))
     -> PPCPrimFn ppc f (MT.FloatType fi)
 
@@ -332,20 +343,20 @@ data PPCPrimFn ppc f tp where
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 32)
+    -> PPCPrimFn ppc f (MT.BVType 24)
   FPSCR2
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 32)
+    -> PPCPrimFn ppc f (MT.BVType 24)
   FPSCR3
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 32)
+    -> PPCPrimFn ppc f (MT.BVType 24)
 
   -- | Uninterpreted floating point functions
   FP1 :: !String -- the name of the function
@@ -386,24 +397,24 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v)
     UDiv rep _ _ -> MT.BVTypeRepr rep
     SDiv rep _ _ -> MT.BVTypeRepr rep
 
-    FPNeg  fi _    -> MT.FloatTypeRepr fi
-    FPAbs  fi _    -> MT.FloatTypeRepr fi
-    FPSqrt fi _    -> MT.FloatTypeRepr fi
-    FPAdd fi _ _   -> MT.FloatTypeRepr fi
-    FPSub fi _ _   -> MT.FloatTypeRepr fi
-    FPMul fi _ _   -> MT.FloatTypeRepr fi
-    FPDiv fi _ _   -> MT.FloatTypeRepr fi
-    FPFMA fi _ _ _ -> MT.FloatTypeRepr fi
+    FPNeg  fi _      -> MT.FloatTypeRepr fi
+    FPAbs  fi _      -> MT.FloatTypeRepr fi
+    FPSqrt fi _ _    -> MT.FloatTypeRepr fi
+    FPAdd fi _ _ _   -> MT.FloatTypeRepr fi
+    FPSub fi _ _ _   -> MT.FloatTypeRepr fi
+    FPMul fi _ _ _   -> MT.FloatTypeRepr fi
+    FPDiv fi _ _ _   -> MT.FloatTypeRepr fi
+    FPFMA fi _ _ _ _ -> MT.FloatTypeRepr fi
     FPLt{}    -> knownRepr
     FPEq{}    -> knownRepr
     FPIsNaN{} -> knownRepr
-    FPCast       fi _ -> MT.FloatTypeRepr fi
-    FPToBinary   fi _ -> MT.floatBVTypeRepr fi
-    FPFromBinary fi _ -> MT.FloatTypeRepr fi
-    FPToSBV      w  _ -> MT.BVTypeRepr w
-    FPToUBV      w  _ -> MT.BVTypeRepr w
-    FPFromSBV    fi _ -> MT.FloatTypeRepr fi
-    FPFromUBV    fi _ -> MT.FloatTypeRepr fi
+    FPCast       fi _ _ -> MT.FloatTypeRepr fi
+    FPToBinary   fi _   -> MT.floatBVTypeRepr fi
+    FPFromBinary fi _   -> MT.FloatTypeRepr fi
+    FPToSBV      w  _ _ -> MT.BVTypeRepr w
+    FPToUBV      w  _ _ -> MT.BVTypeRepr w
+    FPFromSBV    fi _ _ -> MT.FloatTypeRepr fi
+    FPFromUBV    fi _ _ -> MT.FloatTypeRepr fi
     FPCoerce fi _ _ -> MT.FloatTypeRepr fi
     FPSCR1{} -> MT.BVTypeRepr MT.knownNat
     FPSCR2{} -> MT.BVTypeRepr MT.knownNat
@@ -464,31 +475,41 @@ rewritePrimFn = \case
     evalRewrittenArchFn tgtFn
   FPNeg  fi x -> evalRewrittenArchFn =<< (FPNeg fi <$> rewriteValue x)
   FPAbs  fi x -> evalRewrittenArchFn =<< (FPAbs fi <$> rewriteValue x)
-  FPSqrt fi x -> evalRewrittenArchFn =<< (FPSqrt fi <$> rewriteValue x)
-  FPAdd fi x y ->
-    evalRewrittenArchFn =<< (FPAdd fi <$> rewriteValue x <*> rewriteValue y)
-  FPSub fi x y ->
-    evalRewrittenArchFn =<< (FPSub fi <$> rewriteValue x <*> rewriteValue y)
-  FPMul fi x y ->
-    evalRewrittenArchFn =<< (FPMul fi <$> rewriteValue x <*> rewriteValue y)
-  FPDiv fi x y ->
-    evalRewrittenArchFn =<< (FPDiv fi <$> rewriteValue x <*> rewriteValue y)
-  FPFMA fi x y z ->
+  FPSqrt fi r x ->
+    evalRewrittenArchFn =<< (FPSqrt fi <$> rewriteValue r <*> rewriteValue x)
+  FPAdd fi r x y ->
     evalRewrittenArchFn
-      =<< (FPFMA fi <$> rewriteValue x <*> rewriteValue y <*> rewriteValue z)
+      =<< (FPAdd fi <$> rewriteValue r <*> rewriteValue x <*> rewriteValue y)
+  FPSub fi r x y ->
+    evalRewrittenArchFn
+      =<< (FPSub fi <$> rewriteValue r <*> rewriteValue x <*> rewriteValue y)
+  FPMul fi r x y ->
+    evalRewrittenArchFn
+      =<< (FPMul fi <$> rewriteValue r <*> rewriteValue x <*> rewriteValue y)
+  FPDiv fi r x y ->
+    evalRewrittenArchFn
+      =<< (FPDiv fi <$> rewriteValue r <*> rewriteValue x <*> rewriteValue y)
+  FPFMA fi r x y z ->
+    evalRewrittenArchFn
+      =<< (FPFMA fi <$> rewriteValue r <*> rewriteValue x <*> rewriteValue y <*> rewriteValue z)
   FPLt x y ->
     evalRewrittenArchFn =<< (FPLt <$> rewriteValue x <*> rewriteValue y)
   FPEq x y ->
     evalRewrittenArchFn =<< (FPEq <$> rewriteValue x <*> rewriteValue y)
   FPIsNaN x -> evalRewrittenArchFn =<< (FPIsNaN <$> rewriteValue x)
-  FPCast fi x -> evalRewrittenArchFn =<< (FPCast fi <$> rewriteValue x)
+  FPCast fi r x ->
+    evalRewrittenArchFn =<< (FPCast fi <$> rewriteValue r <*> rewriteValue x)
   FPToBinary fi x -> evalRewrittenArchFn =<< (FPToBinary fi <$> rewriteValue x)
   FPFromBinary fi x ->
     evalRewrittenArchFn =<< (FPFromBinary fi <$> rewriteValue x)
-  FPToSBV   w  x -> evalRewrittenArchFn =<< (FPToSBV w <$> rewriteValue x)
-  FPToUBV   w  x -> evalRewrittenArchFn =<< (FPToUBV w <$> rewriteValue x)
-  FPFromSBV fi x -> evalRewrittenArchFn =<< (FPFromSBV fi <$> rewriteValue x)
-  FPFromUBV fi x -> evalRewrittenArchFn =<< (FPFromUBV fi <$> rewriteValue x)
+  FPToSBV w r x ->
+    evalRewrittenArchFn =<< (FPToSBV w <$> rewriteValue r <*> rewriteValue x)
+  FPToUBV w r x ->
+    evalRewrittenArchFn =<< (FPToUBV w <$> rewriteValue r <*> rewriteValue x)
+  FPFromSBV fi r x ->
+    evalRewrittenArchFn =<< (FPFromSBV fi <$> rewriteValue r <*> rewriteValue x)
+  FPFromUBV fi r x ->
+    evalRewrittenArchFn =<< (FPFromUBV fi <$> rewriteValue r <*> rewriteValue x)
   FPCoerce fi fi' x -> evalRewrittenArchFn =<< (FPCoerce fi fi' <$> rewriteValue x)
   FPSCR1 name op fpscr ->
     evalRewrittenArchFn =<< (FPSCR1 name <$> rewriteValue op <*> rewriteValue fpscr)
@@ -519,24 +540,24 @@ ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f t
 ppPrimFn pp = \case
   UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
   SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
-  FPNeg  _fi x -> ppUnary "ppc_fp_neg" <$> pp x
-  FPAbs  _fi x -> ppUnary "ppc_fp_abs" <$> pp x
-  FPSqrt _fi x -> ppUnary "ppc_fp_sqrt" <$> pp x
-  FPAdd _fi x y -> ppBinary "ppc_fp_add" <$> pp x <*> pp y
-  FPSub _fi x y -> ppBinary "ppc_fp_sub" <$> pp x <*> pp y
-  FPMul _fi x y -> ppBinary "ppc_fp_mul" <$> pp x <*> pp y
-  FPDiv _fi x y -> ppBinary "ppc_fp_div" <$> pp x <*> pp y
-  FPFMA _fi x y z -> pp3 "ppc_fp_fma" <$> pp x <*> pp y <*> pp z
+  FPNeg _fi x -> ppUnary "ppc_fp_neg" <$> pp x
+  FPAbs _fi x -> ppUnary "ppc_fp_abs" <$> pp x
+  FPSqrt _fi r x -> ppBinary "ppc_fp_sqrt" <$> pp r <*> pp x
+  FPAdd _fi r x y -> pp3 "ppc_fp_add" <$> pp r <*> pp x <*> pp y
+  FPSub _fi r x y -> pp3 "ppc_fp_sub" <$> pp r <*> pp x <*> pp y
+  FPMul _fi r x y -> pp3 "ppc_fp_mul" <$> pp r <*> pp x <*> pp y
+  FPDiv _fi r x y -> pp3 "ppc_fp_div" <$> pp r <*> pp x <*> pp y
+  FPFMA _fi r x y z -> pp4 "ppc_fp_fma" <$> pp r <*> pp x <*> pp y <*> pp z
   FPLt x y -> ppBinary "ppc_fp_lt" <$> pp x <*> pp y
   FPEq x y -> ppBinary "ppc_fp_eq" <$> pp x <*> pp y
   FPIsNaN x -> ppUnary "ppc_fp_is_nan" <$> pp x
-  FPCast       _fi x -> ppUnary "ppc_fp_cast" <$> pp x
+  FPCast _fi r x -> ppBinary "ppc_fp_cast" <$> pp r <*> pp x
   FPToBinary   _fi x -> ppUnary "ppc_fp_to_binary" <$> pp x
   FPFromBinary _fi x -> ppUnary "ppc_fp_from_binary" <$> pp x
-  FPToSBV      _w  x -> ppUnary "ppc_fp_to_sbv" <$> pp x
-  FPToUBV      _w  x -> ppUnary "ppc_fp_to_ubv" <$> pp x
-  FPFromSBV    _fi x -> ppUnary "ppc_fp_from_sbv" <$> pp x
-  FPFromUBV    _fi x -> ppUnary "ppc_fp_from_ubv" <$> pp x
+  FPToSBV   _w  r x -> ppBinary "ppc_fp_to_sbv" <$> pp r <*> pp x
+  FPToUBV   _w  r x -> ppBinary "ppc_fp_to_ubv" <$> pp r <*> pp x
+  FPFromSBV _fi r x -> ppBinary "ppc_fp_from_sbv" <$> pp r <*> pp x
+  FPFromUBV _fi r x -> ppBinary "ppc_fp_from_ubv" <$> pp r <*> pp x
   FPCoerce _fi _fi' x -> ppUnary "ppc_fp_coerce" <$> pp x
   FPSCR1 n r1 fpscr -> ppBinary ("ppc_fp_un_op_fpscr " ++ n) <$> pp r1 <*> pp fpscr
   FPSCR2 n r1 r2 fpscr -> pp3 ("ppc_fp_bin_op_fpscr " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
@@ -568,22 +589,22 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
     SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
     FPNeg  fi x -> FPNeg fi <$> go x
     FPAbs  fi x -> FPAbs fi <$> go x
-    FPSqrt fi x -> FPSqrt fi <$> go x
-    FPAdd fi x y -> FPAdd fi <$> go x <*> go y
-    FPSub fi x y -> FPSub fi <$> go x <*> go y
-    FPMul fi x y -> FPMul fi <$> go x <*> go y
-    FPDiv fi x y -> FPDiv fi <$> go x <*> go y
-    FPFMA fi x y z -> FPFMA fi <$> go x <*> go y <*> go z
+    FPSqrt fi r x -> FPSqrt fi <$> go r <*> go x
+    FPAdd fi r x y -> FPAdd fi <$> go r <*> go x <*> go y
+    FPSub fi r x y -> FPSub fi <$> go r <*> go x <*> go y
+    FPMul fi r x y -> FPMul fi <$> go r <*> go x <*> go y
+    FPDiv fi r x y -> FPDiv fi <$> go r <*> go x <*> go y
+    FPFMA fi r x y z -> FPFMA fi <$> go r <*> go x <*> go y <*> go z
     FPLt x y -> FPLt <$> go x <*> go y
     FPEq x y -> FPEq <$> go x <*> go y
     FPIsNaN x -> FPIsNaN <$> go x
-    FPCast       fi x -> FPCast fi <$> go x
+    FPCast fi r x -> FPCast fi <$> go r <*> go x
     FPToBinary   fi x -> FPToBinary fi <$> go x
     FPFromBinary fi x -> FPFromBinary fi <$> go x
-    FPToSBV      w  x -> FPToSBV w <$> go x
-    FPToUBV      w  x -> FPToUBV w <$> go x
-    FPFromSBV    fi x -> FPFromSBV fi <$> go x
-    FPFromUBV    fi x -> FPFromUBV fi <$> go x
+    FPToSBV   w  r x -> FPToSBV w <$> go r <*> go x
+    FPToUBV   w  r x -> FPToUBV w <$> go r <*> go x
+    FPFromSBV fi r x -> FPFromSBV fi <$> go r <*> go x
+    FPFromUBV fi r x -> FPFromUBV fi <$> go r <*> go x
     FPCoerce fi fi' x -> FPCoerce fi fi' <$> go x
     FPSCR1 name op fpscr -> FPSCR1 name <$> go op <*> go fpscr
     FPSCR2 name op1 op2 fpscr -> FPSCR2 name <$> go op1 <*> go op2 <*> go fpscr

@@ -34,6 +34,7 @@ import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Architecture.PPC.Eval as PE
 import qualified SemMC.Architecture.PPC.Location as APPC
+import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as M
@@ -284,48 +285,64 @@ ppcAppEvaluator interps = \case
     liftQ [|
         addArchAssignment $ FPAbs $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
-  S.FloatSqrt fpp S.RNE fp -> return $ do
+  S.FloatSqrt fpp r fp -> return $ do
     e <- addEltTH interps fp
     liftQ [|
-        addArchAssignment $ FPSqrt $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchAssignment $ FPSqrt
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e)
       |]
 
-  S.FloatAdd fpp S.RNE fp1 fp2 -> return $ do
+  S.FloatAdd fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     liftQ [|
-        addArchAssignment $
-          FPAdd $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+        addArchAssignment $ FPAdd
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e1)
+          $(return e2)
       |]
-  S.FloatSub fpp S.RNE fp1 fp2 -> return $ do
+  S.FloatSub fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     liftQ [|
-        addArchAssignment $
-          FPSub $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+        addArchAssignment $ FPSub
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e1)
+          $(return e2)
       |]
-  S.FloatMul fpp S.RNE fp1 fp2 -> return $ do
+  S.FloatMul fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     liftQ [|
-        addArchAssignment $
-          FPMul $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+        addArchAssignment $ FPMul
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e1)
+          $(return e2)
       |]
-  S.FloatDiv fpp S.RNE fp1 fp2 -> return $ do
+  S.FloatDiv fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     liftQ [|
-        addArchAssignment $
-          FPDiv $(floatInfoFromPrecisionTH fpp) $(return e1) $(return e2)
+        addArchAssignment $ FPDiv
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e1)
+          $(return e2)
       |]
 
-  S.FloatFMA fpp S.RNE fp1 fp2 fp3 -> return $ do
+  S.FloatFMA fpp r fp1 fp2 fp3 -> return $ do
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     e3 <- addEltTH interps fp3
     liftQ [|
         addArchAssignment $ FPFMA
           $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
           $(return e1)
           $(return e2)
           $(return e3)
@@ -344,10 +361,13 @@ ppcAppEvaluator interps = \case
     e <- addEltTH interps fp
     liftQ [| addArchAssignment $ FPIsNaN $(return e) |]
 
-  S.FloatCast fpp S.RNE fp -> return $ do
+  S.FloatCast fpp r fp -> return $ do
     e <- addEltTH interps fp
     liftQ [|
-        addArchAssignment $ FPCast $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchAssignment $ FPCast
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e)
       |]
   S.FloatToBinary fpp fp -> return $ do
     e <- addEltTH interps fp
@@ -361,23 +381,37 @@ ppcAppEvaluator interps = \case
         addArchAssignment $
           FPFromBinary $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
-  S.FloatToSBV w S.RNE fp -> return $ do
-    e <- addEltTH interps fp
-    liftQ [| addArchAssignment $ FPToSBV $(natReprTH w) $(return e) |]
-  S.FloatToBV w S.RNE fp -> return $ do
-    e <- addEltTH interps fp
-    liftQ [| addArchAssignment $ FPToUBV $(natReprTH w) $(return e) |]
-  S.SBVToFloat fpp S.RNE fp -> return $ do
+  S.FloatToSBV w r fp -> return $ do
     e <- addEltTH interps fp
     liftQ [|
         addArchAssignment $
-          FPFromUBV $(floatInfoFromPrecisionTH fpp) $(return e)
+          FPToSBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
       |]
-  S.BVToFloat fpp S.RNE fp -> return $ do
+  S.FloatToBV w r fp -> return $ do
     e <- addEltTH interps fp
     liftQ [|
         addArchAssignment $
-          FPFromUBV $(floatInfoFromPrecisionTH fpp) $(return e)
+          FPToUBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
+      |]
+  S.SBVToFloat fpp r fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPFromUBV
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e)
+      |]
+  S.BVToFloat fpp r fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPFromUBV
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e)
       |]
 
   _ -> Nothing
+
+roundingModeToBitsTH :: S.RoundingMode -> Q Exp
+roundingModeToBitsTH r =
+  [| M.BVValue $(natReprTH (M.knownNat @2)) $(lift $ U.roundingModeToBits r) |]

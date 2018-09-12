@@ -38,6 +38,7 @@ import qualified Lang.Crucible.Types as C
 import qualified What4.Interface as C
 import qualified What4.InterpretedFloatingPoint as C
 
+import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
@@ -137,25 +138,27 @@ funcSemantics sf pf s =
       C.iFloatNeg @_ @(MS.ToCrucibleFloatInfo fi) sym x'
     MP.FPAbs (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \sym x' ->
       C.iFloatAbs @_ @(MS.ToCrucibleFloatInfo fi) sym x'
-    MP.FPSqrt (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \sym x' ->
-      C.iFloatSqrt @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x'
-    MP.FPAdd (_ :: MT.FloatInfoRepr fi) x y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
-        C.iFloatAdd @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x' y'
-    MP.FPSub (_ :: MT.FloatInfoRepr fi) x y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
-        C.iFloatSub @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x' y'
-    MP.FPMul (_ :: MT.FloatInfoRepr fi) x y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
-        C.iFloatMul @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x' y'
-    MP.FPDiv (_ :: MT.FloatInfoRepr fi) x y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
-        C.iFloatDiv @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x' y'
-    MP.FPFMA (_ :: MT.FloatInfoRepr fi) x y z -> withSym s $ \sym -> do
-      let x' = toValFloat sym x
-      let y' = toValFloat sym y
-      let z' = toValFloat sym z
-      C.iFloatFMA @_ @(MS.ToCrucibleFloatInfo fi) sym C.RNE x' y' z'
+    MP.FPSqrt (_ :: MT.FloatInfoRepr fi) r x ->
+      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+        C.iFloatSqrt @_ @(MS.ToCrucibleFloatInfo fi) sym rm x'
+    MP.FPAdd (_ :: MT.FloatInfoRepr fi) r x y ->
+      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+        C.iFloatAdd @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
+    MP.FPSub (_ :: MT.FloatInfoRepr fi) r x y ->
+      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+        C.iFloatSub @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
+    MP.FPMul (_ :: MT.FloatInfoRepr fi) r x y ->
+      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+        C.iFloatMul @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
+    MP.FPDiv (_ :: MT.FloatInfoRepr fi) r x y ->
+      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+        C.iFloatDiv @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
+    MP.FPFMA (_ :: MT.FloatInfoRepr fi) r x y z ->
+      withSym s $ \sym -> withRounding sym r $ \rm -> do
+        let x' = toValFloat sym x
+        let y' = toValFloat sym y
+        let z' = toValFloat sym z
+        C.iFloatFMA @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y' z'
     MP.FPLt (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
       withSymFPBinOp s x y $ \sym x' y' ->
         C.iFloatLt @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
@@ -165,12 +168,12 @@ funcSemantics sf pf s =
     MP.FPIsNaN (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
       withSymFPUnOp s x $ \sym x' ->
         C.iFloatIsNaN @_ @(MS.ToCrucibleFloatInfo fi) sym x'
-    MP.FPCast fi (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi')) ->
-      withSymFPUnOp s x $ \sym x' ->
+    MP.FPCast fi r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi')) ->
+      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
         C.iFloatCast @_ @_ @(MS.ToCrucibleFloatInfo fi')
           sym
           (MS.floatInfoToCrucible fi)
-          C.RNE
+          rm
           x'
     MP.FPToBinary fi x -> withSymFPUnOp s x $ \sym x' -> case fi of
       MT.HalfFloatRepr ->
@@ -199,18 +202,22 @@ funcSemantics sf pf s =
         C.iFloatFromBinary sym (MS.floatInfoToCrucible fi) x'
       MT.X86_80FloatRepr ->
         C.iFloatFromBinary sym (MS.floatInfoToCrucible fi) x'
-    MP.FPToSBV w (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
-      withSymFPUnOp s x $ \sym x' ->
-        LL.llvmPointer_bv sym
-          =<< C.iFloatToSBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w C.RNE x'
-    MP.FPToUBV w (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
-      withSymFPUnOp s x $ \sym x' ->
-        LL.llvmPointer_bv sym
-          =<< C.iFloatToBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w C.RNE x'
-    MP.FPFromSBV fi x -> withSymBVUnOp s x $ \sym x' ->
-      C.iSBVToFloat sym (MS.floatInfoToCrucible fi) C.RNE x'
-    MP.FPFromUBV fi x -> withSymBVUnOp s x $ \sym x' ->
-      C.iBVToFloat sym (MS.floatInfoToCrucible fi) C.RNE x'
+    MP.FPToSBV w r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
+      withSymFPUnOp s x $ \sym x' -> do
+        bv_val <- withRounding sym r $ \rm ->
+          C.iFloatToSBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w rm x'
+        LL.llvmPointer_bv sym bv_val
+    MP.FPToUBV w r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
+      withSymFPUnOp s x $ \sym x' -> do
+        bv_val <- withRounding sym r $ \rm ->
+          C.iFloatToBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w rm x'
+        LL.llvmPointer_bv sym bv_val
+    MP.FPFromSBV fi r x ->
+      withSymBVUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+        C.iSBVToFloat sym (MS.floatInfoToCrucible fi) rm x'
+    MP.FPFromUBV fi r x ->
+      withSymBVUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+        C.iBVToFloat sym (MS.floatInfoToCrucible fi) rm x'
     MP.FPCoerce (fi :: MT.FloatInfoRepr fi) (fi' :: MT.FloatInfoRepr fi') x ->
       withSymFPUnOp s x $ \sym x' -> do
         res <- C.iFloatCast @_ @_ @(MS.ToCrucibleFloatInfo fi')
@@ -235,25 +242,18 @@ funcSemantics sf pf s =
       x' <- toValBV sym x
       fpscr' <- toValBV sym fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr1"
-        (Ctx.empty
-          Ctx.:> C.BaseStringRepr
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
         (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> fpscr')
-        (C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
     MP.FPSCR2 name x y fpscr -> withSym s $ \sym -> do
       name' <- C.stringLit sym $ Text.pack name
       x' <- toValBV sym x
       y' <- toValBV sym y
       fpscr' <- toValBV sym fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr2"
-        (Ctx.empty
-          Ctx.:> C.BaseStringRepr
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
         (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> y' Ctx.:> fpscr')
-        (C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
     MP.FPSCR3 name x y z fpscr -> withSym s $ \sym -> do
       name' <- C.stringLit sym $ Text.pack name
       x' <- toValBV sym x
@@ -261,14 +261,9 @@ funcSemantics sf pf s =
       z' <- toValBV sym z
       fpscr' <- toValBV sym fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf "fpscr3"
-        (Ctx.empty
-          Ctx.:> C.BaseStringRepr
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @128)
-          Ctx.:> C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
         (Ctx.empty Ctx.:> name' Ctx.:> x' Ctx.:> y' Ctx.:> z' Ctx.:> fpscr')
-        (C.BaseBVRepr (NR.knownNat @32))
+        C.knownRepr
     MP.FP1 name v fpscr -> do
       let sym = s ^. C.stateSymInterface
       name' <- C.stringLit sym $ Text.pack name
@@ -423,5 +418,15 @@ withSymFPBinOp s x y action = withSym s $ \sym -> do
   let x' = toValFloat sym x
   let y' = toValFloat sym y
   action sym x' y'
+
+withRounding
+  :: C.IsSymInterface sym
+  => sym
+  -> A.AtomWrapper (C.RegEntry sym) (MT.BVType 2)
+  -> (C.RoundingMode -> IO (C.SymExpr sym tp))
+  -> IO (C.SymExpr sym tp)
+withRounding sym r action = do
+  r' <- toValBV sym r
+  U.withRounding sym r' action
 
 type S ppc sym rtp bs r ctx = C.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt ppc) rtp bs r ctx
