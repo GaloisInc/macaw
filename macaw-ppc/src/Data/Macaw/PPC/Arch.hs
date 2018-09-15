@@ -286,6 +286,10 @@ data PPCPrimFn ppc f tp where
     :: !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> PPCPrimFn ppc f MT.BoolType
+  FPLe
+    :: !(f (MT.FloatType fi))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f MT.BoolType
 
   FPIsNaN :: !(f (MT.FloatType fi)) -> PPCPrimFn ppc f MT.BoolType
 
@@ -294,6 +298,11 @@ data PPCPrimFn ppc f tp where
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi'))
     -> PPCPrimFn ppc f (MT.FloatType fi)
+  FPRound
+    :: !(MT.FloatInfoRepr fi)
+    -> !(f (MT.BVType 2))
+    -> !(f (MT.FloatType fi))
+    -> PPCPrimFn ppc f (MT.FloatType fi) 
   -- | Treat a floating-point as a bitvector.
   FPToBinary
     :: (1 <= MT.FloatInfoBits fi)
@@ -407,8 +416,10 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v)
     FPFMA fi _ _ _ _ -> MT.FloatTypeRepr fi
     FPLt{}    -> knownRepr
     FPEq{}    -> knownRepr
+    FPLt{}    -> knownRepr
     FPIsNaN{} -> knownRepr
     FPCast       fi _ _ -> MT.FloatTypeRepr fi
+    FPRound      fi _ _ -> MT.FloatTypeRepr fi
     FPToBinary   fi _   -> MT.floatBVTypeRepr fi
     FPFromBinary fi _   -> MT.FloatTypeRepr fi
     FPToSBV      w  _ _ -> MT.BVTypeRepr w
@@ -444,8 +455,10 @@ ppcPrimFnHasSideEffects = \case
   FPFMA{}        -> False
   FPLt{}         -> False
   FPEq{}         -> False
+  FPLe{}         -> False
   FPIsNaN{}      -> False
   FPCast{}       -> False
+  FPRound{}      -> False
   FPToBinary{}   -> False
   FPFromBinary{} -> False
   FPToSBV{}      -> False
@@ -496,9 +509,13 @@ rewritePrimFn = \case
     evalRewrittenArchFn =<< (FPLt <$> rewriteValue x <*> rewriteValue y)
   FPEq x y ->
     evalRewrittenArchFn =<< (FPEq <$> rewriteValue x <*> rewriteValue y)
+  FPLe x y ->
+    evalRewrittenArchFn =<< (FPLe <$> rewriteValue x <*> rewriteValue y)
   FPIsNaN x -> evalRewrittenArchFn =<< (FPIsNaN <$> rewriteValue x)
   FPCast fi r x ->
     evalRewrittenArchFn =<< (FPCast fi <$> rewriteValue r <*> rewriteValue x)
+  FPRound fi r x ->
+    evalRewrittenArchFn =<< (FPRound fi <$> rewriteValue r <*> rewriteValue x)
   FPToBinary fi x -> evalRewrittenArchFn =<< (FPToBinary fi <$> rewriteValue x)
   FPFromBinary fi x ->
     evalRewrittenArchFn =<< (FPFromBinary fi <$> rewriteValue x)
@@ -550,8 +567,10 @@ ppPrimFn pp = \case
   FPFMA _fi r x y z -> pp4 "ppc_fp_fma" <$> pp r <*> pp x <*> pp y <*> pp z
   FPLt x y -> ppBinary "ppc_fp_lt" <$> pp x <*> pp y
   FPEq x y -> ppBinary "ppc_fp_eq" <$> pp x <*> pp y
+  FPLe x y -> ppBinary "ppc_fp_le" <$> pp x <*> pp y
   FPIsNaN x -> ppUnary "ppc_fp_is_nan" <$> pp x
   FPCast _fi r x -> ppBinary "ppc_fp_cast" <$> pp r <*> pp x
+  FPRound _fi r x -> ppBinary "ppc_fp_round" <$> pp r <*> pp x
   FPToBinary   _fi x -> ppUnary "ppc_fp_to_binary" <$> pp x
   FPFromBinary _fi x -> ppUnary "ppc_fp_from_binary" <$> pp x
   FPToSBV   _w  r x -> ppBinary "ppc_fp_to_sbv" <$> pp r <*> pp x
@@ -597,8 +616,10 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
     FPFMA fi r x y z -> FPFMA fi <$> go r <*> go x <*> go y <*> go z
     FPLt x y -> FPLt <$> go x <*> go y
     FPEq x y -> FPEq <$> go x <*> go y
+    FPLe x y -> FPLe <$> go x <*> go y
     FPIsNaN x -> FPIsNaN <$> go x
     FPCast fi r x -> FPCast fi <$> go r <*> go x
+    FPRound fi r x -> FPRound fi <$> go r <*> go x
     FPToBinary   fi x -> FPToBinary fi <$> go x
     FPFromBinary fi x -> FPFromBinary fi <$> go x
     FPToSBV   w  r x -> FPToSBV w <$> go r <*> go x

@@ -165,6 +165,9 @@ funcSemantics sf pf s =
     MP.FPEq (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
       withSymFPBinOp s x y $ \sym x' y' ->
         C.iFloatFpEq @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
+    MP.FPLe (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
+      withSymFPBinOp s x y $ \sym x' y' ->
+        C.iFloatLe @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
     MP.FPIsNaN (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
       withSymFPUnOp s x $ \sym x' ->
         C.iFloatIsNaN @_ @(MS.ToCrucibleFloatInfo fi) sym x'
@@ -175,6 +178,9 @@ funcSemantics sf pf s =
           (MS.floatInfoToCrucible fi)
           rm
           x'
+    MP.FPRound (_ :: MT.FloatInfoRepr fi) r x ->
+      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+        C.iFloatRound @_ @(MS.ToCrucibleFloatInfo fi) sym rm x'
     MP.FPToBinary fi x -> withSymFPUnOp s x $ \sym x' -> case fi of
       MT.HalfFloatRepr ->
         LL.llvmPointer_bv sym

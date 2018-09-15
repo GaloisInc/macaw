@@ -356,6 +356,10 @@ ppcAppEvaluator interps = \case
     e1 <- addEltTH interps fp1
     e2 <- addEltTH interps fp2
     liftQ [| addArchAssignment $ FPEq $(return e1) $(return e2) |]
+  S.FloatLe fp1 fp2 -> return $ do
+    e1 <- addEltTH interps fp1
+    e2 <- addEltTH interps fp2
+    liftQ [| addArchAssignment $ FPLe $(return e1) $(return e2) |]
 
   S.FloatIsNaN fp -> return $ do
     e <- addEltTH interps fp
@@ -365,6 +369,14 @@ ppcAppEvaluator interps = \case
     e <- addEltTH interps fp
     liftQ [|
         addArchAssignment $ FPCast
+          $(floatInfoFromPrecisionTH fpp)
+          $(roundingModeToBitsTH r)
+          $(return e)
+      |]
+  S.FloatRound fpp r fp -> return $ do
+    e <- addEltTH interps fp
+    liftQ [|
+        addArchAssignment $ FPRound
           $(floatInfoFromPrecisionTH fpp)
           $(roundingModeToBitsTH r)
           $(return e)
