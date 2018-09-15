@@ -48,8 +48,11 @@ import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
 
 getOpName :: S.Expr t x -> Maybe String
-getOpName (S.NonceAppExpr nae) = Just $ show $ S.nonceExprId nae
-getOpName _ = Nothing
+getOpName e
+  | S.NonceAppExpr nae <- e
+  , S.FnApp fn _ <- S.nonceExprApp nae =
+    Just $ show $ S.symFnName fn
+  | otherwise = Nothing
 
 ppcNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
