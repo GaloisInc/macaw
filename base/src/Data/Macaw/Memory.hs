@@ -44,6 +44,7 @@ module Data.Macaw.Memory
   , AddrOffsetMap
   , PresymbolData
   , takePresymbolBytes
+  , RelocEntry(..)
   , ResolveFn
   , byteSegments
   , SegmentContents
@@ -660,37 +661,50 @@ takePresymbolBytes cnt (PresymbolData contents bssSize)
 -- | Maps an address to the symbol that it is associated for.
 type AddrOffsetMap w v = Map (MemWord w) v
 
-type ResolveFn v m w = v -> PresymbolData -> m (Maybe (Relocation w, MemWord w))
+-- | Function for resolving the new contents of a relocation entry given an optional
+-- index for the current segment and the existing contents.
+--
+-- The segment index is used for dynamic relocations and set to
+-- `Nothing` for static relocations.
+type ResolveFn m w = Maybe SegmentIndex -> BS.ByteString -> m (Maybe (Relocation w))
+
+-- | Information about a relocation sufficient to know how many bytes
+-- are affected, and how to replaces the existing bytes.
+data RelocEntry m w = RelocEntry { relocEntrySize :: !(MemWord w)
+                                   -- ^ Number of bytes in relocation
+                                 , applyReloc :: !(ResolveFn m w)
+                                 }
 
 -- | This takes a list of symbols and an address and coerces into a memory contents.
 --
 -- If the size is different from the length of file contents, then the file content
 -- buffer is truncated or zero-extended as in a BSS.
-byteSegments :: forall v m w
+byteSegments :: forall m w
              .  (Monad m, MemWidth w)
-             => ResolveFn v m w
-             -> AddrOffsetMap w v -- ^ Map from addresses to symbolis
+             => Map (MemWord w) (RelocEntry m w) -- ^ Map from segment offset to relocation
+             -> Maybe SegmentIndex
+                -- ^ Index of segment for relocation purposes if this is a dynamic address
              -> MemWord w         -- ^ Base address for segment at link time.
              -> L.ByteString      -- ^ File contents for segment.
              -> Int64             -- ^ Expected size
              -> m [SegmentRange w]
-byteSegments resolver relocMap linktimeBase contents0 regionSize
-    | end <= linktimeBase =
+byteSegments relocMap msegIdx linkBaseOff contents0 regionSize
+    | end <= linkBaseOff =
         error $ "regionSize should be a positive number that does not overflow address space."
     | otherwise =
-        bytesToSegmentsAscending [] symbolPairs linktimeBase (mkPresymbolData contents0 regionSize)
+        bytesToSegmentsAscending [] symbolPairs linkBaseOff (mkPresymbolData contents0 regionSize)
   where -- Parse the map to get a list of symbols starting at base0.
-        symbolPairs :: [(MemWord w, v)]
+        symbolPairs :: [(MemWord w, RelocEntry m w)]
         symbolPairs
           = Map.toList
-          $ Map.dropWhileAntitone (< linktimeBase) relocMap
+          $ Map.dropWhileAntitone (< linkBaseOff) relocMap
 
         end :: MemWord w
-        end = linktimeBase + fromIntegral regionSize
+        end = linkBaseOff + fromIntegral regionSize
 
         -- Traverse the list of symbols that we should parse.
         bytesToSegmentsAscending :: [SegmentRange w]
-                                 -> [(MemWord w, v)]
+                                 -> [(MemWord w, RelocEntry m w)]
                                     -- ^ List of relocations to process in order.
                                  -> MemWord w
                                     -- ^ Address we are currently at
@@ -701,26 +715,28 @@ byteSegments resolver relocMap linktimeBase contents0 regionSize
                                  -> m [SegmentRange w]
         bytesToSegmentsAscending pre ((addr,v):rest) ioff contents
           -- We only consider relocations that are in the range of this segment,
-          -- so we require the difference between the address and linktimeBase is
+          -- so we require the difference between the address and linkBaseOff is
           -- less than regionSize
           | addr < end = do
               when (addr < ioff) $ do
                 error "Encountered overlapping relocations."
-              mr <- resolver v contents
-              case mr of
-                Just (r,rsz) -> do
-                  when (rsz < 1 || ioff + rsz > end) $ do
-                    error $ "Region size " ++ show rsz ++ " is out of range."
-                  -- Get number of bytes between this address offset and the current offset."
-                  let addrDiff = addr - ioff
-                  let post   = dropSegment (fromIntegral (addrDiff + rsz)) contents
-                  let pre' = [RelocationRegion r]
-                        ++ reverse (takeSegment (fromIntegral addrDiff) contents)
-                        ++ pre
-                  bytesToSegmentsAscending pre' rest (addr + rsz) post
-                _ -> do
-                  -- Skipping relocation
-                  bytesToSegmentsAscending pre  rest ioff contents
+              let rsz = relocEntrySize v
+              case takePresymbolBytes (fromIntegral rsz) contents of
+                Nothing -> error "Insufficient bytes for relocation."
+                Just bytes -> do
+                  mr <- applyReloc v msegIdx bytes
+                  case mr of
+                    Just r -> do
+                      -- Get number of bytes between this address offset and the current offset."
+                      let addrDiff = addr - ioff
+                      let post   = dropSegment (fromIntegral (addrDiff + rsz)) contents
+                      let pre' = [RelocationRegion r]
+                              ++ reverse (takeSegment (fromIntegral addrDiff) contents)
+                              ++ pre
+                      bytesToSegmentsAscending pre' rest (addr + rsz) post
+                    Nothing -> do
+                      -- Skipping relocation
+                      bytesToSegmentsAscending pre  rest ioff contents
         bytesToSegmentsAscending pre _ _ contents =
           pure $ reverse pre ++ allSymbolData contents
 
