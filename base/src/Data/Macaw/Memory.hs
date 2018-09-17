@@ -159,6 +159,9 @@ import           Data.Parameterized.NatRepr
 
 import qualified Data.Macaw.Memory.Permissions as Perm
 
+-- | Maps an address to the symbol that it is associated for.
+type AddrOffsetMap w v = Map (MemWord w) v
+
 ------------------------------------------------------------------------
 -- AddrWidthRepr
 
@@ -611,10 +614,16 @@ contentsRanges :: SegmentContents w -> [(MemWord w, SegmentRange w)]
 contentsRanges = Map.toList . segContentsMap
 
 ------------------------------------------------------------------------
--- Code for injecting relocations into segments.
+-- Presymbol data
 
 -- | Contents of segment/section before symbol folded in.
-data PresymbolData = PresymbolData !L.ByteString !Int64
+data PresymbolData = PresymbolData { preBytes :: !L.ByteString
+                                   , preBSS :: !Int64
+                                   }
+
+-- | Return number of presymbol bytes remaining
+presymbolBytesLeft :: PresymbolData -> Integer
+presymbolBytesLeft p = toInteger (L.length (preBytes p)) + toInteger (preBSS p)
 
 mkPresymbolData :: L.ByteString -> Int64 -> PresymbolData
 mkPresymbolData contents0 sz
@@ -652,14 +661,16 @@ dropSegment cnt (PresymbolData contents bssSize)
 
 -- | Return the given bytes
 takePresymbolBytes :: Int64 -> PresymbolData -> Maybe BS.ByteString
-takePresymbolBytes cnt (PresymbolData contents bssSize)
-  | toInteger (L.length contents) + toInteger bssSize > toInteger cnt =
-    Just $ L.toStrict (L.take cnt contents)
-           <> BS.replicate (fromIntegral cnt - fromIntegral (L.length contents)) 0
-  | otherwise = Nothing
+takePresymbolBytes cnt p
+  | toInteger cnt  <= presymbolBytesLeft p =
+      Just $ L.toStrict (L.take cnt (preBytes p))
+          <> BS.replicate (fromIntegral cnt - fromIntegral (L.length (preBytes p))) 0
+  | otherwise =
+      Nothing
 
--- | Maps an address to the symbol that it is associated for.
-type AddrOffsetMap w v = Map (MemWord w) v
+
+------------------------------------------------------------------------
+-- Relocation processing
 
 -- | Function for resolving the new contents of a relocation entry given an optional
 -- index for the current segment and the existing contents.
@@ -722,7 +733,10 @@ byteSegments relocMap msegIdx linkBaseOff contents0 regionSize
                 error "Encountered overlapping relocations."
               let rsz = relocEntrySize v
               case takePresymbolBytes (fromIntegral rsz) contents of
-                Nothing -> error "Insufficient bytes for relocation."
+                Nothing -> do
+                  error $ "Relocation at " ++ show addr ++ " needs "
+                    ++ show rsz ++ " bytes, but only " ++ show (presymbolBytesLeft contents)
+                    ++ " bytes remaining."
                 Just bytes -> do
                   mr <- applyReloc v msegIdx bytes
                   case mr of
