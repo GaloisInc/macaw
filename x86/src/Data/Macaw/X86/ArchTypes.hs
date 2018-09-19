@@ -17,7 +17,7 @@ module Data.Macaw.X86.ArchTypes
   , X86PrimFn(..)
   , X87_FloatType(..)
   , SSE_FloatType(..)
-  , SSE_Cmp
+  , SSE_Cmp(..)
   , lookupSSECmp
   , SSE_Op(..)
   , AVXPointWiseOp2(..)
