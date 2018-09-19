@@ -25,8 +25,6 @@ import qualified Data.IORef as IO
 import qualified Data.Map.Strict as M
 import           Data.Parameterized.Classes ( (:~:)( Refl ), testEquality )
 import qualified Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.NatRepr as NR
-import qualified Data.Text as Text
 import           Text.Printf ( printf )
 
 import qualified Lang.Crucible.Backend as C
@@ -277,7 +275,6 @@ funcSemantics sf pf s =
       return (ptrVal, s)
     MP.FP2 name v1 v2 fpscr -> do
       let sym = s ^. C.stateSymInterface
-      name' <- C.stringLit sym $ Text.pack ("fp_" ++ name)
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
@@ -287,7 +284,6 @@ funcSemantics sf pf s =
       return (ptrVal, s)
     MP.FP3 name v1 v2 v3 fpscr -> do
       let sym = s ^. C.stateSymInterface
-      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3
@@ -298,7 +294,6 @@ funcSemantics sf pf s =
       return (ptrVal, s)
     MP.Vec1 name v fpscr -> do
       let sym = s ^. C.stateSymInterface
-      name' <- C.stringLit sym $ Text.pack name
       v' <- toValBV sym v
       fpscr' <- toValBV sym fpscr
       let args = Ctx.extend (Ctx.extend Ctx.empty v') fpscr'
@@ -307,7 +302,6 @@ funcSemantics sf pf s =
       return (ptrVal, s)
     MP.Vec2 name v1 v2 fpscr -> do
       let sym = s ^. C.stateSymInterface
-      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       fpscr' <- toValBV sym fpscr
@@ -317,7 +311,6 @@ funcSemantics sf pf s =
       return (ptrVal, s)
     MP.Vec3 name v1 v2 v3 fpscr -> do
       let sym = s ^. C.stateSymInterface
-      name' <- C.stringLit sym $ Text.pack name
       v1' <- toValBV sym v1
       v2' <- toValBV sym v2
       v3' <- toValBV sym v3

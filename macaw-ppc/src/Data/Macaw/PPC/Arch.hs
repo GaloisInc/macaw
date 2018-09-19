@@ -416,7 +416,7 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v)
     FPFMA fi _ _ _ _ -> MT.FloatTypeRepr fi
     FPLt{}    -> knownRepr
     FPEq{}    -> knownRepr
-    FPLt{}    -> knownRepr
+    FPLe{}    -> knownRepr
     FPIsNaN{} -> knownRepr
     FPCast       fi _ _ -> MT.FloatTypeRepr fi
     FPRound      fi _ _ -> MT.FloatTypeRepr fi

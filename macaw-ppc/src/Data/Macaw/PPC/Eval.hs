@@ -110,8 +110,10 @@ absEvalArchFn _ _r = \case
   FPFMA{}        -> MA.TopV
   FPLt{}         -> MA.TopV
   FPEq{}         -> MA.TopV
+  FPLe{}         -> MA.TopV
   FPIsNaN{}      -> MA.TopV
   FPCast{}       -> MA.TopV
+  FPRound{}      -> MA.TopV
   FPToBinary{}   -> MA.TopV
   FPFromBinary{} -> MA.TopV
   FPToSBV{}      -> MA.TopV
