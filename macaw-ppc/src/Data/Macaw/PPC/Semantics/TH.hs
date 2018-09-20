@@ -411,7 +411,7 @@ ppcAppEvaluator interps = \case
   S.SBVToFloat fpp r fp -> return $ do
     e <- addEltTH interps fp
     liftQ [|
-        addArchAssignment $ FPFromUBV
+        addArchAssignment $ FPFromSBV
           $(floatInfoFromPrecisionTH fpp)
           $(roundingModeToBitsTH r)
           $(return e)
