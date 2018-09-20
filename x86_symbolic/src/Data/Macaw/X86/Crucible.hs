@@ -209,7 +209,18 @@ pureSem sym fn = do
           zeros <- minUnsignedBV symi knownNat
           ones  <- maxUnsignedBV symi knownNat
           llvmPointer_bv symi =<< bvIte symi res ones zeros
-    M.SSE_UCOMIS {} -> error "SSE_UCOMIS"
+    M.SSE_UCOMIS (tp :: M.SSE_FloatType tp) x y -> do
+      x' <- toValFloat symi tp x
+      y' <- toValFloat symi tp y
+      is_eq <- iFloatFpEq @_ @(FloatInfoFromSSEType tp) symi x' y'
+      is_lt <- iFloatLt @_ @(FloatInfoFromSSEType tp) symi x' y'
+      x_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi x'
+      y_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi y'
+      is_unord <- orPred symi x_is_nan y_is_nan
+      zf <- orPred symi is_eq is_unord
+      cf <- orPred symi is_lt is_unord
+      let pf = is_unord
+      return $ empty `extend` (RV zf) `extend` (RV pf) `extend` (RV cf)
     M.SSE_CVTSS2SD x ->
       fromValFloat symi M.SSE_Double
         =<< iFloatCast @_ @DoubleFloat @SingleFloat symi knownRepr RNE
@@ -224,7 +235,7 @@ pureSem sym fn = do
         =<< toValBV symi x
     M.SSE_CVTTSX2SI w (tp :: M.SSE_FloatType tp) x ->
       llvmPointer_bv symi
-        =<< iFloatToSBV @_ @_ @(FloatInfoFromSSEType tp) symi w RNE
+        =<< iFloatToSBV @_ @_ @(FloatInfoFromSSEType tp) symi w RTZ
         =<< toValFloat symi tp x
 
     M.EvenParity x0 ->

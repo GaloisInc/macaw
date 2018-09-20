@@ -31,6 +31,7 @@ module Data.Macaw.Symbolic.PersistentState
   , floatInfoToCrucible
   , floatInfoFromCrucible
   , typeCtxToCrucible
+  , typeListToCrucible
   , macawAssignToCrucM
   , memReprToCrucible
     -- * Register index map
