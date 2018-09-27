@@ -19,6 +19,7 @@ Operations for creating a view of memory from an elf file.
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
   , memoryForElf
+  , memoryForElfAllSymbols
   , MemLoadWarning(..)
   , resolveElfFuncSymbols
   , resolveElfFuncSymbolsAny
@@ -66,7 +67,6 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-import           Data.Monoid
 import           Data.Parameterized.Some
 import           Data.Set (Set)
 import qualified Data.Set as Set
@@ -78,7 +78,7 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
 
--- | Return a subbrange of a bytestring.
+-- | Return a subrange of a bytestring.
 sliceL :: Integral w => Elf.Range w -> L.ByteString -> L.ByteString
 sliceL (i,c) = L.take (fromIntegral c) . L.drop (fromIntegral i)
 
@@ -316,11 +316,11 @@ resolveSymbol  :: SymbolVector
                -> RelocResolver SymbolInfo
 resolveSymbol (SymbolVector symtab) symIdx = do
   when (symIdx == 0) $
-    relocError $ RelocationZeroSymbol
+    relocError RelocationZeroSymbol
   case symtab V.!? fromIntegral (symIdx - 1) of
     Nothing ->
       relocError $ RelocationBadSymbolIndex $ fromIntegral symIdx
-    Just sym -> pure $ sym
+    Just sym -> pure sym
 
 -- | This attempts to resolve an index in the symbol table to the
 -- identifier information needed to resolve its loaded address.
@@ -333,13 +333,13 @@ resolveRelocationSym :: SymbolVector
 resolveRelocationSym symtab symIdx = do
   sym <- resolveSymbol symtab symIdx
   case symbolDef sym of
-    DefinedSymbol{} -> do
+    DefinedSymbol{} -> 
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
-    SymbolSection idx -> do
+    SymbolSection idx -> 
       pure $ SectionIdentifier idx
-    SymbolFile _ -> do
-      relocError $ RelocationFileUnsupported
-    UndefinedSymbol{} -> do
+    SymbolFile _ -> 
+      relocError RelocationFileUnsupported
+    UndefinedSymbol{} -> 
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
 
 -- | Attempt to resolve an X86_64 specific symbol.
@@ -443,7 +443,7 @@ relaTargetARM = SomeRelocationResolver $ \_symtab rel _maddend ->
 
 -- | Creates a relocation map from the contents of a dynamic section.
 getRelocationResolver
-  :: forall w a
+  :: forall w 
   .  Elf.ElfHeader w
   -> MemLoader w (SomeRelocationResolver w)
 getRelocationResolver hdr =
@@ -524,7 +524,7 @@ mkRelocMap :: Elf.ElfData
               -- ^ Buffer containing relocation entries in Rela format
            -> MemLoader w (Some (RelocMap w))
 mkRelocMap _dta _hdr _symtab Nothing Nothing = do
-  pure $! Some $ emptyRelocMap
+  pure $! Some emptyRelocMap
 mkRelocMap dta hdr symtab _mrelBuffer (Just relaBuffer) = do
  w <- uses mlsMemory memAddrWidth
  reprConstraints w $ do
@@ -555,23 +555,23 @@ resolveUndefinedSymbolReq :: SymbolName
                           -> Elf.ElfSymbolBinding
                           -> MemLoader w SymbolRequirement
 resolveUndefinedSymbolReq _ Elf.STB_WEAK =
-  pure $ SymbolOptional
+  pure SymbolOptional
 resolveUndefinedSymbolReq _ Elf.STB_GLOBAL =
-  pure $ SymbolRequired
+  pure SymbolRequired
 resolveUndefinedSymbolReq nm bnd = do
   addWarning $ UnknownUndefinedSymbolBinding nm bnd
-  pure $ SymbolRequired
+  pure SymbolRequired
 
 resolveDefinedSymbolPrec :: SymbolName -> Elf.ElfSymbolBinding -> MemLoader w SymbolPrecedence
 resolveDefinedSymbolPrec _ Elf.STB_LOCAL =
-  pure $ SymbolLocal
+  pure SymbolLocal
 resolveDefinedSymbolPrec _ Elf.STB_WEAK =
-  pure $ SymbolWeak
+  pure SymbolWeak
 resolveDefinedSymbolPrec _ Elf.STB_GLOBAL =
-  pure $ SymbolStrong
+  pure SymbolStrong
 resolveDefinedSymbolPrec nm bnd = do
   addWarning $ UnknownDefinedSymbolBinding nm bnd
-  pure $ SymbolStrong
+  pure SymbolStrong
 
 resolveUndefinedSymbolType :: SymbolName -> Elf.ElfSymbolType -> MemLoader w SymbolUndefType
 resolveUndefinedSymbolType nm tp =
@@ -582,7 +582,7 @@ resolveUndefinedSymbolType nm tp =
     Elf.STT_TLS    -> pure SymbolUndefThreadLocal
     _ -> do
       addWarning $ UnknownUndefinedSymbolType nm tp
-      pure $ SymbolUndefNoType
+      pure SymbolUndefNoType
 
 mkDefinedSymbol :: SymbolName
                 -> Elf.ElfSymbolBinding
@@ -609,10 +609,10 @@ resolveDefinedSymbolDef sym = do
   case Elf.steType sym of
     Elf.STT_SECTION
       | idx < Elf.SHN_LOPROC -> do
-          when (nm /= "") $ do
+          when (nm /= "") $ 
             addWarning $ ExpectedSectionSymbolNameEmpty nm
-          when (bnd /= Elf.STB_LOCAL) $ do
-            addWarning $ ExpectedSectionSymbolLocal
+          when (bnd /= Elf.STB_LOCAL) $ 
+            addWarning ExpectedSectionSymbolLocal
           pure $ SymbolSection (Elf.fromElfSectionIndex idx)
       | otherwise -> do
           addWarning $ InvalidSectionSymbolIndex idx
@@ -679,10 +679,10 @@ dynamicRelocationMap hdr ph contents =
   case filter (\p -> Elf.phdrSegmentType p == Elf.PT_DYNAMIC) ph of
     [] -> pure $ Some emptyRelocMap
     dynPhdr:dynRest -> do
-      when (not (null dynRest)) $ do
-        addWarning $ MultipleDynamicSegments
+      when (not (null dynRest)) $ 
+        addWarning MultipleDynamicSegments
       w <- uses mlsMemory memAddrWidth
-      reprConstraints w $ do
+      reprConstraints w $ 
         case Elf.virtAddrMap contents ph of
           Nothing -> do
             addWarning OverlappingLoadableSegments
@@ -697,8 +697,8 @@ dynamicRelocationMap hdr ph contents =
               SymbolVector <$> traverse mkDynamicSymbolRef (V.drop 1 symentries)
             mRelBuffer  <- runDynamic $ Elf.dynRelBuffer  dynSection
             mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection
-            when (isJust mRelBuffer && isJust mRelaBuffer) $ do
-              addWarning $ DynamicRelaAndRelPresent
+            when (isJust mRelBuffer && isJust mRelaBuffer) $
+              addWarning DynamicRelaAndRelPresent
             mkRelocMap (Elf.headerData hdr) hdr symtab mRelBuffer mRelaBuffer
 
 ------------------------------------------------------------------------
@@ -759,7 +759,7 @@ insertElfSegment base shdrMap contents (RelocMap relocMap resolver) phdr = do
         IntervalCO shdr_start _ -> do
           let elfIdx = ElfSectionIndex (elfSectionIndex sec)
           when (phdr_offset > shdr_start) $ do
-            fail $ "Found section header that overlaps with program header."
+            fail "Found section header that overlaps with program header."
           let sec_offset = fromIntegral $ shdr_start - phdr_offset
           let Just addr = resolveSegmentOff seg sec_offset
           mlsMemory   %= memAddSectionAddr (fromElfSectionIndex elfIdx) addr
@@ -786,7 +786,7 @@ memoryForElfSegments base e = do
       dynamicRelocationMap hdr ph contents
 
   let intervals :: ElfFileSectionMap (ElfWordType w)
-      intervals = IMap.fromList $
+      intervals = IMap.fromList 
           [ (IntervalCO start end, sec)
           | shdr <- Map.elems (l ^. Elf.shdrs)
           , let start = shdr^._3
@@ -918,7 +918,7 @@ memoryForElfSections e = do
       sectionMap = foldlOf elfSections insSec Map.empty e
         where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
   symtab <- symtabSymbolVector e
-  forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
+  forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) ->
     insertAllocatedSection hdr symtab sectionMap idx nm
   -- TODO: Figure out what to do about .tdata and .tbss
   -- Check for other section names that we do not support."
@@ -945,7 +945,35 @@ adjustedLoadRegionIndex e loadOpt =
         Elf.ET_DYN -> 1
         _ -> 0
 
--- | Load allocated Elf sections into memory.
+memoryForElf' :: ( Memory w
+                 -> SectionIndexMap w
+                 -> Elf w
+                 -> ([SymbolResolutionError], [MemSymbol w]))
+              -> LoadOptions
+              -> Elf w
+              -> Either String ( Memory w
+                      , [MemSymbol w] -- Function symbols
+                      , [MemLoadWarning]
+                      , [SymbolResolutionError]
+                      )
+memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
+  let end = case Elf.elfData e of
+              Elf.ELFDATA2LSB -> LittleEndian
+              Elf.ELFDATA2MSB -> BigEndian
+  (secMap, mem, warnings) <-
+    runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $ 
+      case Elf.elfType e of
+        Elf.ET_REL ->
+          memoryForElfSections e
+        _ -> do
+          let base = MemAddr { addrBase = adjustedLoadRegionIndex e opt
+                             , addrOffset = fromInteger (loadRegionBaseOffset opt)
+                             }
+          memoryForElfSegments base e
+  let (symErrs, funcSymbols) = resolver mem secMap e
+  pure (mem, funcSymbols, warnings, symErrs)
+
+  -- | Load allocated Elf sections into memory.
 --
 -- Normally, Elf uses segments for loading, but the segment
 -- information tends to be more precise.
@@ -956,22 +984,20 @@ memoryForElf :: LoadOptions
                               , [MemLoadWarning]
                               , [SymbolResolutionError]
                               )
-memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
-  let end = case Elf.elfData e of
-              Elf.ELFDATA2LSB -> LittleEndian
-              Elf.ELFDATA2MSB -> BigEndian
-  (secMap, mem, warnings) <-
-    runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $ do
-      case Elf.elfType e of
-        Elf.ET_REL ->
-          memoryForElfSections e
-        _ -> do
-          let base = MemAddr { addrBase = adjustedLoadRegionIndex e opt
-                             , addrOffset = fromInteger (loadRegionBaseOffset opt)
-                             }
-          memoryForElfSegments base e
-  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
-  pure (mem, funcSymbols, warnings, symErrs)
+memoryForElf = memoryForElf' resolveElfFuncSymbols
+
+-- | Load allocated Elf sections into memory.
+--
+-- Normally, Elf uses segments for loading, but the segment
+-- information tends to be more precise.
+memoryForElfAllSymbols :: LoadOptions
+                       -> Elf w
+                       -> Either String ( Memory w
+                              , [MemSymbol w] -- Function symbols
+                              , [MemLoadWarning]
+                              , [SymbolResolutionError]
+                              )
+memoryForElfAllSymbols = memoryForElf' resolveElfFuncSymbolsAny
 
 ------------------------------------------------------------------------
 -- Elf symbol utilities
@@ -1022,7 +1048,7 @@ resolveElfSymbol mem secMap idx ste
         Just (base,sec)
           | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
           , off <- toInteger val - toInteger (elfSectionAddr sec)
-          , Just addr <- incSegmentOff base off -> Just $ do
+          , Just addr <- incSegmentOff base off -> Just $
               Right $ MemSymbol { memSymbolName = Elf.steName ste
                                 , memSymbolStart = addr
                                 , memSymbolSize = fromIntegral (Elf.steSize ste)
@@ -1075,7 +1101,7 @@ resolveElfFuncSymbolsAny mem secMap e =
 
 -- | Return the segment offset of the elf file entry point or fail if undefined.
 getElfEntry ::  LoadOptions -> Memory w -> Elf w -> ([String], Maybe (MemSegmentOff w))
-getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $ do
+getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $ 
  Elf.elfClassInstances (Elf.elfClass e) $ do
    let regIdx = adjustedLoadRegionIndex e loadOpts
    let adjAddr = loadRegionBaseOffset loadOpts + toInteger (Elf.elfEntry e)
@@ -1113,7 +1139,7 @@ resolveElfContents loadOpts e =
       (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts e
       let (entryWarn, mentry) = getElfEntry loadOpts mem e
       pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
-    Elf.ET_CORE -> do
-      Left $ "Reopt does not support loading core files."
-    tp -> do
+    Elf.ET_CORE ->
+      Left  "Reopt does not support loading core files."
+    tp -> 
       Left $ "Reopt does not support loading elf files with type " ++ show tp ++ "."
