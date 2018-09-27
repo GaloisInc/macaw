@@ -68,6 +68,7 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import           Data.Monoid
 import           Data.Parameterized.Some
 import           Data.Set (Set)
 import qualified Data.Set as Set
