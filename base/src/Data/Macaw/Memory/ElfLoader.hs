@@ -1098,7 +1098,7 @@ memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   let (symErrs, funcSymbols) = resolver mem secMap e
   pure (mem, funcSymbols, warnings, symErrs)
 
-  -- | Load allocated Elf sections into memory.
+-- | Load allocated Elf sections into memory.
 --
 -- Normally, Elf uses segments for loading, but the segment
 -- information tends to be more precise.
