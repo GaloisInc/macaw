@@ -17,7 +17,7 @@ module Data.Macaw.X86.ArchTypes
   , X86PrimFn(..)
   , X87_FloatType(..)
   , SSE_FloatType(..)
-  , SSE_Cmp
+  , SSE_Cmp(..)
   , lookupSSECmp
   , SSE_Op(..)
   , AVXPointWiseOp2(..)
@@ -210,8 +210,8 @@ sseOpName f =
 
 -- | A single or double value for floating-point restricted to this types.
 data SSE_FloatType tp where
-   SSE_Single :: SSE_FloatType (FloatType SingleFloat)
-   SSE_Double :: SSE_FloatType (FloatType DoubleFloat)
+   SSE_Single :: SSE_FloatType (FloatBVType SingleFloat)
+   SSE_Double :: SSE_FloatType (FloatBVType DoubleFloat)
 
 instance Show (SSE_FloatType tp) where
   show SSE_Single = "single"
@@ -225,9 +225,9 @@ instance HasRepr SSE_FloatType TypeRepr where
 -- X87 declarations
 
 data X87_FloatType tp where
-   X87_Single :: X87_FloatType (BVType 32)
-   X87_Double :: X87_FloatType (BVType 64)
-   X87_ExtDouble :: X87_FloatType (BVType 80)
+   X87_Single :: X87_FloatType (FloatBVType SingleFloat)
+   X87_Double :: X87_FloatType (FloatBVType DoubleFloat)
+   X87_ExtDouble :: X87_FloatType (FloatBVType X86_80Float)
 
 instance Show (X87_FloatType tp) where
   show X87_Single = "single"
@@ -513,7 +513,7 @@ data X86PrimFn f tp where
   -- Guaranteed to not throw exception or have side effects.
   X87_Extend :: !(SSE_FloatType tp)
              -> !(f tp)
-             -> X86PrimFn f (BVType 80)
+             -> X86PrimFn f (FloatBVType X86_80Float)
 
   -- | This performs an 80-bit floating point add.
   --
@@ -529,9 +529,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FAdd :: !(f (FloatType X86_80Float))
-           -> !(f (FloatType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  X87_FAdd :: !(f (FloatBVType X86_80Float))
+           -> !(f (FloatBVType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
 
   -- | This performs an 80-bit floating point subtraction.
   --
@@ -547,9 +547,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FSub :: !(f (FloatType X86_80Float))
-           -> !(f (FloatType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  X87_FSub :: !(f (FloatBVType X86_80Float))
+           -> !(f (FloatBVType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
 
   -- | This performs an 80-bit floating point multiply.
   --
@@ -565,9 +565,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FMul :: !(f (FloatType X86_80Float))
-           -> !(f (FloatType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+  X87_FMul :: !(f (FloatBVType X86_80Float))
+           -> !(f (FloatBVType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
 
   -- | This rounds a floating number to single or double precision.
   --
@@ -583,7 +583,7 @@ data X86PrimFn f tp where
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
   X87_FST :: !(SSE_FloatType tp)
-          -> !(f (BVType 80))
+          -> !(f (FloatBVType X86_80Float))
           -> X86PrimFn f tp
 
   -- | Unary operation on a vector.  Should have no side effects.

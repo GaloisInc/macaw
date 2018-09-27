@@ -1549,9 +1549,9 @@ def_fstX mnem doPop = defUnary mnem $ \_ val -> do
 
 type X87BinOp
    = forall f
-   . f (FloatType X86_80Float)
-   -> f (FloatType X86_80Float)
-   -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
+   . f (FloatBVType X86_80Float)
+   -> f (FloatBVType X86_80Float)
+   -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
 
 execX87BinOp :: X87BinOp
              -> Location (Addr ids) (BVType 80)

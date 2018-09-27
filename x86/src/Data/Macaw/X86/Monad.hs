@@ -519,7 +519,7 @@ data Location addr (tp :: Type) where
   -- top, so X87Register 0 is the top, X87Register 1 is the second,
   -- and so forth.
   X87StackRegister :: !Int
-                   -> Location addr (FloatType X86_80Float)
+                   -> Location addr (FloatBVType X86_80Float)
 
 ------------------------------------------------------------------------
 -- Location
@@ -743,14 +743,13 @@ c2_loc = fullRegister R.X87_C2
 c3_loc = fullRegister R.X87_C3
 
 -- | Maps float info repr to associated MemRepr.
-floatMemRepr :: FloatInfoRepr flt -> MemRepr (FloatType flt)
-floatMemRepr fir =
-  case floatInfoBytesIsPos fir of
-    LeqProof -> BVMemRepr (floatInfoBytes fir) LittleEndian
+floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
+floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
+  BVMemRepr (floatInfoBytes fi) LittleEndian
 
 -- | Tuen an address into a location of size @n
-mkFPAddr :: FloatInfoRepr flt -> addr -> Location addr (FloatType flt)
-mkFPAddr fir addr = MemoryAddr addr (floatMemRepr fir)
+mkFPAddr :: FloatInfoRepr fi -> addr -> Location addr (FloatBVType fi)
+mkFPAddr fi addr = MemoryAddr addr (floatMemRepr fi)
 
 -- | Return MMX register corresponding to x87 register.
 --
@@ -1629,7 +1628,7 @@ getSegmentBase seg =
 
 -- | X87 support --- these both affect the register stack for the
 -- x87 state.
-x87Push :: Expr ids (FloatType X86_80Float) -> X86Generator st ids ()
+x87Push :: Expr ids (FloatBVType X86_80Float) -> X86Generator st ids ()
 x87Push e = do
   v <- eval e
   topv <- getX87Top

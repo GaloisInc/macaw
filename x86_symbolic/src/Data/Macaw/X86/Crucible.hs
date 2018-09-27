@@ -1,6 +1,7 @@
 {-# Language GADTs #-}
 {-# Language RankNTypes #-}
 {-# Language KindSignatures #-}
+{-# Language LambdaCase #-}
 {-# Language DataKinds #-}
 {-# Language TypeApplications #-}
 {-# Language TypeFamilies #-}
@@ -41,6 +42,7 @@ import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
 
 import           What4.Interface hiding (IsExpr)
+import           What4.InterpretedFloatingPoint
 import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend (IsSymInterface)
@@ -138,7 +140,8 @@ pureSem :: (IsSymInterface sym) =>
   Sym sym   {- ^ Handle to the simulator -} ->
   M.X86PrimFn (AtomWrapper (RegEntry sym)) mt {- ^ Instruction -} ->
   IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
-pureSem sym fn =
+pureSem sym fn = do
+  let symi = (symIface sym)
   case fn of
     M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.XGetBV {} -> error "XGetBV"
@@ -155,13 +158,6 @@ pureSem sym fn =
     M.X86IRem {} -> error "X86IRem"
     M.X86Div  {} -> error "X86Div"
     M.X86Rem  {} -> error "X86Rem"
-    M.SSE_VectorOp {} -> error "SSE_VectorOp"
-    M.SSE_CMPSX {} -> error "SSE_CMPSX"
-    M.SSE_UCOMIS {} -> error "SSE_UCOMIS"
-    M.SSE_CVTSS2SD{} -> error "SSE_CVTSS2SD"
-    M.SSE_CVTSD2SS{} -> error "SSE_CVTSD2SS"
-    M.SSE_CVTSI2SX {} -> error "SSE_CVTSI2SX"
-    M.SSE_CVTTSX2SI {} -> error "SSE_CVTTSX2SI"
     M.X87_Extend{} ->  error "X87_Extend"
     M.X87_FAdd{} -> error "X87_FAdd"
     M.X87_FSub{} -> error "X87_FSub"
@@ -169,7 +165,78 @@ pureSem sym fn =
     M.X87_FST {} -> error "X87_FST"
     M.VExtractF128 {} -> error "VExtractF128"
 
-
+    M.SSE_VectorOp op n (tp :: M.SSE_FloatType (M.BVType w)) x y -> do
+      let w = M.typeWidth tp
+      vecOp2M sym BigEndian (natMultiply n w) w x y $ V.zipWithM $ \x' y' -> do
+        x'' <- toValFloat' sym tp x'
+        y'' <- toValFloat' sym tp y'
+        fromValFloat' symi tp =<< case op of
+          M.SSE_Add ->
+            iFloatAdd @_ @(FloatInfoFromSSEType (M.BVType w)) symi RNE x'' y''
+          M.SSE_Sub ->
+            iFloatSub @_ @(FloatInfoFromSSEType (M.BVType w)) symi RNE x'' y''
+          M.SSE_Mul ->
+            iFloatMul @_ @(FloatInfoFromSSEType (M.BVType w)) symi RNE x'' y''
+          M.SSE_Div ->
+            iFloatDiv @_ @(FloatInfoFromSSEType (M.BVType w)) symi RNE x'' y''
+    M.SSE_CMPSX op (tp :: M.SSE_FloatType tp) x y -> do
+      x' <- toValFloat symi tp x
+      y' <- toValFloat symi tp y
+      res <- case op of
+        M.EQ_OQ -> iFloatFpEq @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.LT_OS -> iFloatLt @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.LE_OS -> iFloatLe @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.UNORD_Q -> do
+          x_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi x'
+          y_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi y'
+          orPred symi x_is_nan y_is_nan
+        M.NEQ_UQ ->
+          notPred symi =<< iFloatFpEq @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.NLT_US ->
+          notPred symi =<< iFloatLt @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.NLE_US ->
+          notPred symi =<< iFloatLe @_ @(FloatInfoFromSSEType tp) symi x' y'
+        M.ORD_Q -> do
+          x_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi x'
+          y_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi y'
+          notPred symi =<< orPred symi x_is_nan y_is_nan
+      case tp of
+        M.SSE_Single -> do
+          zeros <- minUnsignedBV symi knownNat
+          ones  <- maxUnsignedBV symi knownNat
+          llvmPointer_bv symi =<< bvIte symi res ones zeros
+        M.SSE_Double -> do
+          zeros <- minUnsignedBV symi knownNat
+          ones  <- maxUnsignedBV symi knownNat
+          llvmPointer_bv symi =<< bvIte symi res ones zeros
+    M.SSE_UCOMIS (tp :: M.SSE_FloatType tp) x y -> do
+      x' <- toValFloat symi tp x
+      y' <- toValFloat symi tp y
+      is_eq <- iFloatFpEq @_ @(FloatInfoFromSSEType tp) symi x' y'
+      is_lt <- iFloatLt @_ @(FloatInfoFromSSEType tp) symi x' y'
+      x_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi x'
+      y_is_nan <- iFloatIsNaN @_ @(FloatInfoFromSSEType tp) symi y'
+      is_unord <- orPred symi x_is_nan y_is_nan
+      zf <- orPred symi is_eq is_unord
+      cf <- orPred symi is_lt is_unord
+      let pf = is_unord
+      return $ empty `extend` (RV zf) `extend` (RV pf) `extend` (RV cf)
+    M.SSE_CVTSS2SD x ->
+      fromValFloat symi M.SSE_Double
+        =<< iFloatCast @_ @DoubleFloat @SingleFloat symi knownRepr RNE
+        =<< toValFloat symi M.SSE_Single x
+    M.SSE_CVTSD2SS x ->
+      fromValFloat symi M.SSE_Single
+        =<< iFloatCast @_ @SingleFloat @DoubleFloat symi knownRepr RNE
+        =<< toValFloat symi M.SSE_Double x
+    M.SSE_CVTSI2SX tp _ x ->
+      fromValFloat symi tp
+        =<< iSBVToFloat symi (floatInfoFromSSEType tp) RNE
+        =<< toValBV symi x
+    M.SSE_CVTTSX2SI w (tp :: M.SSE_FloatType tp) x ->
+      llvmPointer_bv symi
+        =<< iFloatToSBV @_ @_ @(FloatInfoFromSSEType tp) symi w RTZ
+        =<< toValFloat symi tp x
 
     M.EvenParity x0 ->
       do x <- getBitVal (symIface sym) x0
@@ -354,6 +421,26 @@ vecOp2 sym endian totLen elLen x y f =
   unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
   llvmPointer_bv (symIface sym) =<< evalE sym (V.toBV endian elLen (f u v))
 
+vecOp2M
+  :: (IsSymInterface sym, 1 <= c)
+  => Sym sym   {- ^ Simulator -}
+  -> Endian    {- ^ How to split-up the bit-vector -}
+  -> NatRepr w {- ^ Total width of the bit-vector -}
+  -> NatRepr c {- ^ Width of individual elements -}
+  -> AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value 1 -}
+  -> AtomWrapper (RegEntry sym) (M.BVType w) {- ^ Input value 2 -}
+  -> (  forall n
+      . (1 <= n, (n * c) ~ w)
+     => V.Vector n (E sym (BVType c))
+     -> V.Vector n (E sym (BVType c))
+     -> IO (V.Vector n (E sym (BVType c)))
+     ) {- ^ Definition of operation -}
+  -> IO (RegValue sym (LLVMPointerType w)) -- ^ The final result.
+vecOp2M sym endian totLen elLen x y f =
+  unpack2 (symIface sym) endian totLen elLen x y $ \u v ->
+    llvmPointer_bv (symIface sym)
+      =<< evalE sym
+      =<< (V.toBV endian elLen <$> f u v)
 
 bitOp2 :: (IsSymInterface sym) =>
   Sym sym                                 {- ^ The simulator -} ->
@@ -429,6 +516,63 @@ toValBV ::
   IO (RegValue sym (BVType w))
 toValBV sym (AtomWrapper x) = projectLLVM_bv sym (regValue x)
 
+type family FloatInfoFromSSEType (tp :: M.Type) :: FloatInfo where
+  FloatInfoFromSSEType (M.BVType 32) = SingleFloat
+  FloatInfoFromSSEType (M.BVType 64) = DoubleFloat
+
+floatInfoFromSSEType
+  :: M.SSE_FloatType tp -> FloatInfoRepr (FloatInfoFromSSEType tp)
+floatInfoFromSSEType = \case
+  M.SSE_Single -> knownRepr
+  M.SSE_Double -> knownRepr
+
+toValFloat
+  :: IsSymInterface sym
+  => sym
+  -> M.SSE_FloatType tp
+  -> AtomWrapper (RegEntry sym) tp
+  -> IO (RegValue sym (FloatType (FloatInfoFromSSEType tp)))
+toValFloat sym tp (AtomWrapper x) =
+  case tp of
+    M.SSE_Single ->
+      iFloatFromBinary sym SingleFloatRepr =<< projectLLVM_bv sym (regValue x)
+    M.SSE_Double ->
+      iFloatFromBinary sym DoubleFloatRepr =<< projectLLVM_bv sym (regValue x)
+
+toValFloat'
+  :: IsSymInterface sym
+  => Sym sym
+  -> M.SSE_FloatType (M.BVType w)
+  -> E sym (BVType w)
+  -> IO (RegValue sym (FloatType (FloatInfoFromSSEType (M.BVType w))))
+toValFloat' sym tp x =
+  case tp of
+    M.SSE_Single ->
+      iFloatFromBinary (symIface sym) SingleFloatRepr =<< evalE sym x
+    M.SSE_Double ->
+      iFloatFromBinary (symIface sym) DoubleFloatRepr =<< evalE sym x
+
+fromValFloat
+  :: IsSymInterface sym
+  => sym
+  -> M.SSE_FloatType tp
+  -> RegValue sym (FloatType (FloatInfoFromSSEType tp))
+  -> IO (RegValue sym (ToCrucibleType tp))
+fromValFloat sym tp x =
+  case tp of
+    M.SSE_Single -> llvmPointer_bv sym =<< iFloatToBinary sym SingleFloatRepr x
+    M.SSE_Double -> llvmPointer_bv sym =<< iFloatToBinary sym DoubleFloatRepr x
+
+fromValFloat'
+  :: IsSymInterface sym
+  => sym
+  -> M.SSE_FloatType (M.BVType w)
+  -> RegValue sym (FloatType (FloatInfoFromSSEType (M.BVType w)))
+  -> IO (E sym (BVType w))
+fromValFloat' sym tp x =
+  case tp of
+    M.SSE_Single -> ValBV knownNat <$> iFloatToBinary sym SingleFloatRepr x
+    M.SSE_Double -> ValBV knownNat <$> iFloatToBinary sym DoubleFloatRepr x
 
 
 --------------------------------------------------------------------------------

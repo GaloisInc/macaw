@@ -644,13 +644,15 @@ resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
     [ByteRegion bs] -> do
         absoluteAddr <$> addrRead endianness bs
     [RelocationRegion r] -> do
-        let off = relocationOffset r
         when (relocationIsRel r) $ Nothing
         case relocationSym r of
           SymbolRelocation{} -> Nothing
           SectionIdentifier idx -> do
             addr <- Map.lookup idx (memSectionAddrMap mem)
-            pure $ relativeSegmentAddr addr & incAddr (toInteger off)
+            pure $ relativeSegmentAddr addr & incAddr (toInteger (relocationOffset r))
+          SegmentBaseAddr idx -> do
+            addr <- Map.lookup idx (memSegmentAddrMap mem)
+            pure $ relativeSegmentAddr addr & incAddr (toInteger (relocationOffset r))
     _ -> Nothing
 
 -- This function resolves jump table entries.

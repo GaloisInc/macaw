@@ -707,8 +707,8 @@ ppStmt ppOff stmt =
       where
       ppAddr addr =
         case asAbsoluteAddr addr of
-          Just absAddr -> ppOff absAddr
-          Nothing -> PP.braces (PP.int (addrBase addr)) PP.<> ppOff (addrOffset addr)
+          Just absAddr -> text (show absAddr)
+          Nothing -> PP.braces (PP.int (addrBase addr)) PP.<> text "+" PP.<> text (show (addrOffset addr))
       prefix = text "#" <+> ppAddr a PP.<> text ": "
       ppUpdate key val acc = text (showF key) <+> text "=>" <+> ppValue 0 val : acc
 

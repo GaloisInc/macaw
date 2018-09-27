@@ -71,9 +71,11 @@ import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.Some
 import qualified Data.Parameterized.TH.GADT as U
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -655,6 +657,7 @@ appToCrucible app = do
                   Just Refl -> evalMacawStmt (PtrEq rW xv yv)
                   Nothing ->
                     appAtom =<< C.BVEq n <$> toBits n xv <*> toBits n yv
+           M.FloatTypeRepr _ -> appAtom $ C.FloatEq xv yv
            M.TupleTypeRepr _ -> fail "XXX: Equality on tuples not yet done."
 
 
@@ -670,11 +673,19 @@ appToCrucible app = do
                   Just Refl -> evalMacawStmt (PtrMux rW cond tv fv)
                   Nothing -> appBVAtom n =<<
                                 C.BVIte cond n <$> toBits n tv <*> toBits n fv
+           M.FloatTypeRepr fi ->
+             appAtom $ C.FloatIte (floatInfoToCrucible fi) cond tv fv
            M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
 
 
-    M.TupleField tps x i ->
-      undefined tps x i -- TODO: Fix this
+    M.TupleField tps x i -> do
+      let tps' = typeListToCrucible tps
+          tp'  = typeToCrucible $ tps P.!! i
+      x' <- v2c x
+      case Ctx.intIndex (fromIntegral $ P.indexValue i) (Ctx.size tps') of
+        Just (Some i') | Just Refl <- testEquality tp' (tps' Ctx.! i') ->
+          appAtom $ C.GetStruct x' i' tp'
+        _ -> fail ""
 
 
     -- Booleans
