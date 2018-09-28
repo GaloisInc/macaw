@@ -6,6 +6,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -19,6 +20,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE PatternGuards #-}
@@ -639,8 +641,10 @@ bitOp2 w f x y = fromBits w =<< appAtom =<< f <$> v2c' w x <*> v2c' w y
 
 
 
-appToCrucible :: M.App (M.Value arch ids) tp ->
-                 CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
+appToCrucible
+  :: forall arch ids s tp
+  . M.App (M.Value arch ids) tp
+  -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
 appToCrucible app = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
@@ -813,8 +817,28 @@ appToCrucible app = do
       let w = M.typeWidth x
       r <- MacawOverflows Ssbb w <$> v2c' w x <*> v2c' w y <*> v2c b
       evalMacawExt r
-    M.PopCount w x -> do
-      undefined w x
+    M.PopCount (w :: NatRepr n) x -> case testNatCases (knownNat @1) w of
+      NatCaseLT LeqProof -> do
+        x' <- v2c' w x
+        let bvBit
+              :: (1 <= i, i <= n)
+              => NatRepr i
+              -> CrucGen arch ids s (CR.Atom s (C.BVType n))
+            bvBit i | Refl <- minusPlusCancel i (knownNat @1) = do
+              b <- appAtom $
+                C.BVSelect (subNat i (knownNat @1)) (knownNat @1) w x'
+              appAtom $ C.BVZext w (knownNat @1) b
+        fromBits w =<<
+          foldl
+            (\a b -> appAtom =<< C.BVAdd w <$> a <*> b)
+            (bvLit w 0)
+            (natForEach (knownNat @1) w bvBit)
+      NatCaseEQ -> v2c x
+      NatCaseGT LeqProof
+        | Refl <- plusComm (knownNat @1) w
+        , Refl <- plusMinusCancel (knownNat @1) w ->
+          -- LeqProof 1 0, but the pattern match checking is not clever enough
+          case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of {}
     M.ReverseBytes w x -> do
       undefined w x
     M.Bsf w x -> do
