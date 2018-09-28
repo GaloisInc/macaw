@@ -26,8 +26,10 @@ import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.Bits
+import           Data.List
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -517,6 +519,14 @@ rewriteApp app = do
       pure (BVValue w 0)
     BVShr w _ (BVValue _ n) | n >= natValue w ->
       pure (BVValue w 0)
+
+    PopCount w (BVValue _ x) -> do
+      pure $ BVValue w $ fromIntegral $ popCount $ toUnsigned w x
+    Bsr w (BVValue _ x) -> do
+      let i = fromJust $ find
+                (\j -> toUnsigned w x `shiftR` fromIntegral j == 0)
+                [0 .. natValue w]
+      pure $ BVValue w $ natValue w - i
 
     Eq (BoolValue x) (BoolValue y) -> do
       pure $! boolLitValue (x == y)
