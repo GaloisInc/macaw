@@ -365,7 +365,8 @@ pattern YMM w = X86_YMMReg (F.YMMR w)
 x87StatusNames :: V.Vector String
 x87StatusNames = V.fromList $
   [ "ie", "de", "ze", "oe",       "ue",       "pe",       "ef", "es"
-  , "c0", "c1", "c2", "RESERVED", "RESERVED", "RESERVED", "c3", "RESERVED"
+  , "c0", "c1", "c2", "RESERVED_STATUS_11"
+  , "RESERVED_STATUS_12", "RESERVED_STATUS_13", "c3", "RESERVED_STATUS_15"
   ]
 
 ------------------------------------------------------------------------

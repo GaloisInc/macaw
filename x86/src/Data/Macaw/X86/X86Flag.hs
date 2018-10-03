@@ -32,8 +32,8 @@ newtype X86Flag = X86Flag { flagIndex :: Word8 }
 
 flagNames :: V.Vector String
 flagNames = V.fromList
-  [ "cf", "RESERVED_1", "pf",  "RESERVED_3", "af",    "RESERVED_5", "zf", "sf"
-  , "tf", "if",         "df",  "of",         "iopl1", "iopl2",      "nt", "RESERVED_15"
+  [ "cf", "RESERVED_FLAG_1", "pf",  "RESERVED_FLAG_3", "af",    "RESERVED_FLAG_5", "zf", "sf"
+  , "tf", "if",         "df",  "of",         "iopl1", "iopl2",      "nt", "RESERVED_FLAG_15"
   , "rf", "vm",         "ac",  "vif",        "vip",   "id"
   ]
 
@@ -41,7 +41,7 @@ instance Show X86Flag where
   show (X86Flag i) =
     case flagNames V.!? fromIntegral i of
       Just nm -> nm
-      Nothing -> "RESERVED_" ++ show i
+      Nothing -> "RESERVED_FLAG_" ++ show i
 
 pattern CF :: X86Flag
 pattern CF = X86Flag 0
