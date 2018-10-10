@@ -1133,8 +1133,17 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
       let tlbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent t)
       let flbl = parsedBlockLabel blockLabelMap thisAddr (M.stmtsIdent f)
       addTermStmt $! CR.Br crucCond tlbl flbl
-    M.ParsedArchTermStmt aterm regs _mret -> do
+    M.ParsedArchTermStmt aterm regs mnextAddr -> do
       crucGenArchTermStmt archFns aterm regs
+      case mnextAddr of
+        Just nextAddr -> addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
+        -- This return () looks innocuous, but is actually pretty bad news.
+        -- CrucGen is a continuation-like monad, originally seeded with a
+        -- continuation that errors out. addTermStmt ignores the
+        -- continuation... but return won't, so this essentially dooms things.
+        -- But what else can we do, if the architecture's discovery process
+        -- doesn't know where code will go next?
+        Nothing -> return ()
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.TextLit msg)
       addTermStmt $ CR.ErrorStmt msgVal
