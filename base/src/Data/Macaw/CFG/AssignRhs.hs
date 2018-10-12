@@ -4,6 +4,7 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.AssignRhs
   ( AssignRhs(..)
@@ -45,7 +46,9 @@ type RegAddrWord r = MemWord (RegAddrWidth r)
 --
 -- Registers include things like the general purpose registers, any flag
 -- registers that can be read and written without side effects,
-type family ArchReg (arch :: *) :: Type -> *
+type family ArchReg (arch :: *) = (reg :: Type -> *) | reg -> arch
+  -- Note the injectivity constraint. This makes GHC quit bothering us
+  -- about ambigous types for functions taking ArchRegs as arguments.
 
 -- | A type family for architecture specific functions.
 --
@@ -54,13 +57,13 @@ type family ArchReg (arch :: *) :: Type -> *
 --
 -- The function may depend on the set of registers defined so far, and the type
 -- of the result.
-type family ArchFn (arch :: *) :: (Type -> *) -> Type -> *
+type family ArchFn (arch :: *) = (fn :: (Type -> *) -> Type -> *) | fn -> arch
 
 -- | A type family for defining architecture-specific statements.
 --
 -- The second parameter is used to denote the underlying values in the
 -- statements so that we can use ArchStmts with multiple CFGs.
-type family ArchStmt (arch :: *) :: (Type -> *) -> *
+type family ArchStmt (arch :: *) = (stmt :: (Type -> *) -> *) | stmt -> arch
 
 -- | A type family for defining architecture-specific statements that
 -- may have instruction-specific effects on control-flow and register state.
@@ -73,6 +76,7 @@ type family ArchStmt (arch :: *) :: (Type -> *) -> *
 -- current function, it is assumed to be at most one location, and the block-translator
 -- must provide that value at translation time.
 type family ArchTermStmt (arch :: *) :: * -> *
+   -- NOTE: Not injective because PPC32 and PPC64 use the same type.
 
 -- | Number of bits in addreses for architecture.
 type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
