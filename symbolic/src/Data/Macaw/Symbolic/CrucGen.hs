@@ -841,10 +841,38 @@ appToCrucible app = do
           case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of {}
     M.ReverseBytes w x -> do
       undefined w x
-    M.Bsf w x -> do
-      undefined w x
-    M.Bsr w x -> do
-      undefined w x
+    M.Bsf w x -> countZeros w C.BVLshr x
+    M.Bsr w x -> countZeros w C.BVShl  x
+
+-- | Count how many zeros there are on one end or the other of a bitvector.
+-- (Pass 'C.BVLshr' as the first argument to count zeros on the left, 'C.BVShl'
+-- to count zeros on the right.)
+--
+-- Here's the plan: count how many times we have to shift the value by one bit
+-- before we reach zero, and call this n. Call the width w. Then the number of
+-- zeros on the side we're shifting away from (call it zc) is
+--
+--     zc = w - n
+--
+-- Okay, but we can't do a loop. No problem: we'll take all possible shift
+-- sizes (0 through w-1), turn them into 1 if the shift result is nonzero (0
+-- otherwise), and add them up. This gives n.
+countZeros :: (1 <= w) =>
+  NatRepr w ->
+  (NatRepr w -> CR.Atom s (C.BVType w) -> CR.Atom s (C.BVType w) -> C.App (MacawExt arch) (CR.Atom s) (C.BVType w)) ->
+  M.Value arch ids (M.BVType w) ->
+  CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
+countZeros w f vx = do
+  cx <- v2c vx >>= toBits w
+  isZeros <- forM [0..natValue w-1] $ \i -> do
+    shiftAmt <- bvLit w i
+    shiftedx <- appAtom (f w cx shiftAmt)
+    xIsNonzero <- appAtom (C.BVNonzero w shiftedx)
+    appAtom (C.BoolToBV w xIsNonzero)
+  czero <- bvLit w 0
+  cw <- bvLit w (natValue w)
+  cn <- foldM ((appAtom .) . C.BVAdd w) czero isZeros
+  appAtom (C.BVSub w cw cn) >>= fromBits w
 
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp))
