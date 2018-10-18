@@ -23,6 +23,7 @@ module Data.Macaw.Discovery.State
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
+  , AddrSymMap
   , exploredFunctions
   , ppDiscoveryStateBlocks
   , emptyDiscoveryState
@@ -61,6 +62,12 @@ import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
+
+------------------------------------------------------------------------
+-- AddrSymMap
+
+-- | Maps code addresses to the associated symbol name if any.
+type AddrSymMap w = Map.Map (MemSegmentOff w) BSC.ByteString
 
 ------------------------------------------------------------------------
 -- BlockExploreReason
@@ -248,7 +255,7 @@ instance ArchConstraints arch
       => Pretty (ParsedBlock arch ids) where
   pretty b =
     let sl = blockStatementList b
-        ppOff o = text (show (incAddr (toInteger o) (relativeSegmentAddr (pblockAddr b))))
+        ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
      in text (show (pblockAddr b)) PP.<> text ":" <$$>
         indent 2 (vcat (ppStmt ppOff <$> stmtsNonterm sl) <$$> ppTermStmt ppOff (stmtsTerm sl))
 

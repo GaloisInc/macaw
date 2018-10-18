@@ -180,7 +180,7 @@ partitionAbsoluteAddrs :: MemWidth w
 partitionAbsoluteAddrs addrSet b = foldl' f (s0, Set.empty) addrSet
    where s0 = if b then Set.singleton 0 else Set.empty
          f (intSet,badSet) addr =
-           case msegAddr addr of
+           case segoffAsAbsoluteAddr addr of
              Just addrVal -> seq intSet' $ (intSet', badSet)
                where intSet' = Set.insert (toInteger addrVal) intSet
              Nothing -> seq badSet' $ (intSet, badSet')
@@ -201,7 +201,7 @@ asFinSet nm (CodePointers addrSet b) = go (Set.toList addrSet) $! s0
         go :: [MemSegmentOff w] -> Set Integer -> SomeFinSet (BVType w)
         go [] s = debug DAbsInt ("dropping Codeptr " ++ nm) $ IsFin s
         go (seg_off: r) s =
-          case msegAddr seg_off of
+          case segoffAsAbsoluteAddr seg_off of
             Just addr -> go r $! Set.insert (toInteger addr) s
             Nothing -> NotFin
 asFinSet _ _ = NotFin
@@ -278,7 +278,7 @@ concretize (FinSet s) = Just s
 concretize (CodePointers s b) = Just $ Set.fromList $
   [ toInteger addr
   | mseg <- Set.toList s
-  , addr <- maybeToList (msegAddr mseg)
+  , addr <- maybeToList (segoffAsAbsoluteAddr mseg)
   ]
   ++ (if b then [0] else [])
 concretize (SubValue _ _) = Nothing -- we know nothing about _all_ values
@@ -675,9 +675,9 @@ bvsbb mem w (CodePointers s b) (FinSet t) (BoolConst False)
         vals = do
           x <- Set.toList s
           y <- Set.toList t
-          let z = relativeSegmentAddr x & incAddr (negate y)
+          let z = segoffAddr x & incAddr (negate y)
           case asSegmentOff mem z of
-            Just z_mseg | segmentFlags (msegSegment z_mseg) `Perm.hasPerm` Perm.execute ->
+            Just z_mseg | segmentFlags (segoffSegment z_mseg) `Perm.hasPerm` Perm.execute ->
               pure (Just z_mseg)
             _ ->
               pure Nothing
@@ -695,7 +695,7 @@ bvsbb _ _ xv@(CodePointers xs xb) (CodePointers ys yb) (BoolConst False)
         vals = do
           x <- Set.toList xs
           y <- Set.toList ys
-          pure (relativeSegmentAddr x `diffAddr` relativeSegmentAddr y)
+          pure (segoffAddr x `diffAddr` segoffAddr y)
 bvsbb _ w (FinSet s) (asFinSet "bvsub3" -> IsFin t) (BoolConst b) =
   setL (stridedInterval . SI.fromFoldable w) FinSet $ do
   x <- Set.toList s
@@ -732,9 +732,9 @@ bvsub mem w (CodePointers s b) (FinSet t)
         vals = do
           x <- Set.toList s
           y <- Set.toList t
-          let z = relativeSegmentAddr x & incAddr (negate y)
+          let z = segoffAddr x & incAddr (negate y)
           case asSegmentOff mem z of
-            Just z_mseg | segmentFlags (msegSegment z_mseg) `Perm.hasPerm` Perm.execute ->
+            Just z_mseg | segmentFlags (segoffSegment z_mseg) `Perm.hasPerm` Perm.execute ->
               pure (Just z_mseg)
             _ ->
               pure Nothing
@@ -752,7 +752,7 @@ bvsub _ _ xv@(CodePointers xs xb) (CodePointers ys yb)
         vals = do
           x <- Set.toList xs
           y <- Set.toList ys
-          pure (relativeSegmentAddr x `diffAddr` relativeSegmentAddr y)
+          pure (segoffAddr x `diffAddr` segoffAddr y)
 bvsub _ w (FinSet s) (asFinSet "bvsub3" -> IsFin t) =
   setL (stridedInterval . SI.fromFoldable w) FinSet $ do
   x <- Set.toList s
@@ -852,7 +852,7 @@ abstractSingleton mem w i
   | Just Refl <- testEquality w (memWidth mem)
   , 0 <= i && i <= maxUnsigned w
   , Just sa <- resolveAbsoluteAddr mem (fromInteger i)
-  , segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute =
+  , segmentFlags (segoffSegment sa) `Perm.hasPerm` Perm.execute =
     CodePointers (Set.singleton sa) False
   | 0 <= i && i <= maxUnsigned w = FinSet (Set.singleton i)
   | otherwise = error $ "abstractSingleton given bad value: " ++ show i ++ " " ++ show w
@@ -1209,7 +1209,7 @@ transferValue c v = do
     -- TODO: Ensure a relocatable value is in code.
     RelocatableValue _w i
       | Just addr <- asSegmentOff (absMem c) i
-      , segmentFlags (msegSegment addr) `Perm.hasPerm` Perm.execute ->
+      , segmentFlags (segoffSegment addr) `Perm.hasPerm` Perm.execute ->
         CodePointers (Set.singleton addr) False
       | Just addr <- asAbsoluteAddr i ->
         FinSet $ Set.singleton $ toInteger addr

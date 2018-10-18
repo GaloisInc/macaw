@@ -97,7 +97,7 @@ import           Data.Macaw.Types
 
 isExecutableSegOff :: MemSegmentOff w -> Bool
 isExecutableSegOff sa =
-  segmentFlags (msegSegment sa) `Perm.hasPerm` Perm.execute
+  segmentFlags (segoffSegment sa) `Perm.hasPerm` Perm.execute
 
 -- | Get code pointers out of a abstract value.
 identifyConcreteAddresses :: MemWidth w
@@ -251,14 +251,14 @@ dropUnusedCodeInParsedBlock ainfo b =
 sliceMemContents'
   :: MemWidth w
   => Int -- ^ Number of bytes in each slice.
-  -> [[SegmentRange w]] -- ^ Previous slices
+  -> [[MemChunk w]] -- ^ Previous slices
   -> Integer -- ^ Number of slices to return
-  -> [SegmentRange w] -- ^ Ranges to process next
-  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
+  -> [MemChunk w] -- ^ Ranges to process next
+  -> Either (SplitError w) ([[MemChunk w]],[MemChunk w])
 sliceMemContents' stride prev c next
   | c <= 0 = pure (reverse prev, next)
   | otherwise =
-    case splitSegmentRangeList next stride of
+    case splitMemChunks next stride of
       Left e -> Left e
       Right (this, rest) -> sliceMemContents' stride (this:prev) (c-1) rest
 
@@ -268,8 +268,8 @@ sliceMemContents
   :: MemWidth w
   => Int -- ^ Number of bytes in each slice.
   -> Integer -- ^ Number of slices to return
-  -> [SegmentRange w] -- ^ Ranges to process next
-  -> Either (DropError w) ([[SegmentRange w]],[SegmentRange w])
+  -> [MemChunk w] -- ^ Ranges to process next
+  -> Either (SplitError w) ([[MemChunk w]],[MemChunk w])
 sliceMemContents stride c next = sliceMemContents' stride [] c next
 
 ------------------------------------------------------------------------
@@ -291,7 +291,7 @@ markAddrAsFunction rsn addr s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
-    case contentsAfterSegmentOff addr of
+    case segoffContentsAfter addr of
       Right (ByteRegion _:_) ->
         s & unexploredFunctions %~ Map.insert addr rsn
       _ -> s
@@ -458,7 +458,7 @@ data BoundedMemArray arch tp = BoundedMemArray
     -- if stride is less than the number of bytes read.
   , arEltType   :: !(MemRepr tp)
     -- ^ Resolved type of elements in this array.
-  , arSlices       :: !(V.Vector [SegmentRange (ArchAddrWidth arch)])
+  , arSlices       :: !(V.Vector [MemChunk (ArchAddrWidth arch)])
     -- ^ The slices of memory in the array.
     --
     -- The `i`th element in the vector corresponds to the first `size`
@@ -473,7 +473,7 @@ deriving instance RegisterInfo (ArchReg arch) => Show (BoundedMemArray arch tp)
 
 -- | Return true if the address stored is readable and not writable.
 isReadOnlyBoundedMemArray :: BoundedMemArray arch  tp -> Bool
-isReadOnlyBoundedMemArray = Perm.isReadonly . segmentFlags . msegSegment . arBase
+isReadOnlyBoundedMemArray = Perm.isReadonly . segmentFlags . segoffSegment . arBase
 
 absValueAsSegmentOff
   :: forall w
@@ -543,13 +543,13 @@ matchBoundedMemArray mem aps val
       <- Jmp.unsignedUpperBound (aps^.indexBounds) ixVal
   , cnt <- bnd+1
     -- Check array actually fits in memory.
-  , cnt * toInteger stride <= msegByteCountAfter base
+  , cnt * toInteger stride <= segoffBytesLeft base
     -- Get memory contents after base
-  , Right contents <- contentsAfterSegmentOff base
+  , Right contents <- segoffContentsAfter base
     -- Break up contents into a list of slices each with size stide
   , Right (strideSlices,_) <- sliceMemContents (fromInteger stride) cnt contents
     -- Take the given number of bytes out of each slices
-  , Right slices <- traverse (\s -> fst <$> splitSegmentRangeList s (fromInteger (memReprBytes tp)))
+  , Right slices <- traverse (\s -> fst <$> splitMemChunks s (fromInteger (memReprBytes tp)))
                              (V.fromList strideSlices)
   = let r = BoundedMemArray
           { arBase     = base
@@ -637,7 +637,7 @@ deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
 resolveAsAbsoluteAddr :: forall w
                     .  Memory w
                     -> Endianness
-                    -> [SegmentRange w]
+                    -> [MemChunk w]
                     -> Maybe (MemAddr w)
 resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
   case l of
@@ -648,11 +648,11 @@ resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
         case relocationSym r of
           SymbolRelocation{} -> Nothing
           SectionIdentifier idx -> do
-            addr <- Map.lookup idx (memSectionAddrMap mem)
-            pure $ relativeSegmentAddr addr & incAddr (toInteger (relocationOffset r))
+            addr <- Map.lookup idx (memSectionIndexMap mem)
+            pure $! segoffAddr addr & incAddr (toInteger (relocationOffset r))
           SegmentBaseAddr idx -> do
-            addr <- Map.lookup idx (memSegmentAddrMap mem)
-            pure $ relativeSegmentAddr addr & incAddr (toInteger (relocationOffset r))
+            seg <- Map.lookup idx (memSegmentIndexMap mem)
+            pure $! segmentOffAddr seg (relocationOffset r)
     _ -> Nothing
 
 -- This function resolves jump table entries.
@@ -677,10 +677,10 @@ resolveRelativeJumps mem base arrayRead ext = do
   forM slices $ \l -> do
     case l of
       [ByteRegion bs]
-        | tgtAddr <- relativeSegmentAddr base
+        | tgtAddr <- segoffAddr base
                      & incAddr (extendDyn ext endianness bs)
         , Just tgt <- asSegmentOff mem (toIPAligned @arch tgtAddr)
-        , Perm.isExecutable (segmentFlags (msegSegment tgt))
+        , Perm.isExecutable (segmentFlags (segoffSegment tgt))
           -> Just tgt
       _ -> Nothing
 
@@ -700,11 +700,11 @@ matchJumpTableRef mem aps ip
   | Just (arrayRead,idx) <- matchBoundedMemArray mem aps ip
   , isReadOnlyBoundedMemArray arrayRead
   , BVMemRepr _arByteCount endianness <- arEltType arrayRead = do
-      let go :: [SegmentRange (ArchAddrWidth arch)] -> Maybe (MemSegmentOff (ArchAddrWidth arch))
+      let go :: [MemChunk (ArchAddrWidth arch)] -> Maybe (MemSegmentOff (ArchAddrWidth arch))
           go contents = do
             addr <- resolveAsAbsoluteAddr mem endianness contents
             tgt <- asSegmentOff mem (toIPAligned @arch addr)
-            unless (Perm.isExecutable (segmentFlags (msegSegment tgt))) $ Nothing
+            unless (Perm.isExecutable (segmentFlags (segoffSegment tgt))) $ Nothing
             pure tgt
       tbl <- traverse go (arSlices arrayRead)
       pure (AbsoluteJumpTable arrayRead, tbl, idx)
@@ -913,7 +913,7 @@ parseFetchAndExecute ctx idx stmts regs s = do
       -- Jump to a block within this function.
       | Just tgt_mseg <- valueAsSegmentOff mem (s^.boundValue ip_reg)
         -- Check
-      , segmentFlags (msegSegment tgt_mseg) `Perm.hasPerm` Perm.execute
+      , segmentFlags (segoffSegment tgt_mseg) `Perm.hasPerm` Perm.execute
 
         -- Check the target address is not the entry point of this function.
         -- N.B. These should instead decompile into calls or tail calls.
@@ -1142,20 +1142,18 @@ transfer addr = do
   nonceGen <- gets funNonceGen
   prev_block_map <- use $ curFunBlocks
   -- Get maximum number of bytes to disassemble
-  let seg = msegSegment addr
-      off = msegOffset addr
   let maxSize :: Int
       maxSize =
         case Map.lookupGT addr prev_block_map of
           Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
-          _ -> fromIntegral $ segmentSize seg - off
+          _ -> fromInteger (segoffBytesLeft addr)
   let ab = foundAbstractState finfo
   (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo nonceGen addr maxSize ab
 
 #ifdef USE_REWRITER
   bs1 <- do
     let archStmt = rewriteArchStmt ainfo
-    let secAddrMap = memSectionAddrMap mem
+    let secAddrMap = memSectionIndexMap mem
     liftST $ do
       ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt secAddrMap
       traverse (rewriteBlock ainfo ctx) bs0
@@ -1291,8 +1289,8 @@ analyzeDiscoveredFunctions info =
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
 isDataCodePointer a v
-  =  segmentFlags (msegSegment a) `Perm.hasPerm` Perm.write
-  && segmentFlags (msegSegment v) `Perm.hasPerm` Perm.execute
+  =  segmentFlags (segoffSegment a) `Perm.hasPerm` Perm.write
+  && segmentFlags (segoffSegment v) `Perm.hasPerm` Perm.execute
 
 addMemCodePointer :: (ArchSegmentOff arch, ArchSegmentOff arch)
                   -> DiscoveryState arch

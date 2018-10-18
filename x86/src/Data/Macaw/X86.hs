@@ -128,7 +128,7 @@ rootLoc ip = ExploreLoc { loc_ip      = ip
 initX86State :: ExploreLoc -- ^ Location to explore from.
              -> RegState X86Reg (Value X86_64 ids)
 initX86State loc = mkRegState Initial
-                 & curIP     .~ RelocatableValue Addr64 (relativeSegmentAddr (loc_ip loc))
+                 & curIP     .~ RelocatableValue Addr64 (segoffAddr (loc_ip loc))
                  & boundValue X87_TopReg .~ mkLit knownNat (toInteger (loc_x87_top loc))
                  & boundValue DF         .~ BoolValue (loc_df_flag loc)
 
@@ -146,7 +146,7 @@ initError loc err = do
                 , blockStmts = []
                 , blockTerm  = TranslateError s (Text.pack (show err))
                 }
-  return (b, msegOffset addr, Just err)
+  return (b, segoffOffset addr, Just err)
 
 -- | Returns from the block translator with the preblock built so far
 -- and the current address
@@ -159,7 +159,7 @@ returnWithError pblock curIPAddr err = do
                 , blockStmts = toList (pblock^.pBlockStmts)
                 , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
                 }
-  return (b, msegOffset curIPAddr, Just err)
+  return (b, segoffOffset curIPAddr, Just err)
 
 -- | Translate block, returning blocks read, ending
 -- PC, and an optional error.  and ending PC.
@@ -172,21 +172,21 @@ disassembleBlockImpl :: forall st_s ids
                         -- ^ Address of next instruction to translate
                      -> MemWord 64
                          -- ^ Maximum offset for this addr.
-                     -> [SegmentRange 64]
-                        -- ^ List of contents to read next.
+                     -> [MemChunk 64]
+                        -- ^ Values to read next.
                      -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlockImpl nonceGen pblock curIPAddr max_offset contents = do
   case readInstruction curIPAddr contents of
     Left msg -> do
       returnWithError pblock curIPAddr msg
     Right (i, next_ip_off, nextContents) -> do
-      let seg = msegSegment curIPAddr
-      let off = msegOffset curIPAddr
+      let seg = segoffSegment curIPAddr
+      let off = segoffOffset curIPAddr
       -- Get size of instruction
       let instSize :: Int
           instSize = fromIntegral (next_ip_off - off)
       let next_ip :: MemAddr 64
-          next_ip = relativeAddr seg next_ip_off
+          next_ip = segmentOffAddr seg next_ip_off
       let next_ip_val :: BVValue X86_64 ids 64
           next_ip_val = RelocatableValue Addr64 next_ip
       case execInstruction (ValueExpr next_ip_val) i of
@@ -204,7 +204,7 @@ disassembleBlockImpl nonceGen pblock curIPAddr max_offset contents = do
             runExceptT $ runX86Generator gs $ do
               let line = show curIPAddr ++ ": " ++ show (F.ppInstruction i)
               addStmt (Comment (Text.pack line))
-              asAtomicStateUpdate (MM.relativeSegmentAddr curIPAddr) exec
+              asAtomicStateUpdate (MM.segoffAddr curIPAddr) exec
           case gsr of
             Left msg -> do
               returnWithError pblock curIPAddr (ExecInstructionError curIPAddr i msg)
@@ -232,16 +232,16 @@ disassembleBlock :: forall s
                  -> ST s (Block X86_64 s, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlock nonce_gen loc max_size = do
   let addr = loc_ip loc
-  let sz = msegOffset addr + max_size
+  let sz = segoffOffset addr + max_size
   (b, next_ip_off, maybeError) <-
-    case contentsAfterSegmentOff addr of
+    case segoffContentsAfter addr of
       Left msg -> do
         initError loc (FlexdisMemoryError msg)
       Right contents -> do
         let pblock = emptyPreBlock (initX86State loc) 0
         disassembleBlockImpl nonce_gen pblock addr sz contents
-  assert (next_ip_off > msegOffset addr) $ do
-  let block_sz = next_ip_off - msegOffset addr
+  assert (next_ip_off > segoffOffset addr) $ do
+  let block_sz = next_ip_off - segoffOffset addr
   pure (b, block_sz, maybeError)
 
 -- | The abstract state for a function begining at a given address.
@@ -249,7 +249,7 @@ initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
 initialX86AbsState addr
   = top
   & setAbsIP addr
-  & absRegState . boundValue sp_reg .~ concreteStackOffset (relativeSegmentAddr addr) 0
+  & absRegState . boundValue sp_reg .~ concreteStackOffset (segoffAddr addr) 0
   -- x87 top register points to top of stack.
   & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
   -- Direction flag is initially zero.
@@ -345,10 +345,10 @@ tryDisassembleBlockFromAbsState nonceGen addr maxSize ab = do
                        , loc_x87_top = fromInteger t
                        , loc_df_flag = d /= 0
                        }
-  let off = msegOffset  addr
+  let off = segoffOffset  addr
   let pblock = emptyPreBlock (initX86State loc) 0
   (b, nextIPOff, maybeError) <- lift $
-    case contentsAfterSegmentOff addr of
+    case segoffContentsAfter addr of
       Left msg -> do
         initError loc (FlexdisMemoryError msg)
       Right contents -> do
@@ -400,7 +400,7 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
               , Just val_a <- valueAsMemAddr val
                 -- Check if segment of address is marked as executable.
               , Just ret_addr <- asSegmentOff mem val_a
-              , segmentFlags (msegSegment ret_addr) `Perm.hasPerm` Perm.execute ->
+              , segmentFlags (segoffSegment ret_addr) `Perm.hasPerm` Perm.execute ->
                 Just (prev Seq.>< after, ret_addr)
                 -- Stop if we hit any architecture specific instructions prior to
                 -- identifying return address since they may have side effects.

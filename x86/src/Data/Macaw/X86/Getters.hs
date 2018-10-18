@@ -368,7 +368,7 @@ resolveJumpOffset :: GenState st_s ids
                   -> BVExpr ids 64
 resolveJumpOffset s (F.FixedOffset off) =
   ValueExpr $ RelocatableValue Addr64 $
-     relativeSegmentAddr (genInitPCAddr s)
+     segoffAddr (genInitPCAddr s)
      & incAddr (toInteger (genInstructionSize s) + toInteger off)
 resolveJumpOffset s (F.RelativeOffset insOff symId off)
   = ValueExpr (SymbolValue Addr64 symId)

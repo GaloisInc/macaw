@@ -34,7 +34,7 @@ import           Flexdis86.ByteReader
 -- MemStream
 
 -- | A stream of memory
-data MemStream w = MS { msInitial :: ![SegmentRange w]
+data MemStream w = MS { msInitial :: ![MemChunk w]
                         -- ^ Initial memory contents.  Used for error messages.
                       , msSegment :: !(MemSegment w)
                         -- ^ The current segment
@@ -42,15 +42,15 @@ data MemStream w = MS { msInitial :: ![SegmentRange w]
                         -- ^ The initial offset for the stream.
                       , msOffset :: !(MemWord w)
                         -- ^ The current address
-                      , msNext :: ![SegmentRange w]
+                      , msNext :: ![MemChunk w]
                         -- ^ The next bytes to read.
                       }
 
 msStartAddr :: MemWidth w => MemStream w -> MemAddr w
-msStartAddr ms = relativeAddr (msSegment ms) (msStart ms)
+msStartAddr ms = segmentOffAddr (msSegment ms) (msStart ms)
 
 msAddr :: MemWidth w => MemStream w -> MemAddr w
-msAddr ms = relativeAddr (msSegment ms) (msOffset ms)
+msAddr ms = segmentOffAddr (msSegment ms) (msOffset ms)
 
 ------------------------------------------------------------------------
 -- MemoryByteReader
@@ -59,7 +59,7 @@ msAddr ms = relativeAddr (msSegment ms) (msOffset ms)
 data X86TranslateError w
    = FlexdisMemoryError !(MemoryError w)
      -- ^ A memory error occured in decoding with Flexdis
-   | InvalidInstruction !(MemAddr w) ![SegmentRange w]
+   | InvalidInstruction !(MemAddr w) ![MemChunk w]
      -- ^ The memory reader could not parse the value starting at the given address
      -- the last byte read was at the offset.
    | UserMemoryError !(MemAddr w) !String
@@ -99,14 +99,14 @@ instance MemWidth w => Monad (MemoryByteReader w) where
 -- This returns either the translate error or the value read, the offset read to, and
 -- the next data.
 runMemoryByteReader :: MemSegmentOff w -- ^ Starting segment
-                    -> [SegmentRange w] -- ^ Data to read next.
+                    -> [MemChunk w] -- ^ Data to read next.
                     -> MemoryByteReader w a -- ^ Byte reader to read values from.
-                    -> Either (X86TranslateError w) (a, MemWord w, [SegmentRange w])
+                    -> Either (X86TranslateError w) (a, MemWord w, [MemChunk w])
 runMemoryByteReader addr contents (MBR m) = do
   let ms0 = MS { msInitial = contents
-               , msSegment = msegSegment addr
-               , msStart   = msegOffset addr
-               , msOffset  = msegOffset addr
+               , msSegment = segoffSegment addr
+               , msStart   = segoffOffset addr
+               , msOffset  = segoffOffset addr
                , msNext    = contents
                }
   case runState (runExceptT m) ms0 of
@@ -155,11 +155,11 @@ getJumpBytes s sz =
 updateMSByteString :: MemWidth w
                    => MemStream w
                    -> BS.ByteString
-                   -> [SegmentRange w]
+                   -> [MemChunk w]
                    -> MemWord w
                    -> MemoryByteReader w ()
 updateMSByteString ms bs rest c = do
-  let bs' = BS.drop (fromIntegral (memWordInteger c)) bs
+  let bs' = BS.drop (fromIntegral (memWordToUnsigned c)) bs
   let ms' = ms { msOffset = msOffset ms + c
                , msNext   =
                  if BS.null bs' then
@@ -257,7 +257,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
   invalidInstruction = do
     ms <- MBR $ get
     throwError $ InvalidInstruction (msStartAddr ms)
-      (takeSegmentPrefix (msInitial ms) (msOffset ms - msStart ms))
+      (forcedTakeMemChunks (msInitial ms) (msOffset ms - msStart ms))
 
 ------------------------------------------------------------------------
 -- readInstruction
@@ -265,11 +265,11 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
 -- | Read instruction at a given memory address.
 readInstruction :: MemSegmentOff 64
                    -- ^ Address to read from.
-                -> [SegmentRange 64] -- ^ Data to read next.
+                -> [MemChunk 64] -- ^ Data to read next.
                 -> Either (X86TranslateError 64)
-                          (Flexdis.InstructionInstance
+                          ( Flexdis.InstructionInstance
                           , MemWord 64
-                          , [SegmentRange 64]
+                          , [MemChunk 64]
                           )
 readInstruction addr contents = do
   runMemoryByteReader addr contents Flexdis.disassembleInstruction
