@@ -18,6 +18,7 @@ module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
+       , State.AddrSymMap
        , State.funInfo
        , State.exploredFunctions
        , State.ppDiscoveryStateBlocks
