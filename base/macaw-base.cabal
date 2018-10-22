@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3.1
+version: 0.3.2
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -72,6 +72,7 @@ library
     Data.Macaw.Memory.ElfLoader
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
+    Data.Macaw.Memory.Symbols
     Data.Macaw.SCFG
     Data.Macaw.Types
     Data.Macaw.Utils.Pretty

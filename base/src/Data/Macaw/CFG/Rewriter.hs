@@ -608,7 +608,7 @@ rewriteValue v =
         case sym of
           SectionIdentifier secIdx
             | Just val <- Map.lookup secIdx secIdxAddrMap -> do
-                pure $! RelocatableValue repr (relativeSegmentAddr val)
+                pure $! RelocatableValue repr (segoffAddr val)
           _ -> do
             pure $! SymbolValue repr sym
     AssignedValue (Assignment aid _) -> Rewriter $ do

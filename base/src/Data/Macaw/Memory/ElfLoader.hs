@@ -25,15 +25,19 @@ module Data.Macaw.Memory.ElfLoader
   , resolveElfFuncSymbolsAny
   , resolveElfContents
   , elfAddrWidth
+    -- * Symbols
+  , MemSymbol(..)
+    -- * Re-exports
   , module Data.Macaw.Memory.LoadCommon
   , module Data.Macaw.Memory
+  , module Data.Macaw.Memory.Symbols
   ) where
 
 import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.State.Strict
 import           Data.Bits
-import qualified Data.ByteString as B
+import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
 import           Data.Either
@@ -69,7 +73,6 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Monoid
-import           Data.Parameterized.Some
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
@@ -80,6 +83,7 @@ import           Data.Int
 import           Data.Macaw.Memory
 import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
+import           Data.Macaw.Memory.Symbols
 
 -- | Return a subrange of a bytestring.
 sliceL :: Integral w => Elf.Range w -> L.ByteString -> L.ByteString
@@ -122,7 +126,6 @@ flagsForSectionFlags f =
   where flagIf :: ElfSectionFlags w -> Perm.Flags -> Perm.Flags
         flagIf ef pf = if f `Elf.hasPermissions` ef then pf else Perm.none
 
-
 ------------------------------------------------------------------------
 -- RelocationError
 
@@ -144,7 +147,7 @@ instance Show RelocationError where
   show (RelocationBadSymbolIndex idx) =
     "A relocation entry referred to invalid symbol index " ++ show idx ++ "."
   show (RelocationUnsupportedType tp) =
-    "Do not yet support relocation type " ++ tp ++ "."
+    "Unsupported relocation type " ++ tp ++ "."
   show RelocationFileUnsupported =
     "Do not support relocations referring to file entry."
   show (RelocationInvalidAddend tp v) =
@@ -153,7 +156,7 @@ instance Show RelocationError where
 ------------------------------------------------------------------------
 -- MemLoader
 
-type SectionName = B.ByteString
+type SectionName = BS.ByteString
 
 data MemLoadWarning
   = SectionNotAlloc !SectionName
@@ -164,7 +167,7 @@ data MemLoadWarning
   | DynamicRelaAndRelPresent
     -- ^ Issued if the dynamic section contains table for DT_REL and
     -- DT_RELA.
-  | SectionRelaAndRelPresent !B.ByteString
+  | SectionRelaAndRelPresent !BS.ByteString
     -- ^ @SectionRelaAndRelPresent nm@ is issued if we encounter
     -- both section ".rela$nm" and ".rel$nm".
   | UnsupportedSection !SectionName
@@ -298,10 +301,7 @@ type ElfFileSectionMap v = IntervalMap v (ElfSection v)
 -- This drops the first symbol in Elf since that refers to no symbol
 newtype SymbolTable = SymbolTable (V.Vector SymbolInfo)
 
--- | Monad to use for reporting relocation failures.
-type RelocResolver = Either RelocationError
-
-relocError :: RelocationError -> RelocResolver a
+relocError :: RelocationError -> Either RelocationError a
 relocError = Left
 
 -- | Attempts to resolve a relocation entry into a specific target.
@@ -310,7 +310,7 @@ resolveSymbol  :: SymbolTable
                   -- associated symbol information.
                -> Word32
                   -- ^ Offset of symbol
-               -> RelocResolver SymbolInfo
+               -> Either RelocationError SymbolInfo
 resolveSymbol (SymbolTable symtab) symIdx = do
   when (symIdx == 0) $
     relocError RelocationZeroSymbol
@@ -319,16 +319,26 @@ resolveSymbol (SymbolTable symtab) symIdx = do
       relocError $ RelocationBadSymbolIndex $ fromIntegral symIdx
     Just sym -> pure sym
 
+data RelFlag = IsRel | IsRela
+  deriving (Eq, Ord, Show)
+
 -- | A function that resolves the architecture-specific relocation-type
 -- into a symbol reference.  The input
 type RelocationResolver tp
   =  Maybe SegmentIndex
-     -- ^ Index of segment index if this is a dynamic relocation.
+     -- ^ Index of segment in which this relocation will be applied if this is
+     -- a dynamic relocation, and `Nothing` otherwise.
   -> SymbolTable
   -> Elf.RelEntry tp
+     -- ^ Relocation information
   -> MemWord (Elf.RelocationWidth tp)
      -- ^ Addend to add to symbol.
-  -> RelocResolver (Relocation (Elf.RelocationWidth tp))
+  -> RelFlag
+     -- ^ Flag to indicate if this is a rela and rel relocation
+     --
+     -- Added because some relocations (i.e. PLT ones) will ignore
+     -- Rel relocation addends.
+  -> Either RelocationError (Relocation (Elf.RelocationWidth tp))
 
 data SomeRelocationResolver w
   = forall tp
@@ -342,17 +352,17 @@ resolveRelocationSym :: SymbolTable
                       -- associated symbol information.
                       -> Word32
                       -- ^ Index in the symbol table this refers to.
-                      -> RelocResolver SymbolIdentifier
+                      -> Either RelocationError SymbolIdentifier
 resolveRelocationSym symtab symIdx = do
   sym <- resolveSymbol symtab symIdx
   case symbolDef sym of
-    DefinedSymbol{} -> 
+    DefinedSymbol{} ->
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
-    SymbolSection idx -> 
+    SymbolSection idx ->
       pure $ SectionIdentifier idx
-    SymbolFile _ -> 
+    SymbolFile _ ->
       relocError RelocationFileUnsupported
-    UndefinedSymbol{} -> 
+    UndefinedSymbol{} ->
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
 
 -- | Attempt to resolve an X86_64 specific symbol.
@@ -361,8 +371,9 @@ relaTargetX86_64 :: Maybe SegmentIndex
                  -> Elf.RelEntry Elf.X86_64_RelocationType
                  -> MemWord 64
                  -- ^ Addend to add to symbol.
-                 -> RelocResolver (Relocation 64)
-relaTargetX86_64 _ symtab rel off =
+                 -> RelFlag
+                 -> Either RelocationError (Relocation 64)
+relaTargetX86_64 _ symtab rel off _isRel =
   case Elf.relType rel of
     Elf.R_X86_64_JUMP_SLOT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
@@ -438,14 +449,16 @@ relaTargetARM :: Endianness
               -> Elf.RelEntry Elf.ARM_RelocationType -- ^ Relocaiton entry
               -> MemWord 32
                  -- ^ Addend of symbol
-              -> RelocResolver (Relocation 32)
-relaTargetARM end msegIndex symtab rel addend =
+              -> RelFlag
+              -> Either RelocationError (Relocation 32)
+relaTargetARM end msegIndex symtab rel addend relFlag =
   case Elf.relType rel of
     Elf.R_ARM_GLOB_DAT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
-      -- Check that addend is 0 so that we do not change thumb bit of symbol
+      -- Check that least-significant bit of addend is 0 so that we do
+      -- not change thumb bit of symbol.
       when (addend `testBit` 0) $ do
-        relocError $RelocationInvalidAddend (show (Elf.relType rel)) (toInteger addend)
+        relocError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger addend)
       pure $! Relocation { relocationSym        = sym
                          , relocationOffset     = addend
                          , relocationIsRel      = False
@@ -488,6 +501,23 @@ relaTargetARM end msegIndex symtab rel addend =
                          , relocationIsSigned   = False
                          , relocationEndianness = end
                          }
+    Elf.R_ARM_JUMP_SLOT -> do
+      -- This is a PLT relocation
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      let actualAddend =
+            case relFlag of
+              IsRel -> 0
+              IsRela -> addend
+      -- Check that addend is 0 so that we do not change thumb bit of symbol.
+      when (actualAddend /= 0) $ do
+        relocError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger actualAddend)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = actualAddend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         }
     tp -> do
       relocError $ RelocationUnsupportedType (show tp)
 
@@ -497,7 +527,7 @@ toEndianness Elf.ELFDATA2MSB = BigEndian
 
 -- | Creates a relocation map from the contents of a dynamic section.
 getRelocationResolver
-  :: forall w 
+  :: forall w
   .  Elf.ElfHeader w
   -> MemLoader w (SomeRelocationResolver w)
 getRelocationResolver hdr =
@@ -526,7 +556,7 @@ resolveRela :: ( MemWidth w
             -> Elf.RelaEntry tp
             -> ResolveFn (MemLoader w) w
 resolveRela symtab resolver rela msegIdx _ =
-  case resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) of
+  case resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) IsRela of
     Left e -> do
       addWarning (IgnoreRelocation e)
       pure Nothing
@@ -556,7 +586,7 @@ resolveRel end symtab resolver rel msegIdx bytes = do
               | otherwise =
                   uaddend
   -- Update the resolver.
-  case resolver msegIdx symtab rel (fromInteger saddend) of
+  case resolver msegIdx symtab rel (fromInteger saddend) IsRel of
     Left e -> do
       addWarning (IgnoreRelocation e)
       pure Nothing
@@ -694,9 +724,9 @@ resolveDefinedSymbolDef sym = do
   case Elf.steType sym of
     Elf.STT_SECTION
       | idx < Elf.SHN_LOPROC -> do
-          when (nm /= "") $ 
+          when (nm /= "") $
             addWarning $ ExpectedSectionSymbolNameEmpty nm
-          when (bnd /= Elf.STB_LOCAL) $ 
+          when (bnd /= Elf.STB_LOCAL) $
             addWarning ExpectedSectionSymbolLocal
           pure $ SymbolSection (Elf.fromElfSectionIndex idx)
       | otherwise -> do
@@ -764,10 +794,10 @@ dynamicRelocationMap hdr ph contents =
   case filter (\p -> Elf.phdrSegmentType p == Elf.PT_DYNAMIC) ph of
     [] -> pure $ Map.empty
     dynPhdr:dynRest -> do
-      when (not (null dynRest)) $ 
+      when (not (null dynRest)) $
         addWarning MultipleDynamicSegments
       w <- uses mlsMemory memAddrWidth
-      reprConstraints w $ 
+      reprConstraints w $
         case Elf.virtAddrMap contents ph of
           Nothing -> do
             addWarning OverlappingLoadableSegments
@@ -842,12 +872,8 @@ memSegment relocMap regionIndex regionOff msegIdx linkBaseOff flags bytes sz
       error "Contents two large for base."
     | otherwise = do
       contents <- byteSegments relocMap msegIdx linkBaseOff bytes sz
-      pure $
-        MemSegment { segmentBase = regionIndex
-                   , segmentOffset = fromInteger regionOff + linkBaseOff
-                   , segmentFlags = flags
-                   , segmentContents = contentsFromList contents
-                   }
+      let off = fromInteger regionOff + linkBaseOff
+      pure $! mkMemSegment regionIndex off flags contents
 
 -- | Load an elf file into memory.
 insertElfSegment :: RegionIndex
@@ -875,8 +901,7 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     let phdr_offset = Elf.fromFileOffset (Elf.phdrFileStart phdr)
     let phdr_end = phdr_offset + Elf.phdrFileSize phdr
     -- Add segment index to address mapping to memory object.
-    do let Just segAddr = resolveSegmentOff seg 0
-       mlsMemory %= memAddSegmentAddr segIdx segAddr
+    mlsMemory %= memBindSegmentIndex segIdx seg
     -- Iterative through sections
     let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdr_offset phdr_end)
     forM_ l $ \(i, sec) -> do
@@ -887,7 +912,7 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
             fail "Found section header that overlaps with program header."
           let sec_offset = fromIntegral $ shdr_start - phdr_offset
           let Just addr = resolveSegmentOff seg sec_offset
-          mlsMemory   %= memAddSectionAddr (fromElfSectionIndex elfIdx) addr
+          mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
           mlsIndexMap %= Map.insert elfIdx (addr, sec)
         _ -> fail "Unexpected shdr interval"
 
@@ -913,7 +938,7 @@ memoryForElfSegments regIndex addrOff e = do
   relocMap <- dynamicRelocationMap hdr ph contents
 
   let intervals :: ElfFileSectionMap (ElfWordType w)
-      intervals = IMap.fromList 
+      intervals = IMap.fromList
           [ (IntervalCO start end, sec)
           | shdr <- Map.elems (l ^. Elf.shdrs)
           , let start = shdr^._3
@@ -928,9 +953,9 @@ memoryForElfSegments regIndex addrOff e = do
 
 -- | Contains the name of a section we allocate and whether
 -- relocations are used.
-type AllocatedSectionInfo = (B.ByteString, Bool)
+type AllocatedSectionInfo = (BS.ByteString, Bool)
 
-allocatedNames :: AllocatedSectionInfo -> [B.ByteString]
+allocatedNames :: AllocatedSectionInfo -> [BS.ByteString]
 allocatedNames (nm,False) = [nm]
 allocatedNames (nm,True) = [nm, ".rela" <> nm]
 
@@ -943,7 +968,7 @@ allocatedSectionInfo =
   , (,) ".rodata" True
   ]
 
-allowedSectionNames :: Set B.ByteString
+allowedSectionNames :: Set BS.ByteString
 allowedSectionNames = Set.fromList
   $ concatMap allocatedNames allocatedSectionInfo
   ++ [ ""
@@ -1017,7 +1042,7 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
         -- Add entry to map elf section index to start in segment.
         let elfIdx = ElfSectionIndex (elfSectionIndex sec)
         let Just addr = resolveSegmentOff seg 0
-        mlsMemory   %= memAddSectionAddr (fromElfSectionIndex elfIdx) addr
+        mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
         mlsIndexMap %= Map.insert elfIdx (addr, sec)
 
 -- | Create the symbol vector from
@@ -1074,6 +1099,22 @@ adjustedLoadRegionIndex e loadOpt =
         Elf.ET_DYN -> 1
         _ -> 0
 
+------------------------------------------------------------------------
+-- Memory symbol
+
+-- | Type for representing a symbol that has a defined location in
+-- this memory.
+data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
+                               -- ^ Name of symbol
+                             , memSymbolStart :: !(MemSegmentOff w)
+                               -- ^ Address that symbol starts up.
+                             , memSymbolSize :: !(MemWord w)
+                               -- ^ Size of symbol as defined in table.
+                             }
+
+------------------------------------------------------------------------
+-- memoryForElf
+
 memoryForElf' :: ( Memory w
                  -> SectionIndexMap w
                  -> Elf w
@@ -1081,14 +1122,14 @@ memoryForElf' :: ( Memory w
               -> LoadOptions
               -> Elf w
               -> Either String ( Memory w
-                      , [MemSymbol w] -- Function symbols
-                      , [MemLoadWarning]
-                      , [SymbolResolutionError]
-                      )
+                               , [MemSymbol w] -- Function symbols
+                               , [MemLoadWarning]
+                               , [SymbolResolutionError]
+                               )
 memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   let end = toEndianness (Elf.elfData e)
   (secMap, mem, warnings) <-
-    runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $ 
+    runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $
       case Elf.elfType e of
         Elf.ET_REL ->
           memoryForElfSections e
@@ -1160,7 +1201,7 @@ resolveElfSymbol mem secMap idx ste
   -- Lookup absolute symbol
   | Elf.steIndex ste == Elf.SHN_ABS = reprConstraints (memAddrWidth mem) $ do
       let val = Elf.steValue ste
-      case resolveAddr mem 0 (fromIntegral val) of
+      case resolveAbsoluteAddr mem (fromIntegral val) of
         Just addr -> Just $ Right $
           MemSymbol { memSymbolName = Elf.steName ste
                     , memSymbolStart = addr
@@ -1227,11 +1268,11 @@ resolveElfFuncSymbolsAny mem secMap e =
 
 -- | Return the segment offset of the elf file entry point or fail if undefined.
 getElfEntry ::  LoadOptions -> Memory w -> Elf w -> ([String], Maybe (MemSegmentOff w))
-getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $ 
+getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $
  Elf.elfClassInstances (Elf.elfClass e) $ do
    let regIdx = adjustedLoadRegionIndex e loadOpts
    let adjAddr = loadRegionBaseOffset loadOpts + toInteger (Elf.elfEntry e)
-   case resolveAddr mem regIdx (fromInteger adjAddr) of
+   case resolveRegionOff mem regIdx (fromInteger adjAddr) of
      Nothing ->
        ( ["Could not resolve entry point: " ++ showHex (Elf.elfEntry e) ""]
        , Nothing
@@ -1267,5 +1308,5 @@ resolveElfContents loadOpts e =
       pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
     Elf.ET_CORE ->
       Left  "Reopt does not support loading core files."
-    tp -> 
+    tp ->
       Left $ "Reopt does not support loading elf files with type " ++ show tp ++ "."

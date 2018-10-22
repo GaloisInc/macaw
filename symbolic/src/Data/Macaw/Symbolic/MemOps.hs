@@ -194,7 +194,7 @@ doGetGlobal st mvar globs addr = do
   let sym = st^.stateSymInterface
   mem <- getMem st mvar
   regionNum <- natLit sym (fromIntegral (M.addrBase addr))
-  offset <- bvLit sym (M.addrWidthNatRepr (M.addrWidthRepr addr)) (M.memWordInteger (M.addrOffset addr))
+  offset <- bvLit sym (M.addrWidthNatRepr (M.addrWidthRepr addr)) (M.memWordToUnsigned (M.addrOffset addr))
   mptr <- globs sym mem regionNum offset
   case mptr of
     Nothing -> fail $ unlines
