@@ -216,7 +216,7 @@ floatInfoBitsIsPos = \case
   QuadFloatRepr   -> LeqProof
   X86_80FloatRepr -> LeqProof
 
--- | The bitvector associted with the given floating-point format.
+-- | The bitvector associated with the given floating-point format.
 type FloatBVType (fi :: FloatInfo) = BVType (FloatInfoBits fi)
 
 floatBVTypeRepr :: FloatInfoRepr fi -> TypeRepr (FloatBVType fi)
