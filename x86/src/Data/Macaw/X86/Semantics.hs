@@ -2036,10 +2036,22 @@ def_divps = def_xmm_packed SSE_Div
 -- SQRTSS Compute square root of scalar single-precision floating-point values
 -- RSQRTPS Compute reciprocals of square roots of packed single-precision floating-point values
 -- RSQRTSS Compute reciprocal of square root of scalar single-precision floating-point values
--- MAXPS Return maximum packed single-precision floating-poi1nt values
--- MAXSS Return maximum scalar single-precision floating-point values
--- MINPS Return minimum packed single-precision floating-point values
--- MINSS Return minimum scalar single-precision floating-point values
+
+-- | MINSS Return minimum scalar single-precision floating-point values
+def_minss :: InstructionDef
+def_minss = def_xmm_ss SSE_Min
+
+-- | MINPS Return minimum packed single-precision floating-point values
+def_minps :: InstructionDef
+def_minps = def_xmm_packed SSE_Min
+
+-- | MAXSS Return maximum scalar single-precision floating-point values
+def_maxss :: InstructionDef
+def_maxss = def_xmm_ss SSE_Max
+
+-- | MAXPS Return maximum packed single-precision floating-poi1nt values
+def_maxps :: InstructionDef
+def_maxps = def_xmm_packed SSE_Max
 
 -- *** SSE Comparison Instructions
 
@@ -2800,6 +2812,10 @@ all_instructions =
   , def_subss
   , def_mulss
   , def_divss
+  , def_minss
+  , def_minps
+  , def_maxss
+  , def_maxps
     -- SSE Comparison
   , def_ucomiss
     -- SSE Logical
