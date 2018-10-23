@@ -66,7 +66,7 @@ lookupTOC :: forall ppc m
           -> MC.ArchSegmentOff ppc
           -> m (W.W (MC.ArchAddrWidth ppc))
 lookupTOC (TOC m) addr =
-  case M.lookup (MC.relativeSegmentAddr addr) m of
+  case M.lookup (MC.segoffAddr addr) m of
     Nothing ->
       let x :: TOCException ppc
           x = MissingTOCEntry addr

@@ -36,7 +36,7 @@ library
                        exceptions,
                        parameterized-utils,
                        crucible,
-                       macaw-base,
+                       macaw-base >= 0.3.2,
                        macaw-symbolic,
                        dismantle-tablegen,
                        semmc,

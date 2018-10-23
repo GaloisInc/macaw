@@ -52,19 +52,19 @@ readInstruction :: (MM.MemWidth w)
                 => MM.MemSegmentOff w
                 -> Either (PPCMemoryError w) (D.Instruction, MM.MemWord w)
 readInstruction addr = do
-  let seg = MM.msegSegment addr
+  let seg = MM.segoffSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
-    False -> ET.throwError (PPCMemoryError (MM.PermissionsError (MM.relativeSegmentAddr addr)))
+    False -> ET.throwError (PPCMemoryError (MM.PermissionsError (MM.segoffAddr addr)))
     True -> do
-      contents <- liftMemError $ MM.contentsAfterSegmentOff addr
+      contents <- liftMemError $ MM.segoffContentsAfter addr
       case contents of
-        [] -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
+        [] -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
         MM.RelocationRegion r : _ ->
-          ET.throwError (PPCMemoryError (MM.UnexpectedRelocation (MM.relativeSegmentAddr addr) r))
+          ET.throwError (PPCMemoryError (MM.UnexpectedRelocation (MM.segoffAddr addr) r))
         MM.BSSRegion {} : _ ->
-          ET.throwError (PPCMemoryError (MM.UnexpectedBSS (MM.relativeSegmentAddr addr)))
+          ET.throwError (PPCMemoryError (MM.UnexpectedBSS (MM.segoffAddr addr)))
         MM.ByteRegion bs : _rest
-          | BS.null bs -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.relativeSegmentAddr addr)))
+          | BS.null bs -> ET.throwError (PPCMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
           | otherwise -> do
             -- FIXME: Having to wrap the bytestring in a lazy wrapper is
             -- unpleasant.  We could alter the disassembler to consume strict
@@ -73,7 +73,7 @@ readInstruction addr = do
             let (bytesRead, minsn) = D.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError (PPCInvalidInstruction (MM.relativeSegmentAddr addr) contents)
+              Nothing -> ET.throwError (PPCInvalidInstruction (MM.segoffAddr addr) contents)
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (PPCMemoryError w) a
 liftMemError e =
@@ -83,7 +83,7 @@ liftMemError e =
 
 -- | A wrapper around the 'MM.MemoryError' that lets us add in information about
 -- invalid instructions.
-data PPCMemoryError w = PPCInvalidInstruction !(MM.MemAddr w) [MM.SegmentRange w]
+data PPCMemoryError w = PPCInvalidInstruction !(MM.MemAddr w) [MM.MemChunk w]
                       | PPCMemoryError !(MM.MemoryError w)
                       deriving (Show)
 
@@ -113,19 +113,19 @@ disassembleBlock :: forall ppc ids s
                  -- search with this.
                  -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
 disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
-  let seg = MM.msegSegment curIPAddr
-  let off = MM.msegOffset curIPAddr
+  let seg = MM.segoffSegment curIPAddr
+  let off = MM.segoffOffset curIPAddr
   case readInstruction curIPAddr of
     Left err -> failAt gs off curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
 --      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
-          nextIP = MM.relativeAddr seg nextIPOffset
+          nextIP = MM.segmentOffAddr seg nextIPOffset
           nextIPVal = MC.RelocatableValue (MM.addrWidthRepr curIPAddr) nextIP
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curIPAddr) of
+      ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
       case lookupSemantics ipVal i of
@@ -137,7 +137,7 @@ disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (Comment (T.pack  lineStr))
-            asAtomicStateUpdate (MM.relativeSegmentAddr curIPAddr) transformer
+            asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer
 
             -- Check to see if the IP has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
@@ -190,7 +190,7 @@ tryDisassembleBlock :: (PPCArchConstraints ppc)
                     -> DisM ppc ids s ([Block ppc ids], Int)
 tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
-  let startOffset = MM.msegOffset startAddr
+  let startOffset = MM.segoffOffset startAddr
   (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)

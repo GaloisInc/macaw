@@ -151,7 +151,7 @@ initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
              => MM.MemSegmentOff (RegAddrWidth (ArchReg arch))
              -> RegState (ArchReg arch) (Value arch ids)
 initRegState startIP =
-  mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.relativeSegmentAddr startIP)
+  mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.segoffAddr startIP)
 
 blockSeq :: Simple Lens (GenState arch ids s) (BlockSeq arch ids)
 blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
