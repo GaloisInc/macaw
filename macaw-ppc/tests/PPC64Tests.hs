@@ -124,7 +124,7 @@ testDiscovery expectedFilename elf = do
           unless (S.member addr ignoredBlocks) $ do
             let term = blockTerminator pb
             T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
-            T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb)) (not (isTranslateError term))
+            T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb) ++ "\n" ++ show term) (not (isTranslateError term))
         let actualEntry = absoluteFromSegOff (MD.discoveredFunAddr dfi)
             actualBlockStarts = S.fromList [ (baddr, bsize)
                                            | pbr <- M.elems (dfi ^. MD.parsedBlocks)
