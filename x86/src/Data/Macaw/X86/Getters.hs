@@ -279,8 +279,11 @@ getSomeBVValue :: F.Value -> X86Generator st ids (SomeBV (Expr ids))
 getSomeBVValue v =
   case v of
     F.ByteImm  w      -> pure $! SomeBV $ bvLit n8  $ toInteger w
+    F.ByteSignedImm w -> pure $! SomeBV $ bvLit n8  $ toInteger w
     F.WordImm  w      -> pure $! SomeBV $ bvLit n16 $ toInteger w
+    F.WordSignedImm w -> pure $! SomeBV $ bvLit n16 $ toInteger w
     F.DWordImm i      -> pure $! SomeBV $ getImm32 i
+    F.DWordSignedImm w -> pure $! SomeBV $ bvLit n32 $ toInteger w
     F.QWordImm w      -> pure $! SomeBV $ bvLit n64 $ toInteger w
     F.JumpOffset _ _  -> fail "Jump Offset should not be treated as a BVValue."
     _ -> do
