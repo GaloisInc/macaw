@@ -448,6 +448,9 @@ getAddrRegSegmentOrImm v =
     F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
     F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
     F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+    F.ByteSignedImm w -> pure $ Some $ HasRepSize ByteRepVal $ bvLit n8 (toInteger w)
+    F.WordSignedImm w -> pure $ Some $ HasRepSize WordRepVal $ bvLit n16 (toInteger w)
+    F.DWordSignedImm w -> pure $ Some $ HasRepSize DWordRepVal $ bvLit n32 (toInteger w)
     _ -> do
       Some (HasRepSize rep l) <- getAddrRegOrSegment v
       Some . HasRepSize rep <$> get l
