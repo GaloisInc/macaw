@@ -1083,11 +1083,6 @@ memoryForElfSections e = do
 ------------------------------------------------------------------------
 -- High level loading
 
--- | Return true if Elf has a @PT_DYNAMIC@ segment (thus indicating it
--- is relocatable.
-isRelocatable :: Elf w -> Bool
-isRelocatable e = any (Elf.hasSegmentType Elf.PT_DYNAMIC) (Elf.elfSegments e)
-
 adjustedLoadRegionIndex :: Elf w -> LoadOptions -> RegionIndex
 adjustedLoadRegionIndex e loadOpt =
   case loadRegionIndex loadOpt of
@@ -1095,7 +1090,9 @@ adjustedLoadRegionIndex e loadOpt =
     Nothing ->
       case Elf.elfType e of
         Elf.ET_REL -> 1
-        Elf.ET_EXEC -> if isRelocatable e then 1 else 0
+        -- This is only for non-position independent exectuables.
+        Elf.ET_EXEC -> 0
+        -- This is for shared libraries or position-independent executablkes.
         Elf.ET_DYN -> 1
         _ -> 0
 
@@ -1131,8 +1128,10 @@ memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   (secMap, mem, warnings) <-
     runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $
       case Elf.elfType e of
+        -- We load object files by section
         Elf.ET_REL ->
           memoryForElfSections e
+        -- Other files are loaded by segment.
         _ -> do
           let regIdx = adjustedLoadRegionIndex e opt
           let addrOff = loadRegionBaseOffset opt
@@ -1303,6 +1302,7 @@ resolveElfContents loadOpts e =
       let (entryWarn, mentry) = getElfEntry loadOpts mem e
       Right (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
     Elf.ET_DYN -> do
+      -- This is a shared library or position-independent executable.
       (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts e
       let (entryWarn, mentry) = getElfEntry loadOpts mem e
       pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
