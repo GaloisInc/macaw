@@ -26,9 +26,10 @@ module Data.Macaw.X86.Generator
   , evalArchFn
   , evalAssignRhs
   , getState
-    -- * GenResult
-  , GenResult(..)
-  , finishGenResult
+    -- * PartialBlock
+  , PartialBlock
+  , unfinishedAtAddr
+  , finishPartialBlock
     -- * PreBlock
   , PreBlock
   , emptyPreBlock
@@ -36,7 +37,6 @@ module Data.Macaw.X86.Generator
   , pBlockState
   , pBlockStmts
   , pBlockApps
-  , finishBlock
     -- * GenState
   , GenState(..)
   , blockState
@@ -156,10 +156,9 @@ data PreBlock ids = PreBlock { pBlockIndex :: !Word64
 
 -- | Create a new pre block.
 emptyPreBlock :: RegState X86Reg (Value X86_64 ids)
-              -> Word64
               -> PreBlock ids
-emptyPreBlock s idx =
-  PreBlock { pBlockIndex  = idx
+emptyPreBlock s  =
+  PreBlock { pBlockIndex  = 0
            , _pBlockStmts = Seq.empty
            , _pBlockApps  = MapF.empty
            , _pBlockState = s
@@ -185,18 +184,28 @@ finishBlock preBlock term =
         }
 
 ------------------------------------------------------------------------
--- GenResult
+-- PartialBlock
 
--- | The final result from the block generator.
-data GenResult ids
-   = UnfinishedGenResult !(PreBlock ids)
-   | FinishedGenResult !(Block X86_64 ids)
+-- | This describes a code block that may or may not be terminated by
+-- a terminal statement.
+data PartialBlock ids
+   = UnfinishedPartialBlock !(PreBlock ids)
+   | FinishedPartialBlock !(Block X86_64 ids)
+
+-- | Return true if the partial block is not yet terminated and the
+-- next PC is the given one.
+unfinishedAtAddr :: PartialBlock ids -> MemAddr 64 -> Maybe (PreBlock ids)
+unfinishedAtAddr (UnfinishedPartialBlock b) next_ip
+  | RelocatableValue _ v <- b^.(pBlockState . curIP)
+  , v == next_ip =
+      Just b
+unfinishedAtAddr _ _ = Nothing
 
 -- | Finishes the current block, if it is started.
-finishGenResult :: GenResult ids
-            -> Block X86_64 ids
-finishGenResult (UnfinishedGenResult pre_b) = finishBlock pre_b FetchAndExecute
-finishGenResult (FinishedGenResult blk) = blk
+finishPartialBlock :: PartialBlock ids
+                   -> Block X86_64 ids
+finishPartialBlock (UnfinishedPartialBlock pre_b) = finishBlock pre_b FetchAndExecute
+finishPartialBlock (FinishedPartialBlock blk) = blk
 
 ------------------------------------------------------------------------
 -- GenState
@@ -246,7 +255,7 @@ curX86State = blockState . pBlockState
 -- This returns either a failure message or the next state.
 newtype X86Generator st_s ids a =
   X86G { unX86G ::
-           ContT (GenResult ids)
+           ContT (PartialBlock ids)
                  (ReaderT (GenState st_s ids)
                           (ExceptT Text (ST st_s))) a
        }
@@ -265,14 +274,14 @@ instance Monad (X86Generator st_s ids) where
 type X86GCont st_s ids a
   =  a
   -> GenState st_s ids
-  -> ExceptT Text (ST st_s) (GenResult ids)
+  -> ExceptT Text (ST st_s) (PartialBlock ids)
 
 -- | Run an 'X86Generator' starting from a given state
 runX86Generator :: GenState st_s ids
                 -> X86Generator st_s ids ()
-                -> ExceptT Text (ST st_s) (GenResult ids)
+                -> ExceptT Text (ST st_s) (PartialBlock ids)
 runX86Generator st (X86G m) = runReaderT (runContT m (ReaderT . k)) st
-  where k () s = pure $! UnfinishedGenResult (s^.blockState)
+  where k () s = pure $! UnfinishedPartialBlock (s^.blockState)
 
 getState :: X86Generator st_s ids (GenState st_s ids)
 getState = X86G ask
@@ -326,7 +335,7 @@ addArchTermStmt ts = do
     -- Create finished block.
     let fin_b = finishBlock p_b $ ArchTermStmt ts
     -- Return early
-    return $! FinishedGenResult fin_b
+    return $! FinishedPartialBlock fin_b
 
 -- | Are we in AVX mode?
 isAVX :: X86Generator st ids Bool

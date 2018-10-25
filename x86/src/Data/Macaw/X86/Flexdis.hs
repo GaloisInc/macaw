@@ -10,10 +10,9 @@ Macaw memory object.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.X86.Flexdis
-  ( MemoryByteReader
-  , X86TranslateError(..)
-  , runMemoryByteReader
-  , readInstruction
+  ( readInstruction
+  , InstructionDecodeError(..)
+  , RelocPos(..)
   ) where
 
 import           Control.Monad.Except
@@ -21,8 +20,6 @@ import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.ByteString as BS
 import           Data.Int
-import           Data.Text (Text)
-import           Data.Text as Text
 import           Data.Word
 
 import           Data.Macaw.Memory
@@ -36,85 +33,83 @@ import           Flexdis86.ByteReader
 -- | A stream of memory
 data MemStream w = MS { msInitial :: ![MemChunk w]
                         -- ^ Initial memory contents.  Used for error messages.
-                      , msSegment :: !(MemSegment w)
-                        -- ^ The current segment
-                      , msStart :: !(MemWord w)
-                        -- ^ The initial offset for the stream.
                       , msOffset :: !(MemWord w)
-                        -- ^ The current address
+                        -- ^ Offset of msState
                       , msNext :: ![MemChunk w]
                         -- ^ The next bytes to read.
                       }
 
-msStartAddr :: MemWidth w => MemStream w -> MemAddr w
-msStartAddr ms = segmentOffAddr (msSegment ms) (msStart ms)
-
-msAddr :: MemWidth w => MemStream w -> MemAddr w
-msAddr ms = segmentOffAddr (msSegment ms) (msOffset ms)
-
 ------------------------------------------------------------------------
 -- MemoryByteReader
 
--- | Describes the reason the translation error occured.
-data X86TranslateError w
-   = FlexdisMemoryError !(MemoryError w)
-     -- ^ A memory error occured in decoding with Flexdis
-   | InvalidInstruction !(MemAddr w) ![MemChunk w]
-     -- ^ The memory reader could not parse the value starting at the given address
-     -- the last byte read was at the offset.
-   | UserMemoryError !(MemAddr w) !String
-     -- ^ the memory reader threw an unspecified error at the given location.
-   | UnsupportedInstruction !(MemSegmentOff w) !Flexdis.InstructionInstance
-     -- ^ The instruction is not supported by the translator
-   | ExecInstructionError !(MemSegmentOff w) !Flexdis.InstructionInstance Text
-     -- ^ An error occured when trying to translate the instruction
+-- | Descriptor of which function encountered a relocation.
+data RelocPos
+   = ReadByte
+   | ReadJump
+   | ReadImm32
 
-instance MemWidth w => Show (X86TranslateError w) where
+-- | Errors thrown when decoding an instruction.
+data InstructionDecodeError w
+   = UserDecodeError !String
+     -- ^ the memory reader threw an unspecified error at the given offset.
+   | EndOfInstruction
+     -- ^ Unexpected end of instruction.
+   | UnsupportedRelocation !RelocPos !(Relocation w)
+     -- ^ A relocation appeared in given position.
+   | BSSEncountered
+     -- ^ We encountered BSS data when decoding instruction.s
+   | InvalidInstruction ![SegmentRange w]
+     -- ^ We could not decode the instruction.
+
+instance Show (InstructionDecodeError w) where
   show err =
     case err of
-      FlexdisMemoryError me ->
-        show me
-      InvalidInstruction start rng ->
-        "Invalid instruction at " ++ show start ++ ": " ++ show rng
-      UserMemoryError addr msg ->
-        "Memory error " ++ show addr ++ ": " ++ msg
-      UnsupportedInstruction addr i ->
-        "Unsupported instruction at " ++ show addr ++ ": " ++ show i
-      ExecInstructionError addr i msg ->
-        "Error in interpretting instruction at " ++ show addr ++ ": " ++ show i ++ "\n  "
-        ++ Text.unpack msg
+      UserDecodeError msg ->
+        msg
+      EndOfInstruction ->
+        "Unexpected end of instruction."
+      UnsupportedRelocation loc r ->
+        let sloc = case loc of
+                     ReadByte -> "byte"
+                     ReadImm32 -> "32-bit immediate"
+                     ReadJump -> "jump"
+        in "Unexpected relocation when decoding " ++ sloc ++ ":\n"
+           ++ "  " ++ show r
+      BSSEncountered ->
+        "Do not support decoding instructions within .bss."
+      InvalidInstruction rng ->
+        "Could not decode instruction " ++ show rng
 
-newtype MemoryByteReader w a = MBR { unMBR :: ExceptT (X86TranslateError w) (State (MemStream w)) a }
-  deriving (Functor, Applicative, MonadError (X86TranslateError w))
+
+newtype MemoryByteReader w a = MBR { unMBR :: ExceptT (MemWord w, InstructionDecodeError w) (State (MemStream w)) a }
+  deriving (Functor, Applicative, MonadError (MemWord w, InstructionDecodeError w))
+
+throwDecodeError :: MemWidth w => InstructionDecodeError w -> MemoryByteReader w a
+throwDecodeError e = do
+  off <- MBR $ gets msOffset
+  throwError $! (off, e)
 
 instance MemWidth w => Monad (MemoryByteReader w) where
   return = MBR . return
   MBR m >>= f = MBR $ m >>= unMBR . f
-  fail msg = do
-    addr <- MBR $ gets msAddr
-    throwError $ UserMemoryError addr msg
+  fail msg = throwDecodeError $ UserDecodeError msg
 
 -- | Run a memory byte reader starting from the given offset.
 --
 -- This returns either the translate error or the value read, the offset read to, and
 -- the next data.
-runMemoryByteReader :: MemSegmentOff w -- ^ Starting segment
-                    -> [MemChunk w] -- ^ Data to read next.
+runMemoryByteReader :: MemWidth w
+                    => [MemChunk w] -- ^ Data to read next.
                     -> MemoryByteReader w a -- ^ Byte reader to read values from.
-                    -> Either (X86TranslateError w) (a, MemWord w, [MemChunk w])
-runMemoryByteReader addr contents (MBR m) = do
+                    -> Either (Int, InstructionDecodeError w) (a, Int, [MemChunk w])
+runMemoryByteReader contents (MBR m) = do
   let ms0 = MS { msInitial = contents
-               , msSegment = segoffSegment addr
-               , msStart   = segoffOffset addr
-               , msOffset  = segoffOffset addr
+               , msOffset  = 0
                , msNext    = contents
                }
   case runState (runExceptT m) ms0 of
-    (Left e, _) -> Left e
-    (Right v, ms) -> Right (v, msOffset ms, msNext ms)
-
-throwMemoryError :: MemoryError w -> MemoryByteReader w a
-throwMemoryError e = MBR $ throwError (FlexdisMemoryError e)
+    (Left (off, e), _) -> Left (fromIntegral off, e)
+    (Right v, ms) -> Right (v, fromIntegral (msOffset ms), msNext ms)
 
 sbyte :: (Bits w, Num w) => Word8 -> Int -> w
 sbyte w o = fromIntegral i8 `shiftL` (8*o)
@@ -135,8 +130,7 @@ getUnsigned32 s =
     w0:w1:w2:w3:_ -> do
       pure $! ubyte w3 3 .|. ubyte w2 2 .|. ubyte w1 1 .|. ubyte w0 0
     _ -> do
-      ms <- MBR get
-      throwMemoryError $ AccessViolation (msAddr ms)
+      throwDecodeError $ EndOfInstruction
 
 getJumpBytes :: MemWidth w => BS.ByteString -> Flexdis.JumpSize -> MemoryByteReader w (Int64, Int)
 getJumpBytes s sz =
@@ -149,8 +143,7 @@ getJumpBytes s sz =
       v <- getUnsigned32 s
       pure (fromIntegral (fromIntegral v :: Int32), 4)
     _ -> do
-      ms <- MBR get
-      throwMemoryError $ AccessViolation (msAddr ms)
+      throwDecodeError $ EndOfInstruction
 
 updateMSByteString :: MemWidth w
                    => MemStream w
@@ -176,15 +169,15 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
     -- If remaining bytes are empty
     case msNext ms of
       [] ->
-        throwMemoryError $ AccessViolation (msAddr ms)
+        throwDecodeError $ EndOfInstruction
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
-        throwMemoryError $ UnexpectedBSS (msAddr ms)
+        throwDecodeError $ BSSEncountered
       RelocationRegion r:_ ->
-        throwMemoryError $ UnexpectedByteRelocation (msAddr ms) r
+        throwDecodeError $ UnsupportedRelocation ReadByte r
       ByteRegion bs:rest -> do
         if BS.null bs then do
-          throwMemoryError $ AccessViolation (msAddr ms)
+          throwDecodeError $ EndOfInstruction
          else do
           let v = BS.head bs
           updateMSByteString ms bs rest 1
@@ -195,10 +188,10 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
     -- If remaining bytes are empty
     case msNext ms of
       [] ->
-        throwMemoryError $ AccessViolation (msAddr ms)
+        throwDecodeError $ EndOfInstruction
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
-        throwMemoryError $ UnexpectedBSS (msAddr ms)
+        throwDecodeError $ BSSEncountered
       RelocationRegion r:rest -> do
         let sym = relocationSym r
         let off = relocationOffset r
@@ -207,7 +200,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
               && relocationSize r == 4
               && relocationEndianness r == LittleEndian
         when (not isGood) $ do
-          throwMemoryError $ Unsupported32ImmRelocation (msAddr ms) r
+          throwDecodeError $ UnsupportedRelocation ReadImm32 r
         -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
         let signed = relocationIsSigned r
 
@@ -227,10 +220,10 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
     -- If remaining bytes are empty
     case msNext ms of
       [] ->
-        throwMemoryError $ AccessViolation (msAddr ms)
+        throwDecodeError $ EndOfInstruction
       -- Throw error if we try to read a relocation as a symbolic reference
       BSSRegion _:_ -> do
-        throwMemoryError $ UnexpectedBSS (msAddr ms)
+        throwDecodeError $ BSSEncountered
       RelocationRegion r:rest -> do
         let sym = relocationSym r
         let off = relocationOffset r
@@ -241,35 +234,32 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
               && relocationIsSigned r == False
               && relocationEndianness r == LittleEndian
         when (not isGood) $ do
-          throwMemoryError $ UnsupportedJumpOffsetRelocation (msAddr ms) r
+          throwDecodeError $ UnsupportedRelocation ReadJump r
         let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
                      , msNext   = rest
                      }
         seq ms' $ MBR $ put ms'
-        let ioff = fromIntegral $ msOffset ms - msStart ms
+        let ioff = fromIntegral $ msOffset ms
         pure $ Flexdis.RelativeOffset ioff sym (fromIntegral off)
       ByteRegion bs:rest -> do
         (v,c) <- getJumpBytes bs sz
         updateMSByteString ms bs rest (fromIntegral c)
         pure (Flexdis.FixedOffset v)
 
-
   invalidInstruction = do
     ms <- MBR $ get
-    throwError $ InvalidInstruction (msStartAddr ms)
-      (forcedTakeMemChunks (msInitial ms) (msOffset ms - msStart ms))
+    let e = InvalidInstruction $ takeSegmentPrefix (msInitial ms) (msOffset ms)
+    throwError (0, e)
 
 ------------------------------------------------------------------------
 -- readInstruction
 
--- | Read instruction at a given memory address.
-readInstruction :: MemSegmentOff 64
-                   -- ^ Address to read from.
-                -> [MemChunk 64] -- ^ Data to read next.
-                -> Either (X86TranslateError 64)
-                          ( Flexdis.InstructionInstance
-                          , MemWord 64
+-- | Read instruction with given contents.
+readInstruction :: [MemChunk 64] -- ^ Data to read next.
+                -> Either (Int, InstructionDecodeError 64)
+                          (Flexdis.InstructionInstance
+                          , Int
                           , [MemChunk 64]
                           )
-readInstruction addr contents = do
-  runMemoryByteReader addr contents Flexdis.disassembleInstruction
+readInstruction contents =
+  runMemoryByteReader contents Flexdis.disassembleInstruction
