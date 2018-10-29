@@ -115,7 +115,7 @@ testDiscovery expectedFilename elf = do
           ignoredBlocks = S.fromList (ignoreBlocks er)
           allFoundBlockAddrs :: S.Set Word64
           allFoundBlockAddrs =
-            S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+            S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.segoffAddr (MD.pblockAddr pbr))))
                        | PU.Some pbr <- allDiscoveredBlocks di
                        ]
       -- Test that all discovered blocks were expected (and verify their sizes)
@@ -130,7 +130,7 @@ testDiscovery expectedFilename elf = do
             actualBlockStarts = S.fromList [ (baddr, bsize)
                                            | pbr <- M.elems (dfi ^. MD.parsedBlocks)
 --                                             , trace ("Parsed Block: " ++ show pbr) True
-                                           , let baddr = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+                                           , let baddr = fromIntegral (fromJust (MM.asAbsoluteAddr (MM.segoffAddr (MD.pblockAddr pbr))))
                                            , let bsize = fromIntegral (MD.blockSize pbr)
                                            ]
         case (S.member actualEntry ignoredBlocks, M.lookup actualEntry expectedEntries) of
@@ -145,7 +145,7 @@ testDiscovery expectedFilename elf = do
         T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
 
 absoluteFromSegOff :: MM.MemSegmentOff 64 -> Hex Word64
-absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr
+absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.segoffAddr
 
 removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
 removeIgnored actualBlockStarts ignoredBlocks =

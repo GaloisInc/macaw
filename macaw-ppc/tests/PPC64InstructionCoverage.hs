@@ -44,7 +44,7 @@ testMacaw elf = do
   let di = MD.cfgFromAddrs cfg mem M.empty (F.toList entries) []
   let allFoundBlockAddrs :: S.Set Word64
       allFoundBlockAddrs =
-        S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.relativeSegmentAddr (MD.pblockAddr pbr))))
+        S.fromList [ fromIntegral (fromJust (MM.asAbsoluteAddr (MM.segoffAddr (MD.pblockAddr pbr))))
                    | PU.Some dfi <- M.elems (di ^. MD.funInfo)
                    , pbr <- M.elems (dfi ^. MD.parsedBlocks)
                    ]
