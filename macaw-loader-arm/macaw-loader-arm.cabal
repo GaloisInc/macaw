@@ -1,0 +1,20 @@
+name:                macaw-loader-arm
+version:             0.1.0.0
+synopsis:            Library to load ARM binary images and get macaw Memory and entry points.
+-- description:
+homepage:            https://github.com/GaloisInc/macaw-loader/macaw-loader-arm
+license:             BSD3
+license-file:        LICENSE
+author:              Galois, Inc.
+maintainer:          kquick@galois.com
+copyright:           2018, Galois Inc.
+category:            Development
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  build-depends:       base >=4.9 && <4.12
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall

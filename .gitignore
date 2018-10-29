@@ -1,0 +1,6 @@
+**/.stack-work/
+*~
+**/dist/
+**/dist-newstyle/
+**/_darcs/
+**/#*#

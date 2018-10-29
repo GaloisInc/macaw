@@ -1,0 +1,32 @@
+name:                macaw-loader-ppc
+version:             0.1.0.0
+synopsis:            Library to load PPC binary images and get macaw Memory and entry points.
+-- description:
+homepage:            https://github.com/GaloisInc/macaw-loader/macaw-loader-ppc
+license:             BSD3
+license-file:        LICENSE
+author:              Galois, Inc.
+maintainer:          kquick@galois.com
+copyright:           2018, Galois Inc.
+category:            Development
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules: Data.Macaw.BinaryLoader.PPC
+                 , Data.Macaw.BinaryLoader.PPC.ELF
+                 , Data.Macaw.BinaryLoader.PPC.TOC
+  build-depends:       base >=4.9 && <4.12
+                     , bytestring
+                     , cereal
+                     , containers
+                     , dismantle-tablegen
+                     , elf-edit
+                     , exceptions
+                     , macaw-base
+                     , macaw-loader
+                     , semmc-ppc
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall
