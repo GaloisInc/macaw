@@ -26,6 +26,7 @@ import qualified Data.ElfEdit as E
 
 import qualified Data.Parameterized.Some as PU
 import qualified Data.Macaw.BinaryLoader as MBL
+import qualified Data.Macaw.BinaryLoader.PPC ()
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
@@ -100,7 +101,7 @@ testDiscovery expectedFilename elf = do
   loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
                <- MBL.loadBinary loadCfg elf
   entries <- MBL.entryPoints loadedBinary
-  let cfg = RO.ppc64_linux_info (MBL.archBinaryData loadedBinary)
+  let cfg = RO.ppc64_linux_info loadedBinary
   let mem = MBL.memoryImage loadedBinary
   let di = MD.cfgFromAddrs cfg mem M.empty (F.toList entries) []
   expectedString <- readFile expectedFilename

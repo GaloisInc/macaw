@@ -18,14 +18,6 @@ module Data.Macaw.PPC (
   A.PPCTermStmt(..),
   A.PPCStmt(..),
   A.PPCPrimFn(..),
-  -- * ELF support
-  PL.PPCLoadException(..),
-  TOC.TOC,
-  TOC.lookupTOC,
-  TOC.lookupTOCAbs,
-  TOC.entryPoints,
-  BE.parseTOC,
-  TOC.TOCException(..)
   ) where
 
 import           Data.Proxy ( Proxy(..) )
@@ -54,13 +46,14 @@ import Data.Macaw.PPC.Arch ( rewriteTermStmt,
                              ppcPrimFnHasSideEffects,
                              PPCArchConstraints
                            )
-import qualified Data.Macaw.PPC.BinaryFormat.ELF as BE
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Arch as A
-import qualified Data.Macaw.PPC.Loader as PL
-import qualified Data.Macaw.PPC.TOC as TOC
+import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
+import qualified Data.Macaw.BinaryLoader.PPC ()
+import qualified Data.Macaw.BinaryLoader as BL
+
 
 -- | The type tag for 64 bit PowerPC
 type PPC64 = PPC64.PPC
@@ -74,14 +67,17 @@ archDemandContext _ =
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
 
-ppc64_linux_info :: TOC.TOC PPC64.PPC
+ppc64_linux_info :: ( BL.BinaryAddrWidth binFmt ~ 64
+                    , BL.ArchBinaryData PPC64.PPC binFmt ~ TOC.TOC 64
+                    ) =>
+                    BL.LoadedBinary PPC64.PPC binFmt
                  -> MI.ArchitectureInfo PPC64.PPC
-ppc64_linux_info tocMap =
+ppc64_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
                       , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
-                      , MI.mkInitialAbsState = mkInitialAbsState proxy tocMap
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.postCallAbsState = postCallAbsState proxy
@@ -96,14 +92,17 @@ ppc64_linux_info tocMap =
   where
     proxy = Proxy @PPC64.PPC
 
-ppc32_linux_info :: TOC.TOC PPC32.PPC
+ppc32_linux_info :: ( BL.BinaryAddrWidth binFmt ~ 32
+                    , BL.ArchBinaryData PPC32.PPC binFmt ~ TOC.TOC 32
+                    ) =>
+                    BL.LoadedBinary PPC32.PPC binFmt
                  -> MI.ArchitectureInfo PPC32.PPC
-ppc32_linux_info tocMap =
+ppc32_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
                       , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
-                      , MI.mkInitialAbsState = mkInitialAbsState proxy tocMap
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.postCallAbsState = postCallAbsState proxy

@@ -19,6 +19,9 @@
 [submodule "submodules/macaw"]
 	path = submodules/macaw
 	url = git@github.com:GaloisInc/macaw.git
+[submodule "submodules/macaw-loader"]
+	path = submodules/macaw-loader
+	url = git@github.com:GaloisInc/macaw-loader.git
 [submodule "submodules/s-cargot"]
 	path = submodules/s-cargot
 	url = git@github.com:aisamanra/s-cargot.git

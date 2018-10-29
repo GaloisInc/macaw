@@ -5,6 +5,10 @@ packages: macaw-ppc/
           submodules/macaw/x86/
           submodules/macaw/symbolic/
           submodules/macaw/x86_symbolic/
+          submodules/macaw-loader/macaw-loader
+          submodules/macaw-loader/macaw-loader-arm
+          submodules/macaw-loader/macaw-loader-ppc
+          submodules/macaw-loader/macaw-loader-x86
           submodules/semmc/semmc/
           submodules/semmc/semmc-ppc/
           submodules/semmc/semmc-arm/

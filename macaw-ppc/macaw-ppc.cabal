@@ -18,7 +18,6 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Data.Macaw.PPC
                        Data.Macaw.PPC.Arch
-                       Data.Macaw.PPC.BinaryFormat.ELF
                        Data.Macaw.PPC.Disassemble
                        Data.Macaw.PPC.Eval
                        Data.Macaw.PPC.Identify
@@ -28,8 +27,6 @@ library
                        Data.Macaw.PPC.Semantics.PPC64
                        Data.Macaw.PPC.Semantics.PPC32
                        Data.Macaw.PPC.Semantics.TH
-                       Data.Macaw.PPC.Loader
-  other-modules:       Data.Macaw.PPC.TOC
   build-depends:       base >=4.9 && <5,
                        bytestring,
                        containers,
@@ -42,6 +39,8 @@ library
                        semmc,
                        semmc-ppc,
                        macaw-semmc,
+                       macaw-loader,
+                       macaw-loader-ppc,
                        lens,
                        macaw-base,
                        ansi-wl-pprint,
@@ -79,6 +78,8 @@ test-suite macaw-ppc-tests
                  macaw-base,
                  macaw-semmc,
                  macaw-ppc,
+                 macaw-loader,
+                 macaw-loader-ppc,
                  parameterized-utils,
                  semmc,
                  semmc-ppc,
