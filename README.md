@@ -14,3 +14,10 @@ The core libraries are:
 * macaw-x86-symbolic -- Adds Macaw-symbolic extensions needed to support x86.
 
 The libraries that make up Macaw are released under the BSD license.
+
+To build with Stack, first create a top-level `stack.yaml` file by
+symlinking to one of the provided `stack-ghc-<version>.yaml`
+files. E.g.
+
+    ln -s stack-ghc-8.2.yaml stack.yaml
+    stack build
