@@ -17,7 +17,6 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
-import           Data.Typeable ( Typeable )
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
@@ -30,6 +29,7 @@ import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import qualified Data.Macaw.BinaryLoader as BL
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
+import qualified Data.Macaw.BinaryLoader.PPC as BLP
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 
 preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
@@ -78,8 +78,8 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
 --
 -- One value that is definitely set is the link register, which holds the
 -- abstract return value.
-mkInitialAbsState :: ( PPCArchConstraints ppc, Typeable ppc
-                     , BL.ArchBinaryData ppc binFmt ~ TOC.TOC (ArchAddrWidth ppc)
+mkInitialAbsState :: ( PPCArchConstraints ppc
+                     , BLP.HasTOC ppc binFmt
                      ) =>
                      proxy ppc
                   -> BL.LoadedBinary ppc binFmt
@@ -87,7 +87,7 @@ mkInitialAbsState :: ( PPCArchConstraints ppc, Typeable ppc
                   -> ArchSegmentOff ppc
                   -> MA.AbsBlockState (ArchReg ppc)
 mkInitialAbsState _ binData _mem startAddr =
-  case TOC.lookupTOCAbs (BL.archBinaryData binData) startAddr of
+  case TOC.lookupTOCAbs (BLP.getTOC binData) startAddr of
     Just tocAddr -> s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
     Nothing -> s0
   where

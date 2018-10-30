@@ -50,8 +50,7 @@ import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Arch as A
-import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
-import qualified Data.Macaw.BinaryLoader.PPC ()
+import qualified Data.Macaw.BinaryLoader.PPC as BLP
 import qualified Data.Macaw.BinaryLoader as BL
 
 
@@ -67,7 +66,7 @@ archDemandContext _ =
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
 
-ppc64_linux_info :: ( BL.ArchBinaryData PPC64.PPC binFmt ~ TOC.TOC 64
+ppc64_linux_info :: ( BLP.HasTOC PPC64.PPC binFmt
                     ) =>
                     BL.LoadedBinary PPC64.PPC binFmt
                  -> MI.ArchitectureInfo PPC64.PPC
@@ -91,7 +90,7 @@ ppc64_linux_info binData =
   where
     proxy = Proxy @PPC64.PPC
 
-ppc32_linux_info :: ( BL.ArchBinaryData PPC32.PPC binFmt ~ TOC.TOC 32
+ppc32_linux_info :: ( BLP.HasTOC PPC32.PPC binFmt
                     ) =>
                     BL.LoadedBinary PPC32.PPC binFmt
                  -> MI.ArchitectureInfo PPC32.PPC
