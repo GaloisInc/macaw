@@ -32,38 +32,39 @@ data PPCElfData w = PPCElfData { elf :: E.Elf w
                                , memSymbols :: [EL.MemSymbol w]
                                }
 
-instance BL.BinaryLoader PPC32.PPC (E.Elf 32) where
+-- NOTE: This funny constraint is necessary because we don't have access to the
+-- PPCReg type here.  If we could import that type and get its associated
+-- instances, this information would be apparent to the compiler, but we can't
+-- import it because it is in a package we can't depend on.  Anywhere we use
+-- this instance, the compiler will ensure that the assertion is actually true.
+instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => BL.BinaryLoader PPC32.PPC (E.Elf 32) where
   type ArchBinaryData PPC32.PPC (E.Elf 32) = TOC.TOC 32
   type BinaryFormatData PPC32.PPC (E.Elf 32) = PPCElfData 32
   type Diagnostic PPC32.PPC (E.Elf 32) = EL.MemLoadWarning
-  type BinaryAddrWidth (E.Elf 32) = 32
   loadBinary = loadPPCBinary BL.Elf32Repr
   entryPoints = ppcEntryPoints
 
-instance BL.BinaryLoader PPC64.PPC (E.Elf 64) where
+instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => BL.BinaryLoader PPC64.PPC (E.Elf 64) where
   type ArchBinaryData PPC64.PPC (E.Elf 64)  = TOC.TOC 64
   type BinaryFormatData PPC64.PPC (E.Elf 64) = PPCElfData 64
   type Diagnostic PPC64.PPC (E.Elf 64) = EL.MemLoadWarning
-  type BinaryAddrWidth (E.Elf 64) = 64
   loadBinary = loadPPCBinary BL.Elf64Repr
   entryPoints = ppcEntryPoints
 
 ppcEntryPoints :: (X.MonadThrow m,
                    MC.MemWidth w,
                    Integral (E.ElfWordType w),
-                   w ~ BL.BinaryAddrWidth (E.Elf w),
+                   MC.ArchAddrWidth ppc ~ w,
                    BL.ArchBinaryData ppc (E.Elf w) ~ TOC.TOC w,
                    BL.BinaryFormatData ppc (E.Elf w) ~ PPCElfData w)
                => BL.LoadedBinary ppc (E.Elf w)
                -> m (NEL.NonEmpty (MC.MemSegmentOff w))
 ppcEntryPoints loadedBinary = do
-  -- mem :: EL.Memory (MC.ArchAddrWidth ppc)
   entryAddr <- liftMemErr PPCElfMemoryError (MC.readAddr mem MC.BigEndian tocEntryAbsAddr)
   absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem entryAddr)
   let otherEntries = mapMaybe (MC.asSegmentOff mem) (TOC.entryPoints toc)
   return (absEntryAddr NEL.:| otherEntries)
   where
-    -- tocEntryAddr :: E.ElfWordType w
     tocEntryAddr = E.elfEntry (elf (BL.binaryFormatData loadedBinary))
     tocEntryAbsAddr :: EL.MemWidth w => MC.MemAddr w
     tocEntryAbsAddr = MC.absoluteAddr (MC.memWord (fromIntegral tocEntryAddr))
@@ -85,7 +86,7 @@ liftMemErr exn a =
 loadPPCBinary :: (X.MonadThrow m,
                   BL.ArchBinaryData ppc (E.Elf w) ~ TOC.TOC w,
                   BL.BinaryFormatData ppc (E.Elf w) ~ PPCElfData w,
-                  BL.BinaryAddrWidth (E.Elf w) ~ w,
+                  MC.ArchAddrWidth ppc ~ w,
                   BL.Diagnostic ppc (E.Elf w) ~ EL.MemLoadWarning,
                   MC.MemWidth w,
                   Typeable w,

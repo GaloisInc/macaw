@@ -30,7 +30,6 @@ instance BL.BinaryLoader MX.X86_64 (E.Elf 64) where
   type ArchBinaryData MX.X86_64 (E.Elf 64) = ()
   type BinaryFormatData MX.X86_64 (E.Elf 64) = X86ElfData 64
   type Diagnostic MX.X86_64 (E.Elf 64) = EL.MemLoadWarning
-  type BinaryAddrWidth (E.Elf 64) = 64
   loadBinary = loadX86Binary
   entryPoints = x86EntryPoints
 

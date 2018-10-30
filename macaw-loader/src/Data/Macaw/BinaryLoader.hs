@@ -13,7 +13,7 @@ module Data.Macaw.BinaryLoader (
 import qualified Control.Monad.Catch as X
 import qualified Data.ElfEdit as E
 import qualified Data.List.NonEmpty as NEL
-import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.CFG as MM
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
@@ -30,7 +30,7 @@ instance PC.TestEquality BinaryRepr where
   testEquality _ _ = Nothing
 
 data LoadedBinary arch binFmt =
-  LoadedBinary { memoryImage :: MM.Memory (BinaryAddrWidth binFmt)
+  LoadedBinary { memoryImage :: MM.Memory (MM.ArchAddrWidth arch)
                , archBinaryData :: ArchBinaryData arch binFmt
                , binaryFormatData :: BinaryFormatData arch binFmt
                , loadDiagnostics :: [Diagnostic arch binFmt]
@@ -60,7 +60,6 @@ class BinaryLoader arch binFmt where
   -- | Information specific to the binary format that might be used later.
   type BinaryFormatData arch binFmt :: *
   type Diagnostic arch binFmt :: *
-  type BinaryAddrWidth binFmt :: Nat
   -- | A loader for the given binary format at a caller-specified architecture
   loadBinary :: (X.MonadThrow m) => LC.LoadOptions -> binFmt -> m (LoadedBinary arch binFmt)
   -- | An architecture-specific function to return the entry points of a binary
@@ -69,9 +68,9 @@ class BinaryLoader arch binFmt where
   -- based on the metadata available in a binary.
   entryPoints :: (X.MonadThrow m) =>
                  LoadedBinary arch binFmt
-              -> m (NEL.NonEmpty (MM.MemSegmentOff (BinaryAddrWidth binFmt)))
+              -> m (NEL.NonEmpty (MM.MemSegmentOff (MM.ArchAddrWidth arch)))
 
 
 -- | Return a runtime representative of the pointer width of the architecture
-addressWidth :: LoadedBinary arch binFmt -> NR.NatRepr (BinaryAddrWidth binFmt)
+addressWidth :: LoadedBinary arch binFmt -> NR.NatRepr (MM.ArchAddrWidth arch)
 addressWidth = MM.memWidth . memoryImage
