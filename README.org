@@ -32,6 +32,18 @@ The dependencies of this project that are not available on Hackage are tracked v
 
 #+END_SRC
 
+To build with ~stack~:
+
+#+BEGIN_SRC
+
+ $ git submodule update --init
+ # Choose one of the provided GHC version-specific
+ # stack-ghc-<version>.yaml files, e.g. stack-ghc-8.2.yaml.
+ $ ln -s stack-ghc-<version>.yaml stack.yaml
+ $ stack build
+
+#+END_SRC
+
 ** Code dependencies and related packages
 
   - macaw (binary code discovery)
