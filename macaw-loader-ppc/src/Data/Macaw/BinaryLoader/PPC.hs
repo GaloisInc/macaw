@@ -9,6 +9,7 @@
 
 module Data.Macaw.BinaryLoader.PPC
   ( PPCLoadException(..)
+  , HasTOC(..)
   )
 where
 
@@ -27,6 +28,8 @@ import           GHC.TypeLits
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
+class HasTOC arch binFmt where
+  getTOC :: BL.LoadedBinary arch binFmt -> TOC.TOC (MC.ArchAddrWidth arch)
 
 data PPCElfData w = PPCElfData { elf :: E.Elf w
                                , memSymbols :: [EL.MemSymbol w]
@@ -44,12 +47,18 @@ instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => BL.BinaryLoader PPC32.PPC (E.Elf 3
   loadBinary = loadPPCBinary BL.Elf32Repr
   entryPoints = ppcEntryPoints
 
+instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => HasTOC PPC32.PPC (E.Elf 32) where
+  getTOC = BL.archBinaryData
+
 instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => BL.BinaryLoader PPC64.PPC (E.Elf 64) where
   type ArchBinaryData PPC64.PPC (E.Elf 64)  = TOC.TOC 64
   type BinaryFormatData PPC64.PPC (E.Elf 64) = PPCElfData 64
   type Diagnostic PPC64.PPC (E.Elf 64) = EL.MemLoadWarning
   loadBinary = loadPPCBinary BL.Elf64Repr
   entryPoints = ppcEntryPoints
+
+instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => HasTOC PPC64.PPC (E.Elf 64) where
+  getTOC = BL.archBinaryData
 
 ppcEntryPoints :: (X.MonadThrow m,
                    MC.MemWidth w,
