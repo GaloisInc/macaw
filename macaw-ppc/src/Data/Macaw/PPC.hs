@@ -67,8 +67,7 @@ archDemandContext _ =
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
 
-ppc64_linux_info :: ( BL.BinaryAddrWidth binFmt ~ 64
-                    , BL.ArchBinaryData PPC64.PPC binFmt ~ TOC.TOC 64
+ppc64_linux_info :: ( BL.ArchBinaryData PPC64.PPC binFmt ~ TOC.TOC 64
                     ) =>
                     BL.LoadedBinary PPC64.PPC binFmt
                  -> MI.ArchitectureInfo PPC64.PPC
@@ -92,8 +91,7 @@ ppc64_linux_info binData =
   where
     proxy = Proxy @PPC64.PPC
 
-ppc32_linux_info :: ( BL.BinaryAddrWidth binFmt ~ 32
-                    , BL.ArchBinaryData PPC32.PPC binFmt ~ TOC.TOC 32
+ppc32_linux_info :: ( BL.ArchBinaryData PPC32.PPC binFmt ~ TOC.TOC 32
                     ) =>
                     BL.LoadedBinary PPC32.PPC binFmt
                  -> MI.ArchitectureInfo PPC32.PPC
