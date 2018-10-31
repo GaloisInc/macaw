@@ -2405,7 +2405,7 @@ def_cvtss2sd = defBinary "cvtss2sd" $ \_ loc val -> do
 -- | CVTSD2SS Convert scalar double-precision floating-point values to
 -- scalar single-precision floating-point values
 def_cvtsd2ss :: InstructionDef
-def_cvtsd2ss = defBinary "cvtss2ss" $ \_ loc val -> do
+def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ loc val -> do
   r <- getXMM loc
   v <- eval =<< get =<< getXMM_mr_low64 val
   (xmm_low32 r .=) =<< evalArchFn (SSE_CVTSD2SS v)
