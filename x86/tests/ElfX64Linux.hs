@@ -76,7 +76,7 @@ testDiscovery expectedFilename elf =
                 case MM.asSegmentOff mem addr  of
                   Just a -> a
                   Nothing -> do
-                    let ppSeg seg = "  Segment: " ++ show (MM.relativeAddr seg 0)
+                    let ppSeg seg = "  Segment: " ++ show (MM.segmentOffAddr seg 0)
                     error $ "Could not resolve address : " ++ show addr ++ "\n"
                           ++ unlines (fmap ppSeg (MM.memSegments mem))
         let expectedEntries = M.fromList

@@ -58,7 +58,7 @@ data InstructionDecodeError w
      -- ^ A relocation appeared in given position.
    | BSSEncountered
      -- ^ We encountered BSS data when decoding instruction.s
-   | InvalidInstruction ![SegmentRange w]
+   | InvalidInstruction ![MemChunk w]
      -- ^ We could not decode the instruction.
 
 instance Show (InstructionDecodeError w) where
@@ -248,7 +248,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
 
   invalidInstruction = do
     ms <- MBR $ get
-    let e = InvalidInstruction $ takeSegmentPrefix (msInitial ms) (msOffset ms)
+    let e = InvalidInstruction $ forcedTakeMemChunks (msInitial ms) (msOffset ms)
     throwError (0, e)
 
 ------------------------------------------------------------------------
