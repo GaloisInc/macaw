@@ -2154,38 +2154,29 @@ def_ucomiss =
 
 -- *** SSE Logical Instructions
 
-exec_andpx :: 1 <= elsz
-           => NatRepr elsz
+exec_bifpx :: 1 <= elsz =>
+              (Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
+           -> NatRepr elsz
            -> Location (Addr ids) XMMType
            -> Expr ids XMMType
            -> X86Generator st ids ()
-exec_andpx elsz l v = fmap_loc l $ \lv -> vectorize2 elsz (.&.) lv v
+exec_bifpx f elsz l v = fmap_loc l $ \lv -> (vectorize2 elsz) (f) lv v
 
 -- | ANDPS Perform bitwise logical AND of packed single-precision floating-point values
 def_andps :: InstructionDef
-def_andps = defBinaryKnown "andps" $ exec_andpx n32
+def_andps = defBinaryKnown "andps" $ exec_bifpx (.&.) n32
 
 -- ANDNPS Perform bitwise logical AND NOT of packed single-precision floating-point values
-
-exec_orpx :: 1 <= elsz
-          => NatRepr elsz
-          -> Location (Addr ids) XMMType
-          -> Expr ids XMMType
-          -> X86Generator st ids ()
-exec_orpx elsz l v = fmap_loc l $ \lv -> vectorize2 elsz (.|.) lv v
+def_andnps :: InstructionDef
+def_andnps = defBinaryKnown "andnps" $ exec_bifpx (\a b -> bvComplement $ (.&.) a b) n32
 
 -- | ORPS Perform bitwise logical OR of packed single-precision floating-point values
 def_orps :: InstructionDef
-def_orps = defBinaryKnown "orps" $ exec_orpx n32
+def_orps = defBinaryKnown "orps" $ exec_bifpx (.|.) n32
 
--- XORPS Perform bitwise logical XOR of packed single-precision floating-point values
-
+-- | XORPS Perform bitwise logical XOR of packed single-precision floating-point values
 def_xorps :: InstructionDef
-def_xorps =
-  defBinary "xorps" $ \_ loc val -> do
-    l <- getBVLocation loc n128
-    v <- readXMMValue val
-    modify l (`bvXor` v)
+def_xorps = defBinaryKnown "xorps" $ exec_bifpx bvXor n32
 
 -- *** SSE Shuffle and Unpack Instructions
 
@@ -2398,12 +2389,12 @@ def_sqrtsd = def_xmm_sd SSE_Sqrt
 
 -- | ANDPD  Perform bitwise logical AND of packed double-precision floating-point values
 def_andpd :: InstructionDef
-def_andpd = defBinaryKnown "andpd" $ exec_andpx n64
+def_andpd = defBinaryKnown "andpd" $ exec_bifpx (.&.) n64
 
 -- ANDNPD Perform bitwise logical AND NOT of packed double-precision floating-point values
 -- | ORPD   Perform bitwise logical OR of packed double-precision floating-point values
 def_orpd :: InstructionDef
-def_orpd = defBinaryKnown "orpd" $ exec_orpx n64
+def_orpd = defBinaryKnown "orpd" $ exec_bifpx (.|.)  n64
 
 -- XORPD  Perform bitwise logical XOR of packed double-precision floating-point values
 
@@ -2890,6 +2881,7 @@ all_instructions =
   , def_ucomiss
     -- SSE Logical
   , def_andps
+  , def_andnps
   , def_orps
 
   , def_pmaxu "b"  n8
