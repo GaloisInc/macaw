@@ -183,6 +183,8 @@ pureSem sym fn = do
             iFloatMin @_ @(FloatInfoFromSSEType (M.BVType w)) symi x'' y''
           M.SSE_Max ->
             iFloatMax @_ @(FloatInfoFromSSEType (M.BVType w)) symi x'' y''
+          M.SSE_Sqrt ->
+            iFloatSqrt @_ @(FloatInfoFromSSEType (M.BVType w)) symi RTP x''
     M.SSE_CMPSX op (tp :: M.SSE_FloatType tp) x y -> do
       x' <- toValFloat symi tp x
       y' <- toValFloat symi tp y

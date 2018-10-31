@@ -200,6 +200,7 @@ data SSE_Op
    | SSE_Div
    | SSE_Min
    | SSE_Max
+   | SSE_Sqrt
 
 -- | Return the name of the mnemonic associated with the SSE op.
 sseOpName :: SSE_Op -> String
@@ -211,6 +212,7 @@ sseOpName f =
     SSE_Div -> "div"
     SSE_Min -> "min"
     SSE_Max -> "max"
+    SSE_Sqrt -> "sqrt"
 
 -- | A single or double value for floating-point restricted to this types.
 data SSE_FloatType tp where

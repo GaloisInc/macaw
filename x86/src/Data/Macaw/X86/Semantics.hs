@@ -2033,7 +2033,11 @@ def_divps = def_xmm_packed SSE_Div
 -- RCPPS Compute reciprocals of packed single-precision floating-point values
 -- RCPSS Compute reciprocal of scalar single-precision floating-point values
 -- SQRTPS Compute square roots of packed single-precision floating-point values
--- SQRTSS Compute square root of scalar single-precision floating-point values
+
+-- |SQRTSS Compute square root of scalar single-precision floating-point values
+def_sqrtss :: InstructionDef
+def_sqrtss = def_xmm_ss SSE_Sqrt
+
 -- RSQRTPS Compute reciprocals of square roots of packed single-precision floating-point values
 -- RSQRTSS Compute reciprocal of square root of scalar single-precision floating-point values
 
@@ -2322,7 +2326,11 @@ def_divsd = def_xmm_sd SSE_Div
 -- DIVPD Divide packed double-precision floating-point values
 
 -- SQRTPD Compute packed square roots of packed double-precision floating-point values
--- SQRTSD Compute scalar square root of scalar double-precision floating-point values
+
+-- | SQRTSD Compute scalar square root of scalar double-precision floating-point values
+def_sqrtsd :: InstructionDef
+def_sqrtsd = def_xmm_sd SSE_Sqrt
+
 -- MAXPD Return maximum packed double-precision floating-point values
 -- MAXSD Return maximum scalar double-precision floating-point values
 -- MINPD Return minimum packed double-precision floating-point values
@@ -2813,6 +2821,8 @@ all_instructions =
   , def_mulss
   , def_divss
   , def_minss
+  , def_sqrtss
+  , def_sqrtsd
   , def_minps
   , def_maxss
   , def_maxps
