@@ -900,6 +900,64 @@ def_sar = def_sh "sar" bvSar set_cf set_of
           bvBit v (uext w i .- bvLit w 1) .||. (notInRange .&&. msb_v)
         set_of _ _ = false
 
+-- Like def_sh, but for shrd/shxd instructions which have 3 arguments
+-- instead of 2.
+def_shXd :: String
+         -> (forall ids n . 1 <= n => BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n)
+            -- ^ Function for value.  Takes the source value and the
+            -- current value and returns the updated value.
+         -> (forall ids n . (1 <= n, 8 <= n) => NatRepr n -> BVExpr ids n -> BVExpr ids 8 -> Expr ids BoolType)
+            -- ^ Function to update carry flag. Takes current value of
+            -- location to shift and number of indices to shift by.
+         -> (forall ids n . (1 <= n) => BVExpr ids n -> BVExpr ids n -> Expr ids BoolType)
+            -- ^ Function to update overflow flag.  Takes current and
+            -- new value of location.
+       -> InstructionDef
+def_shXd mnemonic val_setter cf_setter of_setter =
+  defTernary mnemonic $ \_ loc srcReg amt -> do
+    -- srcVal <- get srcReg
+    -- SomeBV srcVal <- getSomeBVValue srcReg
+    Some (HasRepSize lw l) <- getAddrRegOrSegment loc
+    srcVal <- getBVValue srcReg (typeWidth l)
+    case lw of
+      ByteRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+      WordRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+      DWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+      QWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+
+def_shld :: InstructionDef
+def_shld = def_shXd "shld" exec_shld set_cf set_of
+  where set_cf w v i =
+           (i `bvUle` bvLit n8 (natValue w)) .&&. bvBit v (bvLit w (natValue w) .- uext w i)
+        set_of v _ =  msb v
+
+exec_shld :: forall n ids . (1 <= n) =>
+             BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n
+exec_shld srcVal v amt = let w = typeWidth v
+                         in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
+                            withAddLeq w w $
+                            \w2 -> let iv = bvCat v srcVal
+                                       amt' = uext w2 amt
+                                       fv = bvShl iv amt'
+                                   in fst $ bvSplit fv
+
+def_shrd :: InstructionDef
+def_shrd = def_shXd "shrd" exec_shrd set_cf set_of
+  where -- Carry flag should be set to last bit shifted out.
+        -- Note that if i exceeds w, bvBit v i returns false, so this does what we want.
+        set_cf w v i = bvBit v (uext w i .- bvLit w 1)
+        set_of v res = msb res `boolXor` msb v
+
+exec_shrd :: forall n ids . (1 <= n) =>
+             BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n
+exec_shrd srcVal v amt = let w = typeWidth v
+                         in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
+                            withAddLeq w w $
+                            \w2 -> let iv = bvCat srcVal v
+                                       amt' = uext w2 amt
+                                       fv = bvShr iv amt'
+                                   in snd $ bvSplit fv
+
 -- FIXME: use really_exec_shift above?
 exec_rol :: (1 <= n', n' <= n, SupportedBVWidth n)
          => Location (Addr ids) (BVType n)
@@ -2754,6 +2812,8 @@ all_instructions =
   , def_sbb
   , def_shl
   , def_shr
+  , def_shld
+  , def_shrd
   , def_sar
   , defNullary  "std" $ df_loc .= true
   , def_sub
