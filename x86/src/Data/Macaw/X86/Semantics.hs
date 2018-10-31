@@ -848,7 +848,7 @@ exec_sh lw l val val_setter cf_setter of_setter = do
      of_loc .= mux (low_count .=. zero8) of_val
                  -- If count is one, then of is xor of initial and final values.
                  (mux (low_count .=. bvLit n8 1) (of_setter v res) of_undef)
-  -- Set the cover flag
+  -- Set the carry flag
   modify cf_loc $ mux isNonzero (cf_setter w v low_count)
   -- Set result flags
   modify sf_loc $ mux isNonzero (msb res)
@@ -2133,11 +2133,11 @@ def_xorps =
 
 -- SHUFPS Shuffles values in packed single-precision floating-point operands
 -- UNPCKHPS Unpacks and interleaves the two high-order values from two single-precision floating-point operands
--- | UNPCKLPS Unpacks and interleaves the two low-order values from two single-precision floating-point operands
 
 interleave :: [a] -> [a] -> [a]
 interleave xs ys = concat (zipWith (\x y -> [x, y]) xs ys)
 
+-- | UNPCKLPS Unpacks and interleaves the two low-order values from two single-precision floating-point operands
 def_unpcklps :: InstructionDef
 def_unpcklps = defBinaryKnown "unpcklps" exec
   where exec :: Location (Addr ids) XMMType -> Expr ids XMMType -> X86Generator st ids ()

@@ -176,7 +176,7 @@ defBinaryLVge mnem f = defBinaryLVpoly mnem $ \l v -> do
   Just LeqProof <- return $ testLeq (typeWidth v) (typeWidth l)
   f l v
 
--- | Define an instruction from a function with fixed widths kmown at compile time/.
+-- | Define an instruction from a function with fixed widths known at compile time.
 defBinaryKnown :: (KnownNat n, KnownNat n')
                => String
                -> (forall st ids . Location (Addr ids) (BVType n) -> BVExpr ids n' -> X86Generator st ids ())
