@@ -1165,13 +1165,12 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
       crucGenArchTermStmt archFns aterm regs
       case mnextAddr of
         Just nextAddr -> addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
-        -- This return () looks innocuous, but is actually pretty bad news.
-        -- CrucGen is a continuation-like monad, originally seeded with a
-        -- continuation that errors out. addTermStmt ignores the
-        -- continuation... but return won't, so this essentially dooms things.
-        -- But what else can we do, if the architecture's discovery process
-        -- doesn't know where code will go next?
-        Nothing -> return ()
+        -- There won't be a next instruction if, for instance, this is
+        -- an X86 HLT instruction.  TODO: We may want to do something
+        -- else for an exit syscall, since that's a normal outcome.
+        Nothing -> do
+          msgVal <- crucibleValue (C.TextLit "Halting")
+          addTermStmt $ CR.ErrorStmt msgVal
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.TextLit msg)
       addTermStmt $ CR.ErrorStmt msgVal
