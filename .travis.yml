@@ -41,8 +41,8 @@ install:
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
  - travis_wait stack --no-terminal --skip-ghc-check setup
- - stack build macaw-x86 macaw-x86-symbolic
- - stack test macaw-x86
+ - stack --stack-yaml stack.ghc-8.2.2.yaml build macaw-x86 macaw-x86-symbolic
+ - stack --stack-yaml stack.ghc-8.2.2.yaml test macaw-x86
 
 # Check that the resulting source distribution can be built & installed.
 # If there are no other `.tar.gz` files in `dist`, this can be even simpler:
