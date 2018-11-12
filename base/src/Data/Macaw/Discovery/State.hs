@@ -33,7 +33,7 @@ module Data.Macaw.Discovery.State
   , globalDataMap
   , funInfo
   , unexploredFunctions
-  , trustKnownFns
+  , trustedFunctionEntryPoints
   , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
@@ -51,6 +51,8 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
+import           Data.Set (Set)
+import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -310,9 +312,20 @@ data DiscoveryState arch
                       -- they are analyzed.
                       --
                       -- The keys in this map and `_funInfo` should be mutually disjoint.
-                    , _trustKnownFns       :: !Bool
-                      -- ^ Should we use and depend on known function entries in
-                      -- our analysis? E.g. used to distinguish jumps vs. tail calls
+                    , _trustedFunctionEntryPoints :: !(Set (ArchSegmentOff arch))
+                      -- ^ This is the set of addresses that we treat
+                      -- as definitely belonging to function entry
+                      -- points.
+                      --
+                      -- The discovery process will not allow
+                      -- intra-procedural jumps to these addresses.
+                      -- Jumps to these addresses must either be calls
+                      -- or tail calls.
+                      --
+                      -- To ensure translation is invariant on the
+                      -- order in which functions are visited, this
+                      -- set should be initialized upfront, and not
+                      -- changed.
                     , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
                       -- ^ if present, this predicate decides whether to explore
                       -- a function at the given address or not
@@ -350,7 +363,7 @@ emptyDiscoveryState mem symbols info =
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustKnownFns       = False
+  , _trustedFunctionEntryPoints = Set.empty
   , _exploreFnPred       = Nothing
   }
 
@@ -368,8 +381,10 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
-trustKnownFns :: Simple Lens (DiscoveryState arch) Bool
-trustKnownFns = lens _trustKnownFns (\s v -> s { _trustKnownFns = v })
+trustedFunctionEntryPoints :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+trustedFunctionEntryPoints =
+  lens _trustedFunctionEntryPoints
+       (\s v -> s { _trustedFunctionEntryPoints = v })
 
 exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })

@@ -68,6 +68,7 @@ import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
 
 import           Data.Macaw.AbsDomain.AbsState
        ( AbsBlockState
+       , curAbsStack
        , setAbsIP
        , absRegState
        , StackEntry(..)
@@ -503,6 +504,17 @@ identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
                 -- Otherwise skip over this instruction.
               | otherwise -> go prev (stmt Seq.<| after)
 
+-- | Return true if stack pointer has been reset to original value, and
+-- return address is on top of stack.
+checkForReturnAddrX86 :: forall ids
+                      .  AbsProcessorState X86Reg ids
+                      -> Bool
+checkForReturnAddrX86 absState
+  | Just (StackEntry _ ReturnAddr) <- Map.lookup 8 (absState^.curAbsStack) =
+      True
+  | otherwise =
+      False
+
 -- | Called to determine if the instruction sequence contains a return
 -- from the current function.
 --
@@ -575,6 +587,7 @@ x86_64_info preservePred =
                    , absEvalArchStmt   = \s _ -> s
                    , postCallAbsState = x86PostCallAbsState
                    , identifyCall      = identifyX86Call
+                   , checkForReturnAddr = \_ s -> checkForReturnAddrX86 s
                    , identifyReturn    = identifyX86Return
                    , rewriteArchFn     = rewriteX86PrimFn
                    , rewriteArchStmt   = rewriteX86Stmt

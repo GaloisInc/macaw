@@ -97,8 +97,23 @@ data ArchitectureInfo arch
        -- Given a memory state, list of statements, and final register
        -- state, the should determine if this is a call, and if so,
        -- return the statements with any action to push the return
-       -- value to the stack removed, and provide the explicit return
-       -- address that the function should return to.
+       -- value to the stack removed, and provide the return address that
+       -- the function should return to.
+
+     , checkForReturnAddr :: forall ids
+                          .  RegState (ArchReg arch) (Value arch ids)
+                          -> AbsProcessorState (ArchReg arch) ids
+                          -> Bool
+       -- ^ @checkForReturnAddr regs s@ returns true if the location
+       -- where the return address is normally stored in regs when
+       -- calling a function does indeed contain the abstract value
+       -- associated with return addresses.
+       --
+       -- For x86 this checks if the address just above the stack is the
+       -- return address.  For ARM, this should check the link register.
+       --
+       -- This predicate is invoked when considering if a potential tail call
+       -- is setup to return to the right location.
      , identifyReturn :: forall ids
                       .  [Stmt arch ids]
                       -> RegState (ArchReg arch) (Value arch ids)

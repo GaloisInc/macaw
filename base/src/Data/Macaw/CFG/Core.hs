@@ -693,7 +693,7 @@ data Stmt arch ids
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
-          -- ^ Function for pretty printing an offset
+          -- ^ Function for pretty printing an instruction address offset
        -> Stmt arch ids
        -> Doc
 ppStmt ppOff stmt =

@@ -18,6 +18,7 @@ module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
+       , State.trustedFunctionEntryPoints
        , State.AddrSymMap
        , State.funInfo
        , State.exploredFunctions
@@ -844,6 +845,7 @@ parseFetchAndExecute ctx idx stmts regs s = do
   -- We define calls as statements that end with a write that
   -- stores the pc to an address.
   case () of
+    -- The block ends with a Mux, so we turn this into a `ParsedIte` statement.
     _ | Just (Mux _ c t f) <- valueAsApp (s^.boundValue ip_reg) -> do
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
@@ -869,7 +871,7 @@ parseFetchAndExecute ctx idx stmts regs s = do
                                   }
           pure (ret, falseIdx)
 
-    -- The last statement was a call.
+    -- Use architecture-specific callback to check if last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
     -- this code will never jump to the return value.
     _ | Just (prev_stmts, ret) <- identifyCall ainfo mem stmts s  -> do
@@ -913,7 +915,7 @@ parseFetchAndExecute ctx idx stmts regs s = do
 
       -- Jump to a block within this function.
       | Just tgt_mseg <- valueAsSegmentOff mem (s^.boundValue ip_reg)
-        -- Check
+        -- Check target block address is in executable segment.
       , segmentFlags (segoffSegment tgt_mseg) `Perm.hasPerm` Perm.execute
 
         -- Check the target address is not the entry point of this function.
@@ -935,7 +937,8 @@ parseFetchAndExecute ctx idx stmts regs s = do
                                  , stmtsAbsState = absProcState'
                                  }
          pure (ret, idx+1)
-      -- Block ends with what looks like a jump table.
+
+        -- Block ends with what looks like a jump table.
       | Just (_jt, entries, jumpIndex) <- matchJumpTableRef mem absProcState' (s^.curIP) -> do
 
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
@@ -957,12 +960,13 @@ parseFetchAndExecute ctx idx stmts regs s = do
                                     }
             pure (ret,idx+1)
 
-      -- Check for tail call when the stack pointer points to the return address.
-      --
-      -- TODO: this makes sense for x86, but is not correct for all architectures
-      | ptrType    <- addrMemRepr ainfo
-      , sp_val     <- s^.boundValue sp_reg
-      , ReturnAddr <- absEvalReadMem absProcState' sp_val ptrType -> do
+      -- Check for tail call when the calling convention seems to be satisfied.
+      | spVal     <- s^.boundValue sp_reg
+        -- Check to see if the stack pointer points to an offset of the initial stack.
+      , StackOffset _ offsets <- transferValue absProcState' spVal
+        -- Stack stack is back to height when function was called.
+      , offsets == Set.singleton 0
+      , checkForReturnAddr ainfo s absProcState' -> do
         finishWithTailCall absProcState'
 
       -- Is this a jump to a known function entry? We're already past the
@@ -1097,19 +1101,9 @@ addBlocks src finfo sz blockMap =
       funAddr <- gets curFunAddr
       s <- use curFunCtx
 
-      -- Combine entries of functions we've discovered thus far with
-      -- undiscovered functions with entries marked InitAddr, which we assume is
-      -- info we know from the symbol table or some other reliable source, and
-      -- pass in. Only used in analysis if pctxTrustKnownFns is True.
-      let knownFns =
-            if s^.trustKnownFns then
-              Set.union (Map.keysSet $ s^.funInfo)
-                        (Map.keysSet $ Map.filter (== InitAddr) $ s^.unexploredFunctions)
-             else
-              Set.empty
       let ctx = ParseContext { pctxMemory         = memory s
                              , pctxArchInfo       = archInfo s
-                             , pctxKnownFnEntries = knownFns
+                             , pctxKnownFnEntries = s^.trustedFunctionEntryPoints
                              , pctxFunAddr        = funAddr
                              , pctxAddr           = src
                              , pctxBlockMap       = blockMap
