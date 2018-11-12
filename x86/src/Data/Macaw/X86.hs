@@ -510,7 +510,7 @@ checkForReturnAddrX86 :: forall ids
                       .  AbsProcessorState X86Reg ids
                       -> Bool
 checkForReturnAddrX86 absState
-  | Just (StackEntry _ ReturnAddr) <- Map.lookup 8 (absState^.curAbsStack) =
+  | Just (StackEntry _ ReturnAddr) <- Map.lookup 0 (absState^.curAbsStack) =
       True
   | otherwise =
       False
