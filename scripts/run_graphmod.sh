@@ -7,10 +7,11 @@ if ! type -p graphmod || ! type -p dot; then
     exit 1
 fi
 
-dir="src"
-name="reopt"
-FILES="$(find src -name '*.hs') $(find reopt -name '*.hs')"
-echo "Writing graphmod file to $name.svg"
-graphmod -i src -i reopt -p --no-cluster $FILES -q | dot -Tsvg > reopt.svg
+include="-i base/src -i x86/src"
+files="$(find base/src -name '*.hs') $(find x86/src -name '*.hs')"
 
-graphmod -i src -i reopt -p $FILES -q | dot -Tsvg > reopt_cluster.svg
+echo "Writing graphmod file to macaw.svg"
+graphmod $include --no-cluster $files -q | dot -Tsvg > macaw.svg
+
+echo "Writing graphmod file to macaw_cluster.svg"
+graphmod $include -p $files -q | dot -Tsvg > macaw_cluster.svg
