@@ -167,12 +167,11 @@ instance MemWidth w => Show (X86TranslateError w) where
 
 
 -- | Signal an error from the initial address.
-initError :: ExploreLoc -- ^ Location to explore from.
+initError :: MemSegmentOff 64 -- ^ Location to explore from.
+          -> RegState X86Reg (Value X86_64 ids)
           -> X86TranslateError 64
           -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
-initError loc err = do
-  let addr = loc_ip loc
-  let s = initX86State loc
+initError addr s err = do
   let b = Block { blockLabel = 0
                 , blockStmts = []
                 , blockTerm  = TranslateError s (Text.pack (show err))
@@ -276,7 +275,9 @@ disassembleFixedBlock :: NonceGenerator (ST st_s) ids
                        -- ^ Number of bytes to translate
                       -> ST st_s (Either (X86TranslateError 64) (Block X86_64 ids))
 disassembleFixedBlock gen loc sz = do
-  case segoffContentsAfter (loc_ip loc) of
+  let addr = loc_ip loc
+  let initRegs = initX86State loc
+  case segoffContentsAfter addr of
     Left err -> do
       pure $ Left $ FlexdisMemoryError err
     Right fullContents -> do
@@ -284,8 +285,8 @@ disassembleFixedBlock gen loc sz = do
         Left _err -> do
           error $ "Could not split memory."
         Right (contents,_) -> do
-          let pblock = emptyPreBlock (initX86State loc)
-          disassembleFixedBlock' gen pblock 0 (loc_ip loc) contents
+          let pblock = emptyPreBlock initRegs
+          disassembleFixedBlock' gen pblock 0 addr contents
 
 -- | Translate block, returning blocks read, ending
 -- PC, and an optional error.  and ending PC.
@@ -328,13 +329,14 @@ disassembleBlock :: forall s
                  -> ST s (Block X86_64 s, MemWord 64, Maybe (X86TranslateError 64))
 disassembleBlock nonce_gen loc max_size = do
   let addr = loc_ip loc
+  let regs = initX86State loc
   let sz = segoffOffset addr + max_size
   (b, next_ip_off, maybeError) <-
     case segoffContentsAfter addr of
       Left msg -> do
-        initError loc (FlexdisMemoryError msg)
+        initError addr regs (FlexdisMemoryError msg)
       Right contents -> do
-        let pblock = emptyPreBlock (initX86State loc)
+        let pblock = emptyPreBlock regs
         disassembleBlockImpl nonce_gen pblock 0 addr sz contents
   assert (next_ip_off > segoffOffset addr) $ do
   let block_sz = next_ip_off - segoffOffset addr
@@ -416,56 +418,67 @@ transferAbsValue r f =
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
 
+
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
-tryDisassembleBlockFromAbsState :: forall s ids
-                                .  NonceGenerator (ST s) ids
-                                -> MemSegmentOff 64
-                                -- ^ Address to disassemble at
-                                -> Int
-                                -- ^ Maximum size of this block
-                                -> AbsBlockState X86Reg
-                                -- ^ Abstract state of processor for defining state.
-                                -> ExceptT String (ST s) (Block X86_64 ids, Int, Maybe String)
-tryDisassembleBlockFromAbsState nonceGen addr maxSize ab = do
+initRegsFromAbsState :: forall ids
+                     .  MemSegmentOff 64
+                     -- ^ Address to disassemble at
+                     -> AbsBlockState X86Reg
+                     -- ^ Abstract state of processor for defining state.
+                     -> Either String (RegState X86Reg (Value X86_64 ids))
+initRegsFromAbsState addr ab = do
   t <-
     case asConcreteSingleton (ab^.absRegState^.boundValue X87_TopReg) of
-      Nothing -> throwError "Could not determine height of X87 stack."
+      Nothing -> Left "Could not determine height of X87 stack."
       Just t -> pure t
   d <-
     case asConcreteSingleton (ab^.absRegState^.boundValue DF) of
       Nothing -> do
-        throwError $ "Could not determine df flag " ++ show (ab^.absRegState^.boundValue DF)
+        Left $ "Could not determine df flag " ++ show (ab^.absRegState^.boundValue DF)
       Just d -> pure d
-  let loc = ExploreLoc { loc_ip = addr
-                       , loc_x87_top = fromInteger t
-                       , loc_df_flag = d /= 0
-                       }
+  pure $ initX86State $
+        ExploreLoc { loc_ip = addr
+                   , loc_x87_top = fromInteger t
+                   , loc_df_flag = d /= 0
+                   }
+
+-- | Disassemble block, returning either an error, or a list of blocks
+-- and ending PC.
+tryDisassembleBlock :: forall s ids
+                    .  NonceGenerator (ST s) ids
+                    -> MemSegmentOff 64
+                       -- ^ Address to disassemble at
+                    -> RegState X86Reg (Value X86_64 ids)
+                       -- ^ Initial registers
+                    -> Int
+                       -- ^ Maximum size of this block
+                    -> ExceptT String (ST s) (Block X86_64 ids, Int, Maybe String)
+tryDisassembleBlock nonceGen addr initRegs maxSize = do
   let off = segoffOffset  addr
-  let pblock = emptyPreBlock (initX86State loc)
   (b, nextIPOff, maybeError) <- lift $
     case segoffContentsAfter addr of
       Left msg -> do
-        initError loc (FlexdisMemoryError msg)
+        initError addr initRegs (FlexdisMemoryError msg)
       Right contents -> do
-        disassembleBlockImpl nonceGen pblock 0 addr (off + fromIntegral maxSize) contents
+        disassembleBlockImpl nonceGen (emptyPreBlock initRegs) 0 addr (off + fromIntegral maxSize) contents
   let sz :: Int
       sz = fromIntegral $ nextIPOff - off
   pure $! (b, sz, show <$> maybeError)
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
-disassembleBlockFromAbsState :: forall s ids
-                             .  NonceGenerator (ST s) ids
-                             -> MemSegmentOff 64
-                             -- ^ Address to disassemble at
-                             -> Int
-                             -- ^ Maximum size of this block
-                             -> AbsBlockState X86Reg
-                             -- ^ Abstract state of processor for defining state.
-                             -> ST s ([Block X86_64 ids], Int, Maybe String)
-disassembleBlockFromAbsState nonceGen addr maxSize ab = do
-  mr <- runExceptT $ tryDisassembleBlockFromAbsState nonceGen addr maxSize ab
+disassembleBlockWithRegs :: forall s ids
+                         .  NonceGenerator (ST s) ids
+                         -> MemSegmentOff 64
+                            -- ^ Address to disassemble at
+                         -> RegState X86Reg (Value X86_64 ids)
+                         -> Int
+                            -- ^ Maximum size of this block
+                            -- ^ Abstract state of processor for defining state.
+                         -> ST s ([Block X86_64 ids], Int, Maybe String)
+disassembleBlockWithRegs nonceGen addr initRegs maxSize = do
+  mr <- runExceptT $ tryDisassembleBlock nonceGen addr initRegs maxSize
   case mr of
     Left msg -> pure ([], 0, Just msg)
     Right (b,sz, merr) ->  pure ([b],sz,merr)
@@ -475,10 +488,10 @@ disassembleBlockFromAbsState nonceGen addr maxSize ab = do
 --
 -- This can also return Nothing if the call is not supported.
 identifyX86Call :: Memory 64
-                -> [Stmt X86_64 ids]
+                -> Seq (Stmt X86_64 ids)
                 -> RegState X86Reg (Value X86_64 ids)
                 -> Maybe (Seq (Stmt X86_64 ids), MemSegmentOff 64)
-identifyX86Call mem stmts0 s = go (Seq.fromList stmts0) Seq.empty
+identifyX86Call mem stmts0 s = go stmts0 Seq.empty
   where -- Get value of stack pointer
         next_sp = s^.boundValue sp_reg
         -- Recurse on statements.
@@ -521,13 +534,13 @@ checkForReturnAddrX86 absState
 -- An instruction executing a return from a function will place the
 -- ReturnAddr value (placed on the top of the stack by
 -- 'initialX86AbsState' above) into the instruction pointer.
-identifyX86Return :: [Stmt X86_64 ids]
+identifyX86Return :: Seq (Stmt X86_64 ids)
                   -> RegState X86Reg (Value X86_64 ids)
                   -> AbsProcessorState X86Reg ids
                   -> Maybe (Seq (Stmt X86_64 ids))
 identifyX86Return stmts s finalRegSt8 =
   case transferValue finalRegSt8 (s^.boundValue ip_reg) of
-    ReturnAddr -> Just $ Seq.fromList stmts
+    ReturnAddr -> Just stmts
     _ -> Nothing
 
 -- | Return state post call
@@ -581,7 +594,8 @@ x86_64_info preservePred =
   ArchitectureInfo { withArchConstraints = \x -> x
                    , archAddrWidth      = Addr64
                    , archEndianness     = LittleEndian
-                   , disassembleFn      = disassembleBlockFromAbsState
+                   , mkInitialRegsForBlock = initRegsFromAbsState
+                   , disassembleFn      = disassembleBlockWithRegs
                    , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s

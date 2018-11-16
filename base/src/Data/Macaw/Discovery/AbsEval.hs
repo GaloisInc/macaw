@@ -88,8 +88,9 @@ absEvalStmt info stmt = withArchConstraints info $
       pure ()
 
 -- This takes a processor state and updates it based on executing each statement.
-absEvalStmts :: ArchitectureInfo arch
+absEvalStmts :: Foldable t
+             => ArchitectureInfo arch
              -> AbsProcessorState (ArchReg arch) ids
-             -> [Stmt arch ids]
+             -> t (Stmt arch ids)
              -> AbsProcessorState (ArchReg arch) ids
 absEvalStmts info r stmts = execState (mapM_ (absEvalStmt info) stmts) r

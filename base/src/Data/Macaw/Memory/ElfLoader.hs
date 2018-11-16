@@ -383,6 +383,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationSize  = 8
                         , relocationIsSigned = False
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot = True
                         }
     Elf.R_X86_64_PC32 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
@@ -390,8 +391,9 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationOffset     = off
                         , relocationIsRel      = True
                         , relocationSize       = 4
-                        , relocationIsSigned = False
+                        , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
                         }
     Elf.R_X86_64_32 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
@@ -401,6 +403,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationSize       = 4
                         , relocationIsSigned = False
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
                         }
     Elf.R_X86_64_32S -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
@@ -410,6 +413,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationSize       = 4
                         , relocationIsSigned   = True
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
                         }
     Elf.R_X86_64_64 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
@@ -419,6 +423,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationSize       = 8
                         , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
                         }
     -- R_X86_64_GLOB_DAT are used to update GOT entries with their
     -- target address.  They are similar to R_x86_64_64 except appear
@@ -432,6 +437,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationSize       = 8
                         , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
                         }
 
     -- Jhx Note. These will be needed to support thread local variables.
@@ -465,6 +471,7 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
                          , relocationSize       = 4
                          , relocationIsSigned   = False
                          , relocationEndianness = end
+                         , relocationJumpSlot   = False
                          }
     Elf.R_ARM_RELATIVE -> do
       -- This relocation has the value B(S) + A where
@@ -500,6 +507,7 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
                          , relocationSize       = 4
                          , relocationIsSigned   = False
                          , relocationEndianness = end
+                         , relocationJumpSlot   = False
                          }
     Elf.R_ARM_JUMP_SLOT -> do
       -- This is a PLT relocation
@@ -517,6 +525,7 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
                          , relocationSize       = 4
                          , relocationIsSigned   = False
                          , relocationEndianness = end
+                         , relocationJumpSlot   = True
                          }
     tp -> do
       relocError $ RelocationUnsupportedType (show tp)

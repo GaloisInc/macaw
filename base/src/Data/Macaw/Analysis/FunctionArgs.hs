@@ -49,8 +49,14 @@ import           Data.Macaw.CFG
 import           Data.Macaw.CFG.BlockLabel
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Discovery.State
-import           Data.Macaw.Fold
 import           Data.Macaw.Types
+
+
+newtype Ap f a = Ap { getAp :: f a }
+
+instance (Applicative f, Monoid a) => Monoid (Ap f a) where
+  mempty = Ap $ pure mempty
+  mappend (Ap x) (Ap y) = Ap $ mappend <$> x <*> y
 
 -------------------------------------------------------------------------------
 
@@ -94,6 +100,10 @@ data DemandSet (r :: Type -> *) =
               , functionResultDemands :: !(Map (RegSegmentOff r) (RegisterSet r))
               }
 
+-- | Create a demand set for specific registers.
+registerDemandSet :: RegisterSet r -> DemandSet r
+registerDemandSet s = DemandSet { registerDemands = s, functionResultDemands = Map.empty }
+
 deriving instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (DemandSet r)
 deriving instance (TestEquality r) => Eq (DemandSet r)
 deriving instance (OrdF r) => Ord (DemandSet r)
@@ -108,15 +118,18 @@ instance OrdF r => Semigroup (DemandSet r) where
 
 instance OrdF r => Monoid (DemandSet r) where
   mempty = DemandSet { registerDemands = Set.empty
-                     , functionResultDemands = mempty
+                     , functionResultDemands = Map.empty
                      }
   mappend = (<>)
 
 demandSetDifference :: OrdF r => DemandSet r -> DemandSet r -> DemandSet r
 demandSetDifference ds1 ds2 =
-  DemandSet (registerDemands ds1 `Set.difference` registerDemands ds2)
-            (Map.differenceWith setDiff (functionResultDemands ds1)
-                                        (functionResultDemands ds2))
+  DemandSet { registerDemands = registerDemands ds1 `Set.difference` registerDemands ds2
+            , functionResultDemands =
+                Map.differenceWith setDiff
+                (functionResultDemands ds1)
+                (functionResultDemands ds2)
+            }
   where
     setDiff s1 s2 =
       let s' = s1 `Set.difference` s2
@@ -130,8 +143,8 @@ data DemandType r
   -- | This type is for registers that are demanded if the function at the given address wants
   -- the given register.
   | forall tp. DemandFunctionArg (RegSegmentOff r) (r tp)
-    -- | This is a associated with a set of registers that are demanded if the given register is needed
-    -- as a return value.
+    -- | This is a associated with the registers that are demanded if
+    -- the given register is needed as a return value.
   | forall tp. DemandFunctionResult (r tp)
 
 instance (MemWidth (RegAddrWidth r), ShowF r) => Show (DemandType r) where
@@ -178,8 +191,8 @@ data ArchTermStmtRegEffects arch
    = ArchTermStmtRegEffects { termRegDemands :: ![Some (ArchReg arch)]
                               -- ^ Registers demanded by term statement
                             , termRegTransfers :: [Some (ArchReg arch)]
-                              -- ^ Registers that terminal statement are not modified
-                              -- by terminal statement.
+                              -- ^ Registers that are not modified by
+                              -- terminal statement.
                             }
 
 -- | Returns information about the registers needed and modified by a terminal statement
@@ -192,6 +205,8 @@ type ComputeArchTermStmtEffects arch ids
    -> RegState (ArchReg arch) (Value arch ids)
    -> ArchTermStmtRegEffects arch
 
+-- | Information about the architecture/environment what arguments a
+-- function needs.
 data ArchDemandInfo arch = ArchDemandInfo
      { -- | Registers used as arguments to the function.
        functionArgRegs :: ![Some (ArchReg arch)]
@@ -293,34 +308,38 @@ addIntraproceduralJumpTarget fun_info src_block dest_addr = do  -- record the ed
         text "Could not find target block" <+> text (show dest_addr) <$$>
         indent 2 (text "Source:" <$$> pretty src_block)
 
--- | Compute the input registers that this value depends on
+withAssignmentCache :: State (AssignmentCache (ArchReg arch) ids)  a -> FunctionArgsM arch ids a
+withAssignmentCache m = do
+  c <- use assignmentCache
+  let (r, c') = runState m c
+  seq c' $ assignmentCache .= c'
+  pure r
+
+-- | Return the input registers that a value depends on.
 valueUses :: (OrdF (ArchReg arch), FoldableFC (ArchFn arch))
           => Value arch ids tp
-          -> FunctionArgsM arch ids (RegisterSet (ArchReg arch))
-valueUses v = zoom assignmentCache $ foldValueCached fns v
-  where fns = emptyValueFold { foldInput = Set.singleton . Some }
+          -> State (AssignmentCache (ArchReg arch) ids) (RegisterSet (ArchReg arch))
+valueUses (AssignedValue (Assignment a rhs)) = do
+  mr <- gets $ Map.lookup (Some a)
+  case mr of
+    Just s -> pure s
+    Nothing -> do
+      rhs' <- foldrFC (\v mrhs -> Set.union <$> valueUses v <*> mrhs) (pure Set.empty) rhs
+      seq rhs' $ modify' $ Map.insert (Some a) rhs'
+      pure $ rhs'
+valueUses (Initial r) = do
+  pure $! Set.singleton (Some r)
+valueUses _ = do
+  pure $! Set.empty
 
--- | Record that a block demands the value of certain registers.
-recordBlockDemand :: ( OrdF (ArchReg arch)
-                     , FoldableFC (ArchFn arch)
-                     )
-                  => ArchLabel arch
-                     -- ^ The current block
-                  -> RegState (ArchReg arch) (Value arch ids)
-                  -- ^ The current register state
-                  -> (forall tp . ArchReg arch tp -> DemandType (ArchReg arch))
-                  -> [Some (ArchReg arch)]
-                     -- ^ The registers that we need.
-                  -> FunctionArgsM arch ids () -- Map (Some N.RegisterName) RegDeps
-recordBlockDemand lbl s mk rs = do
-  let doReg (Some r) = do
-        rs' <- valueUses (s ^. boundValue r)
-        return (mk r, DemandSet rs' mempty)
-  vs <- mapM doReg rs
-  blockDemandMap %= Map.insertWith (Map.unionWith mappend) lbl (Map.fromListWith mappend vs)
+addBlockDemands :: OrdF (ArchReg arch) => ArchLabel arch -> DemandMap (ArchReg arch) -> FunctionArgsM arch ids ()
+addBlockDemands lbl m =
+  blockDemandMap %= Map.insertWith demandMapUnion lbl m
+
 
 -- Figure out the deps of the given registers and update the state for the current label
-recordBlockTransfer :: ( OrdF (ArchReg arch)
+recordBlockTransfer :: forall arch ids
+                    .  ( OrdF (ArchReg arch)
                        , FoldableFC (ArchFn arch)
                        )
                     => ArchLabel arch
@@ -328,10 +347,13 @@ recordBlockTransfer :: ( OrdF (ArchReg arch)
                     -> [Some (ArchReg arch)]
                     -> FunctionArgsM arch ids () -- Map (Some N.RegisterName) RegDeps
 recordBlockTransfer lbl s rs = do
-  let doReg (Some r) = do
+  let doReg :: Some (ArchReg arch)
+            ->  State (AssignmentCache (ArchReg arch) ids)
+                      (Some (ArchReg arch), DemandSet (ArchReg arch))
+      doReg (Some r) = do
         rs' <- valueUses (s ^. boundValue r)
-        return (Some r, DemandSet rs' mempty)
-  vs <- mapM doReg rs
+        return (Some r, registerDemandSet rs')
+  vs <- withAssignmentCache $ traverse doReg rs
   blockTransfer %= Map.insertWith (Map.unionWith mappend) lbl (Map.fromListWith mappend vs)
 
 -- | A block requires a value, and so we need to remember which
@@ -341,9 +363,8 @@ demandValue :: (OrdF (ArchReg arch), FoldableFC (ArchFn arch))
             -> Value arch ids tp
             -> FunctionArgsM arch ids ()
 demandValue lbl v = do
-  regs <- valueUses v
-  blockDemandMap %= Map.insertWith demandMapUnion lbl
-                        (Map.singleton DemandAlways (DemandSet regs mempty))
+  regs <- withAssignmentCache $ valueUses v
+  addBlockDemands lbl $ Map.singleton DemandAlways (registerDemandSet regs)
 
 -- -----------------------------------------------------------------------------
 -- Entry point
@@ -425,9 +446,9 @@ summarizeCall :: forall arch ids
               -> Bool
                  -- ^ A flag that is set to true for tail calls.
               -> FunctionArgsM arch ids ()
-summarizeCall mem lbl proc_state isTailCall = do
+summarizeCall mem lbl finalRegs isTailCall = do
   knownAddrs <- gets computedAddrSet
-  case valueAsMemAddr (proc_state^.boundValue ip_reg) of
+  case valueAsMemAddr (finalRegs^.boundValue ip_reg) of
     Just faddr0
       | Just faddr <- asSegmentOff mem faddr0
       , Set.member faddr knownAddrs -> do
@@ -438,10 +459,10 @@ summarizeCall mem lbl proc_state isTailCall = do
       -- singleton for now, but propagating back will introduce more deps.
       let demandSet sr         = DemandSet mempty (Map.singleton faddr (Set.singleton sr))
 
-      if isTailCall then
+      if isTailCall then do
         -- tail call, propagate demands for our return regs to the called function
-        let propMap = map (\(Some r) -> (DemandFunctionResult r, demandSet (Some r))) retRegs
-         in  blockDemandMap %= Map.insertWith (Map.unionWith mappend) lbl (Map.fromList propMap)
+        let propMap = (\(Some r) -> (DemandFunctionResult r, demandSet (Some r))) <$> retRegs
+        addBlockDemands lbl $ Map.fromList propMap
        else do
         -- Given a return register sr, this indicates that
         let propResult :: Some (ArchReg arch) -> FunctionArgsM arch ids ()
@@ -454,12 +475,22 @@ summarizeCall mem lbl proc_state isTailCall = do
       -- If a function wants argument register r, then we note that this
       -- block needs the corresponding state values.  Note that we could
       -- do this for _all_ registers, but this should make the summaries somewhat smaller.
+
+      -- Associate the demand sets for each potential argument register with the registers used
+      -- by faddr.
       argRegs <- gets $ functionArgRegs . archDemandInfo
-      recordBlockDemand lbl proc_state (DemandFunctionArg faddr) argRegs
+      let regDemandSet (Some r) = registerDemandSet  <$> valueUses (finalRegs^. boundValue r)
+      let demandTypes = viewSome (DemandFunctionArg faddr) <$>  argRegs
+      demands <- withAssignmentCache $ traverse regDemandSet argRegs
+      addBlockDemands lbl $ Map.fromList $ zip demandTypes demands
     _ -> do
       -- In the dynamic case, we just assume all arguments (FIXME: results?)
       argRegs <- gets $ functionArgRegs . archDemandInfo
-      recordBlockDemand lbl proc_state (\_ -> DemandAlways) ([Some ip_reg] ++ argRegs)
+
+      do let demandedRegs = [Some ip_reg] ++ argRegs
+         let regUses (Some r) = valueUses (finalRegs^. boundValue r)
+         demands <- withAssignmentCache $ fmap registerDemandSet $ getAp $ foldMap (Ap . regUses) demandedRegs
+         addBlockDemands lbl $ Map.singleton DemandAlways demands
 
 -- | Return values that must be evaluated to execute side effects.
 stmtDemandedValues :: DemandContext arch
@@ -491,10 +522,10 @@ summarizeBlock :: forall arch ids
                -> ArchSegmentOff arch -- ^ Address of the code.
                -> StatementList arch ids -- ^ Current block
                -> FunctionArgsM arch ids ()
-summarizeBlock mem interp_state addr stmts = do
+summarizeBlock mem interpState addr stmts = do
   let lbl = GeneratedBlock addr (stmtsIdent stmts)
   -- Add this label to block demand map with empty set.
-  blockDemandMap %= Map.insertWith demandMapUnion lbl mempty
+  addBlockDemands lbl mempty
 
   ctx <- gets $ demandInfoCtx . archDemandInfo
   -- Add all values demanded by non-terminal statements in list.
@@ -502,6 +533,67 @@ summarizeBlock mem interp_state addr stmts = do
         (stmtsNonterm stmts)
   -- Add values demanded by terminal statements
   case stmtsTerm stmts of
+    ParsedCall finalRegs m_ret_addr -> do
+      -- Record the demands based on the call, and add edges between
+      -- this note and next nodes.
+      case m_ret_addr of
+        Nothing -> do
+          summarizeCall mem lbl finalRegs True
+        Just ret_addr -> do
+          summarizeCall mem lbl finalRegs False
+          addIntraproceduralJumpTarget interpState lbl ret_addr
+          callRegs <- gets $ calleeSavedRegs . archDemandInfo
+          recordBlockTransfer lbl finalRegs ([Some sp_reg] ++ Set.toList callRegs)
+
+    PLTStub regs _ _ -> do
+      -- PLT Stubs demand all registers that could be function
+      -- arguments, as well as any registers in regs.
+      ainfo <- gets archDemandInfo
+      let demandedRegs = Set.fromList (functionArgRegs ainfo)
+      demands <- withAssignmentCache $ getAp $ foldMapF (Ap . valueUses) regs
+      addBlockDemands lbl $ Map.singleton DemandAlways $
+        registerDemandSet $ demands <> demandedRegs
+
+    ParsedJump procState tgtAddr -> do
+      -- record all propagations
+      recordBlockTransfer lbl procState archRegs
+      addIntraproceduralJumpTarget interpState lbl tgtAddr
+
+    ParsedLookupTable finalRegs lookup_idx vec -> do
+      demandValue lbl lookup_idx
+      -- record all propagations
+      recordBlockTransfer lbl finalRegs archRegs
+      traverse_ (addIntraproceduralJumpTarget interpState lbl) vec
+
+    ParsedReturn finalRegs -> do
+      retRegs <- gets $ functionRetRegs . archDemandInfo
+      let demandTypes = viewSome DemandFunctionResult <$> retRegs
+      let regDemandSet (Some r) = registerDemandSet  <$> valueUses (finalRegs^.boundValue r)
+      demands <- withAssignmentCache $ traverse regDemandSet retRegs
+      addBlockDemands lbl $ Map.fromList $ zip demandTypes demands
+
+
+
+    ParsedIte c tblock fblock -> do
+      -- Demand condition then summarize recursive blocks.
+      demandValue lbl c
+      summarizeBlock mem interpState addr tblock
+      summarizeBlock mem interpState addr fblock
+
+    ParsedArchTermStmt tstmt finalRegs next_addr -> do
+       -- Compute effects of terminal statement.
+      ainfo <- gets $ archDemandInfo
+      let e = computeArchTermStmtEffects ainfo tstmt finalRegs
+
+      -- Demand all registers the terminal statement demands.
+      do let regUses (Some r) = valueUses (finalRegs^.boundValue r)
+         demands <- withAssignmentCache $ fmap registerDemandSet $ getAp $
+           foldMap (Ap . regUses) (termRegDemands e)
+         addBlockDemands lbl $ Map.singleton DemandAlways demands
+
+      recordBlockTransfer lbl finalRegs (termRegTransfers e)
+      traverse_ (addIntraproceduralJumpTarget interpState lbl) next_addr
+
     ParsedTranslateError _ -> do
       -- We ignore demands for translate errors.
       pure ()
@@ -509,43 +601,6 @@ summarizeBlock mem interp_state addr stmts = do
       -- We ignore demands for classify failure.
       pure ()
 
-    ParsedIte c tblock fblock -> do
-      -- Demand condition then summarize recursive blocks.
-      demandValue lbl c
-      summarizeBlock mem interp_state addr tblock
-      summarizeBlock mem interp_state addr fblock
-
-    ParsedCall proc_state m_ret_addr -> do
-      case m_ret_addr of
-        Nothing -> do
-          summarizeCall mem lbl proc_state True
-        Just ret_addr -> do
-          summarizeCall mem lbl proc_state False
-          addIntraproceduralJumpTarget interp_state lbl ret_addr
-          callRegs <- gets $ calleeSavedRegs . archDemandInfo
-          recordBlockTransfer lbl proc_state ([Some sp_reg] ++ Set.toList callRegs)
-
-    ParsedJump proc_state tgt_addr -> do
-      -- record all propagations
-      recordBlockTransfer lbl proc_state archRegs
-      addIntraproceduralJumpTarget interp_state lbl tgt_addr
-
-    ParsedReturn proc_state -> do
-      retRegs <- gets $ functionRetRegs . archDemandInfo
-      recordBlockDemand lbl proc_state DemandFunctionResult retRegs
-
-    ParsedArchTermStmt tstmt proc_state next_addr -> do
-      effFn <- gets $ computeArchTermStmtEffects . archDemandInfo
-      let e = effFn tstmt proc_state
-      recordBlockDemand   lbl proc_state (\_ -> DemandAlways) (termRegDemands e)
-      recordBlockTransfer lbl proc_state (termRegTransfers e)
-      traverse_ (addIntraproceduralJumpTarget interp_state lbl) next_addr
-
-    ParsedLookupTable proc_state lookup_idx vec -> do
-      demandValue lbl lookup_idx
-      -- record all propagations
-      recordBlockTransfer lbl proc_state archRegs
-      traverse_ (addIntraproceduralJumpTarget interp_state lbl) vec
 
 -- | Explore states until we have reached end of frontier.
 summarizeIter :: ArchConstraints arch
@@ -574,7 +629,7 @@ calculateOnePred newDemands predLbl = do
 
   -- update uses, returning value before this iteration
   seenDemands <- use (blockDemandMap . ix lbl')
-  blockDemandMap . at lbl' .= Just (Map.unionWith mappend demands' seenDemands)
+  addBlockDemands lbl' demands'
   -- seenDemands <- blockDemandMap . ix lbl' <<%= demandMapUnion demands'
 
 
@@ -682,10 +737,7 @@ doOneFunction archFns addrs ist0 acc ist = do
     -- recorded as a use, which is erroneous, so we strip out any
     -- reference to them here.
     callRegs <- gets $ calleeSavedRegs . archDemandInfo
-    let calleeDemandSet = DemandSet { registerDemands =
-                                        Set.insert (Some sp_reg) callRegs
-                                    , functionResultDemands = mempty
-                                    }
+    let calleeDemandSet = registerDemandSet (Set.insert (Some sp_reg) callRegs)
 
     return (Map.foldlWithKey' (decomposeMap calleeDemandSet addr) acc funDemands)
 

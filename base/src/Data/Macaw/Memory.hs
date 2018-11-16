@@ -469,6 +469,15 @@ data Relocation w
                 , relocationEndianness :: !Endianness
                   -- ^ The byte order used to encode the relocation in
                   -- memory.
+                , relocationJumpSlot :: !Bool
+                  -- ^ Returns true if this is a jump slot relocation.
+                  --
+                  -- This relocation is specifically used for global
+                  -- offset table entries, and are typically resolved
+                  -- when the function is first called rather than at
+                  -- load time.  The address will be initially the
+                  -- entry sequence stub, and will be updated once
+                  -- resolved by the stub.
                 }
 
 -- | Short encoding of endianness for relocation pretty printing
@@ -846,8 +855,8 @@ memBindSegmentIndex idx seg mem
 
 -- | A memory with no segments.
 emptyMemory :: AddrWidthRepr w -> Memory w
-emptyMemory w = Memory { memAddrWidth      = w
-                       , memSegmentMap     = Map.empty
+emptyMemory w = Memory { memAddrWidth       = w
+                       , memSegmentMap      = Map.empty
                        , memSectionIndexMap = Map.empty
                        , memSegmentIndexMap = Map.empty
                        }
