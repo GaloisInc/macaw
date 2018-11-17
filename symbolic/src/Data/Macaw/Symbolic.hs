@@ -618,12 +618,13 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
                          }
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
-  let s = C.initSimState ctx initGlobals C.defaultAbortHandler
-  a <- C.executeCrucible s $ C.runOverrideSim macawStructRepr $ do
-    let args :: C.RegMap sym (MacawFunctionArgs arch)
-        args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
-    crucGenArchConstraints archFns $
-      C.regValue <$> C.callCFG g args
+  let s = C.InitialState ctx initGlobals C.defaultAbortHandler $
+            C.runOverrideSim macawStructRepr $ do
+                let args :: C.RegMap sym (MacawFunctionArgs arch)
+                    args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
+                crucGenArchConstraints archFns $
+                  C.regValue <$> C.callCFG g args
+  a <- C.executeCrucible [] s
   return (mvar,a)
 
 {-
