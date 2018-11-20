@@ -52,6 +52,7 @@ import           GHC.TypeLits
 import           Control.Lens
 import qualified Control.Monad.Cont as Ct
 import qualified Control.Monad.Except as ET
+import           Control.Monad.Fail
 import qualified Control.Monad.Reader as Rd
 import           Control.Monad.ST ( ST )
 import qualified Control.Monad.State.Strict as St
@@ -247,6 +248,9 @@ instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
 
 instance ET.MonadError GeneratorError (Generator arch ids s) where
   throwError e = Generator (Ct.ContT (\_ -> ET.throwError e))
+
+instance MonadFail (Generator arch ids s) where
+  fail err = ET.throwError $ GeneratorMessage $ show err
 
 -- | The type of continuations provided by 'shiftGen'
 type GenCont arch ids s a = a -> GenState arch ids s -> ET.ExceptT GeneratorError (ST s) (GenResult arch ids)
