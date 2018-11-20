@@ -72,7 +72,7 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-import           Data.Monoid
+import           Data.Semigroup
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
@@ -84,6 +84,9 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Memory.Symbols
+
+import           Prelude
+
 
 -- | Return a subrange of a bytestring.
 sliceL :: Integral w => Elf.Range w -> L.ByteString -> L.ByteString
@@ -888,8 +891,8 @@ insertElfSegment :: RegionIndex
                  -> MemLoader w ()
 insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
   w <- uses mlsMemory memAddrWidth
-  reprConstraints w $ do
-  when (Elf.phdrMemSize phdr > 0) $ do
+  reprConstraints w $
+   when (Elf.phdrMemSize phdr > 0) $ do
     let segIdx = Elf.phdrSegmentIndex phdr
     seg <- do
       let linkBaseOff = fromIntegral (Elf.phdrSegmentVirtAddr phdr)
@@ -932,21 +935,21 @@ memoryForElfSegments regIndex addrOff e = do
   let hdr = Elf.elfLayoutHeader l
   let w = elfAddrWidth (elfClass e)
   reprConstraints w $ do
-  let ph  = Elf.allPhdrs l
-  let contents = elfLayoutBytes l
-  -- Create relocation map
-  relocMap <- dynamicRelocationMap hdr ph contents
+    let ph  = Elf.allPhdrs l
+    let contents = elfLayoutBytes l
+    -- Create relocation map
+    relocMap <- dynamicRelocationMap hdr ph contents
 
-  let intervals :: ElfFileSectionMap (ElfWordType w)
-      intervals = IMap.fromList
+    let intervals :: ElfFileSectionMap (ElfWordType w)
+        intervals = IMap.fromList
           [ (IntervalCO start end, sec)
           | shdr <- Map.elems (l ^. Elf.shdrs)
           , let start = shdr^._3
           , let sec = shdr^._1
           , let end = start + elfSectionFileSize sec
           ]
-  mapM_ (insertElfSegment regIndex addrOff intervals contents relocMap)
-        (filter (\p -> Elf.phdrSegmentType p == Elf.PT_LOAD) ph)
+    mapM_ (insertElfSegment regIndex addrOff intervals contents relocMap)
+          (filter (\p -> Elf.phdrSegmentType p == Elf.PT_LOAD) ph)
 
 ------------------------------------------------------------------------
 -- Elf section loading
@@ -1008,8 +1011,8 @@ insertAllocatedSection :: Elf.ElfHeader w
 insertAllocatedSection hdr symtab sectionMap regIdx nm = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
-  msec <- findSection sectionMap nm
-  case msec of
+   msec <- findSection sectionMap nm
+   case msec of
     Nothing -> pure ()
     Just sec -> do
       mRelBuffer <- fmap (fmap (L.fromStrict . elfSectionData)) $

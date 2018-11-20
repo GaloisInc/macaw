@@ -34,6 +34,7 @@ module Data.Macaw.Analysis.FunctionArgs
 import           Control.Lens
 import           Control.Monad.State.Strict
 import           Data.Foldable as Fold (traverse_)
+import qualified Data.Kind as Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -81,13 +82,13 @@ import           Data.Macaw.Types
 --    demanded?
 
 -- | A set of registrs
-type RegisterSet (r :: Type -> *) = Set (Some r)
+type RegisterSet (r :: Type -> Kind.Type) = Set (Some r)
 
 -- | A memory segment offset compatible with the architecture registers.
 type RegSegmentOff r = MemSegmentOff (RegAddrWidth r)
 
 -- | This stores the registers needed by a specific address
-data DemandSet (r :: Type -> *) =
+data DemandSet (r :: Type -> Kind.Type) =
     DemandSet { registerDemands       :: !(RegisterSet r)
                 -- | This maps a function address to the registers
                 -- that it needs.
