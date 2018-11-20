@@ -17,7 +17,6 @@ import qualified Data.Macaw.CFG as MM
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
-import           GHC.TypeNats
 
 
 data BinaryRepr binFmt where
