@@ -29,7 +29,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules: Data.Macaw.BinaryLoader
-  build-depends:       base >=4.9 && <4.12
+  build-depends:       base >=4.9 && <4.13
                      , elf-edit
                      , exceptions
                      , macaw-base
