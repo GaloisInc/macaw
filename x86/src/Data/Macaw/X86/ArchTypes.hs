@@ -38,6 +38,7 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
+import qualified Data.Kind as Kind
 import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -877,7 +878,7 @@ x86PrimFnHasSideEffects f =
 -- X86Stmt
 
 -- | An X86 specific statement.
-data X86Stmt (v :: Type -> *) where
+data X86Stmt (v :: Type -> Kind.Type) where
   WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
 
   -- | Store the X87 control register in the given address.
