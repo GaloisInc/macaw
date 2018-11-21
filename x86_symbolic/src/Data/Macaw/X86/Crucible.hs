@@ -34,9 +34,10 @@ module Data.Macaw.X86.Crucible
 
 import           Control.Lens ((^.))
 import           Data.Bits hiding (xor)
+import           Data.Kind ( Type )
 import           Data.Parameterized.Context.Unsafe (empty,extend)
-import           Data.Parameterized.Utils.Endian (Endian(..))
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.Utils.Endian (Endian(..))
 import qualified Data.Parameterized.Vector as PV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
@@ -156,7 +157,7 @@ pureSem sym fn = do
     M.RepnzScas{}   -> error "RepnzScas"
     M.X86IDiv {} -> error "X86IDiv"
     M.X86IRem {} -> error "X86IRem"
-    M.X86Div  {} -> error "X86Div"
+    M.X86Div w n d -> error "X86Div"
     M.X86Rem  {} -> error "X86Rem"
     M.X87_Extend{} ->  error "X87_Extend"
     M.X87_FAdd{} -> error "X87_FAdd"
@@ -602,7 +603,7 @@ evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
-data E :: * -> CrucibleType -> * where
+data E :: Type -> CrucibleType -> Type where
   ValBool :: RegValue sym BoolType -> E sym BoolType
   ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
   Expr :: App () (E sym) t -> E sym t
@@ -682,7 +683,7 @@ n128 = knownNat
 
 --------------------------------------------------------------------------------
 
-newtype AtomWrapper (f :: CrucibleType -> *) (tp :: M.Type)
+newtype AtomWrapper (f :: CrucibleType -> Type) (tp :: M.Type)
   = AtomWrapper (f (ToCrucibleType tp))
 
 liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
