@@ -124,7 +124,7 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
   instrArg <- asP instrVar [p| D.Instruction $(varP opcodeVar) $(varP operandListVar) |]
   matcherRes <- appE (varE archSpecificMatcher) (varE instrVar)
   actionVar <- newName "action"
-  let fullDefs = libDefs ++ concatMap (\(t,i,p) -> [t,i,p]) bodyDefs
+  let fullDefs = libDefs ++ concatMap (\(t,i) -> [t,i]) bodyDefs
   let instrCase = LetE [unimp] $ CaseE (VarE opcodeVar) allCases
   let lam = LamE [(VarP ipVarName), instrArg] $
          CaseE matcherRes
@@ -190,7 +190,7 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> Name
                 -> (Q Type, Q Type)
                 -> MapF.Pair a (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo a))
-                -> Q (Match, (Dec, Dec, Dec))
+                -> Q (Match, (Dec, Dec))
 mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
@@ -210,8 +210,7 @@ mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.P
                   (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo))
                   []]
        mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (appE (varE ofname) (varE ipVarName)) (varE operandListVar))) []
-       let pgma = PragmaD (InlineP ofname NoInline FunLike AllPhases)
-       return (mtch, (ofsig, ofdef, pgma))
+       return (mtch, (ofsig, ofdef))
 
 
 -- | For each opcode case, we have a sub-case expression to destructure the
