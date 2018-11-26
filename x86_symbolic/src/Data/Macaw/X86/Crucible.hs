@@ -160,10 +160,10 @@ pureSem sym fn = do
     M.RDTSC{}       -> error "RDTSC"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
-    M.X86IDiv {} -> error "X86IDiv"
-    M.X86IRem {} -> error "X86IRem"
-    M.X86Div  {} -> error "X86Div"
-    M.X86Rem  {} -> error "X86Rem"
+    M.X86IDiv w n d -> sDiv sym w n d
+    M.X86IRem w n d -> sRem sym w n d
+    M.X86Div  w n d -> uDiv sym w n d
+    M.X86Rem  w n d -> uRem sym w n d
     M.X87_Extend{} ->  error "X87_Extend"
     M.X87_FAdd{} -> error "X87_FAdd"
     M.X87_FSub{} -> error "X87_FSub"
@@ -386,6 +386,127 @@ shuffleB xs is = fmap lkp is
   lkp i = app (BVIte (bvTestBit i 7) knownNat
               (bv 0)
               (bvLookup xs (app $ BVTrunc n4 knownNat i)))
+
+--------------------------------------------------------------------------------
+
+-- | Performs a simple unsigned division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the dividend (not any
+-- remainder--see uRem for that), and any divide-by-zero exception was
+-- already handled via an Assert.
+uDiv :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+uDiv sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVUdiv
+      Nothing -> error "uDiv unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple unsigned division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the remainder (the dividend is
+-- computed separately by uDiv), and any divide-by-zero exception was
+-- already handled via an Assert.
+uRem :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+uRem sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVUrem
+      Nothing -> error "uRem unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple signed division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the dividend (not any
+-- remainder--see sRem for that), and any divide-by-zero exception was
+-- already handled via an Assert.
+sDiv :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+sDiv sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVSdiv
+      Nothing -> error "sDiv unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple signed division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the remainder (the dividend is
+-- computed separately by sDiv), and any divide-by-zero exception was
+-- already handled via an Assert.
+sRem :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+sRem sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVSrem
+      Nothing -> error "sRem unable to verify numerator is >= 1 bit"
+
+-- | Common function for division and remainder computation for both
+-- signed and unsigned BV expressions.
+--
+-- The x86 numerator is twice the size as the denominator, so
+-- zero-extend the denominator, perform the division, then truncate
+-- the result.
+divOp :: ( IsSymInterface sym
+         , 1 <= (w + w)
+         , w <= (w + w)
+         ) =>
+         Sym sym
+      -> NatRepr (w + w)
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> NatRepr w
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> (NatRepr (w + w) -> E sym (BVType (w + w)) -> E sym (BVType (w + w)) -> App () (E sym) (BVType (w + w)))
+      -> IO (RegValue sym (LLVMPointerType w))
+divOp sym nw n' dw d' op = do
+  let symi = symIface sym
+  n <- getBitVal symi n'
+  d <- getBitVal symi d'
+  case testLeq n1 dw of
+    Just LeqProof ->
+      case testLeq (incNat dw) nw of
+        Just LeqProof ->
+          llvmPointer_bv symi =<< (evalE sym
+                                  -- (assertExpr (app $ BVEq dw (app $ BVLit dw 0)
+                                   (app $ BVTrunc dw nw $ app $ op nw (app $ BVZext nw dw d) n))
+                                   -- "must not be zero"
+                                   -- )
+                                  -- )
+        Nothing -> error "divOp unable to prove numerator size > denominator size + 1"
+    Nothing -> error "divOp unable to prove denominator size > 1 bit"
+
 
 --------------------------------------------------------------------------------
 divExact ::
