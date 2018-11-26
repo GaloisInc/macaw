@@ -9,6 +9,7 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4,
+                 ansi-wl-pprint,
                  crucible >= 0.4,
                  crucible-llvm,
                  flexdis86 >= 0.1.2,

@@ -35,11 +35,13 @@ module Data.Macaw.X86.Crucible
 import           Control.Lens ((^.))
 import           Data.Bits hiding (xor)
 import           Data.Parameterized.Context.Unsafe (empty,extend)
-import           Data.Parameterized.Utils.Endian (Endian(..))
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.Utils.Endian (Endian(..))
 import qualified Data.Parameterized.Vector as PV
+import           Data.Semigroup
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
+import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), empty )
 
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
@@ -65,6 +67,8 @@ import           Data.Macaw.Symbolic
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
 
+import           Prelude
+
 
 type S sym rtp bs r ctx =
   CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
@@ -86,14 +90,16 @@ stmtSemantics :: (IsSymInterface sym)
               -> M.X86Stmt (AtomWrapper (RegEntry sym))
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-stmtSemantics = error "Symbolic-execution time semantics for x86 statements are not implemented yet"
+stmtSemantics fs x s = error ("Symbolic execution semantics for x86 statements are not implemented yet: " <>
+                              (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) x))
 
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
               -> M.X86TermStmt ids
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-termSemantics = error "Symbolic-execution time semantics for x86 terminators are not implemented yet"
+termSemantics fs x s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
+                              (show $ MC.prettyF x))
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
