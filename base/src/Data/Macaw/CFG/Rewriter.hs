@@ -125,7 +125,7 @@ appendRewrittenStmt stmt = Rewriter $ do
   stmts <- use rwRevStmts
   let stmts' = stmt : stmts
   seq stmt $ seq stmts' $ do
-  rwRevStmts .= stmts'
+    rwRevStmts .= stmts'
 
 -- | Add a statment to the list
 appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src tgt ()
@@ -151,10 +151,10 @@ addBinding :: AssignId src tp -> Value arch tgt tp -> Rewriter arch s src tgt ()
 addBinding srcId val = Rewriter $ do
   ref <- gets $ rwctxCache . rwContext
   lift $ do
-  m <- readSTRef ref
-  when (MapF.member srcId m) $ do
-    fail $ "Assignment " ++ show srcId ++ " is already bound."
-  writeSTRef ref $! MapF.insert srcId val m
+    m <- readSTRef ref
+    when (MapF.member srcId m) $ do
+      fail $ "Assignment " ++ show srcId ++ " is already bound."
+    writeSTRef ref $! MapF.insert srcId val m
 
 -- | Return true if values are identical
 identValue :: TestEquality (ArchReg arch) => Value arch tgt tp -> Value arch tgt tp -> Bool
@@ -171,7 +171,7 @@ rewriteApp :: App (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt
 rewriteApp app = do
   ctx <- Rewriter $ gets rwContext
   rwctxConstraints ctx $ do
-  case app of
+   case app of
 
     Trunc (BVValue _ x) w -> do
       pure $ BVValue w $ toUnsigned w x

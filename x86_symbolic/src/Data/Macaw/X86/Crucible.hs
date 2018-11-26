@@ -34,6 +34,7 @@ module Data.Macaw.X86.Crucible
 
 import           Control.Lens ((^.))
 import           Data.Bits hiding (xor)
+import           Data.Kind ( Type )
 import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Utils.Endian (Endian(..))
@@ -729,7 +730,7 @@ evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
-data E :: * -> CrucibleType -> * where
+data E :: Type -> CrucibleType -> Type where
   ValBool :: RegValue sym BoolType -> E sym BoolType
   ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
   Expr :: App () (E sym) t -> E sym t
@@ -809,7 +810,7 @@ n128 = knownNat
 
 --------------------------------------------------------------------------------
 
-newtype AtomWrapper (f :: CrucibleType -> *) (tp :: M.Type)
+newtype AtomWrapper (f :: CrucibleType -> Type) (tp :: M.Type)
   = AtomWrapper (f (ToCrucibleType tp))
 
 liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t

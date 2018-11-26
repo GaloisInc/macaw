@@ -29,6 +29,7 @@ module Data.Macaw.X86.Symbolic
 import           Control.Lens ((^.),(%~),(&))
 import           Control.Monad ( void )
 import           Data.Functor.Identity (Identity(..))
+import           Data.Kind
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
@@ -185,7 +186,7 @@ freshX86Reg sym r =
 
 -- | We currently make a type like this, we could instead a generic
 -- X86PrimFn function
-data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
+data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) where
   -- | To reduce clutter, but potentially increase clutter, we just make every
   -- Macaw X86PrimFn a Macaw-Crucible statement extension.
   X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) t) ->

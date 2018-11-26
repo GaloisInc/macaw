@@ -415,13 +415,13 @@ mergeIntraJump  :: ArchSegmentOff arch
 mergeIntraJump src ab tgt = do
   info <- uses curFunCtx archInfo
   withArchConstraints info $ do
-  when (not (absStackHasReturnAddr ab)) $ do
+   when (not (absStackHasReturnAddr ab)) $ do
     debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) $
       pure ()
-  let rsn = NextIP src
-  -- Associate a new abstract state with the code region.
-  foundMap <- use foundAddrs
-  case Map.lookup tgt foundMap of
+   let rsn = NextIP src
+   -- Associate a new abstract state with the code region.
+   foundMap <- use foundAddrs
+   case Map.lookup tgt foundMap of
     -- We have seen this block before, so need to join and see if
     -- the results is changed.
     Just old_info -> do
@@ -764,8 +764,8 @@ recordWriteStmt arch_info mem regs stmt = do
     WriteMem _addr repr v
       | Just Refl <- testEquality repr (addrMemRepr arch_info) -> do
           withArchConstraints arch_info $ do
-          let addrs = identifyConcreteAddresses mem (transferValue regs v)
-          writtenCodeAddrs %= (filter isExecutableSegOff addrs ++)
+            let addrs = identifyConcreteAddresses mem (transferValue regs v)
+            writtenCodeAddrs %= (filter isExecutableSegOff addrs ++)
     _ -> return ()
 
 ------------------------------------------------------------------------
@@ -840,10 +840,10 @@ parseFetchAndExecute ctx idx stmts regs s = do
   let ainfo= pctxArchInfo ctx
   let absProcState' = absEvalStmts ainfo regs stmts
   withArchConstraints ainfo $ do
-  -- See if next statement appears to end with a call.
-  -- We define calls as statements that end with a write that
-  -- stores the pc to an address.
-  case () of
+   -- See if next statement appears to end with a call.
+   -- We define calls as statements that end with a write that
+   -- stores the pc to an address.
+   case () of
     _ | Just (Mux _ c t f) <- valueAsApp (s^.boundValue ip_reg) -> do
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
@@ -876,19 +876,19 @@ parseFetchAndExecute ctx idx stmts regs s = do
         mapM_ (recordWriteStmt ainfo mem absProcState') prev_stmts
         let abst = finalAbsBlockState absProcState' s
         seq abst $ do
-        -- Merge caller return information
-        intraJumpTargets %= ((ret, postCallAbsState ainfo abst ret):)
-        -- Use the abstract domain to look for new code pointers for the current IP.
-        addNewFunctionAddrs $
-          identifyCallTargets mem abst s
-        -- Use the call-specific code to look for new IPs.
+          -- Merge caller return information
+          intraJumpTargets %= ((ret, postCallAbsState ainfo abst ret):)
+          -- Use the abstract domain to look for new code pointers for the current IP.
+          addNewFunctionAddrs $
+            identifyCallTargets mem abst s
+          -- Use the call-specific code to look for new IPs.
 
-        let r = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = toList prev_stmts
-                              , stmtsTerm  = ParsedCall s (Just ret)
-                              , stmtsAbsState = absProcState'
-                              }
-        pure (r, idx+1)
+          let r = StatementList { stmtsIdent = idx
+                                , stmtsNonterm = toList prev_stmts
+                                , stmtsTerm  = ParsedCall s (Just ret)
+                                , stmtsAbsState = absProcState'
+                                }
+          pure (r, idx+1)
 
       -- This block ends with a return as identified by the
       -- architecture-specific processing.  Basic return
@@ -993,16 +993,16 @@ parseFetchAndExecute ctx idx stmts regs s = do
           let abst = finalAbsBlockState absProcState' s
           seq abst $ do
 
-          -- Look for new instruction pointers
-          addNewFunctionAddrs $
-            identifyConcreteAddresses mem (abst^.absRegState^.curIP)
+            -- Look for new instruction pointers
+            addNewFunctionAddrs $
+              identifyConcreteAddresses mem (abst^.absRegState^.curIP)
 
-          let ret = StatementList { stmtsIdent = idx
-                                  , stmtsNonterm = stmts
-                                  , stmtsTerm  = ParsedCall s Nothing
-                                  , stmtsAbsState = absProcState'
-                                  }
-          seq ret $ pure (ret,idx+1)
+            let ret = StatementList { stmtsIdent = idx
+                                    , stmtsNonterm = stmts
+                                    , stmtsTerm  = ParsedCall s Nothing
+                                    , stmtsAbsState = absProcState'
+                                    }
+            seq ret $ pure (ret,idx+1)
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -1019,7 +1019,7 @@ parseBlock ctx idx b regs = do
   let mem       = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
-  case blockTerm b of
+   case blockTerm b of
     Branch c lb rb -> do
       let blockMap = pctxBlockMap ctx
       -- FIXME: we should propagate c back to the initial block, not just b
@@ -1136,56 +1136,56 @@ transfer addr = do
   s <- use curFunCtx
   let ainfo = archInfo s
   withArchConstraints ainfo $ do
-  mfinfo <- use $ foundAddrs . at addr
-  let finfo = fromMaybe (error $ "transfer called on unfound address " ++ show addr ++ ".") $
-                mfinfo
-  let mem = memory s
-  nonceGen <- gets funNonceGen
-  prev_block_map <- use $ curFunBlocks
-  -- Get maximum number of bytes to disassemble
-  let maxSize :: Int
-      maxSize =
-        case Map.lookupGT addr prev_block_map of
-          Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
-          _ -> fromInteger (segoffBytesLeft addr)
-  let ab = foundAbstractState finfo
-  (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo nonceGen addr maxSize ab
+    mfinfo <- use $ foundAddrs . at addr
+    let finfo = fromMaybe (error $ "transfer called on unfound address " ++ show addr ++ ".") $
+                  mfinfo
+    let mem = memory s
+    nonceGen <- gets funNonceGen
+    prev_block_map <- use $ curFunBlocks
+    -- Get maximum number of bytes to disassemble
+    let maxSize :: Int
+        maxSize =
+          case Map.lookupGT addr prev_block_map of
+            Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
+            _ -> fromInteger (segoffBytesLeft addr)
+    let ab = foundAbstractState finfo
+    (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo nonceGen addr maxSize ab
 
 #ifdef USE_REWRITER
-  bs1 <- do
-    let archStmt = rewriteArchStmt ainfo
-    let secAddrMap = memSectionIndexMap mem
-    liftST $ do
-      ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt secAddrMap
-      traverse (rewriteBlock ainfo ctx) bs0
+    bs1 <- do
+      let archStmt = rewriteArchStmt ainfo
+      let secAddrMap = memSectionIndexMap mem
+      liftST $ do
+        ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt secAddrMap
+        traverse (rewriteBlock ainfo ctx) bs0
 #else
-  bs1 <- pure bs0
+    bs1 <- pure bs0
 #endif
 
-  -- If no blocks are returned, then we just add an empty parsed block.
-  if null bs1 then do
-    let errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
-    let stmts = StatementList
-          { stmtsIdent = 0
-          , stmtsNonterm = []
-          , stmtsTerm = ParsedTranslateError errMsg
-          , stmtsAbsState = initAbsProcessorState mem (foundAbstractState finfo)
-          }
-    let pb = ParsedBlock { pblockAddr = addr
-                         , blockSize = sz
-                         , blockReason = foundReason finfo
-                         , blockAbstractState = foundAbstractState finfo
-                         , blockStatementList = stmts
-                         }
-    id %= addFunBlock addr pb
-   else do
-    -- Rewrite returned blocks to simplify expressions
+    -- If no blocks are returned, then we just add an empty parsed block.
+    if null bs1 then do
+      let errMsg = Text.pack $ fromMaybe "Unknown error" maybeError
+      let stmts = StatementList
+                  { stmtsIdent = 0
+                  , stmtsNonterm = []
+                  , stmtsTerm = ParsedTranslateError errMsg
+                  , stmtsAbsState = initAbsProcessorState mem (foundAbstractState finfo)
+                  }
+      let pb = ParsedBlock { pblockAddr = addr
+                           , blockSize = sz
+                           , blockReason = foundReason finfo
+                           , blockAbstractState = foundAbstractState finfo
+                           , blockStatementList = stmts
+                           }
+      id %= addFunBlock addr pb
+    else do
+      -- Rewrite returned blocks to simplify expressions
 
-    -- Compute demand set
-    let bs = bs1 -- eliminateDeadStmts ainfo bs1
-    -- Call transfer blocks to calculate parsedblocks
-    let blockMap = Map.fromList [ (blockLabel b, b) | b <- bs ]
-    addBlocks addr finfo sz blockMap
+      -- Compute demand set
+      let bs = bs1 -- eliminateDeadStmts ainfo bs1
+      -- Call transfer blocks to calculate parsedblocks
+      let blockMap = Map.fromList [ (blockLabel b, b) | b <- bs ]
+      addBlocks addr finfo sz blockMap
 
 ------------------------------------------------------------------------
 -- Main loop

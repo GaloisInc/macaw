@@ -21,6 +21,7 @@ module Data.Macaw.CFG.App
   , ppAppA
   ) where
 
+import qualified Data.Kind as Kind
 import           Control.Monad.Identity
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
@@ -40,7 +41,7 @@ import           Data.Macaw.Utils.Pretty
 -- These operations are all total functions.  Different architecture tend to have
 -- different ways of raising signals or exceptions, and so partial functions are
 -- all architecture specific.
-data App (f :: Type -> *) (tp :: Type) where
+data App (f :: Type -> Kind.Type) (tp :: Type) where
 
   -- Compare for equality.
   Eq :: !(f tp) -> !(f tp) -> App f BoolType

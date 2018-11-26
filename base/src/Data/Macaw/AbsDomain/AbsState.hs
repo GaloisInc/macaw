@@ -66,6 +66,7 @@ import           Data.Bits
 import           Data.Foldable
 import           Data.Functor
 import           Data.Int
+import qualified Data.Kind as Kind
 import           Data.Map (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -1316,7 +1317,7 @@ transferApp r a = do
     _ -> TopV
 
 -- | Minimal information needed to parse a function call/system call
-data CallParams (r :: Type -> *)
+data CallParams (r :: Type -> Kind.Type)
    = CallParams { postCallStackDelta :: Integer
                   -- ^ Amount stack should shift by when going before/after call.
                 , preserveReg        :: forall tp . r tp -> Bool
