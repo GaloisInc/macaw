@@ -67,6 +67,7 @@ import           Data.Macaw.Symbolic.CrucGen (MacawExt)
 import           Data.Macaw.Symbolic
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
+import qualified Data.Macaw.CFG.Core as MC
 
 import           Prelude
 
