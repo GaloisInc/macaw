@@ -1,6 +1,7 @@
 packages: macaw-ppc/
           macaw-arm/
           macaw-semmc/
+          macaw-ppc-symbolic/
           submodules/macaw/base/
           submodules/macaw/x86/
           submodules/macaw/symbolic/
