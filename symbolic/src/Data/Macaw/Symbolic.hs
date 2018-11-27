@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -43,10 +44,15 @@ module Data.Macaw.Symbolic
   , Regs
   , freshValue
   , GlobalMap
+    -- * Symbolic architecture-specific types
+  , ArchBits
+  , ArchInfo(..)
+  , ArchVals(..)
   ) where
 
 import           Control.Lens ((^.))
 import           Control.Monad (forM, join)
+import           Control.Monad.IO.Class
 import           Control.Monad.ST (ST, RealWorld, stToIO)
 import           Data.Foldable
 import           Data.Map.Strict (Map)
@@ -477,13 +483,17 @@ type MacawArchEvalFn sym arch =
 
 
 -- | This evaluates a  Macaw statement extension in the simulator.
-execMacawStmtExtension ::
-  IsSymInterface sym =>
-  MacawArchEvalFn sym arch {- ^ Function for executing -} ->
-  C.GlobalVar MM.Mem ->
-  GlobalMap sym (M.ArchAddrWidth arch) ->
-  LookupFunctionHandle sym arch ->
-  EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
+execMacawStmtExtension
+  :: IsSymInterface sym
+  => (  C.GlobalVar MM.Mem
+     -> GlobalMap sym (M.ArchAddrWidth arch)
+     -> MacawArchEvalFn sym arch
+     )
+  {- ^ Function for executing -}
+  -> C.GlobalVar MM.Mem
+  -> GlobalMap sym (M.ArchAddrWidth arch)
+  -> LookupFunctionHandle sym arch
+  -> EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 execMacawStmtExtension archStmtFn mvar globs (LFH lookupH) s0 st =
   case s0 of
     MacawReadMem w mr x         -> doReadMem st mvar globs w mr x
@@ -506,7 +516,7 @@ execMacawStmtExtension archStmtFn mvar globs (LFH lookupH) s0 st =
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')
 
-    MacawArchStmtExtension s    -> archStmtFn s st
+    MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
@@ -568,37 +578,84 @@ freshValue sym str w ty =
 
 
 -- | Return macaw extension evaluation functions.
-macawExtensions ::
-  IsSymInterface sym =>
-  MacawArchEvalFn sym arch ->
-  C.GlobalVar MM.Mem ->
-  GlobalMap sym (M.ArchAddrWidth arch) ->
-  LookupFunctionHandle sym arch ->
-  C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
+macawExtensions
+  :: IsSymInterface sym
+  => (  C.GlobalVar MM.Mem
+     -> GlobalMap sym (M.ArchAddrWidth arch)
+     -> MacawArchEvalFn sym arch
+     )
+  -> C.GlobalVar MM.Mem
+  -> GlobalMap sym (M.ArchAddrWidth arch)
+  -> LookupFunctionHandle sym arch
+  -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
 macawExtensions f mvar globs lookupH =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH
                   }
 
+type ArchBits arch =
+  ( C.IsSyntaxExtension (MacawExt arch)
+  , M.ArchConstraints arch
+  , M.RegisterInfo (M.ArchReg arch)
+  , M.HasRepr (M.ArchReg arch) M.TypeRepr
+  , M.MemWidth (M.ArchAddrWidth arch)
+  , Show (M.ArchReg arch (M.BVType (M.ArchAddrWidth arch)))
+  , ArchInfo arch
+  )
+
+type SymArchConstraints arch =
+  ( C.IsSyntaxExtension (MacawExt arch)
+  , M.MemWidth (M.ArchAddrWidth arch)
+  , M.PrettyF (M.ArchReg arch)
+  )
+
+data ArchVals arch = ArchVals
+  { archFunctions :: MacawSymbolicArchFunctions arch
+  , withArchEval
+      :: forall a m sym
+       . (IsSymInterface sym, MonadIO m)
+      => sym
+      -> (  (  C.GlobalVar MM.Mem
+            -> GlobalMap sym (M.ArchAddrWidth arch)
+            -> MacawArchEvalFn sym arch
+            )
+         -> m a
+         )
+      -> m a
+  , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
+  }
+
+-- | A class to capture the architecture-specific information required to
+-- perform block recovery and translation into a Crucible CFG.
+--
+-- For architectures that do not have a symbolic backend yet, have this function
+-- return 'Nothing'.
+class ArchInfo arch where
+  archVals :: proxy arch -> Maybe (ArchVals arch)
+
 -- | Run the simulator over a contiguous set of code.
-runCodeBlock :: forall sym arch blocks
-           .  (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym)
-           => sym
-           -> MacawSymbolicArchFunctions arch
-              -- ^ Translation functions
-           -> MacawArchEvalFn sym arch
-           -> C.HandleAllocator RealWorld
-           -> (MM.MemImpl sym, GlobalMap sym (M.ArchAddrWidth arch))
-           -> LookupFunctionHandle sym arch
-           -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
-           -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
-              -- ^ Register assignment
-           -> IO ( C.GlobalVar MM.Mem
-                 , C.ExecResult
-                   (MacawSimulatorState sym)
-                   sym
-                   (MacawExt arch)
-                   (C.RegEntry sym (ArchRegStruct arch)))
+runCodeBlock
+  :: forall sym arch blocks
+   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym)
+  => sym
+  -> MacawSymbolicArchFunctions arch
+  -- ^ Translation functions
+  -> (  C.GlobalVar MM.Mem
+     -> GlobalMap sym (M.ArchAddrWidth arch)
+     -> MacawArchEvalFn sym arch
+     )
+  -> C.HandleAllocator RealWorld
+  -> (MM.MemImpl sym, GlobalMap sym (M.ArchAddrWidth arch))
+  -> LookupFunctionHandle sym arch
+  -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
+  -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
+  -- ^ Register assignment
+  -> IO ( C.GlobalVar MM.Mem
+        , C.ExecResult
+          (MacawSimulatorState sym)
+          sym
+          (MacawExt arch)
+          (C.RegEntry sym (ArchRegStruct arch)))
 runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = do
   mvar <- stToIO (MM.mkMemVar halloc)
   let crucRegTypes = crucArchRegTypes archFns

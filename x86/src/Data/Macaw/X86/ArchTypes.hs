@@ -33,6 +33,7 @@ module Data.Macaw.X86.ArchTypes
   , X86PrimLoc(..)
   , SIMDWidth(..)
   , RepValSize(..)
+  , SomeRepValSize(..)
   , repValSizeByteCount
   , repValSizeMemRepr
   ) where
@@ -81,6 +82,9 @@ data RepValSize w
    | (w ~ 32) => DWordRepVal
    | (w ~ 64) => QWordRepVal
 
+data SomeRepValSize where
+  SomeRepValSize :: (1 <= w) => RepValSize w -> SomeRepValSize
+
 repValSizeMemRepr :: RepValSize w -> MemRepr (BVType w)
 repValSizeMemRepr v =
   case v of
@@ -122,7 +126,7 @@ data X86PrimLoc tp
    | (tp ~ BVType 16) => FS
      -- ^ This refers to the selector of the 'FS' register.
    | (tp ~ BVType 16) => GS
-     -- ^ This refers to the se lector of the 'GS' register.
+     -- ^ This refers to the selector of the 'GS' register.
    | forall w . (tp ~ BVType   w) => X87_ControlLoc !(X87_ControlReg w)
      -- ^ One of the x87 control registers
 
@@ -895,12 +899,14 @@ data X86Stmt (v :: Type -> Kind.Type) where
   -- * @dir@ is a flag that indicates the direction of move ('True' ==
   --   decrement, 'False' == increment) for updating the buffer
   --   pointers.
-  RepMovs :: !(RepValSize w)
-          -> !(v (BVType 64))
-          -> !(v (BVType 64))
-          -> !(v (BVType 64))
-          -> !(v BoolType)
-          -> X86Stmt v
+  RepMovs
+    :: (1 <= w)
+    => !(RepValSize w)
+    -> !(v (BVType 64))
+    -> !(v (BVType 64))
+    -> !(v (BVType 64))
+    -> !(v BoolType)
+    -> X86Stmt v
 
   -- | Assign all elements in an array in memory a specific value.
   --
@@ -912,16 +918,18 @@ data X86Stmt (v :: Type -> Kind.Type) where
   -- * @dir@ is a flag that indicates the direction of move ('True' ==
   --   decrement, 'False' == increment) for updating the buffer
   --   pointers.
-  RepStos :: !(RepValSize w)
-          -> !(v (BVType 64))
-             -- /\ Address to start assigning to.
-          -> !(v (BVType w))
-             -- /\ Value to assign
-          -> !(v (BVType 64))
-             -- /\ Number of values to assign
-          -> !(v BoolType)
-            -- /\ Direction flag
-          -> X86Stmt v
+  RepStos
+    :: (1 <= w)
+    => !(RepValSize w)
+    -> !(v (BVType 64))
+        -- /\ Address to start assigning to.
+    -> !(v (BVType w))
+        -- /\ Value to assign
+    -> !(v (BVType 64))
+        -- /\ Number of values to assign
+    -> !(v BoolType)
+      -- /\ Direction flag
+    -> X86Stmt v
 
   -- | Empty MMX technology State. Sets the x87 FPU tag word to empty.
   --

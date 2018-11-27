@@ -1223,13 +1223,12 @@ def_ret = defVariadic "ret"    $ \_ vs ->
 def_movs :: InstructionDef
 def_movs = defBinary "movs" $ \ii loc _ -> do
   let pfx = F.iiPrefixes ii
-  Some w <-
-        case loc of
-          F.Mem8{}  -> pure (Some ByteRepVal)
-          F.Mem16{} -> pure (Some WordRepVal)
-          F.Mem32{} -> pure (Some DWordRepVal)
-          F.Mem64{} -> pure (Some QWordRepVal)
-          _ -> error "Bad argument to movs"
+  SomeRepValSize w <- case loc of
+    F.Mem8{}  -> pure (SomeRepValSize ByteRepVal)
+    F.Mem16{} -> pure (SomeRepValSize WordRepVal)
+    F.Mem32{} -> pure (SomeRepValSize DWordRepVal)
+    F.Mem64{} -> pure (SomeRepValSize QWordRepVal)
+    _ -> error "Bad argument to movs"
   let bytesPerOp = bvLit n64 (repValSizeByteCount w)
   dest <- get rdi
   src  <- get rsi
@@ -1484,16 +1483,16 @@ def_lodsx suf elsz = defNullaryPrefix ("lods" ++ suf) $ \pfx -> do
 def_stos :: InstructionDef
 def_stos = defBinary "stos" $ \ii loc loc' -> do
   let pfx = F.iiPrefixes ii
-  Some rep <-
+  SomeRepValSize rep <-
     case (loc, loc') of
       (F.Mem8  (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.ByteReg  F.AL) -> do
-        pure (Some ByteRepVal)
+        pure (SomeRepValSize ByteRepVal)
       (F.Mem16 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.WordReg  F.AX) -> do
-        pure (Some WordRepVal)
+        pure (SomeRepValSize WordRepVal)
       (F.Mem32 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.DWordReg F.EAX) -> do
-        pure (Some DWordRepVal)
+        pure (SomeRepValSize DWordRepVal)
       (F.Mem64 (F.Addr_64 F.ES (Just F.RDI) Nothing F.NoDisplacement), F.QWordReg F.RAX) -> do
-        pure (Some QWordRepVal)
+        pure (SomeRepValSize QWordRepVal)
       _ -> error $ "stos given bad arguments " ++ show (loc, loc')
   -- The direction flag indicates post decrement or post increment.
   dest <- get rdi

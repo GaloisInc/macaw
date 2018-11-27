@@ -33,6 +33,7 @@ module Data.Macaw.X86.Crucible
   ) where
 
 import           Control.Lens ((^.))
+import           Control.Monad
 import           Data.Bits hiding (xor)
 import           Data.Kind ( Type )
 import           Data.Parameterized.Context.Unsafe (empty,extend)
@@ -44,12 +45,14 @@ import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
 import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), empty )
 
+import           What4.Concrete
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
 import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend (IsSymInterface)
 import           Lang.Crucible.CFG.Expr
+import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.Intrinsics (IntrinsicTypes)
@@ -59,12 +62,20 @@ import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 
 import           Lang.Crucible.LLVM.MemModel
-                   (LLVMPointerType, projectLLVM_bv,
-                    pattern LLVMPointerRepr, llvmPointer_bv)
+                   ( LLVMPointerType
+                   , Mem
+                   , ptrAdd
+                   , projectLLVM_bv
+                   , pattern LLVMPointerRepr
+                   , llvmPointer_bv
+                   )
 
+import qualified Data.Macaw.CFG.Core as M
+import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen (MacawExt)
-import           Data.Macaw.Symbolic
+import           Data.Macaw.Symbolic.MemOps
+import           Data.Macaw.Symbolic.PersistentState
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
 import qualified Data.Macaw.CFG.Core as MC
@@ -87,21 +98,83 @@ funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
                           v <- pureSem sym x
                           return (v,s)
 
-stmtSemantics :: (IsSymInterface sym)
-              => SymFuns sym
-              -> M.X86Stmt (AtomWrapper (RegEntry sym))
-              -> S sym rtp bs r ctx
-              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-stmtSemantics fs x s = error ("Symbolic execution semantics for x86 statements are not implemented yet: " <>
-                              (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) x))
+withConcreteCountAndDir
+  :: (IsSymInterface sym, 1 <= w)
+  => S sym rtp bs r ctx
+  -> M.RepValSize w
+  -> (AtomWrapper (RegEntry sym) (M.BVType 64))
+  -> (AtomWrapper (RegEntry sym) M.BoolType)
+  -> (S sym rtp bs r ctx -> (SymBV sym 64) -> IO (S sym rtp bs r ctx))
+  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+withConcreteCountAndDir state val_size wrapped_count wrapped_dir func = do
+  let sym = state^.stateSymInterface
+  let val_byte_size = M.repValSizeByteCount val_size
+  bv_count <- toValBV sym wrapped_count
+  case asConcrete bv_count of
+    Just (ConcreteBV _ count) -> do
+      res_crux_state <- foldM func state
+        =<< mapM (\index -> bvLit sym knownNat $ index * val_byte_size)
+          -- [0..((if dir then 1 else -1) * (count - 1))]
+          [0..(count - 1)]
+      return ((), res_crux_state)
+    Nothing -> error $ "Unsupported symbolic count in rep stmt: "
+
+stmtSemantics
+  :: IsSymInterface sym
+  => SymFuns sym
+  -> C.GlobalVar Mem
+  -> GlobalMap sym (M.ArchAddrWidth M.X86_64)
+  -> M.X86Stmt (AtomWrapper (RegEntry sym))
+  -> S sym rtp bs r ctx
+  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+stmtSemantics _sym_funs global_var_mem globals stmt state = do
+  let sym = state^.stateSymInterface
+  case stmt of
+    M.RepMovs val_size (AtomWrapper dest) (AtomWrapper src) count dir ->
+      withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
+        let mem_repr = M.repValSizeMemRepr val_size
+        curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
+        curr_src_ptr <- ptrAdd sym knownNat (regValue src) offset
+        (val, after_read_state) <- doReadMem
+          acc_state
+          global_var_mem
+          globals
+          M.Addr64
+          mem_repr
+          (RegEntry knownRepr curr_src_ptr)
+        (_, after_write_state) <- doWriteMem
+          after_read_state
+          global_var_mem
+          globals
+          M.Addr64
+          mem_repr
+          (RegEntry knownRepr curr_dest_ptr)
+          (RegEntry (typeToCrucible $ M.typeRepr mem_repr) val)
+        return after_write_state
+    M.RepStos val_size (AtomWrapper dest) (AtomWrapper val) count dir ->
+      withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
+          let mem_repr = M.repValSizeMemRepr val_size
+          curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
+          (_, after_write_state) <- doWriteMem
+            acc_state
+            global_var_mem
+            globals
+            M.Addr64
+            mem_repr
+            (RegEntry knownRepr curr_dest_ptr)
+            val
+          return after_write_state
+    _ -> error $
+      "Symbolic execution semantics for x86 statement are not implemented yet: "
+      <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
 
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
               -> M.X86TermStmt ids
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-termSemantics fs x s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
-                              (show $ MC.prettyF x))
+termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
+                               (show $ MC.prettyF x))
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
