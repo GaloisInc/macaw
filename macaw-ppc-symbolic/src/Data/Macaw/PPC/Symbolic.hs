@@ -8,8 +8,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.PPC.Symbolic (
   ppc64MacawSymbolicFns,
   ppc64MacawEvalFn,
@@ -39,6 +41,7 @@ import           GHC.TypeLits
 import           Control.Lens ( (^.), (%~), (&) )
 import           Control.Monad ( void )
 import qualified Control.Monad.Catch as X
+import           Control.Monad.IO.Class ( liftIO )
 import qualified Data.Functor.Identity as I
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
@@ -132,6 +135,24 @@ ppc32MacawEvalFn fs = \xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s
+
+instance MS.ArchInfo MP.PPC64 where
+  archVals _ = Just $ MS.ArchVals
+    { MS.archFunctions = ppc64MacawSymbolicFns
+    , MS.withArchEval = \sym k -> do
+        sfns <- liftIO $ F.newSymFuns sym
+        k $ \_ _ -> ppc64MacawEvalFn sfns
+    , MS.withArchConstraints = \x -> x
+    }
+
+instance MS.ArchInfo MP.PPC32 where
+  archVals _ = Just $ MS.ArchVals
+    { MS.archFunctions = ppc32MacawSymbolicFns
+    , MS.withArchEval = \sym k -> do
+        sfns <- liftIO $ F.newSymFuns sym
+        k $ \_ _ -> ppc32MacawEvalFn sfns
+    , MS.withArchConstraints = \x -> x
+    }
 
 ppcRegName :: MP.PPCReg ppc tp -> C.SolverSymbol
 ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
