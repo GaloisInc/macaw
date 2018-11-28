@@ -201,6 +201,8 @@ disassembleBlock lookupSemantics gs curPCAddr maxOffset = do
             let lineStr = printf "%s: %s" (show curPCAddr) (show (case i of
                                                                     A32I i' -> ARMD.ppInstruction i'
                                                                     T32I i' -> ThumbD.ppInstruction i'))
+            let Just addrWord = MM.segoffAsAbsoluteAddr curPCAddr
+            addStmt (InstructionStart addrWord (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.relativeSegmentAddr curPCAddr) transformer
 

@@ -136,6 +136,8 @@ disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
+            let Just addrWord = MM.segoffAsAbsoluteAddr curIPAddr
+            addStmt (InstructionStart addrWord (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer
 
