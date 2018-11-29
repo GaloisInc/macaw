@@ -142,7 +142,7 @@ tryDisassembleBlock :: (ARMArchConstraints arm)
 tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.msegOffset startAddr
-  (nextPCOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr (startOffset + fromIntegral maxSize)
+  (nextPCOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do
     let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
     failAt gs0 nextPCOffset startAddr reason
@@ -171,11 +171,13 @@ disassembleBlock :: forall arm ids s
                  -> MM.MemSegmentOff (ArchAddrWidth arm)
                  -- ^ The current instruction pointer
                  -> MM.MemWord (ArchAddrWidth arm)
+                 -- ^ The offset into the block of this instruction
+                 -> MM.MemWord (ArchAddrWidth arm)
                  -- ^ The maximum offset into the bytestring that we should
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM arm ids s (MM.MemWord (ArchAddrWidth arm), BlockSeq arm ids)
-disassembleBlock lookupSemantics gs curPCAddr maxOffset = do
+disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
   let seg = MM.msegSegment curPCAddr
   let off = MM.msegOffset curPCAddr
   case readInstruction curPCAddr of
@@ -201,8 +203,7 @@ disassembleBlock lookupSemantics gs curPCAddr maxOffset = do
             let lineStr = printf "%s: %s" (show curPCAddr) (show (case i of
                                                                     A32I i' -> ARMD.ppInstruction i'
                                                                     T32I i' -> ThumbD.ppInstruction i'))
-            let Just addrWord = MM.segoffAsAbsoluteAddr curPCAddr
-            addStmt (InstructionStart addrWord (T.pack lineStr))
+            addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.relativeSegmentAddr curPCAddr) transformer
 
@@ -232,7 +233,7 @@ disassembleBlock lookupSemantics gs curPCAddr maxOffset = do
                                          , genAddr = nextPCSegAddr
                                          , genRegUpdates = MapF.empty
                                          }
-                      disassembleBlock lookupSemantics gs2 nextPCSegAddr maxOffset
+                      disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
 
                 _ -> return (nextPCOffset, finishBlock FetchAndExecute gs1)
 

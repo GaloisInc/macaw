@@ -108,11 +108,13 @@ disassembleBlock :: forall ppc ids s
                  -> MM.MemSegmentOff (ArchAddrWidth ppc)
                  -- ^ The current instruction pointer
                  -> MM.MemWord (ArchAddrWidth ppc)
+                 -- ^ The offset into the block of this instruction
+                 -> MM.MemWord (ArchAddrWidth ppc)
                  -- ^ The maximum offset into the bytestring that we should
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
-disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
+disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curIPAddr
   let off = MM.segoffOffset curIPAddr
   case readInstruction curIPAddr of
@@ -136,8 +138,7 @@ disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
-            let Just addrWord = MM.segoffAsAbsoluteAddr curIPAddr
-            addStmt (InstructionStart addrWord (T.pack lineStr))
+            addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer
 
@@ -167,7 +168,7 @@ disassembleBlock lookupSemantics gs curIPAddr maxOffset = do
                                          , genAddr = nextIPSegAddr
                                          , genRegUpdates = MapF.empty
                                          }
-                      disassembleBlock lookupSemantics gs2 nextIPSegAddr maxOffset
+                      disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
 
                 _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
 
@@ -193,7 +194,7 @@ tryDisassembleBlock :: (PPCArchConstraints ppc)
 tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
   let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
   let startOffset = MM.segoffOffset startAddr
-  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr (startOffset + fromIntegral maxSize)
+  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
