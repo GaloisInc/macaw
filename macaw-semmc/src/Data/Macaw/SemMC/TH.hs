@@ -617,7 +617,7 @@ addEltTH interps elt = do
             withLocToReg $ \ltr -> do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
           | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
-            bindExpr elt [| O.extractValue $(varE name) |]
+            bindExpr elt [| return $ O.extractValue $(varE (regsValName interps)) $(varE name) |]
           | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
             bindExpr elt [| return $(varE name) |]
           | otherwise -> fail $ "bound var not found: " ++ show bVar
@@ -742,7 +742,7 @@ defaultNonceAppEvaluator bvi nonceApp =
                     [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
                     argNames -> do
                       let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                      liftQ [| O.extractValue ($(call)) |]
+                      liftQ [| return $ O.extractValue $(varE (regsValName bvi)) ($(call)) |]
               | otherwise -> error $ "Unsupported function: " ++ show fnName
     _ -> error "Unsupported NonceApp case"
 

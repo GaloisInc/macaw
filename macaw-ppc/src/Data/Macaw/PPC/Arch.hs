@@ -655,12 +655,13 @@ type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
 
 memrrToEffectiveAddress :: forall ppc ids s n
                          . (n ~ MC.RegAddrWidth (MC.ArchReg ppc), PPCArchConstraints ppc)
-                        => D.MemRR
+                        => MC.RegState (PPCReg ppc) (MC.Value ppc ids)
+                        -> D.MemRR
                         -> G.Generator ppc ids s (MC.Value ppc ids (MT.BVType n))
-memrrToEffectiveAddress memrr = do
-  offset <- O.extractValue (E.interpMemrrOffsetExtractor memrr)
-  base <- O.extractValue (E.interpMemrrBaseExtractor memrr)
-  isr0 <- O.extractValue (E.interpIsR0 (E.interpMemrrBaseExtractor memrr))
+memrrToEffectiveAddress regs memrr = do
+  let offset = O.extractValue regs (E.interpMemrrOffsetExtractor memrr)
+  let base = O.extractValue regs (E.interpMemrrBaseExtractor memrr)
+  let isr0 = O.extractValue regs (E.interpIsR0 (E.interpMemrrBaseExtractor memrr))
   let repr = MT.knownNat @n
   let zero = MC.BVValue repr 0
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
@@ -735,18 +736,20 @@ ppcInstructionMatcher (D.Instruction opc operands) =
     D.TD ->
       case operands of
         D.Gprc rB D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
-          vB <- O.extractValue rB
-          vA <- O.extractValue rA
-          vTo <- O.extractValue to
+          regs <- G.getRegs
+          let vB = O.extractValue regs rB
+          let vA = O.extractValue regs rA
+          let vTo = O.extractValue regs to
           trapDoubleword vB vA vTo
     D.TDI ->
       case operands of
         D.S16imm imm D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
-          vB <- O.extractValue imm
+          regs <- G.getRegs
+          let vB = O.extractValue regs imm
           let repr = MT.knownNat @n
           vB' <- G.addExpr (G.AppExpr (MC.SExt vB repr))
-          vA <- O.extractValue rA
-          vTo <- O.extractValue to
+          let vA = O.extractValue regs rA
+          let vTo = O.extractValue regs to
           trapDoubleword vB' vA vTo
     D.ATTN -> Just $ do
       incrementIP
@@ -760,120 +763,138 @@ ppcInstructionMatcher (D.Instruction opc operands) =
     D.DCBA ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcba ea))
     D.DCBF ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcbf ea))
     D.DCBI ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcbi ea))
     D.DCBST ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcbst ea))
     D.DCBZ ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcbz ea))
     D.DCBZL ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Dcbzl ea))
     D.DCBT ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
-          th <- O.extractValue imm
+          ea <- memrrToEffectiveAddress regs memrr
+          let th = O.extractValue regs imm
           G.addStmt (MC.ExecArchStmt (Dcbt ea th))
     D.DCBTST ->
       case operands of
         D.Memrr memrr D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
-          th <- O.extractValue imm
+          ea <- memrrToEffectiveAddress regs memrr
+          let th = O.extractValue regs imm
           G.addStmt (MC.ExecArchStmt (Dcbtst ea th))
     D.ICBI ->
       case operands of
         D.Memrr memrr D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
+          ea <- memrrToEffectiveAddress regs memrr
           G.addStmt (MC.ExecArchStmt (Icbi ea))
     D.ICBT ->
       case operands of
         D.Memrr memrr D.:< D.U4imm imm D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          ea <- memrrToEffectiveAddress memrr
-          ct <- O.extractValue imm
+          ea <- memrrToEffectiveAddress regs memrr
+          let ct = O.extractValue regs imm
           G.addStmt (MC.ExecArchStmt (Icbt ea ct))
     D.TABORT ->
       case operands of
         D.Gprc r D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          rv <- O.extractValue r
+          let rv = O.extractValue regs r
           G.addStmt (MC.ExecArchStmt (Tabort rv))
     D.TABORTDC ->
       case operands of
         D.Gprc r1 D.:< D.Gprc r2 D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          rv1 <- O.extractValue r1
-          rv2 <- O.extractValue r2
-          immv <- O.extractValue imm
+          let rv1 = O.extractValue regs r1
+          let rv2 = O.extractValue regs r2
+          let immv = O.extractValue regs imm
           G.addStmt (MC.ExecArchStmt (Tabortdc rv1 rv2 immv))
     D.TABORTDCI ->
       case operands of
         D.U5imm i1 D.:< D.Gprc r D.:< D.U5imm i2 D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          imm1 <- O.extractValue i1
-          rv <- O.extractValue r
-          imm2 <- O.extractValue i2
+          let imm1 = O.extractValue regs i1
+          let rv = O.extractValue regs r
+          let imm2 = O.extractValue regs i2
           G.addStmt (MC.ExecArchStmt (Tabortdci imm1 rv imm2))
     D.TABORTWC ->
       case operands of
         D.Gprc r1 D.:< D.Gprc r2 D.:< D.U5imm imm D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          rv1 <- O.extractValue r1
-          rv2 <- O.extractValue r2
-          immv <- O.extractValue imm
+          let rv1 = O.extractValue regs r1
+          let rv2 = O.extractValue regs r2
+          let immv = O.extractValue regs imm
           G.addStmt (MC.ExecArchStmt (Tabortwc rv1 rv2 immv))
     D.TABORTWCI ->
       case operands of
         D.U5imm i1 D.:< D.Gprc r D.:< D.U5imm i2 D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          imm1 <- O.extractValue i1
-          rv <- O.extractValue r
-          imm2 <- O.extractValue i2
+          let imm1 = O.extractValue regs i1
+          let rv = O.extractValue regs r
+          let imm2 = O.extractValue regs i2
           G.addStmt (MC.ExecArchStmt (Tabortwci imm1 rv imm2))
     D.TBEGIN ->
       case operands of
         D.U1imm i D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          iv <- O.extractValue i
+          let iv = O.extractValue regs i
           G.addStmt (MC.ExecArchStmt (Tbegin iv))
     D.TCHECK ->
       case operands of
         D.Crrc r D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          rv <- O.extractValue r
+          let rv = O.extractValue regs r
           G.addStmt (MC.ExecArchStmt (Tcheck rv))
     D.TEND ->
       case operands of
         D.U1imm i D.:< D.Nil -> Just $ do
+          regs <- G.getRegs
           incrementIP
-          iv <- O.extractValue i
+          let iv = O.extractValue regs i
           G.addStmt (MC.ExecArchStmt (Tend iv))
     _ -> Nothing

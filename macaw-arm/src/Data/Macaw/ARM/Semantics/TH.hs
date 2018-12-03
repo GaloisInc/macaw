@@ -78,8 +78,8 @@ armNonceAppEval bvi nonceApp =
                              case (Map.lookup bv (locVars bvi), Map.lookup bv (opVars bvi)) of
                                (Just _, Just _) -> fail ("arm_is_r15 bound var is location and operand: " ++ show bv)
                                (Just loc, Nothing) -> withLocToReg $ \locToReg ->
-                                 liftQ [| O.extractValue (AE.interpIsR15 (armRegToGPR $(locToReg loc))) |]
-                               (Nothing, Just (C.Const name)) -> liftQ [| O.extractValue (AE.interpIsR15 $(varE name)) |]
+                                 liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 (armRegToGPR $(locToReg loc))) |]
+                               (Nothing, Just (C.Const name)) -> liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 $(varE name)) |]
                                (Nothing, Nothing) -> fail ("arm_is_r15 bound var not found: " ++ show bv)
                          S.NonceAppExpr nonceApp' ->
                              case S.nonceExprApp nonceApp' of
@@ -93,7 +93,7 @@ armNonceAppEval bvi nonceApp =
                                                        \ are not supported: " ++ nm)
                                            argNames ->
                                                let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                                               in liftQ [| O.extractValue (AE.interpIsR15 ($(call))) |]
+                                               in liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 ($(call))) |]
                                _ -> fail ("Unsupported arm.is_r15 nonce app type")
                          _ -> fail "Unsupported operand to arm.is_r15"
                      _ -> fail ("Invalid argument list for arm.is_r15: " ++ showF args)

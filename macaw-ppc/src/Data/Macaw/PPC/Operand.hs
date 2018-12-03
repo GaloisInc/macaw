@@ -14,6 +14,8 @@
 -- package that cannot depend on the architecture-specific backends.
 module Data.Macaw.PPC.Operand () where
 
+import           Control.Lens ( (^.) )
+
 import           Data.Word ( Word32 )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Macaw.CFG.Core as MC
@@ -22,57 +24,56 @@ import qualified Dismantle.PPC as D
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
-import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
 import qualified Data.Macaw.PPC.PPCReg as R
 
 instance ExtractValue PPC32.PPC D.GPR (BVType 32) where
-  extractValue gpr = G.getRegValue (R.PPC_GP gpr)
+  extractValue regs gpr = regs ^. MC.boundValue (R.PPC_GP gpr)
 
 instance ExtractValue PPC32.PPC (Maybe D.GPR) (BVType 32) where
-  extractValue mgpr =
+  extractValue regs mgpr =
     case mgpr of
-      Just gpr -> extractValue gpr
-      Nothing -> return $ MC.BVValue NR.knownNat 0
+      Just gpr -> extractValue regs gpr
+      Nothing -> MC.BVValue NR.knownNat 0
 
 instance ExtractValue PPC64.PPC D.GPR (BVType 64) where
-  extractValue gpr = G.getRegValue (R.PPC_GP gpr)
+  extractValue regs gpr = regs ^. MC.boundValue (R.PPC_GP gpr)
 
 instance ExtractValue PPC64.PPC (Maybe D.GPR) (BVType 64) where
-  extractValue mgpr =
+  extractValue regs mgpr =
     case mgpr of
-      Just gpr -> extractValue gpr
-      Nothing -> return $ MC.BVValue NR.knownNat 0
+      Just gpr -> extractValue regs gpr
+      Nothing -> MC.BVValue NR.knownNat 0
 
 instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.FR (BVType 128) where
-  extractValue (D.FR fr) = G.getRegValue (R.PPC_FR (D.VSReg fr))
+  extractValue regs (D.FR fr) = regs ^. MC.boundValue (R.PPC_FR (D.VSReg fr))
 
 instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.VR (BVType 128) where
-  extractValue (D.VR vr) = G.getRegValue (R.PPC_FR (D.VSReg (vr + 32)))
+  extractValue regs (D.VR vr) = regs ^. MC.boundValue (R.PPC_FR (D.VSReg (vr + 32)))
 
 instance (MC.ArchReg ppc ~ R.PPCReg ppc) => ExtractValue ppc D.VSReg (BVType 128) where
-  extractValue (D.VSReg vsr) = G.getRegValue (R.PPC_FR (D.VSReg vsr))
+  extractValue regs (D.VSReg vsr) = regs ^. MC.boundValue (R.PPC_FR (D.VSReg vsr))
 
 instance ExtractValue arch D.AbsBranchTarget (BVType 24) where
-  extractValue (D.ABT w) = return $ MC.BVValue NR.knownNat (toIntegerWord w)
+  extractValue _ (D.ABT w) = MC.BVValue NR.knownNat (toIntegerWord w)
 
 instance ExtractValue arch D.CondBranchTarget (BVType 14) where
-  extractValue (D.CBT i) = return $ MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ (D.CBT i) = MC.BVValue NR.knownNat (toIntegerWord i)
 
 instance ExtractValue arch D.AbsCondBranchTarget (BVType 14) where
-  extractValue (D.ACBT w) = return $ MC.BVValue NR.knownNat (toIntegerWord w)
+  extractValue _ (D.ACBT w) = MC.BVValue NR.knownNat (toIntegerWord w)
 
 instance ExtractValue arch D.BranchTarget (BVType 24) where
-  extractValue (D.BT i) = return $ MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ (D.BT i) = MC.BVValue NR.knownNat (toIntegerWord i)
 
 instance ExtractValue arch D.CRBitM (BVType 4) where
-  extractValue (D.CRBitM b) = return $ MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRBitM b) = MC.BVValue NR.knownNat (toIntegerWord b)
 
 instance ExtractValue arch D.CRBitRC (BVType 5) where
-  extractValue (D.CRBitRC b) = return $ MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRBitRC b) = MC.BVValue NR.knownNat (toIntegerWord b)
 
 instance ExtractValue arch D.CRRC (BVType 3) where
-  extractValue (D.CRRC b) = return $ MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRRC b) = MC.BVValue NR.knownNat (toIntegerWord b)
 
 instance ToRegister D.GPR (R.PPCReg PPC32.PPC) (BVType 32) where
   toRegister = R.PPC_GP

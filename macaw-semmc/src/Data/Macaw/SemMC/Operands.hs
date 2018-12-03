@@ -15,7 +15,6 @@ module Data.Macaw.SemMC.Operands (
 import           Data.Int ( Int8, Int16 )
 import qualified Data.Int.Indexed as I
 import qualified Data.Macaw.CFG.Core as MC
-import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr as NR
 import           Data.Word ( Word32 )
@@ -23,25 +22,25 @@ import qualified Data.Word.Indexed as W
 import           GHC.TypeLits
 
 class ExtractValue arch a tp | arch a -> tp where
-  extractValue :: a -> G.Generator arch ids s (MC.Value arch ids tp)
+  extractValue :: MC.RegState (MC.ArchReg arch) (MC.Value arch ids) -> a -> MC.Value arch ids tp
 
 class ToRegister a r tp | a r -> tp where
   toRegister :: a -> r tp
 
 instance (KnownNat n, 1 <= n) => ExtractValue arch (W.W n) (BVType n) where
-  extractValue w = return $ MC.BVValue NR.knownNat (toIntegerWord (W.unW w))
+  extractValue _ w = MC.BVValue NR.knownNat (toIntegerWord (W.unW w))
 
 instance (KnownNat n, 1 <= n) => ExtractValue arch (I.I n) (BVType n) where
-  extractValue (I.I i) = return $ MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ (I.I i) = MC.BVValue NR.knownNat (toIntegerWord i)
 
 instance ExtractValue arch Bool BoolType where
-  extractValue = return . MC.BoolValue
+  extractValue _ = MC.BoolValue
 
 instance ExtractValue arch Int8 (BVType 8) where
-  extractValue i = return $ MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ i = MC.BVValue NR.knownNat (toIntegerWord i)
 
 instance ExtractValue arch Int16 (BVType 16) where
-  extractValue i = return $ MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ i = MC.BVValue NR.knownNat (toIntegerWord i)
 
 
 -- | Convert to a positive integer through a word type

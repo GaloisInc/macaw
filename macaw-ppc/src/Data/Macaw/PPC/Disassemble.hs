@@ -145,7 +145,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
             -- Check to see if the IP has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
             -- provided by the Generator monad.
-            nextIPExpr <- getRegValue PPC_IP
+            nextIPExpr <- getCurrentIP
             case matchConditionalBranch nextIPExpr of
               Just (cond, t_ip, f_ip) ->
                 conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)

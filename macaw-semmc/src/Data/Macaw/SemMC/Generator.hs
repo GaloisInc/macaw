@@ -34,7 +34,7 @@ module Data.Macaw.SemMC.Generator (
   asAtomicStateUpdate,
   -- * State access
   getRegs,
-  getRegValue,
+  getCurrentIP,
   -- * Results
   GenResult(..),
   -- * Monad
@@ -306,22 +306,24 @@ addAssignment rhs = do
 -- This is meant to be used to snapshot the register state at the beginning of
 -- an instruction transformer so that we can perform atomic updates to the
 -- machine state (by reading values from the captured initial state).
+--
+-- NOTE: This should be called at most once, right at the beginning of
+-- semantics transformers, to get a snapshot of the register state before the
+-- instruction modifies them. If it is called later, it will return
+-- partially-modified register values, which is probably not what you want.
 getRegs :: Generator arch ids s (RegState (ArchReg arch) (Value arch ids))
 getRegs = do
   genState <- St.get
   return (genState ^. (blockState . pBlockState))
 
--- | Get the value of a single register.
---
--- NOTE: This should not be called from the generated semantics transformers.
--- Those must get their register values through 'getRegs', which is used to take
--- a snapshot of the register state at the beginning of each instruction.  This
--- is required for instruction updates to register values to have the necessary
--- atomic update behavior.
-getRegValue :: (OrdF (ArchReg arch)) => ArchReg arch tp -> Generator arch ids s (Value arch ids tp)
-getRegValue r = do
-  genState <- St.get
-  return (genState ^. (blockState . pBlockState . boundValue r))
+-- | Get the current value of the IP (NOT the snapshot of the value from when
+-- the instruction began evaluating).
+getCurrentIP ::
+  (OrdF (ArchReg arch), RegisterInfo (ArchReg arch)) =>
+  Generator arch ids s (BVValue arch ids (ArchAddrWidth arch))
+getCurrentIP = do
+  regs <- getRegs
+  return (regs ^. boundValue ip_reg)
 
 -- | Finish a block immediately with the given terminator statement
 --

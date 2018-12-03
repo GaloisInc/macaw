@@ -210,7 +210,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             -- Check to see if the PC has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
             -- provided by the Generator monad.
-            nextPCExpr <- getRegValue ARM_PC
+            nextPCExpr <- getCurrentIP
             case matchConditionalBranch nextPCExpr of
               Just (cond, t_pc, f_pc) ->
                 conditionalBranch cond (setRegVal ARM_PC t_pc) (setRegVal ARM_PC f_pc)

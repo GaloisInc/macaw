@@ -191,7 +191,7 @@ ppcNonceAppEval bvi nonceApp =
               case operand of
                 S.BoundVarExpr bv -> do
                   case Map.lookup bv (opVars bvi) of
-                    Just (C.Const name) -> liftQ [| O.extractValue (PE.interpIsR0 $(varE name)) |]
+                    Just (C.Const name) -> liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (PE.interpIsR0 $(varE name)) |]
                     Nothing -> fail ("bound var not found: " ++ show bv)
                 S.NonceAppExpr nonceApp' -> do
                   case S.nonceExprApp nonceApp' of
@@ -204,7 +204,7 @@ ppcNonceAppEval bvi nonceApp =
                             [] -> fail ("zero-argument uninterpreted functions are not supported: " ++ fnName)
                             argNames -> do
                               let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                              liftQ [| O.extractValue (PE.interpIsR0 ($(call))) |]
+                              liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (PE.interpIsR0 ($(call))) |]
                     _ -> fail ("Unsupported nonce app type")
                 _ -> fail "Unsupported operand to ppc.is_r0"
             _ -> fail ("Invalid argument list for ppc.is_r0: " ++ showF args)
