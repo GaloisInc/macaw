@@ -179,7 +179,11 @@ data MemLoadWarning
   | ExpectedSectionSymbolLocal
   | InvalidSectionSymbolIndex !Elf.ElfSectionIndex
   | UnsupportedProcessorSpecificSymbolIndex !SymbolName !ElfSectionIndex
-  | IgnoreRelocation !RelocationError
+  | IgnoreRelocation !Integer !String !RelocationError
+    -- ^ @IgnoreRelocation idx tp err@ warns we ignored the location at index @idx@ due to @err@.
+    --
+    -- @tp@ is a string representing the type which we print, because usually errors come because
+    -- we don't support that type or only partially implement it.
 
 ppSymbol :: SymbolName -> String
 ppSymbol "" = "unnamed symbol"
@@ -224,8 +228,8 @@ instance Show MemLoadWarning where
     "Expected section symbol to have a valid index instead of " ++ show idx ++ "."
   show (UnsupportedProcessorSpecificSymbolIndex nm idx) =
     "Could not resolve symbol index " ++ show idx ++ " for symbol " ++ BSC.unpack nm ++ "."
-  show (IgnoreRelocation err) =
-    "Ignoring relocation: " ++ show err
+  show (IgnoreRelocation idx typeName err) =
+    "Ignoring relocation " ++ show idx ++ " with type " ++ typeName ++ ": " ++ show err
 
 data MemLoaderState w = MLS { _mlsMemory :: !(Memory w)
                             , mlsEndianness :: !Endianness
@@ -440,6 +444,18 @@ relaTargetX86_64 _ symtab rel off _isRel =
                         , relocationJumpSlot   = False
                         }
 
+    Elf.R_X86_64_RELATIVE -> do
+      when (Elf.relSym rel /= 0) $ do
+        Left $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
+      pure $ Relocation { relocationSym        = LoadBaseAddr
+                        , relocationOffset     = off
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
+                        }
+
     -- Jhx Note. These will be needed to support thread local variables.
     --   Elf.R_X86_64_TPOFF32 -> undefined
     --   Elf.R_X86_64_GOTTPOFF -> undefined
@@ -562,12 +578,13 @@ resolveRela :: ( MemWidth w
                )
             => SymbolTable
             -> RelocationResolver tp
+            -> Integer -- ^ Index of relocation
             -> Elf.RelaEntry tp
             -> ResolveFn (MemLoader w) w
-resolveRela symtab resolver rela msegIdx _ =
+resolveRela symtab resolver relaIdx rela msegIdx _ =
   case resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) IsRela of
     Left e -> do
-      addWarning (IgnoreRelocation e)
+      addWarning (IgnoreRelocation relaIdx (show (Elf.relaType rela)) e)
       pure Nothing
     Right r -> do
       pure $ Just r
@@ -579,9 +596,10 @@ resolveRel :: ( MemWidth w
            => Endianness -- ^ Endianness of Elf file
            -> SymbolTable -- ^ Symbol table
            -> RelocationResolver tp
+           -> Integer -- ^ Index of relocation
            -> Elf.RelEntry tp
            -> ResolveFn (MemLoader w) w
-resolveRel end symtab resolver rel msegIdx bytes = do
+resolveRel end symtab resolver relIdx rel msegIdx bytes = do
   -- Get the number of bits in the addend
   let bits = Elf.relocTargetBits (Elf.relType rel)
   -- Compute the addended by masking off the low order bits, and
@@ -597,7 +615,7 @@ resolveRel end symtab resolver rel msegIdx bytes = do
   -- Update the resolver.
   case resolver msegIdx symtab rel (fromInteger saddend) IsRel of
     Left e -> do
-      addWarning (IgnoreRelocation e)
+      addWarning (IgnoreRelocation relIdx (show (Elf.relType rel)) e)
       pure Nothing
     Right r -> do
       pure $ Just r
@@ -616,12 +634,13 @@ relocFromRela :: ( Elf.IsRelocationType tp
                  )
               => SymbolTable
               -> RelocationResolver tp
+              -> Integer -- ^ Index of relocation entry for error reporting
               -> Elf.RelaEntry tp
               -> (MemWord w, RelocEntry (MemLoader w) w)
-relocFromRela symtab resolver r =
+relocFromRela symtab resolver idx r =
   ( fromIntegral (Elf.relaAddr r)
   , RelocEntry { relocEntrySize = relocTargetBytes (Elf.relaType r)
-               , applyReloc = resolveRela symtab resolver r
+               , applyReloc = resolveRela symtab resolver idx r
                }
   )
 
@@ -633,12 +652,13 @@ relocFromRel :: ( Elf.IsRelocationType tp
              => Endianness
              -> SymbolTable
              -> RelocationResolver tp
+             -> Integer -- ^ Index of relocation entry for error reporting.
              -> Elf.RelEntry tp
              -> (MemWord w, RelocEntry (MemLoader w) w)
-relocFromRel end symtab resolver r =
+relocFromRel end symtab resolver idx r =
   ( fromIntegral (Elf.relAddr r)
   , RelocEntry { relocEntrySize = relocTargetBytes (Elf.relType r)
-               , applyReloc = resolveRel end symtab resolver r
+               , applyReloc = resolveRel end symtab resolver idx r
                }
   )
 
@@ -663,7 +683,7 @@ relocMapFromRelAndRela dta resolver symtab _ (Just relaBuffer) = do
         addWarning (RelocationParseFailure msg)
         pure Map.empty
       Right entries -> do
-        pure $ Map.fromList $ relocFromRela symtab resolver <$> entries
+        pure $ Map.fromList $ zipWith (relocFromRela symtab resolver) [0..]  entries
 relocMapFromRelAndRela dta resolver symtab (Just relBuffer) Nothing = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
@@ -672,7 +692,7 @@ relocMapFromRelAndRela dta resolver symtab (Just relBuffer) Nothing = do
         addWarning (RelocationParseFailure msg)
         pure Map.empty
       Right entries -> do
-        pure $ Map.fromList $ relocFromRel (toEndianness dta) symtab resolver <$> entries
+        pure $ Map.fromList $ zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
 
 
 resolveUndefinedSymbolReq :: SymbolName
@@ -835,9 +855,9 @@ dynamicRelocationMap hdr ph contents =
                 Right Elf.PLTEmpty -> do
                   pure $! Map.empty
                 Right (Elf.PLTRel entries) -> do
-                  pure $! Map.fromList $ relocFromRel (toEndianness dta) symtab resolver <$> entries
+                  pure $! Map.fromList $ zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
                 Right (Elf.PLTRela entries) -> do
-                  pure $! Map.fromList $ relocFromRela symtab resolver <$> entries
+                  pure $! Map.fromList $ zipWith (relocFromRela symtab resolver) [0..] entries
             pure $ Map.union loadtimeRelocs pltRelocs
 
 ------------------------------------------------------------------------

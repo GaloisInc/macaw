@@ -650,8 +650,10 @@ resolveAsAbsoluteAddr :: forall w
                     -> Maybe (MemAddr w)
 resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
   case l of
-    [ByteRegion bs] -> do
-        absoluteAddr <$> addrRead endianness bs
+    [ByteRegion bs] ->
+      case addrRead endianness bs of
+        Just a -> pure $! absoluteAddr a
+        Nothing -> error $ "internal: resolveAsAbsoluteAddr given short chunk list."
     [RelocationRegion r] -> do
         when (relocationIsRel r) $ Nothing
         case relocationSym r of
@@ -662,6 +664,8 @@ resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
           SegmentBaseAddr idx -> do
             seg <- Map.lookup idx (memSegmentIndexMap mem)
             pure $! segmentOffAddr seg (relocationOffset r)
+          LoadBaseAddr -> do
+            memBaseAddr mem
     _ -> Nothing
 
 -- This function resolves jump table entries.

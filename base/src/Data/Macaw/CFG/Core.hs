@@ -724,12 +724,3 @@ instance ArchConstraints arch => Show (Stmt arch ids) where
 refsInValue :: Value arch ids tp -> Set (Some (AssignId ids))
 refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
 refsInValue _                                = Set.empty
-
--- | Return the assign identifiers in the assignment right-hand side.
---
--- Note.  This does not recursively evaluate references in values, it
--- just returns the assignment identifiers.
-refsInAssignRhs :: FoldableFC (ArchFn arch)
-                => AssignRhs arch (Value arch ids) tp
-                -> Set (Some (AssignId ids))
-refsInAssignRhs rhs = foldMapFC refsInValue rhs
