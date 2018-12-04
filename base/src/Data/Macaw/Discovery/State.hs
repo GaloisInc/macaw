@@ -372,15 +372,15 @@ emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information
                     -> DiscoveryState arch
-emptyDiscoveryState mem symbols info =
+emptyDiscoveryState mem addrSymMap info =
   DiscoveryState
   { memory               = mem
-  , symbolNames          = symbols
+  , symbolNames          = addrSymMap
   , archInfo             = info
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustedFunctionEntryPoints = Set.empty
+  , _trustedFunctionEntryPoints = Map.keysSet addrSymMap
   , _exploreFnPred       = Nothing
   }
 

@@ -1445,8 +1445,8 @@ cfgFromAddrs ::
      --
      -- Each entry contains an address and the value stored in it.
   -> DiscoveryState arch
-cfgFromAddrs ainfo mem symbols =
-  cfgFromAddrsAndState (emptyDiscoveryState mem symbols ainfo)
+cfgFromAddrs ainfo mem addrSymMap =
+  cfgFromAddrsAndState (emptyDiscoveryState mem addrSymMap ainfo)
 
 ------------------------------------------------------------------------
 -- Resolve functions with logging

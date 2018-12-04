@@ -742,6 +742,7 @@ symbolDefTypeMap = Map.fromList
   , (,) Elf.STT_FUNC      SymbolDefFunc
   , (,) Elf.STT_TLS       SymbolDefThreadLocal
   , (,) Elf.STT_GNU_IFUNC SymbolDefIFunc
+  , (,) Elf.STT_NOTYPE    SymbolDefNoType
   ]
 
 resolveDefinedSymbolDef :: ElfSymbolTableEntry wtp
