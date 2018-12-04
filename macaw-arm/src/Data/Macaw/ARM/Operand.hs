@@ -104,7 +104,7 @@ instance ExtractValue ARM.AArch32 T32Operand.AddrModeIs4 (BVType 32) where
   extractValue _ = MC.BVValue NR.knownNat . toInteger . T32Operand.addrModeIs4ToBits
 
 instance ExtractValue ARM.AArch32 T32Operand.LowGPR (BVType 32) where
-  extractValue _ r = G.getReg.ARM_GP $ fromIntegral $ T32Operand.unLowGPR r)
+  extractValue _ r = G.getReg.ARM_GP $ fromIntegral $ T32Operand.unLowGPR r
 
 instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
   toRegister = Reg.ARM_GP . fromIntegral . T32Operand.unLowGPR
