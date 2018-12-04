@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
@@ -28,7 +29,9 @@ module Data.Macaw.X86.Symbolic
 
 import           Control.Lens ((^.),(%~),(&))
 import           Control.Monad ( void )
+import           Control.Monad.IO.Class ( liftIO )
 import           Data.Functor.Identity (Identity(..))
+import           Data.Kind
 import           Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Map as MapF
 import           Data.Parameterized.TraversableF
@@ -54,6 +57,7 @@ import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
 import           Lang.Crucible.Simulator.RegValue (RegValue'(..))
 import qualified Lang.Crucible.Types as C
+import qualified Lang.Crucible.LLVM.MemModel as MM
 
 ------------------------------------------------------------------------
 -- Utilities for generating a type-level context with repeated elements.
@@ -185,7 +189,7 @@ freshX86Reg sym r =
 
 -- | We currently make a type like this, we could instead a generic
 -- X86PrimFn function
-data X86StmtExtension (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
+data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) where
   -- | To reduce clutter, but potentially increase clutter, we just make every
   -- Macaw X86PrimFn a Macaw-Crucible statement extension.
   X86PrimFn :: !(M.X86PrimFn (AtomWrapper f) t) ->
@@ -263,8 +267,23 @@ x86_64MacawSymbolicFns =
 
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
-x86_64MacawEvalFn ::
-  C.IsSymInterface sym => SymFuns sym -> MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn fs (X86PrimFn x) s = funcSemantics fs x s
-x86_64MacawEvalFn fs (X86PrimStmt stmt) s = stmtSemantics fs stmt s
-x86_64MacawEvalFn fs (X86PrimTerm term) s = termSemantics fs term s
+x86_64MacawEvalFn
+  :: C.IsSymInterface sym
+  => SymFuns sym
+  -> C.GlobalVar MM.Mem
+  -> GlobalMap sym (M.ArchAddrWidth M.X86_64)
+  -> MacawArchEvalFn sym M.X86_64
+x86_64MacawEvalFn fs global_var_mem globals ext_stmt crux_state =
+  case ext_stmt of
+    X86PrimFn x -> funcSemantics fs x crux_state
+    X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
+    X86PrimTerm term -> termSemantics fs term crux_state
+
+instance ArchInfo M.X86_64 where
+  archVals _ = Just $ ArchVals
+    { archFunctions = x86_64MacawSymbolicFns
+    , withArchEval = \sym -> \k -> do
+        sfns <- liftIO $ newSymFuns sym
+        k $ x86_64MacawEvalFn sfns
+    , withArchConstraints = \x -> x
+    }

@@ -6,6 +6,8 @@ This exports the pre-classification term statement and block data
 types.
 -}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Data.Macaw.CFG.Block
   ( Block(..)
   , ppBlock

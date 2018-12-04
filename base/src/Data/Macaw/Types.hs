@@ -29,6 +29,7 @@ module Data.Macaw.Types
   , Data.Parameterized.NatRepr.knownNat
   ) where
 
+import qualified Data.Kind as Kind
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
@@ -251,7 +252,7 @@ instance OrdF FloatInfoRepr where
 
 -- | A multi-parameter type class that allows one to represent that a
 -- parameterized type value has some representative type such as a TypeRepr.
-class HasRepr (f :: k -> *) (v :: k -> *) | f -> v where
+class HasRepr (f :: k -> Kind.Type) (v :: k -> Kind.Type) | f -> v where
   typeRepr :: f tp -> v tp
 
 typeWidth :: HasRepr f TypeRepr => f (BVType w) -> NatRepr w

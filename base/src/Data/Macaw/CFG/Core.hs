@@ -7,6 +7,7 @@ Defines data types needed to represent values, assignments, and statements from 
 This is a low-level CFG representation where the entire program is a
 single CFG.
 -}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -21,7 +22,8 @@ single CFG.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -83,6 +85,7 @@ import           Control.Monad.Identity
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
+import qualified Data.Kind as Kind
 import           Data.Maybe (isNothing, catMaybes)
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
@@ -124,7 +127,7 @@ class PrettyPrec v where
   prettyPrec :: Int -> v -> Doc
 
 -- | Pretty print over all instances of a type.
-class PrettyF (f :: k -> *) where
+class PrettyF (f :: k -> Kind.Type) where
   prettyF :: f tp -> Doc
 
 -- | Pretty print a document with parens if condition is true
@@ -152,7 +155,7 @@ addrWidthTypeRepr Addr64 = BVTypeRepr knownNat
 -- form. 'AssignId's are typed, and also include a type variable @ids@
 -- that intuitively denotes the set of identifiers from which they are
 -- drawn.
-newtype AssignId (ids :: *) (tp :: Type) = AssignId (Nonce ids tp)
+newtype AssignId (ids :: Kind.Type) (tp :: Type) = AssignId (Nonce ids tp)
 
 ppAssignId :: AssignId ids tp -> Doc
 ppAssignId (AssignId w) = text ("r" ++ show (indexValue w))
@@ -391,7 +394,7 @@ class IPAlignment arch where
 -- RegState
 
 -- | This represents the state of the processor registers.
-newtype RegState (r :: k -> *) (f :: k -> *) = RegState (MapF.MapF r f)
+newtype RegState (r :: k -> Kind.Type) (f :: k -> Kind.Type) = RegState (MapF.MapF r f)
 
 deriving instance (OrdF r, EqF f) => Eq (RegState r f)
 
@@ -538,7 +541,7 @@ instance RegisterInfo (ArchReg arch) => Show (Value arch ids tp) where
   show = show . pretty
 
 -- | Typeclass for architecture-specific functions
-class IsArchFn (f :: (Type -> *) -> Type -> *)  where
+class IsArchFn (f :: (Type -> Kind.Type) -> Type -> Kind.Type)  where
   -- | A function for pretty printing an archFn of a given type.
   ppArchFn :: Applicative m
            => (forall u . v u -> m Doc)
@@ -547,7 +550,7 @@ class IsArchFn (f :: (Type -> *) -> Type -> *)  where
            -> m Doc
 
 -- | Typeclass for architecture-specific statements
-class IsArchStmt (f :: (Type -> *) -> *)  where
+class IsArchStmt (f :: (Type -> Kind.Type) -> Kind.Type)  where
   -- | A function for pretty printing an architecture statement of a given type.
   ppArchStmt :: (forall u . v u -> Doc)
                 -- ^ Function for pretty printing value.
@@ -641,7 +644,7 @@ ppValueAssignmentList vals =
 
 -- | This class provides a way of optionally pretty printing the contents
 -- of a register or omitting them.
-class PrettyRegValue r (f :: Type -> *) where
+class PrettyRegValue r (f :: Type -> Kind.Type) where
   -- | ppValueEq should return a doc if the contents of the given register
   -- should be printed, and Nothing if the contents should be ignored.
   ppValueEq :: r tp -> f tp -> Maybe Doc

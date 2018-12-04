@@ -33,20 +33,26 @@ module Data.Macaw.X86.Crucible
   ) where
 
 import           Control.Lens ((^.))
+import           Control.Monad
 import           Data.Bits hiding (xor)
+import           Data.Kind ( Type )
 import           Data.Parameterized.Context.Unsafe (empty,extend)
-import           Data.Parameterized.Utils.Endian (Endian(..))
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.Utils.Endian (Endian(..))
 import qualified Data.Parameterized.Vector as PV
+import           Data.Semigroup
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
+import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), empty )
 
+import           What4.Concrete
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
 import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend (IsSymInterface)
 import           Lang.Crucible.CFG.Expr
+import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
 import           Lang.Crucible.Simulator.ExecutionTree
 import           Lang.Crucible.Simulator.Intrinsics (IntrinsicTypes)
@@ -56,14 +62,25 @@ import           Lang.Crucible.Types
 import qualified Lang.Crucible.Vector as V
 
 import           Lang.Crucible.LLVM.MemModel
-                   (LLVMPointerType, projectLLVM_bv,
-                    pattern LLVMPointerRepr, llvmPointer_bv)
+                   ( LLVMPointerType
+                   , Mem
+                   , ptrAdd
+                   , projectLLVM_bv
+                   , pattern LLVMPointerRepr
+                   , llvmPointer_bv
+                   )
 
+import qualified Data.Macaw.CFG.Core as M
+import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic.CrucGen (MacawExt)
-import           Data.Macaw.Symbolic
+import           Data.Macaw.Symbolic.MemOps
+import           Data.Macaw.Symbolic.PersistentState
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
+import qualified Data.Macaw.CFG.Core as MC
+
+import           Prelude
 
 
 type S sym rtp bs r ctx =
@@ -81,19 +98,83 @@ funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
                           v <- pureSem sym x
                           return (v,s)
 
-stmtSemantics :: (IsSymInterface sym)
-              => SymFuns sym
-              -> M.X86Stmt (AtomWrapper (RegEntry sym))
-              -> S sym rtp bs r ctx
-              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-stmtSemantics = error "Symbolic-execution time semantics for x86 statements are not implemented yet"
+withConcreteCountAndDir
+  :: (IsSymInterface sym, 1 <= w)
+  => S sym rtp bs r ctx
+  -> M.RepValSize w
+  -> (AtomWrapper (RegEntry sym) (M.BVType 64))
+  -> (AtomWrapper (RegEntry sym) M.BoolType)
+  -> (S sym rtp bs r ctx -> (SymBV sym 64) -> IO (S sym rtp bs r ctx))
+  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+withConcreteCountAndDir state val_size wrapped_count wrapped_dir func = do
+  let sym = state^.stateSymInterface
+  let val_byte_size = M.repValSizeByteCount val_size
+  bv_count <- toValBV sym wrapped_count
+  case asConcrete bv_count of
+    Just (ConcreteBV _ count) -> do
+      res_crux_state <- foldM func state
+        =<< mapM (\index -> bvLit sym knownNat $ index * val_byte_size)
+          -- [0..((if dir then 1 else -1) * (count - 1))]
+          [0..(count - 1)]
+      return ((), res_crux_state)
+    Nothing -> error $ "Unsupported symbolic count in rep stmt: "
+
+stmtSemantics
+  :: IsSymInterface sym
+  => SymFuns sym
+  -> C.GlobalVar Mem
+  -> GlobalMap sym (M.ArchAddrWidth M.X86_64)
+  -> M.X86Stmt (AtomWrapper (RegEntry sym))
+  -> S sym rtp bs r ctx
+  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+stmtSemantics _sym_funs global_var_mem globals stmt state = do
+  let sym = state^.stateSymInterface
+  case stmt of
+    M.RepMovs val_size (AtomWrapper dest) (AtomWrapper src) count dir ->
+      withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
+        let mem_repr = M.repValSizeMemRepr val_size
+        curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
+        curr_src_ptr <- ptrAdd sym knownNat (regValue src) offset
+        (val, after_read_state) <- doReadMem
+          acc_state
+          global_var_mem
+          globals
+          M.Addr64
+          mem_repr
+          (RegEntry knownRepr curr_src_ptr)
+        (_, after_write_state) <- doWriteMem
+          after_read_state
+          global_var_mem
+          globals
+          M.Addr64
+          mem_repr
+          (RegEntry knownRepr curr_dest_ptr)
+          (RegEntry (typeToCrucible $ M.typeRepr mem_repr) val)
+        return after_write_state
+    M.RepStos val_size (AtomWrapper dest) (AtomWrapper val) count dir ->
+      withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
+          let mem_repr = M.repValSizeMemRepr val_size
+          curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
+          (_, after_write_state) <- doWriteMem
+            acc_state
+            global_var_mem
+            globals
+            M.Addr64
+            mem_repr
+            (RegEntry knownRepr curr_dest_ptr)
+            val
+          return after_write_state
+    _ -> error $
+      "Symbolic execution semantics for x86 statement are not implemented yet: "
+      <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
 
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
               -> M.X86TermStmt ids
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-termSemantics = error "Symbolic-execution time semantics for x86 terminators are not implemented yet"
+termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
+                               (show $ MC.prettyF x))
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
@@ -154,10 +235,10 @@ pureSem sym fn = do
     M.RDTSC{}       -> error "RDTSC"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
-    M.X86IDiv {} -> error "X86IDiv"
-    M.X86IRem {} -> error "X86IRem"
-    M.X86Div  {} -> error "X86Div"
-    M.X86Rem  {} -> error "X86Rem"
+    M.X86IDiv w n d -> sDiv sym w n d
+    M.X86IRem w n d -> sRem sym w n d
+    M.X86Div  w n d -> uDiv sym w n d
+    M.X86Rem  w n d -> uRem sym w n d
     M.X87_Extend{} ->  error "X87_Extend"
     M.X87_FAdd{} -> error "X87_FAdd"
     M.X87_FSub{} -> error "X87_FSub"
@@ -382,6 +463,127 @@ shuffleB xs is = fmap lkp is
               (bvLookup xs (app $ BVTrunc n4 knownNat i)))
 
 --------------------------------------------------------------------------------
+
+-- | Performs a simple unsigned division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the dividend (not any
+-- remainder--see uRem for that), and any divide-by-zero exception was
+-- already handled via an Assert.
+uDiv :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+uDiv sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVUdiv
+      Nothing -> error "uDiv unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple unsigned division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the remainder (the dividend is
+-- computed separately by uDiv), and any divide-by-zero exception was
+-- already handled via an Assert.
+uRem :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+uRem sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVUrem
+      Nothing -> error "uRem unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple signed division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the dividend (not any
+-- remainder--see sRem for that), and any divide-by-zero exception was
+-- already handled via an Assert.
+sDiv :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+sDiv sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVSdiv
+      Nothing -> error "sDiv unable to verify numerator is >= 1 bit"
+
+-- | Performs a simple signed division operation.
+--
+-- The x86 numerator is twice the size as the denominator.
+--
+-- This function is only reponsible for the remainder (the dividend is
+-- computed separately by sDiv), and any divide-by-zero exception was
+-- already handled via an Assert.
+sRem :: ( IsSymInterface sym ) =>
+         Sym sym
+      -> M.RepValSize w
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> IO (RegValue sym (LLVMPointerType w))
+sRem sym repsz n d = do
+  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
+  withAddLeq dw dw $ \nw ->
+    case testLeq n1 nw of
+      Just LeqProof ->
+        divOp sym nw n dw d BVSrem
+      Nothing -> error "sRem unable to verify numerator is >= 1 bit"
+
+-- | Common function for division and remainder computation for both
+-- signed and unsigned BV expressions.
+--
+-- The x86 numerator is twice the size as the denominator, so
+-- zero-extend the denominator, perform the division, then truncate
+-- the result.
+divOp :: ( IsSymInterface sym
+         , 1 <= (w + w)
+         , w <= (w + w)
+         ) =>
+         Sym sym
+      -> NatRepr (w + w)
+      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
+      -> NatRepr w
+      -> AtomWrapper (RegEntry sym) (M.BVType w)
+      -> (NatRepr (w + w) -> E sym (BVType (w + w)) -> E sym (BVType (w + w)) -> App () (E sym) (BVType (w + w)))
+      -> IO (RegValue sym (LLVMPointerType w))
+divOp sym nw n' dw d' op = do
+  let symi = symIface sym
+  n <- getBitVal symi n'
+  d <- getBitVal symi d'
+  case testLeq n1 dw of
+    Just LeqProof ->
+      case testLeq (incNat dw) nw of
+        Just LeqProof ->
+          llvmPointer_bv symi =<< (evalE sym
+                                  -- (assertExpr (app $ BVEq dw (app $ BVLit dw 0)
+                                   (app $ BVTrunc dw nw $ app $ op nw (app $ BVZext nw dw d) n))
+                                   -- "must not be zero"
+                                   -- )
+                                  -- )
+        Nothing -> error "divOp unable to prove numerator size > denominator size + 1"
+    Nothing -> error "divOp unable to prove denominator size > 1 bit"
+
+
+--------------------------------------------------------------------------------
 divExact ::
   NatRepr n ->
   NatRepr x ->
@@ -602,7 +804,7 @@ evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
-data E :: * -> CrucibleType -> * where
+data E :: Type -> CrucibleType -> Type where
   ValBool :: RegValue sym BoolType -> E sym BoolType
   ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
   Expr :: App () (E sym) t -> E sym t
@@ -682,7 +884,7 @@ n128 = knownNat
 
 --------------------------------------------------------------------------------
 
-newtype AtomWrapper (f :: CrucibleType -> *) (tp :: M.Type)
+newtype AtomWrapper (f :: CrucibleType -> Type) (tp :: M.Type)
   = AtomWrapper (f (ToCrucibleType tp))
 
 liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
