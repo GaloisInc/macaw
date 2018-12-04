@@ -45,13 +45,10 @@ type DisassembleFn arch
    .  NonceGenerator (ST s) ids
    -> ArchSegmentOff arch
       -- ^ The offset to start reading from.
+   -> RegState (ArchReg arch) (Value arch ids)
+      -- ^ Initial values to use for registers.
    -> Int
       -- ^ Maximum offset for this to read from.
-   -> AbsBlockState (ArchReg arch)
-      -- ^ Abstract state associated with address that we are disassembling
-      -- from.
-      --
-      -- This is used for things like the height of the x87 stack.
    -> ST s ([Block arch ids], Int, Maybe String)
 
 -- | This records architecture specific functions for analysis.
@@ -64,6 +61,12 @@ data ArchitectureInfo arch
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
+     , mkInitialRegsForBlock :: !(forall ids
+                              .  ArchSegmentOff arch
+                              -> AbsBlockState (ArchReg arch)
+                              -> Either String (RegState (ArchReg arch) (Value arch ids)))
+       -- ^ Use the abstract block state information to infer register
+       -- values to use for disassembling from given address.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disasembling a block.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
@@ -89,7 +92,7 @@ data ArchitectureInfo arch
        -- ^ Update the abstract state after a function call returns
      , identifyCall :: forall ids
                     .  Memory (ArchAddrWidth arch)
-                    -> [Stmt arch ids]
+                    -> Seq (Stmt arch ids)
                     -> RegState (ArchReg arch) (Value arch ids)
                     -> Maybe (Seq (Stmt arch ids), ArchSegmentOff arch)
        -- ^ Function for recognizing call statements.
@@ -97,10 +100,25 @@ data ArchitectureInfo arch
        -- Given a memory state, list of statements, and final register
        -- state, the should determine if this is a call, and if so,
        -- return the statements with any action to push the return
-       -- value to the stack removed, and provide the explicit return
-       -- address that the function should return to.
+       -- value to the stack removed, and provide the return address that
+       -- the function should return to.
+
+     , checkForReturnAddr :: forall ids
+                          .  RegState (ArchReg arch) (Value arch ids)
+                          -> AbsProcessorState (ArchReg arch) ids
+                          -> Bool
+       -- ^ @checkForReturnAddr regs s@ returns true if the location
+       -- where the return address is normally stored in regs when
+       -- calling a function does indeed contain the abstract value
+       -- associated with return addresses.
+       --
+       -- For x86 this checks if the address just above the stack is the
+       -- return address.  For ARM, this should check the link register.
+       --
+       -- This predicate is invoked when considering if a potential tail call
+       -- is setup to return to the right location.
      , identifyReturn :: forall ids
-                      .  [Stmt arch ids]
+                      .  Seq (Stmt arch ids)
                       -> RegState (ArchReg arch) (Value arch ids)
                       -> AbsProcessorState (ArchReg arch) ids
                       -> Maybe (Seq (Stmt arch ids))

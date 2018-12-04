@@ -1,0 +1,19 @@
+R { funcs =
+     [ (Addr 1 0x580, [(Addr 1 0x580,16),(Addr 1 0x590,5),(Addr 1 0x595,5)])
+     , (Addr 1 0x5b0, [(Addr 1 0x5b0,6)])
+     , (Addr 1 0x5c0, [(Addr 1 0x5c0,6)])
+     , (Addr 1 0x5d0, [(Addr 1 0x5d0,6)])
+     , (Addr 1 0x5d8, [(Addr 1 0x5d8,6)])
+     , (Addr 1 0x5e0, [(Addr 1 0x5e0,41),(Addr 1 0x609,1)])
+     , (Addr 1 0x610, [(Addr 1 0x610,27),(Addr 1 0x62b,12),(Addr 1 0x637,3),(Addr 1 0x640,2)])
+     , (Addr 1 0x650, [(Addr 1 0x650,40),(Addr 1 0x678,12),(Addr 1 0x684,3),(Addr 1 0x690,2)])
+     , (Addr 1 0x6a0, [(Addr 1 0x6a0,9),(Addr 1 0x6a9,14),(Addr 1 0x6b7,12),(Addr 1 0x6c3,5),(Addr 1 0x6c8,8),(Addr 1 0x6d0,2)])
+     , (Addr 1 0x6e0, [(Addr 1 0x6e0,13), (Addr 1 0x6ed,5), (Addr 1 0x6f8, 12), (Addr 1 0x704, 6), (Addr 1 0x70a, 6)])
+     , (Addr 1 0x710, [(Addr 1 0x710,13),(Addr 1 0x71d,4)])
+     , (Addr 1 0x730, [(Addr 1 0x730,49),(Addr 1 0x761,5),(Addr 1 0x766,10),(Addr 1 0x770,13),(Addr 1
+0x77d,9),(Addr 1 0x786,15)])
+     , (Addr 1 0x7a0, [(Addr 1 0x7a0,2)])
+     , (Addr 1 0x7a4, [(Addr 1 0x7a4,9)])
+     ]
+  , ignoreBlocks = []
+  }

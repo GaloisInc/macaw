@@ -55,6 +55,7 @@ module Data.Macaw.CFG.Core
   , mkRegStateM
   , traverseRegsWith
   , zipWithRegState
+  , ppRegMap
   -- * Pretty printing
   , ppAssignId
   , ppLit
@@ -72,8 +73,6 @@ module Data.Macaw.CFG.Core
   , asStackAddrOffset
     -- * References
   , refsInValue
-  , refsInApp
-  , refsInAssignRhs
     -- ** Synonyms
   , ArchAddrValue
   , Data.Parameterized.TraversableFC.FoldableFC(..)
@@ -650,12 +649,15 @@ class PrettyRegValue r (f :: Type -> Kind.Type) where
   -- should be printed, and Nothing if the contents should be ignored.
   ppValueEq :: r tp -> f tp -> Maybe Doc
 
-instance ( PrettyRegValue r f
-         )
+ppRegMap :: forall r v . PrettyRegValue r v => MapF.MapF r v -> Doc
+ppRegMap m = bracketsep $ catMaybes (f <$> MapF.toList m)
+  where f :: MapF.Pair r v -> Maybe Doc
+        f (MapF.Pair r v) = ppValueEq r v
+
+
+instance ( PrettyRegValue r f)
       => Pretty (RegState r f) where
-  pretty (RegState m) = bracketsep $ catMaybes (f <$> MapF.toList m)
-    where f :: MapF.Pair r f -> Maybe Doc
-          f (MapF.Pair r v) = ppValueEq r v
+  pretty (RegState m) = ppRegMap m
 
 instance ( PrettyRegValue r f
          )
@@ -696,7 +698,7 @@ data Stmt arch ids
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
-          -- ^ Function for pretty printing an offset
+          -- ^ Function for pretty printing an instruction address offset
        -> Stmt arch ids
        -> Doc
 ppStmt ppOff stmt =
@@ -706,7 +708,8 @@ ppStmt ppOff stmt =
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
-    ArchState a m -> hang (length (show prefix)) (prefix PP.<> PP.semiBraces (MapF.foldrWithKey ppUpdate [] m))
+    ArchState a m ->
+        hang (length (show prefix)) (prefix PP.<> PP.semiBraces (MapF.foldrWithKey ppUpdate [] m))
       where
       ppAddr addr =
         case asAbsoluteAddr addr of
@@ -724,19 +727,3 @@ instance ArchConstraints arch => Show (Stmt arch ids) where
 refsInValue :: Value arch ids tp -> Set (Some (AssignId ids))
 refsInValue (AssignedValue (Assignment v _)) = Set.singleton (Some v)
 refsInValue _                                = Set.empty
-
-refsInApp :: App (Value arch ids) tp -> Set (Some (AssignId ids))
-refsInApp app = foldMapFC refsInValue app
-
-refsInAssignRhs :: FoldableFC (ArchFn arch)
-                => AssignRhs arch (Value arch ids) tp
-                -> Set (Some (AssignId ids))
-refsInAssignRhs rhs =
-  case rhs of
-    EvalApp v      -> refsInApp v
-    SetUndefined _ -> Set.empty
-    ReadMem v _    -> refsInValue v
-    CondReadMem _ c a d ->
-      Set.union (refsInValue c) $
-      Set.union (refsInValue a) (refsInValue d)
-    EvalArchFn f _ -> foldMapFC refsInValue f
