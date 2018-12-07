@@ -55,6 +55,9 @@ import           Data.Macaw.Types
 
 newtype Ap f a = Ap { getAp :: f a }
 
+instance (Applicative f, Semigroup a) => Semigroup (Ap f a) where
+  Ap x <> Ap y = Ap $ (<>) <$> x <*> y
+
 instance (Applicative f, Monoid a) => Monoid (Ap f a) where
   mempty = Ap $ pure mempty
   mappend (Ap x) (Ap y) = Ap $ mappend <$> x <*> y
