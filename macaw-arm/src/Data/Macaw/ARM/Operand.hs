@@ -14,9 +14,9 @@ module Data.Macaw.ARM.Operand
     )
     where
 
+import           Control.Lens ( (^. ) )
 import qualified Data.Macaw.ARM.ARMReg as Reg
 import qualified Data.Macaw.CFG.Core as MC
-import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.Operands
 import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.NatRepr as NR
@@ -27,7 +27,7 @@ import qualified SemMC.Architecture.AArch32 as ARM
 
 
 instance ExtractValue ARM.AArch32 A32Operand.GPR (BVType 32) where
-  extractValue regs r = regs ^. boundValue (Reg.ARM_GP $ fromIntegral $ A32Operand.unGPR r)
+  extractValue regs r = regs ^. MC.boundValue (Reg.ARM_GP $ fromIntegral $ A32Operand.unGPR r)
 
 
 instance ToRegister A32Operand.GPR Reg.ARMReg (BVType 32) where
@@ -78,7 +78,7 @@ instance ExtractValue ARM.AArch32 Word8 (BVType 8) where
 -- ----------------------------------------------------------------------
 
 instance ExtractValue ARM.AArch32 T32Operand.GPR (BVType 32) where
-  extractValue regs r = regs ^. boundValue (Reg.ARM_GP $ fromIntegral $ T32Operand.unGPR r)
+  extractValue regs r = regs ^. MC.boundValue (Reg.ARM_GP $ fromIntegral $ T32Operand.unGPR r)
 
 
 instance ToRegister T32Operand.GPR Reg.ARMReg (BVType 32) where
@@ -104,7 +104,7 @@ instance ExtractValue ARM.AArch32 T32Operand.AddrModeIs4 (BVType 32) where
   extractValue _ = MC.BVValue NR.knownNat . toInteger . T32Operand.addrModeIs4ToBits
 
 instance ExtractValue ARM.AArch32 T32Operand.LowGPR (BVType 32) where
-  extractValue _ r = G.getReg.ARM_GP $ fromIntegral $ T32Operand.unLowGPR r
+  extractValue regs r = regs ^. MC.boundValue (Reg.ARM_GP $ fromIntegral $ T32Operand.unLowGPR r)
 
 instance ToRegister T32Operand.LowGPR Reg.ARMReg (BVType 32) where
   toRegister = Reg.ARM_GP . fromIntegral . T32Operand.unLowGPR
