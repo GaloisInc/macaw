@@ -542,7 +542,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames = do
                   valExp <- addEltTH interps expr
                   appendStmt [| case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
                                    Just reg -> G.setRegVal (O.toRegister reg) $(return valExp)
-                                   Nothing -> error ("Invalid instruction form at " ++ show $(varE ipVarName))
+                                   Nothing -> fail ("Invalid instruction form at " ++ show $(varE ipVarName) ++ " in " ++ $(litE (stringL str)))
                                |]
 
 translateFunction :: forall arch t fs args ret .
