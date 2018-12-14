@@ -1,8 +1,10 @@
-A32CC=arm-linux-gnueabi-gcc
-# arm-none-eabi-gcc
-T32CC=arm-linux-gnueabi-gcc -mthumb
-# -march=armv7-m
-# arm-none-eabi-gcc -march=armv7-m
+# n.b. nix packages for this arm gcc and related:
+#    pkgsCross.arm-embedded.buildPackages.gcc
+
+CCPROG != for X in arm-linux-gnueabi-gcc arm-none-eabi-gcc gcc ; do if type $$X > /dev/null 2>&1 ; then echo $$X; break; fi; done
+
+A32CC := $(CCPROG)
+T32CC := $(CCPROG) -mthumb
 
 all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildcard *.c))
 
