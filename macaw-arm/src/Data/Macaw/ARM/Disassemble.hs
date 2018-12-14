@@ -153,7 +153,7 @@ tryDisassembleBlock :: (ARMArchConstraints arm)
                     -> DisM arm ids s ([Block arm ids], Int)
 tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   let gs0 = initGenState nonceGen startAddr regState
-  let startOffset = MM.msegOffset startAddr
+  let startOffset = MM.segoffOffset startAddr
   (nextPCOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do
     let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
@@ -190,19 +190,19 @@ disassembleBlock :: forall arm ids s
                  -- search with this.
                  -> DisM arm ids s (MM.MemWord (ArchAddrWidth arm), BlockSeq arm ids)
 disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
-  let seg = MM.msegSegment curPCAddr
-  let off = MM.msegOffset curPCAddr
+  let seg = MM.segoffSegment curPCAddr
+  let off = MM.segoffOffset curPCAddr
   case readInstruction curPCAddr of
     Left err -> failAt gs off curPCAddr (DecodeError err)
-    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.relativeSegmentAddr curPCAddr) (MM.relativeSegmentAddr curPCAddr))
+    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
     Right (i, bytesRead) -> do
       -- traceM ("II: " ++ show i)
       let nextPCOffset = off + bytesRead
-          nextPC = MM.relativeAddr seg nextPCOffset
+          nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.relativeSegmentAddr curPCAddr) of
+      ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
                  Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
       case lookupSemantics ipVal i of
@@ -217,7 +217,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                                                     T32I i' -> ThumbD.ppInstruction i'))
             addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
-            asAtomicStateUpdate (MM.relativeSegmentAddr curPCAddr) transformer
+            asAtomicStateUpdate (MM.segoffAddr curPCAddr) transformer
 
             -- Check to see if the PC has become conditionally-defined (by e.g.,
             -- a mux).  If it has, we need to split execution using a primitive
@@ -259,8 +259,8 @@ readInstruction :: (MM.MemWidth w)
                 => MM.MemSegmentOff w
                 -> Either (ARMMemoryError w) (InstructionSet, MM.MemWord w)
 readInstruction addr = do
-  let seg = MM.msegSegment addr
-      segRelAddrRaw = MM.relativeSegmentAddr addr
+  let seg = MM.segoffSegment addr
+      segRelAddrRaw = MM.segoffAddr addr
       -- Addresses specified in ARM instructions have the low bit
       -- clear, but Thumb (T32) target addresses have the low bit sit.
       -- This is only manifested in the instruction addresses: the
@@ -272,7 +272,7 @@ readInstruction addr = do
   then do
       let ao = addrOffset segRelAddr
       alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
-      contents <- liftMemError $ MM.contentsAfterSegmentOff alignedMsegOff
+      contents <- liftMemError $ MM.segoffContentsAfter alignedMsegOff
       case contents of
         [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
         MM.BSSRegion {} : _ ->
@@ -287,7 +287,7 @@ readInstruction addr = do
             -- bytestrings, at the cost of possibly making it less efficient for
             -- other clients.
             let (bytesRead, minsn) =
-                         if msegOffset addr .&. 1 == 0
+                         if segoffOffset addr .&. 1 == 0
                          then fmap (fmap A32I) $ ARMD.disassembleInstruction (LBS.fromStrict bs)
                          else fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
@@ -309,7 +309,7 @@ liftMemError e =
 
 -- | A wrapper around the 'MM.MemoryError' that lets us add in information about
 -- invalid instructions.
-data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.SegmentRange w]
+data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.MemChunk w]
                       | ARMMemoryError !(MM.MemoryError w)
                       | ARMInvalidInstructionAddress !(MM.MemSegment w) !(MM.MemWord w)
                       deriving (Show)

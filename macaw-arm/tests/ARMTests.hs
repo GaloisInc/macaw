@@ -136,8 +136,8 @@ testDiscovery32 (funcblocks, ignored) elf =
     let discoveryInfo = MD.cfgFromAddrs RO.arm_linux_info mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
-    let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr . MD.pblockAddr
-        getAbsFunAddr = fromJust . MM.asAbsoluteAddr . MM.relativeSegmentAddr . MD.discoveredFunAddr
+    let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
+        getAbsFunAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.discoveredFunAddr
 
 
     let allFoundBlockAddrs :: S.Set Word64
