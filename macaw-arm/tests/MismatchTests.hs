@@ -1,11 +1,13 @@
 module MismatchTests where
 
 
+import Control.Monad.Catch
+import Data.Monoid
+import Shared
 import Test.Tasty
 import Test.Tasty.HUnit
-import Shared
-import Data.Monoid
-import Control.Monad.Catch
+
+import Prelude
 
 
 armMismatchTests :: [FilePath] -> TestTree

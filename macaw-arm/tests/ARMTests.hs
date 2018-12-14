@@ -34,6 +34,8 @@ import           Text.PrettyPrint.ANSI.Leijen ( putDoc )
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
+import           Prelude
+
 
 -- | Set to true to build with chatty output.
 isChatty :: Bool
