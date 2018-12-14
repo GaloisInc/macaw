@@ -6,6 +6,7 @@
 module Data.Macaw.ARM.Identify
     ( identifyCall
     , identifyReturn
+    , isReturnValue
     ) where
 
 import           Control.Lens ( (^.) )
@@ -13,10 +14,17 @@ import           Data.Macaw.ARM.Arch
 import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                , AbsValue(..)
                                                , transferValue
+                                               , ppAbsValue
                                                )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Types as MT
 import qualified Data.Sequence as Seq
+
+-- import           Debug.Trace
+debug :: Show a => a -> b -> b
+-- debug = trace
+debug = flip const
 
 
 -- | Identifies a call statement, *after* the corresponding statement
@@ -49,7 +57,29 @@ identifyReturn :: ARMArchConstraints arm =>
                -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
                -> AbsProcessorState (MC.ArchReg arm) ids
                -> Maybe (Seq.Seq (MC.Stmt arm ids))
-identifyReturn _ stmts s finalRegSt8 =
-    case transferValue finalRegSt8 (s^.MC.boundValue MC.ip_reg) of
-      ReturnAddr -> Just stmts
-      _ -> Nothing
+identifyReturn arm stmts s finalRegSt8 =
+  if isReturnValue arm finalRegSt8 (s^.MC.boundValue MC.ip_reg)
+  then Just stmts
+  else Nothing
+
+
+-- | Determines if the supplied value is the symbolic return address
+-- from Macaw, modulo any ARM semantics operations (lots of ite caused
+-- by the conditional execution bits for most instructions, clearing
+-- of the low bits (1 in T32 mode, 2 in A32 mode).
+isReturnValue :: ARMArchConstraints arm =>
+                 proxy arm
+              -> AbsProcessorState (MC.ArchReg arm) ids
+              -> MC.Value arm ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+              -> Bool
+isReturnValue _ absProcState val =
+  case transferValue absProcState val of
+    ReturnAddr -> True
+    -- TBD: fill in the code here to recognize the expression that
+    -- clears the lower bit(s), along the lines of what is done by PPC
+    -- Identify.hs for the shifting operations.
+    o -> debug ("######################## Unrecognized return value: " <>
+                show (MC.ppValue 0 val) <>
+                " or " <>
+                show (ppAbsValue o)
+               ) False

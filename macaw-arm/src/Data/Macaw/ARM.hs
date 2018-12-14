@@ -17,9 +17,12 @@ module Data.Macaw.ARM
 import           Data.Macaw.ARM.Arch
 import           Data.Macaw.ARM.Disassemble ( disassembleFn, initialBlockRegs )
 import           Data.Macaw.ARM.Eval
-import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn )
+import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn, isReturnValue )
+import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
 import qualified Data.Macaw.ARM.Semantics.ThumbSemantics as ThumbSem
+import qualified Data.Macaw.CFG as MC
+import           Control.Lens ( (^.) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
@@ -43,6 +46,7 @@ arm_linux_info =
                         , MI.absEvalArchStmt = absEvalArchStmt proxy
                         , MI.postCallAbsState = error "TBD: postCallAbsState proxy"
                         , MI.identifyCall = identifyCall proxy
+                        , MI.checkForReturnAddr = \r s -> isReturnValue proxy s (r ^. MC.boundValue ARMReg.arm_LR)
                         , MI.identifyReturn = identifyReturn proxy
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
