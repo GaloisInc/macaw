@@ -20,38 +20,42 @@ module Data.Macaw.PPC (
   A.PPCPrimFn(..),
   ) where
 
+import           Control.Lens ( (^.) )
+import           Data.Maybe
 import           Data.Proxy ( Proxy(..) )
 
 import qualified Data.Macaw.Architecture.Info as MI
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
 
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
-import Data.Macaw.PPC.Disassemble ( disassembleFn )
-import Data.Macaw.PPC.Eval ( mkInitialAbsState,
-                             absEvalArchFn,
-                             absEvalArchStmt,
-                             postCallAbsState,
-                             postPPCTermStmtAbsState,
-                             preserveRegAcrossSyscall
-                           )
-import Data.Macaw.PPC.Identify ( identifyCall,
-                                 identifyReturn
-                               )
-import Data.Macaw.PPC.Arch ( rewriteTermStmt,
-                             rewriteStmt,
-                             rewritePrimFn,
-                             ppcPrimFnHasSideEffects,
-                             PPCArchConstraints
-                           )
+import qualified Data.Macaw.BinaryLoader as BL
+import qualified Data.Macaw.BinaryLoader.PPC as BLP
+import           Data.Macaw.PPC.Arch ( rewriteTermStmt
+                                     , rewriteStmt
+                                     , rewritePrimFn
+                                     , ppcPrimFnHasSideEffects
+                                     , PPCArchConstraints
+                                     )
+import qualified Data.Macaw.PPC.Arch as A
+import           Data.Macaw.PPC.Disassemble ( disassembleFn, initialBlockRegs )
+import           Data.Macaw.PPC.Eval ( mkInitialAbsState
+                                     , absEvalArchFn
+                                     , absEvalArchStmt
+                                     , postCallAbsState
+                                     , postPPCTermStmtAbsState
+                                     , preserveRegAcrossSyscall
+                                     )
+import           Data.Macaw.PPC.Identify ( identifyCall
+                                         , identifyReturn
+                                         , matchReturn
+                                         )
+import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
-import qualified Data.Macaw.PPC.PPCReg as R
-import qualified Data.Macaw.PPC.Arch as A
-import qualified Data.Macaw.BinaryLoader.PPC as BLP
-import qualified Data.Macaw.BinaryLoader as BL
 
 
 -- | The type tag for 64 bit PowerPC
@@ -65,7 +69,6 @@ archDemandContext _ =
   MDS.DemandContext { MDS.demandConstraints = \a -> a
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
                     }
-
 ppc64_linux_info :: ( BLP.HasTOC PPC64.PPC binFmt
                     ) =>
                     BL.LoadedBinary PPC64.PPC binFmt
@@ -74,12 +77,14 @@ ppc64_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
+                      , MI.mkInitialRegsForBlock = initialBlockRegs
                       , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
                       , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
+                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt
@@ -98,12 +103,14 @@ ppc32_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
+                      , MI.mkInitialRegsForBlock = initialBlockRegs
                       , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
                       , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
+                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt

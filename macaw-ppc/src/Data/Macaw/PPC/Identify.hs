@@ -1,9 +1,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-module Data.Macaw.PPC.Identify (
-  identifyCall,
-  identifyReturn
-  ) where
+module Data.Macaw.PPC.Identify
+  ( identifyCall
+  , identifyReturn
+  , matchReturn
+  )
+where
 
 import           Control.Lens ( (^.) )
 import           Control.Monad ( guard )
@@ -30,7 +32,7 @@ import           Data.Macaw.PPC.PPCReg
 identifyCall :: (PPCArchConstraints ppc)
              => proxy ppc
              -> MM.Memory (MC.ArchAddrWidth ppc)
-             -> [MC.Stmt ppc ids]
+             -> Seq.Seq (MC.Stmt ppc ids)
              -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
              -> Maybe (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
 identifyCall _ mem stmts0 rs
@@ -39,7 +41,7 @@ identifyCall _ mem stmts0 rs
   , Just retVal <- simplifyValue (rs ^. MC.boundValue PPC_LNK)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
-      Just (Seq.fromList stmts0, retAddr)
+      Just (stmts0, retAddr)
   | otherwise = Nothing
 
 
@@ -51,13 +53,13 @@ identifyCall _ mem stmts0 rs
 -- 'mkInitialAbsState') into the instruction pointer.
 identifyReturn :: (PPCArchConstraints ppc) =>
                   proxy ppc
-               -> [MC.Stmt ppc ids]
+               -> Seq.Seq (MC.Stmt ppc ids)
                -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
                -> MA.AbsProcessorState (MC.ArchReg ppc) ids
                -> Maybe (Seq.Seq (MC.Stmt ppc ids))
 identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
-  return (Seq.fromList stmts)
+  return stmts
 
 matchReturn :: (PPCArchConstraints ppc, MC.ArchReg ppc ~ PPCReg ppc)
             => MA.AbsProcessorState (MC.ArchReg ppc) ids

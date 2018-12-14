@@ -8,7 +8,11 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
-module Data.Macaw.PPC.Disassemble ( disassembleFn ) where
+module Data.Macaw.PPC.Disassemble
+  ( disassembleFn
+  , initialBlockRegs
+  )
+where
 
 import           Control.Lens ( (&), (^.), (%~), (.~) )
 import           Control.Monad ( unless )
@@ -189,10 +193,11 @@ tryDisassembleBlock :: (PPCArchConstraints ppc)
                     => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff ppc
+                    -> (RegState (ArchReg ppc) (Value ppc ids))
                     -> Int
                     -> DisM ppc ids s ([Block ppc ids], Int)
-tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
+tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
+  let gs0 = initGenState nonceGen startAddr regState
   let startOffset = MM.segoffOffset startAddr
   (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
@@ -215,18 +220,31 @@ disassembleFn :: (PPCArchConstraints ppc)
               -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff ppc
               -- ^ The address to disassemble from
+              -> (RegState (ArchReg ppc) (Value ppc ids))
+              -- ^ The initial registers
               -> Int
               -- ^ Maximum size of the block (a safeguard)
-              -> MA.AbsBlockState (ArchReg ppc)
-              -- ^ Abstract state of the processor at the start of the block
               -> ST s ([Block ppc ids], Int, Maybe String)
-disassembleFn _ lookupSemantics nonceGen startAddr maxSize _  = do
-  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize))
+disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
+  mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
+
+initialBlockRegs :: forall ids ppc . PPCArchConstraints ppc =>
+                    ArchSegmentOff ppc
+                    -- ^ The address of the block
+                 -> MA.AbsBlockState (ArchReg ppc)
+                    -- ^ Abstract state of the processor at the start of the block
+                 -> Either String (RegState (ArchReg ppc) (Value ppc ids))
+                    -- ^ Error or initial register state for the block
+initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
+
+
 type LocatedError ppc ids = ([Block ppc ids], Int, TranslationError (ArchAddrWidth ppc))
+
+
 -- | This is a monad for error handling during disassembly
 --
 -- It allows for early failure that reports progress (in the form of blocks
