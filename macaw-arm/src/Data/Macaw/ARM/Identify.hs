@@ -19,7 +19,10 @@ import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
+import           Data.Semigroup
 import qualified Data.Sequence as Seq
+
+import Prelude
 
 -- import           Debug.Trace
 debug :: Show a => a -> b -> b
