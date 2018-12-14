@@ -15,7 +15,7 @@ module Data.Macaw.ARM
     where
 
 import           Data.Macaw.ARM.Arch
-import           Data.Macaw.ARM.Disassemble ( disassembleFn )
+import           Data.Macaw.ARM.Disassemble ( disassembleFn, initialBlockRegs )
 import           Data.Macaw.ARM.Eval
 import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn )
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
@@ -36,6 +36,7 @@ arm_linux_info =
     MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
+                        , MI.mkInitialRegsForBlock = initialBlockRegs
                         , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
                         , MI.mkInitialAbsState = mkInitialAbsState proxy
                         , MI.absEvalArchFn = absEvalArchFn proxy

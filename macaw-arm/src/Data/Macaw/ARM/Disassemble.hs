@@ -62,6 +62,7 @@ Notes:
 
 module Data.Macaw.ARM.Disassemble
     ( disassembleFn
+    , initialBlockRegs
     )
     where
 
@@ -98,6 +99,16 @@ import           Text.Printf ( printf )
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)
 
+initialBlockRegs :: forall ids arm . ARMArchConstraints arm =>
+                    ArchSegmentOff arm
+                    -- ^ The address of the block
+                 -> MA.AbsBlockState (ArchReg arm)
+                    -- ^ Abstract state of the processor at the start of the block
+                 -> Either String (RegState (ArchReg arm) (Value arm ids))
+                    -- ^ Error or initial register state for the block
+initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
+
+
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
 --
@@ -117,18 +128,18 @@ disassembleFn :: (ARMArchConstraints arm)
               -- ^ A generator of unique IDs used for assignments
               -> ArchSegmentOff arm
               -- ^ The address to disassemble from
+              -> (RegState (ArchReg arm) (Value arm ids))
+              -- ^ The initial registers
               -> Int
               -- ^ Maximum size of the block (a safeguard)
-              -> MA.AbsBlockState (ArchReg arm)
-              -- ^ Abstract state of the processor at the start of the block
               -> ST s ([Block arm ids], Int, Maybe String)
-disassembleFn _ lookupA32Semantics lookupT32Semantics nonceGen startAddr maxSize _  = do
+disassembleFn _ lookupA32Semantics lookupT32Semantics nonceGen startAddr regState maxSize = do
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
                                       T32I inst -> lookupT32Semantics ipval inst
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock
                                lookupSemantics
-                               nonceGen startAddr maxSize))
+                               nonceGen startAddr regState maxSize))
   case mr of
     Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
@@ -137,10 +148,11 @@ tryDisassembleBlock :: (ARMArchConstraints arm)
                     => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff arm
+                    -> RegState (ArchReg arm) (Value arm ids)
                     -> Int
                     -> DisM arm ids s ([Block arm ids], Int)
-tryDisassembleBlock lookupSemantics nonceGen startAddr maxSize = do
-  let gs0 = initGenState nonceGen startAddr (initRegState startAddr)
+tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
+  let gs0 = initGenState nonceGen startAddr regState
   let startOffset = MM.msegOffset startAddr
   (nextPCOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do

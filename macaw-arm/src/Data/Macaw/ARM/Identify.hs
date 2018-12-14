@@ -28,7 +28,7 @@ import qualified Data.Sequence as Seq
 identifyCall :: ARMArchConstraints arm =>
                 proxy arm
              -> MM.Memory (MC.ArchAddrWidth arm)
-             -> [MC.Stmt arm ids]
+             -> Seq.Seq (MC.Stmt arm ids)
              -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
              -> Maybe (Seq.Seq (MC.Stmt arm ids), MC.ArchSegmentOff arm)
 identifyCall _ _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identified as a call
@@ -45,11 +45,11 @@ identifyCall _ _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identifie
 -- addresses.
 identifyReturn :: ARMArchConstraints arm =>
                   proxy arm
-               -> [MC.Stmt arm ids]
+               -> Seq.Seq (MC.Stmt arm ids)
                -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
                -> AbsProcessorState (MC.ArchReg arm) ids
                -> Maybe (Seq.Seq (MC.Stmt arm ids))
 identifyReturn _ stmts s finalRegSt8 =
     case transferValue finalRegSt8 (s^.MC.boundValue MC.ip_reg) of
-      ReturnAddr -> Just $ Seq.fromList stmts
+      ReturnAddr -> Just stmts
       _ -> Nothing
