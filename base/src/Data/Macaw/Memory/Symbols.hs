@@ -42,6 +42,9 @@ data SymbolDefType
      -- ^ This symbol denotes a thread local identifier
    | SymbolDefIFunc
      -- ^ This symbol is a "IFUNC" (e.g., it calls a function to resolve the symbol)
+   | SymbolDefNoType
+     -- ^ This symbol does not have a specified type.
+
 
 -- | Describes whether an undefined symbol is required during linking.
 data SymbolRequirement

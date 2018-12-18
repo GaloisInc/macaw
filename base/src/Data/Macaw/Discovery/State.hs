@@ -10,6 +10,7 @@ discovery.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -33,7 +34,7 @@ module Data.Macaw.Discovery.State
   , globalDataMap
   , funInfo
   , unexploredFunctions
-  , trustKnownFns
+  , trustedFunctionEntryPoints
   , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
@@ -50,7 +51,10 @@ import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
+import           Data.Set (Set)
+import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -131,6 +135,18 @@ data ParsedTermStmt arch ids
   -- | A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
   = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
                !(Maybe (ArchSegmentOff arch))
+    -- | @PLTStub regs addr@ denotes a terminal statement that has been identified as a PLT stub
+    -- for calling the given relocation.
+    --
+    -- This is a special case of a tail call.  It has been added
+    -- separately because it occurs frequently in dynamically linked
+    -- code, and we can use this to recognize PLT stubs.
+    --
+    -- The register set only contains registers that were changed in
+    -- the function.  Other registers have the initial value.
+  | PLTStub !(MapF.MapF (ArchReg arch) (Value arch ids))
+            !(ArchSegmentOff arch)
+            !(Relocation (ArchAddrWidth arch))
   -- | A jump to an explicit address within a function.
   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
   -- | A lookup table that branches to one of a vector of addresses.
@@ -172,11 +188,14 @@ ppTermStmt :: ArchConstraints arch
 ppTermStmt ppOff tstmt =
   case tstmt of
     ParsedCall s Nothing ->
-      text "tail call" <$$>
+      text "tail_call" <$$>
       indent 2 (pretty s)
     ParsedCall s (Just next) ->
       text "call and return to" <+> text (show next) <$$>
       indent 2 (pretty s)
+    PLTStub regs addr r ->
+      text "call_via_got" <+> text (show (relocationSym r)) <+> "(at" <+> text (show addr) PP.<> ")" <$$>
+       indent 2 (ppRegMap regs)
     ParsedJump s addr ->
       text "jump" <+> text (show addr) <$$>
       indent 2 (pretty s)
@@ -279,7 +298,7 @@ parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
     text "function" <+> text (BSC.unpack (discoveredFunName info))
-         <+> pretty "@" <+> pretty (show (discoveredFunAddr info))
+         <+> "@" <+> pretty (show (discoveredFunAddr info))
     <$$>
     vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
@@ -310,9 +329,20 @@ data DiscoveryState arch
                       -- they are analyzed.
                       --
                       -- The keys in this map and `_funInfo` should be mutually disjoint.
-                    , _trustKnownFns       :: !Bool
-                      -- ^ Should we use and depend on known function entries in
-                      -- our analysis? E.g. used to distinguish jumps vs. tail calls
+                    , _trustedFunctionEntryPoints :: !(Set (ArchSegmentOff arch))
+                      -- ^ This is the set of addresses that we treat
+                      -- as definitely belonging to function entry
+                      -- points.
+                      --
+                      -- The discovery process will not allow
+                      -- intra-procedural jumps to these addresses.
+                      -- Jumps to these addresses must either be calls
+                      -- or tail calls.
+                      --
+                      -- To ensure translation is invariant on the
+                      -- order in which functions are visited, this
+                      -- set should be initialized upfront, and not
+                      -- changed.
                     , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
                       -- ^ if present, this predicate decides whether to explore
                       -- a function at the given address or not
@@ -342,15 +372,15 @@ emptyDiscoveryState :: Memory (ArchAddrWidth arch)
                     -> ArchitectureInfo arch
                        -- ^ architecture/OS specific information
                     -> DiscoveryState arch
-emptyDiscoveryState mem symbols info =
+emptyDiscoveryState mem addrSymMap info =
   DiscoveryState
   { memory               = mem
-  , symbolNames          = symbols
+  , symbolNames          = addrSymMap
   , archInfo             = info
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustKnownFns       = False
+  , _trustedFunctionEntryPoints = Map.keysSet addrSymMap
   , _exploreFnPred       = Nothing
   }
 
@@ -368,8 +398,10 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
-trustKnownFns :: Simple Lens (DiscoveryState arch) Bool
-trustKnownFns = lens _trustKnownFns (\s v -> s { _trustKnownFns = v })
+trustedFunctionEntryPoints :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+trustedFunctionEntryPoints =
+  lens _trustedFunctionEntryPoints
+       (\s v -> s { _trustedFunctionEntryPoints = v })
 
 exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })

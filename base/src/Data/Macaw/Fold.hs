@@ -53,8 +53,14 @@ emptyValueFold =
 
 -- | This folds over elements of a values in a  values.
 --
--- It memoizes values so that it only evaluates assignments with the same id
--- once.
+-- It memoizes the results so that if an assignment is visited
+-- multiple times, we only visit the children the first time it is
+-- visited.  On subsequent visits, `foldAssign` will still be called,
+-- but the children will not be revisited.
+--
+-- This makes the total time to visit linear with respect to the
+-- number of children, but still allows determining whether a term is
+-- shared.
 foldValueCached :: forall r arch ids tp
                 .  (Monoid r, FoldableFC (ArchFn arch))
                 => ValueFold arch ids r
