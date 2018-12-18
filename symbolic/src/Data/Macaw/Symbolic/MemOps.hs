@@ -513,7 +513,8 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      let ?ptrWidth = M.addrWidthNatRepr w
      let v0 = regValue val
          v  = LLVMValInt (ptrBase v0) (asBits v0)
-     mem1 <- storeRaw sym mem ptr ty v
+     let alignment = 0 -- default to byte alignment (FIXME)
+     mem1 <- storeRaw sym mem ptr ty alignment v
      return ((), setMem st mvar mem1)
 
 --------------------------------------------------------------------------------
