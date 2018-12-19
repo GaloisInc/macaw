@@ -424,7 +424,8 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
 
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
-     val <- loadRaw sym mem ptr ty
+     let alignment = 0 -- default to byte alignment (FIXME)
+     val <- loadRaw sym mem ptr ty alignment
      a   <- case valToBits bitw val of
               Just a  -> return a
               Nothing -> fail "[doReadMem] We read an unexpected value"
@@ -464,7 +465,8 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
-     val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty
+     let alignment = 0 -- default to byte alignment (FIXME)
+     val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty alignment
 
      let useDefault msg =
            do notC <- notPred sym cond
