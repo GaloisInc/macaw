@@ -961,7 +961,7 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
         -- Use the call-specific code to look for new IPs.
 
         let r = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = toList prev_stmts
+                              , stmtsNonterm = toList stmts
                               , stmtsTerm  = ParsedCall finalRegs (Just ret)
                               , stmtsAbsState = absProcState'
                               }
