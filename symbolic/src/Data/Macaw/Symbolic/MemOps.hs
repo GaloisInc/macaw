@@ -69,7 +69,7 @@ import           Lang.Crucible.LLVM.MemModel
           , mkNullPointer
           , bitvectorType
           , ppPtr )
-import           Lang.Crucible.LLVM.DataLayout (EndianForm(..))
+import           Lang.Crucible.LLVM.DataLayout (EndianForm(..), noAlignment)
 import           Lang.Crucible.LLVM.Bytes (toBytes)
 
 import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
@@ -424,7 +424,7 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
 
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
-     let alignment = 0 -- default to byte alignment (FIXME)
+     let alignment = noAlignment -- default to byte alignment (FIXME)
      val <- loadRaw sym mem ptr ty alignment
      a   <- case valToBits bitw val of
               Just a  -> return a
@@ -465,7 +465,7 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
-     let alignment = 0 -- default to byte alignment (FIXME)
+     let alignment = noAlignment -- default to byte alignment (FIXME)
      val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty alignment
 
      let useDefault msg =
@@ -515,7 +515,7 @@ doWriteMem st mvar globs w (BVMemRepr bytes endian) ptr0 val =
      let ?ptrWidth = M.addrWidthNatRepr w
      let v0 = regValue val
          v  = LLVMValInt (ptrBase v0) (asBits v0)
-     let alignment = 0 -- default to byte alignment (FIXME)
+     let alignment = noAlignment -- default to byte alignment (FIXME)
      mem1 <- storeRaw sym mem ptr ty alignment v
      return ((), setMem st mvar mem1)
 
