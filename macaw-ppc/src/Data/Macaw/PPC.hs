@@ -11,6 +11,10 @@ module Data.Macaw.PPC (
   ppc32_linux_info,
   ppc64_linux_info,
   -- * Type-level tags
+  AnyPPC,
+  Variant,
+  V64,
+  V32,
   PPC64,
   PPC32,
   -- * PPC Types
@@ -29,6 +33,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
 
+import qualified SemMC.Architecture.PPC as PPC
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -57,12 +62,23 @@ import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
 
+-- | The constructor for type tags for PowerPC
+type AnyPPC = PPC.AnyPPC
 
--- | The type tag for 64 bit PowerPC
-type PPC64 = PPC64.PPC
+-- | Data kind for specifying a PowerPC variant for 'AnyPPC'
+type Variant = PPC.Variant
 
--- | The type tag for 32 bit PowerPC
-type PPC32 = PPC32.PPC
+-- | The variant for 64-bit PowerPC
+type V64 = PPC.V64
+
+-- | The variant for 32-bit PowerPC
+type V32 = PPC.V32
+
+-- | The type tag for 64-bit PowerPC
+type PPC64 = AnyPPC V64
+
+-- | The type tag for 32-bit PowerPC
+type PPC32 = AnyPPC V32
 
 archDemandContext :: (PPCArchConstraints ppc) => proxy ppc -> MDS.DemandContext ppc
 archDemandContext _ =
