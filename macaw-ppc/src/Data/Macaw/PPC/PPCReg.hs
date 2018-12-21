@@ -1,14 +1,17 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -36,12 +39,15 @@ import qualified Data.Parameterized.TH.GADT as TH
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import qualified Dismantle.PPC as D
+import qualified SemMC.Architecture.PPC as PPC
 import qualified SemMC.Architecture.PPC.Location as APPC
-import qualified SemMC.Architecture.PPC32 as PPC32
-import qualified SemMC.Architecture.PPC64 as PPC64
 
 -- | The register type for PowerPC, parameterized by architecture to support
 -- both PowerPC32 and PowerPC64
+
+-- TODO: Refactor so that this takes the PPC variant as an argument
+-- rather than the architecture (which is always @PPC.AnyPPC v@ for
+-- some @v@).  This is likely to be disruptive.
 data PPCReg arch tp where
   PPC_GP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => D.GPR -> PPCReg arch (BVType w)
   PPC_FR :: D.VSReg -> PPCReg arch (BVType 128)
@@ -104,22 +110,19 @@ linuxCalleeSaveRegisters :: (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
 linuxCalleeSaveRegisters _ =
   S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
 
-type instance MC.RegAddrWidth (PPCReg PPC32.PPC) = 32
-type instance MC.RegAddrWidth (PPCReg PPC64.PPC) = 64
+type instance MC.RegAddrWidth (PPCReg (PPC.AnyPPC v)) = PPC.AddrWidth v
+type instance MC.ArchReg (PPC.AnyPPC v) = PPCReg (PPC.AnyPPC v)
 
-type instance MC.ArchReg PPC64.PPC = PPCReg PPC64.PPC
-type instance MC.ArchReg PPC32.PPC = PPCReg PPC32.PPC
-
+{-# DEPRECATED
+      ArchWidth "Use 'SemMC.Architecture.AddrWidth' and 'SemMC.Architecture.addrWidth'."
+#-}
 class ArchWidth arch where
   pointerNatRepr :: proxy arch -> NatRepr (MC.RegAddrWidth (PPCReg arch))
 
-instance ArchWidth PPC32.PPC where
-  pointerNatRepr _ = n32
+instance PPC.KnownVariant v => ArchWidth (PPC.AnyPPC v) where
+  pointerNatRepr _ = PPC.addrWidth (PPC.knownVariant @v)
 
-instance ArchWidth PPC64.PPC where
-  pointerNatRepr _ = n64
-
-instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
+instance (PPC.KnownVariant v, ppc ~ PPC.AnyPPC v) => HasRepr (PPCReg ppc) TypeRepr where
   typeRepr r =
     case r of
       PPC_GP {} -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
@@ -132,22 +135,22 @@ instance (ArchWidth ppc) => HasRepr (PPCReg ppc) TypeRepr where
       PPC_FPSCR -> BVTypeRepr n32
       PPC_VSCR -> BVTypeRepr n32
 
-
-instance ( ArchWidth ppc
-         , MC.ArchReg ppc ~ PPCReg ppc
-         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
-         , 1 <= MC.RegAddrWidth (PPCReg ppc)
-         , KnownNat (MC.RegAddrWidth (PPCReg ppc)))
-         => MC.RegisterInfo (PPCReg ppc) where
+-- The MM.MemWidth constraint is always satisfiable, but sadly it has
+-- to be included since GHC doesn't *know* it's always satisfiable :-\
+instance ( PPC.KnownVariant v, MM.MemWidth (PPC.AddrWidth v)
+         ) =>
+         MC.RegisterInfo (PPCReg (PPC.AnyPPC v)) where
   archRegs = ppcRegs
   sp_reg = PPC_GP (D.GPR 1)
   ip_reg = PPC_IP
   syscall_num_reg = PPC_GP (D.GPR 0)
   syscallArgumentRegs = [ PPC_GP (D.GPR rnum) | rnum <- [3..10] ]
 
-ppcRegs :: forall w ppc
-         . (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
-        => [Some (PPCReg ppc)]
+-- FIXME These should probably live somewhere else?
+
+ppcRegs :: forall v
+         . ( PPC.KnownVariant v )
+        => [Some (PPCReg (PPC.AnyPPC v))]
 ppcRegs = concat [ gprs
                  , sprs
                  , fprs
@@ -163,8 +166,7 @@ ppcRegs = concat [ gprs
 
 -- | Translate a location from the semmc semantics into a location suitable for
 -- use in macaw
-locToRegTH :: (1 <= APPC.ArchRegWidth ppc,
-               MC.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
+locToRegTH :: (PPC.KnownVariant v, ppc ~ PPC.AnyPPC v)
            => proxy ppc
            -> APPC.Location ppc ctp
            -> Q Exp

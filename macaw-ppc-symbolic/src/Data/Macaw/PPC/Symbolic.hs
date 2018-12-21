@@ -63,7 +63,6 @@ import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.PersistentState as MS
 import qualified Data.Macaw.PPC as MP
-import           Data.Macaw.PPC.PPCReg ( ArchWidth )
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
 import qualified Data.Macaw.PPC.Symbolic.Functions as F
@@ -91,20 +90,19 @@ ppc32MacawSymbolicFns =
   , MS.crucGenArchTermStmt = ppcGenTermStmt
   }
 
-type RegSize ppc = MC.RegAddrWidth (MP.PPCReg ppc)
-type RegContext ppc
-  =     (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize ppc)) -- IP
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize ppc)) -- LNK
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize ppc)) -- CTR
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize ppc)) -- XER
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)            -- CR
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)            -- FPSCR
-  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)            -- VSCR
-  C.<+> R.CtxRepeat 32 (MT.BVType (RegSize ppc))       -- GPRs
-  C.<+> R.CtxRepeat 64 (MT.BVType 128)                 -- VSRs
+type RegSize v = MC.RegAddrWidth (MP.PPCReg (MP.AnyPPC v))
+type RegContext v
+  =     (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize v)) -- IP
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize v)) -- LNK
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize v)) -- CTR
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType (RegSize v)) -- XER
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)          -- CR
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)          -- FPSCR
+  C.<+> (Ctx.EmptyCtx Ctx.::> MT.BVType 32)          -- VSCR
+  C.<+> R.CtxRepeat 32 (MT.BVType (RegSize v))       -- GPRs
+  C.<+> R.CtxRepeat 64 (MT.BVType 128)               -- VSRs
 
-type instance MS.ArchRegContext MP.PPC64 = RegContext MP.PPC64
-type instance MS.ArchRegContext MP.PPC32 = RegContext MP.PPC32
+type instance MS.ArchRegContext (MP.AnyPPC v) = RegContext v
 
 type RegAssign ppc f = Ctx.Assignment f (MS.ArchRegContext ppc)
 
@@ -158,9 +156,9 @@ instance MS.ArchInfo MP.PPC32 where
 ppcRegName :: MP.PPCReg ppc tp -> C.SolverSymbol
 ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
 
-ppcRegAssignment :: forall ppc
-                  . (1 <= RegSize ppc)
-                 => Ctx.Assignment (MP.PPCReg ppc) (RegContext ppc)
+ppcRegAssignment :: forall v
+                  . ( MP.KnownVariant v )
+                 => Ctx.Assignment (MP.PPCReg (MP.AnyPPC v)) (RegContext v)
 ppcRegAssignment =
   (Ctx.Empty Ctx.:> MP.PPC_IP
             Ctx.:> MP.PPC_LNK
@@ -169,32 +167,27 @@ ppcRegAssignment =
             Ctx.:> MP.PPC_CR
             Ctx.:> MP.PPC_FPSCR
             Ctx.:> MP.PPC_VSCR)
-  Ctx.<++> (R.repeatAssign (MP.PPC_GP . D.GPR . fromIntegral) :: Ctx.Assignment (MP.PPCReg ppc) (R.CtxRepeat 32 (MT.BVType (RegSize ppc))))
-  Ctx.<++> (R.repeatAssign (MP.PPC_FR . D.VSReg . fromIntegral) :: Ctx.Assignment (MP.PPCReg ppc) (R.CtxRepeat 64 (MT.BVType 128)))
+  Ctx.<++> (R.repeatAssign (MP.PPC_GP . D.GPR . fromIntegral) :: Ctx.Assignment (MP.PPCReg (MP.AnyPPC v)) (R.CtxRepeat 32 (MT.BVType (RegSize v))))
+  Ctx.<++> (R.repeatAssign (MP.PPC_FR . D.VSReg . fromIntegral) :: Ctx.Assignment (MP.PPCReg (MP.AnyPPC v)) (R.CtxRepeat 64 (MT.BVType 128)))
 
-data PPCSymbolicException ppc = MissingRegisterInState (Some (MP.PPCReg ppc))
+data PPCSymbolicException v = MissingRegisterInState (Some (MP.PPCReg (MP.AnyPPC v)))
 
-deriving instance (Typeable ppc) => Show (PPCSymbolicException ppc)
+deriving instance Show (PPCSymbolicException v)
 
-instance (Typeable ppc) => X.Exception (PPCSymbolicException ppc)
+instance Typeable v => X.Exception (PPCSymbolicException v)
 
-regIndexMap :: forall ppc
-             . (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
-                MS.ArchRegContext ppc ~ RegContext ppc,
-                MC.ArchReg ppc ~ MP.PPCReg ppc,
-                ArchWidth ppc)
-            => MS.RegIndexMap ppc
+regIndexMap :: forall v
+             . MP.KnownVariant v
+            => MS.RegIndexMap (MP.AnyPPC v)
 regIndexMap = MS.mkRegIndexMap assgn sz
   where
-    assgn = ppcRegAssignment @ppc
+    assgn = ppcRegAssignment @v
     sz = Ctx.size (MS.typeCtxToCrucible (FC.fmapFC MT.typeRepr assgn))
 
-lookupReg :: (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
-              X.MonadThrow m,
-              Typeable ppc,
-              MS.ArchRegContext ppc ~ RegContext ppc,
-              MC.ArchReg ppc ~ MP.PPCReg ppc,
-              ArchWidth ppc)
+lookupReg :: forall v ppc m f tp
+           . (MP.KnownVariant v,
+              ppc ~ MP.AnyPPC v,
+              X.MonadThrow m)
           => MP.PPCReg ppc tp
           -> Ctx.Assignment f (MS.MacawCrucibleRegTypes ppc)
           -> m (f (MS.ToCrucibleType tp))
@@ -203,12 +196,10 @@ lookupReg r asgn =
     Nothing -> X.throwM (MissingRegisterInState (Some r))
     Just pair -> return (asgn Ctx.! MS.crucibleIndex pair)
 
-updateReg :: (1 <= RegSize ppc, 1 <= MC.ArchAddrWidth ppc,
-                MS.ArchRegContext ppc ~ RegContext ppc,
-                MC.ArchReg ppc ~ MP.PPCReg ppc,
-                Typeable ppc,
-                X.MonadThrow m,
-                ArchWidth ppc)
+updateReg :: forall v ppc m f tp
+           . (MP.KnownVariant v,
+               ppc ~ MP.AnyPPC v,
+               X.MonadThrow m)
           => MP.PPCReg ppc tp
           -> (f (MS.ToCrucibleType tp) -> f (MS.ToCrucibleType tp))
           -> Ctx.Assignment f (MS.MacawCrucibleRegTypes ppc)
@@ -218,8 +209,8 @@ updateReg r upd asgn = do
     Nothing -> X.throwM (MissingRegisterInState (Some r))
     Just pair -> return (asgn & MapF.ixF (MS.crucibleIndex pair) %~ upd)
 
-ppcGenFn :: forall ids s tp ppc
-          . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
+ppcGenFn :: forall ids s tp v ppc
+          . ( ppc ~ MP.AnyPPC v )
          => MP.PPCPrimFn ppc (MC.Value ppc ids) tp
          -> MS.CrucGen ppc ids s (C.Atom s (MS.ToCrucibleType tp))
 ppcGenFn fn = do
@@ -228,8 +219,8 @@ ppcGenFn fn = do
   r <- FC.traverseFC f fn
   MS.evalArchStmt (PPCPrimFn r)
 
-ppcGenStmt :: forall ppc ids s
-            . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
+ppcGenStmt :: forall v ids s ppc
+            . ( ppc ~ MP.AnyPPC v )
            => MP.PPCStmt ppc (MC.Value ppc ids)
            -> MS.CrucGen ppc ids s ()
 ppcGenStmt s = do
@@ -238,8 +229,8 @@ ppcGenStmt s = do
   s' <- TF.traverseF f s
   void (MS.evalArchStmt (PPCPrimStmt s'))
 
-ppcGenTermStmt :: forall ppc ids s
-                . (MS.MacawArchStmtExtension ppc ~ PPCStmtExtension ppc)
+ppcGenTermStmt :: forall v ids s ppc
+                . ( ppc ~ MP.AnyPPC v )
                => MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
                -> MS.CrucGen ppc ids s ()
@@ -276,7 +267,7 @@ instance FC.TraversableFC (PPCStmtExtension ppc) where
   traverseFC f (PPCPrimStmt s) = PPCPrimStmt <$> TF.traverseF (A.liftAtomTrav f) s
   traverseFC _f (PPCPrimTerm t) = pure (PPCPrimTerm t)
 
-instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => C.TypeApp (PPCStmtExtension ppc) where
+instance (1 <= MC.ArchAddrWidth ppc) => C.TypeApp (PPCStmtExtension ppc) where
   appType (PPCPrimFn x) = MS.typeToCrucible (MT.typeRepr x)
   appType (PPCPrimStmt _s) = C.UnitRepr
   appType (PPCPrimTerm _t) = C.UnitRepr
@@ -288,6 +279,5 @@ instance C.PrettyApp (PPCStmtExtension ppc) where
     MC.ppArchStmt (A.liftAtomIn ppSub) s
   ppApp _ppSub (PPCPrimTerm t) = MC.prettyF t
 
-type instance MS.MacawArchStmtExtension MP.PPC64 = PPCStmtExtension MP.PPC64
-type instance MS.MacawArchStmtExtension MP.PPC32 = PPCStmtExtension MP.PPC32
-
+type instance MS.MacawArchStmtExtension (MP.AnyPPC v) =
+  PPCStmtExtension (MP.AnyPPC v)

@@ -17,6 +17,8 @@ module Data.Macaw.PPC (
   V32,
   PPC64,
   PPC32,
+  PPC.VariantRepr(..),
+  PPC.KnownVariant(..),
   -- * PPC Types
   R.PPCReg(..),
   A.PPCTermStmt(..),
