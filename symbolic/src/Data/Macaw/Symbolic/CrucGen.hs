@@ -12,6 +12,7 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
@@ -456,11 +457,47 @@ data CrucGenState arch ids s
      -- ^ Offset
    , prevStmts  :: ![C.Posd (CR.Stmt (MacawExt arch) s)]
      -- ^ List of states in reverse order
+   , toBitsCache :: !(MapF (PtrAtom s) (BVAtom s))
+   , fromBitsCache :: !(MapF (BVAtom s) (PtrAtom s))
    }
+
+newtype PtrAtom s w = PtrAtom { getPtrAtom :: CR.Atom s (MM.LLVMPointerType w) }
+
+instance TestEquality (PtrAtom s) where
+  testEquality x y =
+    testEquality (getPtrAtom x) (getPtrAtom y) <&> \Refl -> Refl
+
+instance OrdF (PtrAtom s) where
+  compareF x y =
+    case compareF (getPtrAtom x) (getPtrAtom y) of
+      LTF -> LTF
+      EQF -> EQF
+      GTF -> GTF
+
+newtype BVAtom s w = BVAtom { getBVAtom :: CR.Atom s (C.BVType w) }
+
+instance TestEquality (BVAtom s) where
+  testEquality x y =
+    testEquality (getBVAtom x) (getBVAtom y) <&> \Refl -> Refl
+
+instance OrdF (BVAtom s) where
+  compareF x y =
+    case compareF (getBVAtom x) (getBVAtom y) of
+      LTF -> LTF
+      EQF -> EQF
+      GTF -> GTF
 
 crucPStateLens ::
   Simple Lens (CrucGenState arch ids s) (CrucPersistentState ids s)
 crucPStateLens = lens crucPState (\s v -> s { crucPState = v })
+
+toBitsCacheLens ::
+  Simple Lens (CrucGenState arch ids s) (MapF (PtrAtom s) (BVAtom s))
+toBitsCacheLens = lens toBitsCache (\s v -> s { toBitsCache = v })
+
+fromBitsCacheLens ::
+  Simple Lens (CrucGenState arch ids s) (MapF (BVAtom s) (PtrAtom s))
+fromBitsCacheLens = lens fromBitsCache (\s v -> s { fromBitsCache = v })
 
 assignValueMapLens ::
   Simple Lens (CrucPersistentState ids s)
@@ -561,7 +598,15 @@ toBits ::
   NatRepr w ->
   CR.Atom s (MM.LLVMPointerType w) ->
   CrucGen arch ids s (CR.Atom s (C.BVType w))
-toBits w x = evalMacawExt (PtrToBits w x)
+toBits w x =
+  use (toBitsCacheLens . atF (PtrAtom x)) >>= \case
+    Just (BVAtom x') ->
+      return x'
+    Nothing -> do
+      x' <- evalMacawExt (PtrToBits w x)
+      assign (toBitsCacheLens . atF (PtrAtom x)) (Just (BVAtom x'))
+      assign (fromBitsCacheLens . atF (BVAtom x')) (Just (PtrAtom x))
+      return x'
 
 -- | Treat a bit-vector as a register value.
 fromBits ::
@@ -569,7 +614,15 @@ fromBits ::
   NatRepr w ->
   CR.Atom s (C.BVType w) ->
   CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
-fromBits w x = evalMacawExt (BitsToPtr w x)
+fromBits w x =
+  use (fromBitsCacheLens . atF (BVAtom x)) >>= \case
+    Just (PtrAtom x') ->
+      return x'
+    Nothing -> do
+      x' <- evalMacawExt (BitsToPtr w x)
+      assign (fromBitsCacheLens . atF (BVAtom x)) (Just (PtrAtom x'))
+      assign (toBitsCacheLens . atF (PtrAtom x')) (Just (BVAtom x))
+      return x'
 
 getRegs :: CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
 getRegs = gets crucRegisterReg >>= evalAtom . CR.ReadReg
@@ -1061,6 +1114,8 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
                         , blockLabel = lbl
                         , codeOff    = off
                         , prevStmts  = []
+                        , toBitsCache = MapF.empty
+                        , fromBitsCache = MapF.empty
                         }
   let cont _s () = fail "Unterminated crucible block"
   (s, tstmt)  <- mmExecST $ unCrucGen action s0 cont
