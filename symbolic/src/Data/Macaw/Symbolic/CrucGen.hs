@@ -78,6 +78,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
+import           Data.Parameterized.Pair
 import           Data.Parameterized.Some
 import qualified Data.Parameterized.TH.GADT as U
 import           Data.Parameterized.TraversableF
@@ -1030,21 +1031,42 @@ createRegStruct :: forall arch ids s
                 .  M.RegState (M.ArchReg arch) (M.Value arch ids)
                 -> CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
 createRegStruct regs = do
-  (tps, fields) <- createRegStructAssignment regs
-  crucibleValue (C.MkStruct tps fields)
+  (tps, updates) <- createRegUpdates regs
+  -- IMPORTANT: The registers are never changed in the middle of the
+  -- block, ONLY at the ends.  So this value is the value at the
+  -- beginning.
+  regReg <- gets crucRegisterReg
+  startingVals <- evalAtom $ CR.ReadReg regReg
+  go tps updates startingVals
+  where
+    go :: C.CtxRepr (MacawCrucibleRegTypes arch)
+       -> [Pair (Ctx.Index (MacawCrucibleRegTypes arch)) (CR.Atom s)]
+       -> CR.Atom s (ArchRegStruct arch)
+       -> CrucGen arch ids s (CR.Atom s (ArchRegStruct arch))
+    go _tps [] vals =
+      return vals
+    go tps (Pair idx val : updates) vals = do
+      vals' <- crucibleValue $ C.SetStruct tps vals idx val
+      go tps updates vals'
 
-createRegStructAssignment :: forall arch ids s
-                           .  M.RegState (M.ArchReg arch) (M.Value arch ids)
-                          -> CrucGen arch ids s (C.CtxRepr (CtxToCrucibleType (ArchRegContext arch)),
-                                                 Assignment (CR.Atom s) (CtxToCrucibleType (ArchRegContext arch)))
-createRegStructAssignment regs = do
+createRegUpdates :: forall arch ids s
+                 .  M.RegState (M.ArchReg arch) (M.Value arch ids)
+                 -> CrucGen arch ids s (C.CtxRepr (CtxToCrucibleType (ArchRegContext arch)),
+                                        [Pair (Ctx.Index (CtxToCrucibleType (ArchRegContext arch))) (CR.Atom s)])
+createRegUpdates regs = do
   archFns <- gets translateFns
+  idxMap <- gets crucRegIndexMap
   crucGenArchConstraints archFns $ do
   let regAssign = crucGenRegAssignment archFns
   let tps = fmapFC M.typeRepr regAssign
-  let a = fmapFC (\r -> regs ^. M.boundValue r) regAssign
-  fields <- macawAssignToCrucM valueToCrucible a
-  return (typeCtxToCrucible tps, fields)
+  updates :: [Pair (Ctx.Index (MacawCrucibleRegTypes arch)) (CR.Atom s)] <-
+    fmap catMaybes $ forM (M.regStateMap regs & MapF.toList) $ \(Pair reg val) ->
+      case val of
+        M.Initial _ -> return Nothing
+        _ -> case MapF.lookup reg idxMap of
+          Nothing -> fail "internal: Register is not bound."
+          Just idx -> Just . Pair (crucibleIndex idx) <$> valueToCrucible val
+  return (typeCtxToCrucible tps, updates)
 
 addMacawTermStmt :: Map Word64 (CR.Label s)
                     -- ^ Map from block index to Crucible label
@@ -1169,6 +1191,8 @@ parsedBlockLabel blockLabelMap addr idx =
   fromMaybe (error $ "Could not find entry point: " ++ show addr) $
   Map.lookup (addr, idx) blockLabelMap
 
+-- | DO NOT CALL THIS FROM USER CODE.  We count on the registers not
+-- changing until the end of the block.
 setMachineRegs :: CR.Atom s (ArchRegStruct arch) -> CrucGen arch ids s ()
 setMachineRegs newRegs = do
   regReg <- gets crucRegisterReg
@@ -1188,8 +1212,8 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
  crucGenArchConstraints archFns $ do
   case tstmt of
     M.ParsedCall regs mret -> do
-      (tps, fields) <- createRegStructAssignment regs
-      curRegs <- crucibleValue (C.MkStruct tps fields)
+      curRegs <- createRegStruct regs
+      let tps = typeCtxToCrucible $ fmapFC M.typeRepr $ crucGenRegAssignment archFns
       fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
       newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (C.StructRepr tps)
       case mret of
