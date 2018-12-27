@@ -477,6 +477,11 @@ class ( OrdF r
   -- | List of all arch registers.
   archRegs :: [Some r]
 
+  -- | Set of all arch registers (expressed as a 'MapF.Map' of units).
+  -- Preferable to 'archRegs' when building a map.
+  archRegSet :: MapF.MapF r (Const ())
+  archRegSet = MapF.fromList [ MapF.Pair r (Const ()) | Some r <- archRegs ]
+
   -- | The stack pointer register
   sp_reg :: r (BVType (RegAddrWidth r))
 
@@ -497,8 +502,7 @@ curIP = boundValue ip_reg
 mkRegStateM :: (RegisterInfo r, Applicative m)
             => (forall tp . r tp -> m (f tp))
             -> m (RegState r f)
-mkRegStateM f = RegState . MapF.fromList <$> traverse g archRegs
-  where g (Some r) = MapF.Pair r <$> f r
+mkRegStateM f = RegState <$> MapF.traverseWithKey (\k _ -> f k) archRegSet
 
 -- Create a pure register state
 mkRegState :: RegisterInfo r
