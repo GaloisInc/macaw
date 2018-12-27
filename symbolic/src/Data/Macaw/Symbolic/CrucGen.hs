@@ -479,15 +479,19 @@ newtype CrucGen arch ids s r
              }
 
 instance Functor (CrucGen arch ids s) where
+  {-# INLINE fmap #-}
   fmap f m = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 v -> cont s1 (f v)
 
 instance Applicative (CrucGen arch ids s) where
+  {-# INLINE pure #-}
   pure r = CrucGen $ \s cont -> cont s r
+  {-# INLINE (<*>) #-}
   mf <*> ma = CrucGen $ \s0 cont -> unCrucGen mf s0
                       $ \s1 f -> unCrucGen ma s1
                       $ \s2 a -> cont s2 (f a)
 
 instance Monad (CrucGen arch ids s) where
+  {-# INLINE (>>=) #-}
   m >>= h = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 r -> unCrucGen (h r) s1 cont
 
 instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
