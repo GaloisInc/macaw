@@ -229,27 +229,27 @@ instance TraversableFC X86StmtExtension where
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
 
-crucGenX86Fn :: forall ids s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
-             -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
+crucGenX86Fn :: forall ids h s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
+             -> CrucGen M.X86_64 ids h s (C.Atom s (ToCrucibleType tp))
 crucGenX86Fn fn = do
-  let f ::  M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
+  let f ::  M.Value arch ids a -> CrucGen arch ids h s (AtomWrapper (C.Atom s) a)
       f x = AtomWrapper <$> valueToCrucible x
   r <- traverseFC f fn
   evalArchStmt (X86PrimFn r)
 
 
-crucGenX86Stmt :: forall ids s
+crucGenX86Stmt :: forall ids h s
                 . M.X86Stmt (M.Value M.X86_64 ids)
-               -> CrucGen M.X86_64 ids s ()
+               -> CrucGen M.X86_64 ids h s ()
 crucGenX86Stmt stmt = do
-  let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
+  let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids h s (AtomWrapper (C.Atom s) a)
       f x = AtomWrapper <$> valueToCrucible x
   stmt' <- traverseF f stmt
   void (evalArchStmt (X86PrimStmt stmt'))
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
-                   -> CrucGen M.X86_64 ids s ()
+                   -> CrucGen M.X86_64 ids h s ()
 crucGenX86TermStmt tstmt _regs =
   void (evalArchStmt (X86PrimTerm tstmt))
 

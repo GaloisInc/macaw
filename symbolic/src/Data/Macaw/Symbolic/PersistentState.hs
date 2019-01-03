@@ -43,6 +43,7 @@ module Data.Macaw.Symbolic.PersistentState
   ) where
 
 
+import           Control.Monad.ST (ST)
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -50,6 +51,7 @@ import           Data.Parameterized.Context
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Lang.Crucible.CFG.Reg as CR
@@ -202,20 +204,20 @@ instance TraversableFC MacawCrucibleValue where
 -- CrucPersistentState
 
 -- | State that needs to be persisted across block translations
-data CrucPersistentState ids s
+data CrucPersistentState ids h s
    = CrucPersistentState
-   { valueCount :: !Int
-     -- ^ Counter used to get fresh indices for Crucible atoms.
+   { nonceGen :: NonceGenerator (ST h) s
+     -- ^ Generator used to get fresh ids for Crucible atoms.
    , assignValueMap ::
       !(MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
      -- ^ Map Macaw assign id to associated Crucible value.
    }
 
 -- | Initial crucible persistent state
-initCrucPersistentState :: Int -> CrucPersistentState ids s
-initCrucPersistentState argCount =
+initCrucPersistentState :: NonceGenerator (ST h) s
+                        -> CrucPersistentState ids h s
+initCrucPersistentState ng =
   CrucPersistentState
-      { -- Count initial arguments in valie
-        valueCount     = argCount
+      { nonceGen       = ng
       , assignValueMap = MapF.empty
       }
