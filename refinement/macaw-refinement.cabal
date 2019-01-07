@@ -1,0 +1,30 @@
+name:          macaw-refinement
+version:       0.0.1
+author:        Galois, Inc.
+maintainer:    kquick@galois.com
+build-type:    Simple
+cabal-version: >= 1.9.2
+license:       BSD3
+license-file:  LICENSE
+
+library
+  build-depends: base >= 4
+               , ansi-wl-pprint
+               , containers
+               , crucible >= 0.4
+               , crucible-llvm
+               , lens
+               , macaw-base
+               , macaw-symbolic
+               , mtl
+               , parameterized-utils
+               , text
+               , what4 >= 0.4.0
+
+  hs-source-dirs: src
+
+  exposed-modules:
+    Data.Macaw.Refinement
+
+  ghc-options: -Wall
+  ghc-prof-options: -O2 -fprof-auto-top
