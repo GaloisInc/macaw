@@ -415,18 +415,38 @@ traverseRegsWith :: Applicative m
                  -> m (RegState r g)
 traverseRegsWith f (RegState m) = RegState <$> MapF.traverseWithKey f m
 
+{-# INLINE[1] boundValue #-} -- Make sure the RULE gets a chance to fire
 -- | Get a register out of the state.
 boundValue :: forall r f tp
            .  OrdF r
            => r tp
            -> Simple Lens (RegState r f) (f tp)
-boundValue r = lens getter setter
-  where getter (RegState m) =
-          case MapF.lookup r m of
-            Just v -> v
-            Nothing -> error "internal error in boundValue given unexpected reg"
-        setter (RegState m) v = RegState (MapF.insert r v m)
+boundValue r =
+  -- TODO Ideally there would be a Lens-aware "alter"-type operation
+  -- in Data.Parameterized.Map (see Data.Map source); such an
+  -- operation would have SPECIALIZE pragmas that would make it good
+  -- to use to implement this.  We're resorting to RULES here, without
+  -- which boundValue was accounting for over 8% of runtime on
+  -- Brittle.
+  lens (getBoundValue r) (setBoundValue r)
 
+getBoundValue :: OrdF r => r tp -> RegState r f -> f tp
+getBoundValue r (RegState m) =
+  case MapF.lookup r m of
+    Just v -> v
+    Nothing -> error "internal error in boundValue given unexpected reg"
+
+-- Without this rule, boundValue gets left as a higher-order function,
+-- making its uses VERY slow.
+{-# RULES
+      "boundValue/get" forall rs r. get (boundValue r) rs = getBoundValue r rs
+  #-}
+-- Note that this rule seems to cover (^.) as well as get, which is
+-- fortunate since a parsing bug makes it impossible to mention (^.)
+-- in a rule.
+
+setBoundValue :: OrdF r => r tp -> RegState r f -> f tp -> RegState r f
+setBoundValue r (RegState m) v = RegState (MapF.insert r v m)
 
 -- | Compares if two register states are equal.
 cmpRegState :: OrdF r
@@ -457,6 +477,11 @@ class ( OrdF r
   -- | List of all arch registers.
   archRegs :: [Some r]
 
+  -- | Set of all arch registers (expressed as a 'MapF.Map' of units).
+  -- Preferable to 'archRegs' when building a map.
+  archRegSet :: MapF.MapF r (Const ())
+  archRegSet = MapF.fromList [ MapF.Pair r (Const ()) | Some r <- archRegs ]
+
   -- | The stack pointer register
   sp_reg :: r (BVType (RegAddrWidth r))
 
@@ -477,8 +502,7 @@ curIP = boundValue ip_reg
 mkRegStateM :: (RegisterInfo r, Applicative m)
             => (forall tp . r tp -> m (f tp))
             -> m (RegState r f)
-mkRegStateM f = RegState . MapF.fromList <$> traverse g archRegs
-  where g (Some r) = MapF.Pair r <$> f r
+mkRegStateM f = RegState <$> MapF.traverseWithKey (\k _ -> f k) archRegSet
 
 -- Create a pure register state
 mkRegState :: RegisterInfo r
