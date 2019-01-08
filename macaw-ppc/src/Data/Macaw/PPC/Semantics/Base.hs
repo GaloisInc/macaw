@@ -26,6 +26,7 @@ import           Data.Parameterized.Classes
 import qualified What4.Expr.Builder as S
 import qualified What4.BaseTypes as S
 
+import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
@@ -141,8 +142,12 @@ locToReg _  loc              = error ("macaw-ppc: Undefined location " ++ show l
 
 -- | Given a location to modify and a crucible formula, construct a Generator that
 -- will modify the location by the function encoded in the formula.
-interpretFormula :: forall ppc t ctp s ids
-                  . (PPCArchConstraints ppc, 1 <= APPC.ArchRegWidth ppc, M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
+interpretFormula :: forall var ppc t ctp s ids
+                  . ( ppc ~ SP.AnyPPC var
+                    , PPCArchConstraints var
+                    , 1 <= APPC.ArchRegWidth ppc
+                    , M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc
+                    )
                  => APPC.Location ppc ctp
                  -> S.Expr t ctp
                  -> Generator ppc ids s ()

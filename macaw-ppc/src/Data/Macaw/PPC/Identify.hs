@@ -17,6 +17,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery.AbsEval as DE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
+import qualified SemMC.Architecture.PPC as SP
 
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
@@ -29,7 +30,7 @@ import           Data.Macaw.PPC.PPCReg
 -- with a constant is at a call site.  This might be a problem if we see a
 -- @mtlr@ and put a stack value into the link register.  That might look like a
 -- call...
-identifyCall :: (PPCArchConstraints ppc)
+identifyCall :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
              => proxy ppc
              -> MM.Memory (MC.ArchAddrWidth ppc)
              -> Seq.Seq (MC.Stmt ppc ids)
@@ -51,8 +52,8 @@ identifyCall _ mem stmts0 rs
 -- An instruction executing a return from a function will place the
 -- Macaw 'ReturnAddr' value (placed in the LNK register by
 -- 'mkInitialAbsState') into the instruction pointer.
-identifyReturn :: (PPCArchConstraints ppc) =>
-                  proxy ppc
+identifyReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+               => proxy ppc
                -> Seq.Seq (MC.Stmt ppc ids)
                -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
                -> MA.AbsProcessorState (MC.ArchReg ppc) ids
@@ -61,7 +62,7 @@ identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
 
-matchReturn :: (PPCArchConstraints ppc, MC.ArchReg ppc ~ PPCReg ppc)
+matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var, MC.ArchReg ppc ~ PPCReg ppc)
             => MA.AbsProcessorState (MC.ArchReg ppc) ids
             -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
             -> Maybe (Some (MA.AbsValue w))

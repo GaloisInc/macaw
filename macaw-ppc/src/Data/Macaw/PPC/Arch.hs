@@ -43,6 +43,7 @@ import qualified Data.Macaw.Types as MT
 import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
+import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Eval as E
 
 import qualified Data.Macaw.SemMC.Generator as G
@@ -476,7 +477,10 @@ ppcPrimFnHasSideEffects = \case
   Vec2{}         -> False
   Vec3{}         -> False
 
-rewritePrimFn :: (PPCArchConstraints ppc, MC.ArchFn ppc ~ PPCPrimFn ppc)
+rewritePrimFn :: ( ppc ~ SP.AnyPPC var
+                 , PPCArchConstraints var
+                 , MC.ArchFn ppc ~ PPCPrimFn ppc
+                 )
               => PPCPrimFn ppc (MC.Value ppc src) tp
               -> Rewriter ppc s src tgt (MC.Value ppc tgt tp)
 rewritePrimFn = \case
@@ -640,21 +644,24 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
 type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
 type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 
-type PPCArchConstraints ppc = ( MC.ArchReg ppc ~ PPCReg ppc
-                              , MC.ArchFn ppc ~ PPCPrimFn ppc
-                              , MC.ArchStmt ppc ~ PPCStmt ppc
-                              , MC.ArchTermStmt ppc ~ PPCTermStmt
-                              , ArchWidth ppc
-                              , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ppc))
-                              , 1 <= MC.RegAddrWidth (PPCReg ppc)
-                              , KnownNat (MC.RegAddrWidth (PPCReg ppc))
-                              , MC.ArchConstraints ppc
-                              , O.ExtractValue ppc D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-                              , O.ExtractValue ppc (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+type PPCArchConstraints var = ( MC.ArchReg (SP.AnyPPC var) ~ PPCReg (SP.AnyPPC var)
+                              , MC.ArchFn (SP.AnyPPC var) ~ PPCPrimFn (SP.AnyPPC var)
+                              , MC.ArchStmt (SP.AnyPPC var) ~ PPCStmt (SP.AnyPPC var)
+                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt
+                              , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var)))
+                              , 1 <= MC.RegAddrWidth (PPCReg (SP.AnyPPC var))
+                              , KnownNat (MC.RegAddrWidth (PPCReg (SP.AnyPPC var)))
+                              , SP.KnownVariant var
+                              , MC.ArchConstraints (SP.AnyPPC var)
+                              , O.ExtractValue (SP.AnyPPC var) D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var))))
+                              , O.ExtractValue (SP.AnyPPC var) (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var))))
                               )
 
-memrrToEffectiveAddress :: forall ppc ids s n
-                         . (n ~ MC.RegAddrWidth (MC.ArchReg ppc), PPCArchConstraints ppc)
+memrrToEffectiveAddress :: forall var ppc ids s n
+                         . (ppc ~ SP.AnyPPC var
+                           , n ~ MC.RegAddrWidth (MC.ArchReg ppc)
+                           , PPCArchConstraints var
+                           )
                         => MC.RegState (PPCReg ppc) (MC.Value ppc ids)
                         -> D.MemRR
                         -> G.Generator ppc ids s (MC.Value ppc ids (MT.BVType n))
@@ -669,7 +676,7 @@ memrrToEffectiveAddress regs memrr = do
 
 -- | A helper to increment the IP by 4, meant to be used to implement
 -- arch-specific statements that need to update the IP (i.e., all but syscalls).
-incrementIP :: (PPCArchConstraints ppc) => G.Generator ppc ids s ()
+incrementIP :: (PPCArchConstraints var) => G.Generator (SP.AnyPPC var) ids s ()
 incrementIP = do
   rs <- G.getRegs
   let ipVal = rs ^. MC.boundValue PPC_IP
@@ -688,8 +695,11 @@ cases xs end =
       v <- gv
       G.conditionalBranch v ifTrue (cases rest end)
 
-trapDoubleword :: forall ppc n s ids
-                . (PPCArchConstraints ppc, n ~ MC.ArchAddrWidth ppc)
+trapDoubleword :: forall var ppc n s ids
+                . ( ppc ~ SP.AnyPPC var
+                  , PPCArchConstraints var
+                  , n ~ MC.ArchAddrWidth ppc
+                  )
                => MC.Value ppc ids (MT.BVType n)
                -> MC.Value ppc ids (MT.BVType n)
                -> MC.Value ppc ids (MT.BVType 5)
@@ -725,8 +735,12 @@ trapDoubleword b a to = do
 -- NOTE: For SC and TRAP (which we treat as system calls), we don't need to
 -- update the IP here, as the update is handled in the abstract interpretation
 -- of system calls in 'postPPCTermStmtAbsState'.
-ppcInstructionMatcher :: forall ppc ids s n
-                       . (PPCArchConstraints ppc, n ~ MC.ArchAddrWidth ppc, 17 <= n)
+ppcInstructionMatcher :: forall var ppc ids s n
+                       . ( ppc ~ SP.AnyPPC var
+                         , PPCArchConstraints var
+                         , n ~ MC.ArchAddrWidth ppc
+                         , 17 <= n
+                         )
                       => D.Instruction
                       -> Maybe (G.Generator ppc ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =

@@ -22,6 +22,7 @@ import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Some ( Some(..) )
+import qualified SemMC.Architecture.PPC as SP
 
 import qualified Dismantle.PPC as D
 
@@ -38,7 +39,7 @@ preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-postPPCTermStmtAbsState :: (PPCArchConstraints ppc)
+postPPCTermStmtAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
                         -> AbsBlockState (PPCReg ppc)
@@ -78,10 +79,11 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
 --
 -- One value that is definitely set is the link register, which holds the
 -- abstract return value.
-mkInitialAbsState :: ( PPCArchConstraints ppc
+mkInitialAbsState :: ( ppc ~ SP.AnyPPC var
+                     , PPCArchConstraints var
                      , BLP.HasTOC ppc binFmt
-                     ) =>
-                     proxy ppc
+                     )
+                  => proxy ppc
                   -> BL.LoadedBinary ppc binFmt
                   -> MM.Memory (RegAddrWidth (ArchReg ppc))
                   -> ArchSegmentOff ppc
@@ -95,7 +97,7 @@ mkInitialAbsState _ binData _mem startAddr =
                 & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
                 & MA.absRegState . boundValue (PPC_GP (D.GPR 1)) .~ MA.concreteStackOffset (segoffAddr startAddr) 0
 
-absEvalArchFn :: (PPCArchConstraints ppc)
+absEvalArchFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
               => proxy ppc
               -> AbsProcessorState (ArchReg ppc) ids
               -> ArchFn ppc (Value ppc ids) tp
@@ -145,7 +147,7 @@ absEvalArchStmt _ s _ = s
 -- | There should be no difference in stack height before and after a call, as
 -- the callee pushes the return address if required.  Return values are also
 -- passed in registers.
-postCallAbsState :: (PPCArchConstraints ppc)
+postCallAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                  => proxy ppc
                  -> AbsBlockState (ArchReg ppc)
                  -> ArchSegmentOff ppc

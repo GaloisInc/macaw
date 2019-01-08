@@ -23,7 +23,6 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Foldable as F
 import           Data.Maybe ( fromMaybe )
-import           Data.Proxy ( Proxy(..) )
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
@@ -40,6 +39,8 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import           Data.Macaw.Types ( BVType, BoolType )
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
+
+import qualified SemMC.Architecture.PPC as SP
 
 import           Data.Macaw.SemMC.Generator
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
@@ -104,8 +105,8 @@ data PPCMemoryError w = PPCInvalidInstruction !(MM.MemAddr w) [MM.MemChunk w]
 --
 -- In most of those cases, we end the block with a simple terminator.  If the IP
 -- becomes a mux, we split execution using 'conditionalBranch'.
-disassembleBlock :: forall ppc ids s
-                  . PPCArchConstraints ppc
+disassembleBlock :: forall var ppc ids s
+                  . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                  => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> GenState ppc ids s
@@ -133,7 +134,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
       -- physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (pointerNatRepr (Proxy @ppc)) (fromIntegral addr))
+                 Just addr -> return (BVValue (SP.addrWidth SP.knownVariant) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
@@ -178,7 +179,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
 
 -- | Examine a value and see if it is a mux; if it is, break the mux up and
 -- return its component values (the condition and two alternatives)
-matchConditionalBranch :: (PPCArchConstraints arch)
+matchConditionalBranch :: (arch ~ SP.AnyPPC var, PPCArchConstraints var)
                        => Value arch ids tp
                        -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
 matchConditionalBranch v =
@@ -189,7 +190,7 @@ matchConditionalBranch v =
         _ -> Nothing
     _ -> Nothing
 
-tryDisassembleBlock :: (PPCArchConstraints ppc)
+tryDisassembleBlock :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                     => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
                     -> NC.NonceGenerator (ST s) ids
                     -> ArchSegmentOff ppc
@@ -210,7 +211,7 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (PPCArchConstraints ppc)
+disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
               => proxy ppc
               -> (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
               -- ^ A function to look up the semantics for an instruction.  The
@@ -232,8 +233,9 @@ disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
     Right (blocks, bytes) -> return (blocks, bytes, Nothing)
 
 
-initialBlockRegs :: forall ids ppc . PPCArchConstraints ppc =>
-                    ArchSegmentOff ppc
+initialBlockRegs :: forall ids ppc var
+                  . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+                 => ArchSegmentOff ppc
                     -- ^ The address of the block
                  -> MA.AbsBlockState (ArchReg ppc)
                     -- ^ Abstract state of the processor at the start of the block
