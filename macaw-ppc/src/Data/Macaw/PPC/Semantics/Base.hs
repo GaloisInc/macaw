@@ -136,7 +136,7 @@ locToReg _  APPC.LocIP       = PPC_IP
 locToReg _  APPC.LocLNK      = PPC_LNK
 locToReg _  APPC.LocCTR      = PPC_CTR
 locToReg _  APPC.LocCR       = PPC_CR
-locToReg _  _                = undefined
+locToReg _  loc              = error ("macaw-ppc: Undefined location " ++ show loc)
 -- fill the rest out later
 
 -- | Given a location to modify and a crucible formula, construct a Generator that
