@@ -49,6 +49,7 @@ module Data.Macaw.Symbolic.CrucGen
   , valueToCrucible
   , evalArchStmt
   , MemSegmentMap
+  , MacawCrucibleValue(..)
     -- * Additional exports
   , runCrucGen
   , setMachineRegs
