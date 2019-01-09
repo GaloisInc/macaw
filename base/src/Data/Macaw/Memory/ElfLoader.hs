@@ -1093,7 +1093,7 @@ symtabSymbolTable e =
 
 -- | Load allocated Elf sections into memory.
 --
--- Normally, Elf uses segments for loading, but the segment
+-- Normally, Elf uses segments for loading, but the section
 -- information tends to be more precise.
 memoryForElfSections :: forall w
                      .  Elf w

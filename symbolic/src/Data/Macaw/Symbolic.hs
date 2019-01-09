@@ -348,7 +348,7 @@ mkParsedBlockCFG :: forall s arch ids
 mkParsedBlockCFG archFns halloc memBaseVarMap posFn b =
   toCoreCFG archFns <$> mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b
 
--- | This create a registerized Crucible CFG from a Macaw
+-- | This creates a registerized Crucible CFG from a Macaw
 -- `DiscoveryFunInfo` value.
 --
 -- Useful as an alternative to 'mkFunCFG' if post-processing
@@ -423,7 +423,7 @@ mkFunCFG :: forall s arch ids
          -> (M.ArchSegmentOff arch -> C.Position)
             -- ^ Function that maps function address to Crucible position
          -> M.DiscoveryFunInfo arch ids
-         -- ^ List of blocks for this region.
+            -- ^ List of blocks for this region.
          -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkFunCFG archFns halloc memBaseVarMap nm posFn fn =
   toCoreCFG archFns <$> mkFunRegCFG archFns halloc memBaseVarMap nm posFn fn
