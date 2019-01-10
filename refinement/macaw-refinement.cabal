@@ -65,5 +65,5 @@ library
     Data.Macaw.Refinement
 
   default-language: Haskell2010
-  ghc-options: -Wall
+  ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
