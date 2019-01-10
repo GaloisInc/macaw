@@ -67,3 +67,26 @@ library
   default-language: Haskell2010
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
+
+
+executable run-refinement
+  hs-source-dirs: tools
+  main-is:        run-refinement.hs
+  default-language: Haskell2010
+  ghc-options: -Wall -Wcompat
+  build-depends: base >= 4
+               , bytestring
+               , containers
+               , elf-edit
+               , exceptions
+               , lens
+               , macaw-base
+               , macaw-loader
+               , macaw-loader-x86
+               , macaw-loader-ppc
+               , macaw-ppc
+               , macaw-refinement
+               , macaw-symbolic
+               , macaw-x86
+               , parameterized-utils
+               , semmc-ppc
