@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -15,6 +16,7 @@ import qualified Data.ElfEdit as E
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.CFG as MM
 import qualified Data.Macaw.Memory.LoadCommon as LC
+import qualified Data.Macaw.CFG.AssignRhs as MR
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.NatRepr as NR
 
@@ -41,7 +43,11 @@ data LoadedBinary arch binFmt =
 -- An instance is required for every arch/format pair, but the interface is more
 -- accessible to callers than some alternatives.
 --
--- n.b. many of the usage sites will need to express a constraint like:
+-- n.b. The (MM.MemWidth (MR.ArchAddrWidth arch)) constraint enables
+-- the LoadedBinary output type to functions by simply expressing
+-- (BinaryLoader arch binFmt) as a constraint on those functions, but
+-- many of the usage sites will still need to express a constraint
+-- like:
 --
 -- > (BinaryAddrWidth binFmt ~ MC.ArchAddrWidth arch) =>
 --
@@ -53,12 +59,14 @@ data LoadedBinary arch binFmt =
 -- should be able to use macaw-loader-ppc). Ergo this constraint must
 -- be expressed at the usage sites instead.
 
-class BinaryLoader arch binFmt where
+class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
+      BinaryLoader arch binFmt where
   -- | Architecture-specific information extracted from the binary
   type ArchBinaryData arch binFmt :: *
   -- | Information specific to the binary format that might be used later.
   type BinaryFormatData arch binFmt :: *
   type Diagnostic arch binFmt :: *
+
   -- | A loader for the given binary format at a caller-specified architecture
   loadBinary :: (X.MonadThrow m) => LC.LoadOptions -> binFmt -> m (LoadedBinary arch binFmt)
   -- | An architecture-specific function to return the entry points of a binary
