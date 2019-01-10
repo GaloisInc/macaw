@@ -29,5 +29,5 @@ library
     Data.Macaw.Symbolic.MemOps
     Data.Macaw.Symbolic
 
-  ghc-options: -Wall
+  ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
