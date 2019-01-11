@@ -71,6 +71,7 @@ module Data.Macaw.Symbolic
   , CG.MacawFunctionResult
   , PS.typeToCrucible
   , PS.typeCtxToCrucible
+  , PS.MacawCrucibleValue(..)
   -- ** The Macaw extension to Crucible
   , CG.MacawExt
   , CG.MacawExprExtension(..)
