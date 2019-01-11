@@ -75,7 +75,7 @@ import qualified SemMC.Architecture.Location as L
 import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
-import qualified Data.Macaw.Symbolic.PersistentState as M
+import qualified Data.Macaw.Symbolic as M
 
 import Data.Parameterized.NatRepr ( knownNat
                                   , natValue

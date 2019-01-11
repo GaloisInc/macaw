@@ -61,7 +61,7 @@ import qualified What4.Symbol as C
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.Symbolic.PersistentState as MS
+import qualified Data.Macaw.Symbolic.Backend as MSB
 import qualified Data.Macaw.PPC as MP
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
@@ -70,24 +70,24 @@ import qualified Data.Macaw.PPC.Symbolic.Repeat as R
 
 ppc64MacawSymbolicFns :: MS.MacawSymbolicArchFunctions MP.PPC64
 ppc64MacawSymbolicFns =
-  MS.MacawSymbolicArchFunctions
-  { MS.crucGenArchConstraints = \x -> x
-  , MS.crucGenArchRegName = ppcRegName
-  , MS.crucGenRegAssignment = ppcRegAssignment
-  , MS.crucGenArchFn = ppcGenFn
-  , MS.crucGenArchStmt = ppcGenStmt
-  , MS.crucGenArchTermStmt = ppcGenTermStmt
+  MSB.MacawSymbolicArchFunctions
+  { MSB.crucGenArchConstraints = \x -> x
+  , MSB.crucGenArchRegName = ppcRegName
+  , MSB.crucGenRegAssignment = ppcRegAssignment
+  , MSB.crucGenArchFn = ppcGenFn
+  , MSB.crucGenArchStmt = ppcGenStmt
+  , MSB.crucGenArchTermStmt = ppcGenTermStmt
   }
 
 ppc32MacawSymbolicFns :: MS.MacawSymbolicArchFunctions MP.PPC32
 ppc32MacawSymbolicFns =
-  MS.MacawSymbolicArchFunctions
-  { MS.crucGenArchConstraints = \x -> x
-  , MS.crucGenArchRegName = ppcRegName
-  , MS.crucGenRegAssignment = ppcRegAssignment
-  , MS.crucGenArchFn = ppcGenFn
-  , MS.crucGenArchStmt = ppcGenStmt
-  , MS.crucGenArchTermStmt = ppcGenTermStmt
+  MSB.MacawSymbolicArchFunctions
+  { MSB.crucGenArchConstraints = \x -> x
+  , MSB.crucGenArchRegName = ppcRegName
+  , MSB.crucGenRegAssignment = ppcRegAssignment
+  , MSB.crucGenArchFn = ppcGenFn
+  , MSB.crucGenArchStmt = ppcGenStmt
+  , MSB.crucGenArchTermStmt = ppcGenTermStmt
   }
 
 type RegSize v = MC.RegAddrWidth (MP.PPCReg (MP.AnyPPC v))
@@ -122,7 +122,7 @@ getReg = (^. (Ctx.field @n))
 ppc64MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC64 sym
                  -> MS.MacawArchEvalFn sym MP.PPC64
-ppc64MacawEvalFn fs = \xt s -> case xt of
+ppc64MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s
@@ -130,7 +130,7 @@ ppc64MacawEvalFn fs = \xt s -> case xt of
 ppc32MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC32 sym
                  -> MS.MacawArchEvalFn sym MP.PPC32
-ppc32MacawEvalFn fs = \xt s -> case xt of
+ppc32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s
@@ -140,7 +140,7 @@ instance MS.ArchInfo MP.PPC64 where
     { MS.archFunctions = ppc64MacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k $ \_ _ -> ppc64MacawEvalFn sfns
+        k (ppc64MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
     }
 
@@ -149,7 +149,7 @@ instance MS.ArchInfo MP.PPC32 where
     { MS.archFunctions = ppc32MacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k $ \_ _ -> ppc32MacawEvalFn sfns
+        k (ppc32MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
     }
 
@@ -178,8 +178,8 @@ instance Typeable v => X.Exception (PPCSymbolicException v)
 
 regIndexMap :: forall v
              . MP.KnownVariant v
-            => MS.RegIndexMap (MP.AnyPPC v)
-regIndexMap = MS.mkRegIndexMap assgn sz
+            => MSB.RegIndexMap (MP.AnyPPC v)
+regIndexMap = MSB.mkRegIndexMap assgn sz
   where
     assgn = ppcRegAssignment @v
     sz = Ctx.size (MS.typeCtxToCrucible (FC.fmapFC MT.typeRepr assgn))
@@ -194,7 +194,7 @@ lookupReg :: forall v ppc m f tp
 lookupReg r asgn =
   case MapF.lookup r regIndexMap of
     Nothing -> X.throwM (MissingRegisterInState (Some r))
-    Just pair -> return (asgn Ctx.! MS.crucibleIndex pair)
+    Just pair -> return (asgn Ctx.! MSB.crucibleIndex pair)
 
 updateReg :: forall v ppc m f tp
            . (MP.KnownVariant v,
@@ -207,35 +207,35 @@ updateReg :: forall v ppc m f tp
 updateReg r upd asgn = do
   case MapF.lookup r regIndexMap of
     Nothing -> X.throwM (MissingRegisterInState (Some r))
-    Just pair -> return (asgn & MapF.ixF (MS.crucibleIndex pair) %~ upd)
+    Just pair -> return (asgn & MapF.ixF (MSB.crucibleIndex pair) %~ upd)
 
 ppcGenFn :: forall ids h s tp v ppc
           . ( ppc ~ MP.AnyPPC v )
          => MP.PPCPrimFn ppc (MC.Value ppc ids) tp
-         -> MS.CrucGen ppc ids h s (C.Atom s (MS.ToCrucibleType tp))
+         -> MSB.CrucGen ppc ids h s (C.Atom s (MS.ToCrucibleType tp))
 ppcGenFn fn = do
-  let f :: MC.Value ppc ids a -> MS.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
-      f x = A.AtomWrapper <$> MS.valueToCrucible x
+  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
+      f x = A.AtomWrapper <$> MSB.valueToCrucible x
   r <- FC.traverseFC f fn
-  MS.evalArchStmt (PPCPrimFn r)
+  MSB.evalArchStmt (PPCPrimFn r)
 
 ppcGenStmt :: forall v ids h s ppc
             . ( ppc ~ MP.AnyPPC v )
            => MP.PPCStmt ppc (MC.Value ppc ids)
-           -> MS.CrucGen ppc ids h s ()
+           -> MSB.CrucGen ppc ids h s ()
 ppcGenStmt s = do
-  let f :: MC.Value ppc ids a -> MS.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
-      f x = A.AtomWrapper <$> MS.valueToCrucible x
+  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
+      f x = A.AtomWrapper <$> MSB.valueToCrucible x
   s' <- TF.traverseF f s
-  void (MS.evalArchStmt (PPCPrimStmt s'))
+  void (MSB.evalArchStmt (PPCPrimStmt s'))
 
 ppcGenTermStmt :: forall v ids h s ppc
                 . ( ppc ~ MP.AnyPPC v )
                => MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
-               -> MS.CrucGen ppc ids h s ()
+               -> MSB.CrucGen ppc ids h s ()
 ppcGenTermStmt ts _rs =
-  void (MS.evalArchStmt (PPCPrimTerm ts))
+  void (MSB.evalArchStmt (PPCPrimTerm ts))
 
 data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
   -- | Wrappers around the arch-specific functions in PowerPC; these are
@@ -279,5 +279,5 @@ instance C.PrettyApp (PPCStmtExtension ppc) where
     MC.ppArchStmt (A.liftAtomIn ppSub) s
   ppApp _ppSub (PPCPrimTerm t) = MC.prettyF t
 
-type instance MS.MacawArchStmtExtension (MP.AnyPPC v) =
+type instance MSB.MacawArchStmtExtension (MP.AnyPPC v) =
   PPCStmtExtension (MP.AnyPPC v)
