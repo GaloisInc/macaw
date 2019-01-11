@@ -36,7 +36,11 @@
 -- * Memory operations are translated into operations over the LLVM memory model
 --   provided by crucible-llvm.  This memory model makes some assumptions that
 --   do not necessarily hold for all machine code programs, but that do hold for
---   (correct) C and C++ programs.
+--   (correct) C and C++ programs.  The current state of memory is held in a
+--   Crucible global value that is modified by all code.
+-- * Each function takes a single argument (the full set of machine registers)
+--   and returns a single value (the full set of machine registers reflecting
+--   any modifications)
 module Data.Macaw.Symbolic
   ( ArchInfo(..)
   , ArchVals(..)
@@ -566,10 +570,13 @@ execMacawStmtExtension
   :: forall sym arch
   . (IsSymInterface sym)
   => SB.MacawArchEvalFn sym arch
-  {- ^ Function for executing -}
+  -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
+  -- ^ The distinguished global variable holding the current state of the memory model
   -> MO.GlobalMap sym (M.ArchAddrWidth arch)
+  -- ^ The translation from machine words to LLVM memory model pointers
   -> MO.LookupFunctionHandle sym arch
+  -- ^ A function to turn machine addresses into Crucible function handles (which can also perform lazy CFG creation)
   -> SB.EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) s0 st =
   case s0 of
