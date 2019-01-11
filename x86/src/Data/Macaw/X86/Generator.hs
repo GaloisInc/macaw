@@ -37,6 +37,7 @@ module Data.Macaw.X86.Generator
   , pBlockState
   , pBlockStmts
   , pBlockApps
+  , pBlockStart
     -- * GenState
   , GenState(..)
   , blockState
@@ -153,16 +154,19 @@ data PreBlock ids = PreBlock { pBlockIndex :: !Word64
                              , _pBlockStmts :: !(Seq (Stmt X86_64 ids))
                              , _pBlockState :: !(RegState X86Reg (Value X86_64 ids))
                              , _pBlockApps  :: !(MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
+                             , pBlockStart  :: !(ArchSegmentOff X86_64)
                              }
 
 -- | Create a new pre block.
-emptyPreBlock :: RegState X86Reg (Value X86_64 ids)
+emptyPreBlock :: ArchSegmentOff X86_64
+              -> RegState X86Reg (Value X86_64 ids)
               -> PreBlock ids
-emptyPreBlock s  =
+emptyPreBlock startAddr s  =
   PreBlock { pBlockIndex  = 0
            , _pBlockStmts = Seq.empty
            , _pBlockApps  = MapF.empty
            , _pBlockState = s
+           , pBlockStart  = startAddr
            }
 
 pBlockStmts :: Simple Lens (PreBlock ids) (Seq (Stmt X86_64 ids))
@@ -182,6 +186,7 @@ finishBlock preBlock term =
   Block { blockLabel = pBlockIndex preBlock
         , blockStmts = toList (preBlock^.pBlockStmts)
         , blockTerm  = term (preBlock^.pBlockState)
+        , blockAddr  = pBlockStart preBlock
         }
 
 ------------------------------------------------------------------------

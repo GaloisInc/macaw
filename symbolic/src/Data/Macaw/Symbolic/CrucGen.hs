@@ -373,6 +373,16 @@ data MacawStmtExtension (arch :: *)
                           !(MapF.MapF (M.ArchReg arch) (MacawCrucibleValue f)) ->
                           MacawStmtExtension arch f C.UnitType
 
+  -- | Record the start of the translation of a machine instruction
+  --
+  -- The instructions between a MacawInstructionStart and a MacawArchStateUpdate
+  -- all correspond to a single machine instruction.  This metadata includes
+  -- enough information to figure out exactly which machine instruction that is.
+  MacawInstructionStart :: !(M.ArchSegmentOff arch)
+                        -> !(M.ArchAddrWord arch)
+                        -> !Text.Text
+                        -> MacawStmtExtension arch f C.UnitType
+
   -- NOTE: The Ptr* operations below are statements and not expressions
   -- because they need to read the memory variable, to determine if their
   -- inputs are valid pointers.
@@ -463,7 +473,8 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
             prettyArchStateBinding reg (MacawCrucibleValue val) acc =
               (M.prettyF reg <> text " => " <> f val) : acc
         in sexpr "macawArchStateUpdate" [pretty addr, semiBraces (MapF.foldrWithKey prettyArchStateBinding [] m)]
-
+      MacawInstructionStart baddr ioff t ->
+        sexpr "macawInstructionStart" [ pretty baddr, pretty ioff, text (show t) ]
       PtrEq _ x y    -> sexpr "ptr_eq" [ f x, f y ]
       PtrLt _ x y    -> sexpr "ptr_lt" [ f x, f y ]
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
@@ -484,6 +495,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawLookupFunctionHandle regTypes _) = C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
+  appType MacawInstructionStart {} = C.knownRepr
   appType PtrEq {}            = C.knownRepr
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
@@ -1034,8 +1046,8 @@ assignRhsToCrucible rhs =
       fns <- translateFns <$> get
       crucGenArchFn fns f
 
-addMacawStmt :: forall arch ids h s . M.Stmt arch ids -> CrucGen arch ids h s ()
-addMacawStmt stmt =
+addMacawStmt :: forall arch ids h s . M.ArchSegmentOff arch -> M.Stmt arch ids -> CrucGen arch ids h s ()
+addMacawStmt baddr stmt =
   gets translateFns >>= \archFns ->
   crucGenArchConstraints archFns $
   case stmt of
@@ -1048,9 +1060,12 @@ addMacawStmt stmt =
       cval  <- valueToCrucible val
       w     <- archAddrWidth
       void $ evalMacawStmt (MacawWriteMem w repr caddr cval)
-    M.InstructionStart off _ -> do
+    M.InstructionStart off t -> do
       -- Update the position
       modify $ \s -> s { codeOff = off }
+      let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType
+          crucStmt = MacawInstructionStart baddr off t
+      void $ evalMacawStmt crucStmt
     M.Comment _txt -> do
       pure ()
     M.ExecArchStmt astmt -> do
@@ -1204,7 +1219,7 @@ addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
                           }
   fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
-    mapM_ addMacawStmt (M.blockStmts b)
+    mapM_ (addMacawStmt (M.blockAddr b))  (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
 
 parsedBlockLabel :: (Ord addr, Show addr)
@@ -1314,7 +1329,7 @@ addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg ((off,
         throwError $ "Internal: Could not find block with address " ++ show startAddr ++ " index " ++ show idx
   (b,off') <-
     runCrucGen archFns baseAddrMap posFn off lbl regReg $ do
-      mapM_ addMacawStmt (M.stmtsNonterm stmts)
+      mapM_ (addMacawStmt startAddr) (M.stmtsNonterm stmts)
       addMacawParsedTermStmt blockLabelMap startAddr (M.stmtsTerm stmts)
   let new = (off',) <$> nextStatements (M.stmtsTerm stmts)
   addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg (new ++ rest) (b:r)

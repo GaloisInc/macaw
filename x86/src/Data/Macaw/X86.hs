@@ -175,6 +175,7 @@ initError addr s err = do
   let b = Block { blockLabel = 0
                 , blockStmts = []
                 , blockTerm  = TranslateError s (Text.pack (show err))
+                , blockAddr  = addr
                 }
   return (b, segoffOffset addr, Just err)
 
@@ -188,6 +189,7 @@ returnWithError pblock curIPAddr err = do
   let b = Block { blockLabel = pBlockIndex pblock
                 , blockStmts = toList (pblock^.pBlockStmts)
                 , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
+                , blockAddr  = pBlockStart pblock
                 }
   return (b, segoffOffset curIPAddr, Just err)
 
@@ -285,7 +287,7 @@ disassembleFixedBlock gen loc sz = do
         Left _err -> do
           error $ "Could not split memory."
         Right (contents,_) -> do
-          let pblock = emptyPreBlock initRegs
+          let pblock = emptyPreBlock addr initRegs
           disassembleFixedBlock' gen pblock 0 addr contents
 
 -- | Translate block, returning blocks read, ending
@@ -336,7 +338,7 @@ disassembleBlock nonce_gen loc max_size = do
       Left msg -> do
         initError addr regs (FlexdisMemoryError msg)
       Right contents -> do
-        let pblock = emptyPreBlock regs
+        let pblock = emptyPreBlock addr regs
         disassembleBlockImpl nonce_gen pblock 0 addr sz contents
   assert (next_ip_off > segoffOffset addr) $ do
   let block_sz = next_ip_off - segoffOffset addr
@@ -461,7 +463,7 @@ tryDisassembleBlock nonceGen addr initRegs maxSize = do
       Left msg -> do
         initError addr initRegs (FlexdisMemoryError msg)
       Right contents -> do
-        disassembleBlockImpl nonceGen (emptyPreBlock initRegs) 0 addr (off + fromIntegral maxSize) contents
+        disassembleBlockImpl nonceGen (emptyPreBlock addr initRegs) 0 addr (off + fromIntegral maxSize) contents
   let sz :: Int
       sz = fromIntegral $ nextIPOff - off
   pure $! (b, sz, show <$> maybeError)
