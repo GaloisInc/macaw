@@ -40,22 +40,21 @@ import           GHC.TypeLits
 
 import qualified Data.Macaw.CFG as M
 import           Data.Macaw.Symbolic
-import           Data.Macaw.Symbolic.PersistentState
-                 (typeToCrucible,RegIndexMap,mkRegIndexMap,IndexPair(..))
-import           Data.Macaw.Symbolic.CrucGen
-                    (crucArchRegTypes,MacawCrucibleRegTypes)
+import           Data.Macaw.Symbolic.Backend
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
 import           Data.Macaw.X86.Crucible
 import qualified Flexdis86.Register as F
 
+import qualified What4.Interface as WI
+import qualified What4.InterpretedFloatingPoint as WIF
 import qualified What4.Symbol as C
 
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
-import           Lang.Crucible.Simulator.RegValue (RegValue'(..))
+import           Lang.Crucible.Simulator.RegValue (RegValue'(..), RegValue)
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
@@ -178,6 +177,54 @@ freshX86Reg :: C.IsSymInterface sym =>
 freshX86Reg sym r =
   RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
 
+freshValue ::
+  (C.IsSymInterface sym, 1 <= ptrW) =>
+  sym ->
+  String {- ^ Name for fresh value -} ->
+  Maybe (C.NatRepr ptrW) {- ^ Width of pointers; if nothing, allocate as bits -} ->
+  M.TypeRepr tp {- ^ Type of value -} ->
+  IO (RegValue sym (ToCrucibleType tp))
+freshValue sym str w ty =
+  case ty of
+    M.BVTypeRepr y ->
+      case testEquality y =<< w of
+
+        Just Refl ->
+          do nm_base <- symName (str ++ "_base")
+             nm_off  <- symName (str ++ "_off")
+             base    <- WI.freshConstant sym nm_base C.BaseNatRepr
+             offs    <- WI.freshConstant sym nm_off (C.BaseBVRepr y)
+             return (MM.LLVMPointer base offs)
+
+        Nothing ->
+          do nm   <- symName str
+             base <- WI.natLit sym 0
+             offs <- WI.freshConstant sym nm (C.BaseBVRepr y)
+             return (MM.LLVMPointer base offs)
+
+    M.FloatTypeRepr fi -> do
+      nm <- symName str
+      WIF.freshFloatConstant sym nm $ floatInfoToCrucible fi
+
+    M.BoolTypeRepr ->
+      do nm <- symName str
+         WI.freshConstant sym nm C.BaseBoolRepr
+
+    M.TupleTypeRepr {} -> crash [ "Unexpected symbolic tuple:", show str ]
+
+  where
+  symName x =
+    case C.userSymbol ("macaw_" ++ x) of
+      Left err -> crash [ "Invalid symbol name:", show x, show err ]
+      Right a -> return a
+
+  crash xs =
+    case xs of
+      [] -> crash ["(unknown)"]
+      y : ys -> fail $ unlines $ ("[freshX86Reg] " ++ y)
+                               : [ "*** " ++ z | z <- ys ]
+
+
 ------------------------------------------------------------------------
 
 
@@ -270,14 +317,13 @@ x86_64MacawSymbolicFns =
 x86_64MacawEvalFn
   :: C.IsSymInterface sym
   => SymFuns sym
-  -> C.GlobalVar MM.Mem
-  -> GlobalMap sym (M.ArchAddrWidth M.X86_64)
   -> MacawArchEvalFn sym M.X86_64
-x86_64MacawEvalFn fs global_var_mem globals ext_stmt crux_state =
-  case ext_stmt of
-    X86PrimFn x -> funcSemantics fs x crux_state
-    X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
-    X86PrimTerm term -> termSemantics fs term crux_state
+x86_64MacawEvalFn fs =
+  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state ->
+    case ext_stmt of
+      X86PrimFn x -> funcSemantics fs x crux_state
+      X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
+      X86PrimTerm term -> termSemantics fs term crux_state
 
 instance ArchInfo M.X86_64 where
   archVals _ = Just $ ArchVals

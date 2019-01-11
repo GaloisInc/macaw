@@ -65,12 +65,19 @@ type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
   ToCrucibleTypeList '[]      = EmptyCtx
   ToCrucibleTypeList (h ': l) = ToCrucibleTypeList l ::> ToCrucibleType h
 
+-- | A type family that converts Macaw types ('M.Type') into Crucible types
+-- ('C.CrucibleType')
+--
+-- Most values are of type 'M.BVType' (bitvectors) - these are represented in
+-- Crucible as 'MM.LLVMPointerType', which are special bitvectors that can also
+-- be pointers in the LLVM memory model.
 type family ToCrucibleType (tp :: M.Type) :: C.CrucibleType where
   ToCrucibleType (M.BVType w)     = MM.LLVMPointerType w
   ToCrucibleType (M.FloatType fi) = C.FloatType (ToCrucibleFloatInfo fi)
   ToCrucibleType ('M.TupleType l) = C.StructType (ToCrucibleTypeList l)
   ToCrucibleType M.BoolType       = C.BaseToType C.BaseBoolType
 
+-- | Convert Macaw float types into Crucible float types
 type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
   ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
   ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
@@ -78,6 +85,7 @@ type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
   ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
   ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
 
+-- | Convert Crucible float types into Macaw float types
 type family FromCrucibleFloatInfo (fi :: C.FloatInfo) :: M.FloatInfo where
   FromCrucibleFloatInfo C.HalfFloat   = M.HalfFloat
   FromCrucibleFloatInfo C.SingleFloat = M.SingleFloat
@@ -99,7 +107,7 @@ macawAssignToCruc f a =
     Empty -> empty
     b :> x -> macawAssignToCruc f b :> f x
 
--- | Create the variables from a collection of registers.
+-- | Convert a 'Ctx.Assignment' of macaw values into a 'Ctx.Assignment' of Crucible values
 macawAssignToCrucM :: Applicative m
                    => (forall tp . f tp -> m (g (ToCrucibleType tp)))
                    -> Assignment f ctx
@@ -109,6 +117,7 @@ macawAssignToCrucM f a =
     Empty -> pure empty
     b :> x -> (:>) <$> macawAssignToCrucM f b <*> f x
 
+-- | Convert Macaw run-time type representatives into their Crucible equivalents
 typeToCrucible :: M.TypeRepr tp -> C.TypeRepr (ToCrucibleType tp)
 typeToCrucible tp =
   case tp of
@@ -117,6 +126,7 @@ typeToCrucible tp =
     M.FloatTypeRepr fi -> C.FloatRepr $ floatInfoToCrucible fi
     M.TupleTypeRepr a -> C.StructRepr (typeListToCrucible a)
 
+-- | Convert Macaw floating point run-time representatives into their Crucible equivalents
 floatInfoToCrucible
   :: M.FloatInfoRepr fi -> C.FloatInfoRepr (ToCrucibleFloatInfo fi)
 floatInfoToCrucible = \case
@@ -126,6 +136,7 @@ floatInfoToCrucible = \case
   M.QuadFloatRepr   -> knownRepr
   M.X86_80FloatRepr -> knownRepr
 
+-- | Convert Crucible floating point run-time representatives into their Macaw equivalents
 floatInfoFromCrucible
   :: C.FloatInfoRepr fi -> M.FloatInfoRepr (FromCrucibleFloatInfo fi)
 floatInfoFromCrucible = \case
@@ -145,7 +156,7 @@ typeListToCrucible x =
     P.Nil    -> Empty
     h P.:< r -> typeListToCrucible r :> typeToCrucible h
 
--- Return the types associated with a register assignment.
+-- | Return the types associated with a register assignment.
 typeCtxToCrucible ::
   Assignment M.TypeRepr ctx ->
   Assignment C.TypeRepr (CtxToCrucibleType ctx)
@@ -158,6 +169,14 @@ memReprToCrucible = typeToCrucible . M.typeRepr
 -- RegIndexMap
 
 -- | Type family for architecture registers
+--
+-- This specifies the type of each register in the register file for a given architecture.  For example,
+-- it might be something like
+--
+-- > EmptyCtx ::> BVType 64 ::> BVType 64 ::> BVType 32
+--
+-- For a hypothetical architecture with two 64 bit general purpose registers and
+-- a single 32 bit flags register.
 type family ArchRegContext (arch :: *) :: Ctx M.Type
 
 -- | This relates an index from macaw to Crucible.

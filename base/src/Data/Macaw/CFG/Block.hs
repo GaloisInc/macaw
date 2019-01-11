@@ -75,6 +75,8 @@ data Block arch ids
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
              -- ^ The last statement in the block.
+           , blockAddr :: !(ArchSegmentOff arch)
+             -- ^ The address the block was disassembled from
            }
 
 ppBlock :: ArchConstraints arch => Block arch ids -> Doc
