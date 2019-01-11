@@ -105,18 +105,46 @@ import qualified Lang.Crucible.LLVM.MemModel as MM
 import           Data.Macaw.Symbolic.PersistentState
 
 
--- | List of crucible types for architecture.
+-- | The Crucible type of a register state
+--
+-- The registers are stored in an 'Ctx.Assignment' tagged with their Macaw
+-- types; this is a conversion of those Macaw types into Crucible types.
 type MacawCrucibleRegTypes (arch :: *) = CtxToCrucibleType (ArchRegContext arch)
 
+-- | The type of the register file in the symbolic simulator
+--
+-- At run time, this is an 'Ctx.Assignment' of registers (where each register
+-- has a Crucible type, which is mapped via 'CtxToCrucibleType' from its Macaw
+-- type).
 type ArchRegStruct (arch :: *) = C.StructType (MacawCrucibleRegTypes arch)
 
 type ArchAddrCrucibleType arch = MM.LLVMPointerType (M.ArchAddrWidth arch)
 
+-- | The type used for the argument list of every Macaw function translated into Crucible
+--
+-- In this translation, every function takes a single argument (hence the
+-- single-element 'Ctx'): the full register file for the machine.
 type MacawFunctionArgs arch = EmptyCtx ::> ArchRegStruct arch
+
+-- | The type used for the return value of every Macaw function translated into Crucible
+--
+-- Similarly, every function in the translation returns a complete register
+-- state.  In this way, every function is a transformer over the register state
+-- of the machine (and, implicitly, over the memory model, which is held in a
+-- global variable kept in the simulator).
 type MacawFunctionResult arch = ArchRegStruct arch
 
 type ArchAddrWidthRepr arch = M.AddrWidthRepr (M.ArchAddrWidth arch)
 
+-- | The type of the architecture-specific extension to the Macaw extension to Crucible
+--
+-- While 'MacawExt' is the Macaw-specific extension to Crucible to simulate
+-- macaw programs, 'MacawExt' itself requires extensions for each
+-- architecture-specific backend to support operations that are not natively
+-- supported in Crucible.
+--
+-- The simplest examples are support for systems call instructions and other
+-- instructions with effects not expressible as Crucible code.
 type family MacawArchStmtExtension (arch :: *) :: (C.CrucibleType -> *) -> C.CrucibleType -> *
 
 type MacawArchConstraints arch =
@@ -131,6 +159,11 @@ type MacawArchConstraints arch =
 -- CrucPersistentState
 
 -- | Architecture-specific information needed to translate from Macaw to Crucible
+--
+-- Note that the constructor for this type is exposed to allow for new
+-- implementations of architecture-specific backends.  Most client code will not
+-- need to construct (or inspect) values of this type.  Values of this type
+-- should be obtained via the 'archFunctions' field of the 'ArchVals'.
 data MacawSymbolicArchFunctions arch
   = MacawSymbolicArchFunctions
   { crucGenArchConstraints
@@ -168,19 +201,32 @@ crucArchRegTypes archFns = crucGenArchConstraints archFns $
 ------------------------------------------------------------------------
 -- MacawExprExtension
 
+-- | Different types of arithmetic overflow for the overflow test extension
+-- expression ('MacawOverflows')
 data MacawOverflowOp
    = Uadc
+   -- ^ Unsigned add with carry
    | Sadc
+   -- ^ Signed add with carry
    | Usbb
+   -- ^ Unsigned subtract with borrow overflow
    | Ssbb
+   -- ^ Signed subtract with borrow overflow
   deriving (Eq, Ord, Show)
 
 type BVPtr a       = MM.LLVMPointerType (M.ArchAddrWidth a)
 type ArchNatRepr a = NatRepr (M.ArchAddrWidth a)
 
+-- | The extra expressions required to extend Crucible to support simulating
+-- Macaw programs
 data MacawExprExtension (arch :: *)
                         (f :: C.CrucibleType -> *)
                         (tp :: C.CrucibleType) where
+  -- | Test to see if a given operation ('MacawOverflowOp') overflows
+  --
+  -- The operation being tested for is the first operand.  The two operands of
+  -- 'C.BVType' are the numeric operands.  The 'C.BoolType' operand is the carry
+  -- in or borrow bit (depending on the operation)
   MacawOverflows :: (1 <= w)
                  => !MacawOverflowOp
                  -> !(NatRepr w)
@@ -189,15 +235,17 @@ data MacawExprExtension (arch :: *)
                  -> !(f C.BoolType)
                  -> MacawExprExtension arch f C.BoolType
 
-  -- | Treat a pointer as a number.
+  -- | Treat an LLVM pointer as a bitvector
   PtrToBits
     :: (1 <= w)
     => !(NatRepr w)
     -> !(f (MM.LLVMPointerType w))
     -> MacawExprExtension arch f (C.BVType w)
 
-  -- | Treat a number as a pointer.
-  -- We can never read from this pointer.
+  -- | Treat a bitvector as a pointer, which we can read from if it is a valid
+  -- pointer.  The simulator will attempt the conversion with
+  -- 'MM.llvmPointer_bv', which generates side conditions that will be tested by
+  -- the solver.
   BitsToPtr ::
     (1 <= w) =>
     !(NatRepr w) ->
@@ -237,12 +285,19 @@ instance C.TypeApp (MacawExprExtension arch) where
 ------------------------------------------------------------------------
 -- MacawStmtExtension
 
+-- | Extra extension statements required for Crucible to simulate Macaw programs
+--
+-- Note that the various @*Ptr@ operations below are statements, rather than
+-- expressions, because they need to access memory (via the Crucible global
+-- variable that contains the current memory model).
 data MacawStmtExtension (arch :: *)
                         (f    :: C.CrucibleType -> *)
                         (tp   :: C.CrucibleType)
   where
 
   -- | Read from memory.
+  --
+  -- The 'M.MemRepr' describes the endianness and size of the read.
   MacawReadMem ::
     !(ArchAddrWidthRepr arch) ->
 
@@ -277,7 +332,7 @@ data MacawStmtExtension (arch :: *)
     -> !(f (ToCrucibleType tp))
     -> MacawStmtExtension arch f C.UnitType
 
-  -- | Get the pointer associated with the given global address.
+  -- | Convert a literal address (from Macaw) into a pointer in the LLVM memory model
   MacawGlobalPtr
     :: !(ArchAddrWidthRepr arch)
     -> !(M.MemAddr (M.ArchAddrWidth arch))
@@ -290,16 +345,30 @@ data MacawStmtExtension (arch :: *)
     -> MacawStmtExtension arch f (ToCrucibleType tp)
 
   -- | Look up the function handle for the current call given the entire register and memory state
+  --
+  -- This special statement takes an entire register state and computes the
+  -- function that the program would jump to next.  Callers of the simulator
+  -- provide the translation function.  Normally, this translation function will
+  -- inspect the value of the instruction pointer and map that to a function
+  -- address, possibly translating the function into a Crucible CFG on the fly.
+  --
+  -- This needs to be a statement to support the dynamic translation of the
+  -- target CFG, and especially the registration of that CFG with the simulator.
   MacawLookupFunctionHandle :: !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch)))
                             -> !(f (ArchRegStruct arch))
                             -> MacawStmtExtension arch f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch))
 
-  -- | A machine instruction.
+  -- | An architecture-specific machine instruction, for which an interpretation
+  -- is required.  This interpretation must be provided by callers via the
+  -- 'macawExtensions' function.
   MacawArchStmtExtension ::
     !(MacawArchStmtExtension arch f tp) ->
     MacawStmtExtension arch f tp
 
   -- | Metadata about updates to machine registers
+  --
+  -- After a machine instruction is finished executing, this statement records
+  -- which Crucible values are logically in each machine register.
   MacawArchStateUpdate :: !(M.ArchMemAddr arch) ->
                           !(MapF.MapF (M.ArchReg arch) (MacawCrucibleValue f)) ->
                           MacawStmtExtension arch f C.UnitType
@@ -426,6 +495,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
 ------------------------------------------------------------------------
 -- MacawExt
 
+-- | The Crucible extension used to represent Macaw-specific operations
 data MacawExt (arch :: *)
 
 type instance C.ExprExtension (MacawExt arch) = MacawExprExtension arch
@@ -474,6 +544,11 @@ assignValueMapLens = lens assignValueMap (\s v -> s { assignValueMap = v })
 
 type CrucGenRet arch ids h s = (CrucGenState arch ids h s, CR.TermStmt s (MacawFunctionResult arch))
 
+-- | The Crucible generator monad
+--
+-- This monad provides an environment for constructing Crucible blocks from
+-- Macaw blocks, including the translation of values while preserving sharing
+-- and the construction of a control flow graph.
 newtype CrucGen arch ids h s r
    = CrucGen { unCrucGen
                :: CrucGenState arch ids h s
@@ -893,6 +968,9 @@ countZeros w f vx = do
   cn <- foldM ((appAtom .) . C.BVAdd w) czero isZeros
   appAtom (C.BVSub w cw cn) >>= fromBits w
 
+-- | Convert a Macaw 'M.Value' into a Crucible value ('CR.Atom')
+--
+-- This is in the 'CrucGen' monad so that it can preserve sharing in terms.
 valueToCrucible :: M.Value arch ids tp
                 -> CrucGen arch ids h s (CR.Atom s (ToCrucibleType tp))
 valueToCrucible v = do
@@ -928,6 +1006,9 @@ evalMacawStmt :: MacawStmtExtension arch (CR.Atom s) tp ->
                   CrucGen arch ids h s (CR.Atom s tp)
 evalMacawStmt = evalAtom . CR.EvalExt
 
+-- | Embed an architecture-specific Macaw statement into a Crucible program
+--
+-- All architecture-specific statements return values (which can be unit).
 evalArchStmt :: MacawArchStmtExtension arch (CR.Atom s) tp -> CrucGen arch ids h s (CR.Atom s tp)
 evalArchStmt = evalMacawStmt . MacawArchStmtExtension
 

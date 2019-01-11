@@ -151,16 +151,32 @@ doPtrToBits sym w p =
      notPtr <- natEq sym base =<< natLit sym 0
      bvIte sym notPtr (asBits p) undef
 
+-- | The state extension for Crucible holding Macaw-specific state
+--
+-- Currently, evaluation of Macaw doesn't require anything extra from the
+-- simulator.  We use a distinct type here for forward-compatibility.
 data MacawSimulatorState sym = MacawSimulatorState
 
 type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
                                     (MacawCrucibleRegTypes arch)
 
-data LookupFunctionHandle sym arch = LFH
+-- | A function to inspect a machine state and translate it into a 'C.FnHandle'
+-- corresponding to the function that the simulator should call
+--
+-- The function takes a full machine state (register state and memory) and
+-- inspects it (likely by looking at the current value of the machine
+-- instruction pointer) to determine which function the simulator would jump to
+-- if the next Crucible statement was a call.
+--
+-- The callback additionally takes a full 'CrucibleState' and returns an updated
+-- 'CrucibleState' to allow the callback to lazily instantiate callees (e.g., by
+-- constructing the CFG of the callee on the fly) and register them with the
+-- simulator.
+data LookupFunctionHandle sym arch = LookupFunctionHandle
      (forall rtp blocks r ctx
    . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
-  -> Regs sym arch
+  -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
 
 --------------------------------------------------------------------------------
@@ -202,19 +218,7 @@ doGetGlobal st mvar globs addr = do
                         , "*** Region:  " ++ show (M.addrBase addr)
                         , "*** Address: " ++ show addr
                         ]
--- <<<<<<< HEAD
     Just ptr -> return (ptr, st)
--- =======
---     Just region ->
---       do mem <- getMem st mvar
---          let sym = st^.stateSymInterface
---          let w = M.addrWidthRepr addr
---          LeqProof <- pure $ addrWidthAtLeast16 w
---          let ?ptrWidth = M.addrWidthNatRepr w
---          off <- bvLit sym ?ptrWidth (M.memWordInteger (M.addrOffset addr))
---          res <- doPtrAddOffset sym mem region off
---          return (res, st)
--- >>>>>>> master
 
 --------------------------------------------------------------------------------
 

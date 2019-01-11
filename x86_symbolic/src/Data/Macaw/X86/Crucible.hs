@@ -73,9 +73,8 @@ import           Lang.Crucible.LLVM.MemModel
 import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
-import           Data.Macaw.Symbolic.CrucGen (MacawExt)
-import           Data.Macaw.Symbolic.MemOps
-import           Data.Macaw.Symbolic.PersistentState
+import           Data.Macaw.Symbolic
+import           Data.Macaw.Symbolic.Backend
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
 import qualified Data.Macaw.CFG.Core as MC

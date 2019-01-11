@@ -12,6 +12,7 @@ library
     base >= 4,
     ansi-wl-pprint,
     containers,
+    IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,
     lens,
@@ -19,15 +20,20 @@ library
     mtl,
     parameterized-utils,
     text,
+    vector,
+    bytestring,
     what4 >= 0.4.0
 
   hs-source-dirs: src
 
   exposed-modules:
+    Data.Macaw.Symbolic
+    Data.Macaw.Symbolic.Backend
+    Data.Macaw.Symbolic.Memory
+  other-modules:
     Data.Macaw.Symbolic.CrucGen
     Data.Macaw.Symbolic.PersistentState
     Data.Macaw.Symbolic.MemOps
-    Data.Macaw.Symbolic
 
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top

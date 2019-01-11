@@ -1,0 +1,9 @@
+* Overview
+
+The macaw-symbolic library provides a mechanism for translating machine code functions discovered by macaw into Crucible CFGs that can then be symbolically simulated.
+
+The core macaw-symbolic library supports translating generic macaw into crucible, but is not a standalone library.  To translate actual machine code, an /architecture-specific backend/ is required.  For example, macaw-x86-symbolic can be used to translate x86_64 binaries into crucible.  Examples for using macaw-symbolic (and architecture-specific backends) are available in Data.Macaw.Symbolic.
+
+In order to avoid API bloat, the definitions required to implement a new architecture-specific backend are exported through the Data.Macaw.Symbolic.Backend module.
+
+An additional module, Data.Macaw.Symbolic.Memory, provides an example of how to handle memory address translation in the simulator for machine code programs.  There are other possible ways to translate memory addresses, but this module provides a versatile example that can serve many common use cases.
