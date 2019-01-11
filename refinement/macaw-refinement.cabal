@@ -88,5 +88,6 @@ executable run-refinement
                , macaw-refinement
                , macaw-symbolic
                , macaw-x86
+               , optparse-applicative
                , parameterized-utils
                , semmc-ppc
