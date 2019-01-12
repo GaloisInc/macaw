@@ -110,6 +110,7 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
+import qualified Lang.Crucible.LLVM.UndefinedBehavior as UB
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified What4.Interface as WI
@@ -365,7 +366,7 @@ mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal =
           allocBase <- WI.bvLit sym wrep (MC.memWordToUnsigned (allocationBase alloc))
           allocationOffset <- WI.bvSub sym offsetVal allocBase
           let ?ptrWidth = wrep
-          Just <$> CL.doPtrAddOffset sym mem (allocationPtr alloc) allocationOffset
+          Just <$> CL.doPtrAddOffset sym (Just UB.laxConfig) mem (allocationPtr alloc) allocationOffset
         [] -> return Nothing
         _ -> error ("Overlapping allocations for pointer: " ++ show (WI.printSymExpr offsetVal))
     Nothing -> do
@@ -416,7 +417,7 @@ staticRegionMuxTree (MemPtrTable im _) sym mem offsetVal = do
       allocBase <- WI.bvLit sym rep (MC.memWordToUnsigned (allocationBase alloc))
       allocationOffset <- WI.bvSub sym offsetVal allocBase
       let ?ptrWidth = rep
-      thisPtr <- CL.doPtrAddOffset sym mem (allocationPtr alloc) allocationOffset
+      thisPtr <- CL.doPtrAddOffset sym (Just UB.laxConfig) mem (allocationPtr alloc) allocationOffset
       CL.muxLLVMPtr sym p thisPtr f
     addMuxForRegion f (interval, alloc) = do
       case interval of
