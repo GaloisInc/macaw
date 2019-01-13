@@ -396,7 +396,9 @@ doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
             do okP1 <- isValidPtr sym mem w x
                okP2 <- isValidPtr sym mem w y
                ok <- andPred sym okP1 okP2
-               endCaseCheck ok "Comparing invalid pointers" =<< ptrEq sym nw x y
+               (p1, p2) <- ptrEq sym nw x y
+               ps <- andPred sym p1 p2
+               endCaseCheck ok "Comparing invalid pointers" ps
        ]
 
 doReadMem ::

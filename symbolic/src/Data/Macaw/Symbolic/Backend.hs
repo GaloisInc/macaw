@@ -1,7 +1,10 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
 -- | This module exports additional definitions that are required to implement
--- architecture-specific backends for macaw-symbolic
+-- architecture-specific backends for macaw-symbolic.
+--
+-- See macaw-x86-symbolic and macaw-ppc-symbolic for examples of how to write a
+-- backend.
 module Data.Macaw.Symbolic.Backend (
     -- * Creating an architecture-specific backend
     --
