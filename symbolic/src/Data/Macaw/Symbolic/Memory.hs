@@ -102,6 +102,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.Map.Strict as Map
+import           Data.Semigroup
 import qualified Data.Vector as V
 
 import qualified Data.Parameterized.NatRepr as PN
@@ -116,6 +117,9 @@ import qualified Lang.Crucible.Types as CT
 import qualified What4.Interface as WI
 
 import qualified Data.Macaw.Symbolic as MS
+
+import Prelude
+
 
 -- | A configuration knob controlling how the initial contents of the memory
 -- model are populated
