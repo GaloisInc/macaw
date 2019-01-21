@@ -658,17 +658,12 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
   let macawStructRepr = C.StructRepr crucRegTypes
 
   let ctx :: C.SimContext (MacawSimulatorState sym) sym (MacawExt arch)
-      ctx = C.SimContext { C._ctxSymInterface = sym
-                         , C.ctxSolverProof = \a -> a
-                         , C.ctxIntrinsicTypes = llvmIntrinsicTypes
-                         , C.simHandleAllocator = halloc
-                         , C.printHandle = stdout
-                         , C.extensionImpl = macawExtensions archEval mvar globs lookupH
-                         , C._functionBindings =
-                              C.insertHandleMap (C.cfgHandle g) (C.UseCFG g (C.postdomInfo g)) $
-                              C.emptyHandleMap
-                         , C._cruciblePersonality = MacawSimulatorState
-                         }
+      ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
+                             (C.UseCFG g (C.postdomInfo g)) $
+                             C.emptyHandleMap
+                extImpl = macawExtensions archEval mvar globs lookupH
+            in C.initSimContext sym llvmIntrinsicTypes halloc stdout
+               fnBindings extImpl MacawSimulatorState
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
   let s = C.InitialState ctx initGlobals C.defaultAbortHandler $
