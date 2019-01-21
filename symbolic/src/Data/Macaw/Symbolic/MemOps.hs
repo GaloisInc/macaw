@@ -476,14 +476,18 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
 
      let useDefault msg =
            do notC <- notPred sym cond
-              assert sym notC
-                 (AssertFailureSimError ("[doCondReadMem] " ++ msg))
+              assert sym notC $ failWithMsg msg
               return def
+         failWithMsg msg = AssertFailureSimError ("[doCondReadMem] " ++ msg)
 
      a <- case val of
-            Right (p,r,v) | Just a <- valToBits bitw v ->
-              do grd <- impliesPred sym cond p
-                 assert sym grd r
+            Right (v,p1,p2,p3) | Just a <- valToBits bitw v ->
+              do grd1 <- impliesPred sym cond p1
+                 assert sym grd1 $ failWithMsg "memory region is allocated"
+                 grd2 <- impliesPred sym cond p2
+                 assert sym grd2 $ failWithMsg "memory region is properly aligned"
+                 grd3 <- impliesPred sym cond p3
+                 assert sym grd3 $ failWithMsg "memory region validated (see MemModel.Generic)"
                  muxLLVMPtr sym cond a def
             Right _ -> useDefault "Unexpected value read from memory."
             Left err -> useDefault err
