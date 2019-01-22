@@ -68,7 +68,9 @@ import           Lang.Crucible.LLVM.MemModel
           , pattern LLVMPointer
           , mkNullPointer
           , bitvectorType
-          , ppPtr )
+          , ppPtr
+          , ptrMessage
+          )
 import           Lang.Crucible.LLVM.DataLayout (EndianForm(..), noAlignment)
 import           Lang.Crucible.LLVM.Bytes (toBytes)
 
@@ -438,7 +440,6 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
      return (a,st)
 
 
-
 doCondReadMem ::
   IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
@@ -472,7 +473,8 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
      let alignment = noAlignment -- default to byte alignment (FIXME)
-     val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty alignment
+     val <- let ?ptrWidth = M.addrWidthNatRepr w
+             in loadRawWithCondition sym mem ptr ty alignment
 
      let useDefault msg =
            do notC <- notPred sym cond
@@ -481,9 +483,14 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
               return def
 
      a <- case val of
-            Right (p,r,v) | Just a <- valToBits bitw v ->
-              do grd <- impliesPred sym cond p
-                 assert sym grd r
+            Right (v, isAlloc, isAlign, isValid) | Just a <- valToBits bitw v ->
+              do let ?ptrWidth = M.addrWidthNatRepr w
+                 do grd <- impliesPred sym cond isAlloc
+                    assert sym grd (AssertFailureSimError (ptrMessage "Unallocated memory read" ptr ty))
+                 do grd <- impliesPred sym cond isAlign
+                    assert sym grd (AssertFailureSimError (ptrMessage "Unaligned memory read" ptr ty))
+                 do grd <- impliesPred sym cond isValid
+                    assert sym grd (AssertFailureSimError (ptrMessage "Invalid memory read" ptr ty))
                  muxLLVMPtr sym cond a def
             Right _ -> useDefault "Unexpected value read from memory."
             Left err -> useDefault err
