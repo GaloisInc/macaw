@@ -27,9 +27,10 @@ module Data.Macaw.X86
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
-       , ExploreLoc
+       , ExploreLoc(..)
        , rootLoc
        , initX86State
+       , tryDisassembleBlock
        , disassembleBlock
        , disassembleFixedBlock
        , X86TranslateError(..)
