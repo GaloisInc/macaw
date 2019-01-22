@@ -7,6 +7,7 @@ needed to evaluate different blocks.  It can be used to compute which
 registers are needed for function arguments.
 -}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -38,6 +39,10 @@ import qualified Data.Kind as Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+#if MIN_VERSION_base(4,12,0)
+import           Data.Monoid (Ap(Ap, getAp))
+#endif
+
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
@@ -53,14 +58,20 @@ import           Data.Macaw.Discovery.State
 import           Data.Macaw.Types
 
 
+#if !MIN_VERSION_base(4,12,0)
 newtype Ap f a = Ap { getAp :: f a }
 
 instance (Applicative f, Semigroup a) => Semigroup (Ap f a) where
   Ap x <> Ap y = Ap $ (<>) <$> x <*> y
 
-instance (Applicative f, Monoid a) => Monoid (Ap f a) where
+instance (Applicative f,
+#if !MIN_VERSION_base(4,11,0)
+  Semigroup a,
+#endif
+  Monoid a) => Monoid (Ap f a) where
   mempty = Ap $ pure mempty
-  mappend (Ap x) (Ap y) = Ap $ mappend <$> x <*> y
+  mappend = (<>)
+#endif
 
 -------------------------------------------------------------------------------
 
