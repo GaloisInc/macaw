@@ -802,6 +802,8 @@ data ParseContext arch ids =
                  -- ^ Map from block indices to block code at address.
                }
 
+-- | Get the memory representation associated with pointers in the
+-- given architecture.
 addrMemRepr :: ArchitectureInfo arch -> MemRepr (BVType (RegAddrWidth (ArchReg arch)))
 addrMemRepr arch_info =
   case archAddrWidth arch_info of
