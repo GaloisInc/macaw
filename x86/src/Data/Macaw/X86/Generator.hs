@@ -186,7 +186,6 @@ finishBlock preBlock term =
   Block { blockLabel = pBlockIndex preBlock
         , blockStmts = toList (preBlock^.pBlockStmts)
         , blockTerm  = term (preBlock^.pBlockState)
-        , blockAddr  = pBlockStart preBlock
         }
 
 ------------------------------------------------------------------------

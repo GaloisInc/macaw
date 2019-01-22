@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This defines the core operations for mapping from Reopt to Crucible.
 -}
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE EmptyDataDecls #-}
@@ -944,9 +945,15 @@ appToCrucible app = do
         | Refl <- plusComm (knownNat @1) w
         , Refl <- plusMinusCancel (knownNat @1) w ->
           -- LeqProof 1 0, but the pattern match checking is not clever enough
-          case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of {}
-    M.ReverseBytes w x -> do
-      undefined w x
+          case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of
+#if !MIN_VERSION_base(4,11,0)
+            -- GHC 8.2.2 will error if we give an explicit pattern match, but also
+            -- complain of an incomplete pattern match if we do not, so we have
+            -- this case here.
+            _ -> error "CruccGen case with 1 <= 0"
+#endif
+    M.ReverseBytes _w _x -> do
+      error "Reverse bytes not yet defined."
     M.Bsf w x -> countZeros w C.BVLshr x
     M.Bsr w x -> countZeros w C.BVShl  x
 
@@ -1190,13 +1197,15 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               => MacawSymbolicArchFunctions arch
               -> MemSegmentMap (M.ArchAddrWidth arch)
               -- ^ Base address map
+              -> M.ArchSegmentOff arch
+                 -- ^ Address of start of block
               -> Map Word64 (CR.Label s)
                  -- ^ Map from block index to Crucible label
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
               -> MacawMonad arch ids h s (CR.Block (MacawExt arch) s (MacawFunctionResult arch))
-addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
+addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
     case Map.lookup idx blockLabelMap of
@@ -1219,7 +1228,7 @@ addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
                           }
   fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
-    mapM_ (addMacawStmt (M.blockAddr b))  (M.blockStmts b)
+    mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
 
 parsedBlockLabel :: (Ord addr, Show addr)
@@ -1293,6 +1302,8 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
         Nothing -> do
           msgVal <- crucibleValue (C.TextLit "Halting")
           addTermStmt $ CR.ErrorStmt msgVal
+    M.PLTStub{} ->
+      error "Do not support translating PLT stubs"
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.TextLit msg)
       addTermStmt $ CR.ErrorStmt msgVal

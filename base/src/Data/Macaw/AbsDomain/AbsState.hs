@@ -1324,6 +1324,18 @@ data CallParams (r :: Type -> Kind.Type)
                   -- ^ Return true if a register value is preserved by a call.
                 }
 
+-- | Update abstract state post call.
+absUpdateRegsPostCall :: RegisterInfo r
+                      => (forall tp . r tp -> AbsValue (RegAddrWidth r) tp)
+                         -- ^ Register transfer function
+                      -> AbsBlockState r
+                      -> AbsBlockState r
+absUpdateRegsPostCall regFn ab0 =
+    AbsBlockState { _absRegState = mkRegState regFn
+                  , _startAbsStack = ab0^.startAbsStack
+                  , _initIndexBounds = Jmp.arbitraryInitialBounds
+                  }
+
 -- | Return state post call
 absEvalCall :: forall r
                  .  ( RegisterInfo r
@@ -1336,20 +1348,16 @@ absEvalCall :: forall r
                  -> MemSegmentOff (RegAddrWidth r)
                     -- ^ Address we are jumping to
                  -> AbsBlockState r
-absEvalCall params ab0 addr =
-    AbsBlockState { _absRegState = mkRegState regFn
-                  , _startAbsStack = ab0^.startAbsStack
-                  , _initIndexBounds = Jmp.arbitraryInitialBounds
-                  }
+absEvalCall params ab0 addr = absUpdateRegsPostCall regFn ab0
   where regFn :: r tp -> AbsValue (RegAddrWidth r) tp
         regFn r
           -- We set IPReg
           | Just Refl <- testEquality r ip_reg =
               CodePointers (Set.singleton addr) False
           | Just Refl <- testEquality r sp_reg =
-              let w = typeWidth r
-               in bvadd w (ab0^.absRegState^.boundValue r)
-                          (FinSet (Set.singleton (postCallStackDelta params)))
+              bvadd (typeWidth r)
+                    (ab0^.absRegState^.boundValue r)
+                    (FinSet (Set.singleton (postCallStackDelta params)))
             -- Copy callee saved registers
           | preserveReg params r =
             ab0^.absRegState^.boundValue r

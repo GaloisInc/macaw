@@ -53,6 +53,7 @@ module Data.Macaw.CFG.Core
   , curIP
   , mkRegState
   , mkRegStateM
+  , mapRegsWith
   , traverseRegsWith
   , zipWithRegState
   , ppRegMap
@@ -415,7 +416,15 @@ traverseRegsWith :: Applicative m
                  -> m (RegState r g)
 traverseRegsWith f (RegState m) = RegState <$> MapF.traverseWithKey f m
 
+-- | Traverse the register state with the name of each register and value.
+mapRegsWith :: Applicative m
+                 => (forall tp. r tp -> f tp -> g tp)
+                 -> RegState r f
+                 -> RegState r g
+mapRegsWith f (RegState m) = RegState (MapF.mapWithKey f m)
+
 {-# INLINE[1] boundValue #-} -- Make sure the RULE gets a chance to fire
+
 -- | Get a register out of the state.
 boundValue :: forall r f tp
            .  OrdF r
