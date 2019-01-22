@@ -1190,13 +1190,15 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               => MacawSymbolicArchFunctions arch
               -> MemSegmentMap (M.ArchAddrWidth arch)
               -- ^ Base address map
+              -> M.ArchSegmentOff arch
+                 -- ^ Address of start of block
               -> Map Word64 (CR.Label s)
                  -- ^ Map from block index to Crucible label
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
               -> MacawMonad arch ids h s (CR.Block (MacawExt arch) s (MacawFunctionResult arch))
-addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
+addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
     case Map.lookup idx blockLabelMap of
@@ -1219,7 +1221,7 @@ addMacawBlock archFns baseAddrMap blockLabelMap posFn b = do
                           }
   fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
-    mapM_ (addMacawStmt (M.blockAddr b))  (M.blockStmts b)
+    mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
 
 parsedBlockLabel :: (Ord addr, Show addr)
