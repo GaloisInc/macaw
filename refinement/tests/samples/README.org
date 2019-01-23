@@ -1,0 +1,261 @@
+The contents of this directory provide several "golden" tests: the
+baggage-handler service is run on the various binary input files here,
+along with manifests and contracts, and the obtained results are
+compared to files containing the expected results.
+
+See the main test-verification source for a description of the files
+used here and their relationships.
+
+Individual tests can be run manually as well.  Here's an example of
+running the max3-bad test:
+
+#+BEGIN_EXAMPLE
+$ baggage-server &
+$ baggage-cli upload-binary \
+     -b test/verify/max3-bad.ppc.exe \
+     -m test/verify/max3-bad.ppc.manifest.json
+$ baggage-cli upload-properties \
+     -p test/verify/max3-bad.contract.json
+FullStatus {status = JobCompleted (VerifierResult [("prop_MaxCorrect",Failure)]), binaryDiagnosis = []}
+$ baggage-cli status
+#+END_EXAMPLE
+
+* Summary
+
+  | test                    | Desc                                         | Verify                                       | Status     |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | max3-good               | max of 3 integer args                        | result is >= all args                        |            |
+  | max3-bad                | broken max3-good                             | "      "              UNSAT                  |            |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | global-max-good         | max of 3 integers (2 args, 1 global)         | result is >= all args (post-)                | TODO       |
+  | global-max-bad          | broken global-max-good                       | "      "              UNSAT                  | TODO       |
+  | globalpp-max-good       | global_max_good, updates global to first arg | result >= all args and pre- and post- global | NEEDS PPC  |
+  | globalpp-max-bad        | bad global update to maxval - 1              | same as -good, in two guarantee clauses      | NEEDS PPC  |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | float_add               | add 2 double floats                          | monotonic: result > args                     |            |
+  |                         |                                              | nop: args too far apart -> result = max arg  |            |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | float_min               | return min of 2 double floats                | ord: result <= args if args testable         | PPC BROKEN |
+  |                         |                                              | unord: result <= args always         UNSAT   | PPC BROKEN |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | float_simple_arithmetic | add, sub, mul, and div 5 doubles             | result matches identical symbolic equation   |            |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | infoflow-max-good       | max of 3 integer args using message          | result does not use secret value from msg    | NEEDS PPC  |
+  | infoflow-max-bad        | broken infoflow-max3-good                    | result dependsn on secret value from msg     | NEEDS PPC  |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  | msg-max-good            | max of 3 integer args using message          | sent message has result >= all args          | NEEDS PPC  |
+  | msg-max-bad             | broken infoflow-max3-good                    | "    "                              UNSAT    | NEEDS PPC  |
+  |-------------------------+----------------------------------------------+----------------------------------------------+------------|
+  |                         |                                              |                                              |            |
+
+* max3-good
+
+  Simple max3 function which returns the maximum integer value of its
+  three integer arguments.
+
+** max3-good contract
+
+   Guarantees that the return value is always >= every argument, under
+   no assumptions.
+
+* max3-bad
+
+  Would like to be max3-good and return the maximum integer value of
+  its three integer arguments *BUT* it contains a bug when comparing
+  to the third value that causes the return value to be limited to
+  that value, even if one of the other values was larger.
+
+** max3-bad contract
+
+   This is the same as the max3-good contract, and baggage-handler
+   should indicate that this contract is *NOT SATISFIABLE* due to the
+   error in the code.
+
+* global-max-good
+
+  Simple max3 function which returns the maximum integer value of its
+  two integer arguments and a global value.
+
+  Provides the ability to verify a contract which references the
+  function arguments, the function return value, and a global value.
+
+** global-max-good contract
+
+  Verifies that the return value is >= all three of the considered
+  values, under no assumptions.
+
+*** TODO No testing of global-max-good yet.
+
+* global-max-bad
+
+   Would like to be global-max-good and return the maximum integer
+   value of the two integer arguments and the global value, *BUT* it
+   contains a bug where the wrong source value is used when adjusting
+   for a global value, so the return value may be less than the global
+   value in some cases.
+
+** global-max-bad contract
+
+   The same as global-max-good contract.  This should be identified as
+   *NOT SATISFIABLE* by baggage-handler due to the error in the code.
+
+*** TODO No testing of global-max-bad yet.
+
+* globalpp-max-good
+
+  Simple max3 function which returns the maximum integer value of its
+  two integer arguments and a global value.  This is the same as the
+  global-max-good test except the global value is updated.
+
+  Provides the ability to verify a contract which references the
+  function arguments, the function return value, and a global value.
+
+** globalpp-max-good contract
+
+  Verifies that the return value is greater than the two arguments and
+  both the pre- and post- value of the global.
+
+* globalpp-max-bad
+
+  Similar to the globalpp-max-good, except there are two errors:
+
+  1. If the maximum value is smaller than the global value, it is
+     updated to the second argument's value instead of the global
+     value.
+
+  2. The global value is updated to one less than the maximum value
+     instead of the maximum value.
+
+** globalpp-max-bad contract
+
+  Provides two separate guarantee specifications [they could be
+  combined to be the same sa the globalpp-max-good contract].  The
+  contracts attempt to ensure that the returned value is greater than
+  the post and pre values, however the pre-global value is the largest
+  of the numbers; both guarantees are *UNSATISFIABLE*.
+
+* float_add
+
+  Simply adds two double float values and returns the result.
+
+** float_add nop contract
+
+  Under the condition (assumption) that one of the arguments is
+  between 0.0 and 1.0, and the other argument is very large (>
+  1.9e16), checks the guarantee that the magnitudes are sufficiently
+  far from each other that small value is insignificant and therefore
+  the addition returns the larger value unchanged.
+
+** float_add monotonic contract
+
+  Under the condition (assumption) that one of the arguments is
+  generally positive but not large enough so that the magnitude
+  disallows significance of small values, and the other is positive
+  non-zero, guarantees that the result of the addition is larger than
+  the original first argument.
+
+* float_min
+
+  Returns the minimum of two double float args.
+
+** float_min ord contract
+
+  Under the assumption that both arguments are reflexively equal (eahc
+  one is equal to itself) and therefore representationally stable,
+  guarantees that the result is <= both arguments.
+
+** float_min unord contract
+
+  The same as the ord contract, but removes the assumption that the
+  arguments are reflexively equal.  This should be identified as *NOT
+  SATISFIABLE* by baggage-handler because float doubles are not always
+  stable.
+
+** TODO No PPC test
+
+   Currently there are only expected files for the x86_64 version.
+   The ppc expected files would be identical, but there is an error
+   loading the PPC binary
+
+* float_simple_arithmetic
+
+   This is a function which takes 5 double float arguments (small
+   non-zero values) and generates a result from performing 4 common
+   arithmetic operations on them: add, subtract, multiply, and divide.
+
+** float_simple_arithmetic contract
+
+   Verifies that the result is the same as performing the same
+   arithmetic operation symbolically.
+* infoflow-max-good
+  
+  Computes the max3 function, carefully not using the `secret` field
+  of the incoming message to compute the result.
+
+  Checks that we can check assertions about information flow.
+
+** infoflow-max-good manifest
+
+  Specifies message handlers, a Question message format, and an Answer
+  message format.  The message formats correspond to struct types in
+  the C program.  The Question format includes a field carrying the
+  label "TOP SECRET".
+
+** infoflow-max-good contract
+ 
+  Verifies that the Answer message sent by max3 does not depend any
+  data labeled "TOP SECRET".
+
+* infoflow-max-bad
+
+  Attempts to compute the max3 function according to the received
+  Question message, but uses the secret field in place of the third
+  argument.  This causes the answer to depend on the secret data
+  (possibly only implicitly due to control flow).
+
+* msg-max-good
+  
+  Mostly the same as max3, only it uses messages to receive the
+  arguments and return the answer.
+
+  Verifies basic functionality for assertions about messages.
+
+** msg-max-good manifest
+
+  Specifies message handlers, a Question message format, and an Answer
+  message format.  The message formats correspond to struct types in
+  the C program.
+
+** msg-max-good contract
+
+  Specifies that the message that is sent by max3 is correct with
+  respect to the arguments to the max3 function.
+
+  It would be more elegant to check the sent message against a
+  received message, but we don't have contract syntax that relates a
+  sent message to a previously received one.
+
+  TODO: If we had unknown constants as predicate variables, we could
+  use an assumption to bind values for the fields of the received
+  message.  For instance:
+
+    #+BEGIN_EXAMPLE
+    { "assume": [ { "scope": "@func{max3}/@msg{Question}"
+                  , "predicate": "@msgField{Question}{a} == @const{a} &&
+                                  @msgField{Question}{b} == @const{b} &&
+                                  @msgField{Question}{c} == @const{c}"
+                  }
+                ]
+    , "guarantee": [ { "name": "prop_MaxCorrect_Msg"
+                     , "scope": "@func{max3}/@msg{Answer}"
+                     , "predicate": "@msgField{Answer}{n} >= @const{a} &&
+                                     @msgField{Answer}{n} >= @const{b} &&
+                                     @msgField{Answer}{n} >= @const{c}"
+                     }
+                   ]
+    }
+    #+END_EXAMPLE
+
+* msg-max-bad
+
+  Makes the same error as max3-bad.
