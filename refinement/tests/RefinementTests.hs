@@ -180,20 +180,29 @@ mkTestCase (VerboseLogging beVerbose) testinp =
   TTH.testCase (name testinp) $ do
     bs <- BS.readFile (binaryFile testinp)
     case E.parseElf bs of
-      E.Elf64Res warnings elf -> mapM_ print warnings >> withElf elf
+      E.Elf64Res warnings elf -> mapM_ print warnings >> withElf64 elf
+      E.Elf32Res warnings elf -> mapM_ print warnings >> withElf32 elf
       _ -> let badMsg = binaryFile testinp <> " is not a 64-bit ELF file"
            in do when beVerbose $ putStrLn badMsg
                  TTH.assertBool badMsg False
-      where withElf elf =
-              case E.elfMachine elf of
-                E.EM_PPC64 -> do
-                  bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
-                  let pli = ppc64_linux_info bin
-                  withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} pli bin
-                E.EM_X86_64 ->
-                  withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} MX86.x86_64_linux_info =<<
-                    MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
-                _ -> error "only X86 and PPC64 supported for now"
+  where
+    withElf64 elf =
+      case E.elfMachine elf of
+        E.EM_PPC64 -> do
+          bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
+          let pli = ppc64_linux_info bin
+          withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} pli bin
+        E.EM_X86_64 ->
+          withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} MX86.x86_64_linux_info =<<
+            MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
+        m -> error $ "no 64-bit ELF support for " ++ show m
+    withElf32 elf =
+      case E.elfMachine elf of
+        E.EM_PPC -> do  -- 32 bit
+          bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
+          let pli = ppc32_linux_info bin
+          withBinaryDiscoveredInfo testinp pli bin
+        m -> error $ "no 32-bit ELF support for " ++ show m
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
                             , MBL.BinaryLoader arch binFmt
