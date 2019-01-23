@@ -23,6 +23,7 @@ import           Data.Parameterized.Some
 import qualified Data.Text.IO as TIO
 import qualified Options.Applicative as O
 import qualified SemMC.Architecture.PPC64 as PPC64
+import qualified SemMC.Architecture.PPC32 as PPC32
 import           System.Exit
 
 data Options = Options { inputFile :: FilePath
@@ -50,25 +51,28 @@ doRefinement :: Options -> IO ()
 doRefinement opts = do
   let filename = inputFile opts
   bs <- BS.readFile filename
-  elf <- case E.parseElf bs of
-      E.Elf64Res warnings elf -> mapM_ print warnings >> return elf
+  case E.parseElf bs of
+      E.Elf64Res warnings elf -> mapM_ print warnings >> withElf64 elf
+      E.Elf32Res warnings elf -> mapM_ print warnings >> withElf32 elf
       _ -> die "not a 64-bit ELF file"
-  case E.elfMachine elf of
-      E.EM_PPC64 -> do
-        bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
-        let pli = ppc64_linux_info bin
-        withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) pli bin
-      E.EM_X86_64 ->
-        withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) MX86.x86_64_linux_info =<<
-          MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
-      -- E.EM_X86_64 -> case ML.resolveElfContents ML.defaultLoadOptions elf of
-      --   Left e -> fail (show e)
-      --   Right (_, _, Nothing, _) -> fail "Couldn't work out entry point."
-      --   Right (warn, mem, Just entryPoint, _) -> do
-      --     mapM_ print warn
-      --     putStr "Entrypoint: "; putStrLn $ show entryPoint
-      --     showDiscoveryInfo opts $ MD.cfgFromAddrs MX86.x86_64_linux_info mem M.empty [entryPoint] []
-      _ -> error "only X86 and PPC64 supported for now"
+  where
+    withElf64 elf =
+      case E.elfMachine elf of
+        E.EM_PPC64 -> do
+          bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
+          let pli = ppc64_linux_info bin
+          withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) pli bin
+        E.EM_X86_64 ->
+          withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) MX86.x86_64_linux_info =<<
+            MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
+        m -> error $ "only X86 and PPC64 supported for 64-bit analysis; no support for " ++ show m
+    withElf32 elf =
+      case E.elfMachine elf of
+        E.EM_PPC -> do  -- 32 bit
+          bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
+          let pli = ppc32_linux_info bin
+          withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) pli bin
+        m -> error $ "only PPC supported for 32-bit analysis; no support for " ++ show m
 
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
