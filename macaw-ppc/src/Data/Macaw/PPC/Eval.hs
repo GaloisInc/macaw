@@ -56,7 +56,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
                                          , MA.preserveReg = preservePred
                                          }
               Just (nextIP, MA.absEvalCall params s0 nextIP)
-        _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
+        _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
@@ -65,7 +65,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
                                          , MA.preserveReg = preservePred
                                          }
               Just (nextIP, MA.absEvalCall params s0 nextIP)
-        _ -> error ("Syscall could not interpret next IP: " ++ show (regState ^. curIP))
+        _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
 -- block.
