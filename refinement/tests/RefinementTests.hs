@@ -45,6 +45,7 @@ import           Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
+import           Data.Macaw.Refinement
 import qualified Data.Macaw.X86 as MX86
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
@@ -54,6 +55,7 @@ import           Data.Semigroup ( (<>) )
 import           Data.Tagged
 import           Data.Typeable ( Typeable )
 import           Options.Applicative
+import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Directory ( doesFileExist )
 import           System.FilePath ( (</>), (<.>) )
@@ -61,6 +63,7 @@ import qualified System.FilePath as FP
 import qualified System.FilePath.Glob as FPG
 import qualified Test.Tasty as TT
 import qualified Test.Tasty.HUnit as TTH
+import           Test.Tasty.Ingredients
 import           Test.Tasty.Options
 import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), (</>) )
 import           Text.Read ( readEither )
@@ -97,23 +100,34 @@ instance IsOption VerboseLogging where
                                              <> help (untag (optionHelp :: Tagged VerboseLogging String))
                                              )
 
+
+searchResultsReport = TestManager [] $ \opts _tests ->
+  if lookupOption opts == ShowSearch True
+  then Just $ do searchlist <- getTestList datadir True
+                 putStrLn ""
+                 putStrLn $ "Final set of tests [" ++ show (length searchlist) ++ "]:"
+                 mapM_ (putStrLn . show) searchlist
+                 return True
+  else Nothing
+
+
 ingredients = TT.includingOptions [ Option (Proxy :: Proxy ShowSearch)
                                   , Option (Proxy :: Proxy VerboseLogging)
-                                  ] : TT.defaultIngredients
+                                  ]
+              : searchResultsReport
+              : TT.defaultIngredients
 
 main :: IO ()
 main = do
+  -- Note: dynamic test generation should be done before the
+  -- TT.defaultMain call, but test arguments/options are not yet
+  -- available for this; see:
+  -- https://stackoverflow.com/questions/33040722
+  -- https://github.com/feuerbach/tasty/issues/228
   testInputs <- getTestList datadir False
   TT.defaultMainWithIngredients ingredients $
-    TT.askOption $ \beVerbose ->
-    TT.askOption $ \(ShowSearch jl) ->
-      if jl
-      then TTH.testCase "Test Search" $ do searchlist <- getTestList datadir True
-                                           putStrLn ""
-                                           putStrLn $ "Final set of tests [" ++ show (length searchlist) ++ "]:"
-                                           mapM_ (putStrLn . show) searchlist
-      else
-        TT.testGroup "macaw-refinement" $ map (mkTestCase beVerbose) testInputs
+    TT.testGroup "macaw-refinement" $ map mkTest testInputs
+
 
 data TestInput = TestInput { name :: String
                            , arch :: String
@@ -175,11 +189,26 @@ getTestList basedir explain = do
                                        }
 
 
-mkTestCase :: VerboseLogging -> TestInput -> TT.TestTree
-mkTestCase (VerboseLogging beVerbose) testinp =
-  TTH.testCase (name testinp) $ do
-    bs <- BS.readFile (binaryFile testinp)
-    case E.parseElf bs of
+mkTest :: TestInput -> TT.TestTree
+mkTest testinp =
+  let readbin = BS.readFile $ binaryFile testinp
+      cleanup = return . const ()
+      formName ref = if ref then "refined" else "base"
+      tests = catMaybes [ mkT False <$> expectFileBase testinp
+                        , mkT True <$> expectFileRefined testinp
+                        ]
+      mkT ref fn = \v r -> TTH.testCase (formName ref) $
+                           testExpected ref fn testinp v r
+  in TT.askOption $ \(VerboseLogging beVerbose) ->
+     TT.withResource readbin cleanup $
+     \readBinary ->
+       TT.testGroup (name testinp)
+       [TT.testGroup (arch testinp) $ map (\t -> t beVerbose readBinary) tests]
+
+
+testExpected useRefinement expFile testinp beVerbose readBinary = do
+  bs <- readBinary
+  case E.parseElf bs of
       E.Elf64Res warnings elf -> mapM_ print warnings >> withElf64 elf
       E.Elf32Res warnings elf -> mapM_ print warnings >> withElf32 elf
       _ -> let badMsg = binaryFile testinp <> " is not a 64-bit ELF file"
@@ -191,45 +220,52 @@ mkTestCase (VerboseLogging beVerbose) testinp =
         E.EM_PPC64 -> do
           bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
           let pli = ppc64_linux_info bin
-          withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} pli bin
+          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
         E.EM_X86_64 ->
-          withBinaryDiscoveredInfo testinp {- (showDiscoveryInfo testinp) -} MX86.x86_64_linux_info =<<
+          withBinaryDiscoveredInfo testinp useRefinement expFile MX86.x86_64_linux_info =<<
             MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
         m -> error $ "no 64-bit ELF support for " ++ show m
     withElf32 elf =
       case E.elfMachine elf of
-        E.EM_PPC -> do  -- 32 bit
+        E.EM_PPC -> do
           bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
           let pli = ppc32_linux_info bin
-          withBinaryDiscoveredInfo testinp pli bin
+          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
         m -> error $ "no 32-bit ELF support for " ++ show m
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
                             , MBL.BinaryLoader arch binFmt
                             , MonadIO m) =>
                             TestInput
-                         -- -> (MD.DiscoveryState arch -> m a)
+                         -> Bool
+                         -> FilePath
                          -> AI.ArchitectureInfo arch
                          -> MBL.LoadedBinary arch binFmt
                          -> m ()
-withBinaryDiscoveredInfo testinp {- f -} arch_info bin = do
+withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
   entries <- toList <$> entryPoints bin
   let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
       actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
-  case expectFileBase testinp of
-    Just fn ->
-      do expectedData <- liftIO $ readFile fn
-         case readEither expectedData of
-           Right expInfo ->
-             liftIO $ TTH.assertEqual "discovered CFG" expInfo actualBase
-           Left e ->
-             let badMsg = "error parsing expected base CFG " <> fn <> ": " <> e
-                 actFileName = take (length fn - length "expected") fn <> "last-actual"
-             in liftIO $ do writeFile actFileName $ show actualBase
-                            putStrLn $ "Generated actual output to: " <> actFileName
-                            TTH.assertBool badMsg False
-    Nothing -> return ()
+      refinedCFG = refineDiscovery baseCFG
+      refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
+      formName = if useRefinement then "refined" else "base"
+      actual = if useRefinement then refinedBase else actualBase
+  compareToExpected formName actual expFile
 
+
+compareToExpected formName actual fn =
+  let cfgName = formName <> " CFG" in
+  do expectedData <- liftIO $ readFile fn
+     case readEither expectedData of
+       Right expInfo ->
+         -- KWQ: TODO: refine this down to individual components if it fails
+         liftIO $ TTH.assertEqual ("discovered " <> cfgName) expInfo actual
+       Left e ->
+         let badMsg = "error parsing expected " <> cfgName <> " data in " <> fn <> ": " <> e
+             outFileName = take (length fn - length "expected") fn <> "last-actual"
+         in liftIO $ do writeFile outFileName $ show actual
+                        putStrLn $ "Generated actual output to: " <> outFileName
+                        TTH.assertBool badMsg False
 
 data ExpectedInfo arch = Expected
   { expBinaryName  :: String
@@ -268,7 +304,7 @@ cfgToExpected :: (MBL.BinaryLoader arch binFmt) =>
                  TestInput
               -> MBL.LoadedBinary arch binFmt
               -> Maybe (MD.DiscoveryState arch)
-              -> Maybe Int
+              -> Maybe (MD.DiscoveryState arch)
               -> ExpectedInfo arch
 cfgToExpected testinp bin mbCFG mbRefCFG =
   let eps = case entryPoints bin of
@@ -278,7 +314,7 @@ cfgToExpected testinp bin mbCFG mbRefCFG =
               (Nothing, Nothing) -> error "must specify a discovered Macaw CFG"
               (Just _, Just _) -> error "must specify only one discovered Macaw CFG"
               (Just di, Nothing) -> getFunctions di
-              (Nothing, Just _di) -> undefined  -- KWQ: refined
+              (Nothing, Just di) -> getFunctions di
   in Expected { expBinaryName = binaryFile testinp
               , expEntryPoints = (EntryPoint . mkAddress) <$> eps
               , expFunctions = fns
