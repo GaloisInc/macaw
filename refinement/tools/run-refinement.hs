@@ -20,8 +20,8 @@ import           Data.Macaw.PPC
 import qualified Data.Macaw.X86 as MX86
 import qualified Data.Map as M
 import           Data.Parameterized.Some
+import qualified Data.Text.IO as TIO
 import qualified Options.Applicative as O
-import qualified Options.Applicative.Extra as OE
 import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Exit
 
@@ -96,6 +96,19 @@ showDiscoveryInfo _opts di =
     forM_ (M.toList (dfi ^. MD.parsedBlocks)) $ \(blockAddr, pb) -> do
       putStrLn $ "== begin block " ++ show blockAddr ++ " =="
       putStrLn . show $ MD.blockStatementList pb
+      putStrLn ""
+      case MD.stmtsTerm (MD.blockStatementList pb) of
+        MD.ParsedTranslateError r -> do
+          putStr "*** "
+          putStr "TRANSLATE ERROR: "
+          TIO.putStrLn r
+        e@(MD.ClassifyFailure {}) -> do
+          putStr "*** "
+          putStr "CLASSIFY FAILURE: "
+          putStrLn $ show e
+        r -> do
+          putStr "### block terminates with: "
+          putStrLn $ show r
       putStrLn ""
     putStrLn ""
     putStrLn ""
