@@ -51,10 +51,12 @@ module Data.Macaw.X86.Getters
 import           Control.Lens ((&))
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some
+import qualified Data.Text as T
 import qualified Flexdis86 as F
 import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.CFG
+import           Data.Macaw.CFG.Block ( TermStmt(TranslateError) )
 import           Data.Macaw.Types
 import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.Monad
@@ -389,7 +391,10 @@ getCallTarget v =
     F.JumpOffset _ joff -> do
       s <- getState
       pure $! resolveJumpOffset s joff
-    _ -> fail "Unexpected argument"
+    _ -> do
+      ipVal <- eval =<< get rip
+      let msg = "Data.Macaw.X86.Getters.getCallTarget: Unexpected argument: " ++ show v ++ " at " ++ show ipVal
+      addTermStmt (\regs -> TranslateError regs (T.pack msg))
 
 -- | Return the target of a call or jump instruction.
 doJump :: Expr ids BoolType -> F.Value -> X86Generator st ids ()
@@ -413,7 +418,10 @@ doJump cond v =
       rip .= ipVal
     F.QWordImm w -> do
       modify rip $ mux cond $ bvKLit (toInteger w)
-    _ -> fail "Unexpected argument"
+    _ -> do
+      ipVal <- eval =<< get rip
+      let msg = "Data.Macaw.X86.Getters.doJump: Unexpected argument: " ++ show v ++ " at " ++ show ipVal
+      addTermStmt (\regs -> TranslateError regs (T.pack msg))
 
 ------------------------------------------------------------------------
 -- Standard memory values
