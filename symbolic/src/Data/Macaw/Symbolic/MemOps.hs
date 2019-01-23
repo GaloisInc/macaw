@@ -68,7 +68,9 @@ import           Lang.Crucible.LLVM.MemModel
           , pattern LLVMPointer
           , mkNullPointer
           , bitvectorType
-          , ppPtr )
+          , ppPtr
+          , ptrMessage
+          )
 import           Lang.Crucible.LLVM.DataLayout (EndianForm(..), noAlignment)
 import           Lang.Crucible.LLVM.Bytes (toBytes)
 
@@ -438,7 +440,6 @@ doReadMem st mvar globs w (BVMemRepr bytes endian) ptr0 =
      return (a,st)
 
 
-
 doCondReadMem ::
   IsSymInterface sym =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
@@ -472,22 +473,24 @@ doCondReadMem st mvar globs w (BVMemRepr bytes endian) cond0 ptr0 def0 =
      LeqProof <- pure $ addrWidthIsPos w
      LeqProof <- pure $ addrWidthAtLeast16 w
      let alignment = noAlignment -- default to byte alignment (FIXME)
-     val <- let ?ptrWidth = M.addrWidthNatRepr w in loadRawWithCondition sym mem ptr ty alignment
+     val <- let ?ptrWidth = M.addrWidthNatRepr w
+             in loadRawWithCondition sym mem ptr ty alignment
 
      let useDefault msg =
            do notC <- notPred sym cond
-              assert sym notC $ failWithMsg msg
+              assert sym notC
+                 (AssertFailureSimError ("[doCondReadMem] " ++ msg))
               return def
-         failWithMsg msg = AssertFailureSimError ("[doCondReadMem] " ++ msg)
 
      a <- case val of
-            Right (v,p1,p2,p3) | Just a <- valToBits bitw v ->
-              do grd1 <- impliesPred sym cond p1
-                 assert sym grd1 $ failWithMsg "memory region is allocated"
-                 grd2 <- impliesPred sym cond p2
-                 assert sym grd2 $ failWithMsg "memory region is properly aligned"
-                 grd3 <- impliesPred sym cond p3
-                 assert sym grd3 $ failWithMsg "memory region validated (see MemModel.Generic)"
+            Right (v, isAlloc, isAlign, isValid) | Just a <- valToBits bitw v ->
+              do let ?ptrWidth = M.addrWidthNatRepr w
+                 do grd <- impliesPred sym cond isAlloc
+                    assert sym grd (AssertFailureSimError (ptrMessage "Unallocated memory read" ptr ty))
+                 do grd <- impliesPred sym cond isAlign
+                    assert sym grd (AssertFailureSimError (ptrMessage "Unaligned memory read" ptr ty))
+                 do grd <- impliesPred sym cond isValid
+                    assert sym grd (AssertFailureSimError (ptrMessage "Invalid memory read" ptr ty))
                  muxLLVMPtr sym cond a def
             Right _ -> useDefault "Unexpected value read from memory."
             Left err -> useDefault err

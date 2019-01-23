@@ -200,5 +200,4 @@ rewriteBlock info rwctx b = do
     Block { blockLabel = blockLabel b
           , blockStmts = tgtStmts
           , blockTerm  = tgtTermStmt
-          , blockAddr  = blockAddr b
           }

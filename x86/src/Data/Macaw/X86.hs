@@ -27,9 +27,10 @@ module Data.Macaw.X86
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
-       , ExploreLoc
+       , ExploreLoc(..)
        , rootLoc
        , initX86State
+       , tryDisassembleBlock
        , disassembleBlock
        , disassembleFixedBlock
        , X86TranslateError(..)
@@ -175,7 +176,6 @@ initError addr s err = do
   let b = Block { blockLabel = 0
                 , blockStmts = []
                 , blockTerm  = TranslateError s (Text.pack (show err))
-                , blockAddr  = addr
                 }
   return (b, segoffOffset addr, Just err)
 
@@ -189,7 +189,6 @@ returnWithError pblock curIPAddr err = do
   let b = Block { blockLabel = pBlockIndex pblock
                 , blockStmts = toList (pblock^.pBlockStmts)
                 , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
-                , blockAddr  = pBlockStart pblock
                 }
   return (b, segoffOffset curIPAddr, Just err)
 

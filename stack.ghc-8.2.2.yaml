@@ -16,8 +16,8 @@ packages:
 - deps/flexdis86/binary-symbols
 - deps/llvm-pretty
 - deps/parameterized-utils
-
 extra-deps:
 - monadLib-3.7.3
 - panic-0.4.0.1
-resolver: lts-11.5
+- IntervalMap-0.6.1.0
+resolver: lts-11.22

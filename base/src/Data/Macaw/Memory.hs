@@ -984,16 +984,18 @@ segoffBytesLeft segOff = sz - off
   where sz = toInteger (segmentSize (segoffSegment segOff))
         off = toInteger (segoffOffset segOff)
 
+-- | Make a segment offset pair after ensuring the offset is valid
+resolveSegmentOff :: MemWidth w => MemSegment w -> MemWord w -> Maybe (MemSegmentOff w)
+resolveSegmentOff seg off
+  | off < segmentSize seg = Just MemSegmentOff { segoffSegment = seg, segoffOffset = off }
+  | otherwise = Nothing
+
 -- | Return the segment offset associated with the given region offset if any.
 resolveRegionOff :: Memory w -> RegionIndex -> MemWord w -> Maybe (MemSegmentOff w)
 resolveRegionOff mem idx addr = addrWidthClass (memAddrWidth mem) $ do
   m <- Map.lookup idx (memSegmentMap mem)
-  case Map.lookupLE addr m of
-    Just (base, seg) | addr - base < segmentSize seg ->
-      Just $! MemSegmentOff { segoffSegment = seg
-                            , segoffOffset = addr - base
-                            }
-    _ -> Nothing
+  (base, seg) <- Map.lookupLE addr m
+  resolveSegmentOff seg (addr - base)
 
 -- | Return the segment offset associated with the given region offset if any.
 resolveAddr :: Memory w -> RegionIndex -> MemWord w -> Maybe (MemSegmentOff w)
@@ -1007,12 +1009,6 @@ segoffAddr (MemSegmentOff seg off) = segmentOffAddr seg off
 -- | Return the segment associated with the given address if well-defined.
 resolveAbsoluteAddr :: Memory w -> MemWord w -> Maybe (MemSegmentOff w)
 resolveAbsoluteAddr mem addr = resolveRegionOff mem 0 addr
-
--- | Make a segment offset pair after ensuring the offset is valid
-resolveSegmentOff :: MemWidth w => MemSegment w -> MemWord w -> Maybe (MemSegmentOff w)
-resolveSegmentOff seg off
-  | off < segmentSize seg = Just (MemSegmentOff seg off)
-  | otherwise = Nothing
 
 -- | Return the absolute address associated with the segment offset pair (if any)
 segoffAsAbsoluteAddr :: MemWidth w => MemSegmentOff w -> Maybe (MemWord w)
