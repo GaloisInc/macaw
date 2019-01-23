@@ -353,7 +353,6 @@ finishBlock' preBlock term =
   Block { blockLabel = pBlockIndex preBlock
         , blockStmts = F.toList (preBlock ^. pBlockStmts)
         , blockTerm = term (preBlock ^. pBlockState)
-        , blockAddr = pBlockAddr preBlock
         }
 
 -- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
