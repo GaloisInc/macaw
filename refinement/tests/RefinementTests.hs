@@ -267,6 +267,14 @@ compareToExpected formName actual fn =
                         putStrLn $ "Generated actual output to: " <> outFileName
                         TTH.assertBool badMsg False
 
+----------------------------------------------------------------------
+
+-- | The ExpectedInfo is the format of information stored in the
+-- .expected files.  Ideally this would be a 'Show' output so that a
+-- 'Read' could import native data structures for a more refined
+-- comparison, but unfortunately the 'read . show == id' intent is not
+-- held for Macaw/Flexdis86, so the actual stored and compared format
+-- is generally the 'pretty' output of the structures.
 data ExpectedInfo arch = Expected
   { expBinaryName  :: String
   , expEntryPoints :: [EntryPoint arch]
