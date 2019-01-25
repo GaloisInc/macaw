@@ -15,6 +15,7 @@ import qualified Data.Macaw.Architecture.Info as AI
 import           Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.BinaryLoader.X86 ()
 import qualified Data.Macaw.Discovery as MD
+import qualified Data.Macaw.Refinement as MR
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
 import qualified Data.Macaw.X86 as MX86
@@ -91,7 +92,8 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
               -- putStrLn $ show (fmap (show . MM.segoffOffset) entries)
   let di = if unrefined opts
            then MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
-           else error "refinement not supported yet"
+           else AI.withArchConstraints arch_info $
+                MR.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
   f di
 
 showDiscoveryInfo _opts di =
