@@ -66,6 +66,7 @@ module Data.Macaw.Symbolic
     -- * Inspecting and typing generated terms
   , CG.ArchRegStruct
   , CG.MacawCrucibleRegTypes
+  , CG.crucArchRegTypes
   , PS.ToCrucibleType
   , PS.ToCrucibleFloatInfo
   , PS.floatInfoToCrucible

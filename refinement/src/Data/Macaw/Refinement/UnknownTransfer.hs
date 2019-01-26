@@ -1,5 +1,11 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 -- | This module uses symbolic evaluation to refine the discovered CFG
 -- and resolve unknown transfer classify failures.
 --
@@ -106,6 +112,7 @@ module Data.Macaw.Refinement.UnknownTransfer
 where
 
 import Control.Lens
+import Control.Monad.ST ( RealWorld, stToIO )
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , DiscoveryState
@@ -116,9 +123,34 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , parsedBlocks
                                   , stmtsTerm
                                   )
-import qualified Data.Map as M
 import           Data.Maybe ( isJust )
-import           Data.Parameterized.Some
+import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Symbolic as MS
+import Data.Map (Map)
+import qualified Data.Map as Map
+import Data.Parameterized.Some
+import Data.Parameterized.Nonce
+import Data.Semigroup
+import Data.Parameterized.Ctx (Ctx)
+import qualified Data.Parameterized.Context as Ctx
+import Data.Proxy ( Proxy(..) )
+import Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Lang.Crucible.Backend as C
+import qualified Lang.Crucible.Backend.Online as C
+import qualified Lang.Crucible.CFG.Core as C
+import qualified Lang.Crucible.FunctionHandle as C
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
+import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
+import qualified Lang.Crucible.LLVM.DataLayout as LLVM
+import qualified Lang.Crucible.Simulator as C
+import qualified Lang.Crucible.Simulator.GlobalState as C
+import qualified What4.Interface as W
+import qualified What4.ProgramLoc as W
+import qualified What4.Protocol.Online as W
+import qualified What4.Protocol.SMTLib2 as W
+import qualified What4.Solver.Z3 as W
+import           System.IO as IO
 
 
 -- | This is the main entrypoint, which is given the current Discovery
@@ -167,23 +199,22 @@ refineTransfers failedRefine inpDS =
             Just updDS -> refineTransfers failedRefine updDS
 
 
-getAllFunctionsTransfers :: M.Map (ArchSegmentOff arch)
+getAllFunctionsTransfers :: Map (ArchSegmentOff arch)
                                   (Some (DiscoveryFunInfo arch))
                          -> [Some (ParsedBlock arch)]
-getAllFunctionsTransfers = concatMap getUnknownTransfers . M.elems
+getAllFunctionsTransfers = concatMap getUnknownTransfers . Map.elems
 
 
 getUnknownTransfers :: (Some (DiscoveryFunInfo arch))
                     -> [Some (ParsedBlock arch)]
 getUnknownTransfers (Some fi) =
-  Some <$> (filter isUnknownTransfer $ M.elems $ fi ^. parsedBlocks)
+  Some <$> (filter isUnknownTransfer $ Map.elems $ fi ^. parsedBlocks)
 
 isUnknownTransfer :: ParsedBlock arch ids -> Bool
 isUnknownTransfer pb =
   case stmtsTerm (blockStatementList pb) of
     ClassifyFailure {} -> True
     _ -> False
-
 
 -- | This function attempts to use an SMT solver to refine the block
 -- transfer.  If the transfer can be resolved, it will update the
@@ -276,3 +307,117 @@ takePath n (Path blkid anc loop) =
 
 pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
 
+
+data RefinementContext arch solver fp t = RefinementContext
+  { symbolicBackend :: C.OnlineBackend t solver fp
+  , archVals :: MS.ArchVals arch
+  , handleAllocator :: C.HandleAllocator RealWorld
+  , nonceGenerator :: NonceGenerator IO t
+  , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
+  , memVar :: C.GlobalVar LLVM.Mem
+  }
+
+newDefaultRefinementContext
+  :: forall arch
+   . MS.ArchInfo arch
+  => IO (Some (RefinementContext arch (W.Writer W.Z3) (C.Flags C.FloatIEEE)))
+newDefaultRefinementContext = do
+  handle_alloc <- C.newHandleAllocator
+  withIONonceGenerator $ \nonce_gen ->
+    C.withZ3OnlineBackend nonce_gen C.NoUnsatFeatures $ \sym ->
+      case MS.archVals (Proxy @arch) of
+        Just arch_vals -> do
+          mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
+          MS.withArchEval (arch_vals) sym $ \arch_eval_fns -> do
+            let ext_impl = MS.macawExtensions
+                  arch_eval_fns
+                  mem_var
+                  (\_ _ _ _ -> return Nothing)
+                  (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
+            return $ Some $ RefinementContext
+              { symbolicBackend = sym
+              , archVals = arch_vals
+              , handleAllocator = handle_alloc
+              , nonceGenerator = nonce_gen
+              , extensionImpl = ext_impl
+              , memVar = mem_var
+              }
+        Nothing -> fail $ "unsupported architecture"
+
+freshSymVar
+  :: C.IsSymInterface sym
+  => sym
+  -> String
+  -> Ctx.Index ctx tp
+  -> C.TypeRepr tp
+  -> IO (C.RegValue' sym tp)
+freshSymVar sym prefix idx tp =
+  case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
+    Right symbol -> case tp of
+      LLVM.LLVMPointerRepr w -> do
+        bv_var <- W.freshConstant sym symbol $ W.BaseBVRepr w
+        C.RV <$> LLVM.llvmPointer_bv sym bv_var
+      C.BoolRepr ->
+        C.RV <$> W.freshConstant sym symbol W.BaseBoolRepr
+      _ -> fail $ "unsupported variable type: " ++ show tp
+    Left err -> fail $ show err
+
+initSymRegs
+  :: C.IsSymInterface sym
+  => MS.ArchVals arch
+  -> sym
+  -> IO (C.RegMap sym (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch))
+initSymRegs arch_vals sym = do
+  let reg_types = MS.crucArchRegTypes $ MS.archFunctions $ arch_vals
+  reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
+  return $ C.RegMap $
+    Ctx.singleton $ C.RegEntry (C.StructRepr reg_types) reg_vals
+
+refineBlockTransfer'
+  :: forall arch solver fp t
+   . ( MS.SymArchConstraints arch
+     , C.IsSymInterface (C.OnlineBackend t solver fp)
+     , W.OnlineSolver t solver
+     )
+  => RefinementContext arch solver fp t
+  -> DiscoveryState arch
+  -> Some (ParsedBlock arch)
+  -> IO (Maybe (DiscoveryState arch))
+refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
+  let arch = Proxy @arch
+  init_regs <- initSymRegs archVals symbolicBackend
+  init_mem <- LLVM.emptyMem LLVM.LittleEndian
+  some_cfg <- stToIO $ MS.mkParsedBlockCFG
+    (MS.archFunctions archVals)
+    handleAllocator
+    Map.empty
+    (W.BinaryPos "" . maybe 0 fromIntegral . MC.segoffAsAbsoluteAddr)
+    block
+  case some_cfg of
+    C.SomeCFG cfg -> do
+      let sim_context = C.initSimContext
+            symbolicBackend
+            LLVM.llvmIntrinsicTypes
+            handleAllocator
+            IO.stderr
+            C.emptyHandleMap
+            extensionImpl
+            MS.MacawSimulatorState
+      let global_state = C.insertGlobal
+            memVar
+            init_mem
+            C.emptyGlobals
+      let simulation = C.regValue <$> C.callCFG cfg init_regs
+      let handle_return_type = C.handleReturnType $ C.cfgHandle cfg
+      let initial_state = C.InitialState
+            sim_context
+            global_state
+            C.defaultAbortHandler
+            (C.runOverrideSim handle_return_type simulation)
+      let execution_features = []
+      execRes <- C.executeCrucible execution_features initial_state
+      case execRes of
+        C.FinishedResult {} -> return $ Just discovery_state
+        _ -> do
+          putStrLn "Simulation failed"
+          return Nothing
