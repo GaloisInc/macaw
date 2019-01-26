@@ -287,7 +287,7 @@ funIncludesBlock :: BlockIdentifier arch
                  -> Some (DiscoveryFunInfo arch)
                  -> Bool
 funIncludesBlock blkID (Some fi) =
-  isJust ((fi ^. parsedBlocks) M.!? blkID)
+  isJust ((fi ^. parsedBlocks) Map.!? blkID)
 
 
 data FuncBlockPath arch =
@@ -297,7 +297,26 @@ data FuncBlockPath arch =
   [BlockIdentifier arch] -- previously seen ancestors (loop)
 
 buildFuncPath :: Some (DiscoveryFunInfo arch) -> FuncBlockPath arch
-buildFuncPath = undefined
+buildFuncPath (Some fi) =
+  let blks = blockID . Some <$> Map.elems (fi ^. parsedBlocks)
+  in case fst $ bldFPath fi ([], blks) of
+       [fp] -> fp
+       _ -> error "Non-singular function path"
+
+bldFPath :: DiscoveryFunInfo arch ids
+         -> ([FuncBlockPath arch], [BlockIdentifier arch])
+         -> ([FuncBlockPath arch], [BlockIdentifier arch])
+bldFPath _fi x@(_, []) = x
+bldFPath fi (fs, b:_) = ([Path b [] []], [])
+-- bldFPath fi (fs, b:bs) = let nextBlkAddr = blkTransferTo fi b
+--                          in undefined -- if nextBlkAddr in fs, update that fs's anc array, else add a new fs and call go again
+
+blkTransferTo :: DiscoveryFunInfo arch ids -> BlockIdentifier arch -> ArchSegmentOff arch
+blkTransferTo fi frm = let frmBlk = (fi ^. parsedBlocks) Map.!? frm
+                       in case frmBlk of
+                            Just fBlk -> case stmtsTerm $ blockStatementList fBlk of
+                                           _ -> undefined
+                            Nothing -> error "block ID not valid" -- impossible
 
 takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
 takePath n (Path blkid anc loop) =
@@ -305,6 +324,7 @@ takePath n (Path blkid anc loop) =
   then Path blkid (takePath (n-1) <$> anc) loop
   else Path blkid [] loop
 
+pathDepth (Path _ [] _) = 0
 pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
 
 
