@@ -192,12 +192,11 @@ crucGenAddrWidth fns =
   crucGenArchConstraints fns $ M.addrWidthRepr Proxy
 
 -- | Return types of registers in Crucible
-crucArchRegTypes ::
-  MacawSymbolicArchFunctions arch ->
-  Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))
-crucArchRegTypes archFns = crucGenArchConstraints archFns $
-    typeCtxToCrucible (fmapFC M.typeRepr regAssign)
-  where regAssign = crucGenRegAssignment archFns
+crucArchRegTypes
+  :: MacawSymbolicArchFunctions arch
+  -> Assignment C.TypeRepr (MacawCrucibleRegTypes arch)
+crucArchRegTypes arch_fns = crucGenArchConstraints arch_fns $
+  typeCtxToCrucible $ fmapFC M.typeRepr $ crucGenRegAssignment arch_fns
 
 ------------------------------------------------------------------------
 -- MacawExprExtension
