@@ -117,6 +117,7 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , stmtsTerm
                                   )
 import qualified Data.Map as M
+import           Data.Maybe ( isJust )
 import           Data.Parameterized.Some
 
 
@@ -194,10 +195,10 @@ refineBlockTransfer :: DiscoveryState arch
                     -> Some (ParsedBlock arch)
                     -> Maybe (DiscoveryState arch)
 refineBlockTransfer inpDS blk@(Some pBlk) =
-  let path = buildFuncPath <$> funForBlock pBlk inpDS
+  let path = buildFuncPath <$> funForBlock blk inpDS
   in case path of
        Nothing -> error "unable to find function path for block" -- internal error
-       Just p -> do soln <- refinePath inpDS p 0 Nothing
+       Just p -> do soln <- refinePath inpDS p (pathDepth p) 0 Nothing
                     return $ updateDiscovery soln blk inpDS
 
 
@@ -208,7 +209,7 @@ updateDiscovery :: Solution
 updateDiscovery _soln _pblk _inpDS = undefined  -- add replace pblk with soln, and add new blocks discoverd by soln
 
 
-refinePath inpDS path numlevels prevResult =
+refinePath inpDS path maxlevel numlevels prevResult =
   let thispath = takePath numlevels path
       smtEquation = equationFor inpDS thispath
   in case solve smtEquation of
@@ -220,7 +221,9 @@ refinePath inpDS path numlevels prevResult =
                                          if soln `isBetterSolution` prevSoln
                                          then Just soln
                                          else prevResult
-                    in refinePath inpDS path nextlevel bestResult
+                    in if numlevels > maxlevel
+                       then bestResult
+                       else refinePath inpDS path maxlevel nextlevel bestResult
 
 data Equation = Equation  -- replace by What4 expression to pass to Crucible
 data Solution = Solution  -- replace by Crucible output
@@ -238,10 +241,23 @@ isBetterSolution _solnA _solnB = True  -- TBD
 -- * Utilities
 
 -- | Given a block determine which function that block is a part of.
-funForBlock :: ParsedBlock arch ids
+funForBlock :: Some (ParsedBlock arch)
             -> DiscoveryState arch
-            -> Maybe (DiscoveryFunInfo arch ids)
-funForBlock = undefined
+            -> Maybe (Some (DiscoveryFunInfo arch))
+funForBlock pb ds =
+  let blkID = blockID pb
+      blkFuns = ds ^. funInfo ^.. folded . filtered (funIncludesBlock blkID)
+  in case blkFuns of
+       [Some f] -> Just $ Some f
+       _ -> Nothing  -- should not be possible
+
+
+funIncludesBlock :: BlockIdentifier arch
+                 -> Some (DiscoveryFunInfo arch)
+                 -> Bool
+funIncludesBlock blkID (Some fi) =
+  isJust ((fi ^. parsedBlocks) M.!? blkID)
+
 
 data FuncBlockPath arch =
   Path
@@ -249,8 +265,14 @@ data FuncBlockPath arch =
   [FuncBlockPath arch] -- ancestors to this block (non-loop)
   [BlockIdentifier arch] -- previously seen ancestors (loop)
 
-buildFuncPath :: DiscoveryFunInfo arch ids -> FuncBlockPath arch
+buildFuncPath :: Some (DiscoveryFunInfo arch) -> FuncBlockPath arch
 buildFuncPath = undefined
 
 takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
-takePath n p = undefined -- return only n recursions of path p
+takePath n (Path blkid anc loop) =
+  if n > 0
+  then Path blkid (takePath (n-1) <$> anc) loop
+  else Path blkid [] loop
+
+pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
+
