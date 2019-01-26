@@ -134,8 +134,8 @@ symbolicUnkTransferRefinement = refineTransfers []
 type BlockIdentifier arch = ArchSegmentOff arch
 
 -- | Obtain the local 'BlockIdentifier' value for a block.
-blockId :: Some (ParsedBlock arch) -> BlockIdentifier arch
-blockId = viewSome pblockAddr
+blockID :: Some (ParsedBlock arch) -> BlockIdentifier arch
+blockID = viewSome pblockAddr
 
 -- | The main loop for transfer discovery refinement.  The first
 -- argument is the accumulation of UnknownTransfer failures that
@@ -152,13 +152,13 @@ refineTransfers :: [BlockIdentifier arch]
                 -> DiscoveryState arch
                    -- ^ Possibly updated DiscoveryState
 refineTransfers failedRefine inpDS =
-  let unrefineable = flip elem failedRefine . blockId
+  let unrefineable = flip elem failedRefine . blockID
       unkTransfers = inpDS ^. funInfo
                      . to getAllFunctionsTransfers
                      ^..folded
                      . filtered (not . unrefineable)
       thisUnkTransfer = head unkTransfers
-      thisId = blockId thisUnkTransfer
+      thisId = blockID thisUnkTransfer
   in if null unkTransfers
      then inpDS
      else case refineBlockTransfer inpDS thisUnkTransfer of
@@ -193,4 +193,64 @@ isUnknownTransfer pb =
 refineBlockTransfer :: DiscoveryState arch
                     -> Some (ParsedBlock arch)
                     -> Maybe (DiscoveryState arch)
-refineBlockTransfer _inpDS _pBlk = Nothing
+refineBlockTransfer inpDS blk@(Some pBlk) =
+  let path = buildFuncPath <$> funForBlock pBlk inpDS
+  in case path of
+       Nothing -> error "unable to find function path for block" -- internal error
+       Just p -> do soln <- refinePath inpDS p 0 Nothing
+                    return $ updateDiscovery soln blk inpDS
+
+
+updateDiscovery :: Solution
+                -> Some (ParsedBlock arch)
+                -> DiscoveryState arch
+                -> DiscoveryState arch
+updateDiscovery _soln _pblk _inpDS = undefined  -- add replace pblk with soln, and add new blocks discoverd by soln
+
+
+refinePath inpDS path numlevels prevResult =
+  let thispath = takePath numlevels path
+      smtEquation = equationFor inpDS thispath
+  in case solve smtEquation of
+       Nothing -> prevResult -- divergent, stop here
+       Just soln -> let nextlevel = numlevels + 1
+                        bestResult = case prevResult of
+                                       Nothing -> Just soln
+                                       Just prevSoln ->
+                                         if soln `isBetterSolution` prevSoln
+                                         then Just soln
+                                         else prevResult
+                    in refinePath inpDS path nextlevel bestResult
+
+data Equation = Equation  -- replace by What4 expression to pass to Crucible
+data Solution = Solution  -- replace by Crucible output
+
+equationFor :: DiscoveryState arch -> FuncBlockPath arch -> Equation
+equationFor inpDS path = undefined
+
+solve :: Equation -> Maybe Solution
+solve _eqn = Just Solution
+
+isBetterSolution :: Solution -> Solution -> Bool
+isBetterSolution _solnA _solnB = True  -- TBD
+
+----------------------------------------------------------------------
+-- * Utilities
+
+-- | Given a block determine which function that block is a part of.
+funForBlock :: ParsedBlock arch ids
+            -> DiscoveryState arch
+            -> Maybe (DiscoveryFunInfo arch ids)
+funForBlock = undefined
+
+data FuncBlockPath arch =
+  Path
+  (BlockIdentifier arch) -- current block
+  [FuncBlockPath arch] -- ancestors to this block (non-loop)
+  [BlockIdentifier arch] -- previously seen ancestors (loop)
+
+buildFuncPath :: DiscoveryFunInfo arch ids -> FuncBlockPath arch
+buildFuncPath = undefined
+
+takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
+takePath n p = undefined -- return only n recursions of path p
