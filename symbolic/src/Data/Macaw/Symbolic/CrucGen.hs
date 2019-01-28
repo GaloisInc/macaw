@@ -4,6 +4,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This defines the core operations for mapping from Reopt to Crucible.
 -}
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
@@ -577,7 +578,7 @@ instance Functor (CrucGen arch ids h s) where
 
 instance Applicative (CrucGen arch ids h s) where
   {-# INLINE pure #-}
-  pure r = CrucGen $ \s cont -> cont s r
+  pure !r = CrucGen $ \s cont -> cont s r
   {-# INLINE (<*>) #-}
   mf <*> ma = CrucGen $ \s0 cont -> unCrucGen mf s0
                       $ \s1 f -> unCrucGen ma s1
@@ -607,8 +608,9 @@ addStmt stmt = seq stmt $ do
   p <- getPos
   s <- get
   let pstmt = C.Posd p stmt
-  seq pstmt $ do
-  put $! s { prevStmts = pstmt : prevStmts s }
+  let prev = prevStmts s
+  seq pstmt $ seq prev $ do
+  put $! s { prevStmts = pstmt : prev }
 
 addTermStmt :: CR.TermStmt s (MacawFunctionResult arch)
             -> CrucGen arch ids h s a
@@ -646,10 +648,11 @@ evalAtom av = do
   p <- getPos
   i <- freshValueIndex
   -- Make atom
+  let !tp = CR.typeOfAtomValue av
   let atom = CR.Atom { CR.atomPosition = p
                      , CR.atomId = i
                      , CR.atomSource = CR.Assigned
-                     , CR.typeOfAtom = CR.typeOfAtomValue av
+                     , CR.typeOfAtom = tp
                      }
   addStmt $ CR.DefineAtom atom av
   pure $! atom
@@ -1069,7 +1072,9 @@ addMacawStmt baddr stmt =
       void $ evalMacawStmt (MacawWriteMem w repr caddr cval)
     M.InstructionStart off t -> do
       -- Update the position
-      modify $ \s -> s { codeOff = off }
+      modify' $ \s -> s { codeOff = off
+                        , codePos = macawPositionFn s off
+                        }
       let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType
           crucStmt = MacawInstructionStart baddr off t
       void $ evalMacawStmt crucStmt
