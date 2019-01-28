@@ -94,6 +94,8 @@ module Data.Macaw.Symbolic
   , runCodeBlock
   ) where
 
+import           GHC.TypeLits
+
 import           Control.Lens ((^.))
 import           Control.Monad (foldM, forM, join)
 import           Control.Monad.IO.Class
@@ -169,6 +171,19 @@ data ArchVals arch = ArchVals
   , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
   -- ^ This function captures the constraints necessary to invoke the symbolic
   -- simulator on a Crucible CFG generated from macaw.
+  , lookupReg
+      :: forall sym tp
+       . (SymArchConstraints arch, IsSymInterface sym)
+      => C.RegEntry sym (CG.ArchRegStruct arch)
+      -> M.ArchReg arch tp
+      -> C.RegEntry sym (PS.ToCrucibleType tp)
+  , updateReg
+      :: forall sym tp
+       . (SymArchConstraints arch, IsSymInterface sym)
+      => C.RegEntry sym (CG.ArchRegStruct arch)
+      -> M.ArchReg arch tp
+      -> C.RegValue sym (PS.ToCrucibleType tp)
+      -> C.RegEntry sym (CG.ArchRegStruct arch)
   }
 
 -- | All of the constraints on an architecture necessary for translating and
@@ -178,6 +193,7 @@ type SymArchConstraints arch =
   , M.RegisterInfo (M.ArchReg arch)
   , M.HasRepr (M.ArchReg arch) M.TypeRepr
   , M.MemWidth (M.ArchAddrWidth arch)
+  , KnownNat (M.ArchAddrWidth arch)
   , M.PrettyF (M.ArchReg arch)
   , Show (M.ArchReg arch (M.BVType (M.ArchAddrWidth arch)))
   , ArchInfo arch
