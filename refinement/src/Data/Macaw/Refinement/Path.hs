@@ -10,7 +10,7 @@ module Data.Macaw.Refinement.Path
 where
 
 import           Control.Applicative
-import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth )
+import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth, ArchSegmentOff )
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
 import           Data.Macaw.Memory ( MemWidth )
 import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier
@@ -75,8 +75,18 @@ bldFPath :: DiscoveryFunInfo arch ids
          -> ([FuncBlockPath arch], [BlockIdentifier arch])
 bldFPath _fi x@(_, []) = x
 bldFPath fi (fs, b:bs) =
-  let nextBlkAddr = blockTransferTo fi b
-      nextBlkID = blockInFunction fi nextBlkAddr
+  let nextBlkAddrs = blockTransferTo fi b
+      updPath = foldr (bldFPath' fi b) fs nextBlkAddrs
+  in bldFPath fi (updPath, bs)
+
+
+bldFPath' :: DiscoveryFunInfo arch ids
+          -> BlockIdentifier arch
+          -> ArchSegmentOff arch
+          -> [FuncBlockPath arch]
+          -> [FuncBlockPath arch]
+bldFPath' fi b nextAddr fs =
+  let nextBlkID = blockInFunction fi nextAddr
 
       isPathElemForBlock bid (Path pid _ _) = bid == pid
 
@@ -107,8 +117,8 @@ bldFPath fi (fs, b:bs) =
            else Path b [] [] : p  -- new terminal entry
 
   in case nextBlkID of
-       Nothing -> bldFPath fi (fs, bs) -- should never happen (block not in function)
-       Just cb -> bldFPath fi ((addAncestor cb fs), bs)
+       Nothing -> fs -- should never happen (block not in function)
+       Just cb -> addAncestor cb fs
 
 
 -- | Given a function's call paths, return the subset of the call

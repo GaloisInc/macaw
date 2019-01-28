@@ -58,9 +58,12 @@ funIncludesBlock :: BlockIdentifier arch
 funIncludesBlock blkID (Some fi) =
   isJust ((fi ^. parsedBlocks) Map.!? blkID)
 
-blockTransferTo :: DiscoveryFunInfo arch ids -> BlockIdentifier arch -> ArchSegmentOff arch
-blockTransferTo fi frm = let frmBlk = (fi ^. parsedBlocks) Map.!? frm
-                         in case frmBlk of
-                              Just fBlk -> case stmtsTerm $ blockStatementList fBlk of
-                                             _ -> undefined
-                              Nothing -> error "block ID not valid" -- impossible
+blockTransferTo :: DiscoveryFunInfo arch ids
+                -> BlockIdentifier arch
+                -> [ArchSegmentOff arch]
+blockTransferTo fi frm =
+  let frmBlk = (fi ^. parsedBlocks) Map.!? frm
+  in case frmBlk of
+       Just fBlk -> case stmtsTerm $ blockStatementList fBlk of
+                      _ -> undefined
+       Nothing -> error "block ID not valid" -- impossible
