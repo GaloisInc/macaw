@@ -55,6 +55,8 @@ pathTo blkID (p@(Path i anc _):ps) =
 pathTo _ [] = Nothing
 
 
+-- | Returns the first n levels (callers) for the specified Block path
+-- in the Function.
 takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
 takePath n (Path blkid anc loop) =
   if n > 0
