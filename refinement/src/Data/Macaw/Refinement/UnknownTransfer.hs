@@ -113,6 +113,7 @@ where
 
 import Control.Lens
 import Control.Monad.ST ( RealWorld, stToIO )
+import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , DiscoveryState
@@ -125,33 +126,32 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID, funForBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, pathTo, takePath )
-import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Parameterized.Some
-import Data.Parameterized.Nonce
-import Data.Semigroup
-import Data.Parameterized.Ctx (Ctx)
 import qualified Data.Parameterized.Context as Ctx
+import Data.Parameterized.Ctx (Ctx)
+import Data.Parameterized.Nonce
+import Data.Parameterized.Some
 import Data.Proxy ( Proxy(..) )
+import Data.Semigroup
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.Backend.Online as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
-import qualified Lang.Crucible.LLVM.MemModel as LLVM
-import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
 import qualified Lang.Crucible.LLVM.DataLayout as LLVM
+import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
+import           System.IO as IO
 import qualified What4.Interface as W
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.Protocol.SMTLib2 as W
 import qualified What4.Solver.Z3 as W
-import           System.IO as IO
 
 
 -- | This is the main entrypoint, which is given the current Discovery
