@@ -1,6 +1,7 @@
 module Data.Macaw.Refinement.FuncBlockUtils
   ( BlockIdentifier
   , blockID
+  , blockInFunction
   , blockTransferTo
   , funBlockIDs
   , funForBlock

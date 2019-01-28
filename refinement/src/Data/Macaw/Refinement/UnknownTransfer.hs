@@ -124,7 +124,7 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , stmtsTerm
                                   )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID, funForBlock )
-import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, takePath )
+import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, pathTo, takePath )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
@@ -217,9 +217,9 @@ isUnknownTransfer pb =
 refineBlockTransfer :: DiscoveryState arch
                     -> Some (ParsedBlock arch)
                     -> Maybe (DiscoveryState arch)
-refineBlockTransfer inpDS blk@(Some pBlk) =
+refineBlockTransfer inpDS blk =
   let path = buildFuncPath <$> funForBlock blk inpDS
-  in case path of
+  in case path >>= pathTo (blockID blk) of
        Nothing -> error "unable to find function path for block" -- internal error
        Just p -> do soln <- refinePath inpDS p (pathDepth p) 0 Nothing
                     return $ updateDiscovery soln blk inpDS
