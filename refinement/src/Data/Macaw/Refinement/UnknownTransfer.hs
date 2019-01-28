@@ -158,7 +158,9 @@ import qualified What4.Solver.Z3 as W
 -- information and which attempts to resolve UnknownTransfer
 -- classification failures, returning (possibly updated) Discovery
 -- information.
-symbolicUnkTransferRefinement :: DiscoveryState arch -> DiscoveryState arch
+symbolicUnkTransferRefinement :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                                 ) =>
+                                 DiscoveryState arch -> DiscoveryState arch
 symbolicUnkTransferRefinement = refineTransfers []
 
 
@@ -170,7 +172,9 @@ symbolicUnkTransferRefinement = refineTransfers []
 -- function recurses until there are no more UnknownTransfer failure
 -- blocks in the input discovery state that are not also in the
 -- failure accumulation array.
-refineTransfers :: [BlockIdentifier arch]
+refineTransfers :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                   ) =>
+                   [BlockIdentifier arch]
                    -- ^ attempted blocks
                 -> DiscoveryState arch
                    -- ^ input DiscoveryState
@@ -214,7 +218,9 @@ isUnknownTransfer pb =
 -- blocks newly discovered via the transfer resolution) and return
 -- that.  If it was unable to refine the transfer, it will return
 -- Nothing and this block will be added to the "unresolvable" list.
-refineBlockTransfer :: DiscoveryState arch
+refineBlockTransfer :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                       ) =>
+                       DiscoveryState arch
                     -> Some (ParsedBlock arch)
                     -> Maybe (DiscoveryState arch)
 refineBlockTransfer inpDS blk =
