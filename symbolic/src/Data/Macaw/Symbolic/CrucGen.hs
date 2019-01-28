@@ -172,6 +172,10 @@ data MacawSymbolicArchFunctions arch
     :: !(forall a . ((M.RegisterInfo (M.ArchReg arch), MacawArchConstraints arch) => a) -> a)
   , crucGenRegAssignment :: !(Ctx.Assignment (M.ArchReg arch) (ArchRegContext arch))
     -- ^ Map from indices in the ArchRegContext to the associated register.
+  , crucGenRegStructType :: !(C.TypeRepr (ArchRegStruct arch))
+    -- ^ Type of structure with arch regs.  This can be computed from
+    -- @crucGenRegAssignment@, but is cached here to save memory (A
+    -- LOT of memory---TypeReprs were dominating the heap).
   , crucGenArchRegName :: !(forall tp . M.ArchReg arch tp -> C.SolverSymbol)
     -- ^ Provides a solver name to use for referring to register.
   , crucGenArchFn :: !(forall ids h s tp
@@ -196,9 +200,8 @@ crucGenAddrWidth fns =
 crucArchRegTypes ::
   MacawSymbolicArchFunctions arch ->
   Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))
-crucArchRegTypes archFns = crucGenArchConstraints archFns $
-    typeCtxToCrucible (fmapFC M.typeRepr regAssign)
-  where regAssign = crucGenRegAssignment archFns
+crucArchRegTypes archFns = case crucGenRegStructType archFns of
+  C.StructRepr tps -> tps
 
 ------------------------------------------------------------------------
 -- MacawExprExtension
@@ -543,6 +546,8 @@ data CrucGenState arch ids h s
      -- ^ Label for this block we are translating
    , codeOff    :: !(M.ArchAddrWord arch)
      -- ^ Offset
+   , codePos    :: !C.Position
+     -- ^ Position (cached from 'codeOff')
    , prevStmts  :: ![C.Posd (CR.Stmt (MacawExt arch) s)]
      -- ^ List of states in reverse order
    }
@@ -601,7 +606,7 @@ archAddrWidth = crucGenAddrWidth . translateFns <$> get
 
 -- | Get current position
 getPos :: CrucGen arch ids h s C.Position
-getPos = gets $ \s -> macawPositionFn s (codeOff s)
+getPos = gets codePos
 
 addStmt :: CR.Stmt (MacawExt arch) s -> CrucGen arch ids h s ()
 addStmt stmt = seq stmt $ do
@@ -696,9 +701,8 @@ getRegValue r = do
     Just idx -> do
       reg <- gets crucRegisterReg
       regStruct <- evalAtom (CR.ReadReg reg)
-      let tp = M.typeRepr (crucGenRegAssignment archFns Ctx.! macawIndex idx)
-      crucibleValue (C.GetStruct regStruct (crucibleIndex idx)
-                    (typeToCrucible tp))
+      let tp = crucArchRegTypes archFns Ctx.! crucibleIndex idx
+      crucibleValue (C.GetStruct regStruct (crucibleIndex idx) tp)
 
 v2c :: M.Value arch ids tp
     -> CrucGen arch ids h s (CR.Atom s (ToCrucibleType tp))
@@ -1115,10 +1119,9 @@ createRegStructAssignment regs = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   let regAssign = crucGenRegAssignment archFns
-  let tps = fmapFC M.typeRepr regAssign
   let a = fmapFC (\r -> regs ^. M.boundValue r) regAssign
   fields <- macawAssignToCrucM valueToCrucible a
-  return (typeCtxToCrucible tps, fields)
+  return (crucArchRegTypes archFns, fields)
 
 addMacawTermStmt :: Map Word64 (CR.Label s)
                     -- ^ Map from block index to Crucible label
@@ -1187,6 +1190,7 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
                         , macawPositionFn = posFn
                         , blockLabel = lbl
                         , codeOff    = off
+                        , codePos    = posFn off
                         , prevStmts  = []
                         }
   let cont _s () = fail "Unterminated crucible block"
