@@ -74,7 +74,42 @@ bldFPath :: DiscoveryFunInfo arch ids
          -> ([FuncBlockPath arch], [BlockIdentifier arch])
          -> ([FuncBlockPath arch], [BlockIdentifier arch])
 bldFPath _fi x@(_, []) = x
-bldFPath fi (fs, b:_) = ([Path b [] []], [])
+bldFPath fi (fs, b:bs) =
+  let nextBlkAddr = blockTransferTo fi b
+      nextBlkID = blockInFunction fi nextBlkAddr
+
+      isPathElemForBlock bid (Path pid _ _) = bid == pid
+
+      -- until an if "ancestor" is attached to any callees it appears
+      -- to be a terminal path point.  When a callee is identified,
+      -- this ancestor should be removed from the terminal list and
+      -- added to the callee location, but any path information
+      -- gathered for the ancestor should be preserved when doing
+      -- that.
+      ancPathElem = case filter (isPathElemForBlock b) fs of
+                      (a : []) -> Just a
+                      _ -> Nothing
+
+      ancToAdd = maybe (Path b [] []) id ancPathElem
+
+      addAncToExisting _ [] = (False, [])
+      addAncToExisting cb (ph@(Path tbid anc loop):ps) =
+        if tbid == cb
+        then (True, Path tbid (ancToAdd:anc) loop : ps)
+        else let (e, p) = addAncToExisting cb ps in (e, ph : p)
+
+      addAncestor cb p =
+        let (toExisting, updPath) = addAncToExisting cb p
+        in if toExisting
+           then case ancPathElem of
+                  Nothing -> updPath
+                  Just _ -> filter (not . isPathElemForBlock b) updPath -- remove terminal entry
+           else Path b [] [] : p  -- new terminal entry
+
+  in case nextBlkID of
+       Nothing -> bldFPath fi (fs, bs) -- should never happen (block not in function)
+       Just cb -> bldFPath fi ((addAncestor cb fs), bs)
+
 
 -- | Given a function's call paths, return the subset of the call
 -- paths that terminates with the specified block.  The specified
