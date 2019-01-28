@@ -63,7 +63,9 @@ library
 
   exposed-modules: Data.Macaw.Refinement
 
-  other-modules: Data.Macaw.Refinement.Target
+  other-modules: Data.Macaw.Refinement.FuncBlockUtils
+                 Data.Macaw.Refinement.Path
+                 Data.Macaw.Refinement.Target
                  Data.Macaw.Refinement.UnknownTransfer
 
   default-language: Haskell2010

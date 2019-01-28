@@ -123,7 +123,8 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , parsedBlocks
                                   , stmtsTerm
                                   )
-import           Data.Maybe ( isJust )
+import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID, funForBlock )
+import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, takePath )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
@@ -160,15 +161,6 @@ import           System.IO as IO
 symbolicUnkTransferRefinement :: DiscoveryState arch -> DiscoveryState arch
 symbolicUnkTransferRefinement = refineTransfers []
 
-
--- | The local type used to identify blocks.  Using a local
--- abstraction for this allows this code to be more independent of the
--- underlying block information.
-type BlockIdentifier arch = ArchSegmentOff arch
-
--- | Obtain the local 'BlockIdentifier' value for a block.
-blockID :: Some (ParsedBlock arch) -> BlockIdentifier arch
-blockID = viewSome pblockAddr
 
 -- | The main loop for transfer discovery refinement.  The first
 -- argument is the accumulation of UnknownTransfer failures that
@@ -269,63 +261,7 @@ isBetterSolution :: Solution -> Solution -> Bool
 isBetterSolution _solnA _solnB = True  -- TBD
 
 ----------------------------------------------------------------------
--- * Utilities
-
--- | Given a block determine which function that block is a part of.
-funForBlock :: Some (ParsedBlock arch)
-            -> DiscoveryState arch
-            -> Maybe (Some (DiscoveryFunInfo arch))
-funForBlock pb ds =
-  let blkID = blockID pb
-      blkFuns = ds ^. funInfo ^.. folded . filtered (funIncludesBlock blkID)
-  in case blkFuns of
-       [Some f] -> Just $ Some f
-       _ -> Nothing  -- should not be possible
-
-
-funIncludesBlock :: BlockIdentifier arch
-                 -> Some (DiscoveryFunInfo arch)
-                 -> Bool
-funIncludesBlock blkID (Some fi) =
-  isJust ((fi ^. parsedBlocks) Map.!? blkID)
-
-
-data FuncBlockPath arch =
-  Path
-  (BlockIdentifier arch) -- current block
-  [FuncBlockPath arch] -- ancestors to this block (non-loop)
-  [BlockIdentifier arch] -- previously seen ancestors (loop)
-
-buildFuncPath :: Some (DiscoveryFunInfo arch) -> FuncBlockPath arch
-buildFuncPath (Some fi) =
-  let blks = blockID . Some <$> Map.elems (fi ^. parsedBlocks)
-  in case fst $ bldFPath fi ([], blks) of
-       [fp] -> fp
-       _ -> error "Non-singular function path"
-
-bldFPath :: DiscoveryFunInfo arch ids
-         -> ([FuncBlockPath arch], [BlockIdentifier arch])
-         -> ([FuncBlockPath arch], [BlockIdentifier arch])
-bldFPath _fi x@(_, []) = x
-bldFPath fi (fs, b:_) = ([Path b [] []], [])
--- bldFPath fi (fs, b:bs) = let nextBlkAddr = blkTransferTo fi b
---                          in undefined -- if nextBlkAddr in fs, update that fs's anc array, else add a new fs and call go again
-
-blkTransferTo :: DiscoveryFunInfo arch ids -> BlockIdentifier arch -> ArchSegmentOff arch
-blkTransferTo fi frm = let frmBlk = (fi ^. parsedBlocks) Map.!? frm
-                       in case frmBlk of
-                            Just fBlk -> case stmtsTerm $ blockStatementList fBlk of
-                                           _ -> undefined
-                            Nothing -> error "block ID not valid" -- impossible
-
-takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
-takePath n (Path blkid anc loop) =
-  if n > 0
-  then Path blkid (takePath (n-1) <$> anc) loop
-  else Path blkid [] loop
-
-pathDepth (Path _ [] _) = 0
-pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
+-- * Symbolic execution
 
 
 data RefinementContext arch solver fp t = RefinementContext
