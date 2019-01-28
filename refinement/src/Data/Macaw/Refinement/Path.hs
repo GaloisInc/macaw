@@ -7,13 +7,14 @@ module Data.Macaw.Refinement.Path
   )
 where
 
-import Data.Macaw.Discovery.State ( DiscoveryFunInfo )
-import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier
-                                            , blockInFunction
-                                            , blockTransferTo
-                                            , funBlockIDs
-                                            )
-import Data.Parameterized.Some
+import           Control.Applicative
+import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
+import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier
+                                                      , blockInFunction
+                                                      , blockTransferTo
+                                                      , funBlockIDs
+                                                      )
+import           Data.Parameterized.Some
 
 
 data FuncBlockPath arch =
@@ -40,9 +41,18 @@ bldFPath _fi x@(_, []) = x
 bldFPath fi (fs, b:_) = ([Path b [] []], [])
 
 -- | Given a function's call paths, return the subset of the call
--- paths that terminates with the specified block.
+-- paths that terminates with the specified block.  The specified
+-- block might be reachable backward from several exit points, but the
+-- inbound paths (i.e. above/forward to) the specified block must be
+-- the same for all outbound paths (loops are elided).
 pathTo :: BlockIdentifier arch -> [FuncBlockPath arch] -> Maybe (FuncBlockPath arch)
-pathTo blkID fpath = undefined
+pathTo blkID (p@(Path i anc _):ps) =
+  if blkID == i
+  then Just p
+  else let depth = pathTo blkID anc
+           breadth = pathTo blkID ps
+       in breadth <|> depth
+pathTo _ [] = Nothing
 
 
 takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
