@@ -23,6 +23,9 @@ import           Data.Text.Prettyprint.Doc
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 
+-- | This is the datatype that represents the back-path of blocks in
+-- the function from the exit point(s) to either the entry point or a
+-- loop point.
 data FuncBlockPath arch =
   Path
   (BlockIdentifier arch) -- current block
@@ -49,12 +52,24 @@ instance ( MemWidth (ArchAddrWidth arch) ) =>
 -- function.  The returned list is a list of all the exit points of
 -- the function, with a FuncBlockPath tree indicating the blocks
 -- forming the path to that exit point.
+--
+-- A function exit point usually represents a RET or JMP, or an ite of
+-- JMP targets; at the present time it is assumed that the latter
+-- targets cannot be a mix of function-internal and function-external
+-- targets.
 buildFuncPath :: Some (DiscoveryFunInfo arch) -> [FuncBlockPath arch]
 buildFuncPath sfi@(Some fi) =
   let blks = funBlockIDs sfi
   in fst $ bldFPath fi ([], blks)
 
 
+-- Internal function to build a FuncBlockPath from an input
+-- BlockIdentifer array.  This recursively processes elements,
+-- migrating them from the tuple snd to the tuple fst; the final
+-- result should have an empty second array, and the elements in the
+-- first array are all the exit points from the function.  Each
+-- recursive invocation takes the next BlockIdentifier and adds it to
+-- an existing path or starts a new path for that BlockIdentifier.
 bldFPath :: DiscoveryFunInfo arch ids
          -> ([FuncBlockPath arch], [BlockIdentifier arch])
          -> ([FuncBlockPath arch], [BlockIdentifier arch])
