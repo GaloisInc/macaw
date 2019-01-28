@@ -29,6 +29,7 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
+import           Data.Coerce ( coerce )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Data.Parameterized.Classes ( OrdF, knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
@@ -72,10 +73,7 @@ instance MC.PrettyF PPCTermStmt where
       PPCTrap -> PP.text "ppc_trap"
 
 rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc s src tgt (PPCTermStmt tgt)
-rewriteTermStmt s =
-  case s of
-    PPCSyscall -> pure PPCSyscall
-    PPCTrap -> pure PPCTrap
+rewriteTermStmt s = pure (coerce s)
 
 data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
