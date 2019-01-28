@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.Path
   ( FuncBlockPath
   , buildFuncPath
@@ -8,13 +10,17 @@ module Data.Macaw.Refinement.Path
 where
 
 import           Control.Applicative
+import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth )
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
+import           Data.Macaw.Memory ( MemWidth )
 import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier
                                                       , blockInFunction
                                                       , blockTransferTo
                                                       , funBlockIDs
                                                       )
 import           Data.Parameterized.Some
+import           Data.Text.Prettyprint.Doc
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 
 data FuncBlockPath arch =
@@ -22,6 +28,21 @@ data FuncBlockPath arch =
   (BlockIdentifier arch) -- current block
   [FuncBlockPath arch] -- ancestors to this block (non-loop)
   [BlockIdentifier arch] -- previously seen ancestors (loop)
+
+
+instance ( MemWidth (ArchAddrWidth arch) ) =>
+         Pretty (FuncBlockPath arch) where
+  pretty (Path bid anc loop) =
+    let label = [ pretty "Path", prettyBlkId bid
+                , parens $ hsep [ pretty $ length anc, pretty " callers" ]
+                ]
+        looptxt = if null loop then []
+                  else [parens (hsep [ pretty "loops from:"
+                                     , list ( prettyBlkId <$> loop )])]
+        prettyBlkId = pretty . show . PP.pretty
+    in vsep [ hsep (label <> looptxt)
+            , nest 4 $ vsep (pretty <$> anc)
+            ]
 
 
 -- | Builds a list of all the back-paths through the specific
