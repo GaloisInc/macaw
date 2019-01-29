@@ -21,6 +21,7 @@ import           Data.Macaw.PPC
 import qualified Data.Macaw.X86 as MX86
 import qualified Data.Map as M
 import           Data.Parameterized.Some
+import           Data.Semigroup
 import qualified Data.Text.IO as TIO
 import qualified Options.Applicative as O
 import qualified SemMC.Architecture.PPC64 as PPC64

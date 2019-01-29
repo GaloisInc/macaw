@@ -22,6 +22,7 @@ import           Data.Macaw.Discovery.State ( DiscoveryFunInfo
 import qualified Data.Map as Map
 import           Data.Maybe ( isJust )
 import           Data.Parameterized.Some
+import           Data.Semigroup
 
 
 -- | The local type used to identify blocks.  Using a local
