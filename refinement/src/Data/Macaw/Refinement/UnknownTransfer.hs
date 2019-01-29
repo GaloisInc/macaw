@@ -1,5 +1,7 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -111,11 +113,13 @@ module Data.Macaw.Refinement.UnknownTransfer
   )
 where
 
+import           GHC.TypeLits
+
 import Control.Lens
 import Control.Monad.ST ( RealWorld, stToIO )
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
-                                  , DiscoveryState
+                                  , DiscoveryState(..)
                                   , ParsedBlock(..)
                                   , ParsedTermStmt(ClassifyFailure)
                                   , blockStatementList
@@ -128,6 +132,7 @@ import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, pat
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
+import Data.Maybe
 import qualified Data.Map as Map
 import Data.Parameterized.Some
 import Data.Parameterized.Nonce
@@ -146,10 +151,12 @@ import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
 import qualified Lang.Crucible.LLVM.DataLayout as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
+import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.Protocol.SMTLib2 as W
+import qualified What4.SatResult as W
 import qualified What4.Solver.Z3 as W
 import           System.IO as IO
 
@@ -264,7 +271,7 @@ isBetterSolution _solnA _solnB = True  -- TBD
 -- * Symbolic execution
 
 
-data RefinementContext arch solver fp t = RefinementContext
+data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
   , archVals :: MS.ArchVals arch
   , handleAllocator :: C.HandleAllocator RealWorld
@@ -273,11 +280,12 @@ data RefinementContext arch solver fp t = RefinementContext
   , memVar :: C.GlobalVar LLVM.Mem
   }
 
-newDefaultRefinementContext
-  :: forall arch
+withDefaultRefinementContext
+  :: forall arch a
    . MS.ArchInfo arch
-  => IO (Some (RefinementContext arch (W.Writer W.Z3) (C.Flags C.FloatIEEE)))
-newDefaultRefinementContext = do
+  => (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
+  -> IO a
+withDefaultRefinementContext k = do
   handle_alloc <- C.newHandleAllocator
   withIONonceGenerator $ \nonce_gen ->
     C.withZ3OnlineBackend nonce_gen C.NoUnsatFeatures $ \sym ->
@@ -288,9 +296,9 @@ newDefaultRefinementContext = do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  (\_ _ _ _ -> return Nothing)
+                  (\sym _ _ off -> Just <$> LLVM.llvmPointer_bv sym off)
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
-            return $ Some $ RefinementContext
+            k $ RefinementContext
               { symbolicBackend = sym
               , archVals = arch_vals
               , handleAllocator = handle_alloc
@@ -308,40 +316,47 @@ freshSymVar
   -> C.TypeRepr tp
   -> IO (C.RegValue' sym tp)
 freshSymVar sym prefix idx tp =
-  case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
+  C.RV <$> case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
     Right symbol -> case tp of
-      LLVM.LLVMPointerRepr w -> do
-        bv_var <- W.freshConstant sym symbol $ W.BaseBVRepr w
-        C.RV <$> LLVM.llvmPointer_bv sym bv_var
+      LLVM.LLVMPointerRepr w ->
+        LLVM.llvmPointer_bv sym
+          =<< W.freshConstant sym symbol (W.BaseBVRepr w)
       C.BoolRepr ->
-        C.RV <$> W.freshConstant sym symbol W.BaseBoolRepr
+        W.freshConstant sym symbol W.BaseBoolRepr
       _ -> fail $ "unsupported variable type: " ++ show tp
     Left err -> fail $ show err
 
-initSymRegs
-  :: C.IsSymInterface sym
+initRegs
+  :: forall arch sym
+   . (MS.SymArchConstraints arch, C.IsSymInterface sym)
   => MS.ArchVals arch
   -> sym
-  -> IO (C.RegMap sym (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch))
-initSymRegs arch_vals sym = do
+  -> C.RegValue sym (LLVM.LLVMPointerType (MC.ArchAddrWidth arch))
+  -> IO (C.RegMap sym (MS.MacawFunctionArgs arch))
+initRegs arch_vals sym ip_val = do
   let reg_types = MS.crucArchRegTypes $ MS.archFunctions $ arch_vals
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
-  return $ C.RegMap $
-    Ctx.singleton $ C.RegEntry (C.StructRepr reg_types) reg_vals
+  let reg_struct = C.RegEntry (C.StructRepr reg_types) reg_vals
+  return $ C.RegMap $ Ctx.singleton $
+    (MS.updateReg arch_vals) reg_struct (MC.ip_reg @(MC.ArchReg arch)) ip_val
 
 refineBlockTransfer'
-  :: forall arch solver fp t
+  :: forall arch t solver fp
    . ( MS.SymArchConstraints arch
      , C.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      )
-  => RefinementContext arch solver fp t
+  => RefinementContext arch t solver fp
   -> DiscoveryState arch
   -> Some (ParsedBlock arch)
-  -> IO (Maybe (DiscoveryState arch))
+  -> IO [ArchSegmentOff arch]
 refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
   let arch = Proxy @arch
-  init_regs <- initSymRegs archVals symbolicBackend
+  block_ip_val <- case MC.segoffAsAbsoluteAddr (pblockAddr block) of
+    Just addr -> LLVM.llvmPointer_bv symbolicBackend
+      =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
+    Nothing -> fail $ "unexpected block address: " ++ show (pblockAddr block)
+  init_regs <- initRegs archVals symbolicBackend block_ip_val
   init_mem <- LLVM.emptyMem LLVM.LittleEndian
   some_cfg <- stToIO $ MS.mkParsedBlockCFG
     (MS.archFunctions archVals)
@@ -371,9 +386,43 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
             C.defaultAbortHandler
             (C.runOverrideSim handle_return_type simulation)
       let execution_features = []
-      execRes <- C.executeCrucible execution_features initial_state
-      case execRes of
-        C.FinishedResult {} -> return $ Just discovery_state
-        _ -> do
-          putStrLn "Simulation failed"
-          return Nothing
+      exec_res <- C.executeCrucible execution_features initial_state
+      case exec_res of
+        C.FinishedResult _ res -> do
+          let res_regs = res ^. C.partialValue . C.gpValue
+          let res_ip = (MS.lookupReg archVals)
+                res_regs
+                (MC.ip_reg @(MC.ArchReg arch))
+          res_ip_bv_val <- LLVM.projectLLVM_bv
+            symbolicBackend
+            (C.regValue res_ip)
+          ip_ground_vals <- genModels symbolicBackend res_ip_bv_val 10
+          return $ mapMaybe
+            (MC.resolveAbsoluteAddr (memory discovery_state) . MC.memWord . fromIntegral)
+            ip_ground_vals
+        _ -> fail "simulation failed"
+
+genModels
+  :: ( C.IsSymInterface (C.OnlineBackend t solver fp)
+     , W.OnlineSolver t solver
+     , KnownNat w
+     , 1 <= w
+     )
+  => C.OnlineBackend t solver fp
+  -> W.SymBV (C.OnlineBackend t solver fp) w
+  -> Int
+  -> IO [W.GroundValue (W.BaseBVType w)]
+genModels sym expr count
+  | count > 0 = do
+    solver_proc <- C.getSolverProcess sym
+    W.checkAndGetModel solver_proc "gen next model" >>= \case
+      W.Sat (W.GroundEvalFn{..}) -> do
+        next_ground_val <- groundEval expr
+        next_bv_val <- W.bvLit sym W.knownNat next_ground_val
+        not_current_ground_val <- W.bvNe sym expr next_bv_val
+        C.addAssumption sym $ C.LabeledPred not_current_ground_val $
+          C.AssumptionReason W.initializationLoc "assume different model"
+        more_ground_vals <- genModels sym expr (count - 1)
+        return $ next_ground_val : more_ground_vals
+      _ -> return []
+  | otherwise = return []
