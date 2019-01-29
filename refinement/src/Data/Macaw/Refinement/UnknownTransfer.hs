@@ -117,6 +117,7 @@ import           GHC.TypeLits
 
 import Control.Lens
 import Control.Monad.ST ( RealWorld, stToIO )
+import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , DiscoveryState(..)
@@ -129,43 +130,44 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID, funForBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath, buildFuncPath, pathDepth, pathTo, takePath )
-import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
 import Data.Maybe
 import qualified Data.Map as Map
-import Data.Parameterized.Some
-import Data.Parameterized.Nonce
-import Data.Semigroup
-import Data.Parameterized.Ctx (Ctx)
 import qualified Data.Parameterized.Context as Ctx
+import Data.Parameterized.Ctx (Ctx)
+import Data.Parameterized.Nonce
+import Data.Parameterized.Some
 import Data.Proxy ( Proxy(..) )
+import Data.Semigroup
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.Backend.Online as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
-import qualified Lang.Crucible.LLVM.MemModel as LLVM
-import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
 import qualified Lang.Crucible.LLVM.DataLayout as LLVM
+import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified What4.Expr.GroundEval as W
+import           System.IO as IO
 import qualified What4.Interface as W
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.Protocol.SMTLib2 as W
 import qualified What4.SatResult as W
 import qualified What4.Solver.Z3 as W
-import           System.IO as IO
 
 
 -- | This is the main entrypoint, which is given the current Discovery
 -- information and which attempts to resolve UnknownTransfer
 -- classification failures, returning (possibly updated) Discovery
 -- information.
-symbolicUnkTransferRefinement :: DiscoveryState arch -> DiscoveryState arch
+symbolicUnkTransferRefinement :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                                 ) =>
+                                 DiscoveryState arch -> DiscoveryState arch
 symbolicUnkTransferRefinement = refineTransfers []
 
 
@@ -177,7 +179,9 @@ symbolicUnkTransferRefinement = refineTransfers []
 -- function recurses until there are no more UnknownTransfer failure
 -- blocks in the input discovery state that are not also in the
 -- failure accumulation array.
-refineTransfers :: [BlockIdentifier arch]
+refineTransfers :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                   ) =>
+                   [BlockIdentifier arch]
                    -- ^ attempted blocks
                 -> DiscoveryState arch
                    -- ^ input DiscoveryState
@@ -221,7 +225,9 @@ isUnknownTransfer pb =
 -- blocks newly discovered via the transfer resolution) and return
 -- that.  If it was unable to refine the transfer, it will return
 -- Nothing and this block will be added to the "unresolvable" list.
-refineBlockTransfer :: DiscoveryState arch
+refineBlockTransfer :: ( MC.MemWidth (MC.ArchAddrWidth arch)
+                       ) =>
+                       DiscoveryState arch
                     -> Some (ParsedBlock arch)
                     -> Maybe (DiscoveryState arch)
 refineBlockTransfer inpDS blk =

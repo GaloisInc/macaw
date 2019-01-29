@@ -28,7 +28,10 @@ import           Data.Parameterized.Classes
 -- | Expand an initial discovery state by exploring from a given set
 -- of function entry points.  This entry point can be used as an
 -- alternative to the same named function in Data.Macaw.Discovery.
-cfgFromAddrsAndState :: forall arch . ShowF (ArchReg arch) =>
+cfgFromAddrsAndState :: forall arch .
+                        ( MM.MemWidth (ArchAddrWidth arch)
+                        , ShowF (ArchReg arch)
+                        ) =>
                         MD.DiscoveryState arch
                      -> [ArchSegmentOff arch]
                      -- ^ Initial function entry points.
@@ -47,7 +50,10 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 -- alternate entry point from the same named function in
 -- Data.Macaw.Discovery.
 cfgFromAddrs ::
-     forall arch . ShowF (ArchReg arch) =>
+  forall arch .
+  ( MM.MemWidth (ArchAddrWidth arch)
+  , ShowF (ArchReg arch)
+  ) =>
      MA.ArchitectureInfo arch
      -- ^ Architecture-specific information needed for doing
      -- control-flow exploration.
@@ -78,6 +84,8 @@ cfgFromAddrs ainfo mem addrSymMap =
 
 -- | Refine an existing discovery state by using a symbolic backend to
 -- perform additional discovery for incomplete blocks.
-refineDiscovery :: DiscoveryState arch -> DiscoveryState arch
+refineDiscovery :: ( MM.MemWidth (ArchAddrWidth arch)
+                   ) =>
+                   DiscoveryState arch -> DiscoveryState arch
 refineDiscovery = symbolicUnkTransferRefinement
                   . symbolicTargetRefinement
