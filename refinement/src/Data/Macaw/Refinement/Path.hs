@@ -76,7 +76,9 @@ bldFPath :: DiscoveryFunInfo arch ids
 bldFPath _fi x@(_, []) = x
 bldFPath fi (fs, b:bs) =
   let nextBlkAddrs = blockTransferTo fi b
-      updPath = foldr (bldFPath' fi b) fs nextBlkAddrs
+      updPath = if null nextBlkAddrs
+                then Path b [] [] : fs
+                else foldr (bldFPath' fi b) fs nextBlkAddrs
   in bldFPath fi (updPath, bs)
 
 
@@ -117,7 +119,7 @@ bldFPath' fi b nextAddr fs =
            else Path b [] [] : p  -- new terminal entry
 
   in case nextBlkID of
-       Nothing -> fs -- should never happen (block not in function)
+       Nothing -> fs -- target addr was external to this function; ignore it
        Just cb -> addAncestor cb fs
 
 
