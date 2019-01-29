@@ -118,6 +118,7 @@ import           GHC.TypeLits
 
 import Control.Lens
 import Control.Monad.ST ( RealWorld, stToIO )
+import Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
@@ -166,9 +167,10 @@ import qualified What4.Solver.Z3 as W
 -- information and which attempts to resolve UnknownTransfer
 -- classification failures, returning (possibly updated) Discovery
 -- information.
-symbolicUnkTransferRefinement :: ( MC.MemWidth (MC.ArchAddrWidth arch)
-                                 ) =>
-                                 DiscoveryState arch -> DiscoveryState arch
+symbolicUnkTransferRefinement
+  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
+  => DiscoveryState arch
+  -> m (DiscoveryState arch)
 symbolicUnkTransferRefinement = refineTransfers []
 
 
@@ -180,15 +182,15 @@ symbolicUnkTransferRefinement = refineTransfers []
 -- function recurses until there are no more UnknownTransfer failure
 -- blocks in the input discovery state that are not also in the
 -- failure accumulation array.
-refineTransfers :: ( MC.MemWidth (MC.ArchAddrWidth arch)
-                   ) =>
-                   [BlockIdentifier arch]
-                   -- ^ attempted blocks
-                -> DiscoveryState arch
-                   -- ^ input DiscoveryState
-                -> DiscoveryState arch
-                   -- ^ Possibly updated DiscoveryState
-refineTransfers failedRefine inpDS =
+refineTransfers
+  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
+  => [BlockIdentifier arch]
+     -- ^ attempted blocks
+  -> DiscoveryState arch
+     -- ^ input DiscoveryState
+  -> m (DiscoveryState arch)
+     -- ^ Possibly updated DiscoveryState
+refineTransfers failedRefine inpDS = do
   let unrefineable = flip elem failedRefine . blockID
       unkTransfers = inpDS ^. funInfo
                      . to getAllFunctionsTransfers
@@ -196,8 +198,10 @@ refineTransfers failedRefine inpDS =
                      . filtered (not . unrefineable)
       thisUnkTransfer = head unkTransfers
       thisId = blockID thisUnkTransfer
-  in if null unkTransfers
-     then inpDS
+  liftIO $ withDefaultRefinementContext $ \context ->
+    mapM (refineBlockTransfer' context inpDS) unkTransfers
+  if null unkTransfers
+     then return inpDS
      else case refineBlockTransfer inpDS thisUnkTransfer of
             Nothing    -> refineTransfers (thisId : failedRefine) inpDS
             Just updDS -> refineTransfers failedRefine updDS
@@ -226,11 +230,10 @@ isUnknownTransfer pb =
 -- blocks newly discovered via the transfer resolution) and return
 -- that.  If it was unable to refine the transfer, it will return
 -- Nothing and this block will be added to the "unresolvable" list.
-refineBlockTransfer :: ( MC.MemWidth (MC.ArchAddrWidth arch)
-                       ) =>
-                       DiscoveryState arch
-                    -> Some (ParsedBlock arch)
-                    -> Maybe (DiscoveryState arch)
+refineBlockTransfer
+  :: DiscoveryState arch
+  -> Some (ParsedBlock arch)
+  -> Maybe (DiscoveryState arch)
 refineBlockTransfer inpDS blk =
   let path = buildFuncPath <$> funForBlock blk inpDS
   in case path >>= pathTo (blockID blk) of
@@ -289,7 +292,7 @@ data RefinementContext arch t solver fp = RefinementContext
   }
 
 withDefaultRefinementContext
-  :: forall arch a
+  :: forall arch a m
    . (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch)
   => (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
   -> IO a
@@ -317,7 +320,7 @@ withDefaultRefinementContext k = do
             base_ptr
             LLVM.noAlignment
             mem_array
-          MS.withArchEval (arch_vals) sym $ \arch_eval_fns -> do
+          MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
@@ -335,14 +338,14 @@ withDefaultRefinementContext k = do
         Nothing -> fail $ "unsupported architecture"
 
 freshSymVar
-  :: C.IsSymInterface sym
+  :: (C.IsSymInterface sym, MonadIO m)
   => sym
   -> String
   -> Ctx.Index ctx tp
   -> C.TypeRepr tp
-  -> IO (C.RegValue' sym tp)
+  -> m (C.RegValue' sym tp)
 freshSymVar sym prefix idx tp =
-  C.RV <$> case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
+  liftIO $ C.RV <$> case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
     Right symbol -> case tp of
       LLVM.LLVMPointerRepr w ->
         LLVM.llvmPointer_bv sym
@@ -353,12 +356,12 @@ freshSymVar sym prefix idx tp =
     Left err -> fail $ show err
 
 initRegs
-  :: forall arch sym
-   . (MS.SymArchConstraints arch, C.IsSymInterface sym)
+  :: forall arch sym m
+   . (MS.SymArchConstraints arch, C.IsSymInterface sym, MonadIO m)
   => MS.ArchVals arch
   -> sym
   -> C.RegValue sym (LLVM.LLVMPointerType (MC.ArchAddrWidth arch))
-  -> IO (C.RegMap sym (MS.MacawFunctionArgs arch))
+  -> m (C.RegMap sym (MS.MacawFunctionArgs arch))
 initRegs arch_vals sym ip_val = do
   let reg_types = MS.crucArchRegTypes $ MS.archFunctions $ arch_vals
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
@@ -367,23 +370,24 @@ initRegs arch_vals sym ip_val = do
     (MS.updateReg arch_vals) reg_struct MC.ip_reg ip_val
 
 refineBlockTransfer'
-  :: forall arch t solver fp
+  :: forall arch t solver fp m
    . ( MS.SymArchConstraints arch
      , C.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
+     , MonadIO m
      )
   => RefinementContext arch t solver fp
   -> DiscoveryState arch
   -> Some (ParsedBlock arch)
-  -> IO [ArchSegmentOff arch]
+  -> m [ArchSegmentOff arch]
 refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
   let arch = Proxy @arch
   block_ip_val <- case MC.segoffAsAbsoluteAddr (pblockAddr block) of
-    Just addr -> LLVM.llvmPointer_bv symbolicBackend
+    Just addr -> liftIO $ LLVM.llvmPointer_bv symbolicBackend
       =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
     Nothing -> fail $ "unexpected block address: " ++ show (pblockAddr block)
   init_regs <- initRegs archVals symbolicBackend block_ip_val
-  some_cfg <- stToIO $ MS.mkParsedBlockCFG
+  some_cfg <- liftIO $ stToIO $ MS.mkParsedBlockCFG
     (MS.archFunctions archVals)
     handleAllocator
     Map.empty
@@ -408,12 +412,12 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
             C.defaultAbortHandler
             (C.runOverrideSim handle_return_type simulation)
       let execution_features = []
-      exec_res <- C.executeCrucible execution_features initial_state
+      exec_res <- liftIO $ C.executeCrucible execution_features initial_state
       case exec_res of
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
           let res_ip = (MS.lookupReg archVals) res_regs MC.ip_reg
-          res_ip_bv_val <- LLVM.projectLLVM_bv
+          res_ip_bv_val <- liftIO $ LLVM.projectLLVM_bv
             symbolicBackend
             (C.regValue res_ip)
           ip_ground_vals <- genModels symbolicBackend res_ip_bv_val 10
@@ -427,13 +431,14 @@ genModels
      , W.OnlineSolver t solver
      , KnownNat w
      , 1 <= w
+     , MonadIO m
      )
   => C.OnlineBackend t solver fp
   -> W.SymBV (C.OnlineBackend t solver fp) w
   -> Int
-  -> IO [W.GroundValue (W.BaseBVType w)]
+  -> m [W.GroundValue (W.BaseBVType w)]
 genModels sym expr count
-  | count > 0 = do
+  | count > 0 = liftIO $ do
     solver_proc <- C.getSolverProcess sym
     W.checkAndGetModel solver_proc "gen next model" >>= \case
       W.Sat (W.GroundEvalFn{..}) -> do
