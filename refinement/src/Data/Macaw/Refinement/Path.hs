@@ -28,9 +28,11 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 -- loop point.
 data FuncBlockPath arch =
   Path
-  (BlockIdentifier arch) -- current block
-  [FuncBlockPath arch] -- ancestors to this block (non-loop)
-  [BlockIdentifier arch] -- previously seen ancestors (loop)
+  (BlockIdentifier arch) -- ^ current block identifier
+  [FuncBlockPath arch]   -- ^ next non-loop path elements (callees for
+                         -- a ForwardPath, callers for a BackwardPath)
+  [BlockIdentifier arch] -- ^ next elements which would form a path
+                         -- loop.
 
 
 instance ( MemWidth (ArchAddrWidth arch) ) =>
