@@ -78,8 +78,12 @@ bldFPath :: DiscoveryFunInfo arch ids
 bldFPath _fi x@(_, []) = x
 bldFPath fi (fs, b:bs) =
   let nextBlkAddrs = blockTransferTo fi b
+      isPathElemForBlock bid (Path pid _ _) = bid == pid
+      isTopLevelPathEntry = not $ null $ filter (isPathElemForBlock b) fs
       updPath = if null nextBlkAddrs
-                then Path b [] [] : fs
+                then if isTopLevelPathEntry
+                     then fs
+                     else b $ Path b [] [] : fs
                 else foldr (bldFPath' fi b) fs nextBlkAddrs
   in bldFPath fi (updPath, bs)
 
@@ -93,6 +97,7 @@ bldFPath' fi b nextAddr fs =
   let nextBlkID = blockInFunction fi nextAddr
 
       isPathElemForBlock bid (Path pid _ _) = bid == pid
+      isTopLevelPathEntry e = not $ null $ filter (isPathElemForBlock e) fs
 
       -- until an if "ancestor" is attached to any callees it appears
       -- to be a terminal path point.  When a callee is identified,
@@ -118,7 +123,9 @@ bldFPath' fi b nextAddr fs =
            then case ancPathElem of
                   Nothing -> updPath
                   Just _ -> filter (not . isPathElemForBlock b) updPath -- remove terminal entry
-           else Path b [] [] : p  -- new terminal entry
+           else if isTopLevelPathEntry cb
+                then p
+                else Path cb [Path b [] []] [] : p  -- new terminal entry
 
   in case nextBlkID of
        Nothing -> fs -- target addr was external to this function; ignore it
