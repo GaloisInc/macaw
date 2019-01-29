@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
@@ -284,11 +285,12 @@ data RefinementContext arch t solver fp = RefinementContext
   , nonceGenerator :: NonceGenerator IO t
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
+  , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
   }
 
 withDefaultRefinementContext
   :: forall arch a
-   . MS.ArchInfo arch
+   . (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch)
   => (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
   -> IO a
 withDefaultRefinementContext k = do
@@ -298,11 +300,28 @@ withDefaultRefinementContext k = do
       case MS.archVals (Proxy @arch) of
         Just arch_vals -> do
           mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
+          empty_mem <- LLVM.emptyMem LLVM.LittleEndian
+          let ?ptrWidth = W.knownNat
+          (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
+            sym
+            LLVM.GlobalAlloc
+            LLVM.Mutable
+            "flat memory"
+            empty_mem
+            LLVM.noAlignment
+          let Right mem_name = W.userSymbol "mem"
+          mem_array <- W.freshConstant sym mem_name W.knownRepr
+          initialized_mem <- LLVM.doArrayStoreUnbounded
+            sym
+            allocated_mem
+            base_ptr
+            LLVM.noAlignment
+            mem_array
           MS.withArchEval (arch_vals) sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  (\sym _ _ off -> Just <$> LLVM.llvmPointer_bv sym off)
+                  (\_ _ _ off -> Just <$> LLVM.ptrAdd sym W.knownNat base_ptr off)
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
             k $ RefinementContext
               { symbolicBackend = sym
@@ -311,6 +330,7 @@ withDefaultRefinementContext k = do
               , nonceGenerator = nonce_gen
               , extensionImpl = ext_impl
               , memVar = mem_var
+              , mem = initialized_mem
               }
         Nothing -> fail $ "unsupported architecture"
 
@@ -344,7 +364,7 @@ initRegs arch_vals sym ip_val = do
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
   let reg_struct = C.RegEntry (C.StructRepr reg_types) reg_vals
   return $ C.RegMap $ Ctx.singleton $
-    (MS.updateReg arch_vals) reg_struct (MC.ip_reg @(MC.ArchReg arch)) ip_val
+    (MS.updateReg arch_vals) reg_struct MC.ip_reg ip_val
 
 refineBlockTransfer'
   :: forall arch t solver fp
@@ -363,7 +383,6 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
       =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
     Nothing -> fail $ "unexpected block address: " ++ show (pblockAddr block)
   init_regs <- initRegs archVals symbolicBackend block_ip_val
-  init_mem <- LLVM.emptyMem LLVM.LittleEndian
   some_cfg <- stToIO $ MS.mkParsedBlockCFG
     (MS.archFunctions archVals)
     handleAllocator
@@ -380,10 +399,7 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
             C.emptyHandleMap
             extensionImpl
             MS.MacawSimulatorState
-      let global_state = C.insertGlobal
-            memVar
-            init_mem
-            C.emptyGlobals
+      let global_state = C.insertGlobal memVar mem C.emptyGlobals
       let simulation = C.regValue <$> C.callCFG cfg init_regs
       let handle_return_type = C.handleReturnType $ C.cfgHandle cfg
       let initial_state = C.InitialState
@@ -396,9 +412,7 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
       case exec_res of
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
-          let res_ip = (MS.lookupReg archVals)
-                res_regs
-                (MC.ip_reg @(MC.ArchReg arch))
+          let res_ip = (MS.lookupReg archVals) res_regs MC.ip_reg
           res_ip_bv_val <- LLVM.projectLLVM_bv
             symbolicBackend
             (C.regValue res_ip)
