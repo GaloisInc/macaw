@@ -22,12 +22,16 @@
 -- source is described, along with various tests.
 
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-missing-signatures #-}
 
 module Main ( main ) where
+
+import           GHC.TypeLits
 
 import           Control.Lens hiding ( (<.>) )
 import           Control.Monad
@@ -46,7 +50,9 @@ import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
 import           Data.Macaw.Refinement
+import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.X86 as MX86
+import           Data.Macaw.X86.Symbolic()
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
 import           Data.Parameterized.Some
@@ -234,6 +240,8 @@ testExpected useRefinement expFile testinp beVerbose readBinary = do
         m -> error $ "no 32-bit ELF support for " ++ show m
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
+                            , MS.SymArchConstraints arch
+                            , 16 <= MC.ArchAddrWidth arch
                             , MBL.BinaryLoader arch binFmt
                             , MonadIO m) =>
                             TestInput
@@ -246,8 +254,8 @@ withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
   entries <- toList <$> entryPoints bin
   let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
       actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
-      refinedCFG = refineDiscovery baseCFG
-      refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
+  refinedCFG <- refineDiscovery baseCFG
+  let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
       formName = if useRefinement then "refined" else "base"
       actual = if useRefinement then refinedBase else actualBase
   compareToExpected formName actual expFile

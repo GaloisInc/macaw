@@ -120,7 +120,9 @@ test-suite test-refinements
                , macaw-loader-ppc
                , macaw-ppc
                , macaw-refinement
+               , macaw-symbolic
                , macaw-x86
+               , macaw-x86-symbolic
                , optparse-applicative >= 0.13 && < 0.15
                , parameterized-utils
                , QuickCheck >= 2.7

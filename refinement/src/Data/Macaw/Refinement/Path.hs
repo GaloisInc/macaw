@@ -83,7 +83,7 @@ bldFPath fi (fs, b:bs) =
       updPath = if null nextBlkAddrs
                 then if isTopLevelPathEntry
                      then fs
-                     else b $ Path b [] [] : fs
+                     else Path b [] [] : fs
                 else foldr (bldFPath' fi b) fs nextBlkAddrs
   in bldFPath fi (updPath, bs)
 
