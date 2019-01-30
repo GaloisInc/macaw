@@ -48,7 +48,7 @@ import           Data.Macaw.BinaryLoader.X86 ()
 import           Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
-import           Data.Macaw.PPC
+-- import           Data.Macaw.PPC
 import           Data.Macaw.Refinement
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.X86 as MX86
@@ -62,8 +62,8 @@ import qualified Data.Set as Set
 import           Data.Tagged
 import           Data.Typeable ( Typeable )
 import           Options.Applicative
-import qualified SemMC.Architecture.PPC32 as PPC32
-import qualified SemMC.Architecture.PPC64 as PPC64
+-- import qualified SemMC.Architecture.PPC32 as PPC32
+-- import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Directory ( doesFileExist )
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath as FP
@@ -233,20 +233,20 @@ testExpected useRefinement expFile testinp beVerbose readBinary = do
   where
     withElf64 elf =
       case E.elfMachine elf of
-        E.EM_PPC64 -> do
-          bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
-          let pli = ppc64_linux_info bin
-          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
+        -- E.EM_PPC64 -> do
+        --   bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
+        --   let pli = ppc64_linux_info bin
+        --   withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
         E.EM_X86_64 ->
           withBinaryDiscoveredInfo testinp useRefinement expFile MX86.x86_64_linux_info =<<
             MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
         m -> error $ "no 64-bit ELF support for " ++ show m
     withElf32 elf =
       case E.elfMachine elf of
-        E.EM_PPC -> do
-          bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
-          let pli = ppc32_linux_info bin
-          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
+        -- E.EM_PPC -> do
+        --   bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
+        --   let pli = ppc32_linux_info bin
+        --   withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
         m -> error $ "no 32-bit ELF support for " ++ show m
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
