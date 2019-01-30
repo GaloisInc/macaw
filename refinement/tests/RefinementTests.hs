@@ -58,6 +58,7 @@ import           Data.Maybe ( catMaybes )
 import           Data.Parameterized.Some
 import           Data.Proxy
 import           Data.Semigroup ( (<>) )
+import qualified Data.Set as Set
 import           Data.Tagged
 import           Data.Typeable ( Typeable )
 import           Options.Applicative
@@ -107,6 +108,8 @@ instance IsOption VerboseLogging where
                                              )
 
 
+-- | This is a Tasty "Ingredient" (aka test runner) that can be used
+-- to display the search process and results for generating the tests.
 searchResultsReport = TestManager [] $ \opts _tests ->
   if lookupOption opts == ShowSearch True
   then Just $ do searchlist <- getTestList datadir True
@@ -131,8 +134,12 @@ main = do
   -- https://stackoverflow.com/questions/33040722
   -- https://github.com/feuerbach/tasty/issues/228
   testInputs <- getTestList datadir False
+  let testNames = Set.fromList $ map name testInputs
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "macaw-refinement" $ map mkTest testInputs
+    TT.testGroup "macaw-refinement" $
+    mkNameGroup testInputs <$> toList testNames
+  where mkNameGroup inps nm =
+          TT.testGroup nm $ map mkTest $ filter ((==) nm . name) inps
 
 
 data TestInput = TestInput { name :: String
@@ -208,8 +215,7 @@ mkTest testinp =
   in TT.askOption $ \(VerboseLogging beVerbose) ->
      TT.withResource readbin cleanup $
      \readBinary ->
-       TT.testGroup (name testinp)
-       [TT.testGroup (arch testinp) $ map (\t -> t beVerbose readBinary) tests]
+       TT.testGroup (arch testinp) $ map (\t -> t beVerbose readBinary) tests
 
 
 testExpected useRefinement expFile testinp beVerbose readBinary = do
