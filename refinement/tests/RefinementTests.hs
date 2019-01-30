@@ -264,11 +264,11 @@ withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
   entries <- toList <$> entryPoints bin
   let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
       actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
-  refinedCFG <- refineDiscovery baseCFG
-  let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
-      formName = if useRefinement then "refined" else "base"
-      actual = if useRefinement then refinedBase else actualBase
-  compareToExpected formName actual expFile
+  if useRefinement
+    then do refinedCFG <- refineDiscovery baseCFG
+            let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
+            compareToExpected "refined" refinedBase expFile
+    else compareToExpected "base" actualBase expFile
 
 
 compareToExpected formName actual fn =
