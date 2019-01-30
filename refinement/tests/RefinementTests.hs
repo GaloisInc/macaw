@@ -41,7 +41,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import           Data.Foldable
 import           Data.Function ( on )
-import           Data.List ( sortBy )
+import           Data.List ( intercalate, sortBy )
 import qualified Data.Macaw.Architecture.Info as AI
 import           Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.BinaryLoader.X86 ()
@@ -52,7 +52,7 @@ import           Data.Macaw.PPC
 import           Data.Macaw.Refinement
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.X86 as MX86
-import           Data.Macaw.X86.Symbolic()
+import           Data.Macaw.X86.Symbolic ()
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
 import           Data.Parameterized.Some
@@ -78,8 +78,11 @@ import           Text.Read ( readEither )
 import           Prelude
 
 
-
 datadir =  "tests/samples"
+supportedArch = [ "x86"
+                , "ppc"
+                ]
+
 
 data ShowSearch =  ShowSearch Bool deriving (Eq, Ord, Typeable)
 
@@ -157,7 +160,8 @@ data TestInput = TestInput { name :: String
 getTestList :: FilePath -> Bool -> IO [TestInput]
 getTestList basedir explain = do
   when explain $ putStrLn $ "Checking for test inputs in " <> (basedir </> "*.exe")
-  exeNames <- (FPG.namesMatching $ basedir </> "*exe")
+  let exeGlob = "*.(" <> (intercalate "|" supportedArch) <> ").exe"
+  exeNames <- FPG.namesMatching $ basedir </> exeGlob
   postproc <$> mapM mkTI exeNames
   where
     postproc = sorted . catMaybes
