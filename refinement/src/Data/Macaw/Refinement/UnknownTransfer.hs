@@ -198,7 +198,7 @@ refineTransfers failedRefine inpDS = do
                      . filtered (not . unrefineable)
       thisUnkTransfer = head unkTransfers
       thisId = blockID thisUnkTransfer
-  liftIO $ withDefaultRefinementContext $ \context ->
+  block_addrs <- liftIO $ withDefaultRefinementContext $ \context ->
     mapM (refineBlockTransfer' context inpDS) unkTransfers
   if null unkTransfers
      then return inpDS
@@ -416,15 +416,20 @@ refineBlockTransfer' RefinementContext{..} discovery_state (Some block) = do
       case exec_res of
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
-          let res_ip = (MS.lookupReg archVals) res_regs MC.ip_reg
-          res_ip_bv_val <- liftIO $ LLVM.projectLLVM_bv
-            symbolicBackend
-            (C.regValue res_ip)
-          ip_ground_vals <- genModels symbolicBackend res_ip_bv_val 10
-          return $ mapMaybe
-            (MC.resolveAbsoluteAddr (memory discovery_state) . MC.memWord . fromIntegral)
-            ip_ground_vals
-        _ -> fail "simulation failed"
+          case C.regValue $ (MS.lookupReg archVals) res_regs MC.ip_reg of
+            LLVM.LLVMPointer _ res_ip_bv_val -> do
+              ip_ground_vals <- genModels symbolicBackend res_ip_bv_val 10
+              return $ mapMaybe
+                (MC.resolveAbsoluteAddr (memory discovery_state) . MC.memWord . fromIntegral)
+                ip_ground_vals
+        C.AbortedResult _ aborted_res -> case aborted_res of
+          C.AbortedExec reason _ ->
+            fail $ "simulation abort: " ++ show (C.ppAbortExecReason reason)
+          C.AbortedExit code ->
+            fail $ "simulation halt: " ++ show code
+          C.AbortedBranch{} ->
+            fail $ "simulation abort branch"
+        C.TimeoutResult{} -> fail $ "simulation timeout"
 
 genModels
   :: ( C.IsSymInterface (C.OnlineBackend t solver fp)
