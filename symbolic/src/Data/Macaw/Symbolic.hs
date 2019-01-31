@@ -351,10 +351,14 @@ termStmtToReturn sl = sl { M.stmtsTerm = tm }
   where
     tm :: M.ParsedTermStmt arch ids
     tm = case M.stmtsTerm sl of
+      M.ParsedCall r _ -> M.ParsedReturn r
       M.ParsedJump r _ -> M.ParsedReturn r
       M.ParsedLookupTable r _ _ -> M.ParsedReturn r
       M.ParsedIte b l r -> M.ParsedIte b (termStmtToReturn l) (termStmtToReturn r)
-      tm0 -> tm0
+      M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
+      M.ClassifyFailure r -> M.ParsedReturn r
+      tm0@M.PLTStub{} -> tm0
+      tm0@M.ParsedTranslateError{} -> tm0
 
 -- | Create a registerized Crucible CFG from a single Macaw 'M.ParsedBlock'.
 -- Note that the term statement of the block is updated to make it a return (and
