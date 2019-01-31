@@ -1,7 +1,10 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -Wno-missing-signatures #-}
 
 import           Control.Lens
@@ -13,11 +16,14 @@ import qualified Data.ElfEdit as E
 import           Data.Foldable
 import qualified Data.Macaw.Architecture.Info as AI
 import           Data.Macaw.BinaryLoader as MBL
+import           Data.Macaw.X86.Symbolic ()
 import           Data.Macaw.BinaryLoader.X86 ()
+import           Data.Macaw.CFG ( ArchAddrWidth )
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.Refinement as MR
 import qualified Data.Macaw.Memory.ElfLoader as ML
-import           Data.Macaw.PPC
+import qualified Data.Macaw.Refinement as MR
+import           Data.Macaw.Symbolic ( SymArchConstraints )
+import           GHC.TypeLits
 import qualified Data.Macaw.X86 as MX86
 import qualified Data.Map as M
 import           Data.Parameterized.Some
@@ -79,6 +85,8 @@ doRefinement opts = do
 
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
                             , MBL.BinaryLoader arch binFmt
+                            , SymArchConstraints arch
+                            , 16 <= ArchAddrWidth arch
                             , MonadIO m) =>
                             Options
                          -> (MD.DiscoveryState arch -> m a)
@@ -91,8 +99,8 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
               putStrLn $ show $ fmap show entries
               -- putStrLn $ show (fmap (show . MM.segoffSegment) entries)
               -- putStrLn $ show (fmap (show . MM.segoffOffset) entries)
-  let di = if unrefined opts
-           then MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
+  di <- liftIO $ if unrefined opts
+           then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
            else AI.withArchConstraints arch_info $
                 MR.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
   f di
