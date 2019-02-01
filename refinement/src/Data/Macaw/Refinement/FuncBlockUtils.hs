@@ -54,8 +54,8 @@ funForBlock pb ds =
        _ -> Nothing  -- should not be possible
 
 blockInFunction :: DiscoveryFunInfo arch ids
-              -> ArchSegmentOff arch
-              -> Maybe (BlockIdentifier arch)
+                -> ArchSegmentOff arch
+                -> Maybe (BlockIdentifier arch)
 blockInFunction fi addr = blockID . Some <$> (fi ^. parsedBlocks) Map.!? addr
 
 funIncludesBlock :: BlockIdentifier arch
