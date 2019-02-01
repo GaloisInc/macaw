@@ -1,7 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.Path
-  ( FuncBlockPath
+  ( FuncBlockPath(..)
   , buildFuncPath
   , pathDepth
   , pathTo

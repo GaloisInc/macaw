@@ -5,6 +5,7 @@ module Data.Macaw.Refinement.FuncBlockUtils
   , blockTransferTo
   , funBlockIDs
   , funForBlock
+  , getBlock
   )
 where
 
@@ -60,6 +61,11 @@ funIncludesBlock :: BlockIdentifier arch
                  -> Bool
 funIncludesBlock blkID (Some fi) =
   isJust ((fi ^. parsedBlocks) Map.!? blkID)
+
+getBlock :: DiscoveryState arch
+         -> BlockIdentifier arch
+         -> Some (ParsedBlock arch)
+getBlock ds blkID = undefined
 
 -- | This function identifies the possible target addresses (of other
 -- blocks within this function) from the terminal statement in the
