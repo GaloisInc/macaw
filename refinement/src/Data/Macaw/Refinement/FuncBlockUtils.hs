@@ -25,6 +25,8 @@ import           Data.Maybe ( isJust )
 import           Data.Parameterized.Some
 import           Data.Semigroup
 
+import           Prelude
+
 
 -- | The local type used to identify blocks.  Using a local
 -- abstraction for this allows this code to be more independent of the
