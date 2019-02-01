@@ -418,7 +418,7 @@ smtSolveTransfer RefinementContext{..} discovery_state (Some block) = do
       =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
     Nothing -> fail $ "unexpected block address: " ++ show (pblockAddr block)
   init_regs <- initRegs archVals symbolicBackend block_ip_val
-  some_cfg <- liftIO $ stToIO $ MS.mkParsedBlockCFG
+  some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)
     handleAllocator
     Map.empty
