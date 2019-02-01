@@ -4,6 +4,7 @@ module Data.Macaw.Refinement.Path
   ( FuncBlockPath(..)
   , buildFuncPath
   , pathDepth
+  , pathForwardTrails
   , pathTo
   , takePath
   )
@@ -161,3 +162,32 @@ takePath n (Path blkid anc loop) =
 pathDepth :: FuncBlockPath arch -> Int
 pathDepth (Path _ [] _) = 0
 pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
+
+
+-- | Converts a Path tree into a list of the distinct paths, where
+-- each path is represented by a list of block IDs in the order that
+-- they would be executed (i.e. the back-path is converted to a
+-- forward-chain list.
+--
+-- For example:
+--
+-- > Path 1
+-- >   [ Path 2 [ Path 3 ] []
+-- >   , Path 4 [ Path 5 [ Path 6 [] []
+-- >                     , Path 7 [ Path 3 [] []] []
+-- >                     ] []
+-- >            ] []
+-- >   ] []
+--
+-- Is converted to:
+--
+-- >  [ [ 3, 2, 1 ]
+-- >  , [ 6, 5, 4, 1 ]
+-- >  , [ 3, 7, 5, 4, 1 ]
+-- >  ]
+--
+pathForwardTrails :: FuncBlockPath arch -> [ [BlockIdentifier arch] ]
+pathForwardTrails (Path i [] _) = [[i]]
+pathForwardTrails (Path i anc _) = let ft = concatMap pathForwardTrails anc
+                                       appendTo v l = l <> [v]
+                                   in map (appendTo i) ft

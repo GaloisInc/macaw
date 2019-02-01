@@ -130,8 +130,11 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , parsedBlocks
                                   , stmtsTerm
                                   )
-import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID, funForBlock, getBlock )
-import Data.Macaw.Refinement.Path ( FuncBlockPath(..), buildFuncPath, pathDepth, pathTo, takePath )
+import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID
+                                            , funForBlock, getBlock )
+import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
+                                  , buildFuncPath, pathDepth, pathForwardTrails
+                                  , pathTo, takePath )
 import qualified Data.Macaw.Symbolic as MS
 import Data.Map (Map)
 import Data.Maybe
@@ -278,21 +281,16 @@ refinePath inpDS path maxlevel numlevels prevResult =
                        then return bestResult
                        else refinePath inpDS path maxlevel nextlevel bestResult
 
-data Equation arch = Equation (DiscoveryState arch) (Some (ParsedBlock arch))
+data Equation arch = Equation (DiscoveryState arch) [[Some (ParsedBlock arch)]]
 type Solution arch = [ArchSegmentOff arch]  -- identified transfers
 
 equationFor :: DiscoveryState arch -> FuncBlockPath arch -> Equation arch
-equationFor inpDS (Path bid anc _loop) =
-  let curBlk = getBlock inpDS bid
-  in case curBlk of
-       Nothing -> error "did not find requested block in discovery results!" -- internal
-       Just b ->
-         if null anc
-         then Equation inpDS b
-         else undefined
-              -- Should linearly combine the anc statements with the
-              -- current block's statements and asserts that state that
-              -- the IP from one to the next is expected.
+equationFor inpDS p =
+  let pTrails = pathForwardTrails p
+      pTrailBlocks = map (getBlock inpDS) <$> pTrails
+  in if and (any (not . isJust) <$> pTrailBlocks)
+     then error "did not find requested block in discovery results!" -- internal
+       else Equation inpDS (catMaybes <$> pTrailBlocks)
 
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
@@ -409,9 +407,24 @@ smtSolveTransfer
      )
   => RefinementContext arch t solver fp
   -> DiscoveryState arch
+  -> [[Some (ParsedBlock arch)]]
+  -> m [ArchSegmentOff arch]
+smtSolveTransfer rc ds blockPaths =
+  -- wrong thing: fix the handling of blockPaths
+  smtSolveTransfer' rc ds $ head $ head blockPaths
+
+smtSolveTransfer'
+  :: forall arch t solver fp m
+   . ( MS.SymArchConstraints arch
+     , C.IsSymInterface (C.OnlineBackend t solver fp)
+     , W.OnlineSolver t solver
+     , MonadIO m
+     )
+  => RefinementContext arch t solver fp
+  -> DiscoveryState arch
   -> Some (ParsedBlock arch)
   -> m [ArchSegmentOff arch]
-smtSolveTransfer RefinementContext{..} discovery_state (Some block) = do
+smtSolveTransfer' RefinementContext{..} discovery_state (Some block) = do
   let arch = Proxy @arch
   block_ip_val <- case MC.segoffAsAbsoluteAddr (pblockAddr block) of
     Just addr -> liftIO $ LLVM.llvmPointer_bv symbolicBackend
