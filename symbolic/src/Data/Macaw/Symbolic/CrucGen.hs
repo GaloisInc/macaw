@@ -62,6 +62,15 @@ module Data.Macaw.Symbolic.CrucGen
   , ArchAddrWidthRepr
   , addrWidthIsPos
   , getRegs
+  , addStatementList
+  , addMacawStmt
+  , addMacawParsedTermStmt
+  , addStmt
+  , appAtom
+  , toBits
+  , getRegValue
+  , bvLit
+  , archAddrWidth
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
