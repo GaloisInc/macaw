@@ -100,7 +100,6 @@ blockTransferTo fi frm =
                                        | otherwise -> []
           ParsedTranslateError {} -> []
           ClassifyFailure {} -> []
-          _ -> undefined
   in case frmBlk of
        Just fBlk -> lclTgtAddrs $ stmtsTerm $ blockStatementList fBlk
        Nothing -> error "block ID not valid" -- impossible
