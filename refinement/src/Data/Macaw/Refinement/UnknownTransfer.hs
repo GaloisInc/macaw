@@ -284,12 +284,15 @@ type Solution arch = [ArchSegmentOff arch]  -- identified transfers
 equationFor :: DiscoveryState arch -> FuncBlockPath arch -> Equation arch
 equationFor inpDS (Path bid anc _loop) =
   let curBlk = getBlock inpDS bid
-  in if null anc
-     then Equation inpDS curBlk
-     else undefined
-          -- Should linearly combine the anc statements with the
-          -- current block's statements and asserts that state that
-          -- the IP from one to the next is expected.
+  in case curBlk of
+       Nothing -> error "did not find requested block in discovery results!" -- internal
+       Just b ->
+         if null anc
+         then Equation inpDS b
+         else undefined
+              -- Should linearly combine the anc statements with the
+              -- current block's statements and asserts that state that
+              -- the IP from one to the next is expected.
 
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch

@@ -62,10 +62,15 @@ funIncludesBlock :: BlockIdentifier arch
 funIncludesBlock blkID (Some fi) =
   isJust ((fi ^. parsedBlocks) Map.!? blkID)
 
+-- | Returns the actual block (if it exists) from the Discovery State
+-- (in the first function for which it exists).
 getBlock :: DiscoveryState arch
          -> BlockIdentifier arch
-         -> Some (ParsedBlock arch)
-getBlock ds blkID = undefined
+         -> Maybe (Some (ParsedBlock arch))
+getBlock ds blkID =
+  case filter (funIncludesBlock blkID) (ds ^. funInfo ^.. folded) of
+    ((Some fi):_) -> Some <$> (fi ^. parsedBlocks) Map.!? blkID
+    [] -> Nothing
 
 -- | This function identifies the possible target addresses (of other
 -- blocks within this function) from the terminal statement in the
