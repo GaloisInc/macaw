@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -57,6 +58,9 @@ module Data.Macaw.Symbolic
     -- ** Translating individual blocks
   , mkParsedBlockRegCFG
   , mkParsedBlockCFG
+    -- ** Translating block paths
+  , mkBlockPathRegCFG
+  , mkBlockPathCFG
     -- ** Post-processing helpers
   , toCoreCFG
     -- ** Translation-related types
@@ -101,7 +105,9 @@ import           Control.Monad (foldM, forM, join)
 import           Control.Monad.IO.Class
 import           Control.Monad.ST (ST, RealWorld, stToIO)
 import qualified Data.Map.Strict as Map
-import           Data.Parameterized.Context as Ctx
+import           Data.Maybe
+import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce ( NonceGenerator, newSTNonceGenerator )
 import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
@@ -114,6 +120,7 @@ import           What4.Symbol (userSymbol)
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
 import qualified Lang.Crucible.CFG.Core as C
+import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
@@ -351,12 +358,34 @@ termStmtToReturn sl = sl { M.stmtsTerm = tm }
   where
     tm :: M.ParsedTermStmt arch ids
     tm = case M.stmtsTerm sl of
+      tm0@M.ParsedReturn{} -> tm0
       M.ParsedCall r _ -> M.ParsedReturn r
       M.ParsedJump r _ -> M.ParsedReturn r
       M.ParsedLookupTable r _ _ -> M.ParsedReturn r
       M.ParsedIte b l r -> M.ParsedIte b (termStmtToReturn l) (termStmtToReturn r)
       M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
       M.ClassifyFailure r -> M.ParsedReturn r
+      tm0@M.PLTStub{} -> tm0
+      tm0@M.ParsedTranslateError{} -> tm0
+
+-- | Normalise any term statements to jumps.
+termStmtToJump
+  :: forall arch ids
+   . M.StatementList arch ids
+  -> M.ArchSegmentOff arch
+  -> M.StatementList arch ids
+termStmtToJump sl addr = sl { M.stmtsTerm = tm }
+  where
+    tm :: M.ParsedTermStmt arch ids
+    tm = case M.stmtsTerm sl of
+      tm0@M.ParsedJump{} -> tm0
+      M.ParsedCall r _ -> M.ParsedJump r addr
+      M.ParsedReturn r -> M.ParsedJump r addr
+      M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
+      M.ParsedIte b l r ->
+        M.ParsedIte b (termStmtToJump l addr) (termStmtToJump r addr)
+      M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
+      M.ClassifyFailure r -> M.ParsedJump r addr
       tm0@M.PLTStub{} -> tm0
       tm0@M.ParsedTranslateError{} -> tm0
 
@@ -450,6 +479,119 @@ mkParsedBlockCFG :: forall s arch ids
                  -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkParsedBlockCFG archFns halloc memBaseVarMap posFn b =
   toCoreCFG archFns <$> mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b
+
+mkBlockPathRegCFG
+  :: forall h arch ids
+   . MacawSymbolicArchFunctions arch
+  -- ^ Architecture specific functions.
+  -> C.HandleAllocator h
+  -- ^ Handle allocator to make the blocks
+  -> MemSegmentMap (M.ArchAddrWidth arch)
+  -- ^ Map from region indices to their address
+  -> (M.ArchSegmentOff arch -> C.Position)
+  -- ^ Function that maps function address to Crucible position
+  -> [M.ParsedBlock arch ids]
+  -- ^ Bloc path to translate
+  -> ST h (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
+mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
+  crucGenArchConstraints arch_fns $ mkCrucRegCFG arch_fns halloc "" $ do
+    let entry_addr = M.pblockAddr $ head blocks
+    let first_blocks = zipWith
+          (\block next_block ->
+            block { M.blockStatementList = termStmtToJump (M.blockStatementList block) (M.pblockAddr next_block) })
+          (take (length blocks - 1) blocks)
+          (tail blocks)
+    let last_block = (last blocks) { M.blockStatementList = termStmtToReturn (M.blockStatementList (last blocks)) }
+    let block_path = first_blocks ++ [last_block]
+
+    -- Get type for representing Machine registers
+    let arch_reg_struct_type = C.StructRepr $ crucArchRegTypes arch_fns
+    let entry_pos = pos_fn entry_addr
+    -- Create Crucible "register" (i.e. a mutable variable) for
+    -- current value of Macaw machine registers.
+    arch_reg_struct_reg_id <- mmFreshNonce
+    let arch_reg_struct_reg = CR.Reg
+          { CR.regPosition = entry_pos
+          , CR.regId = arch_reg_struct_reg_id
+          , CR.typeOfReg = arch_reg_struct_type
+          }
+    nonce_gen <- mmNonceGenerator
+    -- Create atom for entry
+    input_atom <- mmExecST $ Ctx.last <$>
+      CR.mkInputAtoms nonce_gen entry_pos (Empty :> arch_reg_struct_type)
+
+    -- Create map from Macaw (block_address, statement_list_id) pairs
+    -- to Crucible labels
+    block_label_map :: BlockLabelMap arch s <- mkBlockLabelMap block_path
+
+    let off_pos_fn :: M.ArchSegmentOff arch -> M.ArchAddrWord arch -> C.Position
+        off_pos_fn base = pos_fn . fromJust . M.incSegmentOff base . toInteger
+
+    let runCrucGen' addr label = runCrucGen
+          arch_fns
+          mem_base_var_map
+          (off_pos_fn addr)
+          0
+          label
+          arch_reg_struct_reg
+
+    -- Generate entry Crucible block
+    entry_label <- CR.Label <$> mmFreshNonce
+    (init_crucible_block, _) <-
+      runCrucGen' entry_addr entry_label $ do
+        -- Initialize value in arch_reg_struct_reg with initial registers
+        setMachineRegs input_atom
+        -- Jump to function entry point
+        addTermStmt $ CR.Jump (parsedBlockLabel block_label_map entry_addr 0)
+
+    -- Generate code for Macaw blocks
+    crucible_blocks <- forM block_path $ \block -> do
+      let block_addr = M.pblockAddr block
+      let stmts = M.blockStatementList block
+      let label = block_label_map Map.! (block_addr, M.stmtsIdent stmts)
+
+      (first_crucible_block, off) <- runCrucGen' block_addr label $ do
+        arch_width <- M.addrWidthNatRepr <$> archAddrWidth
+        ip_reg_val <- toBits arch_width =<< getRegValue M.ip_reg
+        block_addr_lit <- CG.bvLit arch_width $
+          fromIntegral $ fromJust $ M.segoffAsAbsoluteAddr block_addr
+        cond <- appAtom $ C.BVEq arch_width ip_reg_val block_addr_lit
+        msg <- appAtom $ C.TextLit
+          "the current block follows the previous block in the path"
+        addStmt $ CR.Assume cond msg
+
+        mapM_ (addMacawStmt block_addr) (M.stmtsNonterm stmts)
+        addMacawParsedTermStmt block_label_map block_addr (M.stmtsTerm stmts)
+
+      let next_stmts = map ((,) off) $ nextStatements $ M.stmtsTerm stmts
+      addStatementList
+        arch_fns
+        mem_base_var_map
+        block_label_map
+        block_addr
+        (off_pos_fn block_addr)
+        arch_reg_struct_reg
+        next_stmts
+        [first_crucible_block]
+
+    pure (entry_label, init_crucible_block : concat crucible_blocks)
+
+mkBlockPathCFG
+  :: forall s arch ids
+   . MacawSymbolicArchFunctions arch
+  -- ^ Architecture specific functions.
+  -> C.HandleAllocator s
+  -- ^ Handle allocator to make the blocks
+  -> MemSegmentMap (M.ArchAddrWidth arch)
+  -- ^ Map from region indices to their address
+  -> (M.ArchSegmentOff arch -> C.Position)
+  -- ^ Function that maps function address to Crucible position
+  -> M.ParsedBlock arch ids
+  -- ^ Block to translate
+  -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
+mkBlockPathCFG arch_fns halloc mem_base_var_map pos_fn blocks =
+  toCoreCFG arch_fns <$>
+    mkParsedBlockRegCFG arch_fns halloc mem_base_var_map pos_fn blocks
 
 -- | Translate a macaw function (passed as a 'M.DiscoveryFunInfo') into a
 -- registerized Crucible CFG
@@ -559,8 +701,8 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
       c <- f cv
       let w' = incNat w
       Just LeqProof <- pure $ testLeq (knownNat :: NatRepr 1) w'
-      one  <- bvLit sym w' 1
-      zero <- bvLit sym w' 0
+      one  <- What4.Interface.bvLit sym w' 1
+      zero <- What4.Interface.bvLit sym w' 0
       cext <- baseTypeIte sym c one zero
       case op of
         Uadc -> do
