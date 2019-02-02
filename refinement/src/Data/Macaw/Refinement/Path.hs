@@ -14,12 +14,11 @@ import           Control.Applicative
 import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth, ArchSegmentOff )
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
 import           Data.Macaw.Memory ( MemWidth )
-import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier
+import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
                                                       , blockInFunction
                                                       , blockTransferTo
                                                       , funBlockIDs
                                                       )
-import           Data.Parameterized.Some
 import           Data.Text.Prettyprint.Doc
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
@@ -27,17 +26,16 @@ import qualified Text.PrettyPrint.ANSI.Leijen as PP
 -- | This is the datatype that represents the back-path of blocks in
 -- the function from the exit point(s) to either the entry point or a
 -- loop point.
-data FuncBlockPath arch =
-  Path
-  (BlockIdentifier arch) -- ^ current block identifier
-  [FuncBlockPath arch]   -- ^ next non-loop path elements (callees for
-                         -- a ForwardPath, callers for a BackwardPath)
-  [BlockIdentifier arch] -- ^ next elements which would form a path
-                         -- loop.
+data FuncBlockPath arch ids = Path (BlockIdentifier arch ids) [FuncBlockPath arch ids] [BlockIdentifier arch ids]
+  -- (BlockIdentifier arch) -- ^ current block identifier
+  -- [FuncBlockPath arch]   -- ^ next non-loop path elements (callees for
+  --                        -- a ForwardPath, callers for a BackwardPath)
+  -- [BlockIdentifier arch] -- ^ next elements which would form a path
+  --                        -- loop.
 
 
 instance ( MemWidth (ArchAddrWidth arch) ) =>
-         Pretty (FuncBlockPath arch) where
+         Pretty (FuncBlockPath arch ids) where
   pretty (Path bid anc loop) =
     let label = [ pretty "Path", prettyBlkId bid
                 , parens $ hsep [ pretty $ length anc, pretty " callers" ]
@@ -45,7 +43,7 @@ instance ( MemWidth (ArchAddrWidth arch) ) =>
         looptxt = if null loop then []
                   else [parens (hsep [ pretty "loops from:"
                                      , list ( prettyBlkId <$> loop )])]
-        prettyBlkId = pretty . show . PP.pretty
+        prettyBlkId = pretty . show . PP.pretty . biArchSegmentOff
     in vsep [ hsep (label <> looptxt)
             , nest 4 $ vsep (pretty <$> anc)
             ]
@@ -60,9 +58,9 @@ instance ( MemWidth (ArchAddrWidth arch) ) =>
 -- JMP targets; at the present time it is assumed that the latter
 -- targets cannot be a mix of function-internal and function-external
 -- targets.
-buildFuncPath :: Some (DiscoveryFunInfo arch) -> [FuncBlockPath arch]
-buildFuncPath sfi@(Some fi) =
-  let blks = funBlockIDs sfi
+buildFuncPath :: DiscoveryFunInfo arch ids -> [FuncBlockPath arch ids]
+buildFuncPath fi =
+  let blks = funBlockIDs fi
   in fst $ bldFPath fi ([], blks)
 
 
@@ -74,8 +72,8 @@ buildFuncPath sfi@(Some fi) =
 -- recursive invocation takes the next BlockIdentifier and adds it to
 -- an existing path or starts a new path for that BlockIdentifier.
 bldFPath :: DiscoveryFunInfo arch ids
-         -> ([FuncBlockPath arch], [BlockIdentifier arch])
-         -> ([FuncBlockPath arch], [BlockIdentifier arch])
+         -> ([FuncBlockPath arch ids], [BlockIdentifier arch ids])
+         -> ([FuncBlockPath arch ids], [BlockIdentifier arch ids])
 bldFPath _fi x@(_, []) = x
 bldFPath fi (fs, b:bs) =
   let nextBlkAddrs = blockTransferTo fi b
@@ -90,10 +88,10 @@ bldFPath fi (fs, b:bs) =
 
 
 bldFPath' :: DiscoveryFunInfo arch ids
-          -> BlockIdentifier arch
+          -> BlockIdentifier arch ids
           -> ArchSegmentOff arch
-          -> [FuncBlockPath arch]
-          -> [FuncBlockPath arch]
+          -> [FuncBlockPath arch ids]
+          -> [FuncBlockPath arch ids]
 bldFPath' fi b nextAddr fs =
   let nextBlkID = blockInFunction fi nextAddr
 
@@ -138,7 +136,9 @@ bldFPath' fi b nextAddr fs =
 -- block might be reachable backward from several exit points, but the
 -- inbound paths (i.e. above/forward to) the specified block must be
 -- the same for all outbound paths (loops are elided).
-pathTo :: BlockIdentifier arch -> [FuncBlockPath arch] -> Maybe (FuncBlockPath arch)
+pathTo :: BlockIdentifier arch ids
+       -> [FuncBlockPath arch ids]
+       -> Maybe (FuncBlockPath arch ids)
 pathTo blkID (p@(Path i anc _):ps) =
   if blkID == i
   then Just p
@@ -150,7 +150,7 @@ pathTo _ [] = Nothing
 
 -- | Returns the first n levels (callers) for the specified Block path
 -- in the Function.
-takePath :: Int -> FuncBlockPath arch -> FuncBlockPath arch
+takePath :: Int -> FuncBlockPath arch ids -> FuncBlockPath arch ids
 takePath n (Path blkid anc loop) =
   if n > 0
   then Path blkid (takePath (n-1) <$> anc) loop
@@ -159,7 +159,7 @@ takePath n (Path blkid anc loop) =
 
 -- | Returns the maximum length (depth) of all paths through the
 -- function (ignoring loops)
-pathDepth :: FuncBlockPath arch -> Int
+pathDepth :: FuncBlockPath arch ids -> Int
 pathDepth (Path _ [] _) = 0
 pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
 
@@ -186,7 +186,7 @@ pathDepth (Path _ anc _) = 1 + maximum (pathDepth <$> anc)
 -- >  , [ 3, 7, 5, 4, 1 ]
 -- >  ]
 --
-pathForwardTrails :: FuncBlockPath arch -> [ [BlockIdentifier arch] ]
+pathForwardTrails :: FuncBlockPath arch ids -> [ [BlockIdentifier arch ids] ]
 pathForwardTrails (Path i [] _) = [[i]]
 pathForwardTrails (Path i anc _) = let ft = concatMap pathForwardTrails anc
                                        appendTo v l = l <> [v]

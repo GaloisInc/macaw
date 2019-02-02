@@ -117,6 +117,7 @@ where
 import           GHC.TypeLits
 
 import Control.Lens
+import Control.Monad ( foldM )
 import Control.Monad.ST ( RealWorld, stToIO )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.CFG as MC
@@ -130,23 +131,17 @@ import Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                   , parsedBlocks
                                   , stmtsTerm
                                   )
-import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID
-                                            , funForBlock, getBlock )
+import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..), blockID, getBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
                                   , buildFuncPath, pathDepth, pathForwardTrails
                                   , pathTo, takePath )
 import qualified Data.Macaw.Symbolic as MS
-import Data.Map (Map)
 import Data.Maybe
 import qualified Data.Map as Map
 import qualified Data.Parameterized.Context as Ctx
-import Data.Parameterized.Ctx (Ctx)
 import Data.Parameterized.Nonce
 import Data.Parameterized.Some
 import Data.Proxy ( Proxy(..) )
-import Data.Semigroup
-import Data.Text (Text)
-import qualified Data.Text as Text
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.Backend.Online as C
 import qualified Lang.Crucible.CFG.Core as C
@@ -174,7 +169,10 @@ symbolicUnkTransferRefinement
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
   => DiscoveryState arch
   -> m (DiscoveryState arch)
-symbolicUnkTransferRefinement = refineTransfers []
+symbolicUnkTransferRefinement inpDS = foldM
+  (\accDS (Some fi) -> refineTransfers accDS fi [])
+  inpDS
+  (inpDS ^. funInfo)
 
 
 -- | The main loop for transfer discovery refinement.  The first
@@ -187,37 +185,25 @@ symbolicUnkTransferRefinement = refineTransfers []
 -- failure accumulation array.
 refineTransfers
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => [BlockIdentifier arch]
-     -- ^ attempted blocks
-  -> DiscoveryState arch
-     -- ^ input DiscoveryState
+  => DiscoveryState arch
+  -> DiscoveryFunInfo arch ids
+  -> [BlockIdentifier arch ids]
   -> m (DiscoveryState arch)
-     -- ^ Possibly updated DiscoveryState
-refineTransfers failedRefine inpDS = do
+refineTransfers inpDS fi failedRefine = do
   let unrefineable = flip elem failedRefine . blockID
-      unkTransfers = inpDS ^. funInfo
-                     . to getAllFunctionsTransfers
-                     ^..folded
-                     . filtered (not . unrefineable)
+      unkTransfers = filter (not . unrefineable) $ getUnknownTransfers fi
       thisUnkTransfer = head unkTransfers
       thisId = blockID thisUnkTransfer
   if null unkTransfers
-     then return inpDS
-     else refineBlockTransfer inpDS thisUnkTransfer >>= \case
-            Nothing    -> refineTransfers (thisId : failedRefine) inpDS
-            Just updDS -> refineTransfers failedRefine updDS
+  then return inpDS
+  else refineBlockTransfer inpDS fi thisUnkTransfer >>= \case
+        Nothing    -> refineTransfers inpDS fi (thisId : failedRefine)
+        Just updDS -> refineTransfers updDS fi failedRefine
 
-
-getAllFunctionsTransfers :: Map (ArchSegmentOff arch)
-                                  (Some (DiscoveryFunInfo arch))
-                         -> [Some (ParsedBlock arch)]
-getAllFunctionsTransfers = concatMap getUnknownTransfers . Map.elems
-
-
-getUnknownTransfers :: (Some (DiscoveryFunInfo arch))
-                    -> [Some (ParsedBlock arch)]
-getUnknownTransfers (Some fi) =
-  Some <$> (filter isUnknownTransfer $ Map.elems $ fi ^. parsedBlocks)
+getUnknownTransfers :: DiscoveryFunInfo arch ids
+                    -> [ParsedBlock arch ids]
+getUnknownTransfers fi =
+  filter isUnknownTransfer $ Map.elems $ fi ^. parsedBlocks
 
 isUnknownTransfer :: ParsedBlock arch ids -> Bool
 isUnknownTransfer pb =
@@ -237,19 +223,18 @@ refineBlockTransfer
      , MonadIO m
      ) =>
      DiscoveryState arch
-  -> Some (ParsedBlock arch)
+  -> DiscoveryFunInfo arch ids
+  -> ParsedBlock arch ids
   -> m (Maybe (DiscoveryState arch))
-refineBlockTransfer inpDS blk =
-  let path = buildFuncPath <$> funForBlock blk inpDS
-      tgtPath = path >>= pathTo (blockID blk)
-  in case tgtPath of
-       Nothing -> error "unable to find function path for block" -- internal error
-       Just p -> do soln <- refinePath inpDS p (pathDepth p) 0 Nothing
-                    return $ maybe Nothing (Just . updateDiscovery inpDS blk) soln
+refineBlockTransfer inpDS fi blk =
+  case pathTo (blockID blk) $ buildFuncPath fi of
+    Nothing -> error "unable to find function path for block" -- internal error
+    Just p -> do soln <- refinePath inpDS fi p (pathDepth p) 0 Nothing
+                 return $ maybe Nothing (Just . updateDiscovery inpDS blk) soln
 
 
 updateDiscovery :: DiscoveryState arch
-                -> Some (ParsedBlock arch)
+                -> ParsedBlock arch ids
                 -> Solution arch
                 -> DiscoveryState arch
 updateDiscovery _soln _pblk _inpDS = undefined  -- add replace pblk with soln, and add new blocks discoverd by soln
@@ -260,14 +245,15 @@ refinePath :: ( MS.SymArchConstraints arch
               , MonadIO m
               ) =>
               DiscoveryState arch
-           -> FuncBlockPath arch
+           -> DiscoveryFunInfo arch ids
+           -> FuncBlockPath arch ids
            -> Int
            -> Int
            -> Maybe (Solution arch)
            -> m (Maybe (Solution arch))
-refinePath inpDS path maxlevel numlevels prevResult =
+refinePath inpDS fi path maxlevel numlevels prevResult =
   let thispath = takePath numlevels path
-      smtEquation = equationFor inpDS thispath
+      smtEquation = equationFor inpDS fi thispath
   in solve smtEquation >>= \case
        Nothing -> return prevResult -- divergent, stop here
        s@(Just soln) -> let nextlevel = numlevels + 1
@@ -279,15 +265,18 @@ refinePath inpDS path maxlevel numlevels prevResult =
                                              else prevResult
                     in if numlevels > maxlevel
                        then return bestResult
-                       else refinePath inpDS path maxlevel nextlevel bestResult
+                       else refinePath inpDS fi path maxlevel nextlevel bestResult
 
-data Equation arch = Equation (DiscoveryState arch) [[Some (ParsedBlock arch)]]
+data Equation arch ids = Equation (DiscoveryState arch) [[ParsedBlock arch ids]]
 type Solution arch = [ArchSegmentOff arch]  -- identified transfers
 
-equationFor :: DiscoveryState arch -> FuncBlockPath arch -> Equation arch
-equationFor inpDS p =
+equationFor :: DiscoveryState arch
+            -> DiscoveryFunInfo arch ids
+            -> FuncBlockPath arch ids
+            -> Equation arch ids
+equationFor inpDS fi p =
   let pTrails = pathForwardTrails p
-      pTrailBlocks = map (getBlock inpDS) <$> pTrails
+      pTrailBlocks = map (getBlock fi) <$> pTrails
   in if and (any (not . isJust) <$> pTrailBlocks)
      then error "did not find requested block in discovery results!" -- internal
        else Equation inpDS (catMaybes <$> pTrailBlocks)
@@ -296,7 +285,7 @@ solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
          , MonadIO m
          ) =>
-         Equation arch -> m (Maybe (Solution arch))
+         Equation arch ids -> m (Maybe (Solution arch))
 solve (Equation inpDS blk) = do
   blockAddrs <- liftIO (withDefaultRefinementContext $ \context ->
                            smtSolveTransfer context inpDS blk)
@@ -321,7 +310,7 @@ data RefinementContext arch t solver fp = RefinementContext
   }
 
 withDefaultRefinementContext
-  :: forall arch a m
+  :: forall arch a
    . (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch)
   => (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
   -> IO a
@@ -399,44 +388,41 @@ initRegs arch_vals sym ip_val = do
     (MS.updateReg arch_vals) reg_struct MC.ip_reg ip_val
 
 smtSolveTransfer
-  :: forall arch t solver fp m
-   . ( MS.SymArchConstraints arch
+  :: ( MS.SymArchConstraints arch
      , C.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      , MonadIO m
      )
   => RefinementContext arch t solver fp
   -> DiscoveryState arch
-  -> [[Some (ParsedBlock arch)]]
+  -> [[ParsedBlock arch ids]]
   -> m [ArchSegmentOff arch]
 smtSolveTransfer rc ds blockPaths =
-  -- wrong thing: fix the handling of blockPaths
-  smtSolveTransfer' rc ds $ head $ head blockPaths
+  concat <$> mapM (smtSolveTransfer' rc ds) blockPaths
 
 smtSolveTransfer'
-  :: forall arch t solver fp m
-   . ( MS.SymArchConstraints arch
+  :: ( MS.SymArchConstraints arch
      , C.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      , MonadIO m
      )
   => RefinementContext arch t solver fp
   -> DiscoveryState arch
-  -> Some (ParsedBlock arch)
+  -> [ParsedBlock arch ids]
   -> m [ArchSegmentOff arch]
-smtSolveTransfer' RefinementContext{..} discovery_state (Some block) = do
-  let arch = Proxy @arch
-  block_ip_val <- case MC.segoffAsAbsoluteAddr (pblockAddr block) of
+smtSolveTransfer' RefinementContext{..} discovery_state blocks = do
+  entry_ip_val <- case MC.segoffAsAbsoluteAddr $ pblockAddr $ head blocks of
     Just addr -> liftIO $ LLVM.llvmPointer_bv symbolicBackend
       =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
-    Nothing -> fail $ "unexpected block address: " ++ show (pblockAddr block)
-  init_regs <- initRegs archVals symbolicBackend block_ip_val
+    Nothing ->
+      fail $ "unexpected block address: " ++ show (pblockAddr $ head blocks)
+  init_regs <- initRegs archVals symbolicBackend entry_ip_val
   some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)
     handleAllocator
     Map.empty
     (W.BinaryPos "" . maybe 0 fromIntegral . MC.segoffAsAbsoluteAddr)
-    block
+    blocks
   case some_cfg of
     C.SomeCFG cfg -> do
       let sim_context = C.initSimContext
