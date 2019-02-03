@@ -1,8 +1,13 @@
 {-|
-Copyright  : (c) Galois, Inc 2017-2018
+Copyright  : (c) Galois, Inc 2017-2019
 Maintainer : jhendrix@galois.com
 
-This provides a rewriter for simplifying values.
+This provides a rewriter for simplifying blocks by rewriting value
+computations and performing other rearrangement and adjustments.
+
+The main entry point is calling 'runRewriter' with a constructed
+'RewriteContext' to control the rewrite operation and a Rewriter monad
+computation that rewrites the statements for a particular block.
 -}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -127,7 +132,7 @@ appendRewrittenStmt stmt = Rewriter $ do
   seq stmt $ seq stmts' $ do
     rwRevStmts .= stmts'
 
--- | Add a statment to the list
+-- | Add a architecture-specific statement to the list
 appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src tgt ()
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
 

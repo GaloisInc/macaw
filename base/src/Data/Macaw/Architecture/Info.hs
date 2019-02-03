@@ -32,7 +32,8 @@ import           Data.Macaw.Memory
 ------------------------------------------------------------------------
 -- ArchitectureInfo
 
--- | Function for disassembling a block.
+-- | Function for disassembling a range of code (usually a function in
+-- the target code image) into blocks.
 --
 -- A block is defined as a contiguous region of code with a single known
 -- entrance and potentially multiple exits.
@@ -68,7 +69,7 @@ data ArchitectureInfo arch
        -- ^ Use the abstract block state information to infer register
        -- values to use for disassembling from given address.
      , disassembleFn :: !(DisassembleFn arch)
-       -- ^ Function for disasembling a block.
+       -- ^ Function for disassembling a block.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
                          -> ArchSegmentOff arch
                          -> AbsBlockState (ArchReg arch))

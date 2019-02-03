@@ -1181,10 +1181,10 @@ parseBlock ctx idx initRegs b absProcState = do
                               }
       pure (ret, idx+1)
 
--- | This evalutes the statements in a block to expand the information known
+-- | This evaluates the statements in a block to expand the information known
 -- about control flow targets of this block.
 addBlocks :: ArchSegmentOff arch
-             -- ^ Address of theze blocks
+             -- ^ Address of these blocks
           -> FoundAddr arch
              -- ^ State leading to explore block
           -> RegState (ArchReg arch) (Value arch ids)

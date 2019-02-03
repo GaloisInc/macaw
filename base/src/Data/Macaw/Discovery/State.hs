@@ -94,8 +94,8 @@ data FunctionExploreReason w
 
 -- | This describes why we are exploring a given block within a function.
 data BlockExploreReason w
-     -- | Exploring because the given block writes it to memory.
-  --  =- InWrite !(MemSegmentOff w)
+   --   -- | Exploring because the given block writes it to memory.
+   --  =- InWrite !(MemSegmentOff w)
      -- | Exploring because the given block jumps here.
    = NextIP !(MemSegmentOff w)
      -- | Identified as an entry point from initial information
