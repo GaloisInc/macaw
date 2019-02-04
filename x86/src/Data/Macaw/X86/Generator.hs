@@ -20,6 +20,7 @@ module Data.Macaw.X86.Generator
   , runX86Generator
   , X86GCont
   , addStmt
+  , addTermStmt
   , addArchStmt
   , addArchTermStmt
   , asAtomicStateUpdate
@@ -335,13 +336,16 @@ addArchStmt = addStmt . ExecArchStmt
 
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
-addArchTermStmt ts = do
+addArchTermStmt ts = addTermStmt (ArchTermStmt ts)
+
+-- | Terminate the current block immediately
+--
+-- This can be used to signal an error (e.g., by using the TranslateError terminator)
+addTermStmt :: (RegState (ArchReg X86_64) (Value X86_64 ids) -> TermStmt X86_64 ids) -> X86Generator st ids a
+addTermStmt ts =
   X86G $ ContT $ \_ -> ReaderT $ \s0 -> do
-    -- Get last block.
     let p_b = s0 ^. blockState
-    -- Create finished block.
-    let fin_b = finishBlock p_b $ ArchTermStmt ts
-    -- Return early
+    let fin_b = finishBlock p_b ts
     return $! FinishedPartialBlock fin_b
 
 -- | Are we in AVX mode?

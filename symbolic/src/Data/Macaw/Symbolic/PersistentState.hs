@@ -208,7 +208,7 @@ mkRegIndexMap (a :> r) csz =
 -- Misc types
 
 -- | A Crucible value with a Macaw type.
-data MacawCrucibleValue f tp = MacawCrucibleValue (f (ToCrucibleType tp))
+newtype MacawCrucibleValue f tp = MacawCrucibleValue (f (ToCrucibleType tp))
 
 instance FunctorFC MacawCrucibleValue where
   fmapFC f (MacawCrucibleValue v) = MacawCrucibleValue (f v)
