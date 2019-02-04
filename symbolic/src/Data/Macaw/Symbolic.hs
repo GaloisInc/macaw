@@ -378,7 +378,7 @@ termStmtToJump sl addr = sl { M.stmtsTerm = tm }
   where
     tm :: M.ParsedTermStmt arch ids
     tm = case M.stmtsTerm sl of
-      tm0@M.ParsedJump{} -> tm0
+      M.ParsedJump r _ -> M.ParsedJump r addr
       M.ParsedCall r _ -> M.ParsedJump r addr
       M.ParsedReturn r -> M.ParsedJump r addr
       M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
