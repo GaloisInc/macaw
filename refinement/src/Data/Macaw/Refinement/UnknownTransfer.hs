@@ -383,6 +383,7 @@ data RefinementContext arch t solver fp = RefinementContext
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
   , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
+  , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (MC.ArchAddrWidth arch)
   }
 
 withDefaultRefinementContext
@@ -424,16 +425,12 @@ withDefaultRefinementContext loaded_binary k = do
             LLVM.LittleEndian
             MSM.ConcreteMutable
             (MBL.memoryImage loaded_binary)
+          let global_mapping_fn = MSM.mapRegionPointers mapped_memory
           MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  -- (\_ _ _ off -> Just <$> LLVM.ptrAdd sym W.knownNat base_ptr off)
-                  -- (\_ _ base off -> return $ Just $ LLVM.LLVMPointer base off)
-                  (\sym' mem' base off ->
-                    MSM.mapRegionPointers mapped_memory sym' mem' base off >>= \case
-                      Just ptr -> return $ Just ptr
-                      Nothing -> return $ Just $ LLVM.LLVMPointer base off)
+                  global_mapping_fn
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
             k $ RefinementContext
               { symbolicBackend = sym
@@ -444,6 +441,7 @@ withDefaultRefinementContext loaded_binary k = do
               , memVar = mem_var
               -- , mem = empty_mem
               , mem = mem
+              , globalMappingFn = global_mapping_fn
               }
         Nothing -> fail $ "unsupported architecture"
 
@@ -518,11 +516,14 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
     stack_size
   init_sp_val <- liftIO $ LLVM.ptrAdd symbolicBackend C.knownRepr stack_base_ptr stack_size
 
-  entry_ip_val <- case MC.segoffAsAbsoluteAddr $ pblockAddr $ head blocks of
-    Just addr -> liftIO $ LLVM.llvmPointer_bv symbolicBackend
-      =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
-    Nothing ->
-      fail $ "unexpected block address: " ++ show (pblockAddr $ head blocks)
+  let entry_addr = MC.segoffAddr $ pblockAddr $ head blocks
+  ip_base <- liftIO $ W.natLit symbolicBackend $
+    fromIntegral $ MC.addrBase entry_addr
+  ip_off <- liftIO $ W.bvLit symbolicBackend W.knownNat $
+    MC.memWordToUnsigned $ MC.addrOffset entry_addr
+  entry_ip_val <- liftIO $ fromJust <$>
+    globalMappingFn symbolicBackend mem2 ip_base ip_off
+
   init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
   some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)

@@ -70,6 +70,8 @@ module Data.Macaw.Symbolic.CrucGen
   , addStmt
   , appAtom
   , toBits
+  , fromBits
+  , evalMacawStmt
   , getRegValue
   , bvLit
   , archAddrWidth

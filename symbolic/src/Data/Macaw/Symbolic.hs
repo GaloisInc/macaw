@@ -551,11 +551,11 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
       let label = block_label_map Map.! (block_addr, M.stmtsIdent stmts)
 
       (first_crucible_block, off) <- runCrucGen' block_addr label $ do
-        arch_width <- M.addrWidthNatRepr <$> archAddrWidth
-        ip_reg_val <- toBits arch_width =<< getRegValue M.ip_reg
-        block_addr_lit <- CG.bvLit arch_width $
-          fromIntegral $ fromJust $ M.segoffAsAbsoluteAddr block_addr
-        cond <- appAtom $ C.BVEq arch_width ip_reg_val block_addr_lit
+        arch_width <- archAddrWidth
+        ip_reg_val <- getRegValue M.ip_reg
+        block_ptr <- evalMacawStmt $
+          MacawGlobalPtr arch_width $ M.segoffAddr block_addr
+        cond <- evalMacawStmt $ PtrEq arch_width ip_reg_val block_ptr
         msg <- appAtom $ C.TextLit
           "the current block follows the previous block in the path"
         addStmt $ CR.Assume cond msg
