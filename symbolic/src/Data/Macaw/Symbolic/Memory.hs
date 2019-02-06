@@ -97,15 +97,16 @@ module Data.Macaw.Symbolic.Memory (
 
 import           GHC.TypeLits
 
+import           Control.Monad
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.Map.Strict as Map
 import           Data.Semigroup
-import qualified Data.Vector as V
 
 import qualified Data.Parameterized.NatRepr as PN
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Lang.Crucible.Backend as CB
@@ -120,6 +121,7 @@ import qualified Data.Macaw.Symbolic as MS
 
 import Prelude
 
+import Debug.Trace
 
 -- | A configuration knob controlling how the initial contents of the memory
 -- model are populated
@@ -217,32 +219,21 @@ populateMemory :: ( CB.IsSymInterface sym
                -- ^ The initial memory model (e.g., it might have a stack allocated)
                -> m (CL.MemImpl sym, IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) (Allocation sym (MC.ArchAddrWidth arch)))
 populateMemory _ sym mmc mem memImpl0 = do
-  memImpl1 <- pleatM (memImpl0, IM.empty) (MC.memSegments mem) $ \impl1 seg -> do
-    pleatM impl1 (MC.relativeSegmentContents [seg]) $ \impl2 (addr, memChunk) ->
-      case memChunk of
-        MC.RelocationRegion {} -> error ("SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk)
-        MC.BSSRegion sz -> do
-          nzero <- liftIO $ WI.natLit sym 0
-          bvzero <- liftIO $ WI.bvLit sym (PN.knownNat @8) 0
-          let val = CL.LLVMValArray (CL.bitvectorType 1) (V.fromList (replicate (fromIntegral sz) (CL.LLVMValInt nzero bvzero)))
-          addValueAt sym mmc mem seg addr sz val impl2
-        MC.ByteRegion bytes -> do
-          let sz = BS.length bytes
-          nzero <- liftIO $ WI.natLit sym 0
-          let fromWord8 w = do
-                llw <- liftIO $ WI.bvLit sym (PN.knownNat @8) (fromIntegral w)
-                return (CL.LLVMValInt nzero llw)
-          llvmWords <- mapM fromWord8 (BS.unpack bytes)
-          let val = CL.LLVMValArray (CL.bitvectorType 1) (V.fromList llvmWords)
-          addValueAt sym mmc mem seg addr sz val impl2
-  return memImpl1
+  pleatM (memImpl0, IM.empty) (MC.memSegments mem) $ \impl1 seg -> do
+    pleatM impl1 (MC.relativeSegmentContents [seg]) $ \impl2 (addr, memChunk) -> do
+      bytes <- case memChunk of
+        MC.RelocationRegion {} -> error $
+          "SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk
+        MC.BSSRegion sz -> liftIO $
+          replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat 0
+        MC.ByteRegion bytes -> liftIO $
+          mapM (WI.bvLit sym PN.knownNat . fromIntegral) $ BS.unpack bytes
+      addSegment sym mmc mem seg addr bytes impl2
 
 -- | Add a new value (which is an LLVM array of bytes) of a given length at the given address.
-addValueAt :: ( 16 <= w
+addSegment :: ( 16 <= w
               , MC.MemWidth w
               , KnownNat w
-              , Integral a
-              , Show a
               , CB.IsSymInterface sym
               , MonadIO m
               )
@@ -251,39 +242,63 @@ addValueAt :: ( 16 <= w
            -> MC.Memory w
            -> MC.MemSegment w
            -> MC.MemAddr w
-           -> a
-           -> CL.LLVMVal sym
+           -> [WI.SymBV sym 8]
            -> (CL.MemImpl sym, IM.IntervalMap (MC.MemWord w) (Allocation sym w))
            -> m (CL.MemImpl sym, IM.IntervalMap (MC.MemWord w) (Allocation sym w))
-addValueAt sym mmc mem seg addr sz val (impl, ptrtable) = do
+addSegment sym mmc mem seg addr bytes (impl, ptrtable) = do
   -- We only support statically-linked binaries for now, so fail if we have a
   -- segment-relative address (which should only occur for an object file or
   -- shared library)
-  let Just absAddr = MC.asAbsoluteAddr addr
-  let ty = CL.arrayType (fromIntegral sz) (CL.bitvectorType 1)
-  szVal <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral sz)
   let ?ptrWidth = MC.memWidth mem
-  let interval = IM.IntervalCO absAddr (absAddr + fromIntegral sz)
-  case MMP.isReadonly (MC.segmentFlags seg) of
-    True -> do
-      (ptr, impl1) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Immutable ("Read only memory at " ++ show addr) impl szVal CLD.noAlignment
-      let alloc = Allocation { allocationPtr = ptr, allocationBase = absAddr }
-      impl2 <- liftIO $ CL.storeConstRaw sym impl1 ptr ty CLD.noAlignment val
-      return (impl2, IM.insert interval alloc ptrtable)
-    False ->
-      case mmc of
-        ConcreteMutable -> do
-          (ptr, impl1) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable ("Mutable (concrete) memory at " ++ show addr) impl szVal CLD.noAlignment
-          let alloc = Allocation { allocationPtr = ptr, allocationBase = absAddr }
-          impl2 <- liftIO $ CL.storeRaw sym impl1 ptr ty CLD.noAlignment val
-          return (impl2, IM.insert interval alloc ptrtable)
-        SymbolicMutable -> do
-          let Right alloc_name = WI.userSymbol ("symbolicAllocBytes_" <> show addr)
-          array <- liftIO $ WI.freshConstant sym alloc_name CT.knownRepr
-          (ptr, impl1) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable ("Mutable (symbolic) memory at " ++ show addr) impl szVal CLD.noAlignment
-          let alloc = Allocation { allocationPtr = ptr, allocationBase = absAddr }
-          impl2 <- liftIO $ CL.doArrayStore sym impl1 ptr CLD.noAlignment array szVal
-          return (impl2, IM.insert interval alloc ptrtable)
+  let Just abs_addr = MC.asAbsoluteAddr addr
+  let size = length bytes
+  let interval = IM.IntervalCO abs_addr (abs_addr + fromIntegral size)
+  let (store_fn, mut_flag, conc_flag, desc) =
+        case MMP.isReadonly (MC.segmentFlags seg) of
+          True ->
+            ( CL.doArrayConstStore
+            , CL.Immutable
+            , True
+            , "Mutable (concrete) memory at " ++ show addr
+            )
+          False -> case mmc of
+            ConcreteMutable ->
+              ( CL.doArrayStore
+              , CL.Mutable
+              , True
+              , "Mutable (concrete) memory at " ++ show addr
+              )
+            SymbolicMutable ->
+              ( CL.doArrayStore
+              , CL.Mutable
+              , False
+              , "Mutable (symbolic) memory at " ++ show addr
+              )
+  let Right alloc_name = WI.userSymbol ("symbolicAllocBytes_" <> show addr)
+  array <- liftIO $ WI.freshConstant sym alloc_name CT.knownRepr
+  size_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral size)
+  when conc_flag $
+    F.forM_ (zip [0 .. size - 1] bytes) $ \(idx, byte) -> do
+      index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral idx)
+      eq_pred <- liftIO $ WI.bvEq sym byte
+        =<< WI.arrayLookup sym array (Ctx.singleton index_bv)
+      prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
+      liftIO $ CB.addAssumption sym $
+        CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc desc
+  (ptr, impl1) <- liftIO $ CL.doMalloc
+    sym
+    CL.GlobalAlloc
+    mut_flag
+    desc
+    impl
+    size_bv
+    CLD.noAlignment
+  let alloc = Allocation
+        { allocationPtr = ptr
+        , allocationBase = abs_addr
+        }
+  impl2 <- liftIO $ store_fn sym impl1 ptr CLD.noAlignment array size_bv
+  return (impl2, IM.insert interval alloc ptrtable)
 
 -- | The 'pleatM' function is 'foldM' with the arguments switched so
 -- that the function is last.
