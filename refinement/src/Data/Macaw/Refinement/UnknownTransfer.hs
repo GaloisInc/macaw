@@ -117,9 +117,10 @@ where
 import           GHC.TypeLits
 
 import Control.Lens
-import Control.Monad ( foldM )
+import Control.Monad ( foldM, forM )
 import Control.Monad.ST ( RealWorld, stToIO )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
+import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
 import Data.Macaw.Discovery.State ( DiscoveryFunInfo
@@ -136,6 +137,7 @@ import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
                                   , buildFuncPath, pathDepth, pathForwardTrails
                                   , pathTo, takePath )
 import qualified Data.Macaw.Symbolic as MS
+import qualified Data.Macaw.Symbolic.Memory as MSM
 import Data.Maybe
 import qualified Data.Map as Map
 import qualified Data.Parameterized.Context as Ctx
@@ -167,10 +169,11 @@ import qualified What4.Solver.Z3 as W
 -- information.
 symbolicUnkTransferRefinement
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => DiscoveryState arch
+  => MBL.LoadedBinary arch bin
+  -> DiscoveryState arch
   -> m (DiscoveryState arch)
-symbolicUnkTransferRefinement inpDS = foldM
-  (\accDS (Some fi) -> refineTransfers accDS fi [])
+symbolicUnkTransferRefinement bin inpDS = foldM
+  (\accDS (Some fi) -> refineTransfers bin accDS fi [])
   inpDS
   (inpDS ^. funInfo)
 
@@ -185,20 +188,21 @@ symbolicUnkTransferRefinement inpDS = foldM
 -- failure accumulation array.
 refineTransfers
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => DiscoveryState arch
+  => MBL.LoadedBinary arch bin
+  -> DiscoveryState arch
   -> DiscoveryFunInfo arch ids
   -> [BlockIdentifier arch ids]
   -> m (DiscoveryState arch)
-refineTransfers inpDS fi failedRefine = do
+refineTransfers bin inpDS fi failedRefine = do
   let unrefineable = flip elem failedRefine . blockID
       unkTransfers = filter (not . unrefineable) $ getUnknownTransfers fi
       thisUnkTransfer = head unkTransfers
       thisId = blockID thisUnkTransfer
   if null unkTransfers
   then return inpDS
-  else refineBlockTransfer inpDS fi thisUnkTransfer >>= \case
-        Nothing    -> refineTransfers inpDS fi (thisId : failedRefine)
-        Just updDS -> refineTransfers updDS fi failedRefine
+  else refineBlockTransfer bin inpDS fi thisUnkTransfer >>= \case
+        Nothing    -> refineTransfers bin inpDS fi (thisId : failedRefine)
+        Just updDS -> refineTransfers bin updDS fi failedRefine
 
 getUnknownTransfers :: DiscoveryFunInfo arch ids
                     -> [ParsedBlock arch ids]
@@ -222,14 +226,15 @@ refineBlockTransfer
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
      ) =>
-     DiscoveryState arch
+     MBL.LoadedBinary arch bin
+  -> DiscoveryState arch
   -> DiscoveryFunInfo arch ids
   -> ParsedBlock arch ids
   -> m (Maybe (DiscoveryState arch))
-refineBlockTransfer inpDS fi blk =
+refineBlockTransfer bin inpDS fi blk =
   case pathTo (blockID blk) $ buildFuncPath fi of
     Nothing -> error "unable to find function path for block" -- internal error
-    Just p -> do soln <- refinePath inpDS fi p (pathDepth p) 0 Nothing
+    Just p -> do soln <- refinePath bin inpDS fi p (pathDepth p) 1
                  return $ maybe Nothing (Just . updateDiscovery inpDS blk) soln
 
 
@@ -244,28 +249,21 @@ refinePath :: ( MS.SymArchConstraints arch
               , 16 <= MC.ArchAddrWidth arch
               , MonadIO m
               ) =>
-              DiscoveryState arch
+              MBL.LoadedBinary arch bin
+           -> DiscoveryState arch
            -> DiscoveryFunInfo arch ids
            -> FuncBlockPath arch ids
            -> Int
            -> Int
-           -> Maybe (Solution arch)
            -> m (Maybe (Solution arch))
-refinePath inpDS fi path maxlevel numlevels prevResult =
+refinePath bin inpDS fi path maxlevel numlevels =
   let thispath = takePath numlevels path
       smtEquation = equationFor inpDS fi thispath
-  in solve smtEquation >>= \case
-       Nothing -> return prevResult -- divergent, stop here
-       s@(Just soln) -> let nextlevel = numlevels + 1
-                            bestResult = case prevResult of
-                                           Nothing -> s
-                                           Just prevSoln ->
-                                             if soln < prevSoln
-                                             then s
-                                             else prevResult
-                    in if numlevels > maxlevel
-                       then return bestResult
-                       else refinePath inpDS fi path maxlevel nextlevel bestResult
+  in solve bin smtEquation >>= \case
+       Nothing -> return Nothing -- divergent, stop here
+       soln@(Just{}) -> if numlevels >= maxlevel
+                          then return soln
+                          else refinePath bin inpDS fi path maxlevel (numlevels + 1)
 
 data Equation arch ids = Equation (DiscoveryState arch) [[ParsedBlock arch ids]]
 type Solution arch = [ArchSegmentOff arch]  -- identified transfers
@@ -285,10 +283,13 @@ solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
          , MonadIO m
          ) =>
-         Equation arch ids -> m (Maybe (Solution arch))
-solve (Equation inpDS blk) = do
-  blockAddrs <- liftIO (withDefaultRefinementContext $ \context ->
-                           smtSolveTransfer context inpDS blk)
+         MBL.LoadedBinary arch bin
+      -> Equation arch ids
+      -> m (Maybe (Solution arch))
+solve bin (Equation inpDS paths) = do
+  blockAddrs <- concat <$> forM paths
+    (\path -> liftIO $ withDefaultRefinementContext bin $ \context ->
+      smtSolveTransfer context inpDS path)
   return $ if null blockAddrs then Nothing else Just blockAddrs
 
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
@@ -310,39 +311,55 @@ data RefinementContext arch t solver fp = RefinementContext
   }
 
 withDefaultRefinementContext
-  :: forall arch a
+  :: forall arch a bin
    . (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch)
-  => (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
+  => MBL.LoadedBinary arch bin
+  -> (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
   -> IO a
-withDefaultRefinementContext k = do
+withDefaultRefinementContext loaded_binary k = do
   handle_alloc <- C.newHandleAllocator
   withIONonceGenerator $ \nonce_gen ->
     C.withZ3OnlineBackend nonce_gen C.NoUnsatFeatures $ \sym ->
       case MS.archVals (Proxy @arch) of
         Just arch_vals -> do
+          -- path_setter <- W.getOptionSetting W.z3Path (W.getConfiguration sym)
+          -- _ <- W.setOpt path_setter "z3-tee"
+
           mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
-          empty_mem <- LLVM.emptyMem LLVM.LittleEndian
-          let ?ptrWidth = W.knownNat
-          (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
+          -- empty_mem <- LLVM.emptyMem LLVM.LittleEndian
+          -- let ?ptrWidth = W.knownNat
+          -- (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
+          --   sym
+          --   LLVM.GlobalAlloc
+          --   LLVM.Mutable
+          --   "flat memory"
+          --   empty_mem
+          --   LLVM.noAlignment
+          -- let Right mem_name = W.userSymbol "mem"
+          -- mem_array <- W.freshConstant sym mem_name W.knownRepr
+          -- initialized_mem <- LLVM.doArrayStoreUnbounded
+          --   sym
+          --   allocated_mem
+          --   base_ptr
+          --   LLVM.noAlignment
+          --   mem_array
+          (mem, mapped_memory) <- MSM.newGlobalMemory
+            (Proxy @arch)
             sym
-            LLVM.GlobalAlloc
-            LLVM.Mutable
-            "flat memory"
-            empty_mem
-            LLVM.noAlignment
-          let Right mem_name = W.userSymbol "mem"
-          mem_array <- W.freshConstant sym mem_name W.knownRepr
-          initialized_mem <- LLVM.doArrayStoreUnbounded
-            sym
-            allocated_mem
-            base_ptr
-            LLVM.noAlignment
-            mem_array
+            LLVM.LittleEndian
+            MSM.ConcreteMutable
+            (MBL.memoryImage loaded_binary)
+          traceM $ "### mem alloc count: " ++ show (LLVM.memAllocCount mem)
           MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  (\_ _ _ off -> Just <$> LLVM.ptrAdd sym W.knownNat base_ptr off)
+                  -- (\_ _ _ off -> Just <$> LLVM.ptrAdd sym W.knownNat base_ptr off)
+                  -- (\_ _ base off -> return $ Just $ LLVM.LLVMPointer base off)
+                  (\sym' mem' base off ->
+                    MSM.mapRegionPointers mapped_memory sym' mem' base off >>= \case
+                      Just ptr -> return $ Just ptr
+                      Nothing -> return $ Just $ LLVM.LLVMPointer base off)
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
             k $ RefinementContext
               { symbolicBackend = sym
@@ -351,7 +368,8 @@ withDefaultRefinementContext k = do
               , nonceGenerator = nonce_gen
               , extensionImpl = ext_impl
               , memVar = mem_var
-              , mem = initialized_mem
+              -- , mem = empty_mem
+              , mem = mem
               }
         Nothing -> fail $ "unsupported architecture"
 
@@ -379,29 +397,21 @@ initRegs
   => MS.ArchVals arch
   -> sym
   -> C.RegValue sym (LLVM.LLVMPointerType (MC.ArchAddrWidth arch))
+  -> C.RegValue sym (LLVM.LLVMPointerType (MC.ArchAddrWidth arch))
   -> m (C.RegMap sym (MS.MacawFunctionArgs arch))
-initRegs arch_vals sym ip_val = do
+initRegs arch_vals sym ip_val sp_val = do
   let reg_types = MS.crucArchRegTypes $ MS.archFunctions $ arch_vals
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
   let reg_struct = C.RegEntry (C.StructRepr reg_types) reg_vals
   return $ C.RegMap $ Ctx.singleton $
-    (MS.updateReg arch_vals) reg_struct MC.ip_reg ip_val
+    (MS.updateReg arch_vals)
+      ((MS.updateReg arch_vals) reg_struct MC.ip_reg ip_val)
+      MC.sp_reg
+      sp_val
 
 smtSolveTransfer
   :: ( MS.SymArchConstraints arch
-     , C.IsSymInterface (C.OnlineBackend t solver fp)
-     , W.OnlineSolver t solver
-     , MonadIO m
-     )
-  => RefinementContext arch t solver fp
-  -> DiscoveryState arch
-  -> [[ParsedBlock arch ids]]
-  -> m [ArchSegmentOff arch]
-smtSolveTransfer rc ds blockPaths =
-  concat <$> mapM (smtSolveTransfer' rc ds) blockPaths
-
-smtSolveTransfer'
-  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
      , C.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      , MonadIO m
@@ -410,13 +420,36 @@ smtSolveTransfer'
   -> DiscoveryState arch
   -> [ParsedBlock arch ids]
   -> m [ArchSegmentOff arch]
-smtSolveTransfer' RefinementContext{..} discovery_state blocks = do
+smtSolveTransfer RefinementContext{..} discovery_state blocks = do
+  let ?ptrWidth = W.knownNat
+
+  let Right stack_name = W.userSymbol "stack"
+  stack_array <- liftIO $ W.freshConstant symbolicBackend stack_name C.knownRepr
+  stack_size <- liftIO $ W.bvLit symbolicBackend ?ptrWidth $ 2 * 1024 * 1024
+  (stack_base_ptr, mem1) <- liftIO $ LLVM.doMalloc
+    symbolicBackend
+    LLVM.StackAlloc
+    LLVM.Mutable
+    "stack_alloc"
+    mem
+    stack_size
+    LLVM.noAlignment
+
+  mem2 <- liftIO $ LLVM.doArrayStore
+    symbolicBackend
+    mem1
+    stack_base_ptr
+    LLVM.noAlignment
+    stack_array
+    stack_size
+  init_sp_val <- liftIO $ LLVM.ptrAdd symbolicBackend C.knownRepr stack_base_ptr stack_size
+
   entry_ip_val <- case MC.segoffAsAbsoluteAddr $ pblockAddr $ head blocks of
     Just addr -> liftIO $ LLVM.llvmPointer_bv symbolicBackend
       =<< W.bvLit symbolicBackend W.knownNat (fromIntegral addr)
     Nothing ->
       fail $ "unexpected block address: " ++ show (pblockAddr $ head blocks)
-  init_regs <- initRegs archVals symbolicBackend entry_ip_val
+  init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
   some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)
     handleAllocator
@@ -433,7 +466,7 @@ smtSolveTransfer' RefinementContext{..} discovery_state blocks = do
             C.emptyHandleMap
             extensionImpl
             MS.MacawSimulatorState
-      let global_state = C.insertGlobal memVar mem C.emptyGlobals
+      let global_state = C.insertGlobal memVar mem2 C.emptyGlobals
       let simulation = C.regValue <$> C.callCFG cfg init_regs
       let handle_return_type = C.handleReturnType $ C.cfgHandle cfg
       let initial_state = C.InitialState

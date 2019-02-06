@@ -265,7 +265,7 @@ withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
   let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
       actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
   if useRefinement
-    then do refinedCFG <- refineDiscovery baseCFG
+    then do refinedCFG <- refineDiscovery bin baseCFG
             let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
             compareToExpected "refined" refinedBase expFile
     else compareToExpected "base" actualBase expFile
