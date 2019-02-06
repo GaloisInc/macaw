@@ -20,7 +20,7 @@ discovery.
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
-  , StatementList(..)
+  , StatementList(..), StatementLabel
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
@@ -228,10 +228,13 @@ instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
 ------------------------------------------------------------------------
 -- StatementList
 
+-- | The type of label for each StatementList
+type StatementLabel = Word64
+
 -- | This is a code block after we have classified the control flow
 -- statement(s) that the block ends with.
 data StatementList arch ids
-   = StatementList { stmtsIdent :: !Word64
+   = StatementList { stmtsIdent :: !StatementLabel
                      -- ^ An index for uniquely identifying the block.
                      --
                      -- This is primarily used so that we can reference

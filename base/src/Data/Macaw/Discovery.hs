@@ -798,7 +798,7 @@ data ParseContext arch ids =
                  -- ^ Address of function this block is being parsed as
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
-               , pctxBlockMap       :: !(Map Word64 (Block arch ids))
+               , pctxBlockMap       :: !(Map BlockLabel (Block arch ids))
                  -- ^ Map from block indices to block code at address.
                }
 
@@ -906,8 +906,8 @@ containsAssignId droppedAssign =
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ParseContext arch ids
-                     -> Word64
-                        -- ^ Index of this block
+                     -> State.StatementLabel
+                        -- ^ Index label of this block
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Initial register values
                      -> Seq (Stmt arch ids)
@@ -915,7 +915,12 @@ parseFetchAndExecute :: forall arch ids
                      -- ^ Abstract state of registers prior to blocks being executed.
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Final register values
-                     -> State (ParseState arch ids) (StatementList arch ids, Word64)
+                     -> State (ParseState arch ids) (StatementList arch ids, StatementLabel)
+                     -- ^ Returns the StatementList constructed from
+                     -- the FetchAndExecute parsing, along with the
+                     -- next StatementLabel to assign (StatementLists
+                     -- can be a recursive tree, e.g. with a
+                     -- 'ParsedIte' in 'ParsedTermStatement').
 parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
   let mem   = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
@@ -1080,7 +1085,8 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
 
   where finishWithTailCall :: RegisterInfo (ArchReg arch)
                            => AbsProcessorState (ArchReg arch) ids
-                           -> State (ParseState arch ids) (StatementList arch ids, Word64)
+                           -> State (ParseState arch ids) ( StatementList arch ids
+                                                          , State.StatementLabel)
         finishWithTailCall absProcState' = do
           let mem = pctxMemory ctx
           mapM_ (recordWriteStmt (pctxArchInfo ctx) mem absProcState') stmts
@@ -1103,7 +1109,7 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
 -- about control flow targets of this block.
 parseBlock :: ParseContext arch ids
               -- ^ Context for parsing blocks.
-           -> Word64
+           -> State.StatementLabel
            -- ^ Index for next statements
            -> RegState (ArchReg arch) (Value arch ids)
            -- ^ Initial register values
@@ -1111,7 +1117,12 @@ parseBlock :: ParseContext arch ids
               -- ^ Block to parse
            -> AbsProcessorState (ArchReg arch) ids
               -- ^ Abstract state at start of block
-           -> State (ParseState arch ids) (StatementList arch ids, Word64)
+           -> State (ParseState arch ids) ( StatementList arch ids
+                                          , State.StatementLabel)
+           -- ^ Returns the StatementList constructed from the
+           -- parsing, along with the next StatementLabel to assign
+           -- (StatementLists can be a recursive tree, e.g. with a
+           -- 'ParsedIte' in 'ParsedTermStatement').
 parseBlock ctx idx initRegs b absProcState = do
   let mem       = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
@@ -1182,7 +1193,7 @@ addBlocks :: ArchSegmentOff arch
           -> RegState (ArchReg arch) (Value arch ids)
           -> Int
              -- ^ Number of blocks covered
-          -> Map Word64 (Block arch ids)
+          -> Map BlockLabel (Block arch ids)
              -- ^ Map from labelIndex to associated block
           -> FunM arch s ids ()
 addBlocks src finfo initRegs sz blockMap =
