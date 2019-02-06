@@ -349,7 +349,6 @@ withDefaultRefinementContext loaded_binary k = do
             LLVM.LittleEndian
             MSM.ConcreteMutable
             (MBL.memoryImage loaded_binary)
-          traceM $ "### mem alloc count: " ++ show (LLVM.memAllocCount mem)
           MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
