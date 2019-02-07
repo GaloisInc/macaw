@@ -181,37 +181,92 @@ symbolicUnkTransferRefinement
   => MBL.LoadedBinary arch bin
   -> DiscoveryState arch
   -> m (DiscoveryState arch)
-symbolicUnkTransferRefinement bin inpDS = foldM
-  (\accDS (Some fi) -> refineTransfers bin accDS fi [])
-  inpDS
-  (inpDS ^. funInfo)
+symbolicUnkTransferRefinement bin inpDS =
+  refineFunctions bin inpDS mempty $ allFuns inpDS
 
 
--- | The main loop for transfer discovery refinement.  The first
--- argument is the accumulation of UnknownTransfer failures that
--- refinement has failed for and therefore should not be considered
--- for further refinement.  This is because refinement may reveal new
--- Blocks, which themselves may have unrefined terminators, so this
--- function recurses until there are no more UnknownTransfer failure
--- blocks in the input discovery state that are not also in the
--- failure accumulation array.
-refineTransfers
-  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MBL.LoadedBinary arch bin
+-- | Returns the list of DiscoveryFunInfo for a DiscoveryState
+allFuns :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]
+allFuns ds = ds ^. funInfo . to Map.elems
+
+
+-- | This iterates through the functions in the DiscoveryState to find
+-- those which have transfer failures and attempts to refine the
+-- transfer failure.  There are three cases:
+--
+--  1. The function has no transfer failures
+--  2. The function has a transfer failure, but cannot be refined
+--  3. The function has a transfer failure that was refined
+--
+-- For both #1 and #2, the action is to move to the next function.
+-- For #3, the refinement process had to re-perform discovery (the
+-- refinement may have added new previously undiscovered blocks that
+-- may themselves have transfer failures) and so the DiscoveryState is
+-- updated with the new function; this is a *new* function so it
+-- cannot continue to try to refine the existing function.
+--
+-- Also note that because the Discovery process has to be re-done from
+-- scratch for a function each time there are new transfer solutions,
+-- all *previous* transfer solutions for that function must also be
+-- applied.
+refineFunctions
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     , MonadIO m
+     ) =>
+     MBL.LoadedBinary arch bin
   -> DiscoveryState arch
+  -> Solutions arch -- ^ accumulated solutions so-far
+  -> [Some (DiscoveryFunInfo arch)]
+  -> m (DiscoveryState arch)
+refineFunctions _   inpDS _ [] = pure inpDS
+refineFunctions bin inpDS solns (Some fi:fis) =
+  refineTransfers bin inpDS solns fi [] >>= \case
+    Nothing -> refineFunctions bin inpDS solns fis  -- case 1 or 2
+    Just (updDS, solns') ->
+      refineFunctions bin updDS solns' $ allFuns updDS -- case 3
+
+
+-- | This attempts to refine the passed in function.  There are three
+-- cases:
+--
+--   1. The function has no unknown transfers: no refinement needed
+--
+--   2. An unknown transfer was refined successfully.  This resulted
+--      in a new DiscoveryState, with a new Function (replacing the
+--      old function).  The new Function may have new blocks that need
+--      refinement, but because this is a new function the "current"
+--      function cannot be refined anymore, so return 'Just' this
+--      updated DiscoveryState.
+--
+--   3. The unknown transfer could not be refined: move to the next
+--      block in this function with an unknown transfer target and
+--      recursively attempt to resolve that one.
+--
+--   4. All unknown transfer blocks were unable to be refined: the
+--   original function is sufficient.
+refineTransfers
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     , MonadIO m
+     ) =>
+     MBL.LoadedBinary arch bin
+  -> DiscoveryState arch
+  -> Solutions arch
   -> DiscoveryFunInfo arch ids
   -> [BlockIdentifier arch ids]
-  -> m (DiscoveryState arch)
-refineTransfers bin inpDS fi failedRefine = do
-  let unrefineable = flip elem failedRefine . blockID
+  -> m (Maybe (DiscoveryState arch, Solutions arch))
+refineTransfers bin inpDS solns fi failedRefines = do
+  let unrefineable = flip elem failedRefines . blockID
       unkTransfers = filter (not . unrefineable) $ getUnknownTransfers fi
       thisUnkTransfer = head unkTransfers
       thisId = blockID thisUnkTransfer
   if null unkTransfers
-  then return inpDS
-  else refineBlockTransfer bin inpDS fi thisUnkTransfer >>= \case
-        Nothing    -> refineTransfers bin inpDS fi (thisId : failedRefine)
-        Just updDS -> refineTransfers bin updDS fi failedRefine
+  then return Nothing
+  else refineBlockTransfer bin inpDS solns fi thisUnkTransfer >>= \case
+    Nothing    -> refineTransfers bin inpDS solns fi (thisId : failedRefines)
+    r@(Just _) -> return r
+
 
 getUnknownTransfers :: DiscoveryFunInfo arch ids
                     -> [ParsedBlock arch ids]
@@ -237,14 +292,20 @@ refineBlockTransfer
      ) =>
      MBL.LoadedBinary arch bin
   -> DiscoveryState arch
+  -> Solutions arch
   -> DiscoveryFunInfo arch ids
   -> ParsedBlock arch ids
-  -> m (Maybe (DiscoveryState arch))
-refineBlockTransfer bin inpDS fi blk =
+  -> m (Maybe (DiscoveryState arch, Solutions arch))
+refineBlockTransfer bin inpDS solns fi blk =
   case pathTo (blockID blk) $ buildFuncPath fi of
     Nothing -> error "unable to find function path for block" -- internal error
     Just p -> do soln <- refinePath bin inpDS fi p (pathDepth p) 1
-                 return $ maybe Nothing (Just . updateDiscovery inpDS fi blk) soln
+                 case soln of
+                   Nothing -> return Nothing
+                   Just sl ->
+                     let solns' = Map.insert (pblockAddr blk) sl solns
+                         updDS = updateDiscovery inpDS solns' fi
+                     in return $ Just (updDS, solns')
 
 
 
@@ -253,27 +314,24 @@ updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
                    , MC.ArchConstraints arch
                    ) =>
                    DiscoveryState arch
+                -> Solutions arch
                 -> DiscoveryFunInfo arch ids
-                -> ParsedBlock arch ids
-                -> Solution arch
                 -> DiscoveryState arch
-updateDiscovery inpDS finfo pblk soln =
+updateDiscovery inpDS solns finfo =
   let funAddr = discoveredFunAddr finfo
-      blkAddr = pblockAddr pblk
   in addDiscoveredFunctionBlockTargets inpDS funAddr $
-     guideTargets blkAddr soln
+     guideTargets solns
 
 guideTargets :: ( MC.RegisterInfo (MC.ArchReg arch)
                 , KnownNat (MC.ArchAddrWidth arch)
                 , MC.ArchConstraints arch
                 )=>
-                ArchSegmentOff arch -- ^ addr of block to rewrite
-             -> [ArchSegmentOff arch] -- ^ targets of block to rewrite
+                Solutions arch -- ^ all rewrites to apply to this function's blocks
              -> BlockTermRewriter arch s src tgt
-guideTargets blkAddr tgtAddrs addr tStmt =
-  if addr == blkAddr
-  then rewriteTS tStmt tgtAddrs
-  else pure tStmt
+guideTargets solns addr tStmt = do
+  case Map.lookup addr solns of
+    Nothing -> pure tStmt
+    Just soln -> rewriteTS tStmt soln
   where
     -- The existing TermStmt is assumed to be a TranslateError, and
     -- further assumed to be an unknown transfer because the
@@ -343,6 +401,8 @@ refinePath bin inpDS fi path maxlevel numlevels =
 
 data Equation arch ids = Equation (DiscoveryState arch) [[ParsedBlock arch ids]]
 type Solution arch = [ArchSegmentOff arch]  -- identified transfers
+type Solutions arch = Map.Map (ArchSegmentOff arch) (Solution arch)
+
 
 equationFor :: DiscoveryState arch
             -> DiscoveryFunInfo arch ids
