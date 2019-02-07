@@ -1279,12 +1279,14 @@ transfer addr = do
          else do
           -- Rewrite returned blocks to simplify expressions
 #ifdef USE_REWRITER
-          bs1 <- do
+          bs1 <- snd <$> do
             let archStmt = rewriteArchStmt ainfo
             let secAddrMap = memSectionIndexMap mem
+            let maxBlockLabel = maximum $ map blockLabel bs0
             liftST $ do
-              ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt secAddrMap
-              traverse (rewriteBlock ainfo ctx) bs0
+              ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo)
+                     archStmt secAddrMap (maxBlockLabel + 1)
+              foldM (rewriteBlock ainfo) (ctx, []) bs0
 #else
           bs1 <- pure bs0
 #endif

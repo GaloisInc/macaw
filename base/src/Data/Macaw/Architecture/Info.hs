@@ -188,16 +188,16 @@ rewriteTermStmt info tstmt = do
 
 -- | Apply optimizations to code in the block
 rewriteBlock :: ArchitectureInfo arch
-             -> RewriteContext arch s src tgt
+             -> (RewriteContext arch s src tgt, [Block arch tgt])
              -> Block arch src
-             -> ST s (Block arch tgt)
-rewriteBlock info rwctx b = do
-  (tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
+             -> ST s (RewriteContext arch s src tgt, [Block arch tgt])
+rewriteBlock info (rwctx,blks) b = do
+  (rwctx', newBlks, tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
     mapM_ rewriteStmt (blockStmts b)
     rewriteTermStmt info (blockTerm b)
-  -- Return new block
-  pure $
-    Block { blockLabel = blockLabel b
-          , blockStmts = tgtStmts
-          , blockTerm  = tgtTermStmt
-          }
+  -- Return rewritten block and any new blocks
+  let rwBlock = Block { blockLabel = blockLabel b
+                      , blockStmts = tgtStmts
+                      , blockTerm  = tgtTermStmt
+                      }
+    in pure (rwctx', rwBlock : (newBlks <> blks))
