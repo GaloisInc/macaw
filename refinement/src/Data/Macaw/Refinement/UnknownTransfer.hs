@@ -121,15 +121,20 @@ import Control.Monad.ST ( RealWorld, stToIO )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
-import Data.Macaw.Discovery.State ( DiscoveryFunInfo
-                                  , DiscoveryState(..)
-                                  , ParsedBlock(..)
-                                  , ParsedTermStmt(ClassifyFailure)
-                                  , blockStatementList
-                                  , funInfo
-                                  , parsedBlocks
-                                  , stmtsTerm
-                                  )
+import qualified Data.Macaw.CFG.Rewriter as RW
+import Data.Macaw.CFG.Block ( TermStmt(..) )
+import Data.Macaw.Discovery ( DiscoveryFunInfo
+                            , DiscoveryState(..)
+                            , ParsedBlock(..)
+                            , ParsedTermStmt(ClassifyFailure)
+                            , BlockTermRewriter
+                            , addDiscoveredFunctionBlockTargets
+                            , blockStatementList
+                            , discoveredFunAddr
+                            , funInfo
+                            , parsedBlocks
+                            , stmtsTerm
+                            )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier, blockID
                                             , funForBlock, getBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
@@ -164,6 +169,8 @@ import qualified What4.Protocol.Online as W
 import qualified What4.Protocol.SMTLib2 as W
 import qualified What4.SatResult as W
 import qualified What4.Solver.Z3 as W
+
+import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 
 -- | This is the main entrypoint, which is given the current Discovery
@@ -248,11 +255,79 @@ refineBlockTransfer inpDS blk =
                     return $ maybe Nothing (Just . updateDiscovery inpDS blk) soln
 
 
-updateDiscovery :: DiscoveryState arch
+updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
+                   , KnownNat (MC.ArchAddrWidth arch)
+                   , MC.ArchConstraints arch
+                   ) =>
+                   DiscoveryState arch
                 -> Some (ParsedBlock arch)
                 -> Solution arch
                 -> DiscoveryState arch
-updateDiscovery _soln _pblk _inpDS = undefined  -- add replace pblk with soln, and add new blocks discoverd by soln
+updateDiscovery inpDS b@(Some pblk) soln =
+  case funForBlock b inpDS of
+    Just (Some finfo) ->
+      let funAddr = discoveredFunAddr finfo
+          blkAddr = pblockAddr pblk
+      in addDiscoveredFunctionBlockTargets inpDS funAddr $
+         guideTargets blkAddr soln
+    Nothing -> error "Cannot updateDiscovery for block with no function"
+
+guideTargets :: ( MC.RegisterInfo (MC.ArchReg arch)
+                , KnownNat (MC.ArchAddrWidth arch)
+                , MC.ArchConstraints arch
+                )=>
+                ArchSegmentOff arch -- ^ addr of block to rewrite
+             -> [ArchSegmentOff arch] -- ^ targets of block to rewrite
+             -> BlockTermRewriter arch s src tgt
+guideTargets blkAddr tgtAddrs addr tStmt =
+  if addr == blkAddr
+  then rewriteTS tStmt tgtAddrs
+  else pure tStmt
+  where
+    -- The existing TermStmt is assumed to be a TranslateError, and
+    -- further assumed to be an unknown transfer because the
+    -- equation for the final ip_reg could not be analyzed to obtain
+    -- a simple static address.  The tgtAddrs is supplied via
+    -- additional analysis (e.g. symbolic execution via SMT solver)
+    -- and yielded one or more addresses to branch to.
+    --
+    -- The strategy here is to insert Blocks that explicitly set IP
+    -- register to the target address(es) so that parseBlocks can
+    -- identify those target jumps and also continue to explore those
+    -- targets.
+    rewriteTS old [] = pure old  -- no targets provided, cannot rewrite
+    rewriteTS old (t:[]) = do
+      -- The only TermStmt that allows Block insertion is the Branch,
+      -- so it must be used even if there is only one address.  If
+      -- there is only one address, the explicit setting of ip_reg is
+      -- to the same value on both branches, so the condition for the
+      -- branch is immaterial.
+      j <- jumpToTarget (regsFrom old) t
+      c <- RW.rewriteApp $ testIP (regsFrom old) t
+      pure $ Branch c j j
+    rewriteTS old (t:ts) = do
+      c <- RW.rewriteApp $ testIP (regsFrom old) t
+      j <- jumpToTarget (regsFrom old) t
+      o <- RW.addNewBlockFromRewrite [] =<< rewriteTS old ts
+      pure $ Branch c j o
+
+    jumpToTarget inpRegs tgt = let nbt = FetchAndExecute newRegs
+                                   newRegs = inpRegs & MC.curIP .~ addrAsValue tgt
+                               in RW.addNewBlockFromRewrite [] nbt
+
+    regsFrom = \case
+      TranslateError regs _ -> regs
+      FetchAndExecute regs  -> regs
+      o -> error $ "Unexpected previous TermStmt: " <> show (PP.pretty o)
+
+    addrAsValue a = case MC.segoffAsAbsoluteAddr a of
+                      Just a' -> MC.bvValue $ fromIntegral a'
+                      Nothing -> error "Unable to determine absolute address in guideTargets"
+
+    testIP regs v = let ipAddr = regs^.MC.curIP
+                        tgtVal = addrAsValue v
+                    in MC.Eq ipAddr tgtVal
+
 
 
 refinePath :: ( MS.SymArchConstraints arch
