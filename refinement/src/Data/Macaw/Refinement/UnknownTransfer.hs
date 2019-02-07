@@ -159,8 +159,9 @@ import qualified Lang.Crucible.LLVM.Intrinsics as LLVM
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
-import qualified What4.Expr.GroundEval as W
 import           System.IO as IO
+import qualified What4.Concrete as W
+import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
@@ -383,7 +384,7 @@ data RefinementContext arch t solver fp = RefinementContext
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
   , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
-  , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (MC.ArchAddrWidth arch)
+  , memPtrTable :: MSM.MemPtrTable (C.OnlineBackend t solver fp) (MC.ArchAddrWidth arch)
   }
 
 withDefaultRefinementContext
@@ -419,18 +420,17 @@ withDefaultRefinementContext loaded_binary k = do
           --   base_ptr
           --   LLVM.noAlignment
           --   mem_array
-          (mem, mapped_memory) <- MSM.newGlobalMemory
+          (mem, mem_ptr_table) <- MSM.newGlobalMemory
             (Proxy @arch)
             sym
             LLVM.LittleEndian
             MSM.ConcreteMutable
             (MBL.memoryImage loaded_binary)
-          let global_mapping_fn = MSM.mapRegionPointers mapped_memory
           MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  global_mapping_fn
+                  (MSM.mapRegionPointers mem_ptr_table)
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
             k $ RefinementContext
               { symbolicBackend = sym
@@ -441,7 +441,7 @@ withDefaultRefinementContext loaded_binary k = do
               , memVar = mem_var
               -- , mem = empty_mem
               , mem = mem
-              , globalMappingFn = global_mapping_fn
+              , memPtrTable = mem_ptr_table
               }
         Nothing -> fail $ "unsupported architecture"
 
@@ -522,7 +522,7 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
   ip_off <- liftIO $ W.bvLit symbolicBackend W.knownNat $
     MC.memWordToUnsigned $ MC.addrOffset entry_addr
   entry_ip_val <- liftIO $ fromJust <$>
-    globalMappingFn symbolicBackend mem2 ip_base ip_off
+    (MSM.mapRegionPointers memPtrTable) symbolicBackend mem2 ip_base ip_off
 
   init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
   some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
@@ -555,11 +555,22 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
           case C.regValue $ (MS.lookupReg archVals) res_regs MC.ip_reg of
-            LLVM.LLVMPointer _ res_ip_bv_val -> do
-              ip_ground_vals <- genModels symbolicBackend res_ip_bv_val 10
+            LLVM.LLVMPointer res_ip_base res_ip_off -> do
+              ip_off_ground_vals <- genModels symbolicBackend res_ip_off 10
+
+              ip_base_mem_word <- case MSM.lookupAllocationBase memPtrTable res_ip_base of
+                Just alloc -> return $ MSM.allocationBase alloc
+                Nothing
+                  | Just (W.ConcreteNat 0) <- W.asConcrete res_ip_base ->
+                    return $ MC.memWord 0
+                  | otherwise ->
+                    fail $ "unexpected ip base: " ++ show (W.printSymExpr res_ip_base)
+
               return $ mapMaybe
-                (MC.resolveAbsoluteAddr (memory discovery_state) . MC.memWord . fromIntegral)
-                ip_ground_vals
+                (\off -> MC.resolveAbsoluteAddr (memory discovery_state) $
+                  MC.memWord $ fromIntegral $
+                    MC.memWordToUnsigned ip_base_mem_word + off)
+                ip_off_ground_vals
         C.AbortedResult _ aborted_res -> case aborted_res of
           C.AbortedExec reason _ ->
             fail $ "simulation abort: " ++ show (C.ppAbortExecReason reason)
