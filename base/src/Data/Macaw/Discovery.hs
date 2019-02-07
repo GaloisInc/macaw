@@ -83,7 +83,6 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
-import           Data.Word
 import           GHC.IO (ioToST, stToIO)
 import           System.IO
 
