@@ -138,7 +138,7 @@ import Data.Macaw.Discovery ( DiscoveryFunInfo
                             , stmtsTerm
                             )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..), blockID
-                                            , funForBlock, getBlock )
+                                            , getBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
                                   , buildFuncPath, pathDepth, pathForwardTrails
                                   , pathTo, takePath )
@@ -243,7 +243,7 @@ refineBlockTransfer bin inpDS fi blk =
   case pathTo (blockID blk) $ buildFuncPath fi of
     Nothing -> error "unable to find function path for block" -- internal error
     Just p -> do soln <- refinePath bin inpDS fi p (pathDepth p) 1
-                 return $ maybe Nothing (Just . updateDiscovery inpDS blk) soln
+                 return $ maybe Nothing (Just . updateDiscovery inpDS fi blk) soln
 
 
 
@@ -252,17 +252,15 @@ updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
                    , MC.ArchConstraints arch
                    ) =>
                    DiscoveryState arch
+                -> DiscoveryFunInfo arch ids
                 -> ParsedBlock arch ids
                 -> Solution arch
                 -> DiscoveryState arch
-updateDiscovery inpDS b@(Some pblk) soln =
-  case funForBlock b inpDS of
-    Just (Some finfo) ->
-      let funAddr = discoveredFunAddr finfo
-          blkAddr = pblockAddr pblk
-      in addDiscoveredFunctionBlockTargets inpDS funAddr $
-         guideTargets blkAddr soln
-    Nothing -> error "Cannot updateDiscovery for block with no function"
+updateDiscovery inpDS finfo pblk soln =
+  let funAddr = discoveredFunAddr finfo
+      blkAddr = pblockAddr pblk
+  in addDiscoveredFunctionBlockTargets inpDS funAddr $
+     guideTargets blkAddr soln
 
 guideTargets :: ( MC.RegisterInfo (MC.ArchReg arch)
                 , KnownNat (MC.ArchAddrWidth arch)

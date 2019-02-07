@@ -53,6 +53,9 @@ library
                , crucible-llvm
                , lens
                , macaw-base
+               , macaw-loader
+               -- , macaw-loader-ppc
+               , macaw-loader-x86
                , macaw-symbolic
                , mtl
                , parameterized-utils
