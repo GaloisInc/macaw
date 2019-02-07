@@ -28,8 +28,10 @@ module Data.Macaw.CFG.Rewriter
   , runRewriter
   , rewriteStmt
   , rewriteValue
+  , rewriteApp
   , evalRewrittenArchFn
   , appendRewrittenArchStmt
+  , addNewBlockFromRewrite
   ) where
 
 import           Control.Lens
@@ -63,6 +65,13 @@ data RewriteContext arch s src tgt
                     , rwctxArchStmt
                       :: !(ArchStmt arch (Value arch src) -> Rewriter arch s src tgt ())
                       -- ^ Rewriter for architecture-specific statements
+                    , rwctxTermStmt
+                      :: (TermStmt arch tgt ->
+                          Rewriter arch s src tgt (TermStmt arch tgt))
+                         -- ^ Rewriter for block terminal statements
+                         -- for block at specified address to make any
+                         -- additional adjustments beyond normal
+                         -- discovery.
                     , rwctxConstraints
                       :: !(forall a . (RegisterInfo (ArchReg arch) => a) -> a)
                       -- ^ Constraints needed during rewriting.
@@ -95,16 +104,23 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                      -> Rewriter arch s src tgt (Value arch tgt tp))
                  -> (ArchStmt arch (Value arch src)
                      -> Rewriter arch s src tgt ())
+                 -> (TermStmt arch tgt ->
+                     Rewriter arch s src tgt (TermStmt arch tgt))
+                    -- ^ Optional internal terminal statement
+                    -- rewriter; e.g. use is for block jump targets
+                    -- discovered outside normal pattern-matching in
+                    -- Discovery.hs.
                  -> Map SectionIndex (ArchSegmentOff arch)
                     -- ^ Map from loaded section indices to their address.
                  -> BlockLabel
                  -- ^ next BlockLabel (useable for creating new Block entries)
                  -> ST s (RewriteContext arch s src tgt)
-mkRewriteContext nonceGen archFn archStmt secAddrMap nextBlockLabel = do
+mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap nextBlockLabel = do
   ref <- newSTRef MapF.empty
   pure $! RewriteContext { rwctxNonceGen = nonceGen
                          , rwctxArchFn = archFn
                          , rwctxArchStmt = archStmt
+                         , rwctxTermStmt = termStmt
                          , rwctxConstraints = \a -> a
                          , rwctxSectionAddrMap = secAddrMap
                          , rwctxCache = ref
@@ -148,7 +164,8 @@ runRewriter ctx m = do
                        , _rwRevStmts = []
                        , _rwNewBlocks = []
                        }
-  (r, s') <- runStateT (unRewriter m) s
+      m' = rwctxTermStmt ctx =<< m
+  (r, s') <- runStateT (unRewriter m') s
   pure (rwContext s', _rwNewBlocks s', reverse (_rwRevStmts s'), r)
 
 -- | Add a statment to the list

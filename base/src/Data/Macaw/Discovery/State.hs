@@ -87,6 +87,11 @@ data FunctionExploreReason w
   | CodePointerInMem !(MemSegmentOff w)
     -- | The user requested that we analyze this address as a function.
   | UserRequest
+    -- | Internal Block Target enhancement.  This should not normally
+    -- occur because block target enhancement is usually only
+    -- performed for previously discovered functions, which would
+    -- already have one of the above exploration reasons.
+  | BlockTargetEnhancement
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
