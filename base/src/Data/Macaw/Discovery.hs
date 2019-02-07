@@ -245,13 +245,21 @@ filterStmtList stmtPred s = do
         , stmtsTerm = term'
         }
 
+-- | Force each nonterminal statement in the list.
+seqStmtList :: StatementList arch ids -> ()
+seqStmtList stmts = foldr seq () (stmtsNonterm stmts)
+
 -- | Eliminate all dead statements in blocks
 dropUnusedCodeInParsedBlock :: ArchitectureInfo arch
                           -> ParsedBlock arch ids
                           -> ParsedBlock arch ids
 dropUnusedCodeInParsedBlock ainfo b =
-    b { blockStatementList = filterStmtList stmtPred l }
-  where l = blockStatementList b
+    -- Important to force the result list here, since otherwise we
+    -- hold onto the entire input list
+    seqStmtList stmtList' `seq`
+    b { blockStatementList = stmtList' }
+  where stmtList' = filterStmtList stmtPred l
+        l = blockStatementList b
         demandSet =
           runDemandComp (archDemandContext ainfo) $ do
             addStatementListDemands l

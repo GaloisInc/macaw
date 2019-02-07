@@ -378,7 +378,7 @@ termStmtToJump sl addr = sl { M.stmtsTerm = tm }
   where
     tm :: M.ParsedTermStmt arch ids
     tm = case M.stmtsTerm sl of
-      tm0@M.ParsedJump{} -> tm0
+      M.ParsedJump r _ -> M.ParsedJump r addr
       M.ParsedCall r _ -> M.ParsedJump r addr
       M.ParsedReturn r -> M.ParsedJump r addr
       M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
@@ -586,12 +586,12 @@ mkBlockPathCFG
   -- ^ Map from region indices to their address
   -> (M.ArchSegmentOff arch -> C.Position)
   -- ^ Function that maps function address to Crucible position
-  -> M.ParsedBlock arch ids
+  -> [M.ParsedBlock arch ids]
   -- ^ Block to translate
   -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkBlockPathCFG arch_fns halloc mem_base_var_map pos_fn blocks =
   toCoreCFG arch_fns <$>
-    mkParsedBlockRegCFG arch_fns halloc mem_base_var_map pos_fn blocks
+    mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks
 
 -- | Translate a macaw function (passed as a 'M.DiscoveryFunInfo') into a
 -- registerized Crucible CFG

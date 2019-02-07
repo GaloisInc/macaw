@@ -16,6 +16,7 @@ import           GHC.TypeLits
 import           Control.Lens
 import           Control.Monad.IO.Class (MonadIO)
 import qualified Data.Macaw.Architecture.Info as MA
+import qualified Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.CFG.AssignRhs
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -38,7 +39,8 @@ import           Data.Parameterized.Classes
 -- alternative to the same named function in Data.Macaw.Discovery.
 cfgFromAddrsAndState
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MD.DiscoveryState arch
+  => MBL.LoadedBinary arch bin
+  -> MD.DiscoveryState arch
   -> [ArchSegmentOff arch]
   -- ^ Initial function entry points.
   -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
@@ -47,9 +49,9 @@ cfgFromAddrsAndState
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrsAndState initial_state init_addrs mem_words =
+cfgFromAddrsAndState bin initial_state init_addrs mem_words =
   MD.cfgFromAddrsAndState initial_state init_addrs mem_words
-    & refineDiscovery
+    & refineDiscovery bin
 
 -- | Construct an empty discovery state and populate it by exploring
 -- from a given set of function entry points.  This can be used as an
@@ -57,7 +59,8 @@ cfgFromAddrsAndState initial_state init_addrs mem_words =
 -- Data.Macaw.Discovery.
 cfgFromAddrs
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MA.ArchitectureInfo arch
+  => MBL.LoadedBinary arch bin
+  -> MA.ArchitectureInfo arch
   -- ^ Architecture-specific information needed for doing
   -- control-flow exploration.
   -> MM.Memory (ArchAddrWidth arch)
@@ -72,8 +75,8 @@ cfgFromAddrs
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrs ainfo mem addrSymMap =
-  cfgFromAddrsAndState (emptyDiscoveryState mem addrSymMap ainfo)
+cfgFromAddrs bin ainfo mem addrSymMap =
+  cfgFromAddrsAndState bin (emptyDiscoveryState mem addrSymMap ainfo)
 
 
 ----------------------------------------------------------------------
@@ -89,7 +92,8 @@ cfgFromAddrs ainfo mem addrSymMap =
 -- perform additional discovery for incomplete blocks.
 refineDiscovery
   :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => DiscoveryState arch
+  => MBL.LoadedBinary arch bin
+  -> DiscoveryState arch
   -> m (DiscoveryState arch)
-refineDiscovery =
-  symbolicUnkTransferRefinement . symbolicTargetRefinement
+refineDiscovery bin =
+  symbolicUnkTransferRefinement bin . symbolicTargetRefinement

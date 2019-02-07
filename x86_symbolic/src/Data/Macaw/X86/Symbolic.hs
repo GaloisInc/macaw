@@ -145,6 +145,10 @@ x86RegAssignment =
   <++> (repeatAssign (M.X86_YMMReg . F.ymmReg . fromIntegral) :: Assignment M.X86Reg (CtxRepeat 16 (M.BVType 256)))
 
 
+x86RegStructType :: C.TypeRepr (ArchRegStruct M.X86_64)
+x86RegStructType =
+  C.StructRepr (typeCtxToCrucible $ fmapFC M.typeRepr x86RegAssignment)
+
 regIndexMap :: RegIndexMap M.X86_64
 regIndexMap = mkRegIndexMap x86RegAssignment
             $ Ctx.size $ crucArchRegTypes x86_64MacawSymbolicFns
@@ -306,6 +310,7 @@ x86_64MacawSymbolicFns =
   MacawSymbolicArchFunctions
   { crucGenArchConstraints = \x -> x
   , crucGenRegAssignment = x86RegAssignment
+  , crucGenRegStructType = x86RegStructType
   , crucGenArchRegName  = x86RegName
   , crucGenArchFn = crucGenX86Fn
   , crucGenArchStmt = crucGenX86Stmt
