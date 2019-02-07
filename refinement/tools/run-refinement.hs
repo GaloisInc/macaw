@@ -102,7 +102,7 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
   di <- liftIO $ if unrefined opts
            then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
            else AI.withArchConstraints arch_info $
-                MR.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
+                MR.cfgFromAddrs bin arch_info (memoryImage bin) M.empty entries []
   f di
 
 showDiscoveryInfo _opts di =
