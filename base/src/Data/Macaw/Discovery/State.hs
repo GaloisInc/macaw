@@ -1,9 +1,10 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2018
+Copyright  : (c) Galois, Inc 2016-2019
 Maintainer : jhendrix@galois.com
 
-This defines the main data structure for storing information learned from code
-discovery.
+This defines the data structures for storing information learned from
+code discovery.  The 'DiscoveryState' is the main data structure
+representing this information.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}

@@ -168,7 +168,7 @@ runRewriter ctx m = do
   (r, s') <- runStateT (unRewriter m') s
   pure (rwContext s', _rwNewBlocks s', reverse (_rwRevStmts s'), r)
 
--- | Add a statment to the list
+-- | Add a statement to the list
 appendRewrittenStmt :: Stmt arch tgt -> Rewriter arch s src tgt ()
 appendRewrittenStmt stmt = Rewriter $ do
   stmts <- use rwRevStmts

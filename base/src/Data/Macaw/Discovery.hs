@@ -1,8 +1,9 @@
 {- |
-Copyright        : (c) Galois, Inc 2015-2017
+Copyright        : (c) Galois, Inc 2015-2019
 Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.com>
 
-This provides information about code discovered in binaries.
+This module discovers the Functions and their internal Block CFG in
+target binaries.
 -}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
