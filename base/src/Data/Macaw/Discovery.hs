@@ -426,7 +426,6 @@ mergeIntraJump src ab tgt = do
    when (not (absStackHasReturnAddr ab)) $ do
     debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) $
       pure ()
-   let rsn = NextIP src
    -- Associate a new abstract state with the code region.
    foundMap <- use foundAddrs
    case Map.lookup tgt foundMap of
@@ -444,7 +443,7 @@ mergeIntraJump src ab tgt = do
     Nothing -> do
       reverseEdges %= Map.insertWith Set.union tgt (Set.singleton src)
       frontier     %= Set.insert tgt
-      let found_info = FoundAddr { foundReason = rsn
+      let found_info = FoundAddr { foundReason = NextIP src
                                  , foundAbstractState = ab
                                  }
       foundAddrs %= Map.insert tgt found_info
