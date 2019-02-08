@@ -18,6 +18,13 @@
 -- If there is no "F-" portion, then the same expected file is applied
 -- for all possible values of F.
 --
+-- If there is an expected file but it fails to Parse on a Haskell
+-- Read (e.g. "echo garbage > blah.ppc.base-expected") then the test
+-- will write the actual output to a separate file with the
+-- "last-actual" suffix (e.g. "blah.ppc.base-last-actual"); verify the
+-- contents of that file and then simply copy them to the expected
+-- file to get the correct file contents.
+--
 -- There is also a README in the test/samples directory where the C
 -- source is described, along with various tests.
 
@@ -119,6 +126,17 @@ searchResultsReport = TestManager [] $ \opts _tests ->
                  putStrLn ""
                  putStrLn $ "Final set of tests [" ++ show (length searchlist) ++ "]:"
                  mapM_ (putStrLn . show) searchlist
+                 putStrLn ""
+                 putStrLn ("These search results were based on the contents of the " <>
+                           datadir <> " directory\n\
+                           \Syntax:  BASENAME.c\n\
+                           \         BASENAME.ARCH.EXE\n\
+                           \         BASENAME.ARCH.expected  OR BASENAME.ARCH.base-expected\n\
+                           \                                AND BASENAME.ARCH.refined-expected\n\
+                           \Note that if any .expected file fails a Haskell Read\n\
+                           \parse, a \".....last-actual\" file is written; it can\n\
+                           \be verified and renamed to be the new expected contents.\n")
+
                  return True
   else Nothing
 
