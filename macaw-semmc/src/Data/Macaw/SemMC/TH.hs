@@ -135,14 +135,13 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
                    ]
   return (lam, fullDefs)
 
+-- | Unimplemented instructions return Nothing here, which will be translated
+-- into a TranslationError inside the generator.
 unimplementedInstruction :: Q (Name, Dec)
 unimplementedInstruction = do
     fname <- newName "noMatch"
     arg1Nm <- newName "unknownOpcode"
-    fdecl <- funD fname
-             [clause [varP arg1Nm]
-                         (normalB [| error ("Unimplemented instruction: " ++ show $(varE arg1Nm)) |])
-                         []]
+    fdecl <- funD fname [clause [varP arg1Nm] (normalB [| Nothing |]) []]
     return (fname, fdecl)
 
 

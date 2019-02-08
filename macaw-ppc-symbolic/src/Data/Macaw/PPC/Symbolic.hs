@@ -74,6 +74,7 @@ ppc64MacawSymbolicFns =
   { MSB.crucGenArchConstraints = \x -> x
   , MSB.crucGenArchRegName = ppcRegName
   , MSB.crucGenRegAssignment = ppcRegAssignment
+  , MSB.crucGenRegStructType = ppcRegStructType
   , MSB.crucGenArchFn = ppcGenFn
   , MSB.crucGenArchStmt = ppcGenStmt
   , MSB.crucGenArchTermStmt = ppcGenTermStmt
@@ -85,6 +86,7 @@ ppc32MacawSymbolicFns =
   { MSB.crucGenArchConstraints = \x -> x
   , MSB.crucGenArchRegName = ppcRegName
   , MSB.crucGenRegAssignment = ppcRegAssignment
+  , MSB.crucGenRegStructType = ppcRegStructType
   , MSB.crucGenArchFn = ppcGenFn
   , MSB.crucGenArchStmt = ppcGenStmt
   , MSB.crucGenArchTermStmt = ppcGenTermStmt
@@ -169,6 +171,12 @@ ppcRegAssignment =
             Ctx.:> MP.PPC_VSCR)
   Ctx.<++> (R.repeatAssign (MP.PPC_GP . D.GPR . fromIntegral) :: Ctx.Assignment (MP.PPCReg (MP.AnyPPC v)) (R.CtxRepeat 32 (MT.BVType (RegSize v))))
   Ctx.<++> (R.repeatAssign (MP.PPC_FR . D.VSReg . fromIntegral) :: Ctx.Assignment (MP.PPCReg (MP.AnyPPC v)) (R.CtxRepeat 64 (MT.BVType 128)))
+
+ppcRegStructType :: forall v
+                  . ( MP.KnownVariant v )
+                 => C.TypeRepr (MS.ArchRegStruct (MP.AnyPPC v))
+ppcRegStructType =
+  C.StructRepr (MS.typeCtxToCrucible $ FC.fmapFC MT.typeRepr ppcRegAssignment)
 
 data PPCSymbolicException v = MissingRegisterInState (Some (MP.PPCReg (MP.AnyPPC v)))
 
