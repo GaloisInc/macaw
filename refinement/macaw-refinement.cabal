@@ -54,8 +54,6 @@ library
                , lens
                , macaw-base
                , macaw-loader
-               -- , macaw-loader-ppc
-               , macaw-loader-x86
                , macaw-symbolic
                , mtl
                , parameterized-utils
@@ -70,6 +68,7 @@ library
   other-modules: Data.Macaw.Refinement.FuncBlockUtils
                  Data.Macaw.Refinement.Path
                  Data.Macaw.Refinement.Target
+                 Data.Macaw.Refinement.SymbolicExecution
                  Data.Macaw.Refinement.UnknownTransfer
 
   default-language: Haskell2010
