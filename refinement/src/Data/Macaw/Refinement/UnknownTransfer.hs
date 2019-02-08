@@ -445,6 +445,7 @@ data RefinementContext arch t solver fp = RefinementContext
   , memVar :: C.GlobalVar LLVM.Mem
   , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
   , memPtrTable :: MSM.MemPtrTable (C.OnlineBackend t solver fp) (MC.ArchAddrWidth arch)
+  , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (MC.ArchAddrWidth arch)
   }
 
 withDefaultRefinementContext
@@ -459,39 +460,50 @@ withDefaultRefinementContext loaded_binary k = do
     C.withZ3OnlineBackend nonce_gen C.NoUnsatFeatures $ \sym ->
       case MS.archVals (Proxy @arch) of
         Just arch_vals -> do
-          -- path_setter <- W.getOptionSetting W.z3Path (W.getConfiguration sym)
-          -- _ <- W.setOpt path_setter "z3-tee"
 
           mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
-          -- empty_mem <- LLVM.emptyMem LLVM.LittleEndian
-          -- let ?ptrWidth = W.knownNat
-          -- (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
-          --   sym
-          --   LLVM.GlobalAlloc
-          --   LLVM.Mutable
-          --   "flat memory"
-          --   empty_mem
-          --   LLVM.noAlignment
-          -- let Right mem_name = W.userSymbol "mem"
-          -- mem_array <- W.freshConstant sym mem_name W.knownRepr
-          -- initialized_mem <- LLVM.doArrayStoreUnbounded
-          --   sym
-          --   allocated_mem
-          --   base_ptr
-          --   LLVM.noAlignment
-          --   mem_array
+
           (mem, mem_ptr_table) <- MSM.newGlobalMemory
             (Proxy @arch)
             sym
             LLVM.LittleEndian
             MSM.ConcreteMutable
             (MBL.memoryImage loaded_binary)
+
+          let ?ptrWidth = W.knownNat
+          (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
+            sym
+            LLVM.GlobalAlloc
+            LLVM.Mutable
+            "flat memory"
+            mem
+            LLVM.noAlignment
+          let Right mem_name = W.userSymbol "mem"
+          mem_array <- W.freshConstant sym mem_name W.knownRepr
+          initialized_mem <- LLVM.doArrayStoreUnbounded
+            sym
+            allocated_mem
+            base_ptr
+            LLVM.noAlignment
+            mem_array
+
+          let global_mapping_fn = \sym' mem' base off -> do
+                flat_mem_ptr <- LLVM.ptrAdd sym' W.knownNat base_ptr off
+                MSM.mapRegionPointers
+                  mem_ptr_table
+                  flat_mem_ptr
+                  sym'
+                  mem'
+                  base
+                  off
+
           MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
             let ext_impl = MS.macawExtensions
                   arch_eval_fns
                   mem_var
-                  (MSM.mapRegionPointers mem_ptr_table)
+                  global_mapping_fn
                   (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
+
             k $ RefinementContext
               { symbolicBackend = sym
               , archVals = arch_vals
@@ -499,9 +511,9 @@ withDefaultRefinementContext loaded_binary k = do
               , nonceGenerator = nonce_gen
               , extensionImpl = ext_impl
               , memVar = mem_var
-              -- , mem = empty_mem
-              , mem = mem
+              , mem = initialized_mem
               , memPtrTable = mem_ptr_table
+              , globalMappingFn = global_mapping_fn
               }
         Nothing -> fail $ "unsupported architecture"
 
@@ -582,7 +594,7 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
   ip_off <- liftIO $ W.bvLit symbolicBackend W.knownNat $
     MC.memWordToUnsigned $ MC.addrOffset entry_addr
   entry_ip_val <- liftIO $ fromJust <$>
-    (MSM.mapRegionPointers memPtrTable) symbolicBackend mem2 ip_base ip_off
+    globalMappingFn symbolicBackend mem2 ip_base ip_off
 
   init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
   some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG

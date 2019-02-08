@@ -342,10 +342,11 @@ mapRegionPointers :: ( MC.MemWidth w
                      , CB.IsSymInterface sym
                      )
                   => MemPtrTable sym w
+                  -> CL.LLVMPtr sym w
                   -> MS.GlobalMap sym w
-mapRegionPointers mpt = \sym mem regionNum offsetVal ->
+mapRegionPointers mpt default_ptr = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
-    Just 0 -> mapBitvectorToLLVMPointer mpt sym mem offsetVal
+    Just 0 -> mapBitvectorToLLVMPointer mpt sym mem offsetVal default_ptr
     Just _ ->
       -- This is the case where the region number is concrete and non-zero,
       -- meaning that it is already an LLVM pointer
@@ -354,7 +355,7 @@ mapRegionPointers mpt = \sym mem regionNum offsetVal ->
       -- In this case, the region number is symbolic, so we need to be very
       -- careful to handle the possibility that it is zero (and thus must be
       -- conditionally mapped to one or all of our statically-allocated regions.
-      mapSymbolicRegionPointer mpt sym mem regionNum offsetVal
+      mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr
 
 -- | This is a relatively simple case where we know that the region number is
 -- zero.  This means that the bitvector we have needs to be mapped to a pointer.
@@ -366,8 +367,9 @@ mapBitvectorToLLVMPointer :: ( MC.MemWidth w
                           -> sym
                           -> CS.RegValue sym CL.Mem
                           -> CS.RegValue sym (CT.BVType w)
+                          -> CL.LLVMPtr sym w
                           -> IO (Maybe (CL.LLVMPtr sym w))
-mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal =
+mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal default_ptr =
   case WI.asUnsignedBV offsetVal of
     Just concreteOffset -> do
       -- This is the simplest case where the bitvector is concretely known.  We
@@ -399,7 +401,7 @@ mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal =
       --
       -- We will handle this by creating a mux tree that allows the pointer to
       -- be in *any* of our statically-allocated regions.
-      Just <$> staticRegionMuxTree mpt sym mem offsetVal
+      Just <$> staticRegionMuxTree mpt sym mem offsetVal default_ptr
 
 -- | Create a mux tree that maps the input bitvector (which is the offset in a
 -- LLVMPointer with region == 0) to one of the regions that are statically
@@ -420,11 +422,10 @@ staticRegionMuxTree :: ( CB.IsSymInterface sym
                     -> sym
                     -> CL.MemImpl sym
                     -> WI.SymExpr sym (WI.BaseBVType w)
+                    -> CL.LLVMPtr sym w
                     -> IO (CL.LLVMPtr sym w)
-staticRegionMuxTree (MemPtrTable im _) sym mem offsetVal = do
-  let rep = WI.bvWidth offsetVal
-  np <- CL.mkNullPointer sym rep
-  F.foldlM addMuxForRegion np (IM.toList im)
+staticRegionMuxTree (MemPtrTable im _) sym mem offsetVal default_ptr =
+  F.foldlM addMuxForRegion default_ptr (IM.toList im)
   where
     handleCase f alloc start end greater less = do
       let rep = WI.bvWidth offsetVal
@@ -457,10 +458,11 @@ mapSymbolicRegionPointer :: ( MC.MemWidth w
                          -> CS.RegValue sym CL.Mem
                          -> CS.RegValue sym CT.NatType
                          -> CS.RegValue sym (CT.BVType w)
+                         -> CL.LLVMPtr sym w
                          -> IO (Maybe (CL.LLVMPtr sym w))
-mapSymbolicRegionPointer mpt sym mem regionNum offsetVal = do
+mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr = do
   zeroNat <- WI.natLit sym 0
-  staticRegion <- staticRegionMuxTree mpt sym mem offsetVal
+  staticRegion <- staticRegionMuxTree mpt sym mem offsetVal default_ptr
   isZeroRegion <- WI.natEq sym zeroNat regionNum
   let nonZeroPtr = CL.LLVMPointer regionNum offsetVal
   Just <$> CL.muxLLVMPtr sym isZeroRegion staticRegion nonZeroPtr
