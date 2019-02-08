@@ -1,5 +1,5 @@
 {-|
-Copyright        : (c) Galois, Inc 2017
+Copyright        : (c) Galois, Inc 2017-2019
 Maintainer       : Joe Hendrix <jhendrix@galois.com>
 
 This exports the pre-classification term statement and block data
@@ -9,7 +9,7 @@ types.
 {-# LANGUAGE UndecidableInstances #-}
 
 module Data.Macaw.CFG.Block
-  ( Block(..)
+  ( Block(..), BlockLabel
   , ppBlock
   , TermStmt(..)
   ) where
@@ -33,7 +33,7 @@ data TermStmt arch ids
      -- | Fetch and execute the next instruction from the given processor state.
   = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
     -- | Branch and execute one block or another.
-  | Branch !(Value arch ids BoolType) !Word64 !Word64
+  | Branch !(Value arch ids BoolType) !BlockLabel !BlockLabel
     -- | The block ended prematurely due to an error in instruction
     -- decoding or translation.
     --
@@ -65,11 +65,14 @@ instance ArchConstraints arch
 ------------------------------------------------------------------------
 -- Block
 
+-- | The type of labels for each block
+type BlockLabel = Word64
+
 -- | The type for code blocks returned by the disassembler.
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
 data Block arch ids
-   = Block { blockLabel :: !Word64
+   = Block { blockLabel :: !BlockLabel
              -- ^ Index of this block
            , blockStmts :: !([Stmt arch ids])
              -- ^ List of statements in the block.

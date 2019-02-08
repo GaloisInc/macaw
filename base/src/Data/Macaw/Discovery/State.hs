@@ -1,9 +1,10 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2018
+Copyright  : (c) Galois, Inc 2016-2019
 Maintainer : jhendrix@galois.com
 
-This defines the main data structure for storing information learned from code
-discovery.
+This defines the data structures for storing information learned from
+code discovery.  The 'DiscoveryState' is the main data structure
+representing this information.
 -}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
@@ -20,7 +21,7 @@ discovery.
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
-  , StatementList(..)
+  , StatementList(..), StatementLabel
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
@@ -87,6 +88,11 @@ data FunctionExploreReason w
   | CodePointerInMem !(MemSegmentOff w)
     -- | The user requested that we analyze this address as a function.
   | UserRequest
+    -- | Internal Block Target enhancement.  This should not normally
+    -- occur because block target enhancement is usually only
+    -- performed for previously discovered functions, which would
+    -- already have one of the above exploration reasons.
+  | BlockTargetEnhancement
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -228,10 +234,13 @@ instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
 ------------------------------------------------------------------------
 -- StatementList
 
+-- | The type of label for each StatementList
+type StatementLabel = Word64
+
 -- | This is a code block after we have classified the control flow
 -- statement(s) that the block ends with.
 data StatementList arch ids
-   = StatementList { stmtsIdent :: !Word64
+   = StatementList { stmtsIdent :: !StatementLabel
                      -- ^ An index for uniquely identifying the block.
                      --
                      -- This is primarily used so that we can reference

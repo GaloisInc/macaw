@@ -64,6 +64,17 @@ module Data.Macaw.Symbolic.CrucGen
   , ArchAddrWidthRepr
   , addrWidthIsPos
   , getRegs
+  , addStatementList
+  , addMacawStmt
+  , addMacawParsedTermStmt
+  , addStmt
+  , appAtom
+  , toBits
+  , fromBits
+  , evalMacawStmt
+  , getRegValue
+  , bvLit
+  , archAddrWidth
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -200,10 +211,10 @@ crucGenAddrWidth fns =
   crucGenArchConstraints fns $ M.addrWidthRepr Proxy
 
 -- | Return types of registers in Crucible
-crucArchRegTypes ::
-  MacawSymbolicArchFunctions arch ->
-  Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch))
-crucArchRegTypes archFns = case crucGenRegStructType archFns of
+crucArchRegTypes
+  :: MacawSymbolicArchFunctions arch
+  -> Assignment C.TypeRepr (MacawCrucibleRegTypes arch)
+crucArchRegTypes arch_fns = case crucGenRegStructType arch_fns of
   C.StructRepr tps -> tps
 
 ------------------------------------------------------------------------

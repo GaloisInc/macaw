@@ -54,7 +54,7 @@ import qualified What4.Symbol as C
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
-import           Lang.Crucible.Simulator.RegValue (RegValue'(..), RegValue)
+import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
@@ -177,9 +177,9 @@ updateX86Reg r upd asgn =
      -- return (adjust upd (crucibleIndex pair) asgn)
 
 freshX86Reg :: C.IsSymInterface sym =>
-  sym -> M.X86Reg t -> IO (RegValue' sym (ToCrucibleType t))
+  sym -> M.X86Reg t -> IO (C.RegValue' sym (ToCrucibleType t))
 freshX86Reg sym r =
-  RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
+  C.RV <$> freshValue sym (show r) (Just (C.knownNat @64))  (M.typeRepr r)
 
 freshValue ::
   (C.IsSymInterface sym, 1 <= ptrW) =>
@@ -187,7 +187,7 @@ freshValue ::
   String {- ^ Name for fresh value -} ->
   Maybe (C.NatRepr ptrW) {- ^ Width of pointers; if nothing, allocate as bits -} ->
   M.TypeRepr tp {- ^ Type of value -} ->
-  IO (RegValue sym (ToCrucibleType tp))
+  IO (C.RegValue sym (ToCrucibleType tp))
 freshValue sym str w ty =
   case ty of
     M.BVTypeRepr y ->
@@ -330,6 +330,25 @@ x86_64MacawEvalFn fs =
       X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
       X86PrimTerm term -> termSemantics fs term crux_state
 
+x86LookupReg
+  :: C.RegEntry sym (ArchRegStruct M.X86_64)
+  -> M.X86Reg tp
+  -> C.RegEntry sym (ToCrucibleType tp)
+x86LookupReg reg_struct_entry macaw_reg =
+  case lookupX86Reg macaw_reg (C.regValue reg_struct_entry) of
+    Just (C.RV val) -> C.RegEntry (typeToCrucible $ M.typeRepr macaw_reg) val
+    Nothing -> error $ "unexpected register: " ++ showF macaw_reg
+
+x86UpdateReg
+  :: C.RegEntry sym (ArchRegStruct M.X86_64)
+  -> M.X86Reg tp
+  -> C.RegValue sym (ToCrucibleType tp)
+  -> C.RegEntry sym (ArchRegStruct M.X86_64)
+x86UpdateReg reg_struct_entry macaw_reg val =
+  case updateX86Reg macaw_reg (\_ -> C.RV val) (C.regValue reg_struct_entry) of
+    Just res_reg_struct -> reg_struct_entry { C.regValue = res_reg_struct }
+    Nothing -> error $ "unexpected register: " ++ showF macaw_reg
+
 instance ArchInfo M.X86_64 where
   archVals _ = Just $ ArchVals
     { archFunctions = x86_64MacawSymbolicFns
@@ -337,4 +356,6 @@ instance ArchInfo M.X86_64 where
         sfns <- liftIO $ newSymFuns sym
         k $ x86_64MacawEvalFn sfns
     , withArchConstraints = \x -> x
+    , lookupReg = x86LookupReg
+    , updateReg = x86UpdateReg
     }
