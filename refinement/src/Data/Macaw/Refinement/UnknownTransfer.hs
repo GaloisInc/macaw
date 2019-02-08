@@ -109,16 +109,14 @@ module Data.Macaw.Refinement.UnknownTransfer
   )
 where
 
-import           GHC.TypeLits
-
 import Control.Lens
 import Control.Monad ( forM )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
-import qualified Data.Macaw.CFG.Rewriter as RW
 import Data.Macaw.CFG.Block ( TermStmt(..) )
+import qualified Data.Macaw.CFG.Rewriter as RW
 import Data.Macaw.Discovery ( DiscoveryFunInfo
                             , DiscoveryState(..)
                             , ParsedBlock(..)
@@ -140,10 +138,10 @@ import Data.Macaw.Refinement.SymbolicExecution ( withDefaultRefinementContext
                                                , smtSolveTransfer
                                                )
 import qualified Data.Macaw.Symbolic as MS
-import Data.Maybe
 import qualified Data.Map as Map
-import Data.Parameterized.Some
-
+import           Data.Maybe
+import           Data.Parameterized.Some
+import           GHC.TypeLits
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 
