@@ -12,7 +12,11 @@ int64_t select(int64_t a, int64_t b)
     case 5: return b+5;
     default: return 0;
     }
-    // Has a "jmp rax", which is a classify failure "stmtsTerm = unknown transfer"
+    // Has a "jmp rax", which is a classify failure "stmtsTerm =
+    // unknown transfer".  Note that it seems to require at least 6
+    // case branch targets (for GCC 7.4.0 with -O0) to create a
+    // computed branch target; fewer case targets just implement
+    // explicit jumps.
 }
 
 void _start()
