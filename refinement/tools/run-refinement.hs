@@ -21,6 +21,7 @@ import           Data.Macaw.CFG ( ArchAddrWidth )
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
+import           Data.Macaw.PPC.Symbolic ()
 import qualified Data.Macaw.Refinement as MR
 import           Data.Macaw.Symbolic ( SymArchConstraints )
 import qualified Data.Macaw.X86 as MX86

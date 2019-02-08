@@ -54,7 +54,11 @@ library
                , lens
                , macaw-base
                , macaw-loader
+               , macaw-loader-ppc
+               , macaw-loader-x86
+               , macaw-ppc
                , macaw-symbolic
+               , macaw-ppc-symbolic
                , mtl
                , parameterized-utils
                , prettyprinter
@@ -92,6 +96,7 @@ executable run-refinement
                , macaw-loader-x86
                , macaw-loader-ppc
                , macaw-ppc
+               , macaw-ppc-symbolic
                , macaw-refinement
                , macaw-symbolic
                , macaw-x86
@@ -124,6 +129,7 @@ test-suite test-refinements
                , macaw-loader-x86
                , macaw-loader-ppc
                , macaw-ppc
+               , macaw-ppc-symbolic
                , macaw-refinement
                , macaw-symbolic
                , macaw-x86
