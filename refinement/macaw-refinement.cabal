@@ -68,6 +68,7 @@ library
   other-modules: Data.Macaw.Refinement.FuncBlockUtils
                  Data.Macaw.Refinement.Path
                  Data.Macaw.Refinement.Target
+                 Data.Macaw.Refinement.SymbolicExecution
                  Data.Macaw.Refinement.UnknownTransfer
 
   default-language: Haskell2010

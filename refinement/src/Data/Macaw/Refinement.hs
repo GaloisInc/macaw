@@ -25,7 +25,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Refinement.Target
 import           Data.Macaw.Refinement.UnknownTransfer
-import           Data.Parameterized.Classes
 
 ----------------------------------------------------------------------
 -- * Discovery Entrypoints
