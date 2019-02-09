@@ -122,7 +122,6 @@ import qualified Data.Macaw.Symbolic as MS
 
 import Prelude
 
-import Debug.Trace
 
 -- | A configuration knob controlling how the initial contents of the memory
 -- model are populated
