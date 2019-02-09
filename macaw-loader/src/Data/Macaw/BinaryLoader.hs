@@ -32,6 +32,7 @@ instance PC.TestEquality BinaryRepr where
 
 data LoadedBinary arch binFmt =
   LoadedBinary { memoryImage :: MM.Memory (MM.ArchAddrWidth arch)
+               , memoryEndianness :: MM.Endianness
                , archBinaryData :: ArchBinaryData arch binFmt
                , binaryFormatData :: BinaryFormatData arch binFmt
                , loadDiagnostics :: [Diagnostic arch binFmt]

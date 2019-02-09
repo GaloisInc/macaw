@@ -60,6 +60,7 @@ loadX86Binary lopts e = do
     Left err -> X.throwM (X86ElfLoadError err)
     Right (mem, symbols, warnings, _) ->
       return BL.LoadedBinary { BL.memoryImage = mem
+                             , BL.memoryEndianness = MM.LittleEndian
                              , BL.archBinaryData = ()
                              , BL.binaryFormatData =
                                X86ElfData { elf = e

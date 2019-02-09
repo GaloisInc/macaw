@@ -69,7 +69,8 @@ ppcEntryPoints :: (X.MonadThrow m,
                => BL.LoadedBinary ppc (E.Elf w)
                -> m (NEL.NonEmpty (MC.MemSegmentOff w))
 ppcEntryPoints loadedBinary = do
-  entryAddr <- liftMemErr PPCElfMemoryError (MC.readAddr mem MC.BigEndian tocEntryAbsAddr)
+  entryAddr <- liftMemErr PPCElfMemoryError
+               (MC.readAddr mem (BL.memoryEndianness loadedBinary) tocEntryAbsAddr)
   absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem entryAddr)
   let otherEntries = mapMaybe (MC.asSegmentOff mem) (TOC.entryPoints toc)
   return (absEntryAddr NEL.:| otherEntries)
@@ -112,6 +113,7 @@ loadPPCBinary binRep lopts e = do
         Left err -> X.throwM (PPCTOCLoadError err)
         Right toc ->
           return BL.LoadedBinary { BL.memoryImage = mem
+                                 , BL.memoryEndianness = MC.BigEndian
                                  , BL.archBinaryData = toc
                                  , BL.binaryFormatData =
                                    PPCElfData { elf = e
