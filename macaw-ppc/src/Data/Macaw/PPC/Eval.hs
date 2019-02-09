@@ -23,6 +23,7 @@ import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Some ( Some(..) )
 import qualified SemMC.Architecture.PPC as SP
+import           Text.PrettyPrint.ANSI.Leijen ( pretty )
 
 import qualified Dismantle.PPC as D
 
