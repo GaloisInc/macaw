@@ -62,6 +62,8 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Backend as MSB
+import qualified Lang.Crucible.Simulator.RegMap as MCR
+import qualified Lang.Crucible.Simulator.RegValue as MCRV
 import qualified Data.Macaw.PPC as MP
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
@@ -144,6 +146,8 @@ instance MS.ArchInfo MP.PPC64 where
         sfns <- liftIO $ F.newSymFuns sym
         k (ppc64MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
+    , MS.lookupReg = archLookupReg
+    , MS.updateReg = archUpdateReg
     }
 
 instance MS.ArchInfo MP.PPC32 where
@@ -153,6 +157,8 @@ instance MS.ArchInfo MP.PPC32 where
         sfns <- liftIO $ F.newSymFuns sym
         k (ppc32MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
+    , MS.lookupReg = archLookupReg
+    , MS.updateReg = archUpdateReg
     }
 
 ppcRegName :: MP.PPCReg ppc tp -> C.SolverSymbol
@@ -204,6 +210,17 @@ lookupReg r asgn =
     Nothing -> X.throwM (MissingRegisterInState (Some r))
     Just pair -> return (asgn Ctx.! MSB.crucibleIndex pair)
 
+archLookupReg :: ( MP.KnownVariant v
+                 , ppc ~ MP.AnyPPC v
+                 ) =>
+                 MCR.RegEntry sym (MS.ArchRegStruct (MP.AnyPPC v))
+              -> MP.PPCReg ppc tp
+              -> MCR.RegEntry sym (MS.ToCrucibleType tp)
+archLookupReg regEntry reg =
+  case lookupReg reg (MCR.regValue regEntry) of
+    Just (MCRV.RV val) -> MCR.RegEntry (MS.typeToCrucible $ MT.typeRepr reg) val
+    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+
 updateReg :: forall v ppc m f tp
            . (MP.KnownVariant v,
                ppc ~ MP.AnyPPC v,
@@ -216,6 +233,19 @@ updateReg r upd asgn = do
   case MapF.lookup r regIndexMap of
     Nothing -> X.throwM (MissingRegisterInState (Some r))
     Just pair -> return (asgn & MapF.ixF (MSB.crucibleIndex pair) %~ upd)
+
+archUpdateReg :: ( MP.KnownVariant v
+                 , ppc ~ MP.AnyPPC v
+                 ) =>
+                 MCR.RegEntry sym (MS.ArchRegStruct (MP.AnyPPC v))
+              -> MP.PPCReg ppc tp
+              -> MCRV.RegValue sym (MS.ToCrucibleType tp)
+              -> MCR.RegEntry sym (MS.ArchRegStruct (MP.AnyPPC v))
+archUpdateReg regEntry reg val =
+  case updateReg reg (const $ MCRV.RV val) (MCR.regValue regEntry) of
+    Just r -> regEntry { MCR.regValue = r }
+    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+
 
 ppcGenFn :: forall ids h s tp v ppc
           . ( ppc ~ MP.AnyPPC v )
