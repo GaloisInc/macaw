@@ -85,6 +85,7 @@
 module Data.Macaw.Symbolic.Memory (
   -- * Memory Management
   MemPtrTable,
+  toCrucibleEndian,
   newGlobalMemory,
   MemoryModelContents(..),
   mapRegionPointers,
@@ -164,6 +165,12 @@ data MemPtrTable sym w =
   MemPtrTable { memPtrTable :: IM.IntervalMap (MC.MemWord w) (Allocation sym w)
               , allocationIndex :: Map.Map (CS.RegValue sym CT.NatType) (Allocation sym w)
               }
+
+-- | Convert a Macaw Endianness to a Crucible LLVM EndianForm
+toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
+toCrucibleEndian MC.BigEndian    = CLD.BigEndian
+toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
+
 
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the

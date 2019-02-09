@@ -80,7 +80,7 @@ withDefaultRefinementContext loaded_binary k = do
           (mem, mem_ptr_table) <- MS.newGlobalMemory
             (Proxy @arch)
             sym
-            LLVM.LittleEndian
+            (MS.toCrucibleEndian $ MBL.memoryEndianness loaded_binary)
             MS.ConcreteMutable
             (MBL.memoryImage loaded_binary)
 
