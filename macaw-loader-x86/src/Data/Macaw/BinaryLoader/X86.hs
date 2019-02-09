@@ -38,6 +38,7 @@ x86EntryPoints :: (X.MonadThrow m)
                -> m (NEL.NonEmpty (MM.MemSegmentOff 64))
 x86EntryPoints loadedBinary = do
   case MM.asSegmentOff mem addr of
+    -- n.b. no guarantee of uniqueness, and in particular, entryPoint is probably in symbols somewhere
     Just entryPoint -> return (entryPoint NEL.:| mapMaybe (MM.asSegmentOff mem) symbols)
     Nothing -> X.throwM (InvalidEntryPoint addr)
   where

@@ -71,8 +71,12 @@ class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
   loadBinary :: (X.MonadThrow m) => LC.LoadOptions -> binFmt -> m (LoadedBinary arch binFmt)
   -- | An architecture-specific function to return the entry points of a binary
   --
-  -- This function is allowed (and encouraged) to find all possible entry points
-  -- based on the metadata available in a binary.
+  -- This function is allowed (and encouraged) to find all possible
+  -- entry points based on the metadata available in a binary.  Note
+  -- that there is no guarantee of uniqueness in the results; in
+  -- particular, an ELF file usually specifies an entryPoint address
+  -- that is also an address in the symbol table, both of which are in
+  -- the data returned by this function.
   entryPoints :: (X.MonadThrow m) =>
                  LoadedBinary arch binFmt
               -> m (NEL.NonEmpty (MM.MemSegmentOff (MM.ArchAddrWidth arch)))
