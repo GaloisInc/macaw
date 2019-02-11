@@ -322,7 +322,7 @@ defaultRegisterViewRead
   -> Expr ids (BVType n)
 defaultRegisterViewRead b n _rn v0
   | LeqProof <- leqTrans (LeqProof :: LeqProof 1 n) (LeqProof :: LeqProof n m) =
-    bvTrunc n $ v0 `bvShr` bvLit (typeWidth v0) (natValue b)
+    bvTrunc n $ v0 `bvShr` bvLit (typeWidth v0) (intValue b)
 
 -- | Read a register via a view.
 --
@@ -399,13 +399,13 @@ defaultRegisterViewWrite b n rn v0 write_val
   --   (0^|h ++ m| ++ l)
   -- highOrderBits  .|. lowOrderBits
   let -- Generate the mask for the new bits
-      myMask = maxUnsigned n `Bits.shiftL` fromInteger (natValue b)
+      myMask = maxUnsigned n `Bits.shiftL` fromInteger (intValue b)
       -- Generate max for old bits.
       notMyMask = Bits.complement myMask
       prevBits = v0 .&. bvLit w notMyMask
       w = typeWidth v0
       cl = typeWidth rn
-      b' = natValue b
+      b' = intValue b
       middleOrderBits = uext cl write_val `bvShl` bvLit cl b'
    in prevBits .|. middleOrderBits
 
@@ -634,12 +634,12 @@ ppLocation ppAddr loc = case loc of
     ppReg :: RegisterView w n cl -> Doc
     ppReg rv =
       text $ "%" ++ show (_registerViewReg rv) ++
-        if b == 0 && s == (fromIntegral $ natValue (typeWidth $ _registerViewReg rv))
+        if b == 0 && s == (fromIntegral $ intValue (typeWidth $ _registerViewReg rv))
         then ""
         else "[" ++ show b ++ ":" ++ show s ++ "]"
       where
-        b = natValue $ _registerViewBase rv
-        s = natValue $ _registerViewSize rv
+        b = intValue $ _registerViewBase rv
+        s = intValue $ _registerViewSize rv
 
 ------------------------------------------------------------------------
 -- Register-location smart constructors.
@@ -862,7 +862,7 @@ packWord (R.BitPacking sz bits) = do
         return $ bvLit sz (if b then 1 `Bits.shiftL` widthVal off else (0 :: Integer))
       getMoveBits (R.RegisterBit reg off) = do
         v <- uext sz <$> get (fullRegister reg)
-        return $ v `bvShl` bvLit sz (natValue off)
+        return $ v `bvShl` bvLit sz (intValue off)
   injs <- mapM getMoveBits bits
   return (foldl1 (.|.) injs)
 
@@ -877,7 +877,7 @@ unpackWord (R.BitPacking sz bits) v = mapM_ unpackOne bits
     unpackOne R.ConstantBit{}         = return ()
     unpackOne (R.RegisterBit reg off) = do
       let res_w = typeWidth reg
-      fullRegister reg .= bvTrunc res_w (v `bvShr` bvLit sz (natValue off))
+      fullRegister reg .= bvTrunc res_w (v `bvShr` bvLit sz (intValue off))
 
 ------------------------------------------------------------------------
 -- Values
@@ -1083,7 +1083,7 @@ bvCat h l =
         case ( m_le_m_plus_n , n_le_m_plus_n , _1_le_m_plus_n ) of
           (LeqProof, LeqProof, LeqProof) ->
             let highOrderBits =
-                  uext m_plus_n h `bvShl` bvLit m_plus_n (natValue $ n)
+                  uext m_plus_n h `bvShl` bvLit m_plus_n (intValue $ n)
                 lowOrderBits = uext m_plus_n l
             in highOrderBits .|. lowOrderBits
 
@@ -1117,7 +1117,7 @@ bvSplit v =
         LeqProof ->
           case leqAdd (leqRefl sz) sz :: LeqProof n (n + n) of
             LeqProof ->
-              let sh = bvLit (typeWidth v) (natValue sz)
+              let sh = bvLit (typeWidth v) (intValue sz)
                in (bvTrunc sz (v `bvShr` sh), bvTrunc sz v)
 
 -- | Vectorization
@@ -1157,11 +1157,11 @@ vectorize2 sz f x y = let xs = bvVectorize sz x
 -- | Rotations
 bvRol :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
 bvRol v n = bvShl v n .|. bvShr v bits_less_n
-  where bits_less_n = bvLit (typeWidth v) (natValue $ typeWidth v) .- n
+  where bits_less_n = bvLit (typeWidth v) (intValue $ typeWidth v) .- n
 
 bvRor :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
 bvRor v n = bvShr v n .|. bvShl v bits_less_n
-  where bits_less_n = bvLit (typeWidth v) (natValue $ typeWidth v) .- n
+  where bits_less_n = bvLit (typeWidth v) (intValue $ typeWidth v) .- n
 
 -- | Shifts, the semantics is undefined for shifts >= the width of the first argument.
 --
@@ -1195,7 +1195,7 @@ bvShl x y
       x_base .&. bvLit w (negate (2^x_shft) ::Integer)
 
     | Just yv <- asUnsignedBVLit y
-    , yv >= natValue (typeWidth x) = bvLit (typeWidth x) (0 :: Integer)
+    , yv >= intValue (typeWidth x) = bvLit (typeWidth x) (0 :: Integer)
 
     | otherwise = app $ BVShl (typeWidth x) x y
 
@@ -1285,7 +1285,7 @@ bvBit x y
       boolValue (xv `Bits.testBit` fromInteger yv)
   | Just (Trunc xe w) <- asApp x
   , Just LeqProof <- testLeq n1 (typeWidth xe)
-  , Just yv <- asUnsignedBVLit y = assert (0 <= yv && yv < natValue w) $
+  , Just yv <- asUnsignedBVLit y = assert (0 <= yv && yv < intValue w) $
     bvBit xe (ValueExpr (BVValue (typeWidth xe) yv))
 
   | otherwise =

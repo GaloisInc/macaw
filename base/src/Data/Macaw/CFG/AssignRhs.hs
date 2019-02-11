@@ -114,7 +114,7 @@ instance Show (MemRepr tp) where
 
 -- | Return the number of bytes this uses in memory.
 memReprBytes :: MemRepr tp -> Integer
-memReprBytes (BVMemRepr x _) = natValue x
+memReprBytes (BVMemRepr x _) = intValue x
 
 instance TestEquality MemRepr where
   testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) =

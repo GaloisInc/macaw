@@ -254,7 +254,7 @@ instance MemWidth w => Pretty (AbsValue w tp) where
   pretty (StridedInterval s) =
     text "strided" <> parens (pretty s)
   pretty (SubValue n av) =
-    text "sub" <> parens (integer (natValue n) <> comma <+> pretty av)
+    text "sub" <> parens (integer (intValue n) <> comma <+> pretty av)
   pretty (StackOffset a s) = ppSet (ppv <$> Set.toList s)
     where ppv v' | v' >= 0   = text $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
                  | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
@@ -623,7 +623,7 @@ bvadc w (FinSet l) (FinSet r) (BoolConst b)
       s | Set.size s <= maxSetSize -> FinSet s
       _ -> TopV
   where
-  bottomBits v = v .&. (bit (fromInteger (natValue w)) - 1)
+  bottomBits v = v .&. (bit (fromInteger (intValue w)) - 1)
 -- Strided intervals
 bvadc w v v' c
   | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2

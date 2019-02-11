@@ -1050,13 +1050,13 @@ countZeros :: (1 <= w) =>
   CrucGen arch ids h s (CR.Atom s (MM.LLVMPointerType w))
 countZeros w f vx = do
   cx <- v2c vx >>= toBits w
-  isZeros <- forM [0..natValue w-1] $ \i -> do
+  isZeros <- forM [0..intValue w-1] $ \i -> do
     shiftAmt <- bvLit w i
     shiftedx <- appAtom (f w cx shiftAmt)
     xIsNonzero <- appAtom (C.BVNonzero w shiftedx)
     appAtom (C.BoolToBV w xIsNonzero)
   czero <- bvLit w 0
-  cw <- bvLit w (natValue w)
+  cw <- bvLit w (intValue w)
   cn <- foldM ((appAtom .) . C.BVAdd w) czero isZeros
   appAtom (C.BVSub w cw cn) >>= fromBits w
 
