@@ -831,7 +831,7 @@ exec_sh lw l val val_setter cf_setter of_setter = do
   -- bound on the time the shift takes, with a mask of 63 in the case
   -- of a 64 bit operand, and 31 in the other cases.
   let w = typeWidth (repValSizeMemRepr lw)
-  let nbits = if natValue w == 64 then 64 else 32
+  let nbits = if intValue w == 64 then 64 else 32
   let low_count = count .&. bvLit n8 (nbits - 1)
   -- Compute result.
   let res = val_setter v (uext (typeWidth v) low_count)
@@ -878,7 +878,7 @@ def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
 def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
   where set_cf w v i =
-           (i `bvUle` bvLit n8 (natValue w)) .&&. bvBit v (bvLit w (natValue w) .- uext w i)
+           (i `bvUle` bvLit n8 (intValue w)) .&&. bvBit v (bvLit w (intValue w) .- uext w i)
         set_of v _ =  msb v
 
 def_shr :: InstructionDef
@@ -894,9 +894,9 @@ def_sar = def_sh "sar" bvSar set_cf set_of
         -- the index - 1 or the most-significant bit depending on the shift value.
         set_cf w v i = do
           -- Check if w < i
-          let notInRange = bvUlt (bvLit n8 (natValue w)) i
+          let notInRange = bvUlt (bvLit n8 (intValue w)) i
           -- Get most-significant bit
-          let msb_v = bvBit v (bvLit w (natValue w-1))
+          let msb_v = bvBit v (bvLit w (intValue w-1))
           bvBit v (uext w i .- bvLit w 1) .||. (notInRange .&&. msb_v)
         set_of _ _ = false
 
@@ -928,7 +928,7 @@ def_shXd mnemonic val_setter cf_setter of_setter =
 def_shld :: InstructionDef
 def_shld = def_shXd "shld" exec_shld set_cf set_of
   where set_cf w v i =
-           (i `bvUle` bvLit n8 (natValue w)) .&&. bvBit v (bvLit w (natValue w) .- uext w i)
+           (i `bvUle` bvLit n8 (intValue w)) .&&. bvBit v (bvLit w (intValue w) .- uext w i)
         set_of v _ =  msb v
 
 exec_shld :: forall n ids . (1 <= n) =>
@@ -975,7 +975,7 @@ exec_rol l count = do
       low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effectiveMASK = bvLit (typeWidth v) (intValue (typeWidth v) - 1)
       effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRol v effective
 
@@ -1010,19 +1010,19 @@ exec_ror l count = do
       low_count = uext (typeWidth v) count .&. countMASK
       -- countMASK is sufficient for 32 and 64 bit operand sizes, but not 16 or
       -- 8, so we need to mask those off again...
-      effectiveMASK = bvLit (typeWidth v) (natValue (typeWidth v) - 1)
+      effectiveMASK = bvLit (typeWidth v) (intValue (typeWidth v) - 1)
       effective = uext (typeWidth v) count .&. effectiveMASK
       r = bvRor v effective
 
   l .= r
   let p = is_zero low_count
-  let new_cf = bvBit r (bvLit (typeWidth r) (natValue (typeWidth r) - 1))
+  let new_cf = bvBit r (bvLit (typeWidth r) (intValue (typeWidth r) - 1))
   modify cf_loc $ \old_cf -> mux p old_cf new_cf
   u <- make_undefined knownRepr
   modify of_loc $ \old_of ->
     mux p old_of $
     mux (low_count .=. bvLit (typeWidth low_count) 1)
-        (msb r `boolXor` bvBit r (bvLit (typeWidth r) (natValue (typeWidth v) - 2)))
+        (msb r `boolXor` bvBit r (bvLit (typeWidth r) (intValue (typeWidth v) - 2)))
         u
 
 -- ** Bit and Byte Instructions
@@ -1468,12 +1468,12 @@ def_lods = defBinary "lods" $ \ii loc loc' -> do
 def_lodsx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
 def_lodsx suf elsz = defNullaryPrefix ("lods" ++ suf) $ \pfx -> do
   let rep = pfx == F.RepPrefix
-  case natValue elsz of
+  case intValue elsz of
     8  -> exec_lods rep ByteRepVal
     16 -> exec_lods rep WordRepVal
     32 -> exec_lods rep DWordRepVal
     64 -> exec_lods rep QWordRepVal
-    _  -> error $ "lodsx given bad size " ++ show (natValue elsz)
+    _  -> error $ "lodsx given bad size " ++ show (intValue elsz)
 
 -- | STOS/STOSB Store string/Store byte string
 -- STOS/STOSW Store string/Store word string
@@ -1899,7 +1899,7 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
       -- truncate e.g. 2^31 to 0, so we saturate if the size is over
       -- the number of bits we want to shift.  We can always fit the
       -- width into count bits (assuming we are passed 16, 32, or 64).
-      nbits   = bvLit (typeWidth count) (natValue elsz)
+      nbits   = bvLit (typeWidth count) (intValue elsz)
       countsz = case testNatCases (typeWidth count) elsz of
                   NatCaseLT LeqProof -> uext' elsz count
                   NatCaseEQ          -> count

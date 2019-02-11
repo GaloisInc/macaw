@@ -150,7 +150,7 @@ avxInsert mnem =
   avx4 mnem $ \arg1 arg2 arg3 arg4 ->
     do SomeBV vec <- getSomeBVValue arg2
        SomeBV el  <- getSomeBVValue arg3
-       Some i     <- case someNat (fromIntegral arg4) of
+       Some i     <- case someNat (fromIntegral arg4 :: Integer) of
                        Just ok -> return ok
                        Nothing -> err "Invalid index"
        let vw  = typeWidth vec

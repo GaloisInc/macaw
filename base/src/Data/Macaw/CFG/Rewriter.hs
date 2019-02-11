@@ -485,19 +485,19 @@ rewriteApp app = do
         NatEQ   -> rewriteApp (BVUnsignedLt x y)
         NatGT _ -> rewriteApp (SExt y wx) >>= \y' -> rewriteApp (BVUnsignedLt x y')
 
-    BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (natValue xw) (toInteger (maxBound :: Int))  -> do
+    BVTestBit (BVValue xw xc) (BVValue _ ic) | ic < min (intValue xw) (toInteger (maxBound :: Int))  -> do
       let v = xc `testBit` fromInteger ic
       pure $! boolLitValue v
     -- If we test the greatest bit turn this to a signed equality
     BVTestBit x (BVValue _ ic)
       | w <- typeWidth x
-      , ic + 1 == natValue w -> do
+      , ic + 1 == intValue w -> do
       rewriteApp (BVSignedLt x (BVValue w 0))
       | w <- typeWidth x
-      , ic >= natValue w -> pure (boolLitValue False)
+      , ic >= intValue w -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (UExt x _)) (BVValue _ ic) -> do
       let xw = typeWidth x
-      if ic < natValue xw then
+      if ic < intValue xw then
         rewriteApp (BVTestBit x (BVValue xw ic))
        else
         pure (BoolValue False)
@@ -528,8 +528,8 @@ rewriteApp app = do
       | j + i <= maxUnsigned w -> do
       rewriteApp (BVTestBit x (BVValue w (j + i)))
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
-      | i < natValue w -> do
-      rewriteApp (BVTestBit x (BVValue w (min (j + i) (natValue w-1))))
+      | i < intValue w -> do
+      rewriteApp (BVTestBit x (BVValue w (min (j + i) (intValue w-1))))
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
       | j <= i -> rewriteApp (BVTestBit x (BVValue w (i - j)))
       | otherwise -> pure (boolLitValue False)
@@ -568,22 +568,22 @@ rewriteApp app = do
 
 
     BVShl w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (natValue w)
+      let s = min y (intValue w)
       pure (BVValue w (toUnsigned w (x `shiftL` fromInteger s)))
     BVShr w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (natValue w)
+      let s = min y (intValue w)
       pure (BVValue w (toUnsigned w (x `shiftR` fromInteger s)))
     BVSar w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (natValue w)
+      let s = min y (intValue w)
       pure (BVValue w (toUnsigned w (toSigned w x `shiftR` fromInteger s)))
 
     BVShl _ v (BVValue _ 0) -> pure v
     BVShr _ v (BVValue _ 0) -> pure v
     BVSar _ v (BVValue _ 0) -> pure v
 
-    BVShl w _ (BVValue _ n) | n >= natValue w ->
+    BVShl w _ (BVValue _ n) | n >= intValue w ->
       pure (BVValue w 0)
-    BVShr w _ (BVValue _ n) | n >= natValue w ->
+    BVShr w _ (BVValue _ n) | n >= intValue w ->
       pure (BVValue w 0)
 
     PopCount w (BVValue _ x) -> do
@@ -591,8 +591,8 @@ rewriteApp app = do
     Bsr w (BVValue _ x) -> do
       let i = fromJust $ find
                 (\j -> toUnsigned w x `shiftR` fromIntegral j == 0)
-                [0 .. natValue w]
-      pure $ BVValue w $ natValue w - i
+                [0 .. intValue w]
+      pure $ BVValue w $ intValue w - i
 
     Eq (BoolValue x) (BoolValue y) -> do
       pure $! boolLitValue (x == y)

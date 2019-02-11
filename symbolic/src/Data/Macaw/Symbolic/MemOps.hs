@@ -320,7 +320,7 @@ doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
   let nw = M.addrWidthNatRepr w
       doPtrAlign amt isP isB v
         | amt == 0          = return v
-        | amt == natValue nw = mkNullPointer sym nw
+        | amt == intValue nw = mkNullPointer sym nw
         | Just 0 <- asNat (ptrBase v) = llvmPointer_bv sym =<<
                                         bvAndBits sym (asBits x) (asBits y)
 
@@ -730,7 +730,7 @@ isAlignMask :: (IsSymInterface sym) => LLVMPtr sym w -> Maybe Integer
 isAlignMask v =
   do 0 <- asNat (ptrBase v)
      let off = asBits v
-         w   = fromInteger (natValue (bvWidth off))
+         w   = fromInteger (intValue (bvWidth off))
      k <- asUnsignedBV off
      let (zeros,ones) = break (testBit k) (take w [ 0 .. ])
      guard (all (testBit k) ones)

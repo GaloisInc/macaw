@@ -332,8 +332,8 @@ valueAsStaticMultiplication v
   , Just (BVOr _ l r) <- valueAsApp v'
   , Just (BVShl _ l' (BVValue _ shl)) <- valueAsApp l
   , Just (BVShr _ _ (BVValue _ shr)) <- valueAsApp r
-  , c == complement (2^shl-1) `mod` bit (fromInteger (natValue w))
-  , shr >= natValue w - shl
+  , c == complement (2^shl-1) `mod` bit (fromInteger (intValue w))
+  , shr >= intValue w - shl
   = Just (2^shl, l')
   | otherwise = Nothing
 
