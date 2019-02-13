@@ -19,6 +19,7 @@ module Data.Macaw.Architecture.Info
 import           Control.Monad.ST
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
+import           Data.Semigroup ( (<>) )
 import           Data.Sequence (Seq)
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
