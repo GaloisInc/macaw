@@ -33,6 +33,7 @@ import qualified Data.Macaw.Types as M
 
 import Data.Parameterized.NatRepr ( knownNat
                                   , addNat
+                                  , intValue
                                   , natValue
                                   )
 
@@ -73,7 +74,7 @@ crucAppToExpr (S.BVConcat w bv1 bv2) = AppExpr <$> do
   S.LeqProof <- return $ S.leqTrans pf1 (S.leqRefl w)
   bv1Ext <- addExpr (AppExpr (M.UExt bv1Val w)) ---(u `addNat` v)))
   bv2Ext <- addExpr (AppExpr (M.UExt bv2Val w))
-  bv1Shifter <- addExpr (ValueExpr (M.BVValue w (natValue v)))
+  bv1Shifter <- addExpr (ValueExpr (M.BVValue w (intValue v)))
   bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
   return $ M.BVOr w bv1Shf bv2Ext
 crucAppToExpr (S.BVSelect idx n bv) = do
@@ -88,7 +89,7 @@ crucAppToExpr (S.BVSelect idx n bv) = do
       Refl <- return $ S.plusComm (knownNat @1) idx
       pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
       S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof (idx `addNat` n) w)
-      bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (natValue idx))))
+      bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (intValue idx))))
       return $ AppExpr (M.Trunc bvShf n)
     False -> do
       -- Is there a way to just "know" that n = w?

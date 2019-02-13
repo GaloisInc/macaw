@@ -78,6 +78,7 @@ import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.Symbolic as M
 
 import Data.Parameterized.NatRepr ( knownNat
+                                  , intValue
                                   , natValue
                                   )
 
@@ -488,7 +489,7 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo fun
                    Just pf -> MapF.insert co (Pair pf ci) m
 
 natReprTH :: M.NatRepr w -> Q Exp
-natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (natValue w))) |]
+natReprTH w = [| knownNat :: M.NatRepr $(litT (numTyLit (intValue w))) |]
 
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
@@ -591,7 +592,7 @@ translateBaseType :: CT.BaseTypeRepr tp -> Q Type
 translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
-    CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (natValue n)))
+    CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
     -- S.BaseStructRepr -> -- hard because List versus Assignment
     _ -> fail $ "unsupported base type: " ++ show tp
 

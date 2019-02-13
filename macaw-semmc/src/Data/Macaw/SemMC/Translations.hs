@@ -37,7 +37,7 @@ bvconcat bv1Val bv2Val repV repU repW = do
   S.LeqProof <- return (S.leqTrans pf1 (S.leqRefl repW))
   bv1Ext <- addExpr (AppExpr (UExt bv1Val repW))
   bv2Ext <- addExpr (AppExpr (UExt bv2Val repW))
-  bv1Shifter <- addExpr (ValueExpr (BVValue repW (NR.natValue repV)))
+  bv1Shifter <- addExpr (ValueExpr (BVValue repW (NR.intValue repV)))
   bv1Shf <- addExpr (AppExpr (BVShl repW bv1Ext bv1Shifter))
   return $ AppExpr (BVOr repW bv1Shf bv2Ext)
 
@@ -58,5 +58,5 @@ bvselect bvVal repN repI repW = do
   Refl <- return (S.plusComm (NR.knownNat @1) repI)
   pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
   S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof (repI `S.addNat` repN) repW)
-  bvShf <- addExpr (AppExpr (BVShr repW bvVal (mkLit repW (NR.natValue repI))))
+  bvShf <- addExpr (AppExpr (BVShr repW bvVal (mkLit repW (NR.intValue repI))))
   return (AppExpr (Trunc bvShf repN))
