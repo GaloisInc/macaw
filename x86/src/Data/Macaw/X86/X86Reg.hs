@@ -31,6 +31,7 @@ module Data.Macaw.X86.X86Reg
   , X87_Control
   , XMM
   , YMM
+  , ZMM
 
     -- * X86Reg
   , X86Reg(..)
@@ -81,12 +82,12 @@ module Data.Macaw.X86.X86Reg
   , pattern X87_C2
   , pattern X87_C3
     -- * Large registers
-  , pattern YMM
+  , pattern ZMM
 
     -- * Register lists
   , gpRegList
   , flagRegList
-  , ymmRegList
+  , zmmRegList
   , x87FPURegList
   , x86StateRegs
   , x86CalleeSavedRegs
@@ -125,6 +126,7 @@ type X87_ControlMask = BVType 1
 type X87_Control     = BVType 2
 type XMM             = BVType 128
 type YMM             = BVType 256
+type ZMM             = BVType 512
 
 ------------------------------------------------------------------------
 -- X86Reg
@@ -144,8 +146,9 @@ data X86Reg tp
    | (tp ~ BVType 2)   => X87_TagReg {-# UNPACK #-} !Int
       -- One of 8 fpu/mmx registers.
    | (tp ~ BVType 80)  => X87_FPUReg {-#UNPACK #-} !F.MMXReg
-     -- One of 8 XMM/YMM registers
-   | (tp ~ BVType 256) => X86_YMMReg !F.YMMReg
+     -- AVX2 has 32 512-bit registers.
+   | (tp ~ BVType 512) => X86_ZMMReg !Word8
+
 
 instance Show (X86Reg tp) where
   show X86_IP          = "rip"
@@ -156,7 +159,7 @@ instance Show (X86Reg tp) where
   show X87_TopReg      = "x87top"
   show (X87_TagReg n)  = "tag" ++ show n
   show (X87_FPUReg r)  = show r
-  show (X86_YMMReg r)  = show r
+  show (X86_ZMMReg r)  = "zmm" ++ show r
 
 instance ShowF X86Reg where
   showF = show
@@ -205,11 +208,11 @@ instance OrdF X86Reg where
   compareF X87_TagReg{}       _                  = LTF
   compareF _                 X87_TagReg{}        = GTF
 
-  compareF (X87_FPUReg n)     (X87_FPUReg n')     = fromOrdering (compare n n')
+  compareF (X87_FPUReg n)     (X87_FPUReg n')    = fromOrdering (compare n n')
   compareF X87_FPUReg{}       _                  = LTF
   compareF _                 X87_FPUReg{}        = GTF
 
-  compareF (X86_YMMReg n)        (X86_YMMReg n')        = fromOrdering (compare n n')
+  compareF (X86_ZMMReg n)        (X86_ZMMReg n') = fromOrdering (compare n n')
 
 instance Ord (X86Reg cl) where
   a `compare` b = case a `compareF` b of
@@ -227,7 +230,7 @@ instance HasRepr X86Reg TypeRepr where
       X87_TopReg       -> knownRepr
       X87_TagReg{}     -> knownRepr
       X87_FPUReg{}     -> knownRepr
-      X86_YMMReg{}     -> knownRepr
+      X86_ZMMReg{}     -> knownRepr
 
 ------------------------------------------------------------------------
 -- Exported constructors and their conversion to words
@@ -359,8 +362,11 @@ pattern X87_C2 = X87_StatusReg 10
 pattern X87_C3 :: () => (t ~ X87_Status) => X86Reg t
 pattern X87_C3 = X87_StatusReg 14
 
-pattern YMM :: () => (t ~ YMM) => Word8 -> X86Reg t
-pattern YMM w = X86_YMMReg (F.YMMR w)
+pattern ZMM :: () => (t ~ ZMM) => Word8 -> X86Reg t
+pattern ZMM w <- X86_ZMMReg w
+  where ZMM w | w < 32 = X86_ZMMReg w
+              | otherwise = error "There are only 32 ZMM registers."
+
 
 x87StatusNames :: V.Vector String
 x87StatusNames = V.fromList $
@@ -392,8 +398,8 @@ x87TagRegList = [X87_TagReg i | i <- [0..7]]
 x87FPURegList :: [X86Reg (BVType 80)]
 x87FPURegList = [X87_FPUReg (F.mmxReg i) | i <- [0..7]]
 
-ymmRegList :: [X86Reg (BVType 256)]
-ymmRegList = [X86_YMMReg (F.ymmReg i) | i <- [0..15]]
+zmmRegList :: [X86Reg (BVType 512)]
+zmmRegList = [X86_ZMMReg i | i <- [0..31]]
 
 -- | List of registers stored in X86State
 x86StateRegs :: [Some X86Reg]
@@ -405,7 +411,7 @@ x86StateRegs
   ++ [Some X87_TopReg]
   ++ (Some <$> x87TagRegList)
   ++ (Some <$> x87FPURegList)
-  ++ (Some <$> ymmRegList)
+  ++ (Some <$> zmmRegList)
 
 type instance RegAddrWidth X86Reg = 64
 
@@ -444,11 +450,11 @@ x86CalleeSavedRegs = Set.fromList $
 x86ArgumentRegs :: [X86Reg (BVType 64)]
 x86ArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
 
-x86FloatArgumentRegs :: [X86Reg (BVType 256)]
-x86FloatArgumentRegs =  X86_YMMReg . F.ymmReg <$> [0..7]
+x86FloatArgumentRegs :: [X86Reg (BVType 512)]
+x86FloatArgumentRegs =  X86_ZMMReg <$> [0..7]
 
 x86ResultRegs :: [X86Reg (BVType 64)]
 x86ResultRegs = X86_GP <$> [ F.RAX, F.RDX ]
 
-x86FloatResultRegs :: [X86Reg (BVType 256)]
-x86FloatResultRegs = [ X86_YMMReg (F.ymmReg 0) ]
+x86FloatResultRegs :: [X86Reg (BVType 512)]
+x86FloatResultRegs = [ X86_ZMMReg 0 ]

@@ -233,7 +233,8 @@ getSomeBVLocation v =
     F.XMMReg r       -> do avx <- isAVX
                            pure $ SomeBV $ if avx then xmm_avx r
                                                   else xmm_sse r
-    F.YMMReg r       -> pure $ SomeBV $ ymm r
+    F.YMMReg r       -> do avx <- isAVX
+                           pure $ SomeBV $ if avx then ymm_zero r else ymm_preserve r
     F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
     F.X87Register i -> mk (X87StackRegister i)
     F.FarPointer _      -> fail "FarPointer"
@@ -319,8 +320,8 @@ getSignExtendedValue v out_w =
     F.Mem64  ar   -> mk =<< getBV64Addr ar
     F.Mem128 ar   -> mk =<< getBV128Addr ar
     F.Mem256 ar   -> mk =<< getBV256Addr ar
-    F.XMMReg r                      -> mk (xmm_avx r)
-    F.YMMReg r                      -> mk (ymm r)
+    F.XMMReg r  -> mk (xmm_avx r)
+    F.YMMReg r  -> mk (ymm_zero r)
 
     F.ByteImm  i
       | Just Refl <- testEquality n8 out_w ->
@@ -474,6 +475,6 @@ readXMMValue _ = fail "XMM Instruction given unexpected value."
 
 -- | Get a YMM value
 readYMMValue :: F.Value -> X86Generator st ids (Expr ids (BVType 256))
-readYMMValue (F.YMMReg r) = get (ymm r)
+readYMMValue (F.YMMReg r) = get (ymm_zero r)
 readYMMValue (F.Mem256 a) = readBVAddress a ymmMemRepr
 readYMMValue _ = fail "YMM Instruction given unexpected value."

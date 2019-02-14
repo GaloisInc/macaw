@@ -81,7 +81,8 @@ module Data.Macaw.X86.Monad
   , ax, bx, cx, dx
   , al, dl
   , ah
-  , ymm
+  , ymm_preserve
+  , ymm_zero
   , xmm_sse
   , xmm_avx
   , xmmOwner
@@ -838,17 +839,22 @@ ah = reg_high8 R.RAX
 rip :: Location addr (BVType 64)
 rip = fullRegister R.X86_IP
 
-ymm :: F.YMMReg -> Location addr (BVType 256)
-ymm = fullRegister . R.YMM . F.ymmRegNo
+-- | Access the low-order 256-bits in legacy SSE mode (upper 256-bits preserved)
+ymm_preserve :: F.YMMReg -> Location addr (BVType 256)
+ymm_preserve r = subRegister n0 n256 (R.ZMM (F.ymmRegNo r))
+
+-- | Access the low-order 256-bits in legacy SSE mode (upper 256-bits zeroed)
+ymm_zero :: F.YMMReg -> Location addr (BVType 256)
+ymm_zero r = constUpperBitsOnWriteRegister n256 ZeroExtendOnWrite (R.ZMM (F.ymmRegNo r))
 
 xmm_sse :: F.XMMReg -> Location addr (BVType 128)
-xmm_sse = reg_low128_sse . xmmOwner
+xmm_sse r = subRegister n0 n128 (R.ZMM (F.xmmRegNo r))
 
 xmm_avx :: F.XMMReg -> Location addr (BVType 128)
-xmm_avx = reg_low128_avx . xmmOwner
+xmm_avx r = constUpperBitsOnWriteRegister n128 ZeroExtendOnWrite (R.ZMM (F.xmmRegNo r))
 
-xmmOwner :: F.XMMReg -> X86Reg (BVType 256)
-xmmOwner = R.YMM . F.xmmRegNo
+xmmOwner :: F.XMMReg -> X86Reg (BVType 512)
+xmmOwner r = R.ZMM (F.xmmRegNo r)
 
 ------------------------------------------------------------------------
 
