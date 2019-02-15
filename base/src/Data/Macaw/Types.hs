@@ -221,6 +221,8 @@ instance Show (TypeRepr tp) where
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
   show (VectorTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
 
+instance ShowF TypeRepr
+
 instance KnownRepr TypeRepr BoolType where
   knownRepr = BoolTypeRepr
 

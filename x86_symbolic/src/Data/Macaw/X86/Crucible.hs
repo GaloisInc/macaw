@@ -105,7 +105,7 @@ withConcreteCountAndDir
   -> (AtomWrapper (RegEntry sym) M.BoolType)
   -> (S sym rtp bs r ctx -> (SymBV sym 64) -> IO (S sym rtp bs r ctx))
   -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
-withConcreteCountAndDir state val_size wrapped_count wrapped_dir func = do
+withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
   let sym = state^.stateSymInterface
   let val_byte_size = M.repValSizeByteCount val_size
   bv_count <- toValBV sym wrapped_count
