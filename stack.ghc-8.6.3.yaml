@@ -1,0 +1,24 @@
+flags:
+  time-locale-compat:
+    old-locale: false
+
+packages:
+- base
+- x86
+- symbolic
+- x86_symbolic
+- deps/crucible/what4
+- deps/crucible/crucible
+- deps/crucible/crucible-llvm
+- deps/dwarf
+- deps/elf-edit
+- deps/flexdis86
+- deps/flexdis86/binary-symbols
+- deps/llvm-pretty
+- deps/parameterized-utils
+extra-deps:
+- boomerang-1.4.5.6
+- itanium-abi-0.1.1.0
+- monadLib-3.9
+- panic-0.4.0.1
+resolver: lts-13.7
