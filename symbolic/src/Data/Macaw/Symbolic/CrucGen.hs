@@ -1371,14 +1371,10 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
       addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
     M.ParsedLookupTable regs _idx _possibleAddrs -> do
       setMachineRegs =<< createRegStruct regs
-      -- WARNING: the 'cond', 'tlbl', and 'flbl' values here are all
-      -- nonsense. They were 'undefined', but that makes pretty
-      -- printing crash so we use defined but nonsensical values
-      -- instead.
-      cond <- crucibleValue (C.BoolLit True)
+      let cond = undefined
       -- TODO: Add ability in CrucGen to generate new labels and add new blocks.
-      let tlbl = parsedBlockLabel blockLabelMap thisAddr 0
-      let flbl = tlbl
+      let tlbl = undefined
+      let flbl = undefined
       addTermStmt $! CR.Br cond tlbl flbl
     M.ParsedReturn regs -> do
       regValues <- createRegStruct regs
