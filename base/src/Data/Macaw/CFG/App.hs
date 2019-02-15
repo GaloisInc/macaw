@@ -74,6 +74,10 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- all @false@.
   UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
 
+  -- | This casts an expression from one type to another that should
+  -- use the same number of bytes in memory.
+  Bitcast :: f tp -> TypeRepr out -> App f out
+
   ----------------------------------------------------------------------
   -- Bitvector operations
 
@@ -257,15 +261,17 @@ ppAppA :: Applicative m
       -> m Doc
 ppAppA pp a0 =
   case a0 of
+    Eq x y      -> sexprA "eq" [ pp x, pp y ]
     Mux _ c x y -> sexprA "mux" [ pp c, pp x, pp y ]
-    Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     TupleField _ x i -> sexprA "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
-    SExt x w -> sexprA "sext" [ pp x, ppNat w ]
-    UExt x w -> sexprA "uext" [ pp x, ppNat w ]
     AndApp x y -> sexprA "and" [ pp x, pp y ]
     OrApp  x y -> sexprA "or"  [ pp x, pp y ]
     NotApp x   -> sexprA "not" [ pp x ]
     XorApp  x y -> sexprA "xor"  [ pp x, pp y ]
+    Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
+    SExt x w -> sexprA "sext" [ pp x, ppNat w ]
+    UExt x w -> sexprA "uext" [ pp x, ppNat w ]
+    Bitcast x tp -> sexprA "bitcast" [ pp x, pure (text (show tp)) ]
     BVAdd _ x y   -> sexprA "bv_add" [ pp x, pp y ]
     BVAdc _ x y c -> sexprA "bv_adc" [ pp x, pp y, pp c ]
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
@@ -283,7 +289,6 @@ ppAppA pp a0 =
     BVShl _ x y -> sexprA "bv_shl" [ pp x, pp y ]
     BVShr _ x y -> sexprA "bv_shr" [ pp x, pp y ]
     BVSar _ x y -> sexprA "bv_sar" [ pp x, pp y ]
-    Eq x y      -> sexprA "eq" [ pp x, pp y ]
     PopCount _ x -> sexprA "popcount" [ pp x ]
     ReverseBytes _ x -> sexprA "reverse_bytes" [ pp x ]
     UadcOverflows x y c -> sexprA "uadc_overflows" [ pp x, pp y, pp c ]
@@ -311,6 +316,7 @@ instance HasRepr (App f) TypeRepr where
       Trunc _ w -> BVTypeRepr w
       SExt  _ w -> BVTypeRepr w
       UExt  _ w -> BVTypeRepr w
+      Bitcast _ tp -> tp
 
       AndApp{} -> knownRepr
       OrApp{}  -> knownRepr

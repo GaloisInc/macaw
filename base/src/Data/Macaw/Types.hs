@@ -70,70 +70,8 @@ n128 = knownNat
 n256 :: NatRepr 256
 n256 = knownNat
 
-------------------------------------------------------------------------
--- Type
-
-data Type
-  = -- | A bitvector with the given number of bits.
-    BVType Nat
-    -- | A floating point in the given format.
-  | FloatType FloatInfo
-    -- | A Boolean value
-  | BoolType
-    -- | A tuple of types
-  | TupleType [Type]
-
-
--- Return number of bytes in the type.
-type family TypeBytes (tp :: Type) :: Nat where
-  TypeBytes (BVType  8) = 1
-  TypeBytes (BVType 16) = 2
-  TypeBytes (BVType 32) = 4
-  TypeBytes (BVType 64) = 8
-  TypeBytes (FloatType fi) = FloatInfoBytes fi
-
--- Return number of bits in the type.
-type family TypeBits (tp :: Type) :: Nat where
-  TypeBits (BVType n) = n
-  TypeBits (FloatType fi) = 8 * FloatInfoBytes fi
-
-type BVType = 'BVType
-
-type FloatType = 'FloatType
-
-type BoolType = 'BoolType
-
-type TupleType = 'TupleType
-
--- | A runtime representation of @Type@ for case matching purposes.
-data TypeRepr (tp :: Type) where
-  BoolTypeRepr :: TypeRepr BoolType
-  BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
-  FloatTypeRepr :: !(FloatInfoRepr fi) -> TypeRepr (FloatType fi)
-  TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
-
-type_width :: TypeRepr (BVType n) -> NatRepr n
-type_width (BVTypeRepr n) = n
-
-instance Show (TypeRepr tp) where
-  show BoolTypeRepr = "bool"
-  show (BVTypeRepr w) = "[" ++ show w ++ "]"
-  show (FloatTypeRepr fi) = show fi ++ "_float"
-  show (TupleTypeRepr P.Nil) = "()"
-  show (TupleTypeRepr (h P.:< z)) =
-    "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
-
-instance KnownRepr TypeRepr BoolType where
-  knownRepr = BoolTypeRepr
-
-instance (KnownNat n, 1 <= n) => KnownRepr TypeRepr (BVType n) where
-  knownRepr = BVTypeRepr knownNat
-
-instance (KnownRepr FloatInfoRepr fi) => KnownRepr TypeRepr (FloatType fi) where
-  knownRepr = FloatTypeRepr knownRepr
-
-instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
-  knownRepr = TupleTypeRepr knownRepr
+n512 :: NatRepr 512
+n512 = knownNat
 
 ------------------------------------------------------------------------
 -- Floating point sizes
@@ -217,18 +155,92 @@ floatInfoBitsIsPos = \case
   QuadFloatRepr   -> LeqProof
   X86_80FloatRepr -> LeqProof
 
+$(return [])
+
+------------------------------------------------------------------------
+-- Type
+
+data Type
+  = -- | A bitvector with the given number of bits.
+    BVType Nat
+    -- | A floating point in the given format.
+  | FloatType FloatInfo
+    -- | A Boolean value
+  | BoolType
+    -- | A tuple of types
+  | TupleType [Type]
+    -- | A vector of types
+  | VecType Nat Type
+
+
+-- Return number of bytes in the type.
+type family TypeBytes (tp :: Type) :: Nat where
+  TypeBytes (BVType  8) = 1
+  TypeBytes (BVType 16) = 2
+  TypeBytes (BVType 32) = 4
+  TypeBytes (BVType 64) = 8
+  TypeBytes (FloatType fi) = FloatInfoBytes fi
+  TypeBytes (VecType n tp) = n * TypeBytes tp
+
+-- Return number of bits in the type.
+type family TypeBits (tp :: Type) :: Nat where
+  TypeBits (BVType n) = n
+  TypeBits (FloatType fi) = 8 * FloatInfoBytes fi
+
+type BVType = 'BVType
+
+type FloatType = 'FloatType
+
+type BoolType = 'BoolType
+
+type TupleType = 'TupleType
+
 -- | The bitvector associated with the given floating-point format.
 type FloatBVType (fi :: FloatInfo) = BVType (FloatInfoBits fi)
 
-floatBVTypeRepr :: FloatInfoRepr fi -> TypeRepr (FloatBVType fi)
-floatBVTypeRepr fi | LeqProof <- floatInfoBitsIsPos fi =
-  BVTypeRepr $ floatInfoBits fi
+$(pure [])
 
-$(return [])
+
+-- | A runtime representation of @Type@ for case matching purposes.
+data TypeRepr (tp :: Type) where
+  BoolTypeRepr :: TypeRepr BoolType
+  BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
+  FloatTypeRepr :: !(FloatInfoRepr fi) -> TypeRepr (FloatType fi)
+  TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
+  VectorTypeRepr :: NatRepr n -> TypeRepr tp -> TypeRepr (VecType n tp)
+
+type_width :: TypeRepr (BVType n) -> NatRepr n
+type_width (BVTypeRepr n) = n
+
+instance Show (TypeRepr tp) where
+  show BoolTypeRepr = "bool"
+  show (BVTypeRepr w) = "[" ++ show w ++ "]"
+  show (FloatTypeRepr fi) = show fi ++ "_float"
+  show (TupleTypeRepr P.Nil) = "()"
+  show (TupleTypeRepr (h P.:< z)) =
+    "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
+  show (VectorTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
+
+instance ShowF TypeRepr
+
+instance KnownRepr TypeRepr BoolType where
+  knownRepr = BoolTypeRepr
+
+instance (KnownNat n, 1 <= n) => KnownRepr TypeRepr (BVType n) where
+  knownRepr = BVTypeRepr knownNat
+
+instance (KnownRepr FloatInfoRepr fi) => KnownRepr TypeRepr (FloatType fi) where
+  knownRepr = FloatTypeRepr knownRepr
+
+instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
+  knownRepr = TupleTypeRepr knownRepr
+
+$(pure [])
 
 instance TestEquality TypeRepr where
   testEquality = $(structuralTypeEquality [t|TypeRepr|]
-    [ (ConType [t|NatRepr|] `TypeApp` AnyType, [|testEquality|])
+    [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
+    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|testEquality|])
     , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
     , ( ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType
       , [|testEquality|]
@@ -237,7 +249,8 @@ instance TestEquality TypeRepr where
 
 instance OrdF TypeRepr where
   compareF = $(structuralTypeOrd [t|TypeRepr|]
-    [ (ConType [t|NatRepr|] `TypeApp` AnyType, [|compareF|])
+    [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
+    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
     , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
     , (ConType [t|P.List|] `TypeApp` AnyType `TypeApp` AnyType, [|compareF|])
     ])
@@ -246,6 +259,10 @@ instance TestEquality FloatInfoRepr where
   testEquality = $(structuralTypeEquality [t|FloatInfoRepr|] [])
 instance OrdF FloatInfoRepr where
   compareF = $(structuralTypeOrd [t|FloatInfoRepr|] [])
+
+floatBVTypeRepr :: FloatInfoRepr fi -> TypeRepr (FloatBVType fi)
+floatBVTypeRepr fi | LeqProof <- floatInfoBitsIsPos fi =
+  BVTypeRepr $ floatInfoBits fi
 
 ------------------------------------------------------------------------
 --

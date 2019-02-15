@@ -7,14 +7,13 @@ import Control.Monad(forM_)
 import Data.Parameterized.NatRepr
 import Data.Parameterized.Some
 
-import Flexdis86.Register (ymmReg)
 import qualified Flexdis86 as F
 
 import Data.Macaw.CFG.Core(Value,bvValue)
-import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n256)
+import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n128, n256)
 
 import Data.Macaw.X86.InstructionDef
-import Data.Macaw.X86.Monad((.=), ymm, reg_high128, uext)
+import Data.Macaw.X86.Monad((.=), uext, subRegister)
 import Data.Macaw.X86.Getters(SomeBV(..),getSomeBVValue,getSomeBVLocation
                              , truncateBVValue )
 import Data.Macaw.X86.Generator(X86Generator, Expr(..),inAVX,evalArchFn,eval)
@@ -181,12 +180,12 @@ all_instructions =
     defNullary "vzeroall" $
       inAVX $
       forM_ [ 0 .. maxReg ] $ \r ->
-        ymm (ymmReg r) .= ValueExpr (bvValue 0)
+        subRegister n0   n256 (ZMM r) .= ValueExpr (bvValue 0)
 
   , defNullary "vzeroupper" $
       inAVX $
       forM_ [ 0 .. maxReg ] $ \r ->
-        reg_high128 (YMM r) .= ValueExpr (bvValue 0)
+        subRegister n128 n128 (ZMM r) .= ValueExpr (bvValue 0)
 
   , avxMov "vmovaps"
   , avxMov "vmovups"
