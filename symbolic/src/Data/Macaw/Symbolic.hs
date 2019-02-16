@@ -121,7 +121,6 @@ import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Expr as C
-import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.CFG.SSAConversion as C
 import qualified Lang.Crucible.FunctionHandle as C
@@ -272,7 +271,7 @@ addBlocksCFG archFns baseAddrMap addr posFn macawBlocks = do
       Nothing -> fail "Unable to find initial block"
   blks <- forM macawBlocks $ \b -> do
     addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b
-  return (entry, blks)
+  return (entry, concatMap (uncurry (:)) blks)
 
 -- | Create a registerized Crucible CFG from an arbitrary list of macaw blocks
 --
@@ -441,7 +440,7 @@ mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraint
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,_) <-
+    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
       runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
@@ -458,7 +457,7 @@ mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraint
     --        addTermStmt (CR.Return r))
 
     -- Return initialization block followed by actual blocks.
-    pure (entryLabel, initCrucibleBlock : crucibleBlock)
+    pure (entryLabel, initCrucibleBlock : initExtraCrucibleBlocks ++ crucibleBlock)
 
 -- | This create a Crucible CFG from a Macaw block.  Note that the
 -- term statement of the block is updated to make it a return.
@@ -537,7 +536,7 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
 
     -- Generate entry Crucible block
     entry_label <- CR.Label <$> mmFreshNonce
-    (init_crucible_block, _) <-
+    (init_crucible_block, init_extra_crucible_blocks, _) <-
       runCrucGen' entry_addr entry_label $ do
         -- Initialize value in arch_reg_struct_reg with initial registers
         setMachineRegs input_atom
@@ -550,7 +549,7 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
       let stmts = M.blockStatementList block
       let label = block_label_map Map.! (block_addr, M.stmtsIdent stmts)
 
-      (first_crucible_block, off) <- runCrucGen' block_addr label $ do
+      (first_crucible_block, first_extra_crucible_blocks, off) <- runCrucGen' block_addr label $ do
         arch_width <- archAddrWidth
         ip_reg_val <- getRegValue M.ip_reg
         block_ptr <- evalMacawStmt $
@@ -572,9 +571,10 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
         (off_pos_fn block_addr)
         arch_reg_struct_reg
         next_stmts
-        [first_crucible_block]
+        (first_crucible_block:first_extra_crucible_blocks)
 
-    pure (entry_label, init_crucible_block : concat crucible_blocks)
+    pure (entry_label, init_crucible_block :
+                         init_extra_crucible_blocks ++ concat crucible_blocks)
 
 mkBlockPathCFG
   :: forall s arch ids
@@ -642,7 +642,7 @@ mkFunRegCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints ar
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,_) <-
+    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
       runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
@@ -654,7 +654,8 @@ mkFunRegCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints ar
       forM blockList $ \b -> do
         addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg b
     -- Return initialization block followed by actual blocks.
-    pure (entryLabel, initCrucibleBlock : concat restCrucibleBlocks)
+    pure (entryLabel, initCrucibleBlock :
+                        initExtraCrucibleBlocks ++ concat restCrucibleBlocks)
 
 -- | Translate a macaw function (passed as a 'M.DiscoveryFunInfo') into a Crucible 'C.CFG' (in SSA form)
 mkFunCFG :: forall s arch ids

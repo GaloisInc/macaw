@@ -68,6 +68,7 @@ module Data.Macaw.Symbolic.CrucGen
   , addMacawStmt
   , addMacawParsedTermStmt
   , addStmt
+  , addExtraBlock
   , appAtom
   , toBits
   , fromBits
@@ -106,8 +107,9 @@ import           Data.Proxy
 import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
+import qualified Data.Vector as Vec
 import           Data.Word
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), width)
 
 import           What4.ProgramLoc as C
 import qualified What4.Symbol as C
@@ -566,6 +568,8 @@ data CrucGenState arch ids h s
      -- ^ List of states in reverse order
    , toBitsCache :: !(MapF (PtrAtom s) (BVAtom s))
    , fromBitsCache :: !(MapF (BVAtom s) (PtrAtom s))
+   , extraBlocks :: ![CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
+     -- ^ Extra blocks created during construction, in reverse order of creation
    }
 
 newtype PtrAtom s w = PtrAtom { getPtrAtom :: CR.Atom s (MM.LLVMPointerType w) }
@@ -680,6 +684,17 @@ addTermStmt tstmt = do
   pure $ (crucPState s, blk)
 -}
 
+-- | Add an extra block, to be returned eventually by 'runCrucGen'.
+-- Note that this block has to have been created manually using
+-- 'CR.mkBlock' rather than using 'addStmt' and friends.  (TODO:
+-- Support a friendlier API such as that of Crucible's Generator
+-- monad.)
+addExtraBlock :: CR.Block (MacawExt arch) s (MacawFunctionResult arch)
+              -> CrucGen arch ids h s ()
+addExtraBlock blk =
+  modify' $ \s@(CrucGenState { extraBlocks = blks }) ->
+              s { extraBlocks = blk : blks }
+
 freshValueIndex :: CrucGen arch ids h s (Nonce s tp)
 freshValueIndex = do
   s <- get
@@ -695,22 +710,28 @@ mmFreshNonce = do
   ng <- gets nonceGen
   mmExecST $ freshNonce ng
 
--- | Evaluate the crucible app and return a reference to the result.
-evalAtom :: CR.AtomValue (MacawExt arch) s ctp -> CrucGen arch ids h s (CR.Atom s ctp)
-evalAtom av = do
+mkAtom :: C.TypeRepr ctp -> CrucGen arch ids h s (CR.Atom s ctp)
+mkAtom tp = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   p <- getPos
   i <- freshValueIndex
   -- Make atom
-  let !tp = CR.typeOfAtomValue av
   let atom = CR.Atom { CR.atomPosition = p
                      , CR.atomId = i
                      , CR.atomSource = CR.Assigned
                      , CR.typeOfAtom = tp
                      }
-  addStmt $ CR.DefineAtom atom av
   pure $! atom
+
+-- | Evaluate the crucible app and return a reference to the result.
+evalAtom :: CR.AtomValue (MacawExt arch) s ctp -> CrucGen arch ids h s (CR.Atom s ctp)
+evalAtom av = do
+  archFns <- gets translateFns
+  crucGenArchConstraints archFns $ do
+  atom <- mkAtom (CR.typeOfAtomValue av)
+  addStmt $ CR.DefineAtom atom av
+  pure atom
 
 -- | Evaluate the crucible app and return a reference to the result.
 crucibleValue :: C.App (MacawExt arch) (CR.Atom s) ctp -> CrucGen arch ids h s (CR.Atom s ctp)
@@ -1260,7 +1281,13 @@ runCrucGen :: forall arch ids h s
            -> CR.Reg s (ArchRegStruct arch)
               -- ^ Crucible register for struct containing all Macaw registers.
            -> CrucGen arch ids h s ()
-           -> MacawMonad arch ids h s (CR.Block (MacawExt arch) s (MacawFunctionResult arch), M.ArchAddrWord arch)
+           -> MacawMonad arch ids h s
+                ( CR.Block (MacawExt arch ) s (MacawFunctionResult arch)
+                    -- Block created
+                , [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
+                    -- Extra blocks created along the way
+                , M.ArchAddrWord arch
+                )
 runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstraints archFns $ do
   ps <- get
   let regAssign = crucGenRegAssignment archFns
@@ -1277,6 +1304,7 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
                         , prevStmts  = []
                         , toBitsCache = MapF.empty
                         , fromBitsCache = MapF.empty
+                        , extraBlocks = []
                         }
   let cont _s () = fail "Unterminated crucible block"
   (s, tstmt)  <- mmExecST $ unCrucGen action s0 cont
@@ -1285,7 +1313,8 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
   let stmts = Seq.fromList (reverse (prevStmts s))
   let term = C.Posd termPos tstmt
   let blk = CR.mkBlock (CR.LabelID lbl) Set.empty stmts term
-  pure (blk, codeOff s)
+  let !blks = reverse (extraBlocks s)
+  pure (blk, blks, codeOff s)
 
 addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               => MacawSymbolicArchFunctions arch
@@ -1298,7 +1327,10 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
-              -> MacawMonad arch ids h s (CR.Block (MacawExt arch) s (MacawFunctionResult arch))
+              -> MacawMonad arch ids h s
+                   ( CR.Block (MacawExt arch) s (MacawFunctionResult arch)
+                   , [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
+                   )
 addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
   let idx = M.blockLabel b
   lbl <-
@@ -1320,7 +1352,7 @@ addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
                           , CR.atomSource = CR.FnInput
                           , CR.typeOfAtom = archRegStructRepr
                           }
-  fmap fst $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
+  fmap (\(b', bs, _) -> (b', bs)) $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt blockLabelMap (M.blockTerm b)
@@ -1369,13 +1401,9 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ParsedJump regs nextAddr -> do
       setMachineRegs =<< createRegStruct regs
       addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
-    M.ParsedLookupTable regs _idx _possibleAddrs -> do
+    M.ParsedLookupTable regs idx possibleAddrs -> do
       setMachineRegs =<< createRegStruct regs
-      let cond = undefined
-      -- TODO: Add ability in CrucGen to generate new labels and add new blocks.
-      let tlbl = undefined
-      let flbl = undefined
-      addTermStmt $! CR.Br cond tlbl flbl
+      addSwitch blockLabelMap idx possibleAddrs
     M.ParsedReturn regs -> do
       regValues <- createRegStruct regs
       addTermStmt $ CR.Return regValues
@@ -1402,6 +1430,95 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ClassifyFailure _regs -> do
       msgVal <- crucibleValue $ C.TextLit $ Text.pack $ "Could not identify block at " ++ show thisAddr
       addTermStmt $ CR.ErrorStmt msgVal
+
+addSwitch :: forall arch s ids h
+           . BlockLabelMap arch s
+          -> M.ArchAddrValue arch ids
+          -> Vec.Vector (M.ArchSegmentOff arch)
+          -> CrucGen arch ids h s ()
+addSwitch blockLabelMap idx possibleAddrs = do
+  archFns <- translateFns <$> get
+  crucGenArchConstraints archFns $ do
+
+  p <- getPos
+  idxVal <- v2c idx
+
+  let -- Add a link to the if-else chain, going from the bottom up.
+      -- That is, take the current "else" code and an index-address
+      -- pair from the jump table, and construct a branch that goes
+      -- either to that address or to that "else".
+      --
+      -- Note that it's tempting to use a single 'CR.VariantElim' here
+      -- rather than build a whole bunch of blocks in an if-else
+      -- chain.  Sadly, two things go wrong.  First, you need a way to
+      -- construct a variant with a statically-unknown tag.  This
+      -- isn't currently possible but wouldn't (I think?) be hard to
+      -- add.  More seriously, 'CR.VariantElim' requires the target
+      -- labels to be 'CR.LambdaLabel's, not 'CR.Label's.  So you'd
+      -- need to add a bunch of shim blocks anyway (or refactor the
+      -- CFG datatypes to eliminate the distinction between a label
+      -- and a lambda label taking 'C.UnitType').  This might be worth
+      -- reconsidering if these (potentially very long) chains become
+      -- a problem.
+      chain :: ( [CR.Stmt (MacawExt arch) s]
+               , CR.TermStmt s (MacawFunctionResult arch) )
+            -> ( Int
+               , M.ArchSegmentOff arch )
+            -> CrucGen arch ids h s
+                 ( [CR.Stmt (MacawExt arch) s]
+                 , CR.TermStmt s (MacawFunctionResult arch) )
+      chain (elsStmts, elsTerm) (thnIdx, thnAddr) = do
+        elsLbl <- CR.Label <$> freshValueIndex
+        let elsBlk =
+              CR.mkBlock (CR.LabelID elsLbl) Set.empty
+                (Seq.fromList (map (C.Posd p) elsStmts))
+                (C.Posd p elsTerm)
+        addExtraBlock elsBlk
+
+        -- TODO: This is awkward.  We would like to use @evalAtom@ and
+        -- @crucibleValue@ and such, but we can't because those add
+        -- statements to *this* block.  Would be nice if we could do
+        -- what Crucible's own Generator monad allows and define a
+        -- block in a nested fashion.
+
+        -- FIXME: None of the following four things should be
+        -- necessary to spell out, but the right KnownRepr instances
+        -- aren't available to make knownRepr work on its own.
+        let widthRepr = M.addrWidthRepr (Proxy @(M.ArchAddrWidth arch))
+            width = M.addrWidthNatRepr widthRepr
+            bvRepr = C.BVRepr width
+            ptrRepr = MM.LLVMPointerRepr width
+        thnIdxBitsAtom <- mkAtom bvRepr
+        thnIdxAtom <- mkAtom ptrRepr
+        eqAtom <- mkAtom C.BoolRepr
+
+        let thnLbl = parsedBlockLabel blockLabelMap thnAddr 0
+
+        return ( [ CR.DefineAtom thnIdxBitsAtom $
+                     CR.EvalApp $ C.BVLit width (toInteger thnIdx)
+                 , CR.DefineAtom thnIdxAtom $
+                     CR.EvalApp $ C.ExtensionApp $
+                       BitsToPtr width thnIdxBitsAtom
+                 , CR.DefineAtom eqAtom $
+                     CR.EvalExt $ PtrEq widthRepr idxVal thnIdxAtom
+                 ]
+               , CR.Br eqAtom thnLbl elsLbl
+               )
+
+  errAtom <- mkAtom C.StringRepr
+  let finalStmts =
+        [ CR.DefineAtom errAtom $ CR.EvalApp $ C.TextLit $
+            "Index not in lookup table"
+        ]
+  let finalTermStmt = CR.ErrorStmt errAtom
+
+  (stmts, termStmt) <-
+    Vec.foldM chain (finalStmts, finalTermStmt)
+      -- Build in bottom-up order but keep the original indices
+      (Vec.reverse (Vec.indexed possibleAddrs))
+
+  mapM_ addStmt stmts
+  addTermStmt termStmt
 
 nextStatements :: M.ParsedTermStmt arch ids -> [M.StatementList arch ids]
 nextStatements tstmt =
@@ -1434,12 +1551,12 @@ addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg ((off,
         pure lbl
       Nothing ->
         throwError $ "Internal: Could not find block with address " ++ show startAddr ++ " index " ++ show idx
-  (b,off') <-
+  (b,bs,off') <-
     runCrucGen archFns baseAddrMap posFn off lbl regReg $ do
       mapM_ (addMacawStmt startAddr) (M.stmtsNonterm stmts)
       addMacawParsedTermStmt blockLabelMap startAddr (M.stmtsTerm stmts)
   let new = (off',) <$> nextStatements (M.stmtsTerm stmts)
-  addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg (new ++ rest) (b:r)
+  addStatementList archFns baseAddrMap blockLabelMap startAddr posFn regReg (new ++ rest) (b : bs ++ r)
 
 addParsedBlock :: forall arch ids h s
                .  MacawSymbolicArchFunctions arch
