@@ -2,10 +2,11 @@ packages: macaw-ppc/
           macaw-arm/
           macaw-semmc/
           macaw-ppc-symbolic/
-          submodules/macaw/base/
-          submodules/macaw/x86/
-          submodules/macaw/symbolic/
-          submodules/macaw/x86_symbolic/
+          base/
+          x86/
+          symbolic/
+          x86_symbolic/
+          refinement/
           submodules/macaw-loader/macaw-loader
           submodules/macaw-loader/macaw-loader-arm
           submodules/macaw-loader/macaw-loader-ppc
@@ -17,12 +18,12 @@ packages: macaw-ppc/
           submodules/dismantle/dismantle-ppc/
           submodules/dismantle/dismantle-arm/
           submodules/dismantle/dismantle-thumb/
-          submodules/parameterized-utils/
-          submodules/crucible/crucible/
-          submodules/crucible/crucible-llvm/
-          submodules/crucible/what4/
-          submodules/dwarf/
-          submodules/elf-edit/
-          submodules/flexdis86/
-          submodules/flexdis86/binary-symbols/
-          submodules/llvm-pretty/
+          deps/parameterized-utils/
+          deps/crucible/crucible/
+          deps/crucible/crucible-llvm/
+          deps/crucible/what4/
+          deps/dwarf/
+          deps/elf-edit/
+          deps/flexdis86/
+          deps/flexdis86/binary-symbols/
+          deps/llvm-pretty/
