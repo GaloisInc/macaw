@@ -16,27 +16,12 @@
 [submodule "deps/llvm-pretty"]
 	path = deps/llvm-pretty
 	url = https://github.com/elliottt/llvm-pretty.git
-[submodule "submodules/parameterized-utils"]
-	path = submodules/parameterized-utils
-	url = git@github.com:GaloisInc/parameterized-utils.git
 [submodule "submodules/semmc"]
 	path = submodules/semmc
 	url = git@github.com:GaloisInc/semmc.git
 [submodule "submodules/dismantle"]
 	path = submodules/dismantle
 	url = git@github.com:travitch/dismantle.git
-[submodule "submodules/crucible"]
-	path = submodules/crucible
-	url = git@github.com:GaloisInc/crucible.git
-[submodule "submodules/dwarf"]
-	path = submodules/dwarf
-	url = git@github.com:GaloisInc/dwarf.git
-[submodule "submodules/elf-edit"]
-	path = submodules/elf-edit
-	url = git@github.com:GaloisInc/elf-edit.git
-[submodule "submodules/macaw"]
-	path = submodules/macaw
-	url = git@github.com:GaloisInc/macaw.git
 [submodule "submodules/macaw-loader"]
 	path = submodules/macaw-loader
 	url = git@github.com:GaloisInc/macaw-loader.git
@@ -46,9 +31,3 @@
 [submodule "submodules/s-cargot-letbind"]
 	path = submodules/s-cargot-letbind
 	url = https://github.com/GaloisInc/s-cargot-letbind.git
-[submodule "submodules/flexdis86"]
-	path = submodules/flexdis86
-	url = git@github.com:GaloisInc/flexdis86.git
-[submodule "submodules/llvm-pretty"]
-	path = submodules/llvm-pretty
-	url = git@github.com:elliottt/llvm-pretty.git
