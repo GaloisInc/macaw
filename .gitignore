@@ -1,11 +1,11 @@
 *.o
 *~
 *.hi
-dist
-dist-newstyle
+dist/
+dist-newstyle/
 cabal.sandbox.config
 .cabal-sandbox
-.stack-work
+.stack-work/
 TAGS
 .ghc.environment.*
 **/tests/samples/*.last-actual

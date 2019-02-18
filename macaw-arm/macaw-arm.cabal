@@ -1,0 +1,80 @@
+name:                macaw-arm
+version:             0.1.0.0
+-- synopsis:            
+-- description:         
+license:             BSD3
+license-file:        LICENSE
+author:              Kevin Quick
+maintainer:          kquick@galois.com
+-- copyright:           
+category:            Semantics
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Data.Macaw.ARM
+                     , Data.Macaw.ARM.Arch
+                     , Data.Macaw.ARM.ARMReg
+                     , Data.Macaw.ARM.BinaryFormat.ELF
+                     , Data.Macaw.ARM.Disassemble
+                     , Data.Macaw.ARM.Eval
+                     , Data.Macaw.ARM.Identify
+                     , Data.Macaw.ARM.Operand
+                     , Data.Macaw.ARM.Semantics.ARMSemantics
+                     , Data.Macaw.ARM.Semantics.ThumbSemantics
+                     , Data.Macaw.ARM.Semantics.TH
+  -- other-modules:       
+  -- other-extensions:    
+  build-depends:       base >=4.10 && <5
+                     , ansi-wl-pprint
+                     , bytestring
+                     , cereal
+                     , containers
+                     , crucible
+                     , dismantle-arm
+                     , dismantle-thumb
+                     , dismantle-tablegen
+                     , elf-edit
+                     , lens
+                     , macaw-base
+                     , macaw-semmc
+                     , mtl
+                     , parameterized-utils
+                     , pretty
+                     , semmc
+                     , semmc-arm
+                     , template-haskell
+                     , text
+                     , vector
+                     , what4
+  -- build-tools:         arm-none-eabi-gcc
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall
+
+test-suite macaw-arm-tests
+  type: exitcode-stdio-1.0
+  default-language:    Haskell2010
+  ghc-options:         -Wall
+  hs-source-dirs:      tests
+  main-is:             TestMain.hs
+  other-modules:       ARMTests
+                     , MismatchTests
+                     , Shared
+  build-depends:       base >=4.10 && <5
+                     , ansi-wl-pprint
+                     , binary
+                     , bytestring
+                     , containers
+                     , elf-edit
+                     , exceptions
+                     , filemanip
+                     , filepath
+                     , lens
+                     , macaw-base
+                     , macaw-arm
+                     , parameterized-utils
+                     , semmc-arm
+                     , tasty
+                     , tasty-hunit
