@@ -207,7 +207,7 @@ data TypeRepr (tp :: Type) where
   BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
   FloatTypeRepr :: !(FloatInfoRepr fi) -> TypeRepr (FloatType fi)
   TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
-  VectorTypeRepr :: NatRepr n -> TypeRepr tp -> TypeRepr (VecType n tp)
+  VecTypeRepr :: NatRepr n -> TypeRepr tp -> TypeRepr (VecType n tp)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
@@ -219,7 +219,7 @@ instance Show (TypeRepr tp) where
   show (TupleTypeRepr P.Nil) = "()"
   show (TupleTypeRepr (h P.:< z)) =
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
-  show (VectorTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
+  show (VecTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
 
 instance ShowF TypeRepr
 
