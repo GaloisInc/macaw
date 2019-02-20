@@ -44,6 +44,7 @@ module Data.Macaw.X86.Getters
   , wordMemRepr
   , dwordMemRepr
   , qwordMemRepr
+  , x87MemRepr
   , xmmMemRepr
   , ymmMemRepr
   ) where

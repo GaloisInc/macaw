@@ -11,6 +11,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NondecreasingIndentation #-}
@@ -36,8 +37,8 @@ import qualified Flexdis86 as F
 import           Data.Macaw.CFG ( MemRepr(..)
                                 , memReprBytes
                                 , App(..)
-                                , Value(BoolValue)
-                                , AssignRhs(CondReadMem)
+                                , Value(BoolValue, AssignedValue)
+                                , AssignRhs(CondReadMem, ReadMem)
                                 , mkLit
                                 )
 import           Data.Macaw.Memory (Endianness (LittleEndian))
@@ -148,6 +149,25 @@ getRM32_RM64 v =
     F.Mem64 addr -> Right <$> getBV64Addr addr
     _ -> fail "Unexpected operand"
 
+-- | The the low bits in a register.
+setLowBits :: forall st_s ids l w
+           .  (1 <= l, l <= w, KnownNat l, KnownNat w)
+           => X86Reg (BVType w)
+           -> Expr ids (BVType l)
+           -> X86Generator st_s ids ()
+setLowBits r e = do
+  let w :: NatRepr w
+      w = knownNat
+  let l :: NatRepr l
+      l = knownNat
+  -- Get initial value
+  v0 <- getReg r
+  -- Get old bits
+  LeqProof <- pure $ leqTrans (LeqProof @1 @l) (LeqProof @l @w)
+  let prevBits = v0 .&. bvLit w (Bits.complement (maxUnsigned l))
+  -- Or prevBits with new value
+  v1 <- eval $ prevBits .|. uext w e
+  setReg r v1
 
 -- | Location that get the low 32 bits of a XMM register,
 -- and preserves the high 64 bits on writes.
@@ -161,7 +181,7 @@ xmm_low64 r = subRegister n0 n64 (xmmOwner r)
 
 -- | Location that get the low 64 bits of a XMM register,
 -- and preserves the high 64 bits on writes.
-xmm_low :: F.XMMReg -> SSE_FloatType tp -> Location addr tp
+xmm_low :: F.XMMReg -> SSE_FloatType tp -> Location addr (FloatBVType tp)
 xmm_low r SSE_Single = xmm_low32 r
 xmm_low r SSE_Double = xmm_low64 r
 
@@ -170,47 +190,57 @@ xmm_low r SSE_Double = xmm_low64 r
 xmm_high64 :: F.XMMReg -> Location addr (BVType 64)
 xmm_high64 r = subRegister n64 n64 (xmmOwner r)
 
--- | This gets the register of a xmm field.
-getXMM :: Monad m => F.Value -> m F.XMMReg
-getXMM (F.XMMReg r) = pure r
-getXMM _ = fail "Unexpected argument"
+singleMemRepr :: MemRepr (FloatType SingleFloat)
+singleMemRepr = FloatMemRepr SingleFloatRepr
 
--- | This gets the value of a xmm/m32 field.
---
--- If it is an XMM value, it gets the low 32bit register.
--- If it is a memory address is gets the 32bits there.
--- Otherwise it fails.
-getXMM_mr_low32 :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 32))
-getXMM_mr_low32 (F.XMMReg r) = pure (xmm_low32 r)
-getXMM_mr_low32 (F.Mem128 src_addr) = getBV32Addr src_addr
-getXMM_mr_low32 _ = fail "Unexpected argument"
+doubleMemRepr :: MemRepr (FloatType DoubleFloat)
+doubleMemRepr = FloatMemRepr DoubleFloatRepr
+
+xmmSingleMemRepr :: MemRepr (VecType 4 (FloatType SingleFloat))
+xmmSingleMemRepr = PackedVecMemRepr n4 singleMemRepr
+
+readMem :: F.AddrRef -> MemRepr tp -> X86Generator st ids (Value X86_64 ids tp)
+readMem addrRef repr = do
+  addr <- eval =<< getBVAddress addrRef
+  AssignedValue <$> addAssignment (ReadMem addr repr)
+
+getXMMreg_float_low :: F.XMMReg -> SSE_FloatType tp -> X86Generator st ids (Value X86_64 ids (FloatType tp))
+getXMMreg_float_low r SSE_Single =
+  eval . bitcast knownRepr . bvTrunc' n32 =<< getReg (xmmOwner r)
+getXMMreg_float_low r SSE_Double =
+  eval . bitcast knownRepr . bvTrunc' n64 =<< getReg (xmmOwner r)
+
+-- | This gets the value of a xmm/m128 field as 4 floats
+getXMMreg_sv :: F.XMMReg -> X86Generator st ids (Value X86_64 ids (VecType 4 (FloatType SingleFloat)))
+getXMMreg_sv r = eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner r)
+
+-- | This gets the value of a xmm/m128 field as 4 floats
+getXMM_sv :: F.Value -> X86Generator st ids (Value X86_64 ids (VecType 4 (FloatType SingleFloat)))
+getXMM_sv (F.XMMReg r) = getXMMreg_sv r
+getXMM_sv (F.Mem128 addrRef) = readMem addrRef xmmSingleMemRepr
+getXMM_sv _ = fail "Unexpected argument"
+
+-- | This gets the value of a xmm/m128 field as 4 floats
+setXMMreg_sv :: F.XMMReg -> Expr ids (VecType 4 (FloatType SingleFloat)) -> X86Generator st ids ()
+setXMMreg_sv r e = setLowBits (xmmOwner r) (bitcast (BVTypeRepr n128) e)
 
 -- | This gets the value of a xmm/m64 field.
 --
 -- If it is an XMM value, it gets the low 64bit register.
 -- If it is a memory address is gets the 64bits there.
 -- Otherwise it fails.
-getXMM_mr_low64 :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 64))
-getXMM_mr_low64 (F.XMMReg r) = pure (xmm_low64 r)
-getXMM_mr_low64 (F.Mem128 src_addr) = getBV64Addr src_addr
-getXMM_mr_low64 _ = fail "Unexpected argument"
+getXMM_float_low :: F.Value -> SSE_FloatType tp -> X86Generator st ids (Value X86_64 ids (FloatType tp))
+getXMM_float_low (F.XMMReg r) tp = getXMMreg_float_low r tp
+getXMM_float_low (F.Mem128 addrRef) SSE_Single = readMem addrRef singleMemRepr
+getXMM_float_low (F.Mem128 addrRef) SSE_Double = readMem addrRef doubleMemRepr
+getXMM_float_low _ _ = fail "Unexpected argument"
 
--- | This gets the value of a xmm/m64 field.
---
--- If it is an XMM value, it gets the low 64bit register.
--- If it is a memory address is gets the 64bits there.
--- Otherwise it fails.
-getXMM_mr_low :: F.Value -> SSE_FloatType tp -> X86Generator st ids (Location (Addr ids) tp)
-getXMM_mr_low (F.XMMReg r) tp = pure (xmm_low r tp)
-getXMM_mr_low (F.Mem128 src_addr) SSE_Single = getBV32Addr src_addr
-getXMM_mr_low (F.Mem128 src_addr) SSE_Double = getBV64Addr src_addr
-getXMM_mr_low _ _ = fail "Unexpected argument"
-
--- | This gets the value of a xmm/m128 field.
-getXMM_mr :: F.Value -> X86Generator st ids (Location (Addr ids) (BVType 128))
-getXMM_mr v@(F.XMMReg {}) = getBVLocation v n128
-getXMM_mr v@(F.Mem128 {}) = getBVLocation v n128
-getXMM_mr _ = fail "Unexpected argument"
+-- | The the least significant float or double in an XMM register
+setXMMreg_float_low :: F.XMMReg -> SSE_FloatType tp -> Expr ids (FloatType tp) -> X86Generator st ids ()
+setXMMreg_float_low r SSE_Single e = do
+  setLowBits (xmmOwner r) (bitcast (BVTypeRepr n32) e)
+setXMMreg_float_low r SSE_Double e = do
+  setLowBits (xmmOwner r) (bitcast (BVTypeRepr n64) e)
 
 -- ** Condition codes
 
@@ -228,7 +258,8 @@ def_cmov_list =
       r .= mux c y r_v
 
 def_bswap :: InstructionDef
-def_bswap = defUnaryLoc "bswap" $ \l -> do
+def_bswap = defUnary "bswap" $ \_ val -> do
+  SomeBV l <- getSomeBVLocation val
   v0 <- get l
   l .= (bvUnvectorize (typeWidth l) $ reverse $ bvVectorize n8 v0)
 
@@ -505,7 +536,8 @@ exec_cmp dst y = do
   set_result_flags (dst_val .- y)
 
 def_dec :: InstructionDef
-def_dec = defUnaryLoc  "dec" $ \dst -> do
+def_dec = defUnary  "dec" $ \_ dstVal -> do
+  SomeBV dst <- getSomeBVLocation dstVal
   dst_val <- get dst
   let v1 = bvLit (typeWidth dst_val) 1
   -- Set overflow and arithmetic flags
@@ -544,7 +576,8 @@ set_div_flags = do
 
 -- | Unsigned (@div@ instruction) and signed (@idiv@ instruction) division.
 def_div :: InstructionDef
-def_div = defUnaryV "div" $ \d ->
+def_div = defUnary "div" $ \_ val -> do
+   SomeBV d <- getSomeBVValue val
    case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
            num <- get ax
@@ -569,7 +602,8 @@ def_div = defUnaryV "div" $ \d ->
        | otherwise -> fail "div: Unknown bit width"
 
 def_idiv :: InstructionDef
-def_idiv = defUnaryV "idiv" $ \d -> do
+def_idiv = defUnary "idiv" $ \_ val -> do
+  SomeBV d <- getSomeBVValue val
   set_div_flags
   case typeWidth d of
     n | Just Refl <- testEquality n n8  -> do
@@ -601,7 +635,8 @@ def_hlt :: InstructionDef
 def_hlt = defNullary "hlt" $ addArchTermStmt Hlt
 
 def_inc :: InstructionDef
-def_inc = defUnaryLoc "inc" $ \dst -> do
+def_inc = defUnary "inc" $ \dstVal -> do
+  SomeBV dst <- getSomeBVLocation dstVal
   -- Get current value stored in destination.
   dst_val <- get dst
   let y  = bvLit (typeWidth dst_val) 1
@@ -735,7 +770,8 @@ def_imul = defVariadic "imul" $ \_ vs ->
 
 -- | Should be equiv to 0 - *l
 def_neg :: InstructionDef
-def_neg = defUnaryLoc "neg" $ \l -> do
+def_neg = defUnary "neg" $ \_ val -> do
+  SomeBV l <- getSomeBVLocation val
   v <- get l
   cf_loc .= boolNot (is_zero v)
   let r = bvNeg v
@@ -1549,14 +1585,14 @@ def_lea = defBinary "lea" $ \_ loc (F.VoidMem ar) -> do
 
 -- | FLD Load floating-point value
 def_fld :: InstructionDef
-def_fld = defUnary "fld" $ \_ v -> do
-  case v of
+def_fld = defUnary "fld" $ \_ val -> do
+  case val of
     F.FPMem32 ar -> do
-      l <- getBV32Addr ar
-      x87Push =<< evalArchFn . X87_Extend SSE_Single =<< eval =<< get l
+      v <- readMem ar singleMemRepr
+      x87Push . bitcast knownRepr =<< evalArchFn (X87_Extend SSE_Single v)
     F.FPMem64 ar -> do
-      l <- getBV64Addr ar
-      x87Push =<< evalArchFn . X87_Extend SSE_Double =<< eval =<< get l
+      v <- readMem ar doubleMemRepr
+      x87Push . bitcast knownRepr =<< evalArchFn (X87_Extend SSE_Double v)
     F.FPMem80 ar -> do
       l <- getBV80Addr ar
       x87Push =<< get l
@@ -1570,14 +1606,16 @@ def_fstX mnem doPop = defUnary mnem $ \_ val -> do
   v <- get (X87StackRegister 0)
   case val of
     F.FPMem32 ar -> do
-      l <- getBV32Addr ar
-      (l .=) =<< evalArchFn . X87_FST SSE_Single =<< eval v
+      l <- getBVAddress ar
+      extv <- evalArchFn . X87_FST SSE_Single =<< eval (bitcast (FloatTypeRepr X86_80FloatRepr) v)
+      MemoryAddr l singleMemRepr .= extv
     F.FPMem64 ar -> do
-      l <- getBV64Addr ar
-      (l .=) =<< evalArchFn . X87_FST SSE_Double =<< eval v
+      l <- getBVAddress ar
+      extv <- evalArchFn . X87_FST SSE_Double =<< eval (bitcast (FloatTypeRepr X86_80FloatRepr) v)
+      MemoryAddr l doubleMemRepr .= extv
     F.FPMem80 ar -> do
-      l <- getBV80Addr ar
-      l .= v
+      l <- getBVAddress ar
+      MemoryAddr l x87MemRepr .= v
     F.X87Register n -> do
       X87StackRegister n .= v
     _ -> fail $ "Bad floating point argument."
@@ -1606,19 +1644,19 @@ def_fstX mnem doPop = defUnary mnem $ \_ val -> do
 
 type X87BinOp
    = forall f
-   . f (FloatBVType X86_80Float)
-   -> f (FloatBVType X86_80Float)
-   -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
+   . f (FloatType X86_80Float)
+   -> f (FloatType X86_80Float)
+   -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
 execX87BinOp :: X87BinOp
              -> Location (Addr ids) (BVType 80)
-             -> Expr ids (BVType 80)
+             -> Expr ids (FloatType X86_80Float)
              -> X86Generator st ids ()
 execX87BinOp op loc expr1 = do
-  val0 <- eval =<< get loc
+  val0 <- eval . bitcast knownRepr =<< get loc
   val1 <- eval expr1
   res <- evalArchFn $ op val0 val1
-  loc .= app (TupleField knownRepr res P.index0)
+  loc .= bitcast (BVTypeRepr n80) (app (TupleField knownRepr res P.index0))
   set_undefined c0_loc
   c1_loc .= app (TupleField knownRepr res P.index1)
   set_undefined c2_loc
@@ -1632,17 +1670,17 @@ defX87BinaryInstruction mnem op =
     case vs of
       [F.FPMem32 addr] -> do
         addr' <- getBVAddress addr
-        sVal <- eval =<< get (MemoryAddr addr' (floatMemRepr SingleFloatRepr))
+        sVal <- eval =<< get (MemoryAddr addr' singleMemRepr)
         val  <- evalArchFn $ X87_Extend SSE_Single sVal
         execX87BinOp op (X87StackRegister 0) val
       [F.FPMem64 addr] -> do
         addr' <- getBVAddress addr
-        sVal <- eval =<< get (MemoryAddr addr' (floatMemRepr DoubleFloatRepr))
+        sVal <- eval =<< get (MemoryAddr addr' doubleMemRepr)
         val  <- evalArchFn $ X87_Extend SSE_Double sVal
         execX87BinOp op (X87StackRegister 0) val
       [F.X87Register x, F.X87Register y] -> do
         val <- get (X87StackRegister y)
-        execX87BinOp op (X87StackRegister x) val
+        execX87BinOp op (X87StackRegister x) (bitcast knownRepr val)
       _ -> do
         fail $ mnem ++ "had unexpected arguments: " ++ show vs
 
@@ -1654,7 +1692,7 @@ defX87PopInstruction mnem op =
     case vs of
       [F.X87Register x, F.X87Register 0] -> do
         val <- get (X87StackRegister 0)
-        execX87BinOp op (X87StackRegister x) val
+        execX87BinOp op (X87StackRegister x) (bitcast knownRepr val)
         x87Pop
       _ -> do
         fail $ mnem ++ "had unexpected arguments: " ++ show vs
@@ -1823,20 +1861,20 @@ def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
 
 -- ** MMX Packed Arithmetic Instructions
 
-def_padd :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_padd suf w = defBinaryLV ("padd" ++ suf) $ \l v -> do
+-- | This is used by MMX and SSE instructions
+def_packed_binop :: (1 <= w)
+                 => String
+                 -> NatRepr w
+                 -> (Expr ids (BVType w) -> Expr ids (BVType w) -> Expr ids (BVType w))
+                 -> InstructionDef
+def_packed_binop mnem w f = defBinaryLV mnem $ \l v -> do
   v0 <- get l
-  l .= vectorize2 w (.+) v0 v
+  l .= vectorize2 w f v0 v
 
 -- PADDSB Add packed signed byte integers with signed saturation
 -- PADDSW Add packed signed word integers with signed saturation
 -- PADDUSB Add packed unsigned byte integers with unsigned saturation
 -- PADDUSW Add packed unsigned word integers with unsigned saturation
-
-def_psub :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_psub suf w = defBinaryLV ("psub" ++ suf) $ \l v -> do
-  v0 <- get l
-  l .= vectorize2 w (.-) v0 v
 
 -- PSUBSB Subtract packed signed byte integers with signed saturation
 -- PSUBSW Subtract packed signed word integers with signed saturation
@@ -1855,12 +1893,8 @@ def_pcmp :: 1 <= o
          -> NatRepr o
          -> InstructionDef
 def_pcmp nm op sz =
-  defBinaryLV nm $ \l v -> do
-    v0 <- get l
-    let chkHighLow d s = mux (d `op` s)
-                             (bvLit (typeWidth d) (negate 1))
-                             (bvLit (typeWidth d) 0)
-    l .= vectorize2 sz chkHighLow v0 v
+  let chkHighLow d s = mux (op d s)  (bvLit sz (negate 1)) (bvLit sz 0)
+  def_packed_binop nm sz chkHighLow
 
 -- ** MMX Logical Instructions
 
@@ -1967,12 +2001,11 @@ def_movss = defBinary "movss" $ \_ v1 v2 -> do
 def_pshufb :: InstructionDef
 def_pshufb = defBinary "pshufb" $ \_ f_d f_s -> do
   case (f_d, f_s) of
-    (F.XMMReg {}, F.XMMReg {}) -> do
-      loc_d <- getBVLocation f_d n128
-      d_val  <- eval =<< get loc_d
-      s_val  <- eval =<< getBVValue f_s n128
-      r <- evalArchFn $ PShufb SIMD_128 d_val s_val
-      loc_d .= r
+    (F.XMMReg d, F.XMMReg s) -> do
+      dVal <- eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner d)
+      sVal <- eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner s)
+      r <- evalArchFn $ PShufb SIMDByteCount_XMM dVal sVal
+      setLowBits (xmmOwner d) (bitcast (BVTypeRepr n128) r)
     _ -> do
       fail $ "pshufb only supports 2 XMM registers as arguments."
 
@@ -2036,12 +2069,11 @@ def_movlps = defBinary "movlps" $ \_ x y -> do
 -- and applies a function that updates the low 64-bits of the first argument.
 def_xmm_ss :: SSE_Op -> InstructionDef
 def_xmm_ss f =
-  defBinary (sseOpName f ++ "ss") $ \_ loc val -> do
-    d <- getXMM loc
-    y <- eval =<< get =<< getXMM_mr_low32 val
-    x <- eval =<< get (xmm_low32 d)
-    res <- evalArchFn $ SSE_VectorOp f n1 SSE_Single x y
-    xmm_low32 d .= res
+  defBinary (sseOpName f ++ "ss") $ \_ (F.XMMReg loc) val -> do
+    x <- getXMMreg_float_low loc SSE_Single
+    y <- getXMM_float_low    val SSE_Single
+    res <- evalArchFn $ SSE_UnaryOp f SSE_Single x y
+    setXMMreg_float_low loc SSE_Single res
 
 -- ADDSS Add scalar single-precision floating-point values
 def_addss :: InstructionDef
@@ -2063,12 +2095,11 @@ def_divss = def_xmm_ss SSE_Div
 -- and applies a function that updates the register.
 def_xmm_packed :: SSE_Op -> InstructionDef
 def_xmm_packed f =
-  defBinary (sseOpName f ++ "ps") $ \_ loc val -> do
-    d <- xmm_sse <$> getXMM loc
-    x <- eval =<< get d
-    y <- eval =<< get =<< getXMM_mr val
+  defBinary (sseOpName f ++ "ps") $ \_ (F.XMMReg loc) val -> do
+    x <- getXMMreg_sv loc
+    y <- getXMM_sv val
     res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
-    d .= res
+    setXMMreg_sv loc res
 
 -- | ADDPS Add packed single-precision floating-point values
 def_addps :: InstructionDef
@@ -2122,8 +2153,8 @@ def_ucomisd :: InstructionDef
 -- Invalid (if SNaN operands), Denormal.
 def_ucomisd =
   defBinary "ucomisd" $ \_ xv yv -> do
-    x <- eval =<< get =<< getXMM_mr_low64 xv
-    y <- eval =<< get =<< getXMM_mr_low64 yv
+    x <- getXMM_float_low xv SSE_Double
+    y <- getXMM_float_low yv SSE_Double
     res <- evalArchFn (SSE_UCOMIS SSE_Double x y)
     zf_loc .= app (TupleField knownRepr res P.index0)
     pf_loc .= app (TupleField knownRepr res P.index1)
@@ -2141,8 +2172,8 @@ def_ucomiss :: InstructionDef
 -- Invalid (if SNaN operands), Denormal.
 def_ucomiss =
   defBinary "ucomiss" $ \_ xv yv -> do
-    x <- eval =<< get =<< getXMM_mr_low32 xv
-    y <- eval =<< get =<< getXMM_mr_low32 yv
+    x <- getXMM_float_low xv SSE_Single
+    y <- getXMM_float_low yv SSE_Single
     res <- evalArchFn (SSE_UCOMIS SSE_Single x y)
     zf_loc .= app (TupleField knownRepr res P.index0)
     pf_loc .= app (TupleField knownRepr res P.index1)
@@ -2153,29 +2184,37 @@ def_ucomiss =
 
 -- *** SSE Logical Instructions
 
-exec_bifpx :: 1 <= elsz =>
-              (Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
+def_bifpx :: forall ids elsz
+          .  1 <= elsz
+           => String
+           -> (Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
            -> NatRepr elsz
-           -> Location (Addr ids) XMMType
-           -> Expr ids XMMType
-           -> X86Generator st ids ()
-exec_bifpx f elsz l v = fmap_loc l $ \lv -> (vectorize2 elsz) (f) lv v
+           -> InstructionDef
+           -- Location (Addr ids) XMMType
+           ---> Expr ids XMMType
+           ---> X86Generator st ids ()
+def_bifpx mnem f elsz =
+  defBinary mnem $ \_ loc val -> do
+    l  <- getBVLocation loc n128
+    v  <- getBVValue val n128
+    fmap_loc (l :: Location (Addr ids) XMMType) $ \lv ->
+      vectorize2 elsz f lv (v :: Expr ids XMMType)
 
 -- | ANDPS Perform bitwise logical AND of packed single-precision floating-point values
 def_andps :: InstructionDef
-def_andps = defBinaryKnown "andps" $ exec_bifpx (.&.) n32
+def_andps = def_bifpx "andps" (.&.) n32
 
--- ANDNPS Perform bitwise logical AND NOT of packed single-precision floating-point values
+-- | ANDNPS Perform bitwise logical AND NOT of packed single-precision floating-point values
 def_andnps :: InstructionDef
-def_andnps = defBinaryKnown "andnps" $ exec_bifpx (\a b -> bvComplement $ (.&.) a b) n32
+def_andnps = def_bifpx "andnps" (\a b -> bvComplement $ (.&.) a b) n32
 
 -- | ORPS Perform bitwise logical OR of packed single-precision floating-point values
 def_orps :: InstructionDef
-def_orps = defBinaryKnown "orps" $ exec_bifpx (.|.) n32
+def_orps = def_bifpx "orps" (.|.) n32
 
 -- | XORPS Perform bitwise logical XOR of packed single-precision floating-point values
 def_xorps :: InstructionDef
-def_xorps = defBinaryKnown "xorps" $ exec_bifpx bvXor n32
+def_xorps = def_bifpx "xorps" bvXor n32
 
 -- *** SSE Shuffle and Unpack Instructions
 
@@ -2199,17 +2238,16 @@ def_unpcklps = defBinaryKnown "unpcklps" exec
 -- CVTSI2SS Convert doubleword integer to scalar single-precision floating-point value
 def_cvtsi2sX :: String -> SSE_FloatType tp -> InstructionDef
 def_cvtsi2sX mnem tp =
-  defBinary mnem $ \_ loc val -> do
+  defBinary mnem $ \_ (F.XMMReg loc) val -> do
     -- Loc is RG_XMM_reg
     -- val is "OpType ModRM_rm YSize"
-    d <- getXMM loc
     ev <- getRM32_RM64 val
     -- Read second argument value and coerce to single precision float.
     r <-
       case ev of
         Left  v -> evalArchFn . SSE_CVTSI2SX tp n32 =<< eval =<< get v
         Right v -> evalArchFn . SSE_CVTSI2SX tp n64 =<< eval =<< get v
-    xmm_low d tp .= r
+    setXMMreg_float_low loc tp r
 
 -- CVTPI2PS Convert packed doubleword integers to packed single-precision floating-point values
 
@@ -2344,12 +2382,11 @@ def_xmm_sd :: SSE_Op
               -- ^ Binary operation
            -> InstructionDef
 def_xmm_sd f =
-  defBinary (sseOpName f ++ "sd") $ \_ loc val -> do
-    d <- getXMM loc
-    y <- eval =<< get =<< getXMM_mr_low64 val
-    x <- eval =<< get (xmm_low64 d)
-    res <- evalArchFn $ SSE_VectorOp f n1 SSE_Double x y
-    xmm_low64 d .= res
+  defBinary (sseOpName f ++ "sd") $ \_ (F.XMMReg loc) val -> do
+    x <- getXMMreg_float_low loc SSE_Double
+    y <- getXMM_float_low val SSE_Double
+    res <- evalArchFn $ SSE_UnaryOp f SSE_Double x y
+    setXMMreg_float_low loc SSE_Double res
 
 -- | ADDSD Add scalar double precision floating-point values
 def_addsd :: InstructionDef
@@ -2388,12 +2425,12 @@ def_sqrtsd = def_xmm_sd SSE_Sqrt
 
 -- | ANDPD  Perform bitwise logical AND of packed double-precision floating-point values
 def_andpd :: InstructionDef
-def_andpd = defBinaryKnown "andpd" $ exec_bifpx (.&.) n64
+def_andpd = def_bifpx "andpd" (.&.) n64
 
 -- ANDNPD Perform bitwise logical AND NOT of packed double-precision floating-point values
 -- | ORPD   Perform bitwise logical OR of packed double-precision floating-point values
 def_orpd :: InstructionDef
-def_orpd = defBinaryKnown "orpd" $ exec_bifpx (.|.)  n64
+def_orpd = def_bifpx "orpd" (.|.)  n64
 
 -- XORPD  Perform bitwise logical XOR of packed double-precision floating-point values
 
@@ -2410,16 +2447,20 @@ def_xorpd =
 -- | CMPSD Compare scalar double-precision floating-point values
 def_cmpsX :: String -> SSE_FloatType tp -> InstructionDef
 def_cmpsX mnem tp =
-  defTernary mnem $ \_ loc f_val (F.ByteImm imm) -> do
-    l  <- getXMM loc
-    v  <- eval =<< get =<< getXMM_mr_low f_val tp
+  defTernary mnem $ \_ (F.XMMReg loc) f_val (F.ByteImm imm) -> do
     f <-
       case lookupSSECmp imm of
         Just f -> pure f
         Nothing -> fail $ mnem ++ " had unsupported operator type " ++ show imm ++ "."
-    lv <- eval =<< get (xmm_low l tp)
+    lv <- getXMMreg_float_low loc tp
+    v  <- getXMM_float_low f_val tp
     res <- evalArchFn $ SSE_CMPSX f tp lv v
-    xmm_low l tp .= res
+    let w = floatInfoBits (typeRepr tp)
+    case testLeq n1 w of
+      Nothing ->
+        error "Unexpected width"
+      Just LeqProof ->
+        xmm_low loc tp .= mux res (bvLit w (-1)) (bvLit w 0)
 
 -- COMISD Perform ordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register
 
@@ -2445,25 +2486,23 @@ def_cmpsX mnem tp =
 -- | CVTSS2SD  Convert scalar single-precision floating-point values to
 -- scalar double-precision floating-point values
 def_cvtss2sd :: InstructionDef
-def_cvtss2sd = defBinary "cvtss2sd" $ \_ loc val -> do
-  r <- getXMM loc
-  v <- eval =<< get =<< getXMM_mr_low32 val
-  (xmm_low64 r .=) =<< evalArchFn (SSE_CVTSS2SD v)
+def_cvtss2sd = defBinary "cvtss2sd" $ \_ (F.XMMReg loc) val -> do
+  v <- getXMM_float_low val SSE_Single
+  setXMMreg_float_low loc SSE_Double =<< evalArchFn (SSE_CVTSS2SD v)
 
 -- | CVTSD2SS Convert scalar double-precision floating-point values to
 -- scalar single-precision floating-point values
 def_cvtsd2ss :: InstructionDef
-def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ loc val -> do
-  r <- getXMM loc
-  v <- eval =<< get =<< getXMM_mr_low64 val
-  (xmm_low32 r .=) =<< evalArchFn (SSE_CVTSD2SS v)
+def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ (F.XMMReg loc) val -> do
+  v <- getXMM_float_low val SSE_Double
+  setXMMreg_float_low loc SSE_Single =<< evalArchFn (SSE_CVTSD2SS v)
 
 -- CVTSD2SI  Convert scalar double-precision floating-point values to a doubleword integer
 
 def_cvttsX2si :: String -> SSE_FloatType tp -> InstructionDef
 def_cvttsX2si mnem tp =
   defBinary mnem $ \_ loc val -> do
-    v <- eval =<< get =<< getXMM_mr_low val tp
+    v <- getXMM_float_low val tp
     case loc of
       F.DWordReg r ->
         (reg32Loc r .=) =<< evalArchFn (SSE_CVTTSX2SI n32 tp v)
@@ -2785,10 +2824,14 @@ all_instructions =
   , def_inc
   , def_leave
   , def_mov
-  , defUnaryV   "mul"   $ exec_mul
+  , defUnary   "mul"   $ \_ val -> do
+      SomeBV v <- getSomeBVValue val
+      exec_mul v
   , def_neg
   , defNullary  "nop"   $ return ()
-  , defUnaryLoc "not"   $ \l -> modify l bvComplement
+  , defUnary "not"   $ \_ val -> do
+      SomeBV l <- getSomeBVLocation val
+      modify l bvComplement
   , defBinaryLV "or"    $ exec_or
   , defNullary "pause"  $ return ()
   , def_pop
@@ -2833,15 +2876,14 @@ all_instructions =
   , def_punpck "ldq"  snd n32
   , def_punpck "lqdq" snd n64
 
-  , def_padd "b" n8
-  , def_padd "w" n16
-  , def_padd "d" n32
-    -- FIXME: Can "paddq" can also take 64 bit values?
-  , def_padd "q" n64
+  , def_packed_binop "paddb" n8  (.+)
+  , def_packed_binop "paddw" n16 (.+)
+  , def_packed_binop "paddd" n32 (.+)
+  , def_packed_binop "paddq" n64 (.+)
 
-  , def_psub "b" n8
-  , def_psub "w" n16
-  , def_psub "d" n32
+  , def_packed_binop "psubb" n8  (.-)
+  , def_packed_binop "psubw" n16 (.-)
+  , def_packed_binop "psubd" n32 (.-)
 
   , def_pcmp "pcmpeqb" (.=.) n8
   , def_pcmp "pcmpeqw" (.=.) n16

@@ -15,7 +15,6 @@ module Data.Macaw.X86.ArchTypes
   ( -- * Architecture
     X86_64
   , X86PrimFn(..)
-  , X87_FloatType(..)
   , SSE_FloatType(..)
   , SSE_Cmp(..)
   , lookupSSECmp
@@ -31,6 +30,7 @@ module Data.Macaw.X86.ArchTypes
   , X86TermStmt(..)
   , rewriteX86TermStmt
   , X86PrimLoc(..)
+  , SIMDByteCount(..)
   , SIMDWidth(..)
   , RepValSize(..)
   , SomeRepValSize(..)
@@ -60,7 +60,20 @@ import           Data.Macaw.X86.X87ControlReg
 -- SIMDWidth
 
 -- | Defines a width of a register associated with SIMD operations
--- (e.g., MMX, XMM, AVX)
+-- (e.g., MMX, XMM, YMM)
+data SIMDByteCount w
+   = (w ~  8) => SIMDByteCount_MMX
+   | (w ~ 16) => SIMDByteCount_XMM
+   | (w ~ 32) => SIMDByteCount_YMM
+
+-- | Number of bytes in @SIMDByteCount@.
+simdByteCountNatRepr :: SIMDByteCount w -> NatRepr w
+simdByteCountNatRepr SIMDByteCount_MMX = n8
+simdByteCountNatRepr SIMDByteCount_XMM = n16
+simdByteCountNatRepr SIMDByteCount_YMM = n32
+
+-- | Defines a width of a register associated with SIMD operations
+-- (e.g., MMX, XMM, YMM)
 data SIMDWidth w
    = (w ~  64) => SIMD_64
    | (w ~ 128) => SIMD_128
@@ -221,29 +234,16 @@ sseOpName f =
 
 -- | A single or double value for floating-point restricted to this types.
 data SSE_FloatType tp where
-   SSE_Single :: SSE_FloatType (FloatBVType SingleFloat)
-   SSE_Double :: SSE_FloatType (FloatBVType DoubleFloat)
+   SSE_Single :: SSE_FloatType SingleFloat
+   SSE_Double :: SSE_FloatType DoubleFloat
 
 instance Show (SSE_FloatType tp) where
   show SSE_Single = "single"
   show SSE_Double = "double"
 
-instance HasRepr SSE_FloatType TypeRepr where
+instance HasRepr SSE_FloatType FloatInfoRepr where
   typeRepr SSE_Single = knownRepr
   typeRepr SSE_Double = knownRepr
-
-------------------------------------------------------------------------
--- X87 declarations
-
-data X87_FloatType tp where
-   X87_Single :: X87_FloatType (FloatBVType SingleFloat)
-   X87_Double :: X87_FloatType (FloatBVType DoubleFloat)
-   X87_ExtDouble :: X87_FloatType (FloatBVType X86_80Float)
-
-instance Show (X87_FloatType tp) where
-  show X87_Single = "single"
-  show X87_Double = "double"
-  show X87_ExtDouble = "extdouble"
 
 ------------------------------------------------------------------------
 
@@ -369,12 +369,15 @@ data X86PrimFn f tp where
   -- | @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
   -- based on indices defined in the corresponding bytes of @s@.
   --
-  -- Let @n@ be the number of bytes in the width @w@, and let @l = log2(n)@.
+  -- Let @w@ be the number of bytes, and let @l = log2(n)@.
   -- Given a byte index @i@, the value of byte @res[i]@, is defined by
   --   @res[i] = 0 if msb(s[i]) == 1@
   --   @res[i] = x[j] where j = s[i](0..l)
   -- where @msb(y)@ returns the most-significant bit in byte @y@.
-  PShufb :: (1 <= w) => !(SIMDWidth w) -> !(f (BVType w)) -> !(f (BVType w)) -> X86PrimFn f (BVType w)
+  PShufb :: !(SIMDByteCount w)
+         -> !(f (VecType w (BVType 8)))
+         -> !(f (VecType w (BVType 8)))
+         -> X86PrimFn f (VecType w (BVType 8))
 
   -- | Compares two memory regions and return the number of bytes that were the same.
   --
@@ -439,17 +442,27 @@ data X86PrimFn f tp where
          -> !(f (BVType w))
          -> X86PrimFn f (BVType w)
 
+  -- | This applies the operation pairwise to floating point values.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions as noted in the documentation on SSE.
+  SSE_UnaryOp :: !SSE_Op
+             -> !(SSE_FloatType tp)
+             -> !(f (FloatType tp))
+             -> !(f (FloatType tp))
+             -> X86PrimFn f (FloatType tp)
+
   -- | This applies the operation pairwise to two vectors of floating point values.
   --
   -- This function implicitly depends on the MXCSR register and may
   -- signal exceptions as noted in the documentation on SSE.
-  SSE_VectorOp :: (1 <= n, 1 <= w)
+  SSE_VectorOp :: 1 <= n
                => !SSE_Op
                -> !(NatRepr n)
-               -> !(SSE_FloatType (BVType w))
-               -> !(f (BVType (n*w)))
-               -> !(f (BVType (n*w)))
-               -> X86PrimFn f (BVType (n*w))
+               -> !(SSE_FloatType tp)
+               -> !(f (VecType n (FloatType tp)))
+               -> !(f (VecType n (FloatType tp)))
+               -> X86PrimFn f (VecType n (FloatType tp))
 
   -- | This performs a comparison between the two instructions (as
   -- needed by the CMPSD and CMPSS instructions.
@@ -459,9 +472,9 @@ data X86PrimFn f tp where
   -- appropriate bits are set on the MXCSR register.
   SSE_CMPSX :: !SSE_Cmp
             -> !(SSE_FloatType tp)
-            -> !(f tp)
-            -> !(f tp)
-            -> X86PrimFn f tp
+            -> !(f (FloatType tp))
+            -> !(f (FloatType tp))
+            -> X86PrimFn f BoolType
 
   -- |  This performs a comparison of two floating point values and returns three flags:
   --
@@ -478,8 +491,8 @@ data X86PrimFn f tp where
   -- This function implicitly depends on the MXCSR register and may signal exceptions based
   -- on the configuration of that register.
   SSE_UCOMIS :: !(SSE_FloatType tp)
-             -> !(f tp)
-             -> !(f tp)
+             -> !(f (FloatType tp))
+             -> !(f (FloatType tp))
              -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
 
   -- | This converts a single to a double precision number.
@@ -487,14 +500,16 @@ data X86PrimFn f tp where
   -- This function implicitly depends on the MXCSR register and may
   -- signal a exception based on the configuration of that
   -- register.
-  SSE_CVTSS2SD :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+  SSE_CVTSS2SD :: !(f (FloatType SingleFloat))
+               -> X86PrimFn f (FloatType DoubleFloat)
 
   -- | This converts a double to a single precision number.
   --
   -- This function implicitly depends on the MXCSR register and may
   -- signal a exception based on the configuration of that
   -- register.
-  SSE_CVTSD2SS :: !(f (BVType 64)) -> X86PrimFn f (BVType 32)
+  SSE_CVTSD2SS :: !(f (FloatType DoubleFloat))
+               -> X86PrimFn f (FloatType SingleFloat)
 
   -- | This converts a floating point value to a bitvector of the
   -- given width (should be 32 or 64)
@@ -502,11 +517,11 @@ data X86PrimFn f tp where
   -- This function implicitly depends on the MXCSR register and may
   -- signal exceptions based on the configuration of that register.
   SSE_CVTTSX2SI
-    :: (1 <= w)
-    => !(NatRepr w)
+    :: (1 <= n)
+    => !(NatRepr n)
     -> !(SSE_FloatType tp)
-    -> !(f tp)
-    -> X86PrimFn f (BVType w)
+    -> !(f (FloatType tp))
+    -> X86PrimFn f (BVType n)
 
   -- | This converts a signed integer to a floating point value of
   -- the given type  (the input width should be 32 or 64)
@@ -518,13 +533,13 @@ data X86PrimFn f tp where
     => !(SSE_FloatType tp)
     -> !(NatRepr w)
     -> !(f (BVType w))
-    -> X86PrimFn f tp
+    -> X86PrimFn f (FloatType tp)
 
   -- | Extends a single or double to 80-bit precision.
   -- Guaranteed to not throw exception or have side effects.
   X87_Extend :: !(SSE_FloatType tp)
-             -> !(f tp)
-             -> X86PrimFn f (FloatBVType X86_80Float)
+             -> !(f (FloatType tp))
+             -> X86PrimFn f (FloatType X86_80Float)
 
   -- | This performs an 80-bit floating point add.
   --
@@ -540,9 +555,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FAdd :: !(f (FloatBVType X86_80Float))
-           -> !(f (FloatBVType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
+  X87_FAdd :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
   -- | This performs an 80-bit floating point subtraction.
   --
@@ -558,9 +573,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FSub :: !(f (FloatBVType X86_80Float))
-           -> !(f (FloatBVType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
+  X87_FSub :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
   -- | This performs an 80-bit floating point multiply.
   --
@@ -576,9 +591,9 @@ data X86PrimFn f tp where
   -- * @#U@ Result is too small for destination format.
   -- * @#O@ Result is too large for destination format.
   -- * @#P@ Value cannot be represented exactly in destination format.
-  X87_FMul :: !(f (FloatBVType X86_80Float))
-           -> !(f (FloatBVType X86_80Float))
-           -> X86PrimFn f (TupleType [FloatBVType X86_80Float, BoolType])
+  X87_FMul :: !(f (FloatType X86_80Float))
+           -> !(f (FloatType X86_80Float))
+           -> X86PrimFn f (TupleType [FloatType X86_80Float, BoolType])
 
   -- | This rounds a floating number to single or double precision.
   --
@@ -594,8 +609,8 @@ data X86PrimFn f tp where
   --   In the #P case, the C1 register will be set 1 if rounding up,
   --   and 0 otherwise.
   X87_FST :: !(SSE_FloatType tp)
-          -> !(f (FloatBVType X86_80Float))
-          -> X86PrimFn f tp
+          -> !(f (FloatType X86_80Float))
+          -> X86PrimFn f (FloatType tp)
 
   -- | Unary operation on a vector.  Should have no side effects.
   --
@@ -604,11 +619,11 @@ data X86PrimFn f tp where
   -- * @w@ is the width of the input/result vector
   -- * @op@ is the operation to perform
   -- * @tgt@ is the target vector of the operation
-  VOp1 :: (1 <= n) =>
-     !(NatRepr n)        ->
-     !AVXOp1             ->
-     !(f (BVType n))     ->
-     X86PrimFn f (BVType n)
+  VOp1 :: (1 <= n)
+    =>  !(NatRepr n)
+    -> !AVXOp1
+    -> !(f (BVType n))
+    -> X86PrimFn f (BVType n)
 
   -- | Binary operation on two vectors. Should not have side effects.
   --
@@ -618,12 +633,12 @@ data X86PrimFn f tp where
   -- * @op@ is the binary operation to perform on the vectors
   -- * @vec1@ is the first vector
   -- * @vec2@ is the second vector
-  VOp2 :: (1 <= n) =>
-    !(NatRepr n)    ->
-    !AVXOp2         ->
-    !(f (BVType n)) ->
-    !(f (BVType n)) ->
-    X86PrimFn f (BVType n)
+  VOp2 :: (1 <= n)
+       => !(NatRepr n)
+       -> !AVXOp2
+       -> !(f (BVType n))
+       -> !(f (BVType n))
+       -> X86PrimFn f (BVType n)
 
   -- | Update an element of a vector.
   --
@@ -669,21 +684,20 @@ data X86PrimFn f tp where
   -- * @op@ is the binary operation to perform on the vectors
   -- * @vec1@ is the first vector
   -- * @vec2@ is the second vector
-  Pointwise2 :: (1 <= elSize, 1 <= elNum) =>
-                !(NatRepr elNum)
+  Pointwise2 :: (1 <= elSize, 1 <= elNum)
+             => !(NatRepr elNum)
              -> !(NatRepr elSize)
              -> !AVXPointWiseOp2
              -> !(f (BVType (elNum * elSize)))
              -> !(f (BVType (elNum * elSize)))
              -> X86PrimFn f (BVType (elNum * elSize))
 
-  {- | Extract 128 bits from a 256 bit value, as described by the
-       control mask -}
-  VExtractF128 ::
-    !(f (BVType 256)) ->
-    !Word8 ->
-    X86PrimFn f (BVType 128)
-
+  -- | Extract 128 bits from a 256 bit value, as described by the
+  -- control mask
+  VExtractF128
+    :: !(f (BVType 256))
+    -> !Word8
+    -> X86PrimFn f (BVType 128)
 
 
 instance HasRepr (X86PrimFn f) TypeRepr where
@@ -697,7 +711,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       CMPXCHG8B{}   -> knownRepr
       RDTSC{}       -> knownRepr
       XGetBV{}      -> knownRepr
-      PShufb w _ _  -> BVTypeRepr (typeRepr w)
+      PShufb w _ _  -> VecTypeRepr (simdByteCountNatRepr w) knownRepr
       MemCmp{}      -> knownRepr
       RepnzScas{}   -> knownRepr
       MMXExtend{}   -> knownRepr
@@ -705,18 +719,19 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
       X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
-      SSE_VectorOp _ w tp _ _ -> packedType w tp
-      SSE_CMPSX _ tp _ _  -> typeRepr tp
+      SSE_UnaryOp  _ tp _ _ -> FloatTypeRepr (typeRepr tp)
+      SSE_VectorOp _ w tp _ _ -> VecTypeRepr w (FloatTypeRepr (typeRepr tp))
+      SSE_CMPSX{}  -> knownRepr
       SSE_UCOMIS _ _ _  -> knownRepr
       SSE_CVTSS2SD{} -> knownRepr
       SSE_CVTSD2SS{} -> knownRepr
-      SSE_CVTSI2SX tp _ _ -> typeRepr tp
+      SSE_CVTSI2SX tp _ _ -> FloatTypeRepr (typeRepr tp)
       SSE_CVTTSX2SI w _ _ -> BVTypeRepr w
       X87_Extend{} -> knownRepr
       X87_FAdd{} -> knownRepr
       X87_FSub{} -> knownRepr
       X87_FMul{} -> knownRepr
-      X87_FST tp _ -> typeRepr tp
+      X87_FST tp _ -> FloatTypeRepr (typeRepr tp)
       PointwiseShiftL n w _ _ _ -> packedAVX n w
       VInsert n w _ _ _ -> packedAVX n w
       VOp1 w _ _ -> BVTypeRepr w
@@ -729,11 +744,6 @@ packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
 packedAVX n w =
   case leqMulPos n w of
     LeqProof -> BVTypeRepr (natMultiply n w)
-
-packedType :: (1 <= n, 1 <= w) => NatRepr n -> SSE_FloatType (BVType w) -> TypeRepr (BVType (n*w))
-packedType w tp =
-  case leqMulPos w (typeWidth tp) of
-    LeqProof -> BVTypeRepr (natMultiply w (typeWidth tp))
 
 instance FunctorFC X86PrimFn where
   fmapFC = fmapFCDefault
@@ -762,6 +772,7 @@ instance TraversableFC X86PrimFn where
       X86IRem w n d -> X86IRem w <$> go n <*> go d
       X86Div  w n d -> X86Div  w <$> go n <*> go d
       X86Rem  w n d -> X86Rem  w <$> go n <*> go d
+      SSE_UnaryOp op tp x y -> SSE_UnaryOp op tp <$> go x <*> go y
       SSE_VectorOp op n tp x y -> SSE_VectorOp op n tp <$> go x <*> go y
       SSE_CMPSX c tp x y -> SSE_CMPSX c tp <$> go x <*> go y
       SSE_UCOMIS tp x y -> SSE_UCOMIS tp <$> go x <*> go y
@@ -806,6 +817,8 @@ instance IsArchFn X86PrimFn where
       X86IRem w n d -> sexprA "irem" [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
       X86Div  w n d -> sexprA "div"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
       X86Rem  w n d -> sexprA "rem"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      SSE_UnaryOp op tp x y ->
+        sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
         sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
       SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]
@@ -813,7 +826,7 @@ instance IsArchFn X86PrimFn where
       SSE_CVTSS2SD       x -> sexprA "cvtss2sd" [ pp x ]
       SSE_CVTSD2SS       x -> sexprA "cvtsd2ss" [ pp x ]
       SSE_CVTSI2SX  tp w x -> sexprA "cvtsi2sx" [ ppShow tp, ppShow w, pp x ]
-      SSE_CVTTSX2SI w tp x -> sexprA "cvttsx2si" [ ppShow w, ppShow tp, pp x ]
+      SSE_CVTTSX2SI n tp x -> sexprA "cvttsx2si" [ ppShow n, ppShow tp, pp x ]
       X87_Extend tp x -> sexprA "x87_extend" [ ppShow tp, pp x ]
       X87_FAdd x y -> sexprA "x87_add" [ pp x, pp y ]
       X87_FSub x y -> sexprA "x87_sub" [ pp x, pp y ]
@@ -857,6 +870,7 @@ x86PrimFnHasSideEffects f =
     X86Rem{}     -> True -- /\ ..
 
     -- Each of these may throw exceptions based on floating point config flags.
+    SSE_UnaryOp{}  -> True
     SSE_VectorOp{}  -> True
     SSE_CMPSX{}     -> True
     SSE_UCOMIS{}    -> True

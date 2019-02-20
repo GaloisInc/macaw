@@ -24,6 +24,7 @@ The type of machine words, including bit vectors and floating point
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Types
   ( module Data.Macaw.Types -- export everything
+  , GHC.TypeLits.KnownNat
   , GHC.TypeLits.Nat
   , Data.Parameterized.NatRepr.NatRepr(..)
   , Data.Parameterized.NatRepr.knownNat
@@ -234,6 +235,9 @@ instance (KnownRepr FloatInfoRepr fi) => KnownRepr TypeRepr (FloatType fi) where
 
 instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
   knownRepr = TupleTypeRepr knownRepr
+
+instance (KnownNat n, KnownRepr TypeRepr r) => KnownRepr TypeRepr (VecType n r) where
+  knownRepr = VecTypeRepr knownNat knownRepr
 
 $(pure [])
 

@@ -71,7 +71,6 @@ module Data.Macaw.X86.Monad
   , c2_loc
   , c3_loc
 
-  , mkFPAddr
   , packWord
   , unpackWord
   -- ** Registers
@@ -124,6 +123,7 @@ module Data.Macaw.X86.Monad
   , bvRor
   , bvTrunc'
   , bvTrunc
+  , bitcast
   , msb
   , least_byte
   , least_nibble
@@ -748,10 +748,6 @@ floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
 floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
   BVMemRepr (floatInfoBytes fi) LittleEndian
 
--- | Tuen an address into a location of size @n
-mkFPAddr :: FloatInfoRepr fi -> addr -> Location addr (FloatBVType fi)
-mkFPAddr fi addr = MemoryAddr addr (floatMemRepr fi)
-
 -- | Return MMX register corresponding to x87 register.
 --
 -- An MMX register is the low 64-bits of an x87 register. These
@@ -1253,6 +1249,10 @@ bvTrunc w e =
   case testStrictLeq w (typeWidth e) of
     Left LeqProof -> bvTrunc' w e
     Right Refl -> e
+
+-- | Bitcast from an expression to the given type.
+bitcast :: TypeRepr to -> Expr ids from -> Expr ids to
+bitcast tp e = app (Bitcast e tp)
 
 -- | Unsigned less than
 bvUlt :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType

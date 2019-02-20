@@ -398,6 +398,7 @@ transferAbsValue r f =
     X86IRem{} -> TopV
     X86Div{}  -> TopV
     X86Rem{}  -> TopV
+    SSE_UnaryOp{}  -> TopV
     SSE_VectorOp{}  -> TopV
     SSE_CMPSX{}  -> TopV
     SSE_UCOMIS{}  -> TopV
@@ -418,7 +419,6 @@ transferAbsValue r f =
     PointwiseShiftL {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
-
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
