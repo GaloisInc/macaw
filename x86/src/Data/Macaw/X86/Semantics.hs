@@ -635,7 +635,7 @@ def_hlt :: InstructionDef
 def_hlt = defNullary "hlt" $ addArchTermStmt Hlt
 
 def_inc :: InstructionDef
-def_inc = defUnary "inc" $ \dstVal -> do
+def_inc = defUnary "inc" $ \_ dstVal -> do
   SomeBV dst <- getSomeBVLocation dstVal
   -- Get current value stored in destination.
   dst_val <- get dst
@@ -1865,7 +1865,7 @@ def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
 def_packed_binop :: (1 <= w)
                  => String
                  -> NatRepr w
-                 -> (Expr ids (BVType w) -> Expr ids (BVType w) -> Expr ids (BVType w))
+                 -> (forall ids . Expr ids (BVType w) -> Expr ids (BVType w) -> Expr ids (BVType w))
                  -> InstructionDef
 def_packed_binop mnem w f = defBinaryLV mnem $ \l v -> do
   v0 <- get l
@@ -1892,9 +1892,8 @@ def_pcmp :: 1 <= o
          -> (forall ids . BVExpr ids o -> BVExpr ids o -> Expr ids BoolType)
          -> NatRepr o
          -> InstructionDef
-def_pcmp nm op sz =
-  let chkHighLow d s = mux (op d s)  (bvLit sz (negate 1)) (bvLit sz 0)
-  def_packed_binop nm sz chkHighLow
+def_pcmp nm op sz = do
+  def_packed_binop nm sz (\d s -> mux (op d s)  (bvLit sz (negate 1)) (bvLit sz 0))
 
 -- ** MMX Logical Instructions
 
@@ -2184,21 +2183,18 @@ def_ucomiss =
 
 -- *** SSE Logical Instructions
 
-def_bifpx :: forall ids elsz
+def_bifpx :: forall elsz
           .  1 <= elsz
            => String
-           -> (Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
+           -> (forall ids . Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
            -> NatRepr elsz
            -> InstructionDef
-           -- Location (Addr ids) XMMType
-           ---> Expr ids XMMType
-           ---> X86Generator st ids ()
 def_bifpx mnem f elsz =
   defBinary mnem $ \_ loc val -> do
     l  <- getBVLocation loc n128
     v  <- getBVValue val n128
-    fmap_loc (l :: Location (Addr ids) XMMType) $ \lv ->
-      vectorize2 elsz f lv (v :: Expr ids XMMType)
+    fmap_loc l $ \lv ->
+      vectorize2 elsz f lv v
 
 -- | ANDPS Perform bitwise logical AND of packed single-precision floating-point values
 def_andps :: InstructionDef
