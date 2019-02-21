@@ -7,10 +7,6 @@ cache:
   directories:
     - $HOME/.stack
 
-before_cache:
-  - rm -fv $HOME/.cabal/packages/hackage.haskell.org/build-reports.log
-  - rm -fv $HOME/.cabal/packages/hackage.haskell.org/00-index.tar
-
 before_install:
   # This is an unfortunate hack that changes ssh paths into http path, so that
   # we can do a read-only clone of our submodules without worrying about ssh
@@ -22,7 +18,6 @@ before_install:
   - mkdir -p $HOME/.local/bin
   - export PATH=$HOME/.local/bin:$PATH
   - travis_retry curl -L https://get.haskellstack.org/stable/linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
-
 
 install:
  - travis_wait stack --no-terminal --skip-ghc-check setup
