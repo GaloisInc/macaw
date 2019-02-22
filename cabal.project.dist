@@ -27,3 +27,4 @@ packages: macaw-ppc/
           deps/flexdis86/
           deps/flexdis86/binary-symbols/
           deps/llvm-pretty/
+          deps/llvm-pretty-bc-parser/
