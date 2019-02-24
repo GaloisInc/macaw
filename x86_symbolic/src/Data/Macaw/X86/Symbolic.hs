@@ -106,12 +106,12 @@ getReg x = x ^. (field @n)
 
 x86RegName' :: M.X86Reg tp -> String
 x86RegName' M.X86_IP     = "ip"
-x86RegName' (M.X86_GP r) = show r
+x86RegName' (M.X86_GP r) = show $ F.reg64No r
 x86RegName' (M.X86_FlagReg r) = show r
 x86RegName' (M.X87_StatusReg r) = show r
 x86RegName' M.X87_TopReg = "x87Top"
 x86RegName' (M.X87_TagReg r) = "x87Tag" ++ show r
-x86RegName' (M.X87_FPUReg r) = show r
+x86RegName' (M.X87_FPUReg r) = show $ F.mmxRegNo r
 x86RegName' (M.X86_ZMMReg r) = "zmm" ++ show r
 
 x86RegName :: M.X86Reg tp -> C.SolverSymbol
