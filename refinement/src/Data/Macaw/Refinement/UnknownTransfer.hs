@@ -112,6 +112,7 @@ where
 import Control.Lens
 import Control.Monad ( forM )
 import Control.Monad.IO.Class ( MonadIO, liftIO )
+import Data.List ( sort )
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as MC
 import Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
@@ -276,7 +277,10 @@ refineBlockTransfer bin inpDS solns fi blk =
                  case soln of
                    Nothing -> return Nothing
                    Just sl ->
-                     let solns' = Map.insert (pblockAddr blk) sl solns
+                     -- The discovered solutions are sorted here for
+                     -- convenience and test stability, but the
+                     -- sorting is not otherwise required.
+                     let solns' = Map.insert (pblockAddr blk) (sort sl) solns
                          updDS = updateDiscovery inpDS solns' fi
                      in return $ Just (updDS, solns')
 
