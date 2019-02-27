@@ -70,13 +70,13 @@ import           Lang.Crucible.LLVM.MemModel
                    )
 
 import qualified Data.Macaw.CFG.Core as M
+import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as M
-import qualified Data.Macaw.Types as M
 import           Data.Macaw.Symbolic
 import           Data.Macaw.Symbolic.Backend
+import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
-import qualified Data.Macaw.CFG.Core as MC
 
 import           Prelude
 
@@ -134,35 +134,29 @@ stmtSemantics _sym_funs global_var_mem globals stmt state = do
         let mem_repr = M.repValSizeMemRepr val_size
         curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
         curr_src_ptr <- ptrAdd sym knownNat (regValue src) offset
-        (val, after_read_state) <- doReadMem
-          acc_state
-          global_var_mem
-          globals
-          M.Addr64
-          mem_repr
-          (RegEntry knownRepr curr_src_ptr)
-        (_, after_write_state) <- doWriteMem
-          after_read_state
-          global_var_mem
-          globals
-          M.Addr64
-          mem_repr
-          (RegEntry knownRepr curr_dest_ptr)
-          (RegEntry (typeToCrucible $ M.typeRepr mem_repr) val)
-        return after_write_state
+        -- Get simulator and memory
+        mem <- getMem acc_state global_var_mem
+        -- Resolve source pointer
+        resolvedSrcPtr <- tryGlobPtr sym mem globals curr_src_ptr
+        -- Read resolvePtr
+        val <- doReadMem sym mem M.Addr64 mem_repr resolvedSrcPtr
+        -- Resolve destination pointer
+        resolvedDestPtr <- tryGlobPtr sym mem globals curr_dest_ptr
+        afterWriteMem <- doWriteMem sym mem M.Addr64 mem_repr resolvedDestPtr val
+        -- Update the final state
+        pure $! setMem acc_state global_var_mem afterWriteMem
     M.RepStos val_size (AtomWrapper dest) (AtomWrapper val) count dir ->
       withConcreteCountAndDir state val_size count dir $ \acc_state offset -> do
-          let mem_repr = M.repValSizeMemRepr val_size
-          curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
-          (_, after_write_state) <- doWriteMem
-            acc_state
-            global_var_mem
-            globals
-            M.Addr64
-            mem_repr
-            (RegEntry knownRepr curr_dest_ptr)
-            val
-          return after_write_state
+        let mem_repr = M.repValSizeMemRepr val_size
+        -- Get simulator and memory
+        mem <- getMem acc_state global_var_mem
+        -- Resolve address to write to.
+        curr_dest_ptr <- ptrAdd sym knownNat (regValue dest) offset
+        resolvedDestPtr <- tryGlobPtr sym mem globals curr_dest_ptr
+        -- Perform write
+        afterWriteMem <- doWriteMem sym mem M.Addr64 mem_repr resolvedDestPtr (regValue val)
+        -- Update the final state
+        pure $! setMem acc_state global_var_mem afterWriteMem
     _ -> error $
       "Symbolic execution semantics for x86 statement are not implemented yet: "
       <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
