@@ -103,16 +103,22 @@ type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
 -- memory such as the number of bytes and endianness.
 data MemRepr (tp :: Type) where
   -- | Denotes a bitvector with the given number of bytes and endianness.
-  BVMemRepr :: (1 <= w) => !(NatRepr w) -> Endianness -> MemRepr (BVType (8*w))
-  -- | A floating point value (stored in order x86 uses)
-  FloatMemRepr :: !(FloatInfoRepr f) -> MemRepr (FloatType f)
+  BVMemRepr :: (1 <= w) => !(NatRepr w) -> !Endianness -> MemRepr (BVType (8*w))
+  -- | A floating point value (stored in given endianness.
+  FloatMemRepr :: !(FloatInfoRepr f) -> !Endianness -> MemRepr (FloatType f)
   -- | A vector of values with zero entry first.
+  --
+  -- The first value is stored at the address, the second is stored at address + sizeof eltType,
+  -- etc.
   PackedVecMemRepr :: !(NatRepr n) -> !(MemRepr tp) -> MemRepr (VecType n tp)
 
+ppEndianness :: Endianness -> String
+ppEndianness LittleEndian = "le"
+ppEndianness BigEndian    = "be"
+
 instance Pretty (MemRepr tp) where
-  pretty (BVMemRepr w LittleEndian) = text "bvle" <> text (show w)
-  pretty (BVMemRepr w BigEndian)    = text "bvbe" <> text (show w)
-  pretty (FloatMemRepr f) = pretty f
+  pretty (BVMemRepr w end) = text "bv" <> text (ppEndianness end) <> text (show w)
+  pretty (FloatMemRepr f end) = pretty f <> text (ppEndianness end)
   pretty (PackedVecMemRepr w r) = text "v" <> text (show w) <> pretty r
 
 instance Show (MemRepr tp) where
@@ -121,16 +127,16 @@ instance Show (MemRepr tp) where
 -- | Return the number of bytes this uses in memory.
 memReprBytes :: MemRepr tp -> Integer
 memReprBytes (BVMemRepr x _) = intValue x
-memReprBytes (FloatMemRepr f) = intValue (floatInfoBytes f)
+memReprBytes (FloatMemRepr f _) = intValue (floatInfoBytes f)
 memReprBytes (PackedVecMemRepr w r) = intValue w * memReprBytes r
 
 instance TestEquality MemRepr where
   testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) = do
     Refl <- testEquality xw yw
     if xe == ye then Just Refl else Nothing
-  testEquality (FloatMemRepr xf) (FloatMemRepr yf) = do
+  testEquality (FloatMemRepr xf xe) (FloatMemRepr yf ye) = do
     Refl <- testEquality xf yf
-    Just Refl
+    if xe == ye then Just Refl else Nothing
   testEquality (PackedVecMemRepr xn xe) (PackedVecMemRepr yn ye) = do
     Refl <- testEquality xn yn
     Refl <- testEquality xe ye
@@ -143,8 +149,9 @@ instance OrdF MemRepr where
      fromOrdering (compare  xe ye)
   compareF BVMemRepr{} _ = LTF
   compareF _ BVMemRepr{} = GTF
-  compareF (FloatMemRepr xf) (FloatMemRepr yf) =
-    joinOrderingF (compareF xf yf) $ EQF
+  compareF (FloatMemRepr xf xe) (FloatMemRepr yf ye) =
+    joinOrderingF (compareF xf yf) $
+    fromOrdering (compare  xe ye)
   compareF FloatMemRepr{} _ = LTF
   compareF _ FloatMemRepr{} = GTF
   compareF (PackedVecMemRepr xn xe) (PackedVecMemRepr yn ye) =
@@ -157,7 +164,7 @@ instance HasRepr MemRepr TypeRepr where
     let r = (natMultiply n8 w)
      in case leqMulPos (Proxy :: Proxy 8) w of
           LeqProof -> BVTypeRepr r
-  typeRepr (FloatMemRepr f) = FloatTypeRepr f
+  typeRepr (FloatMemRepr f _) = FloatTypeRepr f
   typeRepr (PackedVecMemRepr n e) = VecTypeRepr n (typeRepr e)
 
 ------------------------------------------------------------------------

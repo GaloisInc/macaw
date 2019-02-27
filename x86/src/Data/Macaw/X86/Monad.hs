@@ -32,7 +32,6 @@ module Data.Macaw.X86.Monad
   , repValSizeMemRepr
   , Data.Macaw.Types.FloatInfoRepr(..)
   , Data.Macaw.Types.floatInfoBits
-  , floatMemRepr
     -- * RegisterView
   , RegisterView
   , RegisterViewType(..)
@@ -123,7 +122,7 @@ module Data.Macaw.X86.Monad
   , bvRor
   , bvTrunc'
   , bvTrunc
-  , bitcast
+--  , bitcast
   , msb
   , least_byte
   , least_nibble
@@ -176,7 +175,6 @@ import           Control.Lens hiding ((.=))
 import           Control.Monad
 import qualified Data.Bits as Bits
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
@@ -743,11 +741,6 @@ c1_loc = fullRegister R.X87_C1
 c2_loc = fullRegister R.X87_C2
 c3_loc = fullRegister R.X87_C3
 
--- | Maps float info repr to associated MemRepr.
-floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
-floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
-  BVMemRepr (floatInfoBytes fi) LittleEndian
-
 -- | Return MMX register corresponding to x87 register.
 --
 -- An MMX register is the low 64-bits of an x87 register. These
@@ -1249,10 +1242,6 @@ bvTrunc w e =
   case testStrictLeq w (typeWidth e) of
     Left LeqProof -> bvTrunc' w e
     Right Refl -> e
-
--- | Bitcast from an expression to the given type.
-bitcast :: TypeRepr to -> Expr ids from -> Expr ids to
-bitcast tp e = app (Bitcast e tp)
 
 -- | Unsigned less than
 bvUlt :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType

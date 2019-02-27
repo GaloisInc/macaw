@@ -78,7 +78,7 @@ n512 = knownNat
 -- Floating point sizes
 
 data FloatInfo
-  = HalfFloat   -- ^ 16 bit binary IEE754
+  = HalfFloat   -- ^ 16 bit binary IEE754*
   | SingleFloat -- ^ 32 bit binary IEE754
   | DoubleFloat -- ^ 64 bit binary IEE754
   | QuadFloat   -- ^ 128 bit binary IEE754

@@ -40,6 +40,7 @@ import           Data.Macaw.CFG ( MemRepr(..)
                                 , Value(BoolValue, AssignedValue)
                                 , AssignRhs(CondReadMem, ReadMem)
                                 , mkLit
+                                , WidthEqProof(..)
                                 )
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
@@ -57,7 +58,45 @@ import qualified Data.Macaw.X86.Semantics.AVX as AVX
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
 
--- * Preliminaries
+------------------------------------------------------------------------
+-- Casting operations
+
+bitcast :: WidthEqProof i o -> Expr ids i -> Expr ids o
+bitcast p x = app (Bitcast x p)
+
+
+toSingle :: WidthEqProof (BVType 32) (FloatType SingleFloat)
+toSingle = ToFloat SingleFloatRepr
+
+fromSingle :: WidthEqProof (FloatType SingleFloat) (BVType 32)
+fromSingle = FromFloat SingleFloatRepr
+
+toDouble :: WidthEqProof (BVType 64) (FloatType DoubleFloat)
+toDouble = ToFloat DoubleFloatRepr
+
+fromDouble :: WidthEqProof (FloatType DoubleFloat) (BVType 64)
+fromDouble = FromFloat DoubleFloatRepr
+
+toX87Float :: WidthEqProof (BVType 80) (FloatType X86_80Float)
+toX87Float = ToFloat X86_80FloatRepr
+
+fromX87Float :: WidthEqProof (FloatType X86_80Float) (BVType 80)
+fromX87Float = FromFloat X86_80FloatRepr
+
+toXMMBytes :: WidthEqProof (BVType 128) (VecType 16 (BVType 8))
+toXMMBytes = UnpackBits n16 n8
+
+fromXMMBytes :: WidthEqProof (VecType 16 (BVType 8)) (BVType 128)
+fromXMMBytes = PackBits n16 n8
+
+castToXMMSingleVec :: Expr ids (BVType 128) -> Expr ids (VecType 4 (FloatType SingleFloat))
+castToXMMSingleVec = bitcast (VecEqCongruence n4 toSingle) . bitcast (UnpackBits n4 n32)
+
+castFromXMMSingleVec :: Expr ids (VecType 4 (FloatType SingleFloat)) -> Expr ids (BVType 128)
+castFromXMMSingleVec = bitcast (PackBits n4 n32) . bitcast (VecEqCongruence n4 fromSingle)
+
+------------------------------------------------------------------------
+-- Preliminaries
 
 -- The representation for a address
 addrRepr :: MemRepr (BVType 64)
@@ -191,10 +230,10 @@ xmm_high64 :: F.XMMReg -> Location addr (BVType 64)
 xmm_high64 r = subRegister n64 n64 (xmmOwner r)
 
 singleMemRepr :: MemRepr (FloatType SingleFloat)
-singleMemRepr = FloatMemRepr SingleFloatRepr
+singleMemRepr = FloatMemRepr SingleFloatRepr LittleEndian
 
 doubleMemRepr :: MemRepr (FloatType DoubleFloat)
-doubleMemRepr = FloatMemRepr DoubleFloatRepr
+doubleMemRepr = FloatMemRepr DoubleFloatRepr LittleEndian
 
 xmmSingleMemRepr :: MemRepr (VecType 4 (FloatType SingleFloat))
 xmmSingleMemRepr = PackedVecMemRepr n4 singleMemRepr
@@ -206,13 +245,13 @@ readMem addrRef repr = do
 
 getXMMreg_float_low :: F.XMMReg -> SSE_FloatType tp -> X86Generator st ids (Value X86_64 ids (FloatType tp))
 getXMMreg_float_low r SSE_Single =
-  eval . bitcast knownRepr . bvTrunc' n32 =<< getReg (xmmOwner r)
+  eval . bitcast toSingle . bvTrunc' n32 =<< getReg (xmmOwner r)
 getXMMreg_float_low r SSE_Double =
-  eval . bitcast knownRepr . bvTrunc' n64 =<< getReg (xmmOwner r)
+  eval . bitcast toDouble . bvTrunc' n64 =<< getReg (xmmOwner r)
 
 -- | This gets the value of a xmm/m128 field as 4 floats
 getXMMreg_sv :: F.XMMReg -> X86Generator st ids (Value X86_64 ids (VecType 4 (FloatType SingleFloat)))
-getXMMreg_sv r = eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner r)
+getXMMreg_sv r = eval . castToXMMSingleVec . bvTrunc' n128 =<< getReg (xmmOwner r)
 
 -- | This gets the value of a xmm/m128 field as 4 floats
 getXMM_sv :: F.Value -> X86Generator st ids (Value X86_64 ids (VecType 4 (FloatType SingleFloat)))
@@ -222,7 +261,7 @@ getXMM_sv _ = fail "Unexpected argument"
 
 -- | This gets the value of a xmm/m128 field as 4 floats
 setXMMreg_sv :: F.XMMReg -> Expr ids (VecType 4 (FloatType SingleFloat)) -> X86Generator st ids ()
-setXMMreg_sv r e = setLowBits (xmmOwner r) (bitcast (BVTypeRepr n128) e)
+setXMMreg_sv r e = setLowBits (xmmOwner r) (castFromXMMSingleVec e)
 
 -- | This gets the value of a xmm/m64 field.
 --
@@ -238,9 +277,9 @@ getXMM_float_low _ _ = fail "Unexpected argument"
 -- | The the least significant float or double in an XMM register
 setXMMreg_float_low :: F.XMMReg -> SSE_FloatType tp -> Expr ids (FloatType tp) -> X86Generator st ids ()
 setXMMreg_float_low r SSE_Single e = do
-  setLowBits (xmmOwner r) (bitcast (BVTypeRepr n32) e)
+  setLowBits (xmmOwner r) (bitcast fromSingle e)
 setXMMreg_float_low r SSE_Double e = do
-  setLowBits (xmmOwner r) (bitcast (BVTypeRepr n64) e)
+  setLowBits (xmmOwner r) (bitcast fromDouble e)
 
 -- ** Condition codes
 
@@ -1589,10 +1628,10 @@ def_fld = defUnary "fld" $ \_ val -> do
   case val of
     F.FPMem32 ar -> do
       v <- readMem ar singleMemRepr
-      x87Push . bitcast knownRepr =<< evalArchFn (X87_Extend SSE_Single v)
+      x87Push . bitcast fromX87Float =<< evalArchFn (X87_Extend SSE_Single v)
     F.FPMem64 ar -> do
       v <- readMem ar doubleMemRepr
-      x87Push . bitcast knownRepr =<< evalArchFn (X87_Extend SSE_Double v)
+      x87Push . bitcast fromX87Float =<< evalArchFn (X87_Extend SSE_Double v)
     F.FPMem80 ar -> do
       l <- getBV80Addr ar
       x87Push =<< get l
@@ -1607,11 +1646,11 @@ def_fstX mnem doPop = defUnary mnem $ \_ val -> do
   case val of
     F.FPMem32 ar -> do
       l <- getBVAddress ar
-      extv <- evalArchFn . X87_FST SSE_Single =<< eval (bitcast (FloatTypeRepr X86_80FloatRepr) v)
+      extv <- evalArchFn . X87_FST SSE_Single =<< eval (bitcast toX87Float v)
       MemoryAddr l singleMemRepr .= extv
     F.FPMem64 ar -> do
       l <- getBVAddress ar
-      extv <- evalArchFn . X87_FST SSE_Double =<< eval (bitcast (FloatTypeRepr X86_80FloatRepr) v)
+      extv <- evalArchFn . X87_FST SSE_Double =<< eval (bitcast toX87Float v)
       MemoryAddr l doubleMemRepr .= extv
     F.FPMem80 ar -> do
       l <- getBVAddress ar
@@ -1653,10 +1692,10 @@ execX87BinOp :: X87BinOp
              -> Expr ids (FloatType X86_80Float)
              -> X86Generator st ids ()
 execX87BinOp op loc expr1 = do
-  val0 <- eval . bitcast knownRepr =<< get loc
+  val0 <- eval . bitcast toX87Float =<< get loc
   val1 <- eval expr1
   res <- evalArchFn $ op val0 val1
-  loc .= bitcast (BVTypeRepr n80) (app (TupleField knownRepr res P.index0))
+  loc .= bitcast fromX87Float (app (TupleField knownRepr res P.index0))
   set_undefined c0_loc
   c1_loc .= app (TupleField knownRepr res P.index1)
   set_undefined c2_loc
@@ -1680,7 +1719,7 @@ defX87BinaryInstruction mnem op =
         execX87BinOp op (X87StackRegister 0) val
       [F.X87Register x, F.X87Register y] -> do
         val <- get (X87StackRegister y)
-        execX87BinOp op (X87StackRegister x) (bitcast knownRepr val)
+        execX87BinOp op (X87StackRegister x) (bitcast toX87Float val)
       _ -> do
         fail $ mnem ++ "had unexpected arguments: " ++ show vs
 
@@ -1692,7 +1731,7 @@ defX87PopInstruction mnem op =
     case vs of
       [F.X87Register x, F.X87Register 0] -> do
         val <- get (X87StackRegister 0)
-        execX87BinOp op (X87StackRegister x) (bitcast knownRepr val)
+        execX87BinOp op (X87StackRegister x) (bitcast toX87Float val)
         x87Pop
       _ -> do
         fail $ mnem ++ "had unexpected arguments: " ++ show vs
@@ -1997,14 +2036,15 @@ def_movss = defBinary "movss" $ \_ v1 v2 -> do
     _ ->
       fail $ "Unexpected arguments in FlexdisMatcher.movss: " ++ show v1 ++ ", " ++ show v2
 
+
 def_pshufb :: InstructionDef
 def_pshufb = defBinary "pshufb" $ \_ f_d f_s -> do
   case (f_d, f_s) of
     (F.XMMReg d, F.XMMReg s) -> do
-      dVal <- eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner d)
-      sVal <- eval . bitcast knownRepr . bvTrunc' n128 =<< getReg (xmmOwner s)
+      dVal <- eval . bitcast toXMMBytes . bvTrunc' n128 =<< getReg (xmmOwner d)
+      sVal <- eval . bitcast toXMMBytes . bvTrunc' n128 =<< getReg (xmmOwner s)
       r <- evalArchFn $ PShufb SIMDByteCount_XMM dVal sVal
-      setLowBits (xmmOwner d) (bitcast (BVTypeRepr n128) r)
+      setLowBits (xmmOwner d) (bitcast fromXMMBytes r)
     _ -> do
       fail $ "pshufb only supports 2 XMM registers as arguments."
 
@@ -2122,8 +2162,12 @@ def_divps = def_xmm_packed SSE_Div
 -- SQRTPS Compute square roots of packed single-precision floating-point values
 
 -- |SQRTSS Compute square root of scalar single-precision floating-point values
-def_sqrtss :: InstructionDef
-def_sqrtss = def_xmm_ss SSE_Sqrt
+def_sqrts :: String -> SSE_FloatType ftp -> InstructionDef
+def_sqrts mnem ftp =
+  defBinary mnem $ \_ (F.XMMReg loc) val -> do
+    y <- getXMM_float_low    val ftp
+    res <- evalArchFn $ SSE_Sqrt ftp y
+    setXMMreg_float_low loc ftp res
 
 -- RSQRTPS Compute reciprocals of square roots of packed single-precision floating-point values
 -- RSQRTSS Compute reciprocal of square root of scalar single-precision floating-point values
@@ -2407,10 +2451,6 @@ def_divsd = def_xmm_sd SSE_Div
 -- DIVPD Divide packed double-precision floating-point values
 
 -- SQRTPD Compute packed square roots of packed double-precision floating-point values
-
--- | SQRTSD Compute scalar square root of scalar double-precision floating-point values
-def_sqrtsd :: InstructionDef
-def_sqrtsd = def_xmm_sd SSE_Sqrt
 
 -- MAXPD Return maximum packed double-precision floating-point values
 -- MAXSD Return maximum scalar double-precision floating-point values
@@ -2909,8 +2949,8 @@ all_instructions =
   , def_mulss
   , def_divss
   , def_minss
-  , def_sqrtss
-  , def_sqrtsd
+  , def_sqrts "sqrtss" SSE_Single
+  , def_sqrts "sqrtsd" SSE_Double
   , def_minps
   , def_maxss
   , def_maxps

@@ -400,6 +400,7 @@ transferAbsValue r f =
     X86Rem{}  -> TopV
     SSE_UnaryOp{}  -> TopV
     SSE_VectorOp{}  -> TopV
+    SSE_Sqrt{}  -> TopV
     SSE_CMPSX{}  -> TopV
     SSE_UCOMIS{}  -> TopV
     SSE_CVTSD2SS{}  -> TopV

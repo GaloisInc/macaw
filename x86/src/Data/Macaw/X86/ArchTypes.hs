@@ -218,7 +218,6 @@ data SSE_Op
    | SSE_Div
    | SSE_Min
    | SSE_Max
-   | SSE_Sqrt
 
 -- | Return the name of the mnemonic associated with the SSE op.
 sseOpName :: SSE_Op -> String
@@ -230,7 +229,6 @@ sseOpName f =
     SSE_Div -> "div"
     SSE_Min -> "min"
     SSE_Max -> "max"
-    SSE_Sqrt -> "sqrt"
 
 -- | A single or double value for floating-point restricted to this types.
 data SSE_FloatType tp where
@@ -463,6 +461,11 @@ data X86PrimFn f tp where
                -> !(f (VecType n (FloatType tp)))
                -> !(f (VecType n (FloatType tp)))
                -> X86PrimFn f (VecType n (FloatType tp))
+
+  -- | This computes the sqrt of the floating point value.
+  SSE_Sqrt :: !(SSE_FloatType tp)
+           -> !(f (FloatType tp))
+           -> X86PrimFn f (FloatType tp)
 
   -- | This performs a comparison between the two instructions (as
   -- needed by the CMPSD and CMPSS instructions.
@@ -721,6 +724,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
       SSE_UnaryOp  _ tp _ _ -> FloatTypeRepr (typeRepr tp)
       SSE_VectorOp _ w tp _ _ -> VecTypeRepr w (FloatTypeRepr (typeRepr tp))
+      SSE_Sqrt tp _ -> FloatTypeRepr (typeRepr tp)
       SSE_CMPSX{}  -> knownRepr
       SSE_UCOMIS _ _ _  -> knownRepr
       SSE_CVTSS2SD{} -> knownRepr
@@ -774,6 +778,7 @@ instance TraversableFC X86PrimFn where
       X86Rem  w n d -> X86Rem  w <$> go n <*> go d
       SSE_UnaryOp op tp x y -> SSE_UnaryOp op tp <$> go x <*> go y
       SSE_VectorOp op n tp x y -> SSE_VectorOp op n tp <$> go x <*> go y
+      SSE_Sqrt ftp x -> SSE_Sqrt ftp <$> go x
       SSE_CMPSX c tp x y -> SSE_CMPSX c tp <$> go x <*> go y
       SSE_UCOMIS tp x y -> SSE_UCOMIS tp <$> go x <*> go y
       SSE_CVTSS2SD x -> SSE_CVTSS2SD <$> go x
@@ -821,6 +826,8 @@ instance IsArchFn X86PrimFn where
         sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
         sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
+      SSE_Sqrt ftp x ->
+        sexprA "sse_sqrt" [ ppShow ftp, pp x ]
       SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]
       SSE_UCOMIS  _ x y -> sexprA "ucomis" [ pp x, pp y ]
       SSE_CVTSS2SD       x -> sexprA "cvtss2sd" [ pp x ]
@@ -870,8 +877,9 @@ x86PrimFnHasSideEffects f =
     X86Rem{}     -> True -- /\ ..
 
     -- Each of these may throw exceptions based on floating point config flags.
-    SSE_UnaryOp{}  -> True
+    SSE_UnaryOp{}   -> True
     SSE_VectorOp{}  -> True
+    SSE_Sqrt{}      -> True
     SSE_CMPSX{}     -> True
     SSE_UCOMIS{}    -> True
     SSE_CVTSS2SD{}  -> True

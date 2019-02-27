@@ -222,7 +222,10 @@ readBVAddress ar repr = get . (`MemoryAddr` repr) =<< getBVAddress ar
 data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
 
-
+-- | Maps float info repr to associated MemRepr.
+floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
+floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
+  BVMemRepr (floatInfoBytes fi) LittleEndian
 
 -- | Extract the location of a bitvector value.
 getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
