@@ -607,10 +607,14 @@ memReprToStorageType reqEnd memRep =
       eltStorageType <- memReprToStorageType reqEnd eltType
       pure $ Mem.arrayType (Bytes (intValue n)) eltStorageType
 
--- | Convert a Crucible register value to a LLVM memory mode lvalue
-resolveMemVal :: MemRepr ty -> -- ^ What/how we are writing
-                 Mem.StorageType -> -- ^ Previously computed storage type for value
-                 RegValue sym (ToCrucibleType ty) -> -- ^ Value to write
+-- | Convert a Crucible register value to a LLVM memory mode lvalue.
+--
+--     arg1 : What/how we are writing
+--     arg2 : Previously computed storage type for value
+--     arg3 : Value to write
+resolveMemVal :: MemRepr ty ->
+                 Mem.StorageType ->
+                 RegValue sym (ToCrucibleType ty) ->
                  Mem.LLVMVal sym
 resolveMemVal (M.BVMemRepr bytes _endian) _ (Mem.LLVMPointer base bits) =
   case leqMulPos (knownNat @8) bytes of
@@ -632,10 +636,13 @@ unexpectedMemVal :: Either String a
 unexpectedMemVal = Left "Unexpected value read from memory."
 
 -- | Translate from a memory value to a Crucible register value.
+--
+--     arg1 : Type of value to return
+--     arg2 : Value to parse
 memValToCrucible ::
   IsExpr (SymExpr sym) =>
-  MemRepr ty -> -- ^ Type of value to return
-  Mem.LLVMVal sym -> -- ^ Value to parse
+  MemRepr ty ->
+  Mem.LLVMVal sym ->
   Either String (RegValue sym (ToCrucibleType ty))
 memValToCrucible memRep val =
   case memRep of
