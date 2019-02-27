@@ -24,6 +24,7 @@ The type of machine words, including bit vectors and floating point
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Types
   ( module Data.Macaw.Types -- export everything
+  , GHC.TypeLits.KnownNat
   , GHC.TypeLits.Nat
   , Data.Parameterized.NatRepr.NatRepr(..)
   , Data.Parameterized.NatRepr.knownNat
@@ -77,7 +78,7 @@ n512 = knownNat
 -- Floating point sizes
 
 data FloatInfo
-  = HalfFloat   -- ^ 16 bit binary IEE754
+  = HalfFloat   -- ^ 16 bit binary IEE754*
   | SingleFloat -- ^ 32 bit binary IEE754
   | DoubleFloat -- ^ 64 bit binary IEE754
   | QuadFloat   -- ^ 128 bit binary IEE754
@@ -207,7 +208,7 @@ data TypeRepr (tp :: Type) where
   BVTypeRepr :: (1 <= n) => !(NatRepr n) -> TypeRepr (BVType n)
   FloatTypeRepr :: !(FloatInfoRepr fi) -> TypeRepr (FloatType fi)
   TupleTypeRepr :: !(P.List TypeRepr ctx) -> TypeRepr (TupleType ctx)
-  VectorTypeRepr :: NatRepr n -> TypeRepr tp -> TypeRepr (VecType n tp)
+  VecTypeRepr :: NatRepr n -> TypeRepr tp -> TypeRepr (VecType n tp)
 
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
@@ -219,7 +220,7 @@ instance Show (TypeRepr tp) where
   show (TupleTypeRepr P.Nil) = "()"
   show (TupleTypeRepr (h P.:< z)) =
     "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
-  show (VectorTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
+  show (VecTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
 
 instance ShowF TypeRepr
 
@@ -234,6 +235,9 @@ instance (KnownRepr FloatInfoRepr fi) => KnownRepr TypeRepr (FloatType fi) where
 
 instance (KnownRepr (P.List TypeRepr) l) => KnownRepr TypeRepr  (TupleType l) where
   knownRepr = TupleTypeRepr knownRepr
+
+instance (KnownNat n, KnownRepr TypeRepr r) => KnownRepr TypeRepr (VecType n r) where
+  knownRepr = VecTypeRepr knownNat knownRepr
 
 $(pure [])
 

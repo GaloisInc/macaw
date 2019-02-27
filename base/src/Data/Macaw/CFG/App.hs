@@ -19,6 +19,11 @@ module Data.Macaw.CFG.App
   ( App(..)
   , ppApp
   , ppAppA
+    -- * Casting proof objects.
+  , WidthEqProof(..)
+  , widthEqTarget
+  , widthEqProofEq
+  , widthEqProofCompare
   ) where
 
 import qualified Data.Kind as Kind
@@ -36,6 +41,78 @@ import           Data.Macaw.Utils.Pretty
 -----------------------------------------------------------------------
 -- App
 
+-- | Data type to represent that two types use the same number of
+-- bits, and thus can be bitcast.
+--
+-- Note. This datatype needs to balance several competing
+-- requirements.  It needs to support all bitcasts needed by
+-- architectures, represent bitcasts compactly, allow bitcasts to be
+-- removed during optimization, and allow bitcasts to be symbolically
+-- simulated.
+--
+-- Due to these requirements, we have a fairly limited set of proof
+-- rules.  New rules can be added, but need to be balanced against the
+-- above set of goals.  By design we do not have transitivity or
+-- equality, as those can be obtained by respectively chaining
+-- bitcasts or eliminating them.
+data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
+  PackBits :: (1 <= n, 2 <= n, 1 <= w)
+           => !(NatRepr n)
+           -> !(NatRepr w)
+           -> WidthEqProof (VecType n (BVType w)) (BVType (n * w))
+  UnpackBits :: (1 <= n, 2 <= n, 1 <= w)
+             => !(NatRepr n)
+             -> !(NatRepr w)
+             -> WidthEqProof (BVType (n * w)) (VecType n (BVType w))
+
+  FromFloat :: !(FloatInfoRepr ftp)
+             -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
+  ToFloat :: !(FloatInfoRepr ftp)
+          -> WidthEqProof (BVType (FloatInfoBits ftp)) (FloatType ftp)
+
+  VecEqCongruence :: !(NatRepr n)
+                  -> !(WidthEqProof i o)
+                  -> WidthEqProof (VecType n i) (VecType n o)
+
+-- | Return the result type of the width equality proof
+widthEqTarget :: WidthEqProof i o -> TypeRepr o
+widthEqTarget (PackBits n w) =
+  case leqMulPos n w of
+    LeqProof -> BVTypeRepr (natMultiply n w)
+widthEqTarget (UnpackBits n w) = VecTypeRepr n (BVTypeRepr w)
+widthEqTarget (FromFloat f) =
+  case floatInfoBitsIsPos f of
+    LeqProof -> BVTypeRepr (floatInfoBits f)
+widthEqTarget (ToFloat f) = FloatTypeRepr f
+widthEqTarget (VecEqCongruence n r) = VecTypeRepr n (widthEqTarget r)
+
+-- Force app to be in template-haskell context.
+$(pure [])
+
+widthEqProofEq :: WidthEqProof xi xo
+               -> WidthEqProof yi yo
+               -> Maybe (WidthEqProof xi xo :~: WidthEqProof yi yo)
+widthEqProofEq =
+  $(structuralTypeEquality [t|WidthEqProof|]
+                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
+                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
+                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
+                      [|widthEqProofEq|])
+                   ]
+                  )
+
+widthEqProofCompare :: WidthEqProof xi xo
+                    -> WidthEqProof yi yo
+                    -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
+widthEqProofCompare =
+  $(structuralTypeOrd [t|WidthEqProof|]
+                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
+                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
+                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
+                      [|widthEqProofCompare|])
+                   ]
+                  )
+
 -- | This datatype defines operations used on multiple architectures.
 --
 -- These operations are all total functions.  Different architecture tend to have
@@ -43,7 +120,7 @@ import           Data.Macaw.Utils.Pretty
 -- all architecture specific.
 data App (f :: Type -> Kind.Type) (tp :: Type) where
 
-  -- Compare for equality.
+  -- | Compare for equality.
   Eq :: !(f tp) -> !(f tp) -> App f BoolType
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
@@ -68,15 +145,15 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
   -- the bitvector with the same @m@ least signficant bits, and where the new bits are
   -- the same as the most significant bit in @x@.
-  SExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
+  SExt :: (1 <= m, m+1 <= n, 1 <= n) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
   -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
   -- the bitvector with the same @m@ least signficant bits, and where the new bits are
   -- all @false@.
-  UExt :: (1 <= m, m+1 <= n, 1 <= n) => f (BVType m) -> NatRepr n -> App f (BVType n)
+  UExt :: (1 <= m, m+1 <= n, 1 <= n) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
 
   -- | This casts an expression from one type to another that should
   -- use the same number of bytes in memory.
-  Bitcast :: f tp -> TypeRepr out -> App f out
+  Bitcast :: !(f tp) -> !(WidthEqProof tp out) -> App f out
 
   ----------------------------------------------------------------------
   -- Bitvector operations
@@ -214,6 +291,8 @@ instance TestEquality f => TestEquality (App f) where
                       [|testEquality|])
                    , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|testEquality|])
+                   , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType,
+                      [|widthEqProofEq|])
                    ]
                   )
 
@@ -227,6 +306,8 @@ instance OrdF f => OrdF (App f) where
                       [|compareF|])
                    , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|compareF|])
+                   , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType,
+                      [|widthEqProofCompare|])
                    ]
               )
 
@@ -271,7 +352,7 @@ ppAppA pp a0 =
     Trunc x w -> sexprA "trunc" [ pp x, ppNat w ]
     SExt x w -> sexprA "sext" [ pp x, ppNat w ]
     UExt x w -> sexprA "uext" [ pp x, ppNat w ]
-    Bitcast x tp -> sexprA "bitcast" [ pp x, pure (text (show tp)) ]
+    Bitcast x tp -> sexprA "bitcast" [ pp x, pure (text (show (widthEqTarget tp))) ]
     BVAdd _ x y   -> sexprA "bv_add" [ pp x, pp y ]
     BVAdc _ x y c -> sexprA "bv_adc" [ pp x, pp y, pp c ]
     BVSub _ x y -> sexprA "bv_sub" [ pp x, pp y ]
@@ -316,7 +397,7 @@ instance HasRepr (App f) TypeRepr where
       Trunc _ w -> BVTypeRepr w
       SExt  _ w -> BVTypeRepr w
       UExt  _ w -> BVTypeRepr w
-      Bitcast _ tp -> tp
+      Bitcast _ p -> widthEqTarget p
 
       AndApp{} -> knownRepr
       OrApp{}  -> knownRepr

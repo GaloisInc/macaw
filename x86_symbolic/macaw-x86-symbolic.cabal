@@ -19,6 +19,7 @@ library
                  macaw-x86,
                  mtl,
                  parameterized-utils,
+                 vector,
                  what4 >= 0.4
   hs-source-dirs: src
   default-language: Haskell2010

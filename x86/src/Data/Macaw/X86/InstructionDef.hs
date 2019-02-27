@@ -20,9 +20,6 @@ module Data.Macaw.X86.InstructionDef
   , defNullaryPrefix
     -- * Unary instruction helpers
   , defUnary
-  , defUnaryLoc
-  , defUnaryKnown
-  , defUnaryV
     -- * Binary instruction helpers
   , defBinary
   , defBinaryLV
@@ -94,35 +91,6 @@ defUnary mnem f = defVariadic mnem $ \pfx vs ->
   case vs of
     [v]   -> f pfx v
     _     -> fail $ "defUnary: " ++ mnem ++ " expecting 1 arguments, got " ++ show (length vs)
-
--- | Defines an instruction that expects a single bitvec location as an argument.
-defUnaryLoc :: String
-            -> (forall st ids n
-                . SupportedBVWidth n
-                => Location (Addr ids) (BVType n)
-                -> X86Generator st ids ())
-            -> InstructionDef
-defUnaryLoc s f = defUnary s $ \_ val -> do
-  SomeBV v <- getSomeBVLocation val
-  f v
-
--- | Defines an instruction that expects a bitvector location with a known fixed width.
-defUnaryKnown :: KnownNat n
-              => String
-              -> (forall st ids . Location (Addr ids) (BVType n) -> X86Generator st ids ())
-              -> InstructionDef
-defUnaryKnown s f = defUnary s $ \_ loc -> f =<< getBVLocation loc knownNat
-
--- | Defines an instruction that expects a single bitvec value as an argument.
-defUnaryV :: String
-          -> ( forall st ids n
-             . SupportedBVWidth n
-             => Expr ids (BVType n)
-             -> X86Generator st ids ())
-          -> InstructionDef
-defUnaryV s f =  defUnary s $ \_ val -> do
-  SomeBV v <- getSomeBVValue val
-  f v
 
 -- | Define an instruction that expects two arguments.
 defBinary :: String

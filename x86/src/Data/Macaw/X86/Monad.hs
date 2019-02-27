@@ -32,7 +32,6 @@ module Data.Macaw.X86.Monad
   , repValSizeMemRepr
   , Data.Macaw.Types.FloatInfoRepr(..)
   , Data.Macaw.Types.floatInfoBits
-  , floatMemRepr
     -- * RegisterView
   , RegisterView
   , RegisterViewType(..)
@@ -71,7 +70,6 @@ module Data.Macaw.X86.Monad
   , c2_loc
   , c3_loc
 
-  , mkFPAddr
   , packWord
   , unpackWord
   -- ** Registers
@@ -124,6 +122,7 @@ module Data.Macaw.X86.Monad
   , bvRor
   , bvTrunc'
   , bvTrunc
+--  , bitcast
   , msb
   , least_byte
   , least_nibble
@@ -176,7 +175,6 @@ import           Control.Lens hiding ((.=))
 import           Control.Monad
 import qualified Data.Bits as Bits
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
@@ -742,15 +740,6 @@ c0_loc = fullRegister R.X87_C0
 c1_loc = fullRegister R.X87_C1
 c2_loc = fullRegister R.X87_C2
 c3_loc = fullRegister R.X87_C3
-
--- | Maps float info repr to associated MemRepr.
-floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
-floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
-  BVMemRepr (floatInfoBytes fi) LittleEndian
-
--- | Tuen an address into a location of size @n
-mkFPAddr :: FloatInfoRepr fi -> addr -> Location addr (FloatBVType fi)
-mkFPAddr fi addr = MemoryAddr addr (floatMemRepr fi)
 
 -- | Return MMX register corresponding to x87 register.
 --

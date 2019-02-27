@@ -61,6 +61,14 @@ import qualified Lang.Crucible.LLVM.MemModel as MM
 ------------------------------------------------------------------------
 -- Type mappings
 
+-- | Convert Macaw float types into Crucible float types
+type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
+  ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
+  ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
+  ToCrucibleFloatInfo M.DoubleFloat = C.DoubleFloat
+  ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
+  ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
+
 type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
   ToCrucibleTypeList '[]      = EmptyCtx
   ToCrucibleTypeList (h ': l) = ToCrucibleTypeList l ::> ToCrucibleType h
@@ -72,18 +80,11 @@ type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
 -- Crucible as 'MM.LLVMPointerType', which are special bitvectors that can also
 -- be pointers in the LLVM memory model.
 type family ToCrucibleType (tp :: M.Type) :: C.CrucibleType where
-  ToCrucibleType (M.BVType w)     = MM.LLVMPointerType w
-  ToCrucibleType (M.FloatType fi) = C.FloatType (ToCrucibleFloatInfo fi)
-  ToCrucibleType ('M.TupleType l) = C.StructType (ToCrucibleTypeList l)
-  ToCrucibleType M.BoolType       = C.BaseToType C.BaseBoolType
-
--- | Convert Macaw float types into Crucible float types
-type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
-  ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
-  ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
-  ToCrucibleFloatInfo M.DoubleFloat = C.DoubleFloat
-  ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
-  ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
+  ToCrucibleType (M.BVType w)      = MM.LLVMPointerType w
+  ToCrucibleType (M.FloatType fi)  = C.FloatType (ToCrucibleFloatInfo fi)
+  ToCrucibleType ('M.TupleType l)  = C.StructType (ToCrucibleTypeList l)
+  ToCrucibleType M.BoolType        = C.BaseToType C.BaseBoolType
+  ToCrucibleType ('M.VecType n tp) = C.VectorType (ToCrucibleType tp)
 
 -- | Convert Crucible float types into Macaw float types
 type family FromCrucibleFloatInfo (fi :: C.FloatInfo) :: M.FloatInfo where
@@ -125,6 +126,7 @@ typeToCrucible tp =
     M.BVTypeRepr w  -> MM.LLVMPointerRepr w
     M.FloatTypeRepr fi -> C.FloatRepr $ floatInfoToCrucible fi
     M.TupleTypeRepr a -> C.StructRepr (typeListToCrucible a)
+    M.VecTypeRepr _n e -> C.VectorRepr (typeToCrucible e)
 
 -- | Convert Macaw floating point run-time representatives into their Crucible equivalents
 floatInfoToCrucible
