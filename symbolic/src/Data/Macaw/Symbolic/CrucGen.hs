@@ -84,6 +84,7 @@ import           Control.Monad.Except
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.Bits
+import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
@@ -127,14 +128,14 @@ import           Data.Macaw.Symbolic.PersistentState
 --
 -- The registers are stored in an 'Ctx.Assignment' tagged with their Macaw
 -- types; this is a conversion of those Macaw types into Crucible types.
-type MacawCrucibleRegTypes (arch :: *) = CtxToCrucibleType (ArchRegContext arch)
+type MacawCrucibleRegTypes (arch :: K.Type) = CtxToCrucibleType (ArchRegContext arch)
 
 -- | The type of the register file in the symbolic simulator
 --
 -- At run time, this is an 'Ctx.Assignment' of registers (where each register
 -- has a Crucible type, which is mapped via 'CtxToCrucibleType' from its Macaw
 -- type).
-type ArchRegStruct (arch :: *) = C.StructType (MacawCrucibleRegTypes arch)
+type ArchRegStruct (arch :: K.Type) = C.StructType (MacawCrucibleRegTypes arch)
 
 type ArchAddrCrucibleType arch = MM.LLVMPointerType (M.ArchAddrWidth arch)
 
@@ -163,7 +164,7 @@ type ArchAddrWidthRepr arch = M.AddrWidthRepr (M.ArchAddrWidth arch)
 --
 -- The simplest examples are support for systems call instructions and other
 -- instructions with effects not expressible as Crucible code.
-type family MacawArchStmtExtension (arch :: *) :: (C.CrucibleType -> *) -> C.CrucibleType -> *
+type family MacawArchStmtExtension (arch :: K.Type) :: (C.CrucibleType -> K.Type) -> C.CrucibleType -> K.Type
 
 type MacawArchConstraints arch =
   ( TraversableFC (MacawArchStmtExtension arch)
@@ -239,8 +240,8 @@ type BVPtr a       = MM.LLVMPointerType (M.ArchAddrWidth a)
 
 -- | The extra expressions required to extend Crucible to support simulating
 -- Macaw programs
-data MacawExprExtension (arch :: *)
-                        (f :: C.CrucibleType -> *)
+data MacawExprExtension (arch :: K.Type)
+                        (f :: C.CrucibleType -> K.Type)
                         (tp :: C.CrucibleType) where
   -- | Test to see if a given operation ('MacawOverflowOp') overflows
   --
@@ -317,8 +318,8 @@ instance C.TypeApp (MacawExprExtension arch) where
 -- Note that the various @*Ptr@ operations below are statements, rather than
 -- expressions, because they need to access memory (via the Crucible global
 -- variable that contains the current memory model).
-data MacawStmtExtension (arch :: *)
-                        (f    :: C.CrucibleType -> *)
+data MacawStmtExtension (arch :: K.Type)
+                        (f    :: C.CrucibleType -> K.Type)
                         (tp   :: C.CrucibleType)
   where
 
@@ -535,7 +536,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
 -- MacawExt
 
 -- | The Crucible extension used to represent Macaw-specific operations
-data MacawExt (arch :: *)
+data MacawExt (arch :: K.Type)
 
 type instance C.ExprExtension (MacawExt arch) = MacawExprExtension arch
 type instance C.StmtExtension (MacawExt arch) = MacawStmtExtension arch

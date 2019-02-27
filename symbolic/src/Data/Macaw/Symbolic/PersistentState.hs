@@ -44,6 +44,7 @@ module Data.Macaw.Symbolic.PersistentState
 
 
 import           Control.Monad.ST (ST)
+import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -55,8 +56,8 @@ import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Lang.Crucible.CFG.Reg as CR
-import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
+import qualified Lang.Crucible.Types as C
 
 ------------------------------------------------------------------------
 -- Type mappings
@@ -179,7 +180,7 @@ memReprToCrucible = typeToCrucible . M.typeRepr
 --
 -- For a hypothetical architecture with two 64 bit general purpose registers and
 -- a single 32 bit flags register.
-type family ArchRegContext (arch :: *) :: Ctx M.Type
+type family ArchRegContext (arch :: K.Type) :: Ctx M.Type
 
 -- | This relates an index from macaw to Crucible.
 data IndexPair ctx tp = IndexPair
