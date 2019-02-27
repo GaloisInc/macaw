@@ -1221,8 +1221,7 @@ createRegUpdates regs = do
   crucGenArchConstraints archFns $ do
     fmap catMaybes $ forM (M.regStateMap regs & MapF.toList) $ \(Pair reg val) ->
       case val of
-        M.Initial _ ->
-          return Nothing
+        M.Initial r | Just _ <- testEquality r reg -> return Nothing
         _ -> case MapF.lookup reg idxMap of
           Nothing -> fail "internal: Register is not bound."
           Just idx -> Just . Pair (crucibleIndex idx) <$> valueToCrucible val
