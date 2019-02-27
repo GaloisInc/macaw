@@ -674,15 +674,22 @@ memValToCrucible memRep val =
           traverse (memValToCrucible eltMemRepr) v
         _ -> unexpectedMemVal
 
--- | Given a Boolean condition and two symbolic values associated with a Macaw type, return
--- a value denoting the first value if condition is true and second value otherwise.
+-- | Given a Boolean condition and two symbolic values associated with
+-- a Macaw type, return a value denoting the first value if condition
+-- is true and second value otherwise.
+--
+--     arg1 : Symbolic interface
+--     arg2 : Description of memory layout of value
+--     arg3 : Condition
+--     arg4 : Value if condition is true
+--     arg5 : Value if condition is false.
 muxMemReprValue ::
   IsSymInterface sym =>
-  sym ->        -- ^ Symbolic interface.
-  MemRepr ty -> -- ^ Description of memory layout of value
-  RegValue sym BoolType -> -- ^ Condition
-  RegValue sym (ToCrucibleType ty) -> -- ^ Value if condition is true
-  RegValue sym (ToCrucibleType ty) -> -- ^ Value if condition is false.
+  sym ->
+  MemRepr ty ->
+  RegValue sym BoolType ->
+  RegValue sym (ToCrucibleType ty) ->
+  RegValue sym (ToCrucibleType ty) ->
   IO (RegValue sym (ToCrucibleType ty))
 muxMemReprValue sym memRep cond x y =
   case memRep of
@@ -738,15 +745,24 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
                 assert sym isValid (AssertFailureSimError "Invalid memory load")
                 return crucVal
 
+-- | Conditional memory read
+--
+--     arg1 : Symbolic Interface
+--     arg2 : Memory implementation
+--     arg3 : Width of ptr
+--     arg4 : What/how we are reading
+--     arg5 : Condition
+--     arg6 : Address to read
+--     arg7 : Default answer if condition is false
 doCondReadMem ::
   IsSymInterface sym =>
   sym ->
   MemImpl sym ->
-  M.AddrWidthRepr ptrW                     {- ^ Width of ptr -} ->
-  MemRepr ty                               {- ^ What/how we are reading -} ->
-  RegValue sym BoolType                    {- ^ Condition -} ->
-  LLVMPtr sym ptrW -> -- ^ Address to read
-  RegValue sym (ToCrucibleType ty)         {- ^ Answer is condition is false -} ->
+  M.AddrWidthRepr ptrW ->
+  MemRepr ty ->
+  RegValue sym BoolType ->
+  LLVMPtr sym ptrW ->
+  RegValue sym (ToCrucibleType ty) ->
   IO (RegValue sym (ToCrucibleType ty))
 doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
   do -- Check pointer is valid.
@@ -781,15 +797,22 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
                    assert sym grd (AssertFailureSimError (Mem.ptrMessage "Invalid memory read" ptr ty))
                 muxMemReprValue sym memRep cond crucVal def
 
---  | Write a Macaw value to memory.
+-- | Write a Macaw value to memory.
+--
+--     arg1 : Symbolic Interface
+--     arg2 : Heap prior to write
+--     arg3 : Width of ptr
+--     arg4 : What/how we are writing
+--     arg5 : Address to write to
+--     arg6 : Value to write
 doWriteMem ::
   IsSymInterface sym =>
   sym ->
-  MemImpl sym -> -- ^ Heap prior to write
-  M.AddrWidthRepr ptrW -> -- ^ Width of ptr
-  MemRepr ty -> -- ^ What/how we are writing
-  LLVMPtr sym ptrW -> -- ^ Address to write to
-  RegValue sym (ToCrucibleType ty) -> -- ^ Value to write
+  MemImpl sym ->
+  M.AddrWidthRepr ptrW ->
+  MemRepr ty ->
+  LLVMPtr sym ptrW ->
+  RegValue sym (ToCrucibleType ty) ->
   IO (MemImpl sym)
 doWriteMem sym mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
   do ok <- isValidPtr sym mem ptrWidth ptr
