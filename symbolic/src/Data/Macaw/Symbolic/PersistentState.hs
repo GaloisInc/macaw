@@ -44,6 +44,7 @@ module Data.Macaw.Symbolic.PersistentState
 
 
 import           Control.Monad.ST (ST)
+import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -55,11 +56,19 @@ import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import qualified Lang.Crucible.CFG.Reg as CR
-import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
+import qualified Lang.Crucible.Types as C
 
 ------------------------------------------------------------------------
 -- Type mappings
+
+-- | Convert Macaw float types into Crucible float types
+type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
+  ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
+  ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
+  ToCrucibleFloatInfo M.DoubleFloat = C.DoubleFloat
+  ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
+  ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
 
 type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
   ToCrucibleTypeList '[]      = EmptyCtx
@@ -72,18 +81,11 @@ type family ToCrucibleTypeList (l :: [M.Type]) :: Ctx C.CrucibleType where
 -- Crucible as 'MM.LLVMPointerType', which are special bitvectors that can also
 -- be pointers in the LLVM memory model.
 type family ToCrucibleType (tp :: M.Type) :: C.CrucibleType where
-  ToCrucibleType (M.BVType w)     = MM.LLVMPointerType w
-  ToCrucibleType (M.FloatType fi) = C.FloatType (ToCrucibleFloatInfo fi)
-  ToCrucibleType ('M.TupleType l) = C.StructType (ToCrucibleTypeList l)
-  ToCrucibleType M.BoolType       = C.BaseToType C.BaseBoolType
-
--- | Convert Macaw float types into Crucible float types
-type family ToCrucibleFloatInfo (fi :: M.FloatInfo) :: C.FloatInfo where
-  ToCrucibleFloatInfo M.HalfFloat   = C.HalfFloat
-  ToCrucibleFloatInfo M.SingleFloat = C.SingleFloat
-  ToCrucibleFloatInfo M.DoubleFloat = C.DoubleFloat
-  ToCrucibleFloatInfo M.QuadFloat   = C.QuadFloat
-  ToCrucibleFloatInfo M.X86_80Float = C.X86_80Float
+  ToCrucibleType (M.BVType w)      = MM.LLVMPointerType w
+  ToCrucibleType (M.FloatType fi)  = C.FloatType (ToCrucibleFloatInfo fi)
+  ToCrucibleType ('M.TupleType l)  = C.StructType (ToCrucibleTypeList l)
+  ToCrucibleType M.BoolType        = C.BaseToType C.BaseBoolType
+  ToCrucibleType ('M.VecType n tp) = C.VectorType (ToCrucibleType tp)
 
 -- | Convert Crucible float types into Macaw float types
 type family FromCrucibleFloatInfo (fi :: C.FloatInfo) :: M.FloatInfo where
@@ -125,6 +127,7 @@ typeToCrucible tp =
     M.BVTypeRepr w  -> MM.LLVMPointerRepr w
     M.FloatTypeRepr fi -> C.FloatRepr $ floatInfoToCrucible fi
     M.TupleTypeRepr a -> C.StructRepr (typeListToCrucible a)
+    M.VecTypeRepr _n e -> C.VectorRepr (typeToCrucible e)
 
 -- | Convert Macaw floating point run-time representatives into their Crucible equivalents
 floatInfoToCrucible
@@ -177,7 +180,7 @@ memReprToCrucible = typeToCrucible . M.typeRepr
 --
 -- For a hypothetical architecture with two 64 bit general purpose registers and
 -- a single 32 bit flags register.
-type family ArchRegContext (arch :: *) :: Ctx M.Type
+type family ArchRegContext (arch :: K.Type) :: Ctx M.Type
 
 -- | This relates an index from macaw to Crucible.
 data IndexPair ctx tp = IndexPair

@@ -5,8 +5,8 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This defines the core operations for mapping from Reopt to Crucible.
 -}
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE EmptyDataDecls #-}
@@ -16,17 +16,18 @@ This defines the core operations for mapping from Reopt to Crucible.
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE PatternGuards #-}
 module Data.Macaw.Symbolic.CrucGen
   ( MacawSymbolicArchFunctions(..)
   , crucArchRegTypes
@@ -84,6 +85,7 @@ import           Control.Monad.Except
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.Bits
+import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
 import qualified Data.Macaw.Discovery.State as M
@@ -127,14 +129,14 @@ import           Data.Macaw.Symbolic.PersistentState
 --
 -- The registers are stored in an 'Ctx.Assignment' tagged with their Macaw
 -- types; this is a conversion of those Macaw types into Crucible types.
-type MacawCrucibleRegTypes (arch :: *) = CtxToCrucibleType (ArchRegContext arch)
+type MacawCrucibleRegTypes (arch :: K.Type) = CtxToCrucibleType (ArchRegContext arch)
 
 -- | The type of the register file in the symbolic simulator
 --
 -- At run time, this is an 'Ctx.Assignment' of registers (where each register
 -- has a Crucible type, which is mapped via 'CtxToCrucibleType' from its Macaw
 -- type).
-type ArchRegStruct (arch :: *) = C.StructType (MacawCrucibleRegTypes arch)
+type ArchRegStruct (arch :: K.Type) = C.StructType (MacawCrucibleRegTypes arch)
 
 type ArchAddrCrucibleType arch = MM.LLVMPointerType (M.ArchAddrWidth arch)
 
@@ -163,7 +165,7 @@ type ArchAddrWidthRepr arch = M.AddrWidthRepr (M.ArchAddrWidth arch)
 --
 -- The simplest examples are support for systems call instructions and other
 -- instructions with effects not expressible as Crucible code.
-type family MacawArchStmtExtension (arch :: *) :: (C.CrucibleType -> *) -> C.CrucibleType -> *
+type family MacawArchStmtExtension (arch :: K.Type) :: (C.CrucibleType -> K.Type) -> C.CrucibleType -> K.Type
 
 type MacawArchConstraints arch =
   ( TraversableFC (MacawArchStmtExtension arch)
@@ -236,12 +238,11 @@ data MacawOverflowOp
   deriving (Eq, Ord, Show)
 
 type BVPtr a       = MM.LLVMPointerType (M.ArchAddrWidth a)
-type ArchNatRepr a = NatRepr (M.ArchAddrWidth a)
 
 -- | The extra expressions required to extend Crucible to support simulating
 -- Macaw programs
-data MacawExprExtension (arch :: *)
-                        (f :: C.CrucibleType -> *)
+data MacawExprExtension (arch :: K.Type)
+                        (f :: C.CrucibleType -> K.Type)
                         (tp :: C.CrucibleType) where
   -- | Test to see if a given operation ('MacawOverflowOp') overflows
   --
@@ -267,16 +268,22 @@ data MacawExprExtension (arch :: *)
   -- pointer.  The simulator will attempt the conversion with
   -- 'MM.llvmPointer_bv', which generates side conditions that will be tested by
   -- the solver.
-  BitsToPtr ::
-    (1 <= w) =>
-    !(NatRepr w) ->
-    !(f (C.BVType w)) ->
-    MacawExprExtension arch f (MM.LLVMPointerType w)
+  BitsToPtr
+    :: (1 <= w)
+    => !(NatRepr w)
+    -> !(f (C.BVType w))
+    -> MacawExprExtension arch f (MM.LLVMPointerType w)
 
   -- | A null pointer.
   MacawNullPtr
     :: !(ArchAddrWidthRepr arch)
     -> MacawExprExtension arch f (BVPtr arch)
+
+  -- | Cast from one macaw value to another.
+  MacawBitcast :: !(f (ToCrucibleType i))
+               -> !(M.WidthEqProof i o)
+               -> MacawExprExtension arch f (ToCrucibleType o)
+
 
 instance C.PrettyApp (MacawExprExtension arch) where
   ppApp f a0 =
@@ -289,6 +296,7 @@ instance C.PrettyApp (MacawExprExtension arch) where
       BitsToPtr w x  -> sexpr ("bits_to_ptr_" ++ show w) [f x]
 
       MacawNullPtr _ -> sexpr "null_ptr" []
+      MacawBitcast x p -> sexpr "bitcast" [f x, text (show (M.widthEqTarget p))]
 
 addrWidthIsPos :: M.AddrWidthRepr w -> LeqProof 1 w
 addrWidthIsPos M.Addr32 = LeqProof
@@ -301,7 +309,7 @@ instance C.TypeApp (MacawExprExtension arch) where
       PtrToBits w _     -> C.BVRepr w
       BitsToPtr w _     -> MM.LLVMPointerRepr w
       MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.LLVMPointerRepr (M.addrWidthNatRepr w)
-
+      MacawBitcast _ p -> typeToCrucible (M.widthEqTarget p)
 
 ------------------------------------------------------------------------
 -- MacawStmtExtension
@@ -311,24 +319,21 @@ instance C.TypeApp (MacawExprExtension arch) where
 -- Note that the various @*Ptr@ operations below are statements, rather than
 -- expressions, because they need to access memory (via the Crucible global
 -- variable that contains the current memory model).
-data MacawStmtExtension (arch :: *)
-                        (f    :: C.CrucibleType -> *)
+data MacawStmtExtension (arch :: K.Type)
+                        (f    :: C.CrucibleType -> K.Type)
                         (tp   :: C.CrucibleType)
   where
 
   -- | Read from memory.
   --
   -- The 'M.MemRepr' describes the endianness and size of the read.
-  MacawReadMem ::
-    !(ArchAddrWidthRepr arch) ->
-
+  MacawReadMem
+    :: !(ArchAddrWidthRepr arch)
     -- Info about memory (endianness, size)
-    !(M.MemRepr tp) ->
-
+    -> !(M.MemRepr tp)
     -- Pointer to read from.
-    !(f (ArchAddrCrucibleType arch)) ->
-
-    MacawStmtExtension arch f (ToCrucibleType tp)
+    -> !(f (ArchAddrCrucibleType arch))
+    -> MacawStmtExtension arch f (ToCrucibleType tp)
 
 
   -- | Read from memory, if the condition is True.
@@ -375,9 +380,11 @@ data MacawStmtExtension (arch :: *)
   --
   -- This needs to be a statement to support the dynamic translation of the
   -- target CFG, and especially the registration of that CFG with the simulator.
-  MacawLookupFunctionHandle :: !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch)))
-                            -> !(f (ArchRegStruct arch))
-                            -> MacawStmtExtension arch f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch))
+  MacawLookupFunctionHandle
+    :: !(Assignment C.TypeRepr (CtxToCrucibleType (ArchRegContext arch)))
+    -> !(f (ArchRegStruct arch))
+    -> MacawStmtExtension arch f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch)
+                                 (ArchRegStruct arch))
 
   -- | An architecture-specific machine instruction, for which an interpretation
   -- is required.  This interpretation must be provided by callers via the
@@ -409,58 +416,56 @@ data MacawStmtExtension (arch :: *)
   -- inputs are valid pointers.
 
   -- | Equality for pointer or bit-vector.
-  PtrEq ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f C.BoolType
+  PtrEq
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f C.BoolType
 
   -- | Unsigned comparison for pointer/bit-vector.
-  PtrLeq ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f C.BoolType
+  PtrLeq
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f C.BoolType
 
   -- | Unsigned comparison for pointer/bit-vector.
-  PtrLt ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f C.BoolType
+  PtrLt
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f C.BoolType
 
   -- | Mux for pointers or bit-vectors.
-  PtrMux ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f C.BoolType) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f (BVPtr arch)
+  PtrMux
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f C.BoolType)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f (BVPtr arch)
 
   -- | Add a pointer to a bit-vector, or two bit-vectors.
-  PtrAdd ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f (BVPtr arch)
+  PtrAdd
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f (BVPtr arch)
 
   -- | Subtract two pointers, two bit-vectors, or bit-vector from a pointer.
-  PtrSub ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f (BVPtr arch)
+  PtrSub
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f (BVPtr arch)
 
   -- | And together two items.  Usually these are going to be bit-vectors,
   -- but sometimes we need to support "and"-ing a pointer with a constant,
   -- which happens when trying to align a pointer.
-  PtrAnd ::
-    !(ArchAddrWidthRepr arch) ->
-    !(f (BVPtr arch)) ->
-    !(f (BVPtr arch)) ->
-    MacawStmtExtension arch f (BVPtr arch)
-
-
+  PtrAnd
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f (BVPtr arch)
 
 instance TraversableFC (MacawArchStmtExtension arch)
       => FunctorFC (MacawStmtExtension arch) where
@@ -478,7 +483,9 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
           M.PrettyF (M.ArchReg arch),
           M.MemWidth (M.RegAddrWidth (M.ArchReg arch)))
       => C.PrettyApp (MacawStmtExtension arch) where
-  ppApp :: forall f . (forall (x :: C.CrucibleType) . f x -> Doc) -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc)
+  ppApp :: forall f
+        .  (forall (x :: C.CrucibleType) . f x -> Doc)
+        -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc)
   ppApp f a0 =
     case a0 of
       MacawReadMem _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
@@ -513,7 +520,8 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawGlobalPtr w _)
     | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (MacawFreshSymbolic r) = typeToCrucible r
-  appType (MacawLookupFunctionHandle regTypes _) = C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
+  appType (MacawLookupFunctionHandle regTypes _) =
+    C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
   appType MacawInstructionStart {} = C.knownRepr
@@ -529,7 +537,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
 -- MacawExt
 
 -- | The Crucible extension used to represent Macaw-specific operations
-data MacawExt (arch :: *)
+data MacawExt (arch :: K.Type)
 
 type instance C.ExprExtension (MacawExt arch) = MacawExprExtension arch
 type instance C.StmtExtension (MacawExt arch) = MacawStmtExtension arch
@@ -827,19 +835,15 @@ addLemma x y =
 bvLit :: (1 <= w) => NatRepr w -> Integer -> CrucGen arch ids h s (CR.Atom s (C.BVType w))
 bvLit w i = crucibleValue (C.BVLit w (i .&. maxUnsigned w))
 
-bitOp2 ::
-  (1 <= w) =>
-  NatRepr w ->
-  (CR.Atom s (C.BVType w) ->
-   CR.Atom s (C.BVType w) ->
-   C.App (MacawExt arch) (CR.Atom s) (C.BVType w)) ->
-   M.Value arch ids (M.BVType w) ->
-   M.Value arch ids (M.BVType w) ->
-   CrucGen arch ids h s (CR.Atom s (MM.LLVMPointerType w))
+bitOp2 :: (1 <= w)
+       => NatRepr w
+       -> (CR.Atom s (C.BVType w)
+           -> CR.Atom s (C.BVType w)
+           -> C.App (MacawExt arch) (CR.Atom s) (C.BVType w))
+       -> M.Value arch ids (M.BVType w)
+       -> M.Value arch ids (M.BVType w)
+       -> CrucGen arch ids h s (CR.Atom s (MM.LLVMPointerType w))
 bitOp2 w f x y = fromBits w =<< appAtom =<< f <$> v2c' w x <*> v2c' w y
-
-
-
 
 
 appToCrucible
@@ -864,23 +868,25 @@ appToCrucible app = do
                     appAtom =<< C.BVEq n <$> toBits n xv <*> toBits n yv
            M.FloatTypeRepr _ -> appAtom $ C.FloatEq xv yv
            M.TupleTypeRepr _ -> fail "XXX: Equality on tuples not yet done."
+           M.VecTypeRepr{} -> fail "XXX: Equality on vectors not yet done."
 
 
-    M.Mux tp c t f ->
-      do cond <- v2c c
-         tv   <- v2c t
-         fv   <- v2c f
-         case tp of
-           M.BoolTypeRepr -> appAtom (C.BaseIte C.BaseBoolRepr cond tv fv)
-           M.BVTypeRepr n ->
+    M.Mux tp c t f -> do
+      cond <- v2c c
+      tv   <- v2c t
+      fv   <- v2c f
+      case tp of
+        M.BoolTypeRepr -> appAtom (C.BaseIte C.BaseBoolRepr cond tv fv)
+        M.BVTypeRepr n ->
              do rW <- archAddrWidth
                 case testEquality n (M.addrWidthNatRepr rW) of
                   Just Refl -> evalMacawStmt (PtrMux rW cond tv fv)
                   Nothing -> appBVAtom n =<<
                                 C.BVIte cond n <$> toBits n tv <*> toBits n fv
-           M.FloatTypeRepr fi ->
+        M.FloatTypeRepr fi ->
              appAtom $ C.FloatIte (floatInfoToCrucible fi) cond tv fv
-           M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
+        M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
+        M.VecTypeRepr{} -> fail "XXX: Mux on vectors not yet done."
 
 
     M.TupleField tps x i -> do
@@ -901,27 +907,31 @@ appToCrucible app = do
     M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
 
     -- Extension operations
-    M.Trunc x w ->
-      do let wx = M.typeWidth x
-         LeqProof <- return (addLemma w wx)
-         appBVAtom w =<< C.BVTrunc w wx <$> v2c' wx x
+    M.Trunc x w -> do
+      let wx = M.typeWidth x
+      LeqProof <- return (addLemma w wx)
+      appBVAtom w =<< C.BVTrunc w wx <$> v2c' wx x
 
-    M.SExt x w ->
-      do let wx = M.typeWidth x
-         appBVAtom w =<< C.BVSext w wx <$> v2c' wx x
+    M.SExt x w -> do
+      let wx = M.typeWidth x
+      appBVAtom w =<< C.BVSext w wx <$> v2c' wx x
 
-    M.UExt x w ->
-      do let wx = M.typeWidth x
-         appBVAtom w =<< C.BVZext w wx <$> v2c' wx x
+    M.UExt x w -> do
+      let wx = M.typeWidth x
+      appBVAtom w =<< C.BVZext w wx <$> v2c' wx x
+
+    M.Bitcast v p -> do
+      crucValue <- v2c v
+      evalMacawExt (MacawBitcast crucValue p)
 
     -- Bitvector arithmetic
-    M.BVAdd w x y ->
-      do xv <- v2c x
-         yv <- v2c y
-         aw <- archAddrWidth
-         case testEquality w (M.addrWidthNatRepr aw) of
-           Just Refl -> evalMacawStmt (PtrAdd aw xv yv)
-           Nothing -> appBVAtom w =<< C.BVAdd w <$> toBits w xv <*> toBits w yv
+    M.BVAdd w x y -> do
+      xv <- v2c x
+      yv <- v2c y
+      aw <- archAddrWidth
+      case testEquality w (M.addrWidthNatRepr aw) of
+        Just Refl -> evalMacawStmt (PtrAdd aw xv yv)
+        Nothing -> appBVAtom w =<< C.BVAdd w <$> toBits w xv <*> toBits w yv
 
     -- Here we assume that this does not make sense for pointers.
     M.BVAdc w x y c -> do
@@ -931,13 +941,13 @@ appToCrucible app = do
                                              <*> appAtom (C.BVLit w 0)
       appBVAtom w (C.BVAdd w z d)
 
-    M.BVSub w x y ->
-      do xv <- v2c x
-         yv <- v2c y
-         aw <- archAddrWidth
-         case testEquality w (M.addrWidthNatRepr aw) of
-           Just Refl -> evalMacawStmt (PtrSub aw xv yv)
-           Nothing -> appBVAtom w =<< C.BVSub w <$> toBits w xv <*> toBits w yv
+    M.BVSub w x y -> do
+      xv <- v2c x
+      yv <- v2c y
+      aw <- archAddrWidth
+      case testEquality w (M.addrWidthNatRepr aw) of
+        Just Refl -> evalMacawStmt (PtrSub aw xv yv)
+        Nothing -> appBVAtom w =<< C.BVSub w <$> toBits w xv <*> toBits w yv
 
     M.BVSbb w x y c -> do
       z <- appAtom =<< C.BVSub w <$> v2c' w x <*> v2c' w y
@@ -1592,18 +1602,22 @@ $(return [])
 instance TestEqualityFC (MacawExprExtension arch) where
   testEqualityFC f =
     $(U.structuralTypeEquality [t|MacawExprExtension|]
-      [ (U.DataArg 1 `U.TypeApp` U.AnyType, [|f|])
-      , (U.ConType [t|NatRepr |] `U.TypeApp` U.AnyType, [|testEquality|])
+      [ (U.DataArg 1                      `U.TypeApp` U.AnyType, [|f|])
+      , (U.ConType [t|NatRepr |]          `U.TypeApp` U.AnyType, [|testEquality|])
       , (U.ConType [t|ArchAddrWidthRepr|] `U.TypeApp` U.AnyType, [|testEquality|])
+      , (U.ConType [t|M.WidthEqProof|] `U.TypeApp` U.AnyType `U.TypeApp` U.AnyType,
+          [|M.widthEqProofEq|])
+
       ])
 
 instance OrdFC (MacawExprExtension arch) where
   compareFC f =
     $(U.structuralTypeOrd [t|MacawExprExtension|]
-      [ (U.DataArg 1 `U.TypeApp` U.AnyType, [|f|])
-      , (U.ConType [t|NatRepr|] `U.TypeApp` U.AnyType, [|compareF|])
-      , (U.ConType [t|ArchNatRepr|] `U.TypeApp` U.AnyType, [|compareF|])
-      , (U.ConType [t|ArchAddrWidthRepr|] `U.TypeApp` U.AnyType, [|compareF|])
+      [ (U.DataArg 1                      `U.TypeApp` U.AnyType,        [|f|])
+      , (U.ConType [t|NatRepr|]           `U.TypeApp` U.AnyType,        [|compareF|])
+      , (U.ConType [t|ArchAddrWidthRepr|] `U.TypeApp` U.AnyType,        [|compareF|])
+      , (U.ConType [t|M.WidthEqProof|] `U.TypeApp` U.AnyType `U.TypeApp` U.AnyType,
+          [|M.widthEqProofCompare|])
       ])
 
 instance FunctorFC (MacawExprExtension arch) where

@@ -3,11 +3,13 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -101,9 +103,10 @@ module Data.Macaw.Symbolic
 import           GHC.TypeLits
 
 import           Control.Lens ((^.))
-import           Control.Monad (foldM, forM, join)
+import           Control.Monad
 import           Control.Monad.IO.Class
 import           Control.Monad.ST (ST, RealWorld, stToIO)
+import           Data.Foldable
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
@@ -111,9 +114,11 @@ import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce ( NonceGenerator, newSTNonceGenerator )
 import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
+import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
 import           What4.Interface
+import           What4.InterpretedFloatingPoint as C
 import qualified What4.ProgramLoc as C
 import           What4.Symbol (userSymbol)
 
@@ -135,13 +140,12 @@ import qualified Lang.Crucible.LLVM.MemModel as MM
 import           Lang.Crucible.LLVM.Intrinsics (llvmIntrinsicTypes)
 
 import qualified Data.Macaw.CFG.Block as M
-import qualified Data.Macaw.CFG.Core as M
+import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery.State as M
-import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.Symbolic.Backend as SB
-import           Data.Macaw.Symbolic.CrucGen as CG
+import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
 
@@ -686,7 +690,72 @@ toCoreCFG archFns (CR.SomeCFG cfg) = crucGenArchConstraints archFns $ C.toSSA cf
 
 -- * Symbolic simulation
 
-evalMacawExprExtension :: IsSymInterface sym
+
+plus1LeqDbl :: forall n w . (2 <= n, 1 <= w) => NatRepr n -> NatRepr w -> LeqProof (w+1) (n * w)
+plus1LeqDbl n w =
+  case testLeq (incNat w) (natMultiply n w) of
+    Nothing -> error "Unexpected vector"
+    Just p -> p
+
+checkMacawFloatEq :: M.FloatInfoRepr ftp
+                  -> FloatInfoToBitWidth (ToCrucibleFloatInfo ftp) :~: M.FloatInfoBits ftp
+checkMacawFloatEq f =
+  case f of
+    M.SingleFloatRepr -> Refl
+    M.HalfFloatRepr   -> Refl
+    M.DoubleFloatRepr -> Refl
+    M.QuadFloatRepr   -> Refl
+    M.X86_80FloatRepr -> Refl
+
+
+doBitcast :: forall sym i o
+          .  IsSymInterface sym
+          => sym
+          -> C.RegValue sym (ToCrucibleType i)
+          -> M.WidthEqProof i o
+          -> IO (C.RegValue sym (ToCrucibleType o))
+doBitcast sym x eqPr =
+  case eqPr of
+    M.PackBits (n :: NatRepr n) (w :: NatRepr w) -> do
+      let outW = natMultiply n w
+      LeqProof <- pure $ leqMulPos n w
+      LeqProof <- pure $ plus1LeqDbl n w
+      when (fromIntegral (V.length x) /= natValue n) $ do
+        fail "bitcast: Incorrect input vector length"
+      -- We should have at least one element due to constraint on n
+      let Just h = x V.!? 0
+      let rest :: V.Vector (MM.LLVMPtr sym w)
+          rest = V.tail x
+      extH <- bvZext sym outW =<< MM.projectLLVM_bv sym h
+      let doPack :: (Integer,SymBV sym (n*w)) -> MM.LLVMPtr sym w -> IO (Integer, SymBV sym (n*w))
+          doPack (i,r) y = do
+            extY <- bvZext sym outW =<< MM.projectLLVM_bv sym y
+            shiftAmt <- bvLit sym outW i
+            r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
+            pure (i+1,r')
+      (_,r) <- foldlM doPack (1,extH) rest
+      MM.llvmPointer_bv sym r
+    M.UnpackBits n w -> do
+      let inW = natMultiply n w
+      LeqProof <- pure $ leqMulPos n w
+      LeqProof <- pure $ plus1LeqDbl n w
+      xbv <- MM.projectLLVM_bv sym x
+      V.generateM (fromIntegral (natValue n)) $ \i -> do
+        shiftAmt <- bvLit sym inW (toInteger i)
+        MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
+    M.FromFloat f -> do
+      Refl <- pure $ checkMacawFloatEq f
+      xbv <- C.iFloatToBinary sym (floatInfoToCrucible f) x
+      MM.llvmPointer_bv sym xbv
+    M.ToFloat f -> do
+      xbv <- MM.projectLLVM_bv sym x
+      Refl <- pure $ checkMacawFloatEq f
+      C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
+    M.VecEqCongruence _n eltPr -> do
+      forM x $ \e -> doBitcast sym e eltPr
+
+evalMacawExprExtension :: forall sym arch f tp
+                       .  IsSymInterface sym
                        => sym
                        -> C.IntrinsicTypes sym
                        -> (Int -> String -> IO ())
@@ -730,11 +799,13 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
           znorm <- bvSext sym w' =<< bvTrunc sym w zext
           bvNe sym zext znorm
 
-    PtrToBits  w x  -> doPtrToBits sym w =<< f x
+    PtrToBits _w x  -> doPtrToBits sym =<< f x
     BitsToPtr _w x  -> MM.llvmPointer_bv sym =<< f x
 
     MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.mkNullPointer sym (M.addrWidthNatRepr w)
-
+    MacawBitcast xExpr eqPr -> do
+      x <- f xExpr
+      doBitcast sym x eqPr
 
 -- | This evaluates a  Macaw statement extension in the simulator.
 execMacawStmtExtension
@@ -747,15 +818,29 @@ execMacawStmtExtension
   -> MO.GlobalMap sym (M.ArchAddrWidth arch)
   -- ^ The translation from machine words to LLVM memory model pointers
   -> MO.LookupFunctionHandle sym arch
-  -- ^ A function to turn machine addresses into Crucible function handles (which can also perform lazy CFG creation)
+  -- ^ A function to turn machine addresses into Crucible function
+  -- handles (which can also perform lazy CFG creation)
   -> SB.EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) s0 st =
   case s0 of
-    MacawReadMem w mr x -> doReadMem st mvar globs w mr x
-    MacawCondReadMem w mr p x d -> doCondReadMem st mvar globs w mr p x d
-    MacawWriteMem w mr x v      -> doWriteMem st mvar globs w mr x v
-
-    MacawGlobalPtr w addr       -> M.addrWidthClass w $ doGetGlobal st mvar globs addr
+    MacawReadMem addrWidth memRep ptr0 -> do
+      let sym = st^.C.stateSymInterface
+      mem <- getMem st mvar
+      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      (,st) <$> doReadMem sym mem addrWidth memRep ptr
+    MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
+      let sym = st^.C.stateSymInterface
+      mem <- getMem st mvar
+      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      (,st) <$> doCondReadMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
+    MacawWriteMem addrWidth memRep ptr0 v -> do
+      let sym = st^.C.stateSymInterface
+      mem <- getMem st mvar
+      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      mem1 <- doWriteMem sym mem addrWidth memRep ptr (C.regValue v)
+      pure ((), setMem st mvar mem1)
+    MacawGlobalPtr w addr ->
+      M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
     MacawFreshSymbolic t -> -- XXX: user freshValue
       do nm <- case userSymbol "macawFresh" of

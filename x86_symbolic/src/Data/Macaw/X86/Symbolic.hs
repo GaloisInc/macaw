@@ -216,6 +216,7 @@ freshValue sym str w ty =
          WI.freshConstant sym nm C.BaseBoolRepr
 
     M.TupleTypeRepr {} -> crash [ "Unexpected symbolic tuple:", show str ]
+    M.VecTypeRepr {} -> crash [ "Unexpected symbolic vector:", show str ]
 
   where
   symName x =
@@ -228,12 +229,6 @@ freshValue sym str w ty =
       [] -> crash ["(unknown)"]
       y : ys -> fail $ unlines $ ("[freshX86Reg] " ++ y)
                                : [ "*** " ++ z | z <- ys ]
-
-
-------------------------------------------------------------------------
-
-
-
 
 ------------------------------------------------------------------------
 -- Other X86 specific

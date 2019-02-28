@@ -30,6 +30,9 @@ module Data.Macaw.Symbolic.Backend (
   , MO.doGetGlobal
   , MO.doLookupFunctionHandle
   , MO.doPtrToBits
+  , MO.getMem
+  , MO.setMem
+  , MO.tryGlobPtr
     -- ** Register Mapping
   , PS.RegIndexMap
   , PS.mkRegIndexMap

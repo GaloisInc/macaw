@@ -20,6 +20,7 @@ module Data.Macaw.X86.Generator
     X86Generator(..)
   , runX86Generator
   , X86GCont
+  , addAssignment
   , addStmt
   , addTermStmt
   , addArchStmt
