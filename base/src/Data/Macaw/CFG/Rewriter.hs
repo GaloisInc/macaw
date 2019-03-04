@@ -374,6 +374,10 @@ rewriteApp app = do
 
     BVUnsignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x <= toUnsigned w y
+    BVUnsignedLe (BVValue w x) _ | toUnsigned w x == minUnsigned w -> do
+      pure $ boolLitValue True
+    BVUnsignedLe _ (BVValue w y) | toUnsigned w y == maxUnsigned w -> do
+      pure $ boolLitValue True
     -- in uext(x) <= uext(y) we can eliminate one or both uext's.
     -- same for sext's, even with unsigned comparisons!
     -- uext(x) <= yc = true    if yc >= 2^width(x)-1
@@ -406,6 +410,10 @@ rewriteApp app = do
 
     BVUnsignedLt (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toUnsigned w x < toUnsigned w y
+    BVUnsignedLt (BVValue w x) _ | toUnsigned w x == maxUnsigned w -> do
+      pure $ boolLitValue False
+    BVUnsignedLt _ (BVValue w x) | toUnsigned w x == minUnsigned w -> do
+      pure $ boolLitValue False
     BVUnsignedLt (BVValue _ x) (valueAsApp -> Just (UExt y _)) -> do
       let wShort = typeWidth y
       if x < maxUnsigned wShort
@@ -433,6 +441,10 @@ rewriteApp app = do
 
     BVSignedLe (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toSigned w x <= toSigned w y
+    BVSignedLe (BVValue w x) _ | toSigned w x == minSigned w -> do
+      pure $ boolLitValue True
+    BVSignedLe _ (BVValue w y) | toSigned w y == maxSigned w -> do
+      pure $ boolLitValue True
     BVSignedLe (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
       let wShort = typeWidth y
           xv = toSigned w x
@@ -461,6 +473,10 @@ rewriteApp app = do
 
     BVSignedLt (BVValue w x) (BVValue _ y) -> do
       pure $ boolLitValue $ toSigned w x < toSigned w y
+    BVSignedLt (BVValue w x) _ | toSigned w x == maxSigned w -> do
+      pure $ boolLitValue False
+    BVSignedLt _ (BVValue w y) | toSigned w y == minSigned w -> do
+      pure $ boolLitValue False
     BVSignedLt (BVValue w x) (valueAsApp -> Just (SExt y _)) -> do
       let wShort = typeWidth y
           xv = toSigned w x
