@@ -731,19 +731,10 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
      -- Load a value from the memory model type system.
-     res <- Mem.loadRawWithCondition sym mem ptr ty alignment
-     -- Parse value returned by memory.
-     case res of
-       Left e -> do
-         addFailedAssertion sym (AssertFailureSimError e)
-       Right (memVal, isAlloc, isAlign, isValid) ->
-         case memValToCrucible memRep memVal of
-           Left err -> fail $ "[doReadMem] " ++ err
-           Right crucVal ->
-             do assert sym isAlloc (AssertFailureSimError "Read from unallocated memory")
-                assert sym isAlign (AssertFailureSimError "Read from unaligned memory")
-                assert sym isValid (AssertFailureSimError "Invalid memory load")
-                return crucVal
+     res <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     case memValToCrucible memRep res of
+       Left err -> fail $ "[doReadMem] " ++ err
+       Right crucVal -> return crucVal
 
 -- | Conditional memory read
 --
@@ -777,25 +768,15 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
 
-     val <- Mem.loadRawWithCondition sym mem ptr ty alignment
+     val <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
      let useDefault msg =
            do notC <- notPred sym cond
               assert sym notC
                 (AssertFailureSimError ("[doCondReadMem] " ++ msg))
               return def
-     case val of
+     case memValToCrucible memRep val of
        Left err -> useDefault err
-       Right (memVal, isAlloc, isAlign, isValid) ->
-         case memValToCrucible memRep memVal of
-           Left err -> useDefault err
-           Right crucVal ->
-             do do grd <- impliesPred sym cond isAlloc
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Unallocated memory read" ptr ty))
-                do grd <- impliesPred sym cond isAlign
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Unaligned memory read" ptr ty))
-                do grd <- impliesPred sym cond isValid
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Invalid memory read" ptr ty))
-                muxMemReprValue sym memRep cond crucVal def
+       Right crucVal -> muxMemReprValue sym memRep cond crucVal def
 
 -- | Write a Macaw value to memory.
 --
