@@ -33,6 +33,7 @@ module Data.Macaw.X86
        , tryDisassembleBlock
        , disassembleBlock
        , disassembleFixedBlock
+       , translateInstruction
        , X86TranslateError(..)
        , Data.Macaw.X86.ArchTypes.X86_64
        , Data.Macaw.X86.ArchTypes.X86PrimFn(..)
@@ -108,8 +109,8 @@ import           Data.Macaw.X86.Generator
 ------------------------------------------------------------------------
 -- ExploreLoc
 
--- | This represents the control-flow information needed to build basic blocks
--- for a code location.
+-- | Information needed to disassble a This represents the control-flow information needed to build
+-- basic blocks for a code location.
 data ExploreLoc
    = ExploreLoc { loc_ip      :: !(MemSegmentOff 64)
                   -- ^ IP address.
@@ -179,22 +180,22 @@ initError addr s err = do
                 }
   return (b, segoffOffset addr, Just err)
 
--- | Returns from the block translator with the preblock built so far
--- and the current address
-returnWithError :: PreBlock ids
-                 -> MemSegmentOff 64
-                 -> X86TranslateError 64
-                 -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
-returnWithError pblock curIPAddr err = do
-  let b = Block { blockLabel = pBlockIndex pblock
-                , blockStmts = toList (pblock^.pBlockStmts)
-                , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
-                }
-  return (b, segoffOffset curIPAddr, Just err)
+-- | Disassemble memory contents using flexdis.
+disassembleInstruction :: MemSegmentOff 64
+                          -- ^ Address of next instruction to disassemble
+                       -> [MemChunk 64]
+                          -- ^ Contents at address
+                       -> ExceptT (X86TranslateError 64) (ST st_s) (F.InstructionInstance, Int, [MemChunk 64])
+disassembleInstruction curIPAddr contents =
+  case readInstruction contents of
+    Left (errOff, err) -> do
+      throwError $ DecodeError (segoffAddr curIPAddr & incAddr (toInteger errOff)) err
+    Right r -> do
+      pure r
 
 -- | Translate block, returning blocks read, ending
 -- PC, and an optional error.  and ending PC.
-disassembleStep :: forall st_s ids
+translateStep :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
                      -> PreBlock ids
@@ -205,43 +206,36 @@ disassembleStep :: forall st_s ids
                         -- ^ Address of next instruction to translate
                      -> [MemChunk 64]
                         -- ^ List of contents to read next.
-                     -> ST st_s
-                     (Either
-                       (X86TranslateError 64)
-                       (F.InstructionInstance, PartialBlock ids, Int, MemAddr 64, [MemChunk 64]))
-disassembleStep nonceGen pblock blockOff curIPAddr contents = do
-  case readInstruction contents of
-    Left (errOff, err) -> do
-      pure $ Left $ DecodeError (segoffAddr curIPAddr & incAddr (toInteger errOff)) err
-    Right (i, instSize, nextContents) -> do
-      -- Get size of instruction
-      let next_ip :: MemAddr 64
-          next_ip = segoffAddr curIPAddr & incAddr (toInteger instSize)
-      let next_ip_val :: BVValue X86_64 ids 64
-          next_ip_val = RelocatableValue Addr64 next_ip
-      case execInstruction (ValueExpr next_ip_val) i of
-        Nothing -> do
-          pure $ Left $ UnsupportedInstruction curIPAddr i
-        Just exec -> do
-          let gs = GenState { assignIdGen = nonceGen
-                            , _blockState = pblock
-                            , genInitPCAddr = curIPAddr
-                            , genInstructionSize = instSize
-                            , avxMode = False
-                            , _genRegUpdates = MapF.empty
-                            }
-          gsr <-
-            runExceptT $ runX86Generator gs $ do
-              let line = Text.pack $ show $ F.ppInstruction i
-              addStmt $ InstructionStart blockOff line
-              asAtomicStateUpdate (MM.segoffAddr curIPAddr) exec
-          case gsr of
-            Left msg -> do
-              pure $ Left $ ExecInstructionError curIPAddr i msg
-            Right res -> do
-              pure $ Right (i, res, instSize, next_ip, nextContents)
+                     -> ExceptT (X86TranslateError 64) (ST st_s)
+                          (F.InstructionInstance, PartialBlock ids, Int, MemAddr 64, [MemChunk 64])
+translateStep gen pblock blockOff curIPAddr contents = do
+  (i, instSize, nextContents) <- disassembleInstruction curIPAddr contents
+  -- Get size of instruction
+  let next_ip :: MemAddr 64
+      next_ip = segoffAddr curIPAddr & incAddr (toInteger instSize)
+  let next_ip_val :: BVValue X86_64 ids 64
+      next_ip_val = RelocatableValue Addr64 next_ip
+  case execInstruction (ValueExpr next_ip_val) i of
+    Nothing -> do
+      throwError $ UnsupportedInstruction curIPAddr i
+    Just exec -> do
+      let gs = GenState { assignIdGen = gen
+                        , _blockState = pblock
+                        , genInitPCAddr = curIPAddr
+                        , genInstructionSize = instSize
+                        , avxMode = False
+                        , _genRegUpdates = MapF.empty
+                        }
+      let transExcept msg = ExecInstructionError curIPAddr i msg
+      res <-
+        withExceptT transExcept $ runX86Generator gs $ do
+          let line = Text.pack $ show $ F.ppInstruction i
+          addStmt $ InstructionStart blockOff line
+          asAtomicStateUpdate (MM.segoffAddr curIPAddr) exec
+      pure $ (i, res, instSize, next_ip, nextContents)
 
-disassembleFixedBlock' :: NonceGenerator (ST st_s) ids
+-- | Recursive function used by `disassembleFixedBlock` below.
+translateFixedBlock' :: NonceGenerator (ST st_s) ids
                        -> PreBlock ids
                        -> MemWord 64
                           -- ^ Offset relative to start of block.
@@ -249,29 +243,26 @@ disassembleFixedBlock' :: NonceGenerator (ST st_s) ids
                        -- ^ Address of next instruction to translate
                        -> [MemChunk 64]
                        -- ^ List of contents to read next.
-                       -> ST st_s (Either (X86TranslateError 64) (Block X86_64 ids))
-disassembleFixedBlock' gen pblock blockOff curIPAddr contents = do
-  r <- disassembleStep gen pblock blockOff curIPAddr contents
-  case r of
-    Left err -> do
-      pure $ Left err
-    Right (i, res, instSize, next_ip, nextContents) -> do
-      case unfinishedAtAddr res next_ip of
-        Just pblock'
-          | Just nextIPAddr <- incSegmentOff curIPAddr (toInteger instSize)
-          , not (null nextContents) -> do
-              let blockOff' = blockOff + fromIntegral instSize
-              disassembleFixedBlock' gen pblock' blockOff' nextIPAddr nextContents
-        _  -> do
-          pure $!
-            if null nextContents then
-              Right $ finishPartialBlock res
-             else
-              Left $ UnexpectedTerminalInstruction curIPAddr i
+                       -> ExceptT (X86TranslateError 64) (ST st_s) (Block X86_64 ids)
+translateFixedBlock' gen pblock blockOff curIPAddr contents = do
+  (i, res, instSize, nextIP, nextContents) <- translateStep gen pblock blockOff curIPAddr contents
+  let blockOff' = blockOff + fromIntegral instSize
+  case unfinishedAtAddr res nextIP of
+    Just pblock'
+      | not (null nextContents)
+      , Just nextIPAddr <- incSegmentOff curIPAddr (toInteger instSize) -> do
+          translateFixedBlock' gen pblock' blockOff' nextIPAddr nextContents
+    _  -> do
+      when (not (null nextContents)) $ do
+        throwError $ UnexpectedTerminalInstruction curIPAddr i
+      pure $! finishPartialBlock res
 
--- | Disassemble a block in memo
+{-# DEPRECATED disassembleFixedBlock "Planned for removal." #-}
+
+-- | Disassemble a block with a fixed number of bytes.
 disassembleFixedBlock :: NonceGenerator (ST st_s) ids
                       -> ExploreLoc
+                         -- ^ Information about starting location for disassembling.
                       -> Int
                        -- ^ Number of bytes to translate
                       -> ST st_s (Either (X86TranslateError 64) (Block X86_64 ids))
@@ -281,44 +272,69 @@ disassembleFixedBlock gen loc sz = do
   case segoffContentsAfter addr of
     Left err -> do
       pure $ Left $ FlexdisMemoryError err
-    Right fullContents -> do
+    Right fullContents ->
       case splitMemChunks fullContents sz of
         Left _err -> do
           error $ "Could not split memory."
         Right (contents,_) -> do
           let pblock = emptyPreBlock addr initRegs
-          disassembleFixedBlock' gen pblock 0 addr contents
+          runExceptT $ translateFixedBlock' gen pblock 0 addr contents
 
--- | Translate block, returning blocks read, ending
--- PC, and an optional error.  and ending PC.
-disassembleBlockImpl :: forall st_s ids
+-- | Attempt to translate a single instruction into a Macaw block.
+translateInstruction :: NonceGenerator (ST st_s) ids
+                     -> RegState X86Reg (Value X86_64 ids)
+                          -- ^ Registers
+                     -> MemSegmentOff 64
+                        -- ^ Address of instruction to disassemble.
+                     -> ExceptT (X86TranslateError 64) (ST st_s) (Block X86_64 ids, MemWord 64)
+translateInstruction gen initRegs addr =
+  case segoffContentsAfter addr of
+    Left err -> do
+      throwError $ FlexdisMemoryError err
+    Right contents -> do
+      let pblock = emptyPreBlock addr initRegs
+      (_i, res, instSize, _nextIP, _nextContents) <- translateStep gen pblock 0 addr contents
+      pure $! (finishPartialBlock res, fromIntegral instSize)
+
+-- | Translate block, returning block read, number of bytes in block,
+-- remaining bytes to parse, and an optional error.
+translateBlockImpl :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
                      -> PreBlock ids
                         -- ^ Block information built up so far.
-                     -> MemWord 64
-                        -- ^ Offset of instruction from start of block
                      -> MemSegmentOff 64
                         -- ^ Address of next instruction to translate
                      -> MemWord 64
-                         -- ^ Maximum offset for this addr.
+                        -- ^ Offset of instruction from start of block
+                     -> MemWord 64
+                         -- ^ Maximum offset for this addr from start of block.
                      -> [MemChunk 64]
                         -- ^ List of contents to read next.
-                     -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
-disassembleBlockImpl nonceGen pblock blockOff curIPAddr max_offset contents = do
-  r <- disassembleStep nonceGen pblock blockOff curIPAddr contents
+                     -> ST st_s (Block X86_64 ids
+                                , MemWord 64
+                                , Maybe (X86TranslateError 64)
+                                )
+translateBlockImpl gen pblock curIPAddr blockOff maxSize contents = do
+  r <- runExceptT $ translateStep gen pblock blockOff curIPAddr contents
   case r of
-    Left err ->  returnWithError pblock curIPAddr err
-    Right (_, res, instSize, next_ip, nextContents) -> do
-      let next_ip_off = segoffOffset curIPAddr + fromIntegral instSize
-      case unfinishedAtAddr res next_ip of
-        Just p_b
-          | next_ip_off < max_offset
-          , Just next_ip_segaddr <- incSegmentOff curIPAddr (toInteger instSize) -> do
-              let blockOff' = blockOff + fromIntegral instSize
-              disassembleBlockImpl nonceGen p_b blockOff' next_ip_segaddr max_offset nextContents
+    Left err -> do
+      let b = Block { blockLabel = pBlockIndex pblock
+                    , blockStmts = toList (pblock^.pBlockStmts)
+                    , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
+                    }
+      pure (b, blockOff, Just err)
+    Right (_, res, instSize, nextIP, nextContents) -> do
+      let blockOff' = blockOff + fromIntegral instSize
+      case unfinishedAtAddr res nextIP of
+        Just pblock'
+          | blockOff' < maxSize
+          , Just nextIPSegOff <- incSegmentOff curIPAddr (toInteger instSize) -> do
+              translateBlockImpl gen pblock' nextIPSegOff blockOff' maxSize nextContents
         _ ->
-          return (finishPartialBlock res, next_ip_off, Nothing)
+          pure (finishPartialBlock res, blockOff', Nothing)
+
+{-# DEPRECATED disassembleBlock "Planned for removal." #-}
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -328,20 +344,15 @@ disassembleBlock :: forall s
                  -> MemWord 64
                     -- ^ Maximum number of bytes in ths block.
                  -> ST s (Block X86_64 s, MemWord 64, Maybe (X86TranslateError 64))
-disassembleBlock nonce_gen loc max_size = do
+disassembleBlock gen loc maxSize = do
   let addr = loc_ip loc
   let regs = initX86State loc
-  let sz = segoffOffset addr + max_size
-  (b, next_ip_off, maybeError) <-
-    case segoffContentsAfter addr of
-      Left msg -> do
-        initError addr regs (FlexdisMemoryError msg)
-      Right contents -> do
-        let pblock = emptyPreBlock addr regs
-        disassembleBlockImpl nonce_gen pblock 0 addr sz contents
-  assert (next_ip_off > segoffOffset addr) $ do
-  let block_sz = next_ip_off - segoffOffset addr
-  pure (b, block_sz, maybeError)
+  case segoffContentsAfter addr of
+    Left msg -> do
+      initError addr regs (FlexdisMemoryError msg)
+    Right contents -> do
+      let pblock = emptyPreBlock addr regs
+      translateBlockImpl gen pblock addr 0 maxSize contents
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
@@ -445,6 +456,8 @@ initRegsFromAbsState addr ab = do
                    , loc_df_flag = d /= 0
                    }
 
+{-# DEPRECATED tryDisassembleBlock "Planned to be removed." #-}
+
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
 tryDisassembleBlock :: forall s ids
@@ -456,34 +469,35 @@ tryDisassembleBlock :: forall s ids
                     -> Int
                        -- ^ Maximum size of this block
                     -> ExceptT String (ST s) (Block X86_64 ids, Int, Maybe String)
-tryDisassembleBlock nonceGen addr initRegs maxSize = do
-  let off = segoffOffset  addr
-  (b, nextIPOff, maybeError) <- lift $
+tryDisassembleBlock gen addr initRegs maxSize = lift $ do
+  (b, sz, maybeError) <-
     case segoffContentsAfter addr of
       Left msg -> do
         initError addr initRegs (FlexdisMemoryError msg)
       Right contents -> do
-        disassembleBlockImpl nonceGen (emptyPreBlock addr initRegs) 0 addr (off + fromIntegral maxSize) contents
-  let sz :: Int
-      sz = fromIntegral $ nextIPOff - off
-  pure $! (b, sz, show <$> maybeError)
+        translateBlockImpl gen (emptyPreBlock addr initRegs) addr 0 (fromIntegral maxSize) contents
+  pure $! (b, fromIntegral sz, show <$> maybeError)
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
-disassembleBlockWithRegs :: forall s ids
+translateBlockWithRegs :: forall s ids
                          .  NonceGenerator (ST s) ids
                          -> MemSegmentOff 64
                             -- ^ Address to disassemble at
                          -> RegState X86Reg (Value X86_64 ids)
+                            -- ^ Initial register values.
                          -> Int
                             -- ^ Maximum size of this block
                             -- ^ Abstract state of processor for defining state.
                          -> ST s ([Block X86_64 ids], Int, Maybe String)
-disassembleBlockWithRegs nonceGen addr initRegs maxSize = do
-  mr <- runExceptT $ tryDisassembleBlock nonceGen addr initRegs maxSize
-  case mr of
-    Left msg -> pure ([], 0, Just msg)
-    Right (b,sz, merr) ->  pure ([b],sz,merr)
+translateBlockWithRegs gen addr initRegs maxSize = do
+  (b, sz, maybeError) <-
+    case segoffContentsAfter addr of
+      Left msg -> do
+        initError addr initRegs (FlexdisMemoryError msg)
+      Right contents -> do
+        translateBlockImpl gen (emptyPreBlock addr initRegs) addr 0 (fromIntegral maxSize) contents
+  pure $! ([b], fromIntegral sz, show <$> maybeError)
 
 -- | Attempt to identify the write to a stack return address, returning
 -- instructions prior to that write and return  values.
@@ -597,7 +611,7 @@ x86_64_info preservePred =
                    , archAddrWidth      = Addr64
                    , archEndianness     = LittleEndian
                    , mkInitialRegsForBlock = initRegsFromAbsState
-                   , disassembleFn      = disassembleBlockWithRegs
+                   , disassembleFn      = translateBlockWithRegs
                    , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s

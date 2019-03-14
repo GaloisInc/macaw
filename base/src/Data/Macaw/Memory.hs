@@ -1303,9 +1303,9 @@ splitMemChunks' prev cnt (reg@(BSSRegion sz): rest) =
 -- This will return an error if the size of the data is too small
 -- or the partition would split a relocation entry.
 splitMemChunks :: MemWidth w
-                      => [MemChunk w]
-                      -> Int
-                      -> Either (SplitError w) ([MemChunk w], [MemChunk w])
+               => [MemChunk w]
+               -> Int
+               -> Either (SplitError w) ([MemChunk w], [MemChunk w])
 splitMemChunks l c = splitMemChunks' [] c l
 
 -- | Given a segment data and a number of bytes `c`, this partitions the data in
