@@ -4,7 +4,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
-
+{-# OPTIONS_GHC -fno-warn-unused-matches #-}
 module Data.Macaw.ARM.Semantics.ThumbSemantics
     ( execInstruction
     )

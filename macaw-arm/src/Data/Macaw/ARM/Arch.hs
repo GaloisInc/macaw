@@ -13,7 +13,7 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE TypeApplications      #-}
-
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.ARM.Arch
     -- ( ARMArchConstraints
     -- , ARMStmt(..)
@@ -62,7 +62,7 @@ instance TF.FoldableF ARMStmt where
   foldMapF = TF.foldMapFDefault
 
 instance TF.TraversableF ARMStmt where
-  traverseF go stmt =
+  traverseF _go stmt =
     case stmt of
       WhatShouldThisBe -> pure WhatShouldThisBe
 
@@ -267,7 +267,7 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
                          ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
                              Just $ G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall $ ThumbDis.Imm0_255 imm))
       ThumbDis.THINT -> case operands of
-                          ThumbDis.Imm0_15 imm ThumbDis.:< ThumbDis.Nil ->
+                          ThumbDis.Imm0_15 _imm ThumbDis.:< ThumbDis.Nil ->
                               Just $ return ()
                                    -- G.finishWithTerminator (MCB.ArchTermStmt (ThumbHint $ ThumbDis.Imm0_15 imm))
       _ -> Nothing

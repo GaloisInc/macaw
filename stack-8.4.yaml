@@ -10,7 +10,7 @@ packages:
 - symbolic
 - x86_symbolic
 - macaw-semmc
-- macaw-arm
+# - macaw-arm
 - macaw-ppc
 - deps/crucible/what4
 - deps/crucible/crucible

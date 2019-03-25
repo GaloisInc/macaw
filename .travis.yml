@@ -30,5 +30,9 @@ install:
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
+ # Build modules with known warnings.
+ - stack build llvm-pretty-bc-parser
+ - stack build semmc-ppc
+ # Build and test rest of system.
  - stack build --ghc-options="-Wall -Werror"
  - stack test  --ghc-options="-Wall -Werror"

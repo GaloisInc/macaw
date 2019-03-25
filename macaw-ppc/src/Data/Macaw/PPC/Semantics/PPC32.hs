@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -fno-warn-unused-matches #-}
 module Data.Macaw.PPC.Semantics.PPC32
   ( execInstruction
   ) where
@@ -28,4 +29,3 @@ execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC))
                     allSemantics allOpcodeInfo allDefinedFunctions
                     ([t| Dismantle.PPC.Operand |], [t| PPC |])
                    )
-

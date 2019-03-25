@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -fno-warn-unused-matches #-}
 module Data.Macaw.PPC.Semantics.PPC64
   ( execInstruction
   ) where

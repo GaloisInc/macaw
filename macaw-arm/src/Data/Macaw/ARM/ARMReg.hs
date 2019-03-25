@@ -29,7 +29,6 @@ import           Data.Macaw.Types ( TypeRepr(..), HasRepr, BVType
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
-import           Data.Semigroup
 import qualified Data.Set as Set
 import           Data.Word ( Word32 )
 import qualified Dismantle.ARM.Operands as ARMOperands

@@ -83,6 +83,7 @@ postARMTermStmtAbsState preservePred mem s0 regState stmt =
                                          , MA.preserveReg = preservePred
                                          }
               Just (nextPC, MA.absEvalCall params s0 nextPC)
+        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
     ThumbSyscall _ ->
       case simplifyValue (regState^.curIP) of
         Just (RelocatableValue _ addr)
