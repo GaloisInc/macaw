@@ -9,9 +9,6 @@ packages:
 - x86
 - symbolic
 - x86_symbolic
-- macaw-semmc
-# - macaw-arm
-- macaw-ppc
 - deps/crucible/what4
 - deps/crucible/crucible
 - deps/crucible/crucible-llvm
@@ -22,15 +19,18 @@ packages:
 - deps/llvm-pretty
 - deps/llvm-pretty-bc-parser
 - deps/parameterized-utils
-- submodules/semmc/semmc
-- submodules/semmc/semmc-ppc
-- submodules/semmc/semmc-arm
-- submodules/dismantle/dismantle-tablegen
-- submodules/dismantle/dismantle-ppc
-- submodules/dismantle/dismantle-arm
-- submodules/dismantle/dismantle-thumb
 - submodules/macaw-loader/macaw-loader
-- submodules/macaw-loader/macaw-loader-ppc
+# - submodules/dismantle/dismantle-tablegen
+# - macaw-semmc
+# - submodules/semmc/semmc
+# - macaw-ppc
+# - submodules/macaw-loader/macaw-loader-ppc
+# - submodules/semmc/semmc-ppc
+# - submodules/dismantle/dismantle-ppc
+# - macaw-arm
+# - submodules/semmc/semmc-arm
+# - submodules/dismantle/dismantle-arm
+# - submodules/dismantle/dismantle-thumb
 extra-deps:
 - boomerang-1.4.5.6@sha256:4f8407b9482a500ef9f8dc3fa13f9615d4d33a7c530b67c1ca27535e136a152d
 - dotgen-0.4.2@sha256:309b7cc8a3593a8e48bee7b53020d5f72db156d58edf78a0214f58fbb84b292b
