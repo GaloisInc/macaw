@@ -196,6 +196,8 @@ type BoolType = 'BoolType
 
 type TupleType = 'TupleType
 
+type VecType = 'VecType
+
 -- | The bitvector associated with the given floating-point format.
 type FloatBVType (fi :: FloatInfo) = BVType (FloatInfoBits fi)
 

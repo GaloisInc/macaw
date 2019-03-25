@@ -49,7 +49,6 @@ module Data.Macaw.X86
        , x86DemandContext
        ) where
 
-import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
