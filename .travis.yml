@@ -12,7 +12,6 @@ matrix:
   - env: STACK_YAML=stack-8.4.yaml
   - env: STACK_YAML=stack-8.6.yaml
 
-
 before_install:
 # Changes ssh paths into http path, so that we can do a read-only clone of
 # our submodules without worrying about ssh keys.
@@ -31,7 +30,6 @@ install:
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
  # Build modules with known warnings.
- - stack build llvm-pretty-bc-parser
  - stack build semmc-ppc
  # Build and test rest of system.
  - stack build --ghc-options="-Wall -Werror"
