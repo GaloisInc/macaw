@@ -30,5 +30,5 @@ install:
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
 script:
- - stack build macaw-x86 macaw-x86-symbolic
- - stack test macaw-x86
+ - stack build macaw-x86 macaw-x86-symbolic --ghc-options="-Wall -Werror"
+ - stack test macaw-x86 --ghc-options="-Wall -Werror"
