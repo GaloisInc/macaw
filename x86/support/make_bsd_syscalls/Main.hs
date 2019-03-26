@@ -10,15 +10,12 @@ import           Data.Attoparsec.ByteString.Char8 (Parser)
 import qualified Data.Attoparsec.ByteString.Char8 as P
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as BS
-import           Data.Either (either)
-import           Data.Map (Map)
 import qualified Data.Map as Map
-import           Data.Maybe (catMaybes, maybe)
+import           Data.Maybe (catMaybes)
 import           Language.C
 import           Language.C.Analysis.AstAnalysis
 import           Language.C.Analysis.SemRep
 import           Language.C.Analysis.TravMonad
-import           Language.C.Data.Ident
 import           Language.C.Data.Name (newNameSupply)
 import           Language.C.Data.Position (position)
 import           System.Environment (getArgs)
@@ -26,8 +23,6 @@ import           System.Exit
 import           System.IO
 import           Text.PrettyPrint
 import           Text.Show.Pretty
-
-import           Debug.Trace
 
 -- FIXME: clag from Data.Macaw.Architecture.Syscall
 data SyscallArgType = VoidArgType | WordArgType
@@ -115,10 +110,15 @@ generateHSFile tunit sis =
 
     -- summariseDeclEvent idecl = pretty idecl
 
-    summariseDeclEvent (getVarDecl -> VarDecl vname _ (FunctionType (FunType rettyp params _) _)) =
-      ( identToString (identOfVarName vname)
-      , typeToArgType rettyp
-      , map (typeToArgType . declType) params )
+    summariseDeclEvent d =
+      case getVarDecl d of
+        VarDecl vname _ (FunctionType (FunType rettyp params _) _) ->
+          ( identToString (identOfVarName vname)
+          , typeToArgType rettyp
+          , map (typeToArgType . declType) params
+          )
+        _ -> error "summariseDeclEvent given unexpected declaration."
+
 
     -- syscallInfo (CDeclExt (CDecl [CTypeSpec spec] [(Just declr, _, _)] _))
     --   | CDeclr (Just ident) [CFunDeclr (Right (decls, _)) _ _] _ _ _ <- declr
@@ -129,8 +129,8 @@ generateHSFile tunit sis =
     -- declToArgType d = error ("unhandled decl (in type) " ++ show d)
 
 typeToArgType :: Type -> SyscallArgType
-typeToArgType typ =
-  case typ of
+typeToArgType tp =
+  case tp of
     DirectType typ' _ _ ->
       case typ' of
         TyVoid               -> VoidArgType
@@ -138,7 +138,7 @@ typeToArgType typ =
         TyFloating TyLDouble -> unhandled
         TyFloating _         -> unhandled -- XMMFloatType
         TyComplex _          -> unhandled
-        TyComp comp          -> unhandled -- compTypeToArgType comp
+        TyComp _comp         -> unhandled -- compTypeToArgType comp
         TyEnum _             -> WordArgType -- FIXME: ???
         TyBuiltin _          -> unhandled
     PtrType _ _ _            -> WordArgType
@@ -146,7 +146,7 @@ typeToArgType typ =
     FunctionType _ _         -> unhandled
     TypeDefType (TypeDefRef _ typ _) _ _ -> typeToArgType typ
   where
-    unhandled = error ("Unhandled type: " ++ show (pretty typ))
+    unhandled = error ("Unhandled type: " ++ show (pretty tp))
 
 ------------------------------------------------------------------------
 -- File preprocessing
