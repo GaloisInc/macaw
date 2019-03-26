@@ -9,9 +9,6 @@ packages:
 - x86
 - symbolic
 - x86_symbolic
-- macaw-semmc
-- macaw-arm
-- macaw-ppc
 - deps/crucible/what4
 - deps/crucible/crucible
 - deps/crucible/crucible-llvm
@@ -22,20 +19,25 @@ packages:
 - deps/llvm-pretty
 - deps/llvm-pretty-bc-parser
 - deps/parameterized-utils
-- submodules/semmc/semmc
-- submodules/semmc/semmc-ppc
-- submodules/semmc/semmc-arm
-- submodules/dismantle/dismantle-tablegen
-- submodules/dismantle/dismantle-ppc
-- submodules/dismantle/dismantle-arm
-- submodules/dismantle/dismantle-thumb
 - submodules/macaw-loader/macaw-loader
-- submodules/macaw-loader/macaw-loader-ppc
+# - submodules/dismantle/dismantle-tablegen
+# - macaw-semmc
+# - submodules/semmc/semmc
+# - macaw-ppc
+# - submodules/macaw-loader/macaw-loader-ppc
+# - submodules/semmc/semmc-ppc
+# - submodules/dismantle/dismantle-ppc
+# - macaw-arm
+# - submodules/semmc/semmc-arm
+# - submodules/dismantle/dismantle-arm
+# - submodules/dismantle/dismantle-thumb
 extra-deps:
 - boomerang-1.4.5.6@sha256:4f8407b9482a500ef9f8dc3fa13f9615d4d33a7c530b67c1ca27535e136a152d
+- dotgen-0.4.2@sha256:309b7cc8a3593a8e48bee7b53020d5f72db156d58edf78a0214f58fbb84b292b
 - fgl-visualize-0.1.0.1@sha256:e682066053a6e75478a08fd6822dd0143a3b8ea23244bdb01dd389a266447c5e
 - itanium-abi-0.1.1.0@sha256:a0b338af8975f35e83cf94fb209b17c62b1a44a0f9f484f3b72cf15d01ea08d5
 - located-base-0.1.1.1@sha256:7c6395f2b6fbf2d5f76c3514f774423838c0ea94e1c6a5530dd3c94b30c9d1c8
+- megaparsec-7.0.4@sha256:a7397151601cbe6b8f831f8bdad1a10118dcd6d9a7ee50d6bbdcfbd1181b4ba2
 - monadLib-3.9@sha256:dc0d8579840968be03fc2ce1c21d5af055fe5a38b65b99793dd720f5e07aaa34
 - panic-0.4.0.1@sha256:fb46577c9e0ca38c37960572f958a8469f2b577e963ed4f3ea1904d8400d828b
 - s-cargot-0.1.4.0@sha256:61ea1833fbb4c80d93577144870e449d2007d311c34d74252850bb48aa8c31fb
