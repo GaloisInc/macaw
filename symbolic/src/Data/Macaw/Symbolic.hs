@@ -68,6 +68,8 @@ module Data.Macaw.Symbolic
     -- ** Translation-related types
     -- $translationHelpers
   , CG.MacawSymbolicArchFunctions
+  , CG.crucGenRegAssignment
+  , CG.crucGenArchRegName
   , CG.MemSegmentMap
     -- * Inspecting and typing generated terms
   , CG.ArchRegStruct
@@ -78,6 +80,8 @@ module Data.Macaw.Symbolic
   , PS.floatInfoToCrucible
   , PS.floatInfoFromCrucible
   , PS.ArchRegContext
+  , PS.macawAssignToCruc
+  , PS.macawAssignToCrucM
   , CG.MacawFunctionArgs
   , CG.MacawFunctionResult
   , PS.typeToCrucible

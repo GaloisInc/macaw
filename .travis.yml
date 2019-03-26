@@ -32,6 +32,4 @@ script:
  # Build packages
  - stack build --ghc-options="-Wall -Werror"
  # Run tests
- - stack test macaw-refinement --ghc-options="-Wall -Werror"
- - stack test macaw-ppc --ghc-options="-Wall -Werror"
  - stack test macaw-x86 macaw-x86-symbolic --ghc-options="-Wall -Werror"

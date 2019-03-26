@@ -2,6 +2,8 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 module Main (main) where
 
 import           Control.Monad
@@ -50,13 +52,16 @@ mkReg archFns sym r =
       C.RV <$> (C.llvmPointer_bv sym =<< C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w))
     M.TupleTypeRepr{}  ->
       error "macaw-symbolic do not support tuple types."
+    M.FloatTypeRepr{}  ->
+      error "macaw-symbolic do not support float types."
+    M.VecTypeRepr{}  ->
+      error "macaw-symbolic do not support vector types."
 
 main :: IO ()
 main = do
-  putStrLn "Start test case"
-  Some gen <- newIONonceGenerator
+  Some (gen :: NonceGenerator IO t) <- newIONonceGenerator
   halloc <- C.newHandleAllocator
-  sym <- C.newSimpleBackend gen
+  sym <- C.newSimpleBackend @t @(C.Flags C.FloatReal) gen
   let x86ArchFns :: MS.MacawSymbolicArchFunctions MX.X86_64
       x86ArchFns = MX.x86_64MacawSymbolicFns
 
@@ -67,7 +72,6 @@ main = do
       loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
                                 , Elf.loadRegionBaseOffset = 0
                                 }
-  putStrLn "Read elf"
   elfContents <- BS.readFile "tests/add_ubuntu64.o"
   elf <-
     case Elf.parseElf elfContents of
@@ -85,13 +89,11 @@ main = do
           hPutStrLn stderr err
         pure (mem, nameAddrList)
 
-  putStrLn "Lookup addr"
   addAddr <-
-    case [ M.memSymbolStart msym | msym <- nameAddrList, M.memSymbolName msym == "add" ] of
+    case [ Elf.memSymbolStart msym | msym <- nameAddrList, Elf.memSymbolName msym == "add" ] of
       [addr] -> pure $! addr
       [] -> fail "Could not find add function"
       _ -> fail "Found multiple add functions"
-  putStrLn $ "Addr " ++ show addAddr
 
   memBaseVar <- stToIO $ C.freshGlobalVar halloc "add_mem_base" C.knownRepr
 
@@ -99,7 +101,7 @@ main = do
       memBaseVarMap = Map.singleton 1 memBaseVar
 
   let addrSymMap :: M.AddrSymMap 64
-      addrSymMap = Map.fromList [ (M.memSymbolStart msym, M.memSymbolName msym)
+      addrSymMap = Map.fromList [ (Elf.memSymbolStart msym, Elf.memSymbolName msym)
                                 | msym <- nameAddrList ]
   let archInfo :: M.ArchitectureInfo MX.X86_64
       archInfo =  MX.x86_64_linux_info
@@ -107,33 +109,31 @@ main = do
   let ds0 :: M.DiscoveryState MX.X86_64
       ds0 = M.emptyDiscoveryState mem addrSymMap archInfo
 
-  putStrLn "Analyze a function"
   let logFn addr = ioToST $ do
         putStrLn $ "Analyzing " ++ show addr
 
   (_, Some funInfo) <- stToIO $ M.analyzeFunction logFn addAddr M.UserRequest ds0
-  putStrLn "Make CFG"
   C.SomeCFG g <- stToIO $ MS.mkFunCFG x86ArchFns halloc memBaseVarMap "add" posFn funInfo
 
   regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
 
   symFuns <- MX.newSymFuns sym
 
-  putStrLn "Run code block"
+  --putStrLn "Run code block"
   initMem <- C.emptyMem LittleEndian
-  let globalMap :: MS.GlobalMap sym MX.X86_64
-      globalMap = Map.empty
+  let globalMap :: MS.GlobalMap sym 64
+      globalMap = \_ _ _ _ -> pure Nothing
   let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
-      lookupFn _mem _regs = do
+      lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do
         fail "Could not find function handle."
   execResult <-
      MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
         halloc (initMem, globalMap) lookupFn g regs
   case execResult of
     (_,C.FinishedResult _ (C.TotalRes _pair))-> do
-      putStrLn "Done"
+      pure ()
     _ -> do
-      fail "Partial execution returned."
+      pure () -- For now, we are ok with this.
 
 {-
   -- Steps:
