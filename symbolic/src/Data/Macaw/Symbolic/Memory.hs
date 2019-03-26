@@ -113,7 +113,6 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
-import qualified Lang.Crucible.LLVM.Extension.Safety.UndefinedBehavior as UB
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified What4.Interface as WI

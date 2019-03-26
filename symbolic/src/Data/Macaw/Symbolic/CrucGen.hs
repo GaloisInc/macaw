@@ -509,6 +509,7 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
       PtrAdd _ x y   -> sexpr "ptr_add" [ f x, f y ]
       PtrSub _ x y   -> sexpr "ptr_sub" [ f x, f y ]
+
       PtrAnd _ x y   -> sexpr "ptr_and" [ f x, f y ]
       PtrMux _ c x y -> sexpr "ptr_mux" [ f c, f x, f y ]
 
@@ -545,6 +546,8 @@ type instance C.StmtExtension (MacawExt arch) = MacawStmtExtension arch
 type instance C.AssertionClassifier (MacawExt arch) = C.NoAssertionClassifier
 
 instance C.HasStructuredAssertions (MacawExt arch) where
+  toPredicate _ _sym c = case c of { }
+  explain _ c = case c of { }
 
 instance MacawArchConstraints arch
       => C.IsSyntaxExtension (MacawExt arch)
@@ -1054,7 +1057,7 @@ appToCrucible app = do
         , Refl <- plusMinusCancel (knownNat @1) w ->
           -- LeqProof 1 0, but the pattern match checking is not clever enough
           case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of
-#if !MIN_VERSION_base(4,11,0)
+#if !MIN_VERSION_base(4,12,0)
             -- GHC 8.2.2 will error if we give an explicit pattern match, but also
             -- complain of an incomplete pattern match if we do not, so we have
             -- this case here.

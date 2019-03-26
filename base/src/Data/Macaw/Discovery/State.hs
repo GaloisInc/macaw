@@ -140,15 +140,23 @@ data ParsedTermStmt arch ids
   -- | A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
   = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
                !(Maybe (ArchSegmentOff arch))
-    -- | @PLTStub regs addr@ denotes a terminal statement that has been identified as a PLT stub
-    -- for calling the given relocation.
+    -- | @PLTStub regs addr reloc@ denotes a terminal statement that
+    -- has been identified as a PLT stub for calling the given
+    -- relocation.
     --
     -- This is a special case of a tail call.  It has been added
     -- separately because it occurs frequently in dynamically linked
     -- code, and we can use this to recognize PLT stubs.
     --
-    -- The register set only contains registers that were changed in
-    -- the function.  Other registers have the initial value.
+    -- The first argument maps registers that were changed to their
+    -- value.  Other registers have the initial value.
+    --
+    -- The second argument is the address in the .GOT that the target
+    -- function is stored at.  The PLT stub sets the PC to the address
+    -- stored here.
+    --
+    -- The third argument is the relocation identifies the function
+    -- that should be stored in this GOT offset.
   | PLTStub !(MapF.MapF (ArchReg arch) (Value arch ids))
             !(ArchSegmentOff arch)
             !(Relocation (ArchAddrWidth arch))
