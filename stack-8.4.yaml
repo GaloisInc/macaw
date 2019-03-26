@@ -6,9 +6,7 @@ resolver: lts-12.26
 
 packages:
 - base
-- x86
 - symbolic
-- x86_symbolic
 - deps/crucible/what4
 - deps/crucible/crucible
 - deps/crucible/crucible-llvm
@@ -20,6 +18,10 @@ packages:
 - deps/llvm-pretty-bc-parser
 - deps/parameterized-utils
 - submodules/macaw-loader/macaw-loader
+# X86 specific repos
+- x86
+- x86/support
+- x86_symbolic
 # - submodules/dismantle/dismantle-tablegen
 # - macaw-semmc
 # - submodules/semmc/semmc

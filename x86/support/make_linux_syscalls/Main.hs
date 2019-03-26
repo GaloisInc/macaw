@@ -6,7 +6,6 @@ The driver for creating SyscallInfo.Linux
 {-# LANGUAGE PatternGuards #-}
 module Main (main) where
 
-import           Control.Lens
 import           Data.Attoparsec.ByteString.Char8 (Parser)
 import qualified Data.Attoparsec.ByteString.Char8 as P
 import           Data.ByteString (ByteString)
@@ -14,22 +13,18 @@ import qualified Data.ByteString.Char8 as BS
 import           Data.Either (either)
 import           Data.Map (Map)
 import qualified Data.Map as Map
-import           Data.Maybe (catMaybes, maybe, isNothing, listToMaybe)
+import           Data.Maybe (catMaybes)
 import           Language.C
 import           Language.C.Analysis.AstAnalysis
 import           Language.C.Analysis.SemRep
 import           Language.C.Analysis.TravMonad
 import           Language.C.Data.Ident
-import           Language.C.Data.Name (newNameSupply)
-import           Language.C.Data.Position (position)
 import           Language.C.System.GCC (newGCC)
 import           System.Environment (getArgs)
 import           System.Exit
 import           System.IO
 import           Text.PrettyPrint
 import           Text.Show.Pretty
-
-import           Debug.Trace
 
 -- FIXME: clag from Data.Macaw.Architecture.Syscall
 data SyscallArgType = VoidArgType | WordArgType | XMMFloatType
@@ -51,15 +46,16 @@ data SyscallArgType = VoidArgType | WordArgType | XMMFloatType
 
 data SyscallInfo =
   SyscallInfo { syscallNo    :: Integer
-              , syscallABI   :: ByteString
+              , _syscallABI   :: ByteString
               , syscallName  :: ByteString
               , syscallProto :: Either ByteString IdentDecl
               }
   -- deriving Show
 
-pp si = print $ integer (syscallNo si) <+> text (show $ syscallName si)
-                <+> text "->"
-                <+> either (const "???") pretty (syscallProto si)
+instance Show SyscallInfo where
+  show si = show $ integer (syscallNo si) <+> text (show $ syscallName si)
+                 <+> text "->"
+            <+> either (const "???") pretty (syscallProto si)
 
 -- A bit hacky, but no less than using TH to read in a text file
 generateHSFile :: [SyscallInfo] -> Doc
@@ -84,10 +80,13 @@ generateHSFile sis =
       , Left str <- [ syscallProto si ]  ]
 
     -- syscallInfo :: CExtDecl -> Maybe (String, SyscallArgType, [SyscallArgType])
-    syscallInfo (getVarDecl -> VarDecl vname _ (FunctionType (FunType rettyp params _) _)) =
-      ( identToString (identOfVarName vname)
-      , typeToArgType rettyp
-      , map (typeToArgType . declType) params )
+    syscallInfo d =
+      case getVarDecl d of
+        VarDecl vname _ (FunctionType (FunType rettyp params _) _) ->
+          ( identToString (identOfVarName vname)
+          , typeToArgType rettyp
+          , map (typeToArgType . declType) params )
+        _ -> error "syscallInfo given unexpected declaration."
 
     -- syscallInfo (CDeclExt (CDecl [CTypeSpec spec] [(Just declr, _, _)] _))
     --   | CDeclr (Just ident) [CFunDeclr (Right (decls, _)) _ _] _ _ _ <- declr
@@ -98,8 +97,8 @@ generateHSFile sis =
     -- declToArgType d = error ("unhandled decl (in type) " ++ show d)
 
 typeToArgType :: Type -> SyscallArgType
-typeToArgType typ =
-  case typ of
+typeToArgType tp =
+  case tp of
     DirectType typ' _ _ ->
       case typ' of
         TyVoid               -> VoidArgType
@@ -107,7 +106,7 @@ typeToArgType typ =
         TyFloating TyLDouble -> unhandled
         TyFloating _         -> XMMFloatType
         TyComplex _          -> unhandled
-        TyComp comp          -> unhandled -- compTypeToArgType comp
+        TyComp _comp         -> unhandled -- compTypeToArgType comp
         TyEnum _             -> WordArgType -- FIXME: ???
         TyBuiltin _          -> unhandled
     PtrType _ _ _            -> WordArgType
@@ -115,10 +114,7 @@ typeToArgType typ =
     FunctionType _ _         -> unhandled
     TypeDefType (TypeDefRef _ typ _) _ _ -> typeToArgType typ
   where
-    unhandled = error ("Unhandled type: " ++ show (pretty typ))
-
-compTypeToArgType :: CompTypeRef -> SyscallArgType
-compTypeToArgType ctyp = trace ("Comp type: " ++ show (pretty ctyp)) WordArgType
+    unhandled = error ("Unhandled type: " ++ show (pretty tp))
 
 -- We support as little as possible here ...
 -- typeSpecToArgType :: Show a => CTypeSpecifier a -> SyscallArgType
@@ -152,7 +148,7 @@ readOneCFile f = do
 
   let gdecls = case runTrav_ (analyseAST tunit) of
                  Left err -> error $ "Error: " ++ (show err)
-                 Right (gdecls, _) -> gdecls
+                 Right (d, _) -> d
 
   return (Map.mapKeys (\(Ident name _ _) -> BS.pack name) $ gObjs gdecls)
 
