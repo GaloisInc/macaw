@@ -70,6 +70,5 @@ int main(int argc, char** argv) {
     test_addr_imm("bts64_addr_imm04", &bts64_addr_imm4, 4, &bts_expected);
     test_addr_imm("bts64_addr_imm68", &bts64_addr_imm68, 68, &bts_expected);
 
-
     return 0;
 }

@@ -1,18 +1,15 @@
-run : test_btx test_ucomis test_ret
-	./test_btx
-	./test_ucomis
-	./test_ret
+tests = btx_test.exe ucomis_test.exe pop_test.exe ret_test.exe
 
-test_btx : test_btx.c btx.s utils.h
-	clang -o test_btx test_btx.c btx.s
+run : $(tests)
+	set -e; for v in $(tests); do echo "Running $$v"; ./$$v; done
 
-test_ucomis : test_ucomis.c ucomis.s utils.h
-	clang -o test_ucomis test_ucomis.c ucomis.s
+%_test.exe : %_test.c %_run.s utils.h
+	clang -o $@ $*_test.c $*_run.s
 
-test_ret : test_ret.c ret.s utils.h
-	clang -o test_ret test_ret.c ret.s
+test_%.exe : test_%.c %.s utils.h
+	clang -o $@ test_$*.c $*.s
 
 clean :
-	rm -rf test_btx test_ucomis test_ret
+	rm -rf $(tests)
 
 .PHONY : run clean
