@@ -30,7 +30,6 @@ bool get_zf(uint64_t flags) {
     return (flags & 0x40) != 0;
 }
 
-
 ////////////////////////////////////////////////////////////////////////
 // Floating point maniuplation.
 
