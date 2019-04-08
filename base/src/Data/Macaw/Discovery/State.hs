@@ -414,10 +414,10 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
-trustedFunctionEntryPoints :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+trustedFunctionEntryPoints
+  :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
 trustedFunctionEntryPoints =
-  lens _trustedFunctionEntryPoints
-       (\s v -> s { _trustedFunctionEntryPoints = v })
+  lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 
 exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })

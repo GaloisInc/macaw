@@ -133,7 +133,9 @@ flagsForSectionFlags f =
 -- RelocationError
 
 data RelocationError
-   = RelocationZeroSymbol
+   = MissingSymbolTable
+     -- ^ The file is missing a symbol table.
+   | RelocationZeroSymbol
      -- ^ A relocation refers to the symbol index 0.
    | RelocationBadSymbolIndex !Int
      -- ^ A relocation entry referenced a bad symbol index.
@@ -143,18 +145,23 @@ data RelocationError
      -- ^ We do not allow relocations to refer to the "file" as in Elf.
    | RelocationInvalidAddend !String !Integer
      -- ^ The relocation type given does not allow the adddend with the given value.
+   | RelocationDynamicError Elf.DynamicError
+     -- ^ Parsing the dynamic section failed when resolving a symbol.
 
 instance Show RelocationError where
+  show MissingSymbolTable =
+    "Relocations cannot be applied due to missing symbol table."
   show RelocationZeroSymbol =
     "A relocation entry referred to invalid 0 symbol index."
   show (RelocationBadSymbolIndex idx) =
     "A relocation entry referred to invalid symbol index " ++ show idx ++ "."
-  show (RelocationUnsupportedType tp) =
-    "Unsupported relocation type " ++ tp ++ "."
+  show (RelocationUnsupportedType _tp) =
+    "Unsupported relocation type."
   show RelocationFileUnsupported =
     "Do not support relocations referring to file entry."
   show (RelocationInvalidAddend tp v) =
     "Do not support addend of " ++ show v ++ " with relocation type " ++ tp ++ "."
+  show (RelocationDynamicError e) = show e
 
 ------------------------------------------------------------------------
 -- MemLoader
@@ -267,7 +274,7 @@ instance MemWidth w => Show (LoadError w) where
   show (LoadInsertError nm (OverlapSegment _ old)) =
     nm ++ " overlaps with memory segment: " ++ show (segmentOffset old)
   show (UnsupportedArchitecture arch) =
-    "Dynamic libraries are not supported on " ++ show arch ++ "."
+    "Dynamic libraries are not supported on " ++ arch ++ "."
   show (FormatDynamicError e) =
     "Elf parsing error: " ++ show e
   show (RelocationDuplicateOffsets o) =
@@ -301,30 +308,173 @@ loadMemSegment nm seg =
 type ElfFileSectionMap v = IntervalMap v (ElfSection v)
 
 ------------------------------------------------------------------------
--- ResolveTarget
+-- SymbolResolver
+
+type SymbolResolver a = ExceptT RelocationError (State [MemLoadWarning]) a
+
+runSymbolResolver :: SymbolResolver a -> MemLoader w (Either RelocationError a)
+runSymbolResolver m = do
+  warn <- gets mlsWarnings
+  let (er, warn') = runState (runExceptT m) warn
+  modify $ \s -> s { mlsWarnings = warn' }
+  pure er
+
+symbolWarning :: MemLoadWarning -> SymbolResolver ()
+symbolWarning w = modify $ \l -> w:l
+
+------------------------------------------------------------------------
+-- Defined symbol resolution
+
+resolveDefinedSymbolPrec :: SymbolName -> Elf.ElfSymbolBinding -> SymbolResolver SymbolPrecedence
+resolveDefinedSymbolPrec _ Elf.STB_LOCAL =
+  pure SymbolLocal
+resolveDefinedSymbolPrec _ Elf.STB_WEAK =
+  pure SymbolWeak
+resolveDefinedSymbolPrec _ Elf.STB_GLOBAL =
+  pure SymbolStrong
+resolveDefinedSymbolPrec nm bnd = do
+  symbolWarning $ UnknownDefinedSymbolBinding nm bnd
+  pure SymbolStrong
+
+symbolDefTypeMap :: Map Elf.ElfSymbolType SymbolDefType
+symbolDefTypeMap = Map.fromList
+  [ (,) Elf.STT_OBJECT    SymbolDefObject
+  , (,) Elf.STT_FUNC      SymbolDefFunc
+  , (,) Elf.STT_TLS       SymbolDefThreadLocal
+  , (,) Elf.STT_GNU_IFUNC SymbolDefIFunc
+  , (,) Elf.STT_NOTYPE    SymbolDefNoType
+  ]
+
+mkDefinedSymbol :: SymbolName
+                -> Elf.ElfSymbolBinding
+                -> SymbolDefType
+                -> SymbolResolver SymbolBinding
+mkDefinedSymbol nm bnd tp = do
+  prec <- resolveDefinedSymbolPrec nm bnd
+  pure $! DefinedSymbol prec tp
+
+resolveDefinedSymbolDef :: ElfSymbolTableEntry wtp
+                        -> SymbolResolver SymbolBinding
+resolveDefinedSymbolDef sym = do
+  let nm = Elf.steName sym
+  let bnd = Elf.steBind sym
+  let idx = Elf.steIndex sym
+  case Elf.steType sym of
+    Elf.STT_SECTION
+      | idx < Elf.SHN_LOPROC -> do
+          when (nm /= "") $
+            symbolWarning $ ExpectedSectionSymbolNameEmpty nm
+          when (bnd /= Elf.STB_LOCAL) $
+            symbolWarning ExpectedSectionSymbolLocal
+          pure $ SymbolSection (Elf.fromElfSectionIndex idx)
+      | otherwise -> do
+          symbolWarning $ InvalidSectionSymbolIndex idx
+          mkDefinedSymbol nm bnd SymbolDefUnknown
+    Elf.STT_FILE -> do
+      pure $ SymbolFile nm
+    tp -> do
+      dtp <-
+        case Map.lookup tp symbolDefTypeMap of
+          Just dtp ->
+            pure dtp
+          Nothing -> do
+            symbolWarning $ UnknownDefinedSymbolType nm tp
+            pure SymbolDefUnknown
+      mkDefinedSymbol nm bnd dtp
+
+------------------------------------------------------------------------
+-- Resolve symbols from elf info
+
+resolveUndefinedSymbolReq :: SymbolName
+                          -> Elf.ElfSymbolBinding
+                          -> SymbolResolver SymbolRequirement
+resolveUndefinedSymbolReq _ Elf.STB_WEAK =
+  pure SymbolOptional
+resolveUndefinedSymbolReq _ Elf.STB_GLOBAL =
+  pure SymbolRequired
+resolveUndefinedSymbolReq nm bnd = do
+  symbolWarning $ UnknownUndefinedSymbolBinding nm bnd
+  pure SymbolRequired
+
+resolveUndefinedSymbolType :: SymbolName -> Elf.ElfSymbolType -> SymbolResolver SymbolUndefType
+resolveUndefinedSymbolType nm tp =
+  case tp of
+    Elf.STT_NOTYPE -> pure SymbolUndefNoType
+    Elf.STT_OBJECT -> pure SymbolUndefObject
+    Elf.STT_FUNC   -> pure SymbolUndefFunc
+    Elf.STT_TLS    -> pure SymbolUndefThreadLocal
+    _ -> do
+      symbolWarning $ UnknownUndefinedSymbolType nm tp
+      pure SymbolUndefNoType
+
+------------------------------------------------------------------------
+-- Resolve symbol information
+
+-- | Create a symbol ref from Elf versioned symbol from a shared
+-- object or executable.
+mkSymbolRef :: ElfSymbolTableEntry wtp
+            -> SymbolVersion -- ^ Version to use for symbol.
+            -> SymbolResolver SymbolInfo
+mkSymbolRef sym ver = do
+  let nm = Elf.steName sym
+  def <-
+    case Elf.steIndex sym of
+      Elf.SHN_UNDEF -> do
+        UndefinedSymbol
+          <$> resolveUndefinedSymbolReq nm (Elf.steBind sym)
+          <*> resolveUndefinedSymbolType nm (Elf.steType sym)
+      Elf.SHN_ABS -> do
+        resolveDefinedSymbolDef sym
+      Elf.SHN_COMMON -> do
+        resolveDefinedSymbolDef sym
+      idx | idx < Elf.SHN_LOPROC -> do
+        resolveDefinedSymbolDef sym
+      idx -> do
+        symbolWarning $ UnsupportedProcessorSpecificSymbolIndex nm idx
+        UndefinedSymbol SymbolRequired
+          <$> resolveUndefinedSymbolType nm (Elf.steType sym)
+  pure $
+    SymbolInfo { symbolName = Elf.steName sym
+               , symbolVersion = ver
+               , symbolDef = def
+               }
+
+------------------------------------------------------------------------
+-- SymbolTable
 
 -- | Map from symbol indices to the associated resolved symbol.
 --
 -- This drops the first symbol in Elf since that refers to no symbol
-newtype SymbolTable = SymbolTable (V.Vector SymbolInfo)
+newtype SymbolTable = SymbolTable { resolveSymbol :: Word32 -> SymbolResolver SymbolInfo }
 
-relocError :: RelocationError -> Either RelocationError a
-relocError = Left
+noSymTab :: SymbolTable
+noSymTab = SymbolTable $ \_symIdx -> throwError MissingSymbolTable
 
--- | Attempts to resolve a relocation entry into a specific target.
-resolveSymbol  :: SymbolTable
-                  -- ^ A vector mapping symbol indices to the
-                  -- associated symbol information.
-               -> Word32
-                  -- ^ Offset of symbol
-               -> Either RelocationError SymbolInfo
-resolveSymbol (SymbolTable symtab) symIdx = do
+staticSymTab :: V.Vector (ElfSymbolTableEntry tp) -> SymbolTable
+staticSymTab entries = SymbolTable $ \symIdx -> do
   when (symIdx == 0) $
-    relocError RelocationZeroSymbol
-  case symtab V.!? fromIntegral (symIdx - 1) of
+    throwError RelocationZeroSymbol
+  case entries V.!? fromIntegral symIdx of
     Nothing ->
-      relocError $ RelocationBadSymbolIndex $ fromIntegral symIdx
-    Just sym -> pure sym
+      throwError $ RelocationBadSymbolIndex $ fromIntegral symIdx
+    Just sym -> mkSymbolRef sym ObjectSymbol
+
+-- | Use dynamic section to create symbol table function.
+dynamicSymbolTable :: Elf.DynamicSection w -> SymbolTable
+dynamicSymbolTable ds = SymbolTable $ \symIdx -> do
+  when (symIdx == 0) $
+    throwError RelocationZeroSymbol
+  case Elf.dynSymEntry ds symIdx of
+    Left e -> throwError (RelocationDynamicError e)
+    Right (sym, mverId) -> do
+      let ver = case mverId of
+                  Elf.VersionLocal -> UnversionedSymbol
+                  Elf.VersionGlobal -> UnversionedSymbol
+                  Elf.VersionSpecific elfVer -> VersionedSymbol (Elf.verFile elfVer) (Elf.verName elfVer)
+      mkSymbolRef sym ver
+
+------------------------------------------------------------------------
+-- Relocations
 
 data RelFlag = IsRel | IsRela
   deriving (Eq, Ord, Show)
@@ -345,7 +495,7 @@ type RelocationResolver tp
      --
      -- Added because some relocations (i.e. PLT ones) will ignore
      -- Rel relocation addends.
-  -> Either RelocationError (Relocation (Elf.RelocationWidth tp))
+  -> SymbolResolver (Relocation (Elf.RelocationWidth tp))
 
 data SomeRelocationResolver w
   = forall tp
@@ -359,7 +509,7 @@ resolveRelocationSym :: SymbolTable
                       -- associated symbol information.
                       -> Word32
                       -- ^ Index in the symbol table this refers to.
-                      -> Either RelocationError SymbolIdentifier
+                      -> SymbolResolver SymbolIdentifier
 resolveRelocationSym symtab symIdx = do
   sym <- resolveSymbol symtab symIdx
   case symbolDef sym of
@@ -368,7 +518,7 @@ resolveRelocationSym symtab symIdx = do
     SymbolSection idx ->
       pure $ SectionIdentifier idx
     SymbolFile _ ->
-      relocError RelocationFileUnsupported
+      throwError RelocationFileUnsupported
     UndefinedSymbol{} ->
       pure $ SymbolRelocation (symbolName sym) (symbolVersion sym)
 
@@ -379,7 +529,7 @@ relaTargetX86_64 :: Maybe SegmentIndex
                  -> MemWord 64
                  -- ^ Addend to add to symbol.
                  -> RelFlag
-                 -> Either RelocationError (Relocation 64)
+                 -> SymbolResolver (Relocation 64)
 relaTargetX86_64 _ symtab rel off _isRel =
   case Elf.relType rel of
     Elf.R_X86_64_JUMP_SLOT -> do
@@ -449,7 +599,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
 
     Elf.R_X86_64_RELATIVE -> do
       when (Elf.relSym rel /= 0) $ do
-        Left $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
+        throwError $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
       pure $ Relocation { relocationSym        = LoadBaseAddr
                         , relocationOffset     = off
                         , relocationIsRel      = False
@@ -463,27 +613,27 @@ relaTargetX86_64 _ symtab rel off _isRel =
     --   Elf.R_X86_64_TPOFF32 -> undefined
     --   Elf.R_X86_64_GOTTPOFF -> undefined
 
-    tp -> relocError $ RelocationUnsupportedType (show tp)
+    tp -> throwError $ RelocationUnsupportedType (show tp)
 
 -- | Attempt to resolve an X86_64 specific symbol.
-relaTargetARM :: Endianness
+relaTargetARM32 :: Endianness
                  -- ^ Endianness of relocations
               -> Maybe SegmentIndex
                  -- ^ Index of segment for dynamic relocations
               -> SymbolTable -- ^ Symbol table
-              -> Elf.RelEntry Elf.ARM_RelocationType -- ^ Relocaiton entry
+              -> Elf.RelEntry Elf.ARM32_RelocationType -- ^ Relocaiton entry
               -> MemWord 32
                  -- ^ Addend of symbol
               -> RelFlag
-              -> Either RelocationError (Relocation 32)
-relaTargetARM end msegIndex symtab rel addend relFlag =
+              -> SymbolResolver (Relocation 32)
+relaTargetARM32 end msegIndex symtab rel addend relFlag =
   case Elf.relType rel of
     Elf.R_ARM_GLOB_DAT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       -- Check that least-significant bit of addend is 0 so that we do
       -- not change thumb bit of symbol.
       when (addend `testBit` 0) $ do
-        relocError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger addend)
+        throwError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger addend)
       pure $! Relocation { relocationSym        = sym
                          , relocationOffset     = addend
                          , relocationIsRel      = False
@@ -514,7 +664,7 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
         if Elf.relSym rel == 0 then do
           case msegIndex of
             Nothing -> do
-              relocError $ RelocationZeroSymbol
+              throwError $ RelocationZeroSymbol
             Just idx ->
               pure $! SegmentBaseAddr idx
         else do
@@ -537,7 +687,7 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
               IsRela -> addend
       -- Check that addend is 0 so that we do not change thumb bit of symbol.
       when (actualAddend /= 0) $ do
-        relocError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger actualAddend)
+        throwError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger actualAddend)
       pure $! Relocation { relocationSym        = sym
                          , relocationOffset     = actualAddend
                          , relocationIsRel      = False
@@ -547,7 +697,41 @@ relaTargetARM end msegIndex symtab rel addend relFlag =
                          , relocationJumpSlot   = True
                          }
     tp -> do
-      relocError $ RelocationUnsupportedType (show tp)
+      throwError $ RelocationUnsupportedType (show tp)
+
+-- | Attempt to resolve an X86_64 specific symbol.
+relaTargetARM64 :: Endianness
+                   -- ^ Endianness of relocations
+                -> Maybe SegmentIndex
+                   -- ^ Index of segment for dynamic relocations
+                -> SymbolTable -- ^ Symbol table
+                -> Elf.RelEntry Elf.ARM64_RelocationType -- ^ Relocaiton entry
+                -> MemWord 64
+                   -- ^ Addend of symbol
+                -> RelFlag
+                -> SymbolResolver (Relocation 64)
+relaTargetARM64 end _msegIndex symtab rel addend relFlag =
+  case Elf.relType rel of
+    Elf.R_AARCH64_JUMP_SLOT -> do
+      -- This is a PLT relocation
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      let actualAddend =
+            case relFlag of
+              IsRel -> 0
+              IsRela -> addend
+      -- Check that addend is 0
+      when (actualAddend /= 0) $ do
+        throwError $ RelocationInvalidAddend (show (Elf.relType rel)) (toInteger actualAddend)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = actualAddend
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = True
+                         }
+    tp -> do
+      throwError $ RelocationUnsupportedType (show tp)
 
 toEndianness :: Elf.ElfData -> Endianness
 toEndianness Elf.ELFDATA2LSB = LittleEndian
@@ -564,14 +748,11 @@ getRelocationResolver hdr =
       pure $ SomeRelocationResolver relaTargetX86_64
     (Elf.ELFCLASS32, Elf.EM_ARM) -> do
       let end = toEndianness (Elf.headerData hdr)
-      pure $ SomeRelocationResolver $ relaTargetARM end
+      pure $ SomeRelocationResolver $ relaTargetARM32 end
+    (Elf.ELFCLASS64, Elf.EM_AARCH64) -> do
+      let end = toEndianness (Elf.headerData hdr)
+      pure $ SomeRelocationResolver $ relaTargetARM64 end
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
-
-
--- | This checks a computation that returns a dynamic error or succeeds.
-runDynamic :: Either Elf.DynamicError a -> MemLoader w a
-runDynamic (Left e) = throwError (FormatDynamicError e)
-runDynamic (Right r) = pure r
 
 
 resolveRela :: ( MemWidth w
@@ -584,8 +765,10 @@ resolveRela :: ( MemWidth w
             -> Integer -- ^ Index of relocation
             -> Elf.RelaEntry tp
             -> ResolveFn (MemLoader w) w
-resolveRela symtab resolver relaIdx rela msegIdx _ =
-  case resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) IsRela of
+resolveRela symtab resolver relaIdx rela msegIdx _ = do
+  er <- runSymbolResolver $
+          resolver msegIdx symtab (Elf.relaToRel rela) (fromIntegral (Elf.relaAddend rela)) IsRela
+  case er of
     Left e -> do
       addWarning (IgnoreRelocation relaIdx (show (Elf.relaType rela)) e)
       pure Nothing
@@ -616,7 +799,8 @@ resolveRel end symtab resolver relIdx rel msegIdx bytes = do
               | otherwise =
                   uaddend
   -- Update the resolver.
-  case resolver msegIdx symtab rel (fromInteger saddend) IsRel of
+  er <- runSymbolResolver $ resolver msegIdx symtab rel (fromInteger saddend) IsRel
+  case er of
     Left e -> do
       addWarning (IgnoreRelocation relIdx (show (Elf.relType rel)) e)
       pure Nothing
@@ -697,126 +881,11 @@ relocMapFromRelAndRela dta resolver symtab (Just relBuffer) Nothing = do
       Right entries -> do
         pure $ Map.fromList $ zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
 
+-- | This checks a computation that returns a dynamic error or succeeds.
+runDynamic :: Either Elf.DynamicError a -> MemLoader w a
+runDynamic (Left e) = throwError (FormatDynamicError e)
+runDynamic (Right r) = pure r
 
-resolveUndefinedSymbolReq :: SymbolName
-                          -> Elf.ElfSymbolBinding
-                          -> MemLoader w SymbolRequirement
-resolveUndefinedSymbolReq _ Elf.STB_WEAK =
-  pure SymbolOptional
-resolveUndefinedSymbolReq _ Elf.STB_GLOBAL =
-  pure SymbolRequired
-resolveUndefinedSymbolReq nm bnd = do
-  addWarning $ UnknownUndefinedSymbolBinding nm bnd
-  pure SymbolRequired
-
-resolveDefinedSymbolPrec :: SymbolName -> Elf.ElfSymbolBinding -> MemLoader w SymbolPrecedence
-resolveDefinedSymbolPrec _ Elf.STB_LOCAL =
-  pure SymbolLocal
-resolveDefinedSymbolPrec _ Elf.STB_WEAK =
-  pure SymbolWeak
-resolveDefinedSymbolPrec _ Elf.STB_GLOBAL =
-  pure SymbolStrong
-resolveDefinedSymbolPrec nm bnd = do
-  addWarning $ UnknownDefinedSymbolBinding nm bnd
-  pure SymbolStrong
-
-resolveUndefinedSymbolType :: SymbolName -> Elf.ElfSymbolType -> MemLoader w SymbolUndefType
-resolveUndefinedSymbolType nm tp =
-  case tp of
-    Elf.STT_NOTYPE -> pure SymbolUndefNoType
-    Elf.STT_OBJECT -> pure SymbolUndefObject
-    Elf.STT_FUNC   -> pure SymbolUndefFunc
-    Elf.STT_TLS    -> pure SymbolUndefThreadLocal
-    _ -> do
-      addWarning $ UnknownUndefinedSymbolType nm tp
-      pure SymbolUndefNoType
-
-mkDefinedSymbol :: SymbolName
-                -> Elf.ElfSymbolBinding
-                -> SymbolDefType
-                -> MemLoader w SymbolBinding
-mkDefinedSymbol nm bnd tp = do
-  prec <- resolveDefinedSymbolPrec nm bnd
-  pure $! DefinedSymbol prec tp
-
-symbolDefTypeMap :: Map Elf.ElfSymbolType SymbolDefType
-symbolDefTypeMap = Map.fromList
-  [ (,) Elf.STT_OBJECT    SymbolDefObject
-  , (,) Elf.STT_FUNC      SymbolDefFunc
-  , (,) Elf.STT_TLS       SymbolDefThreadLocal
-  , (,) Elf.STT_GNU_IFUNC SymbolDefIFunc
-  , (,) Elf.STT_NOTYPE    SymbolDefNoType
-  ]
-
-resolveDefinedSymbolDef :: ElfSymbolTableEntry wtp
-                        -> MemLoader w SymbolBinding
-resolveDefinedSymbolDef sym = do
-  let nm = Elf.steName sym
-  let bnd = Elf.steBind sym
-  let idx = Elf.steIndex sym
-  case Elf.steType sym of
-    Elf.STT_SECTION
-      | idx < Elf.SHN_LOPROC -> do
-          when (nm /= "") $
-            addWarning $ ExpectedSectionSymbolNameEmpty nm
-          when (bnd /= Elf.STB_LOCAL) $
-            addWarning ExpectedSectionSymbolLocal
-          pure $ SymbolSection (Elf.fromElfSectionIndex idx)
-      | otherwise -> do
-          addWarning $ InvalidSectionSymbolIndex idx
-          mkDefinedSymbol nm bnd SymbolDefUnknown
-    Elf.STT_FILE -> do
-      pure $ SymbolFile nm
-    tp -> do
-      dtp <-
-        case Map.lookup tp symbolDefTypeMap of
-          Just dtp ->
-            pure dtp
-          Nothing -> do
-            addWarning $ UnknownDefinedSymbolType nm tp
-            pure SymbolDefUnknown
-      mkDefinedSymbol nm bnd dtp
-
--- | Create a symbol ref from Elf versioned symbol from a shared
--- object or executable.
-mkSymbolRef :: ElfSymbolTableEntry wtp
-            -> SymbolVersion
-            -> MemLoader w SymbolInfo
-mkSymbolRef sym ver = do
-  let nm = Elf.steName sym
-  def <-
-    case Elf.steIndex sym of
-      Elf.SHN_UNDEF -> do
-        UndefinedSymbol
-          <$> resolveUndefinedSymbolReq nm (Elf.steBind sym)
-          <*> resolveUndefinedSymbolType nm (Elf.steType sym)
-      Elf.SHN_ABS -> do
-        resolveDefinedSymbolDef sym
-      Elf.SHN_COMMON -> do
-        resolveDefinedSymbolDef sym
-      idx | idx < Elf.SHN_LOPROC -> do
-        resolveDefinedSymbolDef sym
-      idx -> do
-        addWarning $ UnsupportedProcessorSpecificSymbolIndex nm idx
-        UndefinedSymbol SymbolRequired
-          <$> resolveUndefinedSymbolType nm (Elf.steType sym)
-  pure $
-    SymbolInfo { symbolName = Elf.steName sym
-               , symbolVersion = ver
-               , symbolDef = def
-               }
-
-
--- | Create a symbol ref from Elf versioned symbol from a shared
--- object or executable.
-mkDynamicSymbolRef :: Elf.VersionedSymbol wtp
-                   -> MemLoader w SymbolInfo
-mkDynamicSymbolRef (sym, mverId) = do
-  let ver = case mverId of
-              Elf.VersionLocal -> UnversionedSymbol
-              Elf.VersionGlobal -> UnversionedSymbol
-              Elf.VersionSpecific elfVer -> VersionedSymbol (Elf.verFile elfVer) (Elf.verName elfVer)
-  mkSymbolRef sym ver
 
 -- | Create a relocation map from the dynamic loader information.
 dynamicRelocationMap :: Elf.ElfHeader w
@@ -840,9 +909,7 @@ dynamicRelocationMap hdr ph contents =
             -- Find th dynamic section from the contents.
             dynSection <- runDynamic $
               Elf.dynamicEntries (Elf.headerData hdr) (Elf.headerClass hdr) virtMap dynContents
-            symentries <- runDynamic (Elf.dynSymTable dynSection)
-            symtab <-
-              SymbolTable <$> traverse mkDynamicSymbolRef (V.drop 1 symentries)
+            let symtab = dynamicSymbolTable dynSection
             mRelBuffer  <- runDynamic $ Elf.dynRelBuffer  dynSection
             mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection
             SomeRelocationResolver resolver <- getRelocationResolver hdr
@@ -1078,18 +1145,18 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
         mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
         mlsIndexMap %= Map.insert elfIdx (addr, sec)
 
--- | Create the symbol vector from
+-- | Create the symbol vector from the elf static symbol table.
 symtabSymbolTable :: forall w . Elf w -> MemLoader w SymbolTable
 symtabSymbolTable e =
   case Elf.elfSymtab e of
     [] ->
-      pure $ SymbolTable V.empty
+      pure $ noSymTab
     elfSymTab:_rest -> do
 --      when (not (null rest)) $ addWarning $ MultipleSymbolTables
       let entries = Elf.elfSymbolTableEntries elfSymTab
 --      let lclCnt = fromIntegral $ Elf.elfSymbolTableLocalEntries elfSymTab
       -- Create an unversioned symbol from symbol table.
-      SymbolTable <$> traverse (`mkSymbolRef` ObjectSymbol) (V.drop 1 entries)
+      pure (staticSymTab entries)
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1145,21 +1212,15 @@ data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
 ------------------------------------------------------------------------
 -- memoryForElf
 
-memoryForElf' :: ( Memory w
-                 -> SectionIndexMap w
-                 -> Elf w
-                 -> ([SymbolResolutionError], [MemSymbol w]))
-              -> LoadOptions
+memoryForElf' :: LoadOptions
               -> Elf w
-              -> Either String ( Memory w
-                               , [MemSymbol w] -- Function symbols
+              -> Either String ( SectionIndexMap w
+                               , Memory w
                                , [MemLoadWarning]
-                               , [SymbolResolutionError]
                                )
-memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
+memoryForElf' opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   let end = toEndianness (Elf.elfData e)
-  (secMap, mem, warnings) <-
-    runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $
+  runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $
       case Elf.elfType e of
         -- We load object files by section
         Elf.ET_REL ->
@@ -1169,12 +1230,10 @@ memoryForElf' resolver opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
           let regIdx = adjustedLoadRegionIndex e opt
           let addrOff = loadRegionBaseOffset opt
           memoryForElfSegments regIdx addrOff e
-  let (symErrs, funcSymbols) = resolver mem secMap e
-  pure (mem, funcSymbols, warnings, symErrs)
 
 -- | Load allocated Elf sections into memory.
 --
--- Normally, Elf uses segments for loading, but the segment
+-- Normally, Elf uses segments for loading, but the section
 -- information tends to be more precise.
 memoryForElf :: LoadOptions
              -> Elf w
@@ -1183,7 +1242,10 @@ memoryForElf :: LoadOptions
                               , [MemLoadWarning]
                               , [SymbolResolutionError]
                               )
-memoryForElf = memoryForElf' resolveElfFuncSymbols
+memoryForElf opt e = do
+  (secMap, mem, warnings) <- memoryForElf' opt e
+  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
+  pure (mem, funcSymbols, warnings, symErrs)
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1196,7 +1258,10 @@ memoryForElfAllSymbols :: LoadOptions
                               , [MemLoadWarning]
                               , [SymbolResolutionError]
                               )
-memoryForElfAllSymbols = memoryForElf' resolveElfFuncSymbolsAny
+memoryForElfAllSymbols opt e = do
+  (secMap, mem, warnings) <- memoryForElf' opt e
+  let (symErrs, funcSymbols) = resolveElfFuncSymbolsAny mem secMap e
+  pure (mem, funcSymbols, warnings, symErrs)
 
 ------------------------------------------------------------------------
 -- Elf symbol utilities
