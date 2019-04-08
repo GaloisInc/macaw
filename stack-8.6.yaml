@@ -1,7 +1,3 @@
-#flags:
-#  time-locale-compat:
-#    old-locale: false
-
 resolver: lts-13.13
 
 packages:

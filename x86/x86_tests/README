@@ -1,5 +1,8 @@
 This directory contains small unit tests used to develop an
 understanding of specific x86 instructions.
 
+The tests can be executed via `make run`.  If any fail, this suggests
+that our understanding of the instruction semantics was incorrect.
+
 It is not strictly needed for macaw-x86, but included when we need to
 revisit instruction semantics.
