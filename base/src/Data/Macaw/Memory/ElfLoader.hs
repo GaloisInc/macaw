@@ -442,14 +442,20 @@ mkSymbolRef sym ver = do
 ------------------------------------------------------------------------
 -- SymbolTable
 
--- | Map from symbol indices to the associated resolved symbol.
+-- | This wraps a callback function that lets users lookup symbol information by index
+-- from the Elf file.
 --
--- This drops the first symbol in Elf since that refers to no symbol
+-- It is implemented using a callback function as the Elf dynamic
+-- section doesn't provide an explicit number of symbol table
+-- elements, and we decided not to depend on meta data such as section
+-- names that could be stripped from executables/shared objects.
 newtype SymbolTable = SymbolTable { resolveSymbol :: Word32 -> SymbolResolver SymbolInfo }
 
+-- | Construct a symbol table that just reports a missing symbol table error on lookups.
 noSymTab :: SymbolTable
 noSymTab = SymbolTable $ \_symIdx -> throwError MissingSymbolTable
 
+-- | Construct symbol table from a static list of symbol table entries.
 staticSymTab :: V.Vector (ElfSymbolTableEntry tp) -> SymbolTable
 staticSymTab entries = SymbolTable $ \symIdx -> do
   when (symIdx == 0) $
