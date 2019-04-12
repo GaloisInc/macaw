@@ -22,7 +22,6 @@ module Data.Macaw.X86.X86Reg
   , Segment
   , Control
   , Debug
-
   , X87_FPU
   , X87_Status
   , X87_Top
@@ -298,31 +297,31 @@ pattern R14 = X86_GP F.R14
 pattern R15 :: () => (t ~ GP) => X86Reg t
 pattern R15 = X86_GP F.R15
 
-pattern CF :: () => (t ~ Flag) => X86Reg t
+pattern CF :: () => (t ~ BoolType) => X86Reg t
 pattern CF = X86_FlagReg R.CF
 
-pattern PF :: () => (t ~ Flag) => X86Reg t
+pattern PF :: () => (t ~ BoolType) => X86Reg t
 pattern PF = X86_FlagReg R.PF
 
-pattern AF :: () => (t ~ Flag) => X86Reg t
+pattern AF :: () => (t ~ BoolType) => X86Reg t
 pattern AF = X86_FlagReg R.AF
 
-pattern ZF :: () => (t ~ Flag) => X86Reg t
+pattern ZF :: () => (t ~ BoolType) => X86Reg t
 pattern ZF = X86_FlagReg R.ZF
 
-pattern SF :: () => (t ~ Flag) => X86Reg t
+pattern SF :: () => (t ~ BoolType) => X86Reg t
 pattern SF = X86_FlagReg R.SF
 
-pattern TF :: () => (t ~ Flag) => X86Reg t
+pattern TF :: () => (t ~ BoolType) => X86Reg t
 pattern TF = X86_FlagReg R.TF
 
-pattern IF :: () => (t ~ Flag) => X86Reg t
+pattern IF :: () => (t ~ BoolType) => X86Reg t
 pattern IF = X86_FlagReg R.IF
 
-pattern DF :: () => (t ~ Flag) => X86Reg t
+pattern DF :: () => (t ~ BoolType) => X86Reg t
 pattern DF = X86_FlagReg R.DF
 
-pattern OF :: () => (t ~ Flag) => X86Reg t
+pattern OF :: () => (t ~ BoolType) => X86Reg t
 pattern OF = X86_FlagReg R.OF
 
 -- | x87 flags
