@@ -347,7 +347,9 @@ mapRegionPointers :: ( MC.MemWidth w
                      , CB.IsSymInterface sym
                      )
                   => MemPtrTable sym w
-                  -> CL.LLVMPtr sym w
+                  -> CL.LLVMPtr sym w  -- ^ default (i.e. null)
+                                       -- pointer value to return when
+                                       -- a mapping does not exist.
                   -> MS.GlobalMap sym w
 mapRegionPointers mpt default_ptr = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
@@ -372,7 +374,7 @@ mapBitvectorToLLVMPointer :: ( MC.MemWidth w
                           -> sym
                           -> CS.RegValue sym CL.Mem
                           -> CS.RegValue sym (CT.BVType w)
-                          -> CL.LLVMPtr sym w
+                          -> CL.LLVMPtr sym w  -- ^ "null pointer" value if no valid mapping
                           -> IO (Maybe (CL.LLVMPtr sym w))
 mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal default_ptr =
   case WI.asUnsignedBV offsetVal of
@@ -417,8 +419,9 @@ mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal default_ptr =
 --
 -- > "If addrStart <= O <= addrEnd, map O into that region"
 --
--- If the offset is not in any region, the pointer is mapped to the null pointer
--- to trigger an error (if it is used).
+-- If the offset is not in any region, the pointer is mapped to the
+-- default pointer (expected to be the null pointer) to trigger an
+-- error (if it is used).
 staticRegionMuxTree :: ( CB.IsSymInterface sym
                        , MC.MemWidth w
                        , 16 <= w
