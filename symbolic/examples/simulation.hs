@@ -1,4 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
+
 import           Control.Monad.ST ( stToIO, RealWorld )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
@@ -43,3 +45,6 @@ useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
   case execRes of
     CS.FinishedResult {} -> return ()
     _ -> putStrLn "Simulation failed"
+
+main :: IO ()
+main = return ()

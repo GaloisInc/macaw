@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
+
 import           Control.Monad.ST ( stToIO )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -31,3 +33,6 @@ translate dfi =
 
 useCFG :: CC.SomeCFG (MS.MacawExt arch) (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch) -> IO ()
 useCFG _ = return ()
+
+main :: IO ()
+main = return ()
