@@ -4,6 +4,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
+{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 import           GHC.TypeLits
 import           Control.Monad.ST ( stToIO, RealWorld )
@@ -59,3 +60,6 @@ useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
   case execRes of
     CS.FinishedResult {} -> return ()
     _ -> putStrLn "Simulation failed"
+
+main :: IO ()
+main = return ()
