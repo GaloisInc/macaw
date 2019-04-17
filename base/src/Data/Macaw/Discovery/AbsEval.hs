@@ -76,8 +76,10 @@ absEvalStmt info stmt = withArchConstraints info $
   case stmt of
     AssignStmt a ->
       modify $ addAssignment info a
-    WriteMem addr memRepr v ->
-      modify $ addMemWrite addr memRepr v
+    WriteMem addr memRepr v -> do
+      modify $ \s -> addMemWrite addr memRepr v s
+    CondWriteMem _cond addr memRepr v ->
+      modify $ \s -> addCondMemWrite lub addr memRepr (transferValue s v) s
     InstructionStart _ _ ->
       pure ()
     Comment{} ->
