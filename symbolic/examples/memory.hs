@@ -50,7 +50,8 @@ useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
   memModelVar <- stToIO (CLM.mkMemVar hdlAlloc)
   (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
-  let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh
+  mapping <- MSM.mapRegionPointers memPtrTbl <$> CLM.mkNullPointer sym WI.knownNat
+  let extImpl = MS.macawExtensions archEvalFns memModelVar mapping lfh
   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
