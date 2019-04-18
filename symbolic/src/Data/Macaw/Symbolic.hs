@@ -843,6 +843,12 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
       mem1 <- doWriteMem sym mem addrWidth memRep ptr (C.regValue v)
       pure ((), setMem st mvar mem1)
+    MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
+      let sym = st^.C.stateSymInterface
+      mem <- getMem st mvar
+      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      mem1 <- doCondWriteMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue v)
+      pure ((), setMem st mvar mem1)
     MacawGlobalPtr w addr ->
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
