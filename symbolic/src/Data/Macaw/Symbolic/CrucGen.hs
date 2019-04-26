@@ -359,6 +359,16 @@ data MacawStmtExtension (arch :: K.Type)
     -> !(f (ToCrucibleType tp))
     -> MacawStmtExtension arch f C.UnitType
 
+  -- | Write to memory id  xonsiriob is true
+  MacawCondWriteMem
+    :: !(ArchAddrWidthRepr arch)
+    -> !(M.MemRepr tp)
+    -- Condition
+    -> !(f C.BoolType)
+    -> !(f (ArchAddrCrucibleType arch))
+    -> !(f (ToCrucibleType tp))
+    -> MacawStmtExtension arch f C.UnitType
+
   -- | Convert a literal address (from Macaw) into a pointer in the LLVM memory model
   MacawGlobalPtr
     :: !(ArchAddrWidthRepr arch)
@@ -489,9 +499,10 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
         -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc)
   ppApp f a0 =
     case a0 of
-      MacawReadMem _ r a     -> sexpr "macawReadMem"       [pretty r, f a]
-      MacawCondReadMem _ r c a d -> sexpr "macawCondReadMem" [pretty r, f c, f a, f d ]
-      MacawWriteMem _ r a v  -> sexpr "macawWriteMem"      [pretty r, f a, f v]
+      MacawReadMem     _  r   a   -> sexpr "macawReadMem"      [pretty r, f a]
+      MacawCondReadMem _  r c a d -> sexpr "macawCondReadMem"  [pretty r, f c, f a, f d ]
+      MacawWriteMem     _ r   a v -> sexpr "macawWriteMem"     [pretty r, f a, f v]
+      MacawCondWriteMem _ r c a v -> sexpr "macawCondWriteMem" [f c, pretty r, f a, f v]
       MacawGlobalPtr _ x -> sexpr "global" [ text (show x) ]
 
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
@@ -519,6 +530,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawReadMem _ r _) = memReprToCrucible r
   appType (MacawCondReadMem _ r _ _ _) = memReprToCrucible r
   appType (MacawWriteMem _ _ _ _) = C.knownRepr
+  appType MacawCondWriteMem{} = C.knownRepr
   appType (MacawGlobalPtr w _)
     | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (MacawFreshSymbolic r) = typeToCrucible r
@@ -1178,6 +1190,12 @@ addMacawStmt baddr stmt =
       cval  <- valueToCrucible val
       w     <- archAddrWidth
       void $ evalMacawStmt (MacawWriteMem w repr caddr cval)
+    M.CondWriteMem cond addr repr val -> do
+      ccond <- valueToCrucible cond
+      caddr <- valueToCrucible addr
+      cval  <- valueToCrucible val
+      w     <- archAddrWidth
+      void $ evalMacawStmt (MacawCondWriteMem w repr ccond caddr cval)
     M.InstructionStart off t -> do
       -- Update the position
       modify' $ \s -> s { codeOff = off

@@ -716,6 +716,11 @@ rewriteStmt s =
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
       appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
+    CondWriteMem cond addr repr val -> do
+      tgtCond <- rewriteValue cond
+      tgtAddr <- rewriteValue addr
+      tgtVal  <- rewriteValue val
+      appendRewrittenStmt $ CondWriteMem tgtCond tgtAddr repr tgtVal
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
     InstructionStart off mnem ->

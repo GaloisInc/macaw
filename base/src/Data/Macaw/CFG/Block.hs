@@ -44,8 +44,6 @@ data TermStmt arch ids
     --
     -- The registers include the state of registers just before the terminal statement
     -- executes.
-    -- The address returns the address within the current function that this terminal
-    -- statement could return to (if any)
   | ArchTermStmt !(ArchTermStmt arch ids)
                  !(RegState (ArchReg arch) (Value arch ids))
 

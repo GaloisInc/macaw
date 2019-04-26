@@ -23,6 +23,7 @@ module Data.Macaw.Symbolic.MemOps
   , doReadMem
   , doCondReadMem
   , doWriteMem
+  , doCondWriteMem
   , doGetGlobal
   , doLookupFunctionHandle
   , doPtrToBits
@@ -805,3 +806,35 @@ doWriteMem sym mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
      let alignment = noAlignment -- default to byte alignment (FIXME)
      let memVal = resolveMemVal memRep ty val
      Mem.storeRaw sym mem ptr ty alignment memVal
+
+
+-- | Write a Macaw value to memory if a condition holds.
+--
+--     arg1 : Symbolic Interface
+--     arg2 : Heap prior to write
+--     arg3 : Width of ptr
+--     arg4 : What/how we are writing
+--     arg5 : Condition that must hold if we write.
+--     arg6 : Address to write to
+--     arg7 : Value to write
+doCondWriteMem ::
+  IsSymInterface sym =>
+  sym ->
+  MemImpl sym ->
+  M.AddrWidthRepr ptrW ->
+  MemRepr ty ->
+  Pred sym ->
+  LLVMPtr sym ptrW ->
+  RegValue sym (ToCrucibleType ty) ->
+  IO (MemImpl sym)
+doCondWriteMem sym mem ptrWidth memRep cond ptr val = hasPtrClass ptrWidth $
+  do ok <- isValidPtr sym mem ptrWidth ptr
+     condOk <- impliesPred sym cond ok
+     check sym condOk "doWriteMem" $
+       "Write to an invalid location: " ++ show (Mem.ppPtr ptr)
+     ty <- case memReprToStorageType (getEnd mem) memRep of
+             Left msg -> throwIO $ userError msg
+             Right tp -> pure tp
+     let alignment = noAlignment -- default to byte alignment (FIXME)
+     let memVal = resolveMemVal memRep ty val
+     Mem.condStoreRaw sym mem cond ptr ty alignment memVal

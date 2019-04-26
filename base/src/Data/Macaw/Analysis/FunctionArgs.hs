@@ -520,6 +520,7 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
       | otherwise ->
           []
     WriteMem addr _ v -> [Some addr, Some v]
+    CondWriteMem cond addr _ v -> [Some cond, Some addr, Some v]
     InstructionStart _ _ -> []
     -- Comment statements have no specific value.
     Comment _ -> []

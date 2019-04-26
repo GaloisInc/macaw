@@ -1,7 +1,4 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
-Maintainer       : Joe Hendrix <jhendrix@galois.com>
-
 Defines data types needed to represent values, assignments, and statements from Machine code.
 
 This is a low-level CFG representation where the entire program is a
@@ -23,7 +20,6 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -55,6 +51,7 @@ module Data.Macaw.CFG.Core
   , mkRegStateM
   , mapRegsWith
   , traverseRegsWith
+  , traverseRegsWith_
   , zipWithRegState
   , ppRegMap
   -- * Pretty printing
@@ -417,6 +414,13 @@ traverseRegsWith :: Applicative m
 traverseRegsWith f (RegState m) = RegState <$> MapF.traverseWithKey f m
 
 -- | Traverse the register state with the name of each register and value.
+traverseRegsWith_ :: Applicative m
+                  => (forall tp. r tp -> f tp -> m ())
+                  -> RegState r f
+                  -> m ()
+traverseRegsWith_ f (RegState m) = MapF.traverseWithKey_ f m
+
+-- | Traverse the register state with the name of each register and value.
 mapRegsWith :: Applicative m
                  => (forall tp. r tp -> f tp -> g tp)
                  -> RegState r f
@@ -713,21 +717,30 @@ instance ( RegisterInfo r
 data Stmt arch ids
    = forall tp . AssignStmt !(Assignment arch ids tp)
    | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
-     -- ^ This denotes a write to memory, and consists of an address to write to, a `MemRepr` defining
-     -- how the value should be stored in memory, and the value to be written.
+     -- ^ This denotes a write to memory, and consists of an address
+     -- to write to, a `MemRepr` defining how the value should be
+     -- stored in memory, and the value to be written.
+  | forall tp .
+    CondWriteMem !(Value arch ids BoolType)
+                 !(ArchAddrValue arch ids)
+                 !(MemRepr tp)
+                 !(Value arch ids tp)
+     -- ^ This denotes a write to memory that only executes if the
+     -- condition is true.
    | InstructionStart !(ArchAddrWord arch) !Text
      -- ^ The start of an instruction
      --
-     -- The information includes the offset relative to the start of the block and the
-     -- disassembler output if available (or empty string if unavailable)
+     -- The information includes the offset relative to the start of
+     -- the block and the disassembler output if available (or empty
+     -- string if unavailable)
    | Comment !Text
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
    | ArchState !(ArchMemAddr arch) !(MapF.MapF (ArchReg arch) (Value arch ids))
-     -- ^ Address of an instruction and the *machine* registers that it updates
-     -- (with their associated macaw values after the execution of the
-     -- instruction).
+     -- ^ Address of an instruction and the *machine* registers that
+     -- it updates (with their associated macaw values after the
+     -- execution of the instruction).
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
@@ -737,7 +750,10 @@ ppStmt :: ArchConstraints arch
 ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
-    WriteMem a _ rhs -> text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+    WriteMem     a _ rhs ->
+      text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+    CondWriteMem c a _ rhs ->
+      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a <+> ppValue 0 rhs
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s

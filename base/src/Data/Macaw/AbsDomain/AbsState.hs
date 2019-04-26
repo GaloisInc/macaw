@@ -50,6 +50,7 @@ module Data.Macaw.AbsDomain.AbsState
   , stridedInterval
   , finalAbsBlockState
   , addMemWrite
+  , addCondMemWrite
   , transferValue
   , abstractULt
   , abstractULeq
@@ -1240,37 +1241,70 @@ addMemWrite :: ( RegisterInfo (ArchReg arch)
                -- ^ Current processor state.
             -> AbsProcessorState (ArchReg arch) ids
 addMemWrite a memRepr v r =
-  case (transferValue r a, transferValue r v) of
+  addCondMemWrite (\new _ -> new) a memRepr (transferValue r v) r
+
+-- | Update the processor state with a potential memory write.
+addCondMemWrite :: ( RegisterInfo r
+                   , MemWidth (RegAddrWidth r)
+                   , HasCallStack
+                   , r ~ ArchReg arch
+                   )
+                => (AbsValue (RegAddrWidth r) tp
+                    -> AbsValue (RegAddrWidth r) tp
+                    -> AbsValue (RegAddrWidth r) tp)
+                -- ^ Updaete function that takes new value, old value and returns value to insert.
+                -> Value arch ids (BVType (RegAddrWidth r))
+                -- ^ Address that we are writing to.
+                -> MemRepr tp
+                -- ^ Information about how value should be represented in memory.
+                -> AbsValue (RegAddrWidth r) tp
+               -- ^ Value to write to memory
+                -> AbsProcessorState r ids
+                -- ^ Current processor state.
+                -> AbsProcessorState r ids
+addCondMemWrite f a memRepr v_abs r =
+  case transferValue r a of
     -- (_,TopV) -> r
     -- We overwrite _some_ stack location.  An alternative would be to
     -- update everything with v.
-    (SomeStackOffset _, _) -> do
+    SomeStackOffset _ -> do
       let cur_ip = r^.absInitialRegs^.curIP
       debug DAbsInt ("addMemWrite: dropping stack at "
              ++ show (pretty cur_ip)
              ++ " via " ++ show (pretty a)
              ++" in SomeStackOffset case") $
         r & curAbsStack %~ pruneStack
-    (StackOffset _ s, v_abs) ->
+    StackOffset _ s ->
       let w = fromInteger (memReprBytes memRepr)
-          e = StackEntry memRepr v_abs
           stk0 = r^.curAbsStack
           -- Delete information about old assignment
           stk1 = Set.fold (\o m -> deleteRange o (o+w) m) stk0 s
           -- Add information about new assignment
           stk2 =
             case Set.toList s of
-              [o] | v_abs /= TopV -> Map.insert o e stk1
+              [o] | -- Skip if new value is top
+                    v_abs /= TopV
+                    -- Lookup existing value at tack
+                  , oldAbs <-
+                      case Map.lookup o stk0 of
+                        Just (StackEntry oldMemRepr old)
+                          | Just Refl <- testEquality memRepr oldMemRepr -> old
+                        _ -> top
+                    -- Computed merged value
+                  , mergedValue <- f v_abs oldAbs
+                    -- Insert only non-top values
+                  , mergedValue /= TopV ->
+                    Map.insert o (StackEntry memRepr mergedValue) stk1
               _ -> stk1
        in r & curAbsStack .~ stk2
     -- FIXME: nuke stack on an unknown address or Top?
     _ -> r
 
+-- | Returns true if return address is known to sit on stack.
 absStackHasReturnAddr :: AbsBlockState r -> Bool
 absStackHasReturnAddr s = isJust $ find isReturnAddr (Map.elems (s^.startAbsStack))
   where isReturnAddr (StackEntry _ ReturnAddr) = True
         isReturnAddr _ = False
-
 
 -- | Return state for after value has run.
 finalAbsBlockState :: forall a ids

@@ -110,6 +110,10 @@ addStmtDemands s =
     WriteMem addr _repr val -> do
       addValueDemands addr
       addValueDemands val
+    CondWriteMem cond addr _repr val -> do
+      addValueDemands cond
+      addValueDemands addr
+      addValueDemands val
     InstructionStart{} ->
       pure ()
     Comment _ ->
@@ -129,6 +133,7 @@ stmtNeeded :: AssignIdSet ids -> Stmt arch ids -> Bool
 stmtNeeded demandSet stmt =
   case stmt of
     AssignStmt a -> Set.member (Some (assignId a)) demandSet
+    CondWriteMem{} -> True
     WriteMem{} -> True
     InstructionStart{} -> True
     Comment{} -> True

@@ -580,6 +580,8 @@ x86DemandContext =
                 , archFnHasSideEffects = x86PrimFnHasSideEffects
                 }
 
+-- | Get the next IP that may run after this terminal and the abstract
+-- state denoting possible starting conditions when that code runs.
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
                         -> AbsBlockState X86Reg
