@@ -279,7 +279,7 @@ disassembleFixedBlock gen loc sz = do
           let pblock = emptyPreBlock addr initRegs
           runExceptT $ translateFixedBlock' gen pblock 0 addr contents
 
--- | Attempt to translate a single instruction into a Macaw block.
+-- | Attempt to translate a single instruction into a Macaw block and instruction size.
 translateInstruction :: NonceGenerator (ST st_s) ids
                      -> RegState X86Reg (Value X86_64 ids)
                           -- ^ Registers
