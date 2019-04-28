@@ -31,7 +31,6 @@ module Data.Macaw.CFG.Rewriter
   , rewriteApp
   , evalRewrittenArchFn
   , appendRewrittenArchStmt
-  , addNewBlockFromRewrite
   ) where
 
 import           Control.Lens
@@ -51,7 +50,7 @@ import           Data.STRef
 
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
-import           Data.Macaw.CFG.Block ( TermStmt, Block(..), BlockLabel )
+import           Data.Macaw.CFG.Block (TermStmt)
 
 -- | Information needed for rewriting.
 data RewriteContext arch s src tgt
@@ -90,11 +89,6 @@ data RewriteContext arch s src tgt
                       -- of the assignments can be eliminated this
                       -- should be done via a dead code elimination step
                       -- rather than during rewriting.
-
-                    , rwctxBlockLabel :: BlockLabel
-                      -- ^ The next assignable BlockLabel (used for
-                      -- rewrites that create new blocks, as would be
-                      -- needed for Branch TermStmts.
                     }
 
 mkRewriteContext :: RegisterInfo (ArchReg arch)
@@ -112,10 +106,8 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                     -- Discovery.hs.
                  -> Map SectionIndex (ArchSegmentOff arch)
                     -- ^ Map from loaded section indices to their address.
-                 -> BlockLabel
-                 -- ^ next BlockLabel (useable for creating new Block entries)
                  -> ST s (RewriteContext arch s src tgt)
-mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap nextBlockLabel = do
+mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap = do
   ref <- newSTRef MapF.empty
   pure $! RewriteContext { rwctxNonceGen = nonceGen
                          , rwctxArchFn = archFn
@@ -124,7 +116,6 @@ mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap nextBlockLabel = d
                          , rwctxConstraints = \a -> a
                          , rwctxSectionAddrMap = secAddrMap
                          , rwctxCache = ref
-                         , rwctxBlockLabel = nextBlockLabel
                          }
 
 -- | State used by rewriter for tracking states
@@ -132,20 +123,11 @@ data RewriteState arch s src tgt
    = RewriteState { -- | Access to the context for the rewriter
                     rwContext        :: !(RewriteContext arch s src tgt)
                   , _rwRevStmts      :: ![Stmt arch tgt]
-                  , _rwNewBlocks      :: ![Block arch tgt]
                   }
 
 -- | A list of statements in the current block in reverse order.
 rwRevStmts :: Simple Lens (RewriteState arch s src tgt) [Stmt arch tgt]
 rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
-
--- | A list of newly created Blocks generated during the rewrite operation.
-rwNewBlocks :: Simple Lens (RewriteState arch s src tgt) [Block arch tgt]
-rwNewBlocks = lens _rwNewBlocks (\s v -> s { _rwNewBlocks = v })
-
--- | The next BlockLabel to use for newly created Blocks generated during the rewrite.
-rwBlockLabel :: Simple Lens (RewriteState arch s src tgt) BlockLabel
-rwBlockLabel = lens (rwctxBlockLabel . rwContext) (\s v -> s { rwContext = (rwContext s) { rwctxBlockLabel = v }})
 
 -- | Monad for constant propagation within a block.
 newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch s src tgt) (ST s) a }
@@ -156,17 +138,15 @@ newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteStat
 runRewriter :: RewriteContext arch s src tgt
             -> Rewriter arch s src tgt (TermStmt arch tgt)
             -> ST s ( RewriteContext arch s src tgt
-                    , [Block arch tgt]
                     , [Stmt arch tgt]
                     , (TermStmt arch tgt))
 runRewriter ctx m = do
   let s = RewriteState { rwContext = ctx
                        , _rwRevStmts = []
-                       , _rwNewBlocks = []
                        }
       m' = rwctxTermStmt ctx =<< m
   (r, s') <- runStateT (unRewriter m') s
-  pure (rwContext s', _rwNewBlocks s', reverse (_rwRevStmts s'), r)
+  pure (rwContext s', reverse (_rwRevStmts s'), r)
 
 -- | Add a statement to the list
 appendRewrittenStmt :: Stmt arch tgt -> Rewriter arch s src tgt ()
@@ -179,23 +159,6 @@ appendRewrittenStmt stmt = Rewriter $ do
 -- | Add a architecture-specific statement to the list
 appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src tgt ()
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
-
-
--- | If the rewriting needs to add a new 'Block' (e.g. for a 'Branch'
--- target) it does so by calling this function with that 'Block'.
-addNewBlockFromRewrite :: [Stmt arch tgt]
-                       -> TermStmt arch tgt
-                       -> Rewriter arch s src tgt (BlockLabel)
-addNewBlockFromRewrite stmts termstmt = Rewriter $ do
-  blkLabel <- use rwBlockLabel
-  let blk = Block { blockLabel = blkLabel
-                  , blockStmts = stmts
-                  , blockTerm = termstmt
-                  }
-  rwNewBlocks %= (:) blk
-  rwBlockLabel += 1
-  return blkLabel
-
 
 -- | Add an assignment statement that evaluates the right hand side and return the resulting value.
 evalRewrittenRhs :: AssignRhs arch (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)

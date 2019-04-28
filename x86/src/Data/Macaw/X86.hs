@@ -171,13 +171,12 @@ instance MemWidth w => Show (X86TranslateError w) where
 initError :: MemSegmentOff 64 -- ^ Location to explore from.
           -> RegState X86Reg (Value X86_64 ids)
           -> X86TranslateError 64
-          -> ST st_s (Block X86_64 ids, MemWord 64, Maybe (X86TranslateError 64))
+          -> ST st_s (Block X86_64 ids, MemWord 64)
 initError addr s err = do
-  let b = Block { blockLabel = 0
-                , blockStmts = []
+  let b = Block { blockStmts = []
                 , blockTerm  = TranslateError s (Text.pack (show err))
                 }
-  return (b, segoffOffset addr, Just err)
+  return (b, segoffOffset addr)
 
 -- | Disassemble memory contents using flexdis.
 disassembleInstruction :: MemSegmentOff 64
@@ -310,19 +309,17 @@ translateBlockImpl :: forall st_s ids
                          -- ^ Maximum offset for this addr from start of block.
                      -> [MemChunk 64]
                         -- ^ List of contents to read next.
-                     -> ST st_s (Block X86_64 ids
+                     -> ST st_s ( Block X86_64 ids
                                 , MemWord 64
-                                , Maybe (X86TranslateError 64)
                                 )
 translateBlockImpl gen pblock curIPAddr blockOff maxSize contents = do
   r <- runExceptT $ translateStep gen pblock blockOff curIPAddr contents
   case r of
     Left err -> do
-      let b = Block { blockLabel = pBlockIndex pblock
-                    , blockStmts = toList (pblock^.pBlockStmts)
+      let b = Block { blockStmts = toList (pblock^.pBlockStmts)
                     , blockTerm  = TranslateError (pblock^.pBlockState) (Text.pack (show err))
                     }
-      pure (b, blockOff, Just err)
+      pure (b, blockOff)
     Right (_, res, instSize, nextIP, nextContents) -> do
       let blockOff' = blockOff + fromIntegral instSize
       case unfinishedAtAddr res nextIP of
@@ -331,7 +328,7 @@ translateBlockImpl gen pblock curIPAddr blockOff maxSize contents = do
           , Just nextIPSegOff <- incSegmentOff curIPAddr (toInteger instSize) -> do
               translateBlockImpl gen pblock' nextIPSegOff blockOff' maxSize nextContents
         _ ->
-          pure (finishPartialBlock res, blockOff', Nothing)
+          pure (finishPartialBlock res, blockOff')
 
 {-# DEPRECATED disassembleBlock "Planned for removal." #-}
 
@@ -342,7 +339,7 @@ disassembleBlock :: forall s
                  -> ExploreLoc
                  -> MemWord 64
                     -- ^ Maximum number of bytes in ths block.
-                 -> ST s (Block X86_64 s, MemWord 64, Maybe (X86TranslateError 64))
+                 -> ST s (Block X86_64 s, MemWord 64)
 disassembleBlock gen loc maxSize = do
   let addr = loc_ip loc
   let regs = initX86State loc
@@ -469,13 +466,13 @@ tryDisassembleBlock :: forall s ids
                        -- ^ Maximum size of this block
                     -> ExceptT String (ST s) (Block X86_64 ids, Int, Maybe String)
 tryDisassembleBlock gen addr initRegs maxSize = lift $ do
-  (b, sz, maybeError) <-
+  (b, sz) <-
     case segoffContentsAfter addr of
       Left msg -> do
         initError addr initRegs (FlexdisMemoryError msg)
       Right contents -> do
         translateBlockImpl gen (emptyPreBlock addr initRegs) addr 0 (fromIntegral maxSize) contents
-  pure $! (b, fromIntegral sz, show <$> maybeError)
+  pure $! (b, fromIntegral sz, Nothing)
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
@@ -488,15 +485,15 @@ translateBlockWithRegs :: forall s ids
                          -> Int
                             -- ^ Maximum size of this block
                             -- ^ Abstract state of processor for defining state.
-                         -> ST s ([Block X86_64 ids], Int, Maybe String)
+                         -> ST s (Block X86_64 ids, Int)
 translateBlockWithRegs gen addr initRegs maxSize = do
-  (b, sz, maybeError) <-
+  (b, sz) <-
     case segoffContentsAfter addr of
       Left msg -> do
         initError addr initRegs (FlexdisMemoryError msg)
       Right contents -> do
         translateBlockImpl gen (emptyPreBlock addr initRegs) addr 0 (fromIntegral maxSize) contents
-  pure $! ([b], fromIntegral sz, show <$> maybeError)
+  pure $! (b, fromIntegral sz)
 
 -- | Attempt to identify the write to a stack return address, returning
 -- instructions prior to that write and return  values.

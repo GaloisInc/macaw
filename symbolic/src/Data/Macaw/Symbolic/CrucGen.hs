@@ -1215,16 +1215,6 @@ addMacawStmt baddr stmt =
           crucStmt = MacawArchStateUpdate addr m
       void $ evalMacawStmt crucStmt
 
-lookupCrucibleLabel :: Map Word64 (CR.Label s)
-                       -- ^ Map from block index to Crucible label
-                    -> Word64
-                       -- ^ Index of crucible block
-                    -> CrucGen arch ids h s (CR.Label s)
-lookupCrucibleLabel m idx = do
-  case Map.lookup idx m of
-    Nothing -> fail $ "Could not find label for block " ++ show idx
-    Just l -> pure l
-
 -- | Create a crucible struct for registers from a register state.
 createRegStruct :: forall arch ids h s
                 .  M.RegState (M.ArchReg arch) (M.Value arch ids)
@@ -1261,20 +1251,13 @@ createRegUpdates regs = do
           Nothing -> fail "internal: Register is not bound."
           Just idx -> Just . Pair (crucibleIndex idx) <$> valueToCrucible val
 
-addMacawTermStmt :: Map Word64 (CR.Label s)
-                    -- ^ Map from block index to Crucible label
-                 -> M.TermStmt arch ids
+addMacawTermStmt :: M.TermStmt arch ids
                  -> CrucGen arch ids h s ()
-addMacawTermStmt blockLabelMap tstmt =
+addMacawTermStmt tstmt =
   case tstmt of
     M.FetchAndExecute regs -> do
       s <- createRegStruct regs
       addTermStmt (CR.Return s)
-    M.Branch macawPred macawTrueLbl macawFalseLbl -> do
-      p <- valueToCrucible macawPred
-      t <- lookupCrucibleLabel blockLabelMap macawTrueLbl
-      f <- lookupCrucibleLabel blockLabelMap macawFalseLbl
-      addTermStmt (CR.Br p t f)
     M.ArchTermStmt ts regs -> do
       fns <- translateFns <$> get
       crucGenArchTermStmt fns ts regs
@@ -1356,8 +1339,8 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               -- ^ Base address map
               -> M.ArchSegmentOff arch
                  -- ^ Address of start of block
-              -> Map Word64 (CR.Label s)
-                 -- ^ Map from block index to Crucible label
+              -> CR.Label s
+                 -- ^ Crucible label for this bloclk.
               -> (M.ArchAddrWord arch -> C.Position)
                  -- ^ Function for generating position from offset from start of this block.
               -> M.Block arch ids
@@ -1365,14 +1348,7 @@ addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
                    ( CR.Block (MacawExt arch) s (MacawFunctionResult arch)
                    , [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
                    )
-addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
-  let idx = M.blockLabel b
-  lbl <-
-    case Map.lookup idx blockLabelMap of
-      Just lbl ->
-        pure lbl
-      Nothing ->
-        throwError $ "Internal: Could not find block with index " ++ show idx
+addMacawBlock archFns baseAddrMap addr lbl posFn b = do
   let archRegStructRepr = C.StructRepr (crucArchRegTypes archFns)
   ng <- gets nonceGen
   regRegId <- mmExecST $ freshNonce ng
@@ -1389,7 +1365,7 @@ addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b = do
   fmap (\(b', bs, _) -> (b', bs)) $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
-    addMacawTermStmt blockLabelMap (M.blockTerm b)
+    addMacawTermStmt (M.blockTerm b)
 
 parsedBlockLabel :: (Ord addr, Show addr)
                  => Map (addr, Word64) (CR.Label s)

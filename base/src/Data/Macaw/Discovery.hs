@@ -169,8 +169,6 @@ addTermDemands t = do
   case t of
     FetchAndExecute regs -> do
       traverseF_ addValueDemands regs
-    Branch v _ _ -> do
-      addValueDemands v
     TranslateError regs _ -> do
       traverseF_ addValueDemands regs
     ArchTermStmt _ regs -> do
@@ -812,8 +810,6 @@ data ParseContext arch ids =
                  -- ^ Address of function this block is being parsed as
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
-               , pctxBlockMap       :: !(Map BlockLabel (Block arch ids))
-                 -- ^ Map from block indices to block code at address.
                }
 
 -- | Get the memory representation associated with pointers in the
@@ -1142,30 +1138,6 @@ parseBlock ctx idx initRegs b absProcState = do
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
    case blockTerm b of
-    Branch c lb rb -> do
-      let blockMap = pctxBlockMap ctx
-      -- FIXME: we should propagate c back to the initial block, not just b
-      let absProcState' = absEvalStmts ainfo absProcState (blockStmts b)
-      mapM_ (recordWriteStmt ainfo mem absProcState') (blockStmts b)
-
-      let Just l = Map.lookup lb blockMap
-      let l_regs = refineProcStateBounds c True $ refineProcState c absTrue absProcState'
-      let Just r = Map.lookup rb blockMap
-      let r_regs = refineProcStateBounds c False $ refineProcState c absFalse absProcState'
-
-      let l_regs' = absEvalStmts ainfo l_regs (blockStmts b)
-      let r_regs' = absEvalStmts ainfo r_regs (blockStmts b)
-
-      (parsedTrueBlock,trueIdx)   <- parseBlock ctx (idx+1) initRegs l l_regs'
-      (parsedFalseBlock,falseIdx) <- parseBlock ctx trueIdx initRegs r r_regs'
-
-      let ret = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = blockStmts b
-                              , stmtsTerm  = ParsedIte c parsedTrueBlock parsedFalseBlock
-                              , stmtsAbsState = absProcState'
-                              }
-      pure (ret, falseIdx)
-
     FetchAndExecute finalRegs -> do
       parseFetchAndExecute ctx idx initRegs (Seq.fromList (blockStmts b)) absProcState finalRegs
 
@@ -1200,49 +1172,44 @@ parseBlock ctx idx initRegs b absProcState = do
 
 -- | This evaluates the statements in a block to expand the information known
 -- about control flow targets of this block.
-addBlocks :: ArchSegmentOff arch
-             -- ^ Address of these blocks
-          -> FoundAddr arch
-             -- ^ State leading to explore block
-          -> RegState (ArchReg arch) (Value arch ids)
-          -> Int
-             -- ^ Number of blocks covered
-          -> Map BlockLabel (Block arch ids)
-             -- ^ Map from labelIndex to associated block
-          -> FunM arch s ids ()
-addBlocks src finfo initRegs sz blockMap =
-  case Map.lookup 0 blockMap of
-    Nothing -> do
-      error $ "addBlocks given empty blockRegion."
-    Just b -> do
-      mem       <- uses curFunCtx memory
-      let regs = initAbsProcessorState mem (foundAbstractState finfo)
-      funAddr <- gets curFunAddr
-      s <- use curFunCtx
+addBlock :: ArchSegmentOff arch
+            -- ^ Address of these blocks
+         -> FoundAddr arch
+            -- ^ State leading to explore block
+         -> RegState (ArchReg arch) (Value arch ids)
+         -> Int
+            -- ^ Number of bytes in block
+         -> Block arch ids
+            -- ^ Map from labelIndex to associated block
+         -> FunM arch s ids ()
+addBlock src finfo initRegs sz b = do
+  s <- use curFunCtx
+  let mem = memory s
+  let regs = initAbsProcessorState mem (foundAbstractState finfo)
+  funAddr <- gets curFunAddr
 
-      let ctx = ParseContext { pctxMemory         = memory s
-                             , pctxArchInfo       = archInfo s
-                             , pctxKnownFnEntries = s^.trustedFunctionEntryPoints
-                             , pctxFunAddr        = funAddr
-                             , pctxAddr           = src
-                             , pctxBlockMap       = blockMap
-                             }
-      let ps0 = ParseState { _writtenCodeAddrs = []
-                           , _intraJumpTargets = []
-                           , _newFunctionAddrs = []
-                           }
-      let ((pblock,_), ps) = runState (parseBlock ctx 0 initRegs b regs) ps0
-      let pb = ParsedBlock { pblockAddr = src
-                           , blockSize = sz
-                           , blockReason = foundReason finfo
-                           , blockAbstractState = foundAbstractState finfo
-                           , blockStatementList = pblock
-                           }
-      let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
-      id %= addFunBlock src pb'
-      curFunCtx %= markAddrsAsFunction (PossibleWriteEntry src) (ps^.writtenCodeAddrs)
-                .  markAddrsAsFunction (CallTarget src)         (ps^.newFunctionAddrs)
-      mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
+  let ctx = ParseContext { pctxMemory         = memory s
+                         , pctxArchInfo       = archInfo s
+                         , pctxKnownFnEntries = s^.trustedFunctionEntryPoints
+                         , pctxFunAddr        = funAddr
+                         , pctxAddr           = src
+                         }
+  let ps0 = ParseState { _writtenCodeAddrs = []
+                       , _intraJumpTargets = []
+                       , _newFunctionAddrs = []
+                       }
+  let ((pblock,_), ps) = runState (parseBlock ctx 0 initRegs b regs) ps0
+  let pb = ParsedBlock { pblockAddr = src
+                       , blockSize = sz
+                       , blockReason = foundReason finfo
+                       , blockAbstractState = foundAbstractState finfo
+                       , blockStatementList = pblock
+                       }
+  let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
+  id %= addFunBlock src pb'
+  curFunCtx %= markAddrsAsFunction (PossibleWriteEntry src) (ps^.writtenCodeAddrs)
+            .  markAddrsAsFunction (CallTarget src)         (ps^.newFunctionAddrs)
+  mapM_ (\(addr, abs_state) -> mergeIntraJump src abs_state addr) (ps^.intraJumpTargets)
 
 -- | Record an error block with no statements for the given address.
 recordErrorBlock :: ArchSegmentOff arch -> FoundAddr arch -> Maybe String -> FunM arch s ids ()
@@ -1286,30 +1253,22 @@ transfer addr = do
       Left msg -> do
         recordErrorBlock addr finfo (Just msg)
       Right initRegs -> do
-        (bs0, sz, maybeError) <- liftST $ disassembleFn ainfo nonceGen addr initRegs maxSize
+        (b0, sz) <- liftST $ disassembleFn ainfo nonceGen addr initRegs maxSize
         -- If no blocks are returned, then we just add an empty parsed block.
-        if null bs0 then do
-          recordErrorBlock addr finfo maybeError
-         else do
-          -- Rewrite returned blocks to simplify expressions
+        -- Rewrite returned blocks to simplify expressions
 #ifdef USE_REWRITER
-          bs1 <- snd <$> do
-            let archStmt = rewriteArchStmt ainfo
-            let secAddrMap = memSectionIndexMap mem
-            termStmt <- gets termStmtRewriter <*> pure addr
-            let maxBlockLabel = maximum $ map blockLabel bs0
-            liftST $ do
-              ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo)
-                     archStmt termStmt secAddrMap (maxBlockLabel + 1)
-              foldM (rewriteBlock ainfo) (ctx, []) bs0
+        (_,b) <- do
+          let archStmt = rewriteArchStmt ainfo
+          let secAddrMap = memSectionIndexMap mem
+          termStmt <- gets termStmtRewriter <*> pure addr
+          liftST $ do
+            ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
+            rewriteBlock ainfo ctx b0
 #else
-          bs1 <- pure bs0
+        b <- pure b0
 #endif
-          -- Compute demand set
-          let bs = bs1 -- eliminateDeadStmts ainfo bs1
-          -- Call transfer blocks to calculate parsedblocks
-          let blockMap = Map.fromList [ (blockLabel b, b) | b <- bs ]
-          addBlocks addr finfo initRegs sz blockMap
+        -- Call transfer blocks to calculate parsedblocks
+        addBlock addr finfo initRegs sz b
 
 ------------------------------------------------------------------------
 -- Main loop

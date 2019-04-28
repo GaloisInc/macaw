@@ -264,22 +264,15 @@ addBlocksCFG :: forall h s arch ids
                  -- ^ Address of start of block
              ->  (M.ArchAddrWord arch -> C.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
-             -> [M.Block arch ids]
-             -- ^ List of blocks for this region.
+             -> M.Block arch ids
+             -- ^ Macaw block for this region.
              -> MacawMonad arch ids h s (CR.Label s, [CR.Block (MacawExt arch) s (MacawFunctionResult arch)])
-addBlocksCFG archFns baseAddrMap addr posFn macawBlocks = do
+addBlocksCFG archFns baseAddrMap addr posFn macawBlock = do
   crucGenArchConstraints archFns $ do
    -- Map block map to Crucible CFG
-  blockLabelMap <- fmap Map.fromList $ sequence $
-                     [ mmFreshNonce >>= \n -> return (w, CR.Label n)
-                     | w <- M.blockLabel <$> macawBlocks ]
-  entry <-
-    case Map.lookup 0 blockLabelMap of
-      Just lbl -> return lbl
-      Nothing -> fail "Unable to find initial block"
-  blks <- forM macawBlocks $ \b -> do
-    addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b
-  return (entry, concatMap (uncurry (:)) blks)
+  entry <- CR.Label <$> mmFreshNonce
+  (blk,blks) <- addMacawBlock archFns baseAddrMap addr entry posFn macawBlock
+  return (entry, blk:blks)
 
 -- | Create a registerized Crucible CFG from an arbitrary list of macaw blocks
 --
@@ -303,12 +296,12 @@ mkBlocksRegCFG :: forall s arch ids
                -- ^ Address for start of block.
             -> (M.ArchAddrWord arch -> C.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
-            -> [M.Block arch ids]
+            -> M.Block arch ids
             -- ^ List of blocks for this region.
             -> ST s (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks = do
+mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlock = do
   mkCrucRegCFG archFns halloc nm $ do
-    addBlocksCFG archFns memBaseVarMap addr posFn macawBlocks
+    addBlocksCFG archFns memBaseVarMap addr posFn macawBlock
 
 -- | Create a Crucible CFG from an arbitrary list of macaw blocks
 --
@@ -332,12 +325,12 @@ mkBlocksCFG :: forall s arch ids
                -- ^ Address for start of block.
             -> (M.ArchAddrWord arch -> C.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
-            -> [M.Block arch ids]
+            -> M.Block arch ids
             -- ^ List of blocks for this region.
             -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks =
+mkBlocksCFG archFns halloc memBaseVarMap nm addr posFn macawBlock =
   toCoreCFG archFns <$>
-  mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks
+  mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlock
 
 -- | Create a map from Macaw @(address, index)@ pairs to Crucible labels
 mkBlockLabelMap :: [M.ParsedBlock arch ids] -> MacawMonad arch ids h s (BlockLabelMap arch s)
