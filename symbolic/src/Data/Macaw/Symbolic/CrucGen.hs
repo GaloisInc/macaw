@@ -1411,6 +1411,12 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ParsedJump regs nextAddr -> do
       setMachineRegs =<< createRegStruct regs
       addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr 0)
+    M.ParsedBranch regs c trueAddr falseAddr -> do
+      setMachineRegs =<< createRegStruct regs
+      crucCond <- valueToCrucible c
+      let tlbl = parsedBlockLabel blockLabelMap trueAddr 0
+      let flbl = parsedBlockLabel blockLabelMap falseAddr 0
+      addTermStmt $! CR.Br crucCond tlbl flbl
     M.ParsedLookupTable regs idx possibleAddrs -> do
       setMachineRegs =<< createRegStruct regs
       addSwitch blockLabelMap idx possibleAddrs

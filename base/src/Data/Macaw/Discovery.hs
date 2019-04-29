@@ -209,6 +209,8 @@ addStatementListDemands sl = do
       traverseF_ addValueDemands regs
     ParsedJump regs _ -> do
       traverseF_ addValueDemands regs
+    ParsedBranch regs _ _ _ -> do
+      traverseF_ addValueDemands regs
     ParsedLookupTable regs _idx _tbl  -> do
       traverseF_ addValueDemands regs
     ParsedReturn regs -> do
@@ -807,7 +809,7 @@ data ParseContext arch ids =
                  -- intra-procedural jumps to the entry points of new
                  -- functions.
                , pctxFunAddr        :: !(ArchSegmentOff arch)
-                 -- ^ Address of function this block is being parsed as
+                 -- ^ Address of function this block is being parsefd as
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
                }
@@ -900,6 +902,17 @@ removeUnassignedRegs initRegs finalRegs =
         where initVal = initRegs^.boundValue r
    in MapF.filterWithKey keepReg (regStateMap finalRegs)
 
+-- | This returns true if the address may be the target of a
+-- intra-procedural control flow transfer.
+--
+-- Specifically this checks if the address is executable and not the current
+-- function address or a known function address.
+allowedIntraTarget :: ParseContext arch ids -> ArchSegmentOff arch -> Bool
+allowedIntraTarget ctx addr
+  =  segmentFlags (segoffSegment addr) `Perm.hasPerm` Perm.execute
+  && addr /= pctxFunAddr ctx
+  && addr `Set.notMember` pctxKnownFnEntries ctx
+
 -- | Return true if any value in structure contains the given
 -- identifier.
 containsAssignId :: forall t arch ids itp
@@ -939,30 +952,53 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
    -- Try to figure out what control flow statement we have.
    case () of
     -- The block ends with a Mux, so we turn this into a `ParsedIte` statement.
-    _ | Just (Mux _ c t f) <- valueAsApp (finalRegs^.boundValue ip_reg) -> do
+    _ | Just (Mux _ c t f) <- valueAsApp (finalRegs^.boundValue ip_reg)
+      , Just trueTgtAddr <- valueAsSegmentOff mem t
+        -- Check that true branch is an allowed intra-procedural branch target
+      , allowedIntraTarget ctx trueTgtAddr
+      , Just falseTgtAddr <- valueAsSegmentOff mem f
+        -- Check that false branch is an allowed intra-procedural branch target
+      , allowedIntraTarget ctx falseTgtAddr -> do
+
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
-          let l_regs = refineProcStateBounds c True $
-                          refineProcState c absTrue absProcState'
-          let l_regs' = absEvalStmts ainfo l_regs stmts
-          let lState = finalRegs & boundValue ip_reg .~ t
-          (tStmts,trueIdx) <-
-            parseFetchAndExecute ctx (idx+1) initRegs Seq.empty l_regs' lState
+          -- Registers with true value set.
+          let trueRegs = finalRegs & boundValue ip_reg .~ t
+          -- Abstract state after true regs.
+          let trueEvalState =
+                let refinedTrueState = refineProcStateBounds c True $
+                      refineProcState c absTrue absProcState'
+                 in absEvalStmts ainfo refinedTrueState stmts
+          let trueAbsState = finalAbsBlockState trueEvalState trueRegs
 
-          let r_regs = refineProcStateBounds c False $
-                         refineProcState c absFalse absProcState'
-          let r_regs' = absEvalStmts ainfo r_regs stmts
-          let rState = finalRegs & boundValue ip_reg .~ f
 
-          (fStmts,falseIdx) <-
-            parseFetchAndExecute ctx trueIdx initRegs Seq.empty r_regs' rState
+          -- Merge block state and add intra jump target.
+
+          let tStmts = StatementList { stmtsIdent = idx+1
+                                     , stmtsNonterm = []
+                                     , stmtsTerm  = ParsedJump trueRegs trueTgtAddr
+                                     , stmtsAbsState = trueEvalState
+                                     }
+
+          let falseRegs = finalRegs & boundValue ip_reg .~ f
+          let falseEvalState =
+                let refinedFalseState = refineProcStateBounds c False $
+                      refineProcState c absFalse absProcState'
+                 in absEvalStmts ainfo refinedFalseState stmts
+          let falseAbsState = finalAbsBlockState falseEvalState falseRegs
+          intraJumpTargets %= ([(trueTgtAddr, trueAbsState), (falseTgtAddr, falseAbsState)]++)
+          let fStmts = StatementList { stmtsIdent = idx + 2
+                                     , stmtsNonterm = []
+                                     , stmtsTerm  = ParsedJump falseRegs falseTgtAddr
+                                     , stmtsAbsState = falseEvalState
+                                     }
 
           let ret = StatementList { stmtsIdent = idx
                                   , stmtsNonterm = toList stmts
                                   , stmtsTerm  = ParsedIte c tStmts fStmts
                                   , stmtsAbsState = absProcState'
                                   }
-          pure (ret, falseIdx)
+          pure (ret, idx + 3)
 
     -- Use architecture-specific callback to check if last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
@@ -1007,16 +1043,8 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
 
       -- Jump to a block within this function.
       | Just tgt_mseg <- valueAsSegmentOff mem (finalRegs^.boundValue ip_reg)
-        -- Check target block address is in executable segment.
-      , segmentFlags (segoffSegment tgt_mseg) `Perm.hasPerm` Perm.execute
-
-        -- Check the target address is not the entry point of this function.
-        -- N.B. These should instead decompile into calls or tail calls.
-      , tgt_mseg /= pctxFunAddr ctx
-
-      -- If we are trusting known function entries, then only mark as an
-      -- intra-procedural jump if the target is not a known function entry.
-      , not (tgt_mseg `Set.member` pctxKnownFnEntries ctx) -> do
+        -- Check that target is an allowed intra-procedural branch target.
+      , allowedIntraTarget ctx tgt_mseg -> do
 
          mapM_ (recordWriteStmt ainfo mem absProcState') stmts
          -- Merge block state and add intra jump target.
@@ -1039,7 +1067,6 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
               abst = finalAbsBlockState absProcState' finalRegs
 
           seq abst $ do
-
             forM_ entries $ \tgtAddr -> do
               let abst' = abst & setAbsIP tgtAddr
               intraJumpTargets %= ((tgtAddr, abst'):)

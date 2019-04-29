@@ -1088,7 +1088,7 @@ setAbsIP :: RegisterInfo r
          -> AbsBlockState r
 setAbsIP a b
     -- Check to avoid reassigning next IP if it is not needed.
-  | CodePointers s False <- b^.absRegState^.curIP
+  | CodePointers s False <- b^.absRegState^.boundValue ip_reg
   , Set.size s == 1
   , Set.member a s =
     b
@@ -1316,12 +1316,12 @@ finalAbsBlockState :: forall a ids
                    -> RegState (ArchReg a) (Value a ids)
                       -- ^  Final values for abstract processor state
                    -> AbsBlockState (ArchReg a)
-finalAbsBlockState c s =
+finalAbsBlockState c regs =
   let transferReg :: ArchReg a tp -> ArchAbsValue a tp
-      transferReg r = transferValue c (s^.boundValue r)
+      transferReg r = transferValue c (regs^.boundValue r)
    in AbsBlockState { _absRegState = mkRegState transferReg
                     , _startAbsStack = c^.curAbsStack
-                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) s
+                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) regs
                     }
 
 ------------------------------------------------------------------------

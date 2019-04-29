@@ -242,7 +242,7 @@ data FunctionArgsState arch ids = FAS
     _blockTransfer :: !(Map (ArchLabel arch) (ResultDemandsMap (ArchReg arch)))
 
   -- | If a demand d is demanded of block lbl then the block demands S, s.t.
-  -- blockDemandMap ^. at lbl ^. at d = Just S
+  --   `blockDemandMap ^. at lbl ^. at d = Just S1
   , _blockDemandMap    :: !(Map (ArchLabel arch) (DemandMap (ArchReg arch)))
 
   -- | Maps each global block label to the set of blocks that have intra-procedural
@@ -352,15 +352,21 @@ addBlockDemands lbl m =
   blockDemandMap %= Map.insertWith demandMapUnion lbl m
 
 
--- Figure out the deps of the given registers and update the state for the current label
+-- | Given a block and a maping from register to value after the block
+-- has executed, this traverses the registers that will be available
+-- in future blocks, and records a mapping from those registers to
+-- their input dependencies.
 recordBlockTransfer :: forall arch ids
                     .  ( OrdF (ArchReg arch)
                        , FoldableFC (ArchFn arch)
                        )
                     => ArchLabel arch
+                       -- ^ Label for the current block.
                     -> RegState (ArchReg arch) (Value arch ids)
+                       -- ^ Map from registers to values.
                     -> [Some (ArchReg arch)]
-                    -> FunctionArgsM arch ids () -- Map (Some N.RegisterName) RegDeps
+                       -- ^ List of registers that subsequent blocks may depend on.
+                    -> FunctionArgsM arch ids ()
 recordBlockTransfer lbl s rs = do
   let doReg :: Some (ArchReg arch)
             ->  State (AssignmentCache (ArchReg arch) ids)
@@ -435,16 +441,6 @@ calculateGlobalFixpoint s = go (s^.alwaysDemandMap) (s^.alwaysDemandMap)
     diff ds1 ds2 =
         let ds' = ds1 `demandSetDifference` ds2 in
         if ds' == mempty then Nothing else Just ds'
-
-transferDemands :: OrdF r
-                => Map (Some r) (DemandSet r)
-                -> DemandSet r
-                -> DemandSet r
-transferDemands xfer (DemandSet regs funs) =
-  -- Using ix here means we ignore any registers we don't know about,
-  -- e.g. caller-saved registers after a function call.
-  -- FIXME: is this the correct behavior?
-  mconcat (DemandSet mempty funs : [ xfer ^. ix r | r <- Set.toList regs ])
 
 -- A function call is the only block type that results in the
 -- generation of function call demands, so we split that aspect out
@@ -575,6 +571,14 @@ summarizeBlock mem interpState addr stmts = do
       recordBlockTransfer lbl procState archRegs
       addIntraproceduralJumpTarget interpState lbl tgtAddr
 
+    ParsedBranch nextRegs cond trueAddr falseAddr -> do
+      demandValue lbl cond
+      -- record all propagations
+      let notIP (Some r) = isNothing (testEquality r ip_reg)
+      recordBlockTransfer lbl nextRegs (filter notIP archRegs)
+      addIntraproceduralJumpTarget interpState lbl trueAddr
+      addIntraproceduralJumpTarget interpState lbl falseAddr
+
     ParsedLookupTable finalRegs lookup_idx vec -> do
       demandValue lbl lookup_idx
       -- record all propagations
@@ -633,6 +637,17 @@ summarizeIter mem ist = do
       summarizeBlock mem ist (pblockAddr reg) (blockStatementList reg)
       summarizeIter mem ist
 
+
+transferDemands :: OrdF r
+                => Map (Some r) (DemandSet r)
+                -> DemandSet r
+                -> DemandSet r
+transferDemands xfer (DemandSet regs funs) =
+  -- Using ix here means we ignore any registers we don't know about,
+  -- e.g. caller-saved registers after a function call.
+  -- FIXME: is this the correct behavior?
+  mconcat (DemandSet mempty funs : [ xfer ^. ix r | r <- Set.toList regs ])
+
 calculateOnePred :: (OrdF (ArchReg arch))
                  => DemandMap (ArchReg arch)
                  -> ArchLabel arch
@@ -646,7 +661,6 @@ calculateOnePred newDemands predLbl = do
   -- update uses, returning value before this iteration
   seenDemands <- use (blockDemandMap . ix lbl')
   addBlockDemands lbl' demands'
-  -- seenDemands <- blockDemandMap . ix lbl' <<%= demandMapUnion demands'
 
 
   let diff :: OrdF r => DemandSet r -> DemandSet r -> Maybe (DemandSet r)

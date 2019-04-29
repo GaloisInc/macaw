@@ -162,6 +162,15 @@ data ParsedTermStmt arch ids
             !(Relocation (ArchAddrWidth arch))
   -- | A jump to an explicit address within a function.
   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
+  -- | @ParsedBranch regs cond trueAddr falseAddr@ represents a conditional
+  -- branch that jumps to `trueAddr` if `cond` is true and `falseAddr` otherwise.
+  --
+  -- The value assigned to the IP in `regs` should reflect this if-then-else
+  -- structure.
+  | ParsedBranch !(RegState (ArchReg arch) (Value arch ids))
+                 !(Value arch ids BoolType)
+                 !(ArchSegmentOff arch)
+                 !(ArchSegmentOff arch)
   -- | A lookup table that branches to one of a vector of addresses.
   --
   -- The registers store the registers, the value contains the index to jump
@@ -212,6 +221,9 @@ ppTermStmt ppOff tstmt =
     ParsedJump s addr ->
       text "jump" <+> text (show addr) <$$>
       indent 2 (pretty s)
+    ParsedBranch r c t f  ->
+      text "branch" <+> pretty c <+> text (show t) <+> text (show f) <$$>
+      indent 2 (pretty r)
     ParsedLookupTable s idx entries ->
       text "ijump" <+> pretty idx <$$>
       indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v))

@@ -361,6 +361,7 @@ termStmtToReturn sl = sl { M.stmtsTerm = tm }
       tm0@M.ParsedReturn{} -> tm0
       M.ParsedCall r _ -> M.ParsedReturn r
       M.ParsedJump r _ -> M.ParsedReturn r
+      M.ParsedBranch r _ _ _ -> M.ParsedReturn r
       M.ParsedLookupTable r _ _ -> M.ParsedReturn r
       M.ParsedIte b l r -> M.ParsedIte b (termStmtToReturn l) (termStmtToReturn r)
       M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
@@ -379,6 +380,7 @@ termStmtToJump sl addr = sl { M.stmtsTerm = tm }
     tm :: M.ParsedTermStmt arch ids
     tm = case M.stmtsTerm sl of
       M.ParsedJump r _ -> M.ParsedJump r addr
+      M.ParsedBranch r _ _ _ -> M.ParsedJump r addr
       M.ParsedCall r _ -> M.ParsedJump r addr
       M.ParsedReturn r -> M.ParsedJump r addr
       M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
