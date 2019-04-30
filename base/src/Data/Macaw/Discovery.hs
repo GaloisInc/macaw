@@ -53,8 +53,9 @@ module Data.Macaw.Discovery
        , State.pblockAddr
        , State.blockSize
        , State.blockReason
-       , State.blockStatementList
-       , State.StatementList(..)
+       , State.pblockNonterm
+       , State.blockFinalAbsState
+       , State.pblockTerm
        , State.ParsedTermStmt(..)
          -- * Simplification
        , eliminateDeadStmts
@@ -199,10 +200,10 @@ eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
 
 -- | Add any assignments needed to evaluate statements with side
 -- effects and terminal statement to demand set.
-addStatementListDemands :: StatementList arch ids -> DemandComp arch ids ()
-addStatementListDemands sl = do
-  mapM_ addStmtDemands (stmtsNonterm sl)
-  case stmtsTerm sl of
+addParsedBlockDemands :: ParsedBlock arch ids -> DemandComp arch ids ()
+addParsedBlockDemands b = do
+  mapM_ addStmtDemands (pblockNonterm b)
+  case pblockTerm b of
     ParsedCall regs _ -> do
       traverseF_ addValueDemands regs
     PLTStub regs _ _ ->
@@ -215,10 +216,6 @@ addStatementListDemands sl = do
       traverseF_ addValueDemands regs
     ParsedReturn regs -> do
       traverseF_ addValueDemands regs
-    ParsedIte b x y -> do
-      addValueDemands b
-      addStatementListDemands x
-      addStatementListDemands y
     ParsedArchTermStmt _ regs _ -> do
       traverseF_ addValueDemands regs
     ParsedTranslateError _ -> do
@@ -226,43 +223,18 @@ addStatementListDemands sl = do
     ClassifyFailure regs -> do
       traverseF_ addValueDemands regs
 
--- | Apply the given predicate to all statements in the list and only
--- include statements that pass.
---
--- Note. This may break the program if one is not careful.
-filterStmtList :: (Stmt arch ids -> Bool)
-               -> StatementList arch ids
-               -> StatementList arch ids
-filterStmtList stmtPred s = do
-  let term' =
-        case stmtsTerm s of
-          ParsedIte b x y ->
-            let x' = filterStmtList stmtPred x
-                y' = filterStmtList stmtPred y
-             in ParsedIte b x' y'
-          term -> term
-   in s { stmtsNonterm = filter stmtPred (stmtsNonterm s)
-        , stmtsTerm = term'
-        }
-
--- | Force each nonterminal statement in the list.
-seqStmtList :: StatementList arch ids -> ()
-seqStmtList stmts = foldr seq () (stmtsNonterm stmts)
-
 -- | Eliminate all dead statements in blocks
 dropUnusedCodeInParsedBlock :: ArchitectureInfo arch
-                          -> ParsedBlock arch ids
-                          -> ParsedBlock arch ids
+                            -> ParsedBlock arch ids
+                            -> ParsedBlock arch ids
 dropUnusedCodeInParsedBlock ainfo b =
     -- Important to force the result list here, since otherwise we
     -- hold onto the entire input list
-    seqStmtList stmtList' `seq`
-    b { blockStatementList = stmtList' }
-  where stmtList' = filterStmtList stmtPred l
-        l = blockStatementList b
+    foldr seq () stmts' `seq` b { pblockNonterm = stmts' }
+  where stmts' = filter stmtPred (pblockNonterm b)
         demandSet =
           runDemandComp (archDemandContext ainfo) $ do
-            addStatementListDemands l
+            addParsedBlockDemands b
         stmtPred = stmtNeeded demandSet
 
 ------------------------------------------------------------------------
@@ -926,11 +898,19 @@ containsAssignId droppedAssign =
       hasId v = Any (Set.member (Some droppedAssign) (refsInValue v))
    in getAny . foldMapF hasId
 
+-- | Stores the main block features that may changes from parsing a block.
+data ParsedContents arch ids =
+  ParsedContents { parsedNonterm :: !([Stmt arch ids])
+                   -- ^ The non-terminal statements in the block
+                 , parsedAbsState :: !(AbsProcessorState (ArchReg arch) ids)
+                   -- ^ The abstract state of the block just before terminal
+                 , parsedTerm  :: !(ParsedTermStmt arch ids)
+                   -- ^ The terminal statement in the block.
+                 }
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ParseContext arch ids
-                     -> State.StatementLabel
-                        -- ^ Index label of this block
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Initial register values
                      -> Seq (Stmt arch ids)
@@ -938,13 +918,10 @@ parseFetchAndExecute :: forall arch ids
                      -- ^ Abstract state of registers prior to blocks being executed.
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Final register values
-                     -> State (ParseState arch ids) (StatementList arch ids, StatementLabel)
-                     -- ^ Returns the StatementList constructed from
-                     -- the FetchAndExecute parsing, along with the
-                     -- next StatementLabel to assign (StatementLists
-                     -- can be a recursive tree, e.g. with a
-                     -- 'ParsedIte' in 'ParsedTermStatement').
-parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
+                     -> State (ParseState arch ids) (ParsedContents arch ids)
+                     -- ^ Returns the parsed statements, terminal and
+                     -- abstract state.
+parseFetchAndExecute ctx initRegs stmts absProcState finalRegs = do
   let mem   = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
   let absProcState' = absEvalStmts ainfo absProcState stmts
@@ -962,43 +939,27 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
 
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
 
-          -- Registers with true value set.
-          let trueRegs = finalRegs & boundValue ip_reg .~ t
-          -- Abstract state after true regs.
-          let trueEvalState =
-                let refinedTrueState = refineProcStateBounds c True $
+          let trueAbsState =
+                -- Registers with true value set.
+                let trueRegs = finalRegs & boundValue ip_reg .~ t
+                    refinedTrueState = refineProcStateBounds c True $
                       refineProcState c absTrue absProcState'
-                 in absEvalStmts ainfo refinedTrueState stmts
-          let trueAbsState = finalAbsBlockState trueEvalState trueRegs
+                    trueEvalState = absEvalStmts ainfo refinedTrueState stmts
+                 in finalAbsBlockState trueEvalState trueRegs
 
 
-          -- Merge block state and add intra jump target.
-
-          let tStmts = StatementList { stmtsIdent = idx+1
-                                     , stmtsNonterm = []
-                                     , stmtsTerm  = ParsedJump trueRegs trueTgtAddr
-                                     , stmtsAbsState = trueEvalState
-                                     }
-
-          let falseRegs = finalRegs & boundValue ip_reg .~ f
-          let falseEvalState =
-                let refinedFalseState = refineProcStateBounds c False $
+          let falseAbsState =
+                let falseRegs = finalRegs & boundValue ip_reg .~ f
+                    refinedFalseState = refineProcStateBounds c False $
                       refineProcState c absFalse absProcState'
-                 in absEvalStmts ainfo refinedFalseState stmts
-          let falseAbsState = finalAbsBlockState falseEvalState falseRegs
-          intraJumpTargets %= ([(trueTgtAddr, trueAbsState), (falseTgtAddr, falseAbsState)]++)
-          let fStmts = StatementList { stmtsIdent = idx + 2
-                                     , stmtsNonterm = []
-                                     , stmtsTerm  = ParsedJump falseRegs falseTgtAddr
-                                     , stmtsAbsState = falseEvalState
-                                     }
+                    falseEvalState = absEvalStmts ainfo refinedFalseState stmts
+                 in finalAbsBlockState falseEvalState falseRegs
 
-          let ret = StatementList { stmtsIdent = idx
-                                  , stmtsNonterm = toList stmts
-                                  , stmtsTerm  = ParsedIte c tStmts fStmts
-                                  , stmtsAbsState = absProcState'
-                                  }
-          pure (ret, idx + 3)
+          intraJumpTargets %= ([(trueTgtAddr, trueAbsState), (falseTgtAddr, falseAbsState)]++)
+          pure $! ParsedContents { parsedNonterm = toList stmts
+                                 , parsedAbsState = absProcState'
+                                 , parsedTerm  = ParsedBranch finalRegs c trueTgtAddr falseTgtAddr
+                                 }
 
     -- Use architecture-specific callback to check if last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
@@ -1012,13 +973,10 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
         addNewFunctionAddrs $
           identifyCallTargets mem abst finalRegs
         -- Use the call-specific code to look for new IPs.
-
-        let r = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = toList stmts
-                              , stmtsTerm  = ParsedCall finalRegs (Just ret)
-                              , stmtsAbsState = absProcState'
-                              }
-        pure (r, idx+1)
+        pure $! ParsedContents { parsedNonterm = toList stmts
+                               , parsedAbsState = absProcState'
+                               , parsedTerm  = ParsedCall finalRegs (Just ret)
+                               }
 
       -- This block ends with a return as identified by the
       -- architecture-specific processing.  Basic return
@@ -1034,12 +992,10 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
       | Just prev_stmts <- identifyReturn ainfo stmts finalRegs absProcState' -> do
         mapM_ (recordWriteStmt ainfo mem absProcState') prev_stmts
 
-        let ret = StatementList { stmtsIdent = idx
-                                , stmtsNonterm = toList prev_stmts
-                                , stmtsTerm = ParsedReturn finalRegs
-                                , stmtsAbsState = absProcState'
-                                }
-        pure (ret, idx+1)
+        pure $! ParsedContents { parsedNonterm = toList prev_stmts
+                               , parsedAbsState = absProcState'
+                               , parsedTerm = ParsedReturn finalRegs
+                               }
 
       -- Jump to a block within this function.
       | Just tgt_mseg <- valueAsSegmentOff mem (finalRegs^.boundValue ip_reg)
@@ -1051,12 +1007,10 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
          let abst = finalAbsBlockState absProcState' finalRegs
          let abst' = abst & setAbsIP tgt_mseg
          intraJumpTargets %= ((tgt_mseg, abst'):)
-         let ret = StatementList { stmtsIdent = idx
-                                 , stmtsNonterm = toList stmts
-                                 , stmtsTerm  = ParsedJump finalRegs tgt_mseg
-                                 , stmtsAbsState = absProcState'
-                                 }
-         pure (ret, idx+1)
+         pure $! ParsedContents { parsedNonterm = toList stmts
+                                , parsedAbsState = absProcState'
+                                , parsedTerm  = ParsedJump finalRegs tgt_mseg
+                                }
 
         -- Block ends with what looks like a jump table.
       | Just (_jt, entries, jumpIndex) <- matchJumpTableRef mem absProcState' (finalRegs^.curIP) -> do
@@ -1072,16 +1026,13 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
               intraJumpTargets %= ((tgtAddr, abst'):)
 
             let term = ParsedLookupTable finalRegs jumpIndex entries
-            let ret = StatementList { stmtsIdent = idx
-                                    , stmtsNonterm = toList stmts
-                                    , stmtsTerm = term
-                                    , stmtsAbsState = absProcState'
-                                    }
-            pure (ret,idx+1)
+            pure $! ParsedContents { parsedNonterm = toList stmts
+                                   , parsedAbsState = absProcState'
+                                   , parsedTerm = term
+                                   }
 
     -- Code for PLT entry
-    _ | 0 <- idx
-      , AssignedValue (Assignment valId v)  <- finalRegs^.boundValue ip_reg
+    _ | AssignedValue (Assignment valId v)  <- finalRegs^.boundValue ip_reg
       , ReadMem gotVal _repr <- v
       , Just gotAddr <- valueAsMemAddr gotVal
       , Just gotSegOff <- asSegmentOff mem gotAddr
@@ -1094,12 +1045,10 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
       , not (containsAssignId valId strippedRegs) -> do
 
           mapM_ (recordWriteStmt ainfo mem absProcState') strippedStmts
-          let ret = StatementList { stmtsIdent = idx
-                                  , stmtsNonterm = toList strippedStmts
-                                  , stmtsTerm  = PLTStub strippedRegs gotSegOff r
-                                  , stmtsAbsState = absEvalStmts ainfo absProcState strippedStmts
-                                  }
-          pure (ret, idx+1)
+          pure $! ParsedContents { parsedNonterm = toList strippedStmts
+                                 , parsedAbsState = absEvalStmts ainfo absProcState strippedStmts
+                                 , parsedTerm  = PLTStub strippedRegs gotSegOff r
+                                 }
 
       -- Check for tail call when the calling convention seems to be satisfied.
       | spVal     <- finalRegs^.boundValue sp_reg
@@ -1113,17 +1062,14 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
       -- Block that ends with some unknown
       | otherwise -> do
           mapM_ (recordWriteStmt ainfo mem absProcState') stmts
-          let ret = StatementList { stmtsIdent = idx
-                                  , stmtsNonterm = toList stmts
-                                  , stmtsTerm  = ClassifyFailure finalRegs
-                                  , stmtsAbsState = absProcState'
-                                  }
-          pure (ret,idx+1)
+          pure $! ParsedContents { parsedNonterm = toList stmts
+                                 , parsedAbsState = absProcState'
+                                 , parsedTerm  = ClassifyFailure finalRegs
+                                 }
 
   where finishWithTailCall :: RegisterInfo (ArchReg arch)
                            => AbsProcessorState (ArchReg arch) ids
-                           -> State (ParseState arch ids) ( StatementList arch ids
-                                                          , State.StatementLabel)
+                           -> State (ParseState arch ids) (ParsedContents arch ids)
         finishWithTailCall absProcState' = do
           let mem = pctxMemory ctx
           mapM_ (recordWriteStmt (pctxArchInfo ctx) mem absProcState') stmts
@@ -1135,50 +1081,40 @@ parseFetchAndExecute ctx idx initRegs stmts absProcState finalRegs = do
             -- Look for new instruction pointers
             addNewFunctionAddrs $
               identifyConcreteAddresses mem (abst^.absRegState^.curIP)
-            let ret = StatementList { stmtsIdent = idx
-                                    , stmtsNonterm = toList stmts
-                                    , stmtsTerm  = ParsedCall finalRegs Nothing
-                                    , stmtsAbsState = absProcState'
-                                    }
-            seq ret $ pure (ret,idx+1)
+            pure $! ParsedContents { parsedNonterm = toList stmts
+                                   , parsedAbsState = absProcState'
+                                   , parsedTerm  = ParsedCall finalRegs Nothing
+                                   }
 
 -- | this evalutes the statements in a block to expand the information known
 -- about control flow targets of this block.
 parseBlock :: ParseContext arch ids
               -- ^ Context for parsing blocks.
-           -> State.StatementLabel
-           -- ^ Index for next statements
            -> RegState (ArchReg arch) (Value arch ids)
            -- ^ Initial register values
            -> Block arch ids
               -- ^ Block to parse
            -> AbsProcessorState (ArchReg arch) ids
               -- ^ Abstract state at start of block
-           -> State (ParseState arch ids) ( StatementList arch ids
-                                          , State.StatementLabel)
-           -- ^ Returns the StatementList constructed from the
-           -- parsing, along with the next StatementLabel to assign
-           -- (StatementLists can be a recursive tree, e.g. with a
-           -- 'ParsedIte' in 'ParsedTermStatement').
-parseBlock ctx idx initRegs b absProcState = do
-  let mem       = pctxMemory ctx
+           -> State (ParseState arch ids) (ParsedContents arch ids)
+           -- ^ Returns the parsed statements, terminal and pre-terminal
+           -- abstract state.
+parseBlock ctx initRegs b absProcState = do
+  let mem   = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
    case blockTerm b of
     FetchAndExecute finalRegs -> do
-      parseFetchAndExecute ctx idx initRegs (Seq.fromList (blockStmts b)) absProcState finalRegs
+      parseFetchAndExecute ctx initRegs (Seq.fromList (blockStmts b)) absProcState finalRegs
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg -> do
       -- FIXME: we should propagate c back to the initial block, not just b
       let absProcState' = absEvalStmts ainfo absProcState (blockStmts b)
-
-      let ret = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = blockStmts b
-                              , stmtsTerm = ParsedTranslateError msg
-                              , stmtsAbsState = absProcState'
-                              }
-      pure (ret, idx+1)
+      pure $! ParsedContents { parsedNonterm = blockStmts b
+                             , parsedAbsState = absProcState'
+                             , parsedTerm = ParsedTranslateError msg
+                             }
     ArchTermStmt ts s -> do
       -- FIXME: we should propagate c back to the initial block, not just b
       let absProcState' = absEvalStmts ainfo absProcState (blockStmts b)
@@ -1190,12 +1126,10 @@ parseBlock ctx idx initRegs b absProcState = do
         Just (addr,post) ->
           intraJumpTargets %= ((addr, post):)
         Nothing -> pure ()
-      let ret = StatementList { stmtsIdent = idx
-                              , stmtsNonterm = blockStmts b
-                              , stmtsTerm  = ParsedArchTermStmt ts s (fst <$> r)
-                              , stmtsAbsState = absProcState'
-                              }
-      pure (ret, idx+1)
+      pure $! ParsedContents { parsedNonterm = blockStmts b
+                             , parsedTerm  = ParsedArchTermStmt ts s (fst <$> r)
+                             , parsedAbsState = absProcState'
+                             }
 
 -- | This evaluates the statements in a block to expand the information known
 -- about control flow targets of this block.
@@ -1225,12 +1159,14 @@ addBlock src finfo initRegs sz b = do
                        , _intraJumpTargets = []
                        , _newFunctionAddrs = []
                        }
-  let ((pblock,_), ps) = runState (parseBlock ctx 0 initRegs b regs) ps0
+  let (pc, ps) = runState (parseBlock ctx initRegs b regs) ps0
   let pb = ParsedBlock { pblockAddr = src
                        , blockSize = sz
                        , blockReason = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
-                       , blockStatementList = pblock
+                       , pblockNonterm = parsedNonterm pc
+                       , blockFinalAbsState = parsedAbsState pc
+                       , pblockTerm = parsedTerm pc
                        }
   let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
   id %= addFunBlock src pb'
@@ -1244,17 +1180,13 @@ recordErrorBlock addr finfo maybeError = do
   s <- use curFunCtx
   let mem = memory s
   let errMsg = maybe "Unknown error" Text.pack maybeError
-  let stmts = StatementList
-        { stmtsIdent = 0
-        , stmtsNonterm = []
-        , stmtsTerm = ParsedTranslateError errMsg
-        , stmtsAbsState = initAbsProcessorState mem (foundAbstractState finfo)
-        }
   let pb = ParsedBlock { pblockAddr = addr
                        , blockSize = 0
                        , blockReason = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
-                       , blockStatementList = stmts
+                       , pblockNonterm = []
+                       , blockFinalAbsState = initAbsProcessorState mem (foundAbstractState finfo)
+                       , pblockTerm = ParsedTranslateError errMsg
                        }
   id %= addFunBlock addr pb
 

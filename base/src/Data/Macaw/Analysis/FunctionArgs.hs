@@ -531,20 +531,20 @@ summarizeBlock :: forall arch ids
                .  ArchConstraints arch
                => Memory (ArchAddrWidth arch)
                -> DiscoveryFunInfo arch ids
-               -> ArchSegmentOff arch -- ^ Address of the code.
-               -> StatementList arch ids -- ^ Current block
+               -> ParsedBlock arch ids -- ^ Current block
                -> FunctionArgsM arch ids ()
-summarizeBlock mem interpState addr stmts = do
-  let lbl = GeneratedBlock addr (stmtsIdent stmts)
+summarizeBlock mem interpState b = do
+  let addr = pblockAddr b
+  let lbl = GeneratedBlock addr 0
   -- Add this label to block demand map with empty set.
   addBlockDemands lbl mempty
 
   ctx <- gets $ demandInfoCtx . archDemandInfo
   -- Add all values demanded by non-terminal statements in list.
   mapM_ (mapM_ (\(Some v) -> demandValue lbl v) . stmtDemandedValues ctx)
-        (stmtsNonterm stmts)
+        (pblockNonterm b)
   -- Add values demanded by terminal statements
-  case stmtsTerm stmts of
+  case pblockTerm b of
     ParsedCall finalRegs m_ret_addr -> do
       -- Record the demands based on the call, and add edges between
       -- this note and next nodes.
@@ -592,14 +592,6 @@ summarizeBlock mem interpState addr stmts = do
       demands <- withAssignmentCache $ traverse regDemandSet retRegs
       addBlockDemands lbl $ Map.fromList $ zip demandTypes demands
 
-
-
-    ParsedIte c tblock fblock -> do
-      -- Demand condition then summarize recursive blocks.
-      demandValue lbl c
-      summarizeBlock mem interpState addr tblock
-      summarizeBlock mem interpState addr fblock
-
     ParsedArchTermStmt tstmt finalRegs next_addr -> do
        -- Compute effects of terminal statement.
       ainfo <- gets $ archDemandInfo
@@ -632,9 +624,9 @@ summarizeIter mem ist = do
   case fnFrontier of
     [] ->
       return ()
-    reg : frontier' -> do
+    b : frontier' -> do
       blockFrontier .= frontier'
-      summarizeBlock mem ist (pblockAddr reg) (blockStatementList reg)
+      summarizeBlock mem ist b
       summarizeIter mem ist
 
 
