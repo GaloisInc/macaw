@@ -58,7 +58,6 @@ library
     Data.Macaw.CFG.App
     Data.Macaw.CFG.AssignRhs
     Data.Macaw.CFG.Block
-    Data.Macaw.CFG.BlockLabel
     Data.Macaw.CFG.Core
     Data.Macaw.CFG.DemandSet
     Data.Macaw.CFG.Rewriter
