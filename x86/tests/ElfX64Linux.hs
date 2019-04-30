@@ -119,7 +119,7 @@ testDiscovery expectedFilename elf = do
         F.forM_ (M.elems (dfi ^. MD.parsedBlocks)) $ \pb -> do
           let addr = MD.pblockAddr pb
           unless (S.member addr ignoredBlocks) $ do
-            let term = blockTerminator pb
+            let term = MD.pblockTerm pb
             T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
             T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term) (not (isTranslateError term))
         let actualEntry = MD.discoveredFunAddr dfi
@@ -154,9 +154,6 @@ data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
 
 instance C.Exception ElfException
-
-blockTerminator :: MD.ParsedBlock arch ids -> MD.ParsedTermStmt arch ids
-blockTerminator = MD.stmtsTerm . MD.blockStatementList
 
 isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
 isClassifyFailure ts =
