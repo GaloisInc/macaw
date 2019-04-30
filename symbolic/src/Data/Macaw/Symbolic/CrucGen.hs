@@ -1551,8 +1551,8 @@ addParsedBlock archFns memSegMap blockLabelMap posFn regReg macawBlock = do
         throwError $ "Internal: Could not find block with address " ++ show startAddr
   (b,bs) <-
     runCrucGen archFns memSegMap thisPosFn lbl regReg $ do
-      mapM_ (addMacawStmt startAddr) (M.pblockNonterm macawBlock)
-      addMacawParsedTermStmt blockLabelMap startAddr (M.pblockTerm macawBlock)
+      mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
+      addMacawParsedTermStmt blockLabelMap startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
 
 traverseArchStateUpdateMap :: (Applicative m)

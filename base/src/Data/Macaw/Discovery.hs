@@ -53,9 +53,9 @@ module Data.Macaw.Discovery
        , State.pblockAddr
        , State.blockSize
        , State.blockReason
-       , State.pblockNonterm
+       , State.pblockStmts
        , State.blockFinalAbsState
-       , State.pblockTerm
+       , State.pblockTermStmt
        , State.ParsedTermStmt(..)
          -- * Simplification
        , eliminateDeadStmts
@@ -202,8 +202,8 @@ eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
 -- effects and terminal statement to demand set.
 addParsedBlockDemands :: ParsedBlock arch ids -> DemandComp arch ids ()
 addParsedBlockDemands b = do
-  mapM_ addStmtDemands (pblockNonterm b)
-  case pblockTerm b of
+  mapM_ addStmtDemands (pblockStmts b)
+  case pblockTermStmt b of
     ParsedCall regs _ -> do
       traverseF_ addValueDemands regs
     PLTStub regs _ _ ->
@@ -230,8 +230,8 @@ dropUnusedCodeInParsedBlock :: ArchitectureInfo arch
 dropUnusedCodeInParsedBlock ainfo b =
     -- Important to force the result list here, since otherwise we
     -- hold onto the entire input list
-    foldr seq () stmts' `seq` b { pblockNonterm = stmts' }
-  where stmts' = filter stmtPred (pblockNonterm b)
+    foldr seq () stmts' `seq` b { pblockStmts = stmts' }
+  where stmts' = filter stmtPred (pblockStmts b)
         demandSet =
           runDemandComp (archDemandContext ainfo) $ do
             addParsedBlockDemands b
@@ -781,7 +781,7 @@ data ParseContext arch ids =
                  -- intra-procedural jumps to the entry points of new
                  -- functions.
                , pctxFunAddr        :: !(ArchSegmentOff arch)
-                 -- ^ Address of function this block is being parsefd as
+                 -- ^ Address of function containing this block.
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
                }
@@ -1164,9 +1164,9 @@ addBlock src finfo initRegs sz b = do
                        , blockSize = sz
                        , blockReason = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
-                       , pblockNonterm = parsedNonterm pc
+                       , pblockStmts = parsedNonterm pc
                        , blockFinalAbsState = parsedAbsState pc
-                       , pblockTerm = parsedTerm pc
+                       , pblockTermStmt = parsedTerm pc
                        }
   let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
   id %= addFunBlock src pb'
@@ -1184,9 +1184,9 @@ recordErrorBlock addr finfo maybeError = do
                        , blockSize = 0
                        , blockReason = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
-                       , pblockNonterm = []
+                       , pblockStmts = []
                        , blockFinalAbsState = initAbsProcessorState mem (foundAbstractState finfo)
-                       , pblockTerm = ParsedTranslateError errMsg
+                       , pblockTermStmt = ParsedTranslateError errMsg
                        }
   id %= addFunBlock addr pb
 

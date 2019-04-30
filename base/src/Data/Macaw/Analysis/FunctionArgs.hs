@@ -538,9 +538,9 @@ summarizeBlock mem interpState b = do
   ctx <- gets $ demandInfoCtx . archDemandInfo
   -- Add all values demanded by non-terminal statements in list.
   mapM_ (mapM_ (\(Some v) -> demandValue addr v) . stmtDemandedValues ctx)
-        (pblockNonterm b)
+        (pblockStmts b)
   -- Add values demanded by terminal statements
-  case pblockTerm b of
+  case pblockTermStmt b of
     ParsedCall finalRegs m_ret_addr -> do
       -- Record the demands based on the call, and add edges between
       -- this note and next nodes.

@@ -248,11 +248,11 @@ data ParsedBlock arch ids
                  , blockAbstractState :: !(AbsBlockState (ArchReg arch))
                    -- ^ Abstract state prior to the execution of
                    -- this region.
-                 , pblockNonterm :: !([Stmt arch ids])
+                 , pblockStmts :: !([Stmt arch ids])
                      -- ^ The non-terminal statements in the block
                  , blockFinalAbsState :: !(AbsProcessorState (ArchReg arch) ids)
                    -- ^ The abstract state of the block just before terminal
-                 , pblockTerm  :: !(ParsedTermStmt arch ids)
+                 , pblockTermStmt  :: !(ParsedTermStmt arch ids)
                    -- ^ The terminal statement in the block.
                  }
 
@@ -264,7 +264,7 @@ instance ArchConstraints arch
   pretty b =
     let ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
      in text (show (pblockAddr b)) PP.<> text ":" <$$>
-        indent 2 (vcat (ppStmt ppOff <$> pblockNonterm b) <$$> ppTermStmt (pblockTerm b))
+        indent 2 (vcat (ppStmt ppOff <$> pblockStmts b) <$$> ppTermStmt (pblockTermStmt b))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo

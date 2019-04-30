@@ -400,7 +400,7 @@ mkParsedBlockRegCFG :: forall h arch ids
                  -> ST h (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraints archFns $ do
   mkCrucRegCFG archFns halloc "" $ do
-    let strippedBlock = b { M.pblockTerm = termStmtToReturn (M.pblockTerm b) }
+    let strippedBlock = b { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt b) }
 
     let entryAddr = M.pblockAddr strippedBlock
 
@@ -485,10 +485,10 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
     let entry_addr = M.pblockAddr $ head blocks
     let first_blocks = zipWith
           (\block next_block ->
-            block { M.pblockTerm = termStmtToJump (M.pblockTerm block) (M.pblockAddr next_block) })
+            block { M.pblockTermStmt = termStmtToJump (M.pblockTermStmt block) (M.pblockAddr next_block) })
           (take (length blocks - 1) blocks)
           (tail blocks)
-    let last_block = (last blocks) { M.pblockTerm = termStmtToReturn (M.pblockTerm (last blocks)) }
+    let last_block = (last blocks) { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt (last blocks)) }
     let block_path = first_blocks ++ [last_block]
 
     -- Get type for representing Machine registers
@@ -545,8 +545,8 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
           "the current block follows the previous block in the path"
         addStmt $ CR.Assume cond msg
 
-        mapM_ (addMacawStmt block_addr) (M.pblockNonterm block)
-        addMacawParsedTermStmt block_label_map block_addr (M.pblockTerm block)
+        mapM_ (addMacawStmt block_addr) (M.pblockStmts block)
+        addMacawParsedTermStmt block_label_map block_addr (M.pblockTermStmt block)
       pure (reverse (first_crucible_block:first_extra_crucible_blocks))
 
     pure (entry_label, init_crucible_block :
