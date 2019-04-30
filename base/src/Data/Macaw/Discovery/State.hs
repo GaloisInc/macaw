@@ -21,6 +21,7 @@ representing this information.
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
+  , parsedTermSucc
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
@@ -50,6 +51,7 @@ import           Control.Lens
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe (maybeToList)
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
@@ -232,6 +234,21 @@ ppTermStmt tstmt =
 
 instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
   show = show . ppTermStmt
+
+-- | Get all successor blocks for the given list of statements.
+parsedTermSucc :: ParsedTermStmt arch ids -> [ArchSegmentOff arch]
+parsedTermSucc ts = do
+  case ts of
+    ParsedCall _ (Just ret_addr) -> [ret_addr]
+    ParsedCall _ Nothing -> []
+    PLTStub{} -> []
+    ParsedJump _ tgt -> [tgt]
+    ParsedBranch _ _ t f -> [t,f]
+    ParsedLookupTable _ _ v -> V.toList v
+    ParsedReturn{} -> []
+    ParsedTranslateError{} -> []
+    ParsedArchTermStmt _ _ ret -> maybeToList ret
+    ClassifyFailure{} -> []
 
 ------------------------------------------------------------------------
 -- ParsedBlock
