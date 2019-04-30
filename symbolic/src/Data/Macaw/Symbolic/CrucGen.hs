@@ -108,7 +108,6 @@ import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as Vec
-import           Data.Word
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), width)
 
 import           What4.ProgramLoc as C
@@ -1289,8 +1288,6 @@ runCrucGen :: forall arch ids h s
               -- ^ Base address map
            -> (M.ArchAddrWord arch -> C.Position)
               -- ^ Function for generating position from offset from start of this block.
-           -> M.ArchAddrWord arch
-              -- ^ Offset of this code relative to start of block
            -> CR.Label s
               -- ^ Label for this block
            -> CR.Reg s (ArchRegStruct arch)
@@ -1301,9 +1298,8 @@ runCrucGen :: forall arch ids h s
                     -- Block created
                 , [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
                     -- Extra blocks created along the way
-                , M.ArchAddrWord arch
                 )
-runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstraints archFns $ do
+runCrucGen archFns baseAddrMap posFn lbl regReg action = crucGenArchConstraints archFns $ do
   ps <- get
   let regAssign = crucGenRegAssignment archFns
   let crucRegTypes = crucArchRegTypes archFns
@@ -1314,8 +1310,8 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
                         , crucRegisterReg = regReg
                         , macawPositionFn = posFn
                         , blockLabel = lbl
-                        , codeOff    = off
-                        , codePos    = posFn off
+                        , codeOff    = 0
+                        , codePos    = posFn 0
                         , prevStmts  = []
                         , toBitsCache = MapF.empty
                         , fromBitsCache = MapF.empty
@@ -1329,7 +1325,7 @@ runCrucGen archFns baseAddrMap posFn off lbl regReg action = crucGenArchConstrai
   let term = C.Posd termPos tstmt
   let blk = CR.mkBlock (CR.LabelID lbl) Set.empty stmts term
   let !blks = reverse (extraBlocks s)
-  pure (blk, blks, codeOff s)
+  pure (blk, blks)
 
 addMacawBlock :: M.MemWidth (M.ArchAddrWidth arch)
               => MacawSymbolicArchFunctions arch
@@ -1360,7 +1356,7 @@ addMacawBlock archFns baseAddrMap addr lbl posFn b = do
                           , CR.atomSource = CR.FnInput
                           , CR.typeOfAtom = archRegStructRepr
                           }
-  fmap (\(b', bs, _) -> (b', bs)) $ runCrucGen archFns baseAddrMap posFn 0 lbl regReg $ do
+  runCrucGen archFns baseAddrMap posFn lbl regReg $ do
     addStmt $ CR.SetReg regReg regStruct
     mapM_ (addMacawStmt addr)  (M.blockStmts b)
     addMacawTermStmt (M.blockTerm b)
@@ -1540,23 +1536,23 @@ addParsedBlock :: forall arch ids h s
                     -- ^ Register that stores Macaw registers
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids h s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock archFns memSegMap blockLabelMap posFn regReg b = do
+addParsedBlock archFns memSegMap blockLabelMap posFn regReg macawBlock = do
   crucGenArchConstraints archFns $ do
-  let base = M.pblockAddr b
+  let base = M.pblockAddr macawBlock
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
         where Just r = M.incSegmentOff base (toInteger off)
-  let startAddr = M.pblockAddr b
+  let startAddr = M.pblockAddr macawBlock
   lbl <-
     case Map.lookup startAddr blockLabelMap of
       Just lbl ->
         pure lbl
       Nothing ->
         throwError $ "Internal: Could not find block with address " ++ show startAddr
-  (b,bs,_) <-
-    runCrucGen archFns memSegMap thisPosFn 0 lbl regReg $ do
-      mapM_ (addMacawStmt startAddr) (M.pblockNonterm b)
-      addMacawParsedTermStmt blockLabelMap startAddr (M.pblockTerm b)
+  (b,bs) <-
+    runCrucGen archFns memSegMap thisPosFn lbl regReg $ do
+      mapM_ (addMacawStmt startAddr) (M.pblockNonterm macawBlock)
+      addMacawParsedTermStmt blockLabelMap startAddr (M.pblockTerm macawBlock)
   pure (reverse (b : bs))
 
 traverseArchStateUpdateMap :: (Applicative m)

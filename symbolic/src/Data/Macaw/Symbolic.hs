@@ -428,8 +428,8 @@ mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraint
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
-      runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
+    (initCrucibleBlock,initExtraCrucibleBlocks) <-
+      runCrucGen archFns memBaseVarMap initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
         -- Jump to function entry point
@@ -518,13 +518,12 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
           arch_fns
           mem_base_var_map
           (off_pos_fn addr)
-          0
           label
           arch_reg_struct_reg
 
     -- Generate entry Crucible block
     entry_label <- CR.Label <$> mmFreshNonce
-    (init_crucible_block, init_extra_crucible_blocks, _) <-
+    (init_crucible_block, init_extra_crucible_blocks) <-
       runCrucGen' entry_addr entry_label $ do
         -- Initialize value in arch_reg_struct_reg with initial registers
         setMachineRegs input_atom
@@ -536,7 +535,7 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
       let block_addr = M.pblockAddr block
       let label = block_label_map Map.! block_addr
 
-      (first_crucible_block, first_extra_crucible_blocks, off) <- runCrucGen' block_addr label $ do
+      (first_crucible_block, first_extra_crucible_blocks) <- runCrucGen' block_addr label $ do
         arch_width <- archAddrWidth
         ip_reg_val <- getRegValue M.ip_reg
         block_ptr <- evalMacawStmt $
@@ -619,8 +618,8 @@ mkFunRegCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints ar
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
-      runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
+    (initCrucibleBlock,initExtraCrucibleBlocks) <-
+      runCrucGen archFns memBaseVarMap initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
         -- Jump to function entry point
