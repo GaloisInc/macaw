@@ -34,7 +34,7 @@ library
     binary-symbols >= 0.1.2,
     bytestring,
     containers >= 0.5.8.1,
-    elf-edit >= 0.34,
+    elf-edit >= 0.34.1,
     galois-dwarf,
     IntervalMap >= 0.5,
     lens >= 4.7,
