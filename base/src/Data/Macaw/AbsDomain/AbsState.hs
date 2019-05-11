@@ -553,13 +553,14 @@ meet' x _ = x -- Arbitrarily pick one.
 -------------------------------------------------------------------------------
 -- Operations
 
+-- | @trunc s w@ returns an abstract value @t@ such that foreach @v@ in
+-- @s@, @trunc v w@ is in @t@.
 trunc :: (MemWidth w, v+1 <= u)
       => AbsValue w (BVType u)
       -> NatRepr v
       -> AbsValue w (BVType v)
 trunc (FinSet s) w       = FinSet (Set.map (toUnsigned w) s)
-trunc (CodePointers s b) _ = FinSet sf
-  where (sf,_) = partitionAbsoluteAddrs s b
+trunc (CodePointers s b) _ = TopV
 trunc (StridedInterval s) w = stridedInterval (SI.trunc s w)
 trunc (SubValue n av) w =
   case testNatCases n w of
