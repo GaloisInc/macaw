@@ -880,8 +880,15 @@ exec_xor l v = do
 
 -- ** Shift and Rotate Instructions
 
-exec_sh :: (1 <= n, 8 <= n)
-        => RepValSize n -- ^ Number of bits to shift
+repValSizeAtLeastByte :: RepValSize n -> ((1 <= n, 8 <= n) => a) -> a
+repValSizeAtLeastByte lw a =
+    case lw of
+      ByteRepVal  -> a
+      WordRepVal  -> a
+      DWordRepVal -> a
+      QWordRepVal -> a
+
+exec_sh :: RepValSize n -- ^ Number of bits to shift
         -> Location (Addr ids) (BVType n) -- ^ Location to read/write value to shift
         -> F.Value -- ^ 8-bitshift amount
         -> (BVExpr ids n -> BVExpr ids n -> BVExpr ids n)
@@ -893,7 +900,7 @@ exec_sh :: (1 <= n, 8 <= n)
            -- ^ Function to update overflow flag
            -- Takes current and new value of location.
         -> X86Generator st ids ()
-exec_sh lw l val val_setter cf_setter of_setter = do
+exec_sh lw l val val_setter cf_setter of_setter = repValSizeAtLeastByte lw $ do
   count <-
     case val of
       F.ByteImm i ->
@@ -944,11 +951,8 @@ def_sh :: String
        -> InstructionDef
 def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
   Some (HasRepSize lw l) <- getAddrRegOrSegment loc
-  case lw of
-    ByteRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
-    WordRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
-    DWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
-    QWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
+  repValSizeAtLeastByte lw $
+    exec_sh lw l val val_setter cf_setter of_setter
 
 def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
@@ -993,12 +997,9 @@ def_shXd mnemonic val_setter cf_setter of_setter =
     -- srcVal <- get srcReg
     -- SomeBV srcVal <- getSomeBVValue srcReg
     Some (HasRepSize lw l) <- getAddrRegOrSegment loc
-    srcVal <- getBVValue srcReg (typeWidth l)
-    case lw of
-      ByteRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      WordRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      DWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      QWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+    repValSizeAtLeastByte lw $ do
+      srcVal <- getBVValue srcReg (typeWidth l)
+      exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
 
 def_shld :: InstructionDef
 def_shld = def_shXd "shld" exec_shld set_cf set_of
@@ -1006,15 +1007,20 @@ def_shld = def_shXd "shld" exec_shld set_cf set_of
            (i `bvUle` bvLit n8 (intValue w)) .&&. bvBit v (bvLit w (intValue w) .- uext w i)
         set_of v _ =  msb v
 
-exec_shld :: forall n ids . (1 <= n) =>
-             BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n
-exec_shld srcVal v amt = let w = typeWidth v
-                         in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
-                            withAddLeq w w $
-                            \w2 -> let iv = bvCat v srcVal
-                                       amt' = uext w2 amt
-                                       fv = bvShl iv amt'
-                                   in fst $ bvSplit fv
+exec_shld :: forall n ids
+          . (1 <= n)
+          => BVExpr ids n
+          -> BVExpr ids n
+          -> BVExpr ids n
+          -> BVExpr ids n
+exec_shld srcVal v amt =
+  let w = typeWidth v
+   in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
+      withAddLeq w w $ \w2 ->
+        let iv = bvCat v srcVal
+            amt' = uext w2 amt
+            fv = bvShl iv amt'
+         in fst $ bvSplit fv
 
 def_shrd :: InstructionDef
 def_shrd = def_shXd "shrd" exec_shrd set_cf set_of

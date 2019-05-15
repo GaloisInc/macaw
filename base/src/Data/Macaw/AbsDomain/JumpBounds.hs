@@ -117,6 +117,10 @@ mkIndexBounds i = IndexBounds { _regBounds = initialRegUpperBound i
                               }
 
 -- | Add a inclusive upper bound to a value.
+--
+-- This either returns the refined bounds, or `Left msg` where `msg`
+-- is an explanation of what inconsistency was detected.  The upper
+-- bounds must be non-negative.
 addUpperBound :: ( MapF.OrdF (ArchReg arch)
                  , HasRepr (ArchReg arch) TypeRepr
                  )
@@ -132,23 +136,29 @@ addUpperBound v u bnds
   case v of
     BVValue _ c | c <= u -> Right bnds
                 | otherwise -> Left "Constant given upper bound that is statically less than given bounds"
-    RelocatableValue{} -> Left "Relocatable value does not have upper bounds."
-    SymbolValue{}      -> Left "Symbol value does not have upper bounds."
+    RelocatableValue{} -> Right bnds
+    SymbolValue{}      -> Right bnds
     AssignedValue a ->
       case assignRhs a of
         EvalApp (UExt x _) -> addUpperBound x u bnds
-        EvalApp (Trunc x w) ->
-          if u < maxUnsigned w then
-            addUpperBound x u bnds
-           else
-            Right $ bnds
+-- The code below tries to associate an upper bound through a truncation, but this is not sound.
+-- The underlying value may have 0 low order bits, but still be a large number.
+--        EvalApp (Trunc x w) ->
+--          if u < maxUnsigned w then
+--            addUpperBound x u bnds
+--           else
+--            Right $ bnds
         _ ->
           Right $ bnds & assignUpperBound %~ MapF.insertWith min (assignId a) (IntegerUpperBound u)
     Initial r ->
       Right $ bnds & regBounds %~ MapF.insertWith min r (IntegerUpperBound u)
 
 
--- | Assert a predice is true and update bounds.
+-- | Assert a predicate is true/false and update bounds.
+--
+-- If it returns a new upper bounds, then that may be used.
+-- Otherwise, it detects an inconsistency and returns a message
+-- explaing why.
 assertPred :: ( OrdF (ArchReg arch)
               , HasRepr (ArchReg arch) TypeRepr
               )
@@ -167,9 +177,9 @@ assertPred (AssignedValue a) isTrue bnds =
     -- Given not (c <= y), assert y <= (c-1)
     EvalApp (BVUnsignedLe (BVValue _ c) y) | not isTrue -> addUpperBound y (c-1) bnds
     -- Given x && y, assert x, then assert y
-    EvalApp (AndApp l r) | isTrue     -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    EvalApp (AndApp l r) | isTrue     -> (assertPred l True >=> assertPred r True) bnds
     -- Given not (x || y), assert not x, then assert not y
-    EvalApp (OrApp  l r) | not isTrue -> (assertPred l isTrue >=> assertPred r isTrue) bnds
+    EvalApp (OrApp  l r) | not isTrue -> (assertPred l False >=> assertPred r False) bnds
     EvalApp (NotApp p) -> assertPred p (not isTrue) bnds
     _ -> Right bnds
 assertPred _ _ bnds = Right bnds

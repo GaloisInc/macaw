@@ -446,11 +446,17 @@ initRegsFromAbsState addr ab = do
       Nothing -> do
         Left $ "Could not determine df flag " ++ show (ab^.absRegState^.boundValue DF)
       Just d -> pure d
-  pure $ initX86State $
-        ExploreLoc { loc_ip = addr
-                   , loc_x87_top = fromInteger t
-                   , loc_df_flag = d /= 0
-                   }
+  let mkReg :: X86Reg tp -> Value X86_64 ids tp
+      mkReg r
+        | Just Refl <- testEquality r X86_IP =
+            RelocatableValue Addr64 (segoffAddr addr)
+        | Just Refl <- testEquality r X87_TopReg =
+            mkLit knownNat t
+        | Just Refl <- testEquality r DF =
+            BoolValue (d /= 0)
+        | otherwise = Initial r
+  pure $! mkRegState mkReg
+
 
 {-# DEPRECATED tryDisassembleBlock "Planned to be removed." #-}
 

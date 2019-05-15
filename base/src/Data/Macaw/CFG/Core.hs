@@ -42,7 +42,7 @@ module Data.Macaw.CFG.Core
   , ppValueAssignments
   , ppValueAssignmentList
   -- * RegState
-  , RegState(..)
+  , RegState
   , regStateMap
   , boundValue
   , cmpRegState
@@ -421,10 +421,9 @@ traverseRegsWith_ :: Applicative m
 traverseRegsWith_ f (RegState m) = MapF.traverseWithKey_ f m
 
 -- | Traverse the register state with the name of each register and value.
-mapRegsWith :: Applicative m
-                 => (forall tp. r tp -> f tp -> g tp)
-                 -> RegState r f
-                 -> RegState r g
+mapRegsWith :: (forall tp. r tp -> f tp -> g tp)
+            -> RegState r f
+            -> RegState r g
 mapRegsWith f (RegState m) = RegState (MapF.mapWithKey f m)
 
 {-# INLINE[1] boundValue #-} -- Make sure the RULE gets a chance to fire
@@ -617,7 +616,7 @@ ppAssignRhs _  (SetUndefined tp) = pure $ text "undef ::" <+> brackets (text (sh
 ppAssignRhs pp (ReadMem a repr) =
   (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (CondReadMem repr c a d) = f <$> pp c <*> pp a <*> pp d
-  where f cd ad dd = text "read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
+  where f cd ad dd = text "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
 instance ArchConstraints arch => Pretty (AssignRhs arch (Value arch ids) tp) where

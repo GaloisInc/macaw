@@ -53,6 +53,7 @@ module Data.Macaw.Discovery
        , State.pblockAddr
        , State.blockSize
        , State.blockReason
+       , State.blockAbstractState
        , State.pblockStmts
        , State.blockFinalAbsState
        , State.pblockTermStmt
@@ -147,19 +148,6 @@ cameFromUnsoundReason found_map rsn = do
 ------------------------------------------------------------------------
 --
 
--- | This uses an assertion about a given value being true or false to
--- refine the information in an abstract processor state.
-refineProcStateBounds :: ( OrdF (ArchReg arch)
-                         , HasRepr (ArchReg arch) TypeRepr
-                         )
-                      => Value arch ids BoolType
-                      -> Bool
-                      -> AbsProcessorState (ArchReg arch) ids
-                      -> AbsProcessorState (ArchReg arch) ids
-refineProcStateBounds v isTrue ps =
-  case indexBounds (Jmp.assertPred v isTrue) ps of
-    Left{}    -> ps
-    Right ps' -> ps'
 
 ------------------------------------------------------------------------
 -- Eliminate dead code in blocks
@@ -189,11 +177,11 @@ elimDeadStmtsInBlock demandSet b =
     }
 
 -- | Eliminate all dead statements in blocks
-eliminateDeadStmts :: ArchitectureInfo arch -> [Block arch ids] -> [Block arch ids]
-eliminateDeadStmts ainfo bs0 = elimDeadStmtsInBlock demandSet <$> bs0
+eliminateDeadStmts :: ArchitectureInfo arch -> Block arch ids -> Block arch ids
+eliminateDeadStmts ainfo b = elimDeadStmtsInBlock demandSet b
   where demandSet =
           runDemandComp (archDemandContext ainfo) $ do
-            traverse_ addBlockDemands bs0
+            addBlockDemands b
 
 ------------------------------------------------------------------------
 -- Eliminate dead code in blocks
@@ -908,6 +896,49 @@ data ParsedContents arch ids =
                    -- ^ The terminal statement in the block.
                  }
 
+-- | @normBool b q@ returns a pair where for each `NotApp` applied to @b@, we recursively
+-- take the argument to `NotApp` and the Boolean.
+--
+-- This is used to compare if one value is equal to or the syntactic
+-- complement of another value.
+normBool :: Value arch ids BoolType -> Bool -> (Value arch ids BoolType, Bool)
+normBool x b
+  | AssignedValue a <- x
+  , EvalApp (NotApp xn) <- assignRhs a =
+      normBool xn (not b)
+  | otherwise = (x,b)
+
+-- | This computes the abstract state for the start of a block for a
+-- given branch target.  It is used so that we can make use of the
+-- branch condition to simplify the abstract state.
+branchBlockState :: forall a ids t
+               .  ( Foldable t
+                  )
+               => ArchitectureInfo a
+               -> AbsProcessorState (ArchReg a) ids
+               -> t (Stmt a ids)
+               -> RegState (ArchReg a) (Value a ids)
+                  -- ^  Register values
+               -> Value a ids BoolType
+                  -- ^ Branch condition
+               -> Bool
+                  -- ^ Flag indicating if branch is true or false.
+               ->  Either String (AbsBlockState (ArchReg a))
+branchBlockState ainfo ps0 stmts regs c0 isTrue0 = withArchConstraints ainfo $ do
+  let (c,isTrue) = normBool c0 isTrue0
+  ps <- refineProcState c isTrue ps0
+  let mapReg :: ArchReg a tp -> Value a ids tp -> Value a ids tp
+      mapReg _r v
+        | AssignedValue a <- v
+        , EvalApp (Mux _ cv0 tv fv) <- assignRhs a
+        , (cv, b) <- normBool cv0 isTrue
+        , cv == c =
+            if b then tv else fv
+        | otherwise =
+            v
+  let refinedRegs = mapRegsWith mapReg regs
+  pure $ finalAbsBlockState (absEvalStmts ainfo ps stmts) refinedRegs
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  ParseContext arch ids
@@ -921,10 +952,11 @@ parseFetchAndExecute :: forall arch ids
                      -> State (ParseState arch ids) (ParsedContents arch ids)
                      -- ^ Returns the parsed statements, terminal and
                      -- abstract state.
-parseFetchAndExecute ctx initRegs stmts absProcState finalRegs = do
+parseFetchAndExecute ctx initRegs stmts initAbsState finalRegs = do
   let mem   = pctxMemory ctx
   let ainfo = pctxArchInfo ctx
-  let absProcState' = absEvalStmts ainfo absProcState stmts
+  let absState = absEvalStmts ainfo initAbsState stmts
+  let absProcState' = absState
   withArchConstraints ainfo $ do
    -- Try to figure out what control flow statement we have.
    case () of
@@ -937,29 +969,39 @@ parseFetchAndExecute ctx initRegs stmts absProcState finalRegs = do
         -- Check that false branch is an allowed intra-procedural branch target
       , allowedIntraTarget ctx falseTgtAddr -> do
 
-          mapM_ (recordWriteStmt ainfo mem absProcState') stmts
+          mapM_ (recordWriteStmt ainfo mem absState) stmts
 
-          let trueAbsState =
-                -- Registers with true value set.
-                let trueRegs = finalRegs & boundValue ip_reg .~ t
-                    refinedTrueState = refineProcStateBounds c True $
-                      refineProcState c absTrue absProcState'
-                    trueEvalState = absEvalStmts ainfo refinedTrueState stmts
-                 in finalAbsBlockState trueEvalState trueRegs
-
-
-          let falseAbsState =
-                let falseRegs = finalRegs & boundValue ip_reg .~ f
-                    refinedFalseState = refineProcStateBounds c False $
-                      refineProcState c absFalse absProcState'
-                    falseEvalState = absEvalStmts ainfo refinedFalseState stmts
-                 in finalAbsBlockState falseEvalState falseRegs
-
-          intraJumpTargets %= ([(trueTgtAddr, trueAbsState), (falseTgtAddr, falseAbsState)]++)
-          pure $! ParsedContents { parsedNonterm = toList stmts
-                                 , parsedAbsState = absProcState'
-                                 , parsedTerm  = ParsedBranch finalRegs c trueTgtAddr falseTgtAddr
-                                 }
+          case ( branchBlockState ainfo absState stmts finalRegs c True
+               , branchBlockState ainfo absState stmts finalRegs c False
+               ) of
+            (Right trueAbsState, Right falseAbsState) -> do
+              intraJumpTargets %= ([(trueTgtAddr, trueAbsState), (falseTgtAddr, falseAbsState)]++)
+              pure $! ParsedContents { parsedNonterm = toList stmts
+                                     , parsedAbsState = absState
+                                     , parsedTerm  = ParsedBranch finalRegs c trueTgtAddr falseTgtAddr
+                                     }
+            -- The false branch is impossible.
+            (Right trueAbsState, Left _) -> do
+              intraJumpTargets %= ((trueTgtAddr, trueAbsState):)
+              pure $! ParsedContents { parsedNonterm = toList stmts
+                                     , parsedAbsState = absState
+                                     , parsedTerm  = ParsedJump finalRegs trueTgtAddr
+                                     }
+            -- The true branch is impossible.
+            (Left _ , Right falseAbsState) -> do
+              intraJumpTargets %= ((falseTgtAddr, falseAbsState):)
+              pure $! ParsedContents { parsedNonterm = toList stmts
+                                     , parsedAbsState = absState
+                                     , parsedTerm  = ParsedJump finalRegs falseTgtAddr
+                                     }
+            -- Both branches were deemed impossible
+            (Left _ , Left _) -> do
+              pure $! ParsedContents { parsedNonterm = toList stmts
+                                     , parsedAbsState = absState
+                                       -- TODO: Consider introducing
+                                       -- an unreachable terminator.
+                                     , parsedTerm  = ClassifyFailure finalRegs
+                                     }
 
     -- Use architecture-specific callback to check if last statement was a call.
     -- Note that in some cases the call is known not to return, and thus
@@ -1046,7 +1088,7 @@ parseFetchAndExecute ctx initRegs stmts absProcState finalRegs = do
 
           mapM_ (recordWriteStmt ainfo mem absProcState') strippedStmts
           pure $! ParsedContents { parsedNonterm = toList strippedStmts
-                                 , parsedAbsState = absEvalStmts ainfo absProcState strippedStmts
+                                 , parsedAbsState = absEvalStmts ainfo initAbsState strippedStmts
                                  , parsedTerm  = PLTStub strippedRegs gotSegOff r
                                  }
 
