@@ -264,22 +264,15 @@ addBlocksCFG :: forall h s arch ids
                  -- ^ Address of start of block
              ->  (M.ArchAddrWord arch -> C.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
-             -> [M.Block arch ids]
-             -- ^ List of blocks for this region.
+             -> M.Block arch ids
+             -- ^ Macaw block for this region.
              -> MacawMonad arch ids h s (CR.Label s, [CR.Block (MacawExt arch) s (MacawFunctionResult arch)])
-addBlocksCFG archFns baseAddrMap addr posFn macawBlocks = do
+addBlocksCFG archFns baseAddrMap addr posFn macawBlock = do
   crucGenArchConstraints archFns $ do
    -- Map block map to Crucible CFG
-  blockLabelMap <- fmap Map.fromList $ sequence $
-                     [ mmFreshNonce >>= \n -> return (w, CR.Label n)
-                     | w <- M.blockLabel <$> macawBlocks ]
-  entry <-
-    case Map.lookup 0 blockLabelMap of
-      Just lbl -> return lbl
-      Nothing -> fail "Unable to find initial block"
-  blks <- forM macawBlocks $ \b -> do
-    addMacawBlock archFns baseAddrMap addr blockLabelMap posFn b
-  return (entry, concatMap (uncurry (:)) blks)
+  entry <- CR.Label <$> mmFreshNonce
+  (blk,blks) <- addMacawBlock archFns baseAddrMap addr entry posFn macawBlock
+  return (entry, blk:blks)
 
 -- | Create a registerized Crucible CFG from an arbitrary list of macaw blocks
 --
@@ -303,12 +296,12 @@ mkBlocksRegCFG :: forall s arch ids
                -- ^ Address for start of block.
             -> (M.ArchAddrWord arch -> C.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
-            -> [M.Block arch ids]
+            -> M.Block arch ids
             -- ^ List of blocks for this region.
             -> ST s (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks = do
+mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlock = do
   mkCrucRegCFG archFns halloc nm $ do
-    addBlocksCFG archFns memBaseVarMap addr posFn macawBlocks
+    addBlocksCFG archFns memBaseVarMap addr posFn macawBlock
 
 -- | Create a Crucible CFG from an arbitrary list of macaw blocks
 --
@@ -332,69 +325,56 @@ mkBlocksCFG :: forall s arch ids
                -- ^ Address for start of block.
             -> (M.ArchAddrWord arch -> C.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
-            -> [M.Block arch ids]
+            -> M.Block arch ids
             -- ^ List of blocks for this region.
             -> ST s (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlocksCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks =
+mkBlocksCFG archFns halloc memBaseVarMap nm addr posFn macawBlock =
   toCoreCFG archFns <$>
-  mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlocks
+  mkBlocksRegCFG archFns halloc memBaseVarMap nm addr posFn macawBlock
 
 -- | Create a map from Macaw @(address, index)@ pairs to Crucible labels
 mkBlockLabelMap :: [M.ParsedBlock arch ids] -> MacawMonad arch ids h s (BlockLabelMap arch s)
 mkBlockLabelMap blks = foldM insBlock Map.empty blks
  where insBlock :: BlockLabelMap arch s -> M.ParsedBlock arch ids -> MacawMonad arch ids h s (BlockLabelMap arch s)
-       insBlock m b = insSentences (M.pblockAddr b) m [M.blockStatementList b]
-
-       insSentences :: M.ArchSegmentOff arch
-                    -> (BlockLabelMap arch s)
-                    -> [M.StatementList arch ids]
-                    -> MacawMonad arch ids h s (BlockLabelMap arch s)
-       insSentences _ m [] = return m
-       insSentences base m (s:r) = do
+       insBlock m b = do
+         let base = M.pblockAddr b
          n <- mmFreshNonce
-         insSentences base
-                      (Map.insert (base,M.stmtsIdent s) (CR.Label n) m)
-                      (nextStatements (M.stmtsTerm s) ++ r)
+         pure $! Map.insert base (CR.Label n) m
 
 -- | Normalise any term statements to returns --- i.e., remove branching, jumping, etc.
 --
 -- This is used when translating a single Macaw block into Crucible, as Crucible
 -- functions must end in a return.
-termStmtToReturn :: forall arch ids. M.StatementList arch ids -> M.StatementList arch ids
-termStmtToReturn sl = sl { M.stmtsTerm = tm }
-  where
-    tm :: M.ParsedTermStmt arch ids
-    tm = case M.stmtsTerm sl of
-      tm0@M.ParsedReturn{} -> tm0
-      M.ParsedCall r _ -> M.ParsedReturn r
-      M.ParsedJump r _ -> M.ParsedReturn r
-      M.ParsedLookupTable r _ _ -> M.ParsedReturn r
-      M.ParsedIte b l r -> M.ParsedIte b (termStmtToReturn l) (termStmtToReturn r)
-      M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
-      M.ClassifyFailure r -> M.ParsedReturn r
-      tm0@M.PLTStub{} -> tm0
-      tm0@M.ParsedTranslateError{} -> tm0
+termStmtToReturn :: forall arch ids. M.ParsedTermStmt arch ids -> M.ParsedTermStmt arch ids
+termStmtToReturn tm0 =
+  case tm0 of
+    M.ParsedReturn{} -> tm0
+    M.ParsedCall r _ -> M.ParsedReturn r
+    M.ParsedJump r _ -> M.ParsedReturn r
+    M.ParsedBranch r _ _ _ -> M.ParsedReturn r
+    M.ParsedLookupTable r _ _ -> M.ParsedReturn r
+    M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
+    M.ClassifyFailure r -> M.ParsedReturn r
+    M.PLTStub{} -> tm0
+    M.ParsedTranslateError{} -> tm0
 
 -- | Normalise any term statements to jumps.
 termStmtToJump
   :: forall arch ids
-   . M.StatementList arch ids
+   . M.ParsedTermStmt arch ids
   -> M.ArchSegmentOff arch
-  -> M.StatementList arch ids
-termStmtToJump sl addr = sl { M.stmtsTerm = tm }
-  where
-    tm :: M.ParsedTermStmt arch ids
-    tm = case M.stmtsTerm sl of
-      M.ParsedJump r _ -> M.ParsedJump r addr
-      M.ParsedCall r _ -> M.ParsedJump r addr
-      M.ParsedReturn r -> M.ParsedJump r addr
-      M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
-      M.ParsedIte b l r ->
-        M.ParsedIte b (termStmtToJump l addr) (termStmtToJump r addr)
-      M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
-      M.ClassifyFailure r -> M.ParsedJump r addr
-      tm0@M.PLTStub{} -> tm0
-      tm0@M.ParsedTranslateError{} -> tm0
+  -> M.ParsedTermStmt arch ids
+termStmtToJump tm0 addr =
+  case tm0 of
+    M.ParsedJump r _ -> M.ParsedJump r addr
+    M.ParsedBranch r _ _ _ -> M.ParsedJump r addr
+    M.ParsedCall r _ -> M.ParsedJump r addr
+    M.ParsedReturn r -> M.ParsedJump r addr
+    M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
+    M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
+    M.ClassifyFailure r -> M.ParsedJump r addr
+    M.PLTStub{} -> tm0
+    M.ParsedTranslateError{} -> tm0
 
 -- | Create a registerized Crucible CFG from a single Macaw 'M.ParsedBlock'.
 -- Note that the term statement of the block is updated to make it a return (and
@@ -420,7 +400,7 @@ mkParsedBlockRegCFG :: forall h arch ids
                  -> ST h (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraints archFns $ do
   mkCrucRegCFG archFns halloc "" $ do
-    let strippedBlock = b { M.blockStatementList = termStmtToReturn (M.blockStatementList b) }
+    let strippedBlock = b { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt b) }
 
     let entryAddr = M.pblockAddr strippedBlock
 
@@ -448,12 +428,12 @@ mkParsedBlockRegCFG archFns halloc memBaseVarMap posFn b = crucGenArchConstraint
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
-      runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
+    (initCrucibleBlock,initExtraCrucibleBlocks) <-
+      runCrucGen archFns memBaseVarMap initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
         -- Jump to function entry point
-        addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr 0)
+        addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr)
 
     -- Generate code for Macaw block after entry
     crucibleBlock <- addParsedBlock archFns memBaseVarMap blockLabelMap posFn regReg strippedBlock
@@ -505,10 +485,10 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
     let entry_addr = M.pblockAddr $ head blocks
     let first_blocks = zipWith
           (\block next_block ->
-            block { M.blockStatementList = termStmtToJump (M.blockStatementList block) (M.pblockAddr next_block) })
+            block { M.pblockTermStmt = termStmtToJump (M.pblockTermStmt block) (M.pblockAddr next_block) })
           (take (length blocks - 1) blocks)
           (tail blocks)
-    let last_block = (last blocks) { M.blockStatementList = termStmtToReturn (M.blockStatementList (last blocks)) }
+    let last_block = (last blocks) { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt (last blocks)) }
     let block_path = first_blocks ++ [last_block]
 
     -- Get type for representing Machine registers
@@ -538,26 +518,24 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
           arch_fns
           mem_base_var_map
           (off_pos_fn addr)
-          0
           label
           arch_reg_struct_reg
 
     -- Generate entry Crucible block
     entry_label <- CR.Label <$> mmFreshNonce
-    (init_crucible_block, init_extra_crucible_blocks, _) <-
+    (init_crucible_block, init_extra_crucible_blocks) <-
       runCrucGen' entry_addr entry_label $ do
         -- Initialize value in arch_reg_struct_reg with initial registers
         setMachineRegs input_atom
         -- Jump to function entry point
-        addTermStmt $ CR.Jump (parsedBlockLabel block_label_map entry_addr 0)
+        addTermStmt $ CR.Jump (parsedBlockLabel block_label_map entry_addr)
 
     -- Generate code for Macaw blocks
     crucible_blocks <- forM block_path $ \block -> do
       let block_addr = M.pblockAddr block
-      let stmts = M.blockStatementList block
-      let label = block_label_map Map.! (block_addr, M.stmtsIdent stmts)
+      let label = block_label_map Map.! block_addr
 
-      (first_crucible_block, first_extra_crucible_blocks, off) <- runCrucGen' block_addr label $ do
+      (first_crucible_block, first_extra_crucible_blocks) <- runCrucGen' block_addr label $ do
         arch_width <- archAddrWidth
         ip_reg_val <- getRegValue M.ip_reg
         block_ptr <- evalMacawStmt $
@@ -567,19 +545,9 @@ mkBlockPathRegCFG arch_fns halloc mem_base_var_map pos_fn blocks =
           "the current block follows the previous block in the path"
         addStmt $ CR.Assume cond msg
 
-        mapM_ (addMacawStmt block_addr) (M.stmtsNonterm stmts)
-        addMacawParsedTermStmt block_label_map block_addr (M.stmtsTerm stmts)
-
-      let next_stmts = map ((,) off) $ nextStatements $ M.stmtsTerm stmts
-      addStatementList
-        arch_fns
-        mem_base_var_map
-        block_label_map
-        block_addr
-        (off_pos_fn block_addr)
-        arch_reg_struct_reg
-        next_stmts
-        (first_crucible_block:first_extra_crucible_blocks)
+        mapM_ (addMacawStmt block_addr) (M.pblockStmts block)
+        addMacawParsedTermStmt block_label_map block_addr (M.pblockTermStmt block)
+      pure (reverse (first_crucible_block:first_extra_crucible_blocks))
 
     pure (entry_label, init_crucible_block :
                          init_extra_crucible_blocks ++ concat crucible_blocks)
@@ -650,12 +618,12 @@ mkFunRegCFG archFns halloc memBaseVarMap nm posFn fn = crucGenArchConstraints ar
     let initPosFn :: M.ArchAddrWord arch -> C.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
-    (initCrucibleBlock,initExtraCrucibleBlocks,_) <-
-      runCrucGen archFns memBaseVarMap initPosFn 0 entryLabel regReg $ do
+    (initCrucibleBlock,initExtraCrucibleBlocks) <-
+      runCrucGen archFns memBaseVarMap initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
         setMachineRegs inputAtom
         -- Jump to function entry point
-        addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr 0)
+        addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr)
 
     -- Generate code for Macaw blocks after entry
     restCrucibleBlocks <-

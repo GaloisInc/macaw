@@ -21,7 +21,7 @@ representing this information.
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
-  , StatementList(..), StatementLabel
+  , parsedTermSucc
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
@@ -51,6 +51,7 @@ import           Control.Lens
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe (maybeToList)
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
@@ -58,7 +59,6 @@ import           Data.Set (Set)
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
-import           Data.Word
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
@@ -162,6 +162,15 @@ data ParsedTermStmt arch ids
             !(Relocation (ArchAddrWidth arch))
   -- | A jump to an explicit address within a function.
   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
+  -- | @ParsedBranch regs cond trueAddr falseAddr@ represents a conditional
+  -- branch that jumps to `trueAddr` if `cond` is true and `falseAddr` otherwise.
+  --
+  -- The value assigned to the IP in `regs` should reflect this if-then-else
+  -- structure.
+  | ParsedBranch !(RegState (ArchReg arch) (Value arch ids))
+                 !(Value arch ids BoolType)
+                 !(ArchSegmentOff arch)
+                 !(ArchSegmentOff arch)
   -- | A lookup table that branches to one of a vector of addresses.
   --
   -- The registers store the registers, the value contains the index to jump
@@ -173,8 +182,6 @@ data ParsedTermStmt arch ids
                       !(V.Vector (ArchSegmentOff arch))
   -- | A return with the given registers.
   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
-  -- | An if-then-else
-  | ParsedIte !(Value arch ids BoolType) !(StatementList arch ids) !(StatementList arch ids)
   -- | An architecture-specific statement with the registers prior to execution, and
   -- the given next control flow address.
   | ParsedArchTermStmt !(ArchTermStmt arch ids)
@@ -185,20 +192,10 @@ data ParsedTermStmt arch ids
   -- | The classifier failed to identity the block.
   | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
 
--- | Pretty print the block contents indented inside brackets.
-ppStatementList :: ArchConstraints arch => (ArchAddrWord arch -> Doc) -> StatementList arch ids -> Doc
-ppStatementList ppOff b =
-  text "{" <$$>
-  indent 2 (vcat (ppStmt ppOff  <$> stmtsNonterm b) <$$>
-            ppTermStmt ppOff (stmtsTerm b)) <$$>
-  text "}"
-
 ppTermStmt :: ArchConstraints arch
-           => (ArchAddrWord arch -> Doc)
-              -- ^ Given an address offset, this prints the value
-           -> ParsedTermStmt arch ids
+           => ParsedTermStmt arch ids
            -> Doc
-ppTermStmt ppOff tstmt =
+ppTermStmt tstmt =
   case tstmt of
     ParsedCall s Nothing ->
       text "tail_call" <$$>
@@ -212,6 +209,9 @@ ppTermStmt ppOff tstmt =
     ParsedJump s addr ->
       text "jump" <+> text (show addr) <$$>
       indent 2 (pretty s)
+    ParsedBranch r c t f  ->
+      text "branch" <+> pretty c <+> text (show t) <+> text (show f) <$$>
+      indent 2 (pretty r)
     ParsedLookupTable s idx entries ->
       text "ijump" <+> pretty idx <$$>
       indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v))
@@ -220,10 +220,6 @@ ppTermStmt ppOff tstmt =
     ParsedReturn s ->
       text "return" <$$>
       indent 2 (pretty s)
-    ParsedIte c t f ->
-      text "ite" <+> pretty c <$$>
-      ppStatementList ppOff t <$$>
-      ppStatementList ppOff f
     ParsedArchTermStmt ts s maddr ->
       let addrDoc = case maddr of
                       Just a -> text ", return to" <+> text (show a)
@@ -237,32 +233,22 @@ ppTermStmt ppOff tstmt =
       indent 2 (pretty s)
 
 instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
-  show = show . ppTermStmt (text . show)
+  show = show . ppTermStmt
 
-------------------------------------------------------------------------
--- StatementList
-
--- | The type of label for each StatementList
-type StatementLabel = Word64
-
--- | This is a code block after we have classified the control flow
--- statement(s) that the block ends with.
-data StatementList arch ids
-   = StatementList { stmtsIdent :: !StatementLabel
-                     -- ^ An index for uniquely identifying the block.
-                     --
-                     -- This is primarily used so that we can reference
-                     -- which branch lead to a particular next state.
-                   , stmtsNonterm :: !([Stmt arch ids])
-                     -- ^ The non-terminal statements in the block
-                   , stmtsTerm  :: !(ParsedTermStmt arch ids)
-                     -- ^ The terminal statement in the block.
-                   , stmtsAbsState :: !(AbsProcessorState (ArchReg arch) ids)
-                     -- ^ The abstract state of the block just before terminal
-                   }
-
-deriving instance ArchConstraints arch
-  => Show (StatementList arch ids)
+-- | Get all successor blocks for the given list of statements.
+parsedTermSucc :: ParsedTermStmt arch ids -> [ArchSegmentOff arch]
+parsedTermSucc ts = do
+  case ts of
+    ParsedCall _ (Just ret_addr) -> [ret_addr]
+    ParsedCall _ Nothing -> []
+    PLTStub{} -> []
+    ParsedJump _ tgt -> [tgt]
+    ParsedBranch _ _ t f -> [t,f]
+    ParsedLookupTable _ _ v -> V.toList v
+    ParsedReturn{} -> []
+    ParsedTranslateError{} -> []
+    ParsedArchTermStmt _ _ ret -> maybeToList ret
+    ClassifyFailure{} -> []
 
 ------------------------------------------------------------------------
 -- ParsedBlock
@@ -279,8 +265,12 @@ data ParsedBlock arch ids
                  , blockAbstractState :: !(AbsBlockState (ArchReg arch))
                    -- ^ Abstract state prior to the execution of
                    -- this region.
-                 , blockStatementList :: !(StatementList arch ids)
-                   -- ^ Returns the entry block for the region
+                 , pblockStmts :: !([Stmt arch ids])
+                     -- ^ The non-terminal statements in the block
+                 , blockFinalAbsState :: !(AbsProcessorState (ArchReg arch) ids)
+                   -- ^ The abstract state of the block just before terminal
+                 , pblockTermStmt  :: !(ParsedTermStmt arch ids)
+                   -- ^ The terminal statement in the block.
                  }
 
 deriving instance ArchConstraints arch
@@ -289,10 +279,9 @@ deriving instance ArchConstraints arch
 instance ArchConstraints arch
       => Pretty (ParsedBlock arch ids) where
   pretty b =
-    let sl = blockStatementList b
-        ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
+    let ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
      in text (show (pblockAddr b)) PP.<> text ":" <$$>
-        indent 2 (vcat (ppStmt ppOff <$> stmtsNonterm sl) <$$> ppTermStmt ppOff (stmtsTerm sl))
+        indent 2 (vcat (ppStmt ppOff <$> pblockStmts b) <$$> ppTermStmt (pblockTermStmt b))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo

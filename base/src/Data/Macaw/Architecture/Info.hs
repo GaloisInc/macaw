@@ -1,7 +1,4 @@
 {-|
-Copyright  : (c) Galois, Inc 2016
-Maintainer : jhendrix@galois.com
-
 This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
@@ -19,11 +16,9 @@ module Data.Macaw.Architecture.Info
 import           Control.Monad.ST
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
-import           Data.Semigroup ( (<>) )
 import           Data.Sequence (Seq)
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
-import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
@@ -51,7 +46,7 @@ type DisassembleFn arch
       -- ^ Initial values to use for registers.
    -> Int
       -- ^ Maximum offset for this to read from.
-   -> ST s ([Block arch ids], Int, Maybe String)
+   -> ST s (Block arch ids, Int)
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -174,13 +169,6 @@ rewriteTermStmt info tstmt = do
   case tstmt of
     FetchAndExecute regs ->
       FetchAndExecute <$> traverseF rewriteValue regs
-    Branch c t f -> do
-      tgtCond <- rewriteValue c
-      case () of
-        _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
-              pure $ Branch cn f t
-          | otherwise ->
-              pure $ Branch tgtCond t f
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
@@ -190,16 +178,15 @@ rewriteTermStmt info tstmt = do
 
 -- | Apply optimizations to code in the block
 rewriteBlock :: ArchitectureInfo arch
-             -> (RewriteContext arch s src tgt, [Block arch tgt])
+             -> RewriteContext arch s src tgt
              -> Block arch src
-             -> ST s (RewriteContext arch s src tgt, [Block arch tgt])
-rewriteBlock info (rwctx,blks) b = do
-  (rwctx', newBlks, tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
+             -> ST s (RewriteContext arch s src tgt, Block arch tgt)
+rewriteBlock info rwctx b = do
+  (rwctx', tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
     mapM_ rewriteStmt (blockStmts b)
     rewriteTermStmt info (blockTerm b)
   -- Return rewritten block and any new blocks
-  let rwBlock = Block { blockLabel = blockLabel b
-                      , blockStmts = tgtStmts
+  let rwBlock = Block { blockStmts = tgtStmts
                       , blockTerm  = tgtTermStmt
                       }
-    in pure (rwctx', rwBlock : (newBlks <> blks))
+  pure (rwctx', rwBlock)

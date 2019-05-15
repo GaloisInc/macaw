@@ -18,6 +18,7 @@ module Data.Macaw.AbsDomain.AbsState
   , setAbsIP
   , absRegState
   , absStackHasReturnAddr
+  , absUpdateRegsPostCall
   , CallParams(..)
   , absEvalCall
   , AbsBlockStack
@@ -553,13 +554,14 @@ meet' x _ = x -- Arbitrarily pick one.
 -------------------------------------------------------------------------------
 -- Operations
 
+-- | @trunc s w@ returns an abstract value @t@ such that foreach @v@ in
+-- @s@, @trunc v w@ is in @t@.
 trunc :: (MemWidth w, v+1 <= u)
       => AbsValue w (BVType u)
       -> NatRepr v
       -> AbsValue w (BVType v)
 trunc (FinSet s) w       = FinSet (Set.map (toUnsigned w) s)
-trunc (CodePointers s b) _ = FinSet sf
-  where (sf,_) = partitionAbsoluteAddrs s b
+trunc (CodePointers _ _) _ = TopV
 trunc (StridedInterval s) w = stridedInterval (SI.trunc s w)
 trunc (SubValue n av) w =
   case testNatCases n w of
@@ -865,19 +867,19 @@ concreteStackOffset a o = StackOffset a (Set.singleton (fromInteger o))
 ------------------------------------------------------------------------
 -- Restrictions
 
-hasMaximum :: TypeRepr (BVType w) -> AbsValue p (BVType w) -> Maybe Integer
-hasMaximum tp v =
+hasMaximum :: NatRepr w -> AbsValue p (BVType w) -> Maybe Integer
+hasMaximum n v =
   case v of
     FinSet s | Set.null s -> Nothing
              | otherwise  -> Just $! Set.findMax s
     CodePointers s b | Set.null s -> if b then Just 0 else Nothing
-                     | otherwise  -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
+                     | otherwise  -> Just $ maxUnsigned n
     StridedInterval si -> Just (SI.intervalEnd si)
-    TopV               -> Just $ case tp of BVTypeRepr n -> maxUnsigned n
+    TopV               -> Just $ maxUnsigned n
     _                  -> Nothing
 
 
-hasMinimum :: TypeRepr (BVType w) -> AbsValue p (BVType w) -> Maybe Integer
+hasMinimum :: NatRepr w -> AbsValue p (BVType w) -> Maybe Integer
 hasMinimum _tp v =
   case v of
    FinSet s       | Set.null s -> Nothing
@@ -892,34 +894,34 @@ hasMinimum _tp v =
 -- {2, 3} and {3, 4} because we may pick any element from either set.
 
 abstractULt :: MemWidth w
-            => TypeRepr tp
-            -> AbsValue w tp
-            -> AbsValue w tp
-            -> (AbsValue w tp, AbsValue w tp)
-abstractULt _tp TopV TopV = (TopV, TopV)
-abstractULt tp@(BVTypeRepr n) x y
-  | Just u_y <- hasMaximum tp y
-  , Just l_x <- hasMinimum tp x =
+            => NatRepr u
+            -> AbsValue w (BVType u)
+            -> AbsValue w (BVType u)
+            -> (AbsValue w (BVType u), AbsValue w (BVType u))
+abstractULt _n TopV TopV = (TopV, TopV)
+abstractULt n x y
+  | Just u_y <- hasMaximum n y
+  , Just l_x <- hasMinimum n x =
     -- debug DAbsInt' ("abstractLt " ++ show (pretty x) ++ " " ++ show (pretty y) ++ " -> ")
     ( meet x (stridedInterval $ SI.mkStridedInterval n False 0 (u_y - 1) 1)
-    , meet y (stridedInterval $ SI.mkStridedInterval n False (l_x + 1)
-                                                     (maxUnsigned n) 1))
+    , meet y (stridedInterval $ SI.mkStridedInterval n False (l_x + 1) (maxUnsigned n) 1))
 
 abstractULt _tp x y = (x, y)
 
--- | @abstractULeq x y@ refines x and y with the knowledge that @x <= y@
+-- | @abstractULeq u v@ returns a pair @(u',v')@ where for each @x@ in
+-- @u@, and @y@ in @v@, such that @x <= y@, we have that @x \in u'@ and
+-- @y@ in v'.
 abstractULeq :: MemWidth w
-             => TypeRepr tp
-             -> AbsValue w tp
-             -> AbsValue w tp
-             -> (AbsValue w tp, AbsValue w tp)
-abstractULeq _tp TopV TopV = (TopV, TopV)
-abstractULeq tp@(BVTypeRepr n) x y
-  | Just u_y <- hasMaximum tp y
-  , Just l_x <- hasMinimum tp x =
-    ( meet x (stridedInterval $ SI.mkStridedInterval n False 0 u_y 1)
-    , meet y (stridedInterval $ SI.mkStridedInterval n False l_x
-                                                     (maxUnsigned n) 1))
+             => NatRepr u
+             -> AbsValue w (BVType u)
+             -> AbsValue w (BVType u)
+             -> (AbsValue w (BVType u), AbsValue w (BVType u))
+abstractULeq _n TopV TopV = (TopV, TopV)
+abstractULeq n x y
+  | Just u_y <- hasMaximum n y
+  , Just l_x <- hasMinimum n x =
+    ( meet x (stridedInterval $ SI.mkStridedInterval n False 0   u_y 1)
+    , meet y (stridedInterval $ SI.mkStridedInterval n False l_x (maxUnsigned n) 1))
 
 abstractULeq _tp x y = (x, y)
 
@@ -1088,7 +1090,7 @@ setAbsIP :: RegisterInfo r
          -> AbsBlockState r
 setAbsIP a b
     -- Check to avoid reassigning next IP if it is not needed.
-  | CodePointers s False <- b^.absRegState^.curIP
+  | CodePointers s False <- b^.absRegState^.boundValue ip_reg
   , Set.size s == 1
   , Set.member a s =
     b
@@ -1308,20 +1310,17 @@ absStackHasReturnAddr s = isJust $ find isReturnAddr (Map.elems (s^.startAbsStac
 
 -- | Return state for after value has run.
 finalAbsBlockState :: forall a ids
-                   .  ( RegisterInfo (ArchReg a)
-                      , MemWidth (ArchAddrWidth a)
-                      , HasCallStack
-                      )
+                   .  ( RegisterInfo (ArchReg a))
                    => AbsProcessorState (ArchReg a) ids
                    -> RegState (ArchReg a) (Value a ids)
                       -- ^  Final values for abstract processor state
                    -> AbsBlockState (ArchReg a)
-finalAbsBlockState c s =
+finalAbsBlockState c regs =
   let transferReg :: ArchReg a tp -> ArchAbsValue a tp
-      transferReg r = transferValue c (s^.boundValue r)
+      transferReg r = transferValue c (regs^.boundValue r)
    in AbsBlockState { _absRegState = mkRegState transferReg
                     , _startAbsStack = c^.curAbsStack
-                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) s
+                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) regs
                     }
 
 ------------------------------------------------------------------------

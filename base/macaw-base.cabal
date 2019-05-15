@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3.5.1
+version: 0.3.7
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -58,7 +58,6 @@ library
     Data.Macaw.CFG.App
     Data.Macaw.CFG.AssignRhs
     Data.Macaw.CFG.Block
-    Data.Macaw.CFG.BlockLabel
     Data.Macaw.CFG.Core
     Data.Macaw.CFG.DemandSet
     Data.Macaw.CFG.Rewriter
@@ -81,6 +80,11 @@ library
   ghc-options: -fno-warn-unticked-promoted-constructors
   ghc-prof-options: -O2 -fprof-auto-top
   default-language: Haskell2010
+
+  default-extensions:
+    GADTs
+    ScopedTypeVariables
+    TypeOperators
 
   if impl(ghc >= 8.6)
     default-extensions: NoStarIsType

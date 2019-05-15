@@ -1162,9 +1162,6 @@ bvRor v n = bvShr v n .|. bvShl v bits_less_n
 --
 -- The first argument is the value to shift, and the second argument
 -- is the number of bits to shift by.
---
--- Big-endian, so left shift moves bits to higher-order positions
--- and right shift moves bits to lower-order positions.
 bvShr :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
 bvShr x y
   | Just 0 <- asUnsignedBVLit y = x
@@ -1190,7 +1187,8 @@ bvShl x y
       x_base .&. bvLit w (negate (2^x_shft) ::Integer)
 
     | Just yv <- asUnsignedBVLit y
-    , yv >= intValue (typeWidth x) = bvLit (typeWidth x) (0 :: Integer)
+    , yv >= intValue (typeWidth x) =
+        bvLit (typeWidth x) (0 :: Integer)
 
     | otherwise = app $ BVShl (typeWidth x) x y
 

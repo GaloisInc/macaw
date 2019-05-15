@@ -200,11 +200,11 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- Exclusive or
   BVXor :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Logical left shift (x * 2 ^ n)
+  -- | Left shift (e.g. `BVShl x y` denotes `fromUnsigned (toUnsigned x * 2 ^ toUnsigned y)`
   BVShl :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-  -- Logical right shift (x / 2 ^ n)
+  -- | Unsigned right shift (e.g. `BVShr x y` denotes `fromUnsigned (toUnsigned x / 2 ^ toUnsigned y)`
   BVShr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-  -- Arithmetic right shift (x / 2 ^ n)
+  -- | Arithmetic right shift (e.g. `BVSar x y` denotes `fromUnsigned (toSigned x / 2 ^ toUnsigned y)`
   BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- | Add two values and a carry bit to determine if they have an
