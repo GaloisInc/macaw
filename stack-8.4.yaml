@@ -7,32 +7,10 @@ resolver: lts-12.26
 packages:
 - base
 - symbolic
-- deps/crucible/what4
-- deps/crucible/crucible
-- deps/crucible/crucible-llvm
-- deps/dwarf
-- deps/elf-edit
-- deps/flexdis86
-- deps/flexdis86/binary-symbols
-- deps/llvm-pretty
-- deps/llvm-pretty-bc-parser
-- deps/parameterized-utils
-- submodules/macaw-loader/macaw-loader
 # X86 specific repos
 - x86
 - x86/support
 - x86_symbolic
-# - submodules/dismantle/dismantle-tablegen
-# - macaw-semmc
-# - submodules/semmc/semmc
-# - macaw-ppc
-# - submodules/macaw-loader/macaw-loader-ppc
-# - submodules/semmc/semmc-ppc
-# - submodules/dismantle/dismantle-ppc
-# - macaw-arm
-# - submodules/semmc/semmc-arm
-# - submodules/dismantle/dismantle-arm
-# - submodules/dismantle/dismantle-thumb
 extra-deps:
 - boomerang-1.4.5.6@sha256:4f8407b9482a500ef9f8dc3fa13f9615d4d33a7c530b67c1ca27535e136a152d
 - dotgen-0.4.2@sha256:309b7cc8a3593a8e48bee7b53020d5f72db156d58edf78a0214f58fbb84b292b
@@ -44,3 +22,15 @@ extra-deps:
 - panic-0.4.0.1@sha256:fb46577c9e0ca38c37960572f958a8469f2b577e963ed4f3ea1904d8400d828b
 - s-cargot-0.1.4.0@sha256:61ea1833fbb4c80d93577144870e449d2007d311c34d74252850bb48aa8c31fb
 - s-cargot-letbind-0.2.3.0@sha256:238100aa0badc2f285fb7e5bf423b2f3465562061dcce0f8ecca45aa6f279ef6
+
+# Submodules added to extra-deps so that we do not fail on warnings.
+- ./deps/crucible/what4
+- ./deps/crucible/crucible
+- ./deps/crucible/crucible-llvm
+- ./deps/dwarf
+- ./deps/elf-edit
+- ./deps/flexdis86
+- ./deps/flexdis86/binary-symbols
+- ./deps/llvm-pretty
+- ./deps/llvm-pretty-bc-parser
+- ./deps/parameterized-utils
