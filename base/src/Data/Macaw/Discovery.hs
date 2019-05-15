@@ -522,9 +522,10 @@ matchBoundedMemArray mem aps val
     -- Check stride covers at least number of bytes read.
   , memReprBytes tp <= stride
     -- Resolve a static upper bound to array.
-  , Right (Jmp.IntegerUpperBound bnd)
+  , Right (Jmp.UBVUpperBound bndw bnd)
       <- Jmp.unsignedUpperBound (aps^.indexBounds) ixVal
-  , cnt <- bnd+1
+  , Just Refl <- testEquality bndw (typeWidth ixVal)
+  , cnt <- toInteger (bnd+1)
     -- Check array actually fits in memory.
   , cnt * toInteger stride <= segoffBytesLeft base
     -- Get memory contents after base
