@@ -56,7 +56,6 @@ module Data.Macaw.CFG.Core
   , ppRegMap
   -- * Pretty printing
   , ppAssignId
-  , ppLit
   , ppValue
   , ppStmt
   , PrettyF(..)
