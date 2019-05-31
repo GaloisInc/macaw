@@ -21,6 +21,8 @@ module Data.Macaw.CFG.App
   , ppAppA
     -- * Casting proof objects.
   , WidthEqProof(..)
+  , widthEqProofEq
+  , widthEqProofCompare
   , widthEqTarget
   ) where
 
@@ -105,7 +107,8 @@ widthEqTarget (WidthEqTrans _ y) = widthEqTarget y
 -- Force app to be in template-haskell context.
 $(pure [])
 
--- | We treat proofs as equal if the types are the same.
+-- | Compare two proofs, and return truei if the input/output types
+-- are the same.
 widthEqProofEq :: WidthEqProof xi xo
                -> WidthEqProof yi yo
                -> Maybe (WidthEqProof xi xo :~: WidthEqProof yi yo)
@@ -114,7 +117,7 @@ widthEqProofEq p q = do
   Refl <- testEquality (widthEqTarget p) (widthEqTarget q)
   pure Refl
 
--- | We treat proofs as equal if the types are the same.
+-- | Compare proofs based on ordering of source and target.
 widthEqProofCompare :: WidthEqProof xi xo
                     -> WidthEqProof yi yo
                     -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
