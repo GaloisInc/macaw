@@ -39,7 +39,7 @@ library
     IntervalMap >= 0.5,
     lens >= 4.7,
     mtl,
-    parameterized-utils >= 1.0.7,
+    parameterized-utils >= 2.0.0.0.100,
     template-haskell,
     text,
     vector,
