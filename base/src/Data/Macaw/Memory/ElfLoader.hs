@@ -448,7 +448,7 @@ mkSymbolRef sym ver = seq sym $ seq ver $ do
 -- names that could be stripped from executables/shared objects.
 newtype SymbolTable = SymbolTable { resolveSymbol :: Word32 -> SymbolResolver SymbolInfo }
 
- -- | Construct a symbol table that just reports a missing symbol table error on lookups.
+-- | Construct a symbol table that just reports a missing symbol table error on lookups.
 noSymTab :: SymbolTable
 noSymTab = SymbolTable $ \_symIdx -> throwError MissingSymbolTable
 
