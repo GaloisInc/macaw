@@ -98,6 +98,7 @@ module Data.Macaw.Memory
   , readWord64le
     -- * AddrWidthRepr
   , AddrWidthRepr(..)
+  , addrWidthReprByteCount
   , addrWidthNatRepr
   , addrWidthClass
     -- * Endianness
@@ -151,6 +152,7 @@ import qualified Data.Map.Strict as Map
 import           Data.Monoid
 import           Data.Proxy
 import           Data.Word
+import           GHC.Natural
 import           GHC.TypeLits
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
@@ -184,6 +186,11 @@ instance OrdF AddrWidthRepr where
   compareF Addr32 Addr64 = LTF
   compareF Addr64 Addr32 = GTF
   compareF Addr64 Addr64 = EQF
+
+-- | Number of bytes in addr width repr.
+addrWidthReprByteCount :: AddrWidthRepr w -> Natural
+addrWidthReprByteCount Addr32 = 4
+addrWidthReprByteCount Addr64 = 8
 
 -- | The nat representation of this address.
 addrWidthNatRepr :: AddrWidthRepr w -> NatRepr w

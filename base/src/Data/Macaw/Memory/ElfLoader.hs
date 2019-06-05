@@ -412,7 +412,7 @@ resolveUndefinedSymbolType nm tp =
 mkSymbolRef :: ElfSymbolTableEntry wtp
             -> SymbolVersion -- ^ Version to use for symbol.
             -> SymbolResolver SymbolInfo
-mkSymbolRef sym ver = do
+mkSymbolRef sym ver = seq sym $ seq ver $ do
   let nm = Elf.steName sym
   def <-
     case Elf.steIndex sym of
@@ -430,7 +430,7 @@ mkSymbolRef sym ver = do
         symbolWarning $ UnsupportedProcessorSpecificSymbolIndex nm idx
         UndefinedSymbol SymbolRequired
           <$> resolveUndefinedSymbolType nm (Elf.steType sym)
-  pure $
+  pure $!
     SymbolInfo { symbolName = Elf.steName sym
                , symbolVersion = ver
                , symbolDef = def
@@ -448,7 +448,7 @@ mkSymbolRef sym ver = do
 -- names that could be stripped from executables/shared objects.
 newtype SymbolTable = SymbolTable { resolveSymbol :: Word32 -> SymbolResolver SymbolInfo }
 
--- | Construct a symbol table that just reports a missing symbol table error on lookups.
+ -- | Construct a symbol table that just reports a missing symbol table error on lookups.
 noSymTab :: SymbolTable
 noSymTab = SymbolTable $ \_symIdx -> throwError MissingSymbolTable
 
@@ -460,7 +460,21 @@ staticSymTab entries = SymbolTable $ \symIdx -> do
   case entries V.!? fromIntegral symIdx of
     Nothing ->
       throwError $ RelocationBadSymbolIndex $ fromIntegral symIdx
-    Just sym -> mkSymbolRef sym ObjectSymbol
+    Just sym ->
+      -- Look for '@' as it is used to separate symbol name from version information
+      -- in object files.
+      case BSC.findIndex (== '@') (Elf.steName sym) of
+        Just i -> do
+          let nm = Elf.steName sym
+                  -- If "@@" appears in the symbol, this is a default versioned symbol
+          let ver | i+1 < BSC.length nm, BSC.index nm (i+1) == '@' =
+                      ObjectDefaultSymbol (BSC.drop (i+2) nm)
+                  -- Otherwise "@" appears in the symbol, and this is a non-default symbol.
+                  | otherwise =
+                      ObjectNonDefaultSymbol (BSC.drop (i+1) nm)
+          mkSymbolRef (sym { Elf.steName = BSC.take i nm }) ver
+        Nothing -> do
+          mkSymbolRef sym UnversionedSymbol
 
 -- | Use dynamic section to create symbol table function.
 dynamicSymbolTable :: Elf.DynamicSection w -> SymbolTable
@@ -527,18 +541,19 @@ resolveRelocationSym symtab symIdx = do
 
 -- | Attempt to resolve an X86_64 specific symbol.
 relaTargetX86_64 :: Maybe SegmentIndex
-                 -> SymbolTable
+                 -> SymbolTable -- ^ Symbol table to look up symbols in/
                  -> Elf.RelEntry Elf.X86_64_RelocationType
                  -> MemWord 64
                  -- ^ Addend to add to symbol.
                  -> RelFlag
                  -> SymbolResolver (Relocation 64)
-relaTargetX86_64 _ symtab rel off _isRel =
+relaTargetX86_64 _ symtab rel addend _isRel =
   case Elf.relType rel of
+
     Elf.R_X86_64_JUMP_SLOT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym = sym
-                        , relocationOffset = off
+                        , relocationOffset = addend
                         , relocationIsRel = False
                         , relocationSize  = 8
                         , relocationIsSigned = False
@@ -548,7 +563,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
     Elf.R_X86_64_PC32 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = True
                         , relocationSize       = 4
                         , relocationIsSigned   = False
@@ -558,7 +573,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
     Elf.R_X86_64_32 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 4
                         , relocationIsSigned = False
@@ -568,7 +583,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
     Elf.R_X86_64_32S -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 4
                         , relocationIsSigned   = True
@@ -578,7 +593,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
     Elf.R_X86_64_64 -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 8
                         , relocationIsSigned   = False
@@ -592,7 +607,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
     Elf.R_X86_64_GLOB_DAT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 8
                         , relocationIsSigned   = False
@@ -604,7 +619,7 @@ relaTargetX86_64 _ symtab rel off _isRel =
       when (Elf.relSym rel /= 0) $ do
         throwError $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
       pure $ Relocation { relocationSym        = LoadBaseAddr
-                        , relocationOffset     = off
+                        , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 8
                         , relocationIsSigned   = False
@@ -1150,22 +1165,9 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
         mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
         mlsIndexMap %= Map.insert elfIdx (addr, sec)
 
--- | Create the symbol vector from the elf static symbol table.
-symtabSymbolTable :: forall w . Elf w -> MemLoader w SymbolTable
-symtabSymbolTable e =
-  case Elf.elfSymtab e of
-    [] ->
-      pure $ noSymTab
-    elfSymTab:_rest -> do
-      let entries = Elf.elfSymbolTableEntries elfSymTab
---      let lclCnt = fromIntegral $ Elf.elfSymbolTableLocalEntries elfSymTab
-      -- Create an unversioned symbol from symbol table.
-      pure (staticSymTab entries)
-
 -- | Load allocated Elf sections into memory.
 --
--- Normally, Elf uses segments for loading, but the section
--- information tends to be more precise.
+-- This is only used for object files.
 memoryForElfSections :: forall w
                      .  Elf w
                      -> MemLoader w ()
@@ -1175,7 +1177,19 @@ memoryForElfSections e = do
   let sectionMap :: SectionNameMap w
       sectionMap = foldlOf elfSections insSec Map.empty e
         where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
-  symtab <- symtabSymbolTable e
+
+  -- Parse Elf symbol table
+  symtab <-
+    case Elf.elfSymtab e of
+      [] ->
+        pure $ noSymTab
+      elfSymTab:_rest -> do
+        let entries = Elf.elfSymbolTableEntries elfSymTab
+        --      let lclCnt = fromIntegral $ Elf.elfSymbolTableLocalEntries elfSymTab
+        -- Create an unversioned symbol from symbol table.
+        pure (staticSymTab entries)
+
+  -- Insert sections
   forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
     insertAllocatedSection hdr symtab sectionMap idx nm
   -- TODO: Figure out what to do about .tdata and .tbss
