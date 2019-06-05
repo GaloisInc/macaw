@@ -50,27 +50,11 @@ import           Data.Parameterized.TraversableFC
 import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Discovery.State
 import           Data.Macaw.Types
-
-#if !MIN_VERSION_base(4,12,0)
-newtype Ap f a = Ap { getAp :: f a }
-
-instance (Applicative f, Semigroup a) => Semigroup (Ap f a) where
-  Ap x <> Ap y = Ap $ (<>) <$> x <*> y
-
-instance (Applicative f,
-#if !MIN_VERSION_base(4,11,0)
-  Semigroup a,
-#endif
-  Monoid a) => Monoid (Ap f a) where
-  mempty = Ap $ pure mempty
-  mappend = (<>)
-#endif
 
 -------------------------------------------------------------------------------
 
@@ -365,12 +349,11 @@ addWarning msg =
 -- Phase one functions
 
 -- | This registers a block in the first phase (block discovery).
-addIntraproceduralJumpTarget :: ArchConstraints arch
-                             => DiscoveryFunInfo arch ids
-                             -> ArchSegmentOff arch
+addIntraproceduralJumpTarget :: {-ArchConstraints arch
+                             => -} ArchSegmentOff arch
                              -> ArchSegmentOff arch
                              -> FunctionArgsM arch ids ()
-addIntraproceduralJumpTarget fun_info src dest = do  -- record the edge
+addIntraproceduralJumpTarget src dest =  -- record the edge
   blockPreds %= Map.insertWith (++) dest [src]
 
 withAssignmentCache :: State (AssignmentCache (ArchReg arch) ids)  a -> FunctionArgsM arch ids a
@@ -566,8 +549,8 @@ summarizeCall addr finalRegs mReturnAddr = do
   let spVal = finalRegs^.boundValue sp_reg
 
   -- Record stack pointer and IP is always needed.
-  demands <- withAssignmentCache $ foldlM addValueUses Set.empty [ipVal, spVal]
-  addBlockDemands addr $ demandAlways (registerDemandSet demands)
+  do demands <- withAssignmentCache $ foldlM addValueUses Set.empty [ipVal, spVal]
+     addBlockDemands addr $ demandAlways (registerDemandSet demands)
 
 
   case () of
@@ -634,10 +617,9 @@ stmtDemandedValues ctx stmt = demandConstraints ctx $
 -- assignments and registers.
 summarizeBlock :: forall arch ids
                .  ArchConstraints arch
-               => DiscoveryFunInfo arch ids
-               -> ParsedBlock arch ids -- ^ Current block
+               => ParsedBlock arch ids -- ^ Current block
                -> FunctionArgsM arch ids ()
-summarizeBlock interpState b = do
+summarizeBlock b = do
   let addr = pblockAddr b
   -- Add this label to block demand map with empty set.
   addBlockDemands addr mempty
@@ -655,7 +637,7 @@ summarizeBlock interpState b = do
         Nothing -> do
           pure ()
         Just retAddr -> do
-          addIntraproceduralJumpTarget interpState addr retAddr
+          addIntraproceduralJumpTarget addr retAddr
 
       -- Record the demands based on the call, and add edges between
       -- this note and next nodes.
@@ -678,28 +660,28 @@ summarizeBlock interpState b = do
               case MapF.lookup r regs of
                 Just v -> addValueUses s v
                 Nothing -> pure $! Set.insert (Some r) s
-        foldlM addRegUses Set.empty (functionArgRegs ainfo)
+        foldlM addRegUses Set.empty argRegs
       addBlockDemands addr $ demandAlways $
         registerDemandSet $ demands
 
     ParsedJump procState tgtAddr -> do
       -- record all propagations
       recordBlockTransfer addr procState archRegs
-      addIntraproceduralJumpTarget interpState addr tgtAddr
+      addIntraproceduralJumpTarget addr tgtAddr
 
     ParsedBranch nextRegs cond trueAddr falseAddr -> do
       demandValue addr cond
       -- record all propagations
       let notIP (Some r) = isNothing (testEquality r ip_reg)
       recordBlockTransfer addr nextRegs (filter notIP archRegs)
-      addIntraproceduralJumpTarget interpState addr trueAddr
-      addIntraproceduralJumpTarget interpState addr falseAddr
+      addIntraproceduralJumpTarget addr trueAddr
+      addIntraproceduralJumpTarget addr falseAddr
 
     ParsedLookupTable finalRegs lookup_idx vec -> do
       demandValue addr lookup_idx
       -- record all propagations
       recordBlockTransfer addr finalRegs archRegs
-      traverse_ (addIntraproceduralJumpTarget interpState addr) vec
+      traverse_ (addIntraproceduralJumpTarget addr) vec
 
     ParsedReturn finalRegs -> do
       let retRegs = functionRetRegs ainfo
@@ -720,7 +702,7 @@ summarizeBlock interpState b = do
          addBlockDemands addr $ demandAlways (registerDemandSet demands)
 
       recordBlockTransfer addr finalRegs (termRegTransfers e)
-      traverse_ (addIntraproceduralJumpTarget interpState addr) next_addr
+      traverse_ (addIntraproceduralJumpTarget addr) next_addr
 
     ParsedTranslateError _ -> do
       -- We ignore demands for translate errors.
@@ -895,7 +877,7 @@ recordInferredFunctionDemands ainfo fnAddr (BD fnDemands) globalState =
 -- 1. Initial function arguments (ignoring function calls)
 -- 2. Function arguments to function arguments
 -- 3. Function results to function arguments.
-doOneFunction :: forall arch ids
+doOneFunction :: forall arch
               .  ArchConstraints arch
               => FunArgContext arch
               -> FunctionSummaries (ArchReg arch)
@@ -907,7 +889,7 @@ doOneFunction ctx acc (Some finfo) = do
     -- Get address of this function
     let addr = discoveredFunAddr finfo
 
-    mapM_ (summarizeBlock finfo) (finfo^.parsedBlocks)
+    mapM_ summarizeBlock (finfo^.parsedBlocks)
 
     -- Propagate block demands until we are done.
     new <- use blockDemandMap
@@ -951,9 +933,9 @@ calculateGlobalFixpoint s = (go (s^.alwaysDemandMap) (s^.alwaysDemandMap), rever
       -- notify all functions which call fun regs.
       let goRet :: RegSegmentOff r -> Set (Some r) -> DemandSet r
           goRet addr retRegs =
-            foldl (\s r ->
+            foldl (\prev r ->
                      let FRD m = resultDemandsMap^.ix addr
-                      in mappend s (m^.ix r))
+                      in mappend prev (m^.ix r))
                   mempty
                   retRegs
 
