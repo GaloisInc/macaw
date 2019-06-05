@@ -3,7 +3,6 @@ are needed to evaluate different blocks.  It can be used to compute
 which registers are needed for function arguments.
 -}
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -38,9 +37,6 @@ import qualified Data.Kind as Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-#if MIN_VERSION_base(4,12,0)
-import           Data.Monoid (Ap(Ap, getAp))
-#endif
 
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
