@@ -31,7 +31,7 @@ library
     base >= 4,
     ansi-wl-pprint,
     binary,
-    binary-symbols >= 0.1.2,
+    binary-symbols >= 0.1.3,
     bytestring,
     containers >= 0.5.8.1,
     elf-edit >= 0.34.1,

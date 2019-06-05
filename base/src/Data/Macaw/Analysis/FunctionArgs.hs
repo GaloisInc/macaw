@@ -642,10 +642,10 @@ summarizeBlock interpState b = do
   -- Add this label to block demand map with empty set.
   addBlockDemands addr mempty
 
-  ainfo <- asks $ archDemandInfo
-  let ctx = demandInfoCtx ainfo
+  ctx <- ask
+  let ainfo = archDemandInfo ctx
   -- Add all values demanded by non-terminal statements in list.
-  mapM_ (mapM_ (\(Some v) -> demandValue addr v) . stmtDemandedValues ctx)
+  mapM_ (mapM_ (\(Some v) -> demandValue addr v) . stmtDemandedValues (demandInfoCtx ainfo))
         (pblockStmts b)
   -- Add values demanded by terminal statements
   case pblockTermStmt b of
@@ -662,17 +662,15 @@ summarizeBlock interpState b = do
       summarizeCall addr finalRegs mRetAddr
 
     PLTStub regs _ sym -> do
---      case Map.lookup (versymName sym) m of
---        Nothing -> do
---          addWarning
-
---        relocationOffset r == 0
-      -- PLT Stubs demand all registers that could be function
-      -- arguments, as well as any registers in regs.
+      -- Get argument registers if known for symbol.
+      let argRegs
+            | Just cr <- Map.lookup (versymName sym) (knownSymbolDecls ctx) =
+                crArguments cr
+            | otherwise =
+                functionArgRegs ainfo
 
       -- Get all registers in arguments that are not defined in regs.
       demands <- withAssignmentCache $ do
-
         let addRegUses :: RegisterSet (ArchReg arch)
                        -> Some (ArchReg arch)
                        -> State (AssignmentCache (ArchReg arch) ids) (RegisterSet (ArchReg arch))
