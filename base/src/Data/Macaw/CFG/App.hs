@@ -21,9 +21,9 @@ module Data.Macaw.CFG.App
   , ppAppA
     -- * Casting proof objects.
   , WidthEqProof(..)
-  , widthEqTarget
   , widthEqProofEq
   , widthEqProofCompare
+  , widthEqTarget
   ) where
 
 import qualified Data.Kind as Kind
@@ -66,13 +66,30 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
              -> WidthEqProof (BVType (n * w)) (VecType n (BVType w))
 
   FromFloat :: !(FloatInfoRepr ftp)
-             -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
+            -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
   ToFloat :: !(FloatInfoRepr ftp)
           -> WidthEqProof (BVType (FloatInfoBits ftp)) (FloatType ftp)
 
+  -- | Convert between vector types that are equivalent.
   VecEqCongruence :: !(NatRepr n)
                   -> !(WidthEqProof i o)
                   -> WidthEqProof (VecType n i) (VecType n o)
+
+  -- | Allows transitivity composing proofs.
+  WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
+
+-- | Return the input type of the width equality proof
+widthEqSource :: WidthEqProof i o -> TypeRepr i
+widthEqSource (PackBits n w) = VecTypeRepr n (BVTypeRepr w)
+widthEqSource (UnpackBits n w) =
+  case leqMulPos n w of
+    LeqProof -> BVTypeRepr (natMultiply n w)
+widthEqSource (FromFloat f) = FloatTypeRepr f
+widthEqSource (ToFloat f) =
+  case floatInfoBitsIsPos f of
+    LeqProof -> BVTypeRepr (floatInfoBits f)
+widthEqSource (VecEqCongruence n r) = VecTypeRepr n (widthEqSource r)
+widthEqSource (WidthEqTrans x _) = widthEqSource x
 
 -- | Return the result type of the width equality proof
 widthEqTarget :: WidthEqProof i o -> TypeRepr o
@@ -85,33 +102,29 @@ widthEqTarget (FromFloat f) =
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqTarget (ToFloat f) = FloatTypeRepr f
 widthEqTarget (VecEqCongruence n r) = VecTypeRepr n (widthEqTarget r)
+widthEqTarget (WidthEqTrans _ y) = widthEqTarget y
 
 -- Force app to be in template-haskell context.
 $(pure [])
 
+-- | Compare two proofs, and return truei if the input/output types
+-- are the same.
 widthEqProofEq :: WidthEqProof xi xo
                -> WidthEqProof yi yo
                -> Maybe (WidthEqProof xi xo :~: WidthEqProof yi yo)
-widthEqProofEq =
-  $(structuralTypeEquality [t|WidthEqProof|]
-                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
-                      [|widthEqProofEq|])
-                   ]
-                  )
+widthEqProofEq p q = do
+  Refl <- testEquality (widthEqSource p) (widthEqSource q)
+  Refl <- testEquality (widthEqTarget p) (widthEqTarget q)
+  pure Refl
 
+-- | Compare proofs based on ordering of source and target.
 widthEqProofCompare :: WidthEqProof xi xo
                     -> WidthEqProof yi yo
                     -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
-widthEqProofCompare =
-  $(structuralTypeOrd [t|WidthEqProof|]
-                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
-                      [|widthEqProofCompare|])
-                   ]
-                  )
+widthEqProofCompare p q =
+  joinOrderingF (compareF (widthEqSource p) (widthEqSource q)) $
+    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q)) $
+      EQF
 
 -- | This datatype defines operations used on multiple architectures.
 --

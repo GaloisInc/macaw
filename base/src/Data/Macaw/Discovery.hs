@@ -1317,11 +1317,9 @@ mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
 mkFunInfo fs =
   let addr = curFunAddr fs
       s = fs^.curFunCtx
-      nm = withArchConstraints (archInfo s) $
-         fromMaybe (BSC.pack (show addr)) (Map.lookup addr (symbolNames s))
    in DiscoveryFunInfo { discoveredFunReason = funReason fs
                        , discoveredFunAddr = addr
-                       , discoveredFunName = nm
+                       , discoveredFunSymbol = Map.lookup addr (symbolNames s)
                        , _parsedBlocks = fs^.curFunBlocks
                        }
 

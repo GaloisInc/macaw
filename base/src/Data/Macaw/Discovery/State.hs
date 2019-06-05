@@ -39,6 +39,7 @@ module Data.Macaw.Discovery.State
   , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
+  , discoveredFunName
   , parsedBlocks
     -- * Reasons for exploring
   , FunctionExploreReason(..)
@@ -291,21 +292,33 @@ data DiscoveryFunInfo arch ids
    = DiscoveryFunInfo { discoveredFunReason :: !(FunctionExploreReason (ArchAddrWidth arch))
                       , discoveredFunAddr :: !(ArchSegmentOff arch)
                         -- ^ Address of function entry block.
-                      , discoveredFunName :: !BSC.ByteString
-                        -- ^ Name of function should be unique for program
+                      , discoveredFunSymbol :: !(Maybe BSC.ByteString)
+                        -- ^ A symbol associated with the definition.
                       , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
                         -- ^ Maps an address to the blocks associated with that address.
                       }
+
+-- | Returns the "name" associated with a function.
+--
+-- This is either the symbol or the address.
+discoveredFunName :: MemWidth (ArchAddrWidth arch)
+                  => DiscoveryFunInfo arch ids
+                  -> BSC.ByteString
+discoveredFunName finfo =
+  case discoveredFunSymbol finfo of
+    Just nm -> nm
+    Nothing -> BSC.pack (show (discoveredFunAddr finfo))
 
 parsedBlocks :: Simple Lens (DiscoveryFunInfo arch ids) (Map (ArchSegmentOff arch) (ParsedBlock arch ids))
 parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
-    text "function" <+> text (BSC.unpack (discoveredFunName info))
-         <+> "@" <+> pretty (show (discoveredFunAddr info))
-    <$$>
-    vcat (pretty <$> Map.elems (info^.parsedBlocks))
+    let addr = pretty (show (discoveredFunAddr info))
+        nm = case discoveredFunSymbol info of
+               Just sym -> text (BSC.unpack sym) <+> "@" <+> addr
+               Nothing -> addr
+     in text "function" <+> nm <$$> vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
 -- DiscoveryState

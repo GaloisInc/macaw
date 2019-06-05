@@ -24,6 +24,7 @@ module Data.Macaw.Memory.ElfLoader
   , MemLoadWarning(..)
   , resolveElfContents
   , elfAddrWidth
+  , adjustedLoadRegionIndex
     -- * Symbols
   , MemSymbol(..)
     -- * Re-exports

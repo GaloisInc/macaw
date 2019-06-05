@@ -725,6 +725,9 @@ doBitcast sym x eqPr =
       C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
     M.VecEqCongruence _n eltPr -> do
       forM x $ \e -> doBitcast sym e eltPr
+    M.WidthEqTrans p q -> do
+      y <- doBitcast sym x p
+      doBitcast sym y q
 
 evalMacawExprExtension :: forall sym arch f tp
                        .  IsSymInterface sym
