@@ -141,26 +141,27 @@ data ParsedTermStmt arch ids
   -- | A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
   = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
                !(Maybe (ArchSegmentOff arch))
-    -- | @PLTStub regs addr reloc@ denotes a terminal statement that
-    -- has been identified as a PLT stub for calling the given
-    -- relocation.
+    -- | @PLTStub regs addr sym symVer@ denotes a terminal statement that
+    -- has been identified as a PLT stub for jumping to the given symbol
+    -- (with optional version information).
     --
     -- This is a special case of a tail call.  It has been added
     -- separately because it occurs frequently in dynamically linked
     -- code, and we can use this to recognize PLT stubs.
     --
     -- The first argument maps registers that were changed to their
-    -- value.  Other registers have the initial value.
+    -- value.  Other registers have the initial value.  This should
+    -- typically be empty on @X86_64@ PLT stubs.
     --
     -- The second argument is the address in the .GOT that the target
     -- function is stored at.  The PLT stub sets the PC to the address
     -- stored here.
     --
-    -- The third argument is the relocation identifies the function
-    -- that should be stored in this GOT offset.
+    -- The third and fourth arguments are used to resolve where the
+    -- function should jump to.
   | PLTStub !(MapF.MapF (ArchReg arch) (Value arch ids))
             !(ArchSegmentOff arch)
-            !(Relocation (ArchAddrWidth arch))
+            !VersionedSymbol
   -- | A jump to an explicit address within a function.
   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
   -- | @ParsedBranch regs cond trueAddr falseAddr@ represents a conditional
@@ -204,8 +205,8 @@ ppTermStmt tstmt =
     ParsedCall s (Just next) ->
       text "call and return to" <+> text (show next) <$$>
       indent 2 (pretty s)
-    PLTStub regs addr r ->
-      text "call_via_got" <+> text (show (relocationSym r)) <+> "(at" <+> text (show addr) PP.<> ")" <$$>
+    PLTStub regs addr sym ->
+      text "call_via_got" <+> text (show sym) <+> "(at" <+> text (show addr) PP.<> ")" <$$>
        indent 2 (ppRegMap regs)
     ParsedJump s addr ->
       text "jump" <+> text (show addr) <$$>

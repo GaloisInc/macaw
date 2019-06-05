@@ -816,11 +816,12 @@ addNewFunctionAddrs addrs =
 
 -- | @stripPLTRead assignId prev rest@ looks for a read of @assignId@
 -- from the end of @prev@, and if it finds it returns the
--- concatenation of the instructione before the read in @prev@ and
+-- concatenation of the instruction before the read in @prev@ and
 -- @rest@.
 --
 -- The read may appear before comment and @instructionStart@
--- instructions, but otherwise must be at the end of prev
+-- instructions, but otherwise must be at the end of the instructions
+-- in @prev@.
 stripPLTRead :: ArchConstraints arch
               => AssignId ids tp -- ^ Identifier of write to remove
               -> Seq (Stmt arch ids)
@@ -1075,14 +1076,24 @@ parseFetchAndExecute ctx initRegs stmts initAbsState finalRegs = do
                                    }
 
     -- Code for PLT entry
-    _ | AssignedValue (Assignment valId v)  <- finalRegs^.boundValue ip_reg
+    _ | -- The IP should jump to an address in the .got, so try to compute that.
+        AssignedValue (Assignment valId v)  <- finalRegs^.boundValue ip_reg
       , ReadMem gotVal _repr <- v
-      , Just gotAddr <- valueAsMemAddr gotVal
-      , Just gotSegOff <- asSegmentOff mem gotAddr
+      , Just gotSegOff <- valueAsSegmentOff mem gotVal
+        -- The .got contents should point to a relocation to the function
+        -- that we will jump to.
       , Right chunks <- segoffContentsAfter gotSegOff
       , RelocationRegion r:_ <- chunks
-        -- Check the relocation is a jump slot.
+        -- Check the relocation satisfies all the constraints we expect on PLT strub
+      , SymbolRelocation sym symVer <- relocationSym r
+      , relocationOffset r == 0
+      , not (relocationIsRel r)
+      , toInteger (relocationSize r) == toInteger (addrWidthReprByteCount (archAddrWidth ainfo))
+      , not (relocationIsSigned r)
+      , relocationEndianness r == archEndianness ainfo
       , relocationJumpSlot r
+        -- The PLTStub terminator will implicitly read the GOT address, so we remove
+        -- it from the list of statements.
       , Just strippedStmts <- stripPLTRead valId stmts Seq.empty
       , strippedRegs <- removeUnassignedRegs initRegs finalRegs
       , not (containsAssignId valId strippedRegs) -> do
@@ -1090,7 +1101,7 @@ parseFetchAndExecute ctx initRegs stmts initAbsState finalRegs = do
           mapM_ (recordWriteStmt ainfo mem absProcState') strippedStmts
           pure $! ParsedContents { parsedNonterm = toList strippedStmts
                                  , parsedAbsState = absEvalStmts ainfo initAbsState strippedStmts
-                                 , parsedTerm  = PLTStub strippedRegs gotSegOff r
+                                 , parsedTerm  = PLTStub strippedRegs gotSegOff (VerSym sym symVer)
                                  }
 
       -- Check for tail call when the calling convention seems to be satisfied.
