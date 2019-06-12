@@ -90,6 +90,7 @@ module Data.Macaw.X86.X86Reg
   , x87FPURegList
   , x86StateRegs
   , x86CalleeSavedRegs
+  , x86GPPArgumentRegs
   , x86ArgumentRegs
   , x86FloatArgumentRegs
   , x86ResultRegs
@@ -446,8 +447,13 @@ x86CalleeSavedRegs = Set.fromList $
   , Some X87_TopReg
   ]
 
+-- | General purpose registers that may be needed for arguments according
+-- to X86_64 ABI.
+x86GPPArgumentRegs :: [F.Reg64]
+x86GPPArgumentRegs = [F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
+
 x86ArgumentRegs :: [X86Reg (BVType 64)]
-x86ArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
+x86ArgumentRegs = X86_GP <$> x86GPPArgumentRegs
 
 x86FloatArgumentRegs :: [X86Reg (BVType 512)]
 x86FloatArgumentRegs =  X86_ZMMReg <$> [0..7]

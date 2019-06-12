@@ -248,8 +248,8 @@ parsedTermSucc ts = do
     ParsedBranch _ _ t f -> [t,f]
     ParsedLookupTable _ _ v -> V.toList v
     ParsedReturn{} -> []
-    ParsedTranslateError{} -> []
     ParsedArchTermStmt _ _ ret -> maybeToList ret
+    ParsedTranslateError{} -> []
     ClassifyFailure{} -> []
 
 ------------------------------------------------------------------------
