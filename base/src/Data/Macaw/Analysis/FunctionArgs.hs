@@ -412,32 +412,6 @@ addBlockDemands a m =
 -- has executed, this traverses the registers that will be available
 -- in future blocks, and records a mapping from those registers to
 -- their input dependencies.
-recordAllBlockTransfer :: forall arch ids t
-                    .  ( OrdF (ArchReg arch)
-                       , FoldableFC (ArchFn arch)
-                       )
-                    => ArchSegmentOff arch
-                       -- ^ Address of current block.
-                    -> RegState (ArchReg arch) (Value arch ids)
-                       -- ^ Map from registers to values.
-                    -> FunctionArgsM arch ids ()
-recordAllBlockTransfer addr regs = do
-  curDemands <- use $ blockTransfer . ix addr
-  let doReg :: FinalRegisterDemands (ArchReg arch)
-            -> ArchReg arch tp
-            -> Value arch ids tp
-            -> State (AssignmentCache (ArchReg arch) ids)
-                     (FinalRegisterDemands (ArchReg arch))
-      doReg m r v = do
-        rs' <- valueUses v
-        pure $! insertRegDemand r (registerDemandSet rs') m
-  vs <- withAssignmentCache $ MapF.foldlMWithKey doReg curDemands (regStateMap regs)
-  blockTransfer %= Map.insert addr vs
-
--- | Given a block and a maping from register to value after the block
--- has executed, this traverses the registers that will be available
--- in future blocks, and records a mapping from those registers to
--- their input dependencies.
 recordBlockTransfer :: forall arch ids t
                     .  ( OrdF (ArchReg arch)
                        , FoldableFC (ArchFn arch)
@@ -668,10 +642,10 @@ summarizeBlock b = do
         (pblockStmts b)
   -- Add values demanded by terminal statements
   case pblockTermStmt b of
-    ParsedCall finalRegs mRetAddr -> do
+    ParsedCall regs mRetAddr -> do
       -- Record the demands based on the call, and add edges between
       -- this note and next nodes.
-      summarizeCall addr finalRegs mRetAddr
+      summarizeCall addr regs mRetAddr
 
     PLTStub regs _ sym -> do
       -- Get argument registers if known for symbol.
@@ -694,40 +668,40 @@ summarizeBlock b = do
       addBlockDemands addr $ demandAlways $
         registerDemandSet $ demands
 
-    ParsedJump procState tgtAddr -> do
+    ParsedJump regs _tgtAddr -> do
       -- record all propagations
-      recordBlockTransfer addr procState archRegs
+      recordBlockTransfer addr regs archRegs
 
-    ParsedBranch nextRegs cond trueAddr falseAddr -> do
+    ParsedBranch regs cond _trueAddr _falseAddr -> do
       demandValue addr cond
       -- record all propagations
       let notIP (Some r) = isNothing (testEquality r ip_reg)
-      recordBlockTransfer addr nextRegs (filter notIP archRegs)
+      recordBlockTransfer addr regs (filter notIP archRegs)
 
-    ParsedLookupTable finalRegs lookup_idx vec -> do
+    ParsedLookupTable regs lookup_idx _vec -> do
       demandValue addr lookup_idx
       -- record all propagations
-      recordBlockTransfer addr finalRegs archRegs
+      recordBlockTransfer addr regs archRegs
 
-    ParsedReturn finalRegs -> do
+    ParsedReturn regs -> do
       let retRegs = functionRetRegs ainfo
       let regDemandSet m (Some r) = do
-            regs <- valueUses (finalRegs^.boundValue r)
-            pure $! addDemandFunctionResult r (registerDemandSet regs) m
+            rUses <- valueUses (regs^.boundValue r)
+            pure $! addDemandFunctionResult r (registerDemandSet rUses) m
       demands <- withAssignmentCache $ foldlM regDemandSet mempty retRegs
       addBlockDemands addr demands
 
-    ParsedArchTermStmt tstmt finalRegs next_addr -> do
+    ParsedArchTermStmt tstmt regs _nextAddr -> do
        -- Compute effects of terminal statement.
-      let e = computeArchTermStmtEffects ainfo tstmt finalRegs
+      let e = computeArchTermStmtEffects ainfo tstmt regs
 
       -- Demand all registers the terminal statement demands.
-      do let regUses s (Some r) = addValueUses s (finalRegs^.boundValue r)
+      do let regUses s (Some r) = addValueUses s (regs^.boundValue r)
          demands <- withAssignmentCache $
            foldlM regUses Set.empty (termRegDemands e)
          addBlockDemands addr $ demandAlways (registerDemandSet demands)
 
-      recordBlockTransfer addr finalRegs (termRegTransfers e)
+      recordBlockTransfer addr regs (termRegTransfers e)
 
     ParsedTranslateError _ -> do
       -- We ignore demands for translate errors.
@@ -775,15 +749,6 @@ transferDemands :: ( MemWidth (ArchAddrWidth arch)
                 -> FunctionArgsM arch ids (DemandSet (ArchReg arch))
 transferDemands prev next xfer (DemandSet regs funs) = do
   foldlM (transferRegDemand prev next xfer) (DemandSet Set.empty funs) regs
-
--- | Data structure generated when computing the demands of blocks
--- within a function.
-data BlockFixpointState arch =
-  BFS { bfsPending :: !(Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch)))
-        -- ^ Maps each block to the demands that have not yet been backpropagated
-        -- to predecessors.
-      , bfsCurrent :: !(Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch)))
-      }
 
 -- | Given new demands on a register, this back propagates the demands
 -- to the predecessor blocks.
