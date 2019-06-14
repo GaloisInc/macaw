@@ -32,5 +32,5 @@ install:
  - stack build --ghc-options="-Wall -Werror"
  # Run tests
  - stack test macaw-x86 macaw-x86-symbolic --ghc-options="-Wall -Werror"
- # Build documentation
- - stack haddock
+ # It would be good to build documentation, but it currently seems to take too long.
+ # - stack haddock
