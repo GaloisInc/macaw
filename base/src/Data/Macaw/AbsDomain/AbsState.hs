@@ -27,6 +27,7 @@ module Data.Macaw.AbsDomain.AbsState
   , AbsValue(..)
   , bvadd
   , emptyAbsValue
+  , concreteCodeAddr
   , joinAbsValue
   , ppAbsValue
   , absTrue
@@ -147,9 +148,14 @@ data AbsValue w (tp :: Type)
      -- whether this set contains the address 0.
   | (tp ~ BVType w) => StackOffset !(MemAddr w) !(Set Int64)
     -- ^ Offset of stack from the beginning of the block at the given address.
-    --  First argument is address of block.
+    --
+    -- To avoid conflating offsets that are relative to the begining of different
+    -- blocks, we include the address of the block as the first argument.
   | (tp ~ BVType w) => SomeStackOffset !(MemAddr w)
     -- ^ An offset to the stack at some offset.
+    --
+    -- To avoid conflating offsets that are relative to the begining of different
+    -- blocks, we include the address of the block as the first argument.
   | forall n . (tp ~ BVType n) => StridedInterval !(SI.StridedInterval n)
     -- ^ A strided interval
   | forall n n'
@@ -168,6 +174,10 @@ data AbsValue w (tp :: Type)
 -- | Denotes that we do not know of any value that could be in set.
 emptyAbsValue :: AbsValue w (BVType w)
 emptyAbsValue = CodePointers Set.empty False
+
+-- | Construct a abstract value for a pointer to a code address.
+concreteCodeAddr :: MemSegmentOff w -> AbsValue w (BVType w)
+concreteCodeAddr addr = CodePointers (Set.singleton addr) False
 
 -- | Returns a finite set of values with some width.
 data SomeFinSet tp where
@@ -857,10 +867,11 @@ abstractSingleton mem w i
   , 0 <= i && i <= maxUnsigned w
   , Just sa <- resolveAbsoluteAddr mem (fromInteger i)
   , segmentFlags (segoffSegment sa) `Perm.hasPerm` Perm.execute =
-    CodePointers (Set.singleton sa) False
+    concreteCodeAddr sa
   | 0 <= i && i <= maxUnsigned w = FinSet (Set.singleton i)
   | otherwise = error $ "abstractSingleton given bad value: " ++ show i ++ " " ++ show w
 
+-- | Create a concrete stack offset.
 concreteStackOffset :: MemAddr w -> Integer -> AbsValue w (BVType w)
 concreteStackOffset a o = StackOffset a (Set.singleton (fromInteger o))
 
@@ -1095,7 +1106,7 @@ setAbsIP a b
   , Set.member a s =
     b
   | otherwise =
-    b & absRegState . curIP .~ CodePointers (Set.singleton a) False
+    b & absRegState . curIP .~ concreteCodeAddr a
 
 ------------------------------------------------------------------------
 -- AbsProcessorState
@@ -1214,7 +1225,7 @@ transferValue c v = do
     RelocatableValue _w i
       | Just addr <- asSegmentOff (absMem c) i
       , segmentFlags (segoffSegment addr) `Perm.hasPerm` Perm.execute ->
-        CodePointers (Set.singleton addr) False
+        concreteCodeAddr addr
       | Just addr <- asAbsoluteAddr i ->
         FinSet $ Set.singleton $ toInteger addr
       | otherwise ->
@@ -1386,7 +1397,7 @@ absEvalCall params ab0 addr = absUpdateRegsPostCall regFn ab0
         regFn r
           -- We set IPReg
           | Just Refl <- testEquality r ip_reg =
-              CodePointers (Set.singleton addr) False
+              concreteCodeAddr addr
           | Just Refl <- testEquality r sp_reg =
               bvadd (typeWidth r)
                     (ab0^.absRegState^.boundValue r)
