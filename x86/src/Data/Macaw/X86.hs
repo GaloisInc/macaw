@@ -68,23 +68,6 @@ import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
 
 import           Data.Macaw.AbsDomain.AbsState
-       ( AbsBlockState
-       , curAbsStack
-       , setAbsIP
-       , absRegState
-       , StackEntry(..)
-       , concreteStackOffset
-       , AbsValue(..)
-       , top
-       , stridedInterval
-       , asConcreteSingleton
-       , startAbsStack
-       , hasMaximum
-       , AbsProcessorState
-       , transferValue
-       , CallParams(..)
-       , absEvalCall
-       )
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
@@ -354,8 +337,8 @@ disassembleBlock gen loc maxSize = do
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
 initialX86AbsState addr
   = top
-  & setAbsIP addr
-  & absRegState . boundValue sp_reg .~ concreteStackOffset (segoffAddr addr) 0
+  & absRegState . boundValue X86_IP     .~ concreteCodeAddr addr
+  & absRegState . boundValue RSP        .~ concreteStackOffset (segoffAddr addr) 0
   -- x87 top register points to top of stack.
   & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
   -- Direction flag is initially zero.
@@ -511,7 +494,7 @@ identifyX86Call :: Memory 64
                 -> Maybe (Seq (Stmt X86_64 ids), MemSegmentOff 64)
 identifyX86Call mem stmts0 s = go stmts0 Seq.empty
   where -- Get value of stack pointer
-        next_sp = s^.boundValue sp_reg
+        next_sp = s^.boundValue RSP
         -- Recurse on statements.
         go stmts after =
           case Seq.viewr stmts of
