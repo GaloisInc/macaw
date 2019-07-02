@@ -68,23 +68,6 @@ import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
 
 import           Data.Macaw.AbsDomain.AbsState
-       ( AbsBlockState
-       , curAbsStack
-       , setAbsIP
-       , absRegState
-       , StackEntry(..)
-       , concreteStackOffset
-       , AbsValue(..)
-       , top
-       , stridedInterval
-       , asConcreteSingleton
-       , startAbsStack
-       , hasMaximum
-       , AbsProcessorState
-       , transferValue
-       , CallParams(..)
-       , absEvalCall
-       )
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
