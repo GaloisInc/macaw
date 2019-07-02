@@ -459,7 +459,21 @@ staticSymTab entries = SymbolTable $ \symIdx -> do
   case entries V.!? fromIntegral symIdx of
     Nothing ->
       throwError $ RelocationBadSymbolIndex $ fromIntegral symIdx
-    Just sym -> mkSymbolRef sym ObjectSymbol
+    Just sym ->
+      -- Look for '@' as it is used to separate symbol name from version information
+      -- in object files.
+      case BSC.findIndex (== '@') (Elf.steName sym) of
+        Just i -> do
+          let nm = Elf.steName sym
+                  -- If "@@" appears in the symbol, this is a default versioned symbol
+          let ver | i+1 < BSC.length nm, BSC.index nm (i+1) == '@' =
+                      ObjectDefaultSymbol (BSC.drop (i+2) nm)
+                  -- Otherwise "@" appears in the symbol, and this is a non-default symbol.
+                  | otherwise =
+                      ObjectNonDefaultSymbol (BSC.drop (i+1) nm)
+          mkSymbolRef (sym { Elf.steName = BSC.take i nm }) ver
+        Nothing -> do
+          mkSymbolRef sym UnversionedSymbol
 
 -- | Use dynamic section to create symbol table function.
 dynamicSymbolTable :: Elf.DynamicSection w -> SymbolTable
