@@ -81,7 +81,6 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import           GHC.Stack
 import           Numeric (showHex)
-import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -622,7 +621,7 @@ bvinc :: forall w u
       -> AbsValue w (BVType u)
 bvinc w (FinSet s) o =
   FinSet $ Set.map (toUnsigned w . (+o)) s
-bvinc w (CodePointers _  _) _ =
+bvinc _ (CodePointers _  _) _ =
   TopV
 bvinc w (StackOffset a s) o =
   StackOffset a $ Set.map (fromInteger . toUnsigned w . (+o) . toInteger) s
@@ -635,8 +634,8 @@ bvinc _ (SubValue w' v) o =
   case bvinc w' v o of
     TopV -> TopV
     v' -> SubValue w' v'
-bvInc w TopV _ = TopV
-bvInc w ReturnAddr _ = TopV
+bvinc _ TopV _ = TopV
+bvinc _ ReturnAddr _ = TopV
 
 bvadc :: forall w u
       .  MemWidth w
