@@ -962,7 +962,7 @@ parseFetchAndExecute ctx initRegs stmts initAbsState finalRegs = do
   withArchConstraints ainfo $ do
    -- Try to figure out what control flow statement we have.
    case () of
-    -- The block ends with a Mux, so we turn this into a `ParsedIte` statement.
+    -- The block ends with a Mux, so we turn this into a `ParsedBranch` statement.
     _ | Just (Mux _ c t f) <- valueAsApp (finalRegs^.boundValue ip_reg)
       , Just trueTgtAddr <- valueAsSegmentOff mem t
         -- Check that true branch is an allowed intra-procedural branch target
