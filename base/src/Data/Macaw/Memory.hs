@@ -314,13 +314,13 @@ class (1 <= w) => MemWidth w where
   -- The argument is ignored.
   addrWidthRepr :: p w -> AddrWidthRepr w
 
-  -- | @addrWidthMask w@ returns @2^(8 * addrSize w) - 1@.
-  addrWidthMask :: p w -> Word64
-
   -- | Returns number of bytes in addr.
   --
   -- The argument is not evaluated.
   addrSize :: p w -> Int
+
+  -- | @addrWidthMask w@ returns @2^(8 * addrSize w) - 1@.
+  addrWidthMask :: p w -> Word64
 
   -- | Rotates the value by the given index.
   addrRotate :: MemWord w -> Int -> MemWord w
