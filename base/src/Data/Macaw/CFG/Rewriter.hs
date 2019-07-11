@@ -649,7 +649,54 @@ rewriteApp app = do
        else
         rewriteApp (Eq x (BVValue u (toUnsigned u yc)))
 
-    _ -> evalRewrittenRhs (EvalApp app)
+    -- no normal rewrites available, now try mhnf for enabling Discovery
+    _ -> rewriteMhnf app
+
+
+-- | Performs rewrites for "Mux Head Normal Form", which attempts to
+-- raise Mux operations upwards to make them more likely to appear as
+-- the last statement in a Block.  This is needed because
+-- parseFetchAndExecute in Discovery will attempt to recognize branch
+-- statements by pattern matching the value of the IP register as a
+-- Mux.
+--
+-- For example, the following:
+--
+--     r32 := Mux r31 (0x4 :: [64]) (0x28 :: [64])
+--     r33 := Add r32 (0x100a3e50)
+--     { ip => r33, ... }
+--
+-- should be rewritten to:
+--
+--     r34 := Mux r31 (0x100a3e54) (0x100a3e78)
+--     { ip => r34, ... }
+--
+-- so that the Mux itself is the ip register's valueAsApp.  (Note that
+-- the BVAdd of the two r32 branch values and the r33 second argument
+-- are reduced to simple values by the rewriter here as well.
+--
+-- This rewrite is performed after other rewrites to increase the
+-- chances of it raising the Mux past previously rewrite-simplified
+-- statements, although it still recurses into the main rewriter.
+rewriteMhnf :: App (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)
+rewriteMhnf app = do
+  ctx <- Rewriter $ gets rwContext
+  rwctxConstraints ctx $ do
+   case app of
+
+     BVAdd w (valueAsApp -> Just (Mux p c t f)) v@(BVValue _ _) -> do
+       t' <- rewriteApp (BVAdd w t v)
+       f' <- rewriteApp (BVAdd w f v)
+       rewriteApp $ Mux p c t' f'
+
+     BVAdd w (valueAsApp -> Just (Mux p c t f)) v@(RelocatableValue _ _) -> do
+       t' <- rewriteApp (BVAdd w t v)
+       f' <- rewriteApp (BVAdd w f v)
+       rewriteApp $ Mux p c t' f'
+
+     -- no more rewrites applicable, so return the final result
+     _ -> evalRewrittenRhs (EvalApp app)
+
 
 rewriteAssignRhs :: AssignRhs arch (Value arch src) tp
                  -> Rewriter arch s src tgt (Value arch tgt tp)
