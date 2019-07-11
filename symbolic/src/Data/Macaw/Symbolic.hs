@@ -20,7 +20,7 @@
 -- library.  There are two main portions of the API:
 --
 -- 1. Translation of Macaw IR into Crucible CFGs
--- 2. Symbolic execution of Crucible CFGs generated from MAcaw
+-- 2. Symbolic execution of Crucible CFGs generated from Macaw
 --
 -- There are examples of each use case in the relevant sections of the haddocks.
 --
@@ -41,6 +41,7 @@
 --   do not necessarily hold for all machine code programs, but that do hold for
 --   (correct) C and C++ programs.  The current state of memory is held in a
 --   Crucible global value that is modified by all code.
+--
 -- * Each function takes a single argument (the full set of machine registers)
 --   and returns a single value (the full set of machine registers reflecting
 --   any modifications)
@@ -77,6 +78,7 @@ module Data.Macaw.Symbolic
   , CG.crucArchRegTypes
   , PS.ToCrucibleType
   , PS.ToCrucibleFloatInfo
+  , PS.FromCrucibleFloatInfo
   , PS.floatInfoToCrucible
   , PS.floatInfoFromCrucible
   , PS.ArchRegContext

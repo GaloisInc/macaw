@@ -9,9 +9,10 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Data.Macaw.PPC.Semantics.Base
   ( crucAppToExpr
@@ -28,12 +29,14 @@ import qualified What4.BaseTypes as S
 import qualified What4.Expr.BoolMap as BooM
 import qualified What4.Expr.Builder as S
 import qualified What4.Expr.WeightedSum as WSum
+import qualified What4.InterpretedFloatingPoint as SFP
 import qualified What4.SemiRing as SR
 
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
+import qualified Data.Macaw.Symbolic as MS
 
 import Data.Parameterized.NatRepr ( knownNat
                                   , addNat
@@ -48,6 +51,8 @@ import           Data.Macaw.PPC.PPCReg
 type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
   FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
+  FromCrucibleBaseType (S.BaseFloatType fpp) =
+    M.FloatType (MS.FromCrucibleFloatInfo (SFP.FloatPrecisionToInfo fpp))
 
 crucAppToExpr :: (M.ArchConstraints ppc) =>
                  S.App (S.Expr t) ctp
@@ -61,10 +66,10 @@ crucAppToExpr (S.BaseIte bt _ test t f) = AppExpr <$>
       M.Mux <$> pure M.BoolTypeRepr <*> addElt test <*> addElt t <*> addElt f
     S.BaseBVRepr w ->
       M.Mux <$> pure (M.BVTypeRepr w) <*> addElt test <*> addElt t <*> addElt f
-    -- S.BaseFloatRepr fpp ->
-      -- M.Mux
-      -- <$> pure (M.FloatTypeRepr (floatInfoFromPrecision fpp))
-      -- <*> addElt test <*> addElt t <*> addElt f
+    S.BaseFloatRepr fpp ->
+      M.Mux
+      (M.FloatTypeRepr (MS.floatInfoFromCrucible $ SFP.floatPrecisionToInfoRepr fpp))
+      <$> addElt test <*> addElt t <*> addElt f
     _ -> error "unsupported BaseITE repr for macaw PPC base semantics"
 crucAppToExpr (S.BaseEq _bt bv1 bv2) =
   AppExpr <$> do M.Eq <$> addElt bv1 <*> addElt bv2
