@@ -1,3 +1,17 @@
+# *Note:*
+
+  This labeledBlocks branch is a fork of the macaw base from the point
+  where ParsedBlocks still had labels and were recursive, prior to the
+  refactoring which made them strictly linear and addressed by
+  address.  This branch exists because macaw-semmc, macaw-ppc,
+  macaw-arm, and macaw-refinement need to be updated to accomodate the
+  changed in ParsedBlocks.
+
+  AT THIS COMMIT, ALL CHANGES ON THE `labeledBlocks` BRANCH ARE ALSO
+  PRESENT ON MASTER; THIS BRANCH SHOULD NOT BE MERGED TO MASTER, THE
+  USERS OF THIS BRANCH SHOULD SIMPLY SWITCH TO USING MASTER.
+
+
 This is the main repository for the Macaw binary analysis framework.
 This framework is implemented to offer extensible support for
 architectures.
