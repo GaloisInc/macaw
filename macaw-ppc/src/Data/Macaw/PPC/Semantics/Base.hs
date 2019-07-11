@@ -19,12 +19,16 @@ module Data.Macaw.PPC.Semantics.Base
   , interpretFormula
   ) where
 
+import qualified Data.Foldable as F
 import           Data.Proxy
 import           GHC.TypeLits
 
 import           Data.Parameterized.Classes
-import qualified What4.Expr.Builder as S
 import qualified What4.BaseTypes as S
+import qualified What4.Expr.BoolMap as BooM
+import qualified What4.Expr.Builder as S
+import qualified What4.Expr.WeightedSum as WSum
+import qualified What4.SemiRing as SR
 
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Location as APPC
@@ -45,20 +49,26 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseBVType w) = M.BVType w
   FromCrucibleBaseType (S.BaseBoolType) = M.BoolType
 
-crucAppToExpr :: (M.ArchConstraints ppc) => S.App (S.Expr t) ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
-crucAppToExpr S.TrueBool  = return $ ValueExpr (M.BoolValue True)
-crucAppToExpr S.FalseBool = return $ ValueExpr (M.BoolValue False)
-crucAppToExpr (S.NotBool bool) = (AppExpr . M.NotApp) <$> addElt bool
-crucAppToExpr (S.AndBool bool1 bool2) = AppExpr <$> do
-  M.AndApp <$> addElt bool1 <*> addElt bool2
-crucAppToExpr (S.XorBool bool1 bool2) = AppExpr <$> do
-  M.XorApp <$> addElt bool1 <*> addElt bool2
-crucAppToExpr (S.IteBool test t f) = AppExpr <$> do
-  M.Mux <$> pure M.BoolTypeRepr <*> addElt test <*> addElt t <*> addElt f
-crucAppToExpr (S.BVIte w _ test t f) = AppExpr <$> do -- what is _ for?
-  M.Mux <$> pure (M.BVTypeRepr w) <*> addElt test <*> addElt t <*> addElt f
-crucAppToExpr (S.BVEq bv1 bv2) = AppExpr <$> do
-  M.Eq <$> addElt bv1 <*> addElt bv2
+crucAppToExpr :: (M.ArchConstraints ppc) =>
+                 S.App (S.Expr t) ctp
+              -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
+crucAppToExpr (S.NotPred bool) = AppExpr . M.NotApp <$> addElt bool
+crucAppToExpr (S.ConjPred boolmap) = evalBoolMap AndOp True boolmap
+crucAppToExpr (S.DisjPred boolmap) = evalBoolMap OrOp False boolmap
+crucAppToExpr (S.BaseIte bt _ test t f) = AppExpr <$>
+  case bt of
+    S.BaseBoolRepr ->
+      M.Mux <$> pure M.BoolTypeRepr <*> addElt test <*> addElt t <*> addElt f
+    S.BaseBVRepr w ->
+      M.Mux <$> pure (M.BVTypeRepr w) <*> addElt test <*> addElt t <*> addElt f
+    -- S.BaseFloatRepr fpp ->
+      -- M.Mux
+      -- <$> pure (M.FloatTypeRepr (floatInfoFromPrecision fpp))
+      -- <*> addElt test <*> addElt t <*> addElt f
+    _ -> error "unsupported BaseITE repr for macaw PPC base semantics"
+crucAppToExpr (S.BaseEq _bt bv1 bv2) =
+  AppExpr <$> do M.Eq <$> addElt bv1 <*> addElt bv2
+
 crucAppToExpr (S.BVSlt bv1 bv2) = AppExpr <$> do
   M.BVSignedLt <$> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVUlt bv1 bv2) = AppExpr <$> do
@@ -95,18 +105,48 @@ crucAppToExpr (S.BVSelect idx n bv) = do
       -- Is there a way to just "know" that n = w?
       Just Refl <- return $ testEquality n w
       return $ ValueExpr bvVal
-crucAppToExpr (S.BVNeg w bv) = do
-  bvVal  <- addElt bv
-  bvComp <- addExpr (AppExpr (M.BVComplement w bvVal))
-  return $ AppExpr (M.BVAdd w bvComp (M.mkLit w 1))
 crucAppToExpr (S.BVTestBit idx bv) = AppExpr <$> do
   M.BVTestBit
     <$> addExpr (ValueExpr (M.BVValue (S.bvWidth bv) (fromIntegral idx)))
     <*> addElt bv
-crucAppToExpr (S.BVAdd repr bv1 bv2) = AppExpr <$> do
-  M.BVAdd <$> pure repr <*> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVMul repr bv1 bv2) = AppExpr <$> do
-  M.BVMul <$> pure repr <*> addElt bv1 <*> addElt bv2
+
+crucAppToExpr (S.SemiRingSum sm) =
+    case WSum.sumRepr sm of
+      SR.SemiRingBVRepr SR.BVArithRepr w ->
+        let smul mul e = do x <- sval mul
+                            y <- eltToExpr e
+                            AppExpr <$> do M.BVMul w <$> addExpr x <*> addExpr y
+            sval v = return $ ValueExpr $ M.BVValue w v
+            add x y = AppExpr <$> do M.BVAdd w <$> addExpr x <*> addExpr y
+        in WSum.evalM add smul sval sm
+      SR.SemiRingBVRepr SR.BVBitsRepr w ->
+        let smul mul e = do x <- sval mul
+                            y <- eltToExpr e
+                            AppExpr <$> do M.BVAnd w <$> addExpr x <*> addExpr y
+            sval v = return $ ValueExpr $ M.BVValue w v
+            add x y = AppExpr <$> do M.BVXor w <$> addExpr x <*> addExpr y
+        in WSum.evalM add smul sval sm
+      _ -> error "unsupported SemiRingSum repr for macaw PPC base semantics"
+
+crucAppToExpr (S.SemiRingProd pd) =
+    case WSum.prodRepr pd of
+      SR.SemiRingBVRepr SR.BVArithRepr w ->
+        let pmul x y = AppExpr <$> do M.BVMul w <$> addExpr x <*> addExpr y
+            unit = return $ ValueExpr $ M.BVValue w 1
+        in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
+      SR.SemiRingBVRepr SR.BVBitsRepr w ->
+        let pmul x y = AppExpr <$> do M.BVAnd w <$> addExpr x <*> addExpr y
+            unit = return $ ValueExpr $ M.BVValue w $ S.maxUnsigned w
+        in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
+      _ -> error "unsupported SemiRingProd repr for macaw PPC base semantics"
+
+crucAppToExpr (S.BVOrBits pd) =
+    case WSum.prodRepr pd of
+      SR.SemiRingBVRepr _ w ->
+        let pmul x y = AppExpr <$> do M.BVOr w <$> addExpr x <*> addExpr y
+            unit = return $ ValueExpr $ M.BVValue w 0
+        in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
+
 crucAppToExpr (S.BVShl repr bv1 bv2) = AppExpr <$> do
   M.BVShl <$> pure repr <*> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVLshr repr bv1 bv2) = AppExpr <$> do
@@ -117,15 +157,32 @@ crucAppToExpr (S.BVZext repr bv) = AppExpr <$> do
   M.UExt <$> addElt bv <*> pure repr
 crucAppToExpr (S.BVSext repr bv) = AppExpr <$> do
   M.SExt <$> addElt bv <*> pure repr
-crucAppToExpr (S.BVBitNot repr bv) = AppExpr <$> do
-  M.BVComplement <$> pure repr <*> addElt bv
-crucAppToExpr (S.BVBitAnd repr bv1 bv2) = AppExpr <$> do
-  M.BVAnd <$> pure repr <*> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVBitOr repr bv1 bv2) = AppExpr <$> do
-  M.BVOr <$> pure repr <*> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVBitXor repr bv1 bv2) = AppExpr <$> do
-  M.BVXor <$> pure repr <*> addElt bv1 <*> addElt bv2
+
 crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
+
+
+data BoolMapOp = AndOp | OrOp
+
+evalBoolMap :: M.ArchConstraints ppc =>
+               BoolMapOp -> Bool -> BooM.BoolMap (S.Expr t)
+            -> Generator ppc ids s (Expr ppc ids 'M.BoolType)
+evalBoolMap op defVal bmap =
+  let bBase b = return $ ValueExpr (M.BoolValue b)
+      bNotBase = bBase . not
+  in case BooM.viewBoolMap bmap of
+       BooM.BoolMapUnit -> bBase defVal
+       BooM.BoolMapDualUnit -> bNotBase defVal
+       BooM.BoolMapTerms ts ->
+         let onEach e r = do
+               e >>= \e' -> do
+                 n <- case r of
+                        (t, BooM.Positive) -> eltToExpr t
+                        (t, BooM.Negative) -> do p <- eltToExpr t
+                                                 AppExpr <$> do M.NotApp <$> addExpr p
+                 case op of
+                   AndOp -> AppExpr <$> do M.AndApp <$> addExpr e' <*> addExpr n
+                   OrOp  -> AppExpr <$> do M.OrApp  <$> addExpr e' <*> addExpr n
+         in F.foldl onEach (bBase defVal) ts
 
 
 locToReg :: (1 <= APPC.ArchRegWidth ppc,
@@ -162,11 +219,16 @@ interpretFormula loc elt = do
       setRegVal reg (M.AssignedValue assignment)
 
 -- Convert a Crucible element into an expression.
-eltToExpr :: M.ArchConstraints ppc => S.Expr t ctp -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
-eltToExpr (S.BVExpr w val _) = return $ ValueExpr (M.BVValue w val)
+eltToExpr :: M.ArchConstraints ppc =>
+             S.Expr t ctp
+          -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 eltToExpr (S.AppExpr appElt) = crucAppToExpr (S.appExprApp appElt)
+eltToExpr (S.SemiRingLiteral (SR.SemiRingBVRepr _ w) val _) =
+  return $ ValueExpr (M.BVValue w val)
 eltToExpr _ = undefined
 
 -- Add a Crucible element in the Generator monad.
-addElt :: M.ArchConstraints ppc => S.Expr t ctp -> Generator ppc ids s (M.Value ppc ids (FromCrucibleBaseType ctp))
+addElt :: M.ArchConstraints ppc =>
+          S.Expr t ctp
+       -> Generator ppc ids s (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr
