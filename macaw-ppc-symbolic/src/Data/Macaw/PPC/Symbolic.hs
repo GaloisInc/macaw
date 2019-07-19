@@ -247,31 +247,31 @@ archUpdateReg regEntry reg val =
     Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
 
 
-ppcGenFn :: forall ids h s tp v ppc
+ppcGenFn :: forall ids s tp v ppc
           . ( ppc ~ MP.AnyPPC v )
          => MP.PPCPrimFn ppc (MC.Value ppc ids) tp
-         -> MSB.CrucGen ppc ids h s (C.Atom s (MS.ToCrucibleType tp))
+         -> MSB.CrucGen ppc ids s (C.Atom s (MS.ToCrucibleType tp))
 ppcGenFn fn = do
-  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
+  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
       f x = A.AtomWrapper <$> MSB.valueToCrucible x
   r <- FC.traverseFC f fn
   MSB.evalArchStmt (PPCPrimFn r)
 
-ppcGenStmt :: forall v ids h s ppc
+ppcGenStmt :: forall v ids s ppc
             . ( ppc ~ MP.AnyPPC v )
            => MP.PPCStmt ppc (MC.Value ppc ids)
-           -> MSB.CrucGen ppc ids h s ()
+           -> MSB.CrucGen ppc ids s ()
 ppcGenStmt s = do
-  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids h s (A.AtomWrapper (C.Atom s) a)
+  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
       f x = A.AtomWrapper <$> MSB.valueToCrucible x
   s' <- TF.traverseF f s
   void (MSB.evalArchStmt (PPCPrimStmt s'))
 
-ppcGenTermStmt :: forall v ids h s ppc
+ppcGenTermStmt :: forall v ids s ppc
                 . ( ppc ~ MP.AnyPPC v )
                => MP.PPCTermStmt ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
-               -> MSB.CrucGen ppc ids h s ()
+               -> MSB.CrucGen ppc ids s ()
 ppcGenTermStmt ts _rs =
   void (MSB.evalArchStmt (PPCPrimTerm ts))
 
