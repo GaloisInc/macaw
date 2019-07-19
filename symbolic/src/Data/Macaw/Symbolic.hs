@@ -222,22 +222,22 @@ type SymArchConstraints arch =
 -- Useful as an alternative to 'mkCrucCFG' if post-processing is
 -- desired (as this is easier to do with the registerized form); use
 -- 'toCoreCFG' to finish.
-mkCrucRegCFG :: forall h arch ids
+mkCrucRegCFG :: forall arch ids
             .  MacawSymbolicArchFunctions arch
                -- ^ Crucible architecture-specific functions.
-            -> C.HandleAllocator h
+            -> C.HandleAllocator
                -- ^ Handle allocator to make function handles
             -> C.FunctionName
                -- ^ Name of function for pretty print purposes.
-            -> (forall s. MacawMonad arch ids h s (CR.Label s, [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]))
+            -> (forall s. MacawMonad arch ids s (CR.Label s, [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]))
                 -- ^ Action to run
-            -> ST h (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
+            -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkCrucRegCFG archFns halloc nm action = do
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
   let argTypes = Empty :> macawStructRepr
   h <- C.mkHandle' halloc nm argTypes macawStructRepr
-  Some (ng :: NonceGenerator (ST h) s) <- newSTNonceGenerator
+  Some (ng :: NonceGenerator IO s) <- newIONonceGenerator
   let ps0 = initCrucPersistentState ng
   blockRes <- runMacawMonad ps0 action
   (entry, blks) <-
