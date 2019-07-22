@@ -95,7 +95,7 @@ main = do
       [] -> fail "Could not find add function"
       _ -> fail "Found multiple add functions"
 
-  memBaseVar <- stToIO $ C.freshGlobalVar halloc "add_mem_base" C.knownRepr
+  memBaseVar <- C.freshGlobalVar halloc "add_mem_base" C.knownRepr
 
   let memBaseVarMap :: MS.MemSegmentMap 64
       memBaseVarMap = Map.singleton 1 memBaseVar
@@ -113,7 +113,7 @@ main = do
         putStrLn $ "Analyzing " ++ show addr
 
   (_, Some funInfo) <- stToIO $ M.analyzeFunction logFn addAddr M.UserRequest ds0
-  C.SomeCFG g <- stToIO $ MS.mkFunCFG x86ArchFns halloc memBaseVarMap "add" posFn funInfo
+  C.SomeCFG g <- MS.mkFunCFG x86ArchFns halloc memBaseVarMap "add" posFn funInfo
 
   regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
 
