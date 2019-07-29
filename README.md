@@ -44,8 +44,7 @@ The libraries that make up Macaw are released under the BSD license.
 These Macaw core libraries depend on a number of different supporting libraries, including:
 
 * elf-edit -- loading and parsing of ELF binary files
-* galois-dwarf -- retrieval of Dwarf debugging information from binary
-  files
+* galois-dwarf -- retrieval of Dwarf debugging information from binary files
 * flexdis86 -- disassembly and semantics for x86 architectures
 * dismantle -- disassembly for ARM and PPC architectures
 * semmc -- semantics definitions for ARM and PPC architectures
