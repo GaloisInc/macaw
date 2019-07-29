@@ -53,6 +53,7 @@ module Data.Macaw.Memory
   , MemWidth(..)
   , MemWord
   , memWord
+  , memWordValue
   , memWordToUnsigned
   , memWordToSigned
   , addrRead

@@ -67,6 +67,7 @@ import           Data.ElfEdit
   , ElfSymbolTableEntry
   )
 import qualified Data.ElfEdit as Elf
+import           Data.Foldable
 import           Data.IntervalMap.Strict (Interval(..), IntervalMap)
 import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
@@ -173,13 +174,6 @@ data MemLoadWarning
   | MultipleSectionsWithName !SectionName
   | MultipleDynamicSegments
   | OverlappingLoadableSegments
-  | RelocationParseFailure !String
-  | DynamicRelaAndRelPresent
-    -- ^ Issued if the dynamic section contains table for DT_REL and
-    -- DT_RELA.
-  | SectionRelaAndRelPresent !BS.ByteString
-    -- ^ @SectionRelaAndRelPresent nm@ is issued if we encounter
-    -- both section ".rela$nm" and ".rel$nm".
   | UnsupportedSection !SectionName
   | UnknownDefinedSymbolBinding   !SymbolName Elf.ElfSymbolBinding
   | UnknownDefinedSymbolType      !SymbolName Elf.ElfSymbolType
@@ -189,6 +183,12 @@ data MemLoadWarning
   | ExpectedSectionSymbolLocal
   | InvalidSectionSymbolIndex !Elf.ElfSectionIndex
   | UnsupportedProcessorSpecificSymbolIndex !SymbolName !ElfSectionIndex
+
+  | MultipleRelocationTables
+    -- ^ Issued if the file contains multiple relocation tables.
+  | RelocationParseFailure !String
+  | MultipleRelocationsAtAddr !Word64
+    -- ^ Multiple relocations at the given offset
   | IgnoreRelocation !Integer !String !RelocationError
     -- ^ @IgnoreRelocation idx tp err@ warns we ignored the location at index @idx@ due to @err@.
     --
@@ -208,14 +208,6 @@ instance Show MemLoadWarning where
     "Found multiple dynamic segments; choosing first one."
   show OverlappingLoadableSegments =
     "File segments containing overlapping addresses; skipping relocations."
-  show (RelocationParseFailure msg) =
-    "Error parsing relocations: " ++ msg
-  show DynamicRelaAndRelPresent =
-    "PT_DYNAMIC segment contains contain offsets for both DT_REL and DT_RELA relocation tables; "
-    ++ " Using only DT_RELA relocations."
-  show (SectionRelaAndRelPresent (BSC.unpack -> nm)) =
-    "File contains both .rela" ++ nm ++ " and .rel" ++ nm
-    ++ " sections; Using only .rela" ++ nm ++ " sections."
   show (UnsupportedSection nm) =
     "Do not support section " ++ BSC.unpack nm
   show (UnknownDefinedSymbolBinding nm bnd) =
@@ -238,8 +230,15 @@ instance Show MemLoadWarning where
     "Expected section symbol to have a valid index instead of " ++ show idx ++ "."
   show (UnsupportedProcessorSpecificSymbolIndex nm idx) =
     "Could not resolve symbol index " ++ show idx ++ " for symbol " ++ BSC.unpack nm ++ "."
+  show MultipleRelocationTables =
+    "File contains multiple relocation tables; these are being merged."
+  show (RelocationParseFailure msg) =
+    "Error parsing relocations: " ++ msg
   show (IgnoreRelocation idx typeName err) =
     "Ignoring relocation " ++ show idx ++ " with type " ++ typeName ++ ": " ++ show err
+  show (MultipleRelocationsAtAddr addr) =
+    "Multiple relocations modify " ++ showHex addr "."
+
 
 data MemLoaderState w = MLS { _mlsMemory :: !(Memory w)
                             , mlsEndianness :: !Endianness
@@ -723,7 +722,7 @@ relaTargetARM64 :: Endianness
                 -> Maybe SegmentIndex
                    -- ^ Index of segment for dynamic relocations
                 -> SymbolTable -- ^ Symbol table
-                -> Elf.RelEntry Elf.ARM64_RelocationType -- ^ Relocaiton entry
+                -> Elf.RelEntry Elf.AArch64_RelocationType -- ^ Relocaiton entry
                 -> MemWord 64
                    -- ^ Addend of symbol
                 -> RelFlag
@@ -867,29 +866,65 @@ relocFromRel end symtab resolver idx r =
                }
   )
 
-relocMapFromRelAndRela :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
-                       => Elf.ElfData
-                       -- ^ Endianness
-                       -> RelocationResolver tp
-                       -> SymbolTable
-                       -- ^ Map from symbol indices to associated symbol
-                       -> Maybe L.ByteString
-                       -- ^ Buffer containing relocation entries in Rel format
-                       -> Maybe L.ByteString
-                       -- ^ Buffer containing relocation entries in Rela format
-                       -> MemLoader w (Map (MemWord w) (RelocEntry (MemLoader w) w))
-relocMapFromRelAndRela _dta _resolver _symtab Nothing Nothing = do
-  pure Map.empty
-relocMapFromRelAndRela dta resolver symtab _ (Just relaBuffer) = do
+
+-- | Maps address that relocations apply to to the relocation information.
+type RelocMap w = Map (MemWord w) (RelocEntry (MemLoader w) w)
+
+-- | Add a relocation entry to the map.
+addRelocEntry :: RelocMap w
+              -> (MemWord w, RelocEntry (MemLoader w) w)
+              -> MemLoader w (RelocMap w)
+addRelocEntry m (addr, e) =
+  case Map.insertLookupWithKey (\_k _new old -> old) addr e m of
+    (Nothing, m') -> pure m'
+    (Just _, _) -> do
+      addWarning $ MultipleRelocationsAtAddr (memWordValue addr)
+      pure m
+
+addRelocEntries :: RelocMap w
+                -> [(MemWord w, RelocEntry (MemLoader w) w)]
+                -> MemLoader w (RelocMap w)
+addRelocEntries = foldlM addRelocEntry
+
+
+-- | Add rela relocation entries to map.
+addRelaEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
+               => RelocMap w
+               -> Elf.ElfData
+                  -- ^ Endianness
+               -> RelocationResolver tp
+               -> SymbolTable
+               -- ^ Map from symbol indices to associated symbol
+               -> Maybe L.ByteString
+               -- ^ Buffer containing relocation entries in Rela format
+               -> MemLoader w (RelocMap w)
+addRelaEntries m _ _ _ Nothing =
+  pure m
+addRelaEntries m dta resolver symtab (Just relaBuffer) = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
     case Elf.elfRelaEntries dta relaBuffer of
       Left msg -> do
         addWarning (RelocationParseFailure msg)
-        pure Map.empty
+        pure m
       Right entries -> do
-        pure $ Map.fromList $ zipWith (relocFromRela symtab resolver) [0..]  entries
-relocMapFromRelAndRela dta resolver symtab (Just relBuffer) Nothing = do
+        addRelocEntries m $
+          zipWith (relocFromRela symtab resolver) [0..]  entries
+
+-- | Add rel relocation entries to map.
+addRelEntries :: (Elf.IsRelocationType tp, w ~ Elf.RelocationWidth tp)
+              => RelocMap w
+              -> Elf.ElfData
+                 -- ^ Endianness
+              -> RelocationResolver tp
+              -> SymbolTable
+              -- ^ Map from symbol indices to associated symbol
+              -> Maybe L.ByteString
+              -- ^ Buffer containing relocation entries in Rel format
+              -> MemLoader w (RelocMap w)
+addRelEntries m _ _ _ Nothing =
+  pure m
+addRelEntries m dta resolver symtab (Just relBuffer) = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $ do
     case Elf.elfRelEntries dta relBuffer of
@@ -897,7 +932,8 @@ relocMapFromRelAndRela dta resolver symtab (Just relBuffer) Nothing = do
         addWarning (RelocationParseFailure msg)
         pure Map.empty
       Right entries -> do
-        pure $ Map.fromList $ zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
+        addRelocEntries m $
+          zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
 
 -- | This checks a computation that returns a dynamic error or succeeds.
 runDynamic :: Either Elf.DynamicError a -> MemLoader w a
@@ -927,27 +963,31 @@ dynamicRelocationMap hdr ph contents =
             -- Find th dynamic section from the contents.
             dynSection <- runDynamic $
               Elf.dynamicEntries (Elf.headerData hdr) (Elf.headerClass hdr) virtMap dynContents
+            let dta = Elf.headerData hdr
+            SomeRelocationResolver resolver <- getRelocationResolver hdr
             let symtab = dynamicSymbolTable dynSection
+            -- Parse relocations
+
             mRelBuffer  <- runDynamic $ Elf.dynRelBuffer  dynSection
             mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection
-            SomeRelocationResolver resolver <- getRelocationResolver hdr
+            relocs0 <- addRelaEntries Map.empty dta resolver symtab mRelaBuffer
+            relocs1 <- addRelEntries  relocs0   dta resolver symtab mRelBuffer
+
             when (isJust mRelBuffer && isJust mRelaBuffer) $ do
-              addWarning $ DynamicRelaAndRelPresent
-            let dta = Elf.headerData hdr
-            loadtimeRelocs <-
-              relocMapFromRelAndRela dta resolver symtab mRelBuffer mRelaBuffer
-            pltRelocs <-
-              case Elf.dynPLTRel dynSection of
-                Left e -> do
-                  addWarning $ RelocationParseFailure (show e)
-                  pure $! Map.empty
-                Right Elf.PLTEmpty -> do
-                  pure $! Map.empty
-                Right (Elf.PLTRel entries) -> do
-                  pure $! Map.fromList $ zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
-                Right (Elf.PLTRela entries) -> do
-                  pure $! Map.fromList $ zipWith (relocFromRela symtab resolver) [0..] entries
-            pure $ Map.union loadtimeRelocs pltRelocs
+              addWarning $ MultipleRelocationTables
+
+            case Elf.dynPLTRel dynSection of
+              Left e -> do
+                addWarning $ RelocationParseFailure (show e)
+                pure $! relocs1
+              Right Elf.PLTEmpty -> do
+                pure $! relocs1
+              Right (Elf.PLTRel entries) -> do
+                addRelocEntries relocs1 $
+                  zipWith (relocFromRel (toEndianness dta) symtab resolver) [0..] entries
+              Right (Elf.PLTRela entries) -> do
+                addRelocEntries relocs1 $
+                  zipWith (relocFromRela symtab resolver) [0..] entries
 
 ------------------------------------------------------------------------
 -- Elf segment loading
@@ -1152,9 +1192,11 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
         -- Create memory segment
         SomeRelocationResolver resolver <- getRelocationResolver hdr
         when (isJust mRelBuffer && isJust mRelaBuffer) $ do
-          addWarning $ SectionRelaAndRelPresent nm
-        relocMap <-
-          relocMapFromRelAndRela (Elf.headerData hdr) resolver symtab mRelBuffer mRelaBuffer
+          addWarning $ MultipleRelocationTables
+        relocMap <- do
+          let dta = Elf.headerData hdr
+          m1 <- addRelaEntries Map.empty dta resolver symtab mRelaBuffer
+          addRelEntries        m1        dta resolver symtab mRelBuffer
         seg <-
           memSegment relocMap regIdx 0 Nothing (fromIntegral base) flags bytes (fromIntegral secSize)
         -- Load memory segment.
