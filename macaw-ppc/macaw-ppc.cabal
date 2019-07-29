@@ -39,6 +39,7 @@ library
                        semmc,
                        semmc-ppc,
                        macaw-semmc,
+                       macaw-symbolic,
                        macaw-loader,
                        macaw-loader-ppc,
                        lens,
