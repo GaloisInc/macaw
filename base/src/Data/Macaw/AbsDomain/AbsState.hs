@@ -8,11 +8,11 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# OPTIONS_GHC -Werror #-}
 module Data.Macaw.AbsDomain.AbsState
   ( AbsBlockState
   , setAbsIP
@@ -153,6 +153,8 @@ data AbsValue w (tp :: Type)
     -- blocks, we include the address of the block as the first argument.
   | (tp ~ BVType w) => SomeStackOffset !(MemAddr w)
     -- ^ An offset to the stack at some offset.
+    --
+    -- Note. We do nothing to guarantee that this is a legal stack offset.
     --
     -- To avoid conflating offsets that are relative to the begining of different
     -- blocks, we include the address of the block as the first argument.
@@ -610,6 +612,31 @@ asBoolConst :: AbsValue w BoolType -> Maybe Bool
 asBoolConst (BoolConst b) = Just b
 asBoolConst TopV = Nothing
 
+-- | Add an integer to the abstract value.
+bvinc :: forall w u
+      .  NatRepr u
+      -> AbsValue w (BVType u)
+      -> Integer
+      -- ^ An integer value to add to the previous argument.
+      -> AbsValue w (BVType u)
+bvinc w (FinSet s) o =
+  FinSet $ Set.map (toUnsigned w . (+o)) s
+bvinc _ (CodePointers _  _) _ =
+  TopV
+bvinc w (StackOffset a s) o =
+  StackOffset a $ Set.map (fromInteger . toUnsigned w . (+o) . toInteger) s
+bvinc _ (SomeStackOffset a) _ =
+  SomeStackOffset a
+-- Strided intervals
+bvinc w (StridedInterval si) o =
+  stridedInterval $ SI.bvadd w si (SI.singleton w o)
+bvinc _ (SubValue w' v) o =
+  case bvinc w' v o of
+    TopV -> TopV
+    v' -> SubValue w' v'
+bvinc _ TopV _ = TopV
+bvinc _ ReturnAddr _ = TopV
+
 bvadc :: forall w u
       .  MemWidth w
       => NatRepr u
@@ -632,11 +659,9 @@ bvadc w (FinSet t) (StackOffset a s) c
 bvadc w (FinSet l) (FinSet r) (BoolConst b)
   | ls <- Set.toList l
   , rs <- Set.toList r
-  = case Set.fromList [bottomBits $ lval+rval+if b then 1 else 0 | lval <- ls, rval <- rs] of
+  = case Set.fromList [toUnsigned w $ lval+rval+if b then 1 else 0 | lval <- ls, rval <- rs] of
       s | Set.size s <= maxSetSize -> FinSet s
       _ -> TopV
-  where
-  bottomBits v = v .&. (bit (fromInteger (intValue w)) - 1)
 -- Strided intervals
 bvadc w v v' c
   | StridedInterval si1 <- v, StridedInterval si2 <- v' = go si1 si2
@@ -868,8 +893,8 @@ abstractSingleton mem w i
   , Just sa <- resolveAbsoluteAddr mem (fromInteger i)
   , segmentFlags (segoffSegment sa) `Perm.hasPerm` Perm.execute =
     concreteCodeAddr sa
-  | 0 <= i && i <= maxUnsigned w = FinSet (Set.singleton i)
-  | otherwise = error $ "abstractSingleton given bad value: " ++ show i ++ " " ++ show w
+  | otherwise =
+      FinSet (Set.singleton (toUnsigned w i))
 
 -- | Create a concrete stack offset.
 concreteStackOffset :: MemAddr w -> Integer -> AbsValue w (BVType w)
@@ -1227,7 +1252,7 @@ transferValue c v = do
       , segmentFlags (segoffSegment addr) `Perm.hasPerm` Perm.execute ->
         concreteCodeAddr addr
       | Just addr <- asAbsoluteAddr i ->
-        FinSet $ Set.singleton $ toInteger addr
+          FinSet $ Set.singleton $ toInteger addr
       | otherwise ->
         TopV
     SymbolValue{} -> TopV
@@ -1360,14 +1385,6 @@ transferApp r a = do
     BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV
 
--- | Minimal information needed to parse a function call/system call
-data CallParams (r :: Type -> Kind.Type)
-   = CallParams { postCallStackDelta :: Integer
-                  -- ^ Amount stack should shift by when going before/after call.
-                , preserveReg        :: forall tp . r tp -> Bool
-                  -- ^ Return true if a register value is preserved by a call.
-                }
-
 -- | Update abstract state post call.
 absUpdateRegsPostCall :: RegisterInfo r
                       => (forall tp . r tp -> AbsValue (RegAddrWidth r) tp)
@@ -1380,7 +1397,19 @@ absUpdateRegsPostCall regFn ab0 =
                   , _initIndexBounds = Jmp.arbitraryInitialBounds
                   }
 
--- | Return state post call
+-- | Minimal information needed to parse a function call/system call
+data CallParams (r :: Type -> Kind.Type)
+   = CallParams { postCallStackDelta :: Integer
+                  -- ^ Amount stack should shift by when going before/after call.
+                , preserveReg        :: forall tp . r tp -> Bool
+                  -- ^ Return true if a register value is preserved by
+                  -- a call.
+                  --
+                  -- We assume stack pointer and instruction pointer
+                  -- are preserved, so the return value for these does not matter.
+                }
+
+-- | This updates the registers after a call has been performed.
 absEvalCall :: forall r
                  .  ( RegisterInfo r
                     , HasRepr r TypeRepr
@@ -1399,9 +1428,9 @@ absEvalCall params ab0 addr = absUpdateRegsPostCall regFn ab0
           | Just Refl <- testEquality r ip_reg =
               concreteCodeAddr addr
           | Just Refl <- testEquality r sp_reg =
-              bvadd (typeWidth r)
+              bvinc (typeWidth r)
                     (ab0^.absRegState^.boundValue r)
-                    (FinSet (Set.singleton (postCallStackDelta params)))
+                    (postCallStackDelta params)
             -- Copy callee saved registers
           | preserveReg params r =
             ab0^.absRegState^.boundValue r
