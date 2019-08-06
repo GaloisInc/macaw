@@ -477,6 +477,7 @@ Build a dominator tree
 
 import           Data.Macaw.CFG.AssignRhs
 import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.Core (CValue(..))
 import           Data.Macaw.Memory (AddrWidthRepr(..))
 import           Data.Macaw.Types
 
@@ -496,25 +497,7 @@ newtype BlockIndex = BlockIndex Word64
 newtype AssignId ids (tp::Type) = AssignId (Nonce ids tp)
 
 data Value arch ids tp where
-  -- | A constant bitvector
-  --
-  -- The integer should be between 0 and 2^n-1.
-  BVValue :: (1 <= n)
-          => !(NatRepr n)
-          -> !Integer
-          -> Value arch ids (BVType n)
-  -- | A constant Boolean
-  BoolValue :: !Bool -> Value arch ids BoolType
-  -- | A memory address
-  RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-                   -> !(ArchMemAddr arch)
-                   -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | Reference to a symbol identifier.
-  --
-  -- This appears when dealing with relocations.
-  SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-              -> !SymbolIdentifier
-              -> Value arch ids (BVType (ArchAddrWidth arch))
+  Const :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(AssignId ids tp)
                 -> Value arch ids tp

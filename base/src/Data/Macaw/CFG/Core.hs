@@ -13,6 +13,7 @@ single CFG.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -27,6 +28,11 @@ module Data.Macaw.CFG.Core
   , AssignId(..)
     -- * Value
   , Value(..)
+  , CValue(..)
+  , pattern BoolValue
+  , pattern BVValue
+  , pattern RelocatableValue
+  , pattern SymbolValue
   , BVValue
   , valueAsApp
   , valueAsArchFn
@@ -163,6 +169,9 @@ instance Eq (AssignId ids tp) where
 instance TestEquality (AssignId ids) where
   testEquality (AssignId id1) (AssignId id2) = testEquality id1 id2
 
+instance Ord (AssignId ids tp) where
+  compare (AssignId x) (AssignId y) = compare x y
+
 instance OrdF (AssignId ids) where
   compareF (AssignId id1) (AssignId id2) = compareF id1 id2
 
@@ -173,32 +182,73 @@ instance Show (AssignId ids tp) where
   show (AssignId n) = show n
 
 ------------------------------------------------------------------------
+-- CValue
+
+-- | A constant whose value does not change during execution.
+data CValue arch tp where
+  -- | A constant bitvector
+  --
+  -- The integer should be between 0 and 2^n-1.
+  BVCValue :: (1 <= n) => {-# UNPACK #-} !(NatRepr n) -> {-# UNPACK #-} !Integer -> CValue arch (BVType n)
+  -- | A constant Boolean
+  BoolCValue :: !Bool -> CValue arch BoolType
+  -- | A memory address
+  RelocatableCValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+                    -> !(MemAddr (ArchAddrWidth arch))
+                    -> CValue arch (BVType (ArchAddrWidth arch))
+  -- | This denotes the address of a symbol identifier in the binary.
+  --
+  -- This appears when dealing with relocations.
+  SymbolCValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+               -> !SymbolIdentifier
+               -> CValue arch (BVType (ArchAddrWidth arch))
+
+------------------------------------------------------------------------
 -- Value and Assignment
 
 -- | A value at runtime.
 data Value arch ids tp where
-  -- | A constant bitvector
-  --
-  -- The integer should be between 0 and 2^n-1.
-  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
-  -- | A constant Boolean
-  BoolValue :: !Bool -> Value arch ids BoolType
-  -- | A memory address
-  RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-                   -> !(ArchMemAddr arch)
-                   -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | This denotes the address of a symbol identifier in the binary.
-  --
-  -- This appears when dealing with relocations.
-  SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-              -> !SymbolIdentifier
-              -> Value arch ids (BVType (ArchAddrWidth arch))
+  CValue :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)
                 -> Value arch ids tp
   -- | Represents the value assigned to the register when the block started.
   Initial :: !(ArchReg arch tp)
           -> Value arch ids tp
+
+-- | A constant bitvector
+--
+-- The integer should be between 0 and 2^n-1.
+pattern BVValue :: ()
+                => forall n . (tp ~ (BVType n), 1 <= n)
+                => NatRepr n
+                -> Integer
+                -> Value arch ids tp
+pattern BVValue w i = CValue (BVCValue w i)
+
+-- | A constant Boolean
+pattern BoolValue :: () => (tp ~ BoolType) => Bool -> Value arch ids tp
+pattern BoolValue b = CValue (BoolCValue b)
+
+  -- | A memory address
+pattern RelocatableValue :: ()
+                         => tp ~ BVType (ArchAddrWidth arch)
+                         => AddrWidthRepr (ArchAddrWidth arch)
+                         -> MemAddr (ArchAddrWidth arch)
+                         -> Value arch ids tp
+pattern RelocatableValue w a = CValue (RelocatableCValue w a)
+
+-- | This denotes the address of a symbol identifier in the binary.
+--
+-- This appears when dealing with relocations.
+pattern SymbolValue :: ()
+                    => tp ~ BVType (ArchAddrWidth arch)
+                    => AddrWidthRepr (ArchAddrWidth arch)
+                    -> SymbolIdentifier
+                    -> Value arch ids tp
+pattern SymbolValue w s = CValue (SymbolCValue w s)
+
+{-# COMPLETE BVValue, BoolValue, RelocatableValue, SymbolValue, AssignedValue, Initial #-}
 
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
@@ -542,7 +592,6 @@ asStackAddrOffset addr
         BVTypeRepr w -> Just (BVValue w 0)
   | otherwise =
     Nothing
-
 
 ------------------------------------------------------------------------
 -- Pretty print Assign, AssignRhs, Value operations
