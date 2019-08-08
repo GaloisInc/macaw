@@ -904,7 +904,8 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
                fnBindings extImpl MacawSimulatorState
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
-  let s = C.InitialState ctx initGlobals C.defaultAbortHandler $
+  let retType = macawStructRepr
+  let s = C.InitialState ctx initGlobals C.defaultAbortHandler retType $
             C.runOverrideSim macawStructRepr $ do
                 let args :: C.RegMap sym (MacawFunctionArgs arch)
                     args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
