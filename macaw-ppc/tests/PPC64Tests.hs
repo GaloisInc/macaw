@@ -76,7 +76,7 @@ allDiscoveredBlocks di =
   ]
 
 blockTerminator :: MD.ParsedBlock arch ids -> MD.ParsedTermStmt arch ids
-blockTerminator = MD.stmtsTerm . MD.blockStatementList
+blockTerminator = MD.pblockTermStmt
 
 isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
 isClassifyFailure ts =

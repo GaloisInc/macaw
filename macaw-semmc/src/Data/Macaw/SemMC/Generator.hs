@@ -10,39 +10,32 @@ module Data.Macaw.SemMC.Generator (
   -- * Expressions
   Expr(..),
   -- * Blocks
-  BlockSeq(..),
-  nextBlockID,
-  frontierBlocks,
   PreBlock(..),
   pBlockStmts,
   pBlockState,
   GenState(..),
   initGenState,
   initRegState,
-  blockSeq,
   blockState,
-  finishBlock,
   finishBlock',
   -- * State updates
+  PartialBlock(..),
   curRegState,
   setRegVal,
   addStmt,
   addAssignment,
   addExpr,
   finishWithTerminator,
-  conditionalBranch,
   asAtomicStateUpdate,
   -- * State access
   getRegs,
   getCurrentIP,
-  -- * Results
-  GenResult(..),
   -- * Monad
   GenCont,
   Generator,
   runGenerator,
   shiftGen,
-  genResult,
+  unfinishedBlock,
   -- * Errors
   GeneratorError(..)
   ) where
@@ -65,7 +58,6 @@ import           Data.Word (Word64)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BoolType )
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
@@ -75,29 +67,6 @@ import           Data.Macaw.SemMC.Simplify ( simplifyValue, simplifyApp )
 data Expr arch ids tp where
   ValueExpr :: !(Value arch ids tp) -> Expr arch ids tp
   AppExpr   :: !(App (Value arch ids) tp) -> Expr arch ids tp
-
-data GenResult arch ids =
-  GenResult { resBlockSeq :: BlockSeq arch ids
-            , resState :: Maybe (PreBlock arch ids)
-            }
-
-data BlockSeq arch ids =
-  BlockSeq { _nextBlockID :: !Word64
-           , _frontierBlocks :: !(Seq.Seq (Block arch ids))
-           }
-
-deriving instance Show (Block arch ids) => Show (BlockSeq arch ids)
--- deriving instance (PPCArchConstraints ppc) => Show (Block ppc ids)
--- deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc ids)
-
--- | Control flow blocs generated so far.
-nextBlockID :: Simple Lens (BlockSeq arch ids) Word64
-nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
-
--- | Blocks that are not in CFG that end with a FetchAndExecute,
--- which we need to analyze to compute new potential branch targets.
-frontierBlocks :: Simple Lens (BlockSeq arch ids) (Seq.Seq (Block arch ids))
-frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
 
 data PreBlock arch ids =
   PreBlock { pBlockIndex :: !Word64
@@ -116,7 +85,6 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 data GenState arch ids s =
   GenState { assignIdGen :: NC.NonceGenerator (ST s) ids
-           , _blockSeq :: !(BlockSeq arch ids)
            , _blockState :: !(PreBlock arch ids)
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
@@ -139,7 +107,6 @@ initGenState :: NC.NonceGenerator (ST s) ids
              -> GenState arch ids s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
-           , _blockSeq = BlockSeq { _nextBlockID = 1, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            , genRegUpdates = MapF.empty
@@ -153,9 +120,6 @@ initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
              -> RegState (ArchReg arch) (Value arch ids)
 initRegState startIP =
   mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.segoffAddr startIP)
-
-blockSeq :: Simple Lens (GenState arch ids s) (BlockSeq arch ids)
-blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
 
 blockState :: Simple Lens (GenState arch ids s) (PreBlock arch ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
@@ -212,6 +176,10 @@ data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
   deriving (Show)
 
+data PartialBlock arch ids where
+  UnfinishedPartialBlock :: !(PreBlock arch ids) -> PartialBlock arch ids
+  FinishedPartialBlock :: !(Block arch ids) -> PartialBlock arch ids
+
 -- | This is a state monad (with error termination via 'ET.ExceptT') built on
 -- top of 'Ct.ContT' and 'Rd.ReaderT'.
 --
@@ -226,7 +194,7 @@ data GeneratorError = InvalidEncoding
 --
 -- The base monad is 'ST', which is used for nonce generation.
 newtype Generator arch ids s a =
-  Generator { runG :: Ct.ContT (GenResult arch ids)
+  Generator { runG :: Ct.ContT (PartialBlock arch ids)
                                (Rd.ReaderT (GenState arch ids s)
                                            (ET.ExceptT GeneratorError (ST s))) a }
                                deriving (Applicative,
@@ -253,28 +221,25 @@ instance MonadFail (Generator arch ids s) where
   fail err = ET.throwError $ GeneratorMessage $ show err
 
 -- | The type of continuations provided by 'shiftGen'
-type GenCont arch ids s a = a -> GenState arch ids s -> ET.ExceptT GeneratorError (ST s) (GenResult arch ids)
+type GenCont arch ids s a = a -> GenState arch ids s -> ET.ExceptT GeneratorError (ST s) (PartialBlock arch ids)
 
 -- | Given a final continuation to call, run the generator (and produce a final
 -- result with the given continuation @k@).  Also takes an initial state.
 runGenerator :: GenCont arch ids s a
              -> GenState arch ids s
              -> Generator arch ids s a
-             -> ET.ExceptT GeneratorError (ST s) (GenResult arch ids)
+             -> ET.ExceptT GeneratorError (ST s) (PartialBlock arch ids)
 runGenerator k st (Generator m) = Rd.runReaderT (Ct.runContT m (Rd.ReaderT . k)) st
 
 -- | Capture the current continuation and execute an action that gets that
 -- continuation as an argument (it can be invoked as many times as desired).
-shiftGen :: (GenCont arch ids s a -> GenState arch ids s -> ET.ExceptT GeneratorError (ST s) (GenResult arch ids))
+shiftGen :: (GenCont arch ids s a -> GenState arch ids s -> ET.ExceptT GeneratorError (ST s) (PartialBlock arch ids))
          -> Generator arch ids s a
 shiftGen f =
   Generator $ Ct.ContT $ \k -> Rd.ReaderT $ \s -> f (Rd.runReaderT . k) s
 
-genResult :: (Monad m) => a -> GenState arch ids s -> m (GenResult arch ids)
-genResult _ s = do
-  return GenResult { resBlockSeq = s ^. blockSeq
-                   , resState = Just (s ^. blockState)
-                   }
+unfinishedBlock :: (Monad m) => a -> GenState arch ids s -> m (PartialBlock arch ids)
+unfinishedBlock _ s = return (UnfinishedPartialBlock (s ^. blockState))
 
 -- | Append a statement (on the right) to the list of statements in the current
 -- 'PreBlock'.
@@ -338,9 +303,7 @@ finishWithTerminator term =
   shiftGen $ \_ s0 -> do
   let pre_block = s0 ^. blockState
   let fin_block = finishBlock' pre_block term
-  return GenResult { resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
-                   , resState = Nothing
-                   }
+  return $! FinishedPartialBlock fin_block
 
 -- | Convert the contents of a 'PreBlock' (a block being constructed) into a
 -- full-fledged 'Block'
@@ -350,80 +313,7 @@ finishBlock' :: PreBlock arch ids
              -> (RegState (ArchReg arch) (Value arch ids) -> TermStmt arch ids)
              -> Block arch ids
 finishBlock' preBlock term =
-  Block { blockLabel = pBlockIndex preBlock
-        , blockStmts = F.toList (preBlock ^. pBlockStmts)
+  Block { blockStmts = F.toList (preBlock ^. pBlockStmts)
         , blockTerm = term (preBlock ^. pBlockState)
         }
 
--- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
--- new block to the block frontier.
-finishBlock :: (RegState (ArchReg arch) (Value arch ids) -> TermStmt arch ids)
-            -> GenResult arch ids
-            -> BlockSeq arch ids
-finishBlock term st =
-  case resState st of
-    Nothing -> resBlockSeq st
-    Just preBlock ->
-      let b = finishBlock' preBlock term
-      in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
-
--- | A primitive for splitting execution in the presence of conditional
--- branches.
---
--- This function uses the underlying continuation monad to split execution.  It
--- captures the current continuation and builds a block for the true branch and
--- another block for the false branch.  It manually threads the state between
--- the two branches and makes updates to keep them consistent.  It also joins
--- the two exploration frontiers after processing the true and false branches so
--- that the underlying return value contains all discovered blocks.
-conditionalBranch :: (OrdF (ArchReg arch),
-                      MM.MemWidth (RegAddrWidth (ArchReg arch)))
-                  => Value arch ids BoolType
-                  -- ^ The conditional guarding the branch
-                  -> Generator arch ids s ()
-                  -- ^ The action to take on the true branch
-                  -> Generator arch ids s ()
-                  -- ^ The action to take on the false branch
-                  -> Generator arch ids s ()
-conditionalBranch condExpr t f =
-  go (fromMaybe condExpr (simplifyValue condExpr))
-  where
-    go condv =
-      case condv of
-        BoolValue True -> t
-        BoolValue False -> f
-        _ -> shiftGen $ \c s0 -> do
-          let pre_block = s0 ^. blockState
-          let st = pre_block ^. pBlockState
-          let t_block_label = s0 ^. blockSeq ^. nextBlockID
-          let s1 = s0 & blockSeq . nextBlockID +~ 1
-                      & blockSeq . frontierBlocks .~ Seq.empty
-                      & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
-
-          -- Explore the true block
-          t_seq <- finishBlock FetchAndExecute <$> runGenerator c s1 t
-
-          -- Explore the false block
-          let f_block_label = t_seq ^. nextBlockID
-          let s2 = GenState { assignIdGen = assignIdGen s0
-                            , _blockSeq = BlockSeq { _nextBlockID = t_seq ^. nextBlockID + 1
-                                                   , _frontierBlocks = Seq.empty
-                                                   }
-                            , _blockState = emptyPreBlock st f_block_label (genAddr s0)
-                            , genAddr = genAddr s0
-                            , genRegUpdates = genRegUpdates s0
-                            }
-          f_seq <- finishBlock FetchAndExecute <$> runGenerator c s2 f
-
-          -- Join the results with a branch terminator
-          let fin_block = finishBlock' pre_block (\_ -> Branch condv t_block_label f_block_label)
-          let frontier = mconcat [ s0 ^. blockSeq ^. frontierBlocks Seq.|> fin_block
-                                 , t_seq ^. frontierBlocks
-                                 , f_seq ^. frontierBlocks
-                                 ]
-          return GenResult { resBlockSeq =
-                             BlockSeq { _nextBlockID = _nextBlockID f_seq
-                                      , _frontierBlocks = frontier
-                                      }
-                           , resState = Nothing
-                           }
