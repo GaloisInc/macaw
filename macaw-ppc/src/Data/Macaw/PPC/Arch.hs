@@ -65,7 +65,6 @@ data PPCTermStmt ppc ids where
                -> MC.Value ppc ids (MT.BVType 5)
                -> PPCTermStmt ppc ids
 
--- deriving instance Show (PPCTermStmt ppc ids)
 instance (MC.RegisterInfo (MC.ArchReg ppc)) => Show (PPCTermStmt ppc ids) where
   show ts = show (MC.prettyF ts)
 
@@ -692,48 +691,6 @@ incrementIP = do
   e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
   G.setRegVal PPC_IP e
 
--- cases :: (MM.MemWidth (MC.ArchAddrWidth arch),
---           OrdF (MC.ArchReg arch))
---       => [(G.Generator arch ids s (MC.Value arch ids MT.BoolType), G.Generator arch ids s ())]
---       -> G.Generator arch ids s ()
---       -> G.Generator arch ids s ()
--- cases xs end =
---   case xs of
---     [] -> end
---     (gv, ifTrue) : rest -> do
---       v <- gv
---       G.conditionalBranch v ifTrue (cases rest end)
-
--- trapDoubleword :: forall var ppc n s ids
---                 . ( ppc ~ SP.AnyPPC var
---                   , PPCArchConstraints var
---                   , n ~ MC.ArchAddrWidth ppc
---                   )
---                => MC.Value ppc ids (MT.BVType n)
---                -> MC.Value ppc ids (MT.BVType n)
---                -> MC.Value ppc ids (MT.BVType 5)
---                -> G.Generator ppc ids s ()
--- trapDoubleword b a to = do
---   cases [ (conditionAtBit False MC.BVSignedLt 0, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
---         , (conditionAtBit True MC.BVSignedLe 1, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
---         , (conditionAtBit False MC.Eq 2, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
---         , (conditionAtBit False MC.BVUnsignedLt 3, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
---         , (conditionAtBit True MC.BVUnsignedLe 4, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
---         ] incrementIP
---   where
---     conditionAtBit :: Bool
---                    -- ^ True if the resulting bool value should be negated
---                    --
---                    -- Properly wrapping it above is a bit annoying
---                    -> (MC.Value ppc ids (MT.BVType n) -> MC.Value ppc ids (MT.BVType n) -> MC.App (MC.Value ppc ids) MT.BoolType)
---                    -> Int
---                    -> G.Generator ppc ids s (MC.Value ppc ids MT.BoolType)
---     conditionAtBit shouldNegate op bitNum = do
---       cmpVal <- G.addExpr (G.AppExpr (op a b))
---       cmpVal' <- if shouldNegate then G.addExpr (G.AppExpr (MC.NotApp cmpVal)) else return cmpVal
---       toBit <- G.addExpr (G.AppExpr (MC.BVTestBit to (MC.BVValue (MT.knownNat @5) (fromIntegral bitNum))))
---       G.addExpr (G.AppExpr (MC.AndApp cmpVal' toBit))
-
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
 --
@@ -763,7 +720,6 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           let vB = O.extractValue regs rB
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          -- trapDoubleword vB vA vTo
           G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB vA vTo))
     D.TDI ->
       case operands of
@@ -775,7 +731,6 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
           G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB' vA vTo))
-          -- trapDoubleword vB' vA vTo
     D.ATTN -> Just $ do
       incrementIP
       G.addStmt (MC.ExecArchStmt Attn)

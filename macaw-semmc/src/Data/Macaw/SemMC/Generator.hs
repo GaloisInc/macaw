@@ -10,18 +10,13 @@ module Data.Macaw.SemMC.Generator (
   -- * Expressions
   Expr(..),
   -- * Blocks
-  -- BlockSeq(..),
-  -- nextBlockID,
-  -- frontierBlocks,
   PreBlock(..),
   pBlockStmts,
   pBlockState,
   GenState(..),
   initGenState,
   initRegState,
-  -- blockSeq,
   blockState,
-  -- finishBlock,
   finishBlock',
   -- * State updates
   PartialBlock(..),
@@ -31,20 +26,16 @@ module Data.Macaw.SemMC.Generator (
   addAssignment,
   addExpr,
   finishWithTerminator,
-  -- conditionalBranch,
   asAtomicStateUpdate,
   -- * State access
   getRegs,
   getCurrentIP,
-  -- * Results
-  GenResult(..),
   -- * Monad
   GenCont,
   Generator,
   runGenerator,
   shiftGen,
   unfinishedBlock,
-  -- genResult,
   -- * Errors
   GeneratorError(..)
   ) where
@@ -77,30 +68,6 @@ data Expr arch ids tp where
   ValueExpr :: !(Value arch ids tp) -> Expr arch ids tp
   AppExpr   :: !(App (Value arch ids) tp) -> Expr arch ids tp
 
-data GenResult arch ids =
-  GenResult { -- resBlockSeq :: BlockSeq arch ids
-            -- ,
-              resState :: PreBlock arch ids
-            }
-
--- data BlockSeq arch ids =
---   BlockSeq { _nextBlockID :: !Word64
---            , _frontierBlocks :: !(Seq.Seq (Block arch ids))
---            }
-
--- deriving instance Show (Block arch ids) => Show (BlockSeq arch ids)
--- deriving instance (PPCArchConstraints ppc) => Show (Block ppc ids)
--- deriving instance (PPCArchConstraints ppc) => Show (TermStmt ppc ids)
-
--- | Control flow blocs generated so far.
--- nextBlockID :: Simple Lens (BlockSeq arch ids) Word64
--- nextBlockID = lens _nextBlockID (\s v -> s { _nextBlockID = v })
-
--- | Blocks that are not in CFG that end with a FetchAndExecute,
--- which we need to analyze to compute new potential branch targets.
--- frontierBlocks :: Simple Lens (BlockSeq arch ids) (Seq.Seq (Block arch ids))
--- frontierBlocks = lens _frontierBlocks (\s v -> s { _frontierBlocks = v })
-
 data PreBlock arch ids =
   PreBlock { pBlockIndex :: !Word64
            , pBlockAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
@@ -118,7 +85,6 @@ pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 data GenState arch ids s =
   GenState { assignIdGen :: NC.NonceGenerator (ST s) ids
-           -- , _blockSeq :: !(BlockSeq arch ids)
            , _blockState :: !(PreBlock arch ids)
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
@@ -141,7 +107,6 @@ initGenState :: NC.NonceGenerator (ST s) ids
              -> GenState arch ids s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
-           -- , _blockSeq = BlockSeq { _nextBlockID = 1, _frontierBlocks = Seq.empty }
            , _blockState = emptyPreBlock st 0 addr
            , genAddr = addr
            , genRegUpdates = MapF.empty
@@ -155,9 +120,6 @@ initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
              -> RegState (ArchReg arch) (Value arch ids)
 initRegState startIP =
   mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.segoffAddr startIP)
-
--- blockSeq :: Simple Lens (GenState arch ids s) (BlockSeq arch ids)
--- blockSeq = lens _blockSeq (\s v -> s { _blockSeq = v })
 
 blockState :: Simple Lens (GenState arch ids s) (PreBlock arch ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
@@ -279,13 +241,6 @@ shiftGen f =
 unfinishedBlock :: (Monad m) => a -> GenState arch ids s -> m (PartialBlock arch ids)
 unfinishedBlock _ s = return (UnfinishedPartialBlock (s ^. blockState))
 
--- genResult :: (Monad m) => a -> GenState arch ids s -> m (GenResult arch ids)
--- genResult _ s = do
---   return GenResult { -- resBlockSeq = s ^. blockSeq
---                    -- ,
---                      resState = s ^. blockState
---                    }
-
 -- | Append a statement (on the right) to the list of statements in the current
 -- 'PreBlock'.
 addStmt :: Stmt arch ids -> Generator arch ids s ()
@@ -349,10 +304,6 @@ finishWithTerminator term =
   let pre_block = s0 ^. blockState
   let fin_block = finishBlock' pre_block term
   return $! FinishedPartialBlock fin_block
-  -- return GenResult { -- resBlockSeq = s0 ^. blockSeq & frontierBlocks %~ (Seq.|> fin_block)
-  --                  -- ,
-  --                    resState = Nothing
-  --                  }
 
 -- | Convert the contents of a 'PreBlock' (a block being constructed) into a
 -- full-fledged 'Block'
@@ -366,75 +317,3 @@ finishBlock' preBlock term =
         , blockTerm = term (preBlock ^. pBlockState)
         }
 
--- | Consume a 'GenResult', finish off the contained 'PreBlock', and append the
--- new block to the block frontier.
--- finishBlock :: (RegState (ArchReg arch) (Value arch ids) -> TermStmt arch ids)
---             -> GenResult arch ids
---             -> BlockSeq arch ids
--- finishBlock term st =
---   case resState st of
---     Nothing -> resBlockSeq st
---     Just preBlock ->
---       let b = finishBlock' preBlock term
---       in resBlockSeq st & frontierBlocks %~ (Seq.|> b)
-
--- | A primitive for splitting execution in the presence of conditional
--- branches.
---
--- This function uses the underlying continuation monad to split execution.  It
--- captures the current continuation and builds a block for the true branch and
--- another block for the false branch.  It manually threads the state between
--- the two branches and makes updates to keep them consistent.  It also joins
--- the two exploration frontiers after processing the true and false branches so
--- that the underlying return value contains all discovered blocks.
--- conditionalBranch :: (OrdF (ArchReg arch),
---                       MM.MemWidth (RegAddrWidth (ArchReg arch)))
---                   => Value arch ids BoolType
---                   -- ^ The conditional guarding the branch
---                   -> Generator arch ids s ()
---                   -- ^ The action to take on the true branch
---                   -> Generator arch ids s ()
---                   -- ^ The action to take on the false branch
---                   -> Generator arch ids s ()
--- conditionalBranch condExpr t f =
---   go (fromMaybe condExpr (simplifyValue condExpr))
---   where
---     go condv =
---       case condv of
---         BoolValue True -> t
---         BoolValue False -> f
---         _ -> shiftGen $ \c s0 -> do
---           let pre_block = s0 ^. blockState
---           let st = pre_block ^. pBlockState
---           let t_block_label = s0 ^. blockSeq ^. nextBlockID
---           let s1 = s0 & blockSeq . nextBlockID +~ 1
---                       & blockSeq . frontierBlocks .~ Seq.empty
---                       & blockState .~ emptyPreBlock st t_block_label (genAddr s0)
-
---           -- Explore the true block
---           t_seq <- finishBlock FetchAndExecute <$> runGenerator c s1 t
-
---           -- Explore the false block
---           let f_block_label = t_seq ^. nextBlockID
---           let s2 = GenState { assignIdGen = assignIdGen s0
---                             , _blockSeq = BlockSeq { _nextBlockID = t_seq ^. nextBlockID + 1
---                                                    , _frontierBlocks = Seq.empty
---                                                    }
---                             , _blockState = emptyPreBlock st f_block_label (genAddr s0)
---                             , genAddr = genAddr s0
---                             , genRegUpdates = genRegUpdates s0
---                             }
---           f_seq <- finishBlock FetchAndExecute <$> runGenerator c s2 f
-
---           -- Join the results with a branch terminator
---           let fin_block = finishBlock' pre_block (\_ -> Branch condv t_block_label f_block_label)
---           let frontier = mconcat [ s0 ^. blockSeq ^. frontierBlocks Seq.|> fin_block
---                                  , t_seq ^. frontierBlocks
---                                  , f_seq ^. frontierBlocks
---                                  ]
---           return GenResult { resBlockSeq =
---                              BlockSeq { _nextBlockID = _nextBlockID f_seq
---                                       , _frontierBlocks = frontier
---                                       }
---                            , resState = Nothing
---                            }

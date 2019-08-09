@@ -143,15 +143,6 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
             addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer)
-
-            -- Check to see if the IP has become conditionally-defined (by e.g.,
-            -- a mux).  If it has, we need to split execution using a primitive
-            -- provided by the Generator monad.
-            -- nextIPExpr <- getCurrentIP
-            -- case matchConditionalBranch nextIPExpr of
-            --   Just (cond, t_ip, f_ip) ->
-            --     conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)
-            --   Nothing -> return ())
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
@@ -164,7 +155,6 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
                   , Just nextIPSegAddr <- MM.incSegmentOff curIPAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
-                                         -- , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          , genRegUpdates = MapF.empty
@@ -173,19 +163,6 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
 
                   | otherwise -> return (nextIPOffset, finishBlock' preBlock FetchAndExecute)
                 FinishedPartialBlock b -> return (nextIPOffset, b)
-
--- | Examine a value and see if it is a mux; if it is, break the mux up and
--- return its component values (the condition and two alternatives)
--- matchConditionalBranch :: (arch ~ SP.AnyPPC var, PPCArchConstraints var)
---                        => Value arch ids tp
---                        -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
--- matchConditionalBranch v =
---   case v of
---     AssignedValue (Assignment { assignRhs = EvalApp a }) ->
---       case a of
---         Mux _rep cond t f -> Just (cond, fromMaybe t (simplifyValue t), fromMaybe f (simplifyValue f))
---         _ -> Nothing
---     _ -> Nothing
 
 tryDisassembleBlock :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                     => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
@@ -310,6 +287,4 @@ failAt gs offset curIPAddr reason = do
                              }
   let term = (`TranslateError` T.pack (show exn))
   let b = finishBlock' (gs ^. blockState) term
-  -- let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
-  -- let res' = F.toList (res ^. frontierBlocks)
   ET.throwError (b, fromIntegral offset, exn)
