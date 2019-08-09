@@ -203,7 +203,11 @@ disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
 disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize))
   case mr of
-    Left (blocks, off, _exn) -> return (blocks, off)
+    Left (blocks, off, _exn) ->
+      -- Note that we discard exn here: it is actually extraneous since the
+      -- 'failAt' function converts exceptions raised during translation into
+      -- macaw 'TranslationError' block terminators.
+      return (blocks, off)
     Right (blocks, bytes) -> return (blocks, bytes)
 
 
