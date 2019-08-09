@@ -31,7 +31,7 @@ import           Control.Lens ( (^.) )
 import           Data.Bits
 import           Data.Coerce ( coerce )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import           Data.Parameterized.Classes ( OrdF, knownRepr )
+import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -79,6 +79,10 @@ data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
+  Trapdword :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> v (MT.BVType 5) -- (MC.RegAddrWidth (MC.ArchReg ppc)))
+            -> PPCStmt ppc v
   -- These are data cache hints
   Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
@@ -125,6 +129,8 @@ instance TF.TraversableF (PPCStmt ppc) where
       Attn -> pure Attn
       Sync -> pure Sync
       Isync -> pure Isync
+      Trapdword vb va vto ->
+        Trapdword <$> go vb <*> go va <*> go vto
       Dcba ea -> Dcba <$> go ea
       Dcbf ea -> Dcbf <$> go ea
       Dcbi ea -> Dcbi <$> go ea
@@ -150,6 +156,7 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Attn -> PP.text "ppc_attn"
       Sync -> PP.text "ppc_sync"
       Isync -> PP.text "ppc_isync"
+      Trapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> pp vb PP.<+> pp va PP.<+> pp vto
       Dcba ea -> PP.text "ppc_dcba" PP.<+> pp ea
       Dcbf ea -> PP.text "ppc_dcbf" PP.<+> pp ea
       Dcbi ea -> PP.text "ppc_dcbi" PP.<+> pp ea
@@ -681,47 +688,47 @@ incrementIP = do
   e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
   G.setRegVal PPC_IP e
 
-cases :: (MM.MemWidth (MC.ArchAddrWidth arch),
-          OrdF (MC.ArchReg arch))
-      => [(G.Generator arch ids s (MC.Value arch ids MT.BoolType), G.Generator arch ids s ())]
-      -> G.Generator arch ids s ()
-      -> G.Generator arch ids s ()
-cases xs end =
-  case xs of
-    [] -> end
-    (gv, ifTrue) : rest -> do
-      v <- gv
-      G.conditionalBranch v ifTrue (cases rest end)
+-- cases :: (MM.MemWidth (MC.ArchAddrWidth arch),
+--           OrdF (MC.ArchReg arch))
+--       => [(G.Generator arch ids s (MC.Value arch ids MT.BoolType), G.Generator arch ids s ())]
+--       -> G.Generator arch ids s ()
+--       -> G.Generator arch ids s ()
+-- cases xs end =
+--   case xs of
+--     [] -> end
+--     (gv, ifTrue) : rest -> do
+--       v <- gv
+--       G.conditionalBranch v ifTrue (cases rest end)
 
-trapDoubleword :: forall var ppc n s ids
-                . ( ppc ~ SP.AnyPPC var
-                  , PPCArchConstraints var
-                  , n ~ MC.ArchAddrWidth ppc
-                  )
-               => MC.Value ppc ids (MT.BVType n)
-               -> MC.Value ppc ids (MT.BVType n)
-               -> MC.Value ppc ids (MT.BVType 5)
-               -> G.Generator ppc ids s ()
-trapDoubleword b a to = do
-  cases [ (conditionAtBit False MC.BVSignedLt 0, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit True MC.BVSignedLe 1, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit False MC.Eq 2, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit False MC.BVUnsignedLt 3, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit True MC.BVUnsignedLe 4, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        ] incrementIP
-  where
-    conditionAtBit :: Bool
-                   -- ^ True if the resulting bool value should be negated
-                   --
-                   -- Properly wrapping it above is a bit annoying
-                   -> (MC.Value ppc ids (MT.BVType n) -> MC.Value ppc ids (MT.BVType n) -> MC.App (MC.Value ppc ids) MT.BoolType)
-                   -> Int
-                   -> G.Generator ppc ids s (MC.Value ppc ids MT.BoolType)
-    conditionAtBit shouldNegate op bitNum = do
-      cmpVal <- G.addExpr (G.AppExpr (op a b))
-      cmpVal' <- if shouldNegate then G.addExpr (G.AppExpr (MC.NotApp cmpVal)) else return cmpVal
-      toBit <- G.addExpr (G.AppExpr (MC.BVTestBit to (MC.BVValue (MT.knownNat @5) (fromIntegral bitNum))))
-      G.addExpr (G.AppExpr (MC.AndApp cmpVal' toBit))
+-- trapDoubleword :: forall var ppc n s ids
+--                 . ( ppc ~ SP.AnyPPC var
+--                   , PPCArchConstraints var
+--                   , n ~ MC.ArchAddrWidth ppc
+--                   )
+--                => MC.Value ppc ids (MT.BVType n)
+--                -> MC.Value ppc ids (MT.BVType n)
+--                -> MC.Value ppc ids (MT.BVType 5)
+--                -> G.Generator ppc ids s ()
+-- trapDoubleword b a to = do
+--   cases [ (conditionAtBit False MC.BVSignedLt 0, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+--         , (conditionAtBit True MC.BVSignedLe 1, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+--         , (conditionAtBit False MC.Eq 2, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+--         , (conditionAtBit False MC.BVUnsignedLt 3, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+--         , (conditionAtBit True MC.BVUnsignedLe 4, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
+--         ] incrementIP
+--   where
+--     conditionAtBit :: Bool
+--                    -- ^ True if the resulting bool value should be negated
+--                    --
+--                    -- Properly wrapping it above is a bit annoying
+--                    -> (MC.Value ppc ids (MT.BVType n) -> MC.Value ppc ids (MT.BVType n) -> MC.App (MC.Value ppc ids) MT.BoolType)
+--                    -> Int
+--                    -> G.Generator ppc ids s (MC.Value ppc ids MT.BoolType)
+--     conditionAtBit shouldNegate op bitNum = do
+--       cmpVal <- G.addExpr (G.AppExpr (op a b))
+--       cmpVal' <- if shouldNegate then G.addExpr (G.AppExpr (MC.NotApp cmpVal)) else return cmpVal
+--       toBit <- G.addExpr (G.AppExpr (MC.BVTestBit to (MC.BVValue (MT.knownNat @5) (fromIntegral bitNum))))
+--       G.addExpr (G.AppExpr (MC.AndApp cmpVal' toBit))
 
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
@@ -752,7 +759,9 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           let vB = O.extractValue regs rB
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          trapDoubleword vB vA vTo
+          -- trapDoubleword vB vA vTo
+          -- FIXME: This is actually a (conditional) arch terminator
+          G.addStmt (MC.ExecArchStmt (Trapdword vB vA vTo))
     D.TDI ->
       case operands of
         D.S16imm imm D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
@@ -762,7 +771,8 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           vB' <- G.addExpr (G.AppExpr (MC.SExt vB repr))
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          trapDoubleword vB' vA vTo
+          G.addStmt (MC.ExecArchStmt (Trapdword vB' vA vTo))
+          -- trapDoubleword vB' vA vTo
     D.ATTN -> Just $ do
       incrementIP
       G.addStmt (MC.ExecArchStmt Attn)
