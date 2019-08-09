@@ -64,7 +64,7 @@ instance X.Exception SemanticsError
 
 termSemantics :: (C.IsSymInterface sym, 1 <= MC.ArchAddrWidth ppc)
               => SymFuns ppc sym
-              -> MP.PPCTermStmt ids
+              -> MP.PPCTermStmt ppc ids
               -> S ppc sym rtp bs r ctx
               -> IO (C.RegValue sym C.UnitType, S ppc sym rtp bs r ctx)
 termSemantics = error "PowerPC-specific terminator statement semantics not yet implemented"
