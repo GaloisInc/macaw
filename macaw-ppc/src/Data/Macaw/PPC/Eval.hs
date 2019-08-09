@@ -45,7 +45,7 @@ postPPCTermStmtAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
                         -> AbsBlockState (PPCReg ppc)
                         -> RegState (PPCReg ppc) (Value ppc ids)
-                        -> PPCTermStmt ids
+                        -> PPCTermStmt ppc ids
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc))
 postPPCTermStmtAbsState preservePred mem s0 regState stmt =
   case stmt of
@@ -59,6 +59,15 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
               Just (nextIP, MA.absEvalCall params s0 nextIP)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
+      case simplifyValue (regState ^. curIP) of
+        Just (RelocatableValue _ addr)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         }
+              Just (nextIP, MA.absEvalCall params s0 nextIP)
+        _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
+    PPCTrapdword _ _ _ ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
           | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do

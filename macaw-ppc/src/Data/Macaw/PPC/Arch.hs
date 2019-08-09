@@ -29,7 +29,6 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
-import           Data.Coerce ( coerce )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
@@ -52,37 +51,45 @@ import qualified Data.Macaw.SemMC.Operands as O
 import           Data.Macaw.PPC.Operand ()
 import           Data.Macaw.PPC.PPCReg
 
-data PPCTermStmt ids where
+data PPCTermStmt ppc ids where
   -- | A representation of the PowerPC @sc@ instruction
   --
   -- That instruction technically takes an argument, but it must be zero so we
   -- don't preserve it.
-  PPCSyscall :: PPCTermStmt ids
+  PPCSyscall :: PPCTermStmt ppc ids
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
-  PPCTrap :: PPCTermStmt ids
+  PPCTrap :: PPCTermStmt ppc ids
+  -- | A conditional trap
+  PPCTrapdword :: MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+               -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+               -> MC.Value ppc ids (MT.BVType 5)
+               -> PPCTermStmt ppc ids
 
-deriving instance Show (PPCTermStmt ids)
+-- deriving instance Show (PPCTermStmt ppc ids)
+instance (MC.RegisterInfo (MC.ArchReg ppc)) => Show (PPCTermStmt ppc ids) where
+  show ts = show (MC.prettyF ts)
 
-type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt
-type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt
+type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt PPC64.PPC
+type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt PPC32.PPC
 
-instance MC.PrettyF PPCTermStmt where
+instance (MC.RegisterInfo (MC.ArchReg ppc)) => MC.PrettyF (PPCTermStmt ppc) where
   prettyF ts =
     case ts of
       PPCSyscall -> PP.text "ppc_syscall"
       PPCTrap -> PP.text "ppc_trap"
+      PPCTrapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
 
-rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc s src tgt (PPCTermStmt tgt)
-rewriteTermStmt s = pure (coerce s)
+rewriteTermStmt :: PPCTermStmt ppc src -> Rewriter ppc s src tgt (PPCTermStmt ppc tgt)
+rewriteTermStmt s =
+  case s of
+    PPCSyscall -> return PPCSyscall
+    PPCTrap -> return PPCTrap
+    PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
 data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
   Sync :: PPCStmt ppc v
   Isync :: PPCStmt ppc v
-  Trapdword :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-            -> v (MT.BVType 5) -- (MC.RegAddrWidth (MC.ArchReg ppc)))
-            -> PPCStmt ppc v
   -- These are data cache hints
   Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
   Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
@@ -129,8 +136,6 @@ instance TF.TraversableF (PPCStmt ppc) where
       Attn -> pure Attn
       Sync -> pure Sync
       Isync -> pure Isync
-      Trapdword vb va vto ->
-        Trapdword <$> go vb <*> go va <*> go vto
       Dcba ea -> Dcba <$> go ea
       Dcbf ea -> Dcbf <$> go ea
       Dcbi ea -> Dcbi <$> go ea
@@ -156,7 +161,6 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Attn -> PP.text "ppc_attn"
       Sync -> PP.text "ppc_sync"
       Isync -> PP.text "ppc_isync"
-      Trapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> pp vb PP.<+> pp va PP.<+> pp vto
       Dcba ea -> PP.text "ppc_dcba" PP.<+> pp ea
       Dcbf ea -> PP.text "ppc_dcbf" PP.<+> pp ea
       Dcbi ea -> PP.text "ppc_dcbi" PP.<+> pp ea
@@ -652,7 +656,7 @@ type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 type PPCArchConstraints var = ( MC.ArchReg (SP.AnyPPC var) ~ PPCReg (SP.AnyPPC var)
                               , MC.ArchFn (SP.AnyPPC var) ~ PPCPrimFn (SP.AnyPPC var)
                               , MC.ArchStmt (SP.AnyPPC var) ~ PPCStmt (SP.AnyPPC var)
-                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt
+                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt (SP.AnyPPC var)
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var)))
                               , 1 <= MC.RegAddrWidth (PPCReg (SP.AnyPPC var))
                               , KnownNat (MC.RegAddrWidth (PPCReg (SP.AnyPPC var)))
@@ -760,8 +764,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
           -- trapDoubleword vB vA vTo
-          -- FIXME: This is actually a (conditional) arch terminator
-          G.addStmt (MC.ExecArchStmt (Trapdword vB vA vTo))
+          G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB vA vTo))
     D.TDI ->
       case operands of
         D.S16imm imm D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
@@ -771,7 +774,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           vB' <- G.addExpr (G.AppExpr (MC.SExt vB repr))
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          G.addStmt (MC.ExecArchStmt (Trapdword vB' vA vTo))
+          G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB' vA vTo))
           -- trapDoubleword vB' vA vTo
     D.ATTN -> Just $ do
       incrementIP

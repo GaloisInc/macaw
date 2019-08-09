@@ -14,15 +14,13 @@ module Data.Macaw.PPC.Disassemble
   )
 where
 
-import           Control.Lens ( (&), (^.), (%~), (.~) )
+import           Control.Lens ( (^.), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Foldable as F
-import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
 import           Text.Printf ( printf )
@@ -157,8 +155,8 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
-              case resState gs1 of
-                preBlock
+              case gs1 of
+                UnfinishedPartialBlock preBlock
                   | v <- preBlock ^. (pBlockState . curIP)
                   , Just simplifiedIP <- simplifyValue v
                   , simplifiedIP == nextIPVal
@@ -174,6 +172,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
                       disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
 
                   | otherwise -> return (nextIPOffset, finishBlock' preBlock FetchAndExecute)
+                FinishedPartialBlock b -> return (nextIPOffset, b)
 
 -- | Examine a value and see if it is a mux; if it is, break the mux up and
 -- return its component values (the condition and two alternatives)
@@ -198,11 +197,11 @@ tryDisassembleBlock :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
 tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   let gs0 = initGenState nonceGen startAddr regState
   let startOffset = MM.segoffOffset startAddr
-  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
+  (nextIPOffset, block) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
-  return (F.toList (blocks ^. frontierBlocks), fromIntegral (nextIPOffset - startOffset))
+  return (block, fromIntegral (nextIPOffset - startOffset))
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
@@ -223,12 +222,12 @@ disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
               -- ^ The initial registers
               -> Int
               -- ^ Maximum size of the block (a safeguard)
-              -> ST s (Block ppc ids, Int, Maybe String)
+              -> ST s (Block ppc ids, Int)
 disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize))
   case mr of
-    Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
-    Right (blocks, bytes) -> return (blocks, bytes, Nothing)
+    Left (blocks, off, _exn) -> return (blocks, off)
+    Right (blocks, bytes) -> return (blocks, bytes)
 
 
 initialBlockRegs :: forall ids ppc var
@@ -242,7 +241,7 @@ initialBlockRegs :: forall ids ppc var
 initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
 
 
-type LocatedError ppc ids = ([Block ppc ids], Int, TranslationError (ArchAddrWidth ppc))
+type LocatedError ppc ids = (Block ppc ids, Int, TranslationError (ArchAddrWidth ppc))
 
 
 -- | This is a monad for error handling during disassembly
@@ -263,7 +262,7 @@ newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (S
 --
 -- We also can't derive this instance because of that restriction (but deriving
 -- silently fails).
-instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], Int, TranslationError w) (DisM ppc ids s) where
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError (Block ppc ids, Int, TranslationError w) (DisM ppc ids s) where
   throwError e = DisM (ET.throwError e)
   catchError a hdlr = do
     r <- liftST $ ET.runExceptT (unDisM a)
@@ -311,6 +310,6 @@ failAt gs offset curIPAddr reason = do
                              }
   let term = (`TranslateError` T.pack (show exn))
   let b = finishBlock' (gs ^. blockState) term
-  let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
-  let res' = F.toList (res ^. frontierBlocks)
-  ET.throwError (res', fromIntegral offset, exn)
+  -- let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
+  -- let res' = F.toList (res ^. frontierBlocks)
+  ET.throwError (b, fromIntegral offset, exn)
