@@ -34,14 +34,7 @@ import           Data.Proxy
 import           Data.Word
 import qualified Flexdis86 as F
 
-import           Data.Macaw.CFG ( MemRepr(..)
-                                , memReprBytes
-                                , App(..)
-                                , Value(BoolValue, AssignedValue)
-                                , AssignRhs(CondReadMem, ReadMem)
-                                , mkLit
-                                , WidthEqProof(..)
-                                )
+import           Data.Macaw.CFG
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
 
