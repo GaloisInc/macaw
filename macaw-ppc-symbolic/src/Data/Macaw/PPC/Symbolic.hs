@@ -269,7 +269,7 @@ ppcGenStmt s = do
 
 ppcGenTermStmt :: forall v ids s ppc
                 . ( ppc ~ MP.AnyPPC v )
-               => MP.PPCTermStmt ids
+               => MP.PPCTermStmt ppc ids
                -> MC.RegState (MP.PPCReg ppc) (MC.Value ppc ids)
                -> MSB.CrucGen ppc ids s ()
 ppcGenTermStmt ts _rs =
@@ -286,7 +286,7 @@ data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) whe
               -> PPCStmtExtension ppc f C.UnitType
   -- | Wrappers around the arch-specific terminators in PowerPC; these are
   -- interpreted in 'termSemantics'
-  PPCPrimTerm :: MP.PPCTermStmt ids -> PPCStmtExtension ppc f C.UnitType
+  PPCPrimTerm :: MP.PPCTermStmt ppc ids -> PPCStmtExtension ppc f C.UnitType
 
 instance FC.FunctorFC (PPCStmtExtension ppc) where
   fmapFC f (PPCPrimFn x) = PPCPrimFn (FC.fmapFC (A.liftAtomMap f) x)
@@ -310,7 +310,7 @@ instance (1 <= MC.ArchAddrWidth ppc) => C.TypeApp (PPCStmtExtension ppc) where
   appType (PPCPrimStmt _s) = C.UnitRepr
   appType (PPCPrimTerm _t) = C.UnitRepr
 
-instance C.PrettyApp (PPCStmtExtension ppc) where
+instance (MC.RegisterInfo (MC.ArchReg ppc)) => C.PrettyApp (PPCStmtExtension ppc) where
   ppApp ppSub (PPCPrimFn x) =
     I.runIdentity (MC.ppArchFn (I.Identity . A.liftAtomIn ppSub) x)
   ppApp ppSub (PPCPrimStmt s) =
