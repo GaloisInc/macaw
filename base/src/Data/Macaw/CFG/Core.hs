@@ -189,7 +189,7 @@ data CValue arch tp where
   -- | A constant bitvector
   --
   -- The integer should be between 0 and 2^n-1.
-  BVCValue :: (1 <= n) => {-# UNPACK #-} !(NatRepr n) -> {-# UNPACK #-} !Integer -> CValue arch (BVType n)
+  BVCValue :: (1 <= n) => {-# UNPACK #-} !(NatRepr n) -> !Integer -> CValue arch (BVType n)
   -- | A constant Boolean
   BoolCValue :: !Bool -> CValue arch BoolType
   -- | A memory address

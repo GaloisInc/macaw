@@ -610,7 +610,7 @@ recordStmtsDemands :: OrdF (ArchReg arch)
                    -> ArchAddrWord arch -- ^ Offset from start of block of current instruction.
                    -> [Stmt arch ids]
                    -> FunctionArgsM arch ids (ArchAddrWord arch)
-recordStmtsDemands blockAddr off [] = do
+recordStmtsDemands _blockAddr off [] = do
   pure off
 recordStmtsDemands blockAddr off (stmt:stmts) = do
   ctx <- asks $ demandInfoCtx . archDemandInfo
@@ -636,7 +636,7 @@ recordStmtsDemands blockAddr off (stmt:stmts) = do
     ExecArchStmt astmt -> do
       traverseF_ (demandValue blockAddr) astmt
       recordStmtsDemands blockAddr off stmts
-    ArchState _addr assn -> do
+    ArchState _addr _assn -> do
       recordStmtsDemands blockAddr off stmts
 
 -- | This function figures out what the block requires

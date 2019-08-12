@@ -478,10 +478,8 @@ Build a dominator tree
 import           Data.Macaw.CFG.AssignRhs
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.Core (CValue(..))
-import           Data.Macaw.Memory (AddrWidthRepr(..))
 import           Data.Macaw.Types
 
-import           Data.BinarySymbols
 import           Data.ByteString.Char8 as BSC
 import           Data.Map.Strict (Map)
 import           Data.Parameterized.Map (MapF)
@@ -490,7 +488,6 @@ import           Data.Parameterized.Some
 import           Data.Text (Text)
 import qualified Data.Vector as V
 import           Data.Word
-import           GHC.TypeLits
 
 newtype BlockIndex = BlockIndex Word64
 
