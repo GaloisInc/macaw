@@ -230,7 +230,7 @@ pattern BVValue w i = CValue (BVCValue w i)
 pattern BoolValue :: () => (tp ~ BoolType) => Bool -> Value arch ids tp
 pattern BoolValue b = CValue (BoolCValue b)
 
-  -- | A memory address
+-- | A memory address
 pattern RelocatableValue :: ()
                          => tp ~ BVType (ArchAddrWidth arch)
                          => AddrWidthRepr (ArchAddrWidth arch)
