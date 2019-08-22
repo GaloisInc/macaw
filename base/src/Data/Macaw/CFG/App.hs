@@ -23,6 +23,7 @@ module Data.Macaw.CFG.App
   , WidthEqProof(..)
   , widthEqProofEq
   , widthEqProofCompare
+  , widthEqSource
   , widthEqTarget
   ) where
 
@@ -75,6 +76,9 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
                   -> !(WidthEqProof i o)
                   -> WidthEqProof (VecType n i) (VecType n o)
 
+  -- | Type is equal to itself.
+  WidthEqRefl  :: !(TypeRepr tp) -> WidthEqProof tp tp
+
   -- | Allows transitivity composing proofs.
   WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
 
@@ -89,6 +93,7 @@ widthEqSource (ToFloat f) =
   case floatInfoBitsIsPos f of
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqSource (VecEqCongruence n r) = VecTypeRepr n (widthEqSource r)
+widthEqSource (WidthEqRefl x) = x
 widthEqSource (WidthEqTrans x _) = widthEqSource x
 
 -- | Return the result type of the width equality proof
@@ -102,6 +107,7 @@ widthEqTarget (FromFloat f) =
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqTarget (ToFloat f) = FloatTypeRepr f
 widthEqTarget (VecEqCongruence n r) = VecTypeRepr n (widthEqTarget r)
+widthEqTarget (WidthEqRefl x) = x
 widthEqTarget (WidthEqTrans _ y) = widthEqTarget y
 
 -- Force app to be in template-haskell context.

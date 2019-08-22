@@ -83,9 +83,14 @@ data ArchitectureInfo arch
                             -> ArchStmt arch (Value arch ids)
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
-     , postCallAbsState :: AbsBlockState (ArchReg arch)
-                        -> ArchSegmentOff arch
-                        -> AbsBlockState (ArchReg arch)
+     , postCallAbsState :: !(forall ids
+                             . AbsProcessorState (ArchReg arch) ids
+                             -- ^ Processor state at call.
+                             -> RegState (ArchReg arch) (Value arch ids)
+                             -- ^  Register values when call occurs.
+                             -> ArchSegmentOff arch
+                             -- ^ Return address
+                             -> AbsBlockState (ArchReg arch))
        -- ^ Update the abstract state after a function call returns
      , identifyCall :: forall ids
                     .  Memory (ArchAddrWidth arch)
@@ -142,7 +147,7 @@ data ArchitectureInfo arch
      , postArchTermStmtAbsState :: !(forall ids
                                      .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
-                                     -> AbsBlockState (ArchReg arch)
+                                     -> AbsProcessorState (ArchReg arch) ids
                                         -- The registers before executing terminal statement
                                      -> (RegState (ArchReg arch) (Value arch ids))
                                         -- The architecture-specific statement

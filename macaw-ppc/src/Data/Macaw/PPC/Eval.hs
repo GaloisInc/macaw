@@ -43,7 +43,7 @@ preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRe
 postPPCTermStmtAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                        -> AbsBlockState (PPCReg ppc)
+                        -> AbsProcessorState (PPCReg ppc)
                         -> RegState (PPCReg ppc) (Value ppc ids)
                         -> PPCTermStmt ppc ids
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc))
@@ -56,7 +56,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextIP, MA.absEvalCall params s0 nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
       case simplifyValue (regState ^. curIP) of
@@ -65,7 +65,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextIP, MA.absEvalCall params s0 nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrapdword _ _ _ ->
       case simplifyValue (regState ^. curIP) of
@@ -74,7 +74,7 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextIP, MA.absEvalCall params s0 nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
@@ -159,7 +159,8 @@ absEvalArchStmt _ s _ = s
 -- passed in registers.
 postCallAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                  => proxy ppc
-                 -> AbsBlockState (ArchReg ppc)
+                 -> AbsProcessorState (ArchReg ppc)
+                 -> RegState (ArchReg ppc) (Value ppc ids)
                  -> ArchSegmentOff ppc
                  -> AbsBlockState (ArchReg ppc)
 postCallAbsState proxy = MA.absEvalCall params

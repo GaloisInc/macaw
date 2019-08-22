@@ -49,6 +49,7 @@ library
 
   exposed-modules:
     Data.Macaw.AbsDomain.AbsState
+    Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval

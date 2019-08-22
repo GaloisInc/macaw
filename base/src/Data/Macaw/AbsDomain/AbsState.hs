@@ -15,13 +15,16 @@
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.AbsDomain.AbsState
   ( AbsBlockState
+  , initIndexBounds
+  , Jmp.ppInitialIndexBounds
   , setAbsIP
   , absRegState
   , absStackHasReturnAddr
-  , absUpdateRegsPostCall
   , CallParams(..)
   , absEvalCall
   , AbsBlockStack
+  , fnStartAbsBlockState
+  , joinAbsBlockState
   , StackEntry(..)
   , ArchAbsValue
   , AbsValue(..)
@@ -69,7 +72,6 @@ import           Data.Bits
 import           Data.Foldable
 import           Data.Functor
 import           Data.Int
-import qualified Data.Kind as Kind
 import           Data.Map (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -83,6 +85,7 @@ import           GHC.Stack
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
+import           Data.Macaw.AbsDomain.CallParams
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.CFG
@@ -1047,10 +1050,8 @@ ppAbsStack m = vcat (pp <$> Map.toDescList m)
 data AbsBlockState r
    = AbsBlockState { _absRegState :: !(RegState r (AbsValue (RegAddrWidth r)))
                    , _startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
-                   , _initIndexBounds :: !(Jmp.InitialIndexBounds r)
+                   , initIndexBounds :: !(Jmp.InitialIndexBounds r)
                    }
-
-deriving instance MapF.OrdF r => Eq (AbsBlockState r)
 
 absRegState :: Simple Lens (AbsBlockState r)
                            (RegState r (AbsValue (RegAddrWidth r)))
@@ -1059,27 +1060,44 @@ absRegState = lens _absRegState (\s v -> s { _absRegState = v })
 startAbsStack :: Simple Lens (AbsBlockState r) (AbsBlockStack (RegAddrWidth r))
 startAbsStack = lens _startAbsStack (\s v -> s { _startAbsStack = v })
 
-initIndexBounds :: Simple Lens (AbsBlockState r) (Jmp.InitialIndexBounds r)
-initIndexBounds = lens _initIndexBounds (\s v -> s { _initIndexBounds = v })
+-- | This constructs the abstract state for the start of the function.
+--
+-- It initializes the instruction pointer and any register.  It does
+-- not place the return address as where that is stored is
+-- architecture-specific.
+fnStartAbsBlockState :: forall r
+                     .  RegisterInfo r
+                     => MemSegmentOff (RegAddrWidth r)
+                        -- ^ Segment offset
+                     -> MapF r (AbsValue (RegAddrWidth r))
+                        -- ^ Values to explicitly assign to registers
+                     -> AbsBlockState r
+fnStartAbsBlockState addr m =
+  let regFn :: r tp -> AbsValue (RegAddrWidth r) tp
+      regFn r
+        | Just v <- MapF.lookup r m = v
+        | Just Refl <- testEquality ip_reg r = concreteCodeAddr addr
+        | Just Refl <- testEquality sp_reg r = concreteStackOffset (segoffAddr addr) 0
+        | otherwise = TopV
+   in AbsBlockState { _absRegState = mkRegState regFn
+                    , _startAbsStack = Map.empty
+                    , initIndexBounds = Jmp.functionStartBounds
+                    }
 
-instance ( RegisterInfo r
-         )
-      => AbsDomain (AbsBlockState r) where
+joinAbsBlockState :: RegisterInfo r
+                  => AbsBlockState r
+                  -> AbsBlockState r
+                  -> Maybe (AbsBlockState r)
+joinAbsBlockState x y
+    | regs_changed = Just $! z
+    | otherwise = Nothing
+  where xs = x^.absRegState
+        ys = y^.absRegState
 
-  top = AbsBlockState { _absRegState = mkRegState (\_ -> TopV)
-                      , _startAbsStack = Map.empty
-                      , _initIndexBounds = Jmp.arbitraryInitialBounds
-                      }
+        x_stk = x^.startAbsStack
+        y_stk = y^.startAbsStack
 
-  joinD x y | regs_changed = Just $! z
-            | otherwise = Nothing
-    where xs = x^.absRegState
-          ys = y^.absRegState
-
-          x_stk = x^.startAbsStack
-          y_stk = y^.startAbsStack
-
-          (z,(regs_changed,_dropped)) = flip runState (False, Set.empty) $ do
+        (z,(regs_changed,_dropped)) = flip runState (False, Set.empty) $ do
             z_regs <- mkRegStateM $ \r -> do
               let xr = xs^.boundValue r
               (c,s) <- get
@@ -1092,14 +1110,15 @@ instance ( RegisterInfo r
                   return $! zr
             z_stk <- absStackJoinD x_stk y_stk
             z_bnds <-
-              case Jmp.joinInitialBounds (x^.initIndexBounds) (y^.initIndexBounds) of
+              case Jmp.joinInitialBounds (initIndexBounds x) (initIndexBounds y) of
                 Just z_bnds  -> (_1 .= True) $> z_bnds
-                Nothing -> pure (x^.initIndexBounds)
+                Nothing -> pure (initIndexBounds x)
 
             return $ AbsBlockState { _absRegState     = z_regs
                                    , _startAbsStack   = z_stk
-                                   , _initIndexBounds = z_bnds
+                                   , initIndexBounds = z_bnds
                                    }
+
 
 instance ( ShowF r
          , MemWidth (RegAddrWidth r)
@@ -1113,7 +1132,7 @@ instance ( ShowF r
           stack_d | Map.null stack = empty
                   | otherwise = text "stack:" <$$>
                                 indent 2 (ppAbsStack stack)
-          jmp_bnds = pretty (s^.initIndexBounds)
+          jmp_bnds = pretty (initIndexBounds s)
 
 instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (AbsBlockState r) where
   show = show . pretty
@@ -1199,7 +1218,7 @@ initAbsProcessorState mem s =
                     , _absInitialRegs = s^.absRegState
                     , _absAssignments = MapF.empty
                     , _curAbsStack = s^.startAbsStack
-                    , _indexBounds = Jmp.mkIndexBounds (s^.initIndexBounds)
+                    , _indexBounds = Jmp.mkIndexBounds (initIndexBounds s)
                     }
 
 -- | A lens that allows one to lookup and update the value of an assignment in
@@ -1354,9 +1373,10 @@ finalAbsBlockState :: forall a ids
 finalAbsBlockState c regs =
   let transferReg :: ArchReg a tp -> ArchAbsValue a tp
       transferReg r = transferValue c (regs^.boundValue r)
+      bnds = Jmp.nextBlockBounds (c^.indexBounds) regs
    in AbsBlockState { _absRegState = mkRegState transferReg
                     , _startAbsStack = c^.curAbsStack
-                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) regs
+                    , initIndexBounds = bnds
                     }
 
 ------------------------------------------------------------------------
@@ -1385,55 +1405,37 @@ transferApp r a = do
     BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV
 
--- | Update abstract state post call.
-absUpdateRegsPostCall :: RegisterInfo r
-                      => (forall tp . r tp -> AbsValue (RegAddrWidth r) tp)
-                         -- ^ Register transfer function
-                      -> AbsBlockState r
-                      -> AbsBlockState r
-absUpdateRegsPostCall regFn ab0 =
-    AbsBlockState { _absRegState = mkRegState regFn
-                  , _startAbsStack = ab0^.startAbsStack
-                  , _initIndexBounds = Jmp.arbitraryInitialBounds
-                  }
-
--- | Minimal information needed to parse a function call/system call
-data CallParams (r :: Type -> Kind.Type)
-   = CallParams { postCallStackDelta :: Integer
-                  -- ^ Amount stack should shift by when going before/after call.
-                , preserveReg        :: forall tp . r tp -> Bool
-                  -- ^ Return true if a register value is preserved by
-                  -- a call.
-                  --
-                  -- We assume stack pointer and instruction pointer
-                  -- are preserved, so the return value for these does not matter.
-                }
 
 -- | This updates the registers after a call has been performed.
-absEvalCall :: forall r
-                 .  ( RegisterInfo r
-                    , HasRepr r TypeRepr
+absEvalCall :: forall arch ids
+                 .  ( RegisterInfo (ArchReg arch)
                     )
-                 => CallParams r
+                 => CallParams (ArchReg arch)
                     -- ^ Configuration
-                 -> AbsBlockState r
+                 -> AbsProcessorState (ArchReg arch) ids
                     -- ^ State before call
-                 -> MemSegmentOff (RegAddrWidth r)
+                 -> RegState (ArchReg arch) (Value arch ids)
+                 -> MemSegmentOff (ArchAddrWidth arch)
                     -- ^ Address we are jumping to
-                 -> AbsBlockState r
-absEvalCall params ab0 addr = absUpdateRegsPostCall regFn ab0
-  where regFn :: r tp -> AbsValue (RegAddrWidth r) tp
-        regFn r
-          -- We set IPReg
-          | Just Refl <- testEquality r ip_reg =
-              concreteCodeAddr addr
-          | Just Refl <- testEquality r sp_reg =
-              bvinc (typeWidth r)
-                    (ab0^.absRegState^.boundValue r)
-                    (postCallStackDelta params)
-            -- Copy callee saved registers
-          | preserveReg params r =
-            ab0^.absRegState^.boundValue r
-            -- We know nothing about other registers.
-          | otherwise =
+                 -> AbsBlockState (ArchReg arch)
+absEvalCall params ab0 regs addr =
+  let regFn :: ArchReg arch tp
+            -> AbsValue (ArchAddrWidth arch) tp
+      regFn r
+        -- We set IPReg
+        | Just Refl <- testEquality r ip_reg =
+            concreteCodeAddr addr
+        | Just Refl <- testEquality r sp_reg =
+            bvinc (typeWidth r)
+                  (transferValue ab0 (regs^.boundValue r))
+                  (postCallStackDelta params)
+          -- Copy callee saved registers
+        | preserveReg params r =
+          transferValue ab0 (regs^.boundValue r)
+          -- We know nothing about other registers.
+        | otherwise =
             TopV
+   in AbsBlockState { _absRegState = mkRegState regFn
+                    , _startAbsStack = ab0^.curAbsStack
+                    , initIndexBounds = Jmp.postCallBounds params (_indexBounds ab0) regs
+                    }

@@ -721,7 +721,7 @@ summarizeBlock b = do
     ParsedTranslateError _ -> do
       -- We ignore demands for translate errors.
       pure mempty
-    ClassifyFailure _ ->
+    ClassifyFailure _ _ ->
       -- We ignore demands for classify failure.
       pure mempty
 

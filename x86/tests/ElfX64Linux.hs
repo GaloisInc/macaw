@@ -120,8 +120,15 @@ testDiscovery expectedFilename elf = do
           let addr = MD.pblockAddr pb
           unless (S.member addr ignoredBlocks) $ do
             let term = MD.pblockTermStmt pb
-            T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
-            T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term) (not (isTranslateError term))
+            case term of
+              MD.ClassifyFailure _ rsns ->
+                T.assertFailure $ "Unclassified block at " ++ show (MD.pblockAddr pb) ++ "\n"
+                  ++ unlines ((\s -> "  " ++ s) <$> rsns)
+              MD.ParsedTranslateError _ ->
+                T.assertFailure $ "Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term
+              _ ->
+                pure ()
+
         let actualEntry = MD.discoveredFunAddr dfi
             -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
         let actualBlockStarts :: S.Set (Addr, Integer)
@@ -154,15 +161,3 @@ data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
 
 instance C.Exception ElfException
-
-isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
-isClassifyFailure ts =
-  case ts of
-    MD.ClassifyFailure {} -> True
-    _ -> False
-
-isTranslateError :: MD.ParsedTermStmt arch ids -> Bool
-isTranslateError ts =
-  case ts of
-    MD.ParsedTranslateError {} -> True
-    _ -> False

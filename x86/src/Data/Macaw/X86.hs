@@ -335,18 +335,12 @@ disassembleBlock gen loc maxSize = do
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
-initialX86AbsState addr
-  = top
-  & absRegState . boundValue X86_IP     .~ concreteCodeAddr addr
-  & absRegState . boundValue RSP        .~ concreteStackOffset (segoffAddr addr) 0
-  -- x87 top register points to top of stack.
-  & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
-  -- Direction flag is initially zero.
-  -- "The direction flag DF in the %rFLAGS register
-  --- must be clear (set to “forward” direction) on function entry and
-  --- return." (AMD64 ABI Draft 1.0, p18)
-  & absRegState . boundValue DF .~ BoolConst False
-  & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
+initialX86AbsState addr =
+  let m = MapF.fromList [ MapF.Pair X87_TopReg (FinSet (Set.singleton 7))
+                        , MapF.Pair DF         (BoolConst False)
+                        ]
+   in fnStartAbsBlockState addr m
+      & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
 
 preserveFreeBSDSyscallReg :: X86Reg tp -> Bool
 preserveFreeBSDSyscallReg r
@@ -545,7 +539,8 @@ identifyX86Return stmts s finalRegSt8 =
     _ -> Nothing
 
 -- | Return state post call
-x86PostCallAbsState :: AbsBlockState X86Reg
+x86PostCallAbsState :: AbsProcessorState X86Reg ids
+                    -> RegState X86Reg (Value X86_64 ids)
                     -> MemSegmentOff 64
                     -> AbsBlockState X86Reg
 x86PostCallAbsState =
@@ -570,7 +565,7 @@ x86DemandContext =
 -- state denoting possible starting conditions when that code runs.
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
-                        -> AbsBlockState X86Reg
+                        -> AbsProcessorState X86Reg ids
                         -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
                         -> Maybe (MemSegmentOff 64, AbsBlockState X86Reg)
@@ -582,7 +577,7 @@ postX86TermStmtAbsState preservePred mem s regs tstmt =
           let params = CallParams { postCallStackDelta = 0
                                   , preserveReg = preservePred
                                   }
-          Just (nextIP, absEvalCall params s nextIP)
+          Just (nextIP, absEvalCall params s regs nextIP)
         _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing

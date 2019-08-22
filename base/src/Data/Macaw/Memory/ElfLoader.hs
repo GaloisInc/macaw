@@ -477,7 +477,54 @@ relaTargetX86_64 :: Maybe SegmentIndex
                  -> SymbolResolver (Relocation 64)
 relaTargetX86_64 _ symtab rel addend _isRel =
   case Elf.relType rel of
-
+    Elf.R_X86_64_64 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = addend
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
+                        }
+    Elf.R_X86_64_PC32 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = addend
+                        , relocationIsRel      = True
+                        , relocationSize       = 4
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
+                        }
+    -- This is used for constructing relative jumps from a caller to the
+    -- PLT stub for the function it is calling.  Such jumps typically modify
+    -- a relative call instruction with four bytes for the distance, and so
+    -- the distance must be an unsigned 4-byte value.
+    Elf.R_X86_64_PLT32 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym    = sym
+                        , relocationOffset = addend
+                        , relocationIsRel  = True
+                        , relocationSize   = 4
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = True
+                        }
+    -- R_X86_64_GLOB_DAT are used to update GOT entries with their
+    -- target address.  They are similar to R_x86_64_64 except appear
+    -- inside dynamically linked executables/libraries, and are often
+    -- loaded lazily.  We just use the eager AbsoluteRelocation here.
+    Elf.R_X86_64_GLOB_DAT -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = addend
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
+                        }
     Elf.R_X86_64_JUMP_SLOT -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       pure $ Relocation { relocationSym = sym
@@ -488,12 +535,13 @@ relaTargetX86_64 _ symtab rel addend _isRel =
                         , relocationEndianness = LittleEndian
                         , relocationJumpSlot = True
                         }
-    Elf.R_X86_64_PC32 -> do
-      sym <- resolveRelocationSym symtab (Elf.relSym rel)
-      pure $ Relocation { relocationSym        = sym
+    Elf.R_X86_64_RELATIVE -> do
+      when (Elf.relSym rel /= 0) $ do
+        throwError $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
+      pure $ Relocation { relocationSym        = LoadBaseAddr
                         , relocationOffset     = addend
-                        , relocationIsRel      = True
-                        , relocationSize       = 4
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
                         , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
                         , relocationJumpSlot   = False
@@ -518,43 +566,6 @@ relaTargetX86_64 _ symtab rel addend _isRel =
                         , relocationEndianness = LittleEndian
                         , relocationJumpSlot   = False
                         }
-    Elf.R_X86_64_64 -> do
-      sym <- resolveRelocationSym symtab (Elf.relSym rel)
-      pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = addend
-                        , relocationIsRel      = False
-                        , relocationSize       = 8
-                        , relocationIsSigned   = False
-                        , relocationEndianness = LittleEndian
-                        , relocationJumpSlot   = False
-                        }
-    -- R_X86_64_GLOB_DAT are used to update GOT entries with their
-    -- target address.  They are similar to R_x86_64_64 except appear
-    -- inside dynamically linked executables/libraries, and are often
-    -- loaded lazily.  We just use the eager AbsoluteRelocation here.
-    Elf.R_X86_64_GLOB_DAT -> do
-      sym <- resolveRelocationSym symtab (Elf.relSym rel)
-      pure $ Relocation { relocationSym        = sym
-                        , relocationOffset     = addend
-                        , relocationIsRel      = False
-                        , relocationSize       = 8
-                        , relocationIsSigned   = False
-                        , relocationEndianness = LittleEndian
-                        , relocationJumpSlot   = False
-                        }
-
-    Elf.R_X86_64_RELATIVE -> do
-      when (Elf.relSym rel /= 0) $ do
-        throwError $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
-      pure $ Relocation { relocationSym        = LoadBaseAddr
-                        , relocationOffset     = addend
-                        , relocationIsRel      = False
-                        , relocationSize       = 8
-                        , relocationIsSigned   = False
-                        , relocationEndianness = LittleEndian
-                        , relocationJumpSlot   = False
-                        }
-
     -- Jhx Note. These will be needed to support thread local variables.
     --   Elf.R_X86_64_TPOFF32 -> undefined
     --   Elf.R_X86_64_GOTTPOFF -> undefined
@@ -1250,6 +1261,7 @@ allowedSectionNames = Set.fromList
      , ".shstrtab"
      , ".symtab"
      , ".strtab"
+     , ".llvm_addrsig"
      ]
 
 -- | Map from section names to information about them.

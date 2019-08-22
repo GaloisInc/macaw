@@ -349,7 +349,7 @@ termStmtToReturn tm0 =
     M.ParsedBranch r _ _ _ -> M.ParsedReturn r
     M.ParsedLookupTable r _ _ -> M.ParsedReturn r
     M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
-    M.ClassifyFailure r -> M.ParsedReturn r
+    M.ClassifyFailure r _ -> M.ParsedReturn r
     M.PLTStub{} -> tm0
     M.ParsedTranslateError{} -> tm0
 
@@ -367,7 +367,7 @@ termStmtToJump tm0 addr =
     M.ParsedReturn r -> M.ParsedJump r addr
     M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
     M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
-    M.ClassifyFailure r -> M.ParsedJump r addr
+    M.ClassifyFailure r _ -> M.ParsedJump r addr
     M.PLTStub{} -> tm0
     M.ParsedTranslateError{} -> tm0
 

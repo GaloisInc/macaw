@@ -192,7 +192,8 @@ data ParsedTermStmt arch ids
   -- | An error occured in translating the block
   | ParsedTranslateError !Text
   -- | The classifier failed to identity the block.
-  | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids))
+  -- Includes registers with list of reasons for each classifer to fail
+  | ClassifyFailure !(RegState (ArchReg arch) (Value arch ids)) [String]
 
 ppTermStmt :: ArchConstraints arch
            => ParsedTermStmt arch ids
@@ -230,8 +231,8 @@ ppTermStmt tstmt =
           indent 2 (pretty s)
     ParsedTranslateError msg ->
       text "translation error" <+> text (Text.unpack msg)
-    ClassifyFailure s ->
-      text "unknown transfer" <$$>
+    ClassifyFailure s _ ->
+      text "classify failure" <$$>
       indent 2 (pretty s)
 
 instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
@@ -283,6 +284,7 @@ instance ArchConstraints arch
   pretty b =
     let ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
      in text (show (pblockAddr b)) PP.<> text ":" <$$>
+        indent 2 (vcat $ (text "; " <+>) <$> ppInitialIndexBounds (initIndexBounds (blockAbstractState b))) <$$>
         indent 2 (vcat (ppStmt ppOff <$> pblockStmts b) <$$> ppTermStmt (pblockTermStmt b))
 
 ------------------------------------------------------------------------
