@@ -15,7 +15,6 @@ module Data.Macaw.Discovery.AbsEval
   ) where
 
 import           Control.Lens
-import           Data.Foldable
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 

@@ -262,7 +262,6 @@ instance MemWidth w => Show (AbsValue w tp) where
 ppSet :: [Doc] -> Doc
 ppSet = encloseSep lbrace rbrace comma
 
-
 instance MemWidth w => Pretty (AbsValue w tp) where
   pretty (BoolConst b) = text (show b)
   pretty (FinSet s) = text "finset" <+> ppIntegerSet s
@@ -1464,7 +1463,7 @@ absEvalCall params ab0 regs addr =
                             | stackGrowsDown params ->
                                 let newOff = spOff + fromInteger (postCallStackDelta params)
                                     -- Keep entries whose low address is above new stack offset.
-                                    p o v = o >= newOff
+                                    p o _v = o >= newOff
                                     -- Keep entries at offsets above return address.
                                  in Map.filterWithKey p (ab0^.curAbsStack)
                             | otherwise ->

@@ -23,10 +23,8 @@ module Data.Macaw.AbsDomain.JumpBounds
   , UpperBound(..)
   ) where
 
-import           Control.Lens
 import           Control.Monad.State
 import           Data.Functor
-import           Data.Int
 import qualified Data.Map.Merge.Strict as Map
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -35,8 +33,6 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
-import           Data.Proxy
-import           GHC.Stack
 import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
