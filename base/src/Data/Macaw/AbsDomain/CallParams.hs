@@ -12,7 +12,9 @@ import           Data.Macaw.Types
 -- | Minimal information needed to parse a function call/system call
 data CallParams (r :: Type -> Kind.Type)
    = CallParams { postCallStackDelta :: Integer
-                  -- ^ Amount stack should shift by when going before/after call.
+                  -- ^ Amount stack should shift after call.
+                , stackGrowsDown :: !Bool
+                  -- ^ Returns true if stack grows down
                 , preserveReg        :: forall tp . r tp -> Bool
                   -- ^ Return true if a register value is preserved by
                   -- a call.

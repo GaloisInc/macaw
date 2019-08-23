@@ -339,8 +339,7 @@ initialX86AbsState addr =
   let m = MapF.fromList [ MapF.Pair X87_TopReg (FinSet (Set.singleton 7))
                         , MapF.Pair DF         (BoolConst False)
                         ]
-   in fnStartAbsBlockState addr m
-      & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
+   in fnStartAbsBlockState addr m [(0, StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)]
 
 preserveFreeBSDSyscallReg :: X86Reg tp -> Bool
 preserveFreeBSDSyscallReg r
@@ -546,6 +545,7 @@ x86PostCallAbsState :: AbsProcessorState X86Reg ids
 x86PostCallAbsState =
   let params = CallParams { postCallStackDelta = 8
                           , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
+                          , stackGrowsDown = True
                           }
    in absEvalCall params
 
@@ -576,6 +576,7 @@ postX86TermStmtAbsState preservePred mem s regs tstmt =
         RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
           let params = CallParams { postCallStackDelta = 0
                                   , preserveReg = preservePred
+                                  , stackGrowsDown = True
                                   }
           Just (nextIP, absEvalCall params s regs nextIP)
         _ -> error $ "Sycall could not interpret next IP"

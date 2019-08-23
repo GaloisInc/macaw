@@ -9,15 +9,15 @@ This provides a set of functions for abstract evaluation of statements.
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.Discovery.AbsEval
-  ( absEvalStmts
+  ( absEvalStmt
+--  , absEvalStmts
   , absEvalReadMem
   ) where
 
 import           Control.Lens
-import           Control.Monad.State.Strict
+import           Data.Foldable
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
-import qualified Data.Set as Set
 
 import           Data.Macaw.AbsDomain.AbsState
 import           Data.Macaw.Architecture.Info
@@ -33,8 +33,7 @@ absEvalReadMem :: RegisterInfo (ArchReg a)
 absEvalReadMem r a tp
     -- If the value is a stack entry, then see if there is a stack
     -- value associated with it.
-  | StackOffset _ s <- transferValue r a
-  , [o] <- Set.toList s
+  | StackOffset _ o <- transferValue r a
   , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
   , Just Refl <- testEquality tp v_tp = v
   | otherwise = TopV
@@ -61,38 +60,41 @@ transferRHS info r rhs =
 --
 -- If we have already seen a value, this will combine with meet.
 addAssignment :: ArchitectureInfo a
+              -> AbsProcessorState (ArchReg a) ids
               -> Assignment a ids tp
               -> AbsProcessorState (ArchReg a) ids
-              -> AbsProcessorState (ArchReg a) ids
-addAssignment info a c = withArchConstraints info $
-  c & (absAssignments . assignLens (assignId a))
-    %~ (`meet` transferRHS info c (assignRhs a))
+addAssignment info s a = withArchConstraints info $
+  s & (absAssignments . assignLens (assignId a))
+    %~ (`meet` transferRHS info s (assignRhs a))
 
 -- | Given a statement this modifies the processor state based on the statement.
 absEvalStmt :: ArchitectureInfo arch
-             -> Stmt arch ids
-             -> State (AbsProcessorState (ArchReg arch) ids) ()
-absEvalStmt info stmt = withArchConstraints info $
+            -> AbsProcessorState (ArchReg arch) ids
+            -> Stmt arch ids
+            -> AbsProcessorState (ArchReg arch) ids
+absEvalStmt info s stmt = withArchConstraints info $
   case stmt of
     AssignStmt a ->
-      modify $ addAssignment info a
+      addAssignment info s a
     WriteMem addr memRepr v -> do
-      modify $ \s -> addMemWrite addr memRepr v s
-    CondWriteMem _cond addr memRepr v ->
-      modify $ \s -> addCondMemWrite lub addr memRepr (transferValue s v) s
+      addMemWrite s addr memRepr v
+    CondWriteMem cond addr memRepr v ->
+      addCondMemWrite s cond addr memRepr v
     InstructionStart _ _ ->
-      pure ()
+      s
     Comment{} ->
-      pure ()
+      s
     ExecArchStmt astmt ->
-      modify $ \r -> absEvalArchStmt info r astmt
+      absEvalArchStmt info s astmt
     ArchState{} ->
-      pure ()
+      s
 
+{-
 -- This takes a processor state and updates it based on executing each statement.
 absEvalStmts :: Foldable t
              => ArchitectureInfo arch
              -> AbsProcessorState (ArchReg arch) ids
              -> t (Stmt arch ids)
              -> AbsProcessorState (ArchReg arch) ids
-absEvalStmts info r stmts = execState (mapM_ (absEvalStmt info) stmts) r
+absEvalStmts info = foldl' (absEvalStmt info)
+-}

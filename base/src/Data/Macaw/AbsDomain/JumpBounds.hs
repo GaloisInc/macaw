@@ -10,16 +10,17 @@ addresses in the stack.
 module Data.Macaw.AbsDomain.JumpBounds
   ( InitialIndexBounds
   , functionStartBounds
-  , postCallBounds
   , joinInitialBounds
   , ppInitialIndexBounds
+    -- * Index bounds
   , IndexBounds
   , mkIndexBounds
-  , UpperBound(..)
-  , addUpperBound
+  , postCallBounds
+  , nextBlockBounds
   , assertPred
   , unsignedUpperBound
-  , nextBlockBounds
+  , processStmt
+  , UpperBound(..)
   ) where
 
 import           Control.Lens
@@ -35,6 +36,7 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Proxy
+import           GHC.Stack
 import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
@@ -57,7 +59,6 @@ runChanged action =
   case runState action False of
     (r, True)  -> Just r
     (_, False) -> Nothing
-
 
 ------------------------------------------------------------------------
 -- UpperBound
@@ -110,7 +111,7 @@ data InitialIndexBounds r
                           --
                           -- All offsets are relative to the function
                           -- entry point.
-
+--                        , stackBounds :: !(Map Integer MemUpperBound)
                         }
 
 ppInitialIndexBounds :: forall r . ShowF r => InitialIndexBounds r -> [Doc]
@@ -184,8 +185,9 @@ joinInitialBounds old new = runChanged $ do
 
 -- | Information about bounds for a particular value within a block.
 data IndexBounds reg ids
-   = IndexBounds { _regBounds           :: !(MapF reg UpperBound)
-                 , _assignUpperBound   :: !(MapF (AssignId ids) UpperBound)
+   = IndexBounds { regBounds           :: !(MapF reg UpperBound)
+                   -- ^ Maps register to the upper bound associated with that register.
+                 , assignUpperBound   :: !(MapF (AssignId ids) UpperBound)
                  , initRegStackOffsets :: !(Map (TypeAp reg (BVType (RegAddrWidth reg)))
                                                 (MemInt (RegAddrWidth reg)))
                    -- ^ Maps initial register values to the stack offset.
@@ -194,7 +196,6 @@ data IndexBounds reg ids
 addrTypeRepr :: MemWidth w => TypeRepr (BVType w)
 addrTypeRepr = BVTypeRepr w
   where w = addrWidthNatRepr (addrWidthRepr w)
-
 
 -- | Return the index bounds after a function call.
 postCallBounds :: forall arch ids
@@ -224,26 +225,172 @@ postCallBounds params bnds regs =
                              ]
                          }
 
-
 instance ShowF reg => Pretty (IndexBounds reg idx) where
   pretty bnds =
-    vcat $ ppMapFBounds (_regBounds bnds)
-        ++ ppMapFBounds (_assignUpperBound bnds)
-
--- | Maps assignment ids to the associated upper bounds
-regBounds :: Simple Lens (IndexBounds reg ids) (MapF reg UpperBound)
-regBounds = lens _regBounds (\s v -> s { _regBounds = v })
-
--- | Maps assignment ids to the associated upper bounds
-assignUpperBound :: Simple Lens (IndexBounds reg ids) (MapF (AssignId ids) UpperBound)
-assignUpperBound = lens _assignUpperBound (\s v -> s { _assignUpperBound = v })
+    vcat $ ppMapFBounds (regBounds bnds)
+        ++ ppMapFBounds (assignUpperBound bnds)
 
 -- | Create index bounds from initial index bounds.
 mkIndexBounds :: InitialIndexBounds reg -> IndexBounds reg ids
-mkIndexBounds i = IndexBounds { _regBounds = initialRegBoundMap i
-                              , _assignUpperBound = MapF.empty
+mkIndexBounds i = IndexBounds { regBounds = initialRegBoundMap i
+                              , assignUpperBound = MapF.empty
                               , initRegStackOffsets = initialStackOffsets i
                               }
+
+------------------------------------------------------------------------
+-- Operations
+
+{-
+memWrite :: ( RegisterInfo (ArchReg arch)
+            , MemWidth (ArchAddrWidth arch)
+            , HasCallStack
+            )
+         => BVValue arch ids (ArchAddrWidth arch)
+         -- ^ Address that we are writing to.
+         -> MemRepr tp
+         -- ^ Information about how value should be represented in memory.
+         -> Value arch ids tp
+         -- ^ Value to write to memory
+         -> IndexBounds (ArchReg arch) ids
+         -- ^ Current processor state.
+         -> IndexBounds (ArchReg arch) ids
+memWrite _a _memRepr _v r = r
+
+
+-- | Update the processor state with a potential memory write.
+condMemWrite :: ( RegisterInfo (ArchReg arch)
+                , MemWidth (ArchAddrWidth arch)
+                , HasCallStack
+                )
+             => Value arch ids BoolType
+             -- ^ Condition we are splitting on
+             -> Value arch ids (BVType (RegAddrWidth r))
+             -- ^ Address that we are writing to.
+             -> MemRepr tp
+             -- ^ Information about how value should be represented in memory.
+             -> Value arch ids tp
+             -- ^ Value to write to memory
+             -> IndexBounds (ArchReg arch)ids
+             -- ^ Current processor state.
+             -> IndexBounds (ArchReg arch) ids
+condMemWrite _cond _a _memRepr _v r = r
+-}
+
+-- | Lookup an upper bound or return analysis for why it is not defined.
+unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
+                      , MapF.ShowF (ArchReg arch)
+                      , RegisterInfo (ArchReg arch)
+                      )
+                  => IndexBounds (ArchReg arch) ids
+                  -> Value arch ids tp
+                  -> Either String (UpperBound tp)
+unsignedUpperBound bnds v =
+  case v of
+    BoolValue _ -> Left "Boolean values do not have bounds."
+    BVValue w i -> Right $! UBVUpperBound w (fromInteger i)
+    RelocatableValue{} ->
+      Left "Relocatable values do not have bounds."
+    SymbolValue{} ->
+      Left "Symbol values do not have bounds."
+    AssignedValue a ->
+      case MapF.lookup (assignId a) (assignUpperBound bnds) of
+        Just bnd -> Right bnd
+        Nothing ->
+          case assignRhs a of
+            EvalApp (BVAnd _ x y) -> do
+              case (unsignedUpperBound bnds x,  unsignedUpperBound bnds y) of
+                (Right (UBVUpperBound xw xb), Right (UBVUpperBound yw yb))
+                  | Just Refl <- testEquality xw yw ->
+                    Right (UBVUpperBound xw (min xb yb))
+                (Right xb, _) -> Right xb
+                (Left{}, yb)       -> yb
+            EvalApp (SExt x w) -> do
+              UBVUpperBound u b <- unsignedUpperBound bnds x
+              case testLeq u w of
+                Just LeqProof -> pure $! UBVUpperBound u b
+                Nothing -> error "unsignedUpperBound given bad width"
+            EvalApp (UExt x w) -> do
+              UBVUpperBound u r <- unsignedUpperBound bnds x
+              -- If bound is full width, then we can keep it, otherwise we only have subset.
+              case testEquality u (typeWidth x) of
+                Just Refl -> pure $! UBVUpperBound w r
+                Nothing ->
+                  case testLeq u w of
+                    Just LeqProof -> pure $! UBVUpperBound u r
+                    Nothing -> error "unsignedUpperBound given bad width"
+            EvalApp (Trunc x w) -> do
+              UBVUpperBound u xr <- unsignedUpperBound bnds x
+              case testLeq u w of
+                Just LeqProof -> do
+                  pure $! UBVUpperBound u xr
+                Nothing -> do
+                  pure $! UBVUpperBound w (min xr (fromInteger (maxUnsigned w)))
+            _ -> Left $ "Could not find upper bounds for " ++ show v ++ "."
+    Initial r ->
+      case MapF.lookup r (regBounds bnds) of
+        Just bnd -> Right bnd
+        Nothing -> Left $ "No upper bounds for " ++ showF r ++ "."
+
+-- | This returns an offset if we can statically infer that the value
+-- must be an offset of the stack.
+stackOffset :: ( OrdF (ArchReg arch)
+               , MemWidth (ArchAddrWidth arch)
+               )
+            => IndexBounds (ArchReg arch) ids
+            -> Value arch ids (BVType (ArchAddrWidth arch))
+            -> Maybe (MemInt (ArchAddrWidth arch))
+stackOffset bnds v =
+  case v of
+    Initial r -> Map.lookup (TypeAp r) (initRegStackOffsets bnds)
+    CValue _ -> Nothing
+    AssignedValue a ->
+      case assignRhs a of
+        EvalApp (BVAdd _ x y)
+          | BVValue _ i <- x
+          , Just j <- stackOffset bnds y -> do
+              Just $! fromInteger i+j
+          | BVValue _ j <- y
+          , Just i <- stackOffset bnds x -> do
+              Just $! i+fromInteger j
+        EvalApp (BVSub _ x y)
+          | BVValue _ j <- y
+          , Just i <- stackOffset bnds x -> do
+              Just $! i-fromInteger j
+        _ -> Nothing
+
+eitherToMaybe :: Either a b -> Maybe b
+eitherToMaybe (Right v) = Just v
+eitherToMaybe Left{}    = Nothing
+
+-- | Bounds for block after jump
+nextBlockBounds :: forall arch ids
+                .  RegisterInfo (ArchReg arch)
+                => IndexBounds (ArchReg arch) ids
+                   -- ^ Index bounds at end of this state.
+                -> RegState (ArchReg arch) (Value arch ids)
+                   -- ^ Register values at start of next state.
+                -> InitialIndexBounds (ArchReg arch)
+nextBlockBounds bnds regs =
+  let newRegMap = regStateMap regs
+      tp = addrTypeRepr @(ArchAddrWidth arch)
+   in InitialIndexBounds { initialRegBoundMap =
+                             MapF.mapMaybe (eitherToMaybe . unsignedUpperBound bnds) newRegMap
+                         , initialStackOffsets  =
+                             Map.fromAscList
+                               [ (TypeAp r, o)
+                               | MapF.Pair r v <- MapF.toAscList newRegMap
+                               , Refl <- maybeToList $ testEquality (typeRepr r) tp
+                               , o <- maybeToList (stackOffset bnds v)
+                               ]
+                         }
+
+
+-- | Given a statement this modifies the processor state based on the statement.
+processStmt :: IndexBounds (ArchReg arch) ids
+            -> Stmt arch ids
+            -> IndexBounds (ArchReg arch) ids
+processStmt bnds _s = bnds
+
 
 -- | Add a inclusive upper bound to a value.
 --
@@ -295,10 +442,12 @@ addUpperBound v u bnd bnds
                 Just LeqProof -> addUpperBound x w bnd bnds
                 Nothing -> error "addUpperBound invariant broken"
         _ ->
-          Right $ bnds & assignUpperBound %~ MapF.insertWith min (assignId a) (UBVUpperBound u bnd)
+          Right $ bnds { assignUpperBound =
+                           MapF.insertWith min (assignId a) (UBVUpperBound u bnd)
+                             (assignUpperBound bnds)
+                       }
     Initial r ->
-      Right $ bnds & regBounds %~ MapF.insertWith min r (UBVUpperBound u bnd)
-
+      Right $ bnds { regBounds = MapF.insertWith min r (UBVUpperBound u bnd) (regBounds bnds) }
 
 -- | Assert a predicate is true/false and update bounds.
 --
@@ -340,112 +489,3 @@ assertPred (AssignedValue a) isTrue bnds =
     EvalApp (NotApp p) -> assertPred p (not isTrue) bnds
     _ -> Right bnds
 assertPred _ _ bnds = Right bnds
-
--- | Lookup an upper bound or return analysis for why it is not defined.
-unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
-                      , MapF.ShowF (ArchReg arch)
-                      , RegisterInfo (ArchReg arch)
-                      )
-                  => IndexBounds (ArchReg arch) ids
-                  -> Value arch ids tp
-                  -> Either String (UpperBound tp)
-unsignedUpperBound bnds v =
-  case v of
-    BoolValue _ -> Left "Boolean values do not have bounds."
-    BVValue w i -> Right $! UBVUpperBound w (fromInteger i)
-    RelocatableValue{} ->
-      Left "Relocatable values do not have bounds."
-    SymbolValue{} ->
-      Left "Symbol values do not have bounds."
-    AssignedValue a ->
-      case MapF.lookup (assignId a) (bnds^.assignUpperBound) of
-        Just bnd -> Right bnd
-        Nothing ->
-          case assignRhs a of
-            EvalApp (BVAnd _ x y) -> do
-              case (unsignedUpperBound bnds x,  unsignedUpperBound bnds y) of
-                (Right (UBVUpperBound xw xb), Right (UBVUpperBound yw yb))
-                  | Just Refl <- testEquality xw yw ->
-                    Right (UBVUpperBound xw (min xb yb))
-                (Right xb, _) -> Right xb
-                (Left{}, yb)       -> yb
-            EvalApp (SExt x w) -> do
-              UBVUpperBound u b <- unsignedUpperBound bnds x
-              case testLeq u w of
-                Just LeqProof -> pure $! UBVUpperBound u b
-                Nothing -> error "unsignedUpperBound given bad width"
-            EvalApp (UExt x w) -> do
-              UBVUpperBound u r <- unsignedUpperBound bnds x
-              -- If bound is full width, then we can keep it, otherwise we only have subset.
-              case testEquality u (typeWidth x) of
-                Just Refl -> pure $! UBVUpperBound w r
-                Nothing ->
-                  case testLeq u w of
-                    Just LeqProof -> pure $! UBVUpperBound u r
-                    Nothing -> error "unsignedUpperBound given bad width"
-            EvalApp (Trunc x w) -> do
-              UBVUpperBound u xr <- unsignedUpperBound bnds x
-              case testLeq u w of
-                Just LeqProof -> do
-                  pure $! UBVUpperBound u xr
-                Nothing -> do
-                  pure $! UBVUpperBound w (min xr (fromInteger (maxUnsigned w)))
-            _ -> Left $ "Could not find upper bounds for " ++ show v ++ "."
-    Initial r ->
-      case MapF.lookup r (bnds^.regBounds) of
-        Just bnd -> Right bnd
-        Nothing -> Left $ "No upper bounds for " ++ showF r ++ "."
-
-eitherToMaybe :: Either a b -> Maybe b
-eitherToMaybe (Right v) = Just v
-eitherToMaybe Left{}    = Nothing
-
--- | This returns an offset if we can statically infer that the value
--- must be an offset of the stack.
-stackOffset :: ( OrdF (ArchReg arch)
-               , MemWidth (ArchAddrWidth arch)
-               )
-            => IndexBounds (ArchReg arch) ids
-            -> Value arch ids (BVType (ArchAddrWidth arch))
-            -> Maybe (MemInt (ArchAddrWidth arch))
-stackOffset bnds v =
-  case v of
-    Initial r -> Map.lookup (TypeAp r) (initRegStackOffsets bnds)
-    CValue _ -> Nothing
-    AssignedValue a ->
-      case assignRhs a of
-        EvalApp (BVAdd _ x y)
-          | BVValue _ i <- x
-          , Just j <- stackOffset bnds y -> do
-              Just $! fromInteger i+j
-          | BVValue _ j <- y
-          , Just i <- stackOffset bnds x -> do
-              Just $! i+fromInteger j
-        EvalApp (BVSub _ x y)
-          | BVValue _ j <- y
-          , Just i <- stackOffset bnds x -> do
-              Just $! i-fromInteger j
-        _ -> Nothing
-
-
--- | Bounds for block after jump
-nextBlockBounds :: forall arch ids
-                .  RegisterInfo (ArchReg arch)
-                => IndexBounds (ArchReg arch) ids
-                   -- ^ Index bounds at end of this state.
-                -> RegState (ArchReg arch) (Value arch ids)
-                   -- ^ Register values at start of next state.
-                -> InitialIndexBounds (ArchReg arch)
-nextBlockBounds bnds regs =
-  let newRegMap = regStateMap regs
-      tp = addrTypeRepr @(ArchAddrWidth arch)
-   in InitialIndexBounds { initialRegBoundMap =
-                             MapF.mapMaybe (eitherToMaybe . unsignedUpperBound bnds) newRegMap
-                         , initialStackOffsets  =
-                             Map.fromAscList
-                               [ (TypeAp r, o)
-                               | MapF.Pair r v <- MapF.toAscList newRegMap
-                               , Refl <- maybeToList $ testEquality (typeRepr r) tp
-                               , o <- maybeToList (stackOffset bnds v)
-                               ]
-                         }

@@ -270,8 +270,6 @@ data ParsedBlock arch ids
                    -- this region.
                  , pblockStmts :: !([Stmt arch ids])
                      -- ^ The non-terminal statements in the block
-                 , blockFinalAbsState :: !(AbsProcessorState (ArchReg arch) ids)
-                   -- ^ The abstract state of the block just before terminal
                  , pblockTermStmt  :: !(ParsedTermStmt arch ids)
                    -- ^ The terminal statement in the block.
                  }
