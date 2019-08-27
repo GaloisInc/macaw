@@ -68,12 +68,13 @@ import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
 
 import           Data.Macaw.AbsDomain.AbsState
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
-import qualified Data.Macaw.Memory.Permissions as Perm
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
   , HasRepr(..)
@@ -537,18 +538,6 @@ identifyX86Return stmts s finalRegSt8 =
     ReturnAddr -> Just stmts
     _ -> Nothing
 
--- | Return state post call
-x86PostCallAbsState :: AbsProcessorState X86Reg ids
-                    -> RegState X86Reg (Value X86_64 ids)
-                    -> MemSegmentOff 64
-                    -> AbsBlockState X86Reg
-x86PostCallAbsState =
-  let params = CallParams { postCallStackDelta = 8
-                          , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
-                          , stackGrowsDown = True
-                          }
-   in absEvalCall params
-
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
   SyscallPersonality { spTypeInfo = FreeBSD.syscallInfo
@@ -566,10 +555,14 @@ x86DemandContext =
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
                         -> AbsProcessorState X86Reg ids
+                        -> Jmp.IntraJumpBounds X86_64 ids s
                         -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
-                        -> Maybe (MemSegmentOff 64, AbsBlockState X86Reg)
-postX86TermStmtAbsState preservePred mem s regs tstmt =
+                        -> Maybe ( MemSegmentOff 64
+                                 , AbsBlockState X86Reg
+                                 , Jmp.InitJumpBounds X86_64
+                                 )
+postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
   case tstmt of
     X86Syscall ->
       case regs^.curIP of
@@ -578,7 +571,10 @@ postX86TermStmtAbsState preservePred mem s regs tstmt =
                                   , preserveReg = preservePred
                                   , stackGrowsDown = True
                                   }
-          Just (nextIP, absEvalCall params s regs nextIP)
+          Just ( nextIP
+               , absEvalCall params s regs nextIP
+               , Jmp.postCallBounds params bnds regs
+               )
         _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing
@@ -598,8 +594,12 @@ x86_64_info preservePred =
                    , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s
-                   , postCallAbsState = x86PostCallAbsState
                    , identifyCall      = identifyX86Call
+                   , archCallParams =
+                        CallParams { postCallStackDelta = 8
+                                   , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
+                                   , stackGrowsDown = True
+                                   }
                    , checkForReturnAddr = \_ s -> checkForReturnAddrX86 s
                    , identifyReturn    = identifyX86Return
                    , rewriteArchFn     = rewriteX86PrimFn

@@ -15,8 +15,6 @@
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.AbsDomain.AbsState
   ( AbsBlockState
-  , initIndexBounds
-  , Jmp.ppInitialIndexBounds
   , setAbsIP
   , absRegState
   , absStackHasReturnAddr
@@ -47,7 +45,6 @@ module Data.Macaw.AbsDomain.AbsState
   , absMem
   , curAbsStack
   , absInitialRegs
-  , indexBounds
   , initAbsProcessorState
   , absAssignments
   , assignLens
@@ -69,7 +66,6 @@ import           Control.Lens
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Foldable
-import           Data.Functor
 import           Data.Int
 import           Data.Map (Map)
 import qualified Data.Map.Strict as Map
@@ -85,7 +81,6 @@ import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.CallParams
-import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
@@ -1049,7 +1044,6 @@ ppAbsStack m = vcat (pp <$> Map.toDescList m)
 data AbsBlockState r
    = AbsBlockState { _absRegState :: !(RegState r (AbsValue (RegAddrWidth r)))
                    , startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
-                   , initIndexBounds :: !(Jmp.InitialIndexBounds r)
                    }
 
 absRegState :: Simple Lens (AbsBlockState r)
@@ -1079,7 +1073,6 @@ fnStartAbsBlockState addr m entries =
         | otherwise = TopV
    in AbsBlockState { _absRegState    = mkRegState regFn
                     , startAbsStack  = Map.fromList entries
-                    , initIndexBounds = Jmp.functionStartBounds
                     }
 
 joinAbsBlockState :: RegisterInfo r
@@ -1107,16 +1100,9 @@ joinAbsBlockState x y
                   seq s' $ put $ (True,s')
                   return $! zr
             z_stk <- absStackJoinD x_stk y_stk
-            z_bnds <-
-              case Jmp.joinInitialBounds (initIndexBounds x) (initIndexBounds y) of
-                Just z_bnds  -> (_1 .= True) $> z_bnds
-                Nothing -> pure (initIndexBounds x)
-
             return $ AbsBlockState { _absRegState     = z_regs
                                    , startAbsStack   = z_stk
-                                   , initIndexBounds = z_bnds
                                    }
-
 
 instance ( ShowF r
          , MemWidth (RegAddrWidth r)
@@ -1124,13 +1110,11 @@ instance ( ShowF r
   pretty s =
       text "registers:" <$$>
       indent 2 (pretty (s^.absRegState)) <$$>
-      stack_d <$$>
-      jmp_bnds
+      stack_d
     where stack = startAbsStack s
           stack_d | Map.null stack = empty
                   | otherwise = text "stack:" <$$>
                                 indent 2 (ppAbsStack stack)
-          jmp_bnds = pretty (initIndexBounds s)
 
 instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (AbsBlockState r) where
   show = show . pretty
@@ -1171,7 +1155,6 @@ data AbsProcessorState r ids
                          -- symbolic values associated with them
                        , _curAbsStack    :: !(AbsBlockStack (RegAddrWidth r))
                          -- ^ The current symbolic state of the stack
-                       ,  _indexBounds :: !(Jmp.IndexBounds r ids)
                        }
 
 absInitialRegs :: Simple Lens (AbsProcessorState r ids)
@@ -1184,11 +1167,6 @@ absAssignments = lens _absAssignments (\s v -> s { _absAssignments = v })
 
 curAbsStack :: Simple Lens (AbsProcessorState r ids) (AbsBlockStack (RegAddrWidth r))
 curAbsStack = lens _curAbsStack (\s v -> s { _curAbsStack = v })
-
--- | Return the index
-indexBounds :: Simple Lens (AbsProcessorState r ids) (Jmp.IndexBounds r ids)
-indexBounds = lens _indexBounds (\s v -> s { _indexBounds = v })
-
 
 instance (ShowF r, MemWidth (RegAddrWidth r))
       => Pretty (AbsProcessorState r ids) where
@@ -1217,7 +1195,6 @@ initAbsProcessorState mem s =
                     , _absInitialRegs = s^.absRegState
                     , _absAssignments = MapF.empty
                     , _curAbsStack = startAbsStack s
-                    , _indexBounds = Jmp.mkIndexBounds (initIndexBounds s)
                     }
 
 -- | A lens that allows one to lookup and update the value of an assignment in
@@ -1394,10 +1371,8 @@ finalAbsBlockState :: forall a ids
 finalAbsBlockState c regs =
   let transferReg :: ArchReg a tp -> ArchAbsValue a tp
       transferReg r = transferValue c (regs^.boundValue r)
-      bnds = Jmp.nextBlockBounds (c^.indexBounds) regs
    in AbsBlockState { _absRegState = mkRegState transferReg
                     , startAbsStack = c^.curAbsStack
-                    , initIndexBounds = bnds
                     }
 
 ------------------------------------------------------------------------
@@ -1472,5 +1447,4 @@ absEvalCall params ab0 regs addr =
                                     p o (StackEntry r _) = o + fromInteger (memReprBytes r) <= newOff
                                  in Map.filterWithKey p (ab0^.curAbsStack)
                           _ -> Map.empty
-                    , initIndexBounds = Jmp.postCallBounds params (_indexBounds ab0) regs
                     }

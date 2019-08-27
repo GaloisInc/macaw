@@ -64,6 +64,7 @@ import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.AbsState
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
@@ -268,6 +269,8 @@ data ParsedBlock arch ids
                  , blockAbstractState :: !(AbsBlockState (ArchReg arch))
                    -- ^ Abstract state prior to the execution of
                    -- this region.
+                 , blockJumpBounds :: !(Jmp.InitJumpBounds arch)
+                   -- ^ Structure for computing bounds on jump tables.
                  , pblockStmts :: !([Stmt arch ids])
                      -- ^ The non-terminal statements in the block
                  , pblockTermStmt  :: !(ParsedTermStmt arch ids)
@@ -282,7 +285,7 @@ instance ArchConstraints arch
   pretty b =
     let ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
      in text (show (pblockAddr b)) PP.<> text ":" <$$>
-        indent 2 (vcat $ (text "; " <+>) <$> ppInitialIndexBounds (initIndexBounds (blockAbstractState b))) <$$>
+        indent 2 (vcat $ (text "; " <+>) <$> Jmp.ppInitJumpBounds (blockJumpBounds b)) <$$>
         indent 2 (vcat (ppStmt ppOff <$> pblockStmts b) <$$> ppTermStmt (pblockTermStmt b))
 
 ------------------------------------------------------------------------

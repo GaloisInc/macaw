@@ -23,7 +23,6 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 
 import           Data.Macaw.AbsDomain.AbsState
-import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.CFG
 import           Data.Macaw.Types
 
@@ -180,9 +179,5 @@ refineProcState :: ( RegisterInfo (ArchReg arch)
                 -> Bool
                 -- ^ Indicates whether the Boolean above is true/false.
                 -> AbsProcessorState (ArchReg arch) ids
-                -> Either String (AbsProcessorState (ArchReg arch) ids)
-refineProcState v isTrue ps0 = do
-  let ps = refineValue v (if isTrue then absTrue else absFalse) ps0
-  -- Update jump bounds
-  ps' <- indexBounds (Jmp.assertPred v isTrue) ps
-  pure ps'
+                -> AbsProcessorState (ArchReg arch) ids
+refineProcState v isTrue ps0 = refineValue v (if isTrue then absTrue else absFalse) ps0

@@ -7,6 +7,7 @@ applied to a range of values.  We call it an `App` because it
 represents an application of an operation.  In mathematics, we would
 probably call it a signature.
 -}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
@@ -14,6 +15,7 @@ probably call it a signature.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
   ( App(..)
@@ -27,8 +29,8 @@ module Data.Macaw.CFG.App
   , widthEqTarget
   ) where
 
-import qualified Data.Kind as Kind
 import           Control.Monad.Identity
+import qualified Data.Kind as Kind
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
@@ -348,7 +350,6 @@ instance TraversableFC App where
 
 ------------------------------------------------------------------------
 -- App pretty printing
-
 
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty

@@ -50,6 +50,7 @@ module Data.Macaw.CFG.Core
   -- * RegState
   , RegState
   , regStateMap
+  , getBoundValue
   , boundValue
   , cmpRegState
   , curIP
@@ -104,8 +105,8 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.AssignRhs
@@ -203,6 +204,45 @@ data CValue arch tp where
                -> !SymbolIdentifier
                -> CValue arch (BVType (ArchAddrWidth arch))
 
+instance TestEquality (CValue arch) where
+  testEquality (BVCValue xw xi) (BVCValue yw yi) = do
+    Refl <- testEquality xw yw
+    if xi == yi then Just Refl else Nothing
+  testEquality (BoolCValue x) (BoolCValue y) = do
+    if x == y then Just Refl else Nothing
+  testEquality (RelocatableCValue _ x) (RelocatableCValue _ y) = do
+    if x == y then Just Refl else Nothing
+  testEquality (SymbolCValue _ x) (SymbolCValue _ y) = do
+    if x == y then Just Refl else Nothing
+  testEquality _ _ = Nothing
+
+instance OrdF (CValue arch) where
+  compareF (BoolCValue x) (BoolCValue y) = fromOrdering (compare x y)
+  compareF BoolCValue{} _ = LTF
+  compareF _ BoolCValue{} = GTF
+
+  compareF (BVCValue wx vx) (BVCValue wy vy) =
+    case compareF wx wy of
+      LTF -> LTF
+      EQF -> fromOrdering (compare vx vy)
+      GTF -> GTF
+  compareF BVCValue{} _ = LTF
+  compareF _ BVCValue{} = GTF
+
+  compareF (RelocatableCValue _ x) (RelocatableCValue _ y) =
+    fromOrdering (compare x y)
+  compareF RelocatableCValue{} _ = LTF
+  compareF _ RelocatableCValue{} = GTF
+
+  compareF (SymbolCValue _ x) (SymbolCValue _ y) =
+    fromOrdering (compare x y)
+
+instance HasRepr (CValue arch) TypeRepr where
+  typeRepr (BoolCValue _) = BoolTypeRepr
+  typeRepr (BVCValue w _) = BVTypeRepr w
+  typeRepr (RelocatableCValue w _) = addrWidthTypeRepr w
+  typeRepr (SymbolCValue w _)      = addrWidthTypeRepr w
+
 ------------------------------------------------------------------------
 -- Value and Assignment
 
@@ -264,16 +304,12 @@ type BVValue arch ids w = Value arch ids (BVType w)
 type ArchAddrValue arch ids = BVValue arch ids (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
--- Type operations on assignment AssignRhs, and Value
+-- Type operations on assignment Value
 
-instance ( HasRepr (ArchReg arch) TypeRepr
-         )
+instance HasRepr (ArchReg arch) TypeRepr
       => HasRepr (Value arch ids) TypeRepr where
 
-  typeRepr (BoolValue _) = BoolTypeRepr
-  typeRepr (BVValue w _) = BVTypeRepr w
-  typeRepr (RelocatableValue w _) = addrWidthTypeRepr w
-  typeRepr (SymbolValue w _)      = addrWidthTypeRepr w
+  typeRepr (CValue c) = typeRepr c
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
   typeRepr (Initial r) = typeRepr r
 
@@ -283,27 +319,9 @@ instance ( HasRepr (ArchReg arch) TypeRepr
 instance OrdF (ArchReg arch)
       => OrdF (Value arch ids) where
 
-  compareF (BoolValue x) (BoolValue y) = fromOrdering (compare x y)
-  compareF BoolValue{} _ = LTF
-  compareF _ BoolValue{} = GTF
-
-  compareF (BVValue wx vx) (BVValue wy vy) =
-    case compareF wx wy of
-      LTF -> LTF
-      EQF -> fromOrdering (compare vx vy)
-      GTF -> GTF
-  compareF BVValue{} _ = LTF
-  compareF _ BVValue{} = GTF
-
-  compareF (RelocatableValue _ x) (RelocatableValue _ y) =
-    fromOrdering (compare x y)
-  compareF RelocatableValue{} _ = LTF
-  compareF _ RelocatableValue{} = GTF
-
-  compareF (SymbolValue _ x) (SymbolValue _ y) =
-    fromOrdering (compare x y)
-  compareF SymbolValue{} _ = LTF
-  compareF _ SymbolValue{} = GTF
+  compareF (CValue x) (CValue y) = compareF x y
+  compareF CValue{} _ = LTF
+  compareF _ CValue{} = GTF
 
   compareF (AssignedValue x) (AssignedValue y) =
     compareF (assignId x) (assignId y)
