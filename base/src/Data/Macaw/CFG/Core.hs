@@ -243,6 +243,17 @@ instance HasRepr (CValue arch) TypeRepr where
   typeRepr (RelocatableCValue w _) = addrWidthTypeRepr w
   typeRepr (SymbolCValue w _)      = addrWidthTypeRepr w
 
+instance Hashable (CValue arch tp) where
+  hashWithSalt s cv =
+    case cv of
+      BVCValue w i          -> s `hashWithSalt` (0::Int) `hashWithSalt` w `hashWithSalt` i
+      BoolCValue b          -> s `hashWithSalt` (1::Int) `hashWithSalt` b
+      RelocatableCValue _ a -> s `hashWithSalt` (2::Int) `hashWithSalt` a
+      SymbolCValue _ sym    -> s `hashWithSalt` (3::Int) `hashWithSalt` sym
+
+instance HashableF (CValue arch) where
+  hashWithSaltF = hashWithSalt
+
 ------------------------------------------------------------------------
 -- Value and Assignment
 

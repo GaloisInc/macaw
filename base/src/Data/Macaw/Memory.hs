@@ -211,6 +211,10 @@ addrWidthNatRepr Addr64 = knownNat
 data Endianness = BigEndian | LittleEndian
   deriving (Eq, Ord, Show)
 
+instance Hashable Endianness where
+  hashWithSalt s BigEndian    = s `hashWithSalt` (0::Int)
+  hashWithSalt s LittleEndian = s `hashWithSalt` (1::Int)
+
 -- | Convert a byte string to an integer using the provided
 -- endianness.
 bytesToInteger :: Endianness -> BS.ByteString -> Integer
@@ -294,6 +298,9 @@ memWord :: forall w . MemWidth w => Word64 -> MemWord w
 memWord x = MemWord (x .&. addrWidthMask p)
   where p :: Proxy w
         p = Proxy
+
+instance Hashable (MemWord w) where
+  hashWithSalt s (MemWord w) = s `hashWithSalt` w
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
@@ -440,6 +447,9 @@ instance Eq (MemInt w) where
 
 instance Ord (MemInt w) where
   compare = \x y -> compare (memIntValue x) (memIntValue y)
+
+instance Hashable (MemInt w) where
+  hashWithSalt s (MemInt w) = s `hashWithSalt` w
 
 instance Pretty (MemInt w) where
   pretty = text . show . memIntValue
@@ -983,6 +993,9 @@ data MemAddr w
              }
      -- ^ An address formed from a specific value.
   deriving (Eq, Ord)
+
+instance Hashable (MemAddr w) where
+  hashWithSalt s a = s `hashWithSalt` addrBase a  `hashWithSalt` addrOffset a
 
 instance MemWidth w => Show (MemAddr w) where
   showsPrec _ (MemAddr 0 a) = showString "0x" . showHex a

@@ -220,6 +220,21 @@ instance Ord (X86Reg cl) where
     EQF -> EQ
     LTF -> LT
 
+instance Hashable (X86Reg tp) where
+  hashWithSalt s r =
+    case r of
+      X86_IP           -> s `hashWithSalt` (0::Int)
+      X86_GP i         -> s `hashWithSalt` (1::Int) `hashWithSalt` F.reg64No i
+      X86_FlagReg i    -> s `hashWithSalt` (2::Int) `hashWithSalt` R.flagIndex i
+      X87_StatusReg i  -> s `hashWithSalt` (3::Int) `hashWithSalt` i
+      X87_TopReg       -> s `hashWithSalt` (4::Int)
+      X87_TagReg i     -> s `hashWithSalt` (5::Int) `hashWithSalt` i
+      X87_FPUReg i     -> s `hashWithSalt` (6::Int) `hashWithSalt` F.mmxRegNo i
+      X86_ZMMReg i     -> s `hashWithSalt` (7::Int) `hashWithSalt` i
+
+instance HashableF X86Reg where
+  hashWithSaltF = hashWithSalt
+
 instance HasRepr X86Reg TypeRepr where
   typeRepr r =
     case r of

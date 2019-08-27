@@ -317,6 +317,20 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
+instance HashableF f => Hashable (App f tp) where
+  hashWithSalt = $(structuralHashWithSalt [t|App|]
+                     [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
+                     , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                        [|\s _c -> s|])
+                     , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
+                       , [|\s _c -> s|])
+                     ]
+                  )
+
+instance HashableF f => HashableF (App f) where
+  hashWithSaltF = hashWithSalt
+
 instance OrdF f => OrdF (App f) where
   compareF = $(structuralTypeOrd [t|App|]
                    [ (DataArg 0                  `TypeApp` AnyType, [|compareF|])
