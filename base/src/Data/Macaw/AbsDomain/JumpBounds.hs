@@ -248,11 +248,12 @@ instance ShowF r => Pretty (BoundLoc r tp) where
 data BoundConstraint r tp where
   ValueRep :: !(ValuePred (RegAddrWidth r) tp)
            -> !Word64
-           -> BoundConstraint r tp
-  -- ^ An equivalence class representative with the given number of elements.
-  --
-  -- In our map the number of equivalence class members should always
-  -- be positive, and the
+           -> BoundConstraint r tp -- ^ An equivalence class
+                                   -- representative with the given
+                                   -- number of elements.
+                                   --
+                                   -- In our map the number of
+                                   -- equivalence class members should always be positive.
   EqualValue :: !(BoundLoc r tp)
              -> BoundConstraint r tp
 
