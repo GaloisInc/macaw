@@ -496,24 +496,24 @@ addClassRepBound (StackOffLoc i repr) ubnd bnds =
 -- and written to memory during execution of the block, and are purely
 -- functions of the input
 data BoundExpr arch ids s tp where
-  ClassRepExpr :: !(BoundLoc (ArchReg arch) tp) -> BoundExpr arch ids s tp
-  -- ^ This refers to the contents of the location at the start
+  -- | This refers to the contents of the location at the start
   -- of block execution.
   --
   -- The location should be a class representative in the initial bounds.
+  ClassRepExpr :: !(BoundLoc (ArchReg arch) tp) -> BoundExpr arch ids s tp
+  -- | An assignment that is not interpreted, and just treated as a constant.
   AssignExpr :: !(AssignId ids tp)
              -> !(TypeRepr tp)
              -> BoundExpr arch ids s tp
-  -- ^ An assignment that is not interpreted, and just treated as a constant.
+  -- | Denotes the value of the stack pointer at function start plus some constant.
   StackOffsetExpr :: !(MemInt (ArchAddrWidth arch))
                   -> BoundExpr arch ids s (BVType (ArchAddrWidth arch))
-  -- ^ Denotes the value of the stack pointer at function start plus some constant.
+  -- | Denotes a constant
   CExpr :: !(CValue arch tp) -> BoundExpr arch ids s tp
-  -- ^ Denotes a constant
+  -- | This is a pure function applied to other index expressions.
   AppExpr :: !(Nonce s tp)
           -> !(App (BoundExpr arch ids s) tp)
           -> BoundExpr arch ids s tp
-  -- ^ This is a pure function applied to other index expressions.
 
 instance TestEquality (ArchReg arch) => TestEquality (BoundExpr arch ids s) where
   testEquality (ClassRepExpr x) (ClassRepExpr y) =
