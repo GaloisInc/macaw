@@ -7,6 +7,7 @@ applied to a range of values.  We call it an `App` because it
 represents an application of an operation.  In mathematics, we would
 probably call it a signature.
 -}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
@@ -14,6 +15,7 @@ probably call it a signature.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
   ( App(..)
@@ -23,11 +25,12 @@ module Data.Macaw.CFG.App
   , WidthEqProof(..)
   , widthEqProofEq
   , widthEqProofCompare
+  , widthEqSource
   , widthEqTarget
   ) where
 
-import qualified Data.Kind as Kind
 import           Control.Monad.Identity
+import qualified Data.Kind as Kind
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
@@ -75,6 +78,9 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
                   -> !(WidthEqProof i o)
                   -> WidthEqProof (VecType n i) (VecType n o)
 
+  -- | Type is equal to itself.
+  WidthEqRefl  :: !(TypeRepr tp) -> WidthEqProof tp tp
+
   -- | Allows transitivity composing proofs.
   WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
 
@@ -89,6 +95,7 @@ widthEqSource (ToFloat f) =
   case floatInfoBitsIsPos f of
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqSource (VecEqCongruence n r) = VecTypeRepr n (widthEqSource r)
+widthEqSource (WidthEqRefl x) = x
 widthEqSource (WidthEqTrans x _) = widthEqSource x
 
 -- | Return the result type of the width equality proof
@@ -102,6 +109,7 @@ widthEqTarget (FromFloat f) =
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqTarget (ToFloat f) = FloatTypeRepr f
 widthEqTarget (VecEqCongruence n r) = VecTypeRepr n (widthEqTarget r)
+widthEqTarget (WidthEqRefl x) = x
 widthEqTarget (WidthEqTrans _ y) = widthEqTarget y
 
 -- Force app to be in template-haskell context.
@@ -309,6 +317,20 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
+instance HashableF f => Hashable (App f tp) where
+  hashWithSalt = $(structuralHashWithSalt [t|App|]
+                     [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
+                     , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                        [|\s _c -> s|])
+                     , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
+                       , [|\s _c -> s|])
+                     ]
+                  )
+
+instance HashableF f => HashableF (App f) where
+  hashWithSaltF = hashWithSalt
+
 instance OrdF f => OrdF (App f) where
   compareF = $(structuralTypeOrd [t|App|]
                    [ (DataArg 0                  `TypeApp` AnyType, [|compareF|])
@@ -342,7 +364,6 @@ instance TraversableFC App where
 
 ------------------------------------------------------------------------
 -- App pretty printing
-
 
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty

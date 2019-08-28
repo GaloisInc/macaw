@@ -7,7 +7,9 @@ This defines the architecture-specific information needed for code discovery.
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
+  , postCallAbsState
   , DisassembleFn
+  , IntraJumpTarget
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
@@ -19,6 +21,7 @@ import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
@@ -47,6 +50,10 @@ type DisassembleFn arch
    -> Int
       -- ^ Maximum offset for this to read from.
    -> ST s (Block arch ids, Int)
+
+type IntraJumpTarget arch =
+  (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), Jmp.InitJumpBounds arch)
+-- ^ Identifies address we are jumping to an abstract state/bounds for getting there.
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -83,10 +90,6 @@ data ArchitectureInfo arch
                             -> ArchStmt arch (Value arch ids)
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
-     , postCallAbsState :: AbsBlockState (ArchReg arch)
-                        -> ArchSegmentOff arch
-                        -> AbsBlockState (ArchReg arch)
-       -- ^ Update the abstract state after a function call returns
      , identifyCall :: forall ids
                     .  Memory (ArchAddrWidth arch)
                     -> Seq (Stmt arch ids)
@@ -99,6 +102,8 @@ data ArchitectureInfo arch
        -- return the statements with any action to push the return
        -- value to the stack removed, and provide the return address that
        -- the function should return to.
+     , archCallParams :: !(CallParams (ArchReg arch))
+       -- ^ Update the abstract state after a function call returns
 
      , checkForReturnAddr :: forall ids
                           .  RegState (ArchReg arch) (Value arch ids)
@@ -139,15 +144,16 @@ data ArchitectureInfo arch
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
-     , postArchTermStmtAbsState :: !(forall ids
+     , postArchTermStmtAbsState :: !(forall ids s
                                      .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
-                                     -> AbsBlockState (ArchReg arch)
+                                     -> AbsProcessorState (ArchReg arch) ids
                                         -- The registers before executing terminal statement
-                                     -> (RegState (ArchReg arch) (Value arch ids))
+                                     -> Jmp.IntraJumpBounds arch ids s
+                                     -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids
-                                     -> Maybe (ArchSegmentOff arch, AbsBlockState (ArchReg arch)))
+                                     -> Maybe (IntraJumpTarget arch))
        -- ^ This takes an abstract state from before executing an abs
        -- state, and an architecture-specific terminal statement.
        --
@@ -160,6 +166,17 @@ data ArchitectureInfo arch
        -- statements may return to at most one location within a
        -- function.
      }
+
+postCallAbsState :: ArchitectureInfo arch
+                 -> AbsProcessorState (ArchReg arch) ids
+                 -- ^ Processor state at call.
+                 -> RegState (ArchReg arch) (Value arch ids)
+                 -- ^  Register values when call occurs.
+                 -> ArchSegmentOff arch
+                 -- ^ Return address
+                 -> AbsBlockState (ArchReg arch)
+postCallAbsState ainfo = withArchConstraints ainfo $
+  absEvalCall (archCallParams ainfo)
 
 -- | Apply optimizations to a terminal statement.
 rewriteTermStmt :: ArchitectureInfo arch

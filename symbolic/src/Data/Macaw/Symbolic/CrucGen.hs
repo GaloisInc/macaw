@@ -1423,7 +1423,7 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.TextLit msg)
       addTermStmt $ CR.ErrorStmt msgVal
-    M.ClassifyFailure _regs -> do
+    M.ClassifyFailure _regs _failureReasons -> do
       msgVal <- crucibleValue $ C.TextLit $ Text.pack $ "Could not identify block at " ++ show thisAddr
       addTermStmt $ CR.ErrorStmt msgVal
 

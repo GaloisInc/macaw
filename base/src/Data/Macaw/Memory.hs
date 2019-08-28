@@ -51,12 +51,16 @@ module Data.Macaw.Memory
   , SplitError(..)
     -- * MemWidth
   , MemWidth(..)
+    -- * MemWord
   , MemWord
   , memWord
   , memWordValue
   , memWordToUnsigned
   , memWordToSigned
   , addrRead
+    -- * MemInt
+  , MemInt
+  , memIntValue
     -- * Addresses
   , MemAddr(..)
   , absoluteAddr
@@ -121,7 +125,6 @@ module Data.Macaw.Memory
   , byteSegments
   , RelocEntry(..)
   , ResolveFn
-
     -- * Deprecated declarations
   , SegmentRange
   , takeSegmentPrefix
@@ -147,7 +150,7 @@ import           Data.BinarySymbols
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as L
-import           Data.Int (Int64)
+import           Data.Int (Int32, Int64)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Monoid
@@ -207,6 +210,10 @@ addrWidthNatRepr Addr64 = knownNat
 -- In a little endian representation, the most significant byte is stored last.
 data Endianness = BigEndian | LittleEndian
   deriving (Eq, Ord, Show)
+
+instance Hashable Endianness where
+  hashWithSalt s BigEndian    = s `hashWithSalt` (0::Int)
+  hashWithSalt s LittleEndian = s `hashWithSalt` (1::Int)
 
 -- | Convert a byte string to an integer using the provided
 -- endianness.
@@ -278,7 +285,7 @@ bsWord64 BigEndian    = bsWord64be
 bsWord64 LittleEndian = bsWord64le
 
 ------------------------------------------------------------------------
--- MemBase
+-- MemWord
 
 -- | This represents a bitvector value with `w` bits.
 --
@@ -291,6 +298,9 @@ memWord :: forall w . MemWidth w => Word64 -> MemWord w
 memWord x = MemWord (x .&. addrWidthMask p)
   where p :: Proxy w
         p = Proxy
+
+instance Hashable (MemWord w) where
+  hashWithSalt s (MemWord w) = s `hashWithSalt` w
 
 instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
@@ -418,6 +428,55 @@ instance MemWidth 64 where
 addrWidthClass :: AddrWidthRepr w -> (MemWidth w => a) -> a
 addrWidthClass Addr32 x = x
 addrWidthClass Addr64 x = x
+
+------------------------------------------------------------------------
+-- MemInt
+
+-- | A signed integer with the given width.
+newtype MemInt (w::Nat) = MemInt { memIntValue :: Int64 }
+
+-- | Convert `Int64` @x@ into mem word @x mod 2^w-1@.
+memInt :: forall w . MemWidth w => Int64 -> MemInt w
+memInt =
+  case addrWidthRepr (Proxy :: Proxy w) of
+    Addr32 -> \x -> MemInt (fromIntegral (fromIntegral x :: Int32))
+    Addr64 -> \x -> MemInt x
+
+instance Eq (MemInt w) where
+  (==) = \x y -> memIntValue x == memIntValue y
+
+instance Ord (MemInt w) where
+  compare = \x y -> compare (memIntValue x) (memIntValue y)
+
+instance Hashable (MemInt w) where
+  hashWithSalt s (MemInt w) = s `hashWithSalt` w
+
+instance Pretty (MemInt w) where
+  pretty = text . show . memIntValue
+
+instance Show (MemInt w) where
+  showsPrec p (MemInt i) = showsPrec p i
+
+instance MemWidth w => Num (MemInt w) where
+  (+) = \x y -> memInt $ memIntValue x + memIntValue y
+  (-) = \x y -> memInt $ memIntValue x - memIntValue y
+  (*) = \x y -> memInt $ memIntValue x * memIntValue y
+  abs = memInt . abs . memIntValue
+  fromInteger = memInt . fromInteger
+  negate = memInt . negate . memIntValue
+  signum = memInt . signum . memIntValue
+
+instance MemWidth w => Enum (MemInt w) where
+  toEnum   = memInt . fromIntegral
+  fromEnum = fromIntegral . memIntValue
+
+instance MemWidth w => Real (MemInt w) where
+  toRational = toRational . memIntValue
+
+instance MemWidth w => Integral (MemInt w) where
+  x `quotRem` y = (MemInt q, MemInt r)
+    where (q,r) = memIntValue x `quotRem` memIntValue y
+  toInteger = toInteger . memIntValue
 
 ------------------------------------------------------------------------
 -- Relocation
@@ -934,6 +993,9 @@ data MemAddr w
              }
      -- ^ An address formed from a specific value.
   deriving (Eq, Ord)
+
+instance Hashable (MemAddr w) where
+  hashWithSalt s a = s `hashWithSalt` addrBase a  `hashWithSalt` addrOffset a
 
 instance MemWidth w => Show (MemAddr w) where
   showsPrec _ (MemAddr 0 a) = showString "0x" . showHex a

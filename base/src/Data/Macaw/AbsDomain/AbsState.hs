@@ -18,10 +18,11 @@ module Data.Macaw.AbsDomain.AbsState
   , setAbsIP
   , absRegState
   , absStackHasReturnAddr
-  , absUpdateRegsPostCall
   , CallParams(..)
   , absEvalCall
   , AbsBlockStack
+  , fnStartAbsBlockState
+  , joinAbsBlockState
   , StackEntry(..)
   , ArchAbsValue
   , AbsValue(..)
@@ -44,8 +45,6 @@ module Data.Macaw.AbsDomain.AbsState
   , absMem
   , curAbsStack
   , absInitialRegs
-  , indexBounds
-  , startAbsStack
   , initAbsProcessorState
   , absAssignments
   , assignLens
@@ -67,9 +66,7 @@ import           Control.Lens
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Foldable
-import           Data.Functor
 import           Data.Int
-import qualified Data.Kind as Kind
 import           Data.Map (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -83,7 +80,7 @@ import           GHC.Stack
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
-import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
+import           Data.Macaw.AbsDomain.CallParams
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.CFG
 import           Data.Macaw.DebugLogging
@@ -146,7 +143,7 @@ data AbsValue w (tp :: Type)
      -- addresses in an executable segment or the constant zero.  The
      -- set contains the possible addresses, and the Boolean indicates
      -- whether this set contains the address 0.
-  | (tp ~ BVType w) => StackOffset !(MemAddr w) !(Set Int64)
+  | (tp ~ BVType w) => StackOffset !(MemAddr w) !Int64
     -- ^ Offset of stack from the beginning of the block at the given address.
     --
     -- To avoid conflating offsets that are relative to the begining of different
@@ -257,6 +254,9 @@ instance EqF (AbsValue w) where
 instance MemWidth w => Show (AbsValue w tp) where
   show = show . pretty
 
+ppSet :: [Doc] -> Doc
+ppSet = encloseSep lbrace rbrace comma
+
 instance MemWidth w => Pretty (AbsValue w tp) where
   pretty (BoolConst b) = text (show b)
   pretty (FinSet s) = text "finset" <+> ppIntegerSet s
@@ -269,16 +269,12 @@ instance MemWidth w => Pretty (AbsValue w tp) where
     text "strided" <> parens (pretty s)
   pretty (SubValue n av) =
     text "sub" <> parens (integer (intValue n) <> comma <+> pretty av)
-  pretty (StackOffset a s) = ppSet (ppv <$> Set.toList s)
-    where ppv v' | v' >= 0   = text $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
-                 | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
-
+  pretty (StackOffset a v')
+    | v' >= 0   = text $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
+    | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
   pretty (SomeStackOffset a) = text $ "rsp_" ++ show a ++ " + ?"
   pretty TopV = text "top"
   pretty ReturnAddr = text "return_addr"
-
-ppSet :: [Doc] -> Doc
-ppSet = encloseSep lbrace rbrace comma
 
 ppIntegerSet :: (Integral w, Show w) => Set w -> Doc
 ppIntegerSet s = ppSet (ppv <$> Set.toList s)
@@ -301,19 +297,19 @@ concretize (StridedInterval s) =
   debug DAbsInt ("Concretizing " ++ show (pretty s)) $
   Just (Set.fromList (SI.toList s))
 concretize (BoolConst b) = Just (Set.singleton (if b then 1 else 0))
+concretize StackOffset{} = Nothing
 concretize SomeStackOffset{} = Nothing
 concretize TopV       = Nothing
 concretize ReturnAddr = Nothing
-concretize StackOffset{} = Nothing
 
 -- FIXME: make total, we would need to carry around tp
 absValueSize :: AbsValue w tp -> Maybe Integer
 absValueSize (FinSet s) = Just $ fromIntegral (Set.size s)
 absValueSize (CodePointers s b) = Just $ fromIntegral (Set.size s) + (if b then 1 else 0)
 absValueSize (StridedInterval s) = Just $ SI.size s
-absValueSize (StackOffset _ s) = Just $ fromIntegral (Set.size s)
-absValueSize (BoolConst _)     = Just 1
+absValueSize (StackOffset _ _) = Just 1
 absValueSize SomeStackOffset{} = Nothing
+absValueSize (BoolConst _)     = Just 1
 absValueSize SubValue{} = Nothing
 absValueSize TopV       = Nothing
 absValueSize ReturnAddr = Nothing
@@ -419,10 +415,8 @@ joinAbsValue' (FinSet old) (FinSet new)
   where r = Set.union old new
 joinAbsValue' (StackOffset a_old old) (StackOffset b_old new)
     | a_old /= b_old = return (Just TopV)
-    | new `Set.isSubsetOf` old = return $ Nothing
-    | Set.size r > maxSetSize = return $ Just TopV
-    | otherwise = return $ Just (StackOffset a_old r)
-  where r = Set.union old new
+    | old /= new = return (Just (SomeStackOffset a_old))
+    | otherwise = return Nothing
 -- Intervals
 joinAbsValue' v v'
     | StridedInterval si_old <- v, StridedInterval si_new <- v'
@@ -490,7 +484,7 @@ isBottom :: AbsValue w tp -> Bool
 isBottom BoolConst{}      = False
 isBottom (FinSet v)       = Set.null v
 isBottom (CodePointers v b) = Set.null v && not b
-isBottom (StackOffset _ v) = Set.null v
+isBottom (StackOffset _ _) = False
 isBottom (SomeStackOffset _) = False
 isBottom (StridedInterval v) = SI.size v == 0
 isBottom (SubValue _ v) = isBottom v
@@ -528,8 +522,9 @@ meet' (CodePointers old old_zero) (CodePointers new new_zero) =
 --TODO: Fix below
 meet' (asFinSet "meet" -> IsFin old) (asFinSet "meet" -> IsFin new) =
   FinSet $ Set.intersection old new
-meet' (StackOffset ax old) (StackOffset ay new) | ax == ay =
-  StackOffset ax $ Set.intersection old new
+meet' (StackOffset ax old) (StackOffset ay new)
+  | ax == ay, old == new = StackOffset ax old
+  | otherwise = FinSet Set.empty
 
 -- Intervals
 meet' v v'
@@ -624,7 +619,7 @@ bvinc w (FinSet s) o =
 bvinc _ (CodePointers _  _) _ =
   TopV
 bvinc w (StackOffset a s) o =
-  StackOffset a $ Set.map (fromInteger . toUnsigned w . (+o) . toInteger) s
+  StackOffset a (fromInteger (toUnsigned w (o+toInteger s)))
 bvinc _ (SomeStackOffset a) _ =
   SomeStackOffset a
 -- Strided intervals
@@ -645,16 +640,16 @@ bvadc :: forall w u
       -> AbsValue w BoolType
       -> AbsValue w (BVType u)
 -- Stacks
-bvadc w (StackOffset a s) (FinSet t) c
+bvadc w (StackOffset a j) (FinSet t) c
   | [o0] <- Set.toList t
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
-    StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
-bvadc w (FinSet t) (StackOffset a s) c
+    StackOffset a (fromInteger (addOff w o (toInteger j)))
+bvadc w (FinSet t) (StackOffset a j) c
   | [o0] <- Set.toList t
   , BoolConst b <- c
   , o <- if b then o0 + 1 else o0 =
-    StackOffset a $ Set.map (fromInteger . addOff w o . toInteger) s
+    StackOffset a (fromInteger (addOff w o (toInteger j)))
 -- Two finite sets
 bvadc w (FinSet l) (FinSet r) (BoolConst b)
   | ls <- Set.toList l
@@ -740,11 +735,11 @@ bvsbb _ w (FinSet s) (asFinSet "bvsub3" -> IsFin t) (BoolConst b) =
   x <- Set.toList s
   y <- Set.toList t
   return $ toUnsigned w $ (x - y) - (if b then 1 else 0)
-bvsbb _ w (StackOffset ax s) (asFinSet "bvsub6" -> IsFin t) (BoolConst False) =
-  setL (\_ -> SomeStackOffset ax) (StackOffset ax) $ do
-    x <- toInteger <$> Set.toList s
-    y <- Set.toList t
-    return $! fromInteger (toUnsigned w (x - y))
+bvsbb _ w (StackOffset ax x) (asFinSet "bvsub6" -> IsFin t) (BoolConst False) =
+  case Set.toList t of
+    [] -> FinSet Set.empty
+    [y] -> StackOffset ax (fromInteger (toUnsigned w (toInteger x - y)))
+    _ -> SomeStackOffset ax
 bvsbb _ _ (StackOffset ax _) _ _ = SomeStackOffset ax
 bvsbb _ _ _ (StackOffset _ _) _ = TopV
 bvsbb _ _ (SomeStackOffset ax) _ _ = SomeStackOffset ax
@@ -803,11 +798,11 @@ bvsub _ w v v'
   | StridedInterval si <- v', IsFin s <- asFinSet "bvsub5" v  = go si (SI.fromFoldable w s)
   where
     go _si1 _si2 = TopV -- FIXME
-bvsub _ w (StackOffset ax s) (asFinSet "bvsub6" -> IsFin t) =
-  setL (\_ -> SomeStackOffset ax) (StackOffset ax) $ do
-    x <- toInteger <$> Set.toList s
-    y <- Set.toList t
-    return $! fromInteger (toUnsigned w (x - y))
+bvsub _ w (StackOffset ax x) (asFinSet "bvsub6" -> IsFin t) =
+  case Set.toList t of
+    [] -> FinSet Set.empty
+    [y] -> StackOffset ax (fromInteger (toUnsigned w (toInteger x - y)))
+    _ -> SomeStackOffset ax
 bvsub _ _ (StackOffset ax _) _ = SomeStackOffset ax
 bvsub _ _ _ (StackOffset _ _) = TopV
 bvsub _ _ (SomeStackOffset ax) _ = SomeStackOffset ax
@@ -898,7 +893,7 @@ abstractSingleton mem w i
 
 -- | Create a concrete stack offset.
 concreteStackOffset :: MemAddr w -> Integer -> AbsValue w (BVType w)
-concreteStackOffset a o = StackOffset a (Set.singleton (fromInteger o))
+concreteStackOffset a o = StackOffset a (fromInteger o)
 
 ------------------------------------------------------------------------
 -- Restrictions
@@ -972,10 +967,12 @@ instance Eq (StackEntry w) where
     | Just Refl <- testEquality x_tp y_tp = x_v == y_v
     | otherwise = False
 
+deriving instance MemWidth w => Show (StackEntry w)
+
 -- | The AbsBlockStack describes offsets of the stack.
 -- Values that are not in the map may denote any values.
--- The stack grows down, so nonegative keys are those within
--- rsp.
+--
+-- The stack grows down, so negative keys are in the stack frame.
 type AbsBlockStack w = Map Int64 (StackEntry w)
 
 -- absStackLeq :: AbsBlockStack -> AbsBlockStack -> Bool
@@ -1046,40 +1043,52 @@ ppAbsStack m = vcat (pp <$> Map.toDescList m)
 -- | Processor/memory state after at beginning of a block.
 data AbsBlockState r
    = AbsBlockState { _absRegState :: !(RegState r (AbsValue (RegAddrWidth r)))
-                   , _startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
-                   , _initIndexBounds :: !(Jmp.InitialIndexBounds r)
+                   , startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
                    }
-
-deriving instance MapF.OrdF r => Eq (AbsBlockState r)
 
 absRegState :: Simple Lens (AbsBlockState r)
                            (RegState r (AbsValue (RegAddrWidth r)))
 absRegState = lens _absRegState (\s v -> s { _absRegState = v })
 
-startAbsStack :: Simple Lens (AbsBlockState r) (AbsBlockStack (RegAddrWidth r))
-startAbsStack = lens _startAbsStack (\s v -> s { _startAbsStack = v })
+-- | This constructs the abstract state for the start of the function.
+--
+-- It initializes the instruction pointer and any register.  It does
+-- not place the return address as where that is stored is
+-- architecture-specific.
+fnStartAbsBlockState :: forall r
+                     .  RegisterInfo r
+                     => MemSegmentOff (RegAddrWidth r)
+                        -- ^ Segment offset
+                     -> MapF r (AbsValue (RegAddrWidth r))
+                        -- ^ Values to explicitly assign to registers
+                     -> [(Int64, StackEntry (RegAddrWidth r))]
+                        -- ^ Stack entries
+                     -> AbsBlockState r
+fnStartAbsBlockState addr m entries =
+  let regFn :: r tp -> AbsValue (RegAddrWidth r) tp
+      regFn r
+        | Just v <- MapF.lookup r m = v
+        | Just Refl <- testEquality ip_reg r = concreteCodeAddr addr
+        | Just Refl <- testEquality sp_reg r = concreteStackOffset (segoffAddr addr) 0
+        | otherwise = TopV
+   in AbsBlockState { _absRegState    = mkRegState regFn
+                    , startAbsStack  = Map.fromList entries
+                    }
 
-initIndexBounds :: Simple Lens (AbsBlockState r) (Jmp.InitialIndexBounds r)
-initIndexBounds = lens _initIndexBounds (\s v -> s { _initIndexBounds = v })
+joinAbsBlockState :: RegisterInfo r
+                  => AbsBlockState r
+                  -> AbsBlockState r
+                  -> Maybe (AbsBlockState r)
+joinAbsBlockState x y
+    | regs_changed = Just $! z
+    | otherwise = Nothing
+  where xs = x^.absRegState
+        ys = y^.absRegState
 
-instance ( RegisterInfo r
-         )
-      => AbsDomain (AbsBlockState r) where
+        x_stk = startAbsStack x
+        y_stk = startAbsStack y
 
-  top = AbsBlockState { _absRegState = mkRegState (\_ -> TopV)
-                      , _startAbsStack = Map.empty
-                      , _initIndexBounds = Jmp.arbitraryInitialBounds
-                      }
-
-  joinD x y | regs_changed = Just $! z
-            | otherwise = Nothing
-    where xs = x^.absRegState
-          ys = y^.absRegState
-
-          x_stk = x^.startAbsStack
-          y_stk = y^.startAbsStack
-
-          (z,(regs_changed,_dropped)) = flip runState (False, Set.empty) $ do
+        (z,(regs_changed,_dropped)) = flip runState (False, Set.empty) $ do
             z_regs <- mkRegStateM $ \r -> do
               let xr = xs^.boundValue r
               (c,s) <- get
@@ -1091,14 +1100,8 @@ instance ( RegisterInfo r
                   seq s' $ put $ (True,s')
                   return $! zr
             z_stk <- absStackJoinD x_stk y_stk
-            z_bnds <-
-              case Jmp.joinInitialBounds (x^.initIndexBounds) (y^.initIndexBounds) of
-                Just z_bnds  -> (_1 .= True) $> z_bnds
-                Nothing -> pure (x^.initIndexBounds)
-
             return $ AbsBlockState { _absRegState     = z_regs
-                                   , _startAbsStack   = z_stk
-                                   , _initIndexBounds = z_bnds
+                                   , startAbsStack   = z_stk
                                    }
 
 instance ( ShowF r
@@ -1107,13 +1110,11 @@ instance ( ShowF r
   pretty s =
       text "registers:" <$$>
       indent 2 (pretty (s^.absRegState)) <$$>
-      stack_d <$$>
-      jmp_bnds
-    where stack = s^.startAbsStack
+      stack_d
+    where stack = startAbsStack s
           stack_d | Map.null stack = empty
                   | otherwise = text "stack:" <$$>
                                 indent 2 (ppAbsStack stack)
-          jmp_bnds = pretty (s^.initIndexBounds)
 
 instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (AbsBlockState r) where
   show = show . pretty
@@ -1154,7 +1155,6 @@ data AbsProcessorState r ids
                          -- symbolic values associated with them
                        , _curAbsStack    :: !(AbsBlockStack (RegAddrWidth r))
                          -- ^ The current symbolic state of the stack
-                       ,  _indexBounds :: !(Jmp.IndexBounds r ids)
                        }
 
 absInitialRegs :: Simple Lens (AbsProcessorState r ids)
@@ -1167,11 +1167,6 @@ absAssignments = lens _absAssignments (\s v -> s { _absAssignments = v })
 
 curAbsStack :: Simple Lens (AbsProcessorState r ids) (AbsBlockStack (RegAddrWidth r))
 curAbsStack = lens _curAbsStack (\s v -> s { _curAbsStack = v })
-
--- | Return the index
-indexBounds :: Simple Lens (AbsProcessorState r ids) (Jmp.IndexBounds r ids)
-indexBounds = lens _indexBounds (\s v -> s { _indexBounds = v })
-
 
 instance (ShowF r, MemWidth (RegAddrWidth r))
       => Pretty (AbsProcessorState r ids) where
@@ -1188,6 +1183,7 @@ instance (ShowF r, MemWidth (RegAddrWidth r))
       => Show (AbsProcessorState r ids) where
   show = show . pretty
 
+-- | Construct a abstate processor state for the start of block execution.
 initAbsProcessorState :: Memory (RegAddrWidth r)
                          -- ^ Current state of memory in the processor.
                          --
@@ -1198,8 +1194,7 @@ initAbsProcessorState mem s =
   AbsProcessorState { absMem = mem
                     , _absInitialRegs = s^.absRegState
                     , _absAssignments = MapF.empty
-                    , _curAbsStack = s^.startAbsStack
-                    , _indexBounds = Jmp.mkIndexBounds (s^.initIndexBounds)
+                    , _curAbsStack = startAbsStack s
                     }
 
 -- | A lens that allows one to lookup and update the value of an assignment in
@@ -1265,42 +1260,22 @@ transferValue c v = do
 ------------------------------------------------------------------------
 -- Operations
 
+-- | Update the processor state with a memory write.
 addMemWrite :: ( RegisterInfo (ArchReg arch)
                , MemWidth (ArchAddrWidth arch)
                , HasCallStack
                )
-            => BVValue arch ids (ArchAddrWidth arch)
-               -- ^ Address that we are writing to.
+            => AbsProcessorState (ArchReg arch) ids
+            -- ^ Current processor state.
+            -> Value arch ids (BVType (ArchAddrWidth arch))
+            -- ^ Address that we are writing to.
             -> MemRepr tp
-               -- ^ Information about how value should be represented in memory.
+            -- ^ Information about how value should be represented in memory.
             -> Value arch ids tp
-               -- ^ Value to write to memory
+            -- ^ Value to write to memory
             -> AbsProcessorState (ArchReg arch) ids
-               -- ^ Current processor state.
-            -> AbsProcessorState (ArchReg arch) ids
-addMemWrite a memRepr v r =
-  addCondMemWrite (\new _ -> new) a memRepr (transferValue r v) r
-
--- | Update the processor state with a potential memory write.
-addCondMemWrite :: ( RegisterInfo r
-                   , MemWidth (RegAddrWidth r)
-                   , HasCallStack
-                   , r ~ ArchReg arch
-                   )
-                => (AbsValue (RegAddrWidth r) tp
-                    -> AbsValue (RegAddrWidth r) tp
-                    -> AbsValue (RegAddrWidth r) tp)
-                -- ^ Updaete function that takes new value, old value and returns value to insert.
-                -> Value arch ids (BVType (RegAddrWidth r))
-                -- ^ Address that we are writing to.
-                -> MemRepr tp
-                -- ^ Information about how value should be represented in memory.
-                -> AbsValue (RegAddrWidth r) tp
-               -- ^ Value to write to memory
-                -> AbsProcessorState r ids
-                -- ^ Current processor state.
-                -> AbsProcessorState r ids
-addCondMemWrite f a memRepr v_abs r =
+addMemWrite r a memRepr v = do
+  let v_abs = transferValue r v
   case transferValue r a of
     -- (_,TopV) -> r
     -- We overwrite _some_ stack location.  An alternative would be to
@@ -1312,35 +1287,77 @@ addCondMemWrite f a memRepr v_abs r =
              ++ " via " ++ show (pretty a)
              ++" in SomeStackOffset case") $
         r & curAbsStack %~ pruneStack
-    StackOffset _ s ->
+    StackOffset _ o ->
       let w = fromInteger (memReprBytes memRepr)
           stk0 = r^.curAbsStack
           -- Delete information about old assignment
-          stk1 = Set.fold (\o m -> deleteRange o (o+w) m) stk0 s
+          stk1 = deleteRange o (o+w) stk0
           -- Add information about new assignment
-          stk2 =
-            case Set.toList s of
-              [o] | -- Skip if new value is top
-                    v_abs /= TopV
-                    -- Lookup existing value at tack
-                  , oldAbs <-
-                      case Map.lookup o stk0 of
-                        Just (StackEntry oldMemRepr old)
-                          | Just Refl <- testEquality memRepr oldMemRepr -> old
-                        _ -> top
-                    -- Computed merged value
-                  , mergedValue <- f v_abs oldAbs
-                    -- Insert only non-top values
-                  , mergedValue /= TopV ->
-                    Map.insert o (StackEntry memRepr mergedValue) stk1
-              _ -> stk1
+          stk2 | v_abs /= TopV = Map.insert o (StackEntry memRepr v_abs) stk1
+               | otherwise = stk1
+       in r & curAbsStack .~ stk2
+    -- FIXME: nuke stack on an unknown address or Top?
+    _ -> r
+
+
+-- | Update the processor state with a potential memory write.
+addCondMemWrite :: ( RegisterInfo r
+                   , MemWidth (RegAddrWidth r)
+                   , HasCallStack
+                   , r ~ ArchReg arch
+                   )
+                => AbsProcessorState r ids
+                -- ^ Current processor state.
+                -> Value arch ids BoolType
+                -- ^ Condition that holds if write is performed.
+                -> Value arch ids (BVType (RegAddrWidth r))
+                -- ^ Address that we are writing to.
+                -> MemRepr tp
+                -- ^ Information about how value should be represented in memory.
+                -> Value arch ids tp
+               -- ^ Value to write to memory
+                -> AbsProcessorState r ids
+addCondMemWrite r _cond a memRepr v = do
+  case transferValue r a of
+    -- (_,TopV) -> r
+    -- We overwrite _some_ stack location.  An alternative would be to
+    -- update everything with v.
+    SomeStackOffset _ -> do
+      let cur_ip = r^.absInitialRegs^.curIP
+      debug DAbsInt ("addMemWrite: dropping stack at "
+             ++ show (pretty cur_ip)
+             ++ " via " ++ show (pretty a)
+             ++" in SomeStackOffset case") $
+        r & curAbsStack %~ pruneStack
+    StackOffset _ o ->
+      let w = fromInteger (memReprBytes memRepr)
+          stk0 = r^.curAbsStack
+          -- Delete information about old assignment
+          stk1 = deleteRange o (o+w) stk0
+          -- Add information about new assignment
+          stk2
+            | -- Skip if new value is top
+              v_abs <- transferValue r v
+            , v_abs /= TopV
+              -- Lookup existing value at tack
+            , oldAbs <-
+                case Map.lookup o stk0 of
+                  Just (StackEntry oldMemRepr old)
+                    | Just Refl <- testEquality memRepr oldMemRepr -> old
+                  _ -> top
+              -- Computed merged value
+            , mergedValue <- lub v_abs oldAbs
+              -- Insert only non-top values
+            , mergedValue /= TopV =
+               Map.insert o (StackEntry memRepr mergedValue) stk1
+            | otherwise = stk1
        in r & curAbsStack .~ stk2
     -- FIXME: nuke stack on an unknown address or Top?
     _ -> r
 
 -- | Returns true if return address is known to sit on stack.
 absStackHasReturnAddr :: AbsBlockState r -> Bool
-absStackHasReturnAddr s = isJust $ find isReturnAddr (Map.elems (s^.startAbsStack))
+absStackHasReturnAddr s = isJust $ find isReturnAddr (Map.elems (startAbsStack s))
   where isReturnAddr (StackEntry _ ReturnAddr) = True
         isReturnAddr _ = False
 
@@ -1355,8 +1372,7 @@ finalAbsBlockState c regs =
   let transferReg :: ArchReg a tp -> ArchAbsValue a tp
       transferReg r = transferValue c (regs^.boundValue r)
    in AbsBlockState { _absRegState = mkRegState transferReg
-                    , _startAbsStack = c^.curAbsStack
-                    , _initIndexBounds = Jmp.nextBlockBounds (c^.indexBounds) regs
+                    , startAbsStack = c^.curAbsStack
                     }
 
 ------------------------------------------------------------------------
@@ -1385,55 +1401,50 @@ transferApp r a = do
     BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV
 
--- | Update abstract state post call.
-absUpdateRegsPostCall :: RegisterInfo r
-                      => (forall tp . r tp -> AbsValue (RegAddrWidth r) tp)
-                         -- ^ Register transfer function
-                      -> AbsBlockState r
-                      -> AbsBlockState r
-absUpdateRegsPostCall regFn ab0 =
-    AbsBlockState { _absRegState = mkRegState regFn
-                  , _startAbsStack = ab0^.startAbsStack
-                  , _initIndexBounds = Jmp.arbitraryInitialBounds
-                  }
-
--- | Minimal information needed to parse a function call/system call
-data CallParams (r :: Type -> Kind.Type)
-   = CallParams { postCallStackDelta :: Integer
-                  -- ^ Amount stack should shift by when going before/after call.
-                , preserveReg        :: forall tp . r tp -> Bool
-                  -- ^ Return true if a register value is preserved by
-                  -- a call.
-                  --
-                  -- We assume stack pointer and instruction pointer
-                  -- are preserved, so the return value for these does not matter.
-                }
 
 -- | This updates the registers after a call has been performed.
-absEvalCall :: forall r
-                 .  ( RegisterInfo r
-                    , HasRepr r TypeRepr
+absEvalCall :: forall arch ids
+                 .  ( RegisterInfo (ArchReg arch)
                     )
-                 => CallParams r
+                 => CallParams (ArchReg arch)
                     -- ^ Configuration
-                 -> AbsBlockState r
+                 -> AbsProcessorState (ArchReg arch) ids
                     -- ^ State before call
-                 -> MemSegmentOff (RegAddrWidth r)
+                 -> RegState (ArchReg arch) (Value arch ids)
+                 -> MemSegmentOff (ArchAddrWidth arch)
                     -- ^ Address we are jumping to
-                 -> AbsBlockState r
-absEvalCall params ab0 addr = absUpdateRegsPostCall regFn ab0
-  where regFn :: r tp -> AbsValue (RegAddrWidth r) tp
-        regFn r
-          -- We set IPReg
-          | Just Refl <- testEquality r ip_reg =
-              concreteCodeAddr addr
-          | Just Refl <- testEquality r sp_reg =
-              bvinc (typeWidth r)
-                    (ab0^.absRegState^.boundValue r)
-                    (postCallStackDelta params)
-            -- Copy callee saved registers
-          | preserveReg params r =
-            ab0^.absRegState^.boundValue r
-            -- We know nothing about other registers.
-          | otherwise =
+                 -> AbsBlockState (ArchReg arch)
+absEvalCall params ab0 regs addr =
+  let spAbstractVal = transferValue ab0 (regs^.boundValue sp_reg)
+      regFn :: ArchReg arch tp
+            -> AbsValue (ArchAddrWidth arch) tp
+      regFn r
+        -- We set IPReg
+        | Just Refl <- testEquality r ip_reg =
+            concreteCodeAddr addr
+        | Just Refl <- testEquality r sp_reg =
+            bvinc (typeWidth r) spAbstractVal (postCallStackDelta params)
+          -- Copy callee saved registers
+        | preserveReg params r =
+          transferValue ab0 (regs^.boundValue r)
+          -- We know nothing about other registers.
+        | otherwise =
             TopV
+   in AbsBlockState { _absRegState = mkRegState regFn
+                      -- Drop return address from stack.
+                    , startAbsStack =
+                        case spAbstractVal of
+                          StackOffset _ spOff
+                            | stackGrowsDown params ->
+                                let newOff = spOff + fromInteger (postCallStackDelta params)
+                                    -- Keep entries whose low address is above new stack offset.
+                                    p o _v = o >= newOff
+                                    -- Keep entries at offsets above return address.
+                                 in Map.filterWithKey p (ab0^.curAbsStack)
+                            | otherwise ->
+                                let newOff = spOff + fromInteger (postCallStackDelta params)
+                                    -- Keep entries whose high address is below new stack offset
+                                    p o (StackEntry r _) = o + fromInteger (memReprBytes r) <= newOff
+                                 in Map.filterWithKey p (ab0^.curAbsStack)
+                          _ -> Map.empty
+                    }

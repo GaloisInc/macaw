@@ -143,6 +143,16 @@ instance TestEquality MemRepr where
     Just Refl
   testEquality _ _ = Nothing
 
+instance Hashable (MemRepr tp) where
+  hashWithSalt s mr =
+    case mr of
+      BVMemRepr w e        -> s `hashWithSalt` (0::Int) `hashWithSalt` w `hashWithSalt` e
+      FloatMemRepr r e     -> s `hashWithSalt` (1::Int) `hashWithSalt` r `hashWithSalt` e
+      PackedVecMemRepr n e -> s `hashWithSalt` (2::Int) `hashWithSalt` n `hashWithSalt` e
+
+instance HashableF MemRepr where
+  hashWithSaltF = hashWithSalt
+
 instance OrdF MemRepr where
   compareF (BVMemRepr xw xe) (BVMemRepr yw ye) =
     joinOrderingF (compareF xw yw) $

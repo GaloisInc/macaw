@@ -68,12 +68,13 @@ import qualified Flexdis86 as F
 import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
 
 import           Data.Macaw.AbsDomain.AbsState
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
-import qualified Data.Macaw.Memory.Permissions as Perm
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
   , HasRepr(..)
@@ -335,18 +336,11 @@ disassembleBlock gen loc maxSize = do
 
 -- | The abstract state for a function begining at a given address.
 initialX86AbsState :: MemSegmentOff 64 -> AbsBlockState X86Reg
-initialX86AbsState addr
-  = top
-  & absRegState . boundValue X86_IP     .~ concreteCodeAddr addr
-  & absRegState . boundValue RSP        .~ concreteStackOffset (segoffAddr addr) 0
-  -- x87 top register points to top of stack.
-  & absRegState . boundValue X87_TopReg .~ FinSet (Set.singleton 7)
-  -- Direction flag is initially zero.
-  -- "The direction flag DF in the %rFLAGS register
-  --- must be clear (set to “forward” direction) on function entry and
-  --- return." (AMD64 ABI Draft 1.0, p18)
-  & absRegState . boundValue DF .~ BoolConst False
-  & startAbsStack .~ Map.singleton 0 (StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)
+initialX86AbsState addr =
+  let m = MapF.fromList [ MapF.Pair X87_TopReg (FinSet (Set.singleton 7))
+                        , MapF.Pair DF         (BoolConst False)
+                        ]
+   in fnStartAbsBlockState addr m [(0, StackEntry (BVMemRepr n8 LittleEndian) ReturnAddr)]
 
 preserveFreeBSDSyscallReg :: X86Reg tp -> Bool
 preserveFreeBSDSyscallReg r
@@ -544,16 +538,6 @@ identifyX86Return stmts s finalRegSt8 =
     ReturnAddr -> Just stmts
     _ -> Nothing
 
--- | Return state post call
-x86PostCallAbsState :: AbsBlockState X86Reg
-                    -> MemSegmentOff 64
-                    -> AbsBlockState X86Reg
-x86PostCallAbsState =
-  let params = CallParams { postCallStackDelta = 8
-                          , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
-                          }
-   in absEvalCall params
-
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
   SyscallPersonality { spTypeInfo = FreeBSD.syscallInfo
@@ -570,19 +554,27 @@ x86DemandContext =
 -- state denoting possible starting conditions when that code runs.
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
-                        -> AbsBlockState X86Reg
+                        -> AbsProcessorState X86Reg ids
+                        -> Jmp.IntraJumpBounds X86_64 ids s
                         -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
-                        -> Maybe (MemSegmentOff 64, AbsBlockState X86Reg)
-postX86TermStmtAbsState preservePred mem s regs tstmt =
+                        -> Maybe ( MemSegmentOff 64
+                                 , AbsBlockState X86Reg
+                                 , Jmp.InitJumpBounds X86_64
+                                 )
+postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
   case tstmt of
     X86Syscall ->
       case regs^.curIP of
         RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
           let params = CallParams { postCallStackDelta = 0
                                   , preserveReg = preservePred
+                                  , stackGrowsDown = True
                                   }
-          Just (nextIP, absEvalCall params s nextIP)
+          Just ( nextIP
+               , absEvalCall params s regs nextIP
+               , Jmp.postCallBounds params bnds regs
+               )
         _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing
@@ -602,8 +594,12 @@ x86_64_info preservePred =
                    , mkInitialAbsState = \_ addr -> initialX86AbsState addr
                    , absEvalArchFn     = transferAbsValue
                    , absEvalArchStmt   = \s _ -> s
-                   , postCallAbsState = x86PostCallAbsState
                    , identifyCall      = identifyX86Call
+                   , archCallParams =
+                        CallParams { postCallStackDelta = 8
+                                   , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
+                                   , stackGrowsDown = True
+                                   }
                    , checkForReturnAddr = \_ s -> checkForReturnAddrX86 s
                    , identifyReturn    = identifyX86Return
                    , rewriteArchFn     = rewriteX86PrimFn

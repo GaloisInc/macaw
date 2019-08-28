@@ -108,6 +108,20 @@ instance KnownRepr FloatInfoRepr QuadFloat where
 instance KnownRepr FloatInfoRepr X86_80Float where
   knownRepr = X86_80FloatRepr
 
+instance Hashable (FloatInfoRepr fi) where
+  hashWithSalt s r =
+    let i ::Int
+        i = case r of
+              HalfFloatRepr   -> 0
+              SingleFloatRepr -> 1
+              DoubleFloatRepr -> 2
+              QuadFloatRepr   -> 3
+              X86_80FloatRepr -> 4
+     in hashWithSalt s i
+
+instance HashableF FloatInfoRepr where
+  hashWithSaltF = hashWithSalt
+
 instance Show (FloatInfoRepr fi) where
   show HalfFloatRepr   = "half"
   show SingleFloatRepr = "single"
