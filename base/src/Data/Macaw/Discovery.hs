@@ -1030,20 +1030,34 @@ instance Monad Classifier where
 instance Fail.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]
 
+
+{-| The fields of the 'BlockClassifierContext' are:
+
+  [@ParseContext ...@]: The context for the parse
+
+  [@RegState ...@]: Initial register values
+
+  [@Seq (Stmt ...)@]: The statements in the block
+
+  [@AbsProcessorState ...@]: Abstract state of registers prior to
+                             terminator statement being executed.
+
+  [@Jmp.IntraJumpBounds ...@]: Bounds prior to terminator statement
+                               being executed.
+
+  [@ArchSegmentOff arch@]: Address of all segments written to memory
+
+  [@RegState ...@]: Final register values
+-}
+
 type BlockClassifierContext arch ids s
   = ( ParseContext arch ids
     , RegState (ArchReg arch) (Value arch ids)
-      -- ^ Initial register values
     , Seq (Stmt arch ids)
-      -- ^ Statements
     , AbsProcessorState (ArchReg arch) ids
-      -- ^ Abstract state of registers prior to terminator statement being executed.
     , Jmp.IntraJumpBounds arch ids s
-      -- ^ Bounds prior to terminator statement being executed.
     , [ArchSegmentOff arch]
-      -- ^ Address of all segments written to memory
     , RegState (ArchReg arch) (Value arch ids)
-      -- ^ Final register values
     )
 
 type BlockClassifier arch ids s =

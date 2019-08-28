@@ -165,13 +165,13 @@ data UpperBound tp where
 
 -- | This describes a property inferred about a given value.
 data ValuePred (w :: Nat) tp where
-  -- | Value is a bitvector with the given upper bound.
+  -- | Value is a bitvector with the given upper bound.  The argument
+  -- is the upper bound of the bitvector when interpreted as a
+  -- unsigned number.
   BoundedBV :: !(UpperBound tp)
-               -- ^ Upper bound of bitvector when interpreted as a unsigned number.
             -> ValuePred w tp
-  -- | Value is a offset of the stack pointer at the given offset.
+  -- | Value is a offset of the stack pointer at the given offset argument.
   StackOffset :: {-# UNPACK #-} !(MemInt w)
-               -- ^ Stack offset.
               -> ValuePred w (BVType w)
   -- | No constraints on value.
   TopPred :: ValuePred w tp
@@ -248,11 +248,12 @@ instance ShowF r => Pretty (BoundLoc r tp) where
 data BoundConstraint r tp where
   ValueRep :: !(ValuePred (RegAddrWidth r) tp)
            -> !Word64
-           -> BoundConstraint r tp
-  -- ^ An equivalence class representative with the given number of elements.
-  --
-  -- In our map the number of equivalence class members should always
-  -- be positive, and the
+           -> BoundConstraint r tp -- ^ An equivalence class
+                                   -- representative with the given
+                                   -- number of elements.
+                                   --
+                                   -- In our map the number of
+                                   -- equivalence class members should always be positive.
   EqualValue :: !(BoundLoc r tp)
              -> BoundConstraint r tp
 
@@ -495,24 +496,24 @@ addClassRepBound (StackOffLoc i repr) ubnd bnds =
 -- and written to memory during execution of the block, and are purely
 -- functions of the input
 data BoundExpr arch ids s tp where
-  ClassRepExpr :: !(BoundLoc (ArchReg arch) tp) -> BoundExpr arch ids s tp
-  -- ^ This refers to the contents of the location at the start
+  -- | This refers to the contents of the location at the start
   -- of block execution.
   --
   -- The location should be a class representative in the initial bounds.
+  ClassRepExpr :: !(BoundLoc (ArchReg arch) tp) -> BoundExpr arch ids s tp
+  -- | An assignment that is not interpreted, and just treated as a constant.
   AssignExpr :: !(AssignId ids tp)
              -> !(TypeRepr tp)
              -> BoundExpr arch ids s tp
-  -- ^ An assignment that is not interpreted, and just treated as a constant.
+  -- | Denotes the value of the stack pointer at function start plus some constant.
   StackOffsetExpr :: !(MemInt (ArchAddrWidth arch))
                   -> BoundExpr arch ids s (BVType (ArchAddrWidth arch))
-  -- ^ Denotes the value of the stack pointer at function start plus some constant.
+  -- | Denotes a constant
   CExpr :: !(CValue arch tp) -> BoundExpr arch ids s tp
-  -- ^ Denotes a constant
+  -- | This is a pure function applied to other index expressions.
   AppExpr :: !(Nonce s tp)
           -> !(App (BoundExpr arch ids s) tp)
           -> BoundExpr arch ids s tp
-  -- ^ This is a pure function applied to other index expressions.
 
 instance TestEquality (ArchReg arch) => TestEquality (BoundExpr arch ids s) where
   testEquality (ClassRepExpr x) (ClassRepExpr y) =
