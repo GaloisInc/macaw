@@ -165,13 +165,13 @@ data UpperBound tp where
 
 -- | This describes a property inferred about a given value.
 data ValuePred (w :: Nat) tp where
-  -- | Value is a bitvector with the given upper bound.
+  -- | Value is a bitvector with the given upper bound.  The argument
+  -- is the upper bound of the bitvector when interpreted as a
+  -- unsigned number.
   BoundedBV :: !(UpperBound tp)
-               -- ^ Upper bound of bitvector when interpreted as a unsigned number.
             -> ValuePred w tp
-  -- | Value is a offset of the stack pointer at the given offset.
+  -- | Value is a offset of the stack pointer at the given offset argument.
   StackOffset :: {-# UNPACK #-} !(MemInt w)
-               -- ^ Stack offset.
               -> ValuePred w (BVType w)
   -- | No constraints on value.
   TopPred :: ValuePred w tp
