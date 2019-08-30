@@ -223,9 +223,10 @@ data SomeBV v where
   SomeBV :: SupportedBVWidth n => v (BVType n) -> SomeBV v
 
 -- | Maps float info repr to associated MemRepr.
-floatMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
-floatMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
+floatBVMemRepr :: FloatInfoRepr fi -> MemRepr (FloatBVType fi)
+floatBVMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
   BVMemRepr (floatInfoBytes fi) LittleEndian
+
 
 -- | Extract the location of a bitvector value.
 getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
@@ -250,9 +251,9 @@ getSomeBVLocation v =
     F.Mem64  ar  -> SomeBV <$> getBV64Addr  ar
     F.Mem128 ar  -> SomeBV <$> getBV128Addr ar
     F.Mem256 ar  -> SomeBV <$> getBV256Addr ar
-    F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr SingleFloatRepr))
-    F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr DoubleFloatRepr))
-    F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatMemRepr X86_80FloatRepr))
+    F.FPMem32 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatBVMemRepr SingleFloatRepr))
+    F.FPMem64 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatBVMemRepr DoubleFloatRepr))
+    F.FPMem80 ar -> getBVAddress ar >>= mk . (`MemoryAddr` (floatBVMemRepr X86_80FloatRepr))
     F.ByteReg  r -> mk $ reg8Loc  r
     F.WordReg  r -> mk $ reg16Loc r
     F.DWordReg r -> mk $ reg32Loc r
