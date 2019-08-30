@@ -31,10 +31,7 @@ import           Data.Parameterized.TraversableFC
 import           Data.Macaw.CFG
 
 data ValueFold arch ids r = ValueFold
-  { foldBoolValue  :: !(Bool -> r)
-  , foldBVValue    :: !(forall n . NatRepr n -> Integer -> r)
-  , foldAddr       :: !(ArchMemAddr arch -> r)
-  , foldIdentifier :: !(SymbolIdentifier -> r)
+  { foldCValue  :: !(forall tp . CValue arch tp -> r)
   , foldInput      :: !(forall utp . ArchReg arch utp -> r)
   , foldAssign     :: !(forall utp . AssignId ids utp -> r -> r)
   }
@@ -43,12 +40,9 @@ data ValueFold arch ids r = ValueFold
 -- identify of @foldAssign@
 emptyValueFold :: Monoid r => ValueFold arch ids r
 emptyValueFold =
-  ValueFold { foldBoolValue  = \_ -> mempty
-            , foldBVValue    = \_ _ -> mempty
-            , foldAddr       = \_ -> mempty
-            , foldIdentifier = \_ -> mempty
-            , foldInput      = \_ -> mempty
-            , foldAssign     = \_ r -> r
+  ValueFold { foldCValue = \_ -> mempty
+            , foldInput  = \_ -> mempty
+            , foldAssign = \_ r -> r
             }
 
 -- | This folds over elements of a values in a  values.
@@ -73,22 +67,16 @@ foldValueCached fns = go
        -> State (Map (Some (AssignId ids)) r) r
     go v =
       case v of
-        BoolValue b  ->
-          pure $! foldBoolValue fns b
-        BVValue sz i ->
-          pure $! foldBVValue fns sz i
-        RelocatableValue _ a ->
-          pure $! foldAddr fns a
-        SymbolValue _ a ->
-          pure $! foldIdentifier fns a
+        CValue c  ->
+          pure $! foldCValue fns c
+        AssignedValue (Assignment a rhs) -> do
+          m <- get
+          case Map.lookup (Some a) m of
+            Just v' ->
+              pure $! foldAssign fns a v'
+            Nothing -> do
+              rhsVal <- foldlMFC' (\s v' -> mappend s <$> go v') mempty rhs
+              modify' $ Map.insert (Some a) rhsVal
+              pure $! foldAssign fns a rhsVal
         Initial r    ->
           pure $! foldInput fns r
-        AssignedValue (Assignment a_id rhs) -> do
-          m <- get
-          case Map.lookup (Some a_id) m of
-            Just v' ->
-              pure $! foldAssign fns a_id v'
-            Nothing -> do
-              rhs_v <- foldrFC (\v' mrhs -> mappend <$> go v' <*> mrhs) (pure mempty) rhs
-              modify' $ Map.insert (Some a_id) rhs_v
-              pure $! foldAssign fns a_id rhs_v
