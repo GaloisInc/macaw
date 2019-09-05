@@ -6,11 +6,14 @@ Common datatypes for creating a memory from a binary file.
 -}
 module Data.Macaw.Memory.LoadCommon
   ( LoadOptions(..)
+  , loadRegionIndex
+  , loadRegionBaseOffset
   , defaultLoadOptions
   , LoadStyle(..)
   ) where
 
 import Data.Macaw.Memory
+import Data.Word
 
 ------------------------------------------------------------------------
 -- LoadOptions
@@ -23,29 +26,23 @@ data LoadStyle
      -- ^ Load segments in Elf file.
   deriving (Eq)
 
--- | Options used to configure loading
-data LoadOptions
-   = LoadOptions { loadRegionIndex :: !(Maybe RegionIndex)
-                   -- ^ Defines the /region/ to load sections and segments into.
-                   --
-                   -- This should be 0 for static libraries since their addresses are
-                   -- absolute.  It should likely be non-zero for shared library since their
-                   -- addresses are relative.  Different shared libraries loaded into the
-                   -- same memory should have different region indices.
-                   --
-                   -- If 'Nothing' then static executables have region index 0 and other
-                   -- files have region index 1.
-                 , loadRegionBaseOffset :: !Integer
-                   -- ^ Increment to automatically add to segment/section memory offsets
-                   -- when loading.
-                   --
-                   -- This defaults to '0', and is primarily intended to allow loading
-                   -- relocatable files at specific hard-coded offsets.
-                 }
-
--- | Default options for loading
-defaultLoadOptions :: LoadOptions
-defaultLoadOptions =
-  LoadOptions { loadRegionIndex = Nothing
-              , loadRegionBaseOffset = 0
+-- | This contains options for loading.
+newtype LoadOptions =
+  LoadOptions { loadOffset :: Maybe Word64
+                -- ^ If set, the Elf file should be loaded at a specific offset.
               }
+
+loadRegionIndex :: LoadOptions -> Maybe RegionIndex
+loadRegionIndex opts =
+  case loadOffset opts of
+    Nothing -> Nothing
+    Just _ -> Just 0
+
+loadRegionBaseOffset :: LoadOptions -> Integer
+loadRegionBaseOffset opts =
+  case loadOffset opts of
+    Nothing -> 0
+    Just o -> toInteger o
+
+defaultLoadOptions :: LoadOptions
+defaultLoadOptions = LoadOptions { loadOffset = Nothing }

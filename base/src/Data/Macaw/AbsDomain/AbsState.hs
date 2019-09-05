@@ -82,8 +82,10 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.CallParams
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
-import           Data.Macaw.CFG
+import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.Core
 import           Data.Macaw.DebugLogging
+import           Data.Macaw.Memory
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
@@ -1426,7 +1428,7 @@ absEvalCall params ab0 regs addr =
             bvinc (typeWidth r) spAbstractVal (postCallStackDelta params)
           -- Copy callee saved registers
         | preserveReg params r =
-          transferValue ab0 (regs^.boundValue r)
+            transferValue ab0 (regs^.boundValue r)
           -- We know nothing about other registers.
         | otherwise =
             TopV

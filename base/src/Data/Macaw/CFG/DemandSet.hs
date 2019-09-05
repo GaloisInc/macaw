@@ -28,7 +28,7 @@ import           Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
 
-import           Data.Macaw.CFG
+import           Data.Macaw.CFG.Core
 
 ------------------------------------------------------------------------
 -- Functions for computing demanded values

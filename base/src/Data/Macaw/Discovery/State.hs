@@ -7,17 +7,11 @@ code discovery.  The 'DiscoveryState' is the main data structure
 representing this information.
 -}
 {-# LANGUAGE ConstraintKinds #-}
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Discovery.State
   ( GlobalDataInfo(..)
   , ParsedTermStmt(..)
@@ -261,6 +255,10 @@ parsedTermSucc ts = do
 data ParsedBlock arch ids
    = ParsedBlock { pblockAddr :: !(ArchSegmentOff arch)
                    -- ^ Address of region
+                 , pblockPrecond :: !(Either String (ArchBlockPrecond arch))
+                   -- ^ Architecture-specificic information assumed to
+                   -- be true when jumping to this block, or error why this
+                   -- information could not be obtained.
                  , blockSize :: !Int
                    -- ^ The size of the region of memory covered by this.
                  , blockReason :: !(BlockExploreReason (ArchAddrWidth arch))
@@ -277,7 +275,7 @@ data ParsedBlock arch ids
                    -- ^ The terminal statement in the block.
                  }
 
-deriving instance ArchConstraints arch
+deriving instance (ArchConstraints arch, Show (ArchBlockPrecond arch))
   => Show (ParsedBlock arch ids)
 
 instance ArchConstraints arch

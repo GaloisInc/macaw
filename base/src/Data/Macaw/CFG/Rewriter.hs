@@ -36,6 +36,7 @@ module Data.Macaw.CFG.Rewriter
 import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
+import           Data.BinarySymbols
 import           Data.Bits
 import           Data.List
 import           Data.Map.Strict (Map)
@@ -48,7 +49,9 @@ import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 
-import           Data.Macaw.CFG
+import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.Core
+import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.CFG.Block (TermStmt)
 

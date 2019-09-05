@@ -47,7 +47,9 @@ import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
 import           Data.Macaw.AbsDomain.CallParams
-import           Data.Macaw.CFG
+import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.Core
+import           Data.Macaw.Memory
 import           Data.Macaw.Types hiding (Type)
 import qualified Data.Macaw.Types as M
 

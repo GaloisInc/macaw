@@ -84,9 +84,7 @@ toAddr segOff = do
 -- associated with it
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf = do
-  let opt = MM.LoadOptions { MM.loadRegionIndex = Nothing
-                           , MM.loadRegionBaseOffset = 0
-                           }
+  let opt = MM.defaultLoadOptions
   (warn, mem, mentry, syms) <-
     case MM.resolveElfContents opt elf of
       Left err -> C.throwM (MemoryLoadError err)

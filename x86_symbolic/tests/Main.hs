@@ -68,10 +68,6 @@ main = do
   let posFn :: M.MemSegmentOff 64 -> C.Position
       posFn = C.OtherPos . Text.pack . show
 
-  let loadOpt :: Elf.LoadOptions
-      loadOpt = Elf.LoadOptions { Elf.loadRegionIndex = Just 1
-                                , Elf.loadRegionBaseOffset = 0
-                                }
   elfContents <- BS.readFile "tests/add_ubuntu64.o"
   elf <-
     case Elf.parseElf elfContents of
@@ -81,6 +77,8 @@ main = do
         pure e
       _ -> fail "Expected 64-bit elf file"
 
+  let loadOpt :: Elf.LoadOptions
+      loadOpt = Elf.defaultLoadOptions
   (mem, nameAddrList) <-
     case Elf.resolveElfContents loadOpt elf of
       Left err -> fail err

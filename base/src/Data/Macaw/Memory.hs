@@ -34,7 +34,7 @@ module Data.Macaw.Memory
   , memBindSegmentIndex
     -- * Memory segments
   , MemSegment
-  , mkMemSegment
+  , memSegment
   , segmentBase
   , RegionIndex
   , segmentOffset
@@ -122,7 +122,6 @@ module Data.Macaw.Memory
   , findByteStringMatches
   , relativeSegmentContents
     -- * Generating [MemChunk] values from relocations.
-  , byteSegments
   , RelocEntry(..)
   , ResolveFn
     -- * Deprecated declarations
@@ -591,11 +590,6 @@ data MemChunk (w :: Nat)
 type SegmentRange = MemChunk
 {-# DEPRECATED SegmentRange "Use MemChunk" #-}
 
-rangeSize :: forall w . MemWidth w => MemChunk w -> MemWord w
-rangeSize (ByteRegion bs) = fromIntegral (BS.length bs)
-rangeSize (RelocationRegion r) = fromIntegral (relocationSize r)
-rangeSize (BSSRegion sz)  = sz
-
 ppByte :: Word8 -> String -> String
 ppByte w | w < 16    = showChar '0' . showHex w
          | otherwise = showHex w
@@ -614,16 +608,16 @@ instance Show (MemChunk w) where
 -- | This represents the memory contents in a segment.
 newtype SegmentContents w = SegmentContents { segContentsMap :: Map.Map (MemWord w) (MemChunk w) }
 
--- | Create the segment contents from a list of ranges.
-contentsFromList :: MemWidth w => [MemChunk w] -> SegmentContents w
-contentsFromList elts = SegmentContents $ Map.fromList (offsets `zip` elts)
-  where offsets = scanl (\s r -> s + rangeSize r) 0 elts
+chunkSize :: forall w . MemWidth w => MemChunk w -> Word64
+chunkSize (ByteRegion bs) = fromIntegral (BS.length bs)
+chunkSize (RelocationRegion r) = fromIntegral (relocationSize r)
+chunkSize (BSSRegion sz)  = memWordValue sz
 
 contentsSize :: MemWidth w => SegmentContents w -> MemWord w
 contentsSize (SegmentContents m) =
   case Map.maxViewWithKey m of
     Nothing -> 0
-    Just ((start, c),_) -> start + rangeSize c
+    Just ((start, c),_) -> memWord (memWordValue start + chunkSize c)
 
 -- | Deconstruct a 'SegmentContents' into its constituent ranges
 contentsRanges :: SegmentContents w -> [(MemWord w, MemChunk w)]
@@ -634,46 +628,89 @@ contentsRanges = Map.toList . segContentsMap
 
 -- | Contents of segment/section before symbol folded in.
 data PresymbolData = PresymbolData { preBytes :: !L.ByteString
-                                   , preBSS :: !Int64
+                                   , preBSS :: !Integer
                                    }
 
 -- | Return number of presymbol bytes remaining
 presymbolBytesLeft :: PresymbolData -> Integer
-presymbolBytesLeft p = toInteger (L.length (preBytes p)) + toInteger (preBSS p)
+presymbolBytesLeft p = toInteger (L.length (preBytes p)) + preBSS p
 
-mkPresymbolData :: L.ByteString -> Int64 -> PresymbolData
+mkPresymbolData :: L.ByteString -> Integer -> PresymbolData
 mkPresymbolData contents0 sz
-  | sz >= L.length contents0 = PresymbolData contents0 (sz - L.length contents0)
-  | otherwise = PresymbolData (L.take sz contents0) 0
-
--- | Convert bytes into a segment range list.
-singleSegment :: L.ByteString -> [MemChunk w]
-singleSegment contents | L.null contents = []
-                       | otherwise = [ByteRegion (L.toStrict contents)]
+  | sz < toInteger (L.length contents0) =
+      PresymbolData { preBytes = L.take (fromInteger sz) contents0
+                    , preBSS = 0
+                    }
+  | otherwise =
+      PresymbolData { preBytes = contents0
+                    , preBSS = sz - toInteger (L.length contents0)
+                    }
 
 -- | @bssSegment cnt@ creates a BSS region with size @cnt@.
-bssSegment :: MemWidth w => Int64 -> [MemChunk w]
-bssSegment c | c <= 0 = []
-             | otherwise = [BSSRegion (fromIntegral c)]
+bssSegment :: MemWidth w
+           => MemWord w
+           -> Integer
+           -> [(MemWord w, MemChunk w)]
+           -> [(MemWord w, MemChunk w)]
+bssSegment o c | c <= 0 = id
+               | otherwise = ((o, BSSRegion (fromIntegral c)) :)
 
 -- | Return all segment ranges from remainder of data.
-allSymbolData :: MemWidth w => PresymbolData -> [MemChunk w]
-allSymbolData (PresymbolData contents bssSize) =
-  singleSegment contents ++ bssSegment bssSize
-
--- | Take the given amount of data out of presymbol data.
-takeSegment :: MemWidth w => Int64 -> PresymbolData -> [MemChunk w]
-takeSegment cnt (PresymbolData contents bssSize)
-  | L.null contents = bssSegment (min cnt bssSize)
+allSymbolData :: MemWidth w
+              => MemWord w -- ^ Number of bytes read so far.
+              -> PresymbolData
+              -> [(MemWord w, MemChunk w)]
+              -> [(MemWord w, MemChunk w)]
+allSymbolData off (PresymbolData contents bssSize)
+  | L.null contents = bssSegment off bssSize
   | otherwise =
-    ByteRegion (L.toStrict (L.take cnt contents))
-    : bssSegment (min (cnt - L.length contents) bssSize)
+    bssSegment (off + fromIntegral (L.length contents)) bssSize
+      . ((off,  ByteRegion (L.toStrict contents)) :)
+
+
+-- | Take the difference between given amount of data out of presymbol data.
+splitSegment :: MemWidth w
+             => MemWord w -- ^ Base address of segment
+             -> [(MemWord w, MemChunk w)] -- ^ Symbols added so far.
+             -> MemWord w -- ^ Current address
+             -> MemWord w -- ^ Target address (can assume at least target addresss
+             -> PresymbolData
+             -> ([(MemWord w, MemChunk w)], PresymbolData)
+splitSegment _baseAddr pre curAddr targetAddr dta
+  | targetAddr < curAddr = error "TargetAddress less that curAddr"
+  | targetAddr == curAddr = (pre, dta)
+splitSegment baseAddr pre curAddr targetAddr (PresymbolData contents bssSize)
+   -- Case where relocation is contained within regular contents
+  | toInteger cnt <= toInteger (L.length contents) =
+    ( (curAddr - baseAddr, ByteRegion (L.toStrict (L.take (fromIntegral cnt) contents))) : pre
+    , PresymbolData (L.drop (fromIntegral cnt) contents) bssSize
+    )
+  -- If contents is empty, then we just have BSS.
+  | L.null contents =
+      if bssSize < toInteger (targetAddr - curAddr) then
+        error "Out of bytes"
+      else
+        ( (curAddr - baseAddr, BSSRegion cnt) : pre
+        , PresymbolData L.empty (bssSize - toInteger cnt)
+        )
+  -- We take all of file-based data and at least some BSS.
+  | otherwise =
+      ( [ ( curAddr - baseAddr + fromIntegral (L.length contents)
+          , BSSRegion (cnt - fromIntegral (L.length contents))
+          )
+        , (curAddr - baseAddr
+          , ByteRegion (L.toStrict contents)
+          )
+        ] ++ pre
+      , PresymbolData L.empty (bssSize - (toInteger cnt - toInteger (L.length contents)))
+      )
+ where cnt = targetAddr - curAddr
 
 -- | @dropSegment cnt dta@ drops @cnt@ bytes from @dta@.
 dropSegment :: Int64 -> PresymbolData -> PresymbolData
 dropSegment cnt (PresymbolData contents bssSize)
   | cnt <= L.length contents = PresymbolData (L.drop cnt contents) bssSize
-  | otherwise = PresymbolData L.empty (bssSize - (cnt - L.length contents))
+  | otherwise = PresymbolData L.empty (bssSize - toInteger (cnt - L.length contents))
 
 -- | Return the given bytes
 takePresymbolBytes :: Int64 -> PresymbolData -> Maybe BS.ByteString
@@ -706,69 +743,52 @@ data RelocEntry m w = RelocEntry { relocEntrySize :: !(MemWord w)
 --
 -- If the size is different from the length of file contents, then the file content
 -- buffer is truncated or zero-extended as in a BSS.
-byteSegments :: forall m w
-             .  (Monad m, MemWidth w)
-             => Map (MemWord w) (RelocEntry m w) -- ^ Map from segment offset to relocation
-             -> Maybe SegmentIndex
-                -- ^ Index of segment for relocation purposes if this is a dynamic address
-             -> MemWord w         -- ^ Base address for segment at link time.
-             -> L.ByteString      -- ^ File contents for segment.
-             -> Int64             -- ^ Expected size
-             -> m [MemChunk w]
-byteSegments relocMap msegIdx linkBaseOff contents0 regionSize
-    | end <= linkBaseOff =
-        error $ "regionSize should be a positive number that does not overflow address space."
-    | otherwise =
-        bytesToSegmentsAscending [] symbolPairs linkBaseOff (mkPresymbolData contents0 regionSize)
-  where -- Parse the map to get a list of symbols starting at base0.
-        symbolPairs :: [(MemWord w, RelocEntry m w)]
-        symbolPairs
-          = Map.toList
-          $ Map.dropWhileAntitone (< linkBaseOff) relocMap
+applyRelocsToBytes :: (Monad m, MemWidth w)
+                   => MemWord w
+                      -- ^ Virtual offset of segment.
+                   -> Maybe SegmentIndex
+                   -- ^ Identifier for this segment in relocation if this is created from so/exe.
+                   -> [(MemWord w, MemChunk w)]
+                      -- ^ Chunks so far.
+                   -> MemWord w
+                      -- ^ Current virtual address (must be greater than linkBaseOff)
+                   -> [(MemWord w, RelocEntry m w)]
+                      -- ^ List of relocations to process in order.
+                      -- Each offset should be at offset.
+                   -> PresymbolData
+                   -- ^ The remaining bytes in memory including
+                   -- a number extra bss.
+                   -> m (SegmentContents w)
+applyRelocsToBytes baseAddr msegIdx pre ioff ((addr,v):rest) buffer
+  -- We only consider relocations that are in the range of this segment,
+  -- so we require the difference between the address and baseAddr is
+  -- less than regionSize
+  | addr < ioff = error "Encountered overlapping relocations."
+    -- Check start of relocation is in range.
+  | toInteger (addr - ioff) < presymbolBytesLeft buffer  = do
 
-        end :: MemWord w
-        end = linkBaseOff + fromIntegral regionSize
-
-        -- Traverse the list of symbols that we should parse.
-        bytesToSegmentsAscending :: [MemChunk w]
-                                 -> [(MemWord w, RelocEntry m w)]
-                                    -- ^ List of relocations to process in order.
-                                 -> MemWord w
-                                    -- ^ Address we are currently at
-                                    -- This should be guaranteed to be at most @end@.
-                                 -> PresymbolData
-                                  -- ^ The remaining bytes in memory
-                                  -- including a number extra bss.
-                                 -> m [MemChunk w]
-        bytesToSegmentsAscending pre ((addr,v):rest) ioff contents
-          -- We only consider relocations that are in the range of this segment,
-          -- so we require the difference between the address and linkBaseOff is
-          -- less than regionSize
-          | addr < end = do
-              when (addr < ioff) $ do
-                error "Encountered overlapping relocations."
-              let rsz = relocEntrySize v
-              case takePresymbolBytes (fromIntegral rsz) contents of
-                Nothing -> do
-                  error $ "Relocation at " ++ show addr ++ " needs "
-                    ++ show rsz ++ " bytes, but only " ++ show (presymbolBytesLeft contents)
-                    ++ " bytes remaining."
-                Just bytes -> do
-                  mr <- applyReloc v msegIdx bytes
-                  case mr of
-                    Just r -> do
-                      -- Get number of bytes between this address offset and the current offset."
-                      let addrDiff = addr - ioff
-                      let post   = dropSegment (fromIntegral (addrDiff + rsz)) contents
-                      let pre' = [RelocationRegion r]
-                              ++ reverse (takeSegment (fromIntegral addrDiff) contents)
-                              ++ pre
-                      bytesToSegmentsAscending pre' rest (addr + rsz) post
-                    Nothing -> do
-                      -- Skipping relocation
-                      bytesToSegmentsAscending pre  rest ioff contents
-        bytesToSegmentsAscending pre _ _ contents =
-          pure $ reverse pre ++ allSymbolData contents
+      let (preRelocChunks, atRelocContents) = splitSegment baseAddr pre ioff addr buffer
+      -- Get relocation size.
+      let rsz = relocEntrySize v
+      case takePresymbolBytes (fromIntegral rsz) atRelocContents of
+        Nothing -> do
+          error $ "Relocation at " ++ show addr ++ " needs "
+                  ++ show rsz ++ " bytes, but only " ++ show (presymbolBytesLeft atRelocContents)
+                  ++ " bytes remaining."
+        Just bytes -> do
+          mr <- applyReloc v msegIdx bytes
+          case mr of
+            Just r -> do
+              -- Get number of bytes between this address offset and the current offset."
+              let pre' = (addr - baseAddr,  RelocationRegion r): preRelocChunks
+              let post = dropSegment (fromIntegral rsz) atRelocContents
+              applyRelocsToBytes baseAddr msegIdx pre' (addr + rsz) rest post
+            Nothing -> do
+              -- Skipping relocation
+              applyRelocsToBytes baseAddr msegIdx pre ioff rest buffer
+applyRelocsToBytes baseAddr _ pre ioff _ buffer =
+  pure $ SegmentContents $ Map.fromDescList $
+    allSymbolData (ioff - baseAddr) buffer pre
 
 ------------------------------------------------------------------------
 -- MemSegment
@@ -812,19 +832,47 @@ instance Ord (MemSegment w) where
     =  compare (segmentBase x)   (segmentBase y)
     <> compare (segmentOffset x) (segmentOffset y)
 
--- | Concruct a memory segment
-mkMemSegment :: MemWidth w
-             => RegionIndex -- ^ Index of region this is relative to.
-             -> MemWord w   -- ^ Offset relative to region index base
-             -> Perm.Flags  -- ^ Permissions for memory
-             -> [MemChunk w] -- ^ Contents of segment
-             -> MemSegment w
-mkMemSegment idx off flgs reg =
-  MemSegment { segmentBase = idx
-             , segmentOffset = off
-             , segmentFlags = flgs
-             , segmentContents = contentsFromList reg
-             }
+-- | This creates a memory segment from a buffer after applying
+-- relocations and options for
+memSegment :: forall m w
+           .  (Monad m, MemWidth w)
+           => Map (MemWord w) (RelocEntry m w)
+              -- ^ Map from region offset to relocation entry for segment.
+           -> RegionIndex
+              -- ^ Index of base (0=absolute address)
+           -> Integer
+              -- ^ Offset to add to linktime address for this segment.
+           -> Maybe SegmentIndex
+              -- ^ Identifier for this segment in relocation if this is created from so/exe.
+           -> MemWord w
+              -- ^ Linktime address of segment.
+           -> Perm.Flags
+              -- ^ Permissions for segment.
+           -> L.ByteString
+           -- ^ File contents for segment.
+           -> MemWord w
+           -- ^ Expected size (must be positive)
+           -> m (MemSegment w)
+memSegment relocMap regionIndex regionOff msegIdx linkBaseOff flags bytes sz
+      -- Return nothing if size is not positive
+    | not (sz > 0) = error $ "Memory segments must have a positive size."
+      -- Make sure end of segment does not overflow.
+    | regionOff + toInteger linkBaseOff + toInteger sz > toInteger (maxBound :: MemWord w) =
+      error "Contents too large for base."
+    | otherwise = do
+      let symbolPairs :: [(MemWord w, RelocEntry m w)]
+          symbolPairs
+            = Map.toList
+            $ Map.dropWhileAntitone (< linkBaseOff) relocMap
+
+      contents <- applyRelocsToBytes linkBaseOff msegIdx [] linkBaseOff symbolPairs
+                    (mkPresymbolData bytes (toInteger sz))
+      let off = fromInteger regionOff + linkBaseOff
+      pure $! MemSegment { segmentBase = regionIndex
+                         , segmentOffset = off
+                         , segmentFlags = flags
+                         , segmentContents = contents
+                         }
 
 -- | Return the size of the segment data.
 segmentSize :: MemWidth w => MemSegment w -> MemWord w
@@ -1073,8 +1121,12 @@ resolveAddr = resolveRegionOff
 {-# DEPRECATED resolveAddr "Use resolveRegionOff" #-}
 
 -- | Return the address of a segment offset.
-segoffAddr :: MemWidth w => MemSegmentOff w -> MemAddr w
-segoffAddr (MemSegmentOff seg off) = segmentOffAddr seg off
+segoffAddr :: MemSegmentOff w -> MemAddr w
+segoffAddr (MemSegmentOff seg off) =
+  MemAddr { addrBase = segmentBase seg
+            -- Segment off
+          , addrOffset = MemWord $ memWordValue (segmentOffset seg) + memWordValue off
+          }
 
 -- | Return the segment associated with the given address if well-defined.
 resolveAbsoluteAddr :: Memory w -> MemWord w -> Maybe (MemSegmentOff w)
@@ -1085,7 +1137,9 @@ segoffAsAbsoluteAddr :: MemWidth w => MemSegmentOff w -> Maybe (MemWord w)
 segoffAsAbsoluteAddr mseg = do
   let seg = segoffSegment mseg
    in if segmentBase seg == 0 then
-        Just (segmentOffset seg + segoffOffset mseg)
+        -- We do not need to normalize, because the overflow was checked when the segment offset
+        -- was created.
+        Just $! MemWord (memWordValue (segmentOffset seg) + memWordValue (segoffOffset mseg))
        else
         Nothing
 
@@ -1592,7 +1646,7 @@ matchPrefix pat (rel@(RelocationRegion _r) : rest)
   | BS.length pat > (fromIntegral sz) = matchPrefix (BS.drop (fromIntegral sz) pat) rest
   -- When length of pattern is less than or equal to the size of the relocation => match
   | otherwise = True
-  where sz = rangeSize rel
+  where sz = chunkSize rel
 matchPrefix pat (ByteRegion bs : rest)
   -- Enough bytes in region to check for match directly.  This also
   -- returns true when the search pattern is empty and stops recursion
