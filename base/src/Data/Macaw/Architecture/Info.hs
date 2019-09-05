@@ -2,12 +2,13 @@
 This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , postCallAbsState
+  , ArchBlockPrecond
   , DisassembleFn
   , IntraJumpTarget
     -- * Unclassified blocks
@@ -16,6 +17,7 @@ module Data.Macaw.Architecture.Info
   ) where
 
 import           Control.Monad.ST
+import qualified Data.Kind as K
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
@@ -30,6 +32,19 @@ import           Data.Macaw.Memory
 
 ------------------------------------------------------------------------
 -- ArchitectureInfo
+
+-- | This family maps architecture parameters to information needed to
+-- successfully translate machine code into Macaw CFGs.
+--
+-- This is currently used for registers values that are required to be
+-- known constants at translation time.  For example, on X86_64, due to
+-- aliasing between the FPU and MMX registers, we require that the
+-- floating point stack value is known at translation time so that
+-- we do not need to check which register is modified when pushing or
+-- poping from the x86 stack.
+--
+-- If no preconditions are needed, this can just be set to the unit type.
+type family ArchBlockPrecond (arch :: K.Type) :: K.Type
 
 -- | Function for disassembling a range of code (usually a function in
 -- the target code image) into blocks.
@@ -65,12 +80,16 @@ data ArchitectureInfo arch
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
-     , mkInitialRegsForBlock :: !(forall ids
-                              .  ArchSegmentOff arch
-                              -> AbsBlockState (ArchReg arch)
-                              -> Either String (RegState (ArchReg arch) (Value arch ids)))
-       -- ^ Use the abstract block state information to infer register
-       -- values to use for disassembling from given address.
+     , extractBlockPrecond :: !(ArchSegmentOff arch
+                                -> AbsBlockState (ArchReg arch)
+                                -> Either String (ArchBlockPrecond arch))
+       -- ^ Attempt to use abstract domain information to extract
+       -- information needed to translate block.
+     , initialBlockRegs :: !(forall ids
+                             .  ArchSegmentOff arch
+                             -> ArchBlockPrecond arch
+                             -> RegState (ArchReg arch) (Value arch ids))
+       -- ^ Create initial registers from address and precondition.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disassembling a block.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))

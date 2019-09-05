@@ -18,8 +18,8 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Memory.ElfLoader
   ( SectionIndexMap
-  , memoryForElf'
   , memoryForElf
+  , memoryForElf'
   , memoryForElfAllSymbols
   , MemLoadWarning(..)
   , resolveElfContents
@@ -40,7 +40,6 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString.Lazy as L
-import           Data.Either
 import           Data.ElfEdit
   ( ElfWordType
   , Elf
@@ -72,21 +71,16 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
-import           Data.Semigroup
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
-import           Data.Int
 
 import           Data.Macaw.Memory
 import           Data.Macaw.Memory.LoadCommon
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Memory.Symbols
-
-import           Prelude
-
 
 -- | Return a subrange of a bytestring.
 sliceL :: Integral w => Elf.Range w -> L.ByteString -> L.ByteString
@@ -792,7 +786,6 @@ getRelocationResolver hdr =
       pure $ SomeRelocationResolver $ relaTargetARM64 end
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
 
-
 resolveRela :: ( MemWidth w
                , Elf.RelocationWidth tp ~ w
                , Elf.IsRelocationType tp
@@ -810,7 +803,7 @@ resolveRela symtab resolver _relaIdx rela msegIdx _ = do
     Left e -> do
       addWarning (IgnoreRelocation e)
       pure Nothing
-    Right r -> do
+    Right r ->
       pure $ Just r
 
 resolveRel :: ( MemWidth w
@@ -1124,42 +1117,11 @@ reprConstraints :: AddrWidthRepr w
 reprConstraints Addr32 x = x
 reprConstraints Addr64 x = x
 
--- | This creates a memory segment.
-memSegment :: forall m w
-           .  (Monad m, MemWidth w)
-           => Map (MemWord w) (RelocEntry m w)
-              -- ^ Map from region offset to relocation entry for segment.
-           -> RegionIndex
-              -- ^ Index of base (0=absolute address)
-           -> Integer
-              -- ^ Offset to add to linktime address for this segment (defaults to 0)
-           -> Maybe SegmentIndex
-              -- ^ Identifier for this segment in relocation if this is created from so/exe.
-           -> MemWord w
-              -- ^ Linktime address of segment.
-           -> Perm.Flags
-              -- ^ Flags if defined
-           -> L.ByteString
-           -- ^ File contents for segment.
-           -> Int64
-           -- ^ Expected size (must be positive)
-           -> m (MemSegment w)
-memSegment relocMap regionIndex regionOff msegIdx linkBaseOff flags bytes sz
-      -- Return nothing if size is not positive
-    | not (sz > 0) = error $ "Memory segments must have a positive size."
-      -- Check for overflow in contents end
-    | regionOff + toInteger linkBaseOff + toInteger sz > toInteger (maxBound :: MemWord w) =
-      error "Contents two large for base."
-    | otherwise = do
-      contents <- byteSegments relocMap msegIdx linkBaseOff bytes sz
-      let off = fromInteger regionOff + linkBaseOff
-      pure $! mkMemSegment regionIndex off flags contents
-
 -- | Load an elf file into memory.
 insertElfSegment :: RegionIndex
                     -- ^ Region for elf segment
                  -> Integer
-                    -- ^ Amount to add to linktime virtual address for thsi memory.
+                    -- ^ Amount to add to linktime virtual address for this memory.
                  -> ElfFileSectionMap (ElfWordType w)
                  -> L.ByteString
                  -> Map (MemWord w) (RelocEntry (MemLoader w) w)
@@ -1199,34 +1161,32 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
 -- | Load an elf file into memory by parsing segments.
 memoryForElfSegments
   :: forall w
-  .  RegionIndex
-     -- ^ This is used as the base address to load Elf segments at (the virtual
-     -- address is treated as relative to this.
-  -> Integer
-     -- ^ This is used as the base address to load Elf segments at (the virtual
-     -- address is treated as relative to this.
+  .  LoadOptions
   -> Elf  w
-  -> MemLoader w ()
-memoryForElfSegments regIndex addrOff e = do
+  -> Either String (Memory w, SectionIndexMap w, [MemLoadWarning])
+memoryForElfSegments opt e = do
   let l = elfLayout e
   let hdr = Elf.elfLayoutHeader l
   let w = elfAddrWidth (elfClass e)
-  reprConstraints w $ do
-    let ph  = Elf.allPhdrs l
-    let contents = elfLayoutBytes l
-    -- Create relocation map
-    relocMap <- dynamicRelocationMap hdr ph contents
+  runMemLoader (toEndianness (Elf.elfData e)) (emptyMemory (elfAddrWidth (elfClass e))) $ do
+    reprConstraints w $ do
+      let contents = elfLayoutBytes l
+      -- Create relocation map
+      relocMap <- dynamicRelocationMap hdr (Elf.allPhdrs l) contents
 
-    let intervals :: ElfFileSectionMap (ElfWordType w)
-        intervals = IMap.fromList
-          [ (IntervalCO start end, sec)
-          | shdr <- Map.elems (l ^. Elf.shdrs)
-          , let start = shdr^._3
-          , let sec = shdr^._1
-          , let end = start + elfSectionFileSize sec
-          ]
-    mapM_ (insertElfSegment regIndex addrOff intervals contents relocMap)
-          (filter (\p -> Elf.phdrSegmentType p == Elf.PT_LOAD) ph)
+      let intervals :: ElfFileSectionMap (ElfWordType w)
+          intervals = IMap.fromList
+            [ (IntervalCO start end, sec)
+            | shdr <- Map.elems (l ^. Elf.shdrs)
+            , let start = shdr^._3
+            , let sec = shdr^._1
+            , let end = start + elfSectionFileSize sec
+            ]
+      let regIndex = adjustedLoadRegionIndex e opt
+      let addrOff = loadRegionBaseOffset opt
+      forM_ (Elf.allPhdrs l) $ \p -> do
+        when (Elf.phdrSegmentType p == Elf.PT_LOAD) $ do
+          insertElfSegment regIndex addrOff intervals contents relocMap p
 
 ------------------------------------------------------------------------
 -- Elf section loading
@@ -1335,41 +1295,37 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
 -- This is only used for object files.
 memoryForElfSections :: forall w
                      .  Elf w
-                     -> MemLoader w ()
-memoryForElfSections e = do
-  let hdr = Elf.elfHeader e
-  -- Create map from section name to sections with that name.
-  let sectionMap :: SectionNameMap w
-      sectionMap = foldlOf elfSections insSec Map.empty e
-        where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
+                     -> Either String (Memory w, SectionIndexMap w, [MemLoadWarning])
+memoryForElfSections e =
+  runMemLoader (toEndianness (Elf.elfData e)) (emptyMemory (elfAddrWidth (elfClass e))) $ do
+    let hdr = Elf.elfHeader e
+    -- Create map from section name to sections with that name.
+    let sectionMap :: SectionNameMap w
+        sectionMap = foldlOf elfSections insSec Map.empty e
+          where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
 
-  -- Parse Elf symbol table
-  symtab <-
-    case Elf.elfSymtab e of
-      [] ->
-        pure $ NoSymbolTable
-      elfSymTab:_rest -> do
-        let entries = Elf.elfSymbolTableEntries elfSymTab
-        --      let lclCnt = fromIntegral $ Elf.elfSymbolTableLocalEntries elfSymTab
-        -- Create an unversioned symbol from symbol table.
-        pure (StaticSymbolTable entries)
+    -- Parse Elf symbol table
+    let symtab =
+          case Elf.elfSymtab e of
+            [] -> NoSymbolTable
+            elfSymTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries elfSymTab)
 
-  -- Insert sections
-  forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
-    insertAllocatedSection hdr symtab sectionMap idx nm
-  -- TODO: Figure out what to do about .tdata and .tbss
-  -- Check for other section names that we do not support."
-  let unsupportedKeys = Map.keysSet sectionMap `Set.difference ` allowedSectionNames
-  forM_ unsupportedKeys $ \k -> do
-    addWarning $ UnsupportedSection k
+    -- Insert sections
+    forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
+      insertAllocatedSection hdr symtab sectionMap idx nm
+    -- TODO: Figure out what to do about .tdata and .tbss
+    -- Check for other section names that we do not support."
+    let unsupportedKeys = Map.keysSet sectionMap `Set.difference ` allowedSectionNames
+    forM_ unsupportedKeys $ \k -> do
+      addWarning $ UnsupportedSection k
 
 ------------------------------------------------------------------------
 -- High level loading
 
 adjustedLoadRegionIndex :: Elf w -> LoadOptions -> RegionIndex
-adjustedLoadRegionIndex e loadOpt =
-  case loadRegionIndex loadOpt of
-    Just idx -> idx
+adjustedLoadRegionIndex e loadOpts =
+  case loadOffset loadOpts of
+    Just _ -> 0
     Nothing ->
       case Elf.elfType e of
         Elf.ET_REL -> 1
@@ -1407,6 +1363,7 @@ instance Ord (MemSymbol w) where
 ------------------------------------------------------------------------
 -- memoryForElf
 
+{-# DEPRECATED memoryForElf' "Use memoryForElf" #-}
 memoryForElf' :: LoadOptions
               -> Elf w
               -> Either String ( Memory w
@@ -1414,17 +1371,14 @@ memoryForElf' :: LoadOptions
                                , [MemLoadWarning]
                                )
 memoryForElf' opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
-  let end = toEndianness (Elf.elfData e)
-  runMemLoader end (emptyMemory (elfAddrWidth (elfClass e))) $
-    case Elf.elfType e of
-      -- We load object files by section
-      Elf.ET_REL ->
-        memoryForElfSections e
-      -- Other files are loaded by segment.
-      _ -> do
-        let regIdx = adjustedLoadRegionIndex e opt
-        let addrOff = loadRegionBaseOffset opt
-        memoryForElfSegments regIdx addrOff e
+  case Elf.elfType e of
+    -- We load object files by section
+    Elf.ET_REL -> do
+      when (isJust (loadOffset opt)) $ do
+        Left $ "Object file sections have multiple offsets, and do not support loading at address."
+      memoryForElfSections e
+    -- Other files are loaded by segment.
+    _ ->  memoryForElfSegments opt e
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1437,7 +1391,7 @@ memoryForElf :: LoadOptions
                               , [MemLoadWarning]
                               , [SymbolResolutionError]
                               )
-memoryForElf opt e = do
+memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   (mem, secMap, warnings) <- memoryForElf' opt e
   let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
   pure (mem, funcSymbols, warnings, symErrs)
@@ -1636,7 +1590,10 @@ getElfEntry ::  LoadOptions -> Memory w -> Elf w -> ([String], Maybe (MemSegment
 getElfEntry loadOpts mem e =  addrWidthClass (memAddrWidth mem) $
  Elf.elfClassInstances (Elf.elfClass e) $ do
    let regIdx = adjustedLoadRegionIndex e loadOpts
-   let adjAddr = loadRegionBaseOffset loadOpts + toInteger (Elf.elfEntry e)
+   let adjAddr =
+         case loadOffset loadOpts of
+           Nothing -> toInteger (Elf.elfEntry e)
+           Just o -> toInteger o + toInteger (Elf.elfEntry e)
    case resolveRegionOff mem regIdx (fromInteger adjAddr) of
      Nothing ->
        ( ["Could not resolve entry point: " ++ showHex (Elf.elfEntry e) ""]

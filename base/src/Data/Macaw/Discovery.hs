@@ -636,17 +636,17 @@ deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
 -- If the current index can be interpreted as a intra-procedural jump,
 -- then it will add that to the current procedure.
 -- This returns the last address read.
-resolveAsAbsoluteAddr :: forall w
-                    .  Memory w
-                    -> Endianness
-                    -> [MemChunk w]
-                    -> Maybe (MemAddr w)
-resolveAsAbsoluteAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
+resolveAsAddr :: forall w
+              .  Memory w
+              -> Endianness
+              -> [MemChunk w]
+              -> Maybe (MemAddr w)
+resolveAsAddr mem endianness l = addrWidthClass (memAddrWidth mem) $
   case l of
     [ByteRegion bs] ->
       case addrRead endianness bs of
         Just a -> pure $! absoluteAddr a
-        Nothing -> error $ "internal: resolveAsAbsoluteAddr given short chunk list."
+        Nothing -> error $ "internal: resolveAsAddr given short chunk list."
     [RelocationRegion r] -> do
         when (relocationIsRel r) $ Nothing
         case relocationSym r of
@@ -717,19 +717,23 @@ matchAbsoluteJumpTable = classifierName "Absolute jump table" $ do
   endianness <-
     case arEltType arrayRead of
       BVMemRepr _arByteCount e -> pure e
-  let go :: [MemChunk (ArchAddrWidth arch)]
+  let go :: Int
+         -> [MemChunk (ArchAddrWidth arch)]
          -> Classifier (MemSegmentOff (ArchAddrWidth arch))
-      go contents = do
-        addr <- case resolveAsAbsoluteAddr mem endianness contents of
+      go entryIndex contents = do
+        addr <- case resolveAsAddr mem endianness contents of
                   Just a -> pure a
                   Nothing -> fail "Could not resolve jump table contents as absolute address."
         tgt <- case asSegmentOff mem (toIPAligned @arch addr) of
                  Just t -> pure t
-                 Nothing -> fail "Could not resolve jump table contents as segment offset."
+                 Nothing ->
+                   fail $
+                     "Could not resolve jump table entry " ++ show entryIndex
+                     ++ " value " ++ show addr ++ " as segment offset.\n" ++ show mem
         unless (Perm.isExecutable (segmentFlags (segoffSegment tgt))) $
           fail $ "Jump table contents non-executable."
         pure tgt
-  tbl <- lift $ traverse go (arSlices arrayRead)
+  tbl <- lift $ V.zipWithM go (V.generate (V.length (arSlices arrayRead)) id) (arSlices arrayRead)
   pure (AbsoluteJumpTable arrayRead, tbl, idx)
 
 matchRelativeJumpTable
@@ -889,17 +893,6 @@ removeUnassignedRegs initRegs finalRegs =
          | otherwise = True
         where initVal = initRegs^.boundValue r
    in MapF.filterWithKey keepReg (regStateMap finalRegs)
-
--- | This returns true if the address may be the target of a
--- intra-procedural control flow transfer.
---
--- Specifically this checks if the address is executable and not the current
--- function address or a known function address.
-allowedIntraTarget :: ParseContext arch ids -> ArchSegmentOff arch -> Bool
-allowedIntraTarget ctx addr
-  =  segmentFlags (segoffSegment addr) `Perm.hasPerm` Perm.execute
-  && addr /= pctxFunAddr ctx
-  && addr `Set.notMember` pctxKnownFnEntries ctx
 
 -- | Return true if any value in structure contains the given
 -- identifier.
@@ -1065,23 +1058,40 @@ type BlockClassifier arch ids s =
           Classifier
           (ParsedContents arch ids)
 
+classifyDirectJump :: RegisterInfo (ArchReg arch)
+                   => ParseContext arch ids
+                   -> String
+                   -> Value arch ids (BVType (ArchAddrWidth arch))
+                   -> ReaderT i Classifier (MemSegmentOff (ArchAddrWidth arch))
+classifyDirectJump ctx nm v = do
+  ma <- case valueAsMemAddr v of
+          Nothing ->  fail $ nm ++ " value " ++ show v ++ " is not a valid address."
+          Just a -> pure a
+  a <- case asSegmentOff (pctxMemory ctx) ma of
+         Nothing ->
+           fail $ nm ++ " value " ++ show v ++ " is not a segment offset in " ++ show (pctxMemory ctx) ++ "."
+         Just sa -> pure sa
+  when (not (segmentFlags (segoffSegment a) `Perm.hasPerm` Perm.execute)) $ do
+    fail $ nm ++ " value " ++ show a ++ " is not executable."
+  when (a == pctxFunAddr ctx) $ do
+    fail $ nm ++ " value " ++ show a ++ " refers to function start."
+  when (a `Set.member` pctxKnownFnEntries ctx) $ do
+    fail $ nm ++ " value " ++ show a ++ " is a known function entry."
+  pure a
+
 branchClassifier :: BlockClassifier arch ids s
 branchClassifier = classifierName "Branch" $ do
   (ctx, _initRegs, stmts, absState, jmpBounds, writtenAddrs, finalRegs) <- ask
   let ainfo = pctxArchInfo ctx
-  let mem = pctxMemory ctx
   withArchConstraints ainfo $ do
     -- The block ends with a Mux, so we turn this into a `ParsedBranch` statement.
-    Just (Mux _ c t f) <- pure $ valueAsApp (finalRegs^.boundValue ip_reg)
-    Just trueTgtAddr <- pure $ valueAsSegmentOff mem t
-        -- Check that true branch is an allowed intra-procedural branch target
-    unless (allowedIntraTarget ctx trueTgtAddr) $ do
-      fail $ "Branch true target not allowed."
-
-    Just falseTgtAddr <- pure $ valueAsSegmentOff mem f
-    -- Check that false branch is an allowed intra-procedural branch target
-    unless (allowedIntraTarget ctx falseTgtAddr) $ do
-      fail "Branch false target not allowed."
+    let ipVal = finalRegs^.boundValue ip_reg
+    (c,t,f) <- case valueAsApp ipVal of
+                 Just (Mux _ c t f) -> pure (c,t,f)
+                 _ -> fail $ "IP is not an mux:\n"
+                          ++ show (ppValueAssignments ipVal)
+    trueTgtAddr  <- classifyDirectJump ctx "True branch"  t
+    falseTgtAddr <- classifyDirectJump ctx "False branch" f
 
     let trueRegs  = finalRegs & boundValue ip_reg .~ t
     let falseRegs = finalRegs & boundValue ip_reg .~ f
@@ -1175,13 +1185,9 @@ directJumpClassifier :: BlockClassifier arch ids s
 directJumpClassifier = classifierName "Jump" $ do
   (ctx, _initRegs, stmts, absState, jmpBounds, writtenAddrs, finalRegs) <- ask
   let ainfo = pctxArchInfo ctx
-  let mem = pctxMemory ctx
   withArchConstraints ainfo $ do
 
-    Just tgt_mseg <- pure $ valueAsSegmentOff mem (finalRegs^.boundValue ip_reg)
-    -- Check that target is an allowed intra-procedural branch target.
-    unless (allowedIntraTarget ctx tgt_mseg) $ do
-      fail $ "Direct jump must be aan allowed target."
+    tgt_mseg <- classifyDirectJump ctx "Jump" (finalRegs^.boundValue ip_reg)
 
     let abst = finalAbsBlockState absState finalRegs
     let abst' = abst & setAbsIP tgt_mseg
@@ -1362,20 +1368,43 @@ parseBlock ctx initRegs b absBlockState blockBnds = runSTNonceGenerator $ \gen -
                              , newFunctionAddrs = []
                              }
 
--- | This evaluates the statements in a block to expand the information known
--- about control flow targets of this block.
-addBlock :: ArchSegmentOff arch
-            -- ^ Address of these blocks
+-- | This evaluates the statements in a block to expand the
+-- information known about control flow targets of this block.
+addBlock :: ArchConstraints arch
+         => ArchSegmentOff arch
+            -- ^ Address of the block to add.
          -> FoundAddr arch
             -- ^ State leading to explore block
-         -> RegState (ArchReg arch) (Value arch ids)
-         -> Int
-            -- ^ Number of bytes in block
-         -> Block arch ids
-            -- ^ Map from labelIndex to associated block
+         -> ArchBlockPrecond arch
+            -- ^ State information needed to disassemble block at this address.
          -> FunM arch s ids ()
-addBlock src finfo initRegs sz b = do
+addBlock src finfo pr = do
   s <- use curFunCtx
+  let ainfo = archInfo s
+  let initRegs = initialBlockRegs ainfo src pr
+  let mem = memory s
+
+  nonceGen <- gets funNonceGen
+  prev_block_map <- use $ curFunBlocks
+  let maxSize :: Int
+      maxSize =
+        case Map.lookupGT src prev_block_map of
+          Just (next,_) | Just o <- diffSegmentOff next src -> fromInteger o
+          _ -> fromInteger (segoffBytesLeft src)
+  (b0, sz) <- liftST $ disassembleFn ainfo nonceGen src initRegs maxSize
+  -- Rewrite returned blocks to simplify expressions
+#ifdef USE_REWRITER
+  (_,b) <- do
+    let archStmt = rewriteArchStmt ainfo
+    let secAddrMap = memSectionIndexMap mem
+    termStmt <- gets termStmtRewriter <*> pure src
+    liftST $ do
+      ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
+      rewriteBlock ainfo ctx b0
+#else
+  b <- pure b0
+#endif
+
   funAddr <- gets curFunAddr
 
   let ctx = ParseContext { pctxMemory         = memory s
@@ -1385,13 +1414,14 @@ addBlock src finfo initRegs sz b = do
                          , pctxAddr           = src
                          }
   let pc = parseBlock ctx initRegs b (foundAbstractState finfo) (foundJumpBounds finfo)
-  let pb = ParsedBlock { pblockAddr = src
-                       , blockSize = sz
-                       , blockReason = foundReason finfo
+  let pb = ParsedBlock { pblockAddr    = src
+                       , pblockPrecond = Right pr
+                       , blockSize     = sz
+                       , blockReason   = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
                        , blockJumpBounds = foundJumpBounds finfo
-                       , pblockStmts = parsedNonterm pc
-                       , pblockTermStmt = parsedTerm pc
+                       , pblockStmts     = parsedNonterm pc
+                       , pblockTermStmt  = parsedTerm pc
                        }
   let pb' = dropUnusedCodeInParsedBlock (archInfo s) pb
   id %= addFunBlock src pb'
@@ -1400,16 +1430,16 @@ addBlock src finfo initRegs sz b = do
   mapM_ (mergeIntraJump src) (intraJumpTargets pc)
 
 -- | Record an error block with no statements for the given address.
-recordErrorBlock :: ArchSegmentOff arch -> FoundAddr arch -> Maybe String -> FunM arch s ids ()
-recordErrorBlock addr finfo maybeError = do
-  let errMsg = maybe "Unknown error" Text.pack maybeError
+recordErrorBlock :: ArchSegmentOff arch -> FoundAddr arch -> String -> FunM arch s ids ()
+recordErrorBlock addr finfo err = do
   let pb = ParsedBlock { pblockAddr = addr
+                       , pblockPrecond = Left err
                        , blockSize = 0
                        , blockReason = foundReason finfo
                        , blockAbstractState = foundAbstractState finfo
                        , blockJumpBounds    = foundJumpBounds finfo
                        , pblockStmts = []
-                       , pblockTermStmt = ParsedTranslateError errMsg
+                       , pblockTermStmt = ParsedTranslateError (Text.pack err)
                        }
   id %= addFunBlock addr pb
 
@@ -1421,36 +1451,12 @@ transfer addr = do
     mfinfo <- use $ foundAddrs . at addr
     let finfo = fromMaybe (error $ "transfer called on unfound address " ++ show addr ++ ".") $
                   mfinfo
-    let mem = memory s
-    nonceGen <- gets funNonceGen
-    prev_block_map <- use $ curFunBlocks
     -- Get maximum number of bytes to disassemble
-    let maxSize :: Int
-        maxSize =
-          case Map.lookupGT addr prev_block_map of
-            Just (next,_) | Just o <- diffSegmentOff next addr -> fromInteger o
-            _ -> fromInteger (segoffBytesLeft addr)
-    let ab = foundAbstractState finfo
-    case mkInitialRegsForBlock ainfo addr ab of
+    case extractBlockPrecond ainfo addr (foundAbstractState finfo) of
       Left msg -> do
-        recordErrorBlock addr finfo (Just msg)
-      Right initRegs -> do
-        (b0, sz) <- liftST $ disassembleFn ainfo nonceGen addr initRegs maxSize
-        -- If no blocks are returned, then we just add an empty parsed block.
-        -- Rewrite returned blocks to simplify expressions
-#ifdef USE_REWRITER
-        (_,b) <- do
-          let archStmt = rewriteArchStmt ainfo
-          let secAddrMap = memSectionIndexMap mem
-          termStmt <- gets termStmtRewriter <*> pure addr
-          liftST $ do
-            ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
-            rewriteBlock ainfo ctx b0
-#else
-        b <- pure b0
-#endif
-        -- Call transfer blocks to calculate parsedblocks
-        addBlock addr finfo initRegs sz b
+        recordErrorBlock addr finfo msg
+      Right pr -> do
+        addBlock addr finfo pr
 
 ------------------------------------------------------------------------
 -- Main loop
