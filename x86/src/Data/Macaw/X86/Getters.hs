@@ -233,7 +233,7 @@ getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)
 getSomeBVLocation v =
   case v of
     F.ControlReg _ -> fail "ControlReg"
-    F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
+    F.DebugReg _   -> fail "DebugReg"
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
     F.XMMReg r       -> do avx <- isAVX
                            pure $ SomeBV $ if avx then xmm_avx r
