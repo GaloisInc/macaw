@@ -130,12 +130,16 @@ instance PrettyF X86TermStmt where
 ------------------------------------------------------------------------
 -- X86PrimLoc
 
--- | This describes a primitive location that can be read or written to in the
+-- | This describes a mutable component of the processor state which
+-- due to side effects and access checks is not modeled as a general
+-- purpose register.
+--
+
+-- primitive location that can be read or written to in the
 --  X86 architecture model.
 -- Primitive locations are not modeled as registers, but rather as implicit state.
 data X86PrimLoc tp
-   = (tp ~ BVType 64) => ControlLoc !F.ControlReg
-   | (tp ~ BVType 64) => DebugLoc   !F.DebugReg
+   = (tp ~ BVType 64) => DebugLoc   !F.DebugReg
    | (tp ~ BVType 16) => FS
      -- ^ This refers to the selector of the 'FS' register.
    | (tp ~ BVType 16) => GS
@@ -144,7 +148,6 @@ data X86PrimLoc tp
      -- ^ One of the x87 control registers
 
 instance HasRepr X86PrimLoc TypeRepr where
-  typeRepr ControlLoc{} = knownRepr
   typeRepr DebugLoc{}   = knownRepr
   typeRepr FS = knownRepr
   typeRepr GS = knownRepr
@@ -153,7 +156,6 @@ instance HasRepr X86PrimLoc TypeRepr where
       LeqProof -> BVTypeRepr (typeRepr r)
 
 instance Pretty (X86PrimLoc tp) where
-  pretty (ControlLoc r) = text (show r)
   pretty (DebugLoc r) = text (show r)
   pretty FS = text "fs"
   pretty GS = text "gs"

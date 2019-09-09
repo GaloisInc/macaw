@@ -502,9 +502,6 @@ data Location addr (tp :: Type) where
   Register :: !(RegisterView m b n)
            -> Location addr (BVType n)
 
-  ControlReg :: !F.ControlReg
-             -> Location addr (BVType 64)
-
   DebugReg :: !F.DebugReg
            -> Location addr (BVType 64)
 
@@ -563,9 +560,6 @@ setLoc loc v =
    MemoryAddr w tp -> do
      addr <- eval w
      addStmt $ WriteMem addr tp v
-
-   ControlReg r -> do
-     addWriteLoc (ControlLoc r) v
    DebugReg r  ->
      addWriteLoc (DebugLoc r) v
 
@@ -620,7 +614,6 @@ ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
   FullRegister r -> text $ "%" ++ show r
-  ControlReg r -> text (show r)
   DebugReg r -> text (show r)
   SegmentReg r -> text (show r)
   X87ControlReg r -> text ("x87_" ++ show r)
@@ -687,7 +680,6 @@ instance HasRepr (Location addr) TypeRepr where
   typeRepr (MemoryAddr _ tp) = typeRepr tp
   typeRepr (FullRegister r)  = typeRepr r
   typeRepr (Register rv@RegisterView{}) = BVTypeRepr $ _registerViewSize rv
-  typeRepr (ControlReg _)    = knownRepr
   typeRepr (DebugReg _)    = knownRepr
   typeRepr (SegmentReg _)    = knownRepr
   typeRepr (X87ControlReg r) =
@@ -1563,8 +1555,6 @@ get l0 =
     MemoryAddr w tp -> do
       addr <- eval w
       evalAssignRhs (ReadMem addr tp)
-    ControlReg _ ->
-      fail $ "Do not support reading control registers."
     DebugReg _ ->
       fail $ "Do not support reading debug registers."
     SegmentReg s

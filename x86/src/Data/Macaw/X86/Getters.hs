@@ -232,7 +232,7 @@ floatBVMemRepr fi | LeqProof <- floatInfoBytesIsPos fi =
 getSomeBVLocation :: F.Value -> X86Generator st ids (SomeBV (Location (Addr ids)))
 getSomeBVLocation v =
   case v of
-    F.ControlReg cr  -> pure $ SomeBV $ ControlReg cr
+    F.ControlReg _ -> fail "ControlReg"
     F.DebugReg dr    -> pure $ SomeBV $ DebugReg dr
     F.MMXReg mmx     -> pure $ SomeBV $ x87reg_mmx $ X87_FPUReg mmx
     F.XMMReg r       -> do avx <- isAVX
