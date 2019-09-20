@@ -219,27 +219,26 @@ pureSem :: forall sym mt
 pureSem sym fn = do
   let symi = (symIface sym)
   case fn of
-    M.CMPXCHG8B{} -> error "CMPXCHG8B"
-    M.XGetBV {} -> error "XGetBV"
+    M.EvenParity x0 ->
+      do x <- getBitVal (symIface sym) x0
+         evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
+      where xor a b = app (BoolXor a b)
     M.ReadLoc {} -> error "ReadLoc"
-    M.PShufb {} -> error "PShufb"
-    M.MMXExtend {} -> error "MMXExtend"
     M.ReadFSBase    -> error " ReadFSBase"
     M.ReadGSBase    -> error "ReadGSBase"
+    M.GetSegmentSelector _ -> error "GetSegmentSelector"
     M.CPUID{}       -> error "CPUID"
+    M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.RDTSC{}       -> error "RDTSC"
+    M.XGetBV {} -> error "XGetBV"
+    M.PShufb {} -> error "PShufb"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
+    M.MMXExtend {} -> error "MMXExtend"
     M.X86IDiv w n d -> sDiv sym w n d
     M.X86IRem w n d -> sRem sym w n d
     M.X86Div  w n d -> uDiv sym w n d
     M.X86Rem  w n d -> uRem sym w n d
-    M.X87_Extend{} ->  error "X87_Extend"
-    M.X87_FAdd{} -> error "X87_FAdd"
-    M.X87_FSub{} -> error "X87_FSub"
-    M.X87_FMul{} -> error "X87_FMul"
-    M.X87_FST {} -> error "X87_FST"
-    M.VExtractF128 {} -> error "VExtractF128"
 
     M.SSE_UnaryOp op (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let f = case op of
@@ -301,17 +300,18 @@ pureSem sym fn = do
       iFloatCast @_ @DoubleFloat @SingleFloat symi knownRepr RNE (regValue x)
     M.SSE_CVTSD2SS (AtomWrapper x) ->
       iFloatCast @_ @SingleFloat @DoubleFloat symi knownRepr RNE (regValue x)
-    M.SSE_CVTSI2SX tp _ x ->
-     iSBVToFloat symi (floatInfoFromSSEType tp) RNE
-        =<< toValBV symi x
     M.SSE_CVTTSX2SI w (_ :: M.SSE_FloatType ftp) (AtomWrapper x) ->
       llvmPointer_bv symi
         =<< iFloatToSBV @_ @_ @(ToCrucibleFloatInfo ftp) symi w RTZ (regValue x)
+    M.SSE_CVTSI2SX tp _ x ->
+     iSBVToFloat symi (floatInfoFromSSEType tp) RNE
+        =<< toValBV symi x
 
-    M.EvenParity x0 ->
-      do x <- getBitVal (symIface sym) x0
-         evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
-      where xor a b = app (BoolXor a b)
+    M.X87_Extend{} ->  error "X87_Extend"
+    M.X87_FAdd{} -> error "X87_FAdd"
+    M.X87_FSub{} -> error "X87_FSub"
+    M.X87_FMul{} -> error "X87_FMul"
+    M.X87_FST {} -> error "X87_FST"
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -388,6 +388,11 @@ pureSem sym fn = do
                llvmPointer_bv s =<< applySymFn s f ps
           | otherwise -> fail "Unexpecte size for AESEncLast"
 
+    M.VInsert elNum elSz vec el i ->
+      do e <- getBitVal (symIface sym) el
+         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
+           case mulCancelR elNum (V.length xs) elSz of
+             Refl -> V.insertAt i e xs
 
     M.PointwiseShiftL elNum elSz shSz bits amt ->
       do amt' <- getBitVal (symIface sym) amt
@@ -398,12 +403,7 @@ pureSem sym fn = do
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
 
-    M.VInsert elNum elSz vec el i ->
-      do e <- getBitVal (symIface sym) el
-         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz vec $ \xs ->
-           case mulCancelR elNum (V.length xs) elSz of
-             Refl -> V.insertAt i e xs
-
+    M.VExtractF128 {} -> error "VExtractF128"
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
