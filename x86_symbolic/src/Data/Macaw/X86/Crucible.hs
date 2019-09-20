@@ -223,7 +223,6 @@ pureSem sym fn = do
       do x <- getBitVal (symIface sym) x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
-    M.ReadLoc {} -> error "ReadLoc"
     M.ReadFSBase    -> error " ReadFSBase"
     M.ReadGSBase    -> error "ReadGSBase"
     M.GetSegmentSelector _ -> error "GetSegmentSelector"

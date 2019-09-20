@@ -340,7 +340,6 @@ transferAbsValue :: AbsProcessorState X86Reg ids
 transferAbsValue r f =
   case f of
     EvenParity _ -> TopV
-    ReadLoc _  -> TopV
     ReadFSBase -> TopV
     ReadGSBase -> TopV
     GetSegmentSelector _ -> TopV

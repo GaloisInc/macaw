@@ -29,7 +29,6 @@ module Data.Macaw.X86.ArchTypes
   , rewriteX86Stmt
   , X86TermStmt(..)
   , rewriteX86TermStmt
-  , X86PrimLoc(..)
   , SIMDByteCount(..)
   , SIMDWidth(..)
   , RepValSize(..)
@@ -55,7 +54,6 @@ import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.X86.X86Reg
-import           Data.Macaw.X86.X87ControlReg
 
 ------------------------------------------------------------------------
 -- SIMDWidth
@@ -127,29 +125,6 @@ instance PrettyF X86TermStmt where
   prettyF X86Syscall = text "x86_syscall"
   prettyF Hlt        = text "hlt"
   prettyF UD2        = text "ud2"
-
-------------------------------------------------------------------------
--- X86PrimLoc
-
--- | This describes a mutable component of the processor state which
--- due to side effects and access checks is not modeled as a general
--- purpose register.
---
-
--- primitive location that can be read or written to in the
---  X86 architecture model.
--- Primitive locations are not modeled as registers, but rather as implicit state.
-data X86PrimLoc tp
-   = forall w . (tp ~ BVType   w) => X87_ControlLoc !(X87_ControlReg w)
-     -- ^ One of the x87 control registers
-
-instance HasRepr X86PrimLoc TypeRepr where
-  typeRepr (X87_ControlLoc r) =
-    case x87ControlRegWidthIsPos r of
-      LeqProof -> BVTypeRepr (typeRepr r)
-
-instance Pretty (X86PrimLoc tp) where
-  pretty (X87_ControlLoc r) = text (show r)
 
 ------------------------------------------------------------------------
 -- SSE declarations
@@ -306,9 +281,6 @@ data X86PrimFn f tp where
 
   -- | Return true if the operand has an even number of bits set.
   EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
-
-  -- | Read from a primitive X86 location.
-  ReadLoc :: !(X86PrimLoc tp) -> X86PrimFn f tp
 
   -- | Read the 'FS' base address.
   ReadFSBase :: X86PrimFn f (BVType 64)
@@ -708,7 +680,6 @@ instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
       EvenParity{}  -> knownRepr
-      ReadLoc loc   -> typeRepr loc
       ReadFSBase    -> knownRepr
       ReadGSBase    -> knownRepr
       GetSegmentSelector{} -> knownRepr
@@ -761,7 +732,6 @@ instance TraversableFC X86PrimFn where
   traverseFC go f =
     case f of
       EvenParity x -> EvenParity <$> go x
-      ReadLoc l  -> pure (ReadLoc l)
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
       GetSegmentSelector s -> pure (GetSegmentSelector s)
@@ -808,7 +778,6 @@ instance IsArchFn X86PrimFn where
         ppShow = pure . text . show
     case f of
       EvenParity x -> sexprA "even_parity" [ pp x ]
-      ReadLoc loc -> pure $ pretty loc
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
       GetSegmentSelector s -> pure $ sexpr "get_segment_selector" [pretty (show s)]
@@ -864,7 +833,6 @@ x86PrimFnHasSideEffects :: X86PrimFn f tp -> Bool
 x86PrimFnHasSideEffects f =
   case f of
     EvenParity{} -> False
-    ReadLoc{}    -> False
     ReadFSBase   -> False
     ReadGSBase   -> False
     GetSegmentSelector{} -> False
@@ -910,8 +878,6 @@ x86PrimFnHasSideEffects f =
 
 -- | An X86 specific statement.
 data X86Stmt (v :: Type -> Kind.Type) where
-  WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
-
   -- | Set the segment register to the 16-bit segment selector.
   --
   -- This corresponds to the "mov" instruction with a segment selector
@@ -983,7 +949,6 @@ instance FoldableF X86Stmt where
 instance TraversableF X86Stmt where
   traverseF go stmt =
     case stmt of
-      WriteLoc loc v    -> WriteLoc loc <$> go v
       SetSegmentSelector s v -> SetSegmentSelector s <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
       RepMovs bc dest src cnt dir -> RepMovs bc <$> go dest <*> go src <*> go cnt <*> go dir
@@ -993,7 +958,6 @@ instance TraversableF X86Stmt where
 instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
     case stmt of
-      WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
       SetSegmentSelector s v ->
         text "set_segment_selector(" <> text (show s) <> text ", " <> pp v <> text ")"
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
