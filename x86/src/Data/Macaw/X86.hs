@@ -343,6 +343,7 @@ transferAbsValue r f =
     ReadLoc _  -> TopV
     ReadFSBase -> TopV
     ReadGSBase -> TopV
+    GetSegmentSelector _ -> TopV
     CPUID _    -> TopV
     CMPXCHG8B{} -> TopV
     RDTSC      -> TopV

@@ -40,7 +40,6 @@ module Data.Macaw.X86.ArchTypes
 
 import           Data.Bits
 import qualified Data.Kind as Kind
-import           Data.Word(Word8)
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
 import           Data.Macaw.Memory (Endianness(..))
@@ -50,7 +49,9 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
+import           Data.Word (Word8)
 import qualified Flexdis86 as F
+import           Numeric.Natural
 import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
 
 import           Data.Macaw.X86.X86Reg
@@ -106,7 +107,7 @@ repValSizeMemRepr v =
     DWordRepVal -> BVMemRepr (knownNat :: NatRepr 4) LittleEndian
     QWordRepVal -> BVMemRepr (knownNat :: NatRepr 8) LittleEndian
 
-repValSizeByteCount :: RepValSize w -> Integer
+repValSizeByteCount :: RepValSize w -> Natural
 repValSizeByteCount = memReprBytes . repValSizeMemRepr
 
 ------------------------------------------------------------------------
@@ -139,23 +140,15 @@ instance PrettyF X86TermStmt where
 --  X86 architecture model.
 -- Primitive locations are not modeled as registers, but rather as implicit state.
 data X86PrimLoc tp
-   = (tp ~ BVType 16) => FS
-     -- ^ This refers to the selector of the 'FS' register.
-   | (tp ~ BVType 16) => GS
-     -- ^ This refers to the selector of the 'GS' register.
-   | forall w . (tp ~ BVType   w) => X87_ControlLoc !(X87_ControlReg w)
+   = forall w . (tp ~ BVType   w) => X87_ControlLoc !(X87_ControlReg w)
      -- ^ One of the x87 control registers
 
 instance HasRepr X86PrimLoc TypeRepr where
-  typeRepr FS = knownRepr
-  typeRepr GS = knownRepr
   typeRepr (X87_ControlLoc r) =
     case x87ControlRegWidthIsPos r of
       LeqProof -> BVTypeRepr (typeRepr r)
 
 instance Pretty (X86PrimLoc tp) where
-  pretty FS = text "fs"
-  pretty GS = text "gs"
   pretty (X87_ControlLoc r) = text (show r)
 
 ------------------------------------------------------------------------
@@ -322,6 +315,15 @@ data X86PrimFn f tp where
 
   -- | Read the 'GS' base address.
   ReadGSBase :: X86PrimFn f (BVType 64)
+
+  -- | Retrieves the 16-bit segment selector associated with the segment register.
+  --
+  -- This corresponds to the "mov" instruction with a segment selector
+  -- as the source.  See the discussion in the Intel® 64 and IA-32
+  -- Architectures Software Developer’s Manual volume 2 for "mov" for
+  -- more details."
+  GetSegmentSelector :: !F.Segment
+                     -> X86PrimFn f (BVType 16)
 
   -- | The CPUID instruction.
   --
@@ -709,6 +711,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       ReadLoc loc   -> typeRepr loc
       ReadFSBase    -> knownRepr
       ReadGSBase    -> knownRepr
+      GetSegmentSelector{} -> knownRepr
       CPUID{}       -> knownRepr
       CMPXCHG8B{}   -> knownRepr
       RDTSC{}       -> knownRepr
@@ -761,6 +764,7 @@ instance TraversableFC X86PrimFn where
       ReadLoc l  -> pure (ReadLoc l)
       ReadFSBase -> pure ReadFSBase
       ReadGSBase -> pure ReadGSBase
+      GetSegmentSelector s -> pure (GetSegmentSelector s)
       CPUID v    -> CPUID <$> go v
       CMPXCHG8B a ax bx cx dx  -> CMPXCHG8B <$> go a <*> go ax <*> go bx <*> go cx <*> go dx
       RDTSC      -> pure RDTSC
@@ -807,6 +811,7 @@ instance IsArchFn X86PrimFn where
       ReadLoc loc -> pure $ pretty loc
       ReadFSBase  -> pure $ text "fs.base"
       ReadGSBase  -> pure $ text "gs.base"
+      GetSegmentSelector s -> pure $ sexpr "get_segment_selector" [pretty (show s)]
       CPUID code  -> sexprA "cpuid" [ pp code ]
       CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
       RDTSC       -> pure $ text "rdtsc"
@@ -862,6 +867,7 @@ x86PrimFnHasSideEffects f =
     ReadLoc{}    -> False
     ReadFSBase   -> False
     ReadGSBase   -> False
+    GetSegmentSelector{} -> False
     CPUID{}      -> False
     CMPXCHG8B{}  -> True
     RDTSC        -> False
@@ -905,6 +911,16 @@ x86PrimFnHasSideEffects f =
 -- | An X86 specific statement.
 data X86Stmt (v :: Type -> Kind.Type) where
   WriteLoc :: !(X86PrimLoc tp) -> !(v tp) -> X86Stmt v
+
+  -- | Set the segment register to the 16-bit segment selector.
+  --
+  -- This corresponds to the "mov" instruction with a segment selector
+  -- as the destination.  See the discussion in the Intel® 64 and IA-32
+  -- Architectures Software Developer’s Manual volume 2 for "mov" for
+  -- more details."
+  SetSegmentSelector :: !F.Segment
+                     -> !(v (BVType 16))
+                     -> X86Stmt v
 
   -- | Store the X87 control register in the given address.
   StoreX87Control :: !(v (BVType 64)) -> X86Stmt v
@@ -968,6 +984,7 @@ instance TraversableF X86Stmt where
   traverseF go stmt =
     case stmt of
       WriteLoc loc v    -> WriteLoc loc <$> go v
+      SetSegmentSelector s v -> SetSegmentSelector s <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
       RepMovs bc dest src cnt dir -> RepMovs bc <$> go dest <*> go src <*> go cnt <*> go dir
       RepStos bc dest val cnt dir -> RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
@@ -977,13 +994,15 @@ instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
     case stmt of
       WriteLoc loc rhs -> pretty loc <+> text ":=" <+> pp rhs
+      SetSegmentSelector s v ->
+        text "set_segment_selector(" <> text (show s) <> text ", " <> pp v <> text ")"
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
       RepMovs bc dest src cnt dir ->
           text "repMovs" <+> parens (hcat $ punctuate comma args)
-        where args = [pretty (repValSizeByteCount bc), pp dest, pp src, pp cnt, pp dir]
+        where args = [integer (toInteger (repValSizeByteCount bc)), pp dest, pp src, pp cnt, pp dir]
       RepStos bc dest val cnt dir ->
           text "repStos" <+> parens (hcat $ punctuate comma args)
-        where args = [pretty (repValSizeByteCount bc), pp dest, pp val, pp cnt, pp dir]
+        where args = [integer (toInteger (repValSizeByteCount bc)), pp dest, pp val, pp cnt, pp dir]
       EMMS -> text "emms"
 
 ------------------------------------------------------------------------

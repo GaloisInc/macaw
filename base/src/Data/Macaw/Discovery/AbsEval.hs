@@ -32,7 +32,7 @@ absEvalReadMem :: RegisterInfo (ArchReg a)
 absEvalReadMem r a tp
     -- If the value is a stack entry, then see if there is a stack
     -- value associated with it.
-  | StackOffset _ o <- transferValue r a
+  | StackOffsetAbsVal _ o <- transferValue r a
   , Just (StackEntry v_tp v) <- Map.lookup o (r^.curAbsStack)
   , Just Refl <- testEquality tp v_tp = v
   | otherwise = TopV

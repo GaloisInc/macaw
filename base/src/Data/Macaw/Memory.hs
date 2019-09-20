@@ -51,6 +51,7 @@ module Data.Macaw.Memory
   , SplitError(..)
     -- * MemWidth
   , MemWidth(..)
+  , memWidthNatRepr
     -- * MemWord
   , MemWord
   , memWord
@@ -334,6 +335,9 @@ class (1 <= w) => MemWidth w where
 
   -- | Rotates the value by the given index.
   addrRotate :: MemWord w -> Int -> MemWord w
+
+memWidthNatRepr :: MemWidth w => NatRepr w
+memWidthNatRepr = addrWidthNatRepr (addrWidthRepr memWidthNatRepr)
 
 -- | Read an address with the given endianess.
 --

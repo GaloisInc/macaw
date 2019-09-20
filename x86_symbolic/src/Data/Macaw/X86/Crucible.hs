@@ -107,7 +107,8 @@ withConcreteCountAndDir
   -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
 withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
   let sym = state^.stateSymInterface
-  let val_byte_size = M.repValSizeByteCount val_size
+  let val_byte_size :: Integer
+      val_byte_size = fromIntegral $ M.repValSizeByteCount val_size
   bv_count <- toValBV sym wrapped_count
   case asConcrete bv_count of
     Just (ConcreteBV _ count) -> do

@@ -155,8 +155,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
   , even_parity
-  , fnstcw
-  , getSegmentBase
   , x87Push
   , x87Pop
   , bvQuotRem
@@ -502,9 +500,6 @@ data Location addr (tp :: Type) where
   Register :: !(RegisterView m b n)
            -> Location addr (BVType n)
 
-  SegmentReg :: !F.Segment
-             -> Location addr (BVType 16)
-
   X87ControlReg :: !(X87_ControlReg w)
                 -> Location addr (BVType w)
 
@@ -557,13 +552,6 @@ setLoc loc v =
    MemoryAddr w tp -> do
      addr <- eval w
      addStmt $ WriteMem addr tp v
-   SegmentReg s
-     | s == F.FS -> addWriteLoc FS v
-     | s == F.GS -> addWriteLoc GS v
-       -- Otherwise registers are 0.
-     | otherwise ->
-       fail $ "On x86-64 registers other than fs and gs may not be set."
-
    X87ControlReg r ->
      addWriteLoc (X87_ControlLoc r) v
    FullRegister r -> do
@@ -608,7 +596,6 @@ ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
   FullRegister r -> text $ "%" ++ show r
-  SegmentReg r -> text (show r)
   X87ControlReg r -> text ("x87_" ++ show r)
   X87StackRegister i -> text $ "x87_stack@" ++ show i
   where
@@ -673,7 +660,6 @@ instance HasRepr (Location addr) TypeRepr where
   typeRepr (MemoryAddr _ tp) = typeRepr tp
   typeRepr (FullRegister r)  = typeRepr r
   typeRepr (Register rv@RegisterView{}) = BVTypeRepr $ _registerViewSize rv
-  typeRepr (SegmentReg _)    = knownRepr
   typeRepr (X87ControlReg r) =
     case x87ControlRegWidthIsPos r of
       LeqProof -> BVTypeRepr (typeRepr r)
@@ -1547,12 +1533,6 @@ get l0 =
     MemoryAddr w tp -> do
       addr <- eval w
       evalAssignRhs (ReadMem addr tp)
-    SegmentReg s
-      | s == F.FS -> readLoc FS
-      | s == F.GS -> readLoc GS
-        -- Otherwise registers are 0.
-      | otherwise ->
-        fail $ "On x86-64 registers other than fs and gs may not be read."
     X87ControlReg r ->
       readLoc (X87_ControlLoc r)
     FullRegister r -> getReg r
@@ -1581,20 +1561,6 @@ even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)
 even_parity v = do
   val_v <- eval v
   evalArchFn (EvenParity val_v)
-
--- | Store floating point control word in given address.
-fnstcw :: Addr ids -> X86Generator st ids ()
-fnstcw addr = do
-  addArchStmt =<< StoreX87Control <$> eval addr
-
--- | Return the base address of the given segment.
-getSegmentBase :: F.Segment -> X86Generator st ids (Addr ids)
-getSegmentBase seg =
-  case seg of
-    F.FS -> evalArchFn ReadFSBase
-    F.GS -> evalArchFn ReadGSBase
-    _ ->
-      error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
 
 -- FIXME: those should also mutate the underflow/overflow flag and
 -- related state.

@@ -22,9 +22,6 @@ module Data.Macaw.X86.Getters
   , truncateBVValue
   , getCallTarget
   , doJump
-  , HasRepSize(..)
-  , getAddrRegOrSegment
-  , getAddrRegSegmentOrImm
   , readXMMValue
   , readYMMValue
   , getImm32
@@ -51,7 +48,6 @@ module Data.Macaw.X86.Getters
 
 import           Control.Lens ((&))
 import           Data.Parameterized.NatRepr
-import           Data.Parameterized.Some
 import qualified Data.Text as T
 import qualified Flexdis86 as F
 import           GHC.TypeLits (KnownNat)
@@ -173,19 +169,21 @@ getBVAddress ar =
     v0_64 = bvLit n64 0
     -- | Add the segment base to compute an absolute address.
     mk_absolute :: F.Segment -> Addr ids -> X86Generator st ids (Expr ids (BVType 64))
-    mk_absolute seg offset
+    mk_absolute seg offset =
       -- In 64-bit mode the CS, DS, ES, and SS segment registers
       -- are forced to zero, and so segmentation is a nop.
       --
       -- We could nevertheless call 'getSegmentBase' in all cases
       -- here, but that adds a lot of noise to the AST in the common
       -- case of segments other than FS or GS.
-      | seg == F.CS || seg == F.DS || seg == F.ES || seg == F.SS =
-        return offset
-      -- The FS and GS segments can be non-zero based in 64-bit mode.
-      | otherwise = do
-        base <- getSegmentBase seg
-        return $ base .+ offset
+      case seg of
+        F.ES -> pure offset
+        F.CS -> pure offset
+        F.SS -> pure offset
+        F.DS -> pure offset
+        F.FS -> (.+ offset) <$> evalArchFn ReadFSBase
+        F.GS -> (.+ offset) <$> evalArchFn ReadGSBase
+        _ -> error "Unexpected segment"
 
 -- | Translate a flexdis address-refrence into a one-byte address.
 getBV8Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 8))
@@ -240,7 +238,7 @@ getSomeBVLocation v =
                                                   else xmm_sse r
     F.YMMReg r       -> do avx <- isAVX
                            pure $ SomeBV $ if avx then ymm_zero r else ymm_preserve r
-    F.SegmentValue s -> pure $ SomeBV $ SegmentReg s
+    F.SegmentValue _ -> fail "SegmentValue"
     F.X87Register i -> mk (X87StackRegister i)
     F.FarPointer _      -> fail "FarPointer"
     -- SomeBV . (`MemoryAddr`   byteMemRepr) <$> getBVAddress ar -- FIXME: what size here?
@@ -428,46 +426,6 @@ doJump cond v =
       ipVal <- eval =<< get rip
       let msg = "Data.Macaw.X86.Getters.doJump: Unexpected argument: " ++ show v ++ " at " ++ show ipVal
       addTermStmt (\regs -> TranslateError regs (T.pack msg))
-
-------------------------------------------------------------------------
--- Standard memory values
-
-data HasRepSize f w = HasRepSize { _ppvWidth :: !(RepValSize w)
-                                 , _ppvValue :: !(f (BVType w))
-                                 }
-
--- | Gets the location to store the value poped from.
--- These functions only support general purpose registers/addresses and segments.
-getAddrRegOrSegment :: F.Value -> X86Generator st ids (Some (HasRepSize (Location (Addr ids))))
-getAddrRegOrSegment v =
-  case v of
-    F.SegmentValue s -> pure $ Some $ HasRepSize WordRepVal (SegmentReg s)
-    F.Mem8  ar -> Some . HasRepSize  ByteRepVal <$> getBV8Addr  ar
-    F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> getBV16Addr ar
-    F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
-    F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
-
-    F.ByteReg  r -> pure $ Some $ HasRepSize  ByteRepVal $ reg8Loc  r
-    F.WordReg  r -> pure $ Some $ HasRepSize  WordRepVal $ reg16Loc r
-    F.DWordReg r -> pure $ Some $ HasRepSize DWordRepVal $ reg32Loc r
-    F.QWordReg r -> pure $ Some $ HasRepSize QWordRepVal $ reg64Loc r
-    _  -> fail $ "Argument " ++ show v ++ " not supported."
-
--- | Gets a value that can be pushed.
--- These functions only support general purpose registers/addresses and segments.
-getAddrRegSegmentOrImm :: F.Value -> X86Generator st ids (Some (HasRepSize (Expr ids)))
-getAddrRegSegmentOrImm v =
-  case v of
-    F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
-    F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
-    F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
-    F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
-    F.ByteSignedImm w -> pure $ Some $ HasRepSize ByteRepVal $ bvLit n8 (toInteger w)
-    F.WordSignedImm w -> pure $ Some $ HasRepSize WordRepVal $ bvLit n16 (toInteger w)
-    F.DWordSignedImm w -> pure $ Some $ HasRepSize DWordRepVal $ bvLit n32 (toInteger w)
-    _ -> do
-      Some (HasRepSize rep l) <- getAddrRegOrSegment v
-      Some . HasRepSize rep <$> get l
 
 ------------------------------------------------------------------------
 -- SSE
