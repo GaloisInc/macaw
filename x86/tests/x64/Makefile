@@ -20,6 +20,9 @@ test-tail-call.exe: test-tail-call.c
 %.o: %.c
 	clang -c --target=x86_64-pc-linux-elf -o $@ $<
 
+%.o: %.s
+	clang -c --target=x86_64-pc-linux-elf -o $@ $<
+
 .PRECIOUS: %.s
 
 clean:

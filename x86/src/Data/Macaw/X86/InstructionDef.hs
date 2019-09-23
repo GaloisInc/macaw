@@ -84,13 +84,13 @@ defNullaryPrefix mnem f = defVariadic mnem (\pfx _ -> f pfx)
 -- | Define an instruction that expects a single argument
 defUnary :: String
             -- ^ Instruction mnemonic
-         -> (forall st ids . F.LockPrefix -> F.Value -> X86Generator st ids ())
+         -> (forall st ids . F.InstructionInstance -> F.Value -> X86Generator st ids ())
              -- ^ Sementic definition
          -> InstructionDef
-defUnary mnem f = defVariadic mnem $ \pfx vs ->
-  case vs of
-    [v]   -> f pfx v
-    _     -> fail $ "defUnary: " ++ mnem ++ " expecting 1 arguments, got " ++ show (length vs)
+defUnary mnem f = defInstruction mnem $ \ii ->
+  case F.iiArgs ii of
+    [v]   -> f ii (fst v)
+    vs     -> fail $ "defUnary: " ++ mnem ++ " expecting 1 arguments, got " ++ show (length vs)
 
 -- | Define an instruction that expects two arguments.
 defBinary :: String

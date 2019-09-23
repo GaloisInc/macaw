@@ -88,6 +88,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           GHC.IO (ioToST, stToIO)
+import           Numeric.Natural
 import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
 
@@ -440,7 +441,7 @@ mergeIntraJump src (tgt, ab, bnds) = do
 data BoundedMemArray arch tp = BoundedMemArray
   { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
     -- ^ The base address for array accesses.
-  , arStride :: !Integer
+  , arStride :: !Natural
     -- ^ Space between elements of the array.
     --
     -- This will typically be the number of bytes denoted by `arEltType`,
@@ -550,9 +551,9 @@ matchBoundedMemArray mem aps jmpBounds val = do
     fail "Size is too large."
 
   -- Break up contents into a list of slices each with size stide
-  Right (strideSlices,_) <- pure $ sliceMemContents (fromInteger stride) cnt contents
+  Right (strideSlices,_) <- pure $ sliceMemContents (fromIntegral stride) cnt contents
   -- Take the given number of bytes out of each slices
-  Right slices <- pure $ traverse (\s -> fst <$> splitMemChunks s (fromInteger (memReprBytes tp)))
+  Right slices <- pure $ traverse (\s -> fst <$> splitMemChunks s (fromIntegral (memReprBytes tp)))
                                   (V.fromList strideSlices)
 
   let r = BoundedMemArray
@@ -1279,7 +1280,7 @@ tailCallClassifier = classifierName "Tail call" $ do
     -- Check to see if the stack pointer points to an offset of the initial stack.
     o <-
       case transferValue absState spVal of
-        StackOffset _ o -> pure o
+        StackOffsetAbsVal _ o -> pure o
         _ -> fail $ "Not a stack offset"
     -- Stack stack is back to height when function was called.
     unless (o == 0) $

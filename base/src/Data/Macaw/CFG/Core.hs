@@ -18,6 +18,7 @@ single CFG.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -40,6 +41,8 @@ module Data.Macaw.CFG.Core
   , valueAsMemAddr
   , valueAsSegmentOff
   , valueAsStaticMultiplication
+  , StackOffsetView(..)
+  , appAsStackOffset
   , asBaseOffset
   , asInt64Constant
   , IPAlignment(..)
@@ -105,6 +108,7 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
+import           Numeric.Natural
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
@@ -395,12 +399,12 @@ valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
-valueAsStaticMultiplication ::
-  BVValue arch ids w ->
-  Maybe (Integer, BVValue arch ids w)
+valueAsStaticMultiplication
+  :: BVValue arch ids w
+  -> Maybe (Natural, BVValue arch ids w)
 valueAsStaticMultiplication v
-  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
-  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
+  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (fromInteger mul, v')
+  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (fromInteger mul, v')
   | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
   -- the PowerPC way to shift left is a bit obtuse...
   | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
@@ -428,6 +432,32 @@ asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
+
+-- | A stack offset that can also capture the width must match the pointer width.
+data StackOffsetView arch tp where
+  StackOffsetView :: !Integer -> StackOffsetView arch (BVType (ArchAddrWidth arch))
+
+-- | This pattern matches on an app to see if it can be used to adjust a
+-- stack offset.
+appAsStackOffset :: forall arch ids tp
+                 .  MemWidth (ArchAddrWidth arch)
+                 => (Value arch ids (BVType (ArchAddrWidth arch)) -> Maybe Integer)
+                 -- ^ Function for inferring if argument is a stack offset.
+                 -> App (Value arch ids) tp
+                 -> Maybe (StackOffsetView arch tp)
+appAsStackOffset stackFn app =
+  case app of
+    BVAdd w (BVValue _ i) y -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\j -> StackOffsetView (i+j)) <$> stackFn y
+    BVAdd w x (BVValue _ j) -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\i -> StackOffsetView (i+j)) <$> stackFn x
+    BVSub w x (BVValue _ j) -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\i -> StackOffsetView (i-j)) <$> stackFn x
+    _ ->
+      Nothing
 
 -- | During the jump-table detection phase of code discovery, we have the
 -- following problem: we are given a value which represents the computation

@@ -155,8 +155,6 @@ module Data.Macaw.X86.Monad
   , Data.Macaw.X86.Generator.evalArchFn
   , Data.Macaw.X86.Generator.addArchTermStmt
   , even_parity
-  , fnstcw
-  , getSegmentBase
   , x87Push
   , x87Pop
   , bvQuotRem
@@ -189,7 +187,6 @@ import           Data.Macaw.X86.ArchTypes
 import           Data.Macaw.X86.Generator
 import           Data.Macaw.X86.X86Reg (X86Reg(..))
 import qualified Data.Macaw.X86.X86Reg as R
-import           Data.Macaw.X86.X87ControlReg
 
 type XMMType    = BVType 128
 type YMMType    = BVType 256
@@ -198,7 +195,6 @@ ltProof :: forall f n m . (n+1 <= m) => f n -> f m -> LeqProof n m
 ltProof _ _ = leqTrans lt LeqProof
   where lt :: LeqProof n (n+1)
         lt = leqAdd LeqProof n1
-
 
 ------------------------------------------------------------------------
 -- Sub registers
@@ -502,18 +498,6 @@ data Location addr (tp :: Type) where
   Register :: !(RegisterView m b n)
            -> Location addr (BVType n)
 
-  ControlReg :: !F.ControlReg
-             -> Location addr (BVType 64)
-
-  DebugReg :: !F.DebugReg
-           -> Location addr (BVType 64)
-
-  SegmentReg :: !F.Segment
-             -> Location addr (BVType 16)
-
-  X87ControlReg :: !(X87_ControlReg w)
-                -> Location addr (BVType w)
-
   -- | The register stack: the argument is an offset from the stack
   -- top, so X87Register 0 is the top, X87Register 1 is the second,
   -- and so forth.
@@ -527,9 +511,6 @@ data Location addr (tp :: Type) where
 type AddrExpr ids = Expr ids (BVType 64)
 
 type ImpLocation ids tp = Location (AddrExpr ids) tp
-
-readLoc :: X86PrimLoc tp -> X86Generator st_s ids (Expr ids tp)
-readLoc l = evalArchFn (ReadLoc l)
 
 getX87Top :: X86Generator st_s ids Int
 getX87Top = do
@@ -546,10 +527,6 @@ getX87Offset i = do
     fail $ "Illegal floating point index"
   return $! topv + i
 
-
-addWriteLoc :: X86PrimLoc tp -> Value X86_64 ids tp -> X86Generator st_s ids ()
-addWriteLoc l v = addArchStmt $ WriteLoc l v
-
 getReg :: X86Reg tp -> X86Generator st_s ids (Expr ids tp)
 getReg r = ValueExpr <$> getRegValue r
 
@@ -563,21 +540,6 @@ setLoc loc v =
    MemoryAddr w tp -> do
      addr <- eval w
      addStmt $ WriteMem addr tp v
-
-   ControlReg r -> do
-     addWriteLoc (ControlLoc r) v
-   DebugReg r  ->
-     addWriteLoc (DebugLoc r) v
-
-   SegmentReg s
-     | s == F.FS -> addWriteLoc FS v
-     | s == F.GS -> addWriteLoc GS v
-       -- Otherwise registers are 0.
-     | otherwise ->
-       fail $ "On x86-64 registers other than fs and gs may not be set."
-
-   X87ControlReg r ->
-     addWriteLoc (X87_ControlLoc r) v
    FullRegister r -> do
      setReg r v
    Register (rv :: RegisterView m b n) -> do
@@ -620,10 +582,6 @@ ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
   FullRegister r -> text $ "%" ++ show r
-  ControlReg r -> text (show r)
-  DebugReg r -> text (show r)
-  SegmentReg r -> text (show r)
-  X87ControlReg r -> text ("x87_" ++ show r)
   X87StackRegister i -> text $ "x87_stack@" ++ show i
   where
     -- | Print subrange as Python-style slice @<location>[<low>:<high>]@.
@@ -687,12 +645,6 @@ instance HasRepr (Location addr) TypeRepr where
   typeRepr (MemoryAddr _ tp) = typeRepr tp
   typeRepr (FullRegister r)  = typeRepr r
   typeRepr (Register rv@RegisterView{}) = BVTypeRepr $ _registerViewSize rv
-  typeRepr (ControlReg _)    = knownRepr
-  typeRepr (DebugReg _)    = knownRepr
-  typeRepr (SegmentReg _)    = knownRepr
-  typeRepr (X87ControlReg r) =
-    case x87ControlRegWidthIsPos r of
-      LeqProof -> BVTypeRepr (typeRepr r)
   typeRepr (X87StackRegister _) = knownRepr
 
 ------------------------------------------------------------------------
@@ -1563,18 +1515,6 @@ get l0 =
     MemoryAddr w tp -> do
       addr <- eval w
       evalAssignRhs (ReadMem addr tp)
-    ControlReg _ ->
-      fail $ "Do not support reading control registers."
-    DebugReg _ ->
-      fail $ "Do not support reading debug registers."
-    SegmentReg s
-      | s == F.FS -> readLoc FS
-      | s == F.GS -> readLoc GS
-        -- Otherwise registers are 0.
-      | otherwise ->
-        fail $ "On x86-64 registers other than fs and gs may not be read."
-    X87ControlReg r ->
-      readLoc (X87_ControlLoc r)
     FullRegister r -> getReg r
     Register rv -> do
       registerViewRead rv <$> getReg (registerViewReg rv)
@@ -1601,20 +1541,6 @@ even_parity :: BVExpr ids 8 -> X86Generator st ids (Expr ids BoolType)
 even_parity v = do
   val_v <- eval v
   evalArchFn (EvenParity val_v)
-
--- | Store floating point control word in given address.
-fnstcw :: Addr ids -> X86Generator st ids ()
-fnstcw addr = do
-  addArchStmt =<< StoreX87Control <$> eval addr
-
--- | Return the base address of the given segment.
-getSegmentBase :: F.Segment -> X86Generator st ids (Addr ids)
-getSegmentBase seg =
-  case seg of
-    F.FS -> evalArchFn ReadFSBase
-    F.GS -> evalArchFn ReadGSBase
-    _ ->
-      error $ "X86_64 getSegmentBase " ++ show seg ++ ": unimplemented!"
 
 -- FIXME: those should also mutate the underflow/overflow flag and
 -- related state.
