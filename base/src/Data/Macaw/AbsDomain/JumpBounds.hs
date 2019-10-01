@@ -201,14 +201,14 @@ instance ShowF r => Pretty (BoundLoc r tp) where
 
 -- | A constraint on a @BoundLoc
 data LocConstraint r tp where
+  -- | An equivalence class representative with the given number of
+  -- elements.
+  --
+  -- In our map the number of equivalence class members should always
+  -- be positive.
   ValueRep :: !(ClassPred (RegAddrWidth r) tp)
            -> !Word64
-           -> LocConstraint r tp -- ^ An equivalence class
-                                   -- representative with the given
-                                   -- number of elements.
-                                   --
-                                   -- In our map the number of
-                                   -- equivalence class members should always be positive.
+           -> LocConstraint r tp
   EqualValue :: !(BoundLoc r tp)
              -> LocConstraint r tp
 
