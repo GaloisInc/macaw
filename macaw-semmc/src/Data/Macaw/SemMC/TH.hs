@@ -7,9 +7,9 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeApplications #-}
 -- | Architecture-independent translation of semmc semantics (via SimpleBuilder)
 -- into macaw IR.
 --
@@ -39,9 +39,10 @@ import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
 
-import           Data.Proxy ( Proxy(..) )
+import qualified Data.Foldable as F
 import qualified Data.List as L
 import qualified Data.Map as Map
+import           Data.Proxy ( Proxy(..) )
 import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
@@ -60,9 +61,12 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Lang.Crucible.Backend.Simple as S
 import qualified What4.BaseTypes as CT
+import qualified What4.Expr.BoolMap as BooM
 import qualified What4.Expr.Builder as S
+import qualified What4.Expr.WeightedSum as WSum
 import qualified What4.Interface as SI
 import qualified What4.InterpretedFloatingPoint as SI
+import qualified What4.SemiRing as SR
 import qualified What4.Symbol as Sy
 
 import qualified Dismantle.Instruction as D
@@ -607,8 +611,6 @@ addEltTH interps elt = do
     Just e -> return e
     Nothing ->
       case elt of
-        S.BVExpr w val _loc ->
-          bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
         S.AppExpr appElt -> do
           translatedExpr <- appToExprTH (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
@@ -624,8 +626,13 @@ addEltTH interps elt = do
         S.NonceAppExpr n -> do
           translatedExpr <- evalNonceAppTH interps (S.nonceExprApp n)
           bindExpr elt (return translatedExpr)
-        S.SemiRingLiteral {} -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
+        S.SemiRingLiteral srTy val _
+          | (SR.SemiRingBVRepr _ w) <- srTy ->
+            bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
+          | otherwise -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
         S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
+        S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
+
 
 symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
@@ -780,30 +787,40 @@ defaultAppEvaluator :: (A.Architecture arch)
                     -> BoundVarInterpretations arch t fs
                     -> MacawQ arch t fs Exp
 defaultAppEvaluator elt interps = case elt of
-  S.TrueBool  -> liftQ [| return $ G.ValueExpr (M.BoolValue True) |]
-  S.FalseBool -> liftQ [| return $ G.ValueExpr (M.BoolValue False) |]
-  S.NotBool bool -> do
+  S.NotPred bool -> do
     e <- addEltTH interps bool
     liftQ [| return (G.AppExpr (M.NotApp $(return e))) |]
-  S.AndBool bool1 bool2 -> do
-    e1 <- addEltTH interps bool1
-    e2 <- addEltTH interps bool2
-    liftQ [| return (G.AppExpr (M.AndApp $(return e1) $(return e2))) |]
-  S.XorBool bool1 bool2 -> do
-    e1 <- addEltTH interps bool1
-    e2 <- addEltTH interps bool2
-    liftQ [| return (G.AppExpr (M.XorApp $(return e1) $(return e2))) |]
-  S.IteBool test t f -> do
+  S.ConjPred boolmap -> evalBoolMap interps AndOp True boolmap
+  S.DisjPred boolmap -> evalBoolMap interps OrOp False boolmap
+  S.BaseIte bt _ test t f -> do
     testE <- addEltTH interps test
     tE <- addEltTH interps t
     fE <- addEltTH interps f
-    liftQ [| return (G.AppExpr (M.Mux M.BoolTypeRepr $(return testE) $(return tE) $(return fE))) |]
-  S.BVIte w _ test t f -> do
-    testE <- addEltTH interps test
-    tE <- addEltTH interps t
-    fE <- addEltTH interps f
-    liftQ [| return (G.AppExpr (M.Mux (M.BVTypeRepr $(natReprTH w)) $(return testE) $(return tE) $(return fE))) |]
-  S.BVEq bv1 bv2 -> do
+    case bt of
+      CT.BaseBoolRepr -> liftQ [| return
+                                  (G.AppExpr
+                                   (M.Mux M.BoolTypeRepr
+                                    $(return testE) $(return tE) $(return fE)))
+                                |]
+      CT.BaseBVRepr w -> liftQ [| return
+                                  (G.AppExpr
+                                   (M.Mux (M.BVTypeRepr $(natReprTH w))
+                                    $(return testE) $(return tE) $(return fE)))
+                                |]
+      CT.BaseFloatRepr fpp -> liftQ [| return
+                                       (G.AppExpr
+                                        (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp))
+                                         $(return testE) $(return tE) $(return fE)))
+                                     |]
+      CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
+      CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
+      CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
+      CT.BaseStringRepr -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
+      CT.BaseComplexRepr -> liftQ [| error "Macaw semantics for complex ITE unsupported" |]
+      CT.BaseStructRepr {} -> liftQ [| error "Macaw semantics for struct ITE unsupported" |]
+      CT.BaseArrayRepr {} -> liftQ [| error "Macaw semantics for array ITE unsupported" |]
+
+  S.BaseEq _bt bv1 bv2 -> do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
     liftQ [| return (G.AppExpr (M.Eq $(return e1) $(return e2))) |]
@@ -833,22 +850,78 @@ defaultAppEvaluator elt interps = case elt of
                    Just Refl -> return (G.ValueExpr $(return e))
                    Nothing -> error "Invalid reprs for BVSelect translation"
                |]
-  S.BVNeg w bv -> do
-    bvValExp <- addEltTH interps bv
-    liftQ [| let repW = $(natReprTH w)
-             in G.AppExpr <$> (M.BVAdd repW <$> G.addExpr (G.AppExpr (M.BVComplement repW $(return bvValExp))) <*> pure (M.mkLit repW 1))
-           |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH interps bv
-    liftQ [| G.AppExpr <$> (M.BVTestBit <$> G.addExpr (G.ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))) <*> pure $(return bvValExp)) |]
-  S.BVAdd w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| return (G.AppExpr (M.BVAdd $(natReprTH w) $(return e1) $(return e2))) |]
-  S.BVMul w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| return (G.AppExpr (M.BVMul $(natReprTH w) $(return e1) $(return e2))) |]
+    liftQ [| G.AppExpr <$> (M.BVTestBit <$>
+                            G.addExpr (G.ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))) <*>
+                            pure $(return bvValExp)) |]
+
+  S.SemiRingSum sm ->
+    case WSum.sumRepr sm of
+      SR.SemiRingBVRepr SR.BVArithRepr w ->
+        let smul mul e = do y <- addEltTH interps e
+                            liftQ [| return
+                                     (G.AppExpr
+                                      (M.BVMul $(natReprTH w)
+                                       (M.BVValue $(natReprTH w) $(lift mul))
+                                       $(return y)))
+                                   |]
+            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift v))) |]
+            add x y = liftQ [| G.AppExpr <$> (M.BVAdd $(natReprTH w)
+                                              <$> (G.addExpr =<< $(return x))
+                                              <*> (G.addExpr =<< $(return y)))
+                                |]
+        in WSum.evalM add smul sval sm
+      SR.SemiRingBVRepr SR.BVBitsRepr w ->
+        let smul mul e = do y <- addEltTH interps e
+                            liftQ [| return
+                                     (G.AppExpr
+                                      (M.BVAnd $(natReprTH w)
+                                       (M.BVValue $(natReprTH w) $(lift mul))
+                                       $(return y)))
+                                   |]
+            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift v))) |]
+            add x y = liftQ [| G.AppExpr <$> (M.BVXor $(natReprTH w)
+                                              <$> (G.addExpr =<< $(return x))
+                                              <*> (G.addExpr =<< $(return y)))
+                                |]
+        in WSum.evalM add smul sval sm
+      _ -> liftQ [| error "unsupported SemiRingSum repr for macaw semmc TH" |]
+
+  S.SemiRingProd pd ->
+    case WSum.prodRepr pd of
+      SR.SemiRingBVRepr SR.BVArithRepr w ->
+        let pmul x y = liftQ
+                       [| return
+                          (G.AppExpr
+                           (M.BVMul $(natReprTH w) $(return x) $(return y)))
+                        |]
+            unit = liftQ [| return $ M.BVValue $(natReprTH w) 1 |]
+            convert = addEltTH interps
+        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+      SR.SemiRingBVRepr SR.BVBitsRepr w ->
+        let pmul x y = liftQ
+                       [| return
+                          (G.AppExpr
+                           (M.BVAnd $(natReprTH w) $(return x) $(return y)))
+                        |]
+            unit = liftQ [| return (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
+            convert = addEltTH interps
+        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+      _ -> liftQ [| error "unsupported SemiRingProd repr for macaw semmc TH" |]
+
+  S.BVOrBits pd ->
+    case WSum.prodRepr pd of
+      SR.SemiRingBVRepr _ w ->
+        let pmul x y = liftQ
+                       [| return
+                          (G.AppExpr
+                           (M.BVOr $(natReprTH w) $(return x) $(return y)))
+                        |]
+            unit = liftQ [| return $ M.BVValue $(natReprTH w) 0 |]
+            convert = addEltTH interps
+        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH interps bv1
     e2 <- addEltTH interps bv2
@@ -867,31 +940,46 @@ defaultAppEvaluator elt interps = case elt of
   S.BVSext w bv -> do
     e <- addEltTH interps bv
     liftQ [| return (G.AppExpr (M.SExt $(return e) $(natReprTH w))) |]
-  S.BVBitNot w bv -> do
-    e <- addEltTH interps bv
-    liftQ [| return (G.AppExpr (M.BVComplement $(natReprTH w) $(return e))) |]
-  S.BVBitAnd w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| return (G.AppExpr (M.BVAnd $(natReprTH w) $(return e1) $(return e2))) |]
-  S.BVBitOr w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| return (G.AppExpr (M.BVOr $(natReprTH w) $(return e1) $(return e2))) |]
-  S.BVBitXor w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
-    liftQ [| return (G.AppExpr (M.BVXor $(natReprTH w) $(return e1) $(return e2))) |]
-  S.FloatIte fpp cond fp1 fp2 -> do
-    c  <- addEltTH interps cond
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
-    liftQ [|
-        return $ G.AppExpr $ M.Mux
-          (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp))
-          $(return c)
-          $(return e1)
-          $(return e2)
-      |]
   _ -> error $ "unsupported Crucible elt:" ++ show elt
 
+
+----------------------------------------------------------------------
+
+data BoolMapOp = AndOp | OrOp
+
+
+evalBoolMap :: A.Architecture arch =>
+               BoundVarInterpretations arch t fs
+            -> BoolMapOp
+            -> Bool
+            -> BooM.BoolMap (S.Expr t)
+            -> MacawQ arch t fs Exp
+evalBoolMap interps op defVal bmap =
+  case BooM.viewBoolMap bmap of
+    BooM.BoolMapUnit ->     liftQ [| return (boolBase $(lift defVal)) |]
+    BooM.BoolMapDualUnit -> liftQ [| return (bNotBase $(lift defVal)) |]
+    BooM.BoolMapTerms ts ->
+         do d <- liftQ [| return (boolBase $(lift defVal)) |]
+            F.foldl (joinBool interps op) (return d) ts
+
+
+boolBase, bNotBase :: A.Architecture arch => Bool -> G.Expr arch t 'M.BoolType
+boolBase = G.ValueExpr . M.BoolValue
+bNotBase = boolBase . not
+
+joinBool :: A.Architecture arch =>
+            BoundVarInterpretations arch t fs
+         -> BoolMapOp
+         -> MacawQ arch t fs Exp
+         -> (S.Expr t SI.BaseBoolType, S.Polarity)
+         -> MacawQ arch t fs Exp
+joinBool interps op e r =
+  do n <- case r of
+            (t, BooM.Positive) -> do p <- addEltTH interps t
+                                     liftQ [| return $(return p) |]
+            (t, BooM.Negative) -> do p <- addEltTH interps t
+                                     liftQ [| (G.addExpr =<< return (G.AppExpr (M.NotApp $(return p)))) |]
+     j <- e
+     case op of
+       AndOp -> liftQ [| G.AppExpr <$> (M.AndApp <$> (G.addExpr =<< $(return j)) <*> $(return n)) |]
+       OrOp  -> liftQ [| G.AppExpr <$> (M.OrApp  <$> (G.addExpr =<< $(return j)) <*> $(return n)) |]

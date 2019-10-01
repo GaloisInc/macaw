@@ -1,0 +1,26 @@
+resolver: lts-13.26
+
+packages:
+- base
+- symbolic
+# X86 specific repos
+- x86
+- x86/support
+- x86_symbolic
+extra-deps:
+- boomerang-1.4.5.6@sha256:4f8407b9482a500ef9f8dc3fa13f9615d4d33a7c530b67c1ca27535e136a152d
+- itanium-abi-0.1.1.1@sha256:1d727fa88ecafc13ba4ec2b6a752182ce70333fbde9726aec1393151d14de6df
+- monadLib-3.9@sha256:7225fb80bf183bf64968b7d251236fb203b86838679de3eddee7bcc59925adef
+- panic-0.4.0.1@sha256:fb46577c9e0ca38c37960572f958a8469f2b577e963ed4f3ea1904d8400d828b
+- th-abstraction-0.3.1.0@sha256:96042f6658f2dccfac03b33f0fd59f62b1f65b9b0a765d8a2ea6026f4081ee4a
+# Submodules added to extra-deps so that we do not fail on warnings.
+- ./deps/crucible/what4
+- ./deps/crucible/crucible
+- ./deps/crucible/crucible-llvm
+- ./deps/llvm-pretty
+- ./deps/llvm-pretty-bc-parser
+- ./deps/parameterized-utils
+- ./deps/dwarf
+- ./deps/elf-edit
+- ./deps/flexdis86
+- ./deps/flexdis86/binary-symbols

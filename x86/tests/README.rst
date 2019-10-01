@@ -1,8 +1,6 @@
-This directory contains some automated tests for macaw-x86_.
-The macaw tests currently live in this repository because this is
-where our x86_64 semantics are defined.  Separating those semantics
-out is difficult at this point.  The tests currently cover the code
-discovery implementation in macaw.  Specifically, they check:
+This directory contains some automated tests for macaw-x86.  The tests
+currently cover the code discovery implementation in macaw.
+Specifically, they check:
 
 1) That the correct number of functions are found,
 2) Each function starts at the expected address,
@@ -23,5 +21,3 @@ avoid in a robust way.
 Note that the tests are bare-bones and do not link against libc.  They
 issue the exit system call directly to terminate.  This lets us get
 small and comprehensible test cases.
-
-.. _macaw-86: https://gitlab-ext.galois.com/macaw/macaw-x86

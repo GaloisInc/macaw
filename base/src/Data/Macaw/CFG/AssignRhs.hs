@@ -28,19 +28,15 @@ module Data.Macaw.CFG.AssignRhs
   ) where
 
 import qualified Data.Kind as Kind
-import Data.Macaw.CFG.App
-import Data.Macaw.Memory (Endianness(..), MemSegmentOff, MemWord, MemAddr)
-import Data.Macaw.Types
-
-import Data.Monoid
-import Data.Parameterized.Classes
-import Data.Parameterized.NatRepr
-import Data.Parameterized.TraversableFC (FoldableFC(..))
-import Data.Proxy
-import Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
-
-import Prelude
-
+import           Data.Macaw.CFG.App
+import           Data.Macaw.Memory (Endianness(..), MemSegmentOff, MemWord, MemAddr)
+import           Data.Macaw.Types
+import           Data.Parameterized.Classes
+import           Data.Parameterized.NatRepr
+import           Data.Parameterized.TraversableFC (FoldableFC(..))
+import           Data.Proxy
+import           Numeric.Natural
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 -- | Width of register used to store addresses.
 type family RegAddrWidth (r :: Type -> Kind.Type) :: Nat
@@ -58,11 +54,14 @@ type family ArchReg (arch :: Kind.Type) = (reg :: Type -> Kind.Type) | reg -> ar
 
 -- | A type family for architecture specific functions.
 --
--- These functions may return a value.  They may depend on the current state of
--- the heap, but should not affect the processor state.
+-- The functions associated with architecture-function depend on the
+-- contents of memory and implicit components of the processor state,
+-- but they should not affect any of the architecture registers in
+-- @ArchReg arch@.  They may only depend on the value stored in a
+-- general purpose register if it is passed as a value that can be
+-- visited when folding over values.  In particular,
 --
--- The function may depend on the set of registers defined so far, and the type
--- of the result.
+-- One Furthermore, they can only return a value
 type family ArchFn (arch :: Kind.Type) = (fn :: (Type -> Kind.Type) -> Type -> Kind.Type) | fn -> arch
 
 -- | A type family for defining architecture-specific statements.
@@ -125,10 +124,10 @@ instance Show (MemRepr tp) where
   show = show . pretty
 
 -- | Return the number of bytes this uses in memory.
-memReprBytes :: MemRepr tp -> Integer
-memReprBytes (BVMemRepr x _) = intValue x
-memReprBytes (FloatMemRepr f _) = intValue (floatInfoBytes f)
-memReprBytes (PackedVecMemRepr w r) = intValue w * memReprBytes r
+memReprBytes :: MemRepr tp -> Natural
+memReprBytes (BVMemRepr x _) = natValue x
+memReprBytes (FloatMemRepr f _) = natValue (floatInfoBytes f)
+memReprBytes (PackedVecMemRepr w r) = natValue w * memReprBytes r
 
 instance TestEquality MemRepr where
   testEquality (BVMemRepr xw xe) (BVMemRepr yw ye) = do
@@ -142,6 +141,16 @@ instance TestEquality MemRepr where
     Refl <- testEquality xe ye
     Just Refl
   testEquality _ _ = Nothing
+
+instance Hashable (MemRepr tp) where
+  hashWithSalt s mr =
+    case mr of
+      BVMemRepr w e        -> s `hashWithSalt` (0::Int) `hashWithSalt` w `hashWithSalt` e
+      FloatMemRepr r e     -> s `hashWithSalt` (1::Int) `hashWithSalt` r `hashWithSalt` e
+      PackedVecMemRepr n e -> s `hashWithSalt` (2::Int) `hashWithSalt` n `hashWithSalt` e
+
+instance HashableF MemRepr where
+  hashWithSaltF = hashWithSalt
 
 instance OrdF MemRepr where
   compareF (BVMemRepr xw xe) (BVMemRepr yw ye) =

@@ -23,6 +23,7 @@ module Data.Macaw.Symbolic.MemOps
   , doReadMem
   , doCondReadMem
   , doWriteMem
+  , doCondWriteMem
   , doGetGlobal
   , doLookupFunctionHandle
   , doPtrToBits
@@ -731,19 +732,10 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
      -- Load a value from the memory model type system.
-     res <- Mem.loadRawWithCondition sym mem ptr ty alignment
-     -- Parse value returned by memory.
-     case res of
-       Left e -> do
-         addFailedAssertion sym (AssertFailureSimError e)
-       Right (memVal, isAlloc, isAlign, isValid) ->
-         case memValToCrucible memRep memVal of
-           Left err -> fail $ "[doReadMem] " ++ err
-           Right crucVal ->
-             do assert sym isAlloc (AssertFailureSimError "Read from unallocated memory")
-                assert sym isAlign (AssertFailureSimError "Read from unaligned memory")
-                assert sym isValid (AssertFailureSimError "Invalid memory load")
-                return crucVal
+     res <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     case memValToCrucible memRep res of
+       Left err -> fail $ "[doReadMem] " ++ err
+       Right crucVal -> return crucVal
 
 -- | Conditional memory read
 --
@@ -777,25 +769,15 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
 
-     val <- Mem.loadRawWithCondition sym mem ptr ty alignment
+     val <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
      let useDefault msg =
            do notC <- notPred sym cond
               assert sym notC
                 (AssertFailureSimError ("[doCondReadMem] " ++ msg))
               return def
-     case val of
+     case memValToCrucible memRep val of
        Left err -> useDefault err
-       Right (memVal, isAlloc, isAlign, isValid) ->
-         case memValToCrucible memRep memVal of
-           Left err -> useDefault err
-           Right crucVal ->
-             do do grd <- impliesPred sym cond isAlloc
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Unallocated memory read" ptr ty))
-                do grd <- impliesPred sym cond isAlign
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Unaligned memory read" ptr ty))
-                do grd <- impliesPred sym cond isValid
-                   assert sym grd (AssertFailureSimError (Mem.ptrMessage "Invalid memory read" ptr ty))
-                muxMemReprValue sym memRep cond crucVal def
+       Right crucVal -> muxMemReprValue sym memRep cond crucVal def
 
 -- | Write a Macaw value to memory.
 --
@@ -824,3 +806,35 @@ doWriteMem sym mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
      let alignment = noAlignment -- default to byte alignment (FIXME)
      let memVal = resolveMemVal memRep ty val
      Mem.storeRaw sym mem ptr ty alignment memVal
+
+
+-- | Write a Macaw value to memory if a condition holds.
+--
+--     arg1 : Symbolic Interface
+--     arg2 : Heap prior to write
+--     arg3 : Width of ptr
+--     arg4 : What/how we are writing
+--     arg5 : Condition that must hold if we write.
+--     arg6 : Address to write to
+--     arg7 : Value to write
+doCondWriteMem ::
+  IsSymInterface sym =>
+  sym ->
+  MemImpl sym ->
+  M.AddrWidthRepr ptrW ->
+  MemRepr ty ->
+  Pred sym ->
+  LLVMPtr sym ptrW ->
+  RegValue sym (ToCrucibleType ty) ->
+  IO (MemImpl sym)
+doCondWriteMem sym mem ptrWidth memRep cond ptr val = hasPtrClass ptrWidth $
+  do ok <- isValidPtr sym mem ptrWidth ptr
+     condOk <- impliesPred sym cond ok
+     check sym condOk "doWriteMem" $
+       "Write to an invalid location: " ++ show (Mem.ppPtr ptr)
+     ty <- case memReprToStorageType (getEnd mem) memRep of
+             Left msg -> throwIO $ userError msg
+             Right tp -> pure tp
+     let alignment = noAlignment -- default to byte alignment (FIXME)
+     let memVal = resolveMemVal memRep ty val
+     Mem.condStoreRaw sym mem cond ptr ty alignment memVal

@@ -1,7 +1,4 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
-Maintainer       : Joe Hendrix <jhendrix@galois.com>
-
 Defines data types needed to represent values, assignments, and statements from Machine code.
 
 This is a low-level CFG representation where the entire program is a
@@ -16,14 +13,15 @@ single CFG.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
-
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -31,6 +29,11 @@ module Data.Macaw.CFG.Core
   , AssignId(..)
     -- * Value
   , Value(..)
+  , CValue(..)
+  , pattern BoolValue
+  , pattern BVValue
+  , pattern RelocatableValue
+  , pattern SymbolValue
   , BVValue
   , valueAsApp
   , valueAsArchFn
@@ -38,6 +41,8 @@ module Data.Macaw.CFG.Core
   , valueAsMemAddr
   , valueAsSegmentOff
   , valueAsStaticMultiplication
+  , StackOffsetView(..)
+  , appAsStackOffset
   , asBaseOffset
   , asInt64Constant
   , IPAlignment(..)
@@ -46,8 +51,9 @@ module Data.Macaw.CFG.Core
   , ppValueAssignments
   , ppValueAssignmentList
   -- * RegState
-  , RegState(..)
+  , RegState
   , regStateMap
+  , getBoundValue
   , boundValue
   , cmpRegState
   , curIP
@@ -55,11 +61,11 @@ module Data.Macaw.CFG.Core
   , mkRegStateM
   , mapRegsWith
   , traverseRegsWith
+  , traverseRegsWith_
   , zipWithRegState
   , ppRegMap
   -- * Pretty printing
   , ppAssignId
-  , ppLit
   , ppValue
   , ppStmt
   , PrettyF(..)
@@ -102,8 +108,9 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+import           Numeric.Natural
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.AssignRhs
@@ -167,6 +174,9 @@ instance Eq (AssignId ids tp) where
 instance TestEquality (AssignId ids) where
   testEquality (AssignId id1) (AssignId id2) = testEquality id1 id2
 
+instance Ord (AssignId ids tp) where
+  compare (AssignId x) (AssignId y) = compare x y
+
 instance OrdF (AssignId ids) where
   compareF (AssignId id1) (AssignId id2) = compareF id1 id2
 
@@ -177,32 +187,123 @@ instance Show (AssignId ids tp) where
   show (AssignId n) = show n
 
 ------------------------------------------------------------------------
+-- CValue
+
+-- | A constant whose value does not change during execution.
+data CValue arch tp where
+  -- | A constant bitvector
+  --
+  -- The integer should be between 0 and 2^n-1.
+  BVCValue :: (1 <= n) => !(NatRepr n) -> !Integer -> CValue arch (BVType n)
+  -- | A constant Boolean
+  BoolCValue :: !Bool -> CValue arch BoolType
+  -- | A memory address
+  RelocatableCValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+                    -> !(MemAddr (ArchAddrWidth arch))
+                    -> CValue arch (BVType (ArchAddrWidth arch))
+  -- | This denotes the address of a symbol identifier in the binary.
+  --
+  -- This appears when dealing with relocations.
+  SymbolCValue :: !(AddrWidthRepr (ArchAddrWidth arch))
+               -> !SymbolIdentifier
+               -> CValue arch (BVType (ArchAddrWidth arch))
+
+instance TestEquality (CValue arch) where
+  testEquality (BVCValue xw xi) (BVCValue yw yi) = do
+    Refl <- testEquality xw yw
+    if xi == yi then Just Refl else Nothing
+  testEquality (BoolCValue x) (BoolCValue y) = do
+    if x == y then Just Refl else Nothing
+  testEquality (RelocatableCValue _ x) (RelocatableCValue _ y) = do
+    if x == y then Just Refl else Nothing
+  testEquality (SymbolCValue _ x) (SymbolCValue _ y) = do
+    if x == y then Just Refl else Nothing
+  testEquality _ _ = Nothing
+
+instance OrdF (CValue arch) where
+  compareF (BoolCValue x) (BoolCValue y) = fromOrdering (compare x y)
+  compareF BoolCValue{} _ = LTF
+  compareF _ BoolCValue{} = GTF
+
+  compareF (BVCValue wx vx) (BVCValue wy vy) =
+    case compareF wx wy of
+      LTF -> LTF
+      EQF -> fromOrdering (compare vx vy)
+      GTF -> GTF
+  compareF BVCValue{} _ = LTF
+  compareF _ BVCValue{} = GTF
+
+  compareF (RelocatableCValue _ x) (RelocatableCValue _ y) =
+    fromOrdering (compare x y)
+  compareF RelocatableCValue{} _ = LTF
+  compareF _ RelocatableCValue{} = GTF
+
+  compareF (SymbolCValue _ x) (SymbolCValue _ y) =
+    fromOrdering (compare x y)
+
+instance HasRepr (CValue arch) TypeRepr where
+  typeRepr (BoolCValue _) = BoolTypeRepr
+  typeRepr (BVCValue w _) = BVTypeRepr w
+  typeRepr (RelocatableCValue w _) = addrWidthTypeRepr w
+  typeRepr (SymbolCValue w _)      = addrWidthTypeRepr w
+
+instance Hashable (CValue arch tp) where
+  hashWithSalt s cv =
+    case cv of
+      BVCValue w i          -> s `hashWithSalt` (0::Int) `hashWithSalt` w `hashWithSalt` i
+      BoolCValue b          -> s `hashWithSalt` (1::Int) `hashWithSalt` b
+      RelocatableCValue _ a -> s `hashWithSalt` (2::Int) `hashWithSalt` a
+      SymbolCValue _ sym    -> s `hashWithSalt` (3::Int) `hashWithSalt` sym
+
+instance HashableF (CValue arch) where
+  hashWithSaltF = hashWithSalt
+
+------------------------------------------------------------------------
 -- Value and Assignment
 
 -- | A value at runtime.
 data Value arch ids tp where
-  -- | A constant bitvector
-  --
-  -- The integer should be between 0 and 2^n-1.
-  BVValue :: (1 <= n) => !(NatRepr n) -> !Integer -> Value arch ids (BVType n)
-  -- | A constant Boolean
-  BoolValue :: !Bool -> Value arch ids BoolType
-  -- | A memory address
-  RelocatableValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-                   -> !(ArchMemAddr arch)
-                   -> Value arch ids (BVType (ArchAddrWidth arch))
-  -- | This denotes the address of a symbol identifier in the binary.
-  --
-  -- This appears when dealing with relocations.
-  SymbolValue :: !(AddrWidthRepr (ArchAddrWidth arch))
-              -> !SymbolIdentifier
-              -> Value arch ids (BVType (ArchAddrWidth arch))
+  CValue :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)
                 -> Value arch ids tp
   -- | Represents the value assigned to the register when the block started.
   Initial :: !(ArchReg arch tp)
           -> Value arch ids tp
+
+-- | A constant bitvector
+--
+-- The integer should be between 0 and 2^n-1.
+pattern BVValue :: ()
+                => forall n . (tp ~ (BVType n), 1 <= n)
+                => NatRepr n
+                -> Integer
+                -> Value arch ids tp
+pattern BVValue w i = CValue (BVCValue w i)
+
+-- | A constant Boolean
+pattern BoolValue :: () => (tp ~ BoolType) => Bool -> Value arch ids tp
+pattern BoolValue b = CValue (BoolCValue b)
+
+-- | A memory address
+pattern RelocatableValue :: ()
+                         => tp ~ BVType (ArchAddrWidth arch)
+                         => AddrWidthRepr (ArchAddrWidth arch)
+                         -> MemAddr (ArchAddrWidth arch)
+                         -> Value arch ids tp
+pattern RelocatableValue w a = CValue (RelocatableCValue w a)
+
+-- | This denotes the address of a symbol identifier in the binary.
+--
+-- This appears when dealing with relocations.
+pattern SymbolValue :: ()
+                    => tp ~ BVType (ArchAddrWidth arch)
+                    => AddrWidthRepr (ArchAddrWidth arch)
+                    -> SymbolIdentifier
+                    -> Value arch ids tp
+pattern SymbolValue w s = CValue (SymbolCValue w s)
+
+{-# COMPLETE BVValue, BoolValue, RelocatableValue, SymbolValue, AssignedValue, Initial #-}
 
 -- | An assignment consists of a unique location identifier and a right-
 -- hand side that returns a value.
@@ -218,16 +319,12 @@ type BVValue arch ids w = Value arch ids (BVType w)
 type ArchAddrValue arch ids = BVValue arch ids (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
--- Type operations on assignment AssignRhs, and Value
+-- Type operations on assignment Value
 
-instance ( HasRepr (ArchReg arch) TypeRepr
-         )
+instance HasRepr (ArchReg arch) TypeRepr
       => HasRepr (Value arch ids) TypeRepr where
 
-  typeRepr (BoolValue _) = BoolTypeRepr
-  typeRepr (BVValue w _) = BVTypeRepr w
-  typeRepr (RelocatableValue w _) = addrWidthTypeRepr w
-  typeRepr (SymbolValue w _)      = addrWidthTypeRepr w
+  typeRepr (CValue c) = typeRepr c
   typeRepr (AssignedValue a) = typeRepr (assignRhs a)
   typeRepr (Initial r) = typeRepr r
 
@@ -237,27 +334,9 @@ instance ( HasRepr (ArchReg arch) TypeRepr
 instance OrdF (ArchReg arch)
       => OrdF (Value arch ids) where
 
-  compareF (BoolValue x) (BoolValue y) = fromOrdering (compare x y)
-  compareF BoolValue{} _ = LTF
-  compareF _ BoolValue{} = GTF
-
-  compareF (BVValue wx vx) (BVValue wy vy) =
-    case compareF wx wy of
-      LTF -> LTF
-      EQF -> fromOrdering (compare vx vy)
-      GTF -> GTF
-  compareF BVValue{} _ = LTF
-  compareF _ BVValue{} = GTF
-
-  compareF (RelocatableValue _ x) (RelocatableValue _ y) =
-    fromOrdering (compare x y)
-  compareF RelocatableValue{} _ = LTF
-  compareF _ RelocatableValue{} = GTF
-
-  compareF (SymbolValue _ x) (SymbolValue _ y) =
-    fromOrdering (compare x y)
-  compareF SymbolValue{} _ = LTF
-  compareF _ SymbolValue{} = GTF
+  compareF (CValue x) (CValue y) = compareF x y
+  compareF CValue{} _ = LTF
+  compareF _ CValue{} = GTF
 
   compareF (AssignedValue x) (AssignedValue y) =
     compareF (assignId x) (assignId y)
@@ -320,12 +399,12 @@ valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
-valueAsStaticMultiplication ::
-  BVValue arch ids w ->
-  Maybe (Integer, BVValue arch ids w)
+valueAsStaticMultiplication
+  :: BVValue arch ids w
+  -> Maybe (Natural, BVValue arch ids w)
 valueAsStaticMultiplication v
-  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
-  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
+  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (fromInteger mul, v')
+  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (fromInteger mul, v')
   | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
   -- the PowerPC way to shift left is a bit obtuse...
   | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
@@ -353,6 +432,32 @@ asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
   | otherwise = (x,0)
+
+-- | A stack offset that can also capture the width must match the pointer width.
+data StackOffsetView arch tp where
+  StackOffsetView :: !Integer -> StackOffsetView arch (BVType (ArchAddrWidth arch))
+
+-- | This pattern matches on an app to see if it can be used to adjust a
+-- stack offset.
+appAsStackOffset :: forall arch ids tp
+                 .  MemWidth (ArchAddrWidth arch)
+                 => (Value arch ids (BVType (ArchAddrWidth arch)) -> Maybe Integer)
+                 -- ^ Function for inferring if argument is a stack offset.
+                 -> App (Value arch ids) tp
+                 -> Maybe (StackOffsetView arch tp)
+appAsStackOffset stackFn app =
+  case app of
+    BVAdd w (BVValue _ i) y -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\j -> StackOffsetView (i+j)) <$> stackFn y
+    BVAdd w x (BVValue _ j) -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\i -> StackOffsetView (i+j)) <$> stackFn x
+    BVSub w x (BVValue _ j) -> do
+      Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
+      (\i -> StackOffsetView (i-j)) <$> stackFn x
+    _ ->
+      Nothing
 
 -- | During the jump-table detection phase of code discovery, we have the
 -- following problem: we are given a value which represents the computation
@@ -417,10 +522,16 @@ traverseRegsWith :: Applicative m
 traverseRegsWith f (RegState m) = RegState <$> MapF.traverseWithKey f m
 
 -- | Traverse the register state with the name of each register and value.
-mapRegsWith :: Applicative m
-                 => (forall tp. r tp -> f tp -> g tp)
-                 -> RegState r f
-                 -> RegState r g
+traverseRegsWith_ :: Applicative m
+                  => (forall tp. r tp -> f tp -> m ())
+                  -> RegState r f
+                  -> m ()
+traverseRegsWith_ f (RegState m) = MapF.traverseWithKey_ f m
+
+-- | Traverse the register state with the name of each register and value.
+mapRegsWith :: (forall tp. r tp -> f tp -> g tp)
+            -> RegState r f
+            -> RegState r g
 mapRegsWith f (RegState m) = RegState (MapF.mapWithKey f m)
 
 {-# INLINE[1] boundValue #-} -- Make sure the RULE gets a chance to fire
@@ -541,7 +652,6 @@ asStackAddrOffset addr
   | otherwise =
     Nothing
 
-
 ------------------------------------------------------------------------
 -- Pretty print Assign, AssignRhs, Value operations
 
@@ -613,7 +723,7 @@ ppAssignRhs _  (SetUndefined tp) = pure $ text "undef ::" <+> brackets (text (sh
 ppAssignRhs pp (ReadMem a repr) =
   (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (CondReadMem repr c a d) = f <$> pp c <*> pp a <*> pp d
-  where f cd ad dd = text "read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
+  where f cd ad dd = text "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
 instance ArchConstraints arch => Pretty (AssignRhs arch (Value arch ids) tp) where
@@ -713,21 +823,30 @@ instance ( RegisterInfo r
 data Stmt arch ids
    = forall tp . AssignStmt !(Assignment arch ids tp)
    | forall tp . WriteMem !(ArchAddrValue arch ids) !(MemRepr tp) !(Value arch ids tp)
-     -- ^ This denotes a write to memory, and consists of an address to write to, a `MemRepr` defining
-     -- how the value should be stored in memory, and the value to be written.
+     -- ^ This denotes a write to memory, and consists of an address
+     -- to write to, a `MemRepr` defining how the value should be
+     -- stored in memory, and the value to be written.
+  | forall tp .
+    CondWriteMem !(Value arch ids BoolType)
+                 !(ArchAddrValue arch ids)
+                 !(MemRepr tp)
+                 !(Value arch ids tp)
+     -- ^ This denotes a write to memory that only executes if the
+     -- condition is true.
    | InstructionStart !(ArchAddrWord arch) !Text
      -- ^ The start of an instruction
      --
-     -- The information includes the offset relative to the start of the block and the
-     -- disassembler output if available (or empty string if unavailable)
+     -- The information includes the offset relative to the start of
+     -- the block and the disassembler output if available (or empty
+     -- string if unavailable)
    | Comment !Text
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
    | ArchState !(ArchMemAddr arch) !(MapF.MapF (ArchReg arch) (Value arch ids))
-     -- ^ Address of an instruction and the *machine* registers that it updates
-     -- (with their associated macaw values after the execution of the
-     -- instruction).
+     -- ^ Address of an instruction and the *machine* registers that
+     -- it updates (with their associated macaw values after the
+     -- execution of the instruction).
 
 ppStmt :: ArchConstraints arch
        => (ArchAddrWord arch -> Doc)
@@ -737,7 +856,10 @@ ppStmt :: ArchConstraints arch
 ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
-    WriteMem a _ rhs -> text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+    WriteMem     a _ rhs ->
+      text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+    CondWriteMem c a _ rhs ->
+      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a <+> ppValue 0 rhs
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s

@@ -1,16 +1,20 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE TypeApplications #-}
+
 module PPC64InstructionCoverage (
   ppc64InstructionCoverageTests
-  ) where
+  )
+where
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( when )
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe ( fromJust )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
+import qualified System.FilePath as FP
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
 
@@ -31,10 +35,10 @@ ppc64InstructionCoverageTests :: [FilePath] -> T.TestTree
 ppc64InstructionCoverageTests = T.testGroup "PPCCoverage" . map mkTest
 
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp (withELF fp testMacaw)
+mkTest fp = T.testCase fp (withELF fp (testMacaw fp))
 
-testMacaw :: E.Elf 64 -> IO ()
-testMacaw elf = do
+testMacaw :: FilePath -> E.Elf 64 -> IO ()
+testMacaw fpath elf = do
   let loadCfg = MM.defaultLoadOptions { MM.loadRegionIndex = Just 0 }
   loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
                <- MBL.loadBinary loadCfg elf
@@ -49,5 +53,7 @@ testMacaw elf = do
                    , pbr <- M.elems (dfi ^. MD.parsedBlocks)
                    ]
   T.assertBool "No blocks found" (not (S.null allFoundBlockAddrs))
-
-
+  when (FP.takeFileName fpath == "gzip") $
+    -- This is pretty specific, and mostly just designed to notify us
+    -- when there has been a change
+    T.assertEqual "number of found blocks" 37218 (length allFoundBlockAddrs)

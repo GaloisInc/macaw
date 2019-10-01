@@ -69,7 +69,7 @@ absEvalArchStmt _ s _ = s
 postARMTermStmtAbsState :: (ARMArchConstraints arm)
                         => (forall tp . ARMReg tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg arm))
-                        -> AbsBlockState ARMReg
+                        -> AbsProcessorState ARMReg
                         -> RegState ARMReg (Value arm ids)
                         -> ARMTermStmt ids
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg arm)), AbsBlockState ARMReg)
@@ -82,7 +82,8 @@ postARMTermStmtAbsState preservePred mem s0 regState stmt =
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextPC, MA.absEvalCall params s0 nextPC)
+              Just (nextPC, MA.absEvalCall params s0 regState nextPC)
+        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
     ThumbSyscall _ ->
       case simplifyValue (regState^.curIP) of
         Just (RelocatableValue _ addr)
@@ -90,7 +91,7 @@ postARMTermStmtAbsState preservePred mem s0 regState stmt =
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          }
-              Just (nextPC, MA.absEvalCall params s0 nextPC)
+              Just (nextPC, MA.absEvalCall params s0 regState nextPC)
         _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
 
 

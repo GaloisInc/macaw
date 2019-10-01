@@ -84,9 +84,7 @@ toAddr segOff = do
 -- associated with it
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf = do
-  let opt = MM.LoadOptions { MM.loadRegionIndex = Nothing
-                           , MM.loadRegionBaseOffset = 0
-                           }
+  let opt = MM.defaultLoadOptions
   (warn, mem, mentry, syms) <-
     case MM.resolveElfContents opt elf of
       Left err -> C.throwM (MemoryLoadError err)
@@ -119,9 +117,16 @@ testDiscovery expectedFilename elf = do
         F.forM_ (M.elems (dfi ^. MD.parsedBlocks)) $ \pb -> do
           let addr = MD.pblockAddr pb
           unless (S.member addr ignoredBlocks) $ do
-            let term = blockTerminator pb
-            T.assertBool ("Unclassified block at " ++ show (MD.pblockAddr pb)) (not (isClassifyFailure term))
-            T.assertBool ("Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term) (not (isTranslateError term))
+            let term = MD.pblockTermStmt pb
+            case term of
+              MD.ClassifyFailure _ rsns ->
+                T.assertFailure $ "Unclassified block at " ++ show (MD.pblockAddr pb) ++ "\n"
+                  ++ unlines ((\s -> "  " ++ s) <$> rsns)
+              MD.ParsedTranslateError _ ->
+                T.assertFailure $ "Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term
+              _ ->
+                pure ()
+
         let actualEntry = MD.discoveredFunAddr dfi
             -- actualEntry = fromIntegral (MM.addrValue (MD.discoveredFunAddr dfi))
         let actualBlockStarts :: S.Set (Addr, Integer)
@@ -148,18 +153,3 @@ data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
 
 instance C.Exception ElfException
-
-blockTerminator :: MD.ParsedBlock arch ids -> MD.ParsedTermStmt arch ids
-blockTerminator = MD.stmtsTerm . MD.blockStatementList
-
-isClassifyFailure :: MD.ParsedTermStmt arch ids -> Bool
-isClassifyFailure ts =
-  case ts of
-    MD.ClassifyFailure {} -> True
-    _ -> False
-
-isTranslateError :: MD.ParsedTermStmt arch ids -> Bool
-isTranslateError ts =
-  case ts of
-    MD.ParsedTranslateError {} -> True
-    _ -> False

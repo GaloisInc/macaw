@@ -34,14 +34,7 @@ import           Data.Proxy
 import           Data.Word
 import qualified Flexdis86 as F
 
-import           Data.Macaw.CFG ( MemRepr(..)
-                                , memReprBytes
-                                , App(..)
-                                , Value(BoolValue, AssignedValue)
-                                , AssignRhs(CondReadMem, ReadMem)
-                                , mkLit
-                                , WidthEqProof(..)
-                                )
+import           Data.Macaw.CFG
 import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
 
@@ -94,6 +87,29 @@ castToXMMSingleVec = bitcast (VecEqCongruence n4 toSingle) . bitcast (UnpackBits
 
 castFromXMMSingleVec :: Expr ids (VecType 4 (FloatType SingleFloat)) -> Expr ids (BVType 128)
 castFromXMMSingleVec = bitcast (PackBits n4 n32) . bitcast (VecEqCongruence n4 fromSingle)
+
+------------------------------------------------------------------------
+-- Getter
+
+data HasRepSize f w = HasRepSize { _ppvWidth :: !(RepValSize w)
+                                 , _ppvValue :: !(f (BVType w))
+                                 }
+
+-- | Gets the location to store the value poped from.
+-- These functions only support general purpose registers/addresses and segments.
+getAddrOrReg :: F.Value -> X86Generator st ids (Some (HasRepSize (Location (Addr ids))))
+getAddrOrReg v =
+  case v of
+    F.Mem8  ar -> Some . HasRepSize  ByteRepVal <$> getBV8Addr  ar
+    F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> getBV16Addr ar
+    F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
+    F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
+
+    F.ByteReg  r -> pure $ Some $ HasRepSize  ByteRepVal $ reg8Loc  r
+    F.WordReg  r -> pure $ Some $ HasRepSize  WordRepVal $ reg16Loc r
+    F.DWordReg r -> pure $ Some $ HasRepSize DWordRepVal $ reg32Loc r
+    F.QWordReg r -> pure $ Some $ HasRepSize QWordRepVal $ reg64Loc r
+    _  -> fail $ "Argument " ++ show v ++ " not supported."
 
 ------------------------------------------------------------------------
 -- Preliminaries
@@ -155,7 +171,7 @@ set_bitwise_flags res = do
 push :: MemRepr tp -> Expr ids tp -> X86Generator st ids ()
 push repr v = do
   old_sp <- get rsp
-  let delta   = bvLit n64 $ memReprBytes repr -- delta in bytes
+  let delta   = bvLit n64 (fromIntegral (memReprBytes repr)) -- delta in bytes
       new_sp  = old_sp .- delta
   MemoryAddr new_sp repr .= v
   rsp     .= new_sp
@@ -167,7 +183,7 @@ pop repr = do
   -- Get value at stack pointer.
   v   <- get (MemoryAddr old_sp repr)
   -- Increment stack pointer
-  rsp .= old_sp .+ bvLit n64 (memReprBytes repr)
+  rsp .= old_sp .+ bvLit n64 (fromIntegral (memReprBytes repr))
   -- Return value
   return v
 
@@ -329,15 +345,45 @@ def_cdqe = defNullary "cdqe" $ do
 def_pop :: InstructionDef
 def_pop =
   defUnary "pop" $ \_ fval -> do
-    Some (HasRepSize rep l) <- getAddrRegOrSegment fval
+    Some (HasRepSize rep l) <-
+      case fval of
+        F.SegmentValue _ ->
+          fail "pop does not support segment selector."
+        F.WordReg  r -> pure $ Some $ HasRepSize  WordRepVal $ reg16Loc r
+        F.DWordReg r -> pure $ Some $ HasRepSize DWordRepVal $ reg32Loc r
+        F.QWordReg r -> pure $ Some $ HasRepSize QWordRepVal $ reg64Loc r
+        F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> getBV16Addr ar
+        F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> getBV32Addr ar
+        F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> getBV64Addr ar
+        _ ->
+          fail "pop given unexpected value."
     val <- pop (repValSizeMemRepr rep)
     l .= val
 
 def_push :: InstructionDef
 def_push =
-  defUnary "push" $ \_ val -> do
-    Some (HasRepSize rep v) <- getAddrRegSegmentOrImm val
-    push (repValSizeMemRepr rep) v
+  defUnary "push" $ \_ii val -> do
+    Some (HasRepSize rep v) <-
+      case val of
+        F.SegmentValue _ ->
+          fail "push does not support segment selector."
+        F.WordReg  r -> Some . HasRepSize  WordRepVal <$> get (reg16Loc r)
+        F.DWordReg r -> Some . HasRepSize DWordRepVal <$> get (reg32Loc r)
+        F.QWordReg r -> Some . HasRepSize QWordRepVal <$> get (reg64Loc r)
+        F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> (get =<< getBV16Addr ar)
+        F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> (get =<< getBV32Addr ar)
+        F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> (get =<< getBV64Addr ar)
+        F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
+        F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
+        F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
+        F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+        _ -> fail $ "Unexpected argument to push"
+    let repr = repValSizeMemRepr rep
+    old_sp <- get rsp
+    let delta   = bvLit n64 $ fromIntegral (memReprBytes repr) -- delta in bytes
+        new_sp  = old_sp .- delta
+    MemoryAddr new_sp repr .= v
+    rsp     .= new_sp
 
 -- | Sign extend ax -> dx:ax, eax -> edx:eax, rax -> rdx:rax, resp.
 def_cwd :: InstructionDef
@@ -437,32 +483,40 @@ def_mov =
         v <- get $ reg64Loc src
         l .= v
 
-      (F.Mem16 a, F.SegmentValue s) -> do
-        v <- get (SegmentReg s)
-        l <- getBV16Addr  a
-        l .= v
-      (F.WordReg r, F.SegmentValue s) -> do
-        v <- get (SegmentReg s)
-        reg16Loc r .= v
-      (F.DWordReg r, F.SegmentValue s) -> do
-        v <- get (SegmentReg s)
-        reg_low16 (R.X86_GP (F.reg32_reg r)) .= v
-      (F.QWordReg r, F.SegmentValue s) -> do
-        v <- get (SegmentReg s)
-        fullRegister (R.X86_GP r) .= uext' n64 v
+      -- Read segment selector
+      (dest, F.SegmentValue s) -> do
+        v <- evalArchFn (GetSegmentSelector s)
+        case dest of
+          F.Mem16 a -> do
+            l <- getBV16Addr a
+            l .= v
+          F.WordReg r -> do
+            reg16Loc r .= v
+          F.DWordReg r -> do
+            reg_low16 (R.X86_GP (F.reg32_reg r)) .= v
+          F.QWordReg r -> do
+            fullRegister (R.X86_GP r) .= uext' n64 v
+          _ -> do
+            fail $ "Unexpected argument to mov read segment register " ++ show dest
 
-      (F.SegmentValue s, F.Mem16 a) -> do
-        v <- get =<< getBV16Addr a
-        SegmentReg s .= v
-      (F.SegmentValue s, F.WordReg r) -> do
-        v <- get (fullRegister (R.X86_GP (F.reg16_reg r)))
-        SegmentReg s .= bvTrunc' n16 v
-      (F.SegmentValue s, F.DWordReg r) -> do
-        v <- get (fullRegister (R.X86_GP (F.reg32_reg r)))
-        SegmentReg s .= bvTrunc' n16 v
-      (F.SegmentValue s, F.QWordReg r) -> do
-        v <- get (fullRegister (R.X86_GP r))
-        SegmentReg s .= bvTrunc' n16 v
+      -- Write to segment selector
+      (F.SegmentValue s, src) -> do
+        v16 <-
+          case src of
+            F.Mem16 a -> do
+              eval =<< get =<< getBV16Addr a
+            F.WordReg r -> do
+              v <- get (fullRegister (R.X86_GP (F.reg16_reg r)))
+              eval (bvTrunc' n16 v)
+            F.DWordReg r -> do
+              v <- get (fullRegister (R.X86_GP (F.reg32_reg r)))
+              eval (bvTrunc' n16 v)
+            F.QWordReg r -> do
+              v <- get (fullRegister (R.X86_GP r))
+              eval (bvTrunc' n16 v)
+            _ -> do
+              error $ "Unexpected source to mov set segment register " ++ show src
+        addArchStmt $ SetSegmentSelector s v16
 
       (_, F.ControlReg _) -> do
         error "Do not support moving from/to control registers."
@@ -880,8 +934,15 @@ exec_xor l v = do
 
 -- ** Shift and Rotate Instructions
 
-exec_sh :: (1 <= n, 8 <= n)
-        => RepValSize n -- ^ Number of bits to shift
+repValSizeAtLeastByte :: RepValSize n -> ((1 <= n, 8 <= n) => a) -> a
+repValSizeAtLeastByte lw a =
+    case lw of
+      ByteRepVal  -> a
+      WordRepVal  -> a
+      DWordRepVal -> a
+      QWordRepVal -> a
+
+exec_sh :: RepValSize n -- ^ Number of bits to shift
         -> Location (Addr ids) (BVType n) -- ^ Location to read/write value to shift
         -> F.Value -- ^ 8-bitshift amount
         -> (BVExpr ids n -> BVExpr ids n -> BVExpr ids n)
@@ -893,7 +954,7 @@ exec_sh :: (1 <= n, 8 <= n)
            -- ^ Function to update overflow flag
            -- Takes current and new value of location.
         -> X86Generator st ids ()
-exec_sh lw l val val_setter cf_setter of_setter = do
+exec_sh lw l val val_setter cf_setter of_setter = repValSizeAtLeastByte lw $ do
   count <-
     case val of
       F.ByteImm i ->
@@ -943,12 +1004,9 @@ def_sh :: String
           -- Takes current and new value of location.
        -> InstructionDef
 def_sh mnem val_setter cf_setter of_setter = defBinary mnem $ \_ii loc val -> do
-  Some (HasRepSize lw l) <- getAddrRegOrSegment loc
-  case lw of
-    ByteRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
-    WordRepVal  -> exec_sh lw l val val_setter cf_setter of_setter
-    DWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
-    QWordRepVal -> exec_sh lw l val val_setter cf_setter of_setter
+  Some (HasRepSize lw l) <- getAddrOrReg loc
+  repValSizeAtLeastByte lw $
+    exec_sh lw l val val_setter cf_setter of_setter
 
 def_shl :: InstructionDef
 def_shl = def_sh "shl" bvShl set_cf set_of
@@ -992,13 +1050,10 @@ def_shXd mnemonic val_setter cf_setter of_setter =
   defTernary mnemonic $ \_ loc srcReg amt -> do
     -- srcVal <- get srcReg
     -- SomeBV srcVal <- getSomeBVValue srcReg
-    Some (HasRepSize lw l) <- getAddrRegOrSegment loc
-    srcVal <- getBVValue srcReg (typeWidth l)
-    case lw of
-      ByteRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      WordRepVal  -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      DWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
-      QWordRepVal -> exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
+    Some (HasRepSize lw l) <- getAddrOrReg loc
+    repValSizeAtLeastByte lw $ do
+      srcVal <- getBVValue srcReg (typeWidth l)
+      exec_sh lw l amt (val_setter srcVal) cf_setter of_setter
 
 def_shld :: InstructionDef
 def_shld = def_shXd "shld" exec_shld set_cf set_of
@@ -1006,15 +1061,20 @@ def_shld = def_shXd "shld" exec_shld set_cf set_of
            (i `bvUle` bvLit n8 (intValue w)) .&&. bvBit v (bvLit w (intValue w) .- uext w i)
         set_of v _ =  msb v
 
-exec_shld :: forall n ids . (1 <= n) =>
-             BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n
-exec_shld srcVal v amt = let w = typeWidth v
-                         in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
-                            withAddLeq w w $
-                            \w2 -> let iv = bvCat v srcVal
-                                       amt' = uext w2 amt
-                                       fv = bvShl iv amt'
-                                   in fst $ bvSplit fv
+exec_shld :: forall n ids
+          . (1 <= n)
+          => BVExpr ids n
+          -> BVExpr ids n
+          -> BVExpr ids n
+          -> BVExpr ids n
+exec_shld srcVal v amt =
+  let w = typeWidth v
+   in withLeqProof (dblPosIsPos (LeqProof :: LeqProof 1 n)) $
+      withAddLeq w w $ \w2 ->
+        let iv = bvCat v srcVal
+            amt' = uext w2 amt
+            fv = bvShl iv amt'
+         in fst $ bvSplit fv
 
 def_shrd :: InstructionDef
 def_shrd = def_shXd "shrd" exec_shrd set_cf set_of
@@ -1304,7 +1364,7 @@ def_movs = defBinary "movs" $ \ii loc _ -> do
     F.Mem32{} -> pure (SomeRepValSize DWordRepVal)
     F.Mem64{} -> pure (SomeRepValSize QWordRepVal)
     _ -> error "Bad argument to movs"
-  let bytesPerOp = bvLit n64 (repValSizeByteCount w)
+  let bytesPerOp = bvLit n64 (fromIntegral (repValSizeByteCount w))
   dest <- get rdi
   src  <- get rsi
   df   <- get df_loc
@@ -1351,7 +1411,8 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
   df <- get df_loc
   v_rsi <- get rsi
   v_rdi <- get rdi
-  let bytesPerOp = memReprBytes repr
+  let bytesPerOp :: Integer
+      bytesPerOp = toInteger (memReprBytes repr)
   let bytesPerOp' = bvLit n64 bytesPerOp
   if repz_pfx then do
     count <- get rcx
@@ -1435,8 +1496,10 @@ exec_scas False False rep = repValHasSupportedWidth rep $ do
   v_rax <- get (xaxValLoc rep)
   let memRepr = repValSizeMemRepr rep
   exec_cmp (MemoryAddr v_rdi memRepr) v_rax  -- FIXME: right way around?
-  let bytesPerOp = mux df (bvLit n64 (negate (memReprBytes memRepr)))
-                          (bvLit n64 (memReprBytes memRepr))
+  let memSize :: Integer
+      memSize = fromIntegral (memReprBytes memRepr)
+  let bytesPerOp = mux df (bvLit n64 (negate memSize))
+                          (bvLit n64 memSize)
   rdi   .= v_rdi .+ bytesPerOp
 -- repz or repnz prefix set
 exec_scas _repz_pfx False _rep =
@@ -1461,7 +1524,7 @@ exec_scas _repz_pfx True sz = repValHasSupportedWidth sz $ do
   v_rcx <- eval =<< get rcx
   count' <- evalArchFn (RepnzScas sz v_rax v_rdi v_rcx)
   -- Get number of bytes each comparison will use
-  let bytePerOpLit = bvKLit (memReprBytes (repValSizeMemRepr sz))
+  let bytePerOpLit = bvKLit (fromIntegral (memReprBytes (repValSizeMemRepr sz)))
 
   -- Count the number of bytes seen.
   let nBytesSeen    = (ValueExpr v_rcx .- count') .* bytePerOpLit
@@ -1519,8 +1582,8 @@ exec_lods False rep = do
   -- The direction flag indicates post decrement or post increment.
   df   <- get df_loc
   src  <- get rsi
-  let szv     = bvLit n64 (memReprBytes mrepr)
-      neg_szv = bvLit n64 (negate (memReprBytes mrepr))
+  let szv     = bvLit n64 (fromIntegral (memReprBytes mrepr))
+      neg_szv = bvLit n64 (negate (fromIntegral (memReprBytes mrepr)))
   v <- get (MemoryAddr src mrepr)
   (xaxValLoc rep) .= v
   rsi .= src .+ mux df neg_szv szv
@@ -1578,12 +1641,12 @@ def_stos = defBinary "stos" $ \ii loc loc' -> do
       let mrepr = repValSizeMemRepr rep
       count <- get rcx
       addArchStmt =<< traverseF eval (RepStos rep dest v count df)
-      rdi .= dest .+ bvKLit (memReprBytes mrepr) .* mux df (bvNeg count) count
+      rdi .= dest .+ bvKLit (fromIntegral (memReprBytes mrepr)) .* mux df (bvNeg count) count
       rcx .= bvKLit 0
     F.NoLockPrefix -> do
         let mrepr = repValSizeMemRepr rep
-        let neg_szv = bvLit n64 (negate (memReprBytes mrepr))
-        let szv     = bvLit n64 (memReprBytes mrepr)
+        let neg_szv = bvLit n64 (fromIntegral (negate (memReprBytes mrepr)))
+        let szv     = bvLit n64 (fromIntegral (memReprBytes mrepr))
         MemoryAddr dest mrepr .= v
         rdi .= dest .+ mux df neg_szv szv
     lockPrefix -> fail $ "stos unexpected lock/rep prefix: " ++ show lockPrefix
@@ -1839,12 +1902,12 @@ def_fnstcw :: InstructionDef
 def_fnstcw = defUnary "fnstcw" $ \_ loc -> do
   case loc of
     F.Mem16 f_addr -> do
-      addr <- getBVAddress f_addr
+      addr <- eval =<< getBVAddress f_addr
       set_undefined c0_loc
       set_undefined c1_loc
       set_undefined c2_loc
       set_undefined c3_loc
-      fnstcw addr
+      addArchStmt $ StoreX87Control addr
     _ -> fail $ "fnstcw given bad argument " ++ show loc
 
 -- FLDCW Load FPU control word

@@ -108,6 +108,20 @@ instance KnownRepr FloatInfoRepr QuadFloat where
 instance KnownRepr FloatInfoRepr X86_80Float where
   knownRepr = X86_80FloatRepr
 
+instance Hashable (FloatInfoRepr fi) where
+  hashWithSalt s r =
+    let i ::Int
+        i = case r of
+              HalfFloatRepr   -> 0
+              SingleFloatRepr -> 1
+              DoubleFloatRepr -> 2
+              QuadFloatRepr   -> 3
+              X86_80FloatRepr -> 4
+     in hashWithSalt s i
+
+instance HashableF FloatInfoRepr where
+  hashWithSaltF = hashWithSalt
+
 instance Show (FloatInfoRepr fi) where
   show HalfFloatRepr   = "half"
   show SingleFloatRepr = "single"
@@ -196,6 +210,8 @@ type BoolType = 'BoolType
 
 type TupleType = 'TupleType
 
+type VecType = 'VecType
+
 -- | The bitvector associated with the given floating-point format.
 type FloatBVType (fi :: FloatInfo) = BVType (FloatInfoBits fi)
 
@@ -213,14 +229,17 @@ data TypeRepr (tp :: Type) where
 type_width :: TypeRepr (BVType n) -> NatRepr n
 type_width (BVTypeRepr n) = n
 
+-- Pretty print using an s-expression syntax.
+instance Pretty (TypeRepr tp) where
+  pretty BoolTypeRepr = text "bool"
+  pretty (BVTypeRepr w) = parens (text "bv" <+> text (show w))
+  pretty (FloatTypeRepr fi) = text (show fi)
+  pretty (TupleTypeRepr z) =
+    parens (foldlFC (\l tp -> l <+> pretty tp) (text "tuple") z)
+  pretty (VecTypeRepr c tp) = parens (text "vec" <+> text (show c) <+> pretty tp)
+
 instance Show (TypeRepr tp) where
-  show BoolTypeRepr = "bool"
-  show (BVTypeRepr w) = "[" ++ show w ++ "]"
-  show (FloatTypeRepr fi) = show fi ++ "_float"
-  show (TupleTypeRepr P.Nil) = "()"
-  show (TupleTypeRepr (h P.:< z)) =
-    "(" ++ show h ++ foldrFC (\tp r -> "," ++ show tp ++ r) ")" z
-  show (VecTypeRepr c tp) = "(vec " ++ show c ++ " " ++ show tp ++ ")"
+  show = show . pretty
 
 instance ShowF TypeRepr
 

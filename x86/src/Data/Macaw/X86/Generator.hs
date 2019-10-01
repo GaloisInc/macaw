@@ -36,7 +36,6 @@ module Data.Macaw.X86.Generator
     -- * PreBlock
   , PreBlock
   , emptyPreBlock
-  , pBlockIndex
   , pBlockState
   , pBlockStmts
   , pBlockApps
@@ -87,7 +86,6 @@ import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Text (Text)
 import qualified Data.Text as Text
-import           Data.Word
 
 import           Data.Macaw.X86.ArchTypes
 import           Data.Macaw.X86.X86Reg
@@ -153,8 +151,7 @@ asSignedBVLit _ = Nothing
 -- PreBlock
 
 -- | A block that we have not yet finished.
-data PreBlock ids = PreBlock { pBlockIndex :: !Word64
-                             , _pBlockStmts :: !(Seq (Stmt X86_64 ids))
+data PreBlock ids = PreBlock { _pBlockStmts :: !(Seq (Stmt X86_64 ids))
                              , _pBlockState :: !(RegState X86Reg (Value X86_64 ids))
                              , _pBlockApps  :: !(MapF (App (Value X86_64 ids)) (Assignment X86_64 ids))
                              , pBlockStart  :: !(ArchSegmentOff X86_64)
@@ -165,8 +162,7 @@ emptyPreBlock :: ArchSegmentOff X86_64
               -> RegState X86Reg (Value X86_64 ids)
               -> PreBlock ids
 emptyPreBlock startAddr s  =
-  PreBlock { pBlockIndex  = 0
-           , _pBlockStmts = Seq.empty
+  PreBlock { _pBlockStmts = Seq.empty
            , _pBlockApps  = MapF.empty
            , _pBlockState = s
            , pBlockStart  = startAddr
@@ -186,8 +182,7 @@ finishBlock :: PreBlock ids
              -> (RegState X86Reg (Value X86_64 ids) -> TermStmt X86_64 ids)
              -> Block X86_64 ids
 finishBlock preBlock term =
-  Block { blockLabel = pBlockIndex preBlock
-        , blockStmts = toList (preBlock^.pBlockStmts)
+  Block { blockStmts = toList (preBlock^.pBlockStmts)
         , blockTerm  = term (preBlock^.pBlockState)
         }
 

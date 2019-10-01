@@ -14,16 +14,13 @@ module Data.Macaw.PPC.Disassemble
   )
 where
 
-import           Control.Lens ( (&), (^.), (%~), (.~) )
+import           Control.Lens ( (^.), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Foldable as F
-import           Data.Maybe ( fromMaybe )
-import qualified Data.Sequence as Seq
 import qualified Data.Text as T
 import           Data.Word ( Word64 )
 import           Text.Printf ( printf )
@@ -36,7 +33,7 @@ import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
-import           Data.Macaw.Types ( BVType, BoolType )
+import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 
@@ -118,7 +115,7 @@ disassembleBlock :: forall var ppc ids s
                  -- ^ The maximum offset into the bytestring that we should
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
-                 -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), BlockSeq ppc ids)
+                 -> DisM ppc ids s (MM.MemWord (ArchAddrWidth ppc), Block ppc ids)
 disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curIPAddr
   let off = MM.segoffOffset curIPAddr
@@ -141,54 +138,31 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
           -- a result from the state of the 'Generator'.
-          egs1 <- liftST $ ET.runExceptT (runGenerator genResult gs $ do
+          egs1 <- liftST $ ET.runExceptT (runGenerator unfinishedBlock gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
             addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
-            asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer
-
-            -- Check to see if the IP has become conditionally-defined (by e.g.,
-            -- a mux).  If it has, we need to split execution using a primitive
-            -- provided by the Generator monad.
-            nextIPExpr <- getCurrentIP
-            case matchConditionalBranch nextIPExpr of
-              Just (cond, t_ip, f_ip) ->
-                conditionalBranch cond (setRegVal PPC_IP t_ip) (setRegVal PPC_IP f_ip)
-              Nothing -> return ())
+            asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer)
           case egs1 of
             Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
             Right gs1 -> do
-              case resState gs1 of
-                Just preBlock
-                  | Seq.null (resBlockSeq gs1 ^. frontierBlocks)
-                  , v <- preBlock ^. (pBlockState . curIP)
+              case gs1 of
+                UnfinishedPartialBlock preBlock
+                  | v <- preBlock ^. (pBlockState . curIP)
                   , Just simplifiedIP <- simplifyValue v
                   , simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
                   , Just nextIPSegAddr <- MM.incSegmentOff curIPAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
-                                         , _blockSeq = resBlockSeq gs1
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
 
-                _ -> return (nextIPOffset, finishBlock FetchAndExecute gs1)
-
--- | Examine a value and see if it is a mux; if it is, break the mux up and
--- return its component values (the condition and two alternatives)
-matchConditionalBranch :: (arch ~ SP.AnyPPC var, PPCArchConstraints var)
-                       => Value arch ids tp
-                       -> Maybe (Value arch ids BoolType, Value arch ids tp, Value arch ids tp)
-matchConditionalBranch v =
-  case v of
-    AssignedValue (Assignment { assignRhs = EvalApp a }) ->
-      case a of
-        Mux _rep cond t f -> Just (cond, fromMaybe t (simplifyValue t), fromMaybe f (simplifyValue f))
-        _ -> Nothing
-    _ -> Nothing
+                  | otherwise -> return (nextIPOffset, finishBlock' preBlock FetchAndExecute)
+                FinishedPartialBlock b -> return (nextIPOffset, b)
 
 tryDisassembleBlock :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                     => (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
@@ -196,15 +170,15 @@ tryDisassembleBlock :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                     -> ArchSegmentOff ppc
                     -> (RegState (ArchReg ppc) (Value ppc ids))
                     -> Int
-                    -> DisM ppc ids s ([Block ppc ids], Int)
+                    -> DisM ppc ids s (Block ppc ids, Int)
 tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   let gs0 = initGenState nonceGen startAddr regState
   let startOffset = MM.segoffOffset startAddr
-  (nextIPOffset, blocks) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
+  (nextIPOffset, block) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
     failAt gs0 nextIPOffset startAddr reason
-  return (F.toList (blocks ^. frontierBlocks), fromIntegral (nextIPOffset - startOffset))
+  return (block, fromIntegral (nextIPOffset - startOffset))
 
 -- | Disassemble a block from the given start address (which points into the
 -- 'MM.Memory').
@@ -225,12 +199,16 @@ disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
               -- ^ The initial registers
               -> Int
               -- ^ Maximum size of the block (a safeguard)
-              -> ST s ([Block ppc ids], Int, Maybe String)
+              -> ST s (Block ppc ids, Int)
 disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize))
   case mr of
-    Left (blocks, off, exn) -> return (blocks, off, Just (show exn))
-    Right (blocks, bytes) -> return (blocks, bytes, Nothing)
+    Left (blocks, off, _exn) ->
+      -- Note that we discard exn here: it is actually extraneous since the
+      -- 'failAt' function converts exceptions raised during translation into
+      -- macaw 'TranslationError' block terminators.
+      return (blocks, off)
+    Right (blocks, bytes) -> return (blocks, bytes)
 
 
 initialBlockRegs :: forall ids ppc var
@@ -244,7 +222,7 @@ initialBlockRegs :: forall ids ppc var
 initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
 
 
-type LocatedError ppc ids = ([Block ppc ids], Int, TranslationError (ArchAddrWidth ppc))
+type LocatedError ppc ids = (Block ppc ids, Int, TranslationError (ArchAddrWidth ppc))
 
 
 -- | This is a monad for error handling during disassembly
@@ -265,7 +243,7 @@ newtype DisM ppc ids s a = DisM { unDisM :: ET.ExceptT (LocatedError ppc ids) (S
 --
 -- We also can't derive this instance because of that restriction (but deriving
 -- silently fails).
-instance (w ~ ArchAddrWidth ppc) => ET.MonadError ([Block ppc ids], Int, TranslationError w) (DisM ppc ids s) where
+instance (w ~ ArchAddrWidth ppc) => ET.MonadError (Block ppc ids, Int, TranslationError w) (DisM ppc ids s) where
   throwError e = DisM (ET.throwError e)
   catchError a hdlr = do
     r <- liftST $ ET.runExceptT (unDisM a)
@@ -313,6 +291,4 @@ failAt gs offset curIPAddr reason = do
                              }
   let term = (`TranslateError` T.pack (show exn))
   let b = finishBlock' (gs ^. blockState) term
-  let res = _blockSeq gs & frontierBlocks %~ (Seq.|> b)
-  let res' = F.toList (res ^. frontierBlocks)
-  ET.throwError (res', fromIntegral offset, exn)
+  ET.throwError (b, fromIntegral offset, exn)

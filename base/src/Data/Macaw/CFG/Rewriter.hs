@@ -31,12 +31,12 @@ module Data.Macaw.CFG.Rewriter
   , rewriteApp
   , evalRewrittenArchFn
   , appendRewrittenArchStmt
-  , addNewBlockFromRewrite
   ) where
 
 import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
+import           Data.BinarySymbols
 import           Data.Bits
 import           Data.List
 import           Data.Map.Strict (Map)
@@ -49,9 +49,11 @@ import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 
-import           Data.Macaw.CFG
+import           Data.Macaw.CFG.App
+import           Data.Macaw.CFG.Core
+import           Data.Macaw.Memory
 import           Data.Macaw.Types
-import           Data.Macaw.CFG.Block ( TermStmt, Block(..), BlockLabel )
+import           Data.Macaw.CFG.Block (TermStmt)
 
 -- | Information needed for rewriting.
 data RewriteContext arch s src tgt
@@ -90,11 +92,6 @@ data RewriteContext arch s src tgt
                       -- of the assignments can be eliminated this
                       -- should be done via a dead code elimination step
                       -- rather than during rewriting.
-
-                    , rwctxBlockLabel :: BlockLabel
-                      -- ^ The next assignable BlockLabel (used for
-                      -- rewrites that create new blocks, as would be
-                      -- needed for Branch TermStmts.
                     }
 
 mkRewriteContext :: RegisterInfo (ArchReg arch)
@@ -112,10 +109,8 @@ mkRewriteContext :: RegisterInfo (ArchReg arch)
                     -- Discovery.hs.
                  -> Map SectionIndex (ArchSegmentOff arch)
                     -- ^ Map from loaded section indices to their address.
-                 -> BlockLabel
-                 -- ^ next BlockLabel (useable for creating new Block entries)
                  -> ST s (RewriteContext arch s src tgt)
-mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap nextBlockLabel = do
+mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap = do
   ref <- newSTRef MapF.empty
   pure $! RewriteContext { rwctxNonceGen = nonceGen
                          , rwctxArchFn = archFn
@@ -124,7 +119,6 @@ mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap nextBlockLabel = d
                          , rwctxConstraints = \a -> a
                          , rwctxSectionAddrMap = secAddrMap
                          , rwctxCache = ref
-                         , rwctxBlockLabel = nextBlockLabel
                          }
 
 -- | State used by rewriter for tracking states
@@ -132,20 +126,11 @@ data RewriteState arch s src tgt
    = RewriteState { -- | Access to the context for the rewriter
                     rwContext        :: !(RewriteContext arch s src tgt)
                   , _rwRevStmts      :: ![Stmt arch tgt]
-                  , _rwNewBlocks      :: ![Block arch tgt]
                   }
 
 -- | A list of statements in the current block in reverse order.
 rwRevStmts :: Simple Lens (RewriteState arch s src tgt) [Stmt arch tgt]
 rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
-
--- | A list of newly created Blocks generated during the rewrite operation.
-rwNewBlocks :: Simple Lens (RewriteState arch s src tgt) [Block arch tgt]
-rwNewBlocks = lens _rwNewBlocks (\s v -> s { _rwNewBlocks = v })
-
--- | The next BlockLabel to use for newly created Blocks generated during the rewrite.
-rwBlockLabel :: Simple Lens (RewriteState arch s src tgt) BlockLabel
-rwBlockLabel = lens (rwctxBlockLabel . rwContext) (\s v -> s { rwContext = (rwContext s) { rwctxBlockLabel = v }})
 
 -- | Monad for constant propagation within a block.
 newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch s src tgt) (ST s) a }
@@ -156,17 +141,15 @@ newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteStat
 runRewriter :: RewriteContext arch s src tgt
             -> Rewriter arch s src tgt (TermStmt arch tgt)
             -> ST s ( RewriteContext arch s src tgt
-                    , [Block arch tgt]
                     , [Stmt arch tgt]
                     , (TermStmt arch tgt))
 runRewriter ctx m = do
   let s = RewriteState { rwContext = ctx
                        , _rwRevStmts = []
-                       , _rwNewBlocks = []
                        }
       m' = rwctxTermStmt ctx =<< m
   (r, s') <- runStateT (unRewriter m') s
-  pure (rwContext s', _rwNewBlocks s', reverse (_rwRevStmts s'), r)
+  pure (rwContext s', reverse (_rwRevStmts s'), r)
 
 -- | Add a statement to the list
 appendRewrittenStmt :: Stmt arch tgt -> Rewriter arch s src tgt ()
@@ -179,23 +162,6 @@ appendRewrittenStmt stmt = Rewriter $ do
 -- | Add a architecture-specific statement to the list
 appendRewrittenArchStmt :: ArchStmt arch (Value arch tgt) -> Rewriter arch s src tgt ()
 appendRewrittenArchStmt = appendRewrittenStmt . ExecArchStmt
-
-
--- | If the rewriting needs to add a new 'Block' (e.g. for a 'Branch'
--- target) it does so by calling this function with that 'Block'.
-addNewBlockFromRewrite :: [Stmt arch tgt]
-                       -> TermStmt arch tgt
-                       -> Rewriter arch s src tgt (BlockLabel)
-addNewBlockFromRewrite stmts termstmt = Rewriter $ do
-  blkLabel <- use rwBlockLabel
-  let blk = Block { blockLabel = blkLabel
-                  , blockStmts = stmts
-                  , blockTerm = termstmt
-                  }
-  rwNewBlocks %= (:) blk
-  rwBlockLabel += 1
-  return blkLabel
-
 
 -- | Add an assignment statement that evaluates the right hand side and return the resulting value.
 evalRewrittenRhs :: AssignRhs arch (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)
@@ -649,7 +615,54 @@ rewriteApp app = do
        else
         rewriteApp (Eq x (BVValue u (toUnsigned u yc)))
 
-    _ -> evalRewrittenRhs (EvalApp app)
+    -- no normal rewrites available, now try mhnf for enabling Discovery
+    _ -> rewriteMhnf app
+
+
+-- | Performs rewrites for "Mux Head Normal Form", which attempts to
+-- raise Mux operations upwards to make them more likely to appear as
+-- the last statement in a Block.  This is needed because
+-- parseFetchAndExecute in Discovery will attempt to recognize branch
+-- statements by pattern matching the value of the IP register as a
+-- Mux.
+--
+-- For example, the following:
+--
+--     r32 := Mux r31 (0x4 :: [64]) (0x28 :: [64])
+--     r33 := Add r32 (0x100a3e50)
+--     { ip => r33, ... }
+--
+-- should be rewritten to:
+--
+--     r34 := Mux r31 (0x100a3e54) (0x100a3e78)
+--     { ip => r34, ... }
+--
+-- so that the Mux itself is the ip register's valueAsApp.  (Note that
+-- the BVAdd of the two r32 branch values and the r33 second argument
+-- are reduced to simple values by the rewriter here as well.
+--
+-- This rewrite is performed after other rewrites to increase the
+-- chances of it raising the Mux past previously rewrite-simplified
+-- statements, although it still recurses into the main rewriter.
+rewriteMhnf :: App (Value arch tgt) tp -> Rewriter arch s src tgt (Value arch tgt tp)
+rewriteMhnf app = do
+  ctx <- Rewriter $ gets rwContext
+  rwctxConstraints ctx $ do
+   case app of
+
+     BVAdd w (valueAsApp -> Just (Mux p c t f)) v@(BVValue _ _) -> do
+       t' <- rewriteApp (BVAdd w t v)
+       f' <- rewriteApp (BVAdd w f v)
+       rewriteApp $ Mux p c t' f'
+
+     BVAdd w (valueAsApp -> Just (Mux p c t f)) v@(RelocatableValue _ _) -> do
+       t' <- rewriteApp (BVAdd w t v)
+       f' <- rewriteApp (BVAdd w f v)
+       rewriteApp $ Mux p c t' f'
+
+     -- no more rewrites applicable, so return the final result
+     _ -> evalRewrittenRhs (EvalApp app)
+
 
 rewriteAssignRhs :: AssignRhs arch (Value arch src) tp
                  -> Rewriter arch s src tgt (Value arch tgt tp)
@@ -716,6 +729,11 @@ rewriteStmt s =
       tgtAddr <- rewriteValue addr
       tgtVal  <- rewriteValue val
       appendRewrittenStmt $ WriteMem tgtAddr repr tgtVal
+    CondWriteMem cond addr repr val -> do
+      tgtCond <- rewriteValue cond
+      tgtAddr <- rewriteValue addr
+      tgtVal  <- rewriteValue val
+      appendRewrittenStmt $ CondWriteMem tgtCond tgtAddr repr tgtVal
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
     InstructionStart off mnem ->

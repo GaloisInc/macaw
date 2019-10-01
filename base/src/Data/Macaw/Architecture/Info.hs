@@ -1,29 +1,29 @@
 {-|
-Copyright  : (c) Galois, Inc 2016
-Maintainer : jhendrix@galois.com
-
 This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
+  , postCallAbsState
+  , ArchBlockPrecond
   , DisassembleFn
+  , IntraJumpTarget
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
   ) where
 
 import           Control.Monad.ST
+import qualified Data.Kind as K
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
-import           Data.Semigroup ( (<>) )
 import           Data.Sequence (Seq)
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
-import           Data.Macaw.CFG.App
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.CFG.Block
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
@@ -32,6 +32,19 @@ import           Data.Macaw.Memory
 
 ------------------------------------------------------------------------
 -- ArchitectureInfo
+
+-- | This family maps architecture parameters to information needed to
+-- successfully translate machine code into Macaw CFGs.
+--
+-- This is currently used for registers values that are required to be
+-- known constants at translation time.  For example, on X86_64, due to
+-- aliasing between the FPU and MMX registers, we require that the
+-- floating point stack value is known at translation time so that
+-- we do not need to check which register is modified when pushing or
+-- poping from the x86 stack.
+--
+-- If no preconditions are needed, this can just be set to the unit type.
+type family ArchBlockPrecond (arch :: K.Type) :: K.Type
 
 -- | Function for disassembling a range of code (usually a function in
 -- the target code image) into blocks.
@@ -51,7 +64,11 @@ type DisassembleFn arch
       -- ^ Initial values to use for registers.
    -> Int
       -- ^ Maximum offset for this to read from.
-   -> ST s ([Block arch ids], Int, Maybe String)
+   -> ST s (Block arch ids, Int)
+
+type IntraJumpTarget arch =
+  (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), Jmp.InitJumpBounds arch)
+-- ^ Identifies address we are jumping to an abstract state/bounds for getting there.
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -63,12 +80,16 @@ data ArchitectureInfo arch
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
-     , mkInitialRegsForBlock :: !(forall ids
-                              .  ArchSegmentOff arch
-                              -> AbsBlockState (ArchReg arch)
-                              -> Either String (RegState (ArchReg arch) (Value arch ids)))
-       -- ^ Use the abstract block state information to infer register
-       -- values to use for disassembling from given address.
+     , extractBlockPrecond :: !(ArchSegmentOff arch
+                                -> AbsBlockState (ArchReg arch)
+                                -> Either String (ArchBlockPrecond arch))
+       -- ^ Attempt to use abstract domain information to extract
+       -- information needed to translate block.
+     , initialBlockRegs :: !(forall ids
+                             .  ArchSegmentOff arch
+                             -> ArchBlockPrecond arch
+                             -> RegState (ArchReg arch) (Value arch ids))
+       -- ^ Create initial registers from address and precondition.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disassembling a block.
      , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
@@ -88,10 +109,6 @@ data ArchitectureInfo arch
                             -> ArchStmt arch (Value arch ids)
                             -> AbsProcessorState (ArchReg arch) ids)
        -- ^ Evaluates an architecture-specific statement
-     , postCallAbsState :: AbsBlockState (ArchReg arch)
-                        -> ArchSegmentOff arch
-                        -> AbsBlockState (ArchReg arch)
-       -- ^ Update the abstract state after a function call returns
      , identifyCall :: forall ids
                     .  Memory (ArchAddrWidth arch)
                     -> Seq (Stmt arch ids)
@@ -104,6 +121,8 @@ data ArchitectureInfo arch
        -- return the statements with any action to push the return
        -- value to the stack removed, and provide the return address that
        -- the function should return to.
+     , archCallParams :: !(CallParams (ArchReg arch))
+       -- ^ Update the abstract state after a function call returns
 
      , checkForReturnAddr :: forall ids
                           .  RegState (ArchReg arch) (Value arch ids)
@@ -144,15 +163,16 @@ data ArchitectureInfo arch
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
-     , postArchTermStmtAbsState :: !(forall ids
+     , postArchTermStmtAbsState :: !(forall ids s
                                      .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
-                                     -> AbsBlockState (ArchReg arch)
+                                     -> AbsProcessorState (ArchReg arch) ids
                                         -- The registers before executing terminal statement
-                                     -> (RegState (ArchReg arch) (Value arch ids))
+                                     -> Jmp.IntraJumpBounds arch ids s
+                                     -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids
-                                     -> Maybe (ArchSegmentOff arch, AbsBlockState (ArchReg arch)))
+                                     -> Maybe (IntraJumpTarget arch))
        -- ^ This takes an abstract state from before executing an abs
        -- state, and an architecture-specific terminal statement.
        --
@@ -166,6 +186,17 @@ data ArchitectureInfo arch
        -- function.
      }
 
+postCallAbsState :: ArchitectureInfo arch
+                 -> AbsProcessorState (ArchReg arch) ids
+                 -- ^ Processor state at call.
+                 -> RegState (ArchReg arch) (Value arch ids)
+                 -- ^  Register values when call occurs.
+                 -> ArchSegmentOff arch
+                 -- ^ Return address
+                 -> AbsBlockState (ArchReg arch)
+postCallAbsState ainfo = withArchConstraints ainfo $
+  absEvalCall (archCallParams ainfo)
+
 -- | Apply optimizations to a terminal statement.
 rewriteTermStmt :: ArchitectureInfo arch
                 -> TermStmt arch src
@@ -174,13 +205,6 @@ rewriteTermStmt info tstmt = do
   case tstmt of
     FetchAndExecute regs ->
       FetchAndExecute <$> traverseF rewriteValue regs
-    Branch c t f -> do
-      tgtCond <- rewriteValue c
-      case () of
-        _ | Just (NotApp cn) <- valueAsApp tgtCond -> do
-              pure $ Branch cn f t
-          | otherwise ->
-              pure $ Branch tgtCond t f
     TranslateError regs msg ->
       TranslateError <$> traverseF rewriteValue regs
                      <*> pure msg
@@ -190,16 +214,15 @@ rewriteTermStmt info tstmt = do
 
 -- | Apply optimizations to code in the block
 rewriteBlock :: ArchitectureInfo arch
-             -> (RewriteContext arch s src tgt, [Block arch tgt])
+             -> RewriteContext arch s src tgt
              -> Block arch src
-             -> ST s (RewriteContext arch s src tgt, [Block arch tgt])
-rewriteBlock info (rwctx,blks) b = do
-  (rwctx', newBlks, tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
+             -> ST s (RewriteContext arch s src tgt, Block arch tgt)
+rewriteBlock info rwctx b = do
+  (rwctx', tgtStmts, tgtTermStmt) <- runRewriter rwctx $ do
     mapM_ rewriteStmt (blockStmts b)
     rewriteTermStmt info (blockTerm b)
   -- Return rewritten block and any new blocks
-  let rwBlock = Block { blockLabel = blockLabel b
-                      , blockStmts = tgtStmts
+  let rwBlock = Block { blockStmts = tgtStmts
                       , blockTerm  = tgtTermStmt
                       }
-    in pure (rwctx', rwBlock : (newBlks <> blks))
+  pure (rwctx', rwBlock)

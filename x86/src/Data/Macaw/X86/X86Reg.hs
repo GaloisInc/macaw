@@ -22,7 +22,6 @@ module Data.Macaw.X86.X86Reg
   , Segment
   , Control
   , Debug
-
   , X87_FPU
   , X87_Status
   , X87_Top
@@ -91,6 +90,7 @@ module Data.Macaw.X86.X86Reg
   , x87FPURegList
   , x86StateRegs
   , x86CalleeSavedRegs
+  , x86GPPArgumentRegs
   , x86ArgumentRegs
   , x86FloatArgumentRegs
   , x86ResultRegs
@@ -220,6 +220,21 @@ instance Ord (X86Reg cl) where
     EQF -> EQ
     LTF -> LT
 
+instance Hashable (X86Reg tp) where
+  hashWithSalt s r =
+    case r of
+      X86_IP           -> s `hashWithSalt` (0::Int)
+      X86_GP i         -> s `hashWithSalt` (1::Int) `hashWithSalt` F.reg64No i
+      X86_FlagReg i    -> s `hashWithSalt` (2::Int) `hashWithSalt` R.flagIndex i
+      X87_StatusReg i  -> s `hashWithSalt` (3::Int) `hashWithSalt` i
+      X87_TopReg       -> s `hashWithSalt` (4::Int)
+      X87_TagReg i     -> s `hashWithSalt` (5::Int) `hashWithSalt` i
+      X87_FPUReg i     -> s `hashWithSalt` (6::Int) `hashWithSalt` F.mmxRegNo i
+      X86_ZMMReg i     -> s `hashWithSalt` (7::Int) `hashWithSalt` i
+
+instance HashableF X86Reg where
+  hashWithSaltF = hashWithSalt
+
 instance HasRepr X86Reg TypeRepr where
   typeRepr r =
     case r of
@@ -298,31 +313,31 @@ pattern R14 = X86_GP F.R14
 pattern R15 :: () => (t ~ GP) => X86Reg t
 pattern R15 = X86_GP F.R15
 
-pattern CF :: () => (t ~ Flag) => X86Reg t
+pattern CF :: () => (t ~ BoolType) => X86Reg t
 pattern CF = X86_FlagReg R.CF
 
-pattern PF :: () => (t ~ Flag) => X86Reg t
+pattern PF :: () => (t ~ BoolType) => X86Reg t
 pattern PF = X86_FlagReg R.PF
 
-pattern AF :: () => (t ~ Flag) => X86Reg t
+pattern AF :: () => (t ~ BoolType) => X86Reg t
 pattern AF = X86_FlagReg R.AF
 
-pattern ZF :: () => (t ~ Flag) => X86Reg t
+pattern ZF :: () => (t ~ BoolType) => X86Reg t
 pattern ZF = X86_FlagReg R.ZF
 
-pattern SF :: () => (t ~ Flag) => X86Reg t
+pattern SF :: () => (t ~ BoolType) => X86Reg t
 pattern SF = X86_FlagReg R.SF
 
-pattern TF :: () => (t ~ Flag) => X86Reg t
+pattern TF :: () => (t ~ BoolType) => X86Reg t
 pattern TF = X86_FlagReg R.TF
 
-pattern IF :: () => (t ~ Flag) => X86Reg t
+pattern IF :: () => (t ~ BoolType) => X86Reg t
 pattern IF = X86_FlagReg R.IF
 
-pattern DF :: () => (t ~ Flag) => X86Reg t
+pattern DF :: () => (t ~ BoolType) => X86Reg t
 pattern DF = X86_FlagReg R.DF
 
-pattern OF :: () => (t ~ Flag) => X86Reg t
+pattern OF :: () => (t ~ BoolType) => X86Reg t
 pattern OF = X86_FlagReg R.OF
 
 -- | x87 flags
@@ -447,8 +462,13 @@ x86CalleeSavedRegs = Set.fromList $
   , Some X87_TopReg
   ]
 
+-- | General purpose registers that may be needed for arguments according
+-- to X86_64 ABI.
+x86GPPArgumentRegs :: [F.Reg64]
+x86GPPArgumentRegs = [F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
+
 x86ArgumentRegs :: [X86Reg (BVType 64)]
-x86ArgumentRegs = X86_GP <$> [ F.RDI, F.RSI, F.RDX, F.RCX, F.R8, F.R9 ]
+x86ArgumentRegs = X86_GP <$> x86GPPArgumentRegs
 
 x86FloatArgumentRegs :: [X86Reg (BVType 512)]
 x86FloatArgumentRegs =  X86_ZMMReg <$> [0..7]

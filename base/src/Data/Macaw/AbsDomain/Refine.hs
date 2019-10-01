@@ -18,13 +18,13 @@ module Data.Macaw.AbsDomain.Refine
   ) where
 
 
-import Control.Lens
-import Data.Parameterized.Classes
-import Data.Parameterized.NatRepr
+import           Control.Lens
+import           Data.Parameterized.Classes
+import           Data.Parameterized.NatRepr
 
-import Data.Macaw.AbsDomain.AbsState
-import Data.Macaw.CFG
-import Data.Macaw.Types
+import           Data.Macaw.AbsDomain.AbsState
+import           Data.Macaw.CFG
+import           Data.Macaw.Types
 
 -- | Constraints needed for refinement on abstract states.
 type RefineConstraints arch
@@ -34,21 +34,21 @@ type RefineConstraints arch
 --     , MemWidth (ArchAddrWidth arch)
      )
 
--- FIXME: if val \notin av then we should return bottom
--- @refineProcState v av s@ returns a processor state after we have
--- asserted that @v@ is contained in the set @AbsValue@.
-refineProcState :: RefineConstraints arch
+-- | @refineValue v av s@ records an assertion that the value @v@ must
+-- be in the domain @av@, and updates abstract domain information in
+-- the processor state @s@ accordingly.
+refineValue :: RefineConstraints arch
                 => Value arch ids tp -- ^ Value in processor state
                 -> AbsValue (ArchAddrWidth arch) tp -- ^ Abstract value to assign value.
                 -> AbsProcessorState (ArchReg arch) ids
                 -> AbsProcessorState (ArchReg arch) ids
-refineProcState (BoolValue _) _av regs          = regs -- Skip refinement for literal values
-refineProcState (BVValue _n _val) _av regs      = regs -- Skip refinement for literal values
-refineProcState (RelocatableValue _ _) _av regs = regs -- Skip refinement for relocatable values
-refineProcState (SymbolValue _ _)      _av regs = regs -- Skip refinement for this case.
-refineProcState (Initial r) av regs =
+refineValue (BoolValue _) _av regs          = regs -- Skip refinement for literal values
+refineValue (BVValue _n _val) _av regs      = regs -- Skip refinement for literal values
+refineValue (RelocatableValue _ _) _av regs = regs -- Skip refinement for relocatable values
+refineValue (SymbolValue _ _)      _av regs = regs -- Skip refinement for this case.
+refineValue (Initial r) av regs =
   regs & (absInitialRegs . boundValue r) %~ flip meet av
-refineProcState (AssignedValue (Assignment a_id rhs)) av regs
+refineValue (AssignedValue (Assignment a_id rhs)) av regs
   -- av is not a subset.
   | Nothing <- joinAbsValue av av_old = regs
   | otherwise = do
@@ -117,11 +117,11 @@ refineTrunc :: ( (n + 1) <= n'
             -> AbsValue (ArchAddrWidth arch) (BVType n)
             -> AbsProcessorState (ArchReg arch) ids
             -> AbsProcessorState (ArchReg arch) ids
-refineTrunc v sz av regs = refineProcState v (subValue sz av) regs
+refineTrunc v sz av regs = refineValue v (subValue sz av) regs
 
 refineLt :: RefineConstraints arch
-         => Value arch ids tp
-         -> Value arch ids tp
+         => Value arch ids (BVType u)
+         -> Value arch ids (BVType u)
          -> Integer
          -> AbsProcessorState (ArchReg arch) ids
          -> AbsProcessorState (ArchReg arch) ids
@@ -132,8 +132,8 @@ refineLt x y b regs
   | otherwise  = refineULtTrue  x y regs
 
 refineLeq :: RefineConstraints arch
-          => Value arch ids tp
-          -> Value arch ids tp
+          => Value arch ids (BVType u)
+          -> Value arch ids (BVType u)
           -> Integer
           -> AbsProcessorState (ArchReg arch) ids
           -> AbsProcessorState (ArchReg arch) ids
@@ -144,13 +144,13 @@ refineLeq x y b regs
     | otherwise  = refineULeqTrue x y regs
 
 refineULeqTrue :: RefineConstraints arch
-               => Value arch ids tp
-               -> Value arch ids tp
+               => Value arch ids (BVType u)
+               -> Value arch ids (BVType u)
                -> AbsProcessorState (ArchReg arch) ids
                -> AbsProcessorState (ArchReg arch) ids
-refineULeqTrue x y regs = refineProcState x x_leq (refineProcState y y_leq regs)
+refineULeqTrue x y regs = refineValue x x_leq (refineValue y y_leq regs)
   where
-    (x_leq, y_leq) = abstractULeq (typeRepr x) (transferValue regs x) (transferValue regs y)
+    (x_leq, y_leq) = abstractULeq (typeWidth x) (transferValue regs x) (transferValue regs y)
     -- check r@(a, b)
     --   | isBottom a = flip trace r $ "Bottom in refineLeq: "
     --                  ++ show (pretty regs)
@@ -160,10 +160,24 @@ refineULeqTrue x y regs = refineProcState x x_leq (refineProcState y y_leq regs)
 
 -- | Refine using the observation that x < y when treated as unsigned values.
 refineULtTrue :: RefineConstraints arch
-              => Value arch ids tp
-              -> Value arch ids tp
+              => Value arch ids (BVType u)
+              -> Value arch ids (BVType u)
               -> AbsProcessorState (ArchReg arch) ids
               -> AbsProcessorState (ArchReg arch) ids
-refineULtTrue x y regs = refineProcState x x_lt (refineProcState y y_lt regs)
+refineULtTrue x y regs = refineValue x x_lt (refineValue y y_lt regs)
   where
-    (x_lt, y_lt) = abstractULt (typeRepr x) (transferValue regs x) (transferValue regs y)
+    (x_lt, y_lt) = abstractULt (typeWidth x) (transferValue regs x) (transferValue regs y)
+
+-- | This uses an assertion about a given value being true or false to
+-- refine the information in an abstract processor state.
+refineProcState :: ( RegisterInfo (ArchReg arch)
+                   , OrdF (ArchReg arch)
+                   , HasRepr (ArchReg arch) TypeRepr
+                   )
+                => Value arch ids BoolType
+                   -- ^ Condition known to be true/false.
+                -> Bool
+                -- ^ Indicates whether the Boolean above is true/false.
+                -> AbsProcessorState (ArchReg arch) ids
+                -> AbsProcessorState (ArchReg arch) ids
+refineProcState v isTrue ps0 = refineValue v (if isTrue then absTrue else absFalse) ps0

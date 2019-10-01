@@ -7,6 +7,7 @@ applied to a range of values.  We call it an `App` because it
 represents an application of an operation.  In mathematics, we would
 probably call it a signature.
 -}
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
@@ -14,6 +15,7 @@ probably call it a signature.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.CFG.App
   ( App(..)
@@ -21,13 +23,14 @@ module Data.Macaw.CFG.App
   , ppAppA
     -- * Casting proof objects.
   , WidthEqProof(..)
-  , widthEqTarget
   , widthEqProofEq
   , widthEqProofCompare
+  , widthEqSource
+  , widthEqTarget
   ) where
 
-import qualified Data.Kind as Kind
 import           Control.Monad.Identity
+import qualified Data.Kind as Kind
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
@@ -66,13 +69,34 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
              -> WidthEqProof (BVType (n * w)) (VecType n (BVType w))
 
   FromFloat :: !(FloatInfoRepr ftp)
-             -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
+            -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
   ToFloat :: !(FloatInfoRepr ftp)
           -> WidthEqProof (BVType (FloatInfoBits ftp)) (FloatType ftp)
 
+  -- | Convert between vector types that are equivalent.
   VecEqCongruence :: !(NatRepr n)
                   -> !(WidthEqProof i o)
                   -> WidthEqProof (VecType n i) (VecType n o)
+
+  -- | Type is equal to itself.
+  WidthEqRefl  :: !(TypeRepr tp) -> WidthEqProof tp tp
+
+  -- | Allows transitivity composing proofs.
+  WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
+
+-- | Return the input type of the width equality proof
+widthEqSource :: WidthEqProof i o -> TypeRepr i
+widthEqSource (PackBits n w) = VecTypeRepr n (BVTypeRepr w)
+widthEqSource (UnpackBits n w) =
+  case leqMulPos n w of
+    LeqProof -> BVTypeRepr (natMultiply n w)
+widthEqSource (FromFloat f) = FloatTypeRepr f
+widthEqSource (ToFloat f) =
+  case floatInfoBitsIsPos f of
+    LeqProof -> BVTypeRepr (floatInfoBits f)
+widthEqSource (VecEqCongruence n r) = VecTypeRepr n (widthEqSource r)
+widthEqSource (WidthEqRefl x) = x
+widthEqSource (WidthEqTrans x _) = widthEqSource x
 
 -- | Return the result type of the width equality proof
 widthEqTarget :: WidthEqProof i o -> TypeRepr o
@@ -85,33 +109,30 @@ widthEqTarget (FromFloat f) =
     LeqProof -> BVTypeRepr (floatInfoBits f)
 widthEqTarget (ToFloat f) = FloatTypeRepr f
 widthEqTarget (VecEqCongruence n r) = VecTypeRepr n (widthEqTarget r)
+widthEqTarget (WidthEqRefl x) = x
+widthEqTarget (WidthEqTrans _ y) = widthEqTarget y
 
 -- Force app to be in template-haskell context.
 $(pure [])
 
+-- | Compare two proofs, and return truei if the input/output types
+-- are the same.
 widthEqProofEq :: WidthEqProof xi xo
                -> WidthEqProof yi yo
                -> Maybe (WidthEqProof xi xo :~: WidthEqProof yi yo)
-widthEqProofEq =
-  $(structuralTypeEquality [t|WidthEqProof|]
-                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|testEquality|])
-                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
-                      [|widthEqProofEq|])
-                   ]
-                  )
+widthEqProofEq p q = do
+  Refl <- testEquality (widthEqSource p) (widthEqSource q)
+  Refl <- testEquality (widthEqTarget p) (widthEqTarget q)
+  pure Refl
 
+-- | Compare proofs based on ordering of source and target.
 widthEqProofCompare :: WidthEqProof xi xo
                     -> WidthEqProof yi yo
                     -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
-widthEqProofCompare =
-  $(structuralTypeOrd [t|WidthEqProof|]
-                   [ (ConType [t|NatRepr|]       `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
-                   , (ConType [t|WidthEqProof|]  `TypeApp` AnyType `TypeApp` AnyType,
-                      [|widthEqProofCompare|])
-                   ]
-                  )
+widthEqProofCompare p q =
+  joinOrderingF (compareF (widthEqSource p) (widthEqSource q)) $
+    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q)) $
+      EQF
 
 -- | This datatype defines operations used on multiple architectures.
 --
@@ -200,11 +221,11 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- Exclusive or
   BVXor :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
-  -- Logical left shift (x * 2 ^ n)
+  -- | Left shift (e.g. `BVShl x y` denotes `fromUnsigned (toUnsigned x * 2 ^ toUnsigned y)`
   BVShl :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-  -- Logical right shift (x / 2 ^ n)
+  -- | Unsigned right shift (e.g. `BVShr x y` denotes `fromUnsigned (toUnsigned x / 2 ^ toUnsigned y)`
   BVShr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
-  -- Arithmetic right shift (x / 2 ^ n)
+  -- | Arithmetic right shift (e.g. `BVSar x y` denotes `fromUnsigned (toSigned x / 2 ^ toUnsigned y)`
   BVSar :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
 
   -- | Add two values and a carry bit to determine if they have an
@@ -296,6 +317,20 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
+instance HashableF f => Hashable (App f tp) where
+  hashWithSalt = $(structuralHashWithSalt [t|App|]
+                     [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
+                     , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                        [|\s _c -> s|])
+                     , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
+                       , [|\s _c -> s|])
+                     ]
+                  )
+
+instance HashableF f => HashableF (App f) where
+  hashWithSaltF = hashWithSalt
+
 instance OrdF f => OrdF (App f) where
   compareF = $(structuralTypeOrd [t|App|]
                    [ (DataArg 0                  `TypeApp` AnyType, [|compareF|])
@@ -329,7 +364,6 @@ instance TraversableFC App where
 
 ------------------------------------------------------------------------
 -- App pretty printing
-
 
 prettyPure :: (Applicative m, Pretty v) => v -> m Doc
 prettyPure = pure . pretty

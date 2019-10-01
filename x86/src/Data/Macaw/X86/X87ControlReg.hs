@@ -26,7 +26,10 @@ import           Data.Macaw.Types
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 
--- | One of the X87 control registrs
+-- | This is one of the fields in the x87 FPU control word.
+--
+-- The fields indicate the index of the least-significant bit that is part of
+-- the field, and the number of bits in the field.
 data X87_ControlReg w = (1 <= w) => X87_ControlReg !Int !(NatRepr w)
 
 instance TestEquality X87_ControlReg where

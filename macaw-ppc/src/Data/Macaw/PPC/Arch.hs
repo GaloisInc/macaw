@@ -1,5 +1,4 @@
 {-# LANGUAGE ConstraintKinds       #-}
-{-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE DataKinds             #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE FlexibleInstances     #-}
@@ -9,9 +8,11 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
+{-# LANGUAGE StandaloneDeriving    #-}
 {-# LANGUAGE TypeApplications      #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.PPC.Arch (
   PPCTermStmt(..),
@@ -29,9 +30,8 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
-import           Data.Coerce ( coerce )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import           Data.Parameterized.Classes ( OrdF, knownRepr )
+import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -52,28 +52,39 @@ import qualified Data.Macaw.SemMC.Operands as O
 import           Data.Macaw.PPC.Operand ()
 import           Data.Macaw.PPC.PPCReg
 
-data PPCTermStmt ids where
+data PPCTermStmt ppc ids where
   -- | A representation of the PowerPC @sc@ instruction
   --
   -- That instruction technically takes an argument, but it must be zero so we
   -- don't preserve it.
-  PPCSyscall :: PPCTermStmt ids
+  PPCSyscall :: PPCTermStmt ppc ids
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
-  PPCTrap :: PPCTermStmt ids
+  PPCTrap :: PPCTermStmt ppc ids
+  -- | A conditional trap
+  PPCTrapdword :: MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+               -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+               -> MC.Value ppc ids (MT.BVType 5)
+               -> PPCTermStmt ppc ids
 
-deriving instance Show (PPCTermStmt ids)
+instance (MC.RegisterInfo (MC.ArchReg ppc)) => Show (PPCTermStmt ppc ids) where
+  show ts = show (MC.prettyF ts)
 
-type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt
-type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt
+type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt PPC64.PPC
+type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt PPC32.PPC
 
-instance MC.PrettyF PPCTermStmt where
+instance (MC.RegisterInfo (MC.ArchReg ppc)) => MC.PrettyF (PPCTermStmt ppc) where
   prettyF ts =
     case ts of
       PPCSyscall -> PP.text "ppc_syscall"
       PPCTrap -> PP.text "ppc_trap"
+      PPCTrapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
 
-rewriteTermStmt :: PPCTermStmt src -> Rewriter ppc s src tgt (PPCTermStmt tgt)
-rewriteTermStmt s = pure (coerce s)
+rewriteTermStmt :: PPCTermStmt ppc src -> Rewriter ppc s src tgt (PPCTermStmt ppc tgt)
+rewriteTermStmt s =
+  case s of
+    PPCSyscall -> return PPCSyscall
+    PPCTrap -> return PPCTrap
+    PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
 data PPCStmt ppc (v :: MT.Type -> *) where
   Attn :: PPCStmt ppc v
@@ -645,7 +656,7 @@ type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
 type PPCArchConstraints var = ( MC.ArchReg (SP.AnyPPC var) ~ PPCReg (SP.AnyPPC var)
                               , MC.ArchFn (SP.AnyPPC var) ~ PPCPrimFn (SP.AnyPPC var)
                               , MC.ArchStmt (SP.AnyPPC var) ~ PPCStmt (SP.AnyPPC var)
-                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt
+                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt (SP.AnyPPC var)
                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var)))
                               , 1 <= MC.RegAddrWidth (PPCReg (SP.AnyPPC var))
                               , KnownNat (MC.RegAddrWidth (PPCReg (SP.AnyPPC var)))
@@ -681,48 +692,6 @@ incrementIP = do
   e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
   G.setRegVal PPC_IP e
 
-cases :: (MM.MemWidth (MC.ArchAddrWidth arch),
-          OrdF (MC.ArchReg arch))
-      => [(G.Generator arch ids s (MC.Value arch ids MT.BoolType), G.Generator arch ids s ())]
-      -> G.Generator arch ids s ()
-      -> G.Generator arch ids s ()
-cases xs end =
-  case xs of
-    [] -> end
-    (gv, ifTrue) : rest -> do
-      v <- gv
-      G.conditionalBranch v ifTrue (cases rest end)
-
-trapDoubleword :: forall var ppc n s ids
-                . ( ppc ~ SP.AnyPPC var
-                  , PPCArchConstraints var
-                  , n ~ MC.ArchAddrWidth ppc
-                  )
-               => MC.Value ppc ids (MT.BVType n)
-               -> MC.Value ppc ids (MT.BVType n)
-               -> MC.Value ppc ids (MT.BVType 5)
-               -> G.Generator ppc ids s ()
-trapDoubleword b a to = do
-  cases [ (conditionAtBit False MC.BVSignedLt 0, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit True MC.BVSignedLe 1, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit False MC.Eq 2, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit False MC.BVUnsignedLt 3, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        , (conditionAtBit True MC.BVUnsignedLe 4, G.finishWithTerminator (MC.ArchTermStmt PPCTrap))
-        ] incrementIP
-  where
-    conditionAtBit :: Bool
-                   -- ^ True if the resulting bool value should be negated
-                   --
-                   -- Properly wrapping it above is a bit annoying
-                   -> (MC.Value ppc ids (MT.BVType n) -> MC.Value ppc ids (MT.BVType n) -> MC.App (MC.Value ppc ids) MT.BoolType)
-                   -> Int
-                   -> G.Generator ppc ids s (MC.Value ppc ids MT.BoolType)
-    conditionAtBit shouldNegate op bitNum = do
-      cmpVal <- G.addExpr (G.AppExpr (op a b))
-      cmpVal' <- if shouldNegate then G.addExpr (G.AppExpr (MC.NotApp cmpVal)) else return cmpVal
-      toBit <- G.addExpr (G.AppExpr (MC.BVTestBit to (MC.BVValue (MT.knownNat @5) (fromIntegral bitNum))))
-      G.addExpr (G.AppExpr (MC.AndApp cmpVal' toBit))
-
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
 --
@@ -752,7 +721,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           let vB = O.extractValue regs rB
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          trapDoubleword vB vA vTo
+          G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB vA vTo))
     D.TDI ->
       case operands of
         D.S16imm imm D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
@@ -762,7 +731,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
           vB' <- G.addExpr (G.AppExpr (MC.SExt vB repr))
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
-          trapDoubleword vB' vA vTo
+          G.finishWithTerminator (MC.ArchTermStmt (PPCTrapdword vB' vA vTo))
     D.ATTN -> Just $ do
       incrementIP
       G.addStmt (MC.ExecArchStmt Attn)
