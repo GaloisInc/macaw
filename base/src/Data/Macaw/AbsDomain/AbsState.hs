@@ -706,8 +706,11 @@ bvsbb mem w (CodePointers s b) (FinSet t) (BoolConst False)
     | Set.null s && b = FinSet (Set.map (toUnsigned w . negate) t)
     | all isJust vals && (not b || Set.singleton 0 == t) =
       CodePointers (Set.fromList (catMaybes vals)) b
-    | otherwise = error "Losing code pointers due to bvsub."
-  where vals :: [Maybe (MemSegmentOff w)]
+  where -- This list contains an entry for each pair of elements in s and t
+        -- containing the address obtained by subtractin the offset in t
+        -- from the address in s or `Nothing` if the result is not a valid
+        -- segment offset.
+        vals :: [Maybe (MemSegmentOff w)]
         vals = do
           x <- Set.toList s
           y <- Set.toList t
@@ -726,7 +729,6 @@ bvsbb _ _ xv@(CodePointers xs xb) (CodePointers ys yb) (BoolConst False)
           FinSet (Set.insert 0 (Set.fromList (catMaybes vals)))
          else
           FinSet (Set.fromList (catMaybes vals))
-    | otherwise = error "Losing code pointers due to bvsub."
   where vals :: [Maybe Integer]
         vals = do
           x <- Set.toList xs
@@ -746,8 +748,7 @@ bvsbb _ _ (StackOffsetAbsVal ax _) _ _ = SomeStackOffset ax
 bvsbb _ _ _ (StackOffsetAbsVal _ _) _ = TopV
 bvsbb _ _ (SomeStackOffset ax) _ _ = SomeStackOffset ax
 bvsbb _ _ _ (SomeStackOffset _) _ = TopV
-bvsbb _ _ _ _ _b = TopV -- Keep the pattern checker happy
-
+bvsbb _ _ _ _ _b = TopV
 
 -- | Subtracting
 bvsub :: forall w u
