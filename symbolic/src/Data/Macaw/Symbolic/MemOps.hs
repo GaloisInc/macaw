@@ -596,7 +596,7 @@ memReprToStorageType reqEnd memRep =
   case memRep of
     M.BVMemRepr bytes endian -> do
       checkEndian reqEnd endian
-      pure $ Mem.bitvectorType (Bytes (intValue bytes))
+      pure $ Mem.bitvectorType (Bytes (natValue bytes))
     M.FloatMemRepr floatRep endian -> do
       checkEndian reqEnd endian
       case floatRep of
@@ -606,7 +606,7 @@ memReprToStorageType reqEnd memRep =
         _ -> Left $ "Do not support memory accesses to " ++ show floatRep ++ " values."
     M.PackedVecMemRepr n eltType -> do
       eltStorageType <- memReprToStorageType reqEnd eltType
-      pure $ Mem.arrayType (Bytes (intValue n)) eltStorageType
+      pure $ Mem.arrayType (natValue n) eltStorageType
 
 -- | Convert a Crucible register value to a LLVM memory mode lvalue.
 --
@@ -628,7 +628,7 @@ resolveMemVal (M.FloatMemRepr floatRep _endian) _ val =
     _ -> error $ "Do not support memory accesses to " ++ show floatRep ++ " values."
 resolveMemVal (M.PackedVecMemRepr n eltType) stp val =
   case Mem.storageTypeF stp of
-    Mem.Array cnt eltStp | cnt == Bytes (intValue n), fromIntegral (V.length val) == natValue n ->
+    Mem.Array cnt eltStp | cnt == natValue n, fromIntegral (V.length val) == intValue n ->
       Mem.LLVMValArray eltStp (resolveMemVal eltType eltStp <$> val)
     _ -> error $ "Unexpected storage type for packed vec."
 
