@@ -180,11 +180,11 @@ instance Ord (AssignId ids tp) where
 instance OrdF (AssignId ids) where
   compareF (AssignId id1) (AssignId id2) = compareF id1 id2
 
-instance ShowF (AssignId ids) where
-  showF (AssignId n) = show n
-
 instance Show (AssignId ids tp) where
-  show (AssignId n) = show n
+  show (AssignId n) = show (indexValue n)
+
+instance ShowF (AssignId ids) where
+  showF = show
 
 ------------------------------------------------------------------------
 -- CValue

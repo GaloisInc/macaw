@@ -17,6 +17,7 @@ module Data.Macaw.AbsDomain.JumpBounds
   , functionStartBounds
   , joinInitialBounds
   , ppInitJumpBounds
+  , boundsLocationInfo
     -- * IntraJumpbounds
   , IntraJumpBounds
   , mkIntraJumpBounds
@@ -28,9 +29,21 @@ module Data.Macaw.AbsDomain.JumpBounds
   , stackOffset
   , UpperBound(..)
     -- * Low-level details
-  , locRep
-  , BoundLoc(..)
   , ClassPred(..)
+    -- ** Locations and location maps
+  , BoundLoc(..)
+  , LocMap
+  , locMapEmpty
+  , locMapRegs
+  , locMapStack
+  , nonOverlapLocInsert
+    -- * Stack map
+  , StackMap
+  , emptyStackMap
+  , stackMapReplace
+  , stackMapOverwrite
+  , StackMapLookup(..)
+  , stackMapLookup
   ) where
 
 import           Control.Monad.Reader
@@ -40,11 +53,14 @@ import           Data.Functor
 import           Data.Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
+import           Data.Parameterized.Pair
+import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 import           Data.Word
@@ -62,12 +78,6 @@ import qualified Data.Macaw.Types as M
 
 addrTypeRepr :: MemWidth w => TypeRepr (BVType w)
 addrTypeRepr = BVTypeRepr memWidthNatRepr
-
-------------------------------------------------------------------------
--- Utilities
-
-mapTraverseWithKey_ :: Applicative m => (k -> a -> m ()) -> Map k a -> m ()
-mapTraverseWithKey_ f = Map.foldrWithKey (\k v r -> f k v *> r) (pure ())
 
 ------------------------------------------------------------------------
 -- Changed
@@ -118,6 +128,8 @@ data UpperBound tp where
 
 -- | This describes a constraint associated with an equivalence class
 -- of registers in @InitJumpBounds@.
+--
+-- The first parameter is the number of bits in the
 data ClassPred (w :: Nat) tp where
   -- | Value is a bitvector with the given upper bound.  The argument
   -- is the upper bound of the bitvector when interpreted as a
@@ -165,8 +177,14 @@ joinClassPred old new =
 -- | Either a register or stack offset.
 --
 -- These locations are tracked by our bounds analysis algorithm.
-data BoundLoc r tp where
+data BoundLoc (r :: M.Type -> Type) (tp :: M.Type) where
+  -- | @RegLoc r@ denotes the register @r@.
   RegLoc :: !(r tp) -> BoundLoc r tp
+  -- | @StackkOffLoc o repr@ denotes the bytes from address range
+  -- @[initSP + o .. initSP + o + memReprBytes repr)@.
+  --
+  -- We should note that this makes no claim that those addresses
+  -- are valid.
   StackOffLoc :: !(MemInt (RegAddrWidth r))
               -> !(MemRepr tp)
               -> BoundLoc r tp
@@ -220,31 +238,67 @@ ppLocConstraint d (ValueRep p _cnt) = ppClassPred d p
 ppLocConstraint d (EqualValue v) = d <+> text "=" <+> pretty v
 
 ------------------------------------------------------------------------
--- MemAnn
+-- MemVal
 
 -- | A value with a particular type along with a MemRepr indicating
 -- how the type is encoded in memory.
-data MemAnn (p :: M.Type -> Type) =
-  forall (tp :: M.Type) . MemAnn !(MemRepr tp) !(p tp)
+data MemVal (p :: M.Type -> Type) =
+  forall (tp :: M.Type) . MemVal !(MemRepr tp) !(p tp)
 
-ppMemConstraint :: ShowF r => MemInt (RegAddrWidth r) -> MemAnn (LocConstraint r) -> Doc
-ppMemConstraint i (MemAnn repr cns) =
+instance FunctorF MemVal where
+  fmapF f (MemVal r x) = MemVal r (f x)
+
+ppMemConstraint :: ShowF r => MemInt (RegAddrWidth r) -> MemRepr tp -> LocConstraint r tp -> Doc
+ppMemConstraint i repr cns =
   let nm = text "*(stack_frame" <+> ppAddend i <> text "," <+> pretty repr <> text "):"
    in ppLocConstraint nm cns
 
 ------------------------------------------------------------------------
 -- StackMap
 
-type StackMap w p = Map (MemInt w) (MemAnn p)
+-- | This is a data structure for representing values written to
+-- concrete stack offsets.
+newtype StackMap w (v :: M.Type -> Type) = SM (Map (MemInt w) (MemVal v))
 
-stackMapLookup :: MemInt w -> MemRepr tp -> StackMap w p -> Maybe (p tp)
-stackMapLookup i repr m =
-  case Map.lookup i m of
-    Just (MemAnn defRepr p) ->
-      case testEquality repr defRepr of
-        Just Refl -> Just p
-        Nothing -> Nothing
-    Nothing -> Nothing
+instance FunctorF (StackMap w) where
+  fmapF f (SM m) = SM (fmap (fmapF f) m)
+
+-- | Empty stack map
+emptyStackMap :: StackMap w p
+emptyStackMap = SM Map.empty
+
+-- | Result returned by @stackMapLookup@.
+data StackMapLookup w p tp where
+  -- 1| We found a value at the exact offset and repr
+  SMLResult :: !(p tp) -> StackMapLookup w p tp
+  -- | We found a value that had an overlapping offset and repr.
+  SMLOverlap  :: !(MemInt w) -> !(MemRepr utp) -> !(p utp) -> StackMapLookup w p tp
+  -- | We found neither an exact match nor an overlapping write.
+  SMLNone :: StackMapLookup w p tp
+
+-- | Looks Return value (if any) at given offset and representation.
+stackMapLookup :: MemWidth w
+               => MemInt w
+               -> MemRepr tp
+               -> StackMap w p
+               -> StackMapLookup w p tp
+stackMapLookup off repr (SM m) =  do
+  let end = off + fromIntegral (memReprBytes repr)
+  if end < off then
+    error $ "stackMapLookup given bad offset."
+   else
+    case Map.lookupLT end m of
+      Just (oldOff, MemVal oldRepr val)
+          -- If match exact
+        | oldOff == off
+        , Just Refl <- testEquality oldRepr repr ->
+          SMLResult val
+        -- If previous write ends after this write  starts
+        | oldOff + fromIntegral (memReprBytes oldRepr) > off ->
+          SMLOverlap oldOff oldRepr val
+        | otherwise ->
+          SMLNone
+      Nothing -> SMLNone
 
 clearPreWrites :: Ord i => i -> i -> Map i v -> Map i v
 clearPreWrites l h m =
@@ -258,36 +312,196 @@ clearPostWrites l h m =
     Just (o,_v) | o < h -> clearPostWrites l h (Map.delete o m)
     _ -> m
 
--- | Update the stack to point to the given expression.
-stackMapInsert :: forall w p tp
-               .  MemWidth w
-               => MemInt w
-               -> MemRepr tp
-               -> p tp
-               -> StackMap w p
-               -> StackMap w p
-stackMapInsert off repr v m =
+-- | This updates the stack map with a write if this write is either
+-- unreserved or completely replaces an existing write.
+stackMapReplace :: forall w p tp
+                .  (MemWidth w, HasCallStack)
+                => MemInt w
+                -> MemRepr tp
+                -> p tp
+                -> StackMap w p
+                -> Either (MemInt w, Pair MemRepr p) (StackMap w p)
+stackMapReplace off repr val (SM m) = do
+  let end = off + fromIntegral (memReprBytes repr)
+  -- If overflow occured in address then raise error.
+  when (end < off) $ error "Invalid stack offset"
+
+  case Map.lookupLE end m of
+    Nothing -> pure ()
+    Just (oldOff, MemVal oldRepr oldVal)
+      -- Previous write ends before this write.
+      | oldOff + fromIntegral (memReprBytes oldRepr) <= off ->
+          pure ()
+      -- This write replaces a previous write
+      | oldOff == off, memReprBytes oldRepr == memReprBytes repr ->
+          pure ()
+      -- This write overlaps without completely replacing
+      | otherwise ->
+          Left (oldOff, Pair oldRepr oldVal)
+  -- Update map
+  pure $! SM (Map.insert off (MemVal repr val) m)
+
+-- | This assigns a region of bytes to a particular value in the stack.
+--
+-- It overwrites any values that overlap with the location.
+stackMapOverwrite :: forall w p tp
+                  .  MemWidth w
+                  => MemInt w -- ^ Offset in the stack to write to
+                  -> MemRepr tp -- ^ Type of value to write
+                  -> p tp  -- ^ Value to write
+                  -> StackMap w p
+                  -> StackMap w p
+stackMapOverwrite off repr v (SM m) =
   let e = off + fromIntegral (memReprBytes repr)
-   in Map.insert off (MemAnn repr v) $
-      clearPreWrites off e $
-      clearPostWrites off e m
+   in SM $ Map.insert off (MemVal repr v)
+         $ clearPreWrites off e
+         $ clearPostWrites off e m
+
+-- | This sets the value at an offset without checking to clear any
+-- previous writes to values.
+unsafeStackMapInsertWith :: (p tp -> p tp -> p tp)
+                         -> MemInt w
+                         -> MemRepr tp
+                         -> p tp
+                         -> StackMap w p
+                         -> StackMap w p
+unsafeStackMapInsertWith upd o repr v (SM m) = SM (Map.insertWith updAnn o (MemVal repr v) m)
+  where updAnn _new (MemVal oldRepr valCns) =
+          case testEquality repr oldRepr of
+            Just Refl -> MemVal oldRepr (upd v valCns)
+            Nothing -> error $ "unsafeStackMampInsertWith given overlapping memory offsets."
+
+-- | This sets the value at an offset without checking to clear any
+-- previous writes to values.
+unsafeStackMapInsert :: MemInt w -> MemRepr tp -> p tp -> StackMap w p -> StackMap w p
+unsafeStackMapInsert o repr v (SM m) = SM (Map.insert o (MemVal repr v) m)
+
+stackMapFoldrWithKey :: (forall tp . MemInt w -> MemRepr tp -> v tp -> r -> r)
+                     -> r
+                     -> StackMap w v
+                     -> r
+stackMapFoldrWithKey f z (SM m) =
+  Map.foldrWithKey (\k (MemVal repr v) r -> f k repr v r) z m
+
+stackMapTraverseWithKey_ :: Applicative m
+                         => (forall tp . MemInt w -> MemRepr tp -> v tp -> m ())
+                         -> StackMap w v
+                         -> m ()
+stackMapTraverseWithKey_ f (SM m) =
+  Map.foldrWithKey (\k (MemVal repr v) r -> f k repr v *> r) (pure ()) m
+
+stackMapMapWithKey :: (forall tp . MemInt w -> MemRepr tp -> a tp -> b tp)
+                   -> StackMap w a
+                   -> StackMap w b
+stackMapMapWithKey f (SM m) =
+  SM (Map.mapWithKey (\o (MemVal repr v) -> MemVal repr (f o repr v)) m)
+
+stackMapTraverseMaybeWithKey :: Applicative m
+                             => (forall tp . MemInt w -> MemRepr tp -> a tp -> m (Maybe (b tp)))
+                                -- ^ Traversal function
+                             -> StackMap w a
+                             -> m (StackMap w b)
+stackMapTraverseMaybeWithKey f (SM m) =
+  SM <$> Map.traverseMaybeWithKey (\o (MemVal repr v) -> fmap (MemVal repr) <$> f o repr v) m
+
+-- @stackMapDropAbove bnd m@ includes only entries in @m@ whose bytes do not go above @bnd@.
+stackMapDropAbove :: MemWidth w => Integer -> StackMap w p -> StackMap w p
+stackMapDropAbove bnd (SM m) = SM (Map.filterWithKey p m)
+  where p o (MemVal r _) = toInteger o  + toInteger (memReprBytes r) <= bnd
+
+-- @stackMapDropBelow bnd m@ includes only entries in @m@ whose bytes do not go below @bnd@.
+stackMapDropBelow :: MemWidth w => Integer -> StackMap w p -> StackMap w p
+stackMapDropBelow bnd (SM m) = SM (Map.filterWithKey p m)
+  where p o _ = toInteger o >= bnd
 
 ------------------------------------------------------------------------
--- InitialIndexBiunds
+-- LocMap
+
+-- | A map from register/concrete stack offsets to values
+data LocMap (r :: M.Type -> Type) (v :: M.Type -> Type)
+  = LocMap { locMapRegs :: !(MapF r v)
+           , locMapStack :: !(StackMap (RegAddrWidth r) v)
+           }
+
+-- | An empty location map.
+locMapEmpty :: LocMap r v
+locMapEmpty = LocMap { locMapRegs = MapF.empty, locMapStack = emptyStackMap }
+
+-- | Return value associated with location or nothing if it is not
+-- defined.
+locLookup :: (MemWidth (RegAddrWidth r), OrdF r)
+          => BoundLoc r tp
+          -> LocMap r v
+          -> Maybe (v tp)
+locLookup (RegLoc r) m = MapF.lookup r (locMapRegs m)
+locLookup (StackOffLoc o repr) m =
+  case stackMapLookup o repr (locMapStack m) of
+    SMLResult r -> Just r
+    SMLOverlap _ _ _ -> Nothing
+    SMLNone -> Nothing
+
+-- | This associates the location with a value in the map, replacing any existing binding.
+--
+-- It is prefixed with "nonOverlap" because it doesn't guarantee that stack
+-- values are non-overlapping -- the user should ensure this before calling this.
+nonOverlapLocInsert :: OrdF r => BoundLoc r tp -> v tp -> LocMap r v -> LocMap r v
+nonOverlapLocInsert (RegLoc r) v m =
+  m { locMapRegs = MapF.insert r v (locMapRegs m) }
+nonOverlapLocInsert (StackOffLoc off repr) v m =
+  m { locMapStack = unsafeStackMapInsert off repr v (locMapStack m) }
+
+-- | This associates the location with a value in the map, and allows
+-- the old value to be updated.
+--
+-- It is prefixed with "nonOverlap" because it doesn't guarantee that stack
+-- values are non-overlapping -- the user should ensure this before calling this.
+nonOverlapLocInsertWith :: OrdF r
+                        => (v tp -> v tp -> v tp)
+                        -> BoundLoc r tp
+                        -> v tp
+                        -> LocMap r v
+                        -> LocMap r v
+nonOverlapLocInsertWith upd (RegLoc r) v m =
+  m { locMapRegs = MapF.insertWith upd r v (locMapRegs m) }
+nonOverlapLocInsertWith upd (StackOffLoc off repr) v m =
+  m { locMapStack = unsafeStackMapInsertWith upd off repr v (locMapStack m) }
+
+
+locOverwriteWith :: (OrdF r, MemWidth (RegAddrWidth r))
+                 => (v tp -> v tp -> v tp)
+                 -> BoundLoc r tp
+                 -> v tp
+                 -> LocMap r v
+                 -> LocMap r v
+locOverwriteWith upd (RegLoc r) v m =
+  m { locMapRegs = MapF.insertWith upd r v (locMapRegs m) }
+locOverwriteWith upd (StackOffLoc o repr) v m =
+  let nv = case stackMapLookup o repr (locMapStack m) of
+             SMLNone -> v
+             SMLOverlap _ _ _ -> v
+             SMLResult oldv -> upd v oldv
+   in m { locMapStack = stackMapOverwrite o repr nv (locMapStack m) }
+
+------------------------------------------------------------------------
+-- InitJumpBounds
 
 -- | Bounds for a function as the start of a block.
-data InitJumpBounds arch
-   = InitJumpBounds { initialRegBoundMap :: !(MapF (ArchReg arch) (LocConstraint (ArchReg arch)))
+newtype InitJumpBounds arch
+   = InitJumpBounds { initBndsMap :: LocMap (ArchReg arch) (LocConstraint (ArchReg arch))
+                    }
+{-
+                     initialRegBoundMap :: !(MapF (ArchReg arch) (LocConstraint (ArchReg arch)))
                       -- ^ Maps each register to the bounds on it.
                     , initialStackMap :: !(StackMap (ArchAddrWidth arch) (LocConstraint (ArchReg arch)))
                       -- ^ Maps stack offsets to the memory constraint.
                     }
+-}
 
+-- | Pretty print jump bounds.
 ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
-ppInitJumpBounds bnds
-  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:)))
-         (initialRegBoundMap bnds) $
-    Map.foldrWithKey (\i v -> (ppMemConstraint i v:)) [] (initialStackMap bnds)
+ppInitJumpBounds (InitJumpBounds m)
+  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:))) (locMapRegs m)
+  $ stackMapFoldrWithKey (\i repr v -> (ppMemConstraint i repr v:)) [] (locMapStack m)
 
 instance ShowF (ArchReg arch) => Pretty (InitJumpBounds arch) where
   pretty = vcat . ppInitJumpBounds
@@ -297,38 +511,28 @@ instance ShowF (ArchReg arch) => Show (InitJumpBounds arch) where
 
 -- | Bounds at start of function.
 functionStartBounds :: RegisterInfo (ArchReg arch) => InitJumpBounds arch
-functionStartBounds = InitJumpBounds { initialRegBoundMap =
-                                             MapF.singleton sp_reg (ValueRep (IsStackOffset 0) 1)
-                                     , initialStackMap = Map.empty
-                                     }
-
-emptyInitialBounds :: InitJumpBounds arch
-emptyInitialBounds =
-  InitJumpBounds { initialRegBoundMap = MapF.empty
-                     , initialStackMap = Map.empty
-                     }
+functionStartBounds =
+  let m = LocMap { locMapRegs = MapF.singleton sp_reg (ValueRep (IsStackOffset 0) 1)
+                 , locMapStack = emptyStackMap
+                 }
+   in InitJumpBounds m
 
 -- | Return the representative and  predicate associated with the location in the map.
-locConstraint :: OrdF (ArchReg arch)
+locConstraint :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
               => InitJumpBounds arch
               -> BoundLoc (ArchReg arch) tp
               -> LocConstraint (ArchReg arch) tp
-locConstraint bnds (RegLoc r) =
-  MapF.findWithDefault unconstrained r (initialRegBoundMap bnds)
-locConstraint bnds (StackOffLoc i repr) =
-  case stackMapLookup i repr (initialStackMap bnds) of
-    Just cns -> cns
-    Nothing -> unconstrained
+locConstraint (InitJumpBounds m) l = fromMaybe unconstrained (locLookup l m)
 
 -- | Return the representative and predicate associated with the
 -- location in the map along with the class size.
-locRep :: OrdF (ArchReg arch)
-       => InitJumpBounds arch
-       -> BoundLoc (ArchReg arch) tp
-       -> (BoundLoc (ArchReg arch) tp, ClassPred (ArchAddrWidth arch) tp, Word64)
-locRep bnds l =
+boundsLocationInfo :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+                   => InitJumpBounds arch
+                   -> BoundLoc (ArchReg arch) tp
+                   -> (BoundLoc (ArchReg arch) tp, ClassPred (ArchAddrWidth arch) tp, Word64)
+boundsLocationInfo bnds l =
   case locConstraint bnds l of
-    EqualValue loc -> locRep bnds loc
+    EqualValue loc -> boundsLocationInfo bnds loc
     ValueRep p c -> (l, p, c)
 
 -- | Increment the reference count for a class representative.
@@ -336,56 +540,24 @@ incLocCount :: OrdF (ArchReg arch)
             => BoundLoc (ArchReg arch) tp
             -> InitJumpBounds arch
             -> InitJumpBounds arch
-incLocCount (RegLoc r) bnds =
-    bnds { initialRegBoundMap =
-             MapF.insertWith upd r (ValueRep TopPred 2) (initialRegBoundMap bnds)
-         }
+incLocCount loc (InitJumpBounds m) =
+    InitJumpBounds (nonOverlapLocInsertWith upd loc (ValueRep TopPred 2) m)
   where upd _new (ValueRep p cnt) = ValueRep p (cnt+1)
         upd _new (EqualValue _) = error $ "insLocCount given non-class representative."
-incLocCount (StackOffLoc off repr) bnds =
-    bnds { initialStackMap = Map.insertWith upd off def (initialStackMap bnds) }
-  where def = MemAnn repr (ValueRep TopPred 2)
-        upd _new (MemAnn oldRepr valCns) =
-          case testEquality repr oldRepr of
-            Just Refl ->
-              case valCns of
-                ValueRep p cnt -> MemAnn repr (ValueRep p (cnt+1))
-                EqualValue _ -> error $ "insLocCount given non-class representative."
-            Nothing ->
-              error $ "insLocCount given overlapping memory offsets."
 
+-- | The the location to have the given constraint in the bounds, and
+-- return the new bounds.
 setLocConstraint :: OrdF (ArchReg arch)
-                   => BoundLoc (ArchReg arch) tp
-                   -> LocConstraint (ArchReg arch) tp
-                   -> InitJumpBounds arch
-                   -> InitJumpBounds arch
-setLocConstraint (RegLoc r) c bnds =
-  bnds { initialRegBoundMap = MapF.insert r c (initialRegBoundMap bnds) }
-setLocConstraint (StackOffLoc i repr) c bnds =
-  bnds { initialStackMap = Map.insert i (MemAnn repr c) (initialStackMap bnds) }
-
-assertNewLocEqual :: OrdF (ArchReg arch)
-                  => BoundLoc (ArchReg arch) tp
-                     -- ^ New location that should be unbound in this
-                     -- result.
-                  -> BoundLoc (ArchReg arch) tp
-                     -- ^ Existing class representative
-                  -> InitJumpBounds arch
-                  -> InitJumpBounds arch
-assertNewLocEqual newLoc loc =
-  incLocCount loc . setLocConstraint newLoc (EqualValue loc)
-
-addNewClassRep :: OrdF (ArchReg arch)
-               => BoundLoc (ArchReg arch) tp
-               -> ClassPred (ArchAddrWidth arch) tp
-               -> InitJumpBounds arch
-               -> InitJumpBounds arch
-addNewClassRep _r TopPred bnds = bnds
-addNewClassRep loc p bnds = setLocConstraint loc (ValueRep p 1) bnds
+                 => BoundLoc (ArchReg arch) tp
+                 -> LocConstraint (ArchReg arch) tp
+                 -> InitJumpBounds arch
+                 -> InitJumpBounds arch
+setLocConstraint l c (InitJumpBounds m) =
+  InitJumpBounds (nonOverlapLocInsert l c m)
 
 -- | Join locations
 joinNewLoc :: forall s arch tp
-           .  OrdF (ArchReg arch)
+           .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
            => InitJumpBounds arch
            -> InitJumpBounds arch
            -> STRef s (InitJumpBounds arch)
@@ -412,8 +584,8 @@ joinNewLoc old new bndsRef procRef cntr thisLoc oldCns = do
         -- Return this loc
         pure (thisLoc, p, c)
       EqualValue  oldLoc ->
-        pure (locRep old oldLoc)
-  let (newRep, newPred, _newCnt) = locRep new thisLoc
+        pure (boundsLocationInfo old oldLoc)
+  let (newRep, newPred, _newCnt) = boundsLocationInfo new thisLoc
   m <- lift $ readSTRef procRef
   -- See if we have already added a representative for this class.
   let pair = KeyPair oldRep newRep
@@ -422,15 +594,23 @@ joinNewLoc old new bndsRef procRef cntr thisLoc oldCns = do
       p <- joinClassPred oldPred newPred
       lift $ do
         writeSTRef procRef $! MapF.insert pair thisLoc m
-        modifySTRef' bndsRef $ addNewClassRep thisLoc p
+        case p of
+          TopPred -> pure ()
+          _ -> modifySTRef' bndsRef $ setLocConstraint thisLoc (ValueRep p 1)
     Just resRep ->
       -- Assert r is equal to resRep
-      lift $ modifySTRef' bndsRef $ assertNewLocEqual thisLoc resRep
+      lift $ modifySTRef' bndsRef $
+        incLocCount resRep . setLocConstraint thisLoc (EqualValue resRep)
+
+-- | Bounds where there are no constraints.
+emptyInitialBounds :: InitJumpBounds arch
+emptyInitialBounds =
+  InitJumpBounds locMapEmpty
 
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact inx the old bounds is implied by the new bounds.
 joinInitialBounds :: forall arch
-                  .  MapF.OrdF (ArchReg arch)
+                  .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                   => InitJumpBounds arch
                   -> InitJumpBounds arch
                   -> Maybe (InitJumpBounds arch)
@@ -445,10 +625,10 @@ joinInitialBounds old new = runChanged $ do
   --
   MapF.traverseWithKey_
     (\r -> joinNewLoc old new bndsRef procRef cntr (RegLoc r))
-    (initialRegBoundMap old)
-  mapTraverseWithKey_
-    (\i (MemAnn r c) -> joinNewLoc old new bndsRef procRef cntr (StackOffLoc i r) c)
-    (initialStackMap old)
+    (locMapRegs (initBndsMap old))
+  stackMapTraverseWithKey_
+    (\i r c -> joinNewLoc old new bndsRef procRef cntr (StackOffLoc i r) c)
+    (locMapStack (initBndsMap old))
 
   -- Check number of equivalence classes in result and original
   -- The count should not have decreased, but may increase if two elements
@@ -482,17 +662,11 @@ addClassRepBound :: ( HasCallStack
                  -> UpperBound (BVType w)
                  -> InitJumpBounds arch
                  -> InitJumpBounds arch
-addClassRepBound (RegLoc r) ubnd bnds =
+addClassRepBound l ubnd (InitJumpBounds m) =
   let p0 = ValueRep (BoundedBV ubnd) 1
-      upd (EqualValue _) = error "addClassBounds expected class rep"
-      upd (ValueRep oldp cnt) = ValueRep (combineUpperBound ubnd oldp) cnt
-   in bnds { initialRegBoundMap = MapF.insertWith (\_ -> upd) r p0 (initialRegBoundMap bnds) }
-addClassRepBound (StackOffLoc i repr) ubnd bnds =
-  let r = case stackMapLookup i repr (initialStackMap bnds) of
-            Nothing -> ValueRep (BoundedBV ubnd) 1
-            Just (EqualValue _) -> error "addClassBounds expected class rep"
-            Just (ValueRep oldp cnt) -> ValueRep (combineUpperBound ubnd oldp) cnt
-   in bnds { initialStackMap = stackMapInsert i repr r (initialStackMap bnds) }
+      upd _ (EqualValue _) = error "addClassBounds expected class rep"
+      upd _ (ValueRep oldp cnt) = ValueRep (combineUpperBound ubnd oldp) cnt
+   in InitJumpBounds (locOverwriteWith upd l p0 m)
 
 ------------------------------------------------------------------------
 -- BoundExpr
@@ -578,12 +752,12 @@ instance ( HasRepr (ArchReg arch) TypeRepr
 -- | Return an expression equivalent to the location in the bounds.
 --
 -- This attempts to normalize the expression to get a representative.
-locExpr :: OrdF (ArchReg arch)
+locExpr :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
         => InitJumpBounds arch
         -> BoundLoc (ArchReg arch) tp
         -> BoundExpr arch ids s tp
 locExpr bnds loc =
-  case locRep bnds loc of
+  case boundsLocationInfo bnds loc of
     (_, IsStackOffset i, _) -> StackOffsetExpr i
     (rep, BoundedBV _, _) -> ClassRepExpr rep
     (rep, TopPred, _) -> ClassRepExpr rep
@@ -610,18 +784,19 @@ data IntraJumpBounds arch ids s
 
 -- | Create index bounds from initial index bounds.
 mkIntraJumpBounds :: forall arch ids s
-                  .  OrdF (ArchReg arch)
+                  .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                   => InitJumpBounds arch
                   -> IntraJumpBounds arch ids s
 mkIntraJumpBounds initBnds = do
   let -- Map stack offset and memory annotation pair to the
       -- representative in the initial bounds.
       stackExpr :: MemInt (ArchAddrWidth arch)
-                -> MemAnn (LocConstraint (ArchReg arch))
-                -> MemAnn (BoundExpr arch ids s)
-      stackExpr i (MemAnn tp _) = MemAnn tp (locExpr initBnds (StackOffLoc i tp))
+                -> MemRepr tp
+                -> LocConstraint (ArchReg arch) tp
+                -> BoundExpr arch ids s tp
+      stackExpr i tp _ = locExpr initBnds (StackOffLoc i tp)
    in IntraJumpBounds { initBounds     = initBnds
-                      , stackExprMap   = Map.mapWithKey stackExpr (initialStackMap initBnds)
+                      , stackExprMap   = stackMapMapWithKey stackExpr (locMapStack (initBndsMap initBnds))
                       , assignExprMap  = MapF.empty
                       , assignBoundMap = MapF.empty
                       , appBoundMap    = MapF.empty
@@ -630,7 +805,7 @@ mkIntraJumpBounds initBnds = do
 
 -- | Return the value of the index expression given the bounds.
 valueExpr :: forall arch ids s tp
-          .  OrdF (ArchReg arch)
+          .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
           => IntraJumpBounds arch ids s
           -> Value arch ids tp
           -> BoundExpr arch ids s tp
@@ -644,7 +819,7 @@ valueExpr bnds val =
     Initial r -> locExpr (initBounds bnds) (RegLoc r)
 
 -- | Return stack offset if value is a stack offset.
-stackOffset :: OrdF (ArchReg arch)
+stackOffset :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
             => IntraJumpBounds arch ids s
             -> Value arch ids (BVType (ArchAddrWidth arch))
             -> Maybe (MemInt (ArchAddrWidth arch))
@@ -669,7 +844,7 @@ writeStackOff :: forall arch ids s tp
               -> BoundExpr arch ids s tp
               -> IntraJumpBounds arch ids s
 writeStackOff bnds off repr v =
-  bnds { stackExprMap = stackMapInsert off repr v (stackExprMap bnds) }
+  bnds { stackExprMap = stackMapOverwrite off repr v (stackExprMap bnds) }
 
 -- | Return an index expression associated with the @AssignRhs@.
 rhsExpr :: forall arch ids s tp
@@ -697,7 +872,7 @@ rhsExpr gen bnds aid arhs =
               (`AppExpr` a) <$> freshNonce gen
     ReadMem addr repr
       | Just o <- stackOffset bnds addr
-      , Just e <- stackMapLookup o repr (stackExprMap bnds) -> do
+      , SMLResult e <- stackMapLookup o repr (stackExprMap bnds) -> do
           pure e
     _ -> do
       pure $! AssignExpr aid (typeRepr arhs)
@@ -714,20 +889,20 @@ execStatement gen bnds stmt =
   case stmt of
     AssignStmt (Assignment aid arhs) -> do
       let bnds' = case arhs of
-                    EvalArchFn{} -> bnds { stackExprMap = Map.empty }
+                    EvalArchFn{} -> bnds { stackExprMap = emptyStackMap }
                     _ -> bnds
       bindAssignment bnds' aid <$> rhsExpr gen bnds' aid arhs
     WriteMem addr repr val ->
       case stackOffset bnds addr of
         Just addrOff ->
-          pure $! writeStackOff bnds addrOff repr (valueExpr  bnds val)
+          pure $! writeStackOff bnds addrOff repr (valueExpr bnds val)
         -- If we write to something other than stack, then clear all stack references.
         Nothing ->
-          pure $! bnds { stackExprMap = Map.empty }
-    CondWriteMem{} -> pure $! bnds { stackExprMap = Map.empty }
+          pure $! bnds { stackExprMap = emptyStackMap }
+    CondWriteMem{} -> pure $! bnds { stackExprMap = emptyStackMap }
     InstructionStart{} -> pure $! bnds
     Comment{} -> pure $! bnds
-    ExecArchStmt{} -> pure $! bnds { stackExprMap = Map.empty }
+    ExecArchStmt{} -> pure $! bnds { stackExprMap = emptyStackMap }
     ArchState{} -> pure $! bnds
 
 instance ShowF (ArchReg arch) => Pretty (IntraJumpBounds arch ids s) where
@@ -755,7 +930,7 @@ exprPred :: ( MemWidth (ArchAddrWidth arch)
 exprPred bnds v =
   case v of
     ClassRepExpr loc ->
-      case locRep (initBounds bnds) loc of
+      case boundsLocationInfo (initBounds bnds) loc of
         (_,p,_) -> p
     AssignExpr n _ -> do
       case MapF.lookup n (assignBoundMap bnds) of
@@ -820,7 +995,7 @@ valuePred bnds v =
         Just valExpr -> exprPred bnds valExpr
         Nothing -> TopPred
     Initial r ->
-      case locRep (initBounds bnds) (RegLoc r) of
+      case boundsLocationInfo (initBounds bnds) (RegLoc r) of
         (_,p,_) -> p
 
 -- | Lookup an upper bound or return analysis for why it is not defined.
@@ -987,10 +1162,11 @@ nextStackConstraint :: ( MemWidth (ArchAddrWidth arch)
                     => IntraJumpBounds arch ids s
                     -- ^ Bounds at end of this state.
                     -> MemInt (ArchAddrWidth arch)
-                    -> MemAnn (BoundExpr arch ids s)
-                    -> State (NextBlockState arch ids s) (Maybe (MemAnn (LocConstraint (ArchReg arch))))
-nextStackConstraint bnds i (MemAnn repr e) = do
-  fmap (MemAnn repr) <$> nextStateLocConstraint bnds (StackOffLoc i repr) e
+                    -> MemRepr tp
+                    -> BoundExpr arch ids s tp
+                    -> State (NextBlockState arch ids s) (Maybe (LocConstraint (ArchReg arch) tp))
+nextStackConstraint bnds i repr e =
+  nextStateLocConstraint bnds (StackOffLoc i repr) e
 
 -- | Bounds for block after jump
 nextBlockBounds :: forall arch ids s
@@ -1002,11 +1178,10 @@ nextBlockBounds :: forall arch ids s
                 -> InitJumpBounds arch
 nextBlockBounds bnds regs = do
   flip evalState MapF.empty $ do
-    regBoundMap <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) (regStateMap regs)
-    stackMap    <- Map.traverseMaybeWithKey (nextStackConstraint bnds) (stackExprMap bnds)
-    pure $! InitJumpBounds { initialRegBoundMap = regBoundMap
-                           , initialStackMap = stackMap
-                           }
+    rm <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) (regStateMap regs)
+    sm <- stackMapTraverseMaybeWithKey (nextStackConstraint bnds) (stackExprMap bnds)
+    let m = LocMap { locMapRegs = rm, locMapStack = sm }
+    pure $! InitJumpBounds m
 
 -- | Return the index bounds after a function call.
 postCallBounds :: forall arch ids s
@@ -1019,26 +1194,20 @@ postCallBounds :: forall arch ids s
 postCallBounds params bnds regs = do
   flip evalState MapF.empty $ do
     let filteredRegs = MapF.filterWithKey (\r _ -> preserveReg params r) (regStateMap regs)
-    regBoundMap <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) filteredRegs
+    rm <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) filteredRegs
     let finalStack = stackExprMap bnds
     let filteredStack =
           case valuePred bnds (getBoundValue sp_reg regs) of
             IsStackOffset spOff
               | stackGrowsDown params ->
-                  let newOff = spOff + fromInteger (postCallStackDelta params)
-                      -- Keep entries whose low address is above new stack offset.
-                      p o _v = o >= newOff
+                  let newOff = toInteger spOff + postCallStackDelta params
                    -- Keep entries at offsets above return address.
-                   in Map.filterWithKey p finalStack
+                   in stackMapDropBelow newOff finalStack
               | otherwise ->
-                  let newOff :: MemInt (ArchAddrWidth arch)
-                      newOff = spOff + fromInteger (postCallStackDelta params)
+                  let newOff = toInteger spOff + postCallStackDelta params
                       -- Keep entries whose high address is below new stack offset
-                      p :: MemInt (ArchAddrWidth arch) -> MemAnn (BoundExpr arch ids s) -> Bool
-                      p o (MemAnn r _) = o + fromIntegral (memReprBytes r) <= newOff
-                   in Map.filterWithKey p finalStack
-            _ -> Map.empty
-    stackMap <- Map.traverseMaybeWithKey (nextStackConstraint bnds) filteredStack
-    pure $! InitJumpBounds { initialRegBoundMap = regBoundMap
-                           , initialStackMap = stackMap
-                           }
+                   in stackMapDropAbove newOff finalStack
+            _ -> emptyStackMap
+    sm <- stackMapTraverseMaybeWithKey (nextStackConstraint bnds) filteredStack
+    let newMap = LocMap { locMapRegs = rm, locMapStack = sm }
+    pure $! InitJumpBounds newMap

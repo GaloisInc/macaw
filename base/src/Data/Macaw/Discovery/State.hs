@@ -297,7 +297,7 @@ data DiscoveryFunInfo arch ids
                       , discoveredFunSymbol :: !(Maybe BSC.ByteString)
                         -- ^ A symbol associated with the definition.
                       , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
-                        -- ^ Maps an address to the blocks associated with that address.
+                        -- ^ Maps an address block starts with
                       }
 
 -- | Returns the "name" associated with a function.
