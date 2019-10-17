@@ -215,11 +215,11 @@ initialBlockRegs :: forall ids ppc var
                   . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                  => ArchSegmentOff ppc
                     -- ^ The address of the block
-                 -> MA.AbsBlockState (ArchReg ppc)
-                    -- ^ Abstract state of the processor at the start of the block
-                 -> Either String (RegState (ArchReg ppc) (Value ppc ids))
+                 -> ArchBlockPrecond ppc
+                    -- ^ Information about the abstract state of the processor at the start of the block
+                 -> RegState (ArchReg ppc) (Value ppc ids)
                     -- ^ Error or initial register state for the block
-initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
+initialBlockRegs blkAddr _abPrecond = initRegState blkAddr
 
 
 type LocatedError ppc ids = (Block ppc ids, Int, TranslationError (ArchAddrWidth ppc))

@@ -1046,7 +1046,7 @@ ppAbsStack m = vcat (pp <$> Map.toDescList m)
 data AbsBlockState r
    = AbsBlockState { _absRegState :: !(RegState r (AbsValue (RegAddrWidth r)))
                    , startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
-                   }
+                   } deriving Eq
 
 absRegState :: Simple Lens (AbsBlockState r)
                            (RegState r (AbsValue (RegAddrWidth r)))
@@ -1105,6 +1105,13 @@ joinAbsBlockState x y
             return $ AbsBlockState { _absRegState     = z_regs
                                    , startAbsStack   = z_stk
                                    }
+
+instance RegisterInfo r => AbsDomain (AbsBlockState r) where
+  top = AbsBlockState
+    (mkRegState (\_ -> TopV))
+    mempty
+
+  joinD = joinAbsBlockState
 
 instance ( ShowF r
          , MemWidth (RegAddrWidth r)

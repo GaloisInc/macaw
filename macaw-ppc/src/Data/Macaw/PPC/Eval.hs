@@ -4,21 +4,27 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.PPC.Eval (
   mkInitialAbsState,
   absEvalArchFn,
   absEvalArchStmt,
   postCallAbsState,
+  linuxCallParams,
+  extractBlockPrecond,
   postPPCTermStmtAbsState,
   preserveRegAcrossSyscall
   ) where
 
+import           Data.Proxy
 import           GHC.TypeLits
 
 import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
+import           Data.Macaw.AbsDomain.JumpBounds as Jmp
+import qualified Data.Macaw.Architecture.Info as AI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Some ( Some(..) )
@@ -43,11 +49,12 @@ preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRe
 postPPCTermStmtAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                        -> AbsProcessorState (PPCReg ppc)
+                        -> AbsProcessorState (PPCReg ppc) ids
+                        -> Jmp.IntraJumpBounds ppc ids s
                         -> RegState (PPCReg ppc) (Value ppc ids)
                         -> PPCTermStmt ppc ids
-                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc))
-postPPCTermStmtAbsState preservePred mem s0 regState stmt =
+                        -> Maybe (AI.IntraJumpTarget ppc)
+postPPCTermStmtAbsState preservePred mem s0 _ regState stmt =
   case stmt of
     PPCSyscall ->
       case simplifyValue (regState ^. curIP) of
@@ -55,8 +62,9 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
           | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
                                          }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, initJumpBounds)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
       case simplifyValue (regState ^. curIP) of
@@ -64,8 +72,9 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
           | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
                                          }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, initJumpBounds)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrapdword _ _ _ ->
       case simplifyValue (regState ^. curIP) of
@@ -73,9 +82,17 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
           | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
                                          }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, initJumpBounds)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
+  where initJumpBounds = error "postPPCTermStmtAbsState: InitJumpBounds initialization not yet implemented"
+
+type instance ArchBlockPrecond (SP.AnyPPC a) = ()
+
+-- | We don't (yet?) track anything extra special to guide abstract interpretation.
+extractBlockPrecond :: ArchSegmentOff a -> AbsBlockState (PPCReg a) -> Either String ()
+extractBlockPrecond _ _ = Right ()
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
 -- block.
@@ -159,12 +176,15 @@ absEvalArchStmt _ s _ = s
 -- passed in registers.
 postCallAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                  => proxy ppc
-                 -> AbsProcessorState (ArchReg ppc)
+                 -> AbsProcessorState (ArchReg ppc) ids
                  -> RegState (ArchReg ppc) (Value ppc ids)
                  -> ArchSegmentOff ppc
                  -> AbsBlockState (ArchReg ppc)
-postCallAbsState proxy = MA.absEvalCall params
-  where
-    params = MA.CallParams { MA.postCallStackDelta = 0
-                           , MA.preserveReg = \r -> S.member (Some r) (linuxCalleeSaveRegisters proxy)
-                           }
+postCallAbsState _proxy = MA.absEvalCall linuxCallParams
+
+linuxCallParams :: 1 <= SP.AddrWidth var => MA.CallParams (ArchReg (SP.AnyPPC var))
+linuxCallParams = MA.CallParams
+  { MA.postCallStackDelta = 0
+  , MA.preserveReg = \r -> S.member (Some r) (linuxCalleeSaveRegisters Proxy)
+  , MA.stackGrowsDown = True
+  }

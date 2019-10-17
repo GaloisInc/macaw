@@ -18,7 +18,6 @@ module Data.Macaw.Refinement.SymbolicExecution
 where
 
 import           Control.Lens
-import           Control.Monad.ST ( RealWorld, stToIO )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
@@ -26,7 +25,6 @@ import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MS
 import           Data.Maybe
-import qualified Data.Map as Map
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce
 import           Data.Proxy
@@ -53,7 +51,7 @@ import qualified What4.Solver.Z3 as W
 data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
   , archVals :: MS.ArchVals arch
-  , handleAllocator :: C.HandleAllocator RealWorld
+  , handleAllocator :: C.HandleAllocator
   , nonceGenerator :: NonceGenerator IO t
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
@@ -75,7 +73,7 @@ withDefaultRefinementContext loaded_binary k = do
       case MS.archVals (Proxy @arch) of
         Just arch_vals -> do
 
-          mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
+          mem_var <- LLVM.mkMemVar handle_alloc
 
           (mem, mem_ptr_table) <- MS.newGlobalMemory
             (Proxy @arch)
@@ -176,10 +174,9 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
     globalMappingFn symbolicBackend mem2 ip_base ip_off
 
   init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
-  some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
+  some_cfg <- liftIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)
     handleAllocator
-    Map.empty
     (W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr)
     blocks
   case some_cfg of
@@ -199,6 +196,7 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
             sim_context
             global_state
             C.defaultAbortHandler
+            handle_return_type
             (C.runOverrideSim handle_return_type simulation)
       let execution_features = []
       exec_res <- liftIO $ C.executeCrucible execution_features initial_state

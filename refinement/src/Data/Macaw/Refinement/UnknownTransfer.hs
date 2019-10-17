@@ -124,11 +124,9 @@ import Data.Macaw.Discovery ( DiscoveryFunInfo
                             , ParsedTermStmt(ClassifyFailure)
                             , BlockTermRewriter
                             , addDiscoveredFunctionBlockTargets
-                            , blockStatementList
                             , discoveredFunAddr
                             , funInfo
                             , parsedBlocks
-                            , stmtsTerm
                             )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..), blockID
                                             , getBlock )
@@ -249,7 +247,7 @@ getUnknownTransfers fi =
 
 isUnknownTransfer :: ParsedBlock arch ids -> Bool
 isUnknownTransfer pb =
-  case stmtsTerm (blockStatementList pb) of
+  case pblockTermStmt pb of
     ClassifyFailure {} -> True
     _ -> False
 

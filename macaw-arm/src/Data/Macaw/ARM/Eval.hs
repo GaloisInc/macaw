@@ -69,7 +69,7 @@ absEvalArchStmt _ s _ = s
 postARMTermStmtAbsState :: (ARMArchConstraints arm)
                         => (forall tp . ARMReg tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg arm))
-                        -> AbsProcessorState ARMReg
+                        -> AbsProcessorState ARMReg ids
                         -> RegState ARMReg (Value arm ids)
                         -> ARMTermStmt ids
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg arm)), AbsBlockState ARMReg)

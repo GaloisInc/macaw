@@ -52,7 +52,8 @@ import           Data.Macaw.PPC.Disassemble ( disassembleFn, initialBlockRegs )
 import           Data.Macaw.PPC.Eval ( mkInitialAbsState
                                      , absEvalArchFn
                                      , absEvalArchStmt
-                                     , postCallAbsState
+                                     , extractBlockPrecond
+                                     , linuxCallParams
                                      , postPPCTermStmtAbsState
                                      , preserveRegAcrossSyscall
                                      )
@@ -95,12 +96,11 @@ ppc64_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
-                      , MI.mkInitialRegsForBlock = initialBlockRegs
+                      , MI.initialBlockRegs = initialBlockRegs
                       , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
                       , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
-                      , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
                       , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
@@ -109,6 +109,8 @@ ppc64_linux_info binData =
                       , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
                       , MI.postArchTermStmtAbsState = postPPCTermStmtAbsState (preserveRegAcrossSyscall proxy)
+                      , MI.extractBlockPrecond = extractBlockPrecond
+                      , MI.archCallParams = linuxCallParams
                       }
   where
     proxy = Proxy @PPC64.PPC
@@ -121,12 +123,11 @@ ppc32_linux_info binData =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
-                      , MI.mkInitialRegsForBlock = initialBlockRegs
+                      , MI.initialBlockRegs = initialBlockRegs
                       , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
                       , MI.mkInitialAbsState = mkInitialAbsState proxy binData
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
-                      , MI.postCallAbsState = postCallAbsState proxy
                       , MI.identifyCall = identifyCall proxy
                       , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
@@ -135,6 +136,8 @@ ppc32_linux_info binData =
                       , MI.rewriteArchTermStmt = rewriteTermStmt
                       , MI.archDemandContext = archDemandContext proxy
                       , MI.postArchTermStmtAbsState = postPPCTermStmtAbsState (preserveRegAcrossSyscall proxy)
+                      , MI.extractBlockPrecond = extractBlockPrecond
+                      , MI.archCallParams = linuxCallParams
                       }
   where
     proxy = Proxy @PPC32.PPC

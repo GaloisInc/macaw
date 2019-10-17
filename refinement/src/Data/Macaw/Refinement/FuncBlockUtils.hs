@@ -15,7 +15,6 @@ import           Data.Macaw.Discovery.State ( DiscoveryFunInfo
                                             , ParsedBlock(..)
                                             , ParsedTermStmt(..)
                                             , parsedBlocks
-                                            , stmtsTerm
                                             )
 import qualified Data.Map as Map
 import           Data.Semigroup
@@ -70,13 +69,12 @@ blockTransferTo fi blkID =
           ParsedJump _ tgt -> [tgt]
           ParsedLookupTable _ _ tgts -> F.toList tgts
           ParsedReturn {} -> []
-          ParsedIte _ thenS elseS -> lclTgtAddrs (stmtsTerm thenS) <>
-                                    lclTgtAddrs (stmtsTerm elseS)
+          ParsedBranch _ _ thenTgt elseTgt -> [thenTgt, elseTgt]
           PLTStub _ tgt _ -> undefined -- KWQ tgt?
           ParsedArchTermStmt _ _ mbTgt | Just tgt <- mbTgt -> [tgt]
                                        | otherwise -> []
           ParsedTranslateError {} -> []
           ClassifyFailure {} -> []
   in case getBlock fi blkID of
-       Just fBlk -> lclTgtAddrs $ stmtsTerm $ blockStatementList fBlk
+       Just fBlk -> lclTgtAddrs $ pblockTermStmt fBlk
        Nothing -> error "block ID not valid" -- impossible
