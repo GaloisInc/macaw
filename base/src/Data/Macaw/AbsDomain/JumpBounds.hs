@@ -18,6 +18,7 @@ module Data.Macaw.AbsDomain.JumpBounds
   , joinInitialBounds
   , ppInitJumpBounds
   , boundsLocationInfo
+  , boundsLocationRep
     -- * IntraJumpbounds
   , IntraJumpBounds
   , mkIntraJumpBounds
@@ -217,6 +218,8 @@ instance ShowF r => Pretty (BoundLoc r tp) where
 ------------------------------------------------------------------------
 -- LocConstraint
 
+type ClassSize = Word64
+
 -- | A constraint on a @BoundLoc
 data LocConstraint r tp where
   -- | An equivalence class representative with the given number of
@@ -225,7 +228,7 @@ data LocConstraint r tp where
   -- In our map the number of equivalence class members should always
   -- be positive.
   ValueRep :: !(ClassPred (RegAddrWidth r) tp)
-           -> !Word64
+           -> !ClassSize
            -> LocConstraint r tp
   EqualValue :: !(BoundLoc r tp)
              -> LocConstraint r tp
@@ -489,13 +492,6 @@ locOverwriteWith upd (StackOffLoc o repr) v m =
 newtype InitJumpBounds arch
    = InitJumpBounds { initBndsMap :: LocMap (ArchReg arch) (LocConstraint (ArchReg arch))
                     }
-{-
-                     initialRegBoundMap :: !(MapF (ArchReg arch) (LocConstraint (ArchReg arch)))
-                      -- ^ Maps each register to the bounds on it.
-                    , initialStackMap :: !(StackMap (ArchAddrWidth arch) (LocConstraint (ArchReg arch)))
-                      -- ^ Maps stack offsets to the memory constraint.
-                    }
--}
 
 -- | Pretty print jump bounds.
 ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
@@ -524,16 +520,35 @@ locConstraint :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
               -> LocConstraint (ArchReg arch) tp
 locConstraint (InitJumpBounds m) l = fromMaybe unconstrained (locLookup l m)
 
--- | Return the representative and predicate associated with the
--- location in the map along with the class size.
+-- | @boundsLocationInfo bnds loc@ returns a triple containing the
+-- class representative, predicate, and class size associated the
+-- location.
 boundsLocationInfo :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                    => InitJumpBounds arch
                    -> BoundLoc (ArchReg arch) tp
-                   -> (BoundLoc (ArchReg arch) tp, ClassPred (ArchAddrWidth arch) tp, Word64)
+                   -> ( BoundLoc (ArchReg arch) tp
+                      , ClassPred (ArchAddrWidth arch) tp
+                      , ClassSize
+                      )
 boundsLocationInfo bnds l =
   case locConstraint bnds l of
     EqualValue loc -> boundsLocationInfo bnds loc
     ValueRep p c -> (l, p, c)
+
+-- | @boundsLocRep bnds loc@ returns the representative location for
+-- @loc@.
+--
+-- This representative location has the property that a location must
+-- have the same value as its representative location, and if two
+-- locations have provably equal values in the bounds, then they must
+-- have the same representative.
+boundsLocationRep :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+                  => InitJumpBounds arch
+                  -> BoundLoc (ArchReg arch) tp
+                  -> BoundLoc (ArchReg arch) tp
+boundsLocationRep bnds l =
+  case boundsLocationInfo bnds l of
+    (r,_,_) -> r
 
 -- | Increment the reference count for a class representative.
 incLocCount :: OrdF (ArchReg arch)
@@ -604,8 +619,7 @@ joinNewLoc old new bndsRef procRef cntr thisLoc oldCns = do
 
 -- | Bounds where there are no constraints.
 emptyInitialBounds :: InitJumpBounds arch
-emptyInitialBounds =
-  InitJumpBounds locMapEmpty
+emptyInitialBounds = InitJumpBounds locMapEmpty
 
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact inx the old bounds is implied by the new bounds.
@@ -642,7 +656,11 @@ joinInitialBounds old new = runChanged $ do
 
   lift $ readSTRef bndsRef
 
-combineUpperBound :: UpperBound (BVType w) -> ClassPred a (BVType w) -> ClassPred a (BVType w)
+-- | @combineUpperBound ubnd old@ returns predicate that is no
+-- stronger than assumption @ubnd@ and @old@ hold.
+combineUpperBound :: UpperBound (BVType w)
+                  -> ClassPred a (BVType w)
+                  -> ClassPred a (BVType w)
 combineUpperBound ubnd oldp  =
   case oldp of
     TopPred -> BoundedBV ubnd      -- Prefer newbound.
@@ -1132,7 +1150,8 @@ nextStateLocConstraint :: ( MemWidth (ArchAddrWidth arch)
                           -- ^ Location expression is stored at.
                        -> BoundExpr arch ids s tp
                           -- ^ Expression to infer predicate or.
-                       -> State (NextBlockState arch ids s) (Maybe (LocConstraint (ArchReg arch) tp))
+                       -> State (NextBlockState arch ids s)
+                                (Maybe (LocConstraint (ArchReg arch) tp))
 nextStateLocConstraint bnds loc e = do
   m <- get
   case MapF.lookup e m of
