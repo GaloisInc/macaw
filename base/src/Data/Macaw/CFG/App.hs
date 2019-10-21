@@ -162,15 +162,22 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
 
   -- | Given a @m@-bit bitvector and a natural number @n@ less than @m@, this returns
   -- the bitvector with the @n@ least significant bits.
-  Trunc :: (1 <= n, n+1 <= m) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
-  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
-  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
-  -- the same as the most significant bit in @x@.
-  SExt :: (1 <= m, m+1 <= n, 1 <= n) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
-  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater than @m@, this returns
-  -- the bitvector with the same @m@ least signficant bits, and where the new bits are
-  -- all @false@.
-  UExt :: (1 <= m, m+1 <= n, 1 <= n) => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
+  Trunc :: (1 <= n, n+1 <= m)
+        => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
+
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater
+  -- than @m@, this returns the bitvector with the same @m@ least
+  -- signficant bits, and where the new bits are the same as the most
+  -- significant bit in @x@.
+  SExt :: (1 <= m, m+1 <= n, 1 <= n)
+       => !(f (BVType m)) -> !(NatRepr n) -> App f (BVType n)
+  -- | Given a @m@-bit bitvector @x@ and a natural number @n@ greater
+  -- than @m@, this returns the bitvector with the same @m@ least
+  -- signficant bits, and where the new bits are all @false@.
+  UExt :: (1 <= m, m+1 <= n, 1 <= n)
+       => !(f (BVType m))
+       -> !(NatRepr n)
+       -> App f (BVType n)
 
   -- | This casts an expression from one type to another that should
   -- use the same number of bytes in memory.
@@ -180,19 +187,41 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- Bitvector operations
 
   -- | @BVAdd w x y@ denotes @x + y@.
-  BVAdd :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVAdd :: (1 <= n)
+        => !(NatRepr n)
+        -> !(f (BVType n))
+        -> !(f (BVType n))
+        -> App f (BVType n)
 
   -- | @BVAdc w x y c@ denotes @x + y + (c ? 1 : 0)@.
-  BVAdc :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> !(f BoolType) -> App f (BVType n)
+  BVAdc :: (1 <= n)
+        => !(NatRepr n)
+        -> !(f (BVType n))
+        -> !(f (BVType n))
+        -> !(f BoolType)
+        -> App f (BVType n)
 
   -- | @BVSub w x y@ denotes @x - y@.
-  BVSub :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVSub :: (1 <= n)
+        => !(NatRepr n)
+        -> !(f (BVType n))
+        -> !(f (BVType n))
+        -> App f (BVType n)
 
   -- | @BVSbb w x y b@ denotes @(x - y) - (b ? 1 : 0)@.
-  BVSbb :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> !(f BoolType) -> App f (BVType n)
+  BVSbb :: (1 <= n)
+        => !(NatRepr n)
+        -> !(f (BVType n))
+        -> !(f (BVType n))
+        -> !(f BoolType)
+        -> App f (BVType n)
 
   -- Multiply two numbers
-  BVMul :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> !(f (BVType n)) -> App f (BVType n)
+  BVMul :: (1 <= n)
+        => !(NatRepr n)
+        -> !(f (BVType n))
+        -> !(f (BVType n))
+        -> App f (BVType n)
 
   -- Unsigned less than or equal.
   BVUnsignedLe :: (1 <= n) => !(f (BVType n)) -> !(f (BVType n)) -> App f BoolType

@@ -358,10 +358,8 @@ transferAbsValue r f =
           stridedInterval $ SI.mkStridedInterval knownNat False 0 upper 1
       | otherwise -> TopV
     MMXExtend{}   -> TopV
-    X86IDiv{} -> TopV
-    X86IRem{} -> TopV
-    X86Div{}  -> TopV
-    X86Rem{}  -> TopV
+    X86IDivRem{} -> TopV
+    X86DivRem{}  -> TopV
     SSE_UnaryOp{}  -> TopV
     SSE_VectorOp{}  -> TopV
     SSE_Sqrt{}  -> TopV

@@ -157,12 +157,8 @@ module Data.Macaw.X86.Monad
   , even_parity
   , x87Push
   , x87Pop
-  , bvQuotRem
-  , bvSignedQuotRem
-
     -- * SupportedBVWidth
   , SupportedBVWidth
-
     -- * Re-exports
   , type (TypeLits.<=)
   , type Flexdis86.Sizes.SizeConstraint(..)
@@ -1566,48 +1562,3 @@ x87Pop = do
   setReg X87_TopReg (BVValue knownNat (toInteger new_top))
 
 type BVExpr ids w = Expr ids (BVType w)
-
--- | Unsigned division.
---
--- The x86 documentation for @div@ (Intel x86 manual volume 2A,
--- page 3-393) says that results should be truncated towards
--- zero. These operations are called @quot@ and @rem@ in Haskell,
--- whereas @div@ and @mod@ in Haskell round towards negative
--- infinity.
---
--- This should raise a #DE exception if the denominator is zero or the
--- result is larger than maxUnsigned n.
-bvQuotRem :: (1 <= w)
-          => RepValSize w
-          -> Expr ids (BVType (w+w))
-          -- ^ Numerator
-          -> Expr ids (BVType w)
-             -- ^ Denominator
-          -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
-bvQuotRem rep n d = do
-  nv <- eval n
-  dv <- eval d
-  (,) <$> evalArchFn (X86Div rep nv dv)
-      <*> evalArchFn (X86Rem rep nv dv)
-
--- | Signed division.
---
--- The x86 documentation for @idiv@ (Intel x86 manual volume 2A, page
--- 3-393) says that results should be truncated towards zero. These
--- operations are called @quot@ and @rem@ in Haskell, whereas @div@
--- and @mod@ in Haskell round towards negative infinity.
---
--- This should raise a #DE exception if the denominator is zero or the
--- result is larger than maxSigned n or less than minSigned n.
-bvSignedQuotRem :: (1 <= w)
-                => RepValSize w
-                -> BVExpr ids (w+w)
-                   -- ^ Numerator
-                -> BVExpr ids w
-                   -- ^ Denominator
-                -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
-bvSignedQuotRem rep n d = do
-  nv <- eval n
-  dv <- eval d
-  (,) <$> evalArchFn (X86IDiv rep nv dv)
-      <*> evalArchFn (X86IRem rep nv dv)

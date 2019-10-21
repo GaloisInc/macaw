@@ -34,6 +34,7 @@ module Data.Macaw.X86.ArchTypes
   , RepValSize(..)
   , SomeRepValSize(..)
   , repValSizeByteCount
+  , repValSizeBitCount
   , repValSizeMemRepr
   ) where
 
@@ -45,6 +46,7 @@ import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
+import           Data.Parameterized.List
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -106,7 +108,15 @@ repValSizeMemRepr v =
     QWordRepVal -> BVMemRepr (knownNat :: NatRepr 8) LittleEndian
 
 repValSizeByteCount :: RepValSize w -> Natural
-repValSizeByteCount = memReprBytes . repValSizeMemRepr
+repValSizeByteCount v =
+  case v of
+    ByteRepVal  -> 1
+    WordRepVal  -> 2
+    DWordRepVal -> 4
+    QWordRepVal -> 8
+
+repValSizeBitCount :: RepValSize w -> Natural
+repValSizeBitCount v = 8 * repValSizeByteCount v
 
 ------------------------------------------------------------------------
 -- X86TermStmt
@@ -382,36 +392,37 @@ data X86PrimFn f tp where
   -- 1s, and the low 64-bits are the given register.
   MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
 
-  -- | This performs a signed quotient for idiv.
-  -- It raises a #DE exception if the divisor is 0 or the result overflows.
-  -- The stored result is truncated to zero.
-  X86IDiv :: !(RepValSize w)
-          -> !(f (BVType (w+w)))
-          -> !(f (BVType w))
-          -> X86PrimFn f (BVType w)
+  -- | This performs a unsigned quotient and remainder computation.
+  --
+  -- The first value in the tuple returned is the quotient and the
+  -- second is the remainder.  If @X86DivRem w a b d@ is invoked, then
+  -- let @n = toNat a * 2^bitCount w + toNat b@ and @d' = toNat d@.
+  --
+  -- If @d' = 0@ or @n/d'@ is out of the range of a @w@-bit unsigned
+  -- bitvector, then a @#DE@ exception is thrown.  Otherwise a pair
+  -- @(q,r)@ is returned and @toNat q = floor(n/d')@, and @toNat r =
+  -- n' - d' * toNat q@.
+  X86DivRem :: !(RepValSize w)
+            -> !(f (BVType w))
+            -> !(f (BVType w))
+            -> !(f (BVType w))
+            -> X86PrimFn f (TupleType [BVType w, BVType w])
 
-  -- | This performs a signed remainder for idiv.
-  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-  -- The stored result is truncated to zero.
-
-  X86IRem :: !(RepValSize w)
-          -> !(f (BVType (w+w)))
-          -> !(f (BVType w))
-          -> X86PrimFn f (BVType w)
-
-  -- | This performs a unsigned quotient for div.
-  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-  X86Div :: !(RepValSize w)
-         -> !(f (BVType (w+w)))
-         -> !(f (BVType w))
-         -> X86PrimFn f (BVType w)
-
-  -- | This performs an unsigned remainder for div.
-  -- It raises a #DE exception if the divisor is 0 or the quotient overflows.
-  X86Rem :: !(RepValSize w)
-         -> !(f (BVType (w+w)))
-         -> !(f (BVType w))
-         -> X86PrimFn f (BVType w)
+  -- | This performs a signed quotient and remainder computation.
+  --
+  -- The first value in the tuple returned is the quotient and the
+  -- second is the remainder.  If @X86DivRem w a b d@ is invoked, then
+  -- let @n = toInteger a * 2^bitCount w + toNat b@ and @d' = toNat d@.
+  --
+  -- If @d' = 0@ or @n/d'@ is out of the range of a @w@-bit signed
+  -- bitvector, then a @#DE@ exception is thrown.  Otherwise a pair
+  -- @(q,r)@ is returned and @toNat q = roundToZero(n/d')@, and @toNat r =
+  -- n' - d' * toNat q@.
+  X86IDivRem :: !(RepValSize w)
+             -> !(f (BVType w))
+             -> !(f (BVType w))
+             -> !(f (BVType w))
+             -> X86PrimFn f (TupleType [BVType w, BVType w])
 
   -- | This applies the operation pairwise to floating point values.
   --
@@ -454,18 +465,19 @@ data X86PrimFn f tp where
 
   -- |  This performs a comparison of two floating point values and returns three flags:
   --
-  --  * ZF is for the zero-flag and true if the arguments are equal or either argument is a NaN.
+  --  * ZF is for the zero-flag and true if the arguments are equal or
+  --  * either argument is a NaN.
   --
   --  * PF records the unordered flag and is true if either value is a NaN.
   --
-  --  * CF is the carry flag, and true if the first floating point argument is less than
-  --    second or either value is a NaN.
+  --  * CF is the carry flag, and true if the first floating point
+  --    argument is less than second or either value is a NaN.
   --
-  -- The order of the flags was chosen to be consistent with the Intel documentation for
-  -- UCOMISD and UCOMISS.
+  -- The order of the flags was chosen to be consistent with the Intel
+  -- documentation for UCOMISD and UCOMISS.
   --
-  -- This function implicitly depends on the MXCSR register and may signal exceptions based
-  -- on the configuration of that register.
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions based on the configuration of that register.
   SSE_UCOMIS :: !(SSE_FloatType tp)
              -> !(f (FloatType tp))
              -> !(f (FloatType tp))
@@ -691,10 +703,12 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       MemCmp{}      -> knownRepr
       RepnzScas{}   -> knownRepr
       MMXExtend{}   -> knownRepr
-      X86IDiv w _ _ -> typeRepr (repValSizeMemRepr w)
-      X86IRem w _ _ -> typeRepr (repValSizeMemRepr w)
-      X86Div  w _ _ -> typeRepr (repValSizeMemRepr w)
-      X86Rem  w _ _ -> typeRepr (repValSizeMemRepr w)
+      X86IDivRem w _ _ _ ->
+        let tp = typeRepr (repValSizeMemRepr w)
+         in TupleTypeRepr (tp :< tp :< Nil)
+      X86DivRem  w _ _ _ ->
+        let tp = typeRepr (repValSizeMemRepr w)
+         in TupleTypeRepr (tp :< tp :< Nil)
       SSE_UnaryOp  _ tp _ _ -> FloatTypeRepr (typeRepr tp)
       SSE_VectorOp _ w tp _ _ -> VecTypeRepr w (FloatTypeRepr (typeRepr tp))
       SSE_Sqrt tp _ -> FloatTypeRepr (typeRepr tp)
@@ -745,10 +759,8 @@ instance TraversableFC X86PrimFn where
       RepnzScas sz val buf cnt ->
         RepnzScas sz <$> go val <*> go buf <*> go cnt
       MMXExtend v -> MMXExtend <$> go v
-      X86IDiv w n d -> X86IDiv w <$> go n <*> go d
-      X86IRem w n d -> X86IRem w <$> go n <*> go d
-      X86Div  w n d -> X86Div  w <$> go n <*> go d
-      X86Rem  w n d -> X86Rem  w <$> go n <*> go d
+      X86IDivRem w n1 n2 d -> X86IDivRem w <$> go n1 <*> go n2 <*> go d
+      X86DivRem  w n1 n2 d -> X86DivRem  w <$> go n1 <*> go n2 <*> go d
       SSE_UnaryOp op tp x y -> SSE_UnaryOp op tp <$> go x <*> go y
       SSE_VectorOp op n tp x y -> SSE_VectorOp op n tp <$> go x <*> go y
       SSE_Sqrt ftp x -> SSE_Sqrt ftp <$> go x
@@ -772,6 +784,10 @@ instance TraversableFC X86PrimFn where
       VExtractF128 x i -> (`VExtractF128` i) <$> go x
       VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
 
+-- | Pretty print a rep value size
+ppRepValSize :: RepValSize w -> Doc
+ppRepValSize = pretty . toInteger . repValSizeBitCount
+
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
     let ppShow :: (Applicative m, Show a) => a -> m Doc
@@ -791,10 +807,10 @@ instance IsArchFn X86PrimFn where
       RepnzScas _ val buf cnt  -> sexprA "first_byte_offset" args
         where args = [pp val, pp buf, pp cnt]
       MMXExtend e -> sexprA "mmx_extend" [ pp e ]
-      X86IDiv w n d -> sexprA "idiv" [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
-      X86IRem w n d -> sexprA "irem" [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
-      X86Div  w n d -> sexprA "div"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
-      X86Rem  w n d -> sexprA "rem"  [ ppShow $ typeWidth $ repValSizeMemRepr w, pp n, pp d ]
+      X86IDivRem w n1 n2 d ->
+        sexprA "idiv" [ pure (ppRepValSize w), pp n1, pp n2, pp d ]
+      X86DivRem w n1 n2 d ->
+        sexprA "div"  [ pure (ppRepValSize w), pp n1, pp n2, pp d ]
       SSE_UnaryOp op tp x y ->
         sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
@@ -844,10 +860,8 @@ x86PrimFnHasSideEffects f =
     MemCmp{}     -> False
     RepnzScas{}  -> True
     MMXExtend{}  -> False
-    X86IDiv{}    -> True -- To be conservative we treat the divide errors as side effects.
-    X86IRem{}    -> True -- /\ ..
-    X86Div{}     -> True -- /\ ..
-    X86Rem{}     -> True -- /\ ..
+    X86IDivRem{} -> True -- To be conservative we treat the divide errors as side effects.
+    X86DivRem{}  -> True -- To be conservative we treat the divide errors as side effects.
 
     -- Each of these may throw exceptions based on floating point config flags.
     SSE_UnaryOp{}   -> True
@@ -951,8 +965,10 @@ instance TraversableF X86Stmt where
     case stmt of
       SetSegmentSelector s v -> SetSegmentSelector s <$> go v
       StoreX87Control v -> StoreX87Control <$> go v
-      RepMovs bc dest src cnt dir -> RepMovs bc <$> go dest <*> go src <*> go cnt <*> go dir
-      RepStos bc dest val cnt dir -> RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
+      RepMovs bc dest src cnt dir ->
+        RepMovs bc <$> go dest <*> go src <*> go cnt <*> go dir
+      RepStos bc dest val cnt dir ->
+        RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
       EMMS -> pure EMMS
 
 instance IsArchStmt X86Stmt where
@@ -963,10 +979,10 @@ instance IsArchStmt X86Stmt where
       StoreX87Control addr -> pp addr <+> text ":= x87_control"
       RepMovs bc dest src cnt dir ->
           text "repMovs" <+> parens (hcat $ punctuate comma args)
-        where args = [integer (toInteger (repValSizeByteCount bc)), pp dest, pp src, pp cnt, pp dir]
+        where args = [ppRepValSize bc, pp dest, pp src, pp cnt, pp dir]
       RepStos bc dest val cnt dir ->
           text "repStos" <+> parens (hcat $ punctuate comma args)
-        where args = [integer (toInteger (repValSizeByteCount bc)), pp dest, pp val, pp cnt, pp dir]
+        where args = [ppRepValSize bc, pp dest, pp val, pp cnt, pp dir]
       EMMS -> text "emms"
 
 ------------------------------------------------------------------------
