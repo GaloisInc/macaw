@@ -222,7 +222,7 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   where
   logger _ _ = return ()
 
-  evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
+  evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
 -- | Semantics for operations that do not affect Crucible's state directly.
@@ -751,11 +751,11 @@ evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
 evalE sym e = case e of
                 ValBool x -> return x
                 ValBV _ x -> return x
-                Expr a    -> evalApp' sym (evalE sym) a
+                Expr a    -> evalApp sym a
 
 evalApp :: forall sym t.  IsSymInterface sym =>
          Sym sym -> App () (E sym) t -> IO (RegValue sym t)
-evalApp x = evalApp' sym (evalE x)
+evalApp sym = evalApp' sym (evalE sym)
 
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
 bv i = app (BVLit knownNat (fromIntegral i))
