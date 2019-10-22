@@ -34,6 +34,7 @@ import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
 import           Data.Kind ( Type )
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Utils.Endian (Endian(..))
@@ -49,7 +50,7 @@ import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
 import           What4.Symbol (userSymbol)
 
-import           Lang.Crucible.Backend (IsSymInterface)
+import           Lang.Crucible.Backend (IsSymInterface, assert)
 import           Lang.Crucible.CFG.Expr
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
@@ -234,10 +235,10 @@ pureSem sym fn = do
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
     M.MMXExtend {} -> error "MMXExtend"
-    M.X86IDiv w n d -> sDiv sym w n d
-    M.X86IRem w n d -> sRem sym w n d
-    M.X86Div  w n d -> uDiv sym w n d
-    M.X86Rem  w n d -> uRem sym w n d
+    M.X86IDivRem w num1 num2 d -> do
+      sDivRem sym w num1 num2 d
+    M.X86DivRem  w num1 num2 d -> do
+      uDivRem sym w num1 num2 d
 
     M.SSE_UnaryOp op (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let f = case op of
@@ -442,6 +443,67 @@ shuffleB xs is = fmap lkp is
 
 --------------------------------------------------------------------------------
 
+divNatReprClasses :: M.RepValSize w
+                  -> (( KnownNat w
+                      , 1 <= w
+                      , 1 <= w+w
+                      , w+1 <= w+w
+                      ) => a)
+                  -> a
+divNatReprClasses r x =
+  case r of
+    M.ByteRepVal  -> x
+    M.WordRepVal  -> x
+    M.DWordRepVal -> x
+    M.QWordRepVal -> x
+
+mkPair :: forall sym x y
+       .  (IsSymInterface sym, KnownRepr TypeRepr x, KnownRepr TypeRepr y)
+       => Sym sym
+       -> RegValue sym x
+       -> RegValue sym y
+       -> IO (RegValue sym (StructType (EmptyCtx ::> x ::> y)))
+mkPair sym q r = do
+  let pairType :: Ctx.Assignment TypeRepr (EmptyCtx ::> x ::> y)
+      pairType = Ctx.empty Ctx.:> knownRepr Ctx.:> knownRepr
+  let pairRes :: Ctx.Assignment (RegValue' sym) (EmptyCtx ::> x ::> y)
+      pairRes = Ctx.empty Ctx.:> RV q Ctx.:> RV r
+  evalApp' sym (\v -> pure (unRV v)) $ MkStruct pairType pairRes
+
+
+-- | Get numerator from pair of Macaw terms
+getNumerator :: IsSymInterface sym
+                    => (1 <= w, w+1 <= w+w, 1 <= w+w)
+                    => NatRepr w
+                    -> Sym sym
+                    -> AtomWrapper (RegEntry sym) (M.BVType w)
+                    -> AtomWrapper (RegEntry sym) (M.BVType w)
+                    -> IO (RegValue sym (BVType (w+w)))
+getNumerator dw sym macawNum1 macawNum2 = do
+  let symi = symIface sym
+  -- Get top half of numerator
+  num1 <- getBitVal symi macawNum1
+  -- Get bottom half of numerator
+  num2 <- getBitVal symi macawNum2
+  -- Get bottom half of numerator
+  evalApp sym $ BVConcat dw dw num1 num2
+
+-- | Get extended denominator and assert it is not zero.
+getDenominator :: IsSymInterface sym
+                    => 1 <= w
+                    => NatRepr w
+                    -> Sym sym
+                    -> AtomWrapper (RegEntry sym) (M.BVType w)
+                    -> IO (E sym (BVType w))
+getDenominator dw sym macawDenom = do
+  let symi = symIface sym
+  den <- getBitVal symi macawDenom
+  -- Check denominator is not 0
+  do let bvZ = app (BVLit dw 0)
+     denNotZero <- evalApp sym $ Not (app (BVEq dw den bvZ))
+     assert symi denNotZero (C.AssertFailureSimError "denominator not zero")
+  pure den
+
 -- | Performs a simple unsigned division operation.
 --
 -- The x86 numerator is twice the size as the denominator.
@@ -449,117 +511,81 @@ shuffleB xs is = fmap lkp is
 -- This function is only reponsible for the dividend (not any
 -- remainder--see uRem for that), and any divide-by-zero exception was
 -- already handled via an Assert.
-uDiv :: ( IsSymInterface sym ) =>
-         Sym sym
-      -> M.RepValSize w
-      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
-      -> AtomWrapper (RegEntry sym) (M.BVType w)
-      -> IO (RegValue sym (LLVMPointerType w))
-uDiv sym repsz n d = do
-  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
-  withAddLeq dw dw $ \nw ->
-    case testLeq n1 nw of
-      Just LeqProof ->
-        divOp sym nw n dw d BVUdiv
-      Nothing -> error "uDiv unable to verify numerator is >= 1 bit"
+uDivRem :: forall sym w
+        .  IsSymInterface sym
+        => Sym sym
+        -> M.RepValSize w
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> IO (RegValue sym
+                (StructType (EmptyCtx ::> LLVMPointerType w ::> LLVMPointerType w)))
+uDivRem sym repsz macawNum1 macawNum2 macawDenom =
+  divNatReprClasses repsz $ do
+    let dw = M.typeWidth (M.repValSizeMemRepr repsz)
+    -- Get natwidth of w+w
+    let nw = addNat dw dw
+    let symi = symIface sym
+    -- Get numerator
+    numExt <- getNumerator dw sym macawNum1 macawNum2
+    -- Get denominator
+    den <- getDenominator dw sym macawDenom
+    -- Get extended denominator
+    denExt <- evalApp sym $ BVZext nw dw den
+    -- Get extended quotient
+    qExt <- evalApp sym $ BVUdiv nw (ValBV nw numExt) (ValBV nw denExt)
+    -- Get Quotient as bitvector
+    qBV <- evalApp sym $ BVTrunc dw nw (ValBV nw qExt)
+    -- Check quotient did not overflow.
+    do let qExt' = app (BVZext nw dw (ValBV dw qBV))
+       qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
+       assert symi qNoOverflow (C.AssertFailureSimError "quotient no overflow")
+    -- Get quotient
+    q <- llvmPointer_bv symi qBV
+    -- Get remainder
+    r <- do
+      let rext = app (BVUrem nw (ValBV nw numExt) (ValBV nw denExt))
+      rv <- evalE sym $ app (BVTrunc dw nw rext)
+      llvmPointer_bv symi (rv :: RegValue sym (BVType w))
+    mkPair sym q r
 
--- | Performs a simple unsigned division operation.
---
--- The x86 numerator is twice the size as the denominator.
---
--- This function is only reponsible for the remainder (the dividend is
--- computed separately by uDiv), and any divide-by-zero exception was
--- already handled via an Assert.
-uRem :: ( IsSymInterface sym ) =>
-         Sym sym
-      -> M.RepValSize w
-      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
-      -> AtomWrapper (RegEntry sym) (M.BVType w)
-      -> IO (RegValue sym (LLVMPointerType w))
-uRem sym repsz n d = do
-  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
-  withAddLeq dw dw $ \nw ->
-    case testLeq n1 nw of
-      Just LeqProof ->
-        divOp sym nw n dw d BVUrem
-      Nothing -> error "uRem unable to verify numerator is >= 1 bit"
-
--- | Performs a simple signed division operation.
---
--- The x86 numerator is twice the size as the denominator.
---
--- This function is only reponsible for the dividend (not any
--- remainder--see sRem for that), and any divide-by-zero exception was
--- already handled via an Assert.
-sDiv :: ( IsSymInterface sym ) =>
-         Sym sym
-      -> M.RepValSize w
-      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
-      -> AtomWrapper (RegEntry sym) (M.BVType w)
-      -> IO (RegValue sym (LLVMPointerType w))
-sDiv sym repsz n d = do
-  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
-  withAddLeq dw dw $ \nw ->
-    case testLeq n1 nw of
-      Just LeqProof ->
-        divOp sym nw n dw d BVSdiv
-      Nothing -> error "sDiv unable to verify numerator is >= 1 bit"
-
--- | Performs a simple signed division operation.
---
--- The x86 numerator is twice the size as the denominator.
---
--- This function is only reponsible for the remainder (the dividend is
--- computed separately by sDiv), and any divide-by-zero exception was
--- already handled via an Assert.
-sRem :: ( IsSymInterface sym ) =>
-         Sym sym
-      -> M.RepValSize w
-      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
-      -> AtomWrapper (RegEntry sym) (M.BVType w)
-      -> IO (RegValue sym (LLVMPointerType w))
-sRem sym repsz n d = do
-  let dw = M.typeWidth $ M.repValSizeMemRepr repsz
-  withAddLeq dw dw $ \nw ->
-    case testLeq n1 nw of
-      Just LeqProof ->
-        divOp sym nw n dw d BVSrem
-      Nothing -> error "sRem unable to verify numerator is >= 1 bit"
-
--- | Common function for division and remainder computation for both
--- signed and unsigned BV expressions.
---
--- The x86 numerator is twice the size as the denominator, so
--- zero-extend the denominator, perform the division, then truncate
--- the result.
-divOp :: ( IsSymInterface sym
-         , 1 <= (w + w)
-         , w <= (w + w)
-         ) =>
-         Sym sym
-      -> NatRepr (w + w)
-      -> AtomWrapper (RegEntry sym) (M.BVType (w + w))
-      -> NatRepr w
-      -> AtomWrapper (RegEntry sym) (M.BVType w)
-      -> (NatRepr (w + w) -> E sym (BVType (w + w)) -> E sym (BVType (w + w)) -> App () (E sym) (BVType (w + w)))
-      -> IO (RegValue sym (LLVMPointerType w))
-divOp sym nw n' dw d' op = do
-  let symi = symIface sym
-  n <- getBitVal symi n'
-  d <- getBitVal symi d'
-  case testLeq n1 dw of
-    Just LeqProof ->
-      case testLeq (incNat dw) nw of
-        Just LeqProof ->
-          llvmPointer_bv symi =<< (evalE sym
-                                  -- (assertExpr (app $ BVEq dw (app $ BVLit dw 0)
-                                   (app $ BVTrunc dw nw $ app $ op nw (app $ BVZext nw dw d) n))
-                                   -- "must not be zero"
-                                   -- )
-                                  -- )
-        Nothing -> error "divOp unable to prove numerator size > denominator size + 1"
-    Nothing -> error "divOp unable to prove denominator size > 1 bit"
-
+sDivRem :: forall sym w
+        .  IsSymInterface sym
+        => Sym sym
+        -> M.RepValSize w
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> AtomWrapper (RegEntry sym) (M.BVType w)
+        -> IO (RegValue sym
+                (StructType (EmptyCtx ::> LLVMPointerType w ::> LLVMPointerType w)))
+sDivRem sym repsz macawNum1 macawNum2 macawDenom =
+  divNatReprClasses repsz $ do
+    let dw = M.typeWidth (M.repValSizeMemRepr repsz)
+    -- Get natwidth of w+w
+    let nw = addNat dw dw
+    let symi = symIface sym
+    -- Get numerator
+    numExt <- getNumerator dw sym macawNum1 macawNum2
+    -- Get denominator
+    den <- getDenominator dw sym macawDenom
+    -- Get extended denominator
+    denExt <- evalApp sym $ BVSext nw dw den
+    -- Get extended quotient
+    qExt <- evalApp sym $ BVSdiv nw (ValBV nw numExt) (ValBV nw denExt)
+    -- Get Quotient as bitvector
+    qBV <- evalApp sym $ BVTrunc dw nw (ValBV nw qExt)
+    -- Check quotient did not overflow.
+    do let qExt' = app (BVSext nw dw (ValBV dw qBV))
+       qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
+       assert symi qNoOverflow (C.AssertFailureSimError "quotient no overflow")
+    -- Get quotient
+    q <- llvmPointer_bv symi qBV
+    -- Get remainder
+    r <- do
+      let rext = app (BVSrem nw (ValBV nw numExt) (ValBV nw denExt))
+      rv <- evalE sym $ app (BVTrunc dw nw rext)
+      llvmPointer_bv symi (rv :: RegValue sym (BVType w))
+    mkPair sym q r
 
 --------------------------------------------------------------------------------
 divExact ::
@@ -658,9 +684,6 @@ unpack2 sym e w c v1 v2 k =
        v2' <- getBitVal sym v2
        k (V.fromBV e n c v1') (V.fromBV e n c v2')
 
-
-
-
 -- XXX: Do we want to be strict here (i.e., asserting that the thing is
 -- not a pointer, or should be lenent, i.e., return an undefined value?)
 getBitVal ::
@@ -694,11 +717,30 @@ floatInfoFromSSEType = \case
 --------------------------------------------------------------------------------
 -- A small functor that allows mixing of values and Crucible expressions.
 
+data E :: Type -> CrucibleType -> Type where
+  ValBool :: RegValue sym BoolType -> E sym BoolType
+  ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
+  Expr :: App () (E sym) t -> E sym t
+
 evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
 evalE sym e = case e of
                 ValBool x -> return x
                 ValBV _ x -> return x
                 Expr a    -> evalApp sym a
+
+evalApp' :: forall sym g t
+         .  IsSymInterface sym
+         => Sym sym
+         -> (forall utp . g utp -> IO (RegValue sym utp))
+         -> App () g t
+         -> IO (RegValue sym t)
+evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
+  where
+  logger _ _ = return ()
+
+  evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
+  evalExt _ y  = case y of {}
+
 
 evalApp :: forall sym t.  IsSymInterface sym =>
          Sym sym -> App () (E sym) t -> IO (RegValue sym t)
@@ -709,10 +751,6 @@ evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
   evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
-data E :: Type -> CrucibleType -> Type where
-  ValBool :: RegValue sym BoolType -> E sym BoolType
-  ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
-  Expr :: App () (E sym) t -> E sym t
 
 instance IsExpr (E sym) where
   type ExprExt (E sym) = ()

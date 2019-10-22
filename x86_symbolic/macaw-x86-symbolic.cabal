@@ -16,7 +16,7 @@ library
                  lens,
                  macaw-base,
                  macaw-symbolic,
-                 macaw-x86,
+                 macaw-x86 >= 0.3.1,
                  mtl,
                  parameterized-utils,
                  vector,
