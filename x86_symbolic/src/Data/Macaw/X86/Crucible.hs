@@ -211,6 +211,20 @@ newSymFuns s =
                               knownRepr
                Left _ -> fail "Invalid symbol name"
 
+-- | Use @Sym sym@ to to evaluate an app.
+evalApp' :: forall sym f t .
+  IsSymInterface sym =>
+  Sym sym ->
+  (forall utp . f utp -> IO (RegValue sym utp)) ->
+  App () f t ->
+  IO (RegValue sym t)
+evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
+  where
+  logger _ _ = return ()
+
+  evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
+  evalExt _ y  = case y of {}
+
 -- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: forall sym mt
         .  IsSymInterface sym
@@ -722,36 +736,6 @@ data E :: Type -> CrucibleType -> Type where
   ValBV :: (1 <= w) => NatRepr w -> RegValue sym (BVType w) -> E sym (BVType w)
   Expr :: App () (E sym) t -> E sym t
 
-evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
-evalE sym e = case e of
-                ValBool x -> return x
-                ValBV _ x -> return x
-                Expr a    -> evalApp sym a
-
-evalApp' :: forall sym g t
-         .  IsSymInterface sym
-         => Sym sym
-         -> (forall utp . g utp -> IO (RegValue sym utp))
-         -> App () g t
-         -> IO (RegValue sym t)
-evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
-  where
-  logger _ _ = return ()
-
-  evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
-  evalExt _ y  = case y of {}
-
-
-evalApp :: forall sym t.  IsSymInterface sym =>
-         Sym sym -> App () (E sym) t -> IO (RegValue sym t)
-evalApp x = C.evalApp (symIface x) (symTys x) logger evalExt (evalE x)
-  where
-  logger _ _ = return ()
-
-  evalExt :: fun -> EmptyExprExtension f a -> IO (RegValue sym a)
-  evalExt _ y  = case y of {}
-
-
 instance IsExpr (E sym) where
   type ExprExt (E sym) = ()
   app = Expr
@@ -763,6 +747,15 @@ instance IsExpr (E sym) where
                 ValBool _  -> knownRepr
                 ValBV n _  -> BVRepr n
 
+evalE :: IsSymInterface sym => Sym sym -> E sym t -> IO (RegValue sym t)
+evalE sym e = case e of
+                ValBool x -> return x
+                ValBV _ x -> return x
+                Expr a    -> evalApp' sym (evalE sym) a
+
+evalApp :: forall sym t.  IsSymInterface sym =>
+         Sym sym -> App () (E sym) t -> IO (RegValue sym t)
+evalApp x = evalApp' sym (evalE x)
 
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
 bv i = app (BVLit knownNat (fromIntegral i))
