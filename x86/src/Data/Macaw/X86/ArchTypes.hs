@@ -759,8 +759,8 @@ instance TraversableFC X86PrimFn where
       RepnzScas sz val buf cnt ->
         RepnzScas sz <$> go val <*> go buf <*> go cnt
       MMXExtend v -> MMXExtend <$> go v
-      X86IDivRem w n1 n2 d -> X86IDivRem w <$> go n1 <*> go n2 <*> go d
-      X86DivRem  w n1 n2 d -> X86DivRem  w <$> go n1 <*> go n2 <*> go d
+      X86IDivRem w num1 num2 d -> X86IDivRem w <$> go num1 <*> go num2 <*> go d
+      X86DivRem  w num1 num2 d -> X86DivRem  w <$> go num1 <*> go num2 <*> go d
       SSE_UnaryOp op tp x y -> SSE_UnaryOp op tp <$> go x <*> go y
       SSE_VectorOp op n tp x y -> SSE_VectorOp op n tp <$> go x <*> go y
       SSE_Sqrt ftp x -> SSE_Sqrt ftp <$> go x
@@ -807,10 +807,10 @@ instance IsArchFn X86PrimFn where
       RepnzScas _ val buf cnt  -> sexprA "first_byte_offset" args
         where args = [pp val, pp buf, pp cnt]
       MMXExtend e -> sexprA "mmx_extend" [ pp e ]
-      X86IDivRem w n1 n2 d ->
-        sexprA "idiv" [ pure (ppRepValSize w), pp n1, pp n2, pp d ]
-      X86DivRem w n1 n2 d ->
-        sexprA "div"  [ pure (ppRepValSize w), pp n1, pp n2, pp d ]
+      X86IDivRem w num1 num2 d ->
+        sexprA "idiv" [ pure (ppRepValSize w), pp num1, pp num2, pp d ]
+      X86DivRem  w num1 num2 d ->
+        sexprA "div"  [ pure (ppRepValSize w), pp num1, pp num2, pp d ]
       SSE_UnaryOp op tp x y ->
         sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
