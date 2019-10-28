@@ -1155,6 +1155,8 @@ assertPred (AssignedValue a) isTrue bnds =
 assertPred _ _ bnds = Right bnds
 
 -- | Maps bound expression that have been visited to their location.
+--
+-- We memoize expressions seen so that we can infer when two locations must be equal.
 type NextBlockState arch ids s = MapF (BoundExpr arch ids s) (BoundLoc (ArchReg arch) )
 
 -- | Return the constraint associated with the given location and expression
@@ -1174,7 +1176,8 @@ nextStateLocConstraint :: ( MemWidth (ArchAddrWidth arch)
 nextStateLocConstraint bnds loc e = do
   m <- get
   case MapF.lookup e m of
-    Just l ->
+    Just l -> do
+      -- Question: Shouldn't I increment count for l?
       pure $! Just $ EqualValue l
     Nothing -> do
       put $! MapF.insert e loc m
@@ -1221,6 +1224,27 @@ nextBlockBounds bnds regs = do
     let m = LocMap { locMapRegs = rm, locMapStack = sm }
     pure $! InitJumpBounds m
 
+-- | Get the constraint associated with a register after a call.
+postCallConstraint :: RegisterInfo (ArchReg arch)
+                   => CallParams (ArchReg arch)
+                      -- ^ Information about calling convention.
+                   -> IntraJumpBounds arch ids s
+                      -- ^ Bounds at end of this state.
+                   -> ArchReg arch tp
+                   -- ^ Register to get
+                   -> Value arch ids tp
+                   -- ^ Value of register at time call occurs.
+                   -> State (NextBlockState arch ids s) (Maybe (LocConstraint (ArchReg arch) tp))
+postCallConstraint params bnds r v
+  | Just Refl <- testEquality r sp_reg
+  , IsStackOffset o <- exprPred bnds (valueExpr bnds v) = do
+      let postCallPred = IsStackOffset (o+fromInteger (postCallStackDelta params))
+      pure (Just (ValueRep postCallPred 1))
+  | preserveReg params r =
+      nextStateLocConstraint bnds (RegLoc r) (valueExpr bnds v)
+  | otherwise =
+      pure Nothing
+
 -- | Return the index bounds after a function call.
 postCallBounds :: forall arch ids s
                .  ( RegisterInfo (ArchReg arch)
@@ -1231,8 +1255,7 @@ postCallBounds :: forall arch ids s
                -> InitJumpBounds arch
 postCallBounds params bnds regs = do
   flip evalState MapF.empty $ do
-    let filteredRegs = MapF.filterWithKey (\r _ -> preserveReg params r) (regStateMap regs)
-    rm <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) filteredRegs
+    rm <- MapF.traverseMaybeWithKey (postCallConstraint params bnds) (regStateMap regs)
     let finalStack = stackExprMap bnds
     let filteredStack =
           case valuePred bnds (getBoundValue sp_reg regs) of
