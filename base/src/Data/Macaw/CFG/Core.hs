@@ -859,7 +859,8 @@ ppStmt ppOff stmt =
     WriteMem     a _ rhs ->
       text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     CondWriteMem c a _ rhs ->
-      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a <+> ppValue 0 rhs
+      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
+        <+> ppValue 0 rhs
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s

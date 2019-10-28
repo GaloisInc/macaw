@@ -35,9 +35,11 @@ module Data.Macaw.AbsDomain.JumpBounds
   , BoundLoc(..)
   , LocMap
   , locMapEmpty
+  , locLookup
   , locMapRegs
   , locMapStack
   , nonOverlapLocInsert
+  , locOverwriteWith
     -- * Stack map
   , StackMap
   , emptyStackMap
@@ -45,6 +47,7 @@ module Data.Macaw.AbsDomain.JumpBounds
   , stackMapOverwrite
   , StackMapLookup(..)
   , stackMapLookup
+  , ppStackMap
   ) where
 
 import           Control.Monad.Reader
@@ -145,7 +148,8 @@ data ClassPred (w :: Nat) tp where
 
 
 ppAddend :: MemInt w -> Doc
-ppAddend o | memIntValue o < 0 = text "-" <+> pretty (negate (toInteger (memIntValue o)))
+ppAddend o | memIntValue o < 0 =
+               text "-" <+> pretty (negate (toInteger (memIntValue o)))
            | otherwise = text "+" <+> pretty o
 
 -- | Pretty print the class predicate
@@ -213,7 +217,8 @@ instance OrdF r => OrdF (BoundLoc r) where
 
 instance ShowF r => Pretty (BoundLoc r tp) where
   pretty (RegLoc r) = text (showF r)
-  pretty (StackOffLoc i tp) = text "*(stack_frame " <+> ppAddend i <> text ") :" <> pretty tp
+  pretty (StackOffLoc i tp) =
+    text "*(stack_frame " <+> ppAddend i <> text ") :" <> pretty tp
 
 ------------------------------------------------------------------------
 -- LocConstraint
@@ -251,10 +256,9 @@ data MemVal (p :: M.Type -> Type) =
 instance FunctorF MemVal where
   fmapF f (MemVal r x) = MemVal r (f x)
 
-ppMemConstraint :: ShowF r => MemInt (RegAddrWidth r) -> MemRepr tp -> LocConstraint r tp -> Doc
-ppMemConstraint i repr cns =
-  let nm = text "*(stack_frame" <+> ppAddend i <> text "," <+> pretty repr <> text "):"
-   in ppLocConstraint nm cns
+ppStackOff :: MemInt w -> MemRepr tp -> Doc
+ppStackOff o repr =
+  text "*(stack_frame" <+> ppAddend o <> text "," <+> pretty repr <> text ")"
 
 ------------------------------------------------------------------------
 -- StackMap
@@ -270,12 +274,24 @@ instance FunctorF (StackMap w) where
 emptyStackMap :: StackMap w p
 emptyStackMap = SM Map.empty
 
+ppStackMap :: (forall tp . Doc -> v tp -> Doc) -> StackMap w v -> Doc
+ppStackMap f (SM m)
+  | Map.null m = text "empty-stack-map"
+  | otherwise =
+      vcat $
+      [ f (ppStackOff o repr) v
+      | (o,MemVal repr v) <- Map.toList m
+      ]
+
 -- | Result returned by @stackMapLookup@.
 data StackMapLookup w p tp where
   -- 1| We found a value at the exact offset and repr
   SMLResult :: !(p tp) -> StackMapLookup w p tp
   -- | We found a value that had an overlapping offset and repr.
-  SMLOverlap  :: !(MemInt w) -> !(MemRepr utp) -> !(p utp) -> StackMapLookup w p tp
+  SMLOverlap  :: !(MemInt w)
+              -> !(MemRepr utp)
+              -> !(p utp)
+              -> StackMapLookup w p tp
   -- | We found neither an exact match nor an overlapping write.
   SMLNone :: StackMapLookup w p tp
 
@@ -471,7 +487,7 @@ nonOverlapLocInsertWith upd (StackOffLoc off repr) v m =
 
 
 locOverwriteWith :: (OrdF r, MemWidth (RegAddrWidth r))
-                 => (v tp -> v tp -> v tp)
+                 => (v tp -> v tp -> v tp) -- ^ Update takes new and  old.
                  -> BoundLoc r tp
                  -> v tp
                  -> LocMap r v
@@ -496,8 +512,11 @@ newtype InitJumpBounds arch
 -- | Pretty print jump bounds.
 ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
 ppInitJumpBounds (InitJumpBounds m)
-  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:))) (locMapRegs m)
-  $ stackMapFoldrWithKey (\i repr v -> (ppMemConstraint i repr v:)) [] (locMapStack m)
+  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:)))
+                            (locMapRegs m)
+  $ stackMapFoldrWithKey (\i repr v -> (ppLocConstraint (ppStackOff i repr) v:))
+                         []
+                         (locMapStack m)
 
 instance ShowF (ArchReg arch) => Pretty (InitJumpBounds arch) where
   pretty = vcat . ppInitJumpBounds
@@ -1136,6 +1155,8 @@ assertPred (AssignedValue a) isTrue bnds =
 assertPred _ _ bnds = Right bnds
 
 -- | Maps bound expression that have been visited to their location.
+--
+-- We memoize expressions seen so that we can infer when two locations must be equal.
 type NextBlockState arch ids s = MapF (BoundExpr arch ids s) (BoundLoc (ArchReg arch) )
 
 -- | Return the constraint associated with the given location and expression
@@ -1155,7 +1176,8 @@ nextStateLocConstraint :: ( MemWidth (ArchAddrWidth arch)
 nextStateLocConstraint bnds loc e = do
   m <- get
   case MapF.lookup e m of
-    Just l ->
+    Just l -> do
+      -- Question: Shouldn't I increment count for l?
       pure $! Just $ EqualValue l
     Nothing -> do
       put $! MapF.insert e loc m
@@ -1202,6 +1224,27 @@ nextBlockBounds bnds regs = do
     let m = LocMap { locMapRegs = rm, locMapStack = sm }
     pure $! InitJumpBounds m
 
+-- | Get the constraint associated with a register after a call.
+postCallConstraint :: RegisterInfo (ArchReg arch)
+                   => CallParams (ArchReg arch)
+                      -- ^ Information about calling convention.
+                   -> IntraJumpBounds arch ids s
+                      -- ^ Bounds at end of this state.
+                   -> ArchReg arch tp
+                   -- ^ Register to get
+                   -> Value arch ids tp
+                   -- ^ Value of register at time call occurs.
+                   -> State (NextBlockState arch ids s) (Maybe (LocConstraint (ArchReg arch) tp))
+postCallConstraint params bnds r v
+  | Just Refl <- testEquality r sp_reg
+  , IsStackOffset o <- exprPred bnds (valueExpr bnds v) = do
+      let postCallPred = IsStackOffset (o+fromInteger (postCallStackDelta params))
+      pure (Just (ValueRep postCallPred 1))
+  | preserveReg params r =
+      nextStateLocConstraint bnds (RegLoc r) (valueExpr bnds v)
+  | otherwise =
+      pure Nothing
+
 -- | Return the index bounds after a function call.
 postCallBounds :: forall arch ids s
                .  ( RegisterInfo (ArchReg arch)
@@ -1212,8 +1255,7 @@ postCallBounds :: forall arch ids s
                -> InitJumpBounds arch
 postCallBounds params bnds regs = do
   flip evalState MapF.empty $ do
-    let filteredRegs = MapF.filterWithKey (\r _ -> preserveReg params r) (regStateMap regs)
-    rm <- MapF.traverseMaybeWithKey (nextRegConstraint bnds) filteredRegs
+    rm <- MapF.traverseMaybeWithKey (postCallConstraint params bnds) (regStateMap regs)
     let finalStack = stackExprMap bnds
     let filteredStack =
           case valuePred bnds (getBoundValue sp_reg regs) of
