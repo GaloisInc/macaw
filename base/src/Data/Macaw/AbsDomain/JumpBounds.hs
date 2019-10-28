@@ -35,9 +35,11 @@ module Data.Macaw.AbsDomain.JumpBounds
   , BoundLoc(..)
   , LocMap
   , locMapEmpty
+  , locLookup
   , locMapRegs
   , locMapStack
   , nonOverlapLocInsert
+  , locOverwriteWith
     -- * Stack map
   , StackMap
   , emptyStackMap
@@ -45,6 +47,7 @@ module Data.Macaw.AbsDomain.JumpBounds
   , stackMapOverwrite
   , StackMapLookup(..)
   , stackMapLookup
+  , ppStackMap
   ) where
 
 import           Control.Monad.Reader
@@ -145,7 +148,8 @@ data ClassPred (w :: Nat) tp where
 
 
 ppAddend :: MemInt w -> Doc
-ppAddend o | memIntValue o < 0 = text "-" <+> pretty (negate (toInteger (memIntValue o)))
+ppAddend o | memIntValue o < 0 =
+               text "-" <+> pretty (negate (toInteger (memIntValue o)))
            | otherwise = text "+" <+> pretty o
 
 -- | Pretty print the class predicate
@@ -213,7 +217,8 @@ instance OrdF r => OrdF (BoundLoc r) where
 
 instance ShowF r => Pretty (BoundLoc r tp) where
   pretty (RegLoc r) = text (showF r)
-  pretty (StackOffLoc i tp) = text "*(stack_frame " <+> ppAddend i <> text ") :" <> pretty tp
+  pretty (StackOffLoc i tp) =
+    text "*(stack_frame " <+> ppAddend i <> text ") :" <> pretty tp
 
 ------------------------------------------------------------------------
 -- LocConstraint
@@ -251,10 +256,9 @@ data MemVal (p :: M.Type -> Type) =
 instance FunctorF MemVal where
   fmapF f (MemVal r x) = MemVal r (f x)
 
-ppMemConstraint :: ShowF r => MemInt (RegAddrWidth r) -> MemRepr tp -> LocConstraint r tp -> Doc
-ppMemConstraint i repr cns =
-  let nm = text "*(stack_frame" <+> ppAddend i <> text "," <+> pretty repr <> text "):"
-   in ppLocConstraint nm cns
+ppStackOff :: MemInt w -> MemRepr tp -> Doc
+ppStackOff o repr =
+  text "*(stack_frame" <+> ppAddend o <> text "," <+> pretty repr <> text ")"
 
 ------------------------------------------------------------------------
 -- StackMap
@@ -270,12 +274,24 @@ instance FunctorF (StackMap w) where
 emptyStackMap :: StackMap w p
 emptyStackMap = SM Map.empty
 
+ppStackMap :: (forall tp . Doc -> v tp -> Doc) -> StackMap w v -> Doc
+ppStackMap f (SM m)
+  | Map.null m = text "empty-stack-map"
+  | otherwise =
+      vcat $
+      [ f (ppStackOff o repr) v
+      | (o,MemVal repr v) <- Map.toList m
+      ]
+
 -- | Result returned by @stackMapLookup@.
 data StackMapLookup w p tp where
   -- 1| We found a value at the exact offset and repr
   SMLResult :: !(p tp) -> StackMapLookup w p tp
   -- | We found a value that had an overlapping offset and repr.
-  SMLOverlap  :: !(MemInt w) -> !(MemRepr utp) -> !(p utp) -> StackMapLookup w p tp
+  SMLOverlap  :: !(MemInt w)
+              -> !(MemRepr utp)
+              -> !(p utp)
+              -> StackMapLookup w p tp
   -- | We found neither an exact match nor an overlapping write.
   SMLNone :: StackMapLookup w p tp
 
@@ -471,7 +487,7 @@ nonOverlapLocInsertWith upd (StackOffLoc off repr) v m =
 
 
 locOverwriteWith :: (OrdF r, MemWidth (RegAddrWidth r))
-                 => (v tp -> v tp -> v tp)
+                 => (v tp -> v tp -> v tp) -- ^ Update takes new and  old.
                  -> BoundLoc r tp
                  -> v tp
                  -> LocMap r v
@@ -496,8 +512,11 @@ newtype InitJumpBounds arch
 -- | Pretty print jump bounds.
 ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
 ppInitJumpBounds (InitJumpBounds m)
-  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:))) (locMapRegs m)
-  $ stackMapFoldrWithKey (\i repr v -> (ppMemConstraint i repr v:)) [] (locMapStack m)
+  = flip (MapF.foldrWithKey (\k v -> (ppLocConstraint (text (showF k)) v:)))
+                            (locMapRegs m)
+  $ stackMapFoldrWithKey (\i repr v -> (ppLocConstraint (ppStackOff i repr) v:))
+                         []
+                         (locMapStack m)
 
 instance ShowF (ArchReg arch) => Pretty (InitJumpBounds arch) where
   pretty = vcat . ppInitJumpBounds
