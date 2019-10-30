@@ -58,6 +58,8 @@ module Data.Macaw.Symbolic
     -- ** Translating arbitrary collections of blocks
   , mkBlocksRegCFG
   , mkBlocksCFG
+  , addBlocksCFG
+  , mkCrucRegCFG
     -- ** Translating individual blocks
   , mkParsedBlockRegCFG
   , mkParsedBlockCFG
