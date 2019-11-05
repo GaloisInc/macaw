@@ -61,7 +61,7 @@ main :: IO ()
 main = do
   Some (gen :: NonceGenerator IO t) <- newIONonceGenerator
   halloc <- C.newHandleAllocator
-  sym <- C.newSimpleBackend @t @(C.Flags C.FloatReal) gen
+  sym <- C.newSimpleBackend C.FloatRealRepr gen
   let x86ArchFns :: MS.MacawSymbolicArchFunctions MX.X86_64
       x86ArchFns = MX.x86_64MacawSymbolicFns
 

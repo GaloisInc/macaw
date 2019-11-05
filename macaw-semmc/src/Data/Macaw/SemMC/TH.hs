@@ -479,7 +479,7 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
 genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg =
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
-      sym <- runIO (S.newSimpleBackend @_ @(S.Flags S.FloatIEEE) ng)
+      sym <- runIO (S.newSimpleBackend S.FloatIEEERepr ng)
       runIO (S.startCaching sym)
       lib <- runIO (loadLibrary (Proxy @arch) sym functions)
       formulas <- runIO (loadFormulas sym lib semantics)
