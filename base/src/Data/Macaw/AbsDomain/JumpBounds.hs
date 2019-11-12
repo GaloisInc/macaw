@@ -1,6 +1,16 @@
-{-
-This code associates upper bounds with parts of registers and
-addresses in the stack.
+{- |
+
+This module defines a relational abstract domain for tracking relationships
+between values in registers and on stack slots.  It also maintains abstractions
+of upper bounds for those values.
+
+The overall problem being solved with this abstract domain is tracking upper
+bounds on values, but under the observation that sometimes compilers generate
+code that performs bounds checks on values that have been copied to the stack,
+but then later uses the value from the stack rather than the register that was
+checked.  Thus, we need a relational domain to track the equality between the
+two values in order to learn the bounds on the copy on the stack.
+
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
