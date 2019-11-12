@@ -39,7 +39,7 @@ mkTest fp = T.testCase fp (withELF fp (testMacaw fp))
 
 testMacaw :: FilePath -> E.Elf 64 -> IO ()
 testMacaw fpath elf = do
-  let loadCfg = MM.defaultLoadOptions { MM.loadRegionIndex = Just 0 }
+  let loadCfg = MM.defaultLoadOptions { MM.loadOffset = Just 0 }
   loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
                <- MBL.loadBinary loadCfg elf
   entries <- MBL.entryPoints loadedBinary

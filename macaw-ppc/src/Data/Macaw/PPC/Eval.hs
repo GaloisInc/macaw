@@ -3,12 +3,16 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Eval (
   mkInitialAbsState,
   absEvalArchFn,
   absEvalArchStmt,
-  postCallAbsState,
+  ppcInitialBlockRegs,
+  ppcCallParams,
+  ppcExtractBlockPrecond,
   postPPCTermStmtAbsState,
   preserveRegAcrossSyscall
   ) where
@@ -19,14 +23,18 @@ import           Control.Lens ( (&), (.~), (^.) )
 import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
+import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
+import qualified Data.Macaw.Architecture.Info as MI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some ( Some(..) )
 import qualified SemMC.Architecture.PPC as SP
 import           Text.PrettyPrint.ANSI.Leijen ( pretty )
 
 import qualified Dismantle.PPC as D
 
+import qualified Data.Macaw.SemMC.Generator as MSG
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import qualified Data.Macaw.BinaryLoader as BL
 import           Data.Macaw.PPC.Arch
@@ -34,48 +42,62 @@ import           Data.Macaw.PPC.PPCReg
 import qualified Data.Macaw.BinaryLoader.PPC as BLP
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 
+ppcCallParams :: (PPCReg ppc ~ ArchReg ppc) => (forall tp . PPCReg ppc tp -> Bool) -> MA.CallParams (PPCReg ppc)
+ppcCallParams preservePred =
+  MA.CallParams { MA.postCallStackDelta = 0
+                , MA.preserveReg = preservePred
+                , MA.stackGrowsDown = True
+                }
+
+ppcInitialBlockRegs :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+                    => ArchSegmentOff ppc
+                    -> MI.ArchBlockPrecond ppc
+                    -> RegState (PPCReg ppc) (Value ppc ids)
+ppcInitialBlockRegs addr _preconds = MSG.initRegState addr
+
+ppcExtractBlockPrecond :: (MI.ArchBlockPrecond ppc ~ ())
+                       => ArchSegmentOff ppc
+                       -> MA.AbsBlockState (ArchReg ppc)
+                       -> Either String (MI.ArchBlockPrecond ppc)
+ppcExtractBlockPrecond _ _ = Right ()
+
 preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
                          => proxy ppc
                          -> ArchReg ppc tp
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-postPPCTermStmtAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+postPPCTermStmtAbsState :: forall var ppc ids s
+                         . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                        -> AbsProcessorState (PPCReg ppc)
+                        -> AbsProcessorState (PPCReg ppc) ids
+                        -> MJ.IntraJumpBounds ppc ids s
                         -> RegState (PPCReg ppc) (Value ppc ids)
                         -> PPCTermStmt ppc ids
-                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc))
-postPPCTermStmtAbsState preservePred mem s0 regState stmt =
+                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc), MJ.InitJumpBounds ppc)
+postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
     PPCSyscall ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
-          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) ->
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, MJ.postCallBounds params jumpBounds regState)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
-          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) ->
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, MJ.postCallBounds params jumpBounds regState)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrapdword _ _ _ ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
-          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         }
-              Just (nextIP, MA.absEvalCall params s0 regState nextIP)
+          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) ->
+              Just (nextIP, MA.absEvalCall params s0 regState nextIP, MJ.postCallBounds params jumpBounds regState)
         _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
+  where
+    params = ppcCallParams preservePred
 
 -- | Set up an initial abstract state that holds at the beginning of a basic
 -- block.
@@ -84,11 +106,12 @@ postPPCTermStmtAbsState preservePred mem s0 regState stmt =
 --
 -- The 'ArchSegmentOff' is the start address of the basic block.
 --
--- Note that we don't initialize the abstract stack.  On PowerPC, there are no
+-- Note that we don't explicitly initialize the abstract stack.  On PowerPC, there are no
 -- initial stack entries (since the return address is in the link register).
 --
 -- One value that is definitely set is the link register, which holds the
--- abstract return value.
+-- abstract return value.  When available, we also populate the abstract state
+-- with the Table of Contents pointer (in r2).
 mkInitialAbsState :: ( ppc ~ SP.AnyPPC var
                      , PPCArchConstraints var
                      , BLP.HasTOC ppc binFmt
@@ -103,9 +126,8 @@ mkInitialAbsState _ binData _mem startAddr =
     Just tocAddr -> s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
     Nothing -> s0
   where
-    s0 = MA.top & MA.setAbsIP startAddr
-                & MA.absRegState . boundValue PPC_LNK .~ MA.ReturnAddr
-                & MA.absRegState . boundValue (PPC_GP (D.GPR 1)) .~ MA.concreteStackOffset (segoffAddr startAddr) 0
+    initRegVals = MapF.fromList [ MapF.Pair PPC_LNK MA.ReturnAddr ]
+    s0 = MA.fnStartAbsBlockState startAddr initRegVals []
 
 absEvalArchFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
               => proxy ppc
@@ -153,18 +175,3 @@ absEvalArchStmt :: proxy ppc
                 -> ArchStmt ppc (Value ppc ids)
                 -> AbsProcessorState (ArchReg ppc) ids
 absEvalArchStmt _ s _ = s
-
--- | There should be no difference in stack height before and after a call, as
--- the callee pushes the return address if required.  Return values are also
--- passed in registers.
-postCallAbsState :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-                 => proxy ppc
-                 -> AbsProcessorState (ArchReg ppc)
-                 -> RegState (ArchReg ppc) (Value ppc ids)
-                 -> ArchSegmentOff ppc
-                 -> AbsBlockState (ArchReg ppc)
-postCallAbsState proxy = MA.absEvalCall params
-  where
-    params = MA.CallParams { MA.postCallStackDelta = 0
-                           , MA.preserveReg = \r -> S.member (Some r) (linuxCalleeSaveRegisters proxy)
-                           }

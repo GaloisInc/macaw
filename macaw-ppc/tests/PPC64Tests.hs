@@ -95,7 +95,7 @@ isTranslateError ts =
 testDiscovery :: FilePath -> E.Elf 64 -> IO ()
 testDiscovery expectedFilename elf = do
   let loadCfg = MM.defaultLoadOptions
-                  { MM.loadRegionIndex = Just 0
+                  { MM.loadOffset = Just 0
                   }
 
   loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
