@@ -1055,17 +1055,20 @@ absRegState = lens _absRegState (\s v -> s { _absRegState = v })
 
 -- | This constructs the abstract state for the start of the function.
 --
--- It initializes the instruction pointer and any register.  It does
--- not place the return address as where that is stored is
+-- It populates the register state with abstract values from the provided map,
+-- along with defaults for the instruction pointer and stack pointer.  The
+-- provided list provides abstract values to be placed on the stack.
+--
+-- NOTE: It does not place the return address as where that is stored is
 -- architecture-specific.
 fnStartAbsBlockState :: forall r
                      .  RegisterInfo r
                      => MemSegmentOff (RegAddrWidth r)
-                        -- ^ Segment offset
+                        -- ^ Start address of the block
                      -> MapF r (AbsValue (RegAddrWidth r))
-                        -- ^ Values to explicitly assign to registers
+                        -- ^ Values to explicitly assign to registers (overriding default IP and SP values)
                      -> [(Int64, StackEntry (RegAddrWidth r))]
-                        -- ^ Stack entries
+                        -- ^ Stack entries to populate the abstract stack with (format: (offset, abstract stack entry))
                      -> AbsBlockState r
 fnStartAbsBlockState addr m entries =
   let regFn :: r tp -> AbsValue (RegAddrWidth r) tp
