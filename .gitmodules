@@ -17,13 +17,13 @@
 	path = deps/llvm-pretty
 	url = https://github.com/elliottt/llvm-pretty.git
 [submodule "submodules/semmc"]
-	path = submodules/semmc
+	path = deps/semmc
 	url = git@github.com:GaloisInc/semmc.git
 [submodule "submodules/dismantle"]
-	path = submodules/dismantle
+	path = deps/dismantle
 	url = git@github.com:travitch/dismantle.git
 [submodule "submodules/macaw-loader"]
-	path = submodules/macaw-loader
+	path = deps/macaw-loader
 	url = git@github.com:GaloisInc/macaw-loader.git
 [submodule "submodules/s-cargot"]
 	path = submodules/s-cargot
