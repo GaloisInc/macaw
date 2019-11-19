@@ -111,6 +111,7 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), width)
 
 import           What4.ProgramLoc as C
 import qualified What4.Symbol as C
+import qualified What4.Utils.StringLiteral as C
 
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Extension.Safety as C
@@ -1256,7 +1257,7 @@ addMacawTermStmt tstmt =
       fns <- translateFns <$> get
       crucGenArchTermStmt fns ts regs
     M.TranslateError _regs msg -> do
-      cmsg <- crucibleValue (C.TextLit msg)
+      cmsg <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt (CR.ErrorStmt cmsg)
 
 -----------------
@@ -1416,15 +1417,15 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
         -- an X86 HLT instruction.  TODO: We may want to do something
         -- else for an exit syscall, since that's a normal outcome.
         Nothing -> do
-          msgVal <- crucibleValue (C.TextLit "Halting")
+          msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral "Halting"))
           addTermStmt $ CR.ErrorStmt msgVal
     M.PLTStub{} ->
       error "Do not support translating PLT stubs"
     M.ParsedTranslateError msg -> do
-      msgVal <- crucibleValue (C.TextLit msg)
+      msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt $ CR.ErrorStmt msgVal
     M.ClassifyFailure _regs _failureReasons -> do
-      msgVal <- crucibleValue $ C.TextLit $ Text.pack $ "Could not identify block at " ++ show thisAddr
+      msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack $ "Could not identify block at " ++ show thisAddr
       addTermStmt $ CR.ErrorStmt msgVal
 
 addSwitch :: forall arch s ids
@@ -1501,9 +1502,9 @@ addSwitch blockLabelMap idx possibleAddrs = do
                , CR.Br eqAtom thnLbl elsLbl
                )
 
-  errAtom <- mkAtom C.StringRepr
+  errAtom <- mkAtom (C.StringRepr C.UnicodeRepr)
   let finalStmts =
-        [ CR.DefineAtom errAtom $ CR.EvalApp $ C.TextLit $
+        [ CR.DefineAtom errAtom $ CR.EvalApp $ C.StringLit $ C.UnicodeLiteral
             "Index not in lookup table"
         ]
   let finalTermStmt = CR.ErrorStmt errAtom
