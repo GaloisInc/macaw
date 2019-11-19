@@ -25,6 +25,7 @@ module Data.Macaw.X86.Getters
   , readXMMValue
   , readYMMValue
   , getImm32
+  , getUImm64
     -- * Utilities
   , reg8Loc
   , reg16Loc
@@ -109,9 +110,18 @@ reg64Loc = fullRegister . X86_GP
 
 getImm32 :: F.Imm32 -> BVExpr ids 32
 getImm32 (F.Imm32Concrete w) = bvLit n32 (toInteger w)
-getImm32 (F.Imm32SymbolOffset sym off _) =
-  bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
-  .+ bvLit n32 (toInteger off)
+getImm32 (F.Imm32SymbolOffset sym off _)
+  | off < 0 =
+    bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
+    .- bvLit n32 (negate (toInteger off))
+  | otherwise =
+    bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
+    .+ bvLit n32 (toInteger off)
+
+getUImm64 :: F.UImm64 -> BVExpr ids 64
+getUImm64 (F.UImm64Concrete w) = bvLit n64 (toInteger w)
+getUImm64 (F.UImm64SymbolOffset sym off) =
+  ValueExpr (SymbolValue Addr64 sym) .+ bvLit n64 (toInteger off)
 
 -- | Return the value of a 32-bit displacement.
 getDisplacement32 :: F.Displacement -> BVExpr ids 32
@@ -290,7 +300,8 @@ getSomeBVValue v =
     F.WordSignedImm w -> pure $! SomeBV $ bvLit n16 $ toInteger w
     F.DWordImm i      -> pure $! SomeBV $ getImm32 i
     F.DWordSignedImm w -> pure $! SomeBV $ bvLit n32 $ toInteger w
-    F.QWordImm w      -> pure $! SomeBV $ bvLit n64 $ toInteger w
+    F.QWordImm (F.UImm64Concrete  w) ->
+      pure $! SomeBV $ bvLit n64 $ toInteger w
     F.JumpOffset _ _  -> fail "Jump Offset should not be treated as a BVValue."
     _ -> do
       SomeBV l <- getSomeBVLocation v
@@ -335,7 +346,7 @@ getSignExtendedValue v out_w =
     F.DWordImm (F.Imm32Concrete i)
       | Just Refl <- testEquality n32 out_w ->
         pure $! bvLit n32 (toInteger i)
-    F.QWordImm i
+    F.QWordImm (F.UImm64Concrete i)
       | Just Refl <- testEquality n64 out_w ->
         pure $! bvLit n64 (toInteger i)
 
@@ -420,7 +431,7 @@ doJump cond v =
       ipVal <- evalAssignRhs $ CondReadMem qwordMemRepr condVal ipAddr oldIpVal
       -- Set the ip value.
       rip .= ipVal
-    F.QWordImm w -> do
+    F.QWordImm (F.UImm64Concrete w) -> do
       modify rip $ mux cond $ bvKLit (toInteger w)
     _ -> do
       ipVal <- eval =<< get rip

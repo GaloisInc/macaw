@@ -530,7 +530,7 @@ x86DemandContext =
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
                         -> AbsProcessorState X86Reg ids
-                        -> Jmp.IntraJumpBounds X86_64 ids s
+                        -> Jmp.IntraJumpBounds X86_64 ids
                         -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
                         -> Maybe ( MemSegmentOff 64
