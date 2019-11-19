@@ -126,7 +126,6 @@ import           What4.Interface
 import           What4.InterpretedFloatingPoint as C
 import qualified What4.ProgramLoc as C
 import           What4.Symbol (userSymbol)
-import qualified What4.Utils.StringLiteral as C
 
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
@@ -530,7 +529,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
         block_ptr <- evalMacawStmt $
           MacawGlobalPtr arch_width $ M.segoffAddr block_addr
         cond <- evalMacawStmt $ PtrEq arch_width ip_reg_val block_ptr
-        msg <- appAtom $ C.StringLit $ C.UnicodeLiteral
+        msg <- appAtom $ C.TextLit
           "the current block follows the previous block in the path"
         addStmt $ CR.Assume cond msg
 
