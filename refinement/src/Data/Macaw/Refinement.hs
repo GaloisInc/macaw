@@ -8,6 +8,9 @@ module Data.Macaw.Refinement
   ( cfgFromAddrsAndState
   , cfgFromAddrs
   , refineDiscovery
+  , RSE.defaultRefinementContext
+  , RSE.RefinementContext
+  , RSE.Refinement
   )
 where
 
@@ -16,7 +19,6 @@ import           GHC.TypeLits
 import           Control.Lens
 import           Control.Monad.IO.Class (MonadIO)
 import qualified Data.Macaw.Architecture.Info as MA
-import qualified Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.CFG.AssignRhs
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -25,6 +27,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Refinement.Target
 import           Data.Macaw.Refinement.UnknownTransfer
+import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 
 ----------------------------------------------------------------------
 -- * Discovery Entrypoints
@@ -37,8 +40,12 @@ import           Data.Macaw.Refinement.UnknownTransfer
 -- of function entry points.  This entry point can be used as an
 -- alternative to the same named function in Data.Macaw.Discovery.
 cfgFromAddrsAndState
-  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MBL.LoadedBinary arch bin
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     , MonadIO m
+     , RSE.Refinement t solver fp
+     )
+  => RSE.RefinementContext arch t solver fp
   -> MD.DiscoveryState arch
   -> [ArchSegmentOff arch]
   -- ^ Initial function entry points.
@@ -48,17 +55,21 @@ cfgFromAddrsAndState
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrsAndState bin initial_state init_addrs mem_words =
+cfgFromAddrsAndState context initial_state init_addrs mem_words =
   MD.cfgFromAddrsAndState initial_state init_addrs mem_words
-    & refineDiscovery bin
+    & refineDiscovery context
 
 -- | Construct an empty discovery state and populate it by exploring
 -- from a given set of function entry points.  This can be used as an
 -- alternate entry point from the same named function in
 -- Data.Macaw.Discovery.
 cfgFromAddrs
-  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MBL.LoadedBinary arch bin
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     , MonadIO m
+     , RSE.Refinement t solver fp
+     )
+  => RSE.RefinementContext arch t solver fp
   -> MA.ArchitectureInfo arch
   -- ^ Architecture-specific information needed for doing
   -- control-flow exploration.
@@ -74,8 +85,8 @@ cfgFromAddrs
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrs bin ainfo mem addrSymMap =
-  cfgFromAddrsAndState bin (emptyDiscoveryState mem addrSymMap ainfo)
+cfgFromAddrs context ainfo mem addrSymMap =
+  cfgFromAddrsAndState context (emptyDiscoveryState mem addrSymMap ainfo)
 
 
 ----------------------------------------------------------------------
@@ -90,9 +101,13 @@ cfgFromAddrs bin ainfo mem addrSymMap =
 -- | Refine an existing discovery state by using a symbolic backend to
 -- perform additional discovery for incomplete blocks.
 refineDiscovery
-  :: (MS.SymArchConstraints arch, 16 <= MC.ArchAddrWidth arch, MonadIO m)
-  => MBL.LoadedBinary arch bin
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     , MonadIO m
+     , RSE.Refinement t solver fp
+     )
+  => RSE.RefinementContext arch t solver fp
   -> DiscoveryState arch
   -> m (DiscoveryState arch)
-refineDiscovery bin =
-  symbolicUnkTransferRefinement bin . symbolicTargetRefinement
+refineDiscovery context =
+  symbolicUnkTransferRefinement context . symbolicTargetRefinement

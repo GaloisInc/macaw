@@ -106,6 +106,8 @@ executable run-refinement
                , prettyprinter
                , semmc-ppc
                , text
+               , what4
+               , crucible
 
 test-suite test-refinements
   type: exitcode-stdio-1.0
@@ -134,6 +136,8 @@ test-suite test-refinements
                , macaw-symbolic
                , macaw-x86
                , macaw-x86-symbolic
+               , crucible
+               , what4
                , optparse-applicative >= 0.13 && < 0.15
                , parameterized-utils
                , QuickCheck >= 2.7

@@ -34,11 +34,14 @@ import           Data.Semigroup
 import           Data.Semigroup ()
 import qualified Data.Text.IO as TIO
 import           Data.Text.Prettyprint.Doc
+import qualified Lang.Crucible.Backend.Online as CBO
 import           GHC.TypeLits
 import qualified Options.Applicative as O
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Exit
+import qualified What4.Expr as WE
+import qualified Data.Parameterized.Nonce as PN
 
 import           Prelude
 
@@ -123,9 +126,11 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
                 -- putStrLn $ show (fmap (show . MM.segoffSegment) entries)
                 -- putStrLn $ show (fmap (show . MM.segoffOffset) entries)
   di <- liftIO $ if unrefined opts
-           then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
-           else AI.withArchConstraints arch_info $
-                MR.cfgFromAddrs bin arch_info (memoryImage bin) M.empty entries []
+                 then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
+                 else AI.withArchConstraints arch_info $ do
+    CBO.withZ3OnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
+      ctx <- MR.defaultRefinementContext sym bin
+      MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
   f di
 
 showDiscoveryInfo opts di = do
@@ -174,7 +179,7 @@ instance Pretty Summary where
 
 showSummary di =
   let summarizeBlock (_blkAddr, pblk) s =
-        let s' = case MD.stmtsTerm (MD.blockStatementList pblk) of
+        let s' = case MD.pblockTermStmt pblk of
                    MD.ParsedTranslateError _ ->
                      s { blockTranslateErrors = blockTranslateErrors s + 1 }
                    MD.ClassifyFailure {} ->
@@ -200,9 +205,9 @@ showSummary di =
 
 showOverview di =
   let getIssue (blkAddr, pblk) =
-        let issue = case MD.stmtsTerm (MD.blockStatementList pblk) of
+        let issue = case MD.pblockTermStmt pblk of
               MD.ParsedTranslateError r -> pretty "Translation failure:" <+> pretty (show r)
-              MD.ClassifyFailure _ -> pretty "Classify failure"
+              MD.ClassifyFailure {} -> pretty "Classify failure"
               _ -> emptyDoc
         in hsep [ pretty "Block @", pretty $ show blkAddr, issue ]
       funcSummary (funAddr, (Some dfi)) =
@@ -217,9 +222,9 @@ showDetails di =
     putStrLn $ "===== BEGIN FUNCTION " ++ show funAddr ++ " ====="
     forM_ (M.toList (dfi ^. MD.parsedBlocks)) $ \(blockAddr, pb) -> do
       putStrLn $ "== begin block " ++ show blockAddr ++ " =="
-      putStrLn . show $ MD.blockStatementList pb
+      putStrLn . show $ MD.pblockStmts pb
       putStrLn ""
-      case MD.stmtsTerm (MD.blockStatementList pb) of
+      case MD.pblockTermStmt pb of
         MD.ParsedTranslateError r -> do
           putStr "*** "
           putStr "TRANSLATE ERROR: "

@@ -1,3 +1,4 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -12,6 +13,7 @@
 
 module Data.Macaw.Refinement.SymbolicExecution
   ( RefinementContext(..)
+  , Refinement
   , defaultRefinementContext
   , smtSolveTransfer
   )
@@ -60,6 +62,10 @@ data RefinementContext arch t solver fp = RefinementContext
   , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
   }
 
+type Refinement t solver fp = ( W.OnlineSolver t solver
+                              , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
+                              )
+
 defaultRefinementContext
   :: forall arch bin t solver fp
    . ( MS.SymArchConstraints arch
@@ -68,17 +74,12 @@ defaultRefinementContext
      , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
      , t ~ GlobalNonceGenerator
      )
-  => C.OnlineBackend t solver fp -- WE.FloatModeRepr fm
+  => C.OnlineBackend t solver fp
   -> MBL.LoadedBinary arch bin
-  -- -> (forall solver t . RefinementContext arch t (W.Writer W.Z3) (WE.Flags fm) -> IO a)
-  -- -> (forall sym solver t . (sym ~ WE.ExprBuilder t (C.OnlineBackendState (W.Writer W.Z3)) (WE.Flags fm), WIF.IsInterpretedFloatExprBuilder sym) => RefinementContext arch t (W.Writer W.Z3) (WE.Flags fm) -> IO a)
---  -> (forall sym solver t . (sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) (WE.Flags fm), WIF.IsInterpretedFloatExprBuilder sym) => RefinementContext arch t solver (WE.Flags fm) -> IO a)
   -> IO (RefinementContext arch t solver fp)
 defaultRefinementContext sym loaded_binary = do
   handle_alloc <- C.newHandleAllocator
   let nonce_gen = globalNonceGenerator
-  -- withIONonceGenerator $ \nonce_gen ->
-    -- C.withZ3OnlineBackend floatRepr nonce_gen C.NoUnsatFeatures $ \sym ->
   case MS.archVals (Proxy @arch) of
     Just arch_vals -> do
 
