@@ -12,24 +12,22 @@
 
 module Data.Macaw.Refinement.SymbolicExecution
   ( RefinementContext(..)
-  , withDefaultRefinementContext
+  , defaultRefinementContext
   , smtSolveTransfer
   )
 where
 
-import           Control.Lens
-import           Control.Monad.ST ( RealWorld, stToIO )
+import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MS
-import           Data.Maybe
-import qualified Data.Map as Map
+import           Data.Maybe ( mapMaybe, fromJust )
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce
-import           Data.Proxy
+import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.Backend.Online as C
@@ -42,18 +40,18 @@ import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified System.IO as IO
 import qualified What4.Concrete as W
+import qualified What4.Expr as WE
 import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
+import qualified What4.InterpretedFloatingPoint as WIF
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
-import qualified What4.Protocol.SMTLib2 as W
 import qualified What4.SatResult as W
-import qualified What4.Solver.Z3 as W
 
 data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
   , archVals :: MS.ArchVals arch
-  , handleAllocator :: C.HandleAllocator RealWorld
+  , handleAllocator :: C.HandleAllocator
   , nonceGenerator :: NonceGenerator IO t
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
@@ -62,74 +60,83 @@ data RefinementContext arch t solver fp = RefinementContext
   , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
   }
 
-withDefaultRefinementContext
-  :: forall arch a bin
-   . (MS.SymArchConstraints arch, 16 <= M.ArchAddrWidth arch)
-  => MBL.LoadedBinary arch bin
-  -> (forall t . RefinementContext arch t (W.Writer W.Z3) (C.Flags C.FloatIEEE) -> IO a)
-  -> IO a
-withDefaultRefinementContext loaded_binary k = do
+defaultRefinementContext
+  :: forall arch bin t solver fp
+   . ( MS.SymArchConstraints arch
+     , 16 <= M.ArchAddrWidth arch
+     , W.OnlineSolver t solver
+     , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
+     , t ~ GlobalNonceGenerator
+     )
+  => C.OnlineBackend t solver fp -- WE.FloatModeRepr fm
+  -> MBL.LoadedBinary arch bin
+  -- -> (forall solver t . RefinementContext arch t (W.Writer W.Z3) (WE.Flags fm) -> IO a)
+  -- -> (forall sym solver t . (sym ~ WE.ExprBuilder t (C.OnlineBackendState (W.Writer W.Z3)) (WE.Flags fm), WIF.IsInterpretedFloatExprBuilder sym) => RefinementContext arch t (W.Writer W.Z3) (WE.Flags fm) -> IO a)
+--  -> (forall sym solver t . (sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) (WE.Flags fm), WIF.IsInterpretedFloatExprBuilder sym) => RefinementContext arch t solver (WE.Flags fm) -> IO a)
+  -> IO (RefinementContext arch t solver fp)
+defaultRefinementContext sym loaded_binary = do
   handle_alloc <- C.newHandleAllocator
-  withIONonceGenerator $ \nonce_gen ->
-    C.withZ3OnlineBackend nonce_gen C.NoUnsatFeatures $ \sym ->
-      case MS.archVals (Proxy @arch) of
-        Just arch_vals -> do
+  let nonce_gen = globalNonceGenerator
+  -- withIONonceGenerator $ \nonce_gen ->
+    -- C.withZ3OnlineBackend floatRepr nonce_gen C.NoUnsatFeatures $ \sym ->
+  case MS.archVals (Proxy @arch) of
+    Just arch_vals -> do
 
-          mem_var <- stToIO $ LLVM.mkMemVar handle_alloc
+      mem_var <- LLVM.mkMemVar handle_alloc
 
-          (mem, mem_ptr_table) <- MS.newGlobalMemory
-            (Proxy @arch)
-            sym
-            (MS.toCrucibleEndian $ MBL.memoryEndianness loaded_binary)
-            MS.ConcreteMutable
-            (MBL.memoryImage loaded_binary)
+      (mem, mem_ptr_table) <- MS.newGlobalMemory
+        (Proxy @arch)
+        sym
+        (MS.toCrucibleEndian $ MBL.memoryEndianness loaded_binary)
+        MS.ConcreteMutable
+        (MBL.memoryImage loaded_binary)
 
-          let ?ptrWidth = W.knownNat
-          (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
-            sym
-            LLVM.GlobalAlloc
-            LLVM.Mutable
-            "flat memory"
-            mem
-            LLVM.noAlignment
-          let Right mem_name = W.userSymbol "mem"
-          mem_array <- W.freshConstant sym mem_name W.knownRepr
-          initialized_mem <- LLVM.doArrayStoreUnbounded
-            sym
-            allocated_mem
-            base_ptr
-            LLVM.noAlignment
-            mem_array
+      let ?ptrWidth = W.knownNat
+      (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
+        sym
+        LLVM.GlobalAlloc
+        LLVM.Mutable
+        "flat memory"
+        mem
+        LLVM.noAlignment
+      let Right mem_name = W.userSymbol "mem"
+      mem_array <- W.freshConstant sym mem_name W.knownRepr
+      initialized_mem <- LLVM.doArrayStoreUnbounded
+        sym
+        allocated_mem
+        base_ptr
+        LLVM.noAlignment
+        mem_array
 
-          let global_mapping_fn = \sym' mem' base off -> do
-                flat_mem_ptr <- LLVM.ptrAdd sym' W.knownNat base_ptr off
-                MS.mapRegionPointers
-                  mem_ptr_table
-                  flat_mem_ptr
-                  sym'
-                  mem'
-                  base
-                  off
+      let global_mapping_fn = \sym' mem' base off -> do
+            flat_mem_ptr <- LLVM.ptrAdd sym' W.knownNat base_ptr off
+            MS.mapRegionPointers
+              mem_ptr_table
+              flat_mem_ptr
+              sym'
+              mem'
+              base
+              off
 
-          MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
-            let ext_impl = MS.macawExtensions
-                  arch_eval_fns
-                  mem_var
-                  global_mapping_fn
-                  (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
+      MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
+        let ext_impl = MS.macawExtensions
+              arch_eval_fns
+              mem_var
+              global_mapping_fn
+              (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
 
-            k $ RefinementContext
-              { symbolicBackend = sym
-              , archVals = arch_vals
-              , handleAllocator = handle_alloc
-              , nonceGenerator = nonce_gen
-              , extensionImpl = ext_impl
-              , memVar = mem_var
-              , mem = initialized_mem
-              , memPtrTable = mem_ptr_table
-              , globalMappingFn = global_mapping_fn
-              }
-        Nothing -> fail $ "unsupported architecture"
+        return $ RefinementContext
+          { symbolicBackend = sym
+          , archVals = arch_vals
+          , handleAllocator = handle_alloc
+          , nonceGenerator = nonce_gen
+          , extensionImpl = ext_impl
+          , memVar = mem_var
+          , mem = initialized_mem
+          , memPtrTable = mem_ptr_table
+          , globalMappingFn = global_mapping_fn
+          }
+    Nothing -> fail $ "unsupported architecture"
 
 smtSolveTransfer
   :: ( MS.SymArchConstraints arch
@@ -176,11 +183,11 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
     globalMappingFn symbolicBackend mem2 ip_base ip_off
 
   init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
-  some_cfg <- liftIO $ stToIO $ MS.mkBlockPathCFG
+  let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
+  some_cfg <- liftIO $ MS.mkBlockPathCFG
     (MS.archFunctions archVals)
     handleAllocator
-    Map.empty
-    (W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr)
+    posFn
     blocks
   case some_cfg of
     C.SomeCFG cfg -> do
@@ -199,6 +206,7 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
             sim_context
             global_state
             C.defaultAbortHandler
+            handle_return_type
             (C.runOverrideSim handle_return_type simulation)
       let execution_features = []
       exec_res <- liftIO $ C.executeCrucible execution_features initial_state

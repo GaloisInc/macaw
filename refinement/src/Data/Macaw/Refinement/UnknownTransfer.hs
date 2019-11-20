@@ -124,20 +124,16 @@ import Data.Macaw.Discovery ( DiscoveryFunInfo
                             , ParsedTermStmt(ClassifyFailure)
                             , BlockTermRewriter
                             , addDiscoveredFunctionBlockTargets
-                            , blockStatementList
                             , discoveredFunAddr
                             , funInfo
                             , parsedBlocks
-                            , stmtsTerm
                             )
 import Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..), blockID
                                             , getBlock )
 import Data.Macaw.Refinement.Path ( FuncBlockPath(..)
                                   , buildFuncPath, pathDepth, pathForwardTrails
                                   , pathTo, takePath )
-import Data.Macaw.Refinement.SymbolicExecution ( withDefaultRefinementContext
-                                               , smtSolveTransfer
-                                               )
+import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
 import           Data.Maybe

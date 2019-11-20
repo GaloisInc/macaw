@@ -12,11 +12,11 @@ cabal-version: >= 2.0
                
 description:
   The refinement library provides supplemental functionality for
-  discovery of elements that macaw-symbolic is not able to discover
+  discovery of elements that macaw-base is not able to discover
   via pattern matching.  This library will use crucible symbolic
   analysis to attempt to determine elements that could not be
-  identified by macaw-symbolic.  The identification provided by
-  macaw-symbolic is incomplete, and so is the identification by this
+  identified by macaw-base.  The identification provided by
+  macaw-base is incomplete, and so is the identification by this
   macaw-refinement, but macaw-refinement attempts to additionally
   "refine" the analysis to achieve even more information which can
   then be provided back to the macaw analysis.
