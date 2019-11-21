@@ -59,17 +59,19 @@ blockTransferTo :: MDS.DiscoveryFunInfo arch ids
 blockTransferTo fi blkID =
   let lclTgtAddrs termStmt =
         case termStmt of
+          -- The target is absent for tail calls, which never return.  When the
+          -- target is present, that is the return site in cases where the
+          -- function returns.
           MDS.ParsedCall _ mbTgt | Just tgt <- mbTgt -> [tgt]
-                             | otherwise -> []
+                                 | otherwise -> []
           MDS.ParsedJump _ tgt -> [tgt]
           MDS.ParsedLookupTable _ _ tgts -> F.toList tgts
-          MDS.ParsedComputedJump _ tgts -> F.toList tgts
           MDS.ParsedReturn {} -> []
           MDS.ParsedBranch _regs _cond trueTarget falseTarget -> [ trueTarget, falseTarget ]
           MDS.PLTStub _ tgt _ ->
-            -- PLT stubs are really calls and jump outside of the function (but
-            -- will return). We should be able to return no targets here.
-            []
+            -- PLT stubs are really calls and jump outside of the function, but
+            -- will usually return. We should return the return addr here
+            [tgt]
           MDS.ParsedArchTermStmt _ _ mbTgt | Just tgt <- mbTgt -> [tgt]
                                        | otherwise -> []
           MDS.ParsedTranslateError {} -> []
