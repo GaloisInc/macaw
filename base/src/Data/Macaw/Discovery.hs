@@ -325,6 +325,16 @@ data FunState arch s ids
                 -- affected its abstract state.
               , _frontier    :: !(Set (ArchSegmentOff arch))
                 -- ^ Addresses to explore next.
+              , classifyFailureResolutions :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                -- ^ The first element of each pair is the block (ending in a
+                -- 'ClassifyFailure') for which the second element provides a
+                -- list of known jump targets. These inform the initial
+                -- frontier, but also need to be preserved as a side mapping
+                -- when we construct the 'DiscoveryFunInfo'.
+                --
+                -- These resolutions are provided by external data (e.g.,
+                -- another code discovery engine or SMT) and help resolve
+                -- control flow that macaw cannot understand.
               }
 
 -- | Discovery info
@@ -1504,7 +1514,8 @@ mkFunState gen s rsn addr extraIntraTargets = do
                , _curFunBlocks = Map.empty
                , _foundAddrs = Map.singleton addr faddr
                , _reverseEdges = Map.empty
-               , _frontier   = Set.fromList (addr : concatMap snd extraIntraTargets) -- Set.singleton addr
+               , _frontier   = Set.fromList (addr : concatMap snd extraIntraTargets)
+               , classifyFailureResolutions = extraIntraTargets
                }
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
@@ -1515,6 +1526,7 @@ mkFunInfo fs =
                        , discoveredFunAddr = addr
                        , discoveredFunSymbol = Map.lookup addr (symbolNames s)
                        , _parsedBlocks = fs^.curFunBlocks
+                       , discoveredClassifyFailureResolutions = classifyFailureResolutions fs
                        }
 
 -- | This analyzes the function at a given address, possibly
@@ -1579,24 +1591,6 @@ addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
                                       funAddr rsn initState
                                       resolvedTargets)
 
-  -- let rsn = case Map.lookup funAddr (info^.funInfo) of
-  --             Just (Some finfo) -> discoveredFunReason finfo
-  --             Nothing -> BlockTargetEnhancement
-  -- in fst $ runST (runFunctionAnalysis
-  --                 (\_ -> pure ())
-  --                 funAddr rsn info
-  --                 (\s -> s { termStmtRewriter = termRewriter }))
-
--- | This is the type of the callback used for rewriting TermStmts
--- during discovery (e.g. as used by
--- 'addDiscoveredFunctionBlockTargets')
--- type BlockTermRewriter arch s src tgt =
---      ArchSegmentOff arch  -- ^ address of the current block
---   -> TermStmt arch tgt    -- ^ existing TermStmt for this block
---   -> Rewriter arch s src tgt (TermStmt arch tgt)
-
-
-
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.
                     -> ArchSegmentOff arch
@@ -1608,7 +1602,7 @@ runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- given address identified a code location.
                     -> DiscoveryState arch
                     -- ^ The current binary information.
-                    -> [(ArchSegmentOff arch, [ArchSegmentOff arch])] -- (forall ids. FunState arch s ids -> FunState arch s ids)
+                    -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
                     -- ^ Additional identified intraprocedural jump targets
                     -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
 runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
@@ -1782,7 +1776,6 @@ ppFunReason rsn =
     PossibleWriteEntry a -> " (written at " ++ show a ++ ")"
     CallTarget a -> " (called at " ++ show a ++ ")"
     CodePointerInMem a -> " (in initial memory at " ++ show a ++ ")"
-    BlockTargetEnhancement -> "updating block transfer targets in existing function"
 
 -- | Explore until we have found all functions we can.
 --
