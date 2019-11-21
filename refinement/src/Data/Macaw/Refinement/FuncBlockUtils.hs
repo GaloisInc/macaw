@@ -1,3 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.FuncBlockUtils
   ( BlockIdentifier(..)
   , blockID
@@ -24,6 +27,8 @@ newtype BlockIdentifier arch ids = BlockIdentifier
   { biArchSegmentOff :: MC.ArchSegmentOff arch
   }
   deriving (Eq, Ord)
+
+deriving instance (MC.MemWidth (MC.RegAddrWidth (MC.ArchReg arch))) => Show (BlockIdentifier arch ids)
 
 -- | Obtain the local 'BlockIdentifier' value for a block.
 blockID :: MDS.ParsedBlock arch ids -> BlockIdentifier arch ids

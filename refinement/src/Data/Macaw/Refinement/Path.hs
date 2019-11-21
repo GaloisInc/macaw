@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.Path
   ( FuncBlockPath(..)
@@ -13,6 +14,7 @@ where
 import           Control.Applicative
 import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth, ArchSegmentOff )
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
+import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.Memory ( MemWidth )
 import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
                                                       , blockInFunction
@@ -32,6 +34,8 @@ data FuncBlockPath arch ids = Path (BlockIdentifier arch ids) [FuncBlockPath arc
   --                        -- a ForwardPath, callers for a BackwardPath)
   -- [BlockIdentifier arch] -- ^ next elements which would form a path
   --                        -- loop.
+
+deriving instance (MC.MemWidth (MC.RegAddrWidth (MC.ArchReg arch))) => Show (FuncBlockPath arch ids)
 
 
 instance ( MemWidth (ArchAddrWidth arch) ) =>
