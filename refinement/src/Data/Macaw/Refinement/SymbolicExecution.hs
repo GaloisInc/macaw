@@ -6,7 +6,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
@@ -42,7 +41,6 @@ import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified System.IO as IO
 import qualified What4.Concrete as W
-import qualified What4.Expr as WE
 import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
 import qualified What4.InterpretedFloatingPoint as WIF
@@ -85,7 +83,7 @@ defaultRefinementContext sym loaded_binary = do
 
       mem_var <- LLVM.mkMemVar handle_alloc
 
-      (mem, mem_ptr_table) <- MS.newGlobalMemory
+      (mem0, mem_ptr_table) <- MS.newGlobalMemory
         (Proxy @arch)
         sym
         (MS.toCrucibleEndian $ MBL.memoryEndianness loaded_binary)
@@ -98,7 +96,7 @@ defaultRefinementContext sym loaded_binary = do
         LLVM.GlobalAlloc
         LLVM.Mutable
         "flat memory"
-        mem
+        mem0
         LLVM.noAlignment
       let Right mem_name = W.userSymbol "mem"
       mem_array <- W.freshConstant sym mem_name W.knownRepr
@@ -150,57 +148,55 @@ smtSolveTransfer
   -> M.DiscoveryState arch
   -> [M.ParsedBlock arch ids]
   -> m [M.ArchSegmentOff arch]
-smtSolveTransfer RefinementContext{..} discovery_state blocks = do
+smtSolveTransfer ctx discovery_state blocks = do
   let ?ptrWidth = W.knownNat
-
+  let sym = symbolicBackend ctx
   let Right stack_name = W.userSymbol "stack"
-  stack_array <- liftIO $ W.freshConstant symbolicBackend stack_name C.knownRepr
-  stack_size <- liftIO $ W.bvLit symbolicBackend ?ptrWidth $ 2 * 1024 * 1024
+
+  stack_array <- liftIO $ W.freshConstant sym stack_name C.knownRepr
+  stack_size <- liftIO $ W.bvLit sym ?ptrWidth $ 2 * 1024 * 1024
   (stack_base_ptr, mem1) <- liftIO $ LLVM.doMalloc
-    symbolicBackend
+    sym
     LLVM.StackAlloc
     LLVM.Mutable
     "stack_alloc"
-    mem
+    (mem ctx)
     stack_size
     LLVM.noAlignment
 
   mem2 <- liftIO $ LLVM.doArrayStore
-    symbolicBackend
+    sym
     mem1
     stack_base_ptr
     LLVM.noAlignment
     stack_array
     stack_size
-  init_sp_val <- liftIO $
-    LLVM.ptrAdd symbolicBackend C.knownRepr stack_base_ptr stack_size
+  init_sp_val <- liftIO $ LLVM.ptrAdd sym C.knownRepr stack_base_ptr stack_size
 
   let entry_addr = M.segoffAddr $ M.pblockAddr $ head blocks
-  ip_base <- liftIO $ W.natLit symbolicBackend $
-    fromIntegral $ M.addrBase entry_addr
-  ip_off <- liftIO $ W.bvLit symbolicBackend W.knownNat $
-    M.memWordToUnsigned $ M.addrOffset entry_addr
+  ip_base <- liftIO $ W.natLit sym $ fromIntegral $ M.addrBase entry_addr
+  ip_off <- liftIO $ W.bvLit sym W.knownNat $ M.memWordToUnsigned $ M.addrOffset entry_addr
   entry_ip_val <- liftIO $ fromJust <$>
-    globalMappingFn symbolicBackend mem2 ip_base ip_off
+    (globalMappingFn ctx) sym mem2 ip_base ip_off
 
-  init_regs <- initRegs archVals symbolicBackend entry_ip_val init_sp_val
+  init_regs <- initRegs (archVals ctx) sym entry_ip_val init_sp_val
   let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
   some_cfg <- liftIO $ MS.mkBlockPathCFG
-    (MS.archFunctions archVals)
-    handleAllocator
+    (MS.archFunctions (archVals ctx))
+    (handleAllocator ctx)
     posFn
     blocks
   case some_cfg of
     C.SomeCFG cfg -> do
       let sim_context = C.initSimContext
-            symbolicBackend
+            sym
             LLVM.llvmIntrinsicTypes
-            handleAllocator
+            (handleAllocator ctx)
             IO.stderr
             C.emptyHandleMap
-            extensionImpl
+            (extensionImpl ctx)
             MS.MacawSimulatorState
-      let global_state = C.insertGlobal memVar mem2 C.emptyGlobals
+      let global_state = C.insertGlobal (memVar ctx) mem2 C.emptyGlobals
       let simulation = C.regValue <$> C.callCFG cfg init_regs
       let handle_return_type = C.handleReturnType $ C.cfgHandle cfg
       let initial_state = C.InitialState
@@ -214,12 +210,12 @@ smtSolveTransfer RefinementContext{..} discovery_state blocks = do
       case exec_res of
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
-          case C.regValue $ (MS.lookupReg archVals) res_regs M.ip_reg of
+          case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
-              ip_off_ground_vals <- genModels symbolicBackend res_ip_off 10
+              ip_off_ground_vals <- genModels sym res_ip_off 10
 
               ip_base_mem_word <-
-                case MS.lookupAllocationBase memPtrTable res_ip_base of
+                case MS.lookupAllocationBase (memPtrTable ctx) res_ip_base of
                   Just alloc -> return $ MS.allocationBase alloc
                   Nothing
                     | Just (W.ConcreteNat 0) <- W.asConcrete res_ip_base ->
@@ -293,8 +289,8 @@ genModels sym expr count
   | count > 0 = liftIO $ do
     solver_proc <- C.getSolverProcess sym
     W.checkAndGetModel solver_proc "gen next model" >>= \case
-      W.Sat (W.GroundEvalFn{..}) -> do
-        next_ground_val <- groundEval expr
+      W.Sat evalFn -> do
+        next_ground_val <- W.groundEval evalFn expr
         next_bv_val <- W.bvLit sym W.knownNat next_ground_val
         not_current_ground_val <- W.bvNe sym expr next_bv_val
         C.addAssumption sym $ C.LabeledPred not_current_ground_val $
