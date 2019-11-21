@@ -59,6 +59,11 @@ cfgFromAddrsAndState context initial_state init_addrs mem_words =
   MD.cfgFromAddrsAndState initial_state init_addrs mem_words
     & refineDiscovery context
 
+-- FIXME: Note that this only runs one step of refinement.  We might want to
+-- configure the effort spent on iteration.  That would probably involve caching
+-- some results so that we don't fruitlessly keep trying to resolve the same
+-- impossible branches.
+
 -- | Construct an empty discovery state and populate it by exploring
 -- from a given set of function entry points.  This can be used as an
 -- alternate entry point from the same named function in

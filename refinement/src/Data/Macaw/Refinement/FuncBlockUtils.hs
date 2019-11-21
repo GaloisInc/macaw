@@ -63,6 +63,7 @@ blockTransferTo fi blkID =
                              | otherwise -> []
           MDS.ParsedJump _ tgt -> [tgt]
           MDS.ParsedLookupTable _ _ tgts -> F.toList tgts
+          MDS.ParsedComputedJump _ tgts -> F.toList tgts
           MDS.ParsedReturn {} -> []
           MDS.ParsedBranch _regs _cond trueTarget falseTarget -> [ trueTarget, falseTarget ]
           MDS.PLTStub _ tgt _ ->
@@ -74,5 +75,5 @@ blockTransferTo fi blkID =
           MDS.ParsedTranslateError {} -> []
           MDS.ClassifyFailure {} -> []
   in case getBlock fi blkID of
-       Just fBlk -> lclTgtAddrs $ MDS.pblockTermStmt fBlk -- stmtsTerm $ blockStatementList fBlk
+       Just fBlk -> lclTgtAddrs $ MDS.pblockTermStmt fBlk
        Nothing -> error "block ID not valid" -- impossible

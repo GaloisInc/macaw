@@ -108,26 +108,22 @@ module Data.Macaw.Refinement.UnknownTransfer (
   symbolicUnkTransferRefinement
   ) where
 
+import           Control.Arrow ( second )
 import qualified Control.Lens as L
-import           Control.Lens ( (^.) )
+import           Control.Lens ( (^.), (%~), (&) )
 import           Control.Monad ( forM )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import           Data.List ( sort )
 import qualified Data.Macaw.CFG as MC
-import           Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
-import           Data.Macaw.CFG.Block ( TermStmt(..) )
-import qualified Data.Macaw.CFG.Rewriter as RW
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Refinement.FuncBlockUtils as RFU
 import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
-import           Data.Maybe
-import           Data.Parameterized.Some
+import           Data.Maybe ( catMaybes, isJust )
+import           Data.Parameterized.Some ( Some(..) )
 import           GHC.TypeLits
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
-
 
 -- | This is the main entrypoint, which is given the current Discovery
 -- information and which attempts to resolve UnknownTransfer
@@ -266,14 +262,69 @@ refineBlockTransfer context inpDS solns fi blk =
     Just p -> do soln <- refinePath context inpDS fi p (RP.pathDepth p) 1
                  case soln of
                    Nothing -> return Nothing
-                   Just sl ->
+                   Just sl -> do
                      -- The discovered solutions are sorted here for
                      -- convenience and test stability, but the
                      -- sorting is not otherwise required.
-                     let solns' = Map.insert (MD.pblockAddr blk) (sort sl) solns
-                         updDS = error "Update Discovery" -- updateDiscovery inpDS solns' fi
-                     in return $ Just (updDS, solns')
+                     let solns' = addSolution blk sl solns -- Map.insert (MD.pblockAddr blk) (sort sl) solns
+                     updDS <- updateDiscovery inpDS solns' fi
+                     return $ Just (updDS, solns')
 
+updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
+                   , KnownNat (MC.ArchAddrWidth arch)
+                   , MC.ArchConstraints arch
+                   , MonadIO m
+                   )
+                => MD.DiscoveryState arch
+                -> Solutions arch
+                -> MD.DiscoveryFunInfo arch ids
+                -> m (MD.DiscoveryState arch)
+updateDiscovery s0 solutions finfo = do
+  case solutionValues solutions of
+    [] -> return s0
+    vals -> return (MD.addDiscoveredFunctionBlockTargets s0 finfo vals)
+  -- mfinfo' <- reifyFunctionIndirectJumps solutions finfo
+  -- case mfinfo' of
+  --   Nothing -> return s0
+  --   Just finfo' -> return (s0 & MD.funInfo %~ Map.insert funAddr (Some finfo'))
+  -- where
+  --   funAddr = MD.discoveredFunAddr finfo
+
+-- | Use the solutions found by the SMT solver to turn classify failures into explicit jumps to targets
+--
+-- Fold over the solutions, which encode the set of targets identified for each
+-- classify failure.  For each set of solutions, look up the corresponding block
+-- and verify that it ends in a ClassifyFailure.  Capture the RegState from the
+-- ClassifyFailure and use it to create a chain of if-then-else blocks that
+-- dispatch on the IP value to the correct target for all possible targets.
+-- reifyFunctionIndirectJumps :: (MonadIO m, MC.ArchConstraints arch)
+--                            => Solutions arch
+--                            -> MD.DiscoveryFunInfo arch ids
+--                            -> m (Maybe (MD.DiscoveryFunInfo arch ids))
+-- reifyFunctionIndirectJumps solutions dfi = do
+--   newBlocks <- concat <$> mapM (reifyBlockIndirectJumps dfi) (solutionValues solutions)
+--   case newBlocks of
+--     [] -> return Nothing
+--     _ -> do
+--       let addrBlocks = [ (MD.pblockAddr pb, pb) | pb <- newBlocks ]
+--       -- This union is left-biased, which is important.  The new blocks have to
+--       -- overwrite the original blocks to clear out the ClassifyFailures.
+--       let dfi' = dfi & MD.parsedBlocks %~ (Map.union (Map.fromList addrBlocks))
+--       return (Just dfi')
+
+-- reifyBlockIndirectJumps :: (MonadIO m, MC.ArchConstraints arch)
+--                         => MD.DiscoveryFunInfo arch ids
+--                         -> (MC.ArchSegmentOff arch, Solution arch)
+--                         -> m [MD.ParsedBlock arch ids]
+-- reifyBlockIndirectJumps dfi (blockAddr, targets) =
+--   case Map.lookup blockAddr (dfi ^. MD.parsedBlocks) of
+--     Nothing -> error ("No block in the DiscoveryFunInfo for solution: " ++ show blockAddr)
+--     Just pb ->
+--       case MD.pblockTermStmt pb of
+--         MD.ClassifyFailure regState _ -> do
+--           let computedJump = undefined -- MD.ParsedComputedJump regState (V.fromList (solutionAddrs targets))
+--           return [pb { MD.pblockTermStmt = computedJump }]
+--         term -> error ("Expected ClassifyFailure terminator at " ++ show blockAddr ++ " but found " ++ show term)
 
 {-
 updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
@@ -368,9 +419,26 @@ refinePath context inpDS fi path maxlevel numlevels =
                           else refinePath context inpDS fi path maxlevel (numlevels + 1)
 
 data Equation arch ids = Equation (MD.DiscoveryState arch) [[MD.ParsedBlock arch ids]]
-type Solution arch = [ArchSegmentOff arch]  -- identified transfers
-type Solutions arch = Map.Map (ArchSegmentOff arch) (Solution arch)
+newtype Solution arch = Solution [MC.ArchSegmentOff arch]  -- identified transfers
+newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) (Solution arch))
 
+instance Semigroup (Solutions arch) where
+  Solutions s1 <> Solutions s2 = Solutions (s1 <> s2)
+
+instance Monoid (Solutions arch) where
+  mempty = Solutions Map.empty
+
+solutionAddrs :: Solution arch -> [MC.ArchSegmentOff arch]
+solutionAddrs (Solution l) = l
+
+solutionValues :: Solutions arch -> [(MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])]
+solutionValues (Solutions m) = fmap (second solutionAddrs) (Map.toList m)
+
+addSolution :: MD.ParsedBlock arch ids
+            -> Solution arch
+            -> Solutions arch
+            -> Solutions arch
+addSolution blk sl (Solutions slns) = Solutions (Map.insert (MD.pblockAddr blk) sl slns)
 
 equationFor :: MD.DiscoveryState arch
             -> MD.DiscoveryFunInfo arch ids
@@ -383,6 +451,9 @@ equationFor inpDS fi p =
      then error "did not find requested block in discovery results!" -- internal
        else Equation inpDS (catMaybes <$> pTrailBlocks)
 
+-- | Compute a set of solutions for this refinement
+--
+-- Solutions are currently sorted for convenience, not correctness
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
          , MonadIO m
@@ -394,7 +465,7 @@ solve :: ( MS.SymArchConstraints arch
 solve context (Equation inpDS paths) = do
   blockAddrs <- concat <$> forM paths
     (\path -> liftIO $ RSE.smtSolveTransfer context inpDS path)
-  return $ if null blockAddrs then Nothing else Just blockAddrs
+  return $ if null blockAddrs then Nothing else Just (Solution (sort blockAddrs))
 
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
 -- isBetterSolution :: [ArchSegmentOff arch] -> [ArchSegmentOff arch] -> Bool

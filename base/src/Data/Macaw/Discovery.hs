@@ -37,7 +37,6 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.exploreMemPointers
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
        , Data.Macaw.Discovery.addDiscoveredFunctionBlockTargets
-       , Data.Macaw.Discovery.BlockTermRewriter
          -- * Top level utilities
        , Data.Macaw.Discovery.completeDiscoveryState
        , DiscoveryOptions(..)
@@ -326,10 +325,6 @@ data FunState arch s ids
                 -- affected its abstract state.
               , _frontier    :: !(Set (ArchSegmentOff arch))
                 -- ^ Addresses to explore next.
-              , termStmtRewriter :: forall src tgt .
-                                    (ArchSegmentOff arch ->
-                                     TermStmt arch tgt ->
-                                     Rewriter arch s src tgt (TermStmt arch tgt))
               }
 
 -- | Discovery info
@@ -1408,7 +1403,8 @@ addBlock src finfo pr = do
   (_,b) <- do
     let archStmt = rewriteArchStmt ainfo
     let secAddrMap = memSectionIndexMap mem
-    termStmt <- gets termStmtRewriter <*> pure src
+    let rw = \_ -> pure
+    termStmt <- pure rw <*> pure src
     liftST $ do
       ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
       rewriteBlock ainfo ctx b0
@@ -1494,8 +1490,9 @@ mkFunState :: NonceGenerator (ST s) ids
               -- This can be used to figure out why we decided a
               -- given address identified a code location.
            -> ArchSegmentOff arch
+           -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
            -> FunState arch s ids
-mkFunState gen s rsn addr = do
+mkFunState gen s rsn addr extraIntraTargets = do
   let faddr = FoundAddr { foundReason = FunctionEntryPoint
                         , foundAbstractState = mkInitialAbsState (archInfo s) (memory s) addr
                         , foundJumpBounds    = withArchConstraints (archInfo s) $ Jmp.functionStartBounds
@@ -1507,8 +1504,7 @@ mkFunState gen s rsn addr = do
                , _curFunBlocks = Map.empty
                , _foundAddrs = Map.singleton addr faddr
                , _reverseEdges = Map.empty
-               , _frontier   = Set.singleton addr
-               , termStmtRewriter = \_ -> pure
+               , _frontier   = Set.fromList (addr : concatMap snd extraIntraTargets) -- Set.singleton addr
                }
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
@@ -1541,7 +1537,7 @@ analyzeFunction :: (ArchSegmentOff arch -> ST s ())
 analyzeFunction logFn addr rsn s =
   case Map.lookup addr (s^.funInfo) of
     Just finfo -> pure (s, finfo)
-    Nothing -> runFunctionAnalysis logFn addr rsn s id
+    Nothing -> runFunctionAnalysis logFn addr rsn s []
 
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
@@ -1572,27 +1568,32 @@ analyzeDiscoveredFunctions info =
 -- -> new addresses) and the new addresses will be added to the
 -- frontier for additional discovery.
 addDiscoveredFunctionBlockTargets :: DiscoveryState arch
-                                  -> ArchSegmentOff arch
-                                  -- ^ Address of Function containing
-                                  -- source block to be modified
-                                  -> (forall s src tgt . BlockTermRewriter arch s src tgt)
+                                  -> DiscoveryFunInfo arch ids
+                                  -- ^ The function for which we have learned additional information
+                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
                                   -> DiscoveryState arch
-addDiscoveredFunctionBlockTargets info funAddr termRewriter =
-  let rsn = case Map.lookup funAddr (info^.funInfo) of
-              Just (Some finfo) -> discoveredFunReason finfo
-              Nothing -> BlockTargetEnhancement
-  in fst $ runST (runFunctionAnalysis
-                  (\_ -> pure ())
-                  funAddr rsn info
-                  (\s -> s { termStmtRewriter = termRewriter }))
+addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
+  let rsn = discoveredFunReason origFunInfo
+      funAddr = discoveredFunAddr origFunInfo
+  in fst $ runST (runFunctionAnalysis (\_ -> pure ())
+                                      funAddr rsn initState
+                                      resolvedTargets)
+
+  -- let rsn = case Map.lookup funAddr (info^.funInfo) of
+  --             Just (Some finfo) -> discoveredFunReason finfo
+  --             Nothing -> BlockTargetEnhancement
+  -- in fst $ runST (runFunctionAnalysis
+  --                 (\_ -> pure ())
+  --                 funAddr rsn info
+  --                 (\s -> s { termStmtRewriter = termRewriter }))
 
 -- | This is the type of the callback used for rewriting TermStmts
 -- during discovery (e.g. as used by
 -- 'addDiscoveredFunctionBlockTargets')
-type BlockTermRewriter arch s src tgt =
-     ArchSegmentOff arch  -- ^ address of the current block
-  -> TermStmt arch tgt    -- ^ existing TermStmt for this block
-  -> Rewriter arch s src tgt (TermStmt arch tgt)
+-- type BlockTermRewriter arch s src tgt =
+--      ArchSegmentOff arch  -- ^ address of the current block
+--   -> TermStmt arch tgt    -- ^ existing TermStmt for this block
+--   -> Rewriter arch s src tgt (TermStmt arch tgt)
 
 
 
@@ -1607,12 +1608,12 @@ runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- given address identified a code location.
                     -> DiscoveryState arch
                     -- ^ The current binary information.
-                    -> (forall ids. FunState arch s ids -> FunState arch s ids)
-                    -- ^ Enhance initial FunState prior to analysis
+                    -> [(ArchSegmentOff arch, [ArchSegmentOff arch])] -- (forall ids. FunState arch s ids -> FunState arch s ids)
+                    -- ^ Additional identified intraprocedural jump targets
                     -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-runFunctionAnalysis logFn addr rsn s initStateMod = do
+runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
   Some gen <- newSTNonceGenerator
-  let fs0 = initStateMod $ mkFunState gen s rsn addr
+  let fs0 = mkFunState gen s rsn addr extraIntraTargets
   fs <- analyzeBlocks logFn fs0
   let finfo = mkFunInfo fs
   let s' = (fs^.curFunCtx)
