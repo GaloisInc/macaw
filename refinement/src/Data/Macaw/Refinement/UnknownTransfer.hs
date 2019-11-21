@@ -110,7 +110,7 @@ module Data.Macaw.Refinement.UnknownTransfer (
 
 import           Control.Arrow ( second )
 import qualified Control.Lens as L
-import           Control.Lens ( (^.), (%~), (&) )
+import           Control.Lens ( (^.) )
 import           Control.Monad ( forM )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import           Data.List ( sort )
