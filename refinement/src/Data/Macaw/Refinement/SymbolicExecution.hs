@@ -30,7 +30,7 @@ import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats
-import qualified Lang.Crucible.Backend as C
+import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as C
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
@@ -47,6 +47,9 @@ import qualified What4.InterpretedFloatingPoint as WIF
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.SatResult as W
+
+import qualified What4.Expr as WE
+import Text.Printf ( printf )
 
 data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
@@ -138,11 +141,13 @@ defaultRefinementContext sym loaded_binary = do
     Nothing -> fail $ "unsupported architecture"
 
 smtSolveTransfer
-  :: ( MS.SymArchConstraints arch
+  :: forall arch t solver fp m sym ids
+   . ( MS.SymArchConstraints arch
      , 16 <= M.ArchAddrWidth arch
-     , C.IsSymInterface (C.OnlineBackend t solver fp)
+     , CB.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      , MonadIO m
+     , sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) fp
      )
   => RefinementContext arch t solver fp
   -> M.DiscoveryState arch
@@ -186,6 +191,7 @@ smtSolveTransfer ctx discovery_state blocks = do
     (handleAllocator ctx)
     posFn
     blocks
+
   case some_cfg of
     C.SomeCFG cfg -> do
       let sim_context = C.initSimContext
@@ -206,14 +212,22 @@ smtSolveTransfer ctx discovery_state blocks = do
             handle_return_type
             (C.runOverrideSim handle_return_type simulation)
       let execution_features = []
+      fr0 <- liftIO $ CB.pushAssumptionFrame sym
       exec_res <- liftIO $ C.executeCrucible execution_features initial_state
+      _ <- liftIO $ CB.popAssumptionFrame sym fr0
       case exec_res of
         C.FinishedResult _ res -> do
           let res_regs = res ^. C.partialValue . C.gpValue
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
+              fr1 <- liftIO $ CB.pushAssumptionFrame sym
               ip_off_ground_vals <- genModels sym res_ip_off 10
+              _ <- liftIO $ CB.popAssumptionFrame sym fr1
 
+              let showAsHex :: Integer -> String
+                  showAsHex x = printf "0x%x" x
+              liftIO $ putStrLn "\nSMT models:"
+              liftIO $ print (fmap showAsHex ip_off_ground_vals)
               ip_base_mem_word <-
                 case MS.lookupAllocationBase (memPtrTable ctx) res_ip_base of
                   Just alloc -> return $ MS.allocationBase alloc
@@ -224,14 +238,16 @@ smtSolveTransfer ctx discovery_state blocks = do
                       fail $ "unexpected ip base: "
                         ++ show (W.printSymExpr res_ip_base)
 
-              return $ mapMaybe
-                (\off -> M.resolveAbsoluteAddr (M.memory discovery_state) $
-                  M.memWord $ fromIntegral $
-                    M.memWordToUnsigned ip_base_mem_word + off)
-                ip_off_ground_vals
+              let resolveAddr off = M.resolveAbsoluteAddr (M.memory discovery_state) $
+                                     M.memWord $ fromIntegral $
+                                     M.memWordToUnsigned ip_base_mem_word + off
+              let resolved = mapMaybe resolveAddr ip_off_ground_vals
+              liftIO $ putStrLn "Resolved memory addresses of models"
+              liftIO $ print resolved
+              return resolved
         C.AbortedResult _ aborted_res -> case aborted_res of
           C.AbortedExec reason _ ->
-            fail $ "simulation abort: " ++ show (C.ppAbortExecReason reason)
+            fail $ "simulation abort: " ++ show (CB.ppAbortExecReason reason)
           C.AbortedExit code ->
             fail $ "simulation halt: " ++ show code
           C.AbortedBranch{} ->
@@ -240,7 +256,7 @@ smtSolveTransfer ctx discovery_state blocks = do
 
 initRegs
   :: forall arch sym m
-    . (MS.SymArchConstraints arch, C.IsSymInterface sym, MonadIO m)
+    . (MS.SymArchConstraints arch, CB.IsSymInterface sym, MonadIO m)
   => MS.ArchVals arch
   -> sym
   -> C.RegValue sym (LLVM.LLVMPointerType (M.ArchAddrWidth arch))
@@ -257,7 +273,7 @@ initRegs arch_vals sym ip_val sp_val = do
       sp_val
 
 freshSymVar
-  :: (C.IsSymInterface sym, MonadIO m)
+  :: (CB.IsSymInterface sym, MonadIO m)
   => sym
   -> String
   -> Ctx.Index ctx tp
@@ -274,8 +290,9 @@ freshSymVar sym prefix idx tp =
       _ -> fail $ "unsupported variable type: " ++ show tp
     Left err -> fail $ show err
 
+-- | Probe the SMT solver for additional models of the given expression up to a maximum @count@
 genModels
-  :: ( C.IsSymInterface (C.OnlineBackend t solver fp)
+  :: ( CB.IsSymInterface (C.OnlineBackend t solver fp)
      , W.OnlineSolver t solver
      , KnownNat w
      , 1 <= w
@@ -293,8 +310,8 @@ genModels sym expr count
         next_ground_val <- W.groundEval evalFn expr
         next_bv_val <- W.bvLit sym W.knownNat next_ground_val
         not_current_ground_val <- W.bvNe sym expr next_bv_val
-        C.addAssumption sym $ C.LabeledPred not_current_ground_val $
-          C.AssumptionReason W.initializationLoc "assume different model"
+        CB.addAssumption sym $ CB.LabeledPred not_current_ground_val $
+          CB.AssumptionReason W.initializationLoc "assume different model"
         more_ground_vals <- genModels sym expr (count - 1)
         return $ next_ground_val : more_ground_vals
       _ -> return []
