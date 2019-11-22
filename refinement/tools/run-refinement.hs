@@ -128,7 +128,7 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
   di <- liftIO $ if unrefined opts
                  then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
                  else AI.withArchConstraints arch_info $ do
-    CBO.withZ3OnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
+    CBO.withYicesOnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
       ctx <- MR.defaultRefinementContext sym bin
       MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
   f di
