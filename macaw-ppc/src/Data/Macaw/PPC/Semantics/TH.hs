@@ -57,8 +57,8 @@ getOpName e
 ppcNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
                     L.Location arch ~ APPC.Location arch,
-                    1 <= APPC.ArchRegWidth arch,
-                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+                    1 <= A.RegWidth arch,
+                    M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
                 => BoundVarInterpretations arch t fs
                 -> S.NonceApp t (S.Expr t) tp
                 -> Maybe (MacawQ arch t fs Exp)
@@ -234,8 +234,8 @@ addArchExpr expr = G.addExpr =<< addArchAssignment expr
 floatingPointTH :: forall arch t fs f c
                  . (L.Location arch ~ APPC.Location arch,
                      A.Architecture arch,
-                     1 <= APPC.ArchRegWidth arch,
-                     M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch,
+                     1 <= A.RegWidth arch,
+                     M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch,
                      FC.FoldableFC f)
                  => BoundVarInterpretations arch t fs
                  -> String
@@ -261,8 +261,8 @@ floatingPointTH bvi fnName args =
 
 ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                     A.Architecture arch,
-                    1 <= APPC.ArchRegWidth arch,
-                    M.RegAddrWidth (PPCReg arch) ~ APPC.ArchRegWidth arch)
+                    1 <= A.RegWidth arch,
+                    M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
                 => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp
                 -> Maybe (MacawQ arch t fs Exp)
