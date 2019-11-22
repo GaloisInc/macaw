@@ -20,13 +20,17 @@ where
 
 import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import qualified Data.Foldable as F
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery as M
+import qualified Data.Macaw.AbsDomain.AbsState as MAA
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MS
-import           Data.Maybe ( mapMaybe, fromJust )
+import           Data.Maybe ( mapMaybe )
+import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Nonce
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats
@@ -50,6 +54,7 @@ import qualified What4.SatResult as W
 
 import qualified What4.Expr as WE
 import Text.Printf ( printf )
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
@@ -143,6 +148,8 @@ defaultRefinementContext sym loaded_binary = do
           }
     Nothing -> fail $ "unsupported architecture"
 
+
+
 smtSolveTransfer
   :: forall arch t solver fp m sym ids
    . ( MS.SymArchConstraints arch
@@ -181,19 +188,19 @@ smtSolveTransfer ctx discovery_state blocks = do
     stack_size
   init_sp_val <- liftIO $ LLVM.ptrAdd sym C.knownRepr stack_base_ptr stack_size
 
-  let entry_addr = M.segoffAddr $ M.pblockAddr $ head blocks
-  ip_base <- liftIO $ W.natLit sym $ fromIntegral $ M.addrBase entry_addr
-  ip_off <- liftIO $ W.bvLit sym W.knownNat $ M.memWordToUnsigned $ M.addrOffset entry_addr
-  entry_ip_val <- liftIO $ fromJust <$>
-    (globalMappingFn ctx) sym mem2 ip_base ip_off
-
-  init_regs <- initRegs (archVals ctx) sym entry_ip_val init_sp_val
+  -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
+  let entryBlock = head blocks
+  init_regs <- initRegs ctx mem2 entryBlock init_sp_val
   let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
   some_cfg <- liftIO $ MS.mkBlockPathCFG
     (MS.archFunctions (archVals ctx))
     (handleAllocator ctx)
     posFn
     blocks
+
+  F.forM_ blocks $ \pb -> liftIO $ do
+    printf "Block %s\n" (show (M.pblockAddr pb))
+    print (show (PP.pretty pb))
 
   case some_cfg of
     C.SomeCFG cfg -> do
@@ -257,23 +264,90 @@ smtSolveTransfer ctx discovery_state blocks = do
             fail $ "simulation abort branch"
         C.TimeoutResult{} -> fail $ "simulation timeout"
 
-initRegs
-  :: forall arch sym m
-    . (MS.SymArchConstraints arch, CB.IsSymInterface sym, MonadIO m)
-  => MS.ArchVals arch
-  -> sym
-  -> C.RegValue sym (LLVM.LLVMPointerType (M.ArchAddrWidth arch))
+initRegs :: forall arch sym m solver fp ids t
+          . ( MS.SymArchConstraints arch
+            , CB.IsSymInterface sym
+            , MonadIO m
+            , sym ~ C.OnlineBackend t solver fp
+            )
+  => RefinementContext arch t solver fp
+  -> LLVM.MemImpl sym
+  -> M.ParsedBlock arch ids
   -> C.RegValue sym (LLVM.LLVMPointerType (M.ArchAddrWidth arch))
   -> m (C.RegMap sym (MS.MacawFunctionArgs arch))
-initRegs arch_vals sym ip_val sp_val = do
-  let reg_types = MS.crucArchRegTypes $ MS.archFunctions $ arch_vals
+initRegs ctx memory entryBlock spVal = do
+  let sym = symbolicBackend ctx
+  let arch_vals = archVals ctx
+
+  -- Build an IP value to populate the initial register state with
+  let entryAddr = M.segoffAddr (M.pblockAddr entryBlock)
+  ip_base <- liftIO $ W.natLit sym (fromIntegral (M.addrBase entryAddr))
+  ip_off <- liftIO $ W.bvLit sym W.knownNat (M.memWordToUnsigned (M.addrOffset entryAddr))
+  mip <- liftIO $ globalMappingFn ctx sym memory ip_base ip_off
+  entryIPVal <- case mip of
+    Nothing -> error ("IP is not mapped: " ++ show (ip_base, ip_off))
+    Just ip -> return ip
+
+  liftIO $ printf "Entry initial state"
+  liftIO $ print (M.blockAbstractState entryBlock)
+
+  let reg_types = MS.crucArchRegTypes (MS.archFunctions arch_vals)
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
-  let reg_struct = C.RegEntry (C.StructRepr reg_types) reg_vals
-  return $ C.RegMap $ Ctx.singleton $
-    (MS.updateReg arch_vals)
-      ((MS.updateReg arch_vals) reg_struct M.ip_reg ip_val)
-      M.sp_reg
-      sp_val
+  let reg_struct0 = C.RegEntry (C.StructRepr reg_types) reg_vals
+  let reg_struct1 = MS.updateReg arch_vals reg_struct0 M.ip_reg entryIPVal
+  let reg_struct2 = MS.updateReg arch_vals reg_struct1 M.sp_reg spVal
+
+  let absRegs = M.blockAbstractState entryBlock ^. MAA.absRegState
+  reg_struct <- MapF.foldlMWithKey (addKnownRegValue ctx memory) reg_struct2 (M.regStateMap absRegs)
+
+  return $ C.RegMap $ Ctx.singleton reg_struct
+
+-- | If the abstract value is actually completely known, add it concretely to
+-- the register state.
+addKnownRegValue :: forall arch sym m t solver fp tp w
+                  . ( MS.SymArchConstraints arch
+                    , CB.IsSymInterface sym
+                    , MonadIO m
+                    , sym ~ C.OnlineBackend t solver fp
+                    )
+                 => RefinementContext arch t solver fp
+                 -> LLVM.MemImpl sym
+                 -> C.RegEntry sym (MS.ArchRegStruct arch)
+                 -> M.ArchReg arch tp
+                 -> MAA.AbsValue w tp
+                 -> m (C.RegEntry sym (MS.ArchRegStruct arch))
+addKnownRegValue ctx memory regsStruct reg val =
+  case val of
+    MAA.FinSet bvs
+      | [singleBV] <- F.toList bvs -> do
+          let sym = symbolicBackend ctx
+          base <- liftIO $ W.natLit sym 0
+          off <- liftIO $ W.bvLit sym W.knownNat singleBV
+          mptr <- liftIO $ globalMappingFn ctx sym memory base off
+          case mptr of
+            Nothing -> do
+              liftIO $ putStrLn "Not a pointer (translation failed)"
+              ptr <- liftIO $ LLVM.llvmPointer_bv sym off
+              let oldEntry = MS.lookupReg (archVals ctx) regsStruct reg
+              let nr = W.knownNat @(M.RegAddrWidth (M.ArchReg arch))
+              case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
+                Just Refl -> do
+                  liftIO $ printf "Populating register %s with %s" (show reg) (show (LLVM.ppPtr ptr))
+                  return (MS.updateReg (archVals ctx) regsStruct reg ptr)
+                Nothing -> do
+                  liftIO $ printf "Types did not match: %s vs %s" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
+                  return regsStruct
+            Just ptr -> do
+              let oldEntry = MS.lookupReg (archVals ctx) regsStruct reg
+              let nr = W.knownNat @(M.RegAddrWidth (M.ArchReg arch))
+              case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
+                Just Refl -> do
+                  liftIO $ printf "Populating register %s with %s" (show reg) (show (LLVM.ppPtr ptr))
+                  return (MS.updateReg (archVals ctx) regsStruct reg ptr)
+                Nothing -> do
+                  liftIO $ printf "Types did not match: %s vs %s" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
+                  return regsStruct
+    _ -> return regsStruct
 
 freshSymVar
   :: (CB.IsSymInterface sym, MonadIO m)
