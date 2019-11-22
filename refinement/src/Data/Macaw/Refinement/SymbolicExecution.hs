@@ -67,6 +67,9 @@ type Refinement t solver fp = ( W.OnlineSolver t solver
                               , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
                               )
 
+-- | Given a solver backend and binary, create a 'RefinementContext' that has
+-- all of the necessary bits to symbolically simulate machine code and query the
+-- SMT solver for models of the IP
 defaultRefinementContext
   :: forall arch bin t solver fp
    . ( MS.SymArchConstraints arch
