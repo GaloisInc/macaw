@@ -200,7 +200,7 @@ smtSolveTransfer ctx discovery_state blocks = do
 
   F.forM_ blocks $ \pb -> liftIO $ do
     printf "Block %s\n" (show (M.pblockAddr pb))
-    print (show (PP.pretty pb))
+    putStrLn (show (PP.pretty pb))
 
   case some_cfg of
     C.SomeCFG cfg -> do
@@ -231,7 +231,7 @@ smtSolveTransfer ctx discovery_state blocks = do
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
               fr1 <- liftIO $ CB.pushAssumptionFrame sym
-              ip_off_ground_vals <- genModels sym res_ip_off 10
+              ip_off_ground_vals <- genModels sym res_ip_off 100
               _ <- liftIO $ CB.popAssumptionFrame sym fr1
 
               let showAsHex :: Integer -> String
