@@ -20,9 +20,9 @@ import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.ByteString as BS
 import           Data.Int
-import           Data.Word
-
 import           Data.Macaw.Memory
+import           Data.Word
+import           GHC.Stack
 
 import qualified Flexdis86 as Flexdis
 import           Flexdis86.ByteReader
@@ -47,6 +47,7 @@ data RelocPos
    = ReadByte
    | ReadJump
    | ReadImm32
+   | ReadUImm64
 
 -- | Errors thrown when decoding an instruction.
 data InstructionDecodeError w
@@ -54,7 +55,7 @@ data InstructionDecodeError w
      -- ^ the memory reader threw an unspecified error at the given offset.
    | EndOfInstruction
      -- ^ Unexpected end of instruction.
-   | UnsupportedRelocation !RelocPos !(Relocation w)
+   | UnsupportedRelocation !CallStack !RelocPos !(Relocation w)
      -- ^ A relocation appeared in given position.
    | BSSEncountered
      -- ^ We encountered BSS data when decoding instruction.s
@@ -68,13 +69,15 @@ instance Show (InstructionDecodeError w) where
         msg
       EndOfInstruction ->
         "Unexpected end of instruction."
-      UnsupportedRelocation loc r ->
+      UnsupportedRelocation cs loc r ->
         let sloc = case loc of
                      ReadByte -> "byte"
                      ReadImm32 -> "32-bit immediate"
+                     ReadUImm64 -> "64-bit immediate"
                      ReadJump -> "jump"
-        in "Unexpected relocation when decoding " ++ sloc ++ ":\n"
-           ++ "  " ++ show r
+        in "Unexpected relocation in " ++ sloc ++ " decode:\n"
+           ++ "  " ++ show r ++ "\n"
+           ++ "  " ++ prettyCallStack cs
       BSSEncountered ->
         "Do not support decoding instructions within .bss."
       InvalidInstruction rng ->
@@ -116,6 +119,7 @@ sbyte w o = fromIntegral i8 `shiftL` (8*o)
   where i8 :: Int8
         i8 = fromIntegral w
 
+-- | @ubyte x o@ returns the value `x << (8*o)`
 ubyte :: (Bits w, Num w) => Word8 -> Int -> w
 ubyte w o = fromIntegral w `shiftL` (8*o)
 
@@ -124,11 +128,20 @@ jsizeCount Flexdis.JSize8  = 1
 jsizeCount Flexdis.JSize16 = 2
 jsizeCount Flexdis.JSize32 = 4
 
-getUnsigned32 :: MemWidth w => BS.ByteString -> MemoryByteReader w Word32
-getUnsigned32 s =
+getUnsigned32lsb :: MemWidth w => BS.ByteString -> MemoryByteReader w Word32
+getUnsigned32lsb s =
   case BS.unpack s of
     w0:w1:w2:w3:_ -> do
       pure $! ubyte w3 3 .|. ubyte w2 2 .|. ubyte w1 1 .|. ubyte w0 0
+    _ -> do
+      throwDecodeError $ EndOfInstruction
+
+getUnsigned64lsb :: MemWidth w => BS.ByteString -> MemoryByteReader w Word64
+getUnsigned64lsb s =
+  case BS.unpack s of
+    w0:w1:w2:w3:w4:w5:w6:w7:_ -> do
+      pure $! ubyte w7 7 .|. ubyte w6 6 .|. ubyte w5 5 .|. ubyte w4 4
+          .|. ubyte w3 3 .|. ubyte w2 2 .|. ubyte w1 1 .|. ubyte w0 0
     _ -> do
       throwDecodeError $ EndOfInstruction
 
@@ -140,7 +153,7 @@ getJumpBytes s sz =
     (Flexdis.JSize16, w0:w1:_) -> do
       pure (sbyte w1 1 .|. ubyte w0 0, 2)
     (Flexdis.JSize32, _) -> do
-      v <- getUnsigned32 s
+      v <- getUnsigned32lsb s
       pure (fromIntegral (fromIntegral v :: Int32), 4)
     _ -> do
       throwDecodeError $ EndOfInstruction
@@ -162,26 +175,32 @@ updateMSByteString ms bs rest c = do
                }
   seq ms' $ MBR $ put ms'
 
+-- | Read a byte.
+--
+-- Provided as a separate declaration from readByte so we can catch
+-- the call stack.
+memReadByte :: (HasCallStack, MemWidth w) => MemoryByteReader w Word8
+memReadByte = do
+  ms <- MBR get
+  -- If remaining bytes are empty
+  case msNext ms of
+    [] ->
+      throwDecodeError $ EndOfInstruction
+    -- Throw error if we try to read a relocation as a symbolic reference
+    BSSRegion _:_ -> do
+      throwDecodeError $ BSSEncountered
+    RelocationRegion r:_ ->
+      throwDecodeError $ UnsupportedRelocation callStack ReadByte r
+    ByteRegion bs:rest -> do
+      if BS.null bs then do
+        throwDecodeError $ EndOfInstruction
+       else do
+        let v = BS.head bs
+        updateMSByteString ms bs rest 1
+        pure $! v
 
 instance MemWidth w => ByteReader (MemoryByteReader w) where
-  readByte = do
-    ms <- MBR get
-    -- If remaining bytes are empty
-    case msNext ms of
-      [] ->
-        throwDecodeError $ EndOfInstruction
-      -- Throw error if we try to read a relocation as a symbolic reference
-      BSSRegion _:_ -> do
-        throwDecodeError $ BSSEncountered
-      RelocationRegion r:_ ->
-        throwDecodeError $ UnsupportedRelocation ReadByte r
-      ByteRegion bs:rest -> do
-        if BS.null bs then do
-          throwDecodeError $ EndOfInstruction
-         else do
-          let v = BS.head bs
-          updateMSByteString ms bs rest 1
-          pure $! v
+  readByte = memReadByte
 
   readDImm = do
     ms <- MBR get
@@ -200,7 +219,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
               && relocationSize r == 4
               && relocationEndianness r == LittleEndian
         when (not isGood) $ do
-          throwDecodeError $ UnsupportedRelocation ReadImm32 r
+          throwDecodeError $ UnsupportedRelocation callStack ReadImm32 r
         -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
         let signed = relocationIsSigned r
 
@@ -211,9 +230,42 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
         pure $ Flexdis.Imm32SymbolOffset sym (fromIntegral off) signed
 
       ByteRegion bs:rest -> do
-        v <- getUnsigned32 bs
+        v <- getUnsigned32lsb bs
         updateMSByteString ms bs rest 4
         pure $! Flexdis.Imm32Concrete (fromIntegral v)
+
+  readQUImm = do
+    ms <- MBR get
+    -- If remaining bytes are empty
+    case msNext ms of
+      [] ->
+        throwDecodeError $ EndOfInstruction
+      -- Throw error if we try to read a relocation as a symbolic reference
+      BSSRegion _:_ -> do
+        throwDecodeError $ BSSEncountered
+      RelocationRegion r:rest -> do
+        let sym = relocationSym r
+        let off = relocationOffset r
+        let isGood
+              =  relocationIsRel r == False
+              && relocationSize r == 8
+              && relocationEndianness r == LittleEndian
+              && relocationIsSigned r == False
+
+        when (not isGood) $ do
+          throwDecodeError $ UnsupportedRelocation callStack ReadUImm64 r
+        -- Returns whether the bytes in this relocation are thought of as signed or unsigned.
+
+        let ms' = ms { msOffset = msOffset ms + 8
+                     , msNext   = rest
+                     }
+        seq ms' $ MBR $ put ms'
+        pure $ Flexdis.UImm64SymbolOffset sym (fromIntegral off)
+
+      ByteRegion bs:rest -> do
+        v <- getUnsigned64lsb bs
+        updateMSByteString ms bs rest 8
+        pure $! Flexdis.UImm64Concrete v
 
   readJump sz = do
     ms <- MBR get
@@ -234,7 +286,7 @@ instance MemWidth w => ByteReader (MemoryByteReader w) where
               && relocationIsSigned r == False
               && relocationEndianness r == LittleEndian
         when (not isGood) $ do
-          throwDecodeError $ UnsupportedRelocation ReadJump r
+          throwDecodeError $ UnsupportedRelocation callStack ReadJump r
         let ms' = ms { msOffset = msOffset ms + fromIntegral (jsizeCount sz)
                      , msNext   = rest
                      }

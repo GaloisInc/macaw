@@ -169,12 +169,12 @@ data ArchitectureInfo arch
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
-     , postArchTermStmtAbsState :: !(forall ids s
+     , postArchTermStmtAbsState :: !(forall ids
                                      .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
                                      -> AbsProcessorState (ArchReg arch) ids
                                         -- The registers before executing terminal statement
-                                     -> Jmp.IntraJumpBounds arch ids s
+                                     -> Jmp.IntraJumpBounds arch ids
                                      -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids

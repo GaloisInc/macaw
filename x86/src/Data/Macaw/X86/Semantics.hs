@@ -367,16 +367,26 @@ def_push =
       case val of
         F.SegmentValue _ ->
           fail "push does not support segment selector."
-        F.WordReg  r -> Some . HasRepSize  WordRepVal <$> get (reg16Loc r)
-        F.DWordReg r -> Some . HasRepSize DWordRepVal <$> get (reg32Loc r)
-        F.QWordReg r -> Some . HasRepSize QWordRepVal <$> get (reg64Loc r)
-        F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> (get =<< getBV16Addr ar)
-        F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> (get =<< getBV32Addr ar)
-        F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> (get =<< getBV64Addr ar)
-        F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
-        F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
-        F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
-        F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+        F.WordReg  r ->
+          Some . HasRepSize  WordRepVal <$> get (reg16Loc r)
+        F.DWordReg r ->
+          Some . HasRepSize DWordRepVal <$> get (reg32Loc r)
+        F.QWordReg r ->
+          Some . HasRepSize QWordRepVal <$> get (reg64Loc r)
+        F.Mem16 ar ->
+          Some . HasRepSize  WordRepVal <$> (get =<< getBV16Addr ar)
+        F.Mem32 ar ->
+          Some . HasRepSize DWordRepVal <$> (get =<< getBV32Addr ar)
+        F.Mem64 ar ->
+          Some . HasRepSize QWordRepVal <$> (get =<< getBV64Addr ar)
+        F.ByteImm w ->
+          pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
+        F.WordImm w ->
+          pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
+        F.DWordImm i ->
+          pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
+        F.QWordImm (F.UImm64Concrete  w) ->
+          pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
         _ -> fail $ "Unexpected argument to push"
     let repr = repValSizeMemRepr rep
     old_sp <- get rsp
@@ -428,7 +438,6 @@ def_mov =
       (F.Mem8 a, F.ByteImm i) -> do
         l <- getBV8Addr a
         l .= bvLit n8 (toInteger i)
-
       (F.WordReg r, F.WordReg src) -> do
         v <- get $ reg16Loc src
         reg16Loc r .= v
@@ -472,7 +481,7 @@ def_mov =
         v <- get =<< getBV64Addr src
         reg64Loc r .= v
       (F.QWordReg r, F.QWordImm i) -> do
-        reg64Loc r .= bvLit n64 (toInteger i)
+        reg64Loc r .= getUImm64 i
       (F.QWordReg r, F.DWordSignedImm i) -> do
         reg64Loc r .= bvLit n64 (toInteger i)
       (F.Mem64 a, F.DWordSignedImm i) -> do
@@ -482,7 +491,6 @@ def_mov =
         l <- getBV64Addr a
         v <- get $ reg64Loc src
         l .= v
-
       -- Read segment selector
       (dest, F.SegmentValue s) -> do
         v <- evalArchFn (GetSegmentSelector s)
@@ -616,7 +624,6 @@ exec_add dst y = do
   -- Set result value.
   set_result_value dst (dst_val .+ y)
 
--- FIXME: we don't need a location, just a value.
 exec_cmp :: SupportedBVWidth n => Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
 exec_cmp dst y = do
   dst_val <- get dst

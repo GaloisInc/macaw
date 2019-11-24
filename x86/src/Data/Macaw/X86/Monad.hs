@@ -863,23 +863,11 @@ x .+ y
   -- Shift constants to right-hand-side.
   | ValueExpr (BVValue _ _) <- x = y .+ x
 
-  -- Reorganize addition by constant to offset.
-  | Just (BVAdd w x_base (asUnsignedBVLit -> Just x_off)) <- asApp x
-  , ValueExpr (BVValue _ y_off) <- y
-  = x_base .+ bvLit w (x_off + y_off)
-
-  | Just (BVAdd w y_base (asUnsignedBVLit -> Just y_off)) <- asApp y
-  , ValueExpr (BVValue _ x_off) <- x
-  = y_base .+ bvLit w (x_off + y_off)
-
   | otherwise = app $ BVAdd (typeWidth x) x y
 
 -- | Subtract two vectors, ignoring underflow.
 (.-) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
-x .- y
-  | ValueExpr (BVValue _ yv) <- y =
-      x .+ bvLit (typeWidth x) (negate yv)
-  | otherwise = app $ BVSub (typeWidth x) x y
+x .- y = app $ BVSub (typeWidth x) x y
 
 -- | Performs a multiplication of two bitvector values.
 (.*) :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
@@ -981,18 +969,9 @@ x .=. y
   | ValueExpr (BVValue _ xv) <- x
   , ValueExpr (BVValue _ yv) <- y =
       boolValue (xv == yv)
-  -- Move constant to second argument (We implicitly know both x and y are not a constant due to previous case).
+  -- Move constant to second argument (We implicitly know both x and y
+  -- are not a constant due to previous case).
   | ValueExpr BVValue{} <- x  = y .=. x
-
-  -- Rewrite "base + offset = constant" to "base = constant - offset".
-  | Just (BVAdd w x_base (asUnsignedBVLit -> Just x_off)) <- asApp x
-  , ValueExpr (BVValue _ yv) <- y =
-      app $ Eq x_base (bvLit w (yv - x_off))
-      -- Rewrite "u - v == c" to "u = c + v".
-  | Just (BVSub _ x_1 x_2) <- asApp x = x_1 .=. (y .+ x_2)
-  -- Rewrite "c == u - v" to "u = c + v".
-  | Just (BVSub _ y_1 y_2) <- asApp y = y_1 .=. (x .+ y_2)
-
   | ValueExpr (BoolValue True)  <- x = y
   | ValueExpr (BoolValue False) <- x = boolNot y
   | ValueExpr (BoolValue True)  <- y = x
@@ -1390,14 +1369,6 @@ false = boolValue False
 boolNot :: Expr ids BoolType -> Expr ids BoolType
 boolNot x
   | Just xv <- asBoolLit x = boolValue (not xv)
-    -- not (y < z) = y >= z = z <= y
-  | Just (BVUnsignedLt y z) <- asApp x = bvUle z y
-    -- not (y <= z) = y > z = z < y
-  | Just (BVUnsignedLe y z) <- asApp x = bvUlt z y
-    -- not (y < z) = y >= z = z <= y
-  | Just (BVSignedLt y z) <- asApp x = bvSle z y
-    -- not (y <= z) = y > z = z < y
-  | Just (BVSignedLe y z) <- asApp x = bvSlt z y
     -- not (not p) = p
   | Just (NotApp y) <- asApp x = y
   | otherwise = app $ NotApp x

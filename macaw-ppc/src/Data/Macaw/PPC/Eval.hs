@@ -67,12 +67,12 @@ preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-postPPCTermStmtAbsState :: forall var ppc ids s
+postPPCTermStmtAbsState :: forall var ppc ids
                          . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
                         => (forall tp . PPCReg ppc tp -> Bool)
                         -> MM.Memory (RegAddrWidth (ArchReg ppc))
                         -> AbsProcessorState (PPCReg ppc) ids
-                        -> MJ.IntraJumpBounds ppc ids s
+                        -> MJ.IntraJumpBounds ppc ids
                         -> RegState (PPCReg ppc) (Value ppc ids)
                         -> PPCTermStmt ppc ids
                         -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc), MJ.InitJumpBounds ppc)

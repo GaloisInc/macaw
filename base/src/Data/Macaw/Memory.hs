@@ -1059,8 +1059,8 @@ data MemAddr w
 instance Hashable (MemAddr w) where
   hashWithSalt s a = s `hashWithSalt` addrBase a  `hashWithSalt` addrOffset a
 
-instance MemWidth w => Show (MemAddr w) where
-  showsPrec _ (MemAddr 0 a) = showString "0x" . showHex a
+instance Show (MemAddr w) where
+  showsPrec _ (MemAddr 0 a) = showString "0x" . shows a
   showsPrec p (MemAddr i off) =
     showParen (p > 6)
     $ showString "segment"
