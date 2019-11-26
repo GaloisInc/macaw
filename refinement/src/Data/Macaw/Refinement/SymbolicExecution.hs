@@ -303,6 +303,10 @@ initRegs ctx memory entryBlock spVal = do
 
 -- | If the abstract value is actually completely known, add it concretely to
 -- the register state.
+--
+-- NOTE: This function could probably be extended to support non-singleton
+-- finsets by generating mux trees over all of the possible values (with fresh
+-- variables as predicates).
 addKnownRegValue :: forall arch sym m t solver fp tp w
                   . ( MS.SymArchConstraints arch
                     , CB.IsSymInterface sym
@@ -361,6 +365,7 @@ freshSymVar sym prefix idx tp =
       _ -> fail $ "unsupported variable type: " ++ show tp
     Left err -> fail $ show err
 
+-- | Create a predicate constraining the IP to be in some executable code segment
 genIPConstraint :: ( MonadIO m
                    , sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) fp
                    , 1 <= M.ArchAddrWidth arch
