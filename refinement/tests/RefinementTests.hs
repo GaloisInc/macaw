@@ -42,7 +42,6 @@ import           GHC.TypeLits
 
 import           Control.Lens hiding ( (<.>) )
 import           Control.Monad
-import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
@@ -57,18 +56,20 @@ import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
 import           Data.Macaw.PPC.Symbolic ()
-import           Data.Macaw.Refinement
+import           Data.Macaw.Refinement as MR
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.X86 as MX86
 import           Data.Macaw.X86.Symbolic ()
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
+import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some
 import           Data.Proxy
 import           Data.Semigroup ( (<>) )
 import qualified Data.Set as Set
 import           Data.Tagged
 import           Data.Typeable ( Typeable )
+import qualified Lang.Crucible.Backend.Online as CBO
 import           Options.Applicative
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
@@ -82,6 +83,7 @@ import           Test.Tasty.Ingredients
 import           Test.Tasty.Options
 import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), (</>) )
 import           Text.Read ( readEither )
+import qualified What4.Expr as WE
 
 import           Prelude
 
@@ -268,26 +270,28 @@ testExpected useRefinement expFile testinp beVerbose readBinary = do
           withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
         m -> error $ "no 32-bit ELF support for " ++ show m
 
-withBinaryDiscoveredInfo :: ( X.MonadThrow m
-                            , MS.SymArchConstraints arch
+withBinaryDiscoveredInfo :: ( MS.SymArchConstraints arch
                             , 16 <= MC.ArchAddrWidth arch
                             , MBL.BinaryLoader arch binFmt
-                            , MonadIO m) =>
+                            ) =>
                             TestInput
                          -> Bool
                          -> FilePath
                          -> AI.ArchitectureInfo arch
                          -> MBL.LoadedBinary arch binFmt
-                         -> m ()
+                         -> IO ()
 withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
   entries <- toList <$> entryPoints bin
   let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
       actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
-  if useRefinement
-    then do refinedCFG <- refineDiscovery bin baseCFG
-            let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
-            compareToExpected "refined" refinedBase expFile
-    else compareToExpected "base" actualBase expFile
+  case useRefinement of
+    True -> do
+      CBO.withYicesOnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
+        ctx <- MR.defaultRefinementContext sym bin
+        refinedCFG <- refineDiscovery ctx baseCFG
+        let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
+        compareToExpected "refined" refinedBase expFile
+    False -> compareToExpected "base" actualBase expFile
 
 
 compareToExpected formName actual fn =
@@ -372,6 +376,6 @@ getFunctions di =
            Function
            (mkAddress funAddr)
            (fmap (\(blkAddr, pb) ->
-                    Block (mkAddress blkAddr) (show $ MD.blockStatementList pb))
+                    Block (mkAddress blkAddr) (show $ MD.pblockStmts pb))
             (dfi ^. MD.parsedBlocks . to M.toList)))
   (di ^. MD.funInfo . to M.toList)
