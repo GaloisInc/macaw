@@ -108,25 +108,8 @@ defaultRefinementContext sym loaded_binary = do
         (MBL.memoryImage loaded_binary)
 
       let ?ptrWidth = W.knownNat
-      -- (base_ptr, allocated_mem) <- LLVM.doMallocUnbounded
-      --   sym
-      --   LLVM.GlobalAlloc
-      --   LLVM.Mutable
-      --   "flat memory"
-      --   mem0
-      --   LLVM.noAlignment
-      -- let Right mem_name = W.userSymbol "mem"
-      -- mem_array <- W.freshConstant sym mem_name W.knownRepr
-      -- initialized_mem <- LLVM.doArrayStoreUnbounded
-      --   sym
-      --   allocated_mem
-      --   base_ptr
-      --   LLVM.noAlignment
-      --   mem_array
-
       let global_mapping_fn = \sym' mem' base off -> do
-            -- flat_mem_ptr <- LLVM.ptrAdd sym' W.knownNat base_ptr off
-            flat_mem_ptr <- LLVM.mkNullPointer sym' ?ptrWidth -- W.knownNat
+            flat_mem_ptr <- LLVM.mkNullPointer sym' ?ptrWidth
             MS.mapRegionPointers
               mem_ptr_table
               flat_mem_ptr
@@ -152,7 +135,7 @@ defaultRefinementContext sym loaded_binary = do
           , nonceGenerator = nonce_gen
           , extensionImpl = ext_impl
           , memVar = mem_var
-          , mem = mem0 -- initialized_mem
+          , mem = mem0
           , memPtrTable = mem_ptr_table
           , globalMappingFn = global_mapping_fn
           , executableSegments = execSegs
