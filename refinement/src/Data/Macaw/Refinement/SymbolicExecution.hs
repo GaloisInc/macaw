@@ -18,6 +18,7 @@ module Data.Macaw.Refinement.SymbolicExecution
   )
 where
 
+import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.Foldable as F
@@ -25,12 +26,15 @@ import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.AbsDomain.AbsState as MAA
+import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MS
 import           Data.Maybe ( mapMaybe )
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Nonce
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats
@@ -66,6 +70,8 @@ data RefinementContext arch t solver fp = RefinementContext
   , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
   , memPtrTable :: MS.MemPtrTable (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
   , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
+  , executableSegments :: [MM.MemSegment (M.ArchAddrWidth arch)]
+  , memWidthRepr :: PN.NatRepr (M.ArchAddrWidth arch)
   }
 
 type Refinement t solver fp = ( W.OnlineSolver t solver
@@ -129,6 +135,9 @@ defaultRefinementContext sym loaded_binary = do
               base
               off
 
+      let isExecutable = MMP.isExecutable . MM.segmentFlags
+      let execSegs = filter isExecutable (MM.memSegments (MBL.memoryImage loaded_binary))
+
       MS.withArchEval arch_vals sym $ \arch_eval_fns -> do
         let ext_impl = MS.macawExtensions
               arch_eval_fns
@@ -146,6 +155,8 @@ defaultRefinementContext sym loaded_binary = do
           , mem = mem0 -- initialized_mem
           , memPtrTable = mem_ptr_table
           , globalMappingFn = global_mapping_fn
+          , executableSegments = execSegs
+          , memWidthRepr = MM.memWidth (MBL.memoryImage loaded_binary)
           }
     Nothing -> fail $ "unsupported architecture"
 
@@ -232,7 +243,11 @@ smtSolveTransfer ctx discovery_state blocks = do
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
               fr1 <- liftIO $ CB.pushAssumptionFrame sym
-              ip_off_ground_vals <- genModels sym res_ip_off 100
+              ipConstraint <- genIPConstraint ctx res_ip_off
+              let loc = W.mkProgramLoc "" W.InternalPos
+              let msg = CB.AssumptionReason loc "IP is in executable memory"
+              liftIO $ CB.addAssumption sym (CB.LabeledPred ipConstraint msg)
+              ip_off_ground_vals <- genModels sym res_ip_off 10
               _ <- liftIO $ CB.popAssumptionFrame sym fr1
 
               let showAsHex :: Integer -> String
@@ -368,6 +383,29 @@ freshSymVar sym prefix idx tp =
       _ -> fail $ "unsupported variable type: " ++ show tp
     Left err -> fail $ show err
 
+genIPConstraint :: ( MonadIO m
+                   , sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) fp
+                   , 1 <= M.ArchAddrWidth arch
+                   , MM.MemWidth (M.ArchAddrWidth arch)
+                   )
+                => RefinementContext arch t solver fp
+                -> W.SymBV sym (M.ArchAddrWidth arch)
+                -- ^ The IP value to constrain
+                -> m (W.Pred sym)
+genIPConstraint ctx ipVal = liftIO $ do
+  let sym = symbolicBackend ctx
+  ps <- mapM (genSegConstraint sym (memWidthRepr ctx)) (executableSegments ctx)
+  W.andAllOf sym (L.folded . id) ps
+  where
+    genSegConstraint sym repr seg = do
+      let low = MM.segmentOffset seg
+      let high = low + MM.segmentSize seg
+      lo <- W.bvLit sym repr (fromIntegral low)
+      hi <- W.bvLit sym repr (fromIntegral high)
+      lb <- W.bvUle sym lo ipVal
+      ub <- W.bvUle sym ipVal hi
+      W.andPred sym lb ub
+
 -- | Probe the SMT solver for additional models of the given expression up to a maximum @count@
 genModels
   :: ( CB.IsSymInterface (C.OnlineBackend t solver fp)
@@ -390,6 +428,7 @@ genModels sym expr count
         not_current_ground_val <- W.bvNe sym expr next_bv_val
         CB.addAssumption sym $ CB.LabeledPred not_current_ground_val $
           CB.AssumptionReason W.initializationLoc "assume different model"
+        liftIO $ printf "Generated model: 0x%x\n" next_ground_val
         more_ground_vals <- genModels sym expr (count - 1)
         return $ next_ground_val : more_ground_vals
       _ -> return []
