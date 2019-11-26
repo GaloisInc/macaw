@@ -32,6 +32,7 @@ import qualified What4.Expr.WeightedSum as WSum
 import qualified What4.InterpretedFloatingPoint as SFP
 import qualified What4.SemiRing as SR
 
+import qualified SemMC.Architecture as SA
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified Data.Macaw.CFG as M
@@ -190,8 +191,9 @@ evalBoolMap op defVal bmap =
          in F.foldl onEach (bBase defVal) ts
 
 
-locToReg :: (1 <= APPC.ArchRegWidth ppc,
-             M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc)
+locToReg :: ( 1 <= SA.RegWidth ppc
+            , M.RegAddrWidth (PPCReg ppc) ~ SA.RegWidth ppc
+            )
          => proxy ppc
          -> APPC.Location ppc ctp
          -> PPCReg ppc (FromCrucibleBaseType ctp)
@@ -208,8 +210,8 @@ locToReg _  loc              = error ("macaw-ppc: Undefined location " ++ show l
 interpretFormula :: forall var ppc t ctp s ids
                   . ( ppc ~ SP.AnyPPC var
                     , PPCArchConstraints var
-                    , 1 <= APPC.ArchRegWidth ppc
-                    , M.RegAddrWidth (PPCReg ppc) ~ APPC.ArchRegWidth ppc
+                    , 1 <= SA.RegWidth ppc
+                    , M.RegAddrWidth (PPCReg ppc) ~ SA.RegWidth ppc
                     )
                  => APPC.Location ppc ctp
                  -> S.Expr t ctp
