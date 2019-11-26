@@ -327,26 +327,21 @@ addKnownRegValue ctx memory regsStruct reg val =
             Nothing -> do
               liftIO $ putStrLn "Not a pointer (translation failed)"
               ptr <- liftIO $ LLVM.llvmPointer_bv sym off
-              let oldEntry = MS.lookupReg (archVals ctx) regsStruct reg
-              let nr = W.knownNat @(M.RegAddrWidth (M.ArchReg arch))
-              case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
-                Just Refl -> do
-                  liftIO $ printf "Populating register %s with %s" (show reg) (show (LLVM.ppPtr ptr))
-                  return (MS.updateReg (archVals ctx) regsStruct reg ptr)
-                Nothing -> do
-                  liftIO $ printf "Types did not match: %s vs %s" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
-                  return regsStruct
-            Just ptr -> do
-              let oldEntry = MS.lookupReg (archVals ctx) regsStruct reg
-              let nr = W.knownNat @(M.RegAddrWidth (M.ArchReg arch))
-              case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
-                Just Refl -> do
-                  liftIO $ printf "Populating register %s with %s" (show reg) (show (LLVM.ppPtr ptr))
-                  return (MS.updateReg (archVals ctx) regsStruct reg ptr)
-                Nothing -> do
-                  liftIO $ printf "Types did not match: %s vs %s" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
-                  return regsStruct
+              addPtrVal ptr
+            Just ptr -> addPtrVal ptr
     _ -> return regsStruct
+  where
+    addPtrVal :: LLVM.LLVMPtr sym (M.ArchAddrWidth arch) -> m (C.RegEntry sym (MS.ArchRegStruct arch))
+    addPtrVal ptr = do
+      let oldEntry = MS.lookupReg (archVals ctx) regsStruct reg
+      let nr = W.knownNat @(M.ArchAddrWidth arch)
+      case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
+        Just Refl -> do
+          liftIO $ printf "Populating register %s with %s\n" (show (M.prettyF reg)) (show (LLVM.ppPtr ptr))
+          return (MS.updateReg (archVals ctx) regsStruct reg ptr)
+        Nothing -> do
+          liftIO $ printf "Types did not match while populating register: %s vs %s\n" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
+          return regsStruct
 
 freshSymVar
   :: (CB.IsSymInterface sym, MonadIO m)
