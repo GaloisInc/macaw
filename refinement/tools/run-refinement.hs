@@ -237,9 +237,11 @@ showOverview unrefinedDI mrefinedDI =
   let getIssue dfi (blkAddr, pblk) =
         let issue = case MD.pblockTermStmt pblk of
               MD.ParsedTranslateError r -> pretty "Translation failure:" <+> pretty (show r)
-              MD.ClassifyFailure {}
+              MD.ClassifyFailure _ rsns
                 | isNothing (lookup (MD.pblockAddr pblk) (MD.discoveredClassifyFailureResolutions dfi)) ->
-                  pretty "Classify failure"
+                  PP.vcat [ PP.pretty "Classify failure: "
+                          , PP.nest 4 (PP.vcat (map PP.pretty rsns))
+                          ]
               _ -> emptyDoc
         in hsep [ pretty "Block @", pretty $ show blkAddr, issue ]
       funcSummary (funAddr, (Some dfi)) =
