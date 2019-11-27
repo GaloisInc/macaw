@@ -234,14 +234,16 @@ showOverview :: (MC.MemWidth (MC.ArchAddrWidth arch))
              -> Maybe (MD.DiscoveryState arch)
              -> IO ()
 showOverview unrefinedDI mrefinedDI =
-  let getIssue (blkAddr, pblk) =
+  let getIssue dfi (blkAddr, pblk) =
         let issue = case MD.pblockTermStmt pblk of
               MD.ParsedTranslateError r -> pretty "Translation failure:" <+> pretty (show r)
-              MD.ClassifyFailure {} -> pretty "Classify failure"
+              MD.ClassifyFailure {}
+                | isNothing (lookup (MD.pblockAddr pblk) (MD.discoveredClassifyFailureResolutions dfi)) ->
+                  pretty "Classify failure"
               _ -> emptyDoc
         in hsep [ pretty "Block @", pretty $ show blkAddr, issue ]
       funcSummary (funAddr, (Some dfi)) =
-        let blkSummary = map getIssue (dfi ^. MD.parsedBlocks . to M.toList)
+        let blkSummary = map (getIssue dfi) (dfi ^. MD.parsedBlocks . to M.toList)
         in vcat [ pretty "Function @" <+> pretty (show funAddr)
                 , indent 2 $ vcat blkSummary
                 ]
