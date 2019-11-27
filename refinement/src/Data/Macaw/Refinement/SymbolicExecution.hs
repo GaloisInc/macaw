@@ -15,6 +15,9 @@ module Data.Macaw.Refinement.SymbolicExecution
   , Refinement
   , defaultRefinementContext
   , smtSolveTransfer
+  , IPModels(..)
+  , isSpurious
+  , ipModels
   )
 where
 
@@ -146,7 +149,28 @@ defaultRefinementContext sym loaded_binary = do
           }
     Nothing -> fail $ "unsupported architecture"
 
+-- | A data type to represent the models we get back from the solver
+--
+-- This lets us distinguish between no models and too many models (exceeding the
+-- number requested, probably indicating that they are spurious)
+data IPModels a = NoModels
+                | Models [a]
+                | SpuriousModels
 
+-- | Returns all models (unless there is a spurious result)
+ipModels :: IPModels a -> Maybe [a]
+ipModels m =
+  case m of
+    NoModels -> Just []
+    Models ms -> Just ms
+    SpuriousModels -> Nothing
+
+isSpurious :: IPModels a -> Bool
+isSpurious m =
+  case m of
+    SpuriousModels -> True
+    NoModels -> False
+    Models {} -> False
 
 smtSolveTransfer
   :: forall arch t solver fp m sym ids
@@ -160,7 +184,7 @@ smtSolveTransfer
   => RefinementContext arch t solver fp
   -> M.DiscoveryState arch
   -> [M.ParsedBlock arch ids]
-  -> m [M.ArchSegmentOff arch]
+  -> m (IPModels (M.ArchSegmentOff arch))
 smtSolveTransfer ctx discovery_state blocks = do
 
   -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
@@ -376,15 +400,17 @@ extractIPModels :: ( MS.SymArchConstraints arch
                 -> M.DiscoveryState arch
                 -> WE.Expr t WT.BaseNatType
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
-                -> m [MM.MemSegmentOff (M.ArchAddrWidth arch)]
+                -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
 extractIPModels ctx discovery_state res_ip_base res_ip_off = do
+  -- FIXME: Make this a parameter
+  let modelMax = 10
   let sym = symbolicBackend ctx
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
     ipConstraint <- genIPConstraint ctx res_ip_off
     let loc = W.mkProgramLoc "" W.InternalPos
     let msg = CB.AssumptionReason loc "IP is in executable memory"
     CB.addAssumption sym (CB.LabeledPred ipConstraint msg)
-    genModels sym res_ip_off 10
+    genModels sym res_ip_off modelMax
 
   ip_base_mem_word <- resolveIPModelBase ctx res_ip_base
 
@@ -395,7 +421,10 @@ extractIPModels ctx discovery_state res_ip_base res_ip_off = do
   let resolved = mapMaybe resolveAddr ip_off_ground_vals
   liftIO $ putStrLn "Resolved memory addresses of models"
   liftIO $ print resolved
-  return resolved
+  case length resolved of
+    0 -> return NoModels
+    nModels | nModels == modelMax -> return SpuriousModels
+            | otherwise -> return (Models resolved)
 
 -- |
 --

@@ -366,9 +366,11 @@ solve :: ( MS.SymArchConstraints arch
       -> Equation arch ids
       -> m (Maybe (Solution arch))
 solve context (Equation inpDS paths) = do
-  blockAddrs <- concat <$> forM paths
+  possibleModels <- fmap RSE.ipModels <$> forM paths
     (\path -> liftIO $ RSE.smtSolveTransfer context inpDS path)
-  return $ if null blockAddrs then Nothing else Just (Solution (sort blockAddrs))
+  case any isNothing possibleModels of
+    True -> return Nothing
+    False -> return (Just (Solution (sort (concat (catMaybes possibleModels)))))
 
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
 -- isBetterSolution :: [ArchSegmentOff arch] -> [ArchSegmentOff arch] -> Bool
