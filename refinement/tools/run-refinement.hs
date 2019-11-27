@@ -2,10 +2,12 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wno-missing-signatures #-}
+module Main ( main ) where
 
 import           Control.Lens
 import           Control.Monad
@@ -17,7 +19,7 @@ import           Data.Foldable
 import qualified Data.Macaw.Architecture.Info as AI
 import           Data.Macaw.BinaryLoader as MBL
 import           Data.Macaw.BinaryLoader.X86 ()
-import           Data.Macaw.CFG ( ArchAddrWidth )
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory.ElfLoader as ML
 import           Data.Macaw.PPC
@@ -27,13 +29,13 @@ import           Data.Macaw.Symbolic ( SymArchConstraints )
 import qualified Data.Macaw.X86 as MX86
 import           Data.Macaw.X86.Symbolic ()
 import qualified Data.Map as M
-import           Data.Maybe
+import           Data.Maybe ( isNothing, catMaybes )
 import           Data.Monoid
 import           Data.Parameterized.Some
 import           Data.Semigroup
 import           Data.Semigroup ()
 import qualified Data.Text.IO as TIO
-import           Data.Text.Prettyprint.Doc
+import           Data.Text.Prettyprint.Doc as PP
 import qualified Lang.Crucible.Backend.Online as CBO
 import           GHC.TypeLits
 import qualified Options.Applicative as O
@@ -111,10 +113,10 @@ doRefinement opts = do
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
                             , MBL.BinaryLoader arch binFmt
                             , SymArchConstraints arch
-                            , 16 <= ArchAddrWidth arch
+                            , 16 <= MC.ArchAddrWidth arch
                             , MonadIO m) =>
                             Options
-                         -> (MD.DiscoveryState arch -> m a)
+                         -> (MD.DiscoveryState arch -> Maybe (MD.DiscoveryState arch) -> m a)
                          -> AI.ArchitectureInfo arch
                          -> MBL.LoadedBinary arch binFmt
                          -> m a
@@ -125,18 +127,27 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
                 putStrLn $ show $ fmap show entries
                 -- putStrLn $ show (fmap (show . MM.segoffSegment) entries)
                 -- putStrLn $ show (fmap (show . MM.segoffOffset) entries)
-  di <- liftIO $ if unrefined opts
-                 then return $ MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
-                 else AI.withArchConstraints arch_info $ do
-    CBO.withYicesOnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
-      ctx <- MR.defaultRefinementContext sym bin
-      MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
-  f di
+  let unrefinedDI = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
+  mrefinedDI <- case unrefined opts of
+    True -> return Nothing
+    False -> AI.withArchConstraints arch_info $ liftIO $ do
+      CBO.withYicesOnlineBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator CBO.NoUnsatFeatures $ \sym -> do
+        ctx <- MR.defaultRefinementContext sym bin
+        Just <$> MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
+  f unrefinedDI mrefinedDI
 
-showDiscoveryInfo opts di = do
-  unless (summaryOnly opts) $
-    if verbose opts then showDetails di else showOverview di
-  showSummary di
+showDiscoveryInfo :: (SymArchConstraints arch)
+                  => Options
+                  -> MD.DiscoveryState arch
+                  -> Maybe (MD.DiscoveryState arch)
+                  -> IO ()
+showDiscoveryInfo opts unrefinedDI mrefinedDI = do
+  unless (summaryOnly opts) $ do
+    if verbose opts
+      then showDetails unrefinedDI mrefinedDI
+      else showOverview unrefinedDI mrefinedDI
+
+  showSummary unrefinedDI mrefinedDI
 
 data Summary = Summary { functionCnt :: Int
                        , functionsWithErrors :: Int
@@ -177,13 +188,19 @@ instance Pretty Summary where
       else Nothing
     ]
 
-showSummary di =
-  let summarizeBlock (_blkAddr, pblk) s =
+showSummary :: forall arch . MD.DiscoveryState arch -> Maybe (MD.DiscoveryState arch) -> IO ()
+showSummary unrefinedDI mdirefined =
+  let summarizeBlock :: MD.DiscoveryFunInfo arch ids
+                     -> (a, MD.ParsedBlock arch ids)
+                     -> Summary
+                     -> Summary
+      summarizeBlock dfi (_blkAddr, pblk) s =
         let s' = case MD.pblockTermStmt pblk of
                    MD.ParsedTranslateError _ ->
                      s { blockTranslateErrors = blockTranslateErrors s + 1 }
-                   MD.ClassifyFailure {} ->
-                     s { blockUnknownTargetErrors = blockUnknownTargetErrors s + 1 }
+                   MD.ClassifyFailure {}
+                     | isNothing (lookup (MD.pblockAddr pblk) (MD.discoveredClassifyFailureResolutions dfi)) ->
+                       s { blockUnknownTargetErrors = blockUnknownTargetErrors s + 1 }
                    _ -> s
         in s'
       summarizeFunction (_funAddr, (Some dfi)) s =
@@ -193,17 +210,30 @@ showSummary di =
                                  }
             blks = (dfi ^. MD.parsedBlocks . to M.toList)
             numBlks = length blks
-            blksSummary = foldr summarizeBlock funcSummary blks
+            blksSummary = foldr (summarizeBlock dfi) funcSummary blks
             funcErrs = foldr (\a v -> a blksSummary + v) 0 [ blockTranslateErrors, blockUnknownTargetErrors ]
         in (mappend s blksSummary)
            { functionsWithErrors = functionsWithErrors s + funcErrs
            }
-      summarize = vcat [ pretty ":: ==== SUMMARY ===="
-                       , pretty $ foldr summarizeFunction mempty (di ^. MD.funInfo .to M.toList)
-                       ]
-  in putStrLn $ show $ summarize
+      summarize di = vcat [ pretty ":: ==== SUMMARY ===="
+                          , pretty $ foldr summarizeFunction mempty (di ^. MD.funInfo .to M.toList)
+                          ]
+  in case mdirefined of
+    Nothing -> putStrLn (show (summarize unrefinedDI))
+    Just refinedDI -> do
+      let lhs = PP.vcat [ PP.pretty "Unrefined"
+                        , summarize unrefinedDI
+                        ]
+      let rhs = PP.vcat [ PP.pretty "Refined"
+                        , summarize refinedDI
+                        ]
+      putStrLn (show (PP.hcat [ lhs, rhs ]))
 
-showOverview di =
+showOverview :: (MC.MemWidth (MC.ArchAddrWidth arch))
+             => MD.DiscoveryState arch
+             -> Maybe (MD.DiscoveryState arch)
+             -> IO ()
+showOverview unrefinedDI mrefinedDI =
   let getIssue (blkAddr, pblk) =
         let issue = case MD.pblockTermStmt pblk of
               MD.ParsedTranslateError r -> pretty "Translation failure:" <+> pretty (show r)
@@ -215,9 +245,25 @@ showOverview di =
         in vcat [ pretty "Function @" <+> pretty (show funAddr)
                 , indent 2 $ vcat blkSummary
                 ]
-  in putStrLn $ show $ vcat $ map funcSummary (di ^. MD.funInfo .to M.toList)
+      summaries di = map funcSummary (di ^. MD.funInfo . to M.toList)
+  in case mrefinedDI of
+    Nothing -> putStrLn (show (PP.vcat (summaries unrefinedDI)))
+    Just refinedDI -> do
+      let lhs = PP.vcat ( PP.pretty "Unrefined"
+                        : PP.pretty "========="
+                        : summaries unrefinedDI
+                        )
+      let rhs = PP.vcat ( PP.pretty "Refined"
+                        : PP.pretty "======="
+                        : summaries refinedDI
+                        )
+      putStrLn (show (PP.hcat [ lhs, rhs ]))
 
-showDetails di =
+showDetails :: (SymArchConstraints arch)
+            => MD.DiscoveryState arch
+            -> Maybe (MD.DiscoveryState arch)
+            -> IO ()
+showDetails di _ =
   forM_ (M.toList (di ^. MD.funInfo)) $ \(funAddr, Some dfi) -> do
     putStrLn $ "===== BEGIN FUNCTION " ++ show funAddr ++ " ====="
     forM_ (M.toList (dfi ^. MD.parsedBlocks)) $ \(blockAddr, pb) -> do
