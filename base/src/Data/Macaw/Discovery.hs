@@ -37,6 +37,7 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.exploreMemPointers
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
        , Data.Macaw.Discovery.addDiscoveredFunctionBlockTargets
+       , ExternalJumpTarget(..)
          -- * Top level utilities
        , Data.Macaw.Discovery.completeDiscoveryState
        , DiscoveryOptions(..)
@@ -47,6 +48,7 @@ module Data.Macaw.Discovery
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
        , State.discoveredFunName
+       , State.discoveredClassifyFailureResolutions
        , State.parsedBlocks
          -- * Parsed block
        , State.ParsedBlock
@@ -1500,7 +1502,7 @@ mkFunState :: NonceGenerator (ST s) ids
               -- This can be used to figure out why we decided a
               -- given address identified a code location.
            -> ArchSegmentOff arch
-           -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+           -> [(ArchSegmentOff arch, [ExternalJumpTarget arch])]
            -> FunState arch s ids
 mkFunState gen s rsn addr extraIntraTargets = do
   let faddr = FoundAddr { foundReason = FunctionEntryPoint
@@ -1512,11 +1514,20 @@ mkFunState gen s rsn addr extraIntraTargets = do
                , curFunAddr  = addr
                , _curFunCtx  = s
                , _curFunBlocks = Map.empty
-               , _foundAddrs = Map.singleton addr faddr
+               , _foundAddrs = foldr addExtraFoundAddr (Map.singleton addr faddr) (concatMap snd extraIntraTargets)
                , _reverseEdges = Map.empty
-               , _frontier   = Set.fromList (addr : concatMap snd extraIntraTargets)
-               , classifyFailureResolutions = extraIntraTargets
+               , _frontier   = Set.fromList (addr : concatMap (map externalBlockAddress . snd) extraIntraTargets)
+               , classifyFailureResolutions = [ (blockAddr, map externalBlockAddress ejts)
+                                              | (blockAddr, ejts) <- extraIntraTargets
+                                              ]
                }
+  where
+    addExtraFoundAddr extraJumpTarget m =
+      let faddr = FoundAddr { foundReason = externalExploreReason extraJumpTarget
+                            , foundAbstractState = externalBlockAbsState extraJumpTarget
+                            , foundJumpBounds = externalBlockJumpBounds extraJumpTarget
+                            }
+      in Map.insert (externalBlockAddress extraJumpTarget) faddr m
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
 mkFunInfo fs =
@@ -1582,7 +1593,7 @@ analyzeDiscoveredFunctions info =
 addDiscoveredFunctionBlockTargets :: DiscoveryState arch
                                   -> DiscoveryFunInfo arch ids
                                   -- ^ The function for which we have learned additional information
-                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                                  -> [(ArchSegmentOff arch, [ExternalJumpTarget arch])]
                                   -> DiscoveryState arch
 addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
   let rsn = discoveredFunReason origFunInfo
@@ -1590,6 +1601,17 @@ addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
   in fst $ runST (runFunctionAnalysis (\_ -> pure ())
                                       funAddr rsn initState
                                       resolvedTargets)
+
+data ExternalJumpTarget arch =
+  ExternalJumpTarget { externalExploreReason :: BlockExploreReason (ArchAddrWidth arch)
+                     -- ^ The reason this jump target was identified
+                     , externalBlockAddress :: ArchSegmentOff arch
+                     -- ^ The address of this jump target
+                     , externalBlockAbsState :: AbsBlockState (ArchReg arch)
+                     -- ^ The initial abstract state for this jump target
+                     , externalBlockJumpBounds :: Jmp.InitJumpBounds arch
+                     -- ^ The initial relational jump bounds for this jump target
+                     }
 
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.
@@ -1602,8 +1624,10 @@ runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- given address identified a code location.
                     -> DiscoveryState arch
                     -- ^ The current binary information.
-                    -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                    -> [(ArchSegmentOff arch, [ExternalJumpTarget arch])]
                     -- ^ Additional identified intraprocedural jump targets
+                    --
+                    -- The pairs are: (address of the block jumped from, jump targets)
                     -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
 runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
   Some gen <- newSTNonceGenerator

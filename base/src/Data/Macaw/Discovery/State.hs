@@ -103,6 +103,11 @@ data BlockExploreReason w
    | SplitAt !(MemSegmentOff w) !(BlockExploreReason w)
      -- The user requested that we analyze this address as a function.
      -- UserRequest
+
+     -- | The user has provided external information indicating that the
+     -- instruction at the given address (the 'MemSegmentOff') transfers control
+     -- flow to this block.
+   | ExternalResolution !(MemSegmentOff w)
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
