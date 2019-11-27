@@ -227,7 +227,7 @@ showSummary unrefinedDI mdirefined =
       let rhs = PP.vcat [ PP.pretty "Refined"
                         , summarize refinedDI
                         ]
-      putStrLn (show (PP.hcat [ lhs, rhs ]))
+      putStrLn (show (PP.vsep [ lhs, rhs ]))
 
 showOverview :: (MC.MemWidth (MC.ArchAddrWidth arch))
              => MD.DiscoveryState arch
@@ -257,7 +257,7 @@ showOverview unrefinedDI mrefinedDI =
                         : PP.pretty "======="
                         : summaries refinedDI
                         )
-      putStrLn (show (PP.hcat [ lhs, rhs ]))
+      putStrLn (show (PP.vsep [ lhs, rhs ]))
 
 showDetails :: (SymArchConstraints arch)
             => MD.DiscoveryState arch
