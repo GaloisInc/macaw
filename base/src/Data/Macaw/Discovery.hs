@@ -823,6 +823,9 @@ data ParseContext arch ids =
                  -- ^ Address of function containing this block.
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
+               , pctxExtResolution :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                 -- ^ Externally-provided resolutions for classification
+                 -- failures, which are used in parseFetchAndExecute
                }
 
 -- | Get the memory representation associated with pointers in the
@@ -1312,9 +1315,24 @@ tailCallClassifier = classifierName "Tail call" $ do
                           , newFunctionAddrs = identifyCallTargets mem absState finalRegs
                           }
 
+useExternalTargets :: ( OrdF (ArchReg arch)
+                      , RegisterInfo (ArchReg arch)
+                      )
+                   => BlockClassifierContext arch ids
+                   -> Maybe [IntraJumpTarget arch]
+useExternalTargets (ctx, initRegs, _stmts, absState, jmpBounds, _writtenAddrs, finalRegs) = do
+  ipAddr <- valueAsSegmentOff (pctxMemory ctx) ipVal
+  targets <- lookup ipAddr (pctxExtResolution ctx)
+  let blockState = finalAbsBlockState absState finalRegs
+  let nextInitJmpBounds = Jmp.nextBlockBounds jmpBounds finalRegs
+  return [ (tgt, blockState, nextInitJmpBounds) | tgt <- targets ]
+  where
+    ipVal = initRegs ^. boundValue ip_reg
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
-                     .  ParseContext arch ids
+                     .  (RegisterInfo (ArchReg arch))
+                     => ParseContext arch ids
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Initial register values
                      -> [Stmt arch ids]
@@ -1341,7 +1359,7 @@ parseFetchAndExecute ctx initRegs stmts finalRegs absState jmpBounds writtenAddr
       ParsedContents { parsedNonterm = stmts
                      , parsedTerm  = ClassifyFailure finalRegs rsns
                      , writtenCodeAddrs = writtenAddrs
-                     , intraJumpTargets = []
+                     , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []
                      }
 
@@ -1424,6 +1442,7 @@ addBlock src finfo pr = do
   b <- pure b0
 #endif
 
+  extRes <- gets classifyFailureResolutions
   funAddr <- gets curFunAddr
 
   let ctx = ParseContext { pctxMemory         = memory s
@@ -1431,6 +1450,7 @@ addBlock src finfo pr = do
                          , pctxKnownFnEntries = s^.trustedFunctionEntryPoints
                          , pctxFunAddr        = funAddr
                          , pctxAddr           = src
+                         , pctxExtResolution  = extRes
                          }
   let pc = parseBlock ctx initRegs b (foundAbstractState finfo) (foundJumpBounds finfo)
   let pb = ParsedBlock { pblockAddr    = src
@@ -1514,20 +1534,13 @@ mkFunState gen s rsn addr extraIntraTargets = do
                , curFunAddr  = addr
                , _curFunCtx  = s
                , _curFunBlocks = Map.empty
-               , _foundAddrs = foldr addExtraFoundAddr (Map.singleton addr faddr) (concatMap snd extraIntraTargets)
+               , _foundAddrs = Map.singleton addr faddr
                , _reverseEdges = Map.empty
-               , _frontier   = Set.fromList (addr : concatMap (map externalBlockAddress . snd) extraIntraTargets)
+               , _frontier   = Set.fromList [ addr ]
                , classifyFailureResolutions = [ (blockAddr, map externalBlockAddress ejts)
                                               | (blockAddr, ejts) <- extraIntraTargets
                                               ]
                }
-  where
-    addExtraFoundAddr extraJumpTarget m =
-      let faddr = FoundAddr { foundReason = externalExploreReason extraJumpTarget
-                            , foundAbstractState = externalBlockAbsState extraJumpTarget
-                            , foundJumpBounds = externalBlockJumpBounds extraJumpTarget
-                            }
-      in Map.insert (externalBlockAddress extraJumpTarget) faddr m
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
 mkFunInfo fs =
