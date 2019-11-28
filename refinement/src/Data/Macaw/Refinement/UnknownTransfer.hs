@@ -113,10 +113,8 @@ import           Control.Lens ( (^.) )
 import           Control.Monad ( forM )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import           Data.List ( sort )
-import qualified Data.Macaw.AbsDomain.AbsState as MAA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
 import qualified Data.Macaw.Refinement.FuncBlockUtils as RFU
 import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
@@ -124,7 +122,6 @@ import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
 import           Data.Maybe ( catMaybes, isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..) )
-import qualified Data.Parameterized.Map as MapF
 import           GHC.TypeLits
 
 -- | This is the main entrypoint, which is given the current Discovery
@@ -320,21 +317,12 @@ instance Monoid (Solutions arch) where
 
 solutionAddrs :: (MC.RegisterInfo (MC.ArchReg arch))
               => (MC.ArchSegmentOff arch, Solution arch)
-              -> (MC.ArchSegmentOff arch, [MD.ExternalJumpTarget arch])
-solutionAddrs (srcBlockAddr, Solution l) =
-  (srcBlockAddr, map toExternalJumpTarget l)
-  where
-    rsn = MD.ExternalResolution srcBlockAddr
-    toExternalJumpTarget addr =
-      MD.ExternalJumpTarget { MD.externalExploreReason = rsn
-                            , MD.externalBlockAddress = addr
-                            , MD.externalBlockAbsState = MAA.fnStartAbsBlockState addr MapF.empty []
-                            , MD.externalBlockJumpBounds = MJ.functionStartBounds
-                            }
+              -> (MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])
+solutionAddrs (srcBlockAddr, Solution l) = (srcBlockAddr, l)
 
 solutionValues :: (MC.RegisterInfo (MC.ArchReg arch))
                => Solutions arch
-               -> [(MC.ArchSegmentOff arch, [MD.ExternalJumpTarget arch])]
+               -> [(MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])]
 solutionValues (Solutions m) = fmap solutionAddrs (Map.toList m)
 
 addSolution :: MD.ParsedBlock arch ids
