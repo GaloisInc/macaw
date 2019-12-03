@@ -816,7 +816,7 @@ defaultAppEvaluator elt interps = case elt of
       CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
-      CT.BaseStringRepr -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
+      CT.BaseStringRepr {} -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
       CT.BaseComplexRepr -> liftQ [| error "Macaw semantics for complex ITE unsupported" |]
       CT.BaseStructRepr {} -> liftQ [| error "Macaw semantics for struct ITE unsupported" |]
       CT.BaseArrayRepr {} -> liftQ [| error "Macaw semantics for array ITE unsupported" |]
