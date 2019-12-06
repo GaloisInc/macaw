@@ -68,7 +68,6 @@ data RefinementContext arch t solver fp = RefinementContext
   { symbolicBackend :: C.OnlineBackend t solver fp
   , archVals :: MS.ArchVals arch
   , handleAllocator :: C.HandleAllocator
-  , nonceGenerator :: NonceGenerator IO t
   , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
   , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
@@ -100,7 +99,6 @@ defaultRefinementContext
   -> IO (RefinementContext arch t solver fp)
 defaultRefinementContext sym loaded_binary = do
   handle_alloc <- C.newHandleAllocator
-  let nonce_gen = globalNonceGenerator
   case MS.archVals (Proxy @arch) of
     Just arch_vals -> do
 
@@ -138,7 +136,6 @@ defaultRefinementContext sym loaded_binary = do
           { symbolicBackend = sym
           , archVals = arch_vals
           , handleAllocator = handle_alloc
-          , nonceGenerator = nonce_gen
           , extensionImpl = ext_impl
           , memVar = mem_var
           , mem = mem0
