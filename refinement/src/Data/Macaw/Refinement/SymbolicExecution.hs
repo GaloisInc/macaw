@@ -12,7 +12,6 @@
 
 module Data.Macaw.Refinement.SymbolicExecution
   ( RefinementContext(..)
-  , Refinement
   , defaultRefinementContext
   , smtSolveTransfer
   , IPModels(..)
@@ -24,6 +23,7 @@ where
 import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import           Data.Bits ( (.|.) )
 import qualified Data.Foldable as F
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
@@ -38,11 +38,10 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as PN
-import           Data.Parameterized.Nonce
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats
 import qualified Lang.Crucible.Backend as CB
-import qualified Lang.Crucible.Backend.Online as C
+import qualified Lang.Crucible.Backend.Simple as CBS
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.LLVM.DataLayout as LLVM
@@ -54,49 +53,46 @@ import qualified System.IO as IO
 import qualified What4.Concrete as W
 import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
-import qualified What4.InterpretedFloatingPoint as WIF
 import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.SatResult as W
 import qualified What4.BaseTypes as WT
+import qualified What4.ProblemFeatures as WPF
+import qualified What4.LabeledPred as WLP
 
 import qualified What4.Expr as WE
 import Text.Printf ( printf )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified System.IO as IO
 
-data RefinementContext arch t solver fp = RefinementContext
-  { symbolicBackend :: C.OnlineBackend t solver fp
+data RefinementContext sym arch = RefinementContext
+  { symbolicBackend :: sym
   , archVals :: MS.ArchVals arch
   , handleAllocator :: C.HandleAllocator
-  , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState (C.OnlineBackend t solver fp)) (C.OnlineBackend t solver fp) (MS.MacawExt arch)
+  , extensionImpl :: C.ExtensionImpl (MS.MacawSimulatorState sym) sym (MS.MacawExt arch)
   , memVar :: C.GlobalVar LLVM.Mem
-  , mem :: LLVM.MemImpl (C.OnlineBackend t solver fp)
+  , mem :: LLVM.MemImpl sym
   -- ^ The base memory of the executable.  Note that this includes static data
   -- copied from the binary.
-  , memPtrTable :: MS.MemPtrTable (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
-  , globalMappingFn :: MS.GlobalMap (C.OnlineBackend t solver fp) (M.ArchAddrWidth arch)
+  , memPtrTable :: MS.MemPtrTable sym (M.ArchAddrWidth arch)
+  , globalMappingFn :: MS.GlobalMap sym (M.ArchAddrWidth arch)
   , executableSegments :: [MM.MemSegment (M.ArchAddrWidth arch)]
   , memWidthRepr :: PN.NatRepr (M.ArchAddrWidth arch)
   }
-
-type Refinement t solver fp = ( W.OnlineSolver t solver
-                              , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
-                              )
 
 -- | Given a solver backend and binary, create a 'RefinementContext' that has
 -- all of the necessary bits to symbolically simulate machine code and query the
 -- SMT solver for models of the IP
 defaultRefinementContext
-  :: forall arch bin t solver fp
+  :: forall arch bin sym
    . ( MS.SymArchConstraints arch
      , 16 <= M.ArchAddrWidth arch
-     , W.OnlineSolver t solver
-     , WIF.IsInterpretedFloatExprBuilder (C.OnlineBackend t solver fp)
-     , t ~ GlobalNonceGenerator
+     , CB.IsSymInterface sym
+     , Ord (W.SymExpr sym WT.BaseNatType)
      )
-  => C.OnlineBackend t solver fp
+  => sym
   -> MBL.LoadedBinary arch bin
-  -> IO (RefinementContext arch t solver fp)
+  -> IO (RefinementContext sym arch)
 defaultRefinementContext sym loaded_binary = do
   handle_alloc <- C.newHandleAllocator
   case MS.archVals (Proxy @arch) of
@@ -170,19 +166,20 @@ isSpurious m =
     Models {} -> False
 
 smtSolveTransfer
-  :: forall arch t solver fp m sym ids
+  :: forall arch t solver fs m sym ids proxy
    . ( MS.SymArchConstraints arch
      , 16 <= M.ArchAddrWidth arch
-     , CB.IsSymInterface (C.OnlineBackend t solver fp)
+     , CB.IsSymInterface sym
      , W.OnlineSolver t solver
      , MonadIO m
-     , sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) fp
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RefinementContext arch t solver fp
+  => proxy solver
+  -> RefinementContext sym arch
   -> M.DiscoveryState arch
   -> [M.ParsedBlock arch ids]
   -> m (IPModels (M.ArchSegmentOff arch))
-smtSolveTransfer ctx discovery_state blocks = do
+smtSolveTransfer _ ctx discovery_state blocks = do
 
   -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
   let entryBlock = head blocks
@@ -203,6 +200,8 @@ smtSolveTransfer ctx discovery_state blocks = do
       initialState <- initializeSimulator ctx cfg entryBlock
 
       let sym = symbolicBackend ctx
+      assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
+
       -- Symbolically execute the relevant code in a fresh assumption
       -- environment so that we can avoid polluting the global solver state
       exec_res <- liftIO $ inFreshAssumptionFrame sym $ do
@@ -213,7 +212,13 @@ smtSolveTransfer ctx discovery_state blocks = do
           let res_regs = res ^. C.partialValue . C.gpValue
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
-              extractIPModels ctx discovery_state res_ip_base res_ip_off
+              let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs -- .|. WPF.useNonlinearArithmetic
+              let hdl = Nothing
+              solverProc :: W.SolverProcess t solver
+                         <- liftIO $ W.startSolverProcess features hdl sym
+              models <- extractIPModels ctx solverProc assumptions discovery_state res_ip_base res_ip_off
+              _ <- liftIO $ W.shutdownSolverProcess solverProc
+              return models
         C.AbortedResult _ aborted_res -> case aborted_res of
           C.AbortedExec reason _ ->
             fail ("simulation abort: " ++ show (CB.ppAbortExecReason reason))
@@ -230,13 +235,14 @@ smtSolveTransfer ctx discovery_state blocks = do
 -- * A fixed IP
 -- * A stack pointer (passed as an argument)
 -- * Any fixed register values learned through abstract interpretation
-initialRegisterState :: forall arch sym m solver fp ids t
+initialRegisterState :: forall arch sym m ids
                       . ( MS.SymArchConstraints arch
                         , CB.IsSymInterface sym
                         , MonadIO m
-                        , sym ~ C.OnlineBackend t solver fp
+                        , Show (W.SymExpr sym WT.BaseNatType)
+                        , Show (W.SymExpr sym (WT.BaseBVType (M.ArchAddrWidth arch)))
                         )
-                     => RefinementContext arch t solver fp
+                     => RefinementContext sym arch
                      -> LLVM.MemImpl sym
                      -- ^ The memory state to start from
                      -> M.ParsedBlock arch ids
@@ -277,13 +283,12 @@ initialRegisterState ctx memory entryBlock spVal = do
 -- NOTE: This function could probably be extended to support non-singleton
 -- finsets by generating mux trees over all of the possible values (with fresh
 -- variables as predicates).
-addKnownRegValue :: forall arch sym m t solver fp tp w
+addKnownRegValue :: forall arch sym m tp w
                   . ( MS.SymArchConstraints arch
                     , CB.IsSymInterface sym
                     , MonadIO m
-                    , sym ~ C.OnlineBackend t solver fp
                     )
-                 => RefinementContext arch t solver fp
+                 => RefinementContext sym arch
                  -> LLVM.MemImpl sym
                  -> C.RegEntry sym (MS.ArchRegStruct arch)
                  -> M.ArchReg arch tp
@@ -338,11 +343,11 @@ freshSymVar sym prefix idx tp =
 
 -- | Create a predicate constraining the IP to be in some executable code segment
 genIPConstraint :: ( MonadIO m
-                   , sym ~ WE.ExprBuilder t (C.OnlineBackendState solver) fp
                    , 1 <= M.ArchAddrWidth arch
                    , MM.MemWidth (M.ArchAddrWidth arch)
+                   , CB.IsSymInterface sym
                    )
-                => RefinementContext arch t solver fp
+                => RefinementContext sym arch
                 -> W.SymBV sym (M.ArchAddrWidth arch)
                 -- ^ The IP value to constrain
                 -> m (W.Pred sym)
@@ -362,52 +367,70 @@ genIPConstraint ctx ipVal = liftIO $ do
 
 -- | Probe the SMT solver for additional models of the given expression up to a maximum @count@
 genModels
-  :: ( CB.IsSymInterface (C.OnlineBackend t solver fp)
-     , W.OnlineSolver t solver
+  :: ( W.OnlineSolver t solver
      , KnownNat w
      , 1 <= w
      , MonadIO m
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => C.OnlineBackend t solver fp
-  -> W.SymBV (C.OnlineBackend t solver fp) w
+  => sym
+  -> W.SolverProcess t solver
+  -> [W.Pred sym]
+  -> W.SymBV sym w
   -> Int
   -> m [W.GroundValue (W.BaseBVType w)]
-genModels sym expr count
+genModels sym solver_proc assumptions expr count
   | count > 0 = liftIO $ do
-    solver_proc <- C.getSolverProcess sym
-    W.checkAndGetModel solver_proc "gen next model" >>= \case
+    -- solver_proc <- C.getSolverProcess sym
+    -- W.checkAndGetModel solver_proc "gen next model" >>= \case
+    W.checkWithAssumptionsAndModel solver_proc "Next IP model" assumptions >>= \case
       W.Sat evalFn -> do
         next_ground_val <- W.groundEval evalFn expr
         next_bv_val <- W.bvLit sym W.knownNat next_ground_val
         not_current_ground_val <- W.bvNe sym expr next_bv_val
-        CB.addAssumption sym $ CB.LabeledPred not_current_ground_val $
-          CB.AssumptionReason W.initializationLoc "assume different model"
+        -- CB.addAssumption sym $ CB.LabeledPred not_current_ground_val $
+        --   CB.AssumptionReason W.initializationLoc "assume different model"
         liftIO $ printf "Generated model: 0x%x\n" next_ground_val
-        more_ground_vals <- genModels sym expr (count - 1)
+        more_ground_vals <- genModels sym solver_proc (not_current_ground_val : assumptions) expr (count - 1)
         return $ next_ground_val : more_ground_vals
       _ -> return []
   | otherwise = return []
 
 extractIPModels :: ( MS.SymArchConstraints arch
                    , W.OnlineSolver t solver
-                   , Refinement t solver fp
                    , MonadIO m
+                   , CB.IsSymInterface sym
+                   , sym ~ CBS.SimpleBackend t fp
                    )
-                => RefinementContext arch t solver fp
+                => RefinementContext sym arch
+                -> W.SolverProcess t solver
+                -> [W.Pred sym]
                 -> M.DiscoveryState arch
                 -> WE.Expr t WT.BaseNatType
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
-extractIPModels ctx discovery_state res_ip_base res_ip_off = do
+extractIPModels ctx solverProc initialAssumptions discovery_state res_ip_base res_ip_off = do
+  liftIO $ putStrLn ("Number of initial assumptions: " ++ show (length initialAssumptions))
   -- FIXME: Make this a parameter
   let modelMax = 10
   let sym = symbolicBackend ctx
+  -- liftIO $ C.resetSolverProcess sym
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
+    -- FIXME: Try to assert that the base of the IP is 0
     ipConstraint <- genIPConstraint ctx res_ip_off
-    let loc = W.mkProgramLoc "" W.InternalPos
-    let msg = CB.AssumptionReason loc "IP is in executable memory"
-    CB.addAssumption sym (CB.LabeledPred ipConstraint msg)
-    genModels sym res_ip_off modelMax
+    natZero <- liftIO $ W.natLit sym 0
+    basePred <- liftIO $ W.natEq sym natZero res_ip_base
+    let assumptions = ipConstraint : basePred : initialAssumptions
+    -- let loc = W.mkProgramLoc "" W.InternalPos
+    -- let msg = CB.AssumptionReason loc "IP is in executable memory"
+    -- CB.addAssumption sym (CB.LabeledPred ipConstraint msg)
+
+    -- let msg2 = CB.AssumptionReason loc "IP is in region 0"
+    -- CB.addAssumption sym (CB.LabeledPred basePred msg2)
+
+    liftIO $ putStrLn "IP Formula"
+    liftIO $ print (W.printSymExpr res_ip_off)
+    genModels sym solverProc assumptions res_ip_off modelMax
 
   ip_base_mem_word <- resolveIPModelBase ctx res_ip_base
 
@@ -428,9 +451,13 @@ extractIPModels ctx discovery_state res_ip_base res_ip_off = do
 -- NOTE: I expect all of the bases to be zero, as we are generating models based
 -- on bitvector IP values (and not structured LLVM Pointer values).  This should
 -- be tested.
-resolveIPModelBase :: (MonadIO m, MM.MemWidth (M.ArchAddrWidth arch))
-                   => RefinementContext arch t solver fp
-                   -> WE.Expr t WT.BaseNatType
+resolveIPModelBase :: ( MonadIO m
+                      , MM.MemWidth (M.ArchAddrWidth arch)
+                      , Ord (W.SymExpr sym WT.BaseNatType)
+                      , CB.IsSymInterface sym
+                      )
+                   => RefinementContext sym arch
+                   -> W.SymExpr sym WT.BaseNatType -- WE.Expr t WT.BaseNatType
                    -> m (MM.MemWord (M.ArchAddrWidth arch))
 resolveIPModelBase ctx res_ip_base =
   case MS.lookupAllocationBase (memPtrTable ctx) res_ip_base of
@@ -442,12 +469,13 @@ resolveIPModelBase ctx res_ip_base =
         fail (printf "Unexpected IP base: %s" (show (W.printSymExpr res_ip_base)))
 
 initializeSimulator :: ( MonadIO m
-                       , sym ~ C.OnlineBackend t solver fp
                        , 16 <= M.ArchAddrWidth arch
                        , MS.SymArchConstraints arch
-                       , Refinement t solver fp
+                       , CB.IsSymInterface sym
+                       , Show (W.SymExpr sym W.BaseNatType)
+                       , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
                        )
-                    => RefinementContext arch t solver fp
+                    => RefinementContext sym arch
                     -> C.CFG (MS.MacawExt arch) blocks (C.EmptyCtx C.::> C.StructType (MS.CtxToCrucibleType (MS.ArchRegContext arch))) tp
                     -> M.ParsedBlock arch ids
                     -> m (C.ExecState
@@ -474,11 +502,9 @@ initializeSimulator ctx cfg entryBlock = do
 initializeMemory :: ( MS.SymArchConstraints arch
                     , 16 <= M.ArchAddrWidth arch
                     , CB.IsSymInterface sym
-                    , W.OnlineSolver t solver
                     , MonadIO m
-                    , sym ~ C.OnlineBackend t solver fp
                     )
-                 => RefinementContext arch t solver fp
+                 => RefinementContext sym arch
                  -> m (LLVM.MemImpl sym, LLVM.LLVMPtr sym (M.ArchAddrWidth arch))
 initializeMemory ctx = do
   let ?ptrWidth = W.knownNat

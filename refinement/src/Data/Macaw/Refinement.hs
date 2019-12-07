@@ -10,7 +10,6 @@ module Data.Macaw.Refinement
   , refineDiscovery
   , RSE.defaultRefinementContext
   , RSE.RefinementContext
-  , RSE.Refinement
   )
 where
 
@@ -28,6 +27,9 @@ import qualified Data.Macaw.Symbolic as MS
 import           Data.Macaw.Refinement.Target
 import           Data.Macaw.Refinement.UnknownTransfer
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
+import qualified Lang.Crucible.Backend as CB
+import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified What4.Protocol.Online as WPO
 
 ----------------------------------------------------------------------
 -- * Discovery Entrypoints
@@ -43,9 +45,12 @@ cfgFromAddrsAndState
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MD.DiscoveryState arch
   -> [ArchSegmentOff arch]
   -- ^ Initial function entry points.
@@ -55,9 +60,9 @@ cfgFromAddrsAndState
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrsAndState context initial_state init_addrs mem_words =
+cfgFromAddrsAndState proxy context initial_state init_addrs mem_words =
   MD.cfgFromAddrsAndState initial_state init_addrs mem_words
-    & refineDiscovery context
+    & refineDiscovery proxy context
 
 -- FIXME: Note that this only runs one step of refinement.  We might want to
 -- configure the effort spent on iteration.  That would probably involve caching
@@ -72,9 +77,12 @@ cfgFromAddrs
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MA.ArchitectureInfo arch
   -- ^ Architecture-specific information needed for doing
   -- control-flow exploration.
@@ -90,8 +98,8 @@ cfgFromAddrs
   --
   -- Each entry contains an address and the value stored in it.
   -> m (DiscoveryState arch)
-cfgFromAddrs context ainfo mem addrSymMap =
-  cfgFromAddrsAndState context (emptyDiscoveryState mem addrSymMap ainfo)
+cfgFromAddrs proxy context ainfo mem addrSymMap =
+  cfgFromAddrsAndState proxy context (emptyDiscoveryState mem addrSymMap ainfo)
 
 
 ----------------------------------------------------------------------
@@ -109,10 +117,13 @@ refineDiscovery
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> DiscoveryState arch
   -> m (DiscoveryState arch)
-refineDiscovery context =
-  symbolicUnkTransferRefinement context . symbolicTargetRefinement
+refineDiscovery proxy context =
+  symbolicUnkTransferRefinement proxy context . symbolicTargetRefinement

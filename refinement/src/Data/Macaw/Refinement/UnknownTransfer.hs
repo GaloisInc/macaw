@@ -123,6 +123,9 @@ import qualified Data.Map as Map
 import           Data.Maybe ( catMaybes, isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..) )
 import           GHC.TypeLits
+import qualified Lang.Crucible.Backend as CB
+import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified What4.Protocol.Online as WPO
 
 -- | This is the main entrypoint, which is given the current Discovery
 -- information and which attempts to resolve UnknownTransfer
@@ -132,13 +135,16 @@ symbolicUnkTransferRefinement
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MD.DiscoveryState arch
   -> m (MD.DiscoveryState arch)
-symbolicUnkTransferRefinement context inpDS =
-  refineFunctions context inpDS mempty $ allFuns inpDS
+symbolicUnkTransferRefinement proxy context inpDS =
+  refineFunctions proxy context inpDS mempty $ allFuns inpDS
 
 
 -- | Returns the list of DiscoveryFunInfo for a DiscoveryState
@@ -169,19 +175,22 @@ refineFunctions
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MD.DiscoveryState arch
   -> Solutions arch -- ^ accumulated solutions so-far
   -> [Some (MD.DiscoveryFunInfo arch)]
   -> m (MD.DiscoveryState arch)
-refineFunctions _   inpDS _ [] = pure inpDS
-refineFunctions context inpDS solns (Some fi:fis) =
-  refineTransfers context inpDS solns fi [] >>= \case
-    Nothing -> refineFunctions context inpDS solns fis  -- case 1 or 2
+refineFunctions _ _   inpDS _ [] = pure inpDS
+refineFunctions proxy context inpDS solns (Some fi:fis) =
+  refineTransfers proxy context inpDS solns fi [] >>= \case
+    Nothing -> refineFunctions proxy context inpDS solns fis  -- case 1 or 2
     Just (updDS, solns') ->
-      refineFunctions context updDS solns' $ allFuns updDS -- case 3
+      refineFunctions proxy context updDS solns' $ allFuns updDS -- case 3
 
 
 -- | This attempts to refine the passed in function.  There are three
@@ -206,23 +215,26 @@ refineTransfers
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MD.DiscoveryState arch
   -> Solutions arch
   -> MD.DiscoveryFunInfo arch ids
   -> [RFU.BlockIdentifier arch ids]
   -> m (Maybe (MD.DiscoveryState arch, Solutions arch))
-refineTransfers context inpDS solns fi failedRefines = do
+refineTransfers proxy context inpDS solns fi failedRefines = do
   let unrefineable = flip elem failedRefines . RFU.blockID
       unkTransfers = filter (not . unrefineable) $ getUnknownTransfers fi
       thisUnkTransfer = head unkTransfers
       thisId = RFU.blockID thisUnkTransfer
   if null unkTransfers
   then return Nothing
-  else refineBlockTransfer context inpDS solns fi thisUnkTransfer >>= \case
-    Nothing    -> refineTransfers context inpDS solns fi (thisId : failedRefines)
+  else refineBlockTransfer proxy context inpDS solns fi thisUnkTransfer >>= \case
+    Nothing    -> refineTransfers proxy context inpDS solns fi (thisId : failedRefines)
     r@(Just _) -> return r
 
 
@@ -248,18 +260,21 @@ refineBlockTransfer
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
-     , RSE.Refinement t solver fp
+     , WPO.OnlineSolver t solver
+     , CB.IsSymInterface sym
+     , sym ~ CBS.SimpleBackend t fs
      )
-  => RSE.RefinementContext arch t solver fp
+  => proxy solver
+  -> RSE.RefinementContext sym arch
   -> MD.DiscoveryState arch
   -> Solutions arch
   -> MD.DiscoveryFunInfo arch ids
   -> MD.ParsedBlock arch ids
   -> m (Maybe (MD.DiscoveryState arch, Solutions arch))
-refineBlockTransfer context inpDS solns fi blk =
+refineBlockTransfer proxy context inpDS solns fi blk =
   case RP.pathTo (RFU.blockID blk) $ RP.buildFuncPath fi of
     Nothing -> error "unable to find function path for block" -- internal error
-    Just p -> do soln <- refinePath context inpDS fi p (RP.pathDepth p) 1
+    Just p -> do soln <- refinePath proxy context inpDS fi p (RP.pathDepth p) 1
                  case soln of
                    Nothing -> return Nothing
                    Just sl -> do
@@ -287,23 +302,26 @@ updateDiscovery s0 solutions finfo = do
 refinePath :: ( MS.SymArchConstraints arch
               , 16 <= MC.ArchAddrWidth arch
               , MonadIO m
-              , RSE.Refinement t solver fp
+              , WPO.OnlineSolver t solver
+              , CB.IsSymInterface sym
+              , sym ~ CBS.SimpleBackend t fs
               )
-           => RSE.RefinementContext arch t solver fp
+           => proxy solver
+           -> RSE.RefinementContext sym arch
            -> MD.DiscoveryState arch
            -> MD.DiscoveryFunInfo arch ids
            -> RP.FuncBlockPath arch ids
            -> Int
            -> Int
            -> m (Maybe (Solution arch))
-refinePath context inpDS fi path maxlevel numlevels =
+refinePath proxy context inpDS fi path maxlevel numlevels =
   let thispath = RP.takePath numlevels path
       smtEquation = equationFor inpDS fi thispath
-  in solve context smtEquation >>= \case
+  in solve proxy context smtEquation >>= \case
        Nothing -> return Nothing -- divergent, stop here
        soln@(Just{}) -> if numlevels >= maxlevel
                           then return soln
-                          else refinePath context inpDS fi path maxlevel (numlevels + 1)
+                          else refinePath proxy context inpDS fi path maxlevel (numlevels + 1)
 
 data Equation arch ids = Equation (MD.DiscoveryState arch) [[MD.ParsedBlock arch ids]]
 newtype Solution arch = Solution [MC.ArchSegmentOff arch]  -- identified transfers
@@ -348,14 +366,17 @@ equationFor inpDS fi p =
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
          , MonadIO m
-         , RSE.Refinement t solver fp
+         , CB.IsSymInterface sym
+         , WPO.OnlineSolver t solver
+         , sym ~ CBS.SimpleBackend t fs
          )
-      => RSE.RefinementContext arch t solver fp
+      => proxy solver
+      -> RSE.RefinementContext sym arch
       -> Equation arch ids
       -> m (Maybe (Solution arch))
-solve context (Equation inpDS paths) = do
+solve proxy context (Equation inpDS paths) = do
   possibleModels <- fmap RSE.ipModels <$> forM paths
-    (\path -> liftIO $ RSE.smtSolveTransfer context inpDS path)
+    (\path -> liftIO $ RSE.smtSolveTransfer proxy context inpDS path)
   case any isNothing possibleModels of
     True -> return Nothing
     False -> return (Just (Solution (sort (concat (catMaybes possibleModels)))))
