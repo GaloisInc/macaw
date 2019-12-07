@@ -16,6 +16,22 @@ R { funcs = [(Addr 1 0
                ,(Addr 1 0x99,12)
                ,(Addr 1 0xa5,12)
                ,(Addr 1 0xb1,7)
-               ,(Addr 1 0xb8,9)])]
+               ,(Addr 1 0xb8,9)])
+            ,(Addr 1 0xd0
+    	     , [(Addr 1 0xd0,35)
+               ,(Addr 1 0xf3,14)
+               ,(Addr 1 0x101,7)
+               ,(Addr 1 0x108,8)
+               ,(Addr 1 0x110,7)
+               ,(Addr 1 0x117,8)
+               ,(Addr 1 0x11f,7)
+               ,(Addr 1 0x126,8)
+               ,(Addr 1 0x12e,7)
+               ,(Addr 1 0x135,8)
+               ,(Addr 1 0x13d,12)
+               ,(Addr 1 0x149,12)
+               ,(Addr 1 0x155,7)
+               ,(Addr 1 0x15c,9)])
+            ]
   , ignoreBlocks = []
   }

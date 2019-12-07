@@ -1189,13 +1189,6 @@ bvSlt x y
   | x == y = false
   | otherwise = app $ BVSignedLt x y
 
--- | Signed less than
-bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
-bvSle x y
-  | Just xv <- asSignedBVLit x, Just yv <- asSignedBVLit y = boolValue (xv <= yv)
-  | x == y = true
-  | otherwise = app $ BVSignedLe x y
-
 -- | Returns bit at index given by second argument, 0 being lsb
 -- If the bit index is greater than or equal to n, then the result is zero.
 bvBit :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
