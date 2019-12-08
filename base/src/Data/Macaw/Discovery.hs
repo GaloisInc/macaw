@@ -1337,14 +1337,18 @@ useExternalTargets :: ( OrdF (ArchReg arch)
                       )
                    => BlockClassifierContext arch ids
                    -> Maybe [IntraJumpTarget arch]
-useExternalTargets (ctx, initRegs, _stmts, absState, jmpBounds, _writtenAddrs, finalRegs) = do
+useExternalTargets bcc = do
+  let ctx = classifierParseContext bcc
+  let finalRegs = classifierFinalRegState bcc
+  let jmpBounds = classifierJumpBounds bcc
+  let absState = classifierAbsState bcc
+  let initRegs = classifierInitRegState bcc
+  let ipVal = initRegs ^. boundValue ip_reg
   ipAddr <- valueAsSegmentOff (pctxMemory ctx) ipVal
   targets <- lookup ipAddr (pctxExtResolution ctx)
   let blockState = finalAbsBlockState absState finalRegs
   let nextInitJmpBounds = Jmp.nextBlockBounds jmpBounds finalRegs
   return [ (tgt, blockState, nextInitJmpBounds) | tgt <- targets ]
-  where
-    ipVal = initRegs ^. boundValue ip_reg
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
