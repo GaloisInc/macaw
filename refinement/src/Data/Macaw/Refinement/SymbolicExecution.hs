@@ -50,7 +50,6 @@ import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
 import qualified System.IO as IO
-import qualified What4.Concrete as W
 import qualified What4.Expr.GroundEval as W
 import qualified What4.Interface as W
 import qualified What4.ProgramLoc as W
@@ -63,7 +62,6 @@ import qualified What4.LabeledPred as WLP
 import qualified What4.Expr as WE
 import Text.Printf ( printf )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import qualified System.IO as IO
 
 data RefinementContext sym arch = RefinementContext
   { symbolicBackend :: sym
@@ -200,12 +198,19 @@ smtSolveTransfer _ ctx discovery_state blocks = do
       initialState <- initializeSimulator ctx cfg entryBlock
 
       let sym = symbolicBackend ctx
-      assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
 
       -- Symbolically execute the relevant code in a fresh assumption
       -- environment so that we can avoid polluting the global solver state
-      exec_res <- liftIO $ inFreshAssumptionFrame sym $ do
+      -- exec_res <- liftIO $ inFreshAssumptionFrame sym $ do
+      --
+      -- NOTE: The current code isn't using a fresh frame.  It turns out that we
+      -- really do want the path conditions established during symbolic
+      -- execution in scope, or we are in trouble (e.g., we won't have bounds on
+      -- jump tables)
+      exec_res <- liftIO $
         C.executeCrucible executionFeatures initialState
+
+      assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
 
       case exec_res of
         C.FinishedResult _ res -> do
@@ -396,7 +401,8 @@ genModels sym solver_proc assumptions expr count
       _ -> return []
   | otherwise = return []
 
-extractIPModels :: ( MS.SymArchConstraints arch
+extractIPModels :: forall arch solver m sym t fp
+                 . ( MS.SymArchConstraints arch
                    , W.OnlineSolver t solver
                    , MonadIO m
                    , CB.IsSymInterface sym
@@ -421,18 +427,14 @@ extractIPModels ctx solverProc initialAssumptions discovery_state res_ip_base re
     natZero <- liftIO $ W.natLit sym 0
     basePred <- liftIO $ W.natEq sym natZero res_ip_base
     let assumptions = ipConstraint : basePred : initialAssumptions
-    -- let loc = W.mkProgramLoc "" W.InternalPos
-    -- let msg = CB.AssumptionReason loc "IP is in executable memory"
-    -- CB.addAssumption sym (CB.LabeledPred ipConstraint msg)
-
-    -- let msg2 = CB.AssumptionReason loc "IP is in region 0"
-    -- CB.addAssumption sym (CB.LabeledPred basePred msg2)
 
     liftIO $ putStrLn "IP Formula"
     liftIO $ print (W.printSymExpr res_ip_off)
     genModels sym solverProc assumptions res_ip_off modelMax
 
-  ip_base_mem_word <- resolveIPModelBase ctx res_ip_base
+  let ip_base_mem_word :: MM.MemWord (M.ArchAddrWidth arch)
+      ip_base_mem_word = M.memWord 0
+  -- resolveIPModelBase ctx res_ip_base
 
   -- Turn our SMT-generated models into macaw addresses
   let resolveAddr off = M.resolveAbsoluteAddr (M.memory discovery_state) $
@@ -451,22 +453,22 @@ extractIPModels ctx solverProc initialAssumptions discovery_state res_ip_base re
 -- NOTE: I expect all of the bases to be zero, as we are generating models based
 -- on bitvector IP values (and not structured LLVM Pointer values).  This should
 -- be tested.
-resolveIPModelBase :: ( MonadIO m
-                      , MM.MemWidth (M.ArchAddrWidth arch)
-                      , Ord (W.SymExpr sym WT.BaseNatType)
-                      , CB.IsSymInterface sym
-                      )
-                   => RefinementContext sym arch
-                   -> W.SymExpr sym WT.BaseNatType -- WE.Expr t WT.BaseNatType
-                   -> m (MM.MemWord (M.ArchAddrWidth arch))
-resolveIPModelBase ctx res_ip_base =
-  case MS.lookupAllocationBase (memPtrTable ctx) res_ip_base of
-    Just alloc -> return (MS.allocationBase alloc)
-    Nothing
-      | Just (W.ConcreteNat 0) <- W.asConcrete res_ip_base ->
-        return (M.memWord 0)
-      | otherwise ->
-        fail (printf "Unexpected IP base: %s" (show (W.printSymExpr res_ip_base)))
+-- resolveIPModelBase :: ( MonadIO m
+--                       , MM.MemWidth (M.ArchAddrWidth arch)
+--                       , Ord (W.SymExpr sym WT.BaseNatType)
+--                       , CB.IsSymInterface sym
+--                       )
+--                    => RefinementContext sym arch
+--                    -> W.SymExpr sym WT.BaseNatType -- WE.Expr t WT.BaseNatType
+--                    -> m (MM.MemWord (M.ArchAddrWidth arch))
+-- resolveIPModelBase ctx res_ip_base =
+--   case MS.lookupAllocationBase (memPtrTable ctx) res_ip_base of
+--     Just alloc -> return (MS.allocationBase alloc)
+--     Nothing
+--       | Just (W.ConcreteNat 0) <- W.asConcrete res_ip_base ->
+--         return (M.memWord 0)
+--       | otherwise ->
+--         fail (printf "Unexpected IP base: %s" (show (W.printSymExpr res_ip_base)))
 
 initializeSimulator :: ( MonadIO m
                        , 16 <= M.ArchAddrWidth arch
