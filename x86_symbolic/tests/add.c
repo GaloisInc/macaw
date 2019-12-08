@@ -9,6 +9,10 @@ It can be compiled with:
 
 #include <stdint.h>
 
-uint64_t add(uint64_t x, uint64_t y) {
+uint64_t __attribute__((noinline)) add(uint64_t x, uint64_t y) {
     return x + y;
+}
+
+int main() {
+  return add(1, 2);
 }

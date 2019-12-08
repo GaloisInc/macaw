@@ -13,6 +13,7 @@ import qualified Data.ElfEdit as Elf
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
+import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as Text
 import           GHC.IO (ioToST)
 import           System.IO
@@ -23,6 +24,7 @@ import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Memory as M
 import qualified Data.Macaw.Memory.ElfLoader as Elf
 import qualified Data.Macaw.Symbolic as MS
+import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as MX
 import qualified Data.Macaw.X86.Symbolic as MX
@@ -68,7 +70,7 @@ main = do
   let posFn :: M.MemSegmentOff 64 -> C.Position
       posFn = C.OtherPos . Text.pack . show
 
-  elfContents <- BS.readFile "tests/add_ubuntu64.o"
+  elfContents <- BS.readFile "tests/add_ubuntu64"
   elf <-
     case Elf.parseElf elfContents of
       Elf.Elf64Res errs e -> do
@@ -112,16 +114,17 @@ main = do
 
   symFuns <- MX.newSymFuns sym
 
-  --putStrLn "Run code block"
-  initMem <- C.emptyMem LittleEndian
-  let globalMap :: MS.GlobalMap sym 64
-      globalMap = \_ _ _ _ -> pure Nothing
+  (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
+  let globalMap = MSM.mapRegionPointers memPtrTbl
+
   let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
       lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do
         fail "Could not find function handle."
+  let validityCheck :: MS.MkGlobalPointerValidityAssertion sym 64
+      validityCheck _ _ _ _ = return Nothing
   execResult <-
      MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
-        halloc (initMem, globalMap) lookupFn g regs
+        halloc (initMem, globalMap) lookupFn validityCheck g regs
   case execResult of
     (_,C.FinishedResult _ (C.TotalRes _pair))-> do
       pure ()
