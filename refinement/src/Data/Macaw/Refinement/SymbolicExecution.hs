@@ -23,7 +23,6 @@ where
 import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
-import           Data.Bits ( (.|.) )
 import qualified Data.Foldable as F
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
@@ -76,6 +75,7 @@ data RefinementContext sym arch = RefinementContext
   , globalMappingFn :: MS.GlobalMap sym (M.ArchAddrWidth arch)
   , executableSegments :: [MM.MemSegment (M.ArchAddrWidth arch)]
   , memWidthRepr :: PN.NatRepr (M.ArchAddrWidth arch)
+  , problemFeatures :: WPF.ProblemFeatures
   }
 
 -- | Given a solver backend and binary, create a 'RefinementContext' that has
@@ -88,10 +88,11 @@ defaultRefinementContext
      , CB.IsSymInterface sym
      , Ord (W.SymExpr sym WT.BaseNatType)
      )
-  => sym
+  => WPF.ProblemFeatures
+  -> sym
   -> MBL.LoadedBinary arch bin
   -> IO (RefinementContext sym arch)
-defaultRefinementContext sym loaded_binary = do
+defaultRefinementContext features sym loaded_binary = do
   handle_alloc <- C.newHandleAllocator
   case MS.archVals (Proxy @arch) of
     Just arch_vals -> do
@@ -137,6 +138,7 @@ defaultRefinementContext sym loaded_binary = do
           , globalMappingFn = global_mapping_fn
           , executableSegments = execSegs
           , memWidthRepr = MM.memWidth (MBL.memoryImage loaded_binary)
+          , problemFeatures = features
           }
     Nothing -> fail $ "unsupported architecture"
 
@@ -217,7 +219,7 @@ smtSolveTransfer _ ctx discovery_state blocks = do
           let res_regs = res ^. C.partialValue . C.gpValue
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
-              let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs -- .|. WPF.useNonlinearArithmetic
+              let features = problemFeatures ctx
               let hdl = Nothing
               solverProc :: W.SolverProcess t solver
                          <- liftIO $ W.startSolverProcess features hdl sym
