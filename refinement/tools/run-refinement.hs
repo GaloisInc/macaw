@@ -66,6 +66,7 @@ data Options = Options { inputFile :: FilePath
                        , summaryOnly :: Bool
                        , verbose :: Bool
                        , solver :: Solver
+                       , solverInteractionFile :: Maybe FilePath
                        }
 
 optionsParser :: O.Parser Options
@@ -94,6 +95,10 @@ optionsParser = Options
                                    <> O.long "solver"
                                    <> O.value Yices
                                     )
+                <*> O.optional ( O.strOption ( O.metavar "FILE"
+                                            <> O.long "solver-interaction-file"
+                                            <> O.help "File to save solver interactions to"
+                                             ))
 
 main :: IO ()
 main = O.execParser optParser >>= doRefinement
@@ -177,7 +182,7 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
     True -> return Nothing
     False -> AI.withArchConstraints arch_info $ liftIO $ do
       withNewBackend (solver opts) $ \proxy features sym -> do
-        ctx <- MR.defaultRefinementContext features sym bin
+        ctx <- MR.defaultRefinementContext features sym bin (solverInteractionFile opts)
         Just <$> MR.cfgFromAddrs proxy ctx arch_info (memoryImage bin) M.empty entries []
   f unrefinedDI mrefinedDI
 

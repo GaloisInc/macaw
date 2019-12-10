@@ -38,6 +38,7 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Proxy ( Proxy(..) )
+import qualified Data.Traversable as T
 import           GHC.TypeNats
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Simple as CBS
@@ -76,6 +77,7 @@ data RefinementContext sym arch = RefinementContext
   , executableSegments :: [MM.MemSegment (M.ArchAddrWidth arch)]
   , memWidthRepr :: PN.NatRepr (M.ArchAddrWidth arch)
   , problemFeatures :: WPF.ProblemFeatures
+  , solverInteractionFile :: Maybe FilePath
   }
 
 -- | Given a solver backend and binary, create a 'RefinementContext' that has
@@ -91,8 +93,9 @@ defaultRefinementContext
   => WPF.ProblemFeatures
   -> sym
   -> MBL.LoadedBinary arch bin
+  -> Maybe FilePath
   -> IO (RefinementContext sym arch)
-defaultRefinementContext features sym loaded_binary = do
+defaultRefinementContext features sym loaded_binary solverInteraction = do
   handle_alloc <- C.newHandleAllocator
   case MS.archVals (Proxy @arch) of
     Just arch_vals -> do
@@ -131,6 +134,7 @@ defaultRefinementContext features sym loaded_binary = do
           , executableSegments = execSegs
           , memWidthRepr = MM.memWidth (MBL.memoryImage loaded_binary)
           , problemFeatures = features
+          , solverInteractionFile = solverInteraction
           }
     Nothing -> fail $ "unsupported architecture"
 
@@ -212,7 +216,7 @@ smtSolveTransfer _ ctx discovery_state blocks = do
           case C.regValue $ (MS.lookupReg (archVals ctx)) res_regs M.ip_reg of
             LLVM.LLVMPointer res_ip_base res_ip_off -> do
               let features = problemFeatures ctx
-              let hdl = Nothing
+              hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile ctx)
               solverProc :: W.SolverProcess t solver
                          <- liftIO $ W.startSolverProcess features hdl sym
               models <- extractIPModels ctx solverProc assumptions discovery_state res_ip_base res_ip_off
