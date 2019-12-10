@@ -106,16 +106,7 @@ defaultRefinementContext features sym loaded_binary = do
         MS.ConcreteMutable
         (MBL.memoryImage loaded_binary)
 
-      let ?ptrWidth = W.knownNat
-      let global_mapping_fn = \sym' mem' base off -> do
-            flat_mem_ptr <- LLVM.mkNullPointer sym' ?ptrWidth
-            MS.mapRegionPointers
-              mem_ptr_table
-              flat_mem_ptr
-              sym'
-              mem'
-              base
-              off
+      let global_mapping_fn = MS.mapRegionPointers mem_ptr_table
 
       let isExecutable = MMP.isExecutable . MM.segmentFlags
       let execSegs = filter isExecutable (MM.memSegments (MBL.memoryImage loaded_binary))
@@ -126,6 +117,7 @@ defaultRefinementContext features sym loaded_binary = do
               mem_var
               global_mapping_fn
               (MS.LookupFunctionHandle $ \_ _ _ -> undefined)
+              (MS.mkGlobalPointerValidityPred mem_ptr_table)
 
         return $ RefinementContext
           { symbolicBackend = sym
@@ -265,10 +257,7 @@ initialRegisterState ctx memory entryBlock spVal = do
   let entryAddr = M.segoffAddr (M.pblockAddr entryBlock)
   ip_base <- liftIO $ W.natLit sym (fromIntegral (M.addrBase entryAddr))
   ip_off <- liftIO $ W.bvLit sym W.knownNat (M.memWordToUnsigned (M.addrOffset entryAddr))
-  mip <- liftIO $ globalMappingFn ctx sym memory ip_base ip_off
-  entryIPVal <- case mip of
-    Nothing -> error ("IP is not mapped: " ++ show (ip_base, ip_off))
-    Just ip -> return ip
+  entryIPVal <- liftIO $ globalMappingFn ctx sym memory ip_base ip_off
 
   liftIO $ printf "Entry initial state"
   liftIO $ print (M.blockAbstractState entryBlock)
@@ -308,13 +297,8 @@ addKnownRegValue ctx memory regsStruct reg val =
           let sym = symbolicBackend ctx
           base <- liftIO $ W.natLit sym 0
           off <- liftIO $ W.bvLit sym W.knownNat singleBV
-          mptr <- liftIO $ globalMappingFn ctx sym memory base off
-          case mptr of
-            Nothing -> do
-              liftIO $ putStrLn "Not a pointer (translation failed)"
-              ptr <- liftIO $ LLVM.llvmPointer_bv sym off
-              addPtrVal ptr
-            Just ptr -> addPtrVal ptr
+          ptr <- liftIO $ globalMappingFn ctx sym memory base off
+          addPtrVal ptr
     _ -> return regsStruct
   where
     addPtrVal :: LLVM.LLVMPtr sym (M.ArchAddrWidth arch) -> m (C.RegEntry sym (MS.ArchRegStruct arch))
