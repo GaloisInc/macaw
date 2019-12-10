@@ -88,11 +88,13 @@ module Data.Macaw.Symbolic.Memory (
   toCrucibleEndian,
   newGlobalMemory,
   MemoryModelContents(..),
+  mkGlobalPointerValidityPred,
   mapRegionPointers
   ) where
 
 import           GHC.TypeLits
 
+import qualified Control.Lens as L
 import           Control.Monad
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.ByteString as BS
@@ -145,6 +147,7 @@ data MemPtrTable sym w =
               -- ^ The ranges of (static) allocations that are mapped
               , memPtr :: CL.LLVMPtr sym w
               -- ^ The pointer to the allocation backing all of memory
+              , memRepr :: PN.NatRepr w
               }
 
 -- | Convert a Macaw Endianness to a Crucible LLVM EndianForm
@@ -190,7 +193,7 @@ newGlobalMemory proxy sym endian mmc mem = do
   memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray sizeBV
 
   tbl <- populateMemory proxy sym mmc mem symArray
-  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr }
+  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
   return (memImpl3, ptrTable)
 
 populateMemory :: ( CB.IsSymInterface sym
@@ -309,6 +312,92 @@ pleatM s l f = F.foldlM f s l
 
 -- * mapRegionPointers
 
+-- | Create a function that computes a validity predicate for an LLVMPointer
+-- that may point to the static global memory region.
+--
+-- We represent all of the statically allocated storage in a binary in a single
+-- LLVM array.  This array is sparse, meaning that large ranges of the address
+-- space are not actually mapped.  Whenever we use a pointer into this memory
+-- region, we want to assert that it is inside one of the mapped regions.
+--
+-- The mapped regions are recorded in the MemPtrTable.
+--
+-- We need to be a little careful: if the BlockID of the pointer is definitely
+-- zero, we make a direct assertion.  Otherwise, if the pointer is symbolic, we
+-- have to conditionally assert the range validity.
+--
+-- Note that we pass in an indication of the use of the pointer: if the pointer
+-- is used to write, it must only be within the writable portion of the address
+-- space (which is also recorded in the MemPtrTable).  If the write is
+-- conditional, we must additionally mix in the predicate.
+mkGlobalPointerValidityPred :: ( CB.IsSymInterface sym
+                               , MC.MemWidth w
+                               )
+                            => MemPtrTable sym w
+                            -> MS.MkGlobalPointerValidityPred sym w
+mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
+  -- If this is a write, the pointer cannot be in an immutable range (so just
+  -- return False for the predicate on that range).
+  --
+  -- Otherwise, the pointer is allowed to be between the lo/hi range
+  let inMappedRange off (range, mut)
+        | MS.pointerUseTag puse == MS.PointerWrite && mut == CL.Immutable = return (WI.falsePred sym)
+        | otherwise =
+          case range of
+            IM.IntervalCO lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUle sym off hibv
+              WI.andPred sym lob hib
+            IM.ClosedInterval lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUlt sym off hibv
+              WI.andPred sym lob hib
+            IM.OpenInterval lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUle sym off hibv
+              WI.andPred sym lob hib
+            IM.IntervalOC lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUlt sym off hibv
+              WI.andPred sym lob hib
+
+  let mkPred off = do
+        ps <- mapM (inMappedRange off) (IM.toList (memPtrTable mpt))
+        ps' <- WI.orOneOf sym (L.folded . id) ps
+        -- Add the condition from a conditional write
+        WI.itePred sym (maybe (WI.truePred sym) CS.regValue mcond) ps' (WI.truePred sym)
+
+
+  let ptrVal = CS.regValue ptr
+  let (ptrBase, ptrOff) = CL.llvmPointerView ptrVal
+  case WI.asNat ptrBase of
+    Just 0 -> do
+      p <- mkPred ptrOff
+      let msg = CS.GenericSimError "Write outside of static memory range (known BlockID)"
+      let loc = MS.pointerUseLocation puse
+      let assertion = CB.LabeledPred p (CS.SimError loc msg)
+      return (Just assertion)
+    Just _ -> return Nothing
+    Nothing -> do
+      -- In this case, we don't know for sure if the block id is 0, but it could
+      -- be (it is symbolic).  The assertion has to be conditioned on the equality.
+      p <- mkPred ptrOff
+      zeroNat <- WI.natLit sym 0
+      isZeroBase <- WI.natEq sym zeroNat ptrBase
+      p' <- WI.itePred sym isZeroBase p (WI.truePred sym)
+      let msg = CS.GenericSimError "Write outside of static memory range (unknown BlockID)"
+      let loc = MS.pointerUseLocation puse
+      let assertion = CB.LabeledPred p' (CS.SimError loc msg)
+      return (Just assertion)
+
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
 --
 -- This translator is used by the symbolic simulator to resolve memory addresses.
@@ -317,120 +406,34 @@ mapRegionPointers :: ( MC.MemWidth w
                      , CB.IsSymInterface sym
                      )
                   => MemPtrTable sym w
-                  -> CL.LLVMPtr sym w
                   -> MS.GlobalMap sym w
-mapRegionPointers mpt default_ptr = \sym mem regionNum offsetVal ->
+mapRegionPointers mpt = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
-    Just 0 -> mapBitvectorToLLVMPointer mpt sym mem offsetVal default_ptr
+    Just 0 -> do
+      let ?ptrWidth = WI.bvWidth offsetVal
+      CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
     Just _ ->
       -- This is the case where the region number is concrete and non-zero,
       -- meaning that it is already an LLVM pointer
-      return (Just (CL.LLVMPointer regionNum offsetVal))
-    Nothing ->
+      --
+      -- NOTE: This case is not possible because we only call this from
+      -- 'tryGlobPtr', which handles this case separately
+      return (CL.LLVMPointer regionNum offsetVal)
+    Nothing -> do
       -- In this case, the region number is symbolic, so we need to be very
       -- careful to handle the possibility that it is zero (and thus must be
       -- conditionally mapped to one or all of our statically-allocated regions.
-      mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr
-
--- | This is a relatively simple case where we know that the region number is
--- zero.  This means that the bitvector we have needs to be mapped to a pointer.
-mapBitvectorToLLVMPointer :: ( MC.MemWidth w
-                             , 16 <= w
-                             , CB.IsSymInterface sym
-                             )
-                          => MemPtrTable sym w
-                          -> sym
-                          -> CS.RegValue sym CL.Mem
-                          -> CS.RegValue sym (CT.BVType w)
-                          -> CL.LLVMPtr sym w
-                          -> IO (Maybe (CL.LLVMPtr sym w))
-mapBitvectorToLLVMPointer mpt sym mem offsetVal default_ptr = do
-  -- This is the simplest case where the bitvector is concretely known.  We
-  -- can map it to exactly one address.
-  --
-  -- We already know that the region ID is 0 due to mapRegionPointers
-  --
-  -- It doesn't matter if the offset is symbolic or not because all of the
-  -- static pointers are in this allocation somewhere.
-  let ?ptrWidth = WI.bvWidth offsetVal
-  -- FIXME: Assert that the resulting pointer is in the mapped range
-  ptr <- CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
-  return (Just ptr)
-
--- | Create a mux tree that maps the input bitvector (which is the offset in a
--- LLVMPointer with region == 0) to one of the regions that are statically
--- allocated (in the 'MemPtrTable').
---
--- Assume that there is an allocation A that covers [addrStart, addrEnd].  Also,
--- assume that the offset is some symbolic value O.  The mux tree says:
---
--- > "If addrStart <= O <= addrEnd, map O into that region"
---
--- If the offset is not in any region, the pointer is mapped to the null pointer
--- to trigger an error (if it is used).
-staticRegionMuxTree :: ( CB.IsSymInterface sym
-                       , MC.MemWidth w
-                       , 16 <= w
-                       )
-                    => MemPtrTable sym w
-                    -> sym
-                    -> CL.MemImpl sym
-                    -> WI.SymExpr sym (WI.BaseBVType w)
-                    -> CL.LLVMPtr sym w
-                    -> IO (CL.LLVMPtr sym w)
-staticRegionMuxTree mpt@(MemPtrTable im _) sym mem offsetVal default_ptr =
-  case IM.toList im of
-    [] -> return default_ptr
-    [_] -> do
+      --
+      -- NOTE: We can avoid making a huge static mux over all regions: the
+      -- low-level memory model code already handles building the mux tree as it
+      -- walks backwards over all allocations that are live.
+      --
+      -- We just need to add one top-level mux:
+      --
+      -- > ite (blockid == 0) (translate base) (leave alone)
       let ?ptrWidth = WI.bvWidth offsetVal
-      -- FIXME: Assert that the resulting pointer is in the mapped range
-      CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
-    _regions -> do
-      -- FIXME: This case needs to be much more sophisticated
-      let ?ptrWidth = WI.bvWidth offsetVal
-      -- FIXME: Assert that the resulting pointer is in the mapped range
-      CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
-      -- This is needs to be able to mux over other allocations?  I'm not sure on how
-      -- the symbolic array model actually works
-
-               -- F.foldlM addMuxForRegion default_ptr (IM.toList im)
-  -- where
-    -- handleCase f alloc start end greater less = do
-    --   let rep = WI.bvWidth offsetVal
-    --   startLit <- WI.bvLit sym rep (MC.memWordToUnsigned start)
-    --   endLit <- WI.bvLit sym rep (MC.memWordToUnsigned end)
-    --   gt <- greater sym offsetVal startLit
-    --   lt <- less sym offsetVal endLit
-    --   p <- WI.andPred sym gt lt
-    --   allocBase <- WI.bvLit sym rep (MC.memWordToUnsigned (allocationBase alloc))
-    --   allocationOffset <- WI.bvSub sym offsetVal allocBase
-    --   let ?ptrWidth = rep
-    --   thisPtr <- CL.doPtrAddOffset sym mem (allocationPtr alloc) allocationOffset
-    --   CL.muxLLVMPtr sym p thisPtr f
-    -- addMuxForRegion f (interval, alloc) = do
-    --   case interval of
-    --     IM.IntervalOC start end -> handleCase f alloc start end WI.bvUgt WI.bvUle
-    --     IM.IntervalCO start end -> handleCase f alloc start end WI.bvUge WI.bvUlt
-    --     IM.ClosedInterval start end -> handleCase f alloc start end WI.bvUge WI.bvUle
-    --     IM.OpenInterval start end -> handleCase f alloc start end WI.bvUgt WI.bvUlt
-
--- | This is a potentially complicated case where the region number is symbolic.
--- We need to add some guards in the cases where it is zero, to allow it to be
--- mapped to one of our regions.  When it is not zero, we can leave it alone.
-mapSymbolicRegionPointer :: ( MC.MemWidth w
-                            , 16 <= w
-                            , CB.IsSymInterface sym
-                            )
-                         => MemPtrTable sym w
-                         -> sym
-                         -> CS.RegValue sym CL.Mem
-                         -> CS.RegValue sym CT.NatType
-                         -> CS.RegValue sym (CT.BVType w)
-                         -> CL.LLVMPtr sym w
-                         -> IO (Maybe (CL.LLVMPtr sym w))
-mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr = do
-  zeroNat <- WI.natLit sym 0
-  staticRegion <- staticRegionMuxTree mpt sym mem offsetVal default_ptr
-  isZeroRegion <- WI.natEq sym zeroNat regionNum
-  let nonZeroPtr = CL.LLVMPointer regionNum offsetVal
-  Just <$> CL.muxLLVMPtr sym isZeroRegion staticRegion nonZeroPtr
+      zeroNat <- WI.natLit sym 0
+      isZeroRegion <- WI.natEq sym zeroNat regionNum
+      -- The pointer mapped to global memory (if the region number is zero)
+      globalPtr <- CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
+      CL.muxLLVMPtr sym isZeroRegion globalPtr (CL.LLVMPointer regionNum offsetVal)
