@@ -112,6 +112,7 @@ import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified What4.Interface as WI
 import qualified What4.Symbol as WS
+import qualified What4.Utils.Hashable as WUH
 
 import qualified Data.Macaw.Symbolic as MS
 
@@ -185,15 +186,16 @@ newGlobalMemory proxy sym endian mmc mem = do
   memImpl1 <- liftIO $ CL.emptyMem endian
 
   let allocName = WS.safeSymbol "globalMemoryBytes"
-  symArray <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
+  symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
   sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
   (ptr, memImpl2) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
-  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray sizeBV
 
-  tbl <- populateMemory proxy sym mmc mem symArray
+  (symArray2, tbl) <- populateMemory proxy sym mmc mem symArray1
+  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
+
   return (memImpl3, ptrTable)
 
 populateMemory :: ( CB.IsSymInterface sym
@@ -211,10 +213,12 @@ populateMemory :: ( CB.IsSymInterface sym
                -> MC.Memory (MC.ArchAddrWidth arch)
                -- ^ The initial memory image for the binary, which contains static data to populate the memory model
                -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
-               -> m (IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability)
-populateMemory proxy sym mmc mem symArray =
-  pleatM IM.empty (MC.memSegments mem) $ \allocs1 seg -> do
-    pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \allocs2 (addr, memChunk) -> do
+               -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
+                    )
+populateMemory proxy sym mmc mem symArray0 =
+  pleatM (symArray0, IM.empty) (MC.memSegments mem) $ \allocs1 seg -> do
+    pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
       concreteBytes <- case memChunk of
         MC.RelocationRegion {} -> error $
           "SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk
@@ -253,7 +257,9 @@ populateSegmentChunk :: ( 16 <= w
                    -> [WI.SymBV sym 8]
                    -- ^ The concrete values in this chunk (which may or may not be used)
                    -> IM.IntervalMap (MC.MemWord w) CL.Mutability
-                   -> m (IM.IntervalMap (MC.MemWord w) CL.Mutability)
+                   -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+                        , IM.IntervalMap (MC.MemWord w) CL.Mutability
+                        )
 populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
   -- We only support statically-linked binaries for now, so fail if we have a
   -- segment-relative address (which should only occur for an object file or
@@ -262,43 +268,71 @@ populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
   let Just abs_addr = MC.asAbsoluteAddr addr
   let size = length bytes
   let interval = IM.IntervalCO abs_addr (abs_addr + fromIntegral size)
-  let (mut_flag, conc_flag, desc) =
+  let (mut_flag, conc_flag) =
         case MMP.isReadonly (MC.segmentFlags seg) of
           True ->
             ( CL.Immutable
             , True
-            , \address -> "Mutable (concrete) memory at " ++ show address
             )
           False -> case mmc of
             ConcreteMutable ->
               ( CL.Mutable
               , True
-              , \address -> "Mutable (concrete) memory at " ++ show address
               )
             SymbolicMutable ->
               ( CL.Mutable
               , False
-              , \address -> "Mutable (symbolic) memory at " ++ show address
               )
 
   -- When we are treating a piece of memory as having concrete initial values
-  -- (e.g., for read-only memory), this loop populates memory by asserting that
-  -- the symbolic bytes in the backing array representing memory are equal to
-  -- the concrete values taken from the binary.
-  when conc_flag $
-    F.forM_ (zip [0 .. size - 1] bytes) $ \(idx, byte) -> do
-      let byteAddr = MC.incAddr (fromIntegral idx) addr
-      -- FIXME: We can probably properly handle all of the different segments
-      -- here pretty easily when required... but we will need one array per
-      -- segment.
-      let Just absByteAddr = MC.asAbsoluteAddr byteAddr
-      index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
-      eq_pred <- liftIO $ WI.bvEq sym byte
-        =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
-      prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
-      liftIO $ CB.addAssumption sym $
-        CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc (desc byteAddr)
-  return (IM.insert interval mut_flag ptrtable)
+  -- (e.g., for read-only memory) taken from the binary.
+  --
+  -- There are two major strategies for this: assert to the solver that array
+  -- slots have known values or directly update the initial array.
+  --
+  -- We currently choose the former, as the latter has been crashing solvers.
+  case conc_flag of
+    False -> return (symArray, IM.insert interval mut_flag ptrtable)
+    True -> do
+{-
+      -- We don't use this method because repeated applications of updateArray
+      -- are *very* slow for some reason
+
+      symArray2 <- pleatM symArray (zip [0.. size - 1] bytes) $ \arr (idx, byte) -> do
+        let byteAddr = MC.incAddr (fromIntegral idx) addr
+        -- FIXME: We can probably properly handle all of the different segments
+        -- here pretty easily when required... but we will need one array per
+        -- segment.
+        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
+        liftIO $ WI.arrayUpdate sym arr (Ctx.singleton index_bv) byte
+-}
+
+{-
+      -- We don't use this method because it generates very large array update
+      -- terms that, while what we want, crash yices (and make z3 and cvc4 eat
+      -- huge amounts of memory)
+
+      let addUpdate m (idx, byte) =
+            let key = WI.BVIndexLit (MC.memWidth mem) (fromIntegral idx)
+            in WUH.mapInsert (Ctx.singleton key) byte m
+      let updates = F.foldl' addUpdate WUH.mapEmpty (zip [0..size - 1] bytes)
+      symArray2 <- liftIO $ WI.arrayUpdateAtIdxLits sym updates symArray
+-}
+
+      -- Instead, generate assertions for each byte in the array
+      F.forM_ (zip [0.. size - 1] bytes) $ \(idx, byte) -> do
+        let byteAddr = MC.incAddr (fromIntegral idx) addr
+        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
+        eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
+        prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
+        let desc = "Byte@" ++ show byteAddr
+        liftIO $ CB.addAssumption sym $
+          CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc desc
+      let symArray2 = symArray
+
+      return (symArray2, IM.insert interval mut_flag ptrtable)
 
 
 -- | The 'pleatM' function is 'foldM' with the arguments switched so
