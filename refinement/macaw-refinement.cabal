@@ -71,6 +71,7 @@ library
 
   other-modules: Data.Macaw.Refinement.FuncBlockUtils
                  Data.Macaw.Refinement.Path
+                 Data.Macaw.Refinement.Solver
                  Data.Macaw.Refinement.Target
                  Data.Macaw.Refinement.SymbolicExecution
                  Data.Macaw.Refinement.UnknownTransfer
