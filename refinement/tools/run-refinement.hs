@@ -13,7 +13,6 @@ import           Control.Lens
 import           Control.Monad
 import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class
-import           Data.Bits ( (.|.) )
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import           Data.Foldable
@@ -33,39 +32,23 @@ import qualified Data.Map as M
 import           Data.Maybe ( isNothing, catMaybes )
 import           Data.Monoid
 import           Data.Parameterized.Some
-import           Data.Proxy ( Proxy(..) )
 import           Data.Semigroup
 import           Data.Semigroup ()
 import qualified Data.Text.IO as TIO
 import           Data.Text.Prettyprint.Doc as PP
-import qualified Lang.Crucible.Backend as CB
-import qualified Lang.Crucible.Backend.Simple as CBS
 import           GHC.TypeLits
 import qualified Options.Applicative as O
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Exit
-import qualified What4.Config as WC
-import qualified What4.Expr as WE
-import qualified What4.Interface as WI
-import qualified Data.Parameterized.Nonce as PN
-import qualified What4.ProblemFeatures as WPF
-import qualified What4.Solver.CVC4 as WSC
-import qualified What4.Solver.Yices as WSY
-import qualified What4.Solver.Z3 as WSZ
-import qualified What4.Protocol.Online as WPO
-import qualified What4.Protocol.SMTLib2 as WPS
 
 import           Prelude
-
-data Solver = CVC4 | Yices | Z3
-  deriving (Read, Show, Eq, Ord)
 
 data Options = Options { inputFile :: FilePath
                        , unrefined :: Bool
                        , summaryOnly :: Bool
                        , verbose :: Bool
-                       , solver :: Solver
+                       , solver :: MR.Solver
                        , solverInteractionFile :: Maybe FilePath
                        }
 
@@ -93,7 +76,7 @@ optionsParser = Options
                                    <> O.help "The SMT solver to use"
                                    <> O.short 'S'
                                    <> O.long "solver"
-                                   <> O.value Yices
+                                   <> O.value MR.Yices
                                     )
                 <*> O.optional ( O.strOption ( O.metavar "FILE"
                                             <> O.long "solver-interaction-file"
@@ -135,31 +118,6 @@ doRefinement opts = do
           withBinaryDiscoveredInfo opts (showDiscoveryInfo opts) pli bin
         m -> error $ "only PPC supported for 32-bit analysis; no support for " ++ show m
 
-withNewBackend :: (MonadIO m)
-               => Solver
-               -> (forall proxy t solver fs sym . (sym ~ CBS.SimpleBackend t fs, CB.IsSymInterface sym, WPO.OnlineSolver t solver) => proxy solver -> WPF.ProblemFeatures -> sym -> m a)
-               -> m a
-withNewBackend s k = do
-  sym :: CBS.SimpleBackend PN.GlobalNonceGenerator (WE.Flags WE.FloatUninterpreted)
-      <- liftIO $ CBS.newSimpleBackend WE.FloatUninterpretedRepr PN.globalNonceGenerator
-  case s of
-    CVC4 -> do
-      let proxy = Proxy @(WPS.Writer WSC.CVC4)
-      liftIO $ WC.extendConfig WSC.cvc4Options (WI.getConfiguration sym)
-      let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs .|. WPF.useNonlinearArithmetic
-      k proxy features sym
-    Yices -> do
-      let proxy = Proxy @(WSY.Connection PN.GlobalNonceGenerator)
-      liftIO $ WC.extendConfig WSY.yicesOptions (WI.getConfiguration sym)
-      -- For some reason, non-linear arithmetic is required for cvc4 and z3 but doesn't work at all with yices
-      let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs
-      k proxy features sym
-    Z3 -> do
-      let proxy = Proxy @(WPS.Writer WSZ.Z3)
-      liftIO $ WC.extendConfig WSZ.z3Options (WI.getConfiguration sym)
-      let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs .|. WPF.useNonlinearArithmetic
-      k proxy features sym
-
 withBinaryDiscoveredInfo :: ( X.MonadThrow m
                             , MBL.BinaryLoader arch binFmt
                             , SymArchConstraints arch
@@ -181,9 +139,8 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
   mrefinedDI <- case unrefined opts of
     True -> return Nothing
     False -> AI.withArchConstraints arch_info $ liftIO $ do
-      withNewBackend (solver opts) $ \proxy features sym -> do
-        ctx <- MR.defaultRefinementContext features sym bin (solverInteractionFile opts)
-        Just <$> MR.cfgFromAddrs proxy ctx arch_info (memoryImage bin) M.empty entries []
+      ctx <- MR.defaultRefinementContext (solver opts) bin (solverInteractionFile opts)
+      Just <$> MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
   f unrefinedDI mrefinedDI
 
 showDiscoveryInfo :: (SymArchConstraints arch)
