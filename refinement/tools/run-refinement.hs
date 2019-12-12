@@ -51,6 +51,7 @@ data Options = Options { inputFile :: FilePath
                        , solver :: MR.Solver
                        , solverInteractionFile :: Maybe FilePath
                        , maximumModelCount :: Int
+                       , threadCount :: Int
                        }
 
 optionsParser :: O.Parser Options
@@ -88,6 +89,12 @@ optionsParser = Options
                                     <> O.value (MR.maximumModelCount MR.defaultRefinementConfig)
                                     <> O.long "maximum-model-count"
                                     <> O.short 'm'
+                                    )
+                <*> O.option O.auto ( O.metavar "NAT"
+                                    <> O.help "The number of solver processes to run concurrently (minimum 1)"
+                                    <> O.value 1
+                                    <> O.short 'N'
+                                    <> O.long "solver-processes"
                                     )
 
 main :: IO ()
@@ -149,6 +156,7 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
       let config = MR.defaultRefinementConfig { MR.solver = solver opts
                                               , MR.solverInteractionFile = solverInteractionFile opts
                                               , MR.maximumModelCount = maximumModelCount opts
+                                              , MR.parallelismFactor = min 1 (threadCount opts)
                                               }
       ctx <- MR.defaultRefinementContext config bin
       Just <$> MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []

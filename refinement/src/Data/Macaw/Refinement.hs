@@ -19,7 +19,6 @@ where
 import           GHC.TypeLits
 
 import           Control.Lens
-import           Control.Monad.IO.Class (MonadIO)
 import qualified Data.Macaw.Architecture.Info as MA
 import           Data.Macaw.CFG.AssignRhs
 import qualified Data.Macaw.CFG as MC
@@ -46,7 +45,6 @@ import           Data.Macaw.Refinement.UnknownTransfer
 cfgFromAddrsAndState
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
@@ -57,7 +55,7 @@ cfgFromAddrsAndState
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> m (DiscoveryState arch)
+  -> IO (DiscoveryState arch)
 cfgFromAddrsAndState context initial_state init_addrs mem_words =
   MD.cfgFromAddrsAndState initial_state init_addrs mem_words
     & refineDiscovery context
@@ -74,7 +72,6 @@ cfgFromAddrsAndState context initial_state init_addrs mem_words =
 cfgFromAddrs
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
      )
   => RSE.RefinementContext arch
   -> MA.ArchitectureInfo arch
@@ -91,7 +88,7 @@ cfgFromAddrs
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> m (DiscoveryState arch)
+  -> IO (DiscoveryState arch)
 cfgFromAddrs context ainfo mem addrSymMap =
   cfgFromAddrsAndState context (emptyDiscoveryState mem addrSymMap ainfo)
 
@@ -110,10 +107,9 @@ cfgFromAddrs context ainfo mem addrSymMap =
 refineDiscovery
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
      )
   => RSE.RefinementContext arch
   -> DiscoveryState arch
-  -> m (DiscoveryState arch)
+  -> IO (DiscoveryState arch)
 refineDiscovery context =
   symbolicUnkTransferRefinement context . symbolicTargetRefinement

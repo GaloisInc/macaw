@@ -75,6 +75,8 @@ data RefinementConfig =
                    -- indirect call; reaching this number will be taken as an
                    -- indication that the problem is under-constrained and
                    -- macaw-refinement will give up on the branch.
+                   , parallelismFactor :: Int
+                   -- ^ The number of simultaneous solver instances (the default and minimum is 1)
                    }
 
 defaultRefinementConfig :: RefinementConfig
@@ -82,6 +84,7 @@ defaultRefinementConfig =
   RefinementConfig { solver = MRS.Yices
                    , solverInteractionFile = Nothing
                    , maximumModelCount = 20
+                   , parallelismFactor = 1
                    }
 
 data RefinementContext arch = RefinementContext
@@ -146,10 +149,9 @@ smtSolveTransfer
      , MonadIO m
      )
   => RefinementContext arch
-  -> M.DiscoveryState arch
   -> [M.ParsedBlock arch ids]
   -> m (IPModels (M.ArchSegmentOff arch))
-smtSolveTransfer ctx discovery_state blocks
+smtSolveTransfer ctx blocks
   | Just archVals <- MS.archVals (Proxy @arch) = MRS.withNewBackend (solver (config ctx)) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
       halloc <- liftIO $ C.newHandleAllocator
 
@@ -192,7 +194,7 @@ smtSolveTransfer ctx discovery_state blocks
                   hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile (config ctx))
                   solverProc :: W.SolverProcess t solver
                              <- liftIO $ W.startSolverProcess problemFeatures hdl sym
-                  models <- extractIPModels ctx sym solverProc assumptions discovery_state res_ip_base res_ip_off
+                  models <- extractIPModels ctx sym solverProc assumptions res_ip_base res_ip_off
                   _ <- liftIO $ W.shutdownSolverProcess solverProc
                   return models
             C.AbortedResult _ aborted_res -> case aborted_res of
@@ -373,11 +375,10 @@ extractIPModels :: forall arch solver m sym t fp
                 -> sym
                 -> W.SolverProcess t solver
                 -> [W.Pred sym]
-                -> M.DiscoveryState arch
                 -> WE.Expr t WT.BaseNatType
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
-extractIPModels ctx sym solverProc initialAssumptions discovery_state res_ip_base res_ip_off = do
+extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = do
   liftIO $ putStrLn ("Number of initial assumptions: " ++ show (length initialAssumptions))
   let modelMax = maximumModelCount (config ctx)
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
@@ -395,7 +396,7 @@ extractIPModels ctx sym solverProc initialAssumptions discovery_state res_ip_bas
       ip_base_mem_word = M.memWord 0
 
   -- Turn our SMT-generated models into macaw addresses
-  let resolveAddr off = M.resolveAbsoluteAddr (M.memory discovery_state) $
+  let resolveAddr off = M.resolveAbsoluteAddr (binaryMemory ctx) $
                          M.memWord $ fromIntegral $
                          M.memWordToUnsigned ip_base_mem_word + off
   let resolved = mapMaybe resolveAddr ip_off_ground_vals

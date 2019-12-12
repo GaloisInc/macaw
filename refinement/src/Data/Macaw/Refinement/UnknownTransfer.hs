@@ -112,6 +112,8 @@ import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
 import           Control.Monad ( forM )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import qualified Control.Scheduler as CS
+import qualified Data.Foldable as F
 import           Data.List ( sort )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -121,107 +123,55 @@ import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
 import           Data.Maybe ( catMaybes, isJust, isNothing )
-import           Data.Parameterized.Some ( Some(..) )
+import           Data.Parameterized.Some ( Some(..), viewSome )
 import           GHC.TypeLits
 
 -- | This is the main entrypoint, which is given the current Discovery
 -- information and which attempts to resolve UnknownTransfer
 -- classification failures, returning (possibly updated) Discovery
 -- information.
+--
+-- See Note [Parallel Evaluation Strategy] for details
 symbolicUnkTransferRefinement
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
-  -> m (MD.DiscoveryState arch)
-symbolicUnkTransferRefinement context inpDS =
-  refineFunctions context inpDS mempty $ allFuns inpDS
-
+  -> IO (MD.DiscoveryState arch)
+symbolicUnkTransferRefinement context inpDS = do
+  -- Set up the evaluation strategy for the work scheduling library.
+  --
+  -- We use the simple combinator that does not pin workers to specific
+  -- capabilities, as these threads spend most of their time waiting on the SMT
+  -- solver, so it isn't really important which Haskell thread they use.
+  let nCores = CS.ParN (min 1 (fromIntegral (RSE.parallelismFactor (RSE.config context))))
+  -- FIXME: Record the unrefinable set so that we don't try to re-refine those
+  -- blocks next iteration of refinement
+  (solutions, _unrefinable) <- unzip <$> CS.traverseConcurrently nCores (viewSome (refineFunction context)) (allFuns inpDS)
+  F.foldlM updateDiscovery inpDS solutions
 
 -- | Returns the list of DiscoveryFunInfo for a DiscoveryState
 allFuns :: MD.DiscoveryState arch -> [Some (MD.DiscoveryFunInfo arch)]
 allFuns ds = ds ^. MD.funInfo . L.to Map.elems
 
-
--- | This iterates through the functions in the DiscoveryState to find
--- those which have transfer failures and attempts to refine the
--- transfer failure.  There are three cases:
+-- | Attempt to resolve all of the unknown transfers in a block
 --
---  1. The function has no transfer failures
---  2. The function has a transfer failure, but cannot be refined
---  3. The function has a transfer failure that was refined
---
--- For both #1 and #2, the action is to move to the next function.
--- For #3, the refinement process had to re-perform discovery (the
--- refinement may have added new previously undiscovered blocks that
--- may themselves have transfer failures) and so the DiscoveryState is
--- updated with the new function; this is a *new* function so it
--- cannot continue to try to refine the existing function.
---
--- Also note that because the Discovery process has to be re-done from
--- scratch for a function each time there are new transfer solutions,
--- all *previous* transfer solutions for that function must also be
--- applied.
-refineFunctions
+-- Adds solutions for each resolved block into the 'Solutions' object.  It also
+-- records the addresses of blocks for which no resolution was possible.
+-- Ideally, this record will be used to avoid re-analyzing difficult cases in
+-- future refinement iterations.
+refineFunction
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
      )
   => RSE.RefinementContext arch
-  -> MD.DiscoveryState arch
-  -> Solutions arch -- ^ accumulated solutions so-far
-  -> [Some (MD.DiscoveryFunInfo arch)]
-  -> m (MD.DiscoveryState arch)
-refineFunctions _   inpDS _ [] = pure inpDS
-refineFunctions context inpDS solns (Some fi:fis) =
-  refineTransfers context inpDS solns fi [] >>= \case
-    Nothing -> refineFunctions context inpDS solns fis  -- case 1 or 2
-    Just (updDS, solns') ->
-      refineFunctions context updDS solns' $ allFuns updDS -- case 3
-
-
--- | This attempts to refine the passed in function.  There are three
--- cases:
---
---   1. The function has no unknown transfers: no refinement needed
---
---   2. An unknown transfer was refined successfully.  This resulted
---      in a new DiscoveryState, with a new Function (replacing the
---      old function).  The new Function may have new blocks that need
---      refinement, but because this is a new function the "current"
---      function cannot be refined anymore, so return 'Just' this
---      updated DiscoveryState.
---
---   3. The unknown transfer could not be refined: move to the next
---      block in this function with an unknown transfer target and
---      recursively attempt to resolve that one.
---
---   4. All unknown transfer blocks were unable to be refined: the
---   original function is sufficient.
-refineTransfers
-  :: ( MS.SymArchConstraints arch
-     , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
-     )
-  => RSE.RefinementContext arch
-  -> MD.DiscoveryState arch
-  -> Solutions arch
   -> MD.DiscoveryFunInfo arch ids
-  -> [RFU.BlockIdentifier arch ids]
-  -> m (Maybe (MD.DiscoveryState arch, Solutions arch))
-refineTransfers context inpDS solns fi failedRefines = do
-  let unrefineable = flip elem failedRefines . RFU.blockID
-      unkTransfers = filter (not . unrefineable) $ getUnknownTransfers fi
-      thisUnkTransfer = head unkTransfers
-      thisId = RFU.blockID thisUnkTransfer
-  if null unkTransfers
-  then return Nothing
-  else refineBlockTransfer context inpDS solns fi thisUnkTransfer >>= \case
-    Nothing    -> refineTransfers context inpDS solns fi (thisId : failedRefines)
-    r@(Just _) -> return r
-
+  -> IO ((Some (MD.DiscoveryFunInfo arch), Solutions arch), [Some (RFU.BlockIdentifier arch)])
+refineFunction context dfi = do
+  -- Find the blocks with unknown transfers
+  (solns, unrefinable) <- F.foldlM (refineBlockTransfer context dfi) (mempty, []) (getUnknownTransfers dfi)
+  return ((Some dfi, solns), unrefinable)
 
 getUnknownTransfers :: MD.DiscoveryFunInfo arch ids
                     -> [MD.ParsedBlock arch ids]
@@ -235,47 +185,51 @@ isUnknownTransfer fi pb =
       isNothing (lookup (MD.pblockAddr pb) (MD.discoveredClassifyFailureResolutions fi))
     _ -> False
 
--- | This function attempts to use an SMT solver to refine the block
--- transfer.  If the transfer can be resolved, it will update the
--- input DiscoveryState with the new block information (plus any
--- blocks newly discovered via the transfer resolution) and return
--- that.  If it was unable to refine the transfer, it will return
--- Nothing and this block will be added to the "unresolvable" list.
+-- | Discover refinements of control flow for blocks ending in ClassifyFailure
+--
+-- This function does the hard work: it constructs a set of paths from the
+-- ClassifyFailure back as far toward the function start as is possible without
+-- creating a loop.  It then uses symbolic execution to generate models of the
+-- instruction pointer at the ClassifyFailure (solutions).
+--
+-- If it cannot find any solutions for a given ClassifyFailure, it marks the
+-- block as unrefinable so that we can avoid re-analyzing it in subsequent
+-- iterations.
+--
+-- The caller is expected to update the DiscoveryState with any discovered
+-- solutions.
 refineBlockTransfer
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      , MonadIO m
      )
   => RSE.RefinementContext arch
-  -> MD.DiscoveryState arch
-  -> Solutions arch
   -> MD.DiscoveryFunInfo arch ids
+  -> (Solutions arch, [Some (RFU.BlockIdentifier arch)])
+  -- ^ Solutions accumulated for this function (and blocks marked as unrefinable)
   -> MD.ParsedBlock arch ids
-  -> m (Maybe (MD.DiscoveryState arch, Solutions arch))
-refineBlockTransfer context inpDS solns fi blk =
+  -- ^ A block ending in an unknown transfer
+  -> m (Solutions arch, [Some (RFU.BlockIdentifier arch)])
+refineBlockTransfer context fi (solns, unrefinable) blk =
   case RP.pathTo (RFU.blockID blk) $ RP.buildFuncPath fi of
     Nothing -> error "unable to find function path for block" -- internal error
-    Just p -> do soln <- refinePath context inpDS fi p (RP.pathDepth p) 1
+    Just p -> do soln <- refinePath context fi p (RP.pathDepth p) 1
                  case soln of
-                   Nothing -> return Nothing
-                   Just sl -> do
-                     -- The discovered solutions are sorted here for
-                     -- convenience and test stability, but the
-                     -- sorting is not otherwise required.
-                     let solns' = addSolution blk sl solns -- Map.insert (MD.pblockAddr blk) (sort sl) solns
-                     updDS <- updateDiscovery inpDS solns' fi
-                     return $ Just (updDS, solns')
+                   Nothing -> return (solns, Some (RFU.blockID blk) : unrefinable)
+                   Just sl ->
+                     return (addSolution blk sl solns, unrefinable)
 
+-- | Feed solutions back into the system, updating the 'MD.DiscoveryState' by
+-- calling into macaw base.
 updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
                    , KnownNat (MC.ArchAddrWidth arch)
                    , MC.ArchConstraints arch
                    , MonadIO m
                    )
                 => MD.DiscoveryState arch
-                -> Solutions arch
-                -> MD.DiscoveryFunInfo arch ids
+                -> (Some (MD.DiscoveryFunInfo arch), Solutions arch)
                 -> m (MD.DiscoveryState arch)
-updateDiscovery s0 solutions finfo = do
+updateDiscovery s0 (Some finfo, solutions) = do
   case solutionValues solutions of
     [] -> return s0
     vals -> return (MD.addDiscoveredFunctionBlockTargets s0 finfo vals)
@@ -285,22 +239,21 @@ refinePath :: ( MS.SymArchConstraints arch
               , MonadIO m
               )
            => RSE.RefinementContext arch
-           -> MD.DiscoveryState arch
            -> MD.DiscoveryFunInfo arch ids
            -> RP.FuncBlockPath arch ids
            -> Int
            -> Int
            -> m (Maybe (Solution arch))
-refinePath context inpDS fi path maxlevel numlevels =
+refinePath context fi path maxlevel numlevels =
   let thispath = RP.takePath numlevels path
-      smtEquation = equationFor inpDS fi thispath
+      smtEquation = equationFor fi thispath
   in solve context smtEquation >>= \case
        Nothing -> return Nothing -- divergent, stop here
        soln@(Just{}) -> if numlevels >= maxlevel
                           then return soln
-                          else refinePath context inpDS fi path maxlevel (numlevels + 1)
+                          else refinePath context fi path maxlevel (numlevels + 1)
 
-data Equation arch ids = Equation (MD.DiscoveryState arch) [[MD.ParsedBlock arch ids]]
+data Equation arch ids = Equation [[MD.ParsedBlock arch ids]]
 newtype Solution arch = Solution [MC.ArchSegmentOff arch]  -- identified transfers
 newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) (Solution arch))
 
@@ -326,16 +279,15 @@ addSolution :: MD.ParsedBlock arch ids
             -> Solutions arch
 addSolution blk sl (Solutions slns) = Solutions (Map.insert (MD.pblockAddr blk) sl slns)
 
-equationFor :: MD.DiscoveryState arch
-            -> MD.DiscoveryFunInfo arch ids
+equationFor :: MD.DiscoveryFunInfo arch ids
             -> RP.FuncBlockPath arch ids
             -> Equation arch ids
-equationFor inpDS fi p =
+equationFor fi p =
   let pTrails = RP.pathForwardTrails p
       pTrailBlocks = map (RFU.getBlock fi) <$> pTrails
   in if and (any (not . isJust) <$> pTrailBlocks)
      then error "did not find requested block in discovery results!" -- internal
-       else Equation inpDS (catMaybes <$> pTrailBlocks)
+       else Equation (catMaybes <$> pTrailBlocks)
 
 -- | Compute a set of solutions for this refinement
 --
@@ -347,9 +299,9 @@ solve :: ( MS.SymArchConstraints arch
       => RSE.RefinementContext arch
       -> Equation arch ids
       -> m (Maybe (Solution arch))
-solve context (Equation inpDS paths) = do
+solve context (Equation paths) = do
   possibleModels <- fmap RSE.ipModels <$> forM paths
-    (\path -> liftIO $ RSE.smtSolveTransfer context inpDS path)
+    (\path -> liftIO $ RSE.smtSolveTransfer context path)
   case any isNothing possibleModels of
     True -> return Nothing
     False -> return (Just (Solution (sort (concat (catMaybes possibleModels)))))
@@ -357,3 +309,16 @@ solve context (Equation inpDS paths) = do
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
 -- isBetterSolution :: [ArchSegmentOff arch] -> [ArchSegmentOff arch] -> Bool
 -- isBetterSolution = (<)
+
+{- Note [Parallel Evaluation Strategy]
+
+The evaluation strategy is structured to support parallelism.  We process
+functions in parallel (according to a configurable factor).  Any function with
+ClassifyFailures is analyzed in its own thread (all of the ClassifyFailures for
+the same function are processed in the same thread).  We then collect all of the
+findings for all of the functions and update the discovery state serially.
+
+While this update is constrained to one thread, we are able to use many solver
+processes in parallel to do the hard work.
+
+-}
