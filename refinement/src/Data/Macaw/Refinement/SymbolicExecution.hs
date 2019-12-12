@@ -11,7 +11,9 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.Refinement.SymbolicExecution
-  ( RefinementContext(..)
+  ( RefinementConfig(..)
+  , defaultRefinementConfig
+  , RefinementContext(..)
   , defaultRefinementContext
   , smtSolveTransfer
   , IPModels(..)
@@ -63,13 +65,33 @@ import qualified Data.Macaw.Refinement.Solver as MRS
 import qualified What4.Expr as WE
 import Text.Printf ( printf )
 
+data RefinementConfig =
+  RefinementConfig { solver :: MRS.Solver
+                   -- ^ The solver to use to find models
+                   , solverInteractionFile :: Maybe FilePath
+                   -- ^ An optional file to record solver interactions (queries sent and responses)
+                   , maximumModelCount :: Int
+                   -- ^ The maximum number of IP models to produce for any
+                   -- indirect call; reaching this number will be taken as an
+                   -- indication that the problem is under-constrained and
+                   -- macaw-refinement will give up on the branch.
+                   }
 
-data RefinementContext arch = forall bin . RefinementContext
+defaultRefinementConfig :: RefinementConfig
+defaultRefinementConfig =
+  RefinementConfig { solver = MRS.Yices
+                   , solverInteractionFile = Nothing
+                   , maximumModelCount = 20
+                   }
+
+data RefinementContext arch = RefinementContext
   { executableSegments :: [MM.MemSegment (M.ArchAddrWidth arch)]
+  -- ^ The segments in the binary being analyzed that contain code
   , memWidthRepr :: PN.NatRepr (M.ArchAddrWidth arch)
-  , solverInteractionFile :: Maybe FilePath
-  , solver :: MRS.Solver
-  , loadedBinary :: MBL.LoadedBinary arch bin
+  -- ^ The width of pointers for the platform
+  , binaryEndianness :: M.Endianness
+  , binaryMemory :: M.Memory (M.ArchAddrWidth arch)
+  , config :: RefinementConfig
   }
 
 -- | Given a solver backend and binary, create a 'RefinementContext' that has
@@ -80,19 +102,18 @@ defaultRefinementContext
    . ( MS.SymArchConstraints arch
      , 16 <= M.ArchAddrWidth arch
      )
-  => MRS.Solver
+  => RefinementConfig
   -> MBL.LoadedBinary arch bin
-  -> Maybe FilePath
   -> IO (RefinementContext arch)
-defaultRefinementContext slvr loaded_binary solverInteraction = do
+defaultRefinementContext cfg loaded_binary = do
   let isExecutable = MMP.isExecutable . MM.segmentFlags
   let execSegs = filter isExecutable (MM.memSegments (MBL.memoryImage loaded_binary))
   return $ RefinementContext
     { executableSegments = execSegs
     , memWidthRepr = MM.memWidth (MBL.memoryImage loaded_binary)
-    , solverInteractionFile = solverInteraction
-    , loadedBinary = loaded_binary
-    , solver = slvr
+    , binaryEndianness = MBL.memoryEndianness loaded_binary
+    , binaryMemory = MBL.memoryImage loaded_binary
+    , config = cfg
     }
 
 -- | A data type to represent the models we get back from the solver
@@ -128,8 +149,8 @@ smtSolveTransfer
   -> M.DiscoveryState arch
   -> [M.ParsedBlock arch ids]
   -> m (IPModels (M.ArchSegmentOff arch))
-smtSolveTransfer ctx@(RefinementContext { loadedBinary = bin }) discovery_state blocks
-  | Just archVals <- MS.archVals (Proxy @arch) = MRS.withNewBackend (solver ctx) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
+smtSolveTransfer ctx discovery_state blocks
+  | Just archVals <- MS.archVals (Proxy @arch) = MRS.withNewBackend (solver (config ctx)) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
       halloc <- liftIO $ C.newHandleAllocator
 
       -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
@@ -148,7 +169,7 @@ smtSolveTransfer ctx@(RefinementContext { loadedBinary = bin }) discovery_state 
       case some_cfg of
         C.SomeCFG cfg -> do
           let executionFeatures = []
-          initialState <- initializeSimulator bin sym archVals halloc cfg entryBlock
+          initialState <- initializeSimulator ctx sym archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
           -- environment so that we can avoid polluting the global solver state
@@ -168,7 +189,7 @@ smtSolveTransfer ctx@(RefinementContext { loadedBinary = bin }) discovery_state 
               let res_regs = res ^. C.partialValue . C.gpValue
               case C.regValue $ (MS.lookupReg archVals) res_regs M.ip_reg of
                 LLVM.LLVMPointer res_ip_base res_ip_off -> do
-                  hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile ctx)
+                  hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile (config ctx))
                   solverProc :: W.SolverProcess t solver
                              <- liftIO $ W.startSolverProcess problemFeatures hdl sym
                   models <- extractIPModels ctx sym solverProc assumptions discovery_state res_ip_base res_ip_off
@@ -358,8 +379,7 @@ extractIPModels :: forall arch solver m sym t fp
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
 extractIPModels ctx sym solverProc initialAssumptions discovery_state res_ip_base res_ip_off = do
   liftIO $ putStrLn ("Number of initial assumptions: " ++ show (length initialAssumptions))
-  -- FIXME: Make this a parameter
-  let modelMax = 10
+  let modelMax = maximumModelCount (config ctx)
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
     -- FIXME: Try to assert that the base of the IP is 0
     ipConstraint <- genIPConstraint ctx sym res_ip_off
@@ -386,7 +406,7 @@ extractIPModels ctx sym solverProc initialAssumptions discovery_state res_ip_bas
     nModels | nModels == modelMax -> return SpuriousModels
             | otherwise -> return (Models resolved)
 
-initializeSimulator :: forall m sym arch blocks ids bin tp
+initializeSimulator :: forall m sym arch blocks ids tp
                      . ( MonadIO m
                        , 16 <= M.ArchAddrWidth arch
                        , MS.SymArchConstraints arch
@@ -395,7 +415,7 @@ initializeSimulator :: forall m sym arch blocks ids bin tp
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
                        , Ord (W.SymExpr sym WT.BaseNatType)
                        )
-                    => MBL.LoadedBinary arch bin
+                    => RefinementContext arch
                     -> sym
                     -> MS.ArchVals arch
                     -> C.HandleAllocator
@@ -406,10 +426,10 @@ initializeSimulator :: forall m sym arch blocks ids bin tp
                             sym
                             (MS.MacawExt arch)
                             (C.RegEntry sym tp))
-initializeSimulator bin sym archVals halloc cfg entryBlock = MS.withArchEval archVals sym $ \archEvalFns -> do
+initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval archVals sym $ \archEvalFns -> do
   memVar <- liftIO $ LLVM.mkMemVar halloc
-  let end = MS.toCrucibleEndian (MBL.memoryEndianness bin)
-  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) sym end MS.ConcreteMutable (MBL.memoryImage bin)
+  let end = MS.toCrucibleEndian (binaryEndianness ctx)
+  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) sym end MS.ConcreteMutable (binaryMemory ctx)
   (memory1, initSPVal) <- initializeMemory (Proxy @arch) sym memory0
   -- FIXME: Capture output somewhere besides stderr
   let globalMappingFn = MS.mapRegionPointers memPtrTable

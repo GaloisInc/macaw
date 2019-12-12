@@ -11,6 +11,8 @@ module Data.Macaw.Refinement
   , RSE.defaultRefinementContext
   , RSE.RefinementContext
   , MRS.Solver(..)
+  , RSE.RefinementConfig(..)
+  , RSE.defaultRefinementConfig
   )
 where
 

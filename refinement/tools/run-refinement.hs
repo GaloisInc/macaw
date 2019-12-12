@@ -50,6 +50,7 @@ data Options = Options { inputFile :: FilePath
                        , verbose :: Bool
                        , solver :: MR.Solver
                        , solverInteractionFile :: Maybe FilePath
+                       , maximumModelCount :: Int
                        }
 
 optionsParser :: O.Parser Options
@@ -82,6 +83,12 @@ optionsParser = Options
                                             <> O.long "solver-interaction-file"
                                             <> O.help "File to save solver interactions to"
                                              ))
+                <*> O.option O.auto ( O.metavar "INT"
+                                    <> O.help "The maximum number of models to consider valid for a given indirect call"
+                                    <> O.value (MR.maximumModelCount MR.defaultRefinementConfig)
+                                    <> O.long "maximum-model-count"
+                                    <> O.short 'm'
+                                    )
 
 main :: IO ()
 main = O.execParser optParser >>= doRefinement
@@ -139,7 +146,11 @@ withBinaryDiscoveredInfo opts f arch_info bin = do
   mrefinedDI <- case unrefined opts of
     True -> return Nothing
     False -> AI.withArchConstraints arch_info $ liftIO $ do
-      ctx <- MR.defaultRefinementContext (solver opts) bin (solverInteractionFile opts)
+      let config = MR.defaultRefinementConfig { MR.solver = solver opts
+                                              , MR.solverInteractionFile = solverInteractionFile opts
+                                              , MR.maximumModelCount = maximumModelCount opts
+                                              }
+      ctx <- MR.defaultRefinementContext config bin
       Just <$> MR.cfgFromAddrs ctx arch_info (memoryImage bin) M.empty entries []
   f unrefinedDI mrefinedDI
 
