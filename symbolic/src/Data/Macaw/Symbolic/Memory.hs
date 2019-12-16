@@ -314,7 +314,9 @@ populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
       -- huge amounts of memory)
 
       let addUpdate m (idx, byte) =
-            let key = WI.BVIndexLit (MC.memWidth mem) (fromIntegral idx)
+            let byteAddr = MC.incAddr (fromIntegral idx) addr
+                Just absByteAddr = MC.asAbsoluteAddr byteAddr
+                key = WI.BVIndexLit (MC.memWidth mem) (fromIntegral absByteAddr)
             in WUH.mapInsert (Ctx.singleton key) byte m
       let updates = F.foldl' addUpdate WUH.mapEmpty (zip [0..size - 1] bytes)
       symArray2 <- liftIO $ WI.arrayUpdateAtIdxLits sym updates symArray
