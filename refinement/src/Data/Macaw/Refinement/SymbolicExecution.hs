@@ -277,22 +277,25 @@ addKnownRegValue sym archVals globalMappingFn memory regsStruct reg val =
     MAA.FinSet bvs
       | [singleBV] <- F.toList bvs -> do
           base <- liftIO $ W.natLit sym 0
-          off <- liftIO $ W.bvLit sym W.knownNat singleBV
-          ptr <- liftIO $ globalMappingFn sym memory base off
-          addPtrVal ptr
+          let oldEntry = MS.lookupReg archVals regsStruct reg
+          let ptrWidthRepr = W.knownNat @(M.ArchAddrWidth arch)
+          case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr ptrWidthRepr) of
+            Just Refl -> do
+              -- This is a value with the same width as a pointer.  We attempt
+              -- to translate it into a pointer using the global map if possible
+              off <- liftIO $ W.bvLit sym ptrWidthRepr singleBV
+              ptr <- liftIO $ globalMappingFn sym memory base off
+              return (MS.updateReg archVals regsStruct reg ptr)
+            Nothing ->
+              case C.regType oldEntry of
+                LLVM.LLVMPointerRepr nr -> do
+                  -- Otherwise, this is just a bitvector of a non-pointer size,
+                  -- so we just make it into a plain bitvector.
+                  bvVal <- liftIO $ W.bvLit sym nr singleBV
+                  let ptr = LLVM.LLVMPointer base bvVal
+                  return (MS.updateReg archVals regsStruct reg ptr)
+                _ -> return regsStruct
     _ -> return regsStruct
-  where
-    addPtrVal :: LLVM.LLVMPtr sym (M.ArchAddrWidth arch) -> m (C.RegEntry sym (MS.ArchRegStruct arch))
-    addPtrVal ptr = do
-      let oldEntry = MS.lookupReg archVals regsStruct reg
-      let nr = W.knownNat @(M.ArchAddrWidth arch)
-      case testEquality (C.regType oldEntry) (LLVM.LLVMPointerRepr nr) of
-        Just Refl -> do
-          liftIO $ printf "Populating register %s with %s\n" (show (M.prettyF reg)) (show (LLVM.ppPtr ptr))
-          return (MS.updateReg archVals regsStruct reg ptr)
-        Nothing -> do
-          liftIO $ printf "Types did not match while populating register: %s vs %s\n" (show (C.regType oldEntry)) (show (LLVM.LLVMPointerRepr nr))
-          return regsStruct
 
 -- | Generate fresh symbolic variables of supported types
 freshSymVar
