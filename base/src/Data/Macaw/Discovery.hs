@@ -158,7 +158,7 @@ cameFromUnsoundReason found_map rsn = do
 
 -- | Add any values needed to compute term statement to demand set.
 addTermDemands :: TermStmt arch ids -> DemandComp arch ids ()
-addTermDemands t = do
+addTermDemands t =
   case t of
     FetchAndExecute regs -> do
       traverseF_ addValueDemands regs
@@ -1218,10 +1218,11 @@ directJumpClassifier = classifierName "Jump" $ do
 
     let abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
     let abst' = abst & setAbsIP tgt_mseg
+    let tgtBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
                           , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgt_mseg
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = [(tgt_mseg, abst', Jmp.nextBlockBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc))]
+                          , intraJumpTargets = [(tgt_mseg, abst', tgtBnds)]
                           , newFunctionAddrs = []
                           }
 
@@ -1240,7 +1241,7 @@ jumpTableClassifier = classifierName "Jump table" $ do
 
     let abst :: AbsBlockState (ArchReg arch)
         abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
-    let nextBnds = Jmp.nextBlockBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
+    let nextBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     let term = ParsedLookupTable (classifierFinalRegState bcc) jumpIndex entries
     pure $ seq abst $
       ParsedContents { parsedNonterm = toList (classifierStmts bcc)

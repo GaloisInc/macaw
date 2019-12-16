@@ -38,7 +38,8 @@ import qualified Data.Set as Set
 import           GHC.Stack
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
-import           Data.Macaw.AbsDomain.JumpBounds
+import           Data.Macaw.AbsDomain.JumpBounds (initBndsMap)
+import           Data.Macaw.AbsDomain.StackAnalysis
 import           Data.Macaw.CFG.DemandSet
   ( DemandContext
   , demandConstraints
@@ -78,7 +79,7 @@ type AssignStackOffsetMap w ids = Map (Some (AssignId ids)) (MemInt w)
 valueStackOffset :: ( MemWidth (ArchAddrWidth arch)
                     , OrdF (ArchReg arch)
                     )
-                 => InitJumpBounds arch
+                 => BlockStartStackConstraints arch
                  -> AssignStackOffsetMap (ArchAddrWidth arch) ids
                  -> Value arch ids (BVType (ArchAddrWidth arch))
                  -> Maybe (MemInt (ArchAddrWidth arch))
@@ -87,9 +88,7 @@ valueStackOffset bnds amap v =
     CValue{} ->
       Nothing
     Initial r ->
-      case boundsLocationInfo bnds (RegLoc r) of
-        (_rep, IsStackOffset o) -> Just o
-        _ -> Nothing
+      blockStartLocStackOffset bnds (RegLoc r)
     AssignedValue (Assignment aid _) ->
       Map.lookup (Some aid) amap
 
@@ -251,7 +250,7 @@ data RegisterUseContext arch ids
 -- particular locations after the block executes.
 data BlockUsageSummary (arch :: Type) ids = RUS
   { -- | Information about stack layout/jump bounds at start of block.
-    blockPrecond :: !(InitJumpBounds arch)
+    blockPrecond :: !(BlockStartStackConstraints arch)
     -- | Maps locations to the dependencies needed to compute values in that location.
   , _blockInitDeps  :: !(BlockProvideDepMap (ArchReg arch) ids)
     -- | Dependencies needed to execute statements with side effects.
@@ -266,9 +265,9 @@ data BlockUsageSummary (arch :: Type) ids = RUS
 type RegisterUseM arch ids a =
   ReaderT (RegisterUseContext arch ids) (StateT (BlockUsageSummary arch ids) (Except String)) a
 
-initBlockUsageSummary :: InitJumpBounds arch -> BlockUsageSummary arch ids
-initBlockUsageSummary bnds =
-  RUS { blockPrecond       = bnds
+initBlockUsageSummary :: BlockStartStackConstraints arch -> BlockUsageSummary arch ids
+initBlockUsageSummary bCns =
+  RUS { blockPrecond       = bCns
       , _blockInitDeps     = emptyBlockProvideDepMap
       , _blockExecDemands  = emptyDeps
       , _assignmentCache   = Map.empty
@@ -459,7 +458,7 @@ summarizeBlock :: forall arch ids
                -> ParsedBlock arch ids
                -> Except String (BlockUsageSummary arch ids)
 summarizeBlock ctx blk = do
- let s0 = initBlockUsageSummary (blockJumpBounds blk)
+ let s0 = initBlockUsageSummary (initBndsMap (blockJumpBounds blk))
  flip execStateT s0 $ flip runReaderT ctx $ do
   let addr = pblockAddr blk
   -- Add demanded values for terminal
