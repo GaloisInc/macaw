@@ -112,7 +112,7 @@ import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import qualified What4.Interface as WI
 import qualified What4.Symbol as WS
-import qualified What4.Utils.Hashable as WUH
+-- import qualified What4.Utils.Hashable as WUH
 
 import qualified Data.Macaw.Symbolic as MS
 
