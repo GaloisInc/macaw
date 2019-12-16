@@ -43,7 +43,7 @@ withNewBackend s k = do
       let proxy = Proxy @(WSY.Connection PN.GlobalNonceGenerator)
       liftIO $ WC.extendConfig WSY.yicesOptions (WI.getConfiguration sym)
       -- For some reason, non-linear arithmetic is required for cvc4 and z3 but doesn't work at all with yices
-      let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs
+      let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs .|. WPF.useLinearArithmetic
       k proxy features sym
     Z3 -> do
       let proxy = Proxy @(WPS.Writer WSZ.Z3)
