@@ -6,15 +6,15 @@
 
 CCARM=arm-linux-gnu-gcc
 CCPPC=powerpc64-linux-gnu-gcc
-CCX86=gcc
+CCX86=clang
 
-armexe = $(patsubst %.c,%.arm.exe,$(wildcard *.c))
+# armexe = $(patsubst %.c,%.arm.exe,$(wildcard *.c))
 ppcexe = $(patsubst %.c,%.ppc.exe,$(wildcard *.c))
 x86exe = $(patsubst %.c,%.x86.exe,$(wildcard *.c))
 
 CFLAGS = -O0 -fno-stack-protector -g
 
-all: $(armexe) $(ppcexe) $(x86exe)
+all: $(ppcexe) $(x86exe)
 
 $(armexe): %.arm.exe: %.arm.s
 	$(CCARM) $(CFLAGS) -nostdlib $< -o $@
