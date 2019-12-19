@@ -430,9 +430,9 @@ mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
       zeroNat <- WI.natLit sym 0
       isZeroBase <- WI.natEq sym zeroNat ptrBase
       p' <- WI.itePred sym isZeroBase p (WI.truePred sym)
-      let msg = CS.GenericSimError "Write outside of static memory range (unknown BlockID)"
+      let msg = printf "%s outside of static memory range (unknown BlockID): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
-      let assertion = CB.LabeledPred p' (CS.SimError loc msg)
+      let assertion = CB.LabeledPred p' (CS.SimError loc (CS.GenericSimError msg))
       return (Just assertion)
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
