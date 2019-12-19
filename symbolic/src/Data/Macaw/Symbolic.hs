@@ -942,7 +942,7 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
 
 data PointerUse = PointerUse (Maybe WPL.ProgramLoc) PointerUseTag
 data PointerUseTag = PointerRead | PointerWrite
-  deriving (Eq)
+  deriving (Eq, Show)
 
 pointerUseLocation :: PointerUse -> WPL.ProgramLoc
 pointerUseLocation (PointerUse mloc _) =
