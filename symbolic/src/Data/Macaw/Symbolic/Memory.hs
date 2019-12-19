@@ -417,7 +417,7 @@ mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
   case WI.asNat ptrBase of
     Just 0 -> do
       p <- mkPred ptrOff
-      let msg = CS.GenericSimError "Write outside of static memory range (known BlockID)"
+      let msg = CS.GenericSimError ("Write outside of static memory range (known BlockID 0): " ++ show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
       let assertion = CB.LabeledPred p (CS.SimError loc msg)
       return (Just assertion)
