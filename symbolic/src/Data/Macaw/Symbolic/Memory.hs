@@ -110,6 +110,7 @@ import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
+import           Text.Printf ( printf )
 import qualified What4.Interface as WI
 import qualified What4.Symbol as WS
 -- import qualified What4.Utils.Hashable as WUH
@@ -417,9 +418,9 @@ mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
   case WI.asNat ptrBase of
     Just 0 -> do
       p <- mkPred ptrOff
-      let msg = CS.GenericSimError ("Write outside of static memory range (known BlockID 0): " ++ show (WI.printSymExpr ptrOff))
+      let msg = printf "%s outside of static memory range (known BlockID 0): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
       let loc = MS.pointerUseLocation puse
-      let assertion = CB.LabeledPred p (CS.SimError loc msg)
+      let assertion = CB.LabeledPred p (CS.SimError loc (CS.GenericSimError msg))
       return (Just assertion)
     Just _ -> return Nothing
     Nothing -> do
