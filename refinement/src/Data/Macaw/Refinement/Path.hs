@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.Path
@@ -8,12 +9,24 @@ module Data.Macaw.Refinement.Path
   , pathForwardTrails
   , pathTo
   , takePath
+  --  * CFG
+  , CFG
+  , mkPartialCFG
+  , cfgPathsTo
+  , CFGSlice
+  , sliceComponents
   )
 where
 
 import           Control.Applicative
+import           Control.Lens ( (^.) )
+import qualified Data.Foldable as F
+import qualified Data.Graph.Haggle as G
+import qualified Data.Graph.Haggle.Algorithms.DFS as GD
+import qualified Data.Map.Strict as M
 import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth, ArchSegmentOff )
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
+import qualified Data.Macaw.Discovery.State as MDS
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.Memory ( MemWidth )
 import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
@@ -21,9 +34,155 @@ import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
                                                       , blockTransferTo
                                                       , funBlockIDs
                                                       )
+import qualified Data.Macaw.Refinement.FuncBlockUtils as FBU
+import           Data.Maybe ( mapMaybe )
+import qualified Data.Set as S
 import           Data.Text.Prettyprint.Doc
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
+data CFG arch ids = CFG { cfgFunc  :: DiscoveryFunInfo arch ids
+                        -- ^ The original function
+                        , cfg      :: !(G.PatriciaTree (FBU.BlockIdentifier arch ids) ())
+                        -- ^ The directed graph representing control flow
+                        , cfgEntry :: FBU.BlockIdentifier arch ids
+                        -- ^ The entry block of the CFG
+                        , cfgVirtualRoots :: [FBU.BlockIdentifier arch ids]
+                        -- ^ The disconnected roots that could reach targets (entry point + successors of function calls)
+                        , cfgNodeAddrs :: !(M.Map G.Vertex (FBU.BlockIdentifier arch ids))
+                        , cfgAddrNodes :: !(M.Map (FBU.BlockIdentifier arch ids) G.Vertex)
+                        }
+
+emptyCFG :: DiscoveryFunInfo arch ids -> CFG arch ids
+emptyCFG func = CFG { cfgFunc = func
+                    , cfg = G.emptyGraph
+                    , cfgEntry = entryID
+                    , cfgVirtualRoots = [entryID]
+                    , cfgNodeAddrs = M.empty
+                    , cfgAddrNodes = M.empty
+                    }
+  where
+    entryID = FBU.blockID entryBlock
+    Just entryBlock = M.lookup (MDS.discoveredFunAddr func) (func ^. MDS.parsedBlocks)
+
+-- | Build a 'CFG' from a 'DiscoveryFunInfo'
+--
+-- The CFG will include all of the blocks reachable from the entry point to the
+-- function.  This CFG is slightly quirky, reflecting its use in this package:
+-- there are no edges from blocks ending in calls to the return site.  The use
+-- of this CFG is to ask what is definitely reachable via reverse DFS from a
+-- particular point, but stopping at function entry and function calls.  We need
+-- to stop at function calls because we do not currently prove that locals are
+-- unaltered after a call.
+mkPartialCFG :: (MemWidth (MC.ArchAddrWidth arch)) => DiscoveryFunInfo arch ids -> CFG arch ids
+mkPartialCFG fi = F.foldl' buildCFG nodeGraph allBlocks
+  where
+    allBlocks = M.toList (fi ^. MDS.parsedBlocks)
+    -- We need to add all of the nodes to the graph first so that there are
+    -- vertexes allocated for them
+    nodeGraph = F.foldl' addNode (emptyCFG fi) allBlocks
+    addNode gr (_addr, pb) =
+      let bid = FBU.blockID pb
+          (nodeId, g1) = G.insertLabeledVertex (cfg gr) bid
+          nodeAddrs' = M.insert nodeId bid (cfgNodeAddrs gr)
+          addrNodes' = M.insert bid nodeId (cfgAddrNodes gr)
+      in gr { cfg = g1
+            , cfgNodeAddrs = nodeAddrs'
+            , cfgAddrNodes = addrNodes'
+            }
+    addEdge addrNodes srcId g0 tgtAddr =
+      let Just tgtBlock = M.lookup tgtAddr (fi ^. MDS.parsedBlocks)
+          Just tgtId = M.lookup (FBU.blockID tgtBlock) addrNodes
+          Just (_e, g) = G.insertLabeledEdge g0 srcId tgtId ()
+      in g
+    buildCFG gr (_addr, pb) =
+      let Just nodeId = M.lookup (FBU.blockID pb) (cfgAddrNodes gr)
+      in case MDS.pblockTermStmt pb of
+        MDS.ParsedJump _ tgt ->
+          let g2 = addEdge (cfgAddrNodes gr) nodeId (cfg gr) tgt
+          in gr { cfg = g2 }
+        MDS.ParsedBranch _ _ tgt1 tgt2 ->
+          let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) [tgt1, tgt2]
+          in gr { cfg = g2 }
+        MDS.ParsedLookupTable _ _ addrs ->
+          let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) addrs
+          in gr { cfg = g2 }
+        MDS.ParsedCall _ (Just retAddr) ->
+          let Just retBlock = FBU.blockInFunction fi retAddr
+          in gr { cfgVirtualRoots = retBlock : cfgVirtualRoots gr
+                }
+        MDS.ParsedCall _ Nothing -> gr
+        MDS.PLTStub {} -> gr
+        MDS.ParsedArchTermStmt {} -> gr
+        MDS.ParsedReturn {} -> gr
+        MDS.ParsedTranslateError {} -> gr
+        MDS.ClassifyFailure {} -> gr
+
+-- | A contiguous slice from a CFG
+--
+-- Slices are contiguous sets of blocks connected by control flow.  They are not
+-- necessarily linear.  The "body" does not contain the entry or target blocks
+-- (to avoid duplication).
+--
+-- The entry and target could be the same (in which case the body is empty)
+data CFGSlice arch ids =
+  CFGSlice { sliceCFG :: CFG arch ids
+           , sliceEntry :: MDS.ParsedBlock arch ids
+           -- ^ The starting point of the slice
+           , sliceBody :: [MDS.ParsedBlock arch ids]
+           -- ^ Other blocks in the slice
+           , sliceTarget :: MDS.ParsedBlock arch ids
+           -- ^ The terminal block of the slice
+           }
+
+sliceComponents :: CFGSlice arch ids -> (MDS.ParsedBlock arch ids, [MDS.ParsedBlock arch ids], MDS.ParsedBlock arch ids)
+sliceComponents slice = (sliceEntry slice, sliceBody slice, sliceTarget slice)
+
+-- | Compute all of the blocks backward reachable from the given block address
+--
+-- This function returns a list of paths from some block to the target block.
+-- There may be multiple paths because the backwards traversal stops at function
+-- calls (which may split paths).
+--
+-- Note that paths are not necessarily linear and may contain branches.  They
+-- are really contiguous CFG slices.  Each path may have "dangling" branches
+-- that do not lead to the target block.
+cfgPathsTo :: (MemWidth (MC.ArchAddrWidth arch)) => FBU.BlockIdentifier arch ids -> CFG arch ids -> [CFGSlice arch ids]
+cfgPathsTo targetBlockID g0 = mapMaybe slice (cfgVirtualRoots g0)
+  where
+    Just targetNode = M.lookup targetBlockID (cfgAddrNodes g0)
+    Just targetBlock = FBU.getBlock (cfgFunc g0) targetBlockID
+    backwardReachable = S.fromList (GD.rdfs (cfg g0) [targetNode])
+    slice root = do
+      let Just startNode = M.lookup root (cfgAddrNodes g0)
+      let forwardReachable = S.fromList (GD.dfs (cfg g0) [startNode])
+      let common = S.intersection forwardReachable backwardReachable
+      case S.null common of
+        True -> Nothing
+        False -> do
+          let common' = S.delete targetNode $ S.delete startNode common
+          let Just startBlock = FBU.getBlock (cfgFunc g0) root
+          Just $ CFGSlice { sliceCFG = g0
+                          , sliceEntry = startBlock
+                          , sliceTarget = targetBlock
+                          , sliceBody = map nodeToBlock (F.toList common')
+                          }
+    nodeToBlock n =
+      let Just bid = M.lookup n (cfgNodeAddrs g0)
+          Just pb = FBU.getBlock (cfgFunc g0) bid
+      in pb
+
+{-
+
+Save the "virtual roots" of the graph:
+
+- The entry point
+- The successors to each call
+
+let reach = RDFS target g
+for each vRoot $ \r -> do
+  let pathProjection = dfs vroot `intersect` reach
+
+-}
 
 -- | This is the datatype that represents the back-path of blocks in
 -- the function from the exit point(s) to either the entry point or a

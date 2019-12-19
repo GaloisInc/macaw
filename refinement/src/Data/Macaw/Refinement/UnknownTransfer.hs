@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
 -- | This module uses symbolic evaluation to refine the discovered CFG
@@ -110,11 +111,9 @@ module Data.Macaw.Refinement.UnknownTransfer (
 
 import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
-import           Control.Monad ( forM )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Scheduler as CS
 import qualified Data.Foldable as F
-import           Data.List ( sort )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Refinement.FuncBlockUtils as RFU
@@ -124,6 +123,7 @@ import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
 import           Data.Maybe ( catMaybes, isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..), viewSome )
+import qualified Data.Set as S
 import           GHC.TypeLits
 
 -- | This is the main entrypoint, which is given the current Discovery
@@ -210,14 +210,14 @@ refineBlockTransfer
   -> MD.ParsedBlock arch ids
   -- ^ A block ending in an unknown transfer
   -> m (Solutions arch, [Some (RFU.BlockIdentifier arch)])
-refineBlockTransfer context fi (solns, unrefinable) blk =
-  case RP.pathTo (RFU.blockID blk) $ RP.buildFuncPath fi of
-    Nothing -> error "unable to find function path for block" -- internal error
-    Just p -> do soln <- refinePath context fi p (RP.pathDepth p) 1
-                 case soln of
-                   Nothing -> return (solns, Some (RFU.blockID blk) : unrefinable)
-                   Just sl ->
-                     return (addSolution blk sl solns, unrefinable)
+refineBlockTransfer context fi (solns, unrefinable) blk = do
+  let cfg = RP.mkPartialCFG fi
+  let slices = RP.cfgPathsTo (RFU.blockID blk) cfg
+  possibleSolutions <- mapM (refineSlice context) slices
+  if | all isJust possibleSolutions -> do
+       let sl = mconcat (catMaybes possibleSolutions)
+       return (addSolution blk sl solns, unrefinable)
+     | otherwise -> return (solns, Some (RFU.blockID blk) : unrefinable)
 
 -- | Feed solutions back into the system, updating the 'MD.DiscoveryState' by
 -- calling into macaw base.
@@ -234,27 +234,16 @@ updateDiscovery s0 (Some finfo, solutions) = do
     [] -> return s0
     vals -> return (MD.addDiscoveredFunctionBlockTargets s0 finfo vals)
 
-refinePath :: ( MS.SymArchConstraints arch
-              , 16 <= MC.ArchAddrWidth arch
-              , MonadIO m
-              )
-           => RSE.RefinementContext arch
-           -> MD.DiscoveryFunInfo arch ids
-           -> RP.FuncBlockPath arch ids
-           -> Int
-           -> Int
-           -> m (Maybe (Solution arch))
-refinePath context fi path maxlevel numlevels =
-  let thispath = RP.takePath numlevels path
-      smtEquation = equationFor fi thispath
-  in solve context smtEquation >>= \case
-       Nothing -> return Nothing -- divergent, stop here
-       soln@(Just{}) -> if numlevels >= maxlevel
-                          then return soln
-                          else refinePath context fi path maxlevel (numlevels + 1)
+refineSlice :: ( MS.SymArchConstraints arch
+               , 16 <=  MC.ArchAddrWidth arch
+               , MonadIO m
+               )
+            => RSE.RefinementContext arch
+            -> RP.CFGSlice arch ids
+            -> m (Maybe (Solution arch))
+refineSlice context slice = solve context slice
 
-data Equation arch ids = Equation [[MD.ParsedBlock arch ids]]
-newtype Solution arch = Solution [MC.ArchSegmentOff arch]  -- identified transfers
+newtype Solution arch = Solution (S.Set (MC.ArchSegmentOff arch))  -- identified transfers
 newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) (Solution arch))
 
 instance Semigroup (Solutions arch) where
@@ -263,10 +252,16 @@ instance Semigroup (Solutions arch) where
 instance Monoid (Solutions arch) where
   mempty = Solutions Map.empty
 
+instance Semigroup (Solution arch) where
+  Solution s1 <> Solution s2 = Solution (s1 <> s2)
+
+instance Monoid (Solution arch) where
+  mempty = Solution S.empty
+
 solutionAddrs :: (MC.RegisterInfo (MC.ArchReg arch))
               => (MC.ArchSegmentOff arch, Solution arch)
               -> (MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])
-solutionAddrs (srcBlockAddr, Solution l) = (srcBlockAddr, l)
+solutionAddrs (srcBlockAddr, Solution l) = (srcBlockAddr, S.toList l)
 
 solutionValues :: (MC.RegisterInfo (MC.ArchReg arch))
                => Solutions arch
@@ -279,32 +274,20 @@ addSolution :: MD.ParsedBlock arch ids
             -> Solutions arch
 addSolution blk sl (Solutions slns) = Solutions (Map.insert (MD.pblockAddr blk) sl slns)
 
-equationFor :: MD.DiscoveryFunInfo arch ids
-            -> RP.FuncBlockPath arch ids
-            -> Equation arch ids
-equationFor fi p =
-  let pTrails = RP.pathForwardTrails p
-      pTrailBlocks = map (RFU.getBlock fi) <$> pTrails
-  in if and (any (not . isJust) <$> pTrailBlocks)
-     then error "did not find requested block in discovery results!" -- internal
-       else Equation (catMaybes <$> pTrailBlocks)
-
 -- | Compute a set of solutions for this refinement
---
--- Solutions are currently sorted for convenience, not correctness
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
          , MonadIO m
          )
       => RSE.RefinementContext arch
-      -> Equation arch ids
+      -> RP.CFGSlice arch ids
       -> m (Maybe (Solution arch))
-solve context (Equation paths) = do
-  possibleModels <- fmap RSE.ipModels <$> forM paths
-    (\path -> liftIO $ RSE.smtSolveTransfer context path)
-  case any isNothing possibleModels of
-    True -> return Nothing
-    False -> return (Just (Solution (sort (concat (catMaybes possibleModels)))))
+solve context slice = do
+  models <- liftIO $ RSE.smtSolveTransfer context slice
+  let possibleModels = RSE.ipModels models
+  case possibleModels of
+    Nothing -> return Nothing
+    Just mdls -> return (Just (Solution (S.fromList mdls)))
 
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
 -- isBetterSolution :: [ArchSegmentOff arch] -> [ArchSegmentOff arch] -> Bool

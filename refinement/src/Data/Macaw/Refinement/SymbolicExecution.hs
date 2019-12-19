@@ -60,6 +60,7 @@ import qualified What4.SatResult as W
 import qualified What4.BaseTypes as WT
 import qualified What4.LabeledPred as WLP
 
+import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.Solver as MRS
 
 import qualified What4.Expr as WE
@@ -149,20 +150,23 @@ smtSolveTransfer
      , MonadIO m
      )
   => RefinementContext arch
-  -> [M.ParsedBlock arch ids]
+  -> RP.CFGSlice arch ids -- [M.ParsedBlock arch ids]
   -> m (IPModels (M.ArchSegmentOff arch))
-smtSolveTransfer ctx blocks
+smtSolveTransfer ctx slice
   | Just archVals <- MS.archVals (Proxy @arch) = MRS.withNewBackend (solver (config ctx)) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
       halloc <- liftIO $ C.newHandleAllocator
 
       -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
-      let entryBlock = head blocks
+      let (entryBlock, body, targetBlock) = RP.sliceComponents slice
+      -- let entryBlock = head blocks
       let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
-      some_cfg <- liftIO $ MS.mkBlockPathCFG
+      some_cfg <- liftIO $ MS.mkBlockSliceCFG
         (MS.archFunctions archVals)
         halloc
         posFn
-        blocks
+        entryBlock
+        body
+        [targetBlock]
 
       -- F.forM_ blocks $ \pb -> liftIO $ do
       --   printf "Block %s\n" (show (M.pblockAddr pb))
@@ -465,9 +469,11 @@ initializeMemory _ sym mem = do
   let stackBytes = 2 * 1024 * 1024
   stackArray <- liftIO $ W.freshConstant sym (W.safeSymbol "stack") C.knownRepr
   stackSize <- liftIO $ W.bvLit sym ?ptrWidth stackBytes
-  (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc sym LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSize LLVM.noAlignment
+  stackSizex2 <- liftIO $ W.bvLit sym ?ptrWidth (2 * stackBytes)
+  (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc sym LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSizex2 LLVM.noAlignment
   mem2 <- liftIO $ LLVM.doArrayStore sym mem1 stackBasePtr LLVM.noAlignment stackArray stackSize
   initSPVal <- liftIO $ LLVM.ptrAdd sym C.knownRepr stackBasePtr stackSize
+  liftIO $ putStrLn ("Stack pointer is: " ++ show (LLVM.ppPtr initSPVal))
   return (mem2, initSPVal)
 
 
