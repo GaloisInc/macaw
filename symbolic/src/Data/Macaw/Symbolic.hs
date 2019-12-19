@@ -64,6 +64,9 @@ module Data.Macaw.Symbolic
     -- ** Translating block paths
   , mkBlockPathRegCFG
   , mkBlockPathCFG
+    -- * Translating slices of CFGs
+  , mkBlockSliceRegCFG
+  , mkBlockSliceCFG
     -- ** Post-processing helpers
   , toCoreCFG
     -- ** Translation-related types
@@ -125,6 +128,7 @@ import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce ( NonceGenerator, newIONonceGenerator )
 import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
+import qualified Data.Set as S
 import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
@@ -464,6 +468,140 @@ mkParsedBlockCFG :: forall arch ids
                  -> IO (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkParsedBlockCFG archFns halloc posFn b =
   toCoreCFG archFns <$> mkParsedBlockRegCFG archFns halloc posFn b
+
+parsedTermTargets :: M.ParsedTermStmt arch ids -> [M.ArchSegmentOff arch]
+parsedTermTargets t =
+  case t of
+    M.ParsedCall _ Nothing -> []
+    M.ParsedCall _ (Just ret) -> [ret]
+    M.ParsedJump _ addr -> [addr]
+    M.ParsedBranch _ _ taddr faddr -> [taddr, faddr]
+    M.ParsedLookupTable _ _ addrs -> toList addrs
+    M.ParsedReturn {} -> []
+    M.ParsedArchTermStmt _ _ Nothing -> []
+    M.ParsedArchTermStmt _ _ (Just addr) -> [addr]
+    M.PLTStub {} -> []
+    M.ParsedTranslateError {} -> []
+    M.ClassifyFailure {} -> []
+
+-- | See the documentation for 'mkBlockSliceCFG'
+mkBlockSliceRegCFG :: forall arch ids
+                    . MacawSymbolicArchFunctions arch
+                   -> C.HandleAllocator
+                   -> (M.ArchSegmentOff arch -> WPL.Position)
+                   -> M.ParsedBlock arch ids
+                   -- ^ Entry block
+                   -> [M.ParsedBlock arch ids]
+                   -- ^ Non-entry non-terminal blocks
+                   -> [M.ParsedBlock arch ids]
+                   -- ^ Terminal blocks
+                   -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
+mkBlockSliceRegCFG archFns halloc posFn entry body terms = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
+  let entryAddr = M.pblockAddr entry
+  let archRegTy = C.StructRepr (crucArchRegTypes archFns)
+  let entryPos = posFn entryAddr
+  inputRegId <- mmFreshNonce
+  let inputReg = CR.Reg { CR.regPosition = entryPos
+                        , CR.regId = inputRegId
+                        , CR.typeOfReg = archRegTy
+                        }
+  ng <- mmNonceGenerator
+  inputAtom <- mmExecST (Ctx.last <$> CR.mkInputAtoms ng entryPos (Empty :> archRegTy))
+
+  let termAddrs = S.fromList (fmap M.pblockAddr terms)
+  -- The CFG body blocks with terminators and entry blocks removed
+  let isBodyBlock pb =
+        not (S.member (M.pblockAddr pb) termAddrs) && M.pblockAddr pb /= entryAddr
+  let realBody = filter isBodyBlock body
+  let allBlocks = entry : (realBody ++ terms)
+  labelMap0 <- mkBlockLabelMap allBlocks
+
+  let offPosFn :: M.ArchSegmentOff arch -> M.ArchAddrWord arch -> WPL.Position
+      offPosFn base = posFn . fromJust . M.incSegmentOff base . toInteger
+  let runCrucGen' addr label = runCrucGen archFns (offPosFn addr) label inputReg
+
+  -- There may be blocks that are jumped to but not included in the list of
+  -- blocks provided in this slice.  We need to add synthetic blocks to stand in
+  -- for them.  The blocks are simple: they just assert False to indicate that
+  -- those branches are never taken.
+  let makeSyntheticBlock (lm, blks) baddr =
+        case Map.lookup baddr lm of
+          Just _ -> return (lm, blks)
+          Nothing -> do
+            synLabel <- CR.Label <$> mmFreshNonce
+            (synBlock, extraSynBlocks) <- runCrucGen' baddr synLabel $ do
+              falseAtom <- valueToCrucible (M.BoolValue False)
+              msg <- appAtom (C.StringLit (C.UnicodeLiteral "Elided block"))
+              addStmt (CR.Assume falseAtom msg)
+              errMsg <- crucibleValue (C.StringLit (C.UnicodeLiteral "Elided block"))
+              addTermStmt (CR.ErrorStmt errMsg)
+            return (Map.insert baddr synLabel lm, reverse (synBlock : extraSynBlocks) : blks)
+
+  let makeSyntheticBlocks (lm, blks) blk =
+        foldlM makeSyntheticBlock (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
+
+  (labelMap, syntheticBlocks) <- foldlM makeSyntheticBlocks (labelMap0, []) allBlocks
+
+  -- Set up a fake entry block that initializes the register file and jumps
+  -- to the real entry point
+  entryLabel <- CR.Label <$> mmFreshNonce
+  (initCrucBlock, initExtraCrucBlocks) <- runCrucGen' entryAddr entryLabel $ do
+    setMachineRegs inputAtom
+    addTermStmt $ CR.Jump (parsedBlockLabel labelMap entryAddr)
+
+
+  -- Add each block in the slice
+  crucBlocks <- forM allBlocks $ \block -> do
+    let blockAddr = M.pblockAddr block
+    let label = case Map.lookup blockAddr labelMap of
+          Just lbl -> lbl
+          Nothing -> error ("Missing block label for block at " ++ show blockAddr)
+    (mainCrucBlock, auxCrucBlocks) <- runCrucGen' blockAddr label $ do
+      mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
+      case S.member blockAddr termAddrs of
+        True -> do
+          -- NOTE: If the entry block is also a terminator, we'll just
+          -- return at the end of the entry block and ignore all other
+          -- blocks.  This is the intended behavior, but it is an
+          -- interesting consequence.
+
+          -- Convert the existing terminator into a return.  This function
+          -- preserves the existing register state, which is important when
+          -- generating the Crucible return.
+          let retTerm = termStmtToReturn (M.pblockTermStmt block)
+          addMacawParsedTermStmt labelMap blockAddr retTerm
+        False -> addMacawParsedTermStmt labelMap blockAddr (M.pblockTermStmt block)
+    return (reverse (mainCrucBlock : auxCrucBlocks))
+  return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks))
+
+-- | Construct a Crucible CFG from a (possibly incomplete) collection of macaw blocks
+--
+-- The CFG starts with the provided entry block and returns from the terminal
+-- block.  Control flow between the remaining (body) blocks is preserved.  If a
+-- block ends in a branch to a block not included in the body, the translation
+-- will generate a new block that simply asserts false (i.e., that execution
+-- should never reach that block).  The terminal block will have its term
+-- statement translated into a return.
+--
+-- The entry and terminal block can be the same, in which case the body is
+-- expected to be empty (and will be ignored).
+--
+-- The intended use of this function is to ask for models of registers after a
+-- subset of code in a function has executed by examining the register state
+-- after the fragment executes.
+mkBlockSliceCFG :: forall arch ids
+                 . MacawSymbolicArchFunctions arch
+                -> C.HandleAllocator
+                -> (M.ArchSegmentOff arch -> WPL.Position)
+                -> M.ParsedBlock arch ids
+                -- ^ Entry block
+                -> [M.ParsedBlock arch ids]
+                -- ^ Non-entry non-terminal blocks
+                -> [M.ParsedBlock arch ids]
+                -- ^ Terminal blocks
+                -> IO (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
+mkBlockSliceCFG archFns halloc posFn entry body terms =
+  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns halloc posFn entry body terms
 
 mkBlockPathRegCFG
   :: forall arch ids
