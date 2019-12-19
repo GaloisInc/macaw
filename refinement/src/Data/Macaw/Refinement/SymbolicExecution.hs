@@ -168,7 +168,7 @@ smtSolveTransfer ctx slice
         body
         [targetBlock]
 
-      -- F.forM_ blocks $ \pb -> liftIO $ do
+      -- F.forM_ (entryBlock : targetBlock : body) $ \pb -> liftIO $ do
       --   printf "Block %s\n" (show (M.pblockAddr pb))
       --   putStrLn (show (PP.pretty pb))
 
