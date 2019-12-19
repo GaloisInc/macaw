@@ -496,10 +496,9 @@ mkBlockSliceRegCFG :: forall arch ids
                    -> [M.ParsedBlock arch ids]
                    -- ^ Terminal blocks
                    -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceRegCFG archFns halloc posFn entry body terms = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
-  let entryAddr = M.pblockAddr entry
-  let archRegTy = C.StructRepr (crucArchRegTypes archFns)
-  let entryPos = posFn entryAddr
+mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
+  -- Build up some initial values needed to set up the entry point to the
+  -- function (including the initial value of all registers)
   inputRegId <- mmFreshNonce
   let inputReg = CR.Reg { CR.regPosition = entryPos
                         , CR.regId = inputRegId
@@ -508,55 +507,32 @@ mkBlockSliceRegCFG archFns halloc posFn entry body terms = crucGenArchConstraint
   ng <- mmNonceGenerator
   inputAtom <- mmExecST (Ctx.last <$> CR.mkInputAtoms ng entryPos (Empty :> archRegTy))
 
-  let termAddrs = S.fromList (fmap M.pblockAddr terms)
-  -- The CFG body blocks with terminators and entry blocks removed
-  let isBodyBlock pb =
-        not (S.member (M.pblockAddr pb) termAddrs) && M.pblockAddr pb /= entryAddr
-  let realBody = filter isBodyBlock body
-  let allBlocks = entry : (realBody ++ terms)
+  -- Allocate Crucible CFG labels for all of the blocks provided by the caller
   labelMap0 <- mkBlockLabelMap allBlocks
 
-  let offPosFn :: M.ArchSegmentOff arch -> M.ArchAddrWord arch -> WPL.Position
-      offPosFn base = posFn . fromJust . M.incSegmentOff base . toInteger
-  let runCrucGen' addr label = runCrucGen archFns (offPosFn addr) label inputReg
-
-  -- There may be blocks that are jumped to but not included in the list of
-  -- blocks provided in this slice.  We need to add synthetic blocks to stand in
-  -- for them.  The blocks are simple: they just assert False to indicate that
-  -- those branches are never taken.
-  let makeSyntheticBlock (lm, blks) baddr =
-        case Map.lookup baddr lm of
-          Just _ -> return (lm, blks)
-          Nothing -> do
-            synLabel <- CR.Label <$> mmFreshNonce
-            (synBlock, extraSynBlocks) <- runCrucGen' baddr synLabel $ do
-              falseAtom <- valueToCrucible (M.BoolValue False)
-              msg <- appAtom (C.StringLit (C.UnicodeLiteral "Elided block"))
-              addStmt (CR.Assume falseAtom msg)
-              errMsg <- crucibleValue (C.StringLit (C.UnicodeLiteral "Elided block"))
-              addTermStmt (CR.ErrorStmt errMsg)
-            return (Map.insert baddr synLabel lm, reverse (synBlock : extraSynBlocks) : blks)
-
-  let makeSyntheticBlocks (lm, blks) blk =
-        foldlM makeSyntheticBlock (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
-
-  (labelMap, syntheticBlocks) <- foldlM makeSyntheticBlocks (labelMap0, []) allBlocks
+  -- Add synthetic blocks for all jump targets mentioned by the input blocks,
+  -- but not included in the list of all blocks.  The synthetic blocks simply
+  -- assume False to indicate to the symbolic execution engine that executions
+  -- reaching those missing blocks are not feasible paths.
+  (labelMap, syntheticBlocks) <- foldlM (makeSyntheticBlocks inputReg) (labelMap0, []) allBlocks
 
   -- Set up a fake entry block that initializes the register file and jumps
   -- to the real entry point
   entryLabel <- CR.Label <$> mmFreshNonce
-  (initCrucBlock, initExtraCrucBlocks) <- runCrucGen' entryAddr entryLabel $ do
+  (initCrucBlock, initExtraCrucBlocks) <- runCrucGen archFns (offPosFn entryAddr) entryLabel inputReg $ do
     setMachineRegs inputAtom
     addTermStmt $ CR.Jump (parsedBlockLabel labelMap entryAddr)
 
-
   -- Add each block in the slice
+  --
+  -- For blocks marked as terminators, we rewrite their terminator statement
+  -- into a return.
   crucBlocks <- forM allBlocks $ \block -> do
     let blockAddr = M.pblockAddr block
     let label = case Map.lookup blockAddr labelMap of
           Just lbl -> lbl
           Nothing -> error ("Missing block label for block at " ++ show blockAddr)
-    (mainCrucBlock, auxCrucBlocks) <- runCrucGen' blockAddr label $ do
+    (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
       case S.member blockAddr termAddrs of
         True -> do
@@ -573,6 +549,59 @@ mkBlockSliceRegCFG archFns halloc posFn entry body terms = crucGenArchConstraint
         False -> addMacawParsedTermStmt labelMap blockAddr (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
   return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks))
+  where
+    entryAddr = M.pblockAddr entry
+    entryPos = posFn entryAddr
+    archRegTy = C.StructRepr (crucArchRegTypes archFns)
+    -- Addresses of blocks marked as terminators
+    termAddrs = S.fromList (fmap M.pblockAddr terms)
+
+    -- Blocks are "body blocks" if they are not the entry or marked as
+    -- terminator blocks.  We need this distinction because we modify terminator
+    -- blocks to end in a return (even if they don't naturally do so).
+    isBodyBlock :: M.ParsedBlock arch ids -> Bool
+    isBodyBlock pb = not (S.member (M.pblockAddr pb) termAddrs) && M.pblockAddr pb /= entryAddr
+
+    -- Blocks that are not the entry or terminators
+    realBody = filter isBodyBlock body0
+    -- The list of all blocks without duplicates
+    allBlocks = entry : (realBody ++ terms)
+
+    offPosFn :: (M.MemWidth (M.ArchAddrWidth arch)) => M.ArchSegmentOff arch -> M.ArchAddrWord arch -> WPL.Position
+    offPosFn base = posFn . fromJust . M.incSegmentOff base . toInteger
+
+    -- There may be blocks that are jumped to but not included in the list of
+    -- blocks provided in this slice.  We need to add synthetic blocks to stand in
+    -- for them.  The blocks are simple: they just assert False to indicate that
+    -- those branches are never taken.
+    makeSyntheticBlock :: forall s
+                        . (M.MemWidth (M.ArchAddrWidth arch))
+                       => CR.Reg s (ArchRegStruct arch)
+                       -> (Map.Map (M.ArchSegmentOff arch) (CR.Label s), [[CR.Block (MacawExt arch) s (ArchRegStruct arch)]])
+                       -> M.ArchSegmentOff arch
+                       -> MacawMonad arch ids s (Map.Map (M.ArchSegmentOff arch) (CR.Label s), [[CR.Block (MacawExt arch) s (ArchRegStruct arch)]])
+    makeSyntheticBlock inputReg (lm, blks) baddr =
+      case Map.lookup baddr lm of
+        Just _ -> return (lm, blks)
+        Nothing -> do
+          synLabel <- CR.Label <$> mmFreshNonce
+          (synBlock, extraSynBlocks) <- runCrucGen archFns (offPosFn baddr) synLabel inputReg $ do
+            falseAtom <- valueToCrucible (M.BoolValue False)
+            msg <- appAtom (C.StringLit (C.UnicodeLiteral "Elided block"))
+            addStmt (CR.Assume falseAtom msg)
+            errMsg <- crucibleValue (C.StringLit (C.UnicodeLiteral "Elided block"))
+            addTermStmt (CR.ErrorStmt errMsg)
+          return (Map.insert baddr synLabel lm, reverse (synBlock : extraSynBlocks) : blks)
+
+    makeSyntheticBlocks :: forall s
+                         . (M.MemWidth (M.ArchAddrWidth arch))
+                        => CR.Reg s (ArchRegStruct arch)
+                        -> (Map.Map (M.ArchSegmentOff arch) (CR.Label s), [[CR.Block (MacawExt arch) s (ArchRegStruct arch)]])
+                        -> M.ParsedBlock arch ids
+                        -> MacawMonad arch ids s (Map.Map (M.ArchSegmentOff arch) (CR.Label s), [[CR.Block (MacawExt arch) s (ArchRegStruct arch)]])
+    makeSyntheticBlocks inputReg (lm, blks) blk =
+      foldlM (makeSyntheticBlock inputReg) (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
+
 
 -- | Construct a Crucible CFG from a (possibly incomplete) collection of macaw blocks
 --
