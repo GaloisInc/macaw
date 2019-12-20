@@ -4,7 +4,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 -- | This module uses symbolic evaluation to refine the discovered CFG
 -- and resolve unknown transfer classify failures.
 --
@@ -245,6 +247,8 @@ refineSlice context slice = solve context slice
 
 newtype Solution arch = Solution (S.Set (MC.ArchSegmentOff arch))  -- identified transfers
 newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) (Solution arch))
+
+deriving instance (MC.MemWidth (MC.ArchAddrWidth arch)) => Show (Solution arch)
 
 instance Semigroup (Solutions arch) where
   Solutions s1 <> Solutions s2 = Solutions (s1 <> s2)
