@@ -389,10 +389,17 @@ extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = d
   liftIO $ putStrLn ("Number of initial assumptions: " ++ show (length initialAssumptions))
   let modelMax = maximumModelCount (config ctx)
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
-    -- FIXME: Try to assert that the base of the IP is 0
+    -- Assert that the IP is in an executable segment
     ipConstraint <- genIPConstraint ctx sym res_ip_off
+
+    -- We also want to assert that the IP is either a plain bitvector (region 0)
+    -- or in our global memory region (region 1)
     natZero <- liftIO $ W.natLit sym 0
-    basePred <- liftIO $ W.natEq sym natZero res_ip_base
+    natOne <- liftIO $ W.natLit sym 1
+    basePred0 <- liftIO $ W.natEq sym natZero res_ip_base
+    basePred1 <- liftIO $ W.natEq sym natOne res_ip_base
+    basePred <- liftIO $ W.orPred sym basePred0 basePred1
+
     let assumptions = ipConstraint : basePred : initialAssumptions
 
     liftIO $ putStrLn "IP Formula"
