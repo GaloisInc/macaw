@@ -515,7 +515,8 @@ getDenominator dw sym macawDenom = do
   -- Check denominator is not 0
   do let bvZ = app (BVLit dw 0)
      denNotZero <- evalApp sym $ Not (app (BVEq dw den bvZ))
-     assert symi denNotZero (C.AssertFailureSimError "denominator not zero")
+     let errMsg = "denominator not zero"
+     assert symi denNotZero (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.getDenominator"))
   pure den
 
 -- | Performs a simple unsigned division operation.
@@ -553,7 +554,8 @@ uDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVZext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       assert symi qNoOverflow (C.AssertFailureSimError "quotient no overflow")
+       let errMsg = "quotient no overflow"
+       assert symi qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.uDivRem"))
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
@@ -591,7 +593,8 @@ sDivRem sym repsz macawNum1 macawNum2 macawDenom =
     -- Check quotient did not overflow.
     do let qExt' = app (BVSext nw dw (ValBV dw qBV))
        qNoOverflow <- evalApp sym $ BVEq nw (ValBV nw qExt) qExt'
-       assert symi qNoOverflow (C.AssertFailureSimError "quotient no overflow")
+       let errMsg = "quotient no overflow"
+       assert symi qNoOverflow (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.sDivRem"))
     -- Get quotient
     q <- llvmPointer_bv symi qBV
     -- Get remainder
