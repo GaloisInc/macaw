@@ -291,6 +291,7 @@ solve context slice = do
   let possibleModels = RSE.ipModels models
   case possibleModels of
     Nothing -> return Nothing
+    Just [] -> return Nothing
     Just mdls -> return (Just (Solution (S.fromList mdls)))
 
 --isBetterSolution :: Solution arch -> Solution arch -> Bool
