@@ -29,11 +29,9 @@ import           Data.Macaw.Symbolic ( SymArchConstraints )
 import qualified Data.Macaw.X86 as MX86
 import           Data.Macaw.X86.Symbolic ()
 import qualified Data.Map as M
-import           Data.Maybe ( isNothing, catMaybes )
+import           Data.Maybe ( isNothing )
 import           Data.Monoid
 import           Data.Parameterized.Some
-import           Data.Semigroup
-import           Data.Semigroup ()
 import qualified Data.Text.IO as TIO
 import           Data.Text.Prettyprint.Doc as PP
 import           GHC.TypeLits
@@ -43,6 +41,8 @@ import qualified SemMC.Architecture.PPC64 as PPC64
 import           System.Exit
 
 import           Prelude
+
+import           Summary
 
 data Options = Options { inputFile :: FilePath
                        , unrefined :: Bool
@@ -175,74 +175,12 @@ showDiscoveryInfo opts unrefinedDI mrefinedDI = do
 
   showSummary unrefinedDI mrefinedDI
 
-data Summary = Summary { functionCnt :: Int
-                       , functionsWithErrors :: Int
-                       , blockCnt :: Int
-                       , blockTranslateErrors :: Int
-                       , blockUnknownTargetErrors :: Int -- ClassifyFailure
-                       , maxBlocksPerFunction :: Int
-                       }
 
-instance Semigroup Summary where
-  a <> b =
-    Summary { functionCnt = functionCnt a + functionCnt b
-            , functionsWithErrors = functionsWithErrors a + functionsWithErrors b
-            , blockCnt = blockCnt a + blockCnt b
-            , blockTranslateErrors = blockTranslateErrors a + blockTranslateErrors b
-            , blockUnknownTargetErrors = blockUnknownTargetErrors a + blockUnknownTargetErrors b
-            , maxBlocksPerFunction = max (maxBlocksPerFunction a) (maxBlocksPerFunction b)
-            }
-
-instance Monoid Summary where
-  mempty = Summary 0 0 0 0 0 0
-
-instance Pretty Summary where
-  pretty s = vcat $ catMaybes
-    [ Just $ pretty ":: Function count =" <+> pretty (show $ functionCnt s)
-    , if functionsWithErrors s > 0
-      then Just $ pretty "::    with errors =" <+> pretty (show $ functionsWithErrors s)
-      else Nothing
-    , Just $ pretty ":: Total block count =" <+> pretty (show $ blockCnt s)
-    , Just $ pretty ":: Max blocks/function =" <+> pretty (show $ maxBlocksPerFunction s)
-    , if blockTranslateErrors s > 0
-      then Just (pretty "::  blocks with Translate errors (disassembly) =" <+>
-                 pretty (show $ blockTranslateErrors s))
-      else Nothing
-    , if blockUnknownTargetErrors s > 0
-      then Just (pretty "::  blocks with Classification/Unknown Target errors (discovery) =" <+>
-                 pretty (show $ blockUnknownTargetErrors s))
-      else Nothing
-    ]
 
 showSummary :: forall arch . MD.DiscoveryState arch -> Maybe (MD.DiscoveryState arch) -> IO ()
 showSummary unrefinedDI mdirefined =
-  let summarizeBlock :: MD.DiscoveryFunInfo arch ids
-                     -> (a, MD.ParsedBlock arch ids)
-                     -> Summary
-                     -> Summary
-      summarizeBlock dfi (_blkAddr, pblk) s =
-        let s' = case MD.pblockTermStmt pblk of
-                   MD.ParsedTranslateError _ ->
-                     s { blockTranslateErrors = blockTranslateErrors s + 1 }
-                   MD.ClassifyFailure {}
-                     | isNothing (lookup (MD.pblockAddr pblk) (MD.discoveredClassifyFailureResolutions dfi)) ->
-                       s { blockUnknownTargetErrors = blockUnknownTargetErrors s + 1 }
-                   _ -> s
-        in s'
-      summarizeFunction (_funAddr, (Some dfi)) s =
-        let funcSummary = mempty { functionCnt = 1
-                                 , blockCnt = numBlks
-                                 , maxBlocksPerFunction = numBlks
-                                 }
-            blks = (dfi ^. MD.parsedBlocks . to M.toList)
-            numBlks = length blks
-            blksSummary = foldr (summarizeBlock dfi) funcSummary blks
-            funcErrs = foldr (\a v -> a blksSummary + v) 0 [ blockTranslateErrors, blockUnknownTargetErrors ]
-        in (mappend s blksSummary)
-           { functionsWithErrors = functionsWithErrors s + funcErrs
-           }
-      summarize di = vcat [ pretty ":: ==== SUMMARY ===="
-                          , pretty $ foldr summarizeFunction mempty (di ^. MD.funInfo .to M.toList)
+  let summarize di = vcat [ pretty ":: ==== SUMMARY ===="
+                          , pretty (summarizeInfo di)
                           ]
   in case mdirefined of
     Nothing -> putStrLn (show (summarize unrefinedDI))
