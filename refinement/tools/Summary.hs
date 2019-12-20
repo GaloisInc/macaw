@@ -1,6 +1,8 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Summary (
   Summary(..)
   , summarizeInfo
+  , blockAddresses
   ) where
 
 import           Control.Lens ( (^.) )
@@ -11,9 +13,13 @@ import           Data.Maybe ( catMaybes, isNothing )
 import           Data.Monoid
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Semigroup
+import qualified Data.Set as S
 import           Data.Text.Prettyprint.Doc as PP
+import           Data.Word ( Word64 )
 
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
+import qualified Data.Macaw.Memory as MM
 
 import           Prelude
 
@@ -87,3 +93,18 @@ summarizeFunction s (_funAddr, Some dfi) =
 
 summarizeInfo :: MD.DiscoveryState arch -> Summary
 summarizeInfo dstate = F.foldl' summarizeFunction mempty (dstate ^. MD.funInfo . L.to M.toList)
+
+-- | Compute a map from function addresses to the addresses of their blocks
+--
+-- We use Word64 here for easy interop with the test suite since Word64 is big
+-- enough for all pointers right now
+blockAddresses :: (MM.MemWidth (MC.ArchAddrWidth arch)) => MD.DiscoveryState arch -> M.Map Word64 (S.Set Word64)
+blockAddresses dstate = F.foldl' addFunction M.empty (dstate ^. MD.funInfo . L.to M.toList)
+  where
+    addFunction m (funcAddr, Some dfi) =
+      let blockAddrs = dfi ^. MD.parsedBlocks . L.to M.keys
+          addrSet = S.fromList (fmap asWord64 blockAddrs)
+      in M.insert (asWord64 funcAddr) addrSet m
+    asWord64 addr =
+      let Just mw = MM.segoffAsAbsoluteAddr addr
+      in fromIntegral mw

@@ -86,7 +86,7 @@ library
 executable run-refinement
   hs-source-dirs: tools
   main-is:        run-refinement.hs
-  other-modules: Summary
+  other-modules: Summary, Options, Initialization
   default-language: Haskell2010
   ghc-options: -Wall -Wcompat
   build-depends: base >= 4
