@@ -41,6 +41,9 @@ data InitError = UnsupportedArchitecture EE.ElfMachine
 
 instance X.Exception InitError
 
+-- | Load an ELF file from disk and run code discovery on it
+--
+-- The continuation has access to all of the intermediate results of the process
 withElf :: Options
         -> (forall arch binFmt . (16 <= MC.ArchAddrWidth arch, SymArchConstraints arch, MBL.BinaryLoader arch binFmt) => AI.ArchitectureInfo arch -> MBL.LoadedBinary arch binFmt -> MD.DiscoveryState arch -> IO a)
         -> IO a
@@ -84,6 +87,7 @@ withLoadedBinary k archInfo bin = do
   let dstate0 = MD.cfgFromAddrs archInfo (MBL.memoryImage bin) M.empty entries []
   k archInfo bin dstate0
 
+-- | Run the SMT-based refinement on a binary
 withRefinedDiscovery :: ( 16 <= MC.ArchAddrWidth arch
                         , SymArchConstraints arch
                         , MBL.BinaryLoader arch binFmt
