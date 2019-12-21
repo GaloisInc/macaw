@@ -6,7 +6,7 @@
 
 # CCARM=arm-linux-gnu-gcc
 GCCPPC=powerpc64-linux-gnu-gcc
-GCCX86=gcc
+GCCX86=gcc -fcf-protection=none
 CLANGX86=clang
 
 CFLAGS = -O0 -fno-stack-protector -g
