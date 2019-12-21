@@ -4,39 +4,61 @@
 # n.b. do not use pkgsCross.musl-power: this is little-endian and
 # results in: MissingTOCSection ".opd"
 
-CCARM=arm-linux-gnu-gcc
-CCPPC=powerpc64-linux-gnu-gcc
-CCX86=clang
-
-# armexe = $(patsubst %.c,%.arm.exe,$(wildcard *.c))
-ppcexe = $(patsubst %.c,%.ppc.exe,$(wildcard *.c))
-x86exe = $(patsubst %.c,%.x86.exe,$(wildcard *.c))
+# CCARM=arm-linux-gnu-gcc
+GCCPPC=powerpc64-linux-gnu-gcc
+GCCX86=gcc
+CLANGX86=clang
 
 CFLAGS = -O0 -fno-stack-protector -g
+CFLAGS_OPT = -O1 -fno-stack-protector -g
 
-all: $(ppcexe) $(x86exe)
+OPT = noopt opt
+PIE = pie nopie
+ppc_targets = $(foreach opt,$(OPT),$(foreach pie,$(PIE),$(patsubst %.c,%.ppc.gcc.$(pie).$(opt).exe,$(wildcard *.c))))
+COMPILER = clang gcc
+x86_targets = $(foreach compiler,$(COMPILER),$(foreach opt,$(OPT),$(foreach pie,$(PIE),$(patsubst %.c,%.x86.$(compiler).$(pie).$(opt).exe,$(wildcard *.c)))))
 
-$(armexe): %.arm.exe: %.arm.s
-	$(CCARM) $(CFLAGS) -nostdlib $< -o $@
+all: $(ppc_targets) $(x86_targets)
 
-%.arm.s: %.c
-	$(CCARM) $(CFLAGS) -S -c $< -o $@
+# PowerPC
+%.ppc.gcc.nopie.noopt.exe: %.c
+	$(GCCPPC) $(CFLAGS) -nostdlib -no-pie $< -o $@
 
-$(ppcexe): %.ppc.exe: %.ppc.s
-	$(CCPPC) $(CFLAGS) -nostdlib $< -o $@
+%.ppc.gcc.nopie.opt.exe: %.c
+	$(GCCPPC) $(CFLAGS_OPT) -nostdlib -no-pie $< -o $@
 
-%.ppc.s: %.c
-	$(CCPPC) $(CFLAGS) -S -c $< -o $@
+%.ppc.gcc.pie.noopt.exe: %.c
+	$(GCCPPC) $(CFLAGS) -nostdlib -pie $< -o $@
 
-# NOTE: the PIE builds cannot be verified right now.  It looks like something in
-# macaw is choking and not discovering the expected code for PIE binaries
-$(x86exe): %.x86.exe: %.x86.s
-	$(CCX86) $(CFLAGS) -no-pie -nostdlib $< -o $@
+%.ppc.gcc.pie.opt.exe: %.c
+	$(GCCPPC) $(CFLAGS_OPT) -nostdlib -pie $< -o $@
 
-%.x86.s: %.c
-	$(CCX86) $(CFLAGS) -no-pie -S -c $< -o $@
+# X86/gcc
+%.x86.gcc.nopie.noopt.exe: %.c
+	$(GCCX86) $(CFLAGS) -nostdlib -no-pie $< -o $@
 
-.PRECIOUS: %.s
+%.x86.gcc.nopie.opt.exe: %.c
+	$(GCCX86) $(CFLAGS_OPT) -nostdlib -no-pie $< -o $@
+
+%.x86.gcc.pie.noopt.exe: %.c
+	$(GCCX86) $(CFLAGS) -nostdlib -pie $< -o $@
+
+%.x86.gcc.pie.opt.exe: %.c
+	$(GCCX86) $(CFLAGS_OPT) -nostdlib -pie $< -o $@
+
+# X86/clang
+%.x86.clang.nopie.noopt.exe: %.c
+	$(CLANGX86) $(CFLAGS) -nostdlib -no-pie $< -o $@
+
+%.x86.clang.nopie.opt.exe: %.c
+	$(CLANGX86) $(CFLAGS_OPT) -nostdlib -no-pie $< -o $@
+
+%.x86.clang.pie.noopt.exe: %.c
+	$(CLANGX86) $(CFLAGS) -nostdlib -pie -fPIE $< -o $@
+
+%.x86.clang.pie.opt.exe: %.c
+	$(CLANGX86) $(CFLAGS_OPT) -nostdlib -pie -fPIE $< -o $@
+
 
 clean:
-	rm -f *.ppc.s *.ppc.exe *.x86.s *.x86.exe *.arm.s *.arm.exe
+	rm -f *.exe
