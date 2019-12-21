@@ -402,8 +402,8 @@ extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = d
 
     let assumptions = ipConstraint : basePred : initialAssumptions
 
-    liftIO $ putStrLn "IP Formula"
-    liftIO $ print (W.printSymExpr res_ip_off)
+    -- liftIO $ putStrLn "IP Formula"
+    -- liftIO $ print (W.printSymExpr res_ip_off)
     genModels sym solverProc assumptions res_ip_off modelMax
 
   let ip_base_mem_word :: MM.MemWord (M.ArchAddrWidth arch)
