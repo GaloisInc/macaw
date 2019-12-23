@@ -17,7 +17,6 @@ module Data.Macaw.Refinement.SymbolicExecution
   , defaultRefinementContext
   , smtSolveTransfer
   , IPModels(..)
-  , isSpurious
   , ipModels
   )
 where
@@ -127,6 +126,7 @@ defaultRefinementContext cfg loaded_binary = do
 data IPModels a = NoModels
                 | Models [a]
                 | SpuriousModels
+                | Error String
 
 -- | Returns all models (unless there is a spurious result)
 ipModels :: IPModels a -> Maybe [a]
@@ -135,13 +135,7 @@ ipModels m =
     NoModels -> Just []
     Models ms -> Just ms
     SpuriousModels -> Nothing
-
-isSpurious :: IPModels a -> Bool
-isSpurious m =
-  case m of
-    SpuriousModels -> True
-    NoModels -> False
-    Models {} -> False
+    Error {} -> Nothing
 
 smtSolveTransfer
   :: forall arch m ids
@@ -203,12 +197,13 @@ smtSolveTransfer ctx slice
                   return models
             C.AbortedResult _ aborted_res -> case aborted_res of
               C.AbortedExec reason _ ->
-                fail ("simulation abort: " ++ show (CB.ppAbortExecReason reason))
+                return (Error ("simulation abort: " ++ show (CB.ppAbortExecReason reason)))
               C.AbortedExit code ->
-                fail ("simulation halt: " ++ show code)
+                return (Error ("simulation halt: " ++ show code))
               C.AbortedBranch{} ->
-                fail "simulation abort branch"
-            C.TimeoutResult{} -> fail "simulation timeout"
+                return (Error "simulation abort branch")
+            C.TimeoutResult{} ->
+              return (Error "simulation timeout")
   | otherwise = fail "Unsupported architecture"
 
 
