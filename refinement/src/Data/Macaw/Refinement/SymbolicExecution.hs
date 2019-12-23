@@ -238,8 +238,8 @@ initialRegisterState sym archVals globalMappingFn memory entryBlock spVal = do
   ip_off <- liftIO $ W.bvLit sym W.knownNat (M.memWordToUnsigned (M.addrOffset entryAddr))
   entryIPVal <- liftIO $ globalMappingFn sym memory ip_base ip_off
 
-  liftIO $ printf "Entry initial state"
-  liftIO $ print (M.blockAbstractState entryBlock)
+  -- liftIO $ printf "Entry initial state"
+  -- liftIO $ print (M.blockAbstractState entryBlock)
 
   let reg_types = MS.crucArchRegTypes (MS.archFunctions archVals)
   reg_vals <- Ctx.traverseWithIndex (freshSymVar sym "reg") reg_types
@@ -381,7 +381,6 @@ extractIPModels :: forall arch solver m sym t fp
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
 extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = do
-  liftIO $ putStrLn ("Number of initial assumptions: " ++ show (length initialAssumptions))
   let modelMax = maximumModelCount (config ctx)
   ip_off_ground_vals <- liftIO $ inFreshAssumptionFrame sym $ do
     -- Assert that the IP is in an executable segment
@@ -475,7 +474,6 @@ initializeMemory _ sym mem = do
   (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc sym LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSizex2 LLVM.noAlignment
   mem2 <- liftIO $ LLVM.doArrayStore sym mem1 stackBasePtr LLVM.noAlignment stackArray stackSize
   initSPVal <- liftIO $ LLVM.ptrAdd sym C.knownRepr stackBasePtr stackSize
-  liftIO $ putStrLn ("Stack pointer is: " ++ show (LLVM.ppPtr initSPVal))
   return (mem2, initSPVal)
 
 
