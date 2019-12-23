@@ -126,6 +126,7 @@ defaultRefinementContext cfg loaded_binary = do
 data IPModels a = NoModels
                 | Models [a]
                 | SpuriousModels
+                | Timeout
                 | Error String
 
 -- | Returns all models (unless there is a spurious result)
@@ -136,6 +137,7 @@ ipModels m =
     Models ms -> Just ms
     SpuriousModels -> Nothing
     Error {} -> Nothing
+    Timeout -> Nothing
 
 smtSolveTransfer
   :: forall arch m ids
@@ -203,7 +205,7 @@ smtSolveTransfer ctx slice
               C.AbortedBranch{} ->
                 return (Error "simulation abort branch")
             C.TimeoutResult{} ->
-              return (Error "simulation timeout")
+              return Timeout
   | otherwise = fail "Unsupported architecture"
 
 
