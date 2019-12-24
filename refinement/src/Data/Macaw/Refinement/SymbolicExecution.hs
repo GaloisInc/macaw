@@ -310,6 +310,7 @@ freshSymVar sym prefix idx tp =
   liftIO $ C.RV <$> case W.userSymbol $ prefix ++ show (Ctx.indexVal idx) of
     Right symbol -> case tp of
       LLVM.LLVMPointerRepr w ->
+        -- FIXME: This makes a symbolic bitvector - the block ID should also be symbolic
         LLVM.llvmPointer_bv sym
           =<< W.freshConstant sym symbol (W.BaseBVRepr w)
       C.BoolRepr ->

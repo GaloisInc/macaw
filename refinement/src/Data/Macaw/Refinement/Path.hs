@@ -116,6 +116,7 @@ mkPartialCFG fi = F.foldl' buildCFG nodeGraph allBlocks
         MDS.ParsedReturn {} -> gr
         MDS.ParsedTranslateError {} -> gr
         MDS.ClassifyFailure {} -> gr
+        -- FIXME: Add in the branches in the side table of info
 
 -- | A contiguous slice from a CFG
 --
