@@ -102,7 +102,7 @@ withRefinedDiscovery opts archInfo bin k = do
     let config = MR.defaultRefinementConfig { MR.solver = solver opts
                                             , MR.solverInteractionFile = solverInteractionFile opts
                                             , MR.maximumModelCount = maximumModelCount opts
-                                            , MR.parallelismFactor = min 1 (threadCount opts)
+                                            , MR.parallelismFactor = max 1 (threadCount opts)
                                             }
     ctx <- MR.defaultRefinementContext config bin
     entries <- F.toList <$> MBL.entryPoints bin

@@ -147,7 +147,7 @@ symbolicUnkTransferRefinement context inpDS = do
   -- We use the simple combinator that does not pin workers to specific
   -- capabilities, as these threads spend most of their time waiting on the SMT
   -- solver, so it isn't really important which Haskell thread they use.
-  let nCores = CS.ParN (min 1 (fromIntegral (RSE.parallelismFactor (RSE.config context))))
+  let nCores = CS.ParN (max 1 (fromIntegral (RSE.parallelismFactor (RSE.config context))))
   -- FIXME: Record the unrefinable set so that we don't try to re-refine those
   -- blocks next iteration of refinement
   (solutions, _unrefinable) <- unzip <$> CS.traverseConcurrently nCores (viewSome (refineFunction context)) (allFuns inpDS)
