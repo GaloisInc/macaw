@@ -7,17 +7,17 @@ packages: macaw-ppc/
           symbolic/
           x86_symbolic/
           refinement/
-          submodules/macaw-loader/macaw-loader
-          submodules/macaw-loader/macaw-loader-arm
-          submodules/macaw-loader/macaw-loader-ppc
-          submodules/macaw-loader/macaw-loader-x86
-          submodules/semmc/semmc/
-          submodules/semmc/semmc-ppc/
-          submodules/semmc/semmc-arm/
-          submodules/dismantle/dismantle-tablegen/
-          submodules/dismantle/dismantle-ppc/
-          submodules/dismantle/dismantle-arm/
-          submodules/dismantle/dismantle-thumb/
+          deps/macaw-loader/macaw-loader
+          deps/macaw-loader/macaw-loader-arm
+          deps/macaw-loader/macaw-loader-ppc
+          deps/macaw-loader/macaw-loader-x86
+          deps/semmc/semmc/
+          deps/semmc/semmc-ppc/
+          deps/semmc/semmc-arm/
+          deps/dismantle/dismantle-tablegen/
+          deps/dismantle/dismantle-ppc/
+          deps/dismantle/dismantle-arm/
+          deps/dismantle/dismantle-thumb/
           deps/parameterized-utils/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/

@@ -460,6 +460,16 @@ instance Pretty (MemInt w) where
 instance Show (MemInt w) where
   showsPrec p (MemInt i) = showsPrec p i
 
+instance MemWidth w => Bounded (MemInt w) where
+  minBound =
+    case addrWidthRepr (Proxy :: Proxy w) of
+      Addr32 -> MemInt (fromIntegral (minBound :: Int32))
+      Addr64 -> MemInt minBound
+  maxBound =
+    case addrWidthRepr (Proxy :: Proxy w) of
+      Addr32 -> MemInt (fromIntegral (maxBound :: Int32))
+      Addr64 -> MemInt maxBound
+
 instance MemWidth w => Num (MemInt w) where
   (+) = \x y -> memInt $ memIntValue x + memIntValue y
   (-) = \x y -> memInt $ memIntValue x - memIntValue y
@@ -1049,8 +1059,8 @@ data MemAddr w
 instance Hashable (MemAddr w) where
   hashWithSalt s a = s `hashWithSalt` addrBase a  `hashWithSalt` addrOffset a
 
-instance MemWidth w => Show (MemAddr w) where
-  showsPrec _ (MemAddr 0 a) = showString "0x" . showHex a
+instance Show (MemAddr w) where
+  showsPrec _ (MemAddr 0 a) = showString "0x" . shows a
   showsPrec p (MemAddr i off) =
     showParen (p > 6)
     $ showString "segment"

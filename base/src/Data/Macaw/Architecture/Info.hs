@@ -66,9 +66,15 @@ type DisassembleFn arch
       -- ^ Maximum offset for this to read from.
    -> ST s (Block arch ids, Int)
 
+-- | This type is used to represent the location to return to *within a
+-- function* after executing an architecture-specific terminator instruction.
+--
+--  * The 'MemSegmentOff' is the address to jump to next (within the function)
+--  * The 'AbsBlockState' is the abstract state to use at the start of the block returned to (reflecting any changes made by the architecture-specific terminator)
+--  * The 'Jmp.InitJumpBounds' is a collection of relations between values in registers and on the stack that should hold (see 'Jmp.postCallBounds' for to construct this in the common case)
 type IntraJumpTarget arch =
   (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), Jmp.InitJumpBounds arch)
--- ^ Identifies address we are jumping to an abstract state/bounds for getting there.
+
 
 -- | This records architecture specific functions for analysis.
 data ArchitectureInfo arch
@@ -163,12 +169,12 @@ data ArchitectureInfo arch
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
        -- evaluated when evaluating a statement.
-     , postArchTermStmtAbsState :: !(forall ids s
+     , postArchTermStmtAbsState :: !(forall ids
                                      .  Memory (ArchAddrWidth arch)
                                         -- The abstract state when block terminates.
                                      -> AbsProcessorState (ArchReg arch) ids
                                         -- The registers before executing terminal statement
-                                     -> Jmp.IntraJumpBounds arch ids s
+                                     -> Jmp.IntraJumpBounds arch ids
                                      -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
                                      -> ArchTermStmt arch ids

@@ -157,12 +157,8 @@ module Data.Macaw.X86.Monad
   , even_parity
   , x87Push
   , x87Pop
-  , bvQuotRem
-  , bvSignedQuotRem
-
     -- * SupportedBVWidth
   , SupportedBVWidth
-
     -- * Re-exports
   , type (TypeLits.<=)
   , type Flexdis86.Sizes.SizeConstraint(..)
@@ -867,23 +863,11 @@ x .+ y
   -- Shift constants to right-hand-side.
   | ValueExpr (BVValue _ _) <- x = y .+ x
 
-  -- Reorganize addition by constant to offset.
-  | Just (BVAdd w x_base (asUnsignedBVLit -> Just x_off)) <- asApp x
-  , ValueExpr (BVValue _ y_off) <- y
-  = x_base .+ bvLit w (x_off + y_off)
-
-  | Just (BVAdd w y_base (asUnsignedBVLit -> Just y_off)) <- asApp y
-  , ValueExpr (BVValue _ x_off) <- x
-  = y_base .+ bvLit w (x_off + y_off)
-
   | otherwise = app $ BVAdd (typeWidth x) x y
 
 -- | Subtract two vectors, ignoring underflow.
 (.-) :: 1 <= n => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
-x .- y
-  | ValueExpr (BVValue _ yv) <- y =
-      x .+ bvLit (typeWidth x) (negate yv)
-  | otherwise = app $ BVSub (typeWidth x) x y
+x .- y = app $ BVSub (typeWidth x) x y
 
 -- | Performs a multiplication of two bitvector values.
 (.*) :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids (BVType n)
@@ -985,18 +969,9 @@ x .=. y
   | ValueExpr (BVValue _ xv) <- x
   , ValueExpr (BVValue _ yv) <- y =
       boolValue (xv == yv)
-  -- Move constant to second argument (We implicitly know both x and y are not a constant due to previous case).
+  -- Move constant to second argument (We implicitly know both x and y
+  -- are not a constant due to previous case).
   | ValueExpr BVValue{} <- x  = y .=. x
-
-  -- Rewrite "base + offset = constant" to "base = constant - offset".
-  | Just (BVAdd w x_base (asUnsignedBVLit -> Just x_off)) <- asApp x
-  , ValueExpr (BVValue _ yv) <- y =
-      app $ Eq x_base (bvLit w (yv - x_off))
-      -- Rewrite "u - v == c" to "u = c + v".
-  | Just (BVSub _ x_1 x_2) <- asApp x = x_1 .=. (y .+ x_2)
-  -- Rewrite "c == u - v" to "u = c + v".
-  | Just (BVSub _ y_1 y_2) <- asApp y = y_1 .=. (x .+ y_2)
-
   | ValueExpr (BoolValue True)  <- x = y
   | ValueExpr (BoolValue False) <- x = boolNot y
   | ValueExpr (BoolValue True)  <- y = x
@@ -1214,13 +1189,6 @@ bvSlt x y
   | x == y = false
   | otherwise = app $ BVSignedLt x y
 
--- | Signed less than
-bvSle :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
-bvSle x y
-  | Just xv <- asSignedBVLit x, Just yv <- asSignedBVLit y = boolValue (xv <= yv)
-  | x == y = true
-  | otherwise = app $ BVSignedLe x y
-
 -- | Returns bit at index given by second argument, 0 being lsb
 -- If the bit index is greater than or equal to n, then the result is zero.
 bvBit :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids BoolType
@@ -1394,14 +1362,6 @@ false = boolValue False
 boolNot :: Expr ids BoolType -> Expr ids BoolType
 boolNot x
   | Just xv <- asBoolLit x = boolValue (not xv)
-    -- not (y < z) = y >= z = z <= y
-  | Just (BVUnsignedLt y z) <- asApp x = bvUle z y
-    -- not (y <= z) = y > z = z < y
-  | Just (BVUnsignedLe y z) <- asApp x = bvUlt z y
-    -- not (y < z) = y >= z = z <= y
-  | Just (BVSignedLt y z) <- asApp x = bvSle z y
-    -- not (y <= z) = y > z = z < y
-  | Just (BVSignedLe y z) <- asApp x = bvSlt z y
     -- not (not p) = p
   | Just (NotApp y) <- asApp x = y
   | otherwise = app $ NotApp x
@@ -1566,48 +1526,3 @@ x87Pop = do
   setReg X87_TopReg (BVValue knownNat (toInteger new_top))
 
 type BVExpr ids w = Expr ids (BVType w)
-
--- | Unsigned division.
---
--- The x86 documentation for @div@ (Intel x86 manual volume 2A,
--- page 3-393) says that results should be truncated towards
--- zero. These operations are called @quot@ and @rem@ in Haskell,
--- whereas @div@ and @mod@ in Haskell round towards negative
--- infinity.
---
--- This should raise a #DE exception if the denominator is zero or the
--- result is larger than maxUnsigned n.
-bvQuotRem :: (1 <= w)
-          => RepValSize w
-          -> Expr ids (BVType (w+w))
-          -- ^ Numerator
-          -> Expr ids (BVType w)
-             -- ^ Denominator
-          -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
-bvQuotRem rep n d = do
-  nv <- eval n
-  dv <- eval d
-  (,) <$> evalArchFn (X86Div rep nv dv)
-      <*> evalArchFn (X86Rem rep nv dv)
-
--- | Signed division.
---
--- The x86 documentation for @idiv@ (Intel x86 manual volume 2A, page
--- 3-393) says that results should be truncated towards zero. These
--- operations are called @quot@ and @rem@ in Haskell, whereas @div@
--- and @mod@ in Haskell round towards negative infinity.
---
--- This should raise a #DE exception if the denominator is zero or the
--- result is larger than maxSigned n or less than minSigned n.
-bvSignedQuotRem :: (1 <= w)
-                => RepValSize w
-                -> BVExpr ids (w+w)
-                   -- ^ Numerator
-                -> BVExpr ids w
-                   -- ^ Denominator
-                -> X86Generator st_s ids (BVExpr ids w, BVExpr ids w)
-bvSignedQuotRem rep n d = do
-  nv <- eval n
-  dv <- eval d
-  (,) <$> evalArchFn (X86IDiv rep nv dv)
-      <*> evalArchFn (X86IRem rep nv dv)

@@ -15,11 +15,18 @@ import Data.Macaw.Types (BoolType)
 import Data.Macaw.X86.Generator
 import Data.Macaw.X86.Monad
 
--- Constants for defining semantics of different condition flags.
-cond_a, cond_ae, cond_b, cond_be, cond_g, cond_ge, cond_l, cond_le, cond_o, cond_p, cond_s, cond_z,
-  cond_no, cond_np, cond_ns, cond_nz :: X86Generator st ids (Expr ids BoolType)
+-- | The "above" condition is set if the carry flag (typically used
+-- for a borrow in a substract) and zero flag are both not set.
+--
+cond_a :: X86Generator st ids (Expr ids BoolType)
+cond_a = do
+  cfVal <- get cf_loc
+  zfVal <- get zf_loc
+  pure (boolNot cfVal .&&. boolNot zfVal)
 
-cond_a = (\c z -> boolNot c .&&. boolNot z) <$> get cf_loc <*> get zf_loc
+-- Constants for defining semantics of different condition flags.
+cond_ae, cond_b, cond_be, cond_g, cond_ge, cond_l, cond_le, cond_o, cond_p, cond_s, cond_z,
+  cond_no, cond_np, cond_ns, cond_nz :: X86Generator st ids (Expr ids BoolType)
 cond_ae  = boolNot <$> get cf_loc
 cond_b   = get cf_loc
 cond_be  = (.||.) <$> get cf_loc <*> get zf_loc

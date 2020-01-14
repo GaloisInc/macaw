@@ -367,16 +367,26 @@ def_push =
       case val of
         F.SegmentValue _ ->
           fail "push does not support segment selector."
-        F.WordReg  r -> Some . HasRepSize  WordRepVal <$> get (reg16Loc r)
-        F.DWordReg r -> Some . HasRepSize DWordRepVal <$> get (reg32Loc r)
-        F.QWordReg r -> Some . HasRepSize QWordRepVal <$> get (reg64Loc r)
-        F.Mem16 ar -> Some . HasRepSize  WordRepVal <$> (get =<< getBV16Addr ar)
-        F.Mem32 ar -> Some . HasRepSize DWordRepVal <$> (get =<< getBV32Addr ar)
-        F.Mem64 ar -> Some . HasRepSize QWordRepVal <$> (get =<< getBV64Addr ar)
-        F.ByteImm  w -> pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
-        F.WordImm  w -> pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
-        F.DWordImm i -> pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
-        F.QWordImm w -> pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+        F.WordReg  r ->
+          Some . HasRepSize  WordRepVal <$> get (reg16Loc r)
+        F.DWordReg r ->
+          Some . HasRepSize DWordRepVal <$> get (reg32Loc r)
+        F.QWordReg r ->
+          Some . HasRepSize QWordRepVal <$> get (reg64Loc r)
+        F.Mem16 ar ->
+          Some . HasRepSize  WordRepVal <$> (get =<< getBV16Addr ar)
+        F.Mem32 ar ->
+          Some . HasRepSize DWordRepVal <$> (get =<< getBV32Addr ar)
+        F.Mem64 ar ->
+          Some . HasRepSize QWordRepVal <$> (get =<< getBV64Addr ar)
+        F.ByteImm w ->
+          pure $ Some $ HasRepSize ByteRepVal  $ bvLit n8  (toInteger w)
+        F.WordImm w ->
+          pure $ Some $ HasRepSize WordRepVal  $ bvLit n16 (toInteger w)
+        F.DWordImm i ->
+          pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
+        F.QWordImm (F.UImm64Concrete  w) ->
+          pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
         _ -> fail $ "Unexpected argument to push"
     let repr = repValSizeMemRepr rep
     old_sp <- get rsp
@@ -428,7 +438,6 @@ def_mov =
       (F.Mem8 a, F.ByteImm i) -> do
         l <- getBV8Addr a
         l .= bvLit n8 (toInteger i)
-
       (F.WordReg r, F.WordReg src) -> do
         v <- get $ reg16Loc src
         reg16Loc r .= v
@@ -472,7 +481,7 @@ def_mov =
         v <- get =<< getBV64Addr src
         reg64Loc r .= v
       (F.QWordReg r, F.QWordImm i) -> do
-        reg64Loc r .= bvLit n64 (toInteger i)
+        reg64Loc r .= getUImm64 i
       (F.QWordReg r, F.DWordSignedImm i) -> do
         reg64Loc r .= bvLit n64 (toInteger i)
       (F.Mem64 a, F.DWordSignedImm i) -> do
@@ -482,7 +491,6 @@ def_mov =
         l <- getBV64Addr a
         v <- get $ reg64Loc src
         l .= v
-
       -- Read segment selector
       (dest, F.SegmentValue s) -> do
         v <- evalArchFn (GetSegmentSelector s)
@@ -573,8 +581,7 @@ def_movsxd :: InstructionDef
 def_movsxd = defBinaryLVge "movsxd" $ \l v -> l .= sext (typeWidth l) v
 
 def_movzx :: InstructionDef
-def_movzx = defBinaryLVge "movzx" $ \l v -> do
-  l .= uext (typeWidth l) v
+def_movzx = defBinaryLVge "movzx" $ \l v ->   l .= uext (typeWidth l) v
 
 -- The xchng instruction
 def_xchg :: InstructionDef
@@ -617,7 +624,6 @@ exec_add dst y = do
   -- Set result value.
   set_result_value dst (dst_val .+ y)
 
--- FIXME: we don't need a location, just a value.
 exec_cmp :: SupportedBVWidth n => Location (Addr ids) (BVType n) -> BVExpr ids n -> X86Generator st ids ()
 exec_cmp dst y = do
   dst_val <- get dst
@@ -649,77 +655,74 @@ set_div_flags = do
   set_undefined pf_loc
   set_undefined zf_loc
 
--- | Helper function for @div@ and @idiv@ instructions.
---
--- The difference between @div@ and @idiv@ is whether the primitive
--- operations are signed or not.
---
--- The x86 division instructions are peculiar. A @2n@-bit numerator is
--- read from fixed registers and an @n@-bit quotient and @n@-bit
--- remainder are written to those fixed registers. An exception is
--- raised if the denominator is zero or if the quotient does not fit
--- in @n@ bits.
---
--- Also, results should be rounded towards zero. These operations are
--- called @quot@ and @rem@ in Haskell, whereas @div@ and @mod@ in
--- Haskell round towards negative infinity.
---
--- Source: the x86 documentation for @idiv@, Intel x86 manual volume
--- 2A, page 3-393.
+-- Division function used for div/idiv
+type DivFn f w
+  = f (BVType w)
+  -> f (BVType w)
+  -> f (BVType w)
+  -> X86PrimFn f (TupleType [BVType w, BVType w])
 
--- | Unsigned (@div@ instruction) and signed (@idiv@ instruction) division.
+-- | Signed/Unsigned division.
+--
+-- The x86 documentation for @div@ (Intel x86 manual volume 2A,
+-- page 3-393) says that results should be truncated towards
+-- zero. These operations are called @quot@ and @rem@ in Haskell,
+-- whereas @div@ and @mod@ in Haskell round towards negative
+-- infinity.
+--
+-- This should raise a #DE exception if the denominator is zero or the
+-- result is larger than maxUnsigned n.
+bvQuotRem :: (1 <= w)
+          => DivFn (Value X86_64 ids) w
+             -- ^ Division function
+          -> P.List TypeRepr [BVType w, BVType w]
+             -- ^ Tuple type
+          -> Location (Expr ids (BVType 64)) (BVType w)
+          -- ^ Top half of numerator
+          -> Location (Expr ids (BVType 64)) (BVType w)
+          -- ^ Bottom half of numerator
+          -> Expr ids (BVType w)
+             -- ^ Denominator
+          -> X86Generator st_s ids ()
+bvQuotRem fn tupleTp hn ln d = do
+  hnv <- eval =<< get hn
+  lnv <- eval =<< get ln
+  dv <- eval d
+  qr <- evalArchFn $ fn hnv lnv dv
+  ln .= app (TupleField tupleTp qr P.index0)
+  hn .= app (TupleField tupleTp qr P.index1)
+
+-- | Unsigned (@div@ instruction) division.
 def_div :: InstructionDef
 def_div = defUnary "div" $ \_ val -> do
-   SomeBV d <- getSomeBVValue val
-   case typeWidth d of
-    n | Just Refl <- testEquality n n8  -> do
-           num <- get ax
-           (q,r) <- bvQuotRem ByteRepVal num d
-           al .= q
-           ah .= r
-       | Just Refl <- testEquality n n16 -> do
-           num <- bvCat <$> get dx <*> get ax
-           (q,r) <- bvQuotRem WordRepVal num d
-           ax .= q
-           dx .= r
-       | Just Refl <- testEquality n n32 -> do
-           num <- bvCat <$> get edx <*> get eax
-           (q,r) <- bvQuotRem DWordRepVal num d
-           eax .= q
-           edx .= r
-       | Just Refl <- testEquality n n64 -> do
-           num <- bvCat <$> get rdx <*> get rax
-           (q,r) <- bvQuotRem QWordRepVal num d
-           rax .= q
-           rdx .= r
-       | otherwise -> fail "div: Unknown bit width"
+  SomeBV d <- getSomeBVValue val
+  set_div_flags
+  case typeWidth d of
+    n | Just Refl <- testEquality n n8  ->
+          bvQuotRem (X86DivRem ByteRepVal) knownRepr ah al d
+      | Just Refl <- testEquality n n16 ->
+          bvQuotRem (X86DivRem WordRepVal) knownRepr dx ax d
+      | Just Refl <- testEquality n n32 ->
+          bvQuotRem (X86DivRem DWordRepVal) knownRepr edx eax d
+      | Just Refl <- testEquality n n64 ->
+          bvQuotRem (X86DivRem QWordRepVal) knownRepr rdx rax d
+      | otherwise -> fail "div: Unknown bit width"
 
+-- | Signed (@idiv@ instruction) division.
 def_idiv :: InstructionDef
 def_idiv = defUnary "idiv" $ \_ val -> do
   SomeBV d <- getSomeBVValue val
   set_div_flags
   case typeWidth d of
-    n | Just Refl <- testEquality n n8  -> do
-           num <- get ax
-           (q,r) <- bvSignedQuotRem ByteRepVal num d
-           al .= q
-           ah .= r
-       | Just Refl <- testEquality n n16 -> do
-           num <- bvCat <$> get dx <*> get ax
-           (q,r) <- bvSignedQuotRem WordRepVal num d
-           ax .= q
-           dx .= r
-       | Just Refl <- testEquality n n32 -> do
-           num <- bvCat <$> get edx <*> get eax
-           (q,r) <- bvSignedQuotRem DWordRepVal num d
-           eax .= q
-           edx .= r
-       | Just Refl <- testEquality n n64 -> do
-           num <- bvCat <$> get rdx <*> get rax
-           (q,r) <- bvSignedQuotRem QWordRepVal num d
-           rax .= q
-           rdx .= r
-       | otherwise -> fail "idiv: Unknown bit width"
+    n | Just Refl <- testEquality n n8  ->
+          bvQuotRem (X86IDivRem ByteRepVal)  knownRepr ah al d
+      | Just Refl <- testEquality n n16 ->
+          bvQuotRem (X86IDivRem WordRepVal)  knownRepr dx ax d
+      | Just Refl <- testEquality n n32 ->
+          bvQuotRem (X86IDivRem DWordRepVal) knownRepr edx eax d
+      | Just Refl <- testEquality n n64 ->
+          bvQuotRem (X86IDivRem QWordRepVal) knownRepr rdx rax d
+      | otherwise -> fail "idiv: Unknown bit width"
 
 --  | Execute the halt instruction
 --
@@ -1364,7 +1367,7 @@ def_movs = defBinary "movs" $ \ii loc _ -> do
     F.Mem32{} -> pure (SomeRepValSize DWordRepVal)
     F.Mem64{} -> pure (SomeRepValSize QWordRepVal)
     _ -> error "Bad argument to movs"
-  let bytesPerOp = bvLit n64 (fromIntegral (repValSizeByteCount w))
+  let bytesPerOp = bvLit n64 (toInteger (repValSizeByteCount w))
   dest <- get rdi
   src  <- get rsi
   df   <- get df_loc

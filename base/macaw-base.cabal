@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3.12
+version: 0.3.15
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -54,6 +54,7 @@ library
     Data.Macaw.AbsDomain.Refine
     Data.Macaw.AbsDomain.StridedInterval
     Data.Macaw.Analysis.FunctionArgs
+    Data.Macaw.Analysis.RegisterUse
     Data.Macaw.Architecture.Info
     Data.Macaw.CFG
     Data.Macaw.CFG.App

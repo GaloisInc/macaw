@@ -226,9 +226,10 @@ ppTermStmt tstmt =
           indent 2 (pretty s)
     ParsedTranslateError msg ->
       text "translation error" <+> text (Text.unpack msg)
-    ClassifyFailure s _ ->
+    ClassifyFailure s rsns ->
       text "classify failure" <$$>
-      indent 2 (pretty s)
+      indent 2 (pretty s) <$$>
+      indent 2 (vcat (text <$> rsns))
 
 instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
   show = show . ppTermStmt
@@ -297,7 +298,7 @@ data DiscoveryFunInfo arch ids
                       , discoveredFunSymbol :: !(Maybe BSC.ByteString)
                         -- ^ A symbol associated with the definition.
                       , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
-                        -- ^ Maps an address to the blocks associated with that address.
+                        -- ^ Maps an address block starts with
                       }
 
 -- | Returns the "name" associated with a function.

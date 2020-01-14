@@ -479,10 +479,11 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
 genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg =
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
-      sym <- runIO (S.newSimpleBackend @_ @(S.Flags S.FloatIEEE) ng)
+      sym <- runIO (S.newSimpleBackend S.FloatIEEERepr ng)
       runIO (S.startCaching sym)
-      lib <- runIO (loadLibrary (Proxy @arch) sym functions)
-      formulas <- runIO (loadFormulas sym lib semantics)
+      env <- runIO (formulaEnv (Proxy @arch) sym)
+      lib <- runIO (loadLibrary (Proxy @arch) sym env functions)
+      formulas <- runIO (loadFormulas sym env lib semantics)
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
       instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType
         where
@@ -815,7 +816,7 @@ defaultAppEvaluator elt interps = case elt of
       CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
-      CT.BaseStringRepr -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
+      CT.BaseStringRepr {} -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
       CT.BaseComplexRepr -> liftQ [| error "Macaw semantics for complex ITE unsupported" |]
       CT.BaseStructRepr {} -> liftQ [| error "Macaw semantics for struct ITE unsupported" |]
       CT.BaseArrayRepr {} -> liftQ [| error "Macaw semantics for array ITE unsupported" |]

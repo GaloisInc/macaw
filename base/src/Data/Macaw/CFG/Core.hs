@@ -73,6 +73,9 @@ module Data.Macaw.CFG.Core
   , PrettyRegValue(..)
   , IsArchFn(..)
   , IsArchStmt(..)
+  , collectValueRep
+  , ppValueAssignments'
+  , DocF
     -- * Utilities
   , addrWidthTypeRepr
     -- * RegisterInfo
@@ -180,11 +183,11 @@ instance Ord (AssignId ids tp) where
 instance OrdF (AssignId ids) where
   compareF (AssignId id1) (AssignId id2) = compareF id1 id2
 
-instance ShowF (AssignId ids) where
-  showF (AssignId n) = show n
-
 instance Show (AssignId ids tp) where
-  show (AssignId n) = show n
+  show (AssignId n) = show (indexValue n)
+
+instance ShowF (AssignId ids) where
+  showF = show
 
 ------------------------------------------------------------------------
 -- CValue
@@ -257,6 +260,31 @@ instance Hashable (CValue arch tp) where
 
 instance HashableF (CValue arch) where
   hashWithSaltF = hashWithSalt
+
+ppLit :: NatRepr n -> Integer -> Doc
+ppLit w i
+  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
+  | otherwise = error "ppLit given negative value"
+
+ppCValue :: Prec -> CValue arch tp -> Doc
+ppCValue _ (BoolCValue b) = text $ if b then "true" else "false"
+ppCValue p (BVCValue w i)
+  | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
+  | otherwise =
+    -- TODO: We may want to report an error here.
+    parenIf (p > colonPrec) $
+    text (show i) <+> text "::" <+> brackets (text (show w))
+ppCValue p (RelocatableCValue _ a) = parenIf (p > plusPrec) $ text (show a)
+ppCValue _ (SymbolCValue _ a) = text (show a)
+
+instance PrettyPrec (CValue arch tp) where
+  prettyPrec = ppCValue
+
+instance Pretty (CValue arch tp) where
+  pretty = ppCValue 0
+
+instance Show (CValue arch tp) where
+  show = show . pretty
 
 ------------------------------------------------------------------------
 -- Value and Assignment
@@ -655,32 +683,19 @@ asStackAddrOffset addr
 ------------------------------------------------------------------------
 -- Pretty print Assign, AssignRhs, Value operations
 
-ppLit :: NatRepr n -> Integer -> Doc
-ppLit w i
-  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
-  | otherwise = error "ppLit given negative value"
-
 -- | Pretty print a value.
-ppValue :: RegisterInfo (ArchReg arch) => Prec -> Value arch ids tp -> Doc
-ppValue _ (BoolValue b)     = text $ if b then "true" else "false"
-ppValue p (BVValue w i)
-  | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
-  | otherwise =
-    -- TODO: We may want to report an error here.
-    parenIf (p > colonPrec) $
-    text (show i) <+> text "::" <+> brackets (text (show w))
-ppValue p (RelocatableValue _ a) = parenIf (p > plusPrec) $ text (show a)
-ppValue _ (SymbolValue _ a) = text (show a)
+ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
+ppValue p (CValue c) = ppCValue p c
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
 ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
 
-instance RegisterInfo (ArchReg arch) => PrettyPrec (Value arch ids tp) where
+instance ShowF (ArchReg arch) => PrettyPrec (Value arch ids tp) where
   prettyPrec = ppValue
 
-instance RegisterInfo (ArchReg arch) => Pretty (Value arch ids tp) where
+instance ShowF (ArchReg arch) => Pretty (Value arch ids tp) where
   pretty = ppValue 0
 
-instance RegisterInfo (ArchReg arch) => Show (Value arch ids tp) where
+instance ShowF (ArchReg arch) => Show (Value arch ids tp) where
   show = show . pretty
 
 -- | Typeclass for architecture-specific functions
@@ -743,7 +758,7 @@ newtype DocF (a :: Type) = DocF Doc
 -- printed repreentation of subvalues in a map.
 collectValueRep :: forall arch ids tp
                 .  ArchConstraints arch
-                => Prec
+                => Prec -- ^ Outer precedence
                 -> Value arch ids tp
                 -> State (MapF (AssignId ids) DocF) Doc
 collectValueRep _ (AssignedValue a) = do
@@ -859,7 +874,8 @@ ppStmt ppOff stmt =
     WriteMem     a _ rhs ->
       text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     CondWriteMem c a _ rhs ->
-      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a <+> ppValue 0 rhs
+      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
+        <+> ppValue 0 rhs
     InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
     Comment s -> text $ "# " ++ Text.unpack s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s

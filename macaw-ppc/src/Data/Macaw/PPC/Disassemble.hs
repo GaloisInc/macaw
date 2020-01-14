@@ -10,7 +10,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.PPC.Disassemble
   ( disassembleFn
-  , initialBlockRegs
   )
 where
 
@@ -27,7 +26,6 @@ import           Text.Printf ( printf )
 
 import qualified Dismantle.PPC as D
 
-import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
@@ -209,18 +207,6 @@ disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
       -- macaw 'TranslationError' block terminators.
       return (blocks, off)
     Right (blocks, bytes) -> return (blocks, bytes)
-
-
-initialBlockRegs :: forall ids ppc var
-                  . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-                 => ArchSegmentOff ppc
-                    -- ^ The address of the block
-                 -> ArchBlockPrecond ppc
-                    -- ^ Information about the abstract state of the processor at the start of the block
-                 -> RegState (ArchReg ppc) (Value ppc ids)
-                    -- ^ Error or initial register state for the block
-initialBlockRegs blkAddr _abPrecond = initRegState blkAddr
-
 
 type LocatedError ppc ids = (Block ppc ids, Int, TranslationError (ArchAddrWidth ppc))
 

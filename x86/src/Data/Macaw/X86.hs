@@ -358,10 +358,8 @@ transferAbsValue r f =
           stridedInterval $ SI.mkStridedInterval knownNat False 0 upper 1
       | otherwise -> TopV
     MMXExtend{}   -> TopV
-    X86IDiv{} -> TopV
-    X86IRem{} -> TopV
-    X86Div{}  -> TopV
-    X86Rem{}  -> TopV
+    X86IDivRem{} -> TopV
+    X86DivRem{}  -> TopV
     SSE_UnaryOp{}  -> TopV
     SSE_VectorOp{}  -> TopV
     SSE_Sqrt{}  -> TopV
@@ -532,7 +530,7 @@ x86DemandContext =
 postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> Memory 64
                         -> AbsProcessorState X86Reg ids
-                        -> Jmp.IntraJumpBounds X86_64 ids s
+                        -> Jmp.IntraJumpBounds X86_64 ids
                         -> RegState X86Reg (Value X86_64 ids)
                         -> X86TermStmt ids
                         -> Maybe ( MemSegmentOff 64
