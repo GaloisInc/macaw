@@ -355,7 +355,7 @@ data MacawStmtExtension (arch :: K.Type)
     -> !(f (ToCrucibleType tp))
     -> MacawStmtExtension arch f C.UnitType
 
-  -- | Write to memory id  xonsiriob is true
+  -- | Write to memory if condition is true
   MacawCondWriteMem
     :: !(ArchAddrWidthRepr arch)
     -> !(M.MemRepr tp)
