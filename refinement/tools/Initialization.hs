@@ -95,7 +95,7 @@ withRefinedDiscovery :: ( 16 <= MC.ArchAddrWidth arch
                      => Options
                      -> AI.ArchitectureInfo arch
                      -> MBL.LoadedBinary arch binFmt
-                     -> (MD.DiscoveryState arch -> IO a)
+                     -> (MD.DiscoveryState arch -> MR.RefinementInfo arch -> IO a)
                      -> IO a
 withRefinedDiscovery opts archInfo bin k = do
   AI.withArchConstraints archInfo $ do
@@ -103,8 +103,9 @@ withRefinedDiscovery opts archInfo bin k = do
                                             , MR.solverInteractionFile = solverInteractionFile opts
                                             , MR.maximumModelCount = maximumModelCount opts
                                             , MR.parallelismFactor = max 1 (threadCount opts)
+                                            , MR.timeoutSeconds = max 1 (timeoutSeconds opts)
                                             }
     ctx <- MR.defaultRefinementContext config bin
     entries <- F.toList <$> MBL.entryPoints bin
-    dstate <- MR.cfgFromAddrs ctx archInfo (MBL.memoryImage bin) M.empty entries []
-    k dstate
+    (dstate, info) <- MR.cfgFromAddrsWith ctx archInfo (MBL.memoryImage bin) M.empty entries []
+    k dstate info

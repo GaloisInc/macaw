@@ -108,7 +108,10 @@
 
 
 module Data.Macaw.Refinement.UnknownTransfer (
-  symbolicUnkTransferRefinement
+  RefinementFindings,
+  symbolicUnkTransferRefinement,
+  RefinementInfo(..),
+  findingsInfo
   ) where
 
 import qualified Control.Lens as L
@@ -123,7 +126,7 @@ import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Map as Map
-import           Data.Maybe ( catMaybes, isJust, isNothing )
+import           Data.Maybe ( isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Set as S
 import           GHC.TypeLits
@@ -133,29 +136,33 @@ import           GHC.TypeLits
 -- classification failures, returning (possibly updated) Discovery
 -- information.
 --
+-- We thread through previous findings ('RefinementFindings') so that we can
+-- avoid re-analyzing code that we can't reason about.
+--
 -- See Note [Parallel Evaluation Strategy] for details
 symbolicUnkTransferRefinement
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
      )
   => RSE.RefinementContext arch
+  -- ^ Configuration
+  -> RefinementFindings arch
+  -- ^ Previous results from refinement (to avoid re-analysis)
   -> MD.DiscoveryState arch
-  -> IO (MD.DiscoveryState arch)
-symbolicUnkTransferRefinement context inpDS = do
+  -- ^ The state from macaw to refine
+  -> IO (MD.DiscoveryState arch, RefinementFindings arch)
+symbolicUnkTransferRefinement context oldFindings inpDS = do
   -- Set up the evaluation strategy for the work scheduling library.
   --
   -- We use the simple combinator that does not pin workers to specific
   -- capabilities, as these threads spend most of their time waiting on the SMT
   -- solver, so it isn't really important which Haskell thread they use.
   let nCores = CS.ParN (max 1 (fromIntegral (RSE.parallelismFactor (RSE.config context))))
-  -- FIXME: Record the unrefinable set so that we don't try to re-refine those
-  -- blocks next iteration of refinement
-  (solutions, _unrefinable) <- unzip <$> CS.traverseConcurrently nCores (viewSome (refineFunction context)) (allFuns inpDS)
-  F.foldlM updateDiscovery inpDS solutions
+  funcSolutions <- CS.traverseConcurrently nCores (viewSome (refineFunction context oldFindings)) (allFuns inpDS)
+  outDS <- F.foldlM updateDiscovery inpDS funcSolutions
+  let findings = oldFindings <> mconcat (fmap (solutionsToFindings . snd) funcSolutions)
+  return (outDS, findings)
 
--- | Returns the list of DiscoveryFunInfo for a DiscoveryState
-allFuns :: MD.DiscoveryState arch -> [Some (MD.DiscoveryFunInfo arch)]
-allFuns ds = ds ^. MD.funInfo . L.to Map.elems
 
 -- | Attempt to resolve all of the unknown transfers in a block
 --
@@ -168,12 +175,13 @@ refineFunction
      , 16 <= MC.ArchAddrWidth arch
      )
   => RSE.RefinementContext arch
+  -> RefinementFindings arch
   -> MD.DiscoveryFunInfo arch ids
-  -> IO ((Some (MD.DiscoveryFunInfo arch), Solutions arch), [Some (RFU.BlockIdentifier arch)])
-refineFunction context dfi = do
+  -> IO (Some (MD.DiscoveryFunInfo arch), Solutions arch)
+refineFunction context oldFindings dfi = do
   -- Find the blocks with unknown transfers
-  (solns, unrefinable) <- F.foldlM (refineBlockTransfer context dfi) (mempty, []) (getUnknownTransfers dfi)
-  return ((Some dfi, solns), unrefinable)
+  solns <- F.foldlM (refineBlockTransfer context oldFindings dfi) mempty (getUnknownTransfers dfi)
+  return (Some dfi, solns)
 
 getUnknownTransfers :: MD.DiscoveryFunInfo arch ids
                     -> [MD.ParsedBlock arch ids]
@@ -206,20 +214,31 @@ refineBlockTransfer
      , MonadIO m
      )
   => RSE.RefinementContext arch
+  -> RefinementFindings arch
   -> MD.DiscoveryFunInfo arch ids
-  -> (Solutions arch, [Some (RFU.BlockIdentifier arch)])
+  -> Solutions arch
   -- ^ Solutions accumulated for this function (and blocks marked as unrefinable)
   -> MD.ParsedBlock arch ids
   -- ^ A block ending in an unknown transfer
-  -> m (Solutions arch, [Some (RFU.BlockIdentifier arch)])
-refineBlockTransfer context fi (solns, unrefinable) blk = do
-  let cfg = RP.mkPartialCFG fi
-  let slices = RP.cfgPathsTo (RFU.blockID blk) cfg
-  possibleSolutions <- mapM (refineSlice context) slices
-  if | all isJust possibleSolutions -> do
-       let sl = mconcat (catMaybes possibleSolutions)
-       return (addSolution blk sl solns, unrefinable)
-     | otherwise -> return (solns, Some (RFU.blockID blk) : unrefinable)
+  -> m (Solutions arch)
+refineBlockTransfer context oldFindings fi solns blk
+  | haveFindingsFor oldFindings blk = return solns
+  | otherwise = do
+    liftIO $ putStrLn ("Refining a transfer at: " ++ show (MD.pblockAddr blk))
+    let cfg = RP.mkPartialCFG fi
+    let slices = RP.cfgPathsTo (RFU.blockID blk) cfg
+    possibleSolutions <- liftIO $ mapM (refineSlice context) slices
+    return (addSolution blk possibleSolutions solns)
+
+haveFindingsFor :: RefinementFindings arch -> MD.ParsedBlock arch ids -> Bool
+haveFindingsFor (RefinementFindings m) blk =
+  isJust (Map.lookup (MD.pblockAddr blk) m)
+
+asIPModels :: IPModelsFor arch a -> Maybe [a]
+asIPModels (IPModelsFor _ ipm) =
+  case ipm of
+    RSE.Models ms -> Just ms
+    _ -> Nothing
 
 -- | Feed solutions back into the system, updating the 'MD.DiscoveryState' by
 -- calling into macaw base.
@@ -233,22 +252,28 @@ updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
                 -> m (MD.DiscoveryState arch)
 updateDiscovery s0 (Some finfo, solutions) = do
   case solutionValues solutions of
-    [] -> return s0
-    vals -> return (MD.addDiscoveredFunctionBlockTargets s0 finfo vals)
+    Nothing -> return s0
+    -- Consider making this an error, as it means some invariants were violated
+    Just [] -> return s0
+    Just vals -> return (MD.addDiscoveredFunctionBlockTargets s0 finfo vals)
 
 refineSlice :: ( MS.SymArchConstraints arch
                , 16 <=  MC.ArchAddrWidth arch
-               , MonadIO m
                )
             => RSE.RefinementContext arch
             -> RP.CFGSlice arch ids
-            -> m (Maybe (Solution arch))
+            -> IO (IPModelsFor arch (MC.ArchSegmentOff arch))
 refineSlice context slice = solve context slice
 
-newtype Solution arch = Solution (S.Set (MC.ArchSegmentOff arch))  -- identified transfers
-newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) (Solution arch))
-
-deriving instance (MC.MemWidth (MC.ArchAddrWidth arch)) => Show (Solution arch)
+-- | The set (list) of models found for each basic block
+--
+-- Currently, the intent is that a solutions object represents solutions within
+-- a single function.
+--
+-- NOTE: The IPModels structure can contain embedded errors, so it should be
+-- processed before use to ensure that solutions are all valid before applying
+-- them to a DiscoveryState.
+newtype Solutions arch = Solutions (Map.Map (MC.ArchSegmentOff arch) [IPModelsFor arch (MC.ArchSegmentOff arch)])
 
 instance Semigroup (Solutions arch) where
   Solutions s1 <> Solutions s2 = Solutions (s1 <> s2)
@@ -256,24 +281,19 @@ instance Semigroup (Solutions arch) where
 instance Monoid (Solutions arch) where
   mempty = Solutions Map.empty
 
-instance Semigroup (Solution arch) where
-  Solution s1 <> Solution s2 = Solution (s1 <> s2)
-
-instance Monoid (Solution arch) where
-  mempty = Solution S.empty
-
-solutionAddrs :: (MC.RegisterInfo (MC.ArchReg arch))
-              => (MC.ArchSegmentOff arch, Solution arch)
-              -> (MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])
-solutionAddrs (srcBlockAddr, Solution l) = (srcBlockAddr, S.toList l)
-
 solutionValues :: (MC.RegisterInfo (MC.ArchReg arch))
                => Solutions arch
-               -> [(MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])]
-solutionValues (Solutions m) = fmap solutionAddrs (Map.toList m)
+               -> Maybe [(MC.ArchSegmentOff arch, [MC.ArchSegmentOff arch])]
+solutionValues (Solutions m) = mapM addrsFromIPModel (Map.toList m)
+  where
+    addrsFromIPModel (srcBlockAddr, models) = do
+      addrs <- mapM asIPModels models
+      return (srcBlockAddr, unique (concat addrs))
+
+    unique = S.toList . S.fromList
 
 addSolution :: MD.ParsedBlock arch ids
-            -> Solution arch
+            -> [IPModelsFor arch (MC.ArchSegmentOff arch)]
             -> Solutions arch
             -> Solutions arch
 addSolution blk sl (Solutions slns) = Solutions (Map.insert (MD.pblockAddr blk) sl slns)
@@ -285,18 +305,78 @@ solve :: ( MS.SymArchConstraints arch
          )
       => RSE.RefinementContext arch
       -> RP.CFGSlice arch ids
-      -> m (Maybe (Solution arch))
+      -> m (IPModelsFor arch (MC.ArchSegmentOff arch))
 solve context slice = do
   models <- liftIO $ RSE.smtSolveTransfer context slice
-  let possibleModels = RSE.ipModels models
-  case possibleModels of
-    Nothing -> return Nothing
-    Just [] -> return Nothing
-    Just mdls -> return (Just (Solution (S.fromList mdls)))
+  return (IPModelsFor (RP.sliceAddress slice) models)
 
---isBetterSolution :: Solution arch -> Solution arch -> Bool
--- isBetterSolution :: [ArchSegmentOff arch] -> [ArchSegmentOff arch] -> Bool
--- isBetterSolution = (<)
+-- | Models of the instruction pointer paired with the address of the block
+-- containing the unresolved transfer the models are for
+data IPModelsFor arch a =
+  IPModelsFor (MC.ArchSegmentOff arch) (RSE.IPModels a)
+  deriving (Eq)
+
+-- | This is isomorphic to 'Solutions', but contains results for multiple
+-- functions (rather than only for a single function)
+--
+-- We keep this so that we can avoid re-processing the same block again on later
+-- iterations and also record reasons for each failure.  Note that successes are
+-- also included so that we don't re-analyze successfully-refined blocks.
+newtype RefinementFindings arch =
+  RefinementFindings (Map.Map (MC.ArchSegmentOff arch) [IPModelsFor arch (MC.ArchSegmentOff arch)])
+  deriving (Eq)
+
+instance Semigroup (RefinementFindings arch) where
+  RefinementFindings m1 <> RefinementFindings m2 = RefinementFindings (m1 <> m2)
+
+instance Monoid (RefinementFindings arch) where
+  mempty = RefinementFindings Map.empty
+
+-- | Lift 'Solutions' into 'RefinementFindings' so that we can join them
+-- together into whole-program results from single function results
+solutionsToFindings :: Solutions arch -> RefinementFindings arch
+solutionsToFindings (Solutions m) = RefinementFindings m
+
+-- | Returns the list of DiscoveryFunInfo for a DiscoveryState
+allFuns :: MD.DiscoveryState arch -> [Some (MD.DiscoveryFunInfo arch)]
+allFuns ds = ds ^. MD.funInfo . L.to Map.elems
+
+-- | A summary of refinement failures
+data RefinementInfo arch =
+  RefinementInfo { refinementTimeouts :: [MC.ArchSegmentOff arch]
+                 -- ^ The addresses of blocks with unresolved control flow that
+                 -- could not be resolved due to timeouts
+                 , refinementSpurious :: [MC.ArchSegmentOff arch]
+                 -- ^ The addresses of blocks with unresolved control flow that
+                 -- are under-constrained and produced only spurious models
+                 , refinementErrors :: [(MC.ArchSegmentOff arch, String)]
+                 -- ^ Errors encountered during refinement
+                 , refinementNoModels :: [MC.ArchSegmentOff arch]
+                 -- ^ Refinements that produced no models at all
+                 }
+
+-- | Project 'RefinementFindings' into a user-visible structure
+--
+-- Currently, this discards successes under the premise that they are obvious
+-- from the 'DiscoveryState'.  It might be useful to just summarize successes
+-- here.
+findingsInfo :: RefinementFindings arch -> RefinementInfo arch
+findingsInfo (RefinementFindings findings) =
+  RefinementInfo { refinementTimeouts = timeouts
+                 , refinementSpurious = spurious
+                 , refinementErrors = errors
+                 , refinementNoModels = none
+                 }
+  where
+    (timeouts, spurious, errors, none) = F.foldl' collectModels ([], [], [], []) (Map.elems findings)
+    collectModels = F.foldl' collectModel
+    collectModel acc@(t, s, e, n) (IPModelsFor addr ipModel) =
+      case ipModel of
+        RSE.Timeout -> (addr : t, s, e, n)
+        RSE.SpuriousModels -> (t, addr : s, e, n)
+        RSE.Error msg -> (t, s, (addr, msg) : e, n)
+        RSE.NoModels -> (t, s, e, addr : n)
+        RSE.Models {} -> acc
 
 {- Note [Parallel Evaluation Strategy]
 

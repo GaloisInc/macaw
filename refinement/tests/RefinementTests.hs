@@ -176,6 +176,7 @@ testOptions verb file = Options { inputFile = file
                                 , solverInteractionFile = Nothing
                                 , maximumModelCount = 20
                                 , threadCount = 1
+                                , timeoutSeconds = 60
                                 }
 
 mkTest :: TestInput -> TT.TestTree
@@ -183,7 +184,7 @@ mkTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
     withElf opts $ \archInfo bin _unrefinedDI -> do
-      withRefinedDiscovery opts archInfo bin $ \refinedDI -> do
+      withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
         let actual = blockAddresses refinedDI
         expectedInput <- readFile (expectedFilePath testinp)
         case readEither expectedInput of

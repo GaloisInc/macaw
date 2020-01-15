@@ -16,6 +16,7 @@ module Data.Macaw.Refinement.Path
   , cfgPathsTo
   , CFGSlice
   , sliceComponents
+  , sliceAddress
   )
 where
 
@@ -210,6 +211,10 @@ data CFGSlice arch ids =
            , sliceTarget :: MDS.ParsedBlock arch ids
            -- ^ The terminal block of the slice
            }
+
+-- | The address of the block for which we created this slice (the target that has unresolved control flow)
+sliceAddress :: CFGSlice arch ids -> MC.ArchSegmentOff arch
+sliceAddress  = MDS.pblockAddr . sliceTarget
 
 sliceComponents :: CFGSlice arch ids
                 -> (MDS.ParsedBlock arch ids, [MDS.ParsedBlock arch ids], MDS.ParsedBlock arch ids)

@@ -72,6 +72,12 @@ optionsParser = Options
                                     <> O.short 'N'
                                     <> O.long "solver-processes"
                                     )
+                <*> O.option O.auto ( O.metavar "NAT"
+                                    <> O.help "The number of seconds to wait for the solver before timing out"
+                                    <> O.value (MR.timeoutSeconds MR.defaultRefinementConfig)
+                                    <> O.long "timeout"
+                                    <> O.short 't'
+                                    )
 
 main :: IO ()
 main = O.execParser optParser >>= doRefinement
@@ -87,13 +93,13 @@ doRefinement opts = do
     case unrefined opts of
       True -> showDiscoveryInfo opts unrefinedDI Nothing
       False ->
-        withRefinedDiscovery opts archInfo bin $ \refinedDI -> do
-          showDiscoveryInfo opts unrefinedDI (Just refinedDI)
+        withRefinedDiscovery opts archInfo bin $ \refinedDI refinedInfo -> do
+          showDiscoveryInfo opts unrefinedDI (Just (refinedDI, refinedInfo))
 
 showDiscoveryInfo :: (SymArchConstraints arch)
                   => Options
                   -> MD.DiscoveryState arch
-                  -> Maybe (MD.DiscoveryState arch)
+                  -> Maybe (MD.DiscoveryState arch, MR.RefinementInfo arch)
                   -> IO ()
 showDiscoveryInfo opts unrefinedDI mrefinedDI = do
   unless (summaryOnly opts) $ do
@@ -105,25 +111,26 @@ showDiscoveryInfo opts unrefinedDI mrefinedDI = do
 
 
 
-showSummary :: forall arch . MD.DiscoveryState arch -> Maybe (MD.DiscoveryState arch) -> IO ()
+showSummary :: forall arch . (MC.MemWidth (MC.ArchAddrWidth arch)) => MD.DiscoveryState arch -> Maybe (MD.DiscoveryState arch, MR.RefinementInfo arch) -> IO ()
 showSummary unrefinedDI mdirefined =
   let summarize di = vcat [ pretty ":: ==== SUMMARY ===="
                           , pretty (summarizeInfo di)
                           ]
   in case mdirefined of
     Nothing -> putStrLn (show (summarize unrefinedDI))
-    Just refinedDI -> do
+    Just (refinedDI, rinfo) -> do
       let lhs = PP.vcat [ PP.pretty "Unrefined"
                         , summarize unrefinedDI
                         ]
       let rhs = PP.vcat [ PP.pretty "Refined"
+                        , PP.nest 4 (summarizeRefinementInfo rinfo)
                         , summarize refinedDI
                         ]
       putStrLn (show (PP.vsep [ lhs, rhs ]))
 
 showOverview :: (MC.MemWidth (MC.ArchAddrWidth arch))
              => MD.DiscoveryState arch
-             -> Maybe (MD.DiscoveryState arch)
+             -> Maybe (MD.DiscoveryState arch, MR.RefinementInfo arch)
              -> IO ()
 showOverview unrefinedDI mrefinedDI =
   let getIssue dfi (blkAddr, pblk) =
@@ -144,20 +151,29 @@ showOverview unrefinedDI mrefinedDI =
       summaries di = map funcSummary (di ^. MD.funInfo . L.to M.toList)
   in case mrefinedDI of
     Nothing -> putStrLn (show (PP.vcat (summaries unrefinedDI)))
-    Just refinedDI -> do
+    Just (refinedDI, rinfo) -> do
       let lhs = PP.vcat ( PP.pretty "Unrefined"
                         : PP.pretty "========="
                         : summaries unrefinedDI
                         )
       let rhs = PP.vcat ( PP.pretty "Refined"
                         : PP.pretty "======="
+                        : PP.nest 4 (summarizeRefinementInfo rinfo)
                         : summaries refinedDI
                         )
       putStrLn (show (PP.vsep [ lhs, rhs ]))
 
+summarizeRefinementInfo :: (MC.MemWidth (MC.ArchAddrWidth arch)) => MR.RefinementInfo arch -> PP.Doc a
+summarizeRefinementInfo rinfo =
+  PP.vcat [ PP.pretty "Timeouts: " <> PP.list (fmap (PP.pretty . show) (MR.refinementTimeouts rinfo))
+          , PP.pretty "Spurious: " <> PP.list (fmap (PP.pretty . show) (MR.refinementSpurious rinfo))
+          , PP.pretty "No Models: " <> PP.list (fmap (PP.pretty . show) (MR.refinementNoModels rinfo))
+          , PP.pretty "Errors: " <> PP.list (fmap (PP.pretty . show) (MR.refinementErrors rinfo))
+          ]
+
 showDetails :: (SymArchConstraints arch)
             => MD.DiscoveryState arch
-            -> Maybe (MD.DiscoveryState arch)
+            -> Maybe (MD.DiscoveryState arch, MR.RefinementInfo arch)
             -> IO ()
 showDetails di _ =
   forM_ (M.toList (di ^. MD.funInfo)) $ \(funAddr, Some dfi) -> do

@@ -5,20 +5,27 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.Refinement
-  ( cfgFromAddrsAndState
+  ( -- * Simple entry points
+    cfgFromAddrsAndState
   , cfgFromAddrs
-  , refineDiscovery
+    -- * Entry points with extra diagnostic info
+  , cfgFromAddrsAndStateWith
+  , cfgFromAddrsWith
+  , RefinementFindings
+  , RefinementInfo(..)
+    -- * Configuration
   , RSE.defaultRefinementContext
   , RSE.RefinementContext
   , MRS.Solver(..)
   , RSE.RefinementConfig(..)
   , RSE.defaultRefinementConfig
+  -- * Low-level interface
+  , refineDiscovery
   )
 where
 
 import           GHC.TypeLits
 
-import           Control.Lens
 import qualified Data.Macaw.Architecture.Info as MA
 import           Data.Macaw.CFG.AssignRhs
 import qualified Data.Macaw.CFG as MC
@@ -57,13 +64,31 @@ cfgFromAddrsAndState
   -- Each entry contains an address and the value stored in it.
   -> IO (DiscoveryState arch)
 cfgFromAddrsAndState context initial_state init_addrs mem_words =
-  MD.cfgFromAddrsAndState initial_state init_addrs mem_words
-    & refineDiscovery context
+  fst <$> cfgFromAddrsAndStateWith context initial_state init_addrs mem_words
 
--- FIXME: Note that this only runs one step of refinement.  We might want to
--- configure the effort spent on iteration.  That would probably involve caching
--- some results so that we don't fruitlessly keep trying to resolve the same
--- impossible branches.
+cfgFromAddrsAndStateWith
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     )
+  => RSE.RefinementContext arch
+  -> MD.DiscoveryState arch
+  -> [ArchSegmentOff arch]
+  -- ^ Initial function entry points.
+  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -- ^ Function entry points in memory to be explored
+  -- after exploring function entry points.
+  --
+  -- Each entry contains an address and the value stored in it.
+  -> IO (DiscoveryState arch, RefinementInfo arch)
+cfgFromAddrsAndStateWith context initial_state init_addrs mem_words =
+  go (MD.cfgFromAddrsAndState initial_state init_addrs mem_words) mempty
+  where
+    go s0 findings = do
+      (s1, newFindings) <- refineDiscovery context findings s0
+      case findings == newFindings of
+        True -> return (s1, findingsInfo newFindings)
+        False -> go s1 newFindings
+
 
 -- | Construct an empty discovery state and populate it by exploring
 -- from a given set of function entry points.  This can be used as an
@@ -92,6 +117,29 @@ cfgFromAddrs
 cfgFromAddrs context ainfo mem addrSymMap =
   cfgFromAddrsAndState context (emptyDiscoveryState mem addrSymMap ainfo)
 
+cfgFromAddrsWith
+  :: ( MS.SymArchConstraints arch
+     , 16 <= MC.ArchAddrWidth arch
+     )
+  => RSE.RefinementContext arch
+  -> MA.ArchitectureInfo arch
+  -- ^ Architecture-specific information needed for doing
+  -- control-flow exploration.
+  -> MM.Memory (ArchAddrWidth arch)
+  -- ^ Memory to use when decoding instructions.
+  -> AddrSymMap (ArchAddrWidth arch)
+  -- ^ Map from addresses to the associated symbol name.
+  -> [ArchSegmentOff arch]
+  -- ^ Initial function entry points.
+  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -- ^ Function entry points in memory to be explored
+  -- after exploring function entry points.
+  --
+  -- Each entry contains an address and the value stored in it.
+  -> IO (DiscoveryState arch, RefinementInfo arch)
+cfgFromAddrsWith context ainfo mem addrSymMap =
+  cfgFromAddrsAndStateWith context (emptyDiscoveryState mem addrSymMap ainfo)
+
 
 ----------------------------------------------------------------------
 -- * Refinement process
@@ -109,7 +157,8 @@ refineDiscovery
      , 16 <= MC.ArchAddrWidth arch
      )
   => RSE.RefinementContext arch
+  -> RefinementFindings arch
   -> DiscoveryState arch
-  -> IO (DiscoveryState arch)
-refineDiscovery context =
-  symbolicUnkTransferRefinement context . symbolicTargetRefinement
+  -> IO (DiscoveryState arch, RefinementFindings arch)
+refineDiscovery context oldFindings =
+  symbolicUnkTransferRefinement context oldFindings . symbolicTargetRefinement

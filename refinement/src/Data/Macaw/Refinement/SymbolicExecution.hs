@@ -21,6 +21,8 @@ module Data.Macaw.Refinement.SymbolicExecution
   )
 where
 
+import qualified Control.Concurrent.Async as A
+import           Control.Concurrent ( threadDelay )
 import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
@@ -77,6 +79,8 @@ data RefinementConfig =
                    -- macaw-refinement will give up on the branch.
                    , parallelismFactor :: Int
                    -- ^ The number of simultaneous solver instances (the default and minimum is 1)
+                   , timeoutSeconds :: Int
+                   -- ^ The number of seconds to let the solver work before timing out
                    }
 
 defaultRefinementConfig :: RefinementConfig
@@ -85,6 +89,7 @@ defaultRefinementConfig =
                    , solverInteractionFile = Nothing
                    , maximumModelCount = 20
                    , parallelismFactor = 1
+                   , timeoutSeconds = 120
                    }
 
 data RefinementContext arch = RefinementContext
@@ -128,6 +133,7 @@ data IPModels a = NoModels
                 | SpuriousModels
                 | Timeout
                 | Error String
+                deriving (Eq)
 
 -- | Returns all models (unless there is a spurious result)
 ipModels :: IPModels a -> Maybe [a]
@@ -140,21 +146,18 @@ ipModels m =
     Timeout -> Nothing
 
 smtSolveTransfer
-  :: forall arch m ids
+  :: forall arch ids
    . ( MS.SymArchConstraints arch
      , 16 <= M.ArchAddrWidth arch
-     , MonadIO m
      )
   => RefinementContext arch
-  -> RP.CFGSlice arch ids -- [M.ParsedBlock arch ids]
-  -> m (IPModels (M.ArchSegmentOff arch))
+  -> RP.CFGSlice arch ids
+  -> IO (IPModels (M.ArchSegmentOff arch))
 smtSolveTransfer ctx slice
   | Just archVals <- MS.archVals (Proxy @arch) = MRS.withNewBackend (solver (config ctx)) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
       halloc <- liftIO $ C.newHandleAllocator
 
-      -- FIXME: Maintain a Path data type that ensures that the list is non-empty (i.e., get rid of head)
       let (entryBlock, body, targetBlock) = RP.sliceComponents slice
-      -- let entryBlock = head blocks
       let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
       some_cfg <- liftIO $ MS.mkBlockSliceCFG
         (MS.archFunctions archVals)
@@ -167,6 +170,7 @@ smtSolveTransfer ctx slice
       -- F.forM_ (entryBlock : targetBlock : body) $ \pb -> liftIO $ do
       --   printf "Block %s\n" (show (M.pblockAddr pb))
       --   putStrLn (show (PP.pretty pb))
+
 
       case some_cfg of
         C.SomeCFG cfg -> do
@@ -181,31 +185,53 @@ smtSolveTransfer ctx slice
           -- really do want the path conditions established during symbolic
           -- execution in scope, or we are in trouble (e.g., we won't have bounds on
           -- jump tables)
-          exec_res <- liftIO $
-            C.executeCrucible executionFeatures initialState
 
-          assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
+          -- Put the entire symbolic execution in its own task so that we can
+          -- catch simulation errors easily
+          symExTask <- A.async $ do
+            exec_res <- liftIO $
+              C.executeCrucible executionFeatures initialState
 
-          case exec_res of
-            C.FinishedResult _ res -> do
-              let res_regs = res ^. C.partialValue . C.gpValue
-              case C.regValue $ (MS.lookupReg archVals) res_regs M.ip_reg of
-                LLVM.LLVMPointer res_ip_base res_ip_off -> do
-                  hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile (config ctx))
-                  solverProc :: W.SolverProcess t solver
-                             <- liftIO $ W.startSolverProcess problemFeatures hdl sym
-                  models <- extractIPModels ctx sym solverProc assumptions res_ip_base res_ip_off
-                  _ <- liftIO $ W.shutdownSolverProcess solverProc
-                  return models
-            C.AbortedResult _ aborted_res -> case aborted_res of
-              C.AbortedExec reason _ ->
-                return (Error ("simulation abort: " ++ show (CB.ppAbortExecReason reason)))
-              C.AbortedExit code ->
-                return (Error ("simulation halt: " ++ show code))
-              C.AbortedBranch{} ->
-                return (Error "simulation abort branch")
-            C.TimeoutResult{} ->
-              return Timeout
+            assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
+
+            case exec_res of
+              C.FinishedResult _ res -> do
+                let res_regs = res ^. C.partialValue . C.gpValue
+                case C.regValue $ (MS.lookupReg archVals) res_regs M.ip_reg of
+                  LLVM.LLVMPointer res_ip_base res_ip_off -> do
+                    hdl <- T.traverse (\fn -> liftIO (IO.openFile fn IO.WriteMode)) (solverInteractionFile (config ctx))
+                    solverProc :: W.SolverProcess t solver
+                               <- liftIO $ W.startSolverProcess problemFeatures hdl sym
+                    solverTask <- A.async $ do
+                      models <- extractIPModels ctx sym solverProc assumptions res_ip_base res_ip_off
+                      _ <- liftIO $ W.shutdownSolverProcess solverProc
+                      return models
+                    timeoutTask <- A.async $ do
+                      let us = timeoutSeconds (config ctx) * 1000000
+                      threadDelay us
+                      IO.hPutStrLn IO.stderr "Killing a solver process"
+                      W.killSolver solverProc
+                      IO.hPutStrLn IO.stderr "  Killed process"
+                    eres <- A.waitCatch solverTask
+                    A.cancel timeoutTask
+                    case eres of
+                      Right res' -> return res'
+                      Left _ -> return Timeout
+              C.AbortedResult _ aborted_res -> case aborted_res of
+                C.AbortedExec reason _ ->
+                  return (Error ("simulation abort: " ++ show (CB.ppAbortExecReason reason)))
+                C.AbortedExit code ->
+                  return (Error ("simulation halt: " ++ show code))
+                C.AbortedBranch{} ->
+                  return (Error "simulation abort branch")
+              C.TimeoutResult{} ->
+                return Timeout
+          eres <- A.waitCatch symExTask
+          case eres of
+            Right res -> return res
+            Left err -> do
+              IO.hPutStrLn IO.stderr ("Symbolic execution error: " ++ show err)
+              return (Error (show err))
   | otherwise = fail "Unsupported architecture"
 
 

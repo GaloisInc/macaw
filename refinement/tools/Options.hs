@@ -12,4 +12,5 @@ data Options = Options { inputFile :: FilePath
                        , solverInteractionFile :: Maybe FilePath
                        , maximumModelCount :: Int
                        , threadCount :: Int
+                       , timeoutSeconds :: Int
                        }
