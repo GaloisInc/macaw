@@ -146,12 +146,13 @@ crucAppToExpr (S.SemiRingProd pd) =
         in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
       _ -> error "unsupported SemiRingProd repr for macaw PPC base semantics"
 
-crucAppToExpr (S.BVOrBits pd) =
-    case WSum.prodRepr pd of
-      SR.SemiRingBVRepr _ w ->
-        let pmul x y = AppExpr <$> do M.BVOr w <$> addExpr x <*> addExpr y
-            unit = return $ ValueExpr $ M.BVValue w 0
-        in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
+crucAppToExpr (S.BVOrBits w bs) = do
+  let por x y = do
+        y' <- y
+        AppExpr <$> do M.BVOr w <$> addExpr x <*> addExpr y'
+  let unit = return (ValueExpr (M.BVValue w 0))
+  bs' <- mapM eltToExpr (S.bvOrToList bs)
+  foldr por unit bs'
 
 crucAppToExpr (S.BVShl repr bv1 bv2) = AppExpr <$> do
   M.BVShl <$> pure repr <*> addElt bv1 <*> addElt bv2

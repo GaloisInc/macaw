@@ -911,17 +911,16 @@ defaultAppEvaluator elt interps = case elt of
         in WSum.prodEvalM pmul convert pd >>= maybe unit return
       _ -> liftQ [| error "unsupported SemiRingProd repr for macaw semmc TH" |]
 
-  S.BVOrBits pd ->
-    case WSum.prodRepr pd of
-      SR.SemiRingBVRepr _ w ->
-        let pmul x y = liftQ
-                       [| return
-                          (G.AppExpr
-                           (M.BVOr $(natReprTH w) $(return x) $(return y)))
-                        |]
-            unit = liftQ [| return $ M.BVValue $(natReprTH w) 0 |]
-            convert = addEltTH interps
-        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+  S.BVOrBits w bs -> do
+    -- This is a TH Expr that is of type (Macaw) Value at run-time
+    zero <- liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) 0)) |]
+    -- These are all TH Exprs that are of the (Macaw) Value at run-time
+    bs' <- mapM (addEltTH interps) (S.bvOrToList bs)
+    let por x y = do
+          liftQ [|  do y' <- G.addExpr =<< $(return y)
+                       return (G.AppExpr (M.BVOr $(natReprTH w) $(return x) y'))
+                 |]
+    F.foldrM por zero bs'
 
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH interps bv1
