@@ -60,7 +60,6 @@ crucAppToExpr :: (M.ArchConstraints ppc) =>
               -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr (S.NotPred bool) = AppExpr . M.NotApp <$> addElt bool
 crucAppToExpr (S.ConjPred boolmap) = evalBoolMap AndOp True boolmap
-crucAppToExpr (S.DisjPred boolmap) = evalBoolMap OrOp False boolmap
 crucAppToExpr (S.BaseIte bt _ test t f) = AppExpr <$>
   case bt of
     S.BaseBoolRepr ->
