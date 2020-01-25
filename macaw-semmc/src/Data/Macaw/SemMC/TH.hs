@@ -792,7 +792,6 @@ defaultAppEvaluator elt interps = case elt of
     e <- addEltTH interps bool
     liftQ [| return (G.AppExpr (M.NotApp $(return e))) |]
   S.ConjPred boolmap -> evalBoolMap interps AndOp True boolmap
-  S.DisjPred boolmap -> evalBoolMap interps OrOp False boolmap
   S.BaseIte bt _ test t f -> do
     testE <- addEltTH interps test
     tE <- addEltTH interps t
