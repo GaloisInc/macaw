@@ -24,6 +24,7 @@ x86_64 programs.
 module Data.Macaw.X86
        ( x86_64_freeBSD_info
        , x86_64_linux_info
+       , x86_64CallParams
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
@@ -556,6 +557,14 @@ postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
     UD2 ->
       Nothing
 
+x86_64CallParams :: CallParams X86Reg
+x86_64CallParams =
+  CallParams { postCallStackDelta = 8
+             , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
+             , stackGrowsDown = True
+             }
+
+
 -- | Common architecture information for X86_64
 x86_64_info :: (forall tp . X86Reg tp -> Bool)
                -- ^ Function that returns true if we should preserve a register across a system call.
@@ -571,11 +580,7 @@ x86_64_info preservePred =
                    , absEvalArchFn = transferAbsValue
                    , absEvalArchStmt = \s _ -> s
                    , identifyCall = identifyX86Call
-                   , archCallParams =
-                        CallParams { postCallStackDelta = 8
-                                   , preserveReg = \r -> Set.member (Some r) x86CalleeSavedRegs
-                                   , stackGrowsDown = True
-                                   }
+                   , archCallParams = x86_64CallParams
                    , checkForReturnAddr = \_ s -> checkForReturnAddrX86 s
                    , identifyReturn = identifyX86Return
                    , rewriteArchFn = rewriteX86PrimFn

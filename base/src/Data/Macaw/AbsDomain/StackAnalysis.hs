@@ -1,6 +1,6 @@
 {- |
 
-This module defines a relational abstract domain for tracking
+1This module defines a relational abstract domain for tracking
 registers and stack addresses.  The model records when one of these
 values is known to be equal to the current pointer stack frame.  This
 domain also tracks equalities between nodes so that analysis
@@ -26,7 +26,7 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , ppStackEqConstraint
   , blockStartLocExpr
   , blockStartLocStackOffset
-  , StackOffConstraint
+  , StackOffConstraint(..)
   , blockStartLocRepAndCns
   , BoundLoc(..)
   , joinBlockStartStackConstraints
@@ -36,23 +36,25 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , BlockIntraStackConstraints
   , mkBlockIntraStackConstraints
   , biscInitConstraints
-  , blockIntraValueExpr
-  , blockIntraValueStackOffset
+  , intraStackValueExpr
   , StackExpr(..)
-  , blockIntraRhsExpr
-  , bindAssignment
+  , intraStackRhsExpr
+  , intraStackSetAssignId
   , discardStackInfo
   , writeStackOff
     -- ** Block terminator updates
   , postJumpStackConstraints
+  , Data.Macaw.AbsDomain.CallParams.CallParams
   , postCallStackConstraints
     -- * LocMap
   , LocMap(..)
   , locMapEmpty
+  , locMapToList
   , locLookup
   , nonOverlapLocInsert
   , locOverwriteWith
   , ppLocMap
+  , foldLocMap
     -- * StackMap
   , StackMap
   , emptyStackMap
@@ -60,6 +62,7 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , StackMapLookup(..)
   , stackMapOverwrite
   , stackMapMapWithKey
+  , stackMapTraverseWithKey_
   , stackMapTraverseMaybeWithKey
   , stackMapDropAbove
   , stackMapDropBelow
@@ -84,6 +87,7 @@ import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Text.Printf
 
 import           Data.Macaw.AbsDomain.CallParams
 import           Data.Macaw.CFG.App
@@ -273,6 +277,13 @@ stackMapOverwrite off repr v (SM m) =
 unsafeStackMapInsert :: MemInt w -> MemRepr tp -> p tp -> StackMap w p -> StackMap w p
 unsafeStackMapInsert o repr v (SM m) = SM (Map.insert o (MemVal repr v) m)
 
+stackMapFoldlWithKey :: (forall tp . r -> MemInt w -> MemRepr tp -> v tp -> r)
+                     -> r
+                     -> StackMap w v
+                     -> r
+stackMapFoldlWithKey f z (SM m) =
+  Map.foldlWithKey (\r k (MemVal repr v) -> f r k repr v) z m
+
 stackMapFoldrWithKey :: (forall tp . MemInt w -> MemRepr tp -> v tp -> r -> r)
                      -> r
                      -> StackMap w v
@@ -324,14 +335,18 @@ data LocMap (r :: M.Type -> Type) (v :: M.Type -> Type)
 locMapEmpty :: LocMap r v
 locMapEmpty = LocMap { locMapRegs = MapF.empty, locMapStack = emptyStackMap }
 
+-- | Construct a list out of a location map.
+locMapToList :: LocMap r v -> [Pair (BoundLoc r) v]
+locMapToList m =
+  let sl = stackMapFoldrWithKey (\i repr v z -> Pair (StackOffLoc i repr) v : z) [] (locMapStack m)
+   in MapF.foldrWithKey (\r v z -> Pair (RegLoc r) v:z) sl (locMapRegs m)
+
 -- | Pretty print a location map.
 ppLocMap :: ShowF r => (forall tp . Doc -> p tp -> Doc) -> LocMap r p -> [Doc]
-ppLocMap f m
-  = flip (MapF.foldrWithKey (\k v -> (f (text (showF k)) v:)))
-                            (locMapRegs m)
-  $ stackMapFoldrWithKey (\i repr v -> (f (ppStackOff i repr) v:))
-                         []
-                         (locMapStack m)
+ppLocMap f m =
+  let ppPair (Pair (RegLoc r) v) = f (text (showF r)) v
+      ppPair (Pair (StackOffLoc i repr) v) = f (ppStackOff i repr) v
+   in ppPair <$> locMapToList m
 
 -- | Return value associated with location or nothing if it is not
 -- defined.
@@ -345,6 +360,15 @@ locLookup (StackOffLoc o repr) m =
     SMLResult r -> Just r
     SMLOverlap _ _ _ -> Nothing
     SMLNone -> Nothing
+
+-- | Fold over values in a location map.
+foldLocMap :: (forall tp . a -> BoundLoc r tp -> p tp -> a)
+            -> a
+            -> LocMap r p
+            -> a
+foldLocMap f a0 m =
+  let a1 = MapF.foldlWithKey (\a r v -> f a (RegLoc r) v) a0 (locMapRegs m)
+   in stackMapFoldlWithKey (\a o r v -> f a (StackOffLoc o r) v) a1 (locMapStack m)
 
 -- | This associates the location with a value in the map, replacing any existing binding.
 --
@@ -374,14 +398,17 @@ locOverwriteWith upd (StackOffLoc o repr) v m =
 ------------------------------------------------------------------------
 -- StackEqConstraint
 
--- | A constraint on a location for the stack analysis.
+-- | A constraint on the value stored in a location (i.e., register or
+-- stack offset) at the start of block executino.
 data StackEqConstraint r tp where
-  -- | An equivalence class representative with the given number of
-  -- elements.
+  -- | This indicates the value is equal to the frame pointer plus the
+  -- given offset.
   --
-  -- In our map the number of equivalence class members should always
-  -- be positive.
+  -- As stacks grow down on many architectures, the offset will
+  -- typically be negative.
   IsStackOff :: !(MemInt (RegAddrWidth r)) -> StackEqConstraint r (BVType (RegAddrWidth r))
+  -- | This indicates the value is equal to the value stored at the
+  -- location.
   EqualLoc   :: !(BoundLoc r tp) -> StackEqConstraint r tp
 
 ppStackEqConstraint :: ShowF r => Doc -> StackEqConstraint r tp -> Doc
@@ -402,9 +429,11 @@ ppBlockStartStackConstraints = ppLocMap ppStackEqConstraint . unBSSC
 
 fnEntryBlockStartStackConstraints :: RegisterInfo (ArchReg arch) => BlockStartStackConstraints arch
 fnEntryBlockStartStackConstraints =
-  BSSC  LocMap { locMapRegs = MapF.singleton sp_reg (IsStackOff 0)
-               , locMapStack = emptyStackMap
-               }
+  BSSC { unBSSC =
+           LocMap { locMapRegs = MapF.singleton sp_reg (IsStackOff 0)
+                  , locMapStack = emptyStackMap
+                  }
+       }
 
 -- | @blockStartLocStackOffset c l@ returns an offset of the stack
 -- pointer that the value stored in @l@ is inferred to be equivalent
@@ -422,7 +451,7 @@ blockStartLocStackOffset cns loc =
 data StackOffConstraint w tp where
   StackOffCns :: !(MemInt w) -> StackOffConstraint w (BVType w)
 
--- | @boundsLocRep bnds loc@ returns the representative location for
+-- | @boundsLocRep cns loc@ returns the representative location for
 -- @loc@.
 --
 -- This representative location has the property that a location must
@@ -442,6 +471,8 @@ blockStartLocRepAndCns cns l =
 ------------------------------------------------------------------------
 -- joinStackExpr
 
+-- | Maps representatives from old and new join constraints to
+-- representative in merged map.
 type JoinClassMap r = MapF (JoinClassPair (BoundLoc r)) (BoundLoc r)
 
 joinStackEqConstraint :: Maybe (StackOffConstraint w tp)
@@ -470,7 +501,7 @@ joinNewLoc :: forall s arch tp
            -> StackEqConstraint (ArchReg arch) tp
               -- ^ Constraint on location in original list.
            -> Changed s ()
-joinNewLoc old new bndsRef procRef cntr thisLoc oldCns = do
+joinNewLoc old new cnsRef procRef cntr thisLoc oldCns = do
   (oldRep, oldPred) <- changedST $
     case oldCns of
       EqualLoc oldLoc ->
@@ -493,11 +524,11 @@ joinNewLoc old new bndsRef procRef cntr thisLoc oldCns = do
         case mp of
           Nothing -> pure ()
           Just (StackOffCns o) ->
-            modifySTRef' bndsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (IsStackOff o) (unBSSC cns))
+            modifySTRef' cnsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (IsStackOff o) (unBSSC cns))
     Just resRep ->
       -- Assert r is equal to resRep
        changedST $
-       modifySTRef' bndsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (EqualLoc resRep) (unBSSC cns))
+       modifySTRef' cnsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (EqualLoc resRep) (unBSSC cns))
 
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact inx the old bounds is implied by the new bounds.
@@ -508,7 +539,7 @@ joinBlockStartStackConstraints :: forall arch s
                                -> Changed s (BlockStartStackConstraints arch, JoinClassMap (ArchReg arch))
 joinBlockStartStackConstraints old new = do
   -- Reference to new bounds.
-  bndsRef <- changedST $ newSTRef (BSSC locMapEmpty)
+  cnsRef <- changedST $ newSTRef (BSSC locMapEmpty)
   -- This maps pairs containing the class representative in the old
   -- and new maps to the associated class representative in the
   -- combined bounds.
@@ -516,10 +547,10 @@ joinBlockStartStackConstraints old new = do
   cntr    <- changedST $ newSTRef 0
   --
   MapF.traverseWithKey_
-    (\r -> joinNewLoc old new bndsRef procRef cntr (RegLoc r))
+    (\r -> joinNewLoc old new cnsRef procRef cntr (RegLoc r))
     (locMapRegs (unBSSC old))
   stackMapTraverseWithKey_
-    (\i r c -> joinNewLoc old new bndsRef procRef cntr (StackOffLoc i r) c)
+    (\i r c -> joinNewLoc old new cnsRef procRef cntr (StackOffLoc i r) c)
     (locMapStack (unBSSC old))
 
   -- Check number of equivalence classes in result and original
@@ -532,7 +563,7 @@ joinBlockStartStackConstraints old new = do
   -- Record changed if any classes are different.
   markChanged (origClassCount < resultClassCount)
 
-  changedST $ (,) <$> readSTRef bndsRef <*> readSTRef procRef
+  changedST $ (,) <$> readSTRef cnsRef <*> readSTRef procRef
 
 ------------------------------------------------------------------------
 -- StackExpr
@@ -636,11 +667,11 @@ blockStartLocExpr :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                   => BlockStartStackConstraints arch
                   -> BoundLoc (ArchReg arch) tp
                   -> StackExpr arch ids tp
-blockStartLocExpr bnds loc =
-  case locLookup loc (unBSSC bnds) of
+blockStartLocExpr cns loc =
+  case locLookup loc (unBSSC cns) of
     Nothing -> ClassRepExpr loc
     Just (IsStackOff o) -> StackOffsetExpr o
-    Just (EqualLoc loc') -> blockStartLocExpr bnds loc'
+    Just (EqualLoc loc') -> blockStartLocExpr cns loc'
 
 ------------------------------------------------------------------------
 -- BlockIntraStackConstraints
@@ -650,12 +681,10 @@ data BlockIntraStackConstraints arch ids
    = BISC { biscInitConstraints :: !(BlockStartStackConstraints arch)
             -- ^ Bounds at execution start.
           , stackExprMap :: !(StackMap (ArchAddrWidth arch) (StackExpr arch ids))
-            -- ^ Maps stack offsets to the expression associated with them.
+            -- ^ Maps stack offsets to the expression associated with them at the current
+            -- location.
           , assignExprMap :: !(MapF (AssignId ids) (StackExpr arch ids))
             -- ^ Maps processed assignments to index expressions.
-          , memoTable :: !(MapF (App (StackExpr arch ids)) (StackExpr arch ids))
-            -- ^ Table for ensuring each bound expression has a single
-            -- representative.
           }
 
 -- | Create index bounds from initial index bounds.
@@ -663,45 +692,35 @@ mkBlockIntraStackConstraints :: forall arch ids
                              .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                              => BlockStartStackConstraints arch
                              -> BlockIntraStackConstraints arch ids
-mkBlockIntraStackConstraints bnds =
+mkBlockIntraStackConstraints cns =
   let stackExpr :: MemInt (ArchAddrWidth arch)
                 -> MemRepr tp
                 -> StackEqConstraint (ArchReg arch) tp
                 -> StackExpr arch ids tp
-      stackExpr i tp _ = blockStartLocExpr bnds (StackOffLoc i tp)
-   in BISC { biscInitConstraints = bnds
-           , stackExprMap   = stackMapMapWithKey stackExpr (locMapStack (unBSSC bnds))
+      stackExpr i tp _ = blockStartLocExpr cns (StackOffLoc i tp)
+   in BISC { biscInitConstraints = cns
+           , stackExprMap   = stackMapMapWithKey stackExpr (locMapStack (unBSSC cns))
            , assignExprMap  = MapF.empty
-           , memoTable      = MapF.empty
            }
 
 -- | Return the value of the index expression given the bounds.
-blockIntraValueExpr :: forall arch ids tp
+intraStackValueExpr :: forall arch ids tp
                     .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                     => BlockIntraStackConstraints  arch ids
                     -> Value arch ids tp
                     -> StackExpr arch ids tp
-blockIntraValueExpr bnds val =
+intraStackValueExpr cns val =
   case val of
     CValue c -> CExpr c
     AssignedValue (Assignment aid _) ->
-      case MapF.lookup aid (assignExprMap bnds) of
+      case MapF.lookup aid (assignExprMap cns) of
         Just e -> e
-        Nothing -> error $ "blockIntraValueExpr internal: Expected value to be assigned."
-    Initial r -> blockStartLocExpr (biscInitConstraints bnds) (RegLoc r)
-
--- | Return stack offset if value is a stack offset.
-blockIntraValueStackOffset :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                           => BlockIntraStackConstraints arch ids
-                           -> Value arch ids (BVType (ArchAddrWidth arch))
-                           -> Maybe (MemInt (ArchAddrWidth arch))
-blockIntraValueStackOffset bnds val =
-  case blockIntraValueExpr bnds val of
-    StackOffsetExpr i -> Just i
-    _ -> Nothing
+        Nothing ->
+          error $ printf "Expected %s to be assigned." (show (ppAssignId aid))
+    Initial r -> blockStartLocExpr (biscInitConstraints cns) (RegLoc r)
 
 -- | Return an expression associated with the @AssignRhs@.
-blockIntraRhsExpr :: forall arch ids tp
+intraStackRhsExpr :: forall arch ids tp
                   .  ( MemWidth (ArchAddrWidth arch)
                      , OrdF (ArchReg arch)
                      , ShowF (ArchReg arch)
@@ -710,38 +729,39 @@ blockIntraRhsExpr :: forall arch ids tp
                   -> AssignId ids tp
                   -> AssignRhs arch (Value arch ids) tp
                   -> StackExpr arch ids tp
-blockIntraRhsExpr bnds aid arhs =
+intraStackRhsExpr cns aid arhs =
   case arhs of
     EvalApp app -> do
-      let stackFn v = toInteger <$> blockIntraValueStackOffset bnds v
+      let stackFn v =
+            case intraStackValueExpr cns v of
+              StackOffsetExpr i -> Just (toInteger i)
+              _ -> Nothing
       case appAsStackOffset stackFn app of
         Just (StackOffsetView o) -> do
           StackOffsetExpr $ fromInteger o
         _ ->
-          let a = fmapFC (blockIntraValueExpr bnds) app
-           in case MapF.lookup a (memoTable bnds) of
-                Just r -> r
-                Nothing -> AppExpr aid a
+          let a = fmapFC (intraStackValueExpr cns) app
+           in AppExpr aid a
     ReadMem addr repr
-      | Just o <- blockIntraValueStackOffset bnds addr
-      , SMLResult e <- stackMapLookup o repr (stackExprMap bnds) ->
+      | StackOffsetExpr o <- intraStackValueExpr cns addr
+      , SMLResult e <- stackMapLookup o repr (stackExprMap cns) ->
         e
     _ -> UninterpAssignExpr aid (typeRepr arhs)
 
 -- | Associate the given bound expression with the assignment.
-bindAssignment :: AssignId ids tp
-               -> StackExpr arch ids tp
-               -> BlockIntraStackConstraints arch ids
-               -> BlockIntraStackConstraints arch ids
-bindAssignment aid expr bnds =
-  bnds { assignExprMap = MapF.insert aid expr (assignExprMap bnds) }
+intraStackSetAssignId :: AssignId ids tp
+                      -> StackExpr arch ids tp
+                      -> BlockIntraStackConstraints arch ids
+                      -> BlockIntraStackConstraints arch ids
+intraStackSetAssignId aid expr cns =
+  cns { assignExprMap = MapF.insert aid expr (assignExprMap cns) }
 
 -- | Discard information about the stack in the bounds due to an
 -- operation that may affect the stack.
 discardStackInfo :: BlockIntraStackConstraints arch ids
                  -> BlockIntraStackConstraints arch ids
-discardStackInfo bnds =
-  bnds { stackExprMap = emptyStackMap }
+discardStackInfo cns =
+  cns { stackExprMap = emptyStackMap }
 
 -- | Update the stack to point to the given expression.
 writeStackOff :: forall arch ids tp
@@ -751,8 +771,8 @@ writeStackOff :: forall arch ids tp
               -> MemRepr tp
               -> Value arch ids tp
               -> BlockIntraStackConstraints arch ids
-writeStackOff bnds off repr v =
-  bnds { stackExprMap = stackMapOverwrite off repr (blockIntraValueExpr bnds v) (stackExprMap bnds) }
+writeStackOff cns off repr v =
+  cns { stackExprMap = stackMapOverwrite off repr (intraStackValueExpr cns v) (stackExprMap cns) }
 
 ------------------------------------------------------------------------
 -- NextStateMonad
@@ -821,12 +841,12 @@ postJumpStackConstraints :: forall arch ids
                          -> RegState (ArchReg arch) (Value arch ids)
                          -- ^ Register values at start of next state.
                          -> NextStateMonad arch ids (BlockStartStackConstraints arch)
-postJumpStackConstraints bnds regs = do
+postJumpStackConstraints cns regs = do
   rm <- MapF.traverseMaybeWithKey
-          (\r v -> nextStateStackEqConstraint (RegLoc r) (blockIntraValueExpr bnds v))
+          (\r v -> nextStateStackEqConstraint (RegLoc r) (intraStackValueExpr cns v))
           (regStateMap regs)
   sm <- stackMapTraverseMaybeWithKey (\i repr e -> nextStateStackEqConstraint (StackOffLoc i repr) e)
-                                     (stackExprMap bnds)
+                                     (stackExprMap cns)
   pure $! BSSC (LocMap { locMapRegs = rm, locMapStack = sm })
 
 -- | Get the constraint associated with a register after a call.
@@ -840,46 +860,43 @@ postCallConstraint :: RegisterInfo (ArchReg arch)
                    -> Value arch ids tp
                    -- ^ Value of register at time call occurs.
                    -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
-postCallConstraint params bnds r v
+postCallConstraint params cns r v
   | Just Refl <- testEquality r sp_reg
-  , StackOffsetExpr o <- blockIntraValueExpr bnds v = do
+  , StackOffsetExpr o <- intraStackValueExpr cns v = do
       pure $! (Just $! IsStackOff (o+fromInteger (postCallStackDelta params)))
   | preserveReg params r =
-      nextStateStackEqConstraint (RegLoc r) (blockIntraValueExpr bnds v)
+      nextStateStackEqConstraint (RegLoc r) (intraStackValueExpr cns v)
   | otherwise =
       pure Nothing
 
 -- | Return the index bounds after a function call.
 postCallStackConstraints :: forall arch ids
-                            .  RegisterInfo (ArchReg arch)
+                         .  RegisterInfo (ArchReg arch)
                          => CallParams (ArchReg arch)
                          -> BlockIntraStackConstraints arch ids
                          -> RegState (ArchReg arch) (Value arch ids)
-                         -> BlockStartStackConstraints arch
-postCallStackConstraints params cns regs =
-  runNextStateMonad $ do
-    rm <- MapF.traverseMaybeWithKey (postCallConstraint params cns) (regStateMap regs)
+                         -> NextStateMonad arch ids (BlockStartStackConstraints arch)
+postCallStackConstraints params cns regs = do
+  rm <- MapF.traverseMaybeWithKey (postCallConstraint params cns) (regStateMap regs)
 
-    let finalStack = stackExprMap cns
-    let filteredStack =
-          case blockIntraValueExpr cns (getBoundValue sp_reg regs) of
-            StackOffsetExpr spOff
-              | stackGrowsDown params ->
-                  let newOff = toInteger spOff + postCallStackDelta params
-                   -- Keep entries at offsets above return address.
-                   in stackMapDropBelow newOff finalStack
-              | otherwise ->
-                  let newOff = toInteger spOff + postCallStackDelta params
-                      -- Keep entries whose high address is below new stack offset
-                   in stackMapDropAbove newOff finalStack
-            _ -> emptyStackMap
-    let nextStackFn :: MemInt (ArchAddrWidth arch)
-                    -> MemRepr tp
-                    -> StackExpr arch ids tp
-                    -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
-        nextStackFn i repr e =
-          nextStateStackEqConstraint (StackOffLoc i repr) e
-
-    sm <- stackMapTraverseMaybeWithKey nextStackFn filteredStack
-
-    pure $! BSSC (LocMap { locMapRegs = rm, locMapStack = sm })
+  let finalStack = stackExprMap cns
+  let filteredStack =
+        case intraStackValueExpr cns (getBoundValue sp_reg regs) of
+          StackOffsetExpr spOff
+            | stackGrowsDown params ->
+                let newOff = toInteger spOff + postCallStackDelta params
+                    -- Keep entries at offsets above return address.
+                 in stackMapDropBelow newOff finalStack
+            | otherwise ->
+                let newOff = toInteger spOff + postCallStackDelta params
+                    -- Keep entries whose high address is below new stack offset
+                 in stackMapDropAbove newOff finalStack
+          _ -> emptyStackMap
+  let nextStackFn :: MemInt (ArchAddrWidth arch)
+                  -> MemRepr tp
+                  -> StackExpr arch ids tp
+                  -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
+      nextStackFn i repr e =
+        nextStateStackEqConstraint (StackOffLoc i repr) e
+  sm <- stackMapTraverseMaybeWithKey nextStackFn filteredStack
+  pure $! BSSC (LocMap { locMapRegs = rm, locMapStack = sm })

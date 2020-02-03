@@ -1174,10 +1174,11 @@ callClassifier = do
                             -- a function entry point.
                           , writtenCodeAddrs = filter (\a -> a /= ret) (classifierWrittenAddrs bcc)
                             --Include return target
-                          , intraJumpTargets = [( ret
-                                                , postCallAbsState ainfo (classifierAbsState bcc) finalRegs ret
-                                                , Jmp.postCallBounds (archCallParams ainfo) (classifierJumpBounds bcc) finalRegs
-                                                )]
+                          , intraJumpTargets =
+                              [( ret
+                               , postCallAbsState ainfo (classifierAbsState bcc) finalRegs ret
+                               , Jmp.postCallBounds (archCallParams ainfo) (classifierJumpBounds bcc) finalRegs
+                               )]
                             -- Use the abstract domain to look for new code pointers for the current IP.
                           , newFunctionAddrs = identifyCallTargets mem (classifierAbsState bcc) finalRegs
                           }
@@ -1620,8 +1621,6 @@ type BlockTermRewriter arch s src tgt =
      ArchSegmentOff arch  -- ^ address of the current block
   -> TermStmt arch tgt    -- ^ existing TermStmt for this block
   -> Rewriter arch s src tgt (TermStmt arch tgt)
-
-
 
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.

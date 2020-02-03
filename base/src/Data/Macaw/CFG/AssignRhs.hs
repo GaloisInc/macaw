@@ -23,7 +23,6 @@ module Data.Macaw.CFG.AssignRhs
   , RegAddrWord
   , ArchAddrWidth
   , ArchAddrWord
-  , ArchSegmentOff
   , ArchMemAddr
   ) where
 
@@ -85,9 +84,6 @@ type family ArchTermStmt (arch :: Kind.Type) :: Kind.Type -> Kind.Type
 
 -- | Number of bits in addreses for architecture.
 type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
-
--- | A pair containing a segment and valid offset within the segment.
-type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
 
 -- | A word for the given architecture bitwidth.
 type ArchAddrWord arch = RegAddrWord (ArchReg arch)

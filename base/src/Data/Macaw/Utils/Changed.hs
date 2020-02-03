@@ -39,6 +39,8 @@ markChanged True = do
   r <- Changed ask
   changedST $ writeSTRef r True
 
+-- | Run the changed computation and return the value if changed,
+-- and `Nothing` if not.
 runChanged :: forall a . (forall s . Changed s a) -> Maybe a
 runChanged action = runST $ do
   r <-  newSTRef False
