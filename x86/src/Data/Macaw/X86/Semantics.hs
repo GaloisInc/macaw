@@ -47,6 +47,8 @@ import           Data.Macaw.X86.Monad
 import           Data.Macaw.X86.X86Reg (X86Reg)
 import qualified Data.Macaw.X86.X86Reg as R
 import qualified Data.Macaw.X86.Semantics.AVX as AVX
+import qualified Data.Macaw.X86.Semantics.BMI2 as BMI2
+import qualified Data.Macaw.X86.Semantics.ADX as ADX
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
@@ -3070,6 +3072,8 @@ all_instructions =
   ++ def_jcc_list
   ++ def_set_list
   ++ AVX.all_instructions
+  ++ BMI2.all_instructions
+  ++ ADX.all_instructions
 
 ------------------------------------------------------------------------
 -- execInstruction

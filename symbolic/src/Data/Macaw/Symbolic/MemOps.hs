@@ -365,8 +365,9 @@ binOpLabel lab x y =
 
 check :: IsSymInterface sym => sym -> Pred sym -> String -> String -> IO ()
 check sym valid name msg = assert sym valid
-                    $ AssertFailureSimError
-                    $ "[" ++ name ++ "] " ++ msg
+                    $ AssertFailureSimError errMsg errMsg
+  where
+    errMsg = "[" ++ name ++ "] " ++ msg
 
 -- | Define an operation by cases.
 cases ::
@@ -772,8 +773,8 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
      val <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
      let useDefault msg =
            do notC <- notPred sym cond
-              assert sym notC
-                (AssertFailureSimError ("[doCondReadMem] " ++ msg))
+              let errMsg = "[doCondReadMem] " ++ msg
+              assert sym notC (AssertFailureSimError errMsg errMsg)
               return def
      case memValToCrucible memRep val of
        Left err -> useDefault err
