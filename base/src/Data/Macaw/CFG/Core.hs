@@ -85,6 +85,7 @@ module Data.Macaw.CFG.Core
   , refsInValue
     -- ** Synonyms
   , ArchAddrValue
+  , ArchSegmentOff
   , Data.Parameterized.TraversableFC.FoldableFC(..)
   , module Data.Macaw.CFG.AssignRhs
   , module Data.Macaw.Utils.Pretty
@@ -120,6 +121,10 @@ import           Data.Macaw.CFG.AssignRhs
 import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
+
+
+-- | A pair containing a segment and valid offset within the segment.
+type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
 
 -- Note:
 -- The declarations in this file follow a top-down order, so the top-level
@@ -289,8 +294,13 @@ instance Show (CValue arch tp) where
 ------------------------------------------------------------------------
 -- Value and Assignment
 
--- | A value at runtime.
+-- | A value at runtime
+--
+-- Values are only well-defined in the context of a particular block,
+-- and are immutable within that context (i.e. their value would not
+-- change from a memory write).
 data Value arch ids tp where
+  -- | A constant vlaue
   CValue :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)

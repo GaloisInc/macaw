@@ -75,7 +75,6 @@ library
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
     Data.Macaw.Memory.Symbols
-    Data.Macaw.SCFG
     Data.Macaw.Types
     Data.Macaw.Utils.Changed
     Data.Macaw.Utils.Pretty

@@ -122,9 +122,9 @@ data InitJumpBounds arch
 
 -- | Pretty print jump bounds.
 ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
-ppInitJumpBounds bnds
-  = ppBlockStartStackConstraints (initBndsMap bnds)
-  ++ ppLocMap ppJustRangePred (initRngPredMap bnds)
+ppInitJumpBounds cns
+  = ppBlockStartStackConstraints (initBndsMap cns)
+  ++ ppLocMap ppJustRangePred (initRngPredMap cns)
 
 instance ShowF (ArchReg arch) => Pretty (InitJumpBounds arch) where
   pretty = vcat . ppInitJumpBounds
@@ -167,15 +167,15 @@ mkIntraJumpBounds :: forall arch ids
                   .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                   => InitJumpBounds arch
                   -> IntraJumpBounds arch ids
-mkIntraJumpBounds bnds =
-  IntraJumpBounds { intraStackConstraints = mkBlockIntraStackConstraints (initBndsMap bnds)
-                  , intraRangePredMap = initRngPredMap bnds
+mkIntraJumpBounds cns =
+  IntraJumpBounds { intraStackConstraints = mkBlockIntraStackConstraints (initBndsMap cns)
+                  , intraRangePredMap = initRngPredMap cns
                   }
 
 initJumpBounds :: IntraJumpBounds arch ids -> InitJumpBounds arch
-initJumpBounds bnds =
-  InitJumpBounds { initBndsMap = biscInitConstraints (intraStackConstraints bnds)
-                 , initRngPredMap = intraRangePredMap bnds
+initJumpBounds cns =
+  InitJumpBounds { initBndsMap = biscInitConstraints (intraStackConstraints cns)
+                 , initRngPredMap = intraRangePredMap cns
                  }
 
 instance ShowF (ArchReg arch) => Pretty (IntraJumpBounds arch ids) where
@@ -185,7 +185,7 @@ instance ShowF (ArchReg arch) => Pretty (IntraJumpBounds arch ids) where
 modifyIntraStackConstraints :: (BlockIntraStackConstraints arch ids -> BlockIntraStackConstraints arch ids)
                            -> IntraJumpBounds arch ids
                            -> IntraJumpBounds arch ids
-modifyIntraStackConstraints f bnds = bnds { intraStackConstraints = f (intraStackConstraints bnds) }
+modifyIntraStackConstraints f cns = cns { intraStackConstraints = f (intraStackConstraints cns) }
 
 ------------------------------------------------------------------------
 -- Execute a statement
@@ -198,7 +198,7 @@ stackExecStatement :: ( MemWidth (ArchAddrWidth arch)
                    => BlockIntraStackConstraints arch ids
                    -> Stmt arch ids
                    -> BlockIntraStackConstraints arch ids
-stackExecStatement bnds stmt =
+stackExecStatement cns stmt =
   case stmt of
     AssignStmt (Assignment aid arhs) -> do
       -- Clear all knowledge about the stack on architecture-specific
@@ -206,29 +206,32 @@ stackExecStatement bnds stmt =
       --
       -- Note. This is very conservative, and we may need to improve
       -- this.
-      let bnds' = case arhs of
-                    EvalArchFn{} -> discardStackInfo bnds
-                    _ -> bnds
+      let cns' = case arhs of
+                    EvalArchFn{} -> discardStackInfo cns
+                    _ -> cns
       -- Associate the given expression with a bounds.
-      seq bnds' $ bindAssignment aid (blockIntraRhsExpr bnds' aid arhs) bnds'
+      seq cns' $ intraStackSetAssignId aid (intraStackRhsExpr cns' aid arhs) cns'
     WriteMem addr repr val ->
-      case blockIntraValueStackOffset bnds addr of
-        Just addrOff ->
-          writeStackOff bnds addrOff repr val
-        -- If we write to something other than stack, then clear all stack references.
-        -- Note. This seems like a bad idea.
-        Nothing ->
-          discardStackInfo bnds
+      case intraStackValueExpr cns addr of
+        StackOffsetExpr addrOff ->
+          writeStackOff cns addrOff repr val
+        -- If we write to something other than stack, then clear all
+        -- stack references.
+        --
+        -- This is probably not a good idea in general, but seems fine
+        -- for stack detection.
+        _ ->
+          discardStackInfo cns
     CondWriteMem{} ->
-      discardStackInfo bnds
+      discardStackInfo cns
     InstructionStart{} ->
-      bnds
+      cns
     Comment{} ->
-      bnds
+      cns
     ExecArchStmt{} ->
-      discardStackInfo bnds
+      discardStackInfo cns
     ArchState{} ->
-      bnds
+      cns
 
 -- | Update the bounds based on a statement.
 execStatement :: ( MemWidth (ArchAddrWidth arch)
@@ -238,8 +241,8 @@ execStatement :: ( MemWidth (ArchAddrWidth arch)
               => IntraJumpBounds arch ids
               -> Stmt arch ids
               -> IntraJumpBounds arch ids
-execStatement bnds stmt =
-  modifyIntraStackConstraints (`stackExecStatement` stmt) bnds
+execStatement cns stmt =
+  modifyIntraStackConstraints (`stackExecStatement` stmt) cns
 
 
 ------------------------------------------------------------------------
@@ -332,11 +335,11 @@ unsignedUpperBound :: ( MapF.OrdF (ArchReg arch)
                    => IntraJumpBounds arch ids
                    -> Value arch ids tp
                    -> Maybe Natural
-unsignedUpperBound bnds v = do
-  let stkCns = intraStackConstraints bnds
-  let ibnds = biscInitConstraints stkCns
-  let valExpr = blockIntraValueExpr stkCns v
-  case exprRangePred ibnds (intraRangePredMap bnds) emptyBranchConstraints valExpr of
+unsignedUpperBound cns v = do
+  let stkCns = intraStackConstraints cns
+  let icns = biscInitConstraints stkCns
+  let valExpr = intraStackValueExpr stkCns v
+  case exprRangePred icns (intraRangePredMap cns) emptyBranchConstraints valExpr of
     SomeRangePred r -> do
       Refl <- testEquality (rangeWidth r) (typeWidth v)
       pure (rangeUpperBound r)
@@ -563,20 +566,22 @@ assertPred :: ( OrdF (ArchReg arch)
            -> Value arch ids BoolType -- ^ Value representing predicate
            -> Bool -- ^ Controls whether predicate is true or false
            -> Either String (BranchConstraints (ArchReg arch) ids)
-assertPred bnds (AssignedValue a) isTrue =
+assertPred cns (AssignedValue a) isTrue =
   case assignRhs a of
     EvalApp (Eq x (BVValue w c)) -> do
-      addRangePred (blockIntraValueExpr (intraStackConstraints bnds) x) (mkRangeBound w (fromInteger c) (fromInteger c))
+      addRangePred (intraStackValueExpr (intraStackConstraints cns) x)
+                   (mkRangeBound w (fromInteger c) (fromInteger c))
     EvalApp (Eq (BVValue w c) x) -> do
-      addRangePred (blockIntraValueExpr (intraStackConstraints bnds) x) (mkRangeBound w (fromInteger c) (fromInteger c))
+      addRangePred (intraStackValueExpr (intraStackConstraints cns) x)
+                   (mkRangeBound w (fromInteger c) (fromInteger c))
     -- Given x < c), assert x <= c-1
     EvalApp (BVUnsignedLt x (BVValue _ c)) -> do
       if isTrue then do
         when (c == 0) $ Left "x < 0 must be false."
-        addRangePred (blockIntraValueExpr (intraStackConstraints bnds) x)  $!
+        addRangePred (intraStackValueExpr (intraStackConstraints cns) x)  $!
           mkUpperBound (typeWidth x) (fromInteger (c-1))
        else do
-        addRangePred (blockIntraValueExpr (intraStackConstraints bnds) x)  $!
+        addRangePred (intraStackValueExpr (intraStackConstraints cns) x)  $!
           mkLowerBound (typeWidth x) (fromInteger c)
     -- Given not (c < y), assert y <= c
     EvalApp (BVUnsignedLt (BVValue w c) y) -> do
@@ -586,7 +591,7 @@ assertPred bnds (AssignedValue a) isTrue =
           pure $! mkLowerBound w (fromInteger (c+1))
          else do
           pure $! mkUpperBound w (fromInteger c)
-      addRangePred (blockIntraValueExpr (intraStackConstraints bnds) y) p
+      addRangePred (intraStackValueExpr (intraStackConstraints cns) y) p
     -- Given x <= c, assert x <= c
     EvalApp (BVUnsignedLe x (BVValue w c)) -> do
       p <-
@@ -595,39 +600,40 @@ assertPred bnds (AssignedValue a) isTrue =
          else do
           when (c >= maxUnsigned w) $  Left "x <= max_unsigned must be true"
           pure $! mkLowerBound w (fromInteger (c+1))
-      addRangePred (blockIntraValueExpr (intraStackConstraints bnds) x) p
+      addRangePred (intraStackValueExpr (intraStackConstraints cns) x) p
     -- Given not (c <= y), assert y <= (c-1)
     EvalApp (BVUnsignedLe (BVValue _ c) y)
       | isTrue -> do
-          addRangePred (blockIntraValueExpr (intraStackConstraints bnds) y) (mkLowerBound (typeWidth y) (fromInteger c))
+          addRangePred (intraStackValueExpr (intraStackConstraints cns) y)
+                       (mkLowerBound (typeWidth y) (fromInteger c))
       | otherwise -> do
           when (c == 0) $ Left "0 <= x cannot be false"
           addRangePred
-            (blockIntraValueExpr (intraStackConstraints bnds) y)
+            (intraStackValueExpr (intraStackConstraints cns) y)
             (mkUpperBound (typeWidth y) (fromInteger (c-1)))
     EvalApp (AndApp l r) ->
       if isTrue then
         conjoinBranchConstraints
-          <$> assertPred bnds l True
-          <*> assertPred bnds r True
+          <$> assertPred cns l True
+          <*> assertPred cns r True
       else
         disjoinBranchConstraints
-          <$> assertPred bnds l False
-          <*> assertPred bnds r False
+          <$> assertPred cns l False
+          <*> assertPred cns r False
     -- Given not (x || y), assert not x, then assert not y
     EvalApp (OrApp  l r) ->
       if isTrue then
         -- Assert l | r
         disjoinBranchConstraints
-          <$> assertPred bnds l True
-          <*> assertPred bnds r True
+          <$> assertPred cns l True
+          <*> assertPred cns r True
       else
         -- Assert not l && not r
         conjoinBranchConstraints
-          <$> assertPred bnds l False
-          <*> assertPred bnds r False
+          <$> assertPred cns l False
+          <*> assertPred cns r False
     EvalApp (NotApp p) ->
-      assertPred bnds p (not isTrue)
+      assertPred cns p (not isTrue)
     _ -> Right emptyBranchConstraints
 assertPred _ _ _ =
   Right emptyBranchConstraints
@@ -661,10 +667,10 @@ nextBlockBounds :: forall arch ids
                 -> RegState (ArchReg arch) (Value arch ids)
                    -- ^ Register values at start of next state.
                 -> InitJumpBounds arch
-nextBlockBounds bnds brCns regs = runNextStateMonad $ do
-  stkCns <- postJumpStackConstraints (intraStackConstraints bnds) regs
+nextBlockBounds cns brCns regs = runNextStateMonad $ do
+  stkCns <- postJumpStackConstraints (intraStackConstraints cns) regs
   reps <- getNextStateRepresentatives
-  let icns =  biscInitConstraints (intraStackConstraints bnds)
+  let icns =  biscInitConstraints (intraStackConstraints cns)
   let rngMap = foldl' (updateRangePredMap icns brCns) locMapEmpty reps
   pure $! InitJumpBounds { initBndsMap = stkCns
                          , initRngPredMap = rngMap
@@ -678,7 +684,7 @@ postJumpBounds :: forall arch ids
                 -> RegState (ArchReg arch) (Value arch ids)
                    -- ^ Register values at start of next state.
                 -> InitJumpBounds arch
-postJumpBounds bnds regs = nextBlockBounds bnds emptyBranchConstraints regs
+postJumpBounds cns regs = nextBlockBounds cns emptyBranchConstraints regs
 
 -- | Get bounds for start of block after a branch (either the true or
 -- false branch)
@@ -689,9 +695,9 @@ postBranchBounds :: RegisterInfo (ArchReg arch)
                  -> RegState (ArchReg arch) (Value arch ids)
                  -- ^ Register values at start of next state.
                  -> Either String (InitJumpBounds arch)
-postBranchBounds bnds c condIsTrue regs = do
-  brCns <- assertPred bnds c condIsTrue
-  pure (nextBlockBounds bnds brCns regs)
+postBranchBounds cns c condIsTrue regs = do
+  brCns <- assertPred cns c condIsTrue
+  pure (nextBlockBounds cns brCns regs)
 
 
 -- | Return the index bounds after a function call.
@@ -701,8 +707,9 @@ postCallBounds :: forall arch ids
                -> IntraJumpBounds arch ids
                -> RegState (ArchReg arch) (Value arch ids)
                -> InitJumpBounds arch
-postCallBounds params bnds regs =
-  let cns = postCallStackConstraints params (intraStackConstraints bnds) regs
-   in InitJumpBounds { initBndsMap = cns
+postCallBounds params cns regs =
+  let cns' = runNextStateMonad $
+              postCallStackConstraints params (intraStackConstraints cns) regs
+   in InitJumpBounds { initBndsMap = cns'
                      , initRngPredMap = locMapEmpty
                      }
