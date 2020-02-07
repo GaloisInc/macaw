@@ -11,10 +11,8 @@ task needed before deleting unused code.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Analysis.RegisterUse
-  ( -- * Exports for function representation
-    FnBlockInvariant(..)
-    -- * Exports for function recovery
-  , registerUse
+  ( -- * Exports for function recovery
+    registerUse
   , RegisterUseError(..)
     -- ** Input information
   , RegisterUseContext(..)
@@ -25,7 +23,7 @@ module Data.Macaw.Analysis.RegisterUse
     -- * Architecture specific summarization
   , ArchTermStmtUsageFn
   , RegisterUseM
-  , BlockStartConstraints
+  , BlockStartConstraints(..)
   , postCallConstraints
   , BlockUsageSummary(..)
   , RegDependencyMap
@@ -39,7 +37,7 @@ module Data.Macaw.Analysis.RegisterUse
   , funBlockPreds
     -- ** Inferred information.
   , BlockInvariants
-  , biInvariantList
+  , biStartConstraints
   , biMemAccessList
   , biPhiLocs
   , biPredPostValues
@@ -1661,30 +1659,6 @@ backPropagateOne s rest newLocs ((srcAddr,srcDepMap):predRest) = do
   seq s' $ seq rest' $ backPropagateOne s' rest' newLocs predRest
 
 ------------------------------------------------------------------------
--- FnBlockInvariant
-
--- | Invariants about a block location.
-data FnBlockInvariant arch where
-  -- | @FnCalleeSavedReg r x@ indices that @r@ is a callee saved
-  -- register, and @x:@ is a location that store the value @r@ had
-  -- when the function started execution.
-  FnCalleeSavedReg :: ArchReg arch tp
-                   -> BoundLoc (ArchReg arch) tp
-                   -> FnBlockInvariant arch
-  -- | @FnEqualLocs x y@ indicares that the value stored in the
-  -- locations @x@ and @y@ are all equal.
-  FnEqualLocs :: BoundLoc (ArchReg arch) tp
-              -> BoundLoc (ArchReg arch) tp
-              -> FnBlockInvariant arch
-  -- | @FnStackOffset o x@ indices that @x@ stores the value in the
-  -- frame pointer plus @o@.
-  --
-  -- @o@ is typically negative on processors whose stacks grow down.
-  FnStackOff :: !(MemInt (ArchAddrWidth arch))
-             -> !(BoundLoc (ArchReg arch) (BVType (ArchAddrWidth arch)))
-             -> FnBlockInvariant arch
-
-------------------------------------------------------------------------
 -- BlockInvariants
 
 newtype LocList r tp = LL { llValues :: [BoundLoc r tp] }
@@ -1710,11 +1684,8 @@ data BlockInvariants arch ids =
      , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
        -- | Locations from previous block used to initial phi variables.
      , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
-       -- | Construct invariants about blocks.
-       --
-       -- For each equivalence class of locations equal to a
-       -- callee-saved register, this has an invariant about it.
-     , biInvariantList :: ![FnBlockInvariant arch]
+       -- | Start constraints for block
+     , biStartConstraints :: !(BlockStartConstraints arch)
      }
 
 -- | Return true if assignment is needed to execute block.
@@ -1762,13 +1733,6 @@ mkDepLocMap cns =
       addNonRep m _ _ = m
    in foldLocMap addNonRep MapF.empty (bscLocMap cns)
 
-ppInvariant :: Pair (BoundLoc (ArchReg arch)) (ValueRegUseDomain arch) -> FnBlockInvariant arch
-ppInvariant (Pair l d) =
-  case d of
-    ValueRegUseStackOffset o -> FnStackOff o l
-    FnStartRegister r -> FnCalleeSavedReg r l
-    RegEqualLoc r -> FnEqualLocs r l
-
 mkBlockInvariants :: forall arch ids
                   .  (HasRepr (ArchReg arch) TypeRepr
                      , OrdF (ArchReg arch)
@@ -1799,7 +1763,7 @@ mkBlockInvariants predMap valueMap addr summary deps =
          , biLocMap = mkDepLocMap cns
          , biPredPostValues = Map.fromList predphilist
          , biPhiLocs = Set.toList (dsLocSet deps)
-         , biInvariantList = ppInvariant <$> locMapToList (bscLocMap cns)
+         , biStartConstraints = cns
          }
 
 -- | This analyzes a function to determine which registers must b available to
