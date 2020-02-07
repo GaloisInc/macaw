@@ -9,7 +9,6 @@ task needed before deleting unused code.
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Analysis.RegisterUse
   ( -- * Exports for function representation
@@ -104,8 +103,6 @@ funBlockPreds info = Map.fromListWith (++)
   , next <- parsedTermSucc (pblockTermStmt b)
   ]
 
-$(pure [])
-
 -------------------------------------------------------------------------------
 -- RegisterUseError
 
@@ -117,8 +114,6 @@ instance Show (RegisterUseError arch) where
   show (CallStackHeightError addr) =
     "Could not resolve concrete stack height for call at "
       ++ show addr
-
-$(pure [])
 
 -------------------------------------------------------------------------------
 -- StackOffset information
@@ -152,8 +147,6 @@ instance ShowF (ArchReg arch) => Show (ValueRegUseDomain arch tp) where
 
 instance ShowF (ArchReg arch) => ShowF (ValueRegUseDomain arch)
 
-$(pure [])
-
 instance TestEquality (ArchReg arch) => TestEquality (ValueRegUseDomain arch) where
   testEquality (ValueRegUseStackOffset x) (ValueRegUseStackOffset y) =
     if x == y then Just Refl else Nothing
@@ -174,8 +167,6 @@ instance OrdF (ArchReg arch) => OrdF (ValueRegUseDomain arch) where
   compareF _ (FnStartRegister _) = GTF
 
   compareF (RegEqualLoc x) (RegEqualLoc y) = compareF x y
-
-$(pure [])
 
 ------------------------------------------------------------------------
 -- BlockStartConstraints
@@ -282,15 +273,11 @@ unionBlockStartConstraints :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch
                            -> BlockStartConstraints arch
 unionBlockStartConstraints n o = fromMaybe o (runChanged (joinBlockStartConstraints o n))
 
-$(pure [])
-
 -------------------------------------------------------------------------------
 -- StmtIndex
 
 -- | Index of a stmt in a block.
 type StmtIndex = Int
-
-$(pure [])
 
 ------------------------------------------------------------------------
 -- StartValueExpr
@@ -316,16 +303,12 @@ deriving instance ShowF (ArchReg arch) => Show (InferValue arch ids tp)
 
 instance ShowF (ArchReg arch) => ShowF (InferValue arch ids)
 
-$(pure [])
-
 -- | Pattern for stack offset expressions
 pattern FrameExpr :: ()
                   => (tp ~ BVType (ArchAddrWidth arch))
                   => MemInt (ArchAddrWidth arch)
                   -> InferValue arch ids tp
 pattern FrameExpr o = IVDomain (ValueRegUseStackOffset o)
-
-$(pure [])
 
 -- This returns @Just Refl@ if the two expressions denote the same
 -- value under the assumptions about the start of the block, and the
@@ -371,8 +354,6 @@ instance OrdF (ArchReg arch) => OrdF (InferValue arch ids) where
           Nothing -> error "Equal conditional writes with inequal types."
       GT -> GTF
 
-$(pure [])
-
 -- | Information about a stack location used in invariant inference.
 data InferStackValue arch ids tp where
   -- | The stack location had this value in the initial stack.
@@ -396,8 +377,6 @@ data InferStackValue arch ids tp where
                -> !(Value arch ids tp)
                -> !(InferStackValue arch ids tp)
                -> InferStackValue arch ids tp
-
-$(pure [])
 
 ------------------------------------------------------------------------
 -- StartInfer
@@ -517,16 +496,12 @@ sisCurrentInstructionOffsetLens :: Lens' (InferState arch ids) (ArchAddrWord arc
 sisCurrentInstructionOffsetLens =
   lens sisCurrentInstructionOffset (\s v -> s { sisCurrentInstructionOffset = v })
 
-$(pure [])
-
 -- | Monad used for inferring start constraints.
 --
 -- Note. The process of inferring start constraints intentionally does
 -- not do stack escape analysis or other
 type StartInfer arch ids =
   ReaderT (StartInferContext arch) (State (InferState arch ids))
-
-$(pure [])
 
 -- | Set the value associtated with an assignment
 setAssignVal :: AssignId ids tp -> InferValue arch ids tp -> StartInfer arch ids ()
@@ -790,8 +765,6 @@ addNextConstraints lastMap addr nextCns frontierMap =
           Just prevCns -> runChanged (joinBlockStartConstraints prevCns nextCns)
    in Map.alter modifyFrontier addr frontierMap
 
-$(pure [])
-
 -- | Process terminal registers
 intraJumpConstraints :: forall arch ids
                      .  OrdF (ArchReg arch)
@@ -824,8 +797,6 @@ intraJumpConstraints ctx s regs = runInferNextM $ do
                        , locMapStack = stk
                        }
   pure (postValMap, cns)
-
-$(pure [])
 
 -- | Post call constraints for return address.
 postCallConstraints :: forall arch ids
@@ -884,14 +855,7 @@ postCallConstraints params ctx s regs =
                              , locMapStack = stk
                              }
         pure $ Right $ (postValMap, cns)
-      d -> error ("Bad stack value:\n"
-                   ++ show (ppValueAssignments (regs^.boundValue sp_reg)) ++ "\n"
-                   ++ shows ctx "\n"
-                   ++ show d)
-
-        -- pure $ Left (CallStackHeightError addr)
-
-$(pure [])
+      _ -> pure $ Left (CallStackHeightError (segoffAddr (sicAddr ctx)))
 
 -------------------------------------------------------------------------------
 -- DependencySet
@@ -1025,8 +989,6 @@ data BlockUsageSummary (arch :: Type) ids = BUS
   , pendingMemAccesses :: ![MemAccessInfo arch ids]
   }
 
-$(pure [])
-
 initBlockUsageSummary :: BlockStartConstraints arch
                       -> InferState arch ids
                       -> BlockUsageSummary arch ids
@@ -1061,8 +1023,6 @@ assignmentCache :: Lens' (BlockUsageSummary arch ids)
                          (Map (Some (AssignId ids)) (DependencySet (ArchReg arch) ids))
 assignmentCache = lens assignDeps (\s v -> s { assignDeps = v })
 
-$(pure [])
-
 ------------------------------------------------------------------------
 -- FunctionTypeRegs
 
@@ -1074,8 +1034,6 @@ data FunctionTypeRegs (r :: M.Type -> Type) =
                    }
   deriving (Ord, Eq, Show)
 
-$(pure [])
-
 ------------------------------------------------------------------------
 -- RegisterUseContext
 
@@ -1085,8 +1043,6 @@ type PostTermStmtInvariants arch ids =
   -> ArchTermStmt arch ids
   -> RegState (ArchReg arch) (Value arch ids)
   -> Either (RegisterUseError arch) (PostValueMap arch ids, BlockStartConstraints arch)
-
-$(pure [])
 
 type ArchTermStmtUsageFn arch ids
   = ArchTermStmt arch ids
@@ -1123,8 +1079,6 @@ data RegisterUseContext arch
     , demandContext :: !(DemandContext arch)
     }
 
-$(pure [])
-
 -- | Add frontier for an intra-procedural jump that preserves register
 -- and stack.
 visitIntraJumpTarget :: forall arch ids
@@ -1146,8 +1100,6 @@ visitIntraJumpTarget lastMap ctx s regs (m,frontierMap) addr =
   let nextCns :: BlockStartConstraints arch
       (postValMap, nextCns) = intraJumpConstraints ctx s regs
    in (Map.insert addr postValMap m, addNextConstraints lastMap addr nextCns frontierMap)
-
-$(pure [])
 
 -- | Infer information about block
 blockStartConstraints :: ArchConstraints arch
@@ -1229,8 +1181,6 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
       pure $ (m', frontierMap)
 
-$(pure [])
-
 -- | Infer start constraints by recursively evaluating blocks
 propStartConstraints :: ArchConstraints arch
                      => RegisterUseContext arch
@@ -1250,8 +1200,6 @@ propStartConstraints rctx blockMap lastMap next =
     Just ((nextAddr, nextCns), rest) -> do
       (lastMap', next') <- blockStartConstraints rctx blockMap nextAddr nextCns lastMap rest
       propStartConstraints rctx blockMap lastMap' next'
-
-$(pure [])
 
 -- | Infer start constraints by recursively evaluating blocks
 inferStartConstraints :: forall arch ids
@@ -1303,8 +1251,6 @@ type RegisterUseM arch ids =
   ReaderT (RegisterUseContext arch)
           (StateT (BlockUsageSummary arch ids)
                   (Except (RegisterUseError arch)))
-
-$(pure [])
 
 -- ----------------------------------------------------------------------------------------
 -- Phase one functions
@@ -1714,8 +1660,6 @@ backPropagateOne s rest newLocs ((srcAddr,srcDepMap):predRest) = do
             | otherwise = Map.insertWith Set.union srcAddr d rest
   seq s' $ seq rest' $ backPropagateOne s' rest' newLocs predRest
 
-$(pure [])
-
 ------------------------------------------------------------------------
 -- FnBlockInvariant
 
@@ -1739,8 +1683,6 @@ data FnBlockInvariant arch where
   FnStackOff :: !(MemInt (ArchAddrWidth arch))
              -> !(BoundLoc (ArchReg arch) (BVType (ArchAddrWidth arch)))
              -> FnBlockInvariant arch
-
-$(pure [])
 
 ------------------------------------------------------------------------
 -- BlockInvariants
@@ -1775,8 +1717,6 @@ data BlockInvariants arch ids =
      , biInvariantList :: ![FnBlockInvariant arch]
      }
 
-$(pure [])
-
 -- | Return true if assignment is needed to execute block.
 biAssignIdUsed :: AssignId ids tp -> BlockInvariants arch ids -> Bool
 biAssignIdUsed aid inv = Set.member (Some aid) (biUsedAssignSet inv)
@@ -1785,8 +1725,6 @@ biAssignIdUsed aid inv = Set.member (Some aid) (biUsedAssignSet inv)
 -- frame.
 biWriteUsed :: StmtIndex -> BlockInvariants arch ids -> Bool
 biWriteUsed idx inv = Set.member idx (biUsedWriteSet inv)
-
-$(pure [])
 
 -- | This transitively back propagates blocks across
 backPropagate :: forall arch ids
@@ -1805,8 +1743,6 @@ backPropagate predMap depMap new =
       let predAddrs = Map.findWithDefault [] currAddr predMap
           (s', rest') = backPropagateOne depMap rest newRegs predAddrs
        in backPropagate predMap s' rest'
-
-$(pure [])
 
 ------------------------------------------------------------------------
 -- registerUse
@@ -1865,8 +1801,6 @@ mkBlockInvariants predMap valueMap addr summary deps =
          , biPhiLocs = Set.toList (dsLocSet deps)
          , biInvariantList = ppInvariant <$> locMapToList (bscLocMap cns)
          }
-
-$(pure [])
 
 -- | This analyzes a function to determine which registers must b available to
 -- the highest index above sp0 that is read or written.

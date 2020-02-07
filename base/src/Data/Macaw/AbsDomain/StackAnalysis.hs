@@ -1,6 +1,6 @@
 {- |
 
-1This module defines a relational abstract domain for tracking
+This module defines a relational abstract domain for tracking
 registers and stack addresses.  The model records when one of these
 values is known to be equal to the current pointer stack frame.  This
 domain also tracks equalities between nodes so that analysis
