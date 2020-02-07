@@ -28,7 +28,7 @@ module Data.Macaw.CFG.AssignRhs
 
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG.App
-import           Data.Macaw.Memory (Endianness(..), MemSegmentOff, MemWord, MemAddr)
+import           Data.Macaw.Memory (Endianness(..), MemWord, MemAddr)
 import           Data.Macaw.Types
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr

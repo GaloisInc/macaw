@@ -181,6 +181,12 @@ instance ShowF r => Pretty (BoundLoc r tp) where
 instance ShowF r => PrettyF (BoundLoc r) where
   prettyF = pretty
 
+instance ShowF r => Show (BoundLoc r tp) where
+  show = show . pretty
+
+instance ShowF r => ShowF (BoundLoc r)
+
+
 ------------------------------------------------------------------------
 -- StackMap
 

@@ -21,6 +21,7 @@ module Data.Macaw.Analysis.RegisterUse
   , RegisterUseContext(..)
   , PostTermStmtInvariants
   , PostValueMap
+  , pvmFind
   , FunctionTypeRegs(..)
     -- * Architecture specific summarization
   , ArchTermStmtUsageFn
@@ -41,6 +42,10 @@ module Data.Macaw.Analysis.RegisterUse
   , BlockInvariants
   , biInvariantList
   , biMemAccessList
+  , biPhiLocs
+  , biPredPostValues
+  , biLocMap
+  , LocList(..)
   , MemAccessInfo(..)
   , ValueRegUseDomain(..)
     -- *** Mem Access info
@@ -48,14 +53,6 @@ module Data.Macaw.Analysis.RegisterUse
     -- *** Use information
   , biAssignIdUsed
   , biWriteUsed
-    -- *** Phi variables
-  , biPhiVars
-  , PhiVarInfo
-  , phiVarType
-  , phiVarRep
-  , phiVarLocations
-  , phiVarValue
-  , PhiValue(..)
   ) where
 
 import           Control.Lens
@@ -72,17 +69,13 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import qualified Data.Vector as V
-import           Data.Word
 import           GHC.Stack
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 
---import           Data.Macaw.AbsDomain.JumpBounds (initBndsMap)
 import           Data.Macaw.AbsDomain.StackAnalysis
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
   ( DemandContext
---  , demandConstraints
   , archFnHasSideEffects
   )
 import           Data.Macaw.Discovery.State
@@ -91,7 +84,7 @@ import           Data.Macaw.Types hiding (Type)
 import           Data.Macaw.Utils.Changed
 import           Data.Macaw.AbsDomain.CallParams
 
-import Data.STRef
+import           Data.STRef
 
 -------------------------------------------------------------------------------
 -- funBlockPreds
@@ -320,6 +313,8 @@ data InferValue arch ids tp where
   IVCondWrite :: !StmtIndex -> !(MemRepr tp) -> InferValue arch ids tp
 
 deriving instance ShowF (ArchReg arch) => Show (InferValue arch ids tp)
+
+instance ShowF (ArchReg arch) => ShowF (InferValue arch ids)
 
 $(pure [])
 
@@ -702,8 +697,27 @@ processStmt stmtIdx stmt = do
     ExecArchStmt _ -> pure ()
 
 -- | Maps locations to the values to initialize next locations with.
-type PostValueMap arch ids =
-  MapF (BoundLoc (ArchReg arch)) (InferValue arch ids)
+newtype PostValueMap arch ids =
+  PVM { _pvmMap :: MapF (BoundLoc (ArchReg arch)) (InferValue arch ids) }
+
+emptyPVM :: PostValueMap arch ids
+emptyPVM = PVM MapF.empty
+
+pvmBind :: OrdF (ArchReg arch)
+        => BoundLoc (ArchReg arch) tp
+        -> InferValue arch ids tp
+        -> PostValueMap arch ids
+        -> PostValueMap arch ids
+pvmBind l v (PVM m) = PVM (MapF.insert l v m)
+
+pvmFind :: OrdF (ArchReg arch)
+        => BoundLoc (ArchReg arch) tp
+        -> PostValueMap arch ids
+        -> InferValue arch ids tp
+pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l)) l m
+
+instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
+  show (PVM m) = show m
 
 type StartInferInfo arch ids =
   ( ParsedBlock arch ids
@@ -728,7 +742,7 @@ type InferNextM arch ids = State (InferNextState arch ids)
 runInferNextM :: InferNextM arch ids a -> a
 runInferNextM m =
   let s = InferNextState { isSeenValues = MapF.empty
-                         , isRepMap = MapF.empty
+                         , isRepMap = emptyPVM
                          }
    in evalState m s
 
@@ -749,12 +763,12 @@ memoNextDomain loc e = do
       pure (Just d)
     Nothing -> do
       modify $ \s -> InferNextState { isSeenValues = MapF.insert e (RegEqualLoc loc) m
-                                    , isRepMap = MapF.insert loc e (isRepMap s)
+                                    , isRepMap = pvmBind loc e (isRepMap s)
                                     }
       pure Nothing
 
 -- | Process terminal registers
-addNextConstraints :: forall arch ids
+addNextConstraints :: forall arch
                    .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                    => (ArchSegmentOff arch -> Maybe (BlockStartConstraints arch))
                    -- ^ Map of previously explored constraints
@@ -828,9 +842,6 @@ postCallConstraints :: forall arch ids
                               (PostValueMap arch ids, BlockStartConstraints arch)
 postCallConstraints params ctx s regs =
   runInferNextM $ do
-    let callOff = sisCurrentInstructionOffset s
-    let addr = incAddr (toInteger callOff) (segoffAddr (sicAddr ctx))
-
     case valueToStartExpr ctx (sisAssignMap s) (regs^.boundValue sp_reg) of
       FrameExpr spOff -> do
         when (not (stackGrowsDown params)) $
@@ -1089,8 +1100,7 @@ data RegisterUseContext arch
       archCallParams :: !(CallParams (ArchReg arch))
       -- | Given a terminal statement and list of registers it returns
       -- Map containing values afterwards.
-    , archPostTermStmtInvariants
-      :: !(forall ids . PostTermStmtInvariants arch ids)
+    , archPostTermStmtInvariants :: !(forall ids . PostTermStmtInvariants arch ids)
       -- | Registers to use for indirect calls or targets not in list.
     , defaultCallRegs :: !(FunctionTypeRegs (ArchReg arch))
       -- | Registers that are saved by calls (excludes rsp)
@@ -1286,14 +1296,6 @@ getLocDependencySet srcDepMap l =
     Nothing -> locDepSet l
     Just (Const s) -> s
 
-addLocDependency :: (MapF.OrdF r, MemWidth (RegAddrWidth r))
-                 => BoundLoc r tp
-                 -> DependencySet r ids
-                 -> LocDependencyMap r ids
-                 -> LocDependencyMap r ids
-addLocDependency l ds m =
-  locOverwriteWith (\(Const n) (Const o) -> Const (mappend n o)) l (Const ds) m
-
 ------------------------------------------------------------------------
 -- RegisterUseM
 
@@ -1341,21 +1343,6 @@ demandValue v = do
   cache <- gets assignDeps
   addDeps (valueDeps cns cache v)
 
--- | @recordAvailableRegs regs l@ record that the values in @regs@ are
--- used to initial registers in the next block and the registers in
--- @l@ can be depended upon.
-recordAvailableRegs :: forall arch ids
-                    .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                    => [Pair (ArchReg arch) (Value arch ids)]
-                    -- ^ Register and assigned values available when block terminates.
-                    -> BlockUsageSummary arch ids
-                    -> BlockUsageSummary arch ids
-recordAvailableRegs rs s = do
-  let cns = blockUsageStartConstraints s
-      cache = assignDeps s
-      insReg m (Pair r v) = setRegDep r (valueDeps cns cache v) m
-   in s & blockRegDependenciesLens %~ \m -> foldl' insReg m rs
-
 -- | Mark the given register has no dependencies
 clearDependencySet :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                    => ArchReg arch tp
@@ -1401,7 +1388,7 @@ demandReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
               -> Value arch ids (BVType (ArchAddrWidth arch))
               -> MemRepr tp
               -> RegisterUseM arch ids ()
-demandReadMem aid addr repr = do
+demandReadMem aid addr _repr = do
   accessInfo <- popAccessInfo
   case accessInfo of
     NotFrameAccess -> do
@@ -1437,7 +1424,7 @@ demandCondReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                   -> MemRepr tp
                   -> Value arch ids tp
                   -> RegisterUseM arch ids ()
-demandCondReadMem aid cond addr repr val = do
+demandCondReadMem aid cond addr _repr val = do
   accessInfo <- popAccessInfo
   case accessInfo of
     NotFrameAccess -> do
@@ -1461,7 +1448,7 @@ demandCondReadMem aid cond addr repr val = do
                  , valueDeps cns cache val
                  ]
       assignmentCache %= Map.insert (Some aid) deps
-    FrameReadWriteAccess o writeIdx -> do
+    FrameReadWriteAccess _o writeIdx -> do
       cns <- gets blockUsageStartConstraints
       cache <- gets assignDeps
       -- Mark that this value depends on aid and any dependencies
@@ -1753,55 +1740,16 @@ data FnBlockInvariant arch where
              -> !(BoundLoc (ArchReg arch) (BVType (ArchAddrWidth arch)))
              -> FnBlockInvariant arch
 
-------------------------------------------------------------------------
--- PhiValue
-
--- | Index of phi variable in list of values.
-type PhiIndex = Int
-
--- | A phi value is similiar to a Macaw `Value` but refers to
--- phi-variables rather than initial valeus of registers.
---
--- Values are only well-defined in the context of a particular block,
--- and are immutable within that context (i.e. their value would not
--- change from a memory write).
-data PhiValue arch ids tp where
-  -- | A constant vlaue
-  PhiCValue :: !(CValue arch tp) -> PhiValue arch ids tp
-  -- | Value from an assignment statement.
-  PhiAssignedValue :: !(AssignId ids tp) -> PhiValue arch ids tp
-  -- | Represents the value assigned to a phi variable when the block
-  -- started.
-  PhiValue :: !PhiIndex -> PhiValue arch ids tp
-  -- | Denotes the value stored in the stack after a conditional write
-  -- that may or may not have replaced the value.
-  PhiCondWrite :: !StmtIndex -> PhiValue arch ids tp
-
-$(pure [])
-
-------------------------------------------------------------------------
--- PhiVarInfo
-
--- | Information about a phi variable that is initialized when jumping
--- from a source block to the target.
-data PhiVarInfo arch ids tp =
-  PhiVarInfo { phiVarType :: !(TypeRepr tp)
-             , phiVarRep :: !(BoundLoc (ArchReg arch) tp)
-               -- ^ Class representative for locations that lead to this
-               -- phi variable.
-             , phiVarLocations :: ![BoundLoc (ArchReg arch) tp]
-               -- ^ Locations read after this phi variable is introduced that
-               -- are equivalent to this phi variable.
-             , phiVarValue :: Map (ArchSegmentOff arch) (InferValue arch ids tp)
-               -- ^ Maps from the source block starting address to a
-               -- demanded value in the source block that will have
-               -- the value assigned to this phi variable.
-             }
-
 $(pure [])
 
 ------------------------------------------------------------------------
 -- BlockInvariants
+
+newtype LocList r tp = LL { llValues :: [BoundLoc r tp] }
+
+instance Semigroup (LocList r tp) where
+  LL x <> LL y = LL (x++y)
+
 
 -- | This describes information about a block inferred by
 -- register-use.
@@ -1810,15 +1758,21 @@ data BlockInvariants arch ids =
        -- | Indices of write and cond-write statements that write to stack
        -- and whose value is later needed to execute the program.
      , biUsedWriteSet  :: !(Set StmtIndex)
-       -- | phi variables inferred from block.
-     , biPhiVars :: !(V.Vector (Some (PhiVarInfo arch ids)))
+       -- | In-order list of memory accesses in block.
+     , biMemAccessList :: ![MemAccessInfo arch ids]
+       -- | Map from locations to the non-representative locations that are
+       -- equal to them.
+     , biLocMap :: !(MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch)))
+       -- | Map predecessors for this block along with map from locations
+       -- to phi value
+     , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
+       -- | Locations from previous block used to initial phi variables.
+     , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
        -- | Construct invariants about blocks.
        --
        -- For each equivalence class of locations equal to a
        -- callee-saved register, this has an invariant about it.
      , biInvariantList :: ![FnBlockInvariant arch]
-       -- | In-order list of memory accesses in block.
-     , biMemAccessList :: ![MemAccessInfo arch ids]
      }
 
 $(pure [])
@@ -1857,11 +1811,6 @@ $(pure [])
 ------------------------------------------------------------------------
 -- registerUse
 
-newtype LocList r tp = LL { llValues :: [BoundLoc r tp] }
-
-instance Semigroup (LocList r tp) where
-  LL x <> LL y = LL (x++y)
-
 -- | Create map from locations to the non-representative locations
 -- that are equal to them.
 mkDepLocMap :: forall arch
@@ -1877,28 +1826,6 @@ mkDepLocMap cns =
       addNonRep m _ _ = m
    in foldLocMap addNonRep MapF.empty (bscLocMap cns)
 
-
-mkPhiVarValue :: (HasCallStack, OrdF (ArchReg arch))
-              => BoundLoc (ArchReg arch) tp
-              -> (ArchSegmentOff arch, MapF (BoundLoc (ArchReg arch)) (InferValue arch ids))
-              -> (ArchSegmentOff arch, InferValue arch ids tp)
-mkPhiVarValue l (predAddr, m) = (predAddr, MapF.findWithDefault (error "missing phi value") l m)
-
-mkPhiVar :: (OrdF (ArchReg arch), HasRepr (ArchReg arch) TypeRepr)
-         => MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch))
-         -- ^ Map from locations to the non-representative locations
-         -- that are equal to them.
-         -> [(ArchSegmentOff arch, MapF (BoundLoc (ArchReg arch)) (InferValue arch ids))]
-            -- ^ Predecessors for this block along with map from locations to phi value
-         -> BoundLoc (ArchReg arch) tp
-         -> PhiVarInfo arch ids tp
-mkPhiVar locMap predPhiValues l =
-  PhiVarInfo { phiVarType = typeRepr l
-             , phiVarRep = l
-             , phiVarLocations = llValues (MapF.findWithDefault (LL []) l locMap)
-             , phiVarValue = Map.fromList (mkPhiVarValue l <$> predPhiValues)
-             }
-
 ppInvariant :: Pair (BoundLoc (ArchReg arch)) (ValueRegUseDomain arch) -> FnBlockInvariant arch
 ppInvariant (Pair l d) =
   case d of
@@ -1907,11 +1834,15 @@ ppInvariant (Pair l d) =
     RegEqualLoc r -> FnEqualLocs r l
 
 mkBlockInvariants :: forall arch ids
-                  .  (HasRepr (ArchReg arch) TypeRepr, OrdF (ArchReg arch))
+                  .  (HasRepr (ArchReg arch) TypeRepr
+                     , OrdF (ArchReg arch)
+                     , ShowF (ArchReg arch)
+                     , MemWidth (ArchAddrWidth arch)
+                     )
                   => FunPredMap (ArchAddrWidth arch)
                   -> (ArchSegmentOff arch
                        -> ArchSegmentOff arch
-                       -> MapF (BoundLoc (ArchReg arch)) (InferValue arch ids))
+                       -> PostValueMap arch ids)
                      -- ^ Maps block address to map of location representative to value.
                   -> ArchSegmentOff arch
                      -- ^ Address of thsi block.
@@ -1921,7 +1852,6 @@ mkBlockInvariants :: forall arch ids
                   -> BlockInvariants arch ids
 mkBlockInvariants predMap valueMap addr summary deps =
   let cns   = blockUsageStartConstraints summary
-      lmap  = mkDepLocMap cns
       -- Get addresses of blocks that jump to this block
       preds = Map.findWithDefault [] addr predMap
       --
@@ -1930,7 +1860,9 @@ mkBlockInvariants predMap valueMap addr summary deps =
    in BI { biUsedAssignSet = dsAssignSet deps
          , biUsedWriteSet  = dsWriteStmtIndexSet deps
          , biMemAccessList = blockMemAccesses summary
-         , biPhiVars = mapSome (mkPhiVar lmap predphilist) <$> V.fromList (Set.toList (dsLocSet deps))
+         , biLocMap = mkDepLocMap cns
+         , biPredPostValues = Map.fromList predphilist
+         , biPhiLocs = Set.toList (dsLocSet deps)
          , biInvariantList = ppInvariant <$> locMapToList (bscLocMap cns)
          }
 
@@ -1974,5 +1906,5 @@ registerUse rctx fun predMap = do
       phiValFn predAddr nextAddr =
         case Map.lookup predAddr cnsMap of
           Nothing -> error "Could not find predAddr"
-          Just (_,_,_,nextVals) -> Map.findWithDefault MapF.empty nextAddr nextVals
+          Just (_,_,_,nextVals) -> Map.findWithDefault emptyPVM nextAddr nextVals
   pure $ Map.intersectionWithKey (mkBlockInvariants predMap phiValFn) usageMap propMap
