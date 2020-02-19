@@ -123,6 +123,7 @@ import           Data.Parameterized.Nonce ( NonceGenerator, newIONonceGenerator 
 import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
+import qualified Data.Text as T
 import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
@@ -489,8 +490,10 @@ mkBlockSliceRegCFG :: forall arch ids
                    -- ^ Non-entry non-terminal blocks
                    -> [M.ParsedBlock arch ids]
                    -- ^ Terminal blocks
+                   -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
+                   -- ^ (Source, target) block address pairs to convert to returns
                    -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
+mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
   -- Build up some initial values needed to set up the entry point to the
   -- function (including the initial value of all registers)
   inputRegId <- mmFreshNonce
@@ -510,6 +513,13 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstrain
   -- reaching those missing blocks are not feasible paths.
   (labelMap, syntheticBlocks) <- foldlM (makeSyntheticBlocks inputReg) (labelMap0, []) allBlocks
 
+  -- Add synthetic block to act as a target for jumps that we want to be
+  -- returns instead.
+  (retLabel, retBlocks) <- makeReturnBlock inputReg
+  let lookupRetEdges src = Map.fromSet
+        (const retLabel)
+        (Map.findWithDefault S.empty src retEdges)
+
   -- Set up a fake entry block that initializes the register file and jumps
   -- to the real entry point
   entryLabel <- CR.Label <$> mmFreshNonce
@@ -526,6 +536,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstrain
     let label = case Map.lookup blockAddr labelMap of
           Just lbl -> lbl
           Nothing -> error ("Missing block label for block at " ++ show blockAddr)
+    let labelMapWithReturns = Map.union (lookupRetEdges blockAddr) labelMap
     (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
       case S.member blockAddr termAddrs of
@@ -539,16 +550,17 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstrain
           -- preserves the existing register state, which is important when
           -- generating the Crucible return.
           let retTerm = termStmtToReturn (M.pblockTermStmt block)
-          addMacawParsedTermStmt labelMap blockAddr retTerm
-        False -> addMacawParsedTermStmt labelMap blockAddr (M.pblockTermStmt block)
+          addMacawParsedTermStmt labelMapWithReturns blockAddr retTerm
+        False -> addMacawParsedTermStmt labelMapWithReturns blockAddr (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
-  return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks))
+  return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks ++ retBlocks))
   where
     entryAddr = M.pblockAddr entry
     entryPos = posFn entryAddr
     archRegTy = C.StructRepr (crucArchRegTypes archFns)
     -- Addresses of blocks marked as terminators
     termAddrs = S.fromList (fmap M.pblockAddr terms)
+    retEdges = Map.fromListWith S.union [(src, S.singleton tgt) | (src, tgt) <- retEdges_]
 
     -- Blocks are "body blocks" if they are not the entry or marked as
     -- terminator blocks.  We need this distinction because we modify terminator
@@ -596,6 +608,18 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstrain
     makeSyntheticBlocks inputReg (lm, blks) blk =
       foldlM (makeSyntheticBlock inputReg) (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
 
+    makeReturnBlock :: forall s
+                     . (M.MemWidth (M.ArchAddrWidth arch))
+                    => CR.Reg s (ArchRegStruct arch)
+                    -> MacawMonad arch ids s (CR.Label s, [CR.Block (MacawExt arch) s (ArchRegStruct arch)])
+    makeReturnBlock inputReg = do
+      lbl <- CR.Label <$> mmFreshNonce
+      (blk, blks) <- runCrucGen archFns syntheticPos lbl inputReg $ do
+        regs <- getRegs
+        addTermStmt (CR.Return regs)
+      return (lbl, blk:blks)
+      where
+      syntheticPos w = C.OtherPos ("synthetic return block for mkBlockSliceRegCFG; offset " <> T.pack (show w))
 
 -- | Construct a Crucible CFG from a (possibly incomplete) collection of macaw blocks
 --
@@ -622,9 +646,11 @@ mkBlockSliceCFG :: forall arch ids
                 -- ^ Non-entry non-terminal blocks
                 -> [M.ParsedBlock arch ids]
                 -- ^ Terminal blocks
+                -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
+                -- ^ (Source, target) block address pairs to convert to returns
                 -> IO (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceCFG archFns halloc posFn entry body terms =
-  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns halloc posFn entry body terms
+mkBlockSliceCFG archFns halloc posFn entry body terms retEdges =
+  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns halloc posFn entry body terms retEdges
 
 mkBlockPathRegCFG
   :: forall arch ids
