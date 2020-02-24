@@ -28,3 +28,9 @@
 [submodule "deps/llvm-pretty-bc-parser"]
 	path = deps/llvm-pretty-bc-parser
 	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
+[submodule "deps/asl-translator"]
+	path = deps/asl-translator
+	url = https://github.com/GaloisInc/asl-translator.git
+[submodule "deps/arm-asl-parser"]
+	path = deps/arm-asl-parser
+	url = https://github.com/GaloisInc/arm-asl-parser.git
