@@ -27,6 +27,13 @@ install:
   - ln -s cabal.project.dist cabal.project
   - cabal v2-configure
 
+addons:
+  apt:
+    sources:
+      - sourceline: 'ppa:sri-csl/formal-methods'
+    packages:
+      - yices2
+
 script:
   - ./scripts/tests.sh
 
