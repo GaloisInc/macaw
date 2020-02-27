@@ -1,7 +1,7 @@
 #!/bin/bash
 
-./submodules/dismantle/scripts/minify-asl.sh
-cd ./submodules/asl-translator/
+./deps/dismantle/scripts/minify-asl.sh
+cd ./deps/asl-translator/
 make genarm
 cd ../../
 
