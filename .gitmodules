@@ -34,3 +34,6 @@
 [submodule "deps/arm-asl-parser"]
 	path = deps/arm-asl-parser
 	url = https://github.com/GaloisInc/arm-asl-parser.git
+[submodule "deps/what4-serialize"]
+	path = deps/what4-serialize
+	url = https://github.com/GaloisInc/what4-serialize.git
