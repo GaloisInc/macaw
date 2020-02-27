@@ -1,36 +1,35 @@
 sudo: false
-language: minimal
+language: haskell
+
 git:
-  submodules: false  # whether to recursively clone submodules
+  depth: 5
+  submodules: false
+
+cabal: "2.4"
 
 cache:
   directories:
-    - $HOME/.stack
+  - "$HOME/.cabal/store"
 
 matrix:
   include:
-  - env: STACK_YAML=stack-8.4.yaml
-  - env: STACK_YAML=stack-8.6.yaml
+  - ghc: 8.6.5
 
 before_install:
 # Changes ssh paths into http path, so that we can do a read-only clone of
 # our submodules without worrying about ssh keys.
 - sed -i 's/git@github.com:/https:\/\/github.com\//' .gitmodules
-- git submodule update --init
-
-# Download and unpack the stack executable
-- mkdir -p $HOME/.local/bin
-- export PATH=$HOME/.local/bin:$PATH
-- travis_retry curl -L https://get.haskellstack.org/stable/linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
 
 install:
- - travis_wait stack --no-terminal setup
+  - ghc --version
+  - cabal --version
+  - git submodule update --init
+  - ln -s cabal.project.dist cabal.project
+  - cabal v2-configure
+  - ./deps/dismantle/scripts/minify-asl.sh
 
-# Here starts the actual work to be performed for the package under test;
-# any command which exits with a non-zero exit code causes the build to fail.
- # Build packages
- - stack build --ghc-options="-Wall -Werror"
- # Run tests
- - stack test macaw-x86 macaw-x86-symbolic --ghc-options="-Wall -Werror"
- # It would be good to build documentation, but it currently seems to take too long.
- # - stack haddock
+script:
+  - cabal v2-build --only-dependencies macaw-asl
+
+notifications:
+  email: false
