@@ -8,13 +8,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
-    , armRegToGPR
+    -- , armRegToGPR
     , arm_LR
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
@@ -22,80 +23,68 @@ module Data.Macaw.ARM.ARMReg
     )
     where
 
-import qualified Data.Macaw.CFG as MC
-import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( TypeRepr(..), HasRepr, BVType
-                                  , typeRepr, n32 )
 import           Data.Parameterized.Classes
-import           Data.Parameterized.Some ( Some(..) )
+import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Data.Set as Set
 import           Data.Word ( Word32 )
-
--- import qualified Dismantle.ARM.Operands as ARMOperands
-
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
-import qualified SemMC.Architecture.AArch32 as ARM
-import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified Text.PrettyPrint.HughesPJClass as PP
+
+import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Memory as MM
+import           Data.Macaw.Types  as MT
+-- ( TypeRepr(..), HasRepr, BVType
+--                                   , typeRepr, n32 )
+import qualified Dismantle.ARM.A32 as DA
+import qualified Language.ASL.Globals as ASL
+import qualified SemMC.Architecture.AArch32 as SA
+import qualified SemMC.Architecture.ARM.Location as SA
+import qualified What4.BaseTypes as WT
+
+type family BaseToMacawType (tp :: WT.BaseType) :: MT.Type where
+  BaseToMacawType (WT.BaseBVType w) = MT.BVType w
+  BaseToMacawType WT.BaseBoolType = MT.BoolType
+
+baseToMacawTypeRepr :: WT.BaseTypeRepr tp -> MT.TypeRepr (BaseToMacawType tp)
+baseToMacawTypeRepr (WT.BaseBVRepr w) = MT.BVTypeRepr w
+baseToMacawTypeRepr WT.BaseBoolRepr = MT.BoolTypeRepr
+baseToMacawTypeRepr _ = error "ARMReg: unsupported what4 type"
 
 -- | Defines the Register set for the ARM processor.
 data ARMReg tp where
-    -- n.b. The Thumb (T32) register model is the same as the ARM
-    -- (A32) model, so just use the latter to define registers.
-    ARM_GP :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => Word32 -> ARMReg (BVType w)
-             -- GPR15 is normally aliased with the PC, but not always,
-             -- so track it separately and use semantics definitions
-             -- to manage the synchronization.
+  -- | 'ASL.GlobalRef' that refers to a bitvector.
+  ARMGlobalBV :: ( tp ~ BVType w
+                 , 1 <= w
+                 , tp' ~ ASL.GlobalsType s
+                 , tp ~ BaseToMacawType tp')
+              => ASL.GlobalRef s -> ARMReg tp
+  -- | 'ASL.GlobalRef' that refers to a boolean.
+  ARMGlobalBool :: ( tp ~ BoolType
+                   , tp' ~ ASL.GlobalsType s
+                   , tp ~ BaseToMacawType tp')
+                => ASL.GlobalRef s -> ARMReg tp
 
-    -- | The Program Counter (often referred to by Macaw as the "IP"
-    -- or Instruction Pointer, but ARM documentation refers to this as
-    -- the PC).
-    --
-    -- Note that this is generally also GPR15, but there are
-    -- oddities in the definition (see "Writing to the PC" in E.1.2.3,
-    -- pg E1-2295, and particularly the note at the top of that page:
-    -- "The A32 instruction set provides more general access to the
-    -- PC, and many A32 instructions can use the PC as a
-    -- general-purpose register.  However, ARM deprecates the use of
-    -- PC for any purpose other than as the program counter."
-    --
-    -- Due to this ambiguity, the PC is currently modelled as separate
-    -- and distinct from GPR15 in Macaw.  The SemMC semantics also
-    -- make a distinction between GPR15 and PC and the semantics often
-    -- simply update the latter (based on the ARM documentation),
-    -- ignoring the former.
-    ARM_PC :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
+numGPR :: Word32
+numGPR = 16
 
-    -- | The CPSR is the Current Processor Status Register, which is
-    -- the current value of the Application Program Status Register
-    -- (E1.2.4, page E1-2297).
-    ARM_CPSR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
-
--- | GPR14 is the link register for ARM
+-- -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
-arm_LR = ARM_GP 14
+arm_LR = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
 
-armRegToGPR :: ARMReg tp -> Maybe ARMOperands.GPR
-armRegToGPR (ARM_GP gp) = Just (ARMOperands.gpr gp)
-armRegToGPR _ = Nothing
+-- armRegToGPR :: ARMReg tp -> Maybe DA.GPR
+-- armRegToGPR (ARM_GP gp) = Just (ARMOperands.gpr gp)
+-- armRegToGPR _ = Nothing
 
-deriving instance Eq (ARMReg tp)
-deriving instance Ord (ARMReg tp)
+-- deriving instance Eq (ARMReg tp)
+-- deriving instance Ord (ARMReg tp)
 
 instance Show (ARMReg tp) where
-    show r = case r of
-               ARM_GP gpr_oper -> show $ PP.pPrint gpr_oper
-                               --   case unGPRrnum of
-                               -- 15 -> show rnum <> "=PC"
-                               -- 14 -> show rnum <> "=LR"
-                               -- 13 -> show rnum <> "=SP"
-                               -- _ -> show rnum
-               ARM_PC -> "<PC>"
-               ARM_CPSR -> "<CPSR>"
-
+  show r = case r of
+    ARMGlobalBV globalRef -> show (ASL.globalRefSymbol globalRef)
+    ARMGlobalBool globalRef -> show (ASL.globalRefSymbol globalRef)
 
 instance ShowF ARMReg where
     showF = show
@@ -103,42 +92,70 @@ instance ShowF ARMReg where
 $(return [])  -- allow template haskell below to see definitions above
 
 instance TestEquality ARMReg where
-    testEquality = $(TH.structuralTypeEquality [t| ARMReg |] [])
+    testEquality = $(TH.structuralTypeEquality [t| ARMReg |]
+                      [ (TH.ConType [t|ASL.GlobalRef|]
+                         `TH.TypeApp` TH.AnyType,
+                         [|testEquality|])
+                      ])
+
+instance EqF ARMReg where
+  r1 `eqF` r2 = isJust (r1 `testEquality` r2)
+
+instance Eq (ARMReg tp) where
+  r1 == r2 = r1 `eqF` r2
 
 instance OrdF ARMReg where
-    compareF = $(TH.structuralTypeOrd [t| ARMReg |] [])
+  compareF = $(TH.structuralTypeOrd [t| ARMReg |]
+                [ (TH.ConType [t|ASL.GlobalRef|]
+                    `TH.TypeApp` TH.AnyType,
+                    [|compareF|])
+                ])
+
+instance Ord (ARMReg tp) where
+  r1 `compare` r2 = toOrdering (r1 `compareF` r2)
+
 
 instance HasRepr ARMReg TypeRepr where
     typeRepr r =
         case r of
-          ARM_GP {} -> BVTypeRepr n32
-          ARM_PC -> BVTypeRepr n32
-          ARM_CPSR -> BVTypeRepr n32
+          ARMGlobalBV globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
+          ARMGlobalBool globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
 
-
-type instance MC.ArchReg ARM.AArch32 = ARMReg
+type instance MC.ArchReg SA.AArch32 = ARMReg
 type instance MC.RegAddrWidth ARMReg = 32
-
 
 instance ( 1 <= MC.RegAddrWidth ARMReg
          , KnownNat (MC.RegAddrWidth ARMReg)
-         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg ARM.AArch32))
-         , MC.ArchReg ARM.AArch32 ~ ARMReg
+         , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg SA.AArch32))
+         , MC.ArchReg SA.AArch32 ~ ARMReg
          -- , ArchWidth arm
          ) =>
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
-      sp_reg = ARM_GP 13
-      ip_reg = ARM_PC
-      syscall_num_reg = error "MC.RegisterInfo ARMReg syscall_num_reg undefined"
-      syscallArgumentRegs = error "MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
+      sp_reg = ARMGlobalBV (ASL.knownGlobalRef @"_R13")
+--      sp_reg = ARM_GP 13
+      ip_reg = ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+--      ip_reg = ARM_PC
+      syscall_num_reg = error "TODO: MC.RegisterInfo ARMReg syscall_num_reg undefined"
+      syscallArgumentRegs = error "TODO: MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some (ARM_GP n) | n <- [0..ARM.numGPR-1] ] <>
-          [ Some ARM_PC
-          , Some ARM_CPSR
+armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
           ]
-
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
 --
@@ -150,7 +167,15 @@ linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w)
                                   => proxy arm
                                   -> Set.Set (Some ARMReg)
 linuxSystemCallPreservedRegisters _ =
-  Set.fromList [ Some (ARM_GP rnum) | rnum <- [8..ARM.numGPR-1] ]
+  Set.fromList [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
+               ]
   -- Currently, we are only considering the non-volatile GPRs.  There
   -- are also a set of non-volatile floating point registers.  I have
   -- to check on the vector registers.
@@ -158,12 +183,11 @@ linuxSystemCallPreservedRegisters _ =
 
 -- | Translate a location from the semmc semantics into a location suitable for
 -- use in macaw
-locToRegTH :: (1 <= Loc.ArchRegWidth arm,
-               MC.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arm)
-           => proxy arm
-           -> Loc.Location arm ctp
+locToRegTH :: proxy arm
+           -> SA.Location arm ctp
            -> Q Exp
-locToRegTH _  Loc.LocPC      = [| ARM_PC |]
-locToRegTH _  (Loc.LocGPR g) = [| ARM_GP ($(lift g)) |]
-locToRegTH _  (Loc.LocCPSR)  = [| ARM_CPSR |]
-locToRegTH _  _              = [| error "locToRegTH undefined for unrecognized location" |]
+locToRegTH _ (SA.Location globalRef) = case ASL.globalRefSymbol globalRef of
+  _ -> [| error "locToRegTH undefined for unrecognized location" |]
+-- locToRegTH _  Loc.LocPC      = [| ARM_PC |]
+-- locToRegTH _  (Loc.LocGPR g) = [| ARM_GP ($(lift g)) |]
+-- locToRegTH _  _              = [| error "locToRegTH undefined for unrecognized location" |]
