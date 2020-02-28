@@ -24,21 +24,21 @@ module Data.Macaw.ARM.ARMReg
     where
 
 import           Data.Parameterized.Classes
-import           Data.Parameterized.Some ( Some(..), viewSome )
+import           Data.Parameterized.Some ( Some(..) )
+import           Data.Parameterized.SymbolRepr (symbolRepr)
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Data.Set as Set
+import qualified Data.Text as T
 import           Data.Word ( Word32 )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
-import qualified Text.PrettyPrint.HughesPJClass as PP
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types  as MT
 -- ( TypeRepr(..), HasRepr, BVType
 --                                   , typeRepr, n32 )
-import qualified Dismantle.ARM.A32 as DA
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as SA
 import qualified SemMC.Architecture.ARM.Location as SA
@@ -67,19 +67,9 @@ data ARMReg tp where
                    , tp ~ BaseToMacawType tp')
                 => ASL.GlobalRef s -> ARMReg tp
 
-numGPR :: Word32
-numGPR = 16
-
--- -- | GPR14 is the link register for ARM
+-- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
 arm_LR = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
-
--- armRegToGPR :: ARMReg tp -> Maybe DA.GPR
--- armRegToGPR (ARM_GP gp) = Just (ARMOperands.gpr gp)
--- armRegToGPR _ = Nothing
-
--- deriving instance Eq (ARMReg tp)
--- deriving instance Ord (ARMReg tp)
 
 instance Show (ARMReg tp) where
   show r = case r of
@@ -133,9 +123,7 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
       sp_reg = ARMGlobalBV (ASL.knownGlobalRef @"_R13")
---      sp_reg = ARM_GP 13
       ip_reg = ARMGlobalBV (ASL.knownGlobalRef @"_PC")
---      ip_reg = ARM_PC
       syscall_num_reg = error "TODO: MC.RegisterInfo ARMReg syscall_num_reg undefined"
       syscallArgumentRegs = error "TODO: MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
@@ -186,8 +174,11 @@ linuxSystemCallPreservedRegisters _ =
 locToRegTH :: proxy arm
            -> SA.Location arm ctp
            -> Q Exp
-locToRegTH _ (SA.Location globalRef) = case ASL.globalRefSymbol globalRef of
-  _ -> [| error "locToRegTH undefined for unrecognized location" |]
--- locToRegTH _  Loc.LocPC      = [| ARM_PC |]
--- locToRegTH _  (Loc.LocGPR g) = [| ARM_GP ($(lift g)) |]
--- locToRegTH _  _              = [| error "locToRegTH undefined for unrecognized location" |]
+locToRegTH _ (SA.Location globalRef) = do
+  let refName = T.unpack (symbolRepr (ASL.globalRefSymbol globalRef))
+  case ASL.globalRefRepr globalRef of
+    WT.BaseBoolRepr ->
+      [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
+    WT.BaseBVRepr _ ->
+      [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
+    _ -> [| error "locToRegTH undefined for unrecognized location" |]
