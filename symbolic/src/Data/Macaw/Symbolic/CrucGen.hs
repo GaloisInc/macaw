@@ -80,6 +80,7 @@ module Data.Macaw.Symbolic.CrucGen
 import           Control.Lens hiding (Empty, (:>))
 import           Control.Monad ( foldM )
 import           Control.Monad.Except
+import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.Kind as K
@@ -668,6 +669,9 @@ instance Applicative (CrucGen arch ids s) where
 instance Monad (CrucGen arch ids s) where
   {-# INLINE (>>=) #-}
   m >>= h = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 r -> unCrucGen (h r) s1 cont
+
+instance MF.MonadFail (CrucGen arch ids s) where
+  fail e = CrucGen $ \_s _cont -> MF.fail e
 
 instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
   get = CrucGen $ \s cont -> cont s s
