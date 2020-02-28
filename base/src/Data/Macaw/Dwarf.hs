@@ -232,10 +232,10 @@ data DIEParserState = DPS { dpsDIE :: DIE
                             -- we have not considered.
                           }
 
-dpsSeenAttributes :: Simple Lens DIEParserState (Set DW_AT)
+dpsSeenAttributes :: Lens' DIEParserState (Set DW_AT)
 dpsSeenAttributes = lens _dpsSeenAttributes (\s v -> s { _dpsSeenAttributes = v })
 
-dpsSeenChildren :: Simple Lens DIEParserState (Set DW_TAG)
+dpsSeenChildren :: Lens' DIEParserState (Set DW_TAG)
 dpsSeenChildren = lens _dpsSeenChildren (\s v -> s { _dpsSeenChildren = v })
 
 type DIEParser = StateT DIEParserState Parser

@@ -578,7 +578,7 @@ mapRegsWith f (RegState m) = RegState (MapF.mapWithKey f m)
 boundValue :: forall r f tp
            .  OrdF r
            => r tp
-           -> Simple Lens (RegState r f) (f tp)
+           -> Lens' (RegState r f) (f tp)
 boundValue r =
   -- TODO Ideally there would be a Lens-aware "alter"-type operation
   -- in Data.Parameterized.Map (see Data.Map source); such an
@@ -654,7 +654,7 @@ class ( OrdF r
 
 --  The value of the current instruction pointer.
 curIP :: RegisterInfo r
-      => Simple Lens (RegState r f) (f (BVType (RegAddrWidth r)))
+      => Lens' (RegState r f) (f (BVType (RegAddrWidth r)))
 curIP = boundValue ip_reg
 
 mkRegStateM :: (RegisterInfo r, Applicative m)

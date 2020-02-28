@@ -1049,7 +1049,7 @@ data AbsBlockState r
                    , startAbsStack :: !(AbsBlockStack (RegAddrWidth r))
                    }
 
-absRegState :: Simple Lens (AbsBlockState r)
+absRegState :: Lens' (AbsBlockState r)
                            (RegState r (AbsValue (RegAddrWidth r)))
 absRegState = lens _absRegState (\s v -> s { _absRegState = v })
 
@@ -1163,15 +1163,15 @@ data AbsProcessorState r ids
                          -- ^ The current symbolic state of the stack
                        }
 
-absInitialRegs :: Simple Lens (AbsProcessorState r ids)
+absInitialRegs :: Lens' (AbsProcessorState r ids)
                               (RegState r (AbsValue (RegAddrWidth r)))
 absInitialRegs = lens _absInitialRegs (\s v -> s { _absInitialRegs = v })
 
-absAssignments :: Simple Lens (AbsProcessorState r ids)
+absAssignments :: Lens' (AbsProcessorState r ids)
                               (MapF (AssignId ids) (AbsValue (RegAddrWidth r)))
 absAssignments = lens _absAssignments (\s v -> s { _absAssignments = v })
 
-curAbsStack :: Simple Lens (AbsProcessorState r ids) (AbsBlockStack (RegAddrWidth r))
+curAbsStack :: Lens' (AbsProcessorState r ids) (AbsBlockStack (RegAddrWidth r))
 curAbsStack = lens _curAbsStack (\s v -> s { _curAbsStack = v })
 
 instance (ShowF r, MemWidth (RegAddrWidth r))
@@ -1206,7 +1206,7 @@ initAbsProcessorState mem s =
 -- | A lens that allows one to lookup and update the value of an assignment in
 -- map from assignments to abstract values.
 assignLens :: AssignId ids tp
-           -> Simple Lens (MapF (AssignId ids) (AbsValue w)) (AbsValue w tp)
+           -> Lens' (MapF (AssignId ids) (AbsValue w)) (AbsValue w tp)
 assignLens aid = lens (fromMaybe TopV . MapF.lookup aid)
                       (\s v -> MapF.insert aid v s)
 
