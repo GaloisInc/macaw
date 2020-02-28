@@ -16,7 +16,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Map.Strict as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Serialize.Get as G
-import           Data.Typeable ( Typeable )
 import qualified Data.Word.Indexed as W
 import           GHC.TypeLits ( KnownNat, natVal )
 
@@ -35,7 +34,6 @@ import           GHC.TypeLits ( KnownNat, natVal )
 parseTOC :: forall w m
           . (KnownNat w,
              MM.MemWidth w,
-             Typeable w,
              X.MonadThrow m)
          => E.Elf w
          -> m (TOC.TOC w)

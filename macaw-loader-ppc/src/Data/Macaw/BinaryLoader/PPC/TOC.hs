@@ -17,7 +17,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
-import           Data.Typeable ( Typeable )
 import qualified Data.Word.Indexed as W
 
 data TOCException w = MissingTOCEntry (MM.MemSegmentOff w)
@@ -26,7 +25,7 @@ data TOCException w = MissingTOCEntry (MM.MemSegmentOff w)
 
 deriving instance (MM.MemWidth w) => Show (TOCException w)
 
-instance (MM.MemWidth w, Typeable w) => X.Exception (TOCException w)
+instance (MM.MemWidth w, MT.KnownNat w) => X.Exception (TOCException w)
 
 -- | The Table of Contents (TOC) of a PowerPC binary
 --
