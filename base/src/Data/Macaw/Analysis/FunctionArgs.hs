@@ -41,7 +41,6 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
 
