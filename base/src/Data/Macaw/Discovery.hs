@@ -1026,7 +1026,6 @@ instance Applicative Classifier where
 
 instance Monad Classifier where
   (>>=) = classifyBind
-  fail = Fail.fail
 
 instance Fail.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]

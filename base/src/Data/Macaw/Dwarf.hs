@@ -53,6 +53,7 @@ module Data.Macaw.Dwarf
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Except
+import qualified Control.Monad.Fail as MF
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Binary.Get
@@ -105,6 +106,8 @@ newtype WarnT m r = WarnT { unWarnT :: ExceptT String (StateT [String] m) r }
 instance Monad m => Monad (WarnT m) where
   m >>= h = WarnT $ unWarnT m >>= unWarnT . h
   return = pure
+
+instance (Monad m) => MF.MonadFail (WarnT m) where
   fail msg = WarnT $ throwError msg
 
 runWarnT :: WarnT m r -> m (Either String r, [String])
@@ -131,6 +134,7 @@ newtype Parser r = Parser { unParser :: ReaderT ParserState (WarnT Identity) r }
            , Applicative
            , Monad
            , WarnMonad String
+           , MF.MonadFail
            )
 
 
