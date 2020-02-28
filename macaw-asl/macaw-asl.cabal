@@ -1,4 +1,4 @@
-name:                macaw-arm
+name:                macaw-asl
 version:             0.1.0.0
 -- synopsis:            
 -- description:         
@@ -28,6 +28,7 @@ library
   -- other-extensions:    
   build-depends:       base >=4.10 && <5
                      , ansi-wl-pprint
+                     , asl-translator
                      , bytestring
                      , cereal
                      , containers
@@ -51,29 +52,3 @@ library
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
-
-test-suite macaw-arm-tests
-  type: exitcode-stdio-1.0
-  default-language:    Haskell2010
-  ghc-options:         -Wall
-  hs-source-dirs:      tests
-  main-is:             TestMain.hs
-  other-modules:       ARMTests
-                     , MismatchTests
-                     , Shared
-  build-depends:       base >=4.10 && <5
-                     , ansi-wl-pprint
-                     , binary
-                     , bytestring
-                     , containers
-                     , elf-edit
-                     , exceptions
-                     , filemanip
-                     , filepath
-                     , lens
-                     , macaw-base
-                     , macaw-asl
-                     , parameterized-utils
-                     , semmc-asl
-                     , tasty
-                     , tasty-hunit
