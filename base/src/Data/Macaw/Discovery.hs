@@ -1026,6 +1026,9 @@ instance Applicative Classifier where
 
 instance Monad Classifier where
   (>>=) = classifyBind
+#if !(MIN_VERSION_base(4,13,0))
+  fail = Fail.fail
+#endif
 
 instance Fail.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]
