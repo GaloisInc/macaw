@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This defines data structures for parsing Dwarf debug information from
 binaries.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -106,6 +107,9 @@ newtype WarnT m r = WarnT { unWarnT :: ExceptT String (StateT [String] m) r }
 instance Monad m => Monad (WarnT m) where
   m >>= h = WarnT $ unWarnT m >>= unWarnT . h
   return = pure
+#if !(MIN_VERSION_base(4,13,0))
+  fail = MF.fail
+#endif
 
 instance (Monad m) => MF.MonadFail (WarnT m) where
   fail msg = WarnT $ throwError msg

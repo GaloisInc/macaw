@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -45,7 +46,7 @@ import           GHC.TypeLits
 import           Control.Lens
 import qualified Control.Monad.Cont as Ct
 import qualified Control.Monad.Except as ET
-import           Control.Monad.Fail
+import qualified Control.Monad.Fail as MF
 import qualified Control.Monad.Reader as Rd
 import           Control.Monad.ST ( ST )
 import qualified Control.Monad.State.Strict as St
@@ -207,6 +208,9 @@ instance Monad (Generator arch ids s) where
   return v = Generator (return v)
   Generator m >>= h = Generator (m >>= \v -> runG (h v))
   Generator m >> Generator n = Generator (m >> n)
+#if !(MIN_VERSION_base(4,13,0))
+  fail = MF.fail
+#endif
 
 instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
   get = Generator Rd.ask

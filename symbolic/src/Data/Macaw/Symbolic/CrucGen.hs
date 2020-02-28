@@ -669,6 +669,9 @@ instance Applicative (CrucGen arch ids s) where
 instance Monad (CrucGen arch ids s) where
   {-# INLINE (>>=) #-}
   m >>= h = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 r -> unCrucGen (h r) s1 cont
+#if !(MIN_VERSION_base(4,13,0))
+  fail = MF.fail
+#endif
 
 instance MF.MonadFail (CrucGen arch ids s) where
   fail e = CrucGen $ \_s _cont -> MF.fail e
