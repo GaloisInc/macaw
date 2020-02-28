@@ -622,19 +622,19 @@ instance OrdF (BVAtom s) where
       GTF -> GTF
 
 crucPStateLens ::
-  Simple Lens (CrucGenState arch ids s) (CrucPersistentState ids s)
+  Lens' (CrucGenState arch ids s) (CrucPersistentState ids s)
 crucPStateLens = lens crucPState (\s v -> s { crucPState = v })
 
 toBitsCacheLens ::
-  Simple Lens (CrucGenState arch ids s) (MapF (PtrAtom s) (BVAtom s))
+  Lens' (CrucGenState arch ids s) (MapF (PtrAtom s) (BVAtom s))
 toBitsCacheLens = lens toBitsCache (\s v -> s { toBitsCache = v })
 
 fromBitsCacheLens ::
-  Simple Lens (CrucGenState arch ids s) (MapF (BVAtom s) (PtrAtom s))
+  Lens' (CrucGenState arch ids s) (MapF (BVAtom s) (PtrAtom s))
 fromBitsCacheLens = lens fromBitsCache (\s v -> s { fromBitsCache = v })
 
 assignValueMapLens ::
-  Simple Lens (CrucPersistentState ids s)
+  Lens' (CrucPersistentState ids s)
               (MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
 assignValueMapLens = lens assignValueMap (\s v -> s { assignValueMap = v })
 
