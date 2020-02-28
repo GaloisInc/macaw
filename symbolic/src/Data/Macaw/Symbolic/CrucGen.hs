@@ -78,7 +78,6 @@ module Data.Macaw.Symbolic.CrucGen
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
-import           Control.Monad ( foldM )
 import           Control.Monad.Except
 import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
