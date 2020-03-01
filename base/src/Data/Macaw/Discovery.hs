@@ -87,7 +87,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
-import           GHC.IO (ioToST, stToIO)
+import           GHC.IO (ioToST)
 import           Numeric.Natural
 import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
