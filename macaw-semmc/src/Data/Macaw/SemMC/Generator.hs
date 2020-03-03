@@ -220,7 +220,7 @@ instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
 instance ET.MonadError GeneratorError (Generator arch ids s) where
   throwError e = Generator (Ct.ContT (\_ -> ET.throwError e))
 
-instance MonadFail (Generator arch ids s) where
+instance MF.MonadFail (Generator arch ids s) where
   fail err = ET.throwError $ GeneratorMessage $ show err
 
 -- | The type of continuations provided by 'shiftGen'
