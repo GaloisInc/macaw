@@ -17,7 +17,7 @@ library
   exposed-modules: Data.Macaw.BinaryLoader.PPC
                  , Data.Macaw.BinaryLoader.PPC.ELF
                  , Data.Macaw.BinaryLoader.PPC.TOC
-  build-depends:       base >=4.9 && <4.13
+  build-depends:       base >=4.9 && <5
                      , bytestring
                      , cereal
                      , containers

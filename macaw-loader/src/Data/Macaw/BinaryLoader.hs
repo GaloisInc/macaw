@@ -13,6 +13,7 @@ module Data.Macaw.BinaryLoader (
 
 import qualified Control.Monad.Catch as X
 import qualified Data.ElfEdit as E
+import           Data.Kind ( Type )
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.CFG as MM
 import qualified Data.Macaw.Memory.LoadCommon as LC
@@ -63,10 +64,10 @@ data LoadedBinary arch binFmt =
 class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
       BinaryLoader arch binFmt where
   -- | Architecture-specific information extracted from the binary
-  type ArchBinaryData arch binFmt :: *
+  type ArchBinaryData arch binFmt :: Type
   -- | Information specific to the binary format that might be used later.
-  type BinaryFormatData arch binFmt :: *
-  type Diagnostic arch binFmt :: *
+  type BinaryFormatData arch binFmt :: Type
+  type Diagnostic arch binFmt :: Type
 
   -- | A loader for the given binary format at a caller-specified architecture
   loadBinary :: (X.MonadThrow m) => LC.LoadOptions -> binFmt -> m (LoadedBinary arch binFmt)
