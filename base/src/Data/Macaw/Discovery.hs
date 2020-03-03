@@ -87,7 +87,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
-import           GHC.IO (ioToST, stToIO)
+import           GHC.IO (ioToST)
 import           Numeric.Natural
 import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
@@ -1026,7 +1026,9 @@ instance Applicative Classifier where
 
 instance Monad Classifier where
   (>>=) = classifyBind
+#if !(MIN_VERSION_base(4,13,0))
   fail = Fail.fail
+#endif
 
 instance Fail.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]

@@ -126,7 +126,6 @@ import qualified Data.Parameterized.TraversableFC as FC
 
 import qualified What4.FunctionName as C
 import           What4.Interface
-import           What4.Symbol (userSymbol)
 import qualified What4.Utils.StringLiteral as C
 import qualified What4.ProgramLoc as WPL
 

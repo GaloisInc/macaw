@@ -45,7 +45,6 @@ import           Data.Parameterized (Some(..))
 import qualified Data.Parameterized.Context as Ctx
 
 import           What4.Interface
-import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend
 import           Lang.Crucible.CFG.Common (GlobalVar)
