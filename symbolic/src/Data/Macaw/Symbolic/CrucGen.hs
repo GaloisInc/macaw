@@ -80,8 +80,8 @@ module Data.Macaw.Symbolic.CrucGen
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
-import           Control.Monad ( foldM )
 import           Control.Monad.Except
+import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.Kind as K
@@ -623,19 +623,19 @@ instance OrdF (BVAtom s) where
       GTF -> GTF
 
 crucPStateLens ::
-  Simple Lens (CrucGenState arch ids s) (CrucPersistentState ids s)
+  Lens' (CrucGenState arch ids s) (CrucPersistentState ids s)
 crucPStateLens = lens crucPState (\s v -> s { crucPState = v })
 
 toBitsCacheLens ::
-  Simple Lens (CrucGenState arch ids s) (MapF (PtrAtom s) (BVAtom s))
+  Lens' (CrucGenState arch ids s) (MapF (PtrAtom s) (BVAtom s))
 toBitsCacheLens = lens toBitsCache (\s v -> s { toBitsCache = v })
 
 fromBitsCacheLens ::
-  Simple Lens (CrucGenState arch ids s) (MapF (BVAtom s) (PtrAtom s))
+  Lens' (CrucGenState arch ids s) (MapF (BVAtom s) (PtrAtom s))
 fromBitsCacheLens = lens fromBitsCache (\s v -> s { fromBitsCache = v })
 
 assignValueMapLens ::
-  Simple Lens (CrucPersistentState ids s)
+  Lens' (CrucPersistentState ids s)
               (MapF (M.AssignId ids) (MacawCrucibleValue (CR.Atom s)))
 assignValueMapLens = lens assignValueMap (\s v -> s { assignValueMap = v })
 
@@ -670,6 +670,12 @@ instance Applicative (CrucGen arch ids s) where
 instance Monad (CrucGen arch ids s) where
   {-# INLINE (>>=) #-}
   m >>= h = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 r -> unCrucGen (h r) s1 cont
+#if !(MIN_VERSION_base(4,13,0))
+  fail = MF.fail
+#endif
+
+instance MF.MonadFail (CrucGen arch ids s) where
+  fail e = CrucGen $ \_s _cont -> MF.fail e
 
 instance MonadState (CrucGenState arch ids s) (CrucGen arch ids s) where
   get = CrucGen $ \s cont -> cont s s

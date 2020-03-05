@@ -9,10 +9,13 @@ module Data.Macaw.AbsDomain.CallParams
 import qualified Data.Kind as Kind
 import           Data.Macaw.Types
 
--- | Minimal information needed to parse a function call/system call
+-- | Minimal information needed to update stack constraints after a call.
 data CallParams (r :: Type -> Kind.Type)
    = CallParams { postCallStackDelta :: Integer
-                  -- ^ Amount stack should shift after call.
+                  -- ^ Amount stack should shift after call returns.
+                  --
+                  -- On X86_64 this is 8 to reflect the pop of the
+                  -- return value.
                 , stackGrowsDown :: !Bool
                   -- ^ Returns true if stack grows down
                 , preserveReg        :: forall tp . r tp -> Bool

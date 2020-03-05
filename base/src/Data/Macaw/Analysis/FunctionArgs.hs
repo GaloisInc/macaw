@@ -41,7 +41,6 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -395,9 +394,9 @@ valueUses (AssignedValue (Assignment a rhs)) = do
        rhs' <- foldlMFC (\s v -> seq s $ Set.union s <$> valueUses v) Set.empty rhs
        seq rhs' $ modify' $ Map.insert (Some a) rhs'
        pure $ rhs'
-valueUses (Initial r) = do
+valueUses (Initial r) =
   pure $! Set.singleton (Some r)
-valueUses _ = do
+valueUses _ =
   pure $! Set.empty
 
 addValueUses :: (OrdF (ArchReg arch), FoldableFC (ArchFn arch))
@@ -434,7 +433,7 @@ recordBlockTransfer _addr regs regSet = do
             -> Some (ArchReg arch)
             -> State (AssignmentCache (ArchReg arch) ids)
                      (FinalRegisterDemands (ArchReg arch))
-      doReg m (Some r) = do
+      doReg m (Some r) =
         case testEquality r ip_reg of
           Just _ -> pure m
           Nothing -> do

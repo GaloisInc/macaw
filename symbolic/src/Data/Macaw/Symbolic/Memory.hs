@@ -4,84 +4,97 @@
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
--- | This module provides a model implementation of a 'MS.GlobalMap'
+-- | This module provides model implementations of 'MS.GlobalMap' and 'MS.MkGlobalPointerValidityPred'
 --
 -- The implementation is generic and should be suitable for most use cases.  The
 -- documentation for 'MS.GlobalMap' describes the problem being solved in
 -- detail.  At a high level, we need to map bitvector values to pointers in the
 -- LLVM memory model.
 --
--- This module provides an interface to populate an LLVM memory based on the
--- contents of the 'MC.Memory' object from macaw.  Read-only memory is mapped in
--- as immutable concrete data.  Mutable memory can be optionally mapped as
--- concrete or symbolic, depending on the use case required.  This model could
--- be extended to make the symbolic/concrete distinction more granular.
+-- This module provides an interface to populate an LLVM memory model from the
+-- contents of the 'MC.Memory' object from macaw.  All of the static memory in a
+-- binary is mapped into a single "symbolic" memory allocation in the LLVM
+-- memory model.  The allocation is symbolic in that it is backed by a symbolic
+-- SMT array.  Bytes in the symbolic allocation are initialized with concrete
+-- data if they are read-only data (e.g., from .rodata or the .text sections).
+-- Optionally, mutable data can be included in the initialization (see
+-- 'MemoryModelContents').  The 'MS.MkGlobalPointerValidityPred' function can be
+-- used to enforce that writes do not clobber read-only data and that no reads
+-- or writes touch unmapped memory.
+--
+-- This module does not represent the only possible memory model.  It just
+-- provides a default implementation that should be generally useful.
+--
+-- Note that representing all static memory in a single allocation (and thus SMT
+-- array) is intended to improve efficiency by pushing as much pointer reasoning
+-- as possible into the theory of arrays.  This formulation enables efficient
+-- handling of symbolic reads and writes when they are sufficiently constrained
+-- by predicates in the program.
 --
 -- Below is an example of using this module to simulate a machine code function
 -- using Crucible.
 --
--- > {-# LANGUAGE DataKinds #-}
--- > {-# LANGUAGE FlexibleContexts #-}
--- > {-# LANGUAGE GADTs #-}
--- > {-# LANGUAGE ScopedTypeVariables #-}
--- > {-# LANGUAGE TypeApplications #-}
--- > {-# LANGUAGE TypeOperators #-}
--- >
--- > import           GHC.TypeLits
--- > import           Control.Monad.ST ( stToIO, RealWorld )
--- > import qualified Data.Macaw.CFG as MC
--- > import qualified Data.Macaw.Symbolic as MS
--- > import qualified Data.Macaw.Symbolic.Memory as MSM
--- > import           Data.Proxy ( Proxy(..) )
--- > import qualified Lang.Crucible.Backend as CB
--- > import qualified Lang.Crucible.CFG.Core as CC
--- > import qualified Lang.Crucible.FunctionHandle as CFH
--- > import qualified Lang.Crucible.LLVM.MemModel as CLM
--- > import qualified Lang.Crucible.LLVM.Intrinsics as CLI
--- > import qualified Lang.Crucible.LLVM.DataLayout as LDL
--- > import qualified Lang.Crucible.Simulator as CS
--- > import qualified Lang.Crucible.Simulator.GlobalState as CSG
--- > import qualified System.IO as IO
--- > import qualified What4.Interface as WI
--- >
--- > useCFG :: forall sym arch blocks
--- >         . ( CB.IsSymInterface sym
--- >           , MS.SymArchConstraints arch
--- >           , 16 <= MC.ArchAddrWidth arch
--- >           , Ord (WI.SymExpr sym WI.BaseNatType)
--- >           , KnownNat (MC.ArchAddrWidth arch)
--- >           )
--- >        => CFH.HandleAllocator RealWorld
--- >        -- ^ The handle allocator used to construct the CFG
--- >        -> sym
--- >        -- ^ The symbolic backend
--- >        -> MS.ArchVals arch
--- >        -- ^ 'ArchVals' from a prior call to 'archVals'
--- >        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
--- >        -- ^ Initial register state for the simulation
--- >        -> MC.Memory (MC.ArchAddrWidth arch)
--- >        -- ^ The memory recovered by macaw
--- >        -> MS.LookupFunctionHandle sym arch
--- >        -- ^ A translator for machine code addresses to function handles
--- >        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
--- >        -- ^ The CFG to simulate
--- >        -> IO ()
--- > useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
--- >        initialRegs mem lfh cfg = withArchEval sym $ \archEvalFns -> do
--- >   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
--- >   memModelVar <- stToIO (CLM.mkMemVar hdlAlloc)
--- >   (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
--- >   let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh
--- >   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
--- >   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
--- >   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
--- >   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler (CS.runOverrideSim rep simulation)
--- >   let executionFeatures = []
--- >   execRes <- CS.executeCrucible executionFeatures initialState
--- >   case execRes of
--- >     CS.FinishedResult {} -> return ()
--- >     _ -> putStrLn "Simulation failed"
--- >
+-- >>> :set -XDataKinds
+-- >>> :set -XFlexibleContexts
+-- >>> :set -XGADTs
+-- >>> :set -XScopedTypeVariables
+-- >>> :set -XTypeApplications
+-- >>> :set -XTypeOperators
+-- >>> import           GHC.TypeLits
+-- >>> import qualified Data.Macaw.CFG as MC
+-- >>> import qualified Data.Macaw.Symbolic as MS
+-- >>> import qualified Data.Macaw.Symbolic.Memory as MSM
+-- >>> import           Data.Proxy ( Proxy(..) )
+-- >>> import qualified Lang.Crucible.Backend as CB
+-- >>> import qualified Lang.Crucible.CFG.Core as CC
+-- >>> import qualified Lang.Crucible.FunctionHandle as CFH
+-- >>> import qualified Lang.Crucible.LLVM.MemModel as CLM
+-- >>> import qualified Lang.Crucible.LLVM.Intrinsics as CLI
+-- >>> import qualified Lang.Crucible.LLVM.DataLayout as LDL
+-- >>> import qualified Lang.Crucible.Simulator as CS
+-- >>> import qualified Lang.Crucible.Simulator.GlobalState as CSG
+-- >>> import qualified System.IO as IO
+-- >>> import qualified What4.Interface as WI
+-- >>> :{
+-- useCFG :: forall sym arch blocks
+--         . ( CB.IsSymInterface sym
+--           , MS.SymArchConstraints arch
+--           , 16 <= MC.ArchAddrWidth arch
+--           , Ord (WI.SymExpr sym WI.BaseNatType)
+--           , KnownNat (MC.ArchAddrWidth arch)
+--           )
+--        => CFH.HandleAllocator
+--        -- ^ The handle allocator used to construct the CFG
+--        -> sym
+--        -- ^ The symbolic backend
+--        -> MS.ArchVals arch
+--        -- ^ 'ArchVals' from a prior call to 'archVals'
+--        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
+--        -- ^ Initial register state for the simulation
+--        -> MC.Memory (MC.ArchAddrWidth arch)
+--        -- ^ The memory recovered by macaw
+--        -> MS.LookupFunctionHandle sym arch
+--        -- ^ A translator for machine code addresses to function handles
+--        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
+--        -- ^ The CFG to simulate
+--        -> IO ()
+-- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
+--        initialRegs mem lfh cfg = withArchEval sym $ \archEvalFns -> do
+--   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
+--   memModelVar <- CLM.mkMemVar hdlAlloc
+--   (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
+--   let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
+--   let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred
+--   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
+--   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
+--   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
+--   let executionFeatures = []
+--   execRes <- CS.executeCrucible executionFeatures initialState
+--   case execRes of
+--     CS.FinishedResult {} -> return ()
+--     _ -> putStrLn "Simulation failed"
+-- :}
 module Data.Macaw.Symbolic.Memory (
   -- * Memory Management
   MemPtrTable,
@@ -113,7 +126,6 @@ import qualified Lang.Crucible.Types as CT
 import           Text.Printf ( printf )
 import qualified What4.Interface as WI
 import qualified What4.Symbol as WS
--- import qualified What4.Utils.Hashable as WUH
 
 import qualified Data.Macaw.Symbolic as MS
 
@@ -150,6 +162,7 @@ data MemPtrTable sym w =
               , memPtr :: CL.LLVMPtr sym w
               -- ^ The pointer to the allocation backing all of memory
               , memRepr :: PN.NatRepr w
+              -- ^ Pointer width representative
               }
 
 -- | Convert a Macaw Endianness to a Crucible LLVM EndianForm
@@ -160,9 +173,19 @@ toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the
 -- 'CL.MemImpl' are populated based on the 'MC.Memory' (macaw memory) passed in.
--- Read-only data is immutable and concrete.  Other data in the binary is mapped
--- in as either concrete or symbolic based on the value of the
--- 'MemoryModelContents' parameter.
+--
+-- The statically-allocated memory in the 'MC.Memory' is represented by a single
+-- symbolic LLVM memory model allocation, which is backed by an SMT array.
+-- Read-only data is copied in concretely.  Mutable data can be copied in as
+-- concrete mutable data or as symbolic data, depending on the needs of the
+-- symbolic execution task (the behavior is controlled by the
+-- 'MemoryModelContents' parameter).
+--
+-- Note that, since memory is represented using a single SMT array, large
+-- portions of unmapped memory are included in the mapping.  Additionally, SMT
+-- arrays do not have notions of mutable or immutable regions.  These notions
+-- are enforced via the 'MS.MkGlobalPointerValidityPred', which encodes valid
+-- uses of pointers.  See 'mkGlobalPointerValidityPred' for details.
 newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , MC.MemWidth (MC.ArchAddrWidth arch)
                    , KnownNat (MC.ArchAddrWidth arch)
@@ -199,6 +222,8 @@ newGlobalMemory proxy sym endian mmc mem = do
 
   return (memImpl3, ptrTable)
 
+-- | Copy memory from the 'MC.Memory' into the LLVM memory model allocation as
+-- directed by the 'MemoryModelContents' selection
 populateMemory :: ( CB.IsSymInterface sym
                   , 16 <= MC.ArchAddrWidth arch
                   , MC.MemWidth (MC.ArchAddrWidth arch)
@@ -230,8 +255,8 @@ populateMemory proxy sym mmc mem symArray0 =
       populateSegmentChunk proxy sym mmc mem symArray seg addr concreteBytes allocs2
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the
--- 'MemAddr'), assert that the bytes from the symbolic array backing memory
--- match concrete values.  Otherwise, leave bytes as totally symbolic.
+-- 'MemAddr') as concrete, assert that the bytes from the symbolic array backing
+-- memory match concrete values.  Otherwise, leave bytes as totally symbolic.
 --
 -- Note that this is populating memory for *part* of a segment, and not the
 -- entire segment.  This is because segments can be stored as chunks of concrete
@@ -355,7 +380,8 @@ pleatM s l f = F.foldlM f s l
 -- We represent all of the statically allocated storage in a binary in a single
 -- LLVM array.  This array is sparse, meaning that large ranges of the address
 -- space are not actually mapped.  Whenever we use a pointer into this memory
--- region, we want to assert that it is inside one of the mapped regions.
+-- region, we want to assert that it is inside one of the mapped regions and
+-- that it does not violate any mutability constraints.
 --
 -- The mapped regions are recorded in the MemPtrTable.
 --
@@ -367,11 +393,14 @@ pleatM s l f = F.foldlM f s l
 -- is used to write, it must only be within the writable portion of the address
 -- space (which is also recorded in the MemPtrTable).  If the write is
 -- conditional, we must additionally mix in the predicate.
+--
+-- This is intended as a reasonable implementation of the
+-- 'MS.MkGlobalPointerValidityPred'.
 mkGlobalPointerValidityPred :: ( CB.IsSymInterface sym
                                , MC.MemWidth w
                                )
                             => MemPtrTable sym w
-                            -> MS.MkGlobalPointerValidityPred sym w
+                            -> MS.MkGlobalPointerValidityAssertion sym w
 mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
   -- If this is a write, the pointer cannot be in an immutable range (so just
   -- return False for the predicate on that range).

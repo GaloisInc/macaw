@@ -87,7 +87,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
-import           GHC.IO (ioToST, stToIO)
+import           GHC.IO (ioToST)
 import           Numeric.Natural
 import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
@@ -158,7 +158,7 @@ cameFromUnsoundReason found_map rsn = do
 
 -- | Add any values needed to compute term statement to demand set.
 addTermDemands :: TermStmt arch ids -> DemandComp arch ids ()
-addTermDemands t = do
+addTermDemands t =
   case t of
     FetchAndExecute regs -> do
       traverseF_ addValueDemands regs
@@ -1035,7 +1035,9 @@ instance Applicative Classifier where
 
 instance Monad Classifier where
   (>>=) = classifyBind
+#if !(MIN_VERSION_base(4,13,0))
   fail = Fail.fail
+#endif
 
 instance Fail.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]
@@ -1183,10 +1185,11 @@ callClassifier = do
                             -- a function entry point.
                           , writtenCodeAddrs = filter (\a -> a /= ret) (classifierWrittenAddrs bcc)
                             --Include return target
-                          , intraJumpTargets = [( ret
-                                                , postCallAbsState ainfo (classifierAbsState bcc) finalRegs ret
-                                                , Jmp.postCallBounds (archCallParams ainfo) (classifierJumpBounds bcc) finalRegs
-                                                )]
+                          , intraJumpTargets =
+                              [( ret
+                               , postCallAbsState ainfo (classifierAbsState bcc) finalRegs ret
+                               , Jmp.postCallBounds (archCallParams ainfo) (classifierJumpBounds bcc) finalRegs
+                               )]
                             -- Use the abstract domain to look for new code pointers for the current IP.
                           , newFunctionAddrs = identifyCallTargets mem (classifierAbsState bcc) finalRegs
                           }
@@ -1227,10 +1230,11 @@ directJumpClassifier = classifierName "Jump" $ do
 
     let abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
     let abst' = abst & setAbsIP tgt_mseg
+    let tgtBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
                           , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgt_mseg
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = [(tgt_mseg, abst', Jmp.nextBlockBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc))]
+                          , intraJumpTargets = [(tgt_mseg, abst', tgtBnds)]
                           , newFunctionAddrs = []
                           }
 
@@ -1249,7 +1253,7 @@ jumpTableClassifier = classifierName "Jump table" $ do
 
     let abst :: AbsBlockState (ArchReg arch)
         abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
-    let nextBnds = Jmp.nextBlockBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
+    let nextBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     let term = ParsedLookupTable (classifierFinalRegState bcc) jumpIndex entries
     pure $ seq abst $
       ParsedContents { parsedNonterm = toList (classifierStmts bcc)
@@ -1347,7 +1351,7 @@ useExternalTargets bcc = do
   ipAddr <- valueAsSegmentOff (pctxMemory ctx) ipVal
   targets <- lookup ipAddr (pctxExtResolution ctx)
   let blockState = finalAbsBlockState absState finalRegs
-  let nextInitJmpBounds = Jmp.nextBlockBounds jmpBounds finalRegs
+  let nextInitJmpBounds = Jmp.postJumpBounds jmpBounds finalRegs
   return [ (tgt, blockState, nextInitJmpBounds) | tgt <- targets ]
 
 -- | This parses a block that ended with a fetch and execute instruction.

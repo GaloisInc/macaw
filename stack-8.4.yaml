@@ -12,7 +12,7 @@ packages:
 - x86/support
 - x86_symbolic
 extra-deps:
-- zenc-0.1.1@sha256:e4be3e5e9fe1a1ade05910909c6e5b5a8eff72e697868b03955c9781b0443947,964
+- base-orphans-0.8.2@sha256:40ef37ed043aac2cbb6c538fdebfc62e601ee65ee161e4a6327452133b574d7e,2958
 - boomerang-1.4.5.6@sha256:4f8407b9482a500ef9f8dc3fa13f9615d4d33a7c530b67c1ca27535e136a152d
 - itanium-abi-0.1.1.1@sha256:1d727fa88ecafc13ba4ec2b6a752182ce70333fbde9726aec1393151d14de6df
 - monadLib-3.9@sha256:7225fb80bf183bf64968b7d251236fb203b86838679de3eddee7bcc59925adef
@@ -23,9 +23,10 @@ extra-deps:
 - invariant-0.5.3
 - lens-4.17.1
 - microlens-th-0.4.2.3
+- zenc-0.1.1@sha256:e4be3e5e9fe1a1ade05910909c6e5b5a8eff72e697868b03955c9781b0443947,964
 
 # Submodules added to extra-deps so that we do not fail on warnings.
-- ./deps/crucible/what4
+- ./deps/what4/what4
 - ./deps/crucible/crucible
 - ./deps/crucible/crucible-llvm
 - ./deps/dwarf

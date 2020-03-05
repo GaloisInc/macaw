@@ -120,7 +120,8 @@ main = do
   let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
       lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do
         fail "Could not find function handle."
-  let validityCheck _ _ _ _ = return Nothing
+  let validityCheck :: MS.MkGlobalPointerValidityAssertion sym 64
+      validityCheck _ _ _ _ = return Nothing
   execResult <-
      MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
         halloc (initMem, globalMap) lookupFn validityCheck g regs

@@ -27,7 +27,6 @@ where
 import           GHC.TypeLits
 
 import qualified Data.Macaw.Architecture.Info as MA
-import           Data.Macaw.CFG.AssignRhs
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import           Data.Macaw.Discovery.State
@@ -55,9 +54,9 @@ cfgFromAddrsAndState
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
-  -> [ArchSegmentOff arch]
+  -> [MC.ArchSegmentOff arch]
   -- ^ Initial function entry points.
-  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -> [(MC.ArchSegmentOff arch, MC.ArchSegmentOff arch)]
   -- ^ Function entry points in memory to be explored
   -- after exploring function entry points.
   --
@@ -72,9 +71,9 @@ cfgFromAddrsAndStateWith
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
-  -> [ArchSegmentOff arch]
+  -> [MC.ArchSegmentOff arch]
   -- ^ Initial function entry points.
-  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -> [(MC.ArchSegmentOff arch, MC.ArchSegmentOff arch)]
   -- ^ Function entry points in memory to be explored
   -- after exploring function entry points.
   --
@@ -102,13 +101,13 @@ cfgFromAddrs
   -> MA.ArchitectureInfo arch
   -- ^ Architecture-specific information needed for doing
   -- control-flow exploration.
-  -> MM.Memory (ArchAddrWidth arch)
+  -> MM.Memory (MC.ArchAddrWidth arch)
   -- ^ Memory to use when decoding instructions.
-  -> AddrSymMap (ArchAddrWidth arch)
+  -> AddrSymMap (MC.ArchAddrWidth arch)
   -- ^ Map from addresses to the associated symbol name.
-  -> [ArchSegmentOff arch]
+  -> [MC.ArchSegmentOff arch]
   -- ^ Initial function entry points.
-  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -> [(MC.ArchSegmentOff arch, MC.ArchSegmentOff arch)]
   -- ^ Function entry points in memory to be explored
   -- after exploring function entry points.
   --
@@ -125,13 +124,13 @@ cfgFromAddrsWith
   -> MA.ArchitectureInfo arch
   -- ^ Architecture-specific information needed for doing
   -- control-flow exploration.
-  -> MM.Memory (ArchAddrWidth arch)
+  -> MM.Memory (MC.ArchAddrWidth arch)
   -- ^ Memory to use when decoding instructions.
-  -> AddrSymMap (ArchAddrWidth arch)
+  -> AddrSymMap (MC.ArchAddrWidth arch)
   -- ^ Map from addresses to the associated symbol name.
-  -> [ArchSegmentOff arch]
+  -> [MC.ArchSegmentOff arch]
   -- ^ Initial function entry points.
-  -> [(ArchSegmentOff arch, ArchSegmentOff arch)]
+  -> [(MC.ArchSegmentOff arch, MC.ArchSegmentOff arch)]
   -- ^ Function entry points in memory to be explored
   -- after exploring function entry points.
   --

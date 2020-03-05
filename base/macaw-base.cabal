@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3.15
+version: 0.3.15.1
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -52,6 +52,7 @@ library
     Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
+    Data.Macaw.AbsDomain.StackAnalysis
     Data.Macaw.AbsDomain.StridedInterval
     Data.Macaw.Analysis.FunctionArgs
     Data.Macaw.Analysis.RegisterUse
@@ -74,8 +75,8 @@ library
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
     Data.Macaw.Memory.Symbols
-    Data.Macaw.SCFG
     Data.Macaw.Types
+    Data.Macaw.Utils.Changed
     Data.Macaw.Utils.Pretty
 
   ghc-options: -Wall -Wcompat

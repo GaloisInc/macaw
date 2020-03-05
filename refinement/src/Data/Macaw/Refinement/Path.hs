@@ -26,10 +26,10 @@ import qualified Data.Foldable as F
 import qualified Data.Graph.Haggle as G
 import qualified Data.Graph.Haggle.Algorithms.DFS as GD
 import qualified Data.Map.Strict as M
-import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth, ArchSegmentOff )
+import           Data.Macaw.CFG.AssignRhs ( ArchAddrWidth )
+import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.Discovery.State ( DiscoveryFunInfo )
 import qualified Data.Macaw.Discovery.State as MDS
-import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
                                                       , blockInFunction
@@ -412,7 +412,7 @@ bldFPath fi (fs, b:bs) =
 
 bldFPath' :: DiscoveryFunInfo arch ids
           -> BlockIdentifier arch ids
-          -> ArchSegmentOff arch
+          -> MC.ArchSegmentOff arch
           -> [FuncBlockPath arch ids]
           -> [FuncBlockPath arch ids]
 bldFPath' fi b nextAddr fs =

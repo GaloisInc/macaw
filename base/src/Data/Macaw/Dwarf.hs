@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This defines data structures for parsing Dwarf debug information from
 binaries.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -53,6 +54,7 @@ module Data.Macaw.Dwarf
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Except
+import qualified Control.Monad.Fail as MF
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Binary.Get
@@ -105,6 +107,11 @@ newtype WarnT m r = WarnT { unWarnT :: ExceptT String (StateT [String] m) r }
 instance Monad m => Monad (WarnT m) where
   m >>= h = WarnT $ unWarnT m >>= unWarnT . h
   return = pure
+#if !(MIN_VERSION_base(4,13,0))
+  fail = MF.fail
+#endif
+
+instance (Monad m) => MF.MonadFail (WarnT m) where
   fail msg = WarnT $ throwError msg
 
 runWarnT :: WarnT m r -> m (Either String r, [String])
@@ -131,6 +138,7 @@ newtype Parser r = Parser { unParser :: ReaderT ParserState (WarnT Identity) r }
            , Applicative
            , Monad
            , WarnMonad String
+           , MF.MonadFail
            )
 
 
@@ -232,10 +240,10 @@ data DIEParserState = DPS { dpsDIE :: DIE
                             -- we have not considered.
                           }
 
-dpsSeenAttributes :: Simple Lens DIEParserState (Set DW_AT)
+dpsSeenAttributes :: Lens' DIEParserState (Set DW_AT)
 dpsSeenAttributes = lens _dpsSeenAttributes (\s v -> s { _dpsSeenAttributes = v })
 
-dpsSeenChildren :: Simple Lens DIEParserState (Set DW_TAG)
+dpsSeenChildren :: Lens' DIEParserState (Set DW_TAG)
 dpsSeenChildren = lens _dpsSeenChildren (\s v -> s { _dpsSeenChildren = v })
 
 type DIEParser = StateT DIEParserState Parser
