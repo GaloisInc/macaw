@@ -1,7 +1,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 module Initialization (
@@ -11,11 +14,16 @@ module Initialization (
 
 import           GHC.TypeNats
 
+import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Monad.Catch as X
+import qualified Control.Monad.Reader as MR
+import qualified Control.Monad.IO.Unlift as MU
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.Map as M
+import qualified Data.Text.Prettyprint.Doc as PP
+import qualified Lumberjack as LJ
 import qualified System.IO as IO
 import qualified System.Exit as IOE
 
@@ -87,10 +95,34 @@ withLoadedBinary k archInfo bin = do
   let dstate0 = MD.cfgFromAddrs archInfo (MBL.memoryImage bin) M.empty entries []
   k archInfo bin dstate0
 
+newtype Refine arch a = Refine { runRefine_ :: MR.ReaderT (Env arch) IO a }
+  deriving ( Functor
+           , Monad
+           , Applicative
+           , MU.MonadUnliftIO
+           , MonadIO
+           , X.MonadThrow
+           , MR.MonadReader (Env arch)
+           )
+
+data Env arch = Env { logger :: LJ.LogAction (Refine arch) (MR.RefinementLog arch) }
+
+instance LJ.HasLog (MR.RefinementLog arch) (Refine arch) where
+  getLogAction = MR.asks logger
+
+runRefine :: (ML.MemWidth (MC.ArchAddrWidth arch)) => Refine arch a -> IO a
+runRefine a = MR.runReaderT (runRefine_ a) env0
+  where
+    doLog msg = liftIO $ IO.hPutStrLn IO.stderr (show (PP.pretty msg))
+    env0 = Env (LJ.LogAction doLog)
+
+
 -- | Run the SMT-based refinement on a binary
-withRefinedDiscovery :: ( 16 <= MC.ArchAddrWidth arch
+withRefinedDiscovery :: forall arch binFmt a
+                      . ( 16 <= MC.ArchAddrWidth arch
                         , SymArchConstraints arch
                         , MBL.BinaryLoader arch binFmt
+                        , ML.MemWidth (MC.ArchAddrWidth arch)
                         )
                      => Options
                      -> AI.ArchitectureInfo arch
@@ -107,5 +139,5 @@ withRefinedDiscovery opts archInfo bin k = do
                                             }
     ctx <- MR.defaultRefinementContext config bin
     entries <- F.toList <$> MBL.entryPoints bin
-    (dstate, info) <- MR.cfgFromAddrsWith ctx archInfo (MBL.memoryImage bin) M.empty entries []
+    (dstate, info) <- runRefine @arch $ MR.cfgFromAddrsWith ctx archInfo (MBL.memoryImage bin) M.empty entries []
     k dstate info

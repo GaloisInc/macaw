@@ -4,7 +4,9 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 -- | This module uses symbolic evaluation to refine the discovered CFG
@@ -116,12 +118,15 @@ module Data.Macaw.Refinement.UnknownTransfer (
 
 import qualified Control.Lens as L
 import           Control.Lens ( (^.) )
-import           Control.Monad.IO.Class ( MonadIO, liftIO )
+import qualified Control.Monad.Catch as X
+import           Control.Monad.IO.Class ( MonadIO )
+import qualified Control.Monad.IO.Unlift as MU
 import qualified Control.Scheduler as CS
 import qualified Data.Foldable as F
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Refinement.FuncBlockUtils as RFU
+import           Data.Macaw.Refinement.Logging ( RefinementLog(..) )
 import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import qualified Data.Macaw.Symbolic as MS
@@ -130,6 +135,7 @@ import           Data.Maybe ( isJust, isNothing )
 import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Set as S
 import           GHC.TypeLits
+import qualified Lumberjack as LJ
 
 -- | This is the main entrypoint, which is given the current Discovery
 -- information and which attempts to resolve UnknownTransfer
@@ -143,6 +149,9 @@ import           GHC.TypeLits
 symbolicUnkTransferRefinement
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -- ^ Configuration
@@ -150,7 +159,7 @@ symbolicUnkTransferRefinement
   -- ^ Previous results from refinement (to avoid re-analysis)
   -> MD.DiscoveryState arch
   -- ^ The state from macaw to refine
-  -> IO (MD.DiscoveryState arch, RefinementFindings arch)
+  -> m (MD.DiscoveryState arch, RefinementFindings arch)
 symbolicUnkTransferRefinement context oldFindings inpDS = do
   -- Set up the evaluation strategy for the work scheduling library.
   --
@@ -173,11 +182,14 @@ symbolicUnkTransferRefinement context oldFindings inpDS = do
 refineFunction
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch
   -> MD.DiscoveryFunInfo arch ids
-  -> IO (Some (MD.DiscoveryFunInfo arch), Solutions arch)
+  -> m (Some (MD.DiscoveryFunInfo arch), Solutions arch)
 refineFunction context oldFindings dfi = do
   -- Find the blocks with unknown transfers
   solns <- F.foldlM (refineBlockTransfer context oldFindings dfi) mempty (getUnknownTransfers dfi)
@@ -209,9 +221,12 @@ isUnknownTransfer fi pb =
 -- The caller is expected to update the DiscoveryState with any discovered
 -- solutions.
 refineBlockTransfer
-  :: ( MS.SymArchConstraints arch
+  :: forall arch m ids
+    . ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
-     , MonadIO m
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch
@@ -224,10 +239,10 @@ refineBlockTransfer
 refineBlockTransfer context oldFindings fi solns blk
   | haveFindingsFor oldFindings blk = return solns
   | otherwise = do
-    liftIO $ putStrLn ("Refining a transfer at: " ++ show (MD.pblockAddr blk))
+    LJ.writeLogM (RefiningTransferAt @arch (MD.pblockAddr blk))
     let cfg = RP.mkPartialCFG fi
     let slices = RP.cfgPathsTo (RFU.blockID blk) cfg
-    possibleSolutions <- liftIO $ mapM (refineSlice context) slices
+    possibleSolutions <- mapM (refineSlice context) slices
     return (addSolution blk possibleSolutions solns)
 
 haveFindingsFor :: RefinementFindings arch -> MD.ParsedBlock arch ids -> Bool
@@ -246,6 +261,7 @@ updateDiscovery :: ( MC.RegisterInfo (MC.ArchReg arch)
                    , KnownNat (MC.ArchAddrWidth arch)
                    , MC.ArchConstraints arch
                    , MonadIO m
+                   , LJ.HasLog (RefinementLog arch) m
                    )
                 => MD.DiscoveryState arch
                 -> (Some (MD.DiscoveryFunInfo arch), Solutions arch)
@@ -259,10 +275,13 @@ updateDiscovery s0 (Some finfo, solutions) = do
 
 refineSlice :: ( MS.SymArchConstraints arch
                , 16 <=  MC.ArchAddrWidth arch
+               , MU.MonadUnliftIO m
+               , LJ.HasLog (RefinementLog arch) m
+               , X.MonadThrow m
                )
             => RSE.RefinementContext arch
             -> RP.CFGSlice arch ids
-            -> IO (IPModelsFor arch (MC.ArchSegmentOff arch))
+            -> m (IPModelsFor arch (MC.ArchSegmentOff arch))
 refineSlice context slice = solve context slice
 
 -- | The set (list) of models found for each basic block
@@ -301,13 +320,15 @@ addSolution blk sl (Solutions slns) = Solutions (Map.insert (MD.pblockAddr blk) 
 -- | Compute a set of solutions for this refinement
 solve :: ( MS.SymArchConstraints arch
          , 16 <= MC.ArchAddrWidth arch
-         , MonadIO m
+         , MU.MonadUnliftIO m
+         , LJ.HasLog (RefinementLog arch) m
+         , X.MonadThrow m
          )
       => RSE.RefinementContext arch
       -> RP.CFGSlice arch ids
       -> m (IPModelsFor arch (MC.ArchSegmentOff arch))
 solve context slice = do
-  models <- liftIO $ RSE.smtSolveTransfer context slice
+  models <- RSE.smtSolveTransfer context slice
   return (IPModelsFor (RP.sliceAddress slice) models)
 
 -- | Models of the instruction pointer paired with the address of the block

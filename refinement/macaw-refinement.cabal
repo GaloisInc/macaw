@@ -66,6 +66,9 @@ library
                , what4 >= 0.4.0
                , scheduler >= 1.4 && < 1.5
                , async
+               , lumberjack >= 0.1 && < 0.2
+               , unliftio-core >= 0.2 && < 0.3
+               , exceptions >= 0.10 && < 0.11
                , haggle
 
   hs-source-dirs: src
@@ -73,6 +76,7 @@ library
   exposed-modules: Data.Macaw.Refinement
 
   other-modules: Data.Macaw.Refinement.FuncBlockUtils
+                 Data.Macaw.Refinement.Logging
                  Data.Macaw.Refinement.Path
                  Data.Macaw.Refinement.Solver
                  Data.Macaw.Refinement.Target
@@ -113,6 +117,9 @@ executable run-refinement
                , text
                , what4
                , crucible
+               , mtl
+               , lumberjack
+               , unliftio-core
 
 test-suite test-refinements
   type: exitcode-stdio-1.0
@@ -144,7 +151,7 @@ test-suite test-refinements
                , macaw-x86-symbolic
                , crucible
                , what4
-               , optparse-applicative >= 0.13 && < 0.15
+               , optparse-applicative >= 0.13 && < 0.16
                , parameterized-utils
                , QuickCheck >= 2.7
                , semmc-ppc
@@ -153,3 +160,6 @@ test-suite test-refinements
                , tasty-hspec
                , tasty-hunit
                , prettyprinter
+               , mtl
+               , lumberjack
+               , unliftio-core

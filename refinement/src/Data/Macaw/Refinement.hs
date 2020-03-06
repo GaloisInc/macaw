@@ -13,6 +13,7 @@ module Data.Macaw.Refinement
   , cfgFromAddrsWith
   , RefinementFindings
   , RefinementInfo(..)
+  , RefinementLog(..)
     -- * Configuration
   , RSE.defaultRefinementContext
   , RSE.RefinementContext
@@ -26,13 +27,17 @@ where
 
 import           GHC.TypeLits
 
+import qualified Control.Monad.Catch as X
+import qualified Control.Monad.IO.Unlift as MU
 import qualified Data.Macaw.Architecture.Info as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
 import           Data.Macaw.Discovery.State
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Symbolic as MS
+import qualified Lumberjack as LJ
 
+import           Data.Macaw.Refinement.Logging ( RefinementLog(..) )
 import qualified Data.Macaw.Refinement.Solver as MRS
 import qualified Data.Macaw.Refinement.SymbolicExecution as RSE
 import           Data.Macaw.Refinement.Target
@@ -51,6 +56,9 @@ import           Data.Macaw.Refinement.UnknownTransfer
 cfgFromAddrsAndState
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
@@ -61,13 +69,16 @@ cfgFromAddrsAndState
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> IO (DiscoveryState arch)
+  -> m (DiscoveryState arch)
 cfgFromAddrsAndState context initial_state init_addrs mem_words =
   fst <$> cfgFromAddrsAndStateWith context initial_state init_addrs mem_words
 
 cfgFromAddrsAndStateWith
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
@@ -78,7 +89,7 @@ cfgFromAddrsAndStateWith
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> IO (DiscoveryState arch, RefinementInfo arch)
+  -> m (DiscoveryState arch, RefinementInfo arch)
 cfgFromAddrsAndStateWith context initial_state init_addrs mem_words =
   go (MD.cfgFromAddrsAndState initial_state init_addrs mem_words) mempty
   where
@@ -96,6 +107,9 @@ cfgFromAddrsAndStateWith context initial_state init_addrs mem_words =
 cfgFromAddrs
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> MA.ArchitectureInfo arch
@@ -112,13 +126,16 @@ cfgFromAddrs
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> IO (DiscoveryState arch)
+  -> m (DiscoveryState arch)
 cfgFromAddrs context ainfo mem addrSymMap =
   cfgFromAddrsAndState context (emptyDiscoveryState mem addrSymMap ainfo)
 
 cfgFromAddrsWith
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> MA.ArchitectureInfo arch
@@ -135,7 +152,7 @@ cfgFromAddrsWith
   -- after exploring function entry points.
   --
   -- Each entry contains an address and the value stored in it.
-  -> IO (DiscoveryState arch, RefinementInfo arch)
+  -> m (DiscoveryState arch, RefinementInfo arch)
 cfgFromAddrsWith context ainfo mem addrSymMap =
   cfgFromAddrsAndStateWith context (emptyDiscoveryState mem addrSymMap ainfo)
 
@@ -154,10 +171,13 @@ cfgFromAddrsWith context ainfo mem addrSymMap =
 refineDiscovery
   :: ( MS.SymArchConstraints arch
      , 16 <= MC.ArchAddrWidth arch
+     , MU.MonadUnliftIO m
+     , LJ.HasLog (RefinementLog arch) m
+     , X.MonadThrow m
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch
   -> DiscoveryState arch
-  -> IO (DiscoveryState arch, RefinementFindings arch)
+  -> m (DiscoveryState arch, RefinementFindings arch)
 refineDiscovery context oldFindings =
   symbolicUnkTransferRefinement context oldFindings . symbolicTargetRefinement
