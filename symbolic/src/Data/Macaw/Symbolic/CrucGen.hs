@@ -921,18 +921,24 @@ appToCrucible app = do
     M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
 
     -- Extension operations
-    M.Trunc x w -> do
+    M.Trunc x w
+      | Just LeqProof <- testLeq w (M.typeWidth x) -> do
       let wx = M.typeWidth x
       LeqProof <- return (addLemma w wx)
       appBVAtom w =<< C.BVTrunc w wx <$> v2c' wx x
+      | otherwise -> fail "Trunc with invalid widths"
 
-    M.SExt x w -> do
+    M.SExt x w
+      | Just LeqProof <- testLeq (M.typeWidth x) w -> do
       let wx = M.typeWidth x
       appBVAtom w =<< C.BVSext w wx <$> v2c' wx x
+      | otherwise -> fail "SExt with invalid widths"
 
-    M.UExt x w -> do
+    M.UExt x w
+      | Just LeqProof <- testLeq (M.typeWidth x) w -> do
       let wx = M.typeWidth x
       appBVAtom w =<< C.BVZext w wx <$> v2c' wx x
+      | otherwise -> fail "UExt with invalid widths"
 
     M.Bitcast v p -> do
       crucValue <- v2c v

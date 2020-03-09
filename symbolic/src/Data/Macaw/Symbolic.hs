@@ -665,6 +665,7 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
       c <- f cv
       let w' = incNat w
       Just LeqProof <- pure $ testLeq (knownNat :: NatRepr 1) w'
+      Just LeqProof <- pure $ testLeq w w'
       one  <- What4.Interface.bvLit sym w' 1
       zero <- What4.Interface.bvLit sym w' 0
       cext <- baseTypeIte sym c one zero

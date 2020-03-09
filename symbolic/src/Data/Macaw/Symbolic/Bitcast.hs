@@ -25,9 +25,9 @@ import qualified Data.Macaw.Types as M
 
 import           Data.Macaw.Symbolic.PersistentState as PS
 
-plus1LeqDbl :: forall n w . (2 <= n, 1 <= w) => NatRepr n -> NatRepr w -> LeqProof (w+1) (n GHC.TypeLits.* w)
-plus1LeqDbl n w =
-  case testLeq (incNat w) (natMultiply n w) of
+leqDbl :: forall n w . (2 <= n, 1 <= w) => NatRepr n -> NatRepr w -> LeqProof w (n GHC.TypeLits.* w)
+leqDbl n w =
+  case testLeq w (natMultiply n w) of
     Nothing -> error "Unexpected vector"
     Just p -> p
 
@@ -53,7 +53,7 @@ doBitcast sym x eqPr =
     M.PackBits (n :: NatRepr n) (w :: NatRepr w) -> do
       let outW = natMultiply n w
       LeqProof <- pure $ leqMulPos n w
-      LeqProof <- pure $ plus1LeqDbl n w
+      LeqProof <- pure $ leqDbl n w
       when (fromIntegral (V.length x) /= natValue n) $ do
         fail "bitcast: Incorrect input vector length"
       -- We should have at least one element due to constraint on n
@@ -72,7 +72,7 @@ doBitcast sym x eqPr =
     M.UnpackBits n w -> do
       let inW = natMultiply n w
       LeqProof <- pure $ leqMulPos n w
-      LeqProof <- pure $ plus1LeqDbl n w
+      LeqProof <- pure $ leqDbl n w
       xbv <- MM.projectLLVM_bv sym x
       V.generateM (fromIntegral (natValue n)) $ \i -> do
         shiftAmt <- bvLit sym inW (toInteger i)
