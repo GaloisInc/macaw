@@ -62,7 +62,6 @@ Notes:
 
 module Data.Macaw.ARM.Disassemble
     ( disassembleFn
-    , initialBlockRegs
     )
     where
 
@@ -88,22 +87,13 @@ import           Data.Macaw.Types
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
 import qualified Data.Text as T
-import qualified Dismantle.ARM as ARMD
-import qualified Dismantle.Thumb as ThumbD
+import qualified Dismantle.ARM.A32 as ARMD
+import qualified Dismantle.ARM.T32 as ThumbD
 import           Text.Printf ( printf )
 
 
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)
-
-initialBlockRegs :: forall ids arm . ARMArchConstraints arm =>
-                    ArchSegmentOff arm
-                    -- ^ The address of the block
-                 -> MA.AbsBlockState (ArchReg arm)
-                    -- ^ Abstract state of the processor at the start of the block
-                 -> Either String (RegState (ArchReg arm) (Value arm ids))
-                    -- ^ Error or initial register state for the block
-initialBlockRegs blkAddr _abState = pure $ initRegState blkAddr
 
 
 -- | Disassemble a block from the given start address (which points into the

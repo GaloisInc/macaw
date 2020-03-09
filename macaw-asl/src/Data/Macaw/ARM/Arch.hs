@@ -17,6 +17,7 @@
 module Data.Macaw.ARM.Arch where
 
 import           Data.Bits ( (.&.) )
+import qualified Data.Macaw.Architecture.Info as MAI
 import           Data.Macaw.ARM.ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
@@ -64,6 +65,10 @@ rewriteStmt :: (MC.ArchStmt arm ~ ARMStmt) =>
                ARMStmt (MC.Value arm src) -> Rewriter arm s src tgt ()
 rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
+-- The ArchBlockPrecond type holds data required for an architecture to compute
+-- new abstract states at the beginning on a block.  PowerPC doesn't need any
+-- additional information, so we use ()
+type instance MAI.ArchBlockPrecond ARM.AArch32 = ()
 
 -- ----------------------------------------------------------------------
 -- ARM terminal statements (which have instruction-specific effects on
@@ -201,7 +206,6 @@ type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
                               , 1 <= MC.RegAddrWidth ARMReg
                               , KnownNat (MC.RegAddrWidth ARMReg)
                               , MC.ArchConstraints arm
-                              , O.ExtractValue arm (ARMDis.Operand "Bv4") (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
                               )
 
 -- FIXME: Why was a maybe usable as an index to extract a value?                              
@@ -223,6 +227,7 @@ a32InstructionMatcher :: (ARMArchConstraints arch) =>
                          ARMDis.Instruction -> Maybe (G.Generator arch ids s ())
 a32InstructionMatcher (ARMDis.Instruction opc operands) =
     case opc of
+      -- FIXME: Add SVC case
       -- ARMDis.SVC -> case operands of
       --                 ARMDis.Pred _opPred ARMDis.:< ARMDis.Imm24b imm ARMDis.:< ARMDis.Nil ->
       --                     Just $ G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))

@@ -15,7 +15,7 @@ module Data.Macaw.ARM
     where
 
 import           Data.Macaw.ARM.Arch
-import           Data.Macaw.ARM.Disassemble ( disassembleFn, initialBlockRegs )
+import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
 import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn, isReturnValue )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
@@ -39,13 +39,14 @@ arm_linux_info =
     MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
-                        , MI.mkInitialRegsForBlock = initialBlockRegs
+                        , MI.extractBlockPrecond = extractBlockPrecond
+                        , MI.initialBlockRegs = initialBlockRegs
                         , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
                         , MI.mkInitialAbsState = mkInitialAbsState proxy
                         , MI.absEvalArchFn = absEvalArchFn proxy
                         , MI.absEvalArchStmt = absEvalArchStmt proxy
-                        , MI.postCallAbsState = error "TBD: postCallAbsState proxy"
                         , MI.identifyCall = identifyCall proxy
+                        , MI.archCallParams = callParams (preserveRegAcrossSyscall proxy)
                         , MI.checkForReturnAddr = \r s -> isReturnValue proxy s (r ^. MC.boundValue ARMReg.arm_LR)
                         , MI.identifyReturn = identifyReturn proxy
                         , MI.rewriteArchFn = rewritePrimFn
