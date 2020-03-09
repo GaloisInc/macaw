@@ -112,13 +112,14 @@ instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch)
                    -- matcher to run before falling back to the generic one
                    -> MapF.MapF a (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo a))
                    -> (Q Type, Q Type)
+                   -> M.Endianness
                    -> Q (Exp, [Dec])
-instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType = do
+instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType endianness = do
   ipVarName <- newName "_ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib
-  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType) (MapF.toList formulas)
+  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib endianness
+  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endianness) (MapF.toList formulas)
   (fallthruNm, unimp) <- unimplementedInstruction
   fallthroughCase <- match wildP (normalB (appE (varE fallthruNm) (varE opcodeVar))) []
   let allCases :: [Match]
@@ -159,8 +160,9 @@ libraryDefinitions :: (A.Architecture arch)
                    -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
                    -> Q Type
                    -> Library (Sym t fs)
+                   -> M.Endianness
                    -> Q ([Dec], String -> Maybe (MacawQ arch t fs Exp))
-libraryDefinitions ltr ena ae archType lib = do
+libraryDefinitions ltr ena ae archType lib endianness = do
   (decs, pairs) :: ([[Dec]], [(String, Name)])
     <- unzip <$> mapM translate (MapF.toList lib)
   let varMap :: Map.Map String Name
@@ -171,7 +173,7 @@ libraryDefinitions ltr ena ae archType lib = do
   return (concat decs, look)
   where
     translate (Pair.Pair _ ff@(FunctionFormula { ffName = name })) = do
-      (var, sig, def) <- translateFunction ltr ena ae archType ff
+      (var, sig, def) <- translateFunction ltr ena ae archType ff endianness
       return ([sig, def], (name, var))
 
 -- | Generate a single case for one opcode of the case expression.
@@ -193,9 +195,10 @@ mkSemanticsCase :: (LF.LiftF a, A.Architecture arch)
                 -> Name
                 -> Name
                 -> (Q Type, Q Type)
+                -> M.Endianness
                 -> MapF.Pair a (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo a))
                 -> Q (Match, (Dec, Dec))
-mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.Pair opc (Pair semantics capInfo)) =
+mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endianness (MapF.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
@@ -211,7 +214,7 @@ mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType (MapF.P
                               |]
        ofdef <- funD ofname
                  [clause [varP ipVarName, varP arg1Nm]
-                  (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo))
+                  (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo endianness))
                   []]
        mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (appE (varE ofname) (varE ipVarName)) (varE operandListVar))) []
        return (mtch, (ofsig, ofdef))
@@ -250,9 +253,10 @@ mkOperandListCase :: (A.Architecture arch)
                   -> a tp
                   -> ParameterizedFormula (Sym t fs) arch tp
                   -> DT.CaptureInfo a tp
+                  -> M.Endianness
                   -> Q Exp
-mkOperandListCase ltr ena ae df ipVarName operandListVar opc semantics capInfo = do
-  body <- genCaseBody ltr ena ae df ipVarName opc semantics (DT.capturedOperandNames capInfo)
+mkOperandListCase ltr ena ae df ipVarName operandListVar opc semantics capInfo endianness = do
+  body <- genCaseBody ltr ena ae df ipVarName opc semantics (DT.capturedOperandNames capInfo) endianness
   DT.genCase capInfo operandListVar body
 
 -- | This is the function that translates formulas (semantics) into expressions
@@ -276,10 +280,11 @@ genCaseBody :: forall a sh t fs arch
             -> a sh
             -> ParameterizedFormula (Sym t fs) arch sh
             -> SL.List (C.Const Name) sh
+            -> M.Endianness
             -> Q Exp
-genCaseBody ltr ena ae df ipVarName _opc semantics varNames = do
+genCaseBody ltr ena ae df ipVarName _opc semantics varNames endianness = do
   regsName <- newName "_regs"
-  translateFormula ltr ena ae df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames
+  translateFormula ltr ena ae df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames endianness
   where
     locVarsMap :: MapF.MapF (SI.BoundVar (Sym t fs)) (L.Location arch)
     locVarsMap = MapF.foldrWithKey (collectVarForLocation (Proxy @arch)) MapF.empty (pfLiteralVars semantics)
@@ -366,10 +371,11 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
+                   -> M.Endianness
                    -> Q Exp
-genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
+genExecInstruction _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType endianness = do
   logCfg <- runIO $ U.mkNonLogCfg
-  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
+  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg endianness
   runIO $ U.logEndWith logCfg
   addTopDecls decs
   return r
@@ -414,11 +420,12 @@ genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
+                   -> M.Endianness
                    -> Q Exp
-genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType = do
+genExecInstructionLogStdErr _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType endianness = do
   logCfg <- runIO $ U.mkLogCfg "genExecInstruction"
   logThread <- runIO $ U.asyncLinked (U.stdErrLogEventConsumer (const True) logCfg)
-  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg
+  (r, decs) <- genExecInstructionLogging (Proxy @arch) ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg endianness
   runIO $ U.logEndWith logCfg
   runIO $ Async.wait logThread
   addTopDecls decs
@@ -475,8 +482,10 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *)
                    -- the typical implicit expression because I don't
                    -- know how to pass implicits to TH splices
                    -- invocations.
+                   -> M.Endianness
+                   -- ^ Endianness for this instruction set.
                    -> Q (Exp, [Dec])
-genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg =
+genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg endianness =
     U.withLogCfg logcfg $ do
       Some ng <- runIO PN.newIONonceGenerator
       sym <- runIO (S.newSimpleBackend S.FloatIEEERepr ng)
@@ -485,7 +494,7 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo fun
       lib <- runIO (loadLibrary (Proxy @arch) sym env functions)
       formulas <- runIO (loadFormulas sym env lib semantics)
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
-      instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType
+      instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType endianness
         where
           attachInfo m0 (Some ci) m =
               let co = DT.capturedOpcode ci
@@ -521,8 +530,9 @@ translateFormula :: forall arch t fs sh .
                  -> ParameterizedFormula (Sym t fs) arch sh
                  -> BoundVarInterpretations arch t fs
                  -> SL.List (C.Const Name) sh
+                 -> M.Endianness
                  -> Q Exp
-translateFormula ltr ena ae df ipVarName semantics interps varNames = do
+translateFormula ltr ena ae df ipVarName semantics interps varNames endianness = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
   exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (MapF.toList (pfDefs semantics)))
   [| Just $(doSequenceQ preamble exps) |]
@@ -532,19 +542,19 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames = do
           case param of
             OperandParameter _w idx -> do
               let C.Const name = varNames SL.!! idx
-              newVal <- addEltTH interps expr
+              newVal <- addEltTH endianness interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
             LiteralParameter loc
-              | L.isMemoryLocation loc -> writeMemTH interps expr
+              | L.isMemoryLocation loc -> writeMemTH interps expr endianness
               | otherwise -> do
-                  valExp <- addEltTH interps expr
+                  valExp <- addEltTH endianness interps expr
                   appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> fail ("Function has no definition: " ++ str)
                 Just fi -> do
-                  valExp <- addEltTH interps expr
+                  valExp <- addEltTH endianness interps expr
                   appendStmt [| case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
                                    Just reg -> G.setRegVal (O.toRegister reg) $(return valExp)
                                    Nothing -> fail ("Invalid instruction form at " ++ show $(varE ipVarName) ++ " in " ++ $(litE (stringL str)))
@@ -557,8 +567,9 @@ translateFunction :: forall arch t fs args ret .
                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
                   -> Q Type
                   -> FunctionFormula (Sym t fs) '(args, ret)
+                  -> M.Endianness
                   -> Q (Name, Dec, Dec)
-translateFunction ltr ena ae archType ff = do
+translateFunction ltr ena ae archType ff endianness = do
   var <- newName ("_df_" ++ (ffName ff))
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
@@ -577,7 +588,7 @@ translateFunction ltr ena ae archType ff = do
         S.DefinedFnInfo _ e _ -> e
         _ -> error $ "expected a defined function; found " ++ show (ffDef ff)
   stmts <- runMacawQ ltr ena ae (const Nothing) $ do
-    val <- addEltTH interps expr
+    val <- addEltTH endianness interps expr
     appendStmt [| return $(return val) |]
   idsTy <- varT <$> newName "ids"
   sTy <- varT <$> newName "s"
@@ -598,22 +609,24 @@ translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
-    -- S.BaseStructRepr -> -- hard because List versus Assignment
+    CT.BaseIntegerRepr -> [t| M.BoolType |]
+    CT.BaseStructRepr _ -> [t| M.BoolType |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
 addEltTH :: forall arch t fs ctp .
             (A.Architecture arch)
-         => BoundVarInterpretations arch t fs
+         => M.Endianness
+         -> BoundVarInterpretations arch t fs
          -> S.Expr t ctp
          -> MacawQ arch t fs Exp
-addEltTH interps elt = do
+addEltTH endianness interps elt = do
   mexp <- lookupElt elt
   case mexp of
     Just e -> return e
     Nothing ->
       case elt of
         S.AppExpr appElt -> do
-          translatedExpr <- appToExprTH (S.appExprApp appElt) interps
+          translatedExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
         S.BoundVarExpr bVar
           | Just loc <- MapF.lookup bVar (locVars interps) ->
@@ -625,7 +638,7 @@ addEltTH interps elt = do
             bindExpr elt [| return $(varE name) |]
           | otherwise -> fail $ "bound var not found: " ++ show bVar
         S.NonceAppExpr n -> do
-          translatedExpr <- evalNonceAppTH interps (S.nonceExprApp n)
+          translatedExpr <- evalNonceAppTH endianness interps (S.nonceExprApp n)
           bindExpr elt (return translatedExpr)
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
@@ -641,12 +654,14 @@ symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 bvarName :: S.ExprBoundVar t tp -> String
 bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 
+-- FIXME: Endianness needs to be pulled out as a parameter
 writeMemTH :: forall arch t fs tp
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
            -> S.Expr t tp
+           -> M.Endianness
            -> MacawQ arch t fs ()
-writeMemTH bvi expr =
+writeMemTH bvi expr endianness =
   case expr of
     S.NonceAppExpr n ->
       case S.nonceExprApp n of
@@ -654,12 +669,14 @@ writeMemTH bvi expr =
           | Just memWidth <- matchWriteMemWidth (symFnName symFn) ->
             case FC.toListFC Some args of
               [_, Some addr, Some val] -> do
-                addrValExp <- addEltTH bvi addr
-                writtenValExp <- addEltTH bvi val
-                appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) M.BigEndian) $(return writtenValExp)) |]
+                addrValExp <- addEltTH endianness bvi addr
+                writtenValExp <- addEltTH endianness bvi val
+                appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) $(return writtenValExp)) |]
               _ -> fail ("Invalid memory write expression: " ++ showF expr)
-        _ -> fail ("Unexpected memory definition: " ++ showF expr)
-    _ -> fail ("Unexpected memory definition: " ++ showF expr)
+          -- FIXME
+        _ -> fail ("Unexpected memory definition -- not a function application.")
+    S.AppExpr _ -> fail ("Unexpected memory definition -- AppExpr.")
+    _ -> fail ("Unexpected memory definition -- not a NonceApp.")
 
 -- | Match a "write_mem" intrinsic and return the number of bytes written
 matchWriteMemWidth :: String -> Maybe Int
@@ -669,21 +686,23 @@ matchWriteMemWidth s = do
 
 evalNonceAppTH :: forall arch t fs tp
                 . (A.Architecture arch)
-               => BoundVarInterpretations arch t fs
+               => M.Endianness
+               -> BoundVarInterpretations arch t fs
                -> S.NonceApp t (S.Expr t) tp
                -> MacawQ arch t fs Exp
-evalNonceAppTH bvi nonceApp = do
+evalNonceAppTH endianness bvi nonceApp = do
   mtranslator <- withNonceAppEvaluator $ \evalNonceApp -> return (evalNonceApp bvi nonceApp)
   case mtranslator of
     Just translator -> translator
-    Nothing -> defaultNonceAppEvaluator bvi nonceApp
+    Nothing -> defaultNonceAppEvaluator endianness bvi nonceApp
 
 defaultNonceAppEvaluator :: forall arch t fs tp
                           . (A.Architecture arch)
-                         => BoundVarInterpretations arch t fs
+                         => M.Endianness
+                         -> BoundVarInterpretations arch t fs
                          -> S.NonceApp t (S.Expr t) tp
                          -> MacawQ arch t fs Exp
-defaultNonceAppEvaluator bvi nonceApp =
+defaultNonceAppEvaluator  endianness bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args
       | S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
@@ -691,7 +710,7 @@ defaultNonceAppEvaluator bvi nonceApp =
           funMaybe <- definedFunction fnName
           case funMaybe of
             Just fun -> do
-              argExprs <- sequence $ FC.toListFC (addEltTH bvi) args
+              argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
               return $ foldl AppE fun argExprs
             Nothing -> fail ("Unknown defined function: " ++ fnName)
       | otherwise -> do
@@ -704,25 +723,25 @@ defaultNonceAppEvaluator bvi nonceApp =
             "uf_clz_32" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
-                  locExp <- addEltTH bvi loc
+                  locExp <- addEltTH endianness bvi loc
                   liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @32) $(return locExp))) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_clz_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
-                  locExp <- addEltTH bvi loc
+                  locExp <- addEltTH endianness bvi loc
                   liftQ [| G.addExpr (G.AppExpr (M.Bsr (NR.knownNat @64) $(return locExp))) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_popcnt_32" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
-                  locExp <- addEltTH bvi loc
+                  locExp <- addEltTH endianness bvi loc
                   liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @32) $(return locExp))) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_popcnt_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
-                  locExp <- addEltTH bvi loc
+                  locExp <- addEltTH endianness bvi loc
                   liftQ [| G.addExpr (G.AppExpr (M.PopCount (NR.knownNat @64) $(return locExp))) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_undefined" -> do
@@ -736,8 +755,8 @@ defaultNonceAppEvaluator bvi nonceApp =
                     -- read_mem has a shape such that we expect two arguments; the
                     -- first is just a stand-in in the semantics to represent the
                     -- memory.
-                    addr <- addEltTH bvi addrElt
-                    liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) M.BigEndian
+                    addr <- addEltTH endianness bvi addrElt
+                    liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) endianness
                             in M.AssignedValue <$> G.addAssignment (M.ReadMem $(return addr) memRep)
                            |]
                   _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
@@ -774,28 +793,30 @@ asName ufName bvInterps elt =
     _ -> error ("Unexpected elt as name (" ++ showF elt ++ ") in " ++ ufName)
 
 appToExprTH :: (A.Architecture arch)
-            => S.App (S.Expr t) tp
+            => M.Endianness
+            -> S.App (S.Expr t) tp
             -> BoundVarInterpretations arch t fs
             -> MacawQ arch t fs Exp
-appToExprTH app interps = do
+appToExprTH endianness app interps = do
   mtranslator <- withAppEvaluator $ \evalApp -> return (evalApp interps app)
   case mtranslator of
     Just translator -> translator
-    Nothing -> defaultAppEvaluator app interps
+    Nothing -> defaultAppEvaluator endianness app interps
 
 defaultAppEvaluator :: (A.Architecture arch)
-                    => S.App (S.Expr t) ctp
+                    => M.Endianness
+                    -> S.App (S.Expr t) ctp
                     -> BoundVarInterpretations arch t fs
                     -> MacawQ arch t fs Exp
-defaultAppEvaluator elt interps = case elt of
+defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
-    e <- addEltTH interps bool
+    e <- addEltTH endianness interps bool
     liftQ [| return (G.AppExpr (M.NotApp $(return e))) |]
-  S.ConjPred boolmap -> evalBoolMap interps AndOp True boolmap
+  S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap
   S.BaseIte bt _ test t f -> do
-    testE <- addEltTH interps test
-    tE <- addEltTH interps t
-    fE <- addEltTH interps f
+    testE <- addEltTH endianness interps test
+    tE <- addEltTH endianness interps t
+    fE <- addEltTH endianness interps f
     case bt of
       CT.BaseBoolRepr -> liftQ [| return
                                   (G.AppExpr
@@ -821,37 +842,37 @@ defaultAppEvaluator elt interps = case elt of
       CT.BaseArrayRepr {} -> liftQ [| error "Macaw semantics for array ITE unsupported" |]
 
   S.BaseEq _bt bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.Eq $(return e1) $(return e2))) |]
   S.BVSlt bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.BVSignedLt $(return e1) $(return e2))) |]
   S.BVUlt bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.BVUnsignedLt $(return e1) $(return e2))) |]
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| TR.bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
-        e <- addEltTH interps bv
+        e <- addEltTH endianness interps bv
         liftQ [| TR.bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
       False -> do
-        e <- addEltTH interps bv
+        e <- addEltTH endianness interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
                    Just Refl -> return (G.ValueExpr $(return e))
                    Nothing -> error "Invalid reprs for BVSelect translation"
                |]
   S.BVTestBit idx bv -> do
-    bvValExp <- addEltTH interps bv
+    bvValExp <- addEltTH endianness interps bv
     liftQ [| G.AppExpr <$> (M.BVTestBit <$>
                             G.addExpr (G.ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))) <*>
                             pure $(return bvValExp)) |]
@@ -859,7 +880,7 @@ defaultAppEvaluator elt interps = case elt of
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
-        let smul mul e = do y <- addEltTH interps e
+        let smul mul e = do y <- addEltTH endianness interps e
                             liftQ [| return
                                      (G.AppExpr
                                       (M.BVMul $(natReprTH w)
@@ -873,7 +894,7 @@ defaultAppEvaluator elt interps = case elt of
                                 |]
         in WSum.evalM add smul sval sm
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
-        let smul mul e = do y <- addEltTH interps e
+        let smul mul e = do y <- addEltTH endianness interps e
                             liftQ [| return
                                      (G.AppExpr
                                       (M.BVAnd $(natReprTH w)
@@ -897,7 +918,7 @@ defaultAppEvaluator elt interps = case elt of
                            (M.BVMul $(natReprTH w) $(return x) $(return y)))
                         |]
             unit = liftQ [| return $ M.BVValue $(natReprTH w) 1 |]
-            convert = addEltTH interps
+            convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit return
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let pmul x y = liftQ
@@ -906,7 +927,7 @@ defaultAppEvaluator elt interps = case elt of
                            (M.BVAnd $(natReprTH w) $(return x) $(return y)))
                         |]
             unit = liftQ [| return (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
-            convert = addEltTH interps
+            convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit return
       _ -> liftQ [| error "unsupported SemiRingProd repr for macaw semmc TH" |]
 
@@ -914,7 +935,7 @@ defaultAppEvaluator elt interps = case elt of
     -- This is a TH Expr that is of type (Macaw) Value at run-time
     zero <- liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) 0)) |]
     -- These are all TH Exprs that are of the (Macaw) Value at run-time
-    bs' <- mapM (addEltTH interps) (S.bvOrToList bs)
+    bs' <- mapM (addEltTH endianness interps) (S.bvOrToList bs)
     let por x y = do
           liftQ [|  do y' <- G.addExpr =<< $(return y)
                        return (G.AppExpr (M.BVOr $(natReprTH w) $(return x) y'))
@@ -922,24 +943,29 @@ defaultAppEvaluator elt interps = case elt of
     F.foldrM por zero bs'
 
   S.BVShl w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.BVShl $(natReprTH w) $(return e1) $(return e2))) |]
   S.BVLshr w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.BVShr $(natReprTH w) $(return e1) $(return e2))) |]
   S.BVAshr w bv1 bv2 -> do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH endianness interps bv1
+    e2 <- addEltTH endianness interps bv2
     liftQ [| return (G.AppExpr (M.BVSar $(natReprTH w) $(return e1) $(return e2))) |]
   S.BVZext w bv -> do
-    e <- addEltTH interps bv
+    e <- addEltTH endianness interps bv
     liftQ [| return (G.AppExpr (M.UExt $(return e) $(natReprTH w))) |]
   S.BVSext w bv -> do
-    e <- addEltTH interps bv
+    e <- addEltTH endianness interps bv
     liftQ [| return (G.AppExpr (M.SExt $(return e) $(natReprTH w))) |]
-  _ -> error $ "unsupported Crucible elt:" ++ show elt
+
+  -- S.StructCtor tps flds -> do
+  --   es <- sequence $ FC.toListFC (addEltTH endianness interps) flds
+  
+  -- S.StructField fld ix ixTp -> error $ "struct fields unsupported"
+  _ -> liftQ [| error $ "unsupported Crucible elt" |]
 
 
 ----------------------------------------------------------------------
@@ -948,18 +974,19 @@ data BoolMapOp = AndOp | OrOp
 
 
 evalBoolMap :: A.Architecture arch =>
-               BoundVarInterpretations arch t fs
+               M.Endianness
+            -> BoundVarInterpretations arch t fs
             -> BoolMapOp
             -> Bool
             -> BooM.BoolMap (S.Expr t)
             -> MacawQ arch t fs Exp
-evalBoolMap interps op defVal bmap =
+evalBoolMap endianness interps op defVal bmap =
   case BooM.viewBoolMap bmap of
     BooM.BoolMapUnit ->     liftQ [| return (boolBase $(lift defVal)) |]
     BooM.BoolMapDualUnit -> liftQ [| return (bNotBase $(lift defVal)) |]
     BooM.BoolMapTerms ts ->
          do d <- liftQ [| return (boolBase $(lift defVal)) |]
-            F.foldl (joinBool interps op) (return d) ts
+            F.foldl (joinBool endianness interps op) (return d) ts
 
 
 boolBase, bNotBase :: A.Architecture arch => Bool -> G.Expr arch t 'M.BoolType
@@ -967,16 +994,17 @@ boolBase = G.ValueExpr . M.BoolValue
 bNotBase = boolBase . not
 
 joinBool :: A.Architecture arch =>
-            BoundVarInterpretations arch t fs
+            M.Endianness
+         -> BoundVarInterpretations arch t fs
          -> BoolMapOp
          -> MacawQ arch t fs Exp
          -> (S.Expr t SI.BaseBoolType, S.Polarity)
          -> MacawQ arch t fs Exp
-joinBool interps op e r =
+joinBool endianness interps op e r =
   do n <- case r of
-            (t, BooM.Positive) -> do p <- addEltTH interps t
+            (t, BooM.Positive) -> do p <- addEltTH endianness interps t
                                      liftQ [| return $(return p) |]
-            (t, BooM.Negative) -> do p <- addEltTH interps t
+            (t, BooM.Negative) -> do p <- addEltTH endianness interps t
                                      liftQ [| (G.addExpr =<< return (G.AppExpr (M.NotApp $(return p)))) |]
      j <- e
      case op of
