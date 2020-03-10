@@ -438,7 +438,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
         addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr)
 
     -- Generate code for Macaw block after entry
-    crucibleBlock <- addParsedBlock archFns blockLabelMap posFn regReg strippedBlock
+    crucibleBlock <- addParsedBlock archFns blockLabelMap [] posFn regReg strippedBlock
 
     -- (stubCrucibleBlocks,_) <- unzip <$>
     --   (forM (Map.elems stubMap)$ \c -> do
@@ -543,8 +543,8 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms = crucGenArchConstrain
           -- preserves the existing register state, which is important when
           -- generating the Crucible return.
           let retTerm = termStmtToReturn (M.pblockTermStmt block)
-          addMacawParsedTermStmt labelMap blockAddr retTerm
-        False -> addMacawParsedTermStmt labelMap blockAddr (M.pblockTermStmt block)
+          addMacawParsedTermStmt labelMap [] blockAddr retTerm
+        False -> addMacawParsedTermStmt labelMap [] blockAddr (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
   return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks))
   where
@@ -706,7 +706,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
         addStmt $ CR.Assume cond msg
 
         mapM_ (addMacawStmt block_addr) (M.pblockStmts block)
-        addMacawParsedTermStmt block_label_map block_addr (M.pblockTermStmt block)
+        addMacawParsedTermStmt block_label_map [] block_addr (M.pblockTermStmt block)
       pure (reverse (first_crucible_block:first_extra_crucible_blocks))
 
     pure (entry_label, init_crucible_block :
@@ -784,7 +784,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     -- Generate code for Macaw blocks after entry
     restCrucibleBlocks <-
       forM blockList $ \b -> do
-        addParsedBlock archFns blockLabelMap posFn regReg b
+        addParsedBlock archFns blockLabelMap (M.discoveredClassifyFailureResolutions fn) posFn regReg b
     -- Return initialization block followed by actual blocks.
     pure (entryLabel, initCrucibleBlock :
                         initExtraCrucibleBlocks ++ concat restCrucibleBlocks)
