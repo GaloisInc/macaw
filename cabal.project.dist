@@ -24,6 +24,7 @@ packages: macaw-ppc/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/
           deps/what4/what4/
+          deps/what4-serialize/
           deps/dwarf/
           deps/elf-edit/
           deps/flexdis86/
