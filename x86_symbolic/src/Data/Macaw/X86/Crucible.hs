@@ -461,6 +461,7 @@ divNatReprClasses :: M.RepValSize w
                   -> (( KnownNat w
                       , 1 <= w
                       , 1 <= w+w
+                      , w <= w+w
                       , w+1 <= w+w
                       ) => a)
                   -> a
@@ -787,8 +788,12 @@ bvShiftL :: (1 <= w, 1 <= i) =>
 bvShiftL w i vw vi = app (BVShl w vw amt)
   where amt = case testNatCases i w of
                 NatCaseEQ -> vi
-                NatCaseLT LeqProof -> app (BVZext w i vi)
-                NatCaseGT LeqProof -> app (BVTrunc w i vi)
+                NatCaseLT LeqProof -> case testLeq i w of
+                                        Just LeqProof -> app (BVZext w i vi)
+                                        Nothing -> error "bvShiftL/ext of improper sizes"
+                NatCaseGT LeqProof -> case testLeq w i of
+                                        Just LeqProof -> app (BVTrunc w i vi)
+                                        Nothing -> error "bvShiftL/trunc of improper sizes"
 
 
 
