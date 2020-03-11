@@ -41,15 +41,32 @@ module Main ( main ) where
 
 import           Control.Monad ( when )
 import qualified Data.Foldable as F
+import qualified Data.Macaw.BinaryLoader as MBL
+import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Discovery as MD
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Refinement as MR
+import qualified Data.Macaw.Symbolic as MS
+import qualified Data.Macaw.Symbolic.Memory as MSM
+import qualified Data.Macaw.Types as MT
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
+import qualified Data.Parameterized.Nonce as PN
+import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           Data.Semigroup ( (<>) )
 import qualified Data.Set as Set
-import           Data.Tagged
+import qualified Data.Tagged as DT
+import qualified Data.Text as T
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
+import qualified Lang.Crucible.Backend as CB
+import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified Lang.Crucible.CFG.Core as CCC
+import qualified Lang.Crucible.FunctionHandle as CFH
+import qualified Lang.Crucible.LLVM.DataLayout as CLD
+import qualified Lang.Crucible.LLVM.MemModel as CLM
+import qualified Lang.Crucible.Simulator as CS
 import           Options.Applicative
 import qualified System.Directory as SD
 import           System.FilePath ( (</>), (<.>) )
@@ -58,8 +75,12 @@ import qualified Test.Tasty as TT
 import qualified Test.Tasty.HUnit as TTH
 import           Test.Tasty.Ingredients as TI
 import           Test.Tasty.Options
-import           Text.Read ( readEither )
 import           Text.Printf ( printf )
+import           Text.Read ( readEither )
+import qualified What4.ProgramLoc as WPL
+import qualified What4.BaseTypes as WT
+import qualified What4.FunctionName as WF
+import qualified What4.Interface as WI
 
 import           Prelude
 
@@ -80,8 +101,8 @@ instance IsOption ShowSearch where
                       \refinement tests that would be performed\n\
                       \based on the contents of the " <> datadir <> " directory"
   optionCLParser = ShowSearch <$> switch
-                      ( long (untag (optionName :: Tagged ShowSearch String))
-                      <> help (untag (optionHelp :: Tagged ShowSearch String))
+                      ( long (DT.untag (optionName :: DT.Tagged ShowSearch String))
+                      <> help (DT.untag (optionHelp :: DT.Tagged ShowSearch String))
                       )
 
 data VerboseLogging = VerboseLogging Bool
@@ -92,8 +113,8 @@ instance IsOption VerboseLogging where
   parseValue = fmap VerboseLogging . safeRead
   optionName = pure "verbose-logging"
   optionHelp = pure "Turn on verbose logging output"
-  optionCLParser = VerboseLogging <$> switch ( long (untag (optionName :: Tagged VerboseLogging String))
-                                             <> help (untag (optionHelp :: Tagged VerboseLogging String))
+  optionCLParser = VerboseLogging <$> switch ( long (DT.untag (optionName :: DT.Tagged VerboseLogging String))
+                                             <> help (DT.untag (optionHelp :: DT.Tagged VerboseLogging String))
                                              )
 
 
@@ -102,7 +123,7 @@ instance IsOption VerboseLogging where
 searchResultsReport :: TI.Ingredient
 searchResultsReport = TestManager [] $ \opts _tests ->
   if lookupOption opts == ShowSearch True
-  then Just $ do searchlist <- getTestList datadir True
+  then Just $ do searchlist <- getConcreteTestList datadir True
                  putStrLn ""
                  putStrLn $ "Final set of tests [" ++ show (length searchlist) ++ "]:"
                  mapM_ (putStrLn . show) searchlist
@@ -134,10 +155,14 @@ main = do
   -- available for this; see:
   -- https://stackoverflow.com/questions/33040722
   -- https://github.com/feuerbach/tasty/issues/228
-  testInputs <- getTestList datadir False
+  concreteTestInputs <- getConcreteTestList datadir False
+  symbolicTestInputs <- getSymbolicTestList datadir False
   -- let testNames = Set.fromList (map name testInputs)
+  let tests = concat [ map mkTest concreteTestInputs
+                     , map mkSymbolicTest symbolicTestInputs
+                     ]
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "macaw-refinement" $ (map mkTest testInputs)
+    TT.testGroup "macaw-refinement" tests
 
 data TestInput = TestInput { binaryFilePath :: FilePath
                            , expectedFilePath :: FilePath
@@ -148,8 +173,8 @@ data TestInput = TestInput { binaryFilePath :: FilePath
 -- driven by the existence of a .[F-]expected file, for which there
 -- should be a corresponding .exe.  The exe and expected files are
 -- sub-named by the architecture (A) to which they apply.
-getTestList :: FilePath -> Bool -> IO [TestInput]
-getTestList basedir explain = do
+getConcreteTestList :: FilePath -> Bool -> IO [TestInput]
+getConcreteTestList basedir explain = do
   when explain $ putStrLn $ "Checking for test inputs in " <> (basedir </> "*.exe")
 
   -- Find all of the executables we have available
@@ -166,6 +191,20 @@ getTestList basedir explain = do
                                         }
         False -> return Nothing
 
+getSymbolicTestList :: FilePath -> Bool -> IO [TestInput]
+getSymbolicTestList basedir explain = do
+  when explain $ putStrLn ("Checking for symbolic test inputs in " <> (basedir </> "*.symex"))
+  exeNames <- FPG.namesMatching (basedir </> "*.exe")
+  catMaybes <$> mapM findExpectedFiles exeNames
+  where
+    findExpectedFiles exeName = do
+      let expected = exeName <.> "symex"
+      SD.doesFileExist expected >>= \case
+        True -> return $ Just TestInput { binaryFilePath = exeName
+                                        , expectedFilePath = expected
+                                        }
+        False -> return Nothing
+
 -- Refinement configuration for the test suite
 testOptions :: Bool -> FilePath -> Options
 testOptions verb file = Options { inputFile = file
@@ -179,11 +218,14 @@ testOptions verb file = Options { inputFile = file
                                 , timeoutSeconds = 60
                                 }
 
+-- | Test that macaw-refinement can find all of the expected jump targets
+--
+-- Jump targets are provided in .expected files that are 'read' in.
 mkTest :: TestInput -> TT.TestTree
 mkTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
-    withElf opts $ \archInfo bin _unrefinedDI -> do
+    withElf opts $ \_ archInfo bin _unrefinedDI -> do
       withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
         let actual = blockAddresses refinedDI
         expectedInput <- readFile (expectedFilePath testinp)
@@ -205,3 +247,75 @@ mkTest testinp = do
                     let msg = printf "Found an unexpected block in the binary at 0x%x in function 0x%x" actualBlockAddr faddr
                     TTH.assertBool msg (Set.member actualBlockAddr expectedAddrSet)
 
+posFn :: (MC.MemWidth (MC.ArchAddrWidth arch)) => proxy arch -> MC.MemSegmentOff (MC.ArchAddrWidth arch) -> WPL.Position
+posFn _ = WPL.OtherPos . T.pack . show
+
+-- | This test is similar to 'mkTest', but instead of checking the set of
+-- recovered blocks, it translates the function into Crucible using
+-- macaw-symbolic and symbolically executes it.
+--
+-- This test is fairly simple in that it isn't checking any interesting
+-- property, but only that the simulator does not error out due to unresolved
+-- control flow.
+mkSymbolicTest :: TestInput -> TT.TestTree
+mkSymbolicTest testinp = do
+  TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
+    let opts = testOptions beVerbose (binaryFilePath testinp)
+    halloc <- CFH.newHandleAllocator
+    Some gen <- PN.newIONonceGenerator
+    sym <- CBS.newSimpleBackend CBS.FloatRealRepr gen
+    expectedInput <- readFile (expectedFilePath testinp)
+    let symExecFuncAddrs :: Set.Set Word64
+        Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
+    withElf opts $ \proxy archInfo bin _unrefinedDI -> do
+      withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
+        let Just archVals = MS.archVals proxy
+        let archFns = MS.archFunctions archVals
+        let mem = MBL.memoryImage bin
+        F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
+          let Just funcAddr = fromIntegral <$> MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi)
+          case Set.member funcAddr symExecFuncAddrs of
+            False -> return ()
+            True -> do
+              let funcName = WF.functionNameFromText (T.pack ("target@" ++ show (MD.discoveredFunAddr dfi)))
+              printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
+              CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
+              regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
+              -- FIXME: We probably need to pull endianness from somewhere else
+              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
+              let globalMap = MSM.mapRegionPointers memPtrTbl
+              let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
+                    error "Could not find function handle"
+              let validityCheck _ _ _ _ = return Nothing
+              MS.withArchEval archVals sym $ \archEvalFns -> do
+                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn validityCheck cfg regs
+                case res of
+                  CS.FinishedResult _ (CS.TotalRes _) -> return ()
+                  CS.FinishedResult _ (CS.PartialRes {}) -> return ()
+                  CS.AbortedResult _ ares ->
+                    case ares of
+                      CS.AbortedExec rsn _ -> TTH.assertFailure ("Symbolic execution aborted: " ++ show rsn)
+                      CS.AbortedExit {} -> TTH.assertFailure "Symbolic execution exited"
+                      CS.AbortedBranch {} -> return ()
+                  CS.TimeoutResult {} -> TTH.assertFailure "Symbolic execution timed out"
+
+-- | Allocate a fresh value for a machine register
+--
+-- Only Bool and BV types are supported
+mkReg :: (CB.IsSymInterface sym, MT.HasRepr (MC.ArchReg arch) MT.TypeRepr)
+      => MS.MacawSymbolicArchFunctions arch
+      -> sym
+      -> MC.ArchReg arch tp
+      -> IO (CS.RegValue' sym (MS.ToCrucibleType tp))
+mkReg archFns sym r =
+  case MT.typeRepr r of
+    MT.BoolTypeRepr ->
+      CS.RV <$> WI.freshConstant sym (MS.crucGenArchRegName archFns r) WT.BaseBoolRepr
+    MT.BVTypeRepr w ->
+      CS.RV <$> (CLM.llvmPointer_bv sym =<< WI.freshConstant sym (MS.crucGenArchRegName archFns r) (WT.BaseBVRepr w))
+    MT.TupleTypeRepr{}  ->
+      error "macaw-symbolic do not support tuple types."
+    MT.FloatTypeRepr{}  ->
+      error "macaw-symbolic do not support float types."
+    MT.VecTypeRepr{}  ->
+      error "macaw-symbolic do not support vector types."

@@ -150,11 +150,13 @@ test-suite test-refinements
                , macaw-x86
                , macaw-x86-symbolic
                , crucible
+               , crucible-llvm
                , what4
                , optparse-applicative >= 0.13 && < 0.16
                , parameterized-utils
                , QuickCheck >= 2.7
                , semmc-ppc
+               , text
                , tagged
                , tasty
                , tasty-hspec

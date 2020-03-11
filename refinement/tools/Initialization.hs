@@ -22,6 +22,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.Map as M
+import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text.Prettyprint.Doc as PP
 import qualified Lumberjack as LJ
 import qualified System.IO as IO
@@ -53,7 +54,7 @@ instance X.Exception InitError
 --
 -- The continuation has access to all of the intermediate results of the process
 withElf :: Options
-        -> (forall arch binFmt . (16 <= MC.ArchAddrWidth arch, SymArchConstraints arch, MBL.BinaryLoader arch binFmt) => AI.ArchitectureInfo arch -> MBL.LoadedBinary arch binFmt -> MD.DiscoveryState arch -> IO a)
+        -> (forall arch binFmt . (16 <= MC.ArchAddrWidth arch, SymArchConstraints arch, MBL.BinaryLoader arch binFmt) => Proxy arch -> AI.ArchitectureInfo arch -> MBL.LoadedBinary arch binFmt -> MD.DiscoveryState arch -> IO a)
         -> IO a
 withElf opts k = do
   bs <- BS.readFile (inputFile opts)
@@ -83,17 +84,18 @@ withElf opts k = do
           withLoadedBinary k archInfo bin
         m -> X.throwM (UnsupportedArchitecture m)
 
-withLoadedBinary :: ( MBL.BinaryLoader arch binFmt
+withLoadedBinary :: forall arch binFmt m a
+                  . ( MBL.BinaryLoader arch binFmt
                     , X.MonadThrow m
                     )
-                 => (AI.ArchitectureInfo arch -> MBL.LoadedBinary arch binFmt -> MD.DiscoveryState arch -> m a)
+                 => (Proxy arch -> AI.ArchitectureInfo arch -> MBL.LoadedBinary arch binFmt -> MD.DiscoveryState arch -> m a)
                  -> AI.ArchitectureInfo arch
                  -> MBL.LoadedBinary arch binFmt
                  -> m a
 withLoadedBinary k archInfo bin = do
   entries <- F.toList <$> MBL.entryPoints bin
   let dstate0 = MD.cfgFromAddrs archInfo (MBL.memoryImage bin) M.empty entries []
-  k archInfo bin dstate0
+  k (Proxy @arch) archInfo bin dstate0
 
 newtype Refine arch a = Refine { runRefine_ :: MR.ReaderT (Env arch) IO a }
   deriving ( Functor
