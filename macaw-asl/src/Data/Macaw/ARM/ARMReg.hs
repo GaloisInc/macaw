@@ -128,7 +128,8 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
       syscallArgumentRegs = error "TODO: MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
+armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
+          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
