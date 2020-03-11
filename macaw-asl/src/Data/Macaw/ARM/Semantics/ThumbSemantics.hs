@@ -19,21 +19,22 @@ import           Data.Macaw.SemMC.Generator ( Generator )
 import           Data.Macaw.SemMC.TH ( genExecInstructionLogStdErr )
 import qualified Data.Macaw.Types as MT
 import           Data.Proxy ( Proxy(..) )
-import           Dismantle.Thumb -- as ThumbDis -- must be present to supply definitions for genExecInstruction output
+import           Dismantle.ARM.T32 -- as ThumbDis -- must be present to supply definitions for genExecInstruction output
 import qualified SemMC.Architecture.AArch32 as ARMSem
-import           SemMC.Architecture.ARM.Opcodes ( allT32Semantics, allT32OpcodeInfo, t32DefinedFunctions )
+import           SemMC.Architecture.ARM.Opcodes ( allT32Semantics, allT32OpcodeInfo, allDefinedFunctions )
 
 
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
-                -> Dismantle.Thumb.Instruction
+                -> Instruction
                 -> Maybe (Generator ARMSem.AArch32 ids s ())
-execInstruction = $(genExecInstructionLogStdErr (Proxy @ARMSem.AArch32)
-                    (locToRegTH (Proxy @ARMSem.AArch32))
-                    armNonceAppEval
-                    armAppEvaluator
-                    't32InstructionMatcher
-                    allT32Semantics
-                    allT32OpcodeInfo
-                    t32DefinedFunctions
-                    ([t| Dismantle.Thumb.Operand |], [t| ARMSem.AArch32 |])
-                   )
+-- execInstruction = $(genExecInstructionLogStdErr (Proxy @ARMSem.AArch32)
+--                     (locToRegTH (Proxy @ARMSem.AArch32))
+--                     armNonceAppEval
+--                     armAppEvaluator
+--                     't32InstructionMatcher
+--                     allT32Semantics
+--                     allT32OpcodeInfo
+--                     t32DefinedFunctions
+--                     ([t| Dismantle.Thumb.Operand |], [t| ARMSem.AArch32 |])
+--                    )
+execInstruction _ _ = Just (return ())

@@ -24,13 +24,13 @@ import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as Map
+import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import qualified SemMC.Architecture as A
-import qualified SemMC.Architecture.ARM.Eval as AE
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified SemMC.Architecture.Location as L
 import qualified What4.Expr.Builder as S
@@ -47,9 +47,7 @@ import qualified What4.Expr.Builder as S
 -- the caller will try the set of default Application evaluators.
 armNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
-                    L.Location arch ~ Loc.Location arch,
-                    1 <= Loc.ArchRegWidth arch,
-                    M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
+                    L.Location arch ~ Loc.Location arch)
                 => BoundVarInterpretations arch t fs
                 -> S.NonceApp t (S.Expr t) tp
                 -> Maybe (MacawQ arch t fs Exp)
@@ -60,44 +58,10 @@ armNonceAppEval bvi nonceApp =
     -- beyond that needed here, so just handle special cases here
     case nonceApp of
       S.FnApp symFn args ->
-          let nm = symFnName symFn
-          in case nm of
-               "uf_arm_is_r15" -> return $
-                   -- This requires special handling because this can
-                   -- be checking actual GPR locations or the results
-                   -- of an expression extracting a register number
-                   -- from an operand (i.e. a NonceAppExpr), and the
-                   -- appropriate interpIsR15 instance should be
-                   -- applied to the result
-                   case FC.toListFC Some args of
-                     [Some operand] -> do
-                       -- The operand can be either a variable (TH name bound from
-                       -- matching on the instruction operand list) or a call on such.
-                       case operand of
-                         S.BoundVarExpr bv ->
-                             case (Map.lookup bv (locVars bvi), Map.lookup bv (opVars bvi)) of
-                               (Just _, Just _) -> fail ("arm_is_r15 bound var is location and operand: " ++ show bv)
-                               (Just loc, Nothing) -> withLocToReg $ \locToReg ->
-                                 liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 (armRegToGPR $(locToReg loc))) |]
-                               (Nothing, Just (C.Const name)) -> liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 $(varE name)) |]
-                               (Nothing, Nothing) -> fail ("arm_is_r15 bound var not found: " ++ show bv)
-                         S.NonceAppExpr nonceApp' ->
-                             case S.nonceExprApp nonceApp' of
-                               S.FnApp symFn' args' ->
-                                   let recName = symFnName symFn' in
-                                   case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
-                                     Nothing -> fail ("Unsupported arm_is_r15 UF: " ++ recName)
-                                     Just fi ->
-                                         case FC.toListFC (asName nm bvi) args' of
-                                           [] -> fail ("zero-argument arm_is_r15 uninterpreted functions\
-                                                       \ are not supported: " ++ nm)
-                                           argNames ->
-                                               let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
-                                               in liftQ [| return $ O.extractValue $(varE (regsValName bvi)) (AE.interpIsR15 ($(call))) |]
-                               _ -> fail ("Unsupported arm.is_r15 nonce app type")
-                         _ -> fail "Unsupported operand to arm.is_r15"
-                     _ -> fail ("Invalid argument list for arm.is_r15: " ++ showF args)
-               _ -> Nothing -- fallback to default handling
+        let fnName = symFnName symFn
+            in case fnName of
+                 "uf_UNDEFINED_bitvector_1" ->
+                   Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH (knownNat @1)))) |]
       _ -> Nothing -- fallback to default handling
 
 
@@ -114,19 +78,17 @@ addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.
 
 
 armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
-                    A.Architecture arch,
-                    1 <= Loc.ArchRegWidth arch,
-                    M.RegAddrWidth ARMReg ~ Loc.ArchRegWidth arch)
+                    A.Architecture arch)
                 => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp
                 -> Maybe (MacawQ arch t fs Exp)
 armAppEvaluator interps elt =
     case elt of
-      S.BVUrem w bv1 bv2 -> return $ do
-                              e1 <- addEltTH interps bv1
-                              e2 <- addEltTH interps bv2
-                              liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
-                                     |]
+      -- S.BVUrem w bv1 bv2 -> return $ do
+      --                         e1 <- addEltTH interps bv1
+      --                         e2 <- addEltTH interps bv2
+      --                         liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
+      --                                |]
       -- S.NoPrimKnown w rhs -> return $ do e1 <- addEltTH interps rhs
       --                                   liftQ [| let npkExp = NoPrimKnown $(natReprTH w) $(return e1)
       --                                            in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn noPrimKnown (M.typeRepr noPrimKnown))
