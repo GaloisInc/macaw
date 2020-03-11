@@ -1444,7 +1444,7 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
           setMachineRegs =<< createRegStruct regs
           addIPSwitch blockLabelMap targets (regs ^. M.boundValue M.ip_reg)
       | otherwise -> do
-          msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack $ "Could not identify block at " ++ show thisAddr
+          msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions)
           addTermStmt $ CR.ErrorStmt msgVal
 
 -- | This is like 'addSwitch', but for unstructured indirect control flow
