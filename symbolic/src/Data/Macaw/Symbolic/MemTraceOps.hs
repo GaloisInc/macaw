@@ -14,7 +14,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
-module Data.Macaw.Symbolic.MemOps2 where
+module Data.Macaw.Symbolic.MemTraceOps where
 
 import           Control.Applicative
 import           Control.Lens ((%~), (&), (^.))
@@ -69,8 +69,8 @@ data MemOp sym ptrW where
     MemOp sym ptrW
   MergeOps ::
     Pred sym ->
-    MemImpl2 sym ptrW ->
-    MemImpl2 sym ptrW ->
+    MemTraceImpl sym ptrW ->
+    MemTraceImpl sym ptrW ->
     MemOp sym ptrW
 
 instance Eq (MemOpCondition (ExprBuilder t st fs)) where
@@ -86,30 +86,29 @@ instance Eq (MemOp (ExprBuilder t st fs) ptrW) where
   MergeOps p opsT opsF == MergeOps p' opsT' opsF' = p == p' && opsT == opsT' && opsF == opsF'
   _ == _ = False
 
--- TODO: how about "trace memory model"-based naming instead of "2"-based naming?
-type MemImpl2 sym ptrW = Seq (MemOp sym ptrW)
-type Mem2 arch = IntrinsicType "Abstract_memory" (EmptyCtx ::> BVType (ArchAddrWidth arch))
+type MemTraceImpl sym ptrW = Seq (MemOp sym ptrW)
+type MemTrace arch = IntrinsicType "Abstract_memory" (EmptyCtx ::> BVType (ArchAddrWidth arch))
 
-memRepr2 :: (KnownNat (ArchAddrWidth arch), 1 <= ArchAddrWidth arch) => TypeRepr (Mem2 arch)
-memRepr2 = knownRepr
+memTraceRepr :: (KnownNat (ArchAddrWidth arch), 1 <= ArchAddrWidth arch) => TypeRepr (MemTrace arch)
+memTraceRepr = knownRepr
 
 instance IntrinsicClass (ExprBuilder t st fs) "Abstract_memory" where
   -- TODO: cover other cases with a TypeError
-  type Intrinsic (ExprBuilder t st fs) "Abstract_memory" (EmptyCtx ::> BVType ptrW) = MemImpl2 (ExprBuilder t st fs) ptrW
+  type Intrinsic (ExprBuilder t st fs) "Abstract_memory" (EmptyCtx ::> BVType ptrW) = MemTraceImpl (ExprBuilder t st fs) ptrW
   muxIntrinsic _ _ _ (Empty :> BVRepr _) p l r = pure $ case Seq.spanl (uncurry (==)) (Seq.zip l r) of
     (_, Seq.Empty) -> l
     (eqs, Seq.unzip -> (l', r')) -> (fst <$> eqs) Seq.:|> MergeOps p l' r'
 
-type MacawEvalStmtFunc sym arch = EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-type GlobalMap2 sym arch = sym -> MemImpl2 sym (ArchAddrWidth arch) -> RegValue sym NatType -> RegValue sym (BVType (ArchAddrWidth arch)) -> IO (Maybe (LLVMPtr sym (ArchAddrWidth arch)))
-type MacawArchEvalFn2 sym arch = GlobalVar (Mem2 arch) -> GlobalMap2 sym arch -> EvalStmtFunc (MacawArchStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
+type MacawTraceEvalStmtFunc sym arch = EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
+type TraceGlobalMap sym arch = sym -> MemTraceImpl sym (ArchAddrWidth arch) -> RegValue sym NatType -> RegValue sym (BVType (ArchAddrWidth arch)) -> IO (Maybe (LLVMPtr sym (ArchAddrWidth arch)))
+type MacawTraceArchEvalFn sym arch = GlobalVar (MemTrace arch) -> TraceGlobalMap sym arch -> EvalStmtFunc (MacawArchStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 
 execMacawStmtExtension ::
   forall sym arch t st fs. (IsSymInterface sym, KnownNat (ArchAddrWidth arch), sym ~ ExprBuilder t st fs) =>
-  MacawArchEvalFn2 sym arch ->
-  GlobalVar (Mem2 arch) ->
-  GlobalMap2 sym arch ->
-  MacawEvalStmtFunc sym arch
+  MacawTraceArchEvalFn sym arch ->
+  GlobalVar (MemTrace arch) ->
+  TraceGlobalMap sym arch ->
+  MacawTraceEvalStmtFunc sym arch
 execMacawStmtExtension archStmtFn mvar globs stmt
   = case stmt of
     MacawReadMem addrWidth memRepr addr
@@ -281,7 +280,7 @@ doReadMem ::
   AddrWidthRepr ptrW ->
   LLVMPtr sym ptrW ->
   MemRepr ty ->
-  StateT (MemImpl2 sym ptrW) IO (RegValue sym (ToCrucibleType ty))
+  StateT (MemTraceImpl sym ptrW) IO (RegValue sym (ToCrucibleType ty))
 doReadMem sym ptrWidth ptr memRepr = do
   val <- liftIO $ freshRegValue sym ptr memRepr
   doMemOpInternal sym Read Unconditional ptrWidth ptr val memRepr
@@ -295,7 +294,7 @@ doCondReadMem ::
   AddrWidthRepr ptrW ->
   LLVMPtr sym ptrW ->
   MemRepr ty ->
-  StateT (MemImpl2 sym ptrW) IO (RegValue sym (ToCrucibleType ty))
+  StateT (MemTraceImpl sym ptrW) IO (RegValue sym (ToCrucibleType ty))
 doCondReadMem sym cond def ptrWidth ptr memRepr = do
   val <- liftIO $ freshRegValue sym ptr memRepr
   doMemOpInternal sym Read (Conditional cond) ptrWidth ptr val memRepr
@@ -308,7 +307,7 @@ doWriteMem ::
   LLVMPtr sym ptrW ->
   RegValue sym (ToCrucibleType ty) ->
   MemRepr ty ->
-  StateT (MemImpl2 sym ptrW) IO ()
+  StateT (MemTraceImpl sym ptrW) IO ()
 doWriteMem sym = doMemOpInternal sym Write Unconditional
 
 doCondWriteMem ::
@@ -319,7 +318,7 @@ doCondWriteMem ::
   LLVMPtr sym ptrW ->
   RegValue sym (ToCrucibleType ty) ->
   MemRepr ty ->
-  StateT (MemImpl2 sym ptrW) IO ()
+  StateT (MemTraceImpl sym ptrW) IO ()
 doCondWriteMem sym cond = doMemOpInternal sym Write (Conditional cond)
 
 freshRegValue :: forall sym ptrW ty.
@@ -357,9 +356,9 @@ doMemOpInternal :: forall sym ptrW ty.
   LLVMPtr sym ptrW ->
   RegValue sym (ToCrucibleType ty) ->
   MemRepr ty ->
-  StateT (MemImpl2 sym ptrW) IO ()
+  StateT (MemTraceImpl sym ptrW) IO ()
 doMemOpInternal sym dir cond ptrWidth = go where
-  go :: LLVMPtr sym ptrW -> RegValue sym (ToCrucibleType ty') -> MemRepr ty' -> StateT (MemImpl2 sym ptrW) IO ()
+  go :: LLVMPtr sym ptrW -> RegValue sym (ToCrucibleType ty') -> MemRepr ty' -> StateT (MemTraceImpl sym ptrW) IO ()
   go ptr@(LLVMPointer reg off) regVal = \case
     BVMemRepr byteWidth endianness -> logOp $ MemOp ptr dir cond bitWidth regVal endianness
       where bitWidth = natMultiply (knownNat @8) byteWidth
@@ -394,7 +393,7 @@ iteDeep sym cond t f = \case
   PackedVecMemRepr countRepr recRepr -> V.generateM (fromInteger (intValue countRepr)) $ \i ->
     iteDeep sym cond (t V.! i) (f V.! i) recRepr
 
-logOp :: (MonadState (MemImpl2 sym ptrW) m) => MemOp sym ptrW -> m ()
+logOp :: (MonadState (MemTraceImpl sym ptrW) m) => MemOp sym ptrW -> m ()
 logOp op = modify (Seq.:|> op)
 
 addrWidthsArePositive :: AddrWidthRepr w -> (1 <= w => a) -> a

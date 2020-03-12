@@ -34,7 +34,7 @@ library
     Data.Macaw.Symbolic.CrucGen
     Data.Macaw.Symbolic.PersistentState
     Data.Macaw.Symbolic.MemOps
-    Data.Macaw.Symbolic.MemOps2
+    Data.Macaw.Symbolic.MemTraceOps
 
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
