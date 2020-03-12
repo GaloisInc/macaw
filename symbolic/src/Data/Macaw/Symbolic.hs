@@ -538,6 +538,26 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
     let label = case Map.lookup blockAddr labelMap of
           Just lbl -> lbl
           Nothing -> error ("Missing block label for block at " ++ show blockAddr)
+
+    -- Below, we are going to call addMacawParsedTermStmt to convert the final
+    -- instruction in this macaw block into an edge in the CFG. Under normal
+    -- circumstances, this happens by keeping a static map from addresses (that
+    -- are the targets of jumps) to CFG nodes, and passing that map as ane of
+    -- the arguments.
+    --
+    -- We are going to corrupt that mechanism slightly. We want to allow
+    -- callers to break cycles in the CFG by converting some jumps into returns
+    -- instead, and the API we've chosen for specifying which jumps is by
+    -- identifying source block/target block pairs whose edges we should drop
+    -- from the CFG to break the cycles. Right here is where we implement that
+    -- breakage. The way we do it is by changing the map from targets to nodes
+    -- differently depending on which source block we are currently
+    -- interpreting.
+    --
+    -- So: lookupRetEdges builds an override Map which points some of the
+    -- possible target blocks at a special CFG node that just returns
+    -- immediately. Then labelMapWithReturns has the usual static map, but with
+    -- those targets overridden appropriately.
     let labelMapWithReturns = Map.union (lookupRetEdges blockAddr) labelMap
     (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
