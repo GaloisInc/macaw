@@ -12,11 +12,11 @@ cabal-version: >= 2.0
                
 description:
   The refinement library provides supplemental functionality for
-  discovery of elements that macaw-symbolic is not able to discover
+  discovery of elements that macaw-base is not able to discover
   via pattern matching.  This library will use crucible symbolic
   analysis to attempt to determine elements that could not be
-  identified by macaw-symbolic.  The identification provided by
-  macaw-symbolic is incomplete, and so is the identification by this
+  identified by macaw-base.  The identification provided by
+  macaw-base is incomplete, and so is the identification by this
   macaw-refinement, but macaw-refinement attempts to additionally
   "refine" the analysis to achieve even more information which can
   then be provided back to the macaw analysis.
@@ -64,13 +64,21 @@ library
                , prettyprinter
                , text
                , what4 >= 0.4.0
+               , scheduler >= 1.4 && < 1.5
+               , async
+               , lumberjack >= 0.1 && < 0.2
+               , unliftio-core >= 0.2 && < 0.3
+               , exceptions >= 0.10 && < 0.11
+               , haggle
 
   hs-source-dirs: src
 
   exposed-modules: Data.Macaw.Refinement
 
   other-modules: Data.Macaw.Refinement.FuncBlockUtils
+                 Data.Macaw.Refinement.Logging
                  Data.Macaw.Refinement.Path
+                 Data.Macaw.Refinement.Solver
                  Data.Macaw.Refinement.Target
                  Data.Macaw.Refinement.SymbolicExecution
                  Data.Macaw.Refinement.UnknownTransfer
@@ -83,8 +91,9 @@ library
 executable run-refinement
   hs-source-dirs: tools
   main-is:        run-refinement.hs
+  other-modules: Summary, Options, Initialization
   default-language: Haskell2010
-  ghc-options: -Wall -Wcompat
+  ghc-options: -Wall -Wcompat -rtsopts -threaded
   build-depends: base >= 4
                , bytestring
                , containers
@@ -106,14 +115,20 @@ executable run-refinement
                , prettyprinter
                , semmc-ppc
                , text
+               , what4
+               , crucible
+               , mtl
+               , lumberjack
+               , unliftio-core
 
 test-suite test-refinements
   type: exitcode-stdio-1.0
   buildable: True
   default-language: Haskell2010
-  GHC-options: -Wall -Werror -Wcompat
-  hs-source-dirs: tests
+  GHC-options: -Wall -Wcompat
+  hs-source-dirs: tests, tools
   main-is: RefinementTests.hs
+  other-modules: Summary, Initialization, Options
   build-depends: base >= 4
                , ansi-wl-pprint
                , bytestring
@@ -134,11 +149,19 @@ test-suite test-refinements
                , macaw-symbolic
                , macaw-x86
                , macaw-x86-symbolic
-               , optparse-applicative >= 0.13 && < 0.15
+               , crucible
+               , crucible-llvm
+               , what4
+               , optparse-applicative >= 0.13 && < 0.16
                , parameterized-utils
                , QuickCheck >= 2.7
                , semmc-ppc
+               , text
                , tagged
                , tasty
                , tasty-hspec
                , tasty-hunit
+               , prettyprinter
+               , mtl
+               , lumberjack
+               , unliftio-core

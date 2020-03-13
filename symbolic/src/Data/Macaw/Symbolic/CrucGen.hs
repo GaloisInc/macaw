@@ -75,6 +75,8 @@ module Data.Macaw.Symbolic.CrucGen
   , getRegValue
   , bvLit
   , archAddrWidth
+  , evalAtom
+  , crucibleValue
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -82,6 +84,7 @@ import           Control.Monad.Except
 import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
 import           Data.Bits
+import qualified Data.Foldable as F
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M
@@ -1381,11 +1384,17 @@ type BlockLabelMap arch s = Map (M.ArchSegmentOff arch) (CR.Label s)
 
 addMacawParsedTermStmt :: BlockLabelMap arch s
                           -- ^ Block label map for this function
+                       -> [(M.ArchSegmentOff arch, [M.ArchSegmentOff arch])]
+                       -- ^ ClassifyFailure resolutions discovered from external
+                       -- means (attached to the DiscoveryFunInfo if available)
+                       --
+                       -- The keys are the addresses of the blocks that have
+                       -- resolved ClassifyFailures
                        -> M.ArchSegmentOff arch
                           -- ^ Address of this block
                        -> M.ParsedTermStmt arch ids
                        -> CrucGen arch ids s ()
-addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
+addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
  archFns <- translateFns <$> get
  crucGenArchConstraints archFns $ do
   case tstmt of
@@ -1430,9 +1439,82 @@ addMacawParsedTermStmt blockLabelMap thisAddr tstmt = do
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt $ CR.ErrorStmt msgVal
-    M.ClassifyFailure _regs _failureReasons -> do
-      msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack $ "Could not identify block at " ++ show thisAddr
-      addTermStmt $ CR.ErrorStmt msgVal
+    M.ClassifyFailure regs _failureReasons
+      | Just targets <- lookup thisAddr externalResolutions -> do
+          setMachineRegs =<< createRegStruct regs
+          addIPSwitch blockLabelMap targets (regs ^. M.boundValue M.ip_reg)
+      | otherwise -> do
+          msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions)
+          addTermStmt $ CR.ErrorStmt msgVal
+
+-- | This is like 'addSwitch', but for unstructured indirect control flow
+--
+-- The 'addSwitch' function handles jump tables that are indexed by a bitvector
+-- (i.e., the 'M.ArchAddrValue' in 'addSwitch').  This variant is different hand
+-- handles indirect control flow that does not go through a jump table (or goes
+-- through a jump table that the static pattern matching in macaw could not
+-- handle).
+--
+-- In this case, the possible target addresses are in the @targets@ parameter.
+-- We construct a tree of if-then-else branches that check the computed IP
+-- address of the jump and jump to the corresponding block if there is a match.
+-- If there is no match, it turns into a simulator error statement.  The error
+-- could be hit if the macaw analysis was incorrect.
+addIPSwitch :: forall arch s ids
+             . BlockLabelMap arch s
+            -> [M.ArchSegmentOff arch]
+            -- ^ The possible branch targets
+            -> M.Value arch ids (M.BVType (M.ArchAddrWidth arch))
+            -- ^ The IP we are branching to
+            -> CrucGen arch ids s ()
+addIPSwitch blockLabelMap targets macaw_ip = do
+  archFns <- translateFns <$> get
+  crucGenArchConstraints archFns $ do
+    p <- getPos
+    -- Convert the current IP value (taken from the reg state at the terminator)
+    -- into a Crucible value
+    ipVal <- v2c macaw_ip
+    let chain :: ( [CR.Stmt (MacawExt arch) s]
+                 , CR.TermStmt s (MacawFunctionResult arch)
+                 )
+              -> M.ArchSegmentOff arch
+              -> CrucGen arch ids s
+                 ( [CR.Stmt (MacawExt arch) s]
+                 , CR.TermStmt s (MacawFunctionResult arch)
+                 )
+        chain (elseStmts, elseTerm) thenAddr = do
+          elseLbl <- CR.Label <$> freshValueIndex
+          let elseBlock = CR.mkBlock (CR.LabelID elseLbl) Set.empty
+                             (Seq.fromList (map (C.Posd p) elseStmts))
+                             (C.Posd p elseTerm)
+          addExtraBlock elseBlock
+
+          let widthRepr = M.addrWidthRepr (Proxy @(M.ArchAddrWidth arch))
+          let width = M.addrWidthNatRepr widthRepr
+          let bvRepr = C.BVRepr width
+          let ptrRepr = MM.LLVMPointerRepr width
+          eqAtom <- mkAtom C.BoolRepr
+          ptrBitsAtom <- mkAtom bvRepr
+          ptrAtom <- mkAtom ptrRepr
+
+          let targetLbl = parsedBlockLabel blockLabelMap thenAddr
+          let Just bvAddr = M.segoffAsAbsoluteAddr thenAddr
+          -- Make a Crucible instruction sequence that compares the current IP
+          -- against a possible target taken from the input list.
+          return ( [ CR.DefineAtom ptrBitsAtom $ CR.EvalApp $ C.BVLit width (toInteger bvAddr)
+                   , CR.DefineAtom ptrAtom $ CR.EvalApp $ C.ExtensionApp $ BitsToPtr width ptrBitsAtom
+                   , CR.DefineAtom eqAtom $ CR.EvalExt $ PtrEq widthRepr ipVal ptrAtom
+                   ]
+                 , CR.Br eqAtom targetLbl elseLbl
+                 )
+
+    errAtom <- mkAtom (C.StringRepr C.UnicodeRepr)
+    let finalStmts = [ CR.DefineAtom errAtom $ CR.EvalApp $ C.StringLit $ C.UnicodeLiteral "IP target not recovered for jump table"
+                     ]
+    let finalTermStmt = CR.ErrorStmt errAtom
+    (stmts, termStmt) <- F.foldlM chain (finalStmts, finalTermStmt) targets
+    mapM_ addStmt stmts
+    addTermStmt termStmt
 
 addSwitch :: forall arch s ids
            . BlockLabelMap arch s
@@ -1527,13 +1609,15 @@ addParsedBlock :: forall arch ids s
                .  MacawSymbolicArchFunctions arch
                -> BlockLabelMap arch s
                -- ^ Map from block index to Crucible label
+               -> [(M.ArchSegmentOff arch, [M.ArchSegmentOff arch])]
+               -- ^ External resolutions to ClassifyFailures
                -> (M.ArchSegmentOff arch -> C.Position)
                -- ^ Function for generating position from offset from start of this block.
                -> CR.Reg s (ArchRegStruct arch)
                     -- ^ Register that stores Macaw registers
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock archFns blockLabelMap posFn regReg macawBlock = do
+addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock = do
   crucGenArchConstraints archFns $ do
   let base = M.pblockAddr macawBlock
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
@@ -1549,7 +1633,7 @@ addParsedBlock archFns blockLabelMap posFn regReg macawBlock = do
   (b,bs) <-
     runCrucGen archFns thisPosFn lbl regReg $ do
       mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
-      addMacawParsedTermStmt blockLabelMap startAddr (M.pblockTermStmt macawBlock)
+      addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
 
 traverseArchStateUpdateMap :: (Applicative m)

@@ -37,7 +37,6 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.exploreMemPointers
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
        , Data.Macaw.Discovery.addDiscoveredFunctionBlockTargets
-       , Data.Macaw.Discovery.BlockTermRewriter
          -- * Top level utilities
        , Data.Macaw.Discovery.completeDiscoveryState
        , DiscoveryOptions(..)
@@ -48,6 +47,7 @@ module Data.Macaw.Discovery
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
        , State.discoveredFunName
+       , State.discoveredClassifyFailureResolutions
        , State.parsedBlocks
          -- * Parsed block
        , State.ParsedBlock
@@ -326,10 +326,16 @@ data FunState arch s ids
                 -- affected its abstract state.
               , _frontier    :: !(Set (ArchSegmentOff arch))
                 -- ^ Addresses to explore next.
-              , termStmtRewriter :: forall src tgt .
-                                    (ArchSegmentOff arch ->
-                                     TermStmt arch tgt ->
-                                     Rewriter arch s src tgt (TermStmt arch tgt))
+              , classifyFailureResolutions :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                -- ^ The first element of each pair is the block (ending in a
+                -- 'ClassifyFailure') for which the second element provides a
+                -- list of known jump targets. These inform the initial
+                -- frontier, but also need to be preserved as a side mapping
+                -- when we construct the 'DiscoveryFunInfo'.
+                --
+                -- These resolutions are provided by external data (e.g.,
+                -- another code discovery engine or SMT) and help resolve
+                -- control flow that macaw cannot understand.
               }
 
 -- | Discovery info
@@ -816,6 +822,9 @@ data ParseContext arch ids =
                  -- ^ Address of function containing this block.
                , pctxAddr           :: !(ArchSegmentOff arch)
                  -- ^ Address of the current block
+               , pctxExtResolution :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                 -- ^ Externally-provided resolutions for classification
+                 -- failures, which are used in parseFetchAndExecute
                }
 
 -- | Get the memory representation associated with pointers in the
@@ -1327,9 +1336,28 @@ tailCallClassifier = classifierName "Tail call" $ do
                           , newFunctionAddrs = identifyCallTargets mem (classifierAbsState bcc) (classifierFinalRegState bcc)
                           }
 
+useExternalTargets :: ( OrdF (ArchReg arch)
+                      , RegisterInfo (ArchReg arch)
+                      )
+                   => BlockClassifierContext arch ids
+                   -> Maybe [IntraJumpTarget arch]
+useExternalTargets bcc = do
+  let ctx = classifierParseContext bcc
+  let finalRegs = classifierFinalRegState bcc
+  let jmpBounds = classifierJumpBounds bcc
+  let absState = classifierAbsState bcc
+  let initRegs = classifierInitRegState bcc
+  let ipVal = initRegs ^. boundValue ip_reg
+  ipAddr <- valueAsSegmentOff (pctxMemory ctx) ipVal
+  targets <- lookup ipAddr (pctxExtResolution ctx)
+  let blockState = finalAbsBlockState absState finalRegs
+  let nextInitJmpBounds = Jmp.postJumpBounds jmpBounds finalRegs
+  return [ (tgt, blockState, nextInitJmpBounds) | tgt <- targets ]
+
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
-                     .  ParseContext arch ids
+                     .  (RegisterInfo (ArchReg arch))
+                     => ParseContext arch ids
                      -> RegState (ArchReg arch) (Value arch ids)
                         -- ^ Initial register values
                      -> [Stmt arch ids]
@@ -1364,7 +1392,7 @@ parseFetchAndExecute ctx initRegs stmts finalRegs absState jmpBounds writtenAddr
       ParsedContents { parsedNonterm = stmts
                      , parsedTerm  = ClassifyFailure finalRegs rsns
                      , writtenCodeAddrs = writtenAddrs
-                     , intraJumpTargets = []
+                     , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []
                      }
 
@@ -1438,7 +1466,8 @@ addBlock src finfo pr = do
   (_,b) <- do
     let archStmt = rewriteArchStmt ainfo
     let secAddrMap = memSectionIndexMap mem
-    termStmt <- gets termStmtRewriter <*> pure src
+    let rw = \_ -> pure
+    termStmt <- pure rw <*> pure src
     liftST $ do
       ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
       rewriteBlock ainfo ctx b0
@@ -1446,6 +1475,7 @@ addBlock src finfo pr = do
   b <- pure b0
 #endif
 
+  extRes <- gets classifyFailureResolutions
   funAddr <- gets curFunAddr
 
   let ctx = ParseContext { pctxMemory         = memory s
@@ -1453,6 +1483,7 @@ addBlock src finfo pr = do
                          , pctxKnownFnEntries = s^.trustedFunctionEntryPoints
                          , pctxFunAddr        = funAddr
                          , pctxAddr           = src
+                         , pctxExtResolution  = extRes
                          }
   let pc = parseBlock ctx initRegs b (foundAbstractState finfo) (foundJumpBounds finfo)
   let pb = ParsedBlock { pblockAddr    = src
@@ -1524,8 +1555,9 @@ mkFunState :: NonceGenerator (ST s) ids
               -- This can be used to figure out why we decided a
               -- given address identified a code location.
            -> ArchSegmentOff arch
+           -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
            -> FunState arch s ids
-mkFunState gen s rsn addr = do
+mkFunState gen s rsn addr extraIntraTargets = do
   let faddr = FoundAddr { foundReason = FunctionEntryPoint
                         , foundAbstractState = mkInitialAbsState (archInfo s) (memory s) addr
                         , foundJumpBounds    = withArchConstraints (archInfo s) $ Jmp.functionStartBounds
@@ -1537,8 +1569,8 @@ mkFunState gen s rsn addr = do
                , _curFunBlocks = Map.empty
                , _foundAddrs = Map.singleton addr faddr
                , _reverseEdges = Map.empty
-               , _frontier   = Set.singleton addr
-               , termStmtRewriter = \_ -> pure
+               , _frontier   = Set.fromList [ addr ]
+               , classifyFailureResolutions = extraIntraTargets
                }
 
 mkFunInfo :: FunState arch s ids -> DiscoveryFunInfo arch ids
@@ -1549,6 +1581,7 @@ mkFunInfo fs =
                        , discoveredFunAddr = addr
                        , discoveredFunSymbol = Map.lookup addr (symbolNames s)
                        , _parsedBlocks = fs^.curFunBlocks
+                       , discoveredClassifyFailureResolutions = classifyFailureResolutions fs
                        }
 
 -- | This analyzes the function at a given address, possibly
@@ -1571,7 +1604,7 @@ analyzeFunction :: (ArchSegmentOff arch -> ST s ())
 analyzeFunction logFn addr rsn s =
   case Map.lookup addr (s^.funInfo) of
     Just finfo -> pure (s, finfo)
-    Nothing -> runFunctionAnalysis logFn addr rsn s id
+    Nothing -> runFunctionAnalysis logFn addr rsn s []
 
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
@@ -1602,27 +1635,16 @@ analyzeDiscoveredFunctions info =
 -- -> new addresses) and the new addresses will be added to the
 -- frontier for additional discovery.
 addDiscoveredFunctionBlockTargets :: DiscoveryState arch
-                                  -> ArchSegmentOff arch
-                                  -- ^ Address of Function containing
-                                  -- source block to be modified
-                                  -> (forall s src tgt . BlockTermRewriter arch s src tgt)
+                                  -> DiscoveryFunInfo arch ids
+                                  -- ^ The function for which we have learned additional information
+                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
                                   -> DiscoveryState arch
-addDiscoveredFunctionBlockTargets info funAddr termRewriter =
-  let rsn = case Map.lookup funAddr (info^.funInfo) of
-              Just (Some finfo) -> discoveredFunReason finfo
-              Nothing -> BlockTargetEnhancement
-  in fst $ runST (runFunctionAnalysis
-                  (\_ -> pure ())
-                  funAddr rsn info
-                  (\s -> s { termStmtRewriter = termRewriter }))
-
--- | This is the type of the callback used for rewriting TermStmts
--- during discovery (e.g. as used by
--- 'addDiscoveredFunctionBlockTargets')
-type BlockTermRewriter arch s src tgt =
-     ArchSegmentOff arch  -- ^ address of the current block
-  -> TermStmt arch tgt    -- ^ existing TermStmt for this block
-  -> Rewriter arch s src tgt (TermStmt arch tgt)
+addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
+  let rsn = discoveredFunReason origFunInfo
+      funAddr = discoveredFunAddr origFunInfo
+  in fst $ runST (runFunctionAnalysis (\_ -> pure ())
+                                      funAddr rsn initState
+                                      resolvedTargets)
 
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.
@@ -1635,12 +1657,14 @@ runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- given address identified a code location.
                     -> DiscoveryState arch
                     -- ^ The current binary information.
-                    -> (forall ids. FunState arch s ids -> FunState arch s ids)
-                    -- ^ Enhance initial FunState prior to analysis
+                    -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                    -- ^ Additional identified intraprocedural jump targets
+                    --
+                    -- The pairs are: (address of the block jumped from, jump targets)
                     -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-runFunctionAnalysis logFn addr rsn s initStateMod = do
+runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
   Some gen <- newSTNonceGenerator
-  let fs0 = initStateMod $ mkFunState gen s rsn addr
+  let fs0 = mkFunState gen s rsn addr extraIntraTargets
   fs <- analyzeBlocks logFn fs0
   let finfo = mkFunInfo fs
   let s' = (fs^.curFunCtx)
@@ -1809,7 +1833,6 @@ ppFunReason rsn =
     PossibleWriteEntry a -> " (written at " ++ show a ++ ")"
     CallTarget a -> " (called at " ++ show a ++ ")"
     CodePointerInMem a -> " (in initial memory at " ++ show a ++ ")"
-    BlockTargetEnhancement -> "updating block transfer targets in existing function"
 
 -- | Explore until we have found all functions we can.
 --
