@@ -62,6 +62,7 @@ armNonceAppEval bvi nonceApp =
             in case fnName of
                  "uf_UNDEFINED_bitvector_1" ->
                    Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH (knownNat @1)))) |]
+                 _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
 
