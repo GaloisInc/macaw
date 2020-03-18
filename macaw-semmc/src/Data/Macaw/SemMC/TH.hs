@@ -57,7 +57,7 @@ import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.Pair as Pair
-import           Data.Parameterized.Some ( Some(..) )
+import           Data.Parameterized.Some ( Some(..), viewSome )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Lang.Crucible.Backend.Simple as S
 import qualified What4.BaseTypes as CT
@@ -154,7 +154,7 @@ unimplementedInstruction = do
 -- | Create a function declaration for each function in the library.
 -- Generates the declarations and a lookup function to use to generate
 -- calls.
-libraryDefinitions :: (A.Architecture arch)
+libraryDefinitions :: forall arch t fs . A.Architecture arch
                    => (forall tp . L.Location arch tp -> Q Exp)
                    -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
                    -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
@@ -163,18 +163,28 @@ libraryDefinitions :: (A.Architecture arch)
                    -> M.Endianness
                    -> Q ([Dec], String -> Maybe (MacawQ arch t fs Exp))
 libraryDefinitions ltr ena ae archType lib endianness = do
-  (decs, pairs) :: ([[Dec]], [(String, Name)])
-    <- unzip <$> mapM translate (MapF.toList lib)
-  let varMap :: Map.Map String Name
-                -- Would use a MapF (Const String) (Const Name), but there's no
-                -- OrdF instance for Const
-      varMap = Map.fromList pairs
-      look name = (liftQ . varE) <$> Map.lookup name varMap
-  return (concat decs, look)
+  -- First, construct map for all function names
+  let ffs = MapF.elems lib
+  varMap :: Map.Map String Name <- Map.fromList <$> traverse fnName ffs
+
+  -- Create lookup functions for names and calls
+  let lookupName name = Map.lookup name varMap
+      lookupCall name = (liftQ . varE) <$> lookupName name
+  decs <- traverse (translate lookupName lookupCall) (MapF.elems lib)
+  return (concat decs, lookupCall)
   where
-    translate (Pair.Pair _ ff@(FunctionFormula { ffName = name })) = do
-      (var, sig, def) <- translateFunction ltr ena ae archType ff endianness
-      return ([sig, def], (name, var))
+    fnName :: Some (FunctionFormula (Sym t fs)) -> Q (String, Name)
+    fnName (Some ff@(FunctionFormula { ffName = name })) = do
+      var <- newName ("_df_" ++ name)
+      return (name, var)
+
+    translate :: (String -> Maybe Name)
+              -> (String -> Maybe (MacawQ arch t fs Exp))
+              -> Some (FunctionFormula (Sym t fs))
+              -> Q [Dec]
+    translate lookupName lookupCall (Some ff@(FunctionFormula {})) = do
+      (var, sig, def) <- translateFunction ltr ena ae lookupName lookupCall archType ff endianness
+      return [sig, def]
 
 -- | Generate a single case for one opcode of the case expression.
 -- Generates two parts: the case match, which calls a function to
@@ -492,6 +502,7 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo fun
       runIO (S.startCaching sym)
       env <- runIO (formulaEnv (Proxy @arch) sym)
       lib <- runIO (loadLibrary (Proxy @arch) sym env functions)
+      -- runIO (traverse print (MapF.keys lib))
       formulas <- runIO (loadFormulas sym env lib semantics)
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
       instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType endianness
@@ -565,12 +576,17 @@ translateFunction :: forall arch t fs args ret .
                   => (forall tp . L.Location arch tp -> Q Exp)
                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+                  -> (String -> Maybe Name)
+                  -- ^ names of all functions that we might call
+                  -> (String -> Maybe (MacawQ arch t fs Exp))
                   -> Q Type
                   -> FunctionFormula (Sym t fs) '(args, ret)
                   -> M.Endianness
                   -> Q (Name, Dec, Dec)
-translateFunction ltr ena ae archType ff endianness = do
-  var <- newName ("_df_" ++ (ffName ff))
+translateFunction ltr ena ae fnName df archType ff endianness = do
+  let var = case fnName (ffName ff) of
+        Nothing -> error $ "undefined function " ++ ffName ff
+        Just var -> var
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
   let argVarMap :: MapF.MapF (SI.BoundVar (Sym t fs)) (C.Const Name)
@@ -587,7 +603,7 @@ translateFunction ltr ena ae archType ff endianness = do
       expr = case S.symFnInfo (ffDef ff) of
         S.DefinedFnInfo _ e _ -> e
         _ -> error $ "expected a defined function; found " ++ show (ffDef ff)
-  stmts <- runMacawQ ltr ena ae (const Nothing) $ do
+  stmts <- runMacawQ ltr ena ae df $ do
     val <- addEltTH endianness interps expr
     appendStmt [| return $(return val) |]
   idsTy <- varT <$> newName "ids"
