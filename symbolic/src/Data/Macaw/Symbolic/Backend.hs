@@ -64,8 +64,8 @@ type EvalStmtFunc f p sym ext =
 -- architecture-specific backends - client code should not need to construct
 -- values of this type, and instead should obtain values of this type from the
 -- 'withArchEval' function.
-newtype MacawArchEvalFn sym arch =
-  MacawArchEvalFn (C.GlobalVar MM.Mem -> MO.GlobalMap sym (M.ArchAddrWidth arch) -> EvalStmtFunc (CG.MacawArchStmtExtension arch) (MO.MacawSimulatorState sym) sym (CG.MacawExt arch))
+newtype MacawArchEvalFn sym mem arch =
+  MacawArchEvalFn (C.GlobalVar mem -> MO.GlobalMap sym mem (M.ArchAddrWidth arch) -> EvalStmtFunc (CG.MacawArchStmtExtension arch) (MO.MacawSimulatorState sym) sym (CG.MacawExt arch))
 
 -- $archBackend
 --

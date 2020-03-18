@@ -124,7 +124,7 @@ stmtSemantics
   :: IsSymInterface sym
   => SymFuns sym
   -> C.GlobalVar Mem
-  -> GlobalMap sym (M.ArchAddrWidth M.X86_64)
+  -> GlobalMap sym Mem (M.ArchAddrWidth M.X86_64)
   -> M.X86Stmt (AtomWrapper (RegEntry sym))
   -> S sym rtp bs r ctx
   -> IO (RegValue sym UnitType, S sym rtp bs r ctx)

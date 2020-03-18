@@ -104,6 +104,7 @@ module Data.Macaw.Symbolic
     -- $simulationExample
   , SymArchConstraints
   , macawExtensions
+  , macawTraceExtensions
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
   , MO.MacawSimulatorState(..)
@@ -128,6 +129,7 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Vector as V
 
+import qualified What4.Expr.Builder as W4E
 import qualified What4.FunctionName as C
 import           What4.Interface
 import           What4.InterpretedFloatingPoint as C
@@ -161,6 +163,7 @@ import qualified Data.Macaw.Symbolic.Backend as SB
 import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
+import qualified Data.Macaw.Symbolic.MemTraceOps as MT
 
 
 -- | A class to capture the architecture-specific information required to
@@ -186,11 +189,21 @@ data ArchVals arch = ArchVals
       :: forall a m sym
        . (IsSymInterface sym, MonadIO m)
       => sym
-      -> (SB.MacawArchEvalFn sym arch -> m a)
+      -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
       -> m a
   -- ^ This function provides a context with a callback that gives access to the
   -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
   -- is a required argument for 'macawExtensions'.
+  , withArchEvalTrace
+      :: forall a m sym
+       . (IsSymInterface sym, MonadIO m)
+      => sym
+      -> (SB.MacawArchEvalFn sym (MT.MemTrace arch) arch -> m a)
+      -> m a
+  -- ^ This function provides a context with a callback that gives access to the
+  -- set of architecture-specific function evaluators ('MacawArchEvalTraceFn')
+  -- that trace memory operations, which is a required argument for
+  -- 'macawTraceExtensions'.
   , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
   -- ^ This function captures the constraints necessary to invoke the symbolic
   -- simulator on a Crucible CFG generated from macaw.
@@ -986,11 +999,11 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
 execMacawStmtExtension
   :: forall sym arch
   . (IsSymInterface sym)
-  => SB.MacawArchEvalFn sym arch
+  => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The distinguished global variable holding the current state of the memory model
-  -> MO.GlobalMap sym (M.ArchAddrWidth arch)
+  -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ The translation from machine words to LLVM memory model pointers
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
@@ -1053,12 +1066,12 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
 -- | Return macaw extension evaluation functions.
 macawExtensions
   :: IsSymInterface sym
-  => SB.MacawArchEvalFn sym arch
+  => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The Crucible global variable containing the current state of the memory
   -- model
-  -> GlobalMap sym (M.ArchAddrWidth arch)
+  -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ A function that maps bitvectors to valid memory model pointers
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
@@ -1069,6 +1082,20 @@ macawExtensions f mvar globs lookupH =
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH
                   }
 
+-- | Like 'macawExtensions', but with an alternative memory model that records
+-- memory operations without trying to carefully guess the results of
+-- performing them.
+macawTraceExtensions ::
+  (IsSymInterface sym, KnownNat (M.ArchAddrWidth arch), sym ~ W4E.ExprBuilder t st fs) =>
+  SB.MacawArchEvalFn sym (MT.MemTrace arch) arch ->
+  C.GlobalVar (MT.MemTrace arch) ->
+  GlobalMap sym (MT.MemTrace arch) (M.ArchAddrWidth arch) ->
+  C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
+macawTraceExtensions archStmtFn mvar globs = C.ExtensionImpl
+  { C.extensionEval = evalMacawExprExtension
+  , C.extensionExec = MT.execMacawStmtExtension archStmtFn mvar globs
+  }
+
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
@@ -1076,9 +1103,9 @@ runCodeBlock
   => sym
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
-  -> SB.MacawArchEvalFn sym arch
+  -> SB.MacawArchEvalFn sym MM.Mem arch
   -> C.HandleAllocator
-  -> (MM.MemImpl sym, GlobalMap sym (M.ArchAddrWidth arch))
+  -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)

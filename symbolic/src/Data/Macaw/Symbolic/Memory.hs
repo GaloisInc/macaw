@@ -348,7 +348,7 @@ mapRegionPointers :: ( MC.MemWidth w
                      )
                   => MemPtrTable sym w
                   -> CL.LLVMPtr sym w
-                  -> MS.GlobalMap sym w
+                  -> MS.GlobalMap sym CL.Mem w
 mapRegionPointers mpt default_ptr = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
     Just 0 -> mapBitvectorToLLVMPointer mpt sym mem offsetVal default_ptr

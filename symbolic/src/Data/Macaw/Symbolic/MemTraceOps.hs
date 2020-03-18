@@ -27,22 +27,25 @@ import           GHC.TypeNats (type (<=), KnownNat)
 import           Numeric
 
 import Data.Macaw.CFG.AssignRhs (ArchAddrWidth, MemRepr(..))
-import Data.Macaw.Memory (AddrWidthRepr(..), Endianness, addrWidthNatRepr)
+import Data.Macaw.Memory (AddrWidthRepr(..), Endianness, addrWidthClass, addrWidthNatRepr)
 import Data.Macaw.Symbolic.Backend (EvalStmtFunc, MacawArchEvalFn(..))
 import Data.Macaw.Symbolic.CrucGen (MacawArchStmtExtension, MacawStmtExtension(..), MacawExt)
-import Data.Macaw.Symbolic.MemOps (LookupFunctionHandle(..), MacawSimulatorState(..))
+import Data.Macaw.Symbolic.MemOps (LookupFunctionHandle(..), GlobalMap, MacawSimulatorState(..), doGetGlobal)
 import Data.Macaw.Symbolic.PersistentState (ToCrucibleType)
 import Data.Parameterized.Context (pattern (:>), pattern Empty)
+import qualified Data.Parameterized.Map as MapF
+import Data.Text (pack)
 import Lang.Crucible.Backend (IsSymInterface, LabeledPred(..), assert)
-import Lang.Crucible.CFG.Common (GlobalVar)
+import Lang.Crucible.CFG.Common (GlobalVar, freshGlobalVar)
+import Lang.Crucible.FunctionHandle (HandleAllocator)
 import Lang.Crucible.LLVM.MemModel (LLVMPointerType, LLVMPtr, pattern LLVMPointer, llvmPointer_bv)
-import Lang.Crucible.Simulator.ExecutionTree (CrucibleState, actFrame, gpGlobals, stateSymInterface, stateTree)
+import Lang.Crucible.Simulator.ExecutionTree (CrucibleState, ExtensionImpl(..), actFrame, gpGlobals, stateSymInterface, stateTree)
 import Lang.Crucible.Simulator.GlobalState (insertGlobal, lookupGlobal)
-import Lang.Crucible.Simulator.Intrinsics (IntrinsicClass(..))
+import Lang.Crucible.Simulator.Intrinsics (IntrinsicClass(..), IntrinsicMuxFn(..), IntrinsicTypes)
 import Lang.Crucible.Simulator.RegMap (RegEntry(..))
 import Lang.Crucible.Simulator.RegValue (RegValue)
 import Lang.Crucible.Simulator.SimError (SimErrorReason(..))
-import Lang.Crucible.Types ((::>), BoolType, BVType, EmptyCtx, IntrinsicType, NatType, TypeRepr(BVRepr))
+import Lang.Crucible.Types ((::>), BoolType, BVType, EmptyCtx, IntrinsicType, NatType, SymbolRepr, TypeRepr(BVRepr), knownSymbol)
 import What4.Concrete (ConcreteVal(..))
 import What4.Expr.Builder (ExprBuilder)
 import What4.Interface -- (NatRepr, knownRepr, BaseTypeRepr(..), SolverSymbol, userSymbol, freshConstant, natLit)
@@ -87,29 +90,40 @@ instance Eq (MemOp (ExprBuilder t st fs) ptrW) where
   _ == _ = False
 
 type MemTraceImpl sym ptrW = Seq (MemOp sym ptrW)
-type MemTrace arch = IntrinsicType "Abstract_memory" (EmptyCtx ::> BVType (ArchAddrWidth arch))
+type MemTrace arch = IntrinsicType "memory_trace" (EmptyCtx ::> BVType (ArchAddrWidth arch))
 
 memTraceRepr :: (KnownNat (ArchAddrWidth arch), 1 <= ArchAddrWidth arch) => TypeRepr (MemTrace arch)
 memTraceRepr = knownRepr
 
-instance IntrinsicClass (ExprBuilder t st fs) "Abstract_memory" where
+mkMemTraceVar ::
+  forall arch.
+  (KnownNat (ArchAddrWidth arch), 1 <= ArchAddrWidth arch) =>
+  HandleAllocator ->
+  IO (GlobalVar (MemTrace arch))
+mkMemTraceVar ha = freshGlobalVar ha (pack "llvm_memory_trace") knownRepr
+
+instance IntrinsicClass (ExprBuilder t st fs) "memory_trace" where
   -- TODO: cover other cases with a TypeError
-  type Intrinsic (ExprBuilder t st fs) "Abstract_memory" (EmptyCtx ::> BVType ptrW) = MemTraceImpl (ExprBuilder t st fs) ptrW
+  type Intrinsic (ExprBuilder t st fs) "memory_trace" (EmptyCtx ::> BVType ptrW) = MemTraceImpl (ExprBuilder t st fs) ptrW
   muxIntrinsic _ _ _ (Empty :> BVRepr _) p l r = pure $ case Seq.spanl (uncurry (==)) (Seq.zip l r) of
     (_, Seq.Empty) -> l
     (eqs, Seq.unzip -> (l', r')) -> (fst <$> eqs) Seq.:|> MergeOps p l' r'
 
+memTraceIntrinsicTypes :: IsSymInterface (ExprBuilder t st fs) => IntrinsicTypes (ExprBuilder t st fs)
+memTraceIntrinsicTypes = id
+  . MapF.insert (knownSymbol :: SymbolRepr "memory_trace") IntrinsicMuxFn
+  . MapF.insert (knownSymbol :: SymbolRepr "LLVM_pointer") IntrinsicMuxFn
+  $ MapF.empty
+
 type MacawTraceEvalStmtFunc sym arch = EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-type TraceGlobalMap sym arch = sym -> MemTraceImpl sym (ArchAddrWidth arch) -> RegValue sym NatType -> RegValue sym (BVType (ArchAddrWidth arch)) -> IO (Maybe (LLVMPtr sym (ArchAddrWidth arch)))
-type MacawTraceArchEvalFn sym arch = GlobalVar (MemTrace arch) -> TraceGlobalMap sym arch -> EvalStmtFunc (MacawArchStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 
 execMacawStmtExtension ::
   forall sym arch t st fs. (IsSymInterface sym, KnownNat (ArchAddrWidth arch), sym ~ ExprBuilder t st fs) =>
-  MacawTraceArchEvalFn sym arch ->
+  MacawArchEvalFn sym (MemTrace arch) arch ->
   GlobalVar (MemTrace arch) ->
-  TraceGlobalMap sym arch ->
+  GlobalMap sym (MemTrace arch) (ArchAddrWidth arch) ->
   MacawTraceEvalStmtFunc sym arch
-execMacawStmtExtension archStmtFn mvar globs stmt
+execMacawStmtExtension (MacawArchEvalFn archStmtFn) mvar globs stmt
   = case stmt of
     MacawReadMem addrWidth memRepr addr
       -> liftToCrucibleState mvar $ \sym ->
@@ -127,7 +141,7 @@ execMacawStmtExtension archStmtFn mvar globs stmt
       -> liftToCrucibleState mvar $ \sym ->
         doCondWriteMem sym (regValue cond) addrWidth (regValue addr) (regValue def) memRepr
 
-    MacawGlobalPtr w addr -> undefined
+    MacawGlobalPtr w addr -> \cst -> addrWidthClass w $ doGetGlobal cst mvar globs addr
     MacawFreshSymbolic t -> undefined
     MacawLookupFunctionHandle typeReps registers -> undefined
 
