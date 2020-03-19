@@ -626,7 +626,7 @@ translateBaseType tp =
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
     CT.BaseIntegerRepr -> [t| M.BoolType |]
-    CT.BaseStructRepr _ -> [t| M.BoolType |]
+    CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
 addEltTH :: forall arch t fs ctp .

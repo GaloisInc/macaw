@@ -14,6 +14,7 @@ module Data.Macaw.ARM.Semantics.TH
     where
 
 import qualified Data.Functor.Const as C
+import           Data.List (isPrefixOf)
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
@@ -23,6 +24,7 @@ import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, asName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as L
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Some ( Some(..) )
@@ -33,7 +35,8 @@ import           Language.Haskell.TH
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified SemMC.Architecture.Location as L
-import qualified What4.Expr.Builder as S
+import qualified What4.BaseTypes as WT
+import qualified What4.Expr.Builder as WB
 
 
 -- n.b. although MacawQ is a monad and therefore has a fail
@@ -49,7 +52,7 @@ armNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
                     L.Location arch ~ Loc.Location arch)
                 => BoundVarInterpretations arch t fs
-                -> S.NonceApp t (S.Expr t) tp
+                -> WB.NonceApp t (WB.Expr t) tp
                 -> Maybe (MacawQ arch t fs Exp)
 armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
@@ -57,15 +60,23 @@ armNonceAppEval bvi nonceApp =
     -- A.locationFuncInterpretation alist already, and there's nothing
     -- beyond that needed here, so just handle special cases here
     case nonceApp of
-      S.FnApp symFn args ->
+      WB.FnApp symFn args ->
         let fnName = symFnName symFn
-            in case fnName of
-                 "uf_UNDEFINED_bitvector_1" ->
-                   Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH (knownNat @1)))) |]
-                 _ -> Nothing
+            tp = WB.symFnReturnType symFn
+        in case fnName of
+          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
+          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
+          _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
-
+what4TypeTH :: WT.BaseTypeRepr tp -> Q Exp
+what4TypeTH (WT.BaseBVRepr natRepr) = [| M.BVTypeRepr $(natReprTH natRepr) |]
+what4TypeTH WT.BaseBoolRepr = [| M.BoolTypeRepr |]
+what4TypeTH tp = error $ "Unsupported base type: " <> show tp
 
 
 -- ----------------------------------------------------------------------
@@ -81,16 +92,16 @@ addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.
 armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     A.Architecture arch)
                 => BoundVarInterpretations arch t fs
-                -> S.App (S.Expr t) ctp
+                -> WB.App (WB.Expr t) ctp
                 -> Maybe (MacawQ arch t fs Exp)
 armAppEvaluator interps elt =
     case elt of
-      -- S.BVUrem w bv1 bv2 -> return $ do
+      -- WB.BVUrem w bv1 bv2 -> return $ do
       --                         e1 <- addEltTH interps bv1
       --                         e2 <- addEltTH interps bv2
       --                         liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
       --                                |]
-      -- S.NoPrimKnown w rhs -> return $ do e1 <- addEltTH interps rhs
+      -- WB.NoPrimKnown w rhs -> return $ do e1 <- addEltTH interps rhs
       --                                   liftQ [| let npkExp = NoPrimKnown $(natReprTH w) $(return e1)
       --                                            in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn noPrimKnown (M.typeRepr noPrimKnown))
       --                                         |]
