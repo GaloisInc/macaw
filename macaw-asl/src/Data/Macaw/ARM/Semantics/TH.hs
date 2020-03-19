@@ -23,6 +23,7 @@ import qualified Data.Macaw.SemMC.Operands as O
 import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, asName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.List as L
 import qualified Data.Parameterized.Map as Map
@@ -64,6 +65,12 @@ armNonceAppEval bvi nonceApp =
         let fnName = symFnName symFn
             tp = WB.symFnReturnType symFn
         in case fnName of
+          "uf_gpr_get" ->
+             case args of
+               Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+                 Just $ do
+                   rid <- addEltTH M.LittleEndian bvi ix
+                   liftQ [| G.getRegVal $(return rid) |]
           "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->

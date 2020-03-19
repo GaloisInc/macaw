@@ -21,6 +21,7 @@ module Data.Macaw.SemMC.Generator (
   -- * State updates
   PartialBlock(..),
   curRegState,
+  getRegVal,
   setRegVal,
   addStmt,
   addAssignment,
@@ -150,6 +151,14 @@ asAtomicStateUpdate insnAddr transformer = do
   updates <- St.gets genRegUpdates
   addStmt (ArchState insnAddr updates)
   return res
+
+-- | Get the value of a machine register (in the 'Generator' state).
+getRegVal :: OrdF (ArchReg arch)
+          => ArchReg arch tp
+          -> Generator arch ids s (Value arch ids tp)
+getRegVal reg = do
+  genState <- St.get
+  return (genState ^. curRegState . boundValue reg)
 
 -- | Update the value of a machine register (in the 'Generator' state) with a
 -- new macaw 'Value'.  This function applies a simplifier ('simplifyValue') to
