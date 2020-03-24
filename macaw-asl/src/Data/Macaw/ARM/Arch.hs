@@ -100,13 +100,32 @@ rewriteTermStmt s =
 -- and the result type, but should not affect the processor state.
 
 data ARMPrimFn arm (f :: MT.Type -> *) tp where
-  ARMPrimFn :: MT.TypeRepr tp -> ARMPrimFn arm f tp
+  SDiv :: 1 <= w => NR.NatRepr w
+       -> f (MT.BVType w)
+       -> f (MT.BVType w)
+       -> ARMPrimFn arm f (MT.BVType w)
+  UDiv :: 1 <= w => NR.NatRepr w
+       -> f (MT.BVType w)
+       -> f (MT.BVType w)
+       -> ARMPrimFn arm f (MT.BVType w)
+  SRem :: 1 <= w => NR.NatRepr w
+       -> f (MT.BVType w)
+       -> f (MT.BVType w)
+       -> ARMPrimFn arm f (MT.BVType w)
+  URem :: 1 <= w => NR.NatRepr w
+       -> f (MT.BVType w)
+       -> f (MT.BVType w)
+       -> ARMPrimFn arm f (MT.BVType w)
 
 instance MC.IsArchFn (ARMPrimFn arm) where
     ppArchFn pp f =
         let ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
         in case f of
-          ARMPrimFn _ -> pure (PP.text "arm_prim_fn")
+          UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
+          SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
+          URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
+          SRem _ lhs rhs -> ppBinary "arm_srem" <$> pp lhs <*> pp rhs
+      where ppUnary s v' = PP.text s PP.<+> v'
 
 instance FCls.FunctorFC (ARMPrimFn arm) where
   fmapFC = FCls.fmapFCDefault
@@ -117,7 +136,11 @@ instance FCls.FoldableFC (ARMPrimFn arm) where
 instance FCls.TraversableFC (ARMPrimFn arm) where
   traverseFC go f =
     case f of
-      ARMPrimFn rep -> pure (ARMPrimFn rep)
+      UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
+      SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
+      URem rep lhs rhs -> URem rep <$> go lhs <*> go rhs
+      SRem rep lhs rhs -> SRem rep <$> go lhs <*> go rhs
+      -- ARMPrimFn rep -> pure (ARMPrimFn rep)
       -- URem w <$> go dividend <*> go divisor
 
 type instance MC.ArchFn ARM.AArch32 = ARMPrimFn ARM.AArch32
@@ -125,7 +148,11 @@ type instance MC.ArchFn ARM.AArch32 = ARMPrimFn ARM.AArch32
 instance (1 <= MC.RegAddrWidth (MC.ArchReg arm)) => MT.HasRepr (ARMPrimFn arm (MC.Value arm ids)) MT.TypeRepr where
   typeRepr f =
     case f of
-      ARMPrimFn rep -> rep
+      UDiv rep _ _ -> MT.BVTypeRepr rep
+      SDiv rep _ _ -> MT.BVTypeRepr rep
+      URem rep _ _ -> MT.BVTypeRepr rep
+      SRem rep _ _ -> MT.BVTypeRepr rep
+      -- ARMPrimFn rep -> rep
 
 instance MC.IPAlignment ARM.AArch32 where
   -- A formula which results in an address that will be loaded into
@@ -188,7 +215,19 @@ rewritePrimFn :: (ARMArchConstraints arm, MC.ArchFn arm ~ ARMPrimFn arm)
               -> Rewriter arm s src tgt (MC.Value arm tgt tp)
 rewritePrimFn f =
   case f of
-    ARMPrimFn rep -> evalRewrittenArchFn (ARMPrimFn rep)
+    UDiv rep lhs rhs -> do
+      tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
+      evalRewrittenArchFn tgtFn
+    SDiv rep lhs rhs -> do
+      tgtFn <- SDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
+      evalRewrittenArchFn tgtFn
+    URem rep lhs rhs -> do
+      tgtFn <- URem rep <$> rewriteValue lhs <*> rewriteValue rhs
+      evalRewrittenArchFn tgtFn
+    SRem rep lhs rhs -> do
+      tgtFn <- SRem rep <$> rewriteValue lhs <*> rewriteValue rhs
+      evalRewrittenArchFn tgtFn
+    -- ARMPrimFn rep -> evalRewrittenArchFn (ARMPrimFn rep)
     -- URem w dividend divisor -> do
     --   tgtFn <- URem w <$> rewriteValue dividend <*> rewriteValue divisor
     --   evalRewrittenArchFn tgtFn

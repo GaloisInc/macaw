@@ -84,7 +84,10 @@ absEvalArchFn :: (ARMArchConstraints arm)
               -> AbsValue (RegAddrWidth (ArchReg arm)) tp
 absEvalArchFn _ _r f =
   case f of
-    ARMPrimFn _ -> MA.TopV
+    UDiv{} -> MA.TopV
+    SDiv{} -> MA.TopV
+    URem{} -> MA.TopV
+    SRem{} -> MA.TopV
 
 -- For now, none of the architecture-specific statements have an effect on the
 -- abstract value.

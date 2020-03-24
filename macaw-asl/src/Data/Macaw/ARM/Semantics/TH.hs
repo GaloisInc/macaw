@@ -13,6 +13,7 @@ module Data.Macaw.ARM.Semantics.TH
     )
     where
 
+import qualified Control.Monad.Error as E
 import qualified Data.Functor.Const as C
 import           Data.List (isPrefixOf)
 import           Data.Macaw.ARM.ARMReg
@@ -65,14 +66,28 @@ armNonceAppEval bvi nonceApp =
         let fnName = symFnName symFn
             tp = WB.symFnReturnType symFn
         in case fnName of
+          "uf_gpr_set" -> Just $ liftQ [| error $ "gpr_set " <> $(return $ LitE (StringL (showF tp))) |]
+          "uf_write_mem_32" -> Just $ liftQ [| error $ "write_mem " <> $(return $ LitE (StringL (showF tp))) |]
+          "uf_simd_get" ->
+             case args of
+               Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+                 Just $ do
+                   rid <- addEltTH M.LittleEndian bvi ix
+                   liftQ [| E.throwError (G.GeneratorMessage "SIMD values not handled yet") |]
           "uf_gpr_get" ->
              case args of
                Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                  Just $ do
                    rid <- addEltTH M.LittleEndian bvi ix
-                   liftQ [| G.getRegVal $(return rid) |]
-          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
-          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined M.TupleTypeRepr L.Nil) |]
+                   liftQ [| do reg <- case $(return rid) of
+                                        M.BVValue w i | intValue w == 4, Just reg <- integerToARMReg i -> return reg
+                                        _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                               G.getRegVal reg
+                          |]
+                   -- liftQ [| do G.getRegVal $(return rid)
+                   --        |]
+          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
+          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->
                Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->
@@ -98,16 +113,30 @@ addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.
 
 armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
                     A.Architecture arch)
-                => BoundVarInterpretations arch t fs
+                => M.Endianness
+                -> BoundVarInterpretations arch t fs
                 -> WB.App (WB.Expr t) ctp
                 -> Maybe (MacawQ arch t fs Exp)
-armAppEvaluator interps elt =
+armAppEvaluator endianness interps elt =
     case elt of
-      -- WB.BVUrem w bv1 bv2 -> return $ do
-      --                         e1 <- addEltTH interps bv1
-      --                         e2 <- addEltTH interps bv2
-      --                         liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
-      --                                |]
+
+      WB.BVSdiv w bv1 bv2 -> return $ do
+        e1 <- addEltTH endianness interps bv1
+        e2 <- addEltTH endianness interps bv2
+        liftQ [| addArchAssignment (SDiv $(natReprTH w) $(return e1) $(return e2))
+               |]
+      WB.BVUrem w bv1 bv2 -> return $ do
+        e1 <- addEltTH endianness interps bv1
+        e2 <- addEltTH endianness interps bv2
+        liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
+               |]
+      WB.BVSrem w bv1 bv2 -> return $ do
+        e1 <- addEltTH endianness interps bv1
+        e2 <- addEltTH endianness interps bv2
+        liftQ [| addArchAssignment (SRem $(natReprTH w) $(return e1) $(return e2))
+               |]
+      WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
+      WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
       -- WB.NoPrimKnown w rhs -> return $ do e1 <- addEltTH interps rhs
       --                                   liftQ [| let npkExp = NoPrimKnown $(natReprTH w) $(return e1)
       --                                            in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn noPrimKnown (M.typeRepr noPrimKnown))

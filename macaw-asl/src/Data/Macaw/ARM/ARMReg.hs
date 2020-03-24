@@ -20,6 +20,7 @@ module Data.Macaw.ARM.ARMReg
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
     , locToRegTH
+    , integerToARMReg
     )
     where
 
@@ -179,7 +180,25 @@ locToRegTH _ (SA.Location globalRef) = do
   let refName = T.unpack (symbolRepr (ASL.globalRefSymbol globalRef))
   case ASL.globalRefRepr globalRef of
     WT.BaseBoolRepr ->
-      [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
-    WT.BaseBVRepr _ ->
       [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
+    WT.BaseBVRepr _ ->
+      [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
     _ -> [| error "locToRegTH undefined for unrecognized location" |]
+
+integerToARMReg :: Integer -> Maybe (ARMReg (BVType 32))
+integerToARMReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")
+integerToARMReg 1  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R1")
+integerToARMReg 2  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R2")
+integerToARMReg 3  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R3")
+integerToARMReg 4  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R4")
+integerToARMReg 5  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R5")
+integerToARMReg 6  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R6")
+integerToARMReg 7  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R7")
+integerToARMReg 8  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R8")
+integerToARMReg 9  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R9")
+integerToARMReg 10 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R10")
+integerToARMReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R11")
+integerToARMReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R12")
+integerToARMReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R13")
+integerToARMReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+integerToARMReg _  = Nothing

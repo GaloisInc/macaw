@@ -1,3 +1,5 @@
+{-# OPTIONS_GHC -ddump-splices -ddump-to-file #-}
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -50,6 +52,7 @@ import           Language.Haskell.TH.Syntax
 import           Text.Read ( readMaybe )
 
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.HasRepr as HR
 import qualified Data.Parameterized.Lift as LF
 import qualified Data.Parameterized.List as SL
@@ -57,7 +60,7 @@ import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.Pair as Pair
-import           Data.Parameterized.Some ( Some(..), viewSome )
+import           Data.Parameterized.Some ( Some(..), mapSome )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Lang.Crucible.Backend.Simple as S
 import qualified What4.BaseTypes as CT
@@ -555,11 +558,19 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               let C.Const name = varNames SL.!! idx
               newVal <- addEltTH endianness interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
-            LiteralParameter loc
-              | L.isMemoryLocation loc -> writeMemTH interps expr endianness
-              | otherwise -> do
-                  valExp <- addEltTH endianness interps expr
-                  appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
+            LiteralParameter loc -> do
+              valExp <- addEltTH endianness interps expr
+              appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
+              -- | L.isMemoryLocation loc -> case expr of
+              --     S.NonceAppExpr n ->
+              --       case S.nonceExprApp n of
+              --         S.FnApp symFn args
+              --           | Just memWidth <- matchWriteMemWidth (symFnName symFn) ->
+              --             writeMemTH interps symFn args endianness
+              --     _ -> fail ("Unexpected memory definition -- not a NonceApp.")
+              -- | otherwise -> do
+              --     valExp <- addEltTH endianness interps expr
+              --     appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
@@ -625,7 +636,7 @@ translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
-    CT.BaseIntegerRepr -> [t| M.BoolType |]
+    CT.BaseIntegerRepr -> [t| M.BVType 32 |]
     CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
@@ -670,29 +681,22 @@ symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 bvarName :: S.ExprBoundVar t tp -> String
 bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 
--- FIXME: Endianness needs to be pulled out as a parameter
-writeMemTH :: forall arch t fs tp
+writeMemTH :: forall arch t fs args ret
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
-           -> S.Expr t tp
+           -> S.ExprSymFn t args ret
+           -> Ctx.Assignment (S.Expr t) args
            -> M.Endianness
            -> MacawQ arch t fs ()
-writeMemTH bvi expr endianness =
-  case expr of
-    S.NonceAppExpr n ->
-      case S.nonceExprApp n of
-        S.FnApp symFn args
-          | Just memWidth <- matchWriteMemWidth (symFnName symFn) ->
-            case FC.toListFC Some args of
-              [_, Some addr, Some val] -> do
-                addrValExp <- addEltTH endianness bvi addr
-                writtenValExp <- addEltTH endianness bvi val
-                appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) $(return writtenValExp)) |]
-              _ -> fail ("Invalid memory write expression: " ++ showF expr)
-          -- FIXME
-        _ -> fail ("Unexpected memory definition -- not a function application.")
-    S.AppExpr _ -> fail ("Unexpected memory definition -- AppExpr.")
-    _ -> fail ("Unexpected memory definition -- not a NonceApp.")
+writeMemTH bvi symFn args endianness =
+  case FC.toListFC Some args of
+    [_, Some addr, Some val] -> case SI.exprType val of
+      SI.BaseBVRepr memWidth -> do
+        addrValExp <- addEltTH endianness bvi addr
+        writtenValExp <- addEltTH endianness bvi val
+        appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprTH memWidth) endianness) $(return writtenValExp)) |]
+      tp -> fail ("Invalid memory write value type for " <> symFnName symFn <> ": " <> showF tp)
+    l -> fail ("Invalid memory write argument list for " <> symFnName symFn <> ": " <> show l)
 
 -- | Match a "write_mem" intrinsic and return the number of bytes written
 matchWriteMemWidth :: String -> Maybe Int
@@ -981,7 +985,8 @@ defaultAppEvaluator endianness elt interps = case elt of
   --   es <- sequence $ FC.toListFC (addEltTH endianness interps) flds
   
   -- S.StructField fld ix ixTp -> error $ "struct fields unsupported"
-  _ -> liftQ [| error $ "unsupported Crucible elt" |]
+  _ -> error $ "unsupported Crucible elt: " <> show elt
+--  _ -> liftQ [| error $ "unsupported Crucible elt" |]
 
 
 ----------------------------------------------------------------------
