@@ -29,6 +29,7 @@ import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Monad.IO.Unlift as MU
 import qualified Data.Foldable as F
+import           Data.IORef
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery as M
@@ -181,6 +182,8 @@ smtSolveTransfer ctx slice
       case some_cfg of
         C.SomeCFG cfg -> do
           let executionFeatures = []
+          bbMapRef <- liftIO $ newIORef mempty
+          let ?badBehaviorMap = bbMapRef
           initialState <- initializeSimulator ctx sym archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
@@ -463,6 +466,7 @@ initializeSimulator :: forall m sym arch blocks ids tp
                        , 16 <= M.ArchAddrWidth arch
                        , MS.SymArchConstraints arch
                        , CB.IsSymInterface sym
+                       , LLVM.HasLLVMAnn sym
                        , Show (W.SymExpr sym W.BaseNatType)
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
                        , Ord (W.SymExpr sym WT.BaseNatType)

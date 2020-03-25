@@ -64,6 +64,7 @@ import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.LLVM.MemModel
                    ( LLVMPointerType
                    , Mem
+                   , HasLLVMAnn
                    , ptrAdd
                    , projectLLVM_bv
                    , pattern LLVMPointerRepr
@@ -121,7 +122,7 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
 stmtSemantics
-  :: IsSymInterface sym
+  :: (IsSymInterface sym, HasLLVMAnn sym)
   => SymFuns sym
   -> C.GlobalVar Mem
   -> GlobalMap sym (M.ArchAddrWidth M.X86_64)

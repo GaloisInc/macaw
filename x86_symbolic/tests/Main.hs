@@ -1,6 +1,7 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -10,6 +11,7 @@ import           Control.Monad
 import           Control.Monad.ST
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as Elf
+import           Data.IORef
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
@@ -64,6 +66,7 @@ main = do
   Some (gen :: NonceGenerator IO t) <- newIONonceGenerator
   halloc <- C.newHandleAllocator
   sym <- C.newSimpleBackend C.FloatRealRepr gen
+
   let x86ArchFns :: MS.MacawSymbolicArchFunctions MX.X86_64
       x86ArchFns = MX.x86_64MacawSymbolicFns
 
@@ -116,6 +119,9 @@ main = do
 
   (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
   let globalMap = MSM.mapRegionPointers memPtrTbl
+
+  bbMapRef <- newIORef mempty
+  let ?badBehaviorMap = bbMapRef
 
   let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
       lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do

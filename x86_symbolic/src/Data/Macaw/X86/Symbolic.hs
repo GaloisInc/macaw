@@ -316,7 +316,7 @@ x86_64MacawSymbolicFns =
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn
-  :: C.IsSymInterface sym
+  :: (C.IsSymInterface sym, MM.HasLLVMAnn sym)
   => SymFuns sym
   -> MacawArchEvalFn sym M.X86_64
 x86_64MacawEvalFn fs =
