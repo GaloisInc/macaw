@@ -9,6 +9,7 @@ task needed before deleting unused code.
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Analysis.RegisterUse
   ( -- * Exports for function recovery
@@ -16,10 +17,11 @@ module Data.Macaw.Analysis.RegisterUse
   , RegisterUseError(..)
     -- ** Input information
   , RegisterUseContext(..)
+  , ArchFunType
+  , CallRegs(..)
   , PostTermStmtInvariants
   , PostValueMap
   , pvmFind
-  , FunctionTypeRegs(..)
     -- * Architecture specific summarization
   , ArchTermStmtUsageFn
   , RegisterUseM
@@ -42,6 +44,7 @@ module Data.Macaw.Analysis.RegisterUse
   , biPhiLocs
   , biPredPostValues
   , biLocMap
+  , biCallFunType
   , LocList(..)
   , MemAccessInfo(..)
   , ValueRegUseDomain(..)
@@ -105,13 +108,16 @@ funBlockPreds info = Map.fromListWith (++)
 -- RegisterUseError
 
 -- | Errors from register use
-data RegisterUseError arch =
-  CallStackHeightError !(MemAddr (ArchAddrWidth arch))
+data RegisterUseError arch 
+   = CallStackHeightError !(MemAddr (ArchAddrWidth arch))
+   | UnresolvedFunctionTypeError !(ArchSegmentOff arch) !String
 
-instance Show (RegisterUseError arch) where
+instance MemWidth (RegAddrWidth (ArchReg arch)) => Show (RegisterUseError arch) where
   show (CallStackHeightError addr) =
     "Could not resolve concrete stack height for call at "
       ++ show addr
+  show (UnresolvedFunctionTypeError addr msg) =
+    show addr ++ ": "  ++ msg
 
 -------------------------------------------------------------------------------
 -- StackOffset information
@@ -211,6 +217,7 @@ joinValueRegUseDomain :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                          -- respectively.
                       -> BoundLoc (ArchReg arch) tp
                       -> ValueRegUseDomain arch tp
+                        -- ^ Old domain for location. 
                       -> Changed s ()
 joinValueRegUseDomain newCns cnsRef cacheRef l oldDomain = do
   case (oldDomain, locDomain newCns l) of
@@ -225,9 +232,14 @@ joinValueRegUseDomain newCns cnsRef cacheRef l oldDomain = do
       let p = TypedPair oldDomain newDomain
       case MapF.lookup p c of
         Nothing -> do
-          -- This is a new class representative
+          -- This is a new class representative.
+          -- New class representives imply that there was a change as
+          -- the location in the old domain must not have been a free
+          -- class rep.
+          markChanged True
           changedST $ modifySTRef cacheRef $ MapF.insert p l
         Just prevRep -> do
+          -- Mark changed if the old domain was not just a pointer to prevRep.
           case testEquality oldDomain (RegEqualLoc prevRep) of
             Just _ -> pure ()
             Nothing -> markChanged True
@@ -250,15 +262,15 @@ joinBlockStartConstraints (BSC oldCns) newCns = do
   let regFn :: ArchReg arch tp
             -> ValueRegUseDomain arch tp
             -> Changed s ()
-      regFn r = joinValueRegUseDomain newCns cnsRef cacheRef (RegLoc r)
+      regFn r d = joinValueRegUseDomain newCns cnsRef cacheRef (RegLoc r) d
   MapF.traverseWithKey_ regFn (locMapRegs oldCns)
 
   let stackFn :: MemInt (ArchAddrWidth arch)
               -> MemRepr tp
               -> ValueRegUseDomain arch tp
               -> Changed s ()
-      stackFn o r =
-        joinValueRegUseDomain newCns cnsRef cacheRef (StackOffLoc o r)
+      stackFn o r d =
+        joinValueRegUseDomain newCns cnsRef cacheRef (StackOffLoc o r) d
   stackMapTraverseWithKey_ stackFn (locMapStack oldCns)
 
   changedST $ BSC <$> readSTRef cnsRef
@@ -692,6 +704,11 @@ pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l)) l m
 instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
   show (PVM m) = show m
 
+ppPVM :: forall arch ids . ShowF (ArchReg arch) => PostValueMap arch ids -> Doc
+ppPVM (PVM m) = vcat $ ppVal <$> MapF.toList m
+  where ppVal :: Pair (BoundLoc (ArchReg arch)) (InferValue arch ids) -> Doc
+        ppVal (Pair l v) = pretty l <+> text ":=" <+> text (show v)
+
 type StartInferInfo arch ids =
   ( ParsedBlock arch ids
   , BlockStartConstraints arch
@@ -705,8 +722,8 @@ siiCns (_,cns,_,_) = cns
 type FrontierMap arch = Map (ArchSegmentOff arch) (BlockStartConstraints arch)
 
 data InferNextState arch ids =
-  InferNextState { isSeenValues :: !(MapF (InferValue arch ids) (ValueRegUseDomain arch))
-                 , isRepMap :: !(PostValueMap arch ids)
+  InferNextState { insSeenValues :: !(MapF (InferValue arch ids) (ValueRegUseDomain arch))
+                 , insPVM        :: !(PostValueMap arch ids)
                  }
 
 -- | Monad for inferring next state.
@@ -714,8 +731,8 @@ type InferNextM arch ids = State (InferNextState arch ids)
 
 runInferNextM :: InferNextM arch ids a -> a
 runInferNextM m =
-  let s = InferNextState { isSeenValues = MapF.empty
-                         , isRepMap = emptyPVM
+  let s = InferNextState { insSeenValues = MapF.empty
+                         , insPVM       = emptyPVM
                          }
    in evalState m s
 
@@ -730,13 +747,16 @@ memoNextDomain :: OrdF (ArchReg arch)
 memoNextDomain _ (IVDomain d@ValueRegUseStackOffset{}) = pure (Just d)
 memoNextDomain _ (IVDomain d@FnStartRegister{}) = pure (Just d)
 memoNextDomain loc e = do
-  m <- gets isSeenValues
+  m <- gets insSeenValues
   case MapF.lookup e m of
-    Just d ->
+    Just d -> do
+      modify $ \s -> InferNextState { insSeenValues = m 
+                                    , insPVM = pvmBind loc e (insPVM s)
+                                    }
       pure (Just d)
     Nothing -> do
-      modify $ \s -> InferNextState { isSeenValues = MapF.insert e (RegEqualLoc loc) m
-                                    , isRepMap = pvmBind loc e (isRepMap s)
+      modify $ \s -> InferNextState { insSeenValues = MapF.insert e (RegEqualLoc loc) m
+                                    , insPVM = pvmBind loc e (insPVM s)
                                     }
       pure Nothing
 
@@ -763,7 +783,7 @@ addNextConstraints lastMap addr nextCns frontierMap =
           Just prevCns -> runChanged (joinBlockStartConstraints prevCns nextCns)
    in Map.alter modifyFrontier addr frontierMap
 
--- | Process terminal registers
+-- | Get post value map an dnext constraints for an intra-procedural jump to target.
 intraJumpConstraints :: forall arch ids
                      .  OrdF (ArchReg arch)
                      => StartInferContext arch
@@ -790,7 +810,7 @@ intraJumpConstraints ctx s regs = runInferNextM $ do
         memoNextDomain (StackOffLoc o repr) (inferStackValueToValue ctx (sisAssignMap s) sv repr)
   stk <- stackMapTraverseMaybeWithKey stackFn (sisStack s)
 
-  postValMap <- gets isRepMap
+  postValMap <- gets insPVM
   let cns = BSC LocMap { locMapRegs = regs'
                        , locMapStack = stk
                        }
@@ -817,10 +837,11 @@ postCallConstraints params ctx s regs =
           error "Do not yet support architectures where stack grows up."
         when (postCallStackDelta params < 0) $
           error "Unexpected post call stack delta."
-
+        -- Upper bound is stack offset before call.
         let h = toInteger spOff
+        -- Lower bound is stack bound after call.
         let l = h - postCallStackDelta params
-
+        -- Function to update register state.
         let intraRegFn :: ArchReg arch tp
                        -> Value arch ids tp
                        -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
@@ -843,12 +864,12 @@ postCallConstraints params ctx s regs =
               | l <= toInteger o, toInteger o < h =
                   pure Nothing
               | otherwise =
-                -- Otherwise preserve the structure of the
+                -- Otherwise preserve the value.
                   memoNextDomain (StackOffLoc o repr) (inferStackValueToValue ctx (sisAssignMap s) sv repr)
 
         stk <- stackMapTraverseMaybeWithKey stackFn (sisStack s)
 
-        postValMap <- gets isRepMap
+        postValMap <- gets insPVM
         let cns = BSC LocMap { locMapRegs = regs'
                              , locMapStack = stk
                              }
@@ -966,6 +987,8 @@ regDepsFromMap f m = RDM (fmapF (Const . f) m)
 -- particular locations after the block executes.
 data BlockUsageSummary (arch :: Type) ids = BUS
   { blockUsageStartConstraints :: !(BlockStartConstraints arch)
+    -- | Offset of start of last instruction processed relative to start of block.
+  , blockCurOff :: !(ArchAddrWord arch)
     -- | Information about memory accesses in order of statement.
     --
     -- There should be exactly one of these for each @ReadMem@,
@@ -985,6 +1008,9 @@ data BlockUsageSummary (arch :: Type) ids = BUS
   , assignDeps :: !(Map (Some (AssignId ids)) (DependencySet (ArchReg arch) ids))
     -- | Information about next memory reads.
   , pendingMemAccesses :: ![MemAccessInfo arch ids]
+    -- | If this block ends with a call, this has the type of the function called.
+    -- Otherwise, the value should be @Nothing@.
+  , blockCallFunType :: !(Maybe (ArchFunType arch))
   }
 
 initBlockUsageSummary :: BlockStartConstraints arch
@@ -993,6 +1019,7 @@ initBlockUsageSummary :: BlockStartConstraints arch
 initBlockUsageSummary cns s =
   let a = reverse (sisMemAccessStack s)
    in BUS { blockUsageStartConstraints = cns
+          , blockCurOff            = zeroMemWord
           , blockMemAccesses       = a
           , blockFinalStack        = sisStack s
           , _blockExecDemands      = emptyDeps
@@ -1000,6 +1027,7 @@ initBlockUsageSummary cns s =
           , blockWriteDependencies = Map.empty
           , assignDeps             = Map.empty
           , pendingMemAccesses     = a
+          , blockCallFunType = Nothing
           }
 
 -- | Dependencies needed to execute statements with side effects.
@@ -1022,15 +1050,14 @@ assignmentCache :: Lens' (BlockUsageSummary arch ids)
 assignmentCache = lens assignDeps (\s v -> s { assignDeps = v })
 
 ------------------------------------------------------------------------
--- FunctionTypeRegs
+-- CallRegs
 
--- | This indicates which registers a function is expected to
--- read/write.
-data FunctionTypeRegs (r :: M.Type -> Type) =
-  FunctionTypeRegs { fnArgRegs :: [Some r]
-                   , fnReturnRegs :: [Some r]
-                   }
-  deriving (Ord, Eq, Show)
+-- | Identifies demand information about a particular call.
+data CallRegs (arch :: Type) = 
+  CallRegs { callRegsFnType :: !(ArchFunType arch)
+           , callArgRegs :: [Some (ArchReg arch)]
+           , callReturnRegs :: [Some (ArchReg arch)]
+           }
 
 ------------------------------------------------------------------------
 -- RegisterUseContext
@@ -1048,6 +1075,12 @@ type ArchTermStmtUsageFn arch ids
   -> BlockUsageSummary arch ids
   -> Either (RegisterUseError arch) (RegDependencyMap arch ids)
 
+-- | Architecture specific information about the type of function
+-- called by inferring call-site information.
+--
+-- Used to memoize analysis returned by @callDemandFn@.
+type family ArchFunType (arch::Type) :: Type
+
 data RegisterUseContext arch
   = RegisterUseContext
     { -- | Set of registers preserved by a call.
@@ -1055,8 +1088,6 @@ data RegisterUseContext arch
       -- | Given a terminal statement and list of registers it returns
       -- Map containing values afterwards.
     , archPostTermStmtInvariants :: !(forall ids . PostTermStmtInvariants arch ids)
-      -- | Registers to use for indirect calls or targets not in list.
-    , defaultCallRegs :: !(FunctionTypeRegs (ArchReg arch))
       -- | Registers that are saved by calls (excludes rsp)
     , calleeSavedRegisters :: ![Some (ArchReg arch)]
       -- | List of registers that callers may freely change.
@@ -1071,8 +1102,12 @@ data RegisterUseContext arch
       -- | Callback function for summarizing register usage of terminal
       -- statements.
     , reguseTermFn :: !(forall ids . ArchTermStmtUsageFn arch ids)
-      -- | Given an address that is a call target this should return the type if known.
-    , functionArgFn    :: !(MemAddr (ArchAddrWidth arch) -> Maybe (FunctionTypeRegs (ArchReg arch)))
+      -- | Given the address of a call instruction and regisdters, this returns the 
+      -- values read and returned.
+    , callDemandFn    :: !(forall ids
+                          .  ArchSegmentOff arch 
+                          -> RegState (ArchReg arch) (Value arch ids)
+                          -> Either (RegisterUseError arch) (CallRegs arch))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1099,7 +1134,8 @@ visitIntraJumpTarget lastMap ctx s regs (m,frontierMap) addr =
       (postValMap, nextCns) = intraJumpConstraints ctx s regs
    in (Map.insert addr postValMap m, addNextConstraints lastMap addr nextCns frontierMap)
 
--- | Infer information about block
+-- | Analyze block to update start constraints on successors and add blocks
+-- with changed constraints to frontier.
 blockStartConstraints :: ArchConstraints arch
                       => RegisterUseContext arch
                       -> Map (ArchSegmentOff arch) (ParsedBlock arch ids)
@@ -1220,6 +1256,27 @@ inferStartConstraints rctx blockMap addr = do
                        }
   propStartConstraints rctx blockMap Map.empty (Map.singleton addr cns)
 
+-- | Pretty print start constraints for debugging purposes.
+ppStartConstraints :: forall arch ids 
+                   .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
+                   => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
+                   -> Doc 
+ppStartConstraints m = vcat (pp <$> Map.toList m)
+  where pp :: (ArchSegmentOff arch, StartInferInfo arch ids) -> Doc
+        pp (addr, (_,_,_,pvm)) =
+          let pvmEntries = vcat (ppPVMPair <$> Map.toList pvm)
+           in pretty addr <$$>
+                indent 2 (text "post-values:" <$$> indent 2 pvmEntries)
+        ppPVMPair :: (ArchSegmentOff arch, PostValueMap arch ids) -> Doc
+        ppPVMPair (preaddr, pvm) =
+          text "to" <+> pretty preaddr <> text ":" <$$>
+          indent 2 (ppPVM pvm)
+
+_ppStartConstraints :: forall arch ids 
+                   .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
+                   => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
+                   -> Doc 
+_ppStartConstraints = ppStartConstraints
 
 ------------------------------------------------------------------------
 --
@@ -1516,9 +1573,8 @@ demandStmtValues stmtIdx stmt = do
                 addWriteDep stmtIdx $
                   valueDeps cns cache c <> valueDeps cns cache val
          blockWriteDependencyLens %= Map.insert stmtIdx valDeps
-
-   InstructionStart _ _ ->
-     pure ()
+   InstructionStart off _ -> do
+     modify $ \s -> s { blockCurOff = off }
     -- Comment statements have no specific value.
    Comment _ ->
      pure ()
@@ -1562,26 +1618,30 @@ mkBlockUsageSummary ctx cns sis blk = do
         demandValue idx
         recordRegMap (regStateMap regs)
       ParsedCall regs _mret -> do
-        funTypeFn <- asks functionArgFn
-        defCallRegs <- asks defaultCallRegs
+        callFn <- asks callDemandFn
         -- Get function type associated with function
-        let ftr | Just fAddr <- valueAsMemAddr (regs^.boundValue ip_reg)
-                , Just ftp <- funTypeFn fAddr =
-                    ftp
-                | otherwise =
-                    defCallRegs
+        off <- gets blockCurOff
+        let insnAddr = 
+              let msg = "internal: Expected valid instruction address."
+               in fromMaybe (error msg) (incSegmentOff addr (toInteger off))
+        ftr <- 
+          case callFn insnAddr regs of
+            Right v -> pure v
+            Left e -> throwError e
         demandValue (regs^.boundValue ip_reg)
-        traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) (fnArgRegs ftr)
-        cache <- gets assignDeps
+        -- Store call register type information
+        modify $ \s -> s { blockCallFunType = Just (callRegsFnType ftr) }
+        -- Demand argument registers
+        traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) (callArgRegs ftr)
 
+        cache <- gets assignDeps
         savedRegs <- asks calleeSavedRegisters
         let insReg m (Some r) = setRegDep r (valueDeps cns cache (regs^.boundValue r)) m
         blockRegDependenciesLens %= \m -> foldl' insReg m (Some sp_reg : savedRegs)
         clearedRegs <- asks callScratchRegisters
         let clearReg m (Some r) = setRegDep r mempty m
         blockRegDependenciesLens %= \m -> foldl' clearReg m clearedRegs
-        blockRegDependenciesLens %= \m -> foldl' clearReg m (fnReturnRegs ftr)
-
+        blockRegDependenciesLens %= \m -> foldl' clearReg m (callReturnRegs ftr)
       PLTStub regs _ _ -> do
         traverseF_ demandValue regs
         MapF.traverseWithKey_ (\r _ -> modify $ clearDependencySet r) regs
@@ -1666,7 +1726,6 @@ newtype LocList r tp = LL { llValues :: [BoundLoc r tp] }
 instance Semigroup (LocList r tp) where
   LL x <> LL y = LL (x++y)
 
-
 -- | This describes information about a block inferred by
 -- register-use.
 data BlockInvariants arch ids =
@@ -1686,6 +1745,9 @@ data BlockInvariants arch ids =
      , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
        -- | Start constraints for block
      , biStartConstraints :: !(BlockStartConstraints arch)
+       -- | If this block ends with a call, this has the type of the function called.
+       -- Otherwise, the value should be @Nothing@.
+     , biCallFunType :: !(Maybe (ArchFunType arch))
      }
 
 -- | Return true if assignment is needed to execute block.
@@ -1743,7 +1805,8 @@ mkBlockInvariants :: forall arch ids
                   -> (ArchSegmentOff arch
                        -> ArchSegmentOff arch
                        -> PostValueMap arch ids)
-                     -- ^ Maps block address to map of location representative to value.
+                     -- ^ Maps precessor and successor block addresses to the post value from the
+                     -- jump from predecessor to successor.
                   -> ArchSegmentOff arch
                      -- ^ Address of thsi block.
                   -> BlockUsageSummary arch ids
@@ -1754,7 +1817,7 @@ mkBlockInvariants predMap valueMap addr summary deps =
   let cns   = blockUsageStartConstraints summary
       -- Get addresses of blocks that jump to this block
       preds = Map.findWithDefault [] addr predMap
-      --
+      -- Maps address of predecessor to the post value for this block.
       predFn predAddr = (predAddr, valueMap predAddr addr)
       predphilist = predFn <$> preds
    in BI { biUsedAssignSet = dsAssignSet deps
@@ -1764,6 +1827,7 @@ mkBlockInvariants predMap valueMap addr summary deps =
          , biPredPostValues = Map.fromList predphilist
          , biPhiLocs = Set.toList (dsLocSet deps)
          , biStartConstraints = cns
+         , biCallFunType = blockCallFunType summary
          }
 
 -- | This analyzes a function to determine which registers must b available to
