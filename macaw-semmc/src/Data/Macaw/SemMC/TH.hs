@@ -37,6 +37,7 @@ import           GHC.TypeLits ( Symbol )
 import qualified Data.ByteString as BS
 
 import           Control.Lens ( (^.) )
+import           Control.Monad (void)
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
@@ -558,19 +559,15 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               let C.Const name = varNames SL.!! idx
               newVal <- addEltTH endianness interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
-            LiteralParameter loc -> do
-              valExp <- addEltTH endianness interps expr
-              appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
-              -- | L.isMemoryLocation loc -> case expr of
-              --     S.NonceAppExpr n ->
-              --       case S.nonceExprApp n of
-              --         S.FnApp symFn args
-              --           | Just memWidth <- matchWriteMemWidth (symFnName symFn) ->
-              --             writeMemTH interps symFn args endianness
-              --     _ -> fail ("Unexpected memory definition -- not a NonceApp.")
-              -- | otherwise -> do
-              --     valExp <- addEltTH endianness interps expr
-              --     appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
+            LiteralParameter loc
+              | L.isMemoryLocation loc
+              , S.NonceAppExpr n <- expr
+              , S.FnApp symFn args <- S.nonceExprApp n
+              , Just memWidth <- matchWriteMemWidth (symFnName symFn) -> 
+                  void $ writeMemTH interps symFn args memWidth endianness
+              | otherwise -> do
+                  valExp <- addEltTH endianness interps expr
+                  appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
@@ -636,7 +633,7 @@ translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
-    CT.BaseIntegerRepr -> [t| M.BVType 32 |]
+    CT.BaseIntegerRepr -> [t| M.BVType 64 |]
     CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
@@ -681,23 +678,29 @@ symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 bvarName :: S.ExprBoundVar t tp -> String
 bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 
+-- | Create Generator code to write a value to memory. We return the
+-- argument that represents the memory in case it's needed.
 writeMemTH :: forall arch t fs args ret
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
            -> S.ExprSymFn t args ret
            -> Ctx.Assignment (S.Expr t) args
+           -> Int
            -> M.Endianness
-           -> MacawQ arch t fs ()
-writeMemTH bvi symFn args endianness =
+           -> MacawQ arch t fs (Some (S.Expr t))
+writeMemTH bvi symFn args memWidth endianness =
   case FC.toListFC Some args of
-    [_, Some addr, Some val] -> case SI.exprType val of
-      SI.BaseBVRepr memWidth -> do
+    [Some mem, Some addr, Some val] -> case SI.exprType val of
+      SI.BaseBVRepr memWidthRepr | intValue memWidthRepr == fromIntegral (memWidth * 8) -> do
         addrValExp <- addEltTH endianness bvi addr
         writtenValExp <- addEltTH endianness bvi val
-        appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprTH memWidth) endianness) $(return writtenValExp)) |]
+        appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) $(return writtenValExp)) |]
+        return (Some mem)
       tp -> fail ("Invalid memory write value type for " <> symFnName symFn <> ": " <> showF tp)
     l -> fail ("Invalid memory write argument list for " <> symFnName symFn <> ": " <> show l)
 
+-- FIXME: Generalize this to take a symFn, checking the name, argument
+-- types, and return type (possibly)
 -- | Match a "write_mem" intrinsic and return the number of bytes written
 matchWriteMemWidth :: String -> Maybe Int
 matchWriteMemWidth s = do
@@ -722,7 +725,7 @@ defaultNonceAppEvaluator :: forall arch t fs tp
                          -> BoundVarInterpretations arch t fs
                          -> S.NonceApp t (S.Expr t) tp
                          -> MacawQ arch t fs Exp
-defaultNonceAppEvaluator  endianness bvi nonceApp =
+defaultNonceAppEvaluator endianness bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args
       | S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
@@ -735,6 +738,8 @@ defaultNonceAppEvaluator  endianness bvi nonceApp =
             Nothing -> fail ("Unknown defined function: " ++ fnName)
       | otherwise -> do
           let fnName = symFnName symFn
+              fnArgTypes = S.symFnArgTypes symFn
+              fnRetType = S.symFnReturnType symFn
           case fnName of
             -- For count leading zeros, we don't have a SimpleBuilder term to reduce
             -- it to, so we have to manually transform it to macaw here (i.e., we
@@ -790,7 +795,11 @@ defaultNonceAppEvaluator  endianness bvi nonceApp =
                     argNames -> do
                       let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                       liftQ [| return $ O.extractValue $(varE (regsValName bvi)) ($(call)) |]
-              | otherwise -> error $ "Unsupported function: " ++ show fnName
+              | Just memWidth <- matchWriteMemWidth fnName -> do
+                  Some memExpr <- writeMemTH bvi symFn args memWidth endianness
+                  mem <- addEltTH endianness bvi memExpr
+                  liftQ [| return $(return mem) |]
+              | otherwise -> error $ "Unsupported function: " ++ show fnName ++ "(" ++ show fnArgTypes ++ ") -> " ++ show fnRetType
     _ -> error "Unsupported NonceApp case"
 
 -- | Parse the name of a memory read intrinsic and return the number of bytes

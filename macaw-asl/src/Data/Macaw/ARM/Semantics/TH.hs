@@ -13,7 +13,7 @@ module Data.Macaw.ARM.Semantics.TH
     )
     where
 
-import qualified Control.Monad.Error as E
+import qualified Control.Monad.Except as E
 import qualified Data.Functor.Const as C
 import           Data.List (isPrefixOf)
 import           Data.Macaw.ARM.ARMReg
@@ -66,26 +66,41 @@ armNonceAppEval bvi nonceApp =
         let fnName = symFnName symFn
             tp = WB.symFnReturnType symFn
         in case fnName of
-          "uf_gpr_set" -> Just $ liftQ [| error $ "gpr_set " <> $(return $ LitE (StringL (showF tp))) |]
-          "uf_write_mem_32" -> Just $ liftQ [| error $ "write_mem " <> $(return $ LitE (StringL (showF tp))) |]
+          "uf_gpr_set" ->
+             case args of
+               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
+                 rgf <- addEltTH M.LittleEndian bvi rgf
+                 rid <- addEltTH M.LittleEndian bvi rid
+                 val <- addEltTH M.LittleEndian bvi val
+                 liftQ [| do reg <- case $(return rid) of
+                               M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
+                               _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                             G.setRegVal reg $(return val)
+                             return $(return rgf)
+                        |]
+               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
              case args of
                Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                  Just $ do
                    rid <- addEltTH M.LittleEndian bvi ix
-                   liftQ [| E.throwError (G.GeneratorMessage "SIMD values not handled yet") |]
+                   liftQ [| do reg <- case $(return rid) of
+                                 M.BVValue w i | intValue w == 5, Just reg <- integerToSIMDReg i -> return reg
+                                 _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                               G.getRegVal reg
+                          |]
+               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
              case args of
                Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                  Just $ do
                    rid <- addEltTH M.LittleEndian bvi ix
                    liftQ [| do reg <- case $(return rid) of
-                                        M.BVValue w i | intValue w == 4, Just reg <- integerToARMReg i -> return reg
+                                        M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
                                         _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
                                G.getRegVal reg
                           |]
-                   -- liftQ [| do G.getRegVal $(return rid)
-                   --        |]
+               _ -> fail "Invalid uf_gpr_get"
           "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->

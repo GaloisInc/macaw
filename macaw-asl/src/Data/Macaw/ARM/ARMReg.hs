@@ -20,7 +20,8 @@ module Data.Macaw.ARM.ARMReg
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
     , locToRegTH
-    , integerToARMReg
+    , integerToReg
+    , integerToSIMDReg
     )
     where
 
@@ -185,20 +186,55 @@ locToRegTH _ (SA.Location globalRef) = do
       [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
     _ -> [| error "locToRegTH undefined for unrecognized location" |]
 
-integerToARMReg :: Integer -> Maybe (ARMReg (BVType 32))
-integerToARMReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")
-integerToARMReg 1  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R1")
-integerToARMReg 2  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R2")
-integerToARMReg 3  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R3")
-integerToARMReg 4  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R4")
-integerToARMReg 5  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R5")
-integerToARMReg 6  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R6")
-integerToARMReg 7  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R7")
-integerToARMReg 8  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R8")
-integerToARMReg 9  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R9")
-integerToARMReg 10 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R10")
-integerToARMReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R11")
-integerToARMReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R12")
-integerToARMReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R13")
-integerToARMReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R14")
-integerToARMReg _  = Nothing
+integerToReg :: Integer -> Maybe (ARMReg (BVType 32))
+integerToReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")
+integerToReg 1  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R1")
+integerToReg 2  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R2")
+integerToReg 3  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R3")
+integerToReg 4  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R4")
+integerToReg 5  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R5")
+integerToReg 6  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R6")
+integerToReg 7  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R7")
+integerToReg 8  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R8")
+integerToReg 9  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R9")
+integerToReg 10 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R10")
+integerToReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R11")
+integerToReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R12")
+integerToReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R13")
+integerToReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+integerToReg _  = Nothing
+
+integerToSIMDReg :: Integer -> Maybe (ARMReg (BVType 128))
+integerToSIMDReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V0")
+integerToSIMDReg 1  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V1")
+integerToSIMDReg 2  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V2")
+integerToSIMDReg 3  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V3")
+integerToSIMDReg 4  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V4")
+integerToSIMDReg 5  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V5")
+integerToSIMDReg 6  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V6")
+integerToSIMDReg 7  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V7")
+integerToSIMDReg 8  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V8")
+integerToSIMDReg 9  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V9")
+integerToSIMDReg 10 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V10")
+integerToSIMDReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V11")
+integerToSIMDReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V12")
+integerToSIMDReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V13")
+integerToSIMDReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V14")
+integerToSIMDReg 15 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V15")
+integerToSIMDReg 16 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V16")
+integerToSIMDReg 17 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V17")
+integerToSIMDReg 18 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V18")
+integerToSIMDReg 19 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V19")
+integerToSIMDReg 20 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V20")
+integerToSIMDReg 21 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V21")
+integerToSIMDReg 22 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V22")
+integerToSIMDReg 23 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V23")
+integerToSIMDReg 24 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V24")
+integerToSIMDReg 25 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V25")
+integerToSIMDReg 26 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V26")
+integerToSIMDReg 27 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V27")
+integerToSIMDReg 28 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V28")
+integerToSIMDReg 29 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V29")
+integerToSIMDReg 30 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V30")
+integerToSIMDReg 31 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_V31")
+integerToSIMDReg _  = Nothing
