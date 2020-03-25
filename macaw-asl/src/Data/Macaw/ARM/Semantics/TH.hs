@@ -96,8 +96,8 @@ armNonceAppEval bvi nonceApp =
                  Just $ do
                    rid <- addEltTH M.LittleEndian bvi ix
                    liftQ [| do reg <- case $(return rid) of
-                                        M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                                        _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                                 M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
+                                 _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
                                G.getRegVal reg
                           |]
                _ -> fail "Invalid uf_gpr_get"
