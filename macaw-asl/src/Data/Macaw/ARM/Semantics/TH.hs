@@ -67,42 +67,53 @@ armNonceAppEval bvi nonceApp =
             tp = WB.symFnReturnType symFn
         in case fnName of
           "uf_gpr_set" ->
-             case args of
-               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
-                 rgf <- addEltTH M.LittleEndian bvi rgf
-                 rid <- addEltTH M.LittleEndian bvi rid
-                 val <- addEltTH M.LittleEndian bvi val
-                 liftQ [| do reg <- case $(return rid) of
-                               M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                               _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
-                             G.setRegVal reg $(return val)
-                             return $(return rgf)
-                        |]
-               _ -> fail "Invalid uf_gpr_get"
+            case args of
+              Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
+                rgf <- addEltTH M.LittleEndian bvi rgf
+                rid <- addEltTH M.LittleEndian bvi rid
+                val <- addEltTH M.LittleEndian bvi val
+                liftQ [| do reg <- case $(return rid) of
+                              M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
+                              _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                            G.setRegVal reg $(return val)
+                            return $(return rgf)
+                       |]
+              _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
-             case args of
-               Ctx.Empty Ctx.:> _array Ctx.:> ix ->
-                 Just $ do
-                   rid <- addEltTH M.LittleEndian bvi ix
-                   liftQ [| do reg <- case $(return rid) of
-                                 M.BVValue w i | intValue w == 5, Just reg <- integerToSIMDReg i -> return reg
-                                 _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
-                               G.getRegVal reg
-                          |]
-               _ -> fail "Invalid uf_simd_get"
+            case args of
+              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+                Just $ do
+                  rid <- addEltTH M.LittleEndian bvi ix
+                  liftQ [| do reg <- case $(return rid) of
+                                M.BVValue w i | intValue w == 5, Just reg <- integerToSIMDReg i -> return reg
+                                _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                              G.getRegVal reg
+                         |]
+              _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
-             case args of
-               Ctx.Empty Ctx.:> _array Ctx.:> ix ->
-                 Just $ do
-                   rid <- addEltTH M.LittleEndian bvi ix
-                   liftQ [| do reg <- case $(return rid) of
-                                 M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                                 _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
-                               G.getRegVal reg
-                          |]
-               _ -> fail "Invalid uf_gpr_get"
+            case args of
+              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+                Just $ do
+                  rid <- addEltTH M.LittleEndian bvi ix
+                  liftQ [| do reg <- case $(return rid) of
+                                M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
+                                _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                              G.getRegVal reg
+                         |]
+              _ -> fail "Invalid uf_gpr_get"
           "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
+          _ | "uf_assertBV_" `isPrefixOf` fnName ->
+            case args of
+              Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
+                assert <- addEltTH M.LittleEndian bvi assert
+                bv <- addEltTH M.LittleEndian bvi bv
+                liftQ [| case $(return assert) of
+                          M.BoolValue True -> return $(return bv)
+                          _ -> E.throwError (G.GeneratorMessage "Bitvector length assertion failed")
+                       |]
+              _ -> fail "Invalid call to assertBV"
+
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->
                Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->

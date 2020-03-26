@@ -550,8 +550,15 @@ translateFormula :: forall arch t fs sh .
 translateFormula ltr ena ae df ipVarName semantics interps varNames endianness = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
   exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (MapF.toList (pfDefs semantics)))
-  [| Just $(doSequenceQ preamble exps) |]
-  where translateDefinition :: MapF.Pair (Parameter arch sh) (S.SymExpr (Sym t fs))
+  -- In the event that we have an empty list of expressions, insert a
+  -- final return ()
+  final <- NoBindS <$> [| return () |]
+  let allExps = case exps of
+        [] -> [final]
+        _ -> exps
+  [| Just $(doSequenceQ preamble allExps) |]
+  where transl
+ateDefinition :: MapF.Pair (Parameter arch sh) (S.SymExpr (Sym t fs))
                             -> MacawQ arch t fs ()
         translateDefinition (MapF.Pair param expr) = do
           case param of
