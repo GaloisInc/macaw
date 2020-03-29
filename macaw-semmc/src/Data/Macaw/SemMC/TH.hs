@@ -557,8 +557,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
         [] -> [final]
         _ -> exps
   [| Just $(doSequenceQ preamble allExps) |]
-  where transl
-ateDefinition :: MapF.Pair (Parameter arch sh) (S.SymExpr (Sym t fs))
+  where translateDefinition :: MapF.Pair (Parameter arch sh) (S.SymExpr (Sym t fs))
                             -> MacawQ arch t fs ()
         translateDefinition (MapF.Pair param expr) = do
           case param of
@@ -640,7 +639,6 @@ translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
-    CT.BaseIntegerRepr -> [t| M.BVType 64 |]
     CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
@@ -660,8 +658,7 @@ addEltTH endianness interps elt = do
           translatedExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
         S.BoundVarExpr bVar
-          | Just loc <- MapF.lookup bVar (locVars interps) ->
-            withLocToReg $ \ltr -> do
+          | Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
               bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
           | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
             bindExpr elt [| return $ O.extractValue $(varE (regsValName interps)) $(varE name) |]
