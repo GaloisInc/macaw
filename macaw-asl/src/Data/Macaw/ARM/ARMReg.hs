@@ -26,8 +26,10 @@ module Data.Macaw.ARM.ARMReg
     where
 
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Parameterized.SymbolRepr (symbolRepr)
+import           Data.Parameterized.TraversableFC (toListFC, fmapFC)
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -130,23 +132,37 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
       syscallArgumentRegs = error "TODO: MC.RegisterInfo ARMReg syscallArgumentsRegs undefined"
 
 armRegs :: forall w. (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => [Some ARMReg]
-armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
-          , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
-          ]
+armRegs = toListFC asARMReg ( fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalRefs Ctx.<++>
+                              ASL.gprGlobalRefsSym Ctx.<++>
+                              ASL.simdGlobalRefsSym
+                            )
+  where asARMReg :: ASL.GlobalRef s -> Some ARMReg
+        asARMReg gr = case ASL.globalRefRepr gr of
+          WT.BaseBoolRepr -> Some (ARMGlobalBool gr)
+          WT.BaseBVRepr _ -> Some (ARMGlobalBV gr)
+          tp -> error $ "unsupported global type " <> show tp
+          
+-- baseToMacawTypeRepr (WT.BaseBVRepr w) = MT.BVTypeRepr w
+-- baseToMacawTypeRepr WT.BaseBoolRepr = MT.BoolTypeRepr
+-- baseToMacawTypeRepr _ = error "ARMReg: unsupported what4 type"
+          
+-- armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
+--           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
+--           ]
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
 --
@@ -171,7 +187,6 @@ linuxSystemCallPreservedRegisters _ =
   -- are also a set of non-volatile floating point registers.  I have
   -- to check on the vector registers.
 
-
 -- | Translate a location from the semmc semantics into a location suitable for
 -- use in macaw
 locToRegTH :: proxy arm
@@ -184,7 +199,7 @@ locToRegTH _ (SA.Location globalRef) = do
       [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
     WT.BaseBVRepr _ ->
       [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
-    _ -> [| error "locToRegTH undefined for unrecognized location" |]
+    tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ LitE (StringL refName)) |]
 
 integerToReg :: Integer -> Maybe (ARMReg (BVType 32))
 integerToReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")
