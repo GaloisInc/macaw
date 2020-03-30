@@ -89,7 +89,7 @@ main = O.execParser optParser >>= doRefinement
 
 doRefinement :: Options -> IO ()
 doRefinement opts = do
-  withElf opts $ \archInfo bin unrefinedDI -> do
+  withElf opts $ \_ archInfo bin unrefinedDI -> do
     case unrefined opts of
       True -> showDiscoveryInfo opts unrefinedDI Nothing
       False ->
