@@ -22,6 +22,8 @@ import qualified Data.Macaw.Types as MT
 import           Data.Semigroup
 import qualified Data.Sequence as Seq
 
+import qualified SemMC.Architecture.AArch32 as ARM
+
 import Prelude
 
 -- import           Debug.Trace
@@ -36,13 +38,11 @@ debug = flip const
 -- athough the predicate condition on those instructions can determine
 -- if it is actually executed or not.  Also need to consider A32
 -- v.s. T32 mode.
-identifyCall :: ARMArchConstraints arm =>
-                proxy arm
-             -> MM.Memory (MC.ArchAddrWidth arm)
-             -> Seq.Seq (MC.Stmt arm ids)
-             -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
-             -> Maybe (Seq.Seq (MC.Stmt arm ids), MC.ArchSegmentOff arm)
-identifyCall _ _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identified as a call
+identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
+             -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
+             -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
+             -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
+identifyCall _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identified as a call
 
 
 -- | Intended to identify a return statement.
@@ -54,14 +54,12 @@ identifyCall _ _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identifie
 -- semantics will clear the low bit (T32 mode) or the low two bits
 -- (A32 mode) when writing to the PC to discard the mode bit in target
 -- addresses.
-identifyReturn :: ARMArchConstraints arm =>
-                  proxy arm
-               -> Seq.Seq (MC.Stmt arm ids)
-               -> MC.RegState (MC.ArchReg arm) (MC.Value arm ids)
-               -> AbsProcessorState (MC.ArchReg arm) ids
-               -> Maybe (Seq.Seq (MC.Stmt arm ids))
-identifyReturn arm stmts s finalRegSt8 =
-  if isReturnValue arm finalRegSt8 (s^.MC.boundValue MC.ip_reg)
+identifyReturn :: Seq.Seq (MC.Stmt ARM.AArch32 ids)
+               -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
+               -> AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+               -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids))
+identifyReturn stmts s finalRegSt8 =
+  if isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
   then Just stmts
   else Nothing
 
@@ -70,12 +68,10 @@ identifyReturn arm stmts s finalRegSt8 =
 -- from Macaw, modulo any ARM semantics operations (lots of ite caused
 -- by the conditional execution bits for most instructions, clearing
 -- of the low bits (1 in T32 mode, 2 in A32 mode).
-isReturnValue :: ARMArchConstraints arm =>
-                 proxy arm
-              -> AbsProcessorState (MC.ArchReg arm) ids
-              -> MC.Value arm ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
+isReturnValue :: AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+              -> MC.Value ARM.AArch32 ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.AArch32)))
               -> Bool
-isReturnValue _ absProcState val =
+isReturnValue absProcState val =
   case transferValue absProcState val of
     ReturnAddr -> True
     -- TBD: fill in the code here to recognize the expression that

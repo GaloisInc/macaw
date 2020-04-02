@@ -42,26 +42,25 @@ arm_linux_info =
                         , MI.extractBlockPrecond = extractBlockPrecond
                         , MI.initialBlockRegs = initialBlockRegs
                         , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
-                        , MI.mkInitialAbsState = mkInitialAbsState proxy
-                        , MI.absEvalArchFn = absEvalArchFn proxy
-                        , MI.absEvalArchStmt = absEvalArchStmt proxy
-                        , MI.identifyCall = identifyCall proxy
-                        , MI.archCallParams = callParams (preserveRegAcrossSyscall proxy)
-                        , MI.checkForReturnAddr = \r s -> isReturnValue proxy s (r ^. MC.boundValue ARMReg.arm_LR)
-                        , MI.identifyReturn = identifyReturn proxy
+                        , MI.mkInitialAbsState = mkInitialAbsState
+                        , MI.absEvalArchFn = absEvalArchFn
+                        , MI.absEvalArchStmt = absEvalArchStmt
+                        , MI.identifyCall = identifyCall
+                        , MI.archCallParams = callParams preserveRegAcrossSyscall
+                        , MI.checkForReturnAddr = \r s -> isReturnValue s (r ^. MC.boundValue ARMReg.arm_LR)
+                        , MI.identifyReturn = identifyReturn
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
                         , MI.rewriteArchTermStmt = rewriteTermStmt
-                        , MI.archDemandContext = archDemandContext proxy
-                        , MI.postArchTermStmtAbsState = postARMTermStmtAbsState (preserveRegAcrossSyscall proxy)
+                        , MI.archDemandContext = archDemandContext
+                        , MI.postArchTermStmtAbsState = postARMTermStmtAbsState preserveRegAcrossSyscall
                         }
         where
           proxy = Proxy @ARM.AArch32
 
 
-archDemandContext :: (ARMArchConstraints arm) => proxy arm
-                  -> MDS.DemandContext arm
-archDemandContext _ =
+archDemandContext :: MDS.DemandContext ARM.AArch32
+archDemandContext =
   MDS.DemandContext { MDS.demandConstraints    = \a -> a
                     , MDS.archFnHasSideEffects = armPrimFnHasSideEffects
                     }

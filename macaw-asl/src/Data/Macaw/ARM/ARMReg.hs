@@ -170,10 +170,8 @@ armRegs = toListFC asARMReg ( fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalRefs Ct
 -- https://stackoverflow.com/questions/12946958/system-call-in-arm,
 -- R0-R6 are used to pass syscall arguments, r7 specifies the
 -- syscall#, and r0 is the return code.
-linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w)
-                                  => proxy arm
-                                  -> Set.Set (Some ARMReg)
-linuxSystemCallPreservedRegisters _ =
+linuxSystemCallPreservedRegisters :: Set.Set (Some ARMReg)
+linuxSystemCallPreservedRegisters =
   Set.fromList [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))

@@ -34,6 +34,7 @@ import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits
 import           Language.Haskell.TH
+import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified SemMC.Architecture.Location as L
@@ -50,12 +51,10 @@ import qualified What4.Expr.Builder as WB
 -- current Nonce context.  If this is not recognized as an
 -- architecture-specific Application, return Nothing, in which case
 -- the caller will try the set of default Application evaluators.
-armNonceAppEval :: forall arch t fs tp
-                 . (A.Architecture arch,
-                    L.Location arch ~ Loc.Location arch)
-                => BoundVarInterpretations arch t fs
+armNonceAppEval :: forall t fs tp .
+                   BoundVarInterpretations ARM.AArch32 t fs
                 -> WB.NonceApp t (WB.Expr t) tp
-                -> Maybe (MacawQ arch t fs Exp)
+                -> Maybe (MacawQ ARM.AArch32 t fs Exp)
 armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
     -- macaw-semmc:Data.Macaw.SemMC.TH) will search the
@@ -66,6 +65,19 @@ armNonceAppEval bvi nonceApp =
         let fnName = symFnName symFn
             tp = WB.symFnReturnType symFn
         in case fnName of
+          "uf_simd_set" ->
+            case args of
+              Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
+                rgf <- addEltTH M.LittleEndian bvi rgf
+                rid <- addEltTH M.LittleEndian bvi rid
+                val <- addEltTH M.LittleEndian bvi val
+                liftQ [| do reg <- case $(return rid) of
+                              M.BVValue w i | intValue w == 5, Just reg <- integerToReg i -> return reg
+                              _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: " <> show $(return rid))
+                            G.setRegVal reg $(return val)
+                            return $(return rgf)
+                       |]
+              _ -> fail "Invalid uf_simd_get"
           "uf_gpr_set" ->
             case args of
               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
@@ -74,7 +86,7 @@ armNonceAppEval bvi nonceApp =
                 val <- addEltTH M.LittleEndian bvi val
                 liftQ [| do reg <- case $(return rid) of
                               M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                              _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                              _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: " <> show $(return rid))
                             G.setRegVal reg $(return val)
                             return $(return rgf)
                        |]
@@ -86,7 +98,7 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| do reg <- case $(return rid) of
                                 M.BVValue w i | intValue w == 5, Just reg <- integerToSIMDReg i -> return reg
-                                _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                                _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete: " <> show $(return rid))
                               G.getRegVal reg
                          |]
               _ -> fail "Invalid uf_simd_get"
@@ -97,7 +109,9 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| do reg <- case $(return rid) of
                                 M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                                _ -> E.throwError (G.GeneratorMessage "Register identifier not concrete")
+                                -- M.AssignedValue _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: assigned") -- <> show $(return rid))
+                                -- M.Initial _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: initial") -- <> show $(return rid))
+                                _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete: " <> show (M.ppValueAssignments $(return rid)))
                               G.getRegVal reg
                          |]
               _ -> fail "Invalid uf_gpr_get"
@@ -106,11 +120,14 @@ armNonceAppEval bvi nonceApp =
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
-                assert <- addEltTH M.LittleEndian bvi assert
+                assertTH <- addEltTH M.LittleEndian bvi assert
                 bv <- addEltTH M.LittleEndian bvi bv
-                liftQ [| case $(return assert) of
+                liftQ [| case $(return assertTH) of
                           M.BoolValue True -> return $(return bv)
-                          _ -> E.throwError (G.GeneratorMessage "Bitvector length assertion failed")
+                          M.BoolValue False -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed!")
+                          -- FIXME: THIS SHOULD THROW AN ERROR
+                          _ -> return $(return bv)
+                          -- nm -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed: <FIXME: PRINT NAME>")
                        |]
               _ -> fail "Invalid call to assertBV"
 
@@ -131,18 +148,16 @@ what4TypeTH tp = error $ "Unsupported base type: " <> show tp
 
 -- ----------------------------------------------------------------------
 
-addArchAssignment :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
-                  => M.ArchFn arch (M.Value arch ids) tp
-                  -> G.Generator arch ids s (G.Expr arch ids tp)
+addArchAssignment :: (M.HasRepr (M.ArchFn ARM.AArch32 (M.Value ARM.AArch32 ids)) M.TypeRepr)
+                  => M.ArchFn ARM.AArch32 (M.Value ARM.AArch32 ids) tp
+                  -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
 addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
 
 
-armAppEvaluator :: (L.Location arch ~ Loc.Location arch,
-                    A.Architecture arch)
-                => M.Endianness
-                -> BoundVarInterpretations arch t fs
+armAppEvaluator :: M.Endianness
+                -> BoundVarInterpretations ARM.AArch32 t fs
                 -> WB.App (WB.Expr t) ctp
-                -> Maybe (MacawQ arch t fs Exp)
+                -> Maybe (MacawQ ARM.AArch32 t fs Exp)
 armAppEvaluator endianness interps elt =
     case elt of
 

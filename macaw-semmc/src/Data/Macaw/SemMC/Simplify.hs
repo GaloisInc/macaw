@@ -49,6 +49,7 @@ simplifyApp a =
     BVAnd sz l r                      -> binopbv (.&.) sz l r
     BVOr  sz l r                      -> binopbv (.|.) sz l r
     BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
+    BVShr sz l r                      -> binopbv (\l' r' -> shiftR l' (fromIntegral r')) sz l r
     BVAdd _ l (BVValue _ 0)           -> Just l
     BVAdd _ (BVValue _ 0) r           -> Just r
     BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->

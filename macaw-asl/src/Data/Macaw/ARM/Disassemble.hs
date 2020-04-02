@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -74,7 +75,7 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import           Data.Macaw.ARM.ARMReg
-import           Data.Macaw.ARM.Arch ( ARMArchConstraints )
+-- import           Data.Macaw.ARM.Arch ( ARMArchConstraints )
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
@@ -91,6 +92,7 @@ import qualified Dismantle.ARM.A32 as ARMD
 import qualified Dismantle.ARM.T32 as ThumbD
 import           Text.Printf ( printf )
 
+import qualified SemMC.Architecture.AArch32 as ARM
 
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)
@@ -101,25 +103,24 @@ data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
 --
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
-disassembleFn :: (ARMArchConstraints arm)
-              => proxy arm
-              -> (Value arm ids (BVType (ArchAddrWidth arm)) -> ARMD.Instruction -> Maybe (Generator arm ids s ()))
+disassembleFn :: proxy ARM.AArch32
+              -> (Value ARM.AArch32 ids (BVType (ArchAddrWidth ARM.AArch32)) -> ARMD.Instruction -> Maybe (Generator ARM.AArch32 ids s ()))
               -- ^ A function to look up the semantics for an A32 instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
-              -> (Value arm ids (BVType (ArchAddrWidth arm)) -> ThumbD.Instruction -> Maybe (Generator arm ids s ()))
+              -> (Value ARM.AArch32 ids (BVType (ArchAddrWidth ARM.AArch32)) -> ThumbD.Instruction -> Maybe (Generator ARM.AArch32 ids s ()))
               -- ^ A function to look up the semantics for a T32 instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
               -- addressing is necessary.
               -> NC.NonceGenerator (ST s) ids
               -- ^ A generator of unique IDs used for assignments
-              -> ArchSegmentOff arm
+              -> ArchSegmentOff ARM.AArch32
               -- ^ The address to disassemble from
-              -> (RegState (ArchReg arm) (Value arm ids))
+              -> (RegState (ArchReg ARM.AArch32) (Value ARM.AArch32 ids))
               -- ^ The initial registers
               -> Int
               -- ^ Maximum size of the block (a safeguard)
-              -> ST s (Block arm ids, Int)
+              -> ST s (Block ARM.AArch32 ids, Int)
 disassembleFn _ lookupA32Semantics lookupT32Semantics nonceGen startAddr regState maxSize = do
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
@@ -131,13 +132,12 @@ disassembleFn _ lookupA32Semantics lookupT32Semantics nonceGen startAddr regStat
     Left (blocks, off, _exn) -> return (blocks, off)
     Right (blocks, bytes) -> return (blocks, bytes)
 
-tryDisassembleBlock :: (ARMArchConstraints arm)
-                    => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
+tryDisassembleBlock :: (Value ARM.AArch32 ids (BVType (ArchAddrWidth ARM.AArch32)) -> InstructionSet -> Maybe (Generator ARM.AArch32 ids s ()))
                     -> NC.NonceGenerator (ST s) ids
-                    -> ArchSegmentOff arm
-                    -> RegState (ArchReg arm) (Value arm ids)
+                    -> ArchSegmentOff ARM.AArch32
+                    -> RegState (ArchReg ARM.AArch32) (Value ARM.AArch32 ids)
                     -> Int
-                    -> DisM arm ids s (Block arm ids, Int)
+                    -> DisM ARM.AArch32 ids s (Block ARM.AArch32 ids, Int)
 tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   let gs0 = initGenState nonceGen startAddr regState
   let startOffset = MM.segoffOffset startAddr
@@ -162,20 +162,19 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
 --
 -- In most of those cases, we end the block with a simple terminator.  If the IP
 -- becomes a mux, we split execution using 'conditionalBranch'.
-disassembleBlock :: forall arm ids s
-                  . ARMArchConstraints arm
-                 => (Value arm ids (BVType (ArchAddrWidth arm)) -> InstructionSet -> Maybe (Generator arm ids s ()))
+disassembleBlock :: forall ids s .
+                    (Value ARM.AArch32 ids (BVType 32) -> InstructionSet -> Maybe (Generator ARM.AArch32 ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
-                 -> GenState arm ids s
-                 -> MM.MemSegmentOff (ArchAddrWidth arm)
+                 -> GenState ARM.AArch32 ids s
+                 -> MM.MemSegmentOff 32
                  -- ^ The current instruction pointer
-                 -> MM.MemWord (ArchAddrWidth arm)
+                 -> MM.MemWord 32
                  -- ^ The offset into the block of this instruction
-                 -> MM.MemWord (ArchAddrWidth arm)
+                 -> MM.MemWord 32
                  -- ^ The maximum offset into the bytestring that we should
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
-                 -> DisM arm ids s (MM.MemWord (ArchAddrWidth arm), Block arm ids)
+                 -> DisM ARM.AArch32 ids s (MM.MemWord 32, Block ARM.AArch32 ids)
 disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curPCAddr
   let off = MM.segoffOffset curPCAddr
@@ -183,15 +182,18 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
     Left err -> failAt gs off curPCAddr (DecodeError err)
     Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
     Right (i, bytesRead) -> do
+      -- FIXME: Set PSTATE.T based on whether instruction is A32I or T32I
       -- traceM ("II: " ++ show i)
-      let nextPCOffset = off + bytesRead
+      let curPC = MM.segmentOffAddr seg off
+          nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
-          nextPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
+          nextPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
+          curPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
                  Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (knownNat :: NatRepr (ArchAddrWidth arm)) (fromIntegral addr))
+                 Just addr -> return (BVValue (knownNat :: NatRepr 32) (fromIntegral addr))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curPCAddr (UnsupportedInstruction i)
         Just transformer -> do
@@ -210,12 +212,15 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             Right gs1 -> do
               case gs1 of
                 UnfinishedPartialBlock preBlock
+                  -- FIXME: we are ignoring the max offset for now
                   | v <- preBlock ^. (pBlockState . curIP)
-                  , Just simplifiedIP <- simplifyValue v
-                  , simplifiedIP == nextPCVal
-                  , nextPCOffset < maxOffset
+                  , v == curPCVal
                   , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
-                      let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
+                  -- , Just simplifiedIP <- simplifyValue v
+                  -- , simplifiedIP == nextPCVal
+                  -- , simplifiedIP == curPCVal
+                  -- , nextPCOffset < maxOffset
+                      let preBlock' = (pBlockState . curIP .~ nextPCVal) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockState = preBlock'
                                          , genAddr = nextPCSegAddr

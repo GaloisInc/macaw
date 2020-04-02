@@ -218,9 +218,9 @@ mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endiann
        lTypeVar <- newName "l"
        idsTypeVar <- newName "ids"
        sTypeVar <- newName "s"
-       archTypeVar <- newName "arch"
-       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(varT archTypeVar)))
-                                  => M.Value $(varT archTypeVar) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(varT archTypeVar)))
+--       archTypeVar <- newName "arch"
+       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(snd operandResultType)))
+                                  => M.Value $(snd operandResultType) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(snd operandResultType)))
                                   -> SL.List $(fst operandResultType) $(varT lTypeVar)
                                   -> Maybe (G.Generator $(snd operandResultType)
                                                         $(varT idsTypeVar)
@@ -568,9 +568,24 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
             LiteralParameter loc
               | L.isMemoryLocation loc
               , S.NonceAppExpr n <- expr
-              , S.FnApp symFn args <- S.nonceExprApp n
-              , Just memWidth <- matchWriteMemWidth (symFnName symFn) -> 
-                  void $ writeMemTH interps symFn args memWidth endianness
+              , S.FnApp symFn args <- S.nonceExprApp n ->
+              -- , Just _ <- matchWriteMemWidth (symFnName symFn) -> 
+                  void $ writeMemTH interps symFn args endianness
+              -- | L.isMemoryLocation loc
+              -- , S.BoundVarExpr bVar <- expr
+              -- , Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
+              --     return ()
+              --     -- appendStmt [| error "BOUND VAR MEM" |]
+              --     -- bindExpr expr [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
+              -- | L.isMemoryLocation loc
+              -- , S.BoundVarExpr bVar <- expr -> do
+              --     return ()
+              --     -- , Nothing <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
+              --     -- appendStmt [| error $(return $ LitE (StringL ("BAD BOUND VAR MEM: " <> show bVar))) |]
+              -- | L.isMemoryLocation loc
+              -- , S.AppExpr _ <- expr -> do
+              --     error $ "WRITE TO MEM: APP"
+              | L.isMemoryLocation loc -> return ()
               | otherwise -> do
                   valExp <- addEltTH endianness interps expr
                   appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
@@ -642,6 +657,11 @@ translateBaseType tp =
     CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
+-- | wrapper around bitvector constants that forces some type
+-- variables to match those of the monadic context.
+genBVValue :: 1 SI.<= w => NR.NatRepr w -> Integer -> G.Generator arch ids s (M.Value arch ids (M.BVType w))
+genBVValue repr i = return (M.BVValue repr i)
+
 addEltTH :: forall arch t fs ctp .
             (A.Architecture arch)
          => M.Endianness
@@ -670,11 +690,11 @@ addEltTH endianness interps elt = do
           bindExpr elt (return translatedExpr)
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
-            bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
+            bindExpr elt [| genBVValue $(natReprTH w) $(lift val) |]
+--            bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
           | otherwise -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
         S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
-
 
 symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
@@ -689,13 +709,14 @@ writeMemTH :: forall arch t fs args ret
            => BoundVarInterpretations arch t fs
            -> S.ExprSymFn t args ret
            -> Ctx.Assignment (S.Expr t) args
-           -> Int
            -> M.Endianness
            -> MacawQ arch t fs (Some (S.Expr t))
-writeMemTH bvi symFn args memWidth endianness =
+writeMemTH bvi symFn args endianness =
   case FC.toListFC Some args of
     [Some mem, Some addr, Some val] -> case SI.exprType val of
-      SI.BaseBVRepr memWidthRepr | intValue memWidthRepr == fromIntegral (memWidth * 8) -> do
+      SI.BaseBVRepr memWidthRepr -> do
+        -- FIXME: we aren't checking that the width is a multiple of 8.
+        let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
         addrValExp <- addEltTH endianness bvi addr
         writtenValExp <- addEltTH endianness bvi val
         appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) $(return writtenValExp)) |]
@@ -799,8 +820,8 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
                     argNames -> do
                       let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                       liftQ [| return $ O.extractValue $(varE (regsValName bvi)) ($(call)) |]
-              | Just memWidth <- matchWriteMemWidth fnName -> do
-                  Some memExpr <- writeMemTH bvi symFn args memWidth endianness
+              | Just _ <- matchWriteMemWidth fnName -> do
+                  Some memExpr <- writeMemTH bvi symFn args endianness
                   mem <- addEltTH endianness bvi memExpr
                   liftQ [| return $(return mem) |]
               | otherwise -> error $ "Unsupported function: " ++ show fnName ++ "(" ++ show fnArgTypes ++ ") -> " ++ show fnRetType

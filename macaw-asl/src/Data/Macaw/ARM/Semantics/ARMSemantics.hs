@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -ddump-splices -ddump-to-file #-}
+{-# OPTIONS_GHC -w -ddump-splices -ddump-to-file #-}
 
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE DataKinds #-}
@@ -39,3 +39,4 @@ execInstruction = $(genExecInstruction (Proxy @ARMSem.AArch32)
                     ([t| Operand |], [t| ARMSem.AArch32 |])
                     MC.LittleEndian
                    )
+
