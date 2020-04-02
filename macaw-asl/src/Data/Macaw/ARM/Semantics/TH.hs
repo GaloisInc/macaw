@@ -73,7 +73,7 @@ armNonceAppEval bvi nonceApp =
                 val <- addEltTH M.LittleEndian bvi val
                 liftQ [| do reg <- case $(return rid) of
                               M.BVValue w i | intValue w == 5, Just reg <- integerToReg i -> return reg
-                              _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: " <> show $(return rid))
+                              _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete (uf_simd_set): " <> show (M.ppValueAssignments $(return rid)))
                             G.setRegVal reg $(return val)
                             return $(return rgf)
                        |]
@@ -86,7 +86,7 @@ armNonceAppEval bvi nonceApp =
                 val <- addEltTH M.LittleEndian bvi val
                 liftQ [| do reg <- case $(return rid) of
                               M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                              _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: " <> show $(return rid))
+                              _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete (uf_gpr_set): " <> show (M.ppValueAssignments $(return rid)))
                             G.setRegVal reg $(return val)
                             return $(return rgf)
                        |]
@@ -98,7 +98,7 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| do reg <- case $(return rid) of
                                 M.BVValue w i | intValue w == 5, Just reg <- integerToSIMDReg i -> return reg
-                                _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete: " <> show $(return rid))
+                                _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete (uf_simd_get: " <> show (M.ppValueAssignments $(return rid)))
                               G.getRegVal reg
                          |]
               _ -> fail "Invalid uf_simd_get"
@@ -109,9 +109,7 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| do reg <- case $(return rid) of
                                 M.BVValue w i | intValue w == 4, Just reg <- integerToReg i -> return reg
-                                -- M.AssignedValue _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: assigned") -- <> show $(return rid))
-                                -- M.Initial _ -> E.throwError (G.GeneratorMessage $ "Register identifier not concrete: initial") -- <> show $(return rid))
-                                _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete: " <> show (M.ppValueAssignments $(return rid)))
+                                _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete (uf_gpr_get): " <> show (M.ppValueAssignments $(return rid)))
                               G.getRegVal reg
                          |]
               _ -> fail "Invalid uf_gpr_get"
