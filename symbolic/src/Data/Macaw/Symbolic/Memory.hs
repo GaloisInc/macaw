@@ -4,107 +4,119 @@
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
--- | This module provides a model implementation of a 'MS.GlobalMap'
+-- | This module provides model implementations of 'MS.GlobalMap' and 'MS.MkGlobalPointerValidityPred'
 --
 -- The implementation is generic and should be suitable for most use cases.  The
 -- documentation for 'MS.GlobalMap' describes the problem being solved in
 -- detail.  At a high level, we need to map bitvector values to pointers in the
 -- LLVM memory model.
 --
--- This module provides an interface to populate an LLVM memory based on the
--- contents of the 'MC.Memory' object from macaw.  Read-only memory is mapped in
--- as immutable concrete data.  Mutable memory can be optionally mapped as
--- concrete or symbolic, depending on the use case required.  This model could
--- be extended to make the symbolic/concrete distinction more granular.
+-- This module provides an interface to populate an LLVM memory model from the
+-- contents of the 'MC.Memory' object from macaw.  All of the static memory in a
+-- binary is mapped into a single "symbolic" memory allocation in the LLVM
+-- memory model.  The allocation is symbolic in that it is backed by a symbolic
+-- SMT array.  Bytes in the symbolic allocation are initialized with concrete
+-- data if they are read-only data (e.g., from .rodata or the .text sections).
+-- Optionally, mutable data can be included in the initialization (see
+-- 'MemoryModelContents').  The 'MS.MkGlobalPointerValidityPred' function can be
+-- used to enforce that writes do not clobber read-only data and that no reads
+-- or writes touch unmapped memory.
+--
+-- This module does not represent the only possible memory model.  It just
+-- provides a default implementation that should be generally useful.
+--
+-- Note that representing all static memory in a single allocation (and thus SMT
+-- array) is intended to improve efficiency by pushing as much pointer reasoning
+-- as possible into the theory of arrays.  This formulation enables efficient
+-- handling of symbolic reads and writes when they are sufficiently constrained
+-- by predicates in the program.
 --
 -- Below is an example of using this module to simulate a machine code function
 -- using Crucible.
 --
--- > {-# LANGUAGE DataKinds #-}
--- > {-# LANGUAGE FlexibleContexts #-}
--- > {-# LANGUAGE GADTs #-}
--- > {-# LANGUAGE ScopedTypeVariables #-}
--- > {-# LANGUAGE TypeApplications #-}
--- > {-# LANGUAGE TypeOperators #-}
--- >
--- > import           GHC.TypeLits
--- > import           Control.Monad.ST ( stToIO, RealWorld )
--- > import qualified Data.Macaw.CFG as MC
--- > import qualified Data.Macaw.Symbolic as MS
--- > import qualified Data.Macaw.Symbolic.Memory as MSM
--- > import           Data.Proxy ( Proxy(..) )
--- > import qualified Lang.Crucible.Backend as CB
--- > import qualified Lang.Crucible.CFG.Core as CC
--- > import qualified Lang.Crucible.FunctionHandle as CFH
--- > import qualified Lang.Crucible.LLVM.MemModel as CLM
--- > import qualified Lang.Crucible.LLVM.Intrinsics as CLI
--- > import qualified Lang.Crucible.LLVM.DataLayout as LDL
--- > import qualified Lang.Crucible.Simulator as CS
--- > import qualified Lang.Crucible.Simulator.GlobalState as CSG
--- > import qualified System.IO as IO
--- > import qualified What4.Interface as WI
--- >
--- > useCFG :: forall sym arch blocks
--- >         . ( CB.IsSymInterface sym
--- >           , MS.SymArchConstraints arch
--- >           , 16 <= MC.ArchAddrWidth arch
--- >           , Ord (WI.SymExpr sym WI.BaseNatType)
--- >           , KnownNat (MC.ArchAddrWidth arch)
--- >           )
--- >        => CFH.HandleAllocator RealWorld
--- >        -- ^ The handle allocator used to construct the CFG
--- >        -> sym
--- >        -- ^ The symbolic backend
--- >        -> MS.ArchVals arch
--- >        -- ^ 'ArchVals' from a prior call to 'archVals'
--- >        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
--- >        -- ^ Initial register state for the simulation
--- >        -> MC.Memory (MC.ArchAddrWidth arch)
--- >        -- ^ The memory recovered by macaw
--- >        -> MS.LookupFunctionHandle sym arch
--- >        -- ^ A translator for machine code addresses to function handles
--- >        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
--- >        -- ^ The CFG to simulate
--- >        -> IO ()
--- > useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
--- >        initialRegs mem lfh cfg = withArchEval sym $ \archEvalFns -> do
--- >   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
--- >   memModelVar <- stToIO (CLM.mkMemVar hdlAlloc)
--- >   (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
--- >   let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh
--- >   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
--- >   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
--- >   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
--- >   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler (CS.runOverrideSim rep simulation)
--- >   let executionFeatures = []
--- >   execRes <- CS.executeCrucible executionFeatures initialState
--- >   case execRes of
--- >     CS.FinishedResult {} -> return ()
--- >     _ -> putStrLn "Simulation failed"
--- >
+-- >>> :set -XDataKinds
+-- >>> :set -XFlexibleContexts
+-- >>> :set -XGADTs
+-- >>> :set -XImplicitParams
+-- >>> :set -XScopedTypeVariables
+-- >>> :set -XTypeApplications
+-- >>> :set -XTypeOperators
+-- >>> import           GHC.TypeLits
+-- >>> import           Data.IORef
+-- >>> import qualified Data.Macaw.CFG as MC
+-- >>> import qualified Data.Macaw.Symbolic as MS
+-- >>> import qualified Data.Macaw.Symbolic.Memory as MSM
+-- >>> import           Data.Proxy ( Proxy(..) )
+-- >>> import qualified Lang.Crucible.Backend as CB
+-- >>> import qualified Lang.Crucible.CFG.Core as CC
+-- >>> import qualified Lang.Crucible.FunctionHandle as CFH
+-- >>> import qualified Lang.Crucible.LLVM.MemModel as CLM
+-- >>> import qualified Lang.Crucible.LLVM.Intrinsics as CLI
+-- >>> import qualified Lang.Crucible.LLVM.DataLayout as LDL
+-- >>> import qualified Lang.Crucible.Simulator as CS
+-- >>> import qualified Lang.Crucible.Simulator.GlobalState as CSG
+-- >>> import qualified System.IO as IO
+-- >>> import qualified What4.Interface as WI
+-- >>> :{
+-- useCFG :: forall sym arch blocks
+--         . ( CB.IsSymInterface sym
+--           , MS.SymArchConstraints arch
+--           , 16 <= MC.ArchAddrWidth arch
+--           , Ord (WI.SymExpr sym WI.BaseNatType)
+--           , KnownNat (MC.ArchAddrWidth arch)
+--           )
+--        => CFH.HandleAllocator
+--        -- ^ The handle allocator used to construct the CFG
+--        -> sym
+--        -- ^ The symbolic backend
+--        -> MS.ArchVals arch
+--        -- ^ 'ArchVals' from a prior call to 'archVals'
+--        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
+--        -- ^ Initial register state for the simulation
+--        -> MC.Memory (MC.ArchAddrWidth arch)
+--        -- ^ The memory recovered by macaw
+--        -> MS.LookupFunctionHandle sym arch
+--        -- ^ A translator for machine code addresses to function handles
+--        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
+--        -- ^ The CFG to simulate
+--        -> IO ()
+-- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs mem lfh cfg = do
+--   bbMapRef <- newIORef mempty
+--   let ?badBehaviorMap = bbMapRef
+--   withArchEval sym $ \archEvalFns -> do
+--     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
+--     memModelVar <- CLM.mkMemVar hdlAlloc
+--     (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
+--     let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
+--     let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
+--     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
+--     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
+--     let executionFeatures = []
+--     execRes <- CS.executeCrucible executionFeatures initialState
+--     case execRes of
+--       CS.FinishedResult {} -> return ()
+--       _ -> putStrLn "Simulation failed"
+-- :}
 module Data.Macaw.Symbolic.Memory (
   -- * Memory Management
   MemPtrTable,
   toCrucibleEndian,
   newGlobalMemory,
   MemoryModelContents(..),
-  mapRegionPointers,
-  lookupAllocationBase,
-  -- * Allocations
-  Allocation,
-  allocationBase,
-  allocationPtr
+  mkGlobalPointerValidityPred,
+  mapRegionPointers
   ) where
 
 import           GHC.TypeLits
 
+import qualified Control.Lens as L
 import           Control.Monad
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.IntervalMap.Strict as IM
-import qualified Data.Map.Strict as Map
-import           Data.Semigroup
 
 import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.Context as Ctx
@@ -115,12 +127,13 @@ import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
+import           Text.Printf ( printf )
 import qualified What4.Interface as WI
+import qualified What4.Symbol as WS
 
 import qualified Data.Macaw.Symbolic as MS
 
 import Prelude
-
 
 -- | A configuration knob controlling how the initial contents of the memory
 -- model are populated
@@ -145,23 +158,15 @@ data MemoryModelContents = SymbolicMutable
                          | ConcreteMutable
                          -- ^ All of the global data is taken from the binary
 
--- | A wrapper around an LLVM memory model pointer with enough metadata to do
--- address translation from raw bitvectors (LLVM pointers with region 0) and
--- 'MM.MemAddr' values into 'MMP.LLVMPtr' values.
-data Allocation sym w =
-  Allocation { allocationPtr :: CL.LLVMPtr sym w
-             -- ^ The LLVM memory model pointer that points to the memory
-             -- allocated
-             , allocationBase :: MC.MemWord w
-             -- ^ The address of the base of the segment corresponding to this
-             -- memory allocation
-             }
-
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation
 data MemPtrTable sym w =
-  MemPtrTable { memPtrTable :: IM.IntervalMap (MC.MemWord w) (Allocation sym w)
-              , allocationIndex :: Map.Map (CS.RegValue sym CT.NatType) (Allocation sym w)
+  MemPtrTable { memPtrTable :: IM.IntervalMap (MC.MemWord w) CL.Mutability
+              -- ^ The ranges of (static) allocations that are mapped
+              , memPtr :: CL.LLVMPtr sym w
+              -- ^ The pointer to the allocation backing all of memory
+              , memRepr :: PN.NatRepr w
+              -- ^ Pointer width representative
               }
 
 -- | Convert a Macaw Endianness to a Crucible LLVM EndianForm
@@ -169,13 +174,22 @@ toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
 toCrucibleEndian MC.BigEndian    = CLD.BigEndian
 toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
 
-
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the
 -- 'CL.MemImpl' are populated based on the 'MC.Memory' (macaw memory) passed in.
--- Read-only data is immutable and concrete.  Other data in the binary is mapped
--- in as either concrete or symbolic based on the value of the
--- 'MemoryModelContents' parameter.
+--
+-- The statically-allocated memory in the 'MC.Memory' is represented by a single
+-- symbolic LLVM memory model allocation, which is backed by an SMT array.
+-- Read-only data is copied in concretely.  Mutable data can be copied in as
+-- concrete mutable data or as symbolic data, depending on the needs of the
+-- symbolic execution task (the behavior is controlled by the
+-- 'MemoryModelContents' parameter).
+--
+-- Note that, since memory is represented using a single SMT array, large
+-- portions of unmapped memory are included in the mapping.  Additionally, SMT
+-- arrays do not have notions of mutable or immutable regions.  These notions
+-- are enforced via the 'MS.MkGlobalPointerValidityPred', which encodes valid
+-- uses of pointers.  See 'mkGlobalPointerValidityPred' for details.
 newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , MC.MemWidth (MC.ArchAddrWidth arch)
                    , KnownNat (MC.ArchAddrWidth arch)
@@ -195,17 +209,25 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                 -- ^ The macaw memory
                 -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newGlobalMemory proxy sym endian mmc mem = do
-  memImpl1 <- liftIO $ CL.emptyMem endian
-  (memImpl2, tbl) <- populateMemory proxy sym mmc mem memImpl1
-  return (memImpl2, MemPtrTable { memPtrTable = tbl
-                                , allocationIndex = indexAllocations tbl
-                                })
+  let ?ptrWidth = MC.memWidth mem
 
--- | Set up the memory model with some initial contents based on the memory image of the binary
---
--- The strategy is configurable via the 'MemoryModelContents' parameter.  We
--- always leave read-only data as concrete and immutable.  We can either
--- instantiate mutable memory as concrete or symbolic.
+  memImpl1 <- liftIO $ CL.emptyMem endian
+
+  let allocName = WS.safeSymbol "globalMemoryBytes"
+  symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
+  sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
+  (ptr, memImpl2) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable
+                         "Global memory for macaw-symbolic"
+                         memImpl1 sizeBV CLD.noAlignment
+
+  (symArray2, tbl) <- populateMemory proxy sym mmc mem symArray1
+  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
+  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
+
+  return (memImpl3, ptrTable)
+
+-- | Copy memory from the 'MC.Memory' into the LLVM memory model allocation as
+-- directed by the 'MemoryModelContents' selection
 populateMemory :: ( CB.IsSymInterface sym
                   , 16 <= MC.ArchAddrWidth arch
                   , MC.MemWidth (MC.ArchAddrWidth arch)
@@ -220,90 +242,130 @@ populateMemory :: ( CB.IsSymInterface sym
                -- ^ A flag to indicate how to populate the memory model based on the memory image
                -> MC.Memory (MC.ArchAddrWidth arch)
                -- ^ The initial memory image for the binary, which contains static data to populate the memory model
-               -> CL.MemImpl sym
-               -- ^ The initial memory model (e.g., it might have a stack allocated)
-               -> m (CL.MemImpl sym, IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) (Allocation sym (MC.ArchAddrWidth arch)))
-populateMemory _ sym mmc mem memImpl0 = do
-  pleatM (memImpl0, IM.empty) (MC.memSegments mem) $ \impl1 seg -> do
-    pleatM impl1 (MC.relativeSegmentContents [seg]) $ \impl2 (addr, memChunk) -> do
-      bytes <- case memChunk of
+               -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+               -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+                    , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
+                    )
+populateMemory proxy sym mmc mem symArray0 =
+  pleatM (symArray0, IM.empty) (MC.memSegments mem) $ \allocs1 seg -> do
+    pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
+      concreteBytes <- case memChunk of
         MC.RelocationRegion {} -> error $
           "SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk
-        MC.BSSRegion sz -> liftIO $
-          replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat 0
-        MC.ByteRegion bytes -> liftIO $
-          mapM (WI.bvLit sym PN.knownNat . fromIntegral) $ BS.unpack bytes
-      addSegment sym mmc mem seg addr bytes impl2
+        MC.BSSRegion sz ->
+          liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat 0
+        MC.ByteRegion bytes ->
+          liftIO $ mapM (WI.bvLit sym PN.knownNat . fromIntegral) $ BS.unpack bytes
+      populateSegmentChunk proxy sym mmc mem symArray seg addr concreteBytes allocs2
 
--- | Add a new value (which is an LLVM array of bytes) of a given length at the given address.
-addSegment :: ( 16 <= w
-              , MC.MemWidth w
-              , KnownNat w
-              , CB.IsSymInterface sym
-              , MonadIO m
-              )
-           => sym
-           -> MemoryModelContents
-           -> MC.Memory w
-           -> MC.MemSegment w
-           -> MC.MemAddr w
-           -> [WI.SymBV sym 8]
-           -> (CL.MemImpl sym, IM.IntervalMap (MC.MemWord w) (Allocation sym w))
-           -> m (CL.MemImpl sym, IM.IntervalMap (MC.MemWord w) (Allocation sym w))
-addSegment sym mmc mem seg addr bytes (impl, ptrtable) = do
+-- | If we want to treat the contents of this chunk of memory (the bytes at the
+-- 'MemAddr') as concrete, assert that the bytes from the symbolic array backing
+-- memory match concrete values.  Otherwise, leave bytes as totally symbolic.
+--
+-- Note that this is populating memory for *part* of a segment, and not the
+-- entire segment.  This is because segments can be stored as chunks of concrete
+-- values.  The address is the address of a chunk and not a segment.
+populateSegmentChunk :: ( 16 <= w
+                      , MC.MemWidth w
+                      , KnownNat w
+                      , CB.IsSymInterface sym
+                      , MonadIO m
+                      , MC.ArchAddrWidth arch ~ w
+                      )
+                   => proxy arch
+                   -> sym
+                   -> MemoryModelContents
+                   -- ^ The interpretation of mutable memory that we want to use
+                   -> MC.Memory w
+                   -- ^ The contents of memory
+                   -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+                   -- ^ The symbolic array backing memory
+                   -> MC.MemSegment w
+                   -- ^ The segment containing this chunk
+                   -> MC.MemAddr w
+                   -- ^ Memory chunk address
+                   -> [WI.SymBV sym 8]
+                   -- ^ The concrete values in this chunk (which may or may not be used)
+                   -> IM.IntervalMap (MC.MemWord w) CL.Mutability
+                   -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
+                        , IM.IntervalMap (MC.MemWord w) CL.Mutability
+                        )
+populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
   -- We only support statically-linked binaries for now, so fail if we have a
   -- segment-relative address (which should only occur for an object file or
   -- shared library)
   let ?ptrWidth = MC.memWidth mem
   let Just abs_addr = MC.asAbsoluteAddr addr
   let size = length bytes
-  let interval = IM.IntervalCO abs_addr (abs_addr + fromIntegral size)
-  let (store_fn, mut_flag, conc_flag, desc) =
+  let interval = IM.IntervalOC abs_addr (abs_addr + fromIntegral size)
+  let (mut_flag, conc_flag) =
         case MMP.isReadonly (MC.segmentFlags seg) of
           True ->
-            ( CL.doArrayConstStore
-            , CL.Immutable
+            ( CL.Immutable
             , True
-            , "Mutable (concrete) memory at " ++ show addr
             )
           False -> case mmc of
             ConcreteMutable ->
-              ( CL.doArrayStore
-              , CL.Mutable
+              ( CL.Mutable
               , True
-              , "Mutable (concrete) memory at " ++ show addr
               )
             SymbolicMutable ->
-              ( CL.doArrayStore
-              , CL.Mutable
+              ( CL.Mutable
               , False
-              , "Mutable (symbolic) memory at " ++ show addr
               )
-  let Right alloc_name = WI.userSymbol ("symbolicAllocBytes_" <> show addr)
-  array <- liftIO $ WI.freshConstant sym alloc_name CT.knownRepr
-  size_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral size)
-  when conc_flag $
-    F.forM_ (zip [0 .. size - 1] bytes) $ \(idx, byte) -> do
-      index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral idx)
-      eq_pred <- liftIO $ WI.bvEq sym byte
-        =<< WI.arrayLookup sym array (Ctx.singleton index_bv)
-      prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
-      liftIO $ CB.addAssumption sym $
-        CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc desc
-  (ptr, impl1) <- liftIO $ CL.doMalloc
-    sym
-    CL.GlobalAlloc
-    mut_flag
-    desc
-    impl
-    size_bv
-    CLD.noAlignment
-  let alloc = Allocation
-        { allocationPtr = ptr
-        , allocationBase = abs_addr
-        }
-  impl2 <- liftIO $ store_fn sym impl1 ptr CLD.noAlignment array size_bv
-  return (impl2, IM.insert interval alloc ptrtable)
+
+  -- When we are treating a piece of memory as having concrete initial values
+  -- (e.g., for read-only memory) taken from the binary.
+  --
+  -- There are two major strategies for this: assert to the solver that array
+  -- slots have known values or directly update the initial array.
+  --
+  -- We currently choose the former, as the latter has been crashing solvers.
+  case conc_flag of
+    False -> return (symArray, IM.insert interval mut_flag ptrtable)
+    True -> do
+{-
+      -- We don't use this method because repeated applications of updateArray
+      -- are *very* slow for some reason
+
+      symArray2 <- pleatM symArray (zip [0.. size - 1] bytes) $ \arr (idx, byte) -> do
+        let byteAddr = MC.incAddr (fromIntegral idx) addr
+        -- FIXME: We can probably properly handle all of the different segments
+        -- here pretty easily when required... but we will need one array per
+        -- segment.
+        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
+        liftIO $ WI.arrayUpdate sym arr (Ctx.singleton index_bv) byte
+-}
+
+{-
+      -- We don't use this method because it generates very large array update
+      -- terms that, while what we want, crash yices (and make z3 and cvc4 eat
+      -- huge amounts of memory)
+
+      let addUpdate m (idx, byte) =
+            let byteAddr = MC.incAddr (fromIntegral idx) addr
+                Just absByteAddr = MC.asAbsoluteAddr byteAddr
+                key = WI.BVIndexLit (MC.memWidth mem) (fromIntegral absByteAddr)
+            in WUH.mapInsert (Ctx.singleton key) byte m
+      let updates = F.foldl' addUpdate WUH.mapEmpty (zip [0..size - 1] bytes)
+      symArray2 <- liftIO $ WI.arrayUpdateAtIdxLits sym updates symArray
+-}
+
+      -- Instead, generate assertions for each byte in the array
+      F.forM_ (zip [0.. size - 1] bytes) $ \(idx, byte) -> do
+        let byteAddr = MC.incAddr (fromIntegral idx) addr
+        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
+        eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
+        prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
+        let desc = "Byte@" ++ show byteAddr
+        liftIO $ CB.addAssumption sym $
+          CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc desc
+      let symArray2 = symArray
+
+      return (symArray2, IM.insert interval mut_flag ptrtable)
+
 
 -- | The 'pleatM' function is 'foldM' with the arguments switched so
 -- that the function is last.
@@ -314,30 +376,97 @@ pleatM :: (Monad m, F.Foldable t)
        -> m b
 pleatM s l f = F.foldlM f s l
 
-
-indexAllocations :: ( MC.MemWidth w
-                    , Ord (WI.SymExpr sym WI.BaseNatType)
-                    )
-                 => IM.IntervalMap (MC.MemWord w) (Allocation sym w)
-                 -> Map.Map (CS.RegValue sym CT.NatType) (Allocation sym w)
-indexAllocations mappedMemory =
-  F.foldl' indexAllocation Map.empty mappedMemory
-  where
-    indexAllocation m alloc =
-      let (base, _) = CL.llvmPointerView (allocationPtr alloc)
-      in Map.insert base alloc m
-
--- | Returns the allocation region (defined in the binary code) of a
--- base address if the address corresponds to one of the allocation
--- regions.
-lookupAllocationBase :: (Ord (CS.RegValue sym CT.NatType))
-                     => MemPtrTable sym w
-                     -> (CS.RegValue sym CT.NatType)
-                     -> Maybe (Allocation sym w)
-lookupAllocationBase mpt baseAddr = Map.lookup baseAddr (allocationIndex mpt)
-
-
 -- * mapRegionPointers
+
+-- | Create a function that computes a validity predicate for an LLVMPointer
+-- that may point to the static global memory region.
+--
+-- We represent all of the statically allocated storage in a binary in a single
+-- LLVM array.  This array is sparse, meaning that large ranges of the address
+-- space are not actually mapped.  Whenever we use a pointer into this memory
+-- region, we want to assert that it is inside one of the mapped regions and
+-- that it does not violate any mutability constraints.
+--
+-- The mapped regions are recorded in the MemPtrTable.
+--
+-- We need to be a little careful: if the BlockID of the pointer is definitely
+-- zero, we make a direct assertion.  Otherwise, if the pointer is symbolic, we
+-- have to conditionally assert the range validity.
+--
+-- Note that we pass in an indication of the use of the pointer: if the pointer
+-- is used to write, it must only be within the writable portion of the address
+-- space (which is also recorded in the MemPtrTable).  If the write is
+-- conditional, we must additionally mix in the predicate.
+--
+-- This is intended as a reasonable implementation of the
+-- 'MS.MkGlobalPointerValidityPred'.
+mkGlobalPointerValidityPred :: ( CB.IsSymInterface sym
+                               , MC.MemWidth w
+                               )
+                            => MemPtrTable sym w
+                            -> MS.MkGlobalPointerValidityAssertion sym w
+mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
+  -- If this is a write, the pointer cannot be in an immutable range (so just
+  -- return False for the predicate on that range).
+  --
+  -- Otherwise, the pointer is allowed to be between the lo/hi range
+  let inMappedRange off (range, mut)
+        | MS.pointerUseTag puse == MS.PointerWrite && mut == CL.Immutable = return (WI.falsePred sym)
+        | otherwise =
+          case range of
+            IM.IntervalCO lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUle sym off hibv
+              WI.andPred sym lob hib
+            IM.ClosedInterval lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUlt sym off hibv
+              WI.andPred sym lob hib
+            IM.OpenInterval lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUle sym off hibv
+              WI.andPred sym lob hib
+            IM.IntervalOC lo hi -> do
+              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
+              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUlt sym off hibv
+              WI.andPred sym lob hib
+
+  let mkPred off = do
+        ps <- mapM (inMappedRange off) (IM.toList (memPtrTable mpt))
+        ps' <- WI.orOneOf sym (L.folded . id) ps
+        -- Add the condition from a conditional write
+        WI.itePred sym (maybe (WI.truePred sym) CS.regValue mcond) ps' (WI.truePred sym)
+
+
+  let ptrVal = CS.regValue ptr
+  let (ptrBase, ptrOff) = CL.llvmPointerView ptrVal
+  case WI.asNat ptrBase of
+    Just 0 -> do
+      p <- mkPred ptrOff
+      let msg = printf "%s outside of static memory range (known BlockID 0): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
+      let loc = MS.pointerUseLocation puse
+      let assertion = CB.LabeledPred p (CS.SimError loc (CS.GenericSimError msg))
+      return (Just assertion)
+    Just _ -> return Nothing
+    Nothing -> do
+      -- In this case, we don't know for sure if the block id is 0, but it could
+      -- be (it is symbolic).  The assertion has to be conditioned on the equality.
+      p <- mkPred ptrOff
+      zeroNat <- WI.natLit sym 0
+      isZeroBase <- WI.natEq sym zeroNat ptrBase
+      p' <- WI.itePred sym isZeroBase p (WI.truePred sym)
+      let msg = printf "%s outside of static memory range (unknown BlockID): %s" (show (MS.pointerUseTag puse)) (show (WI.printSymExpr ptrOff))
+      let loc = MS.pointerUseLocation puse
+      let assertion = CB.LabeledPred p' (CS.SimError loc (CS.GenericSimError msg))
+      return (Just assertion)
 
 -- | Construct a translator for machine addresses into LLVM memory model pointers.
 --
@@ -347,127 +476,34 @@ mapRegionPointers :: ( MC.MemWidth w
                      , CB.IsSymInterface sym
                      )
                   => MemPtrTable sym w
-                  -> CL.LLVMPtr sym w
                   -> MS.GlobalMap sym CL.Mem w
-mapRegionPointers mpt default_ptr = \sym mem regionNum offsetVal ->
+mapRegionPointers mpt = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
-    Just 0 -> mapBitvectorToLLVMPointer mpt sym mem offsetVal default_ptr
+    Just 0 -> do
+      let ?ptrWidth = WI.bvWidth offsetVal
+      CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
     Just _ ->
       -- This is the case where the region number is concrete and non-zero,
       -- meaning that it is already an LLVM pointer
-      return (Just (CL.LLVMPointer regionNum offsetVal))
-    Nothing ->
+      --
+      -- NOTE: This case is not possible because we only call this from
+      -- 'tryGlobPtr', which handles this case separately
+      return (CL.LLVMPointer regionNum offsetVal)
+    Nothing -> do
       -- In this case, the region number is symbolic, so we need to be very
       -- careful to handle the possibility that it is zero (and thus must be
       -- conditionally mapped to one or all of our statically-allocated regions.
-      mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr
-
--- | This is a relatively simple case where we know that the region number is
--- zero.  This means that the bitvector we have needs to be mapped to a pointer.
-mapBitvectorToLLVMPointer :: ( MC.MemWidth w
-                             , 16 <= w
-                             , CB.IsSymInterface sym
-                             )
-                          => MemPtrTable sym w
-                          -> sym
-                          -> CS.RegValue sym CL.Mem
-                          -> CS.RegValue sym (CT.BVType w)
-                          -> CL.LLVMPtr sym w
-                          -> IO (Maybe (CL.LLVMPtr sym w))
-mapBitvectorToLLVMPointer mpt@(MemPtrTable im _) sym mem offsetVal default_ptr =
-  case WI.asUnsignedBV offsetVal of
-    Just concreteOffset -> do
-      -- This is the simplest case where the bitvector is concretely known.  We
-      -- can map it to exactly one address.
       --
-      -- FIXME: Assert that there is at most one element in here.  We could
-      -- push the assertion to the creation site
-      case IM.elems (IM.containing im (fromIntegral concreteOffset)) of
-        [alloc] -> do
-          -- Addresses inside of our allocations in the LLVM heap start at offset
-          -- 0x0, so we have to subtract off the (logical) offset of the first
-          -- value in the allocation to get the LLVM-level offset of the
-          -- allocation we want.
-          let wrep = WI.bvWidth offsetVal
-          allocBase <- WI.bvLit sym wrep (MC.memWordToUnsigned (allocationBase alloc))
-          allocationOffset <- WI.bvSub sym offsetVal allocBase
-          let ?ptrWidth = wrep
-          Just <$> CL.doPtrAddOffset sym mem (allocationPtr alloc) allocationOffset
-        [] -> return Nothing
-        _ -> error ("Overlapping allocations for pointer: " ++ show (WI.printSymExpr offsetVal))
-    Nothing -> do
-      -- This case is more complicated, as the bitvector value is at least
-      -- partially symbolic.  This means that it could be in *any* of our
-      -- statically-allocated region (in the MemPtrTable).
+      -- NOTE: We can avoid making a huge static mux over all regions: the
+      -- low-level memory model code already handles building the mux tree as it
+      -- walks backwards over all allocations that are live.
       --
-      -- We still get our base assumption that the value cannot be on the stack
-      -- or on the heap, as those cannot have a 0 region number (as they are
-      -- always completely disjoint).
+      -- We just need to add one top-level mux:
       --
-      -- We will handle this by creating a mux tree that allows the pointer to
-      -- be in *any* of our statically-allocated regions.
-      Just <$> staticRegionMuxTree mpt sym mem offsetVal default_ptr
-
--- | Create a mux tree that maps the input bitvector (which is the offset in a
--- LLVMPointer with region == 0) to one of the regions that are statically
--- allocated (in the 'MemPtrTable').
---
--- Assume that there is an allocation A that covers [addrStart, addrEnd].  Also,
--- assume that the offset is some symbolic value O.  The mux tree says:
---
--- > "If addrStart <= O <= addrEnd, map O into that region"
---
--- If the offset is not in any region, the pointer is mapped to the null pointer
--- to trigger an error (if it is used).
-staticRegionMuxTree :: ( CB.IsSymInterface sym
-                       , MC.MemWidth w
-                       , 16 <= w
-                       )
-                    => MemPtrTable sym w
-                    -> sym
-                    -> CL.MemImpl sym
-                    -> WI.SymExpr sym (WI.BaseBVType w)
-                    -> CL.LLVMPtr sym w
-                    -> IO (CL.LLVMPtr sym w)
-staticRegionMuxTree (MemPtrTable im _) sym mem offsetVal default_ptr =
-  F.foldlM addMuxForRegion default_ptr (IM.toList im)
-  where
-    handleCase f alloc start end greater less = do
-      let rep = WI.bvWidth offsetVal
-      startLit <- WI.bvLit sym rep (MC.memWordToUnsigned start)
-      endLit <- WI.bvLit sym rep (MC.memWordToUnsigned end)
-      gt <- greater sym offsetVal startLit
-      lt <- less sym offsetVal endLit
-      p <- WI.andPred sym gt lt
-      allocBase <- WI.bvLit sym rep (MC.memWordToUnsigned (allocationBase alloc))
-      allocationOffset <- WI.bvSub sym offsetVal allocBase
-      let ?ptrWidth = rep
-      thisPtr <- CL.doPtrAddOffset sym mem (allocationPtr alloc) allocationOffset
-      CL.muxLLVMPtr sym p thisPtr f
-    addMuxForRegion f (interval, alloc) = do
-      case interval of
-        IM.IntervalOC start end -> handleCase f alloc start end WI.bvUgt WI.bvUle
-        IM.IntervalCO start end -> handleCase f alloc start end WI.bvUge WI.bvUlt
-        IM.ClosedInterval start end -> handleCase f alloc start end WI.bvUge WI.bvUle
-        IM.OpenInterval start end -> handleCase f alloc start end WI.bvUgt WI.bvUlt
-
--- | This is a potentially complicated case where the region number is symbolic.
--- We need to add some guards in the cases where it is zero, to allow it to be
--- mapped to one of our regions.  When it is not zero, we can leave it alone.
-mapSymbolicRegionPointer :: ( MC.MemWidth w
-                            , 16 <= w
-                            , CB.IsSymInterface sym
-                            )
-                         => MemPtrTable sym w
-                         -> sym
-                         -> CS.RegValue sym CL.Mem
-                         -> CS.RegValue sym CT.NatType
-                         -> CS.RegValue sym (CT.BVType w)
-                         -> CL.LLVMPtr sym w
-                         -> IO (Maybe (CL.LLVMPtr sym w))
-mapSymbolicRegionPointer mpt sym mem regionNum offsetVal default_ptr = do
-  zeroNat <- WI.natLit sym 0
-  staticRegion <- staticRegionMuxTree mpt sym mem offsetVal default_ptr
-  isZeroRegion <- WI.natEq sym zeroNat regionNum
-  let nonZeroPtr = CL.LLVMPointer regionNum offsetVal
-  Just <$> CL.muxLLVMPtr sym isZeroRegion staticRegion nonZeroPtr
+      -- > ite (blockid == 0) (translate base) (leave alone)
+      let ?ptrWidth = WI.bvWidth offsetVal
+      zeroNat <- WI.natLit sym 0
+      isZeroRegion <- WI.natEq sym zeroNat regionNum
+      -- The pointer mapped to global memory (if the region number is zero)
+      globalPtr <- CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
+      CL.muxLLVMPtr sym isZeroRegion globalPtr (CL.LLVMPointer regionNum offsetVal)

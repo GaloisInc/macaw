@@ -449,10 +449,12 @@ instance RegisterInfo X86Reg where
 -- Register information
 
 -- | List of registers that a callee must save.
+--
+-- Note. This does not include the stack pointer (RSP) as that is
+-- treated specially.
 x86CalleeSavedRegs :: Set (Some X86Reg)
 x86CalleeSavedRegs = Set.fromList $
-  [ -- Some rsp sjw: rsp is special
-    Some RBP
+  [ Some RBP
   , Some RBX
   , Some R12
   , Some R13

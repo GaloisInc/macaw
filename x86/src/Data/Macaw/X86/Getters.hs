@@ -48,6 +48,7 @@ module Data.Macaw.X86.Getters
   ) where
 
 import           Control.Lens ((&))
+import qualified Control.Monad.Fail as MF
 import           Data.Parameterized.NatRepr
 import qualified Data.Text as T
 import qualified Flexdis86 as F
@@ -275,7 +276,7 @@ getSomeBVLocation v =
     F.DWordSignedImm _ -> noImm
     F.JumpOffset{}  -> fail "Jump Offset is not a location."
   where
-    noImm :: Monad m => m a
+    noImm :: MF.MonadFail m => m a
     noImm = fail "Immediate is not a location"
     mk :: (Applicative m, SupportedBVWidth n) => f (BVType n) -> m (SomeBV f)
     mk = pure . SomeBV
@@ -372,7 +373,7 @@ getSignExtendedValue v out_w =
       | otherwise =
         fail $ "getSignExtendedValue given bad value."
 
-truncateBVValue :: (Monad m, 1 <= n)
+truncateBVValue :: (Monad m, 1 <= n, MF.MonadFail m)
                 => NatRepr n
                 -> SomeBV (Expr ids)
                 -> m (Expr ids (BVType n))

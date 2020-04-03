@@ -84,11 +84,6 @@ data FunctionExploreReason w
   | CodePointerInMem !(MemSegmentOff w)
     -- | The user requested that we analyze this address as a function.
   | UserRequest
-    -- | Internal Block Target enhancement.  This should not normally
-    -- occur because block target enhancement is usually only
-    -- performed for previously discovered functions, which would
-    -- already have one of the above exploration reasons.
-  | BlockTargetEnhancement
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -108,6 +103,7 @@ data BlockExploreReason w
    | SplitAt !(MemSegmentOff w) !(BlockExploreReason w)
      -- The user requested that we analyze this address as a function.
      -- UserRequest
+
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -133,7 +129,13 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 -- of how block ending with a a FetchAndExecute statement should be
 -- interpreted.
 data ParsedTermStmt arch ids
-  -- | A call with the current register values and location to return to or 'Nothing'  if this is a tail call.
+  -- | A call with the current register values and location to return
+  -- to or 'Nothing' if this is a tail call.
+  --
+  -- Note that the semantics of this instruction assume that the
+  -- program has already stored the return address in the appropriate
+  -- location (which depends on the ABI).  For example on X86_64 this
+  -- is the top of the stack while on ARM this is the link register.
   = ParsedCall !(RegState (ArchReg arch) (Value arch ids))
                !(Maybe (ArchSegmentOff arch))
     -- | @PLTStub regs addr sym symVer@ denotes a terminal statement that
@@ -298,7 +300,13 @@ data DiscoveryFunInfo arch ids
                       , discoveredFunSymbol :: !(Maybe BSC.ByteString)
                         -- ^ A symbol associated with the definition.
                       , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
-                        -- ^ Maps an address block starts with
+                        -- ^ Maps the start addresses of function blocks to their contents
+                      , discoveredClassifyFailureResolutions :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                        -- ^ A side mapping that records jump targets for
+                        -- 'ClassifyFailure' block terminators that have been
+                        -- gleaned from an external source.  When interpreting
+                        -- the function, this map can be used to complete the
+                        -- control flow of functions with 'ClassifyFailure's.
                       }
 
 -- | Returns the "name" associated with a function.

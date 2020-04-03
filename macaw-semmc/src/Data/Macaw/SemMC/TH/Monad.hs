@@ -14,6 +14,7 @@ module Data.Macaw.SemMC.TH.Monad (
   definedFunction
   ) where
 
+import qualified Control.Monad.Fail as MF
 import qualified Control.Monad.State.Strict as St
 import           Control.Monad.Trans ( lift )
 import qualified Data.Functor.Const as C
@@ -81,6 +82,7 @@ newtype MacawQ arch t fs a = MacawQ { unQ :: St.StateT (QState arch t fs) Q a }
   deriving (Functor,
             Applicative,
             Monad,
+            MF.MonadFail,
             St.MonadState (QState arch t fs))
 
 runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)

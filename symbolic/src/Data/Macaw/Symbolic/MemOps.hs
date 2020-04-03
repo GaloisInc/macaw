@@ -39,7 +39,6 @@ import           Control.Exception (throwIO)
 import           Control.Lens ((^.),(&),(%~))
 import           Control.Monad (guard, when)
 import           Data.Bits (testBit)
-import           Data.Maybe ( fromMaybe )
 import qualified Data.Vector as V
 
 import           Data.Parameterized (Some(..))
@@ -47,7 +46,6 @@ import qualified Data.Parameterized.Context as Ctx
 
 
 import           What4.Interface
-import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend
 import           Lang.Crucible.CFG.Common (GlobalVar)
@@ -152,9 +150,9 @@ type GlobalMap sym mem w
     GetIntrinsic sym mem       {-^ The global handle to the memory model -} ->
     RegValue sym NatType       {-^ The region index of the pointer being translated -} ->
     RegValue sym (BVType w)    {-^ The offset of the pointer into the region -} ->
-    IO (Maybe (LLVMPtr sym w))
+    IO (LLVMPtr sym w)
 
-{- | Every now and then we encounter memory opperations that
+{- | Every now and then we encounter memory operations that
 just read/write to some constant.  Normally, we do not allow
 such things as we want memory to be allocated first.
 However we need to make an exception for globals.
@@ -174,10 +172,18 @@ tryGlobPtr ::
   LLVMPtr sym w ->
   IO (LLVMPtr sym w)
 tryGlobPtr sym mem mapBVAddress val
-  | Just 0 <- asNat (ptrBase val) = do
-      maddr <- mapBVAddress sym mem (ptrBase val) (asBits val)
-      return (fromMaybe val maddr)
-  | otherwise = return val
+  | Just blockId <- asNat (ptrBase val)
+  , blockId /= 0 = do
+      -- If we know that the blockId is concretely not zero, the pointer is
+      -- already translated into an LLVM pointer and can be passed through.
+      return val
+  | otherwise = do
+      -- If the blockId is zero, we have to translate it into a proper LLVM
+      -- pointer
+      --
+      -- Otherwise, the blockId is symbolic and we need to create a mux that
+      -- conditionally performs the translation.
+      mapBVAddress sym mem (ptrBase val) (asBits val)
 
 -- | This is the form of binary operation needed by the simulator.
 -- Note that even though the type suggests that we might modify the
@@ -346,14 +352,8 @@ doGetGlobal st mvar globs addr = do
   mem <- getMem st mvar
   regionNum <- natLit sym (fromIntegral (M.addrBase addr))
   offset <- bvLit sym (M.addrWidthNatRepr (M.addrWidthRepr addr)) (M.memWordToUnsigned (M.addrOffset addr))
-  mptr <- globs sym mem regionNum offset
-  case mptr of
-    Nothing -> fail $ unlines
-                        [ "[doGetGlobal] Undefined global region:"
-                        , "*** Region:  " ++ show (M.addrBase addr)
-                        , "*** Address: " ++ show addr
-                        ]
-    Just ptr -> return (ptr, st)
+  ptr <- globs sym mem regionNum offset
+  return (ptr, st)
 
 --------------------------------------------------------------------------------
 
@@ -717,7 +717,7 @@ hasPtrClass ptrWidth v =
         M.Addr64 -> v
 
 doReadMem ::
-  IsSymInterface sym =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -751,7 +751,7 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 --     arg6 : Address to read
 --     arg7 : Default answer if condition is false
 doCondReadMem ::
-  IsSymInterface sym =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -792,7 +792,7 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 --     arg5 : Address to write to
 --     arg6 : Value to write
 doWriteMem ::
-  IsSymInterface sym =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -822,7 +822,7 @@ doWriteMem sym mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
 --     arg6 : Address to write to
 --     arg7 : Value to write
 doCondWriteMem ::
-  IsSymInterface sym =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->

@@ -7,3 +7,11 @@ The test utility will perform both base discovery and discovery
 refinement and compare the results obtained to the expected results
 recorded in the files here to determine if both discovery and
 refinement are operating as expected.
+
+* Skipped Tests
+
+- ~address-of-label1.ppc.gcc.pie.*.exe~
+
+  These are not tested because this test cannot be made PIE on PowerPC.  The
+  address-of-label uses add relocations that aren't supported in static PIE
+  mode.

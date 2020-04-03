@@ -94,6 +94,7 @@ module Data.Macaw.Symbolic
   , PS.typeToCrucible
   , PS.typeCtxToCrucible
   , PS.MacawCrucibleValue(..)
+  , PS.CtxToCrucibleType
   -- ** The Macaw extension to Crucible
   , CG.MacawExt
   , CG.MacawExprExtension(..)
@@ -108,6 +109,11 @@ module Data.Macaw.Symbolic
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
   , MO.MacawSimulatorState(..)
+  , MkGlobalPointerValidityAssertion
+  , PointerUse(..)
+  , PointerUseTag(..)
+  , pointerUseLocation
+  , pointerUseTag
     -- * Simplified entry points
   , runCodeBlock
   ) where
@@ -117,7 +123,7 @@ import           GHC.TypeLits
 import           Control.Lens ((^.))
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Data.Foldable
+import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
@@ -127,15 +133,12 @@ import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
-import qualified Data.Vector as V
 
 import qualified What4.Expr.Builder as W4E
 import qualified What4.FunctionName as C
 import           What4.Interface
-import           What4.InterpretedFloatingPoint as C
-import qualified What4.ProgramLoc as C
-import           What4.Symbol (userSymbol)
 import qualified What4.Utils.StringLiteral as C
+import qualified What4.ProgramLoc as WPL
 
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
@@ -160,6 +163,7 @@ import qualified Data.Macaw.Discovery.State as M
 import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.Symbolic.Backend as SB
+import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
 import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
@@ -187,7 +191,7 @@ data ArchVals arch = ArchVals
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
       :: forall a m sym
-       . (IsSymInterface sym, MonadIO m)
+       . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
       => sym
       -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
       -> m a
@@ -282,7 +286,7 @@ addBlocksCFG :: forall s arch ids
              -- ^ Crucible specific functions.
               -> M.ArchSegmentOff arch
                  -- ^ Address of start of block
-             ->  (M.ArchAddrWord arch -> C.Position)
+             ->  (M.ArchAddrWord arch -> WPL.Position)
              -- ^ Function that maps offsets from start of block to Crucible position.
              -> M.Block arch ids
              -- ^ Macaw block for this region.
@@ -312,7 +316,7 @@ mkBlocksRegCFG :: forall arch ids
                -- ^ Name of function for pretty print purposes.
             -> M.ArchSegmentOff arch
                -- ^ Address for start of block.
-            -> (M.ArchAddrWord arch -> C.Position)
+            -> (M.ArchAddrWord arch -> WPL.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
             -> M.Block arch ids
             -- ^ List of blocks for this region.
@@ -339,7 +343,7 @@ mkBlocksCFG :: forall arch ids
                -- ^ Name of function for pretty print purposes.
             -> M.ArchSegmentOff arch
                -- ^ Address for start of block.
-            -> (M.ArchAddrWord arch -> C.Position)
+            -> (M.ArchAddrWord arch -> WPL.Position)
             -- ^ Function that maps offsets from start of block to Crucible position.
             -> M.Block arch ids
             -- ^ List of blocks for this region.
@@ -407,7 +411,7 @@ mkParsedBlockRegCFG :: forall arch ids
                  -- ^ Architecture specific functions.
                  -> C.HandleAllocator
                  -- ^ Handle allocator to make the blocks
-                 -> (M.ArchSegmentOff arch -> C.Position)
+                 -> (M.ArchSegmentOff arch -> WPL.Position)
                  -- ^ Function that maps function address to Crucible position
                  -> M.ParsedBlock arch ids
                  -- ^ Block to translate
@@ -439,7 +443,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
 
     -- Get initial block for Crucible
     entryLabel <- CR.Label <$> mmFreshNonce
-    let initPosFn :: M.ArchAddrWord arch -> C.Position
+    let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
@@ -450,7 +454,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
         addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr)
 
     -- Generate code for Macaw block after entry
-    crucibleBlock <- addParsedBlock archFns blockLabelMap posFn regReg strippedBlock
+    crucibleBlock <- addParsedBlock archFns blockLabelMap [] posFn regReg strippedBlock
 
     -- (stubCrucibleBlocks,_) <- unzip <$>
     --   (forM (Map.elems stubMap)$ \c -> do
@@ -471,7 +475,7 @@ mkParsedBlockCFG :: forall arch ids
                  -- ^ Architecture specific functions.
                  -> C.HandleAllocator
                  -- ^ Handle allocator to make the blocks
-                 -> (M.ArchSegmentOff arch -> C.Position)
+                 -> (M.ArchSegmentOff arch -> WPL.Position)
                  -- ^ Function that maps function address to Crucible position
                  -> M.ParsedBlock arch ids
                  -- ^ Block to translate
@@ -486,7 +490,7 @@ parsedTermTargets t =
     M.ParsedCall _ (Just ret) -> [ret]
     M.ParsedJump _ addr -> [addr]
     M.ParsedBranch _ _ taddr faddr -> [taddr, faddr]
-    M.ParsedLookupTable _ _ addrs -> toList addrs
+    M.ParsedLookupTable _ _ addrs -> F.toList addrs
     M.ParsedReturn {} -> []
     M.ParsedArchTermStmt _ _ Nothing -> []
     M.ParsedArchTermStmt _ _ (Just addr) -> [addr]
@@ -498,7 +502,7 @@ parsedTermTargets t =
 mkBlockSliceRegCFG :: forall arch ids
                     . MacawSymbolicArchFunctions arch
                    -> C.HandleAllocator
-                   -> (M.ArchSegmentOff arch -> C.Position)
+                   -> (M.ArchSegmentOff arch -> WPL.Position)
                    -> M.ParsedBlock arch ids
                    -- ^ Entry block
                    -> [M.ParsedBlock arch ids]
@@ -526,7 +530,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
   -- but not included in the list of all blocks.  The synthetic blocks simply
   -- assume False to indicate to the symbolic execution engine that executions
   -- reaching those missing blocks are not feasible paths.
-  (labelMap, syntheticBlocks) <- foldlM (makeSyntheticBlocks inputReg) (labelMap0, []) allBlocks
+  (labelMap, syntheticBlocks) <- F.foldlM (makeSyntheticBlocks inputReg) (labelMap0, []) allBlocks
 
   -- Add synthetic block to act as a target for jumps that we want to be
   -- returns instead.
@@ -585,8 +589,8 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
           -- preserves the existing register state, which is important when
           -- generating the Crucible return.
           let retTerm = termStmtToReturn (M.pblockTermStmt block)
-          addMacawParsedTermStmt labelMapWithReturns blockAddr retTerm
-        False -> addMacawParsedTermStmt labelMapWithReturns blockAddr (M.pblockTermStmt block)
+          addMacawParsedTermStmt labelMapWithReturns [] blockAddr retTerm
+        False -> addMacawParsedTermStmt labelMapWithReturns [] blockAddr (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
   return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks ++ retBlocks))
   where
@@ -608,7 +612,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
     -- The list of all blocks without duplicates
     allBlocks = entry : (realBody ++ terms)
 
-    offPosFn :: (M.MemWidth (M.ArchAddrWidth arch)) => M.ArchSegmentOff arch -> M.ArchAddrWord arch -> C.Position
+    offPosFn :: (M.MemWidth (M.ArchAddrWidth arch)) => M.ArchSegmentOff arch -> M.ArchAddrWord arch -> WPL.Position
     offPosFn base = posFn . fromJust . M.incSegmentOff base . toInteger
 
     -- There may be blocks that are jumped to but not included in the list of
@@ -641,7 +645,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
                         -> M.ParsedBlock arch ids
                         -> MacawMonad arch ids s (Map.Map (M.ArchSegmentOff arch) (CR.Label s), [[CR.Block (MacawExt arch) s (ArchRegStruct arch)]])
     makeSyntheticBlocks inputReg (lm, blks) blk =
-      foldlM (makeSyntheticBlock inputReg) (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
+      F.foldlM (makeSyntheticBlock inputReg) (lm, blks) (parsedTermTargets (M.pblockTermStmt blk))
 
     makeReturnBlock :: forall s
                      . (M.MemWidth (M.ArchAddrWidth arch))
@@ -674,7 +678,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
 mkBlockSliceCFG :: forall arch ids
                  . MacawSymbolicArchFunctions arch
                 -> C.HandleAllocator
-                -> (M.ArchSegmentOff arch -> C.Position)
+                -> (M.ArchSegmentOff arch -> WPL.Position)
                 -> M.ParsedBlock arch ids
                 -- ^ Entry block
                 -> [M.ParsedBlock arch ids]
@@ -693,7 +697,7 @@ mkBlockPathRegCFG
   -- ^ Architecture specific functions.
   -> C.HandleAllocator
   -- ^ Handle allocator to make the blocks
-  -> (M.ArchSegmentOff arch -> C.Position)
+  -> (M.ArchSegmentOff arch -> WPL.Position)
   -- ^ Function that maps function address to Crucible position
   -> [M.ParsedBlock arch ids]
   -- ^ Bloc path to translate
@@ -729,7 +733,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
     -- to Crucible labels
     block_label_map :: BlockLabelMap arch s <- mkBlockLabelMap block_path
 
-    let off_pos_fn :: M.ArchSegmentOff arch -> M.ArchAddrWord arch -> C.Position
+    let off_pos_fn :: M.ArchSegmentOff arch -> M.ArchAddrWord arch -> WPL.Position
         off_pos_fn base = pos_fn . fromJust . M.incSegmentOff base . toInteger
 
     let runCrucGen' addr label = runCrucGen
@@ -763,7 +767,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
         addStmt $ CR.Assume cond msg
 
         mapM_ (addMacawStmt block_addr) (M.pblockStmts block)
-        addMacawParsedTermStmt block_label_map block_addr (M.pblockTermStmt block)
+        addMacawParsedTermStmt block_label_map [] block_addr (M.pblockTermStmt block)
       pure (reverse (first_crucible_block:first_extra_crucible_blocks))
 
     pure (entry_label, init_crucible_block :
@@ -775,7 +779,7 @@ mkBlockPathCFG
   -- ^ Architecture specific functions.
   -> C.HandleAllocator
   -- ^ Handle allocator to make the blocks
-  -> (M.ArchSegmentOff arch -> C.Position)
+  -> (M.ArchSegmentOff arch -> WPL.Position)
   -- ^ Function that maps function address to Crucible position
   -> [M.ParsedBlock arch ids]
   -- ^ Block to translate
@@ -797,7 +801,7 @@ mkFunRegCFG :: forall arch ids
             -- ^ Handle allocator to make the blocks
          -> C.FunctionName
             -- ^ Name of function for pretty print purposes.
-         -> (M.ArchSegmentOff arch -> C.Position)
+         -> (M.ArchSegmentOff arch -> WPL.Position)
             -- ^ Function that maps function address to Crucible position
          -> M.DiscoveryFunInfo arch ids
          -- ^ List of blocks for this region.
@@ -828,7 +832,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
       mkBlockLabelMap blockList
     -- Get initial block for Crucible
     entryLabel <- CR.Label <$> mmFreshNonce
-    let initPosFn :: M.ArchAddrWord arch -> C.Position
+    let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
           where Just r = M.incSegmentOff entryAddr (toInteger off)
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
@@ -841,7 +845,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     -- Generate code for Macaw blocks after entry
     restCrucibleBlocks <-
       forM blockList $ \b -> do
-        addParsedBlock archFns blockLabelMap posFn regReg b
+        addParsedBlock archFns blockLabelMap (M.discoveredClassifyFailureResolutions fn) posFn regReg b
     -- Return initialization block followed by actual blocks.
     pure (entryLabel, initCrucibleBlock :
                         initExtraCrucibleBlocks ++ concat restCrucibleBlocks)
@@ -854,7 +858,7 @@ mkFunCFG :: forall arch ids
             -- ^ Handle allocator to make the blocks
          -> C.FunctionName
             -- ^ Name of function for pretty print purposes.
-         -> (M.ArchSegmentOff arch -> C.Position)
+         -> (M.ArchSegmentOff arch -> WPL.Position)
             -- ^ Function that maps function address to Crucible position
          -> M.DiscoveryFunInfo arch ids
             -- ^ List of blocks for this region.
@@ -872,75 +876,6 @@ toCoreCFG :: MacawSymbolicArchFunctions arch
 toCoreCFG archFns (CR.SomeCFG cfg) = crucGenArchConstraints archFns $ C.toSSA cfg
 
 -- * Symbolic simulation
-
-
-plus1LeqDbl :: forall n w . (2 <= n, 1 <= w) => NatRepr n -> NatRepr w -> LeqProof (w+1) (n * w)
-plus1LeqDbl n w =
-  case testLeq (incNat w) (natMultiply n w) of
-    Nothing -> error "Unexpected vector"
-    Just p -> p
-
-checkMacawFloatEq :: M.FloatInfoRepr ftp
-                  -> FloatInfoToBitWidth (ToCrucibleFloatInfo ftp) :~: M.FloatInfoBits ftp
-checkMacawFloatEq f =
-  case f of
-    M.SingleFloatRepr -> Refl
-    M.HalfFloatRepr   -> Refl
-    M.DoubleFloatRepr -> Refl
-    M.QuadFloatRepr   -> Refl
-    M.X86_80FloatRepr -> Refl
-
-
-doBitcast :: forall sym i o
-          .  IsSymInterface sym
-          => sym
-          -> C.RegValue sym (ToCrucibleType i)
-          -> M.WidthEqProof i o
-          -> IO (C.RegValue sym (ToCrucibleType o))
-doBitcast sym x eqPr =
-  case eqPr of
-    M.PackBits (n :: NatRepr n) (w :: NatRepr w) -> do
-      let outW = natMultiply n w
-      LeqProof <- pure $ leqMulPos n w
-      LeqProof <- pure $ plus1LeqDbl n w
-      when (fromIntegral (V.length x) /= natValue n) $ do
-        fail "bitcast: Incorrect input vector length"
-      -- We should have at least one element due to constraint on n
-      let Just h = x V.!? 0
-      let rest :: V.Vector (MM.LLVMPtr sym w)
-          rest = V.tail x
-      extH <- bvZext sym outW =<< MM.projectLLVM_bv sym h
-      let doPack :: (Integer,SymBV sym (n*w)) -> MM.LLVMPtr sym w -> IO (Integer, SymBV sym (n*w))
-          doPack (i,r) y = do
-            extY <- bvZext sym outW =<< MM.projectLLVM_bv sym y
-            shiftAmt <- bvLit sym outW i
-            r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
-            pure (i+1,r')
-      (_,r) <- foldlM doPack (1,extH) rest
-      MM.llvmPointer_bv sym r
-    M.UnpackBits n w -> do
-      let inW = natMultiply n w
-      LeqProof <- pure $ leqMulPos n w
-      LeqProof <- pure $ plus1LeqDbl n w
-      xbv <- MM.projectLLVM_bv sym x
-      V.generateM (fromIntegral (natValue n)) $ \i -> do
-        shiftAmt <- bvLit sym inW (toInteger i)
-        MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
-    M.FromFloat f -> do
-      Refl <- pure $ checkMacawFloatEq f
-      xbv <- C.iFloatToBinary sym (floatInfoToCrucible f) x
-      MM.llvmPointer_bv sym xbv
-    M.ToFloat f -> do
-      xbv <- MM.projectLLVM_bv sym x
-      Refl <- pure $ checkMacawFloatEq f
-      C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
-    M.VecEqCongruence _n eltPr -> do
-      forM x $ \e -> doBitcast sym e eltPr
-    M.WidthEqRefl _ -> do
-      pure x
-    M.WidthEqTrans p q -> do
-      y <- doBitcast sym x p
-      doBitcast sym y q
 
 evalMacawExprExtension :: forall sym arch f tp
                        .  IsSymInterface sym
@@ -995,10 +930,57 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
       x <- f xExpr
       doBitcast sym x eqPr
 
--- | This evaluates a  Macaw statement extension in the simulator.
+-- | A use of a pointer in a memory operation
+--
+-- Uses can be reads or writes (see 'PointerUseTag').  The location is used to
+-- produce diagnostics where possible.
+data PointerUse = PointerUse (Maybe WPL.ProgramLoc) PointerUseTag
+
+-- | Tag a use of a pointer ('PointerUse') as a read or a write
+data PointerUseTag = PointerRead | PointerWrite
+  deriving (Eq, Show)
+
+-- | Extract a location from a 'PointerUse', defaulting to the initial location
+-- if none was provided
+pointerUseLocation :: PointerUse -> WPL.ProgramLoc
+pointerUseLocation (PointerUse mloc _) =
+  case mloc of
+    Just loc -> loc
+    Nothing -> WPL.initializationLoc
+
+-- | Extract the tag denoting a 'PointerUse' as a read or a write
+pointerUseTag :: PointerUse -> PointerUseTag
+pointerUseTag (PointerUse _ tag) = tag
+
+-- | A function to construct validity predicates for pointer uses
+--
+-- This function creates an assertion that encodes the validity of a global
+-- pointer.  One of the intended use cases is that this can be used to generate
+-- assertions that memory accesses are limited to some mapped range of memory.
+-- It could also be used to prohibit reads from or writes to distinguished
+-- regions of the address space.
+--
+-- Note that macaw-symbolic is agnostic to the semantics of the produced
+-- assertion.  A verification tool could simply use @return Nothing@ as the
+-- implementation to elide extra memory safety checks, or if they are not
+-- required for the desired memory model.
+type MkGlobalPointerValidityAssertion sym w = sym
+                                            -- ^ The symbolic backend in use
+                                            -> PointerUse
+                                            -- ^ A tag marking the pointer use as a read or a write
+                                            -> Maybe (C.RegEntry sym C.BoolType)
+                                            -- ^ If this is a conditional read or write, the predicate
+                                            -- determining whether or not the memory operation is executed.  If
+                                            -- generating safety assertions, they should account for the presence and
+                                            -- value of this predicate.
+                                            -> C.RegEntry sym (MM.LLVMPointerType w)
+                                            -- ^ The address written to or read from
+                                            -> IO (Maybe (Assertion sym))
+
+-- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
-  . (IsSymInterface sym)
+  . (IsSymInterface sym, MM.HasLLVMAnn sym)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1008,29 +990,51 @@ execMacawStmtExtension
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
+  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
       ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      let puse = PointerUse (st ^. C.stateLocation) PointerRead
+      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+      case mGlobalPtrValid of
+        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Nothing -> return ()
       (,st) <$> doReadMem sym mem addrWidth memRep ptr
     MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
       let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
       ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      let puse = PointerUse (st ^. C.stateLocation) PointerRead
+      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+      case mGlobalPtrValid of
+        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Nothing -> return ()
       (,st) <$> doCondReadMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
     MacawWriteMem addrWidth memRep ptr0 v -> do
       let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
       ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
+      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+      case mGlobalPtrValid of
+        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Nothing -> return ()
       mem1 <- doWriteMem sym mem addrWidth memRep ptr (C.regValue v)
       pure ((), setMem st mvar mem1)
     MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
       let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
       ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
+      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+      case mGlobalPtrValid of
+        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Nothing -> return ()
       mem1 <- doCondWriteMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue v)
       pure ((), setMem st mvar mem1)
     MacawGlobalPtr w addr ->
@@ -1065,7 +1069,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
-  :: IsSymInterface sym
+  :: (IsSymInterface sym, MM.HasLLVMAnn sym)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1076,10 +1080,12 @@ macawExtensions
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
+  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH =
+macawExtensions f mvar globs lookupH toMemPred =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
                   }
 
 -- | Like 'macawExtensions', but with an alternative memory model that records
@@ -1099,7 +1105,7 @@ macawTraceExtensions archStmtFn mvar globs = C.ExtensionImpl
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
-   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym)
+   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym)
   => sym
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
@@ -1107,6 +1113,7 @@ runCodeBlock
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
+  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -- ^ Register assignment
@@ -1116,7 +1123,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
   mvar <- MM.mkMemVar halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1125,7 +1132,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH
+                extImpl = macawExtensions archEval mvar globs lookupH toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                fnBindings extImpl MacawSimulatorState
   -- Create the symbolic simulator state
@@ -1156,40 +1163,36 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
 --
 -- Below is a representative example of converting a Macaw function into a Crucible CFG:
 --
--- > {-# LANGUAGE FlexibleContexts #-}
--- > {-# LANGUAGE ScopedTypeVariables #-}
--- > {-# LANGUAGE TypeApplications #-}
--- > import           Control.Monad.ST ( stToIO )
--- > import qualified Data.Macaw.CFG as MC
--- > import qualified Data.Macaw.Discovery as MD
--- > import qualified Data.Macaw.Symbolic as MS
--- > import qualified Data.Map as Map
--- > import           Data.Proxy ( Proxy(..) )
--- > import qualified Data.Text.Encoding as TE
--- > import qualified Data.Text.Encoding.Error as TEE
--- > import qualified Lang.Crucible.CFG.Core as CC
--- > import qualified Lang.Crucible.FunctionHandle as CFH
--- > import qualified What4.FunctionName as WFN
--- > import qualified What4.ProgramLoc as WPL
--- >
--- > translate :: forall arch ids
--- >            . (MS.ArchInfo arch, MC.MemWidth (MC.ArchAddrWidth arch))
--- >           => MD.DiscoveryFunInfo arch ids
--- >           -> IO ()
--- > translate dfi =
--- >   case MS.archVals (Proxy @arch) of
--- >     Nothing -> putStrLn "Architecture does not support symbolic reasoning"
--- >     Just MS.ArchVals { MS.archFunctions = archFns } -> do
--- >       hdlAlloc <- CFH.newHandleAllocator
--- >       let nameText = TE.decodeUtf8With TEE.lenientDecode (MD.discoveredFunName dfi)
--- >       let name = WFN.functionNameFromText nameText
--- >       let posFn addr = WPL.BinaryPos nameText (maybe 0 fromIntegral (MC.segoffAsAbsoluteAddr addr))
--- >       cfg <- stToIO $ MS.mkFunCFG archFns hdlAlloc Map.empty name posFn dfi
--- >       useCFG cfg
--- >
--- > useCFG :: CC.SomeCFG (MS.MacawExt arch) (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch) -> IO ()
--- > useCFG _ = return ()
--- >
+-- >>> :set -XFlexibleContexts
+-- >>> :set -XScopedTypeVariables
+-- >>> :set -XTypeApplications
+-- >>> :set -XTypeOperators
+-- >>> import qualified Data.Macaw.CFG as MC
+-- >>> import qualified Data.Macaw.Discovery as MD
+-- >>> import qualified Data.Macaw.Symbolic as MS
+-- >>> import           Data.Proxy ( Proxy(..) )
+-- >>> import qualified Data.Text.Encoding as TE
+-- >>> import qualified Data.Text.Encoding.Error as TEE
+-- >>> import qualified Lang.Crucible.FunctionHandle as CFH
+-- >>> import qualified What4.FunctionName as WFN
+-- >>> import qualified What4.ProgramLoc as WPL
+-- >>> :{
+-- translate :: forall arch ids a
+--            . (MS.ArchInfo arch, MC.MemWidth (MC.ArchAddrWidth arch))
+--           => MD.DiscoveryFunInfo arch ids
+--           -> (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch) -> IO a)
+--           -> IO a
+-- translate dfi useCFG =
+--   case MS.archVals (Proxy @arch) of
+--     Nothing -> fail "Architecture does not support symbolic reasoning"
+--     Just MS.ArchVals { MS.archFunctions = archFns } -> do
+--       hdlAlloc <- CFH.newHandleAllocator
+--       let nameText = TE.decodeUtf8With TEE.lenientDecode (MD.discoveredFunName dfi)
+--       let name = WFN.functionNameFromText nameText
+--       let posFn addr = WPL.BinaryPos nameText (maybe 0 fromIntegral (MC.segoffAsAbsoluteAddr addr))
+--       cfg <- MS.mkFunCFG archFns hdlAlloc name posFn dfi
+--       useCFG cfg
+-- :}
 
 -- $translationHelpers
 --
@@ -1213,49 +1216,58 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH g regStruct = d
 -- initial register and memory states (see Data.Macaw.Symbolic.Memory for an
 -- example of constructing the mappings).
 --
--- > {-# LANGUAGE FlexibleContexts #-}
--- > import           Control.Monad.ST ( stToIO, RealWorld )
--- > import qualified Data.Macaw.CFG as MC
--- > import qualified Data.Macaw.Symbolic as MS
--- > import qualified Lang.Crucible.Backend as CB
--- > import qualified Lang.Crucible.CFG.Core as CC
--- > import qualified Lang.Crucible.FunctionHandle as CFH
--- > import qualified Lang.Crucible.LLVM.MemModel as CLM
--- > import qualified Lang.Crucible.LLVM.Intrinsics as CLI
--- > import qualified Lang.Crucible.Simulator as CS
--- > import qualified Lang.Crucible.Simulator.GlobalState as CSG
--- > import qualified System.IO as IO
--- >
--- > useCFG :: (CB.IsSymInterface sym, MS.SymArchConstraints arch)
--- >        => CFH.HandleAllocator RealWorld
--- >        -- ^ The handle allocator used to construct the CFG
--- >        -> sym
--- >        -- ^ The symbolic backend
--- >        -> MS.ArchVals arch
--- >        -- ^ 'ArchVals' from a prior call to 'archVals'
--- >        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
--- >        -- ^ Initial register state for the simulation
--- >        -> CLM.MemImpl sym
--- >        -- ^ The initial memory state of the simulator
--- >        -> MS.GlobalMap sym (MC.ArchAddrWidth arch)
--- >        -- ^ A translator of machine code addresses to LLVM pointers
--- >        -> MS.LookupFunctionHandle sym arch
--- >        -- ^ A translator for machine code addresses to function handles
--- >        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
--- >        -- ^ The CFG to simulate
--- >        -> IO ()
--- > useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
--- >        initialRegs initialMem globalMap lfh cfg = withArchEval sym $ \archEvalFns -> do
--- >   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
--- >   memModelVar <- stToIO (CLM.mkMemVar hdlAlloc)
--- >   let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh
--- >   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
--- >   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
--- >   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
--- >   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler (CS.runOverrideSim rep simulation)
--- >   let executionFeatures = []
--- >   execRes <- CS.executeCrucible executionFeatures initialState
--- >   case execRes of
--- >     CS.FinishedResult {} -> return ()
--- >     _ -> putStrLn "Simulation failed"
--- >
+-- >>> :set -XFlexibleContexts
+-- >>> :set -XImplicitParams
+-- >>> :set -XScopedTypeVariables
+-- >>> import           Data.IORef
+-- >>> import qualified Data.Macaw.CFG as MC
+-- >>> import qualified Data.Macaw.Symbolic as MS
+-- >>> import qualified Lang.Crucible.Backend as CB
+-- >>> import qualified Lang.Crucible.CFG.Core as CC
+-- >>> import qualified Lang.Crucible.FunctionHandle as CFH
+-- >>> import qualified Lang.Crucible.LLVM.MemModel as CLM
+-- >>> import qualified Lang.Crucible.LLVM.Intrinsics as CLI
+-- >>> import qualified Lang.Crucible.Simulator as CS
+-- >>> import qualified Lang.Crucible.Simulator.GlobalState as CSG
+-- >>> import qualified System.IO as IO
+-- >>> :{
+-- useCFG :: forall sym arch blocks
+--         . (CB.IsSymInterface sym, MS.SymArchConstraints arch)
+--        => CFH.HandleAllocator
+--        -- ^ The handle allocator used to construct the CFG
+--        -> sym
+--        -- ^ The symbolic backend
+--        -> MS.ArchVals arch
+--        -- ^ 'ArchVals' from a prior call to 'archVals'
+--        -> CS.RegMap sym (MS.MacawFunctionArgs arch)
+--        -- ^ Initial register state for the simulation
+--        -> CLM.MemImpl sym
+--        -- ^ The initial memory state of the simulator
+--        -> MS.GlobalMap sym (MC.ArchAddrWidth arch)
+--        -- ^ A translator of machine code addresses to LLVM pointers
+--        -> MS.LookupFunctionHandle sym arch
+--        -- ^ A translator for machine code addresses to function handles
+--        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
+--        -- ^ The CFG to simulate
+--        -> IO ()
+-- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs initialMem globalMap lfh cfg = do
+--   bbMapRef <- newIORef mempty
+--   let ?badBehaviorMap = bbMapRef
+--   withArchEval sym $ \archEvalFns -> do
+--     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
+--     memModelVar <- CLM.mkMemVar hdlAlloc
+--     -- For demonstration purposes, do not enforce any pointer validity constraints
+--     -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
+--     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+--         mkValidityPred _ _ _ _ = return Nothing
+--     let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
+--     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
+--     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
+--     let executionFeatures = []
+--     execRes <- CS.executeCrucible executionFeatures initialState
+--     case execRes of
+--       CS.FinishedResult {} -> return ()
+--       _ -> putStrLn "Simulation failed"
+-- :}

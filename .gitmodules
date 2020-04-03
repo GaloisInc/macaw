@@ -28,3 +28,9 @@
 [submodule "deps/llvm-pretty-bc-parser"]
 	path = deps/llvm-pretty-bc-parser
 	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
+[submodule "deps/what4"]
+	path = deps/what4
+	url = git@github.com:GaloisInc/what4.git
+[submodule "deps/what4-serialize"]
+	path = deps/what4-serialize
+	url = https://github.com/GaloisInc/what4-serialize.git

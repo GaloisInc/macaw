@@ -54,6 +54,7 @@ module Data.Macaw.Memory
   , memWidthNatRepr
     -- * MemWord
   , MemWord
+  , zeroMemWord
   , memWord
   , memWordValue
   , memWordToUnsigned
@@ -102,6 +103,8 @@ module Data.Macaw.Memory
   , readWord32le
   , readWord64be
   , readWord64le
+  , NullTermString(..)
+  , readNullTermString
     -- * AddrWidthRepr
   , AddrWidthRepr(..)
   , addrWidthReprByteCount
@@ -292,6 +295,10 @@ bsWord64 LittleEndian = bsWord64le
 -- Operations on it require the `MemWidth` constraint to be satisfied, so in practice
 -- this only works for 32 and 64-bit values.
 newtype MemWord (w :: Nat) = MemWord { memWordValue :: Word64 }
+
+-- | Equal to 0
+zeroMemWord :: MemWord w
+zeroMemWord = MemWord 0
 
 -- | Convert word64 @x@ into mem word @x mod 2^w-1@.
 memWord :: forall w . MemWidth w => Word64 -> MemWord w
@@ -1312,8 +1319,8 @@ instance MemWidth w => Show (MemoryError w) where
 -- partition a relocation
 -- due to a relocation.
 segoffContentsAfter :: MemWidth w
-                        => MemSegmentOff w
-                        -> Either (MemoryError w) [MemChunk w]
+                    => MemSegmentOff w
+                    -> Either (MemoryError w) [MemChunk w]
 segoffContentsAfter mseg = do
   -- Get offset within segment to get
   let off = segoffOffset mseg
@@ -1602,6 +1609,43 @@ readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
 -- | Read a little endian word64
 readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
 readWord64le mem addr = bsWord64le <$> readByteString mem addr 8
+
+data NullTermString w
+   = NullTermString !BS.ByteString
+   | NoNullTerm
+   | RelocationBeforeNull !(MemAddr w)
+   | NullTermMemoryError !(MemoryError w)
+
+-- | Attempt to read a null terminated bytesting.
+readNullTermString :: MemWidth w 
+                  => MemSegmentOff w
+                  -> NullTermString w
+readNullTermString addr = do
+  let seg = segoffSegment addr
+  let reg = segmentBase seg
+  let off = memWordValue (segmentOffset seg) + memWordValue (segoffOffset addr)
+  case segoffContentsAfter addr of
+    Left e -> NullTermMemoryError e
+    Right [] -> NoNullTerm
+    Right (ByteRegion bs:rest) -> do
+      let bs' = BS.takeWhile (/= 0) bs
+      if BS.length bs' == BS.length bs then
+        case rest of
+          [] -> NoNullTerm
+          ByteRegion _:_ -> error "Misformed memory chunks"
+          RelocationRegion _r:_ ->
+            let off' = off + fromIntegral (BS.length bs)
+                relAddr = MemAddr { addrBase = reg, addrOffset = MemWord off' }
+             in RelocationBeforeNull relAddr
+          BSSRegion _:_ ->
+            NullTermString bs
+      else
+        NullTermString bs'
+    Right (RelocationRegion _r:_) ->
+      let relAddr = MemAddr { addrBase = reg, addrOffset = MemWord off }
+       in RelocationBeforeNull relAddr
+    Right (BSSRegion _:_) ->
+      NullTermString BS.empty
 
 ------------------------------------------------------------------------
 -- Memory finding utilities

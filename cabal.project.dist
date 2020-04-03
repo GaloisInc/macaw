@@ -14,6 +14,8 @@ packages: macaw-ppc/
           deps/semmc/semmc/
           deps/semmc/semmc-ppc/
           deps/semmc/semmc-arm/
+          deps/semmc/semmc-synthesis/
+          deps/semmc/semmc-learning/
           deps/dismantle/dismantle-tablegen/
           deps/dismantle/dismantle-ppc/
           deps/dismantle/dismantle-arm/
@@ -21,7 +23,8 @@ packages: macaw-ppc/
           deps/parameterized-utils/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/
-          deps/crucible/what4/
+          deps/what4/what4/
+          deps/what4-serialize/
           deps/dwarf/
           deps/elf-edit/
           deps/flexdis86/
