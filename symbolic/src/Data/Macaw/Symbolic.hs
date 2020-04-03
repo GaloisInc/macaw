@@ -185,7 +185,7 @@ data ArchVals arch = ArchVals
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
       :: forall a m sym
-       . (IsSymInterface sym, MonadIO m)
+       . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
       => sym
       -> (SB.MacawArchEvalFn sym arch -> m a)
       -> m a
@@ -919,7 +919,7 @@ type MkGlobalPointerValidityAssertion sym w = sym
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
-  . (IsSymInterface sym)
+  . (IsSymInterface sym, MM.HasLLVMAnn sym)
   => SB.MacawArchEvalFn sym arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1008,7 +1008,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
-  :: IsSymInterface sym
+  :: (IsSymInterface sym, MM.HasLLVMAnn sym)
   => SB.MacawArchEvalFn sym arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1030,7 +1030,7 @@ macawExtensions f mvar globs lookupH toMemPred =
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
-   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym)
+   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym)
   => sym
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
@@ -1142,7 +1142,9 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 -- example of constructing the mappings).
 --
 -- >>> :set -XFlexibleContexts
+-- >>> :set -XImplicitParams
 -- >>> :set -XScopedTypeVariables
+-- >>> import           Data.IORef
 -- >>> import qualified Data.Macaw.CFG as MC
 -- >>> import qualified Data.Macaw.Symbolic as MS
 -- >>> import qualified Lang.Crucible.Backend as CB
@@ -1173,22 +1175,24 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
 --        -- ^ The CFG to simulate
 --        -> IO ()
--- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
---        initialRegs initialMem globalMap lfh cfg = withArchEval sym $ \archEvalFns -> do
---   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---   memModelVar <- CLM.mkMemVar hdlAlloc
---   -- For demonstration purposes, do not enforce any pointer validity constraints
---   -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
---   let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
---       mkValidityPred _ _ _ _ = return Nothing
---   let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
---   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
---   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
---   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
---   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
---   let executionFeatures = []
---   execRes <- CS.executeCrucible executionFeatures initialState
---   case execRes of
---     CS.FinishedResult {} -> return ()
---     _ -> putStrLn "Simulation failed"
+-- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs initialMem globalMap lfh cfg = do
+--   bbMapRef <- newIORef mempty
+--   let ?badBehaviorMap = bbMapRef
+--   withArchEval sym $ \archEvalFns -> do
+--     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
+--     memModelVar <- CLM.mkMemVar hdlAlloc
+--     -- For demonstration purposes, do not enforce any pointer validity constraints
+--     -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
+--     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+--         mkValidityPred _ _ _ _ = return Nothing
+--     let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
+--     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
+--     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
+--     let executionFeatures = []
+--     execRes <- CS.executeCrucible executionFeatures initialState
+--     case execRes of
+--       CS.FinishedResult {} -> return ()
+--       _ -> putStrLn "Simulation failed"
 -- :}

@@ -32,6 +32,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -41,6 +42,7 @@ module Main ( main ) where
 
 import           Control.Monad ( when )
 import qualified Data.Foldable as F
+import           Data.IORef
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -284,6 +286,8 @@ mkSymbolicTest testinp = do
               -- FIXME: We probably need to pull endianness from somewhere else
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl
+              bbMapRef <- newIORef mempty
+              let ?badBehaviorMap = bbMapRef
               let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
                     error "Could not find function handle"
               let validityCheck _ _ _ _ = return Nothing
