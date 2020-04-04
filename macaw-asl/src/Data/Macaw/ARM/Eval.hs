@@ -58,9 +58,12 @@ initialBlockRegs addr _preconds = MSG.initRegState addr &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__UndefinedBehavior")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__AssertionFailure")) .~ BoolValue False &
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ BVValue knownNat 0 &
+  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
+  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ BVValue knownNat 1 &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ BoolValue False
+  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ BoolValue False &
+  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ BoolValue False
 
 extractBlockPrecond :: ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (ArchReg ARM.AArch32)
