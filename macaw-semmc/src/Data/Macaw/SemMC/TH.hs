@@ -668,7 +668,6 @@ translateBaseType tp =
   case tp of
     CT.BaseBoolRepr -> [t| M.BoolType |]
     CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
-    CT.BaseArrayRepr _ _ -> [t| M.TupleType '[] |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
 -- | wrapper around bitvector constants that forces some type
