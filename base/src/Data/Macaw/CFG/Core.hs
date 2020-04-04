@@ -592,7 +592,7 @@ getBoundValue :: OrdF r => r tp -> RegState r f -> f tp
 getBoundValue r (RegState m) =
   case MapF.lookup r m of
     Just v -> v
-    Nothing -> error "internal error in boundValue given unexpected reg"
+    Nothing -> error $ "internal error in boundValue given unexpected reg"
 
 -- Without this rule, boundValue gets left as a higher-order function,
 -- making its uses VERY slow.

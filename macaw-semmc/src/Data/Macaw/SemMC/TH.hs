@@ -218,8 +218,7 @@ mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endiann
        lTypeVar <- newName "l"
        idsTypeVar <- newName "ids"
        sTypeVar <- newName "s"
---       archTypeVar <- newName "arch"
-       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(snd operandResultType)))
+       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(snd operandResultType)), U.HasCallStack)
                                   => M.Value $(snd operandResultType) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(snd operandResultType)))
                                   -> SL.List $(fst operandResultType) $(varT lTypeVar)
                                   -> Maybe (G.Generator $(snd operandResultType)
@@ -506,7 +505,6 @@ genExecInstructionLogging _ ltr ena ae archInsnMatcher semantics captureInfo fun
       runIO (S.startCaching sym)
       env <- runIO (formulaEnv (Proxy @arch) sym)
       lib <- runIO (loadLibrary (Proxy @arch) sym env functions)
-      -- runIO (traverse print (MapF.keys lib))
       formulas <- runIO (loadFormulas sym env lib semantics)
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
       instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType endianness
@@ -566,10 +564,26 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               newVal <- addEltTH endianness interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
             LiteralParameter loc
+              -- FIXME: The below case is necessary for calls to
+              -- defined functions that write to memory, but we end up
+              -- calling locToRegTH on the memory object, which is a
+              -- problem.
+              -- | L.isMemoryLocation loc
+              -- , S.NonceAppExpr n <- expr
+              -- , S.FnApp symFn args <- S.nonceExprApp n
+              -- , S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
+              --   let fnName = symFnName symFn
+              --   funMaybe <- definedFunction fnName
+              --   case funMaybe of
+              --     Just fun -> do
+              --       argExprs <- sequence $ FC.toListFC (addEltTH endianness interps) args
+              --       return ()
+              --       -- return $ foldl AppE fun argExprs
+              --     Nothing -> fail ("Unknown defined function: " ++ fnName)
               | L.isMemoryLocation loc
               , S.NonceAppExpr n <- expr
-              , S.FnApp symFn args <- S.nonceExprApp n ->
-              -- , Just _ <- matchWriteMemWidth (symFnName symFn) -> 
+              , S.FnApp symFn args <- S.nonceExprApp n
+              , Just _ <- matchWriteMemWidth (symFnName symFn) -> 
                   void $ writeMemTH interps symFn args endianness
               -- | L.isMemoryLocation loc
               -- , S.BoundVarExpr bVar <- expr
