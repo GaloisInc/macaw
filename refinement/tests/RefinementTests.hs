@@ -32,65 +32,66 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wno-missing-signatures #-}
 
 module Main ( main ) where
 
-import           GHC.TypeLits
-
-import           Control.Lens hiding ( (<.>) )
-import           Control.Monad
-import qualified Control.Monad.Catch as X
-import           Control.Monad.IO.Class
-import qualified Data.ByteString as BS
-import qualified Data.ElfEdit as E
-import           Data.Foldable
-import           Data.Function ( on )
-import           Data.List ( intercalate, sortBy )
-import qualified Data.Macaw.Architecture.Info as AI
-import           Data.Macaw.BinaryLoader as MBL
-import           Data.Macaw.BinaryLoader.X86 ()
-import           Data.Macaw.CFG as MC
+import           Control.Monad ( when )
+import qualified Data.Foldable as F
+import           Data.IORef
+import qualified Data.Macaw.BinaryLoader as MBL
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.Memory.ElfLoader as ML
-import           Data.Macaw.PPC
-import           Data.Macaw.PPC.Symbolic ()
-import           Data.Macaw.Refinement
+import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Refinement as MR
 import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.X86 as MX86
-import           Data.Macaw.X86.Symbolic ()
+import qualified Data.Macaw.Symbolic.Memory as MSM
+import qualified Data.Macaw.Types as MT
 import qualified Data.Map as M
 import           Data.Maybe ( catMaybes )
-import           Data.Parameterized.Some
-import           Data.Proxy
+import qualified Data.Parameterized.Nonce as PN
+import           Data.Parameterized.Some ( Some(..) )
+import           Data.Proxy ( Proxy(..) )
 import           Data.Semigroup ( (<>) )
 import qualified Data.Set as Set
-import           Data.Tagged
+import qualified Data.Tagged as DT
+import qualified Data.Text as T
 import           Data.Typeable ( Typeable )
+import           Data.Word ( Word64 )
+import qualified Lang.Crucible.Backend as CB
+import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified Lang.Crucible.CFG.Core as CCC
+import qualified Lang.Crucible.FunctionHandle as CFH
+import qualified Lang.Crucible.LLVM.DataLayout as CLD
+import qualified Lang.Crucible.LLVM.MemModel as CLM
+import qualified Lang.Crucible.Simulator as CS
 import           Options.Applicative
-import qualified SemMC.Architecture.PPC32 as PPC32
-import qualified SemMC.Architecture.PPC64 as PPC64
-import           System.Directory ( doesFileExist )
+import qualified System.Directory as SD
 import           System.FilePath ( (</>), (<.>) )
-import qualified System.FilePath as FP
 import qualified System.FilePath.Glob as FPG
 import qualified Test.Tasty as TT
 import qualified Test.Tasty.HUnit as TTH
-import           Test.Tasty.Ingredients
+import           Test.Tasty.Ingredients as TI
 import           Test.Tasty.Options
-import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), (</>) )
+import           Text.Printf ( printf )
 import           Text.Read ( readEither )
+import qualified What4.ProgramLoc as WPL
+import qualified What4.BaseTypes as WT
+import qualified What4.FunctionName as WF
+import qualified What4.Interface as WI
 
 import           Prelude
 
+import           Initialization ( withElf, withRefinedDiscovery )
+import           Summary ( blockAddresses )
+import           Options ( Options(..) )
 
+datadir :: FilePath
 datadir =  "tests/samples"
-supportedArch = [ "x86"
-                , "ppc"
-                ]
-
 
 data ShowSearch =  ShowSearch Bool deriving (Eq, Ord, Typeable)
 
@@ -102,8 +103,8 @@ instance IsOption ShowSearch where
                       \refinement tests that would be performed\n\
                       \based on the contents of the " <> datadir <> " directory"
   optionCLParser = ShowSearch <$> switch
-                      ( long (untag (optionName :: Tagged ShowSearch String))
-                      <> help (untag (optionHelp :: Tagged ShowSearch String))
+                      ( long (DT.untag (optionName :: DT.Tagged ShowSearch String))
+                      <> help (DT.untag (optionHelp :: DT.Tagged ShowSearch String))
                       )
 
 data VerboseLogging = VerboseLogging Bool
@@ -114,16 +115,17 @@ instance IsOption VerboseLogging where
   parseValue = fmap VerboseLogging . safeRead
   optionName = pure "verbose-logging"
   optionHelp = pure "Turn on verbose logging output"
-  optionCLParser = VerboseLogging <$> switch ( long (untag (optionName :: Tagged VerboseLogging String))
-                                             <> help (untag (optionHelp :: Tagged VerboseLogging String))
+  optionCLParser = VerboseLogging <$> switch ( long (DT.untag (optionName :: DT.Tagged VerboseLogging String))
+                                             <> help (DT.untag (optionHelp :: DT.Tagged VerboseLogging String))
                                              )
 
 
 -- | This is a Tasty "Ingredient" (aka test runner) that can be used
 -- to display the search process and results for generating the tests.
+searchResultsReport :: TI.Ingredient
 searchResultsReport = TestManager [] $ \opts _tests ->
   if lookupOption opts == ShowSearch True
-  then Just $ do searchlist <- getTestList datadir True
+  then Just $ do searchlist <- getConcreteTestList datadir True
                  putStrLn ""
                  putStrLn $ "Final set of tests [" ++ show (length searchlist) ++ "]:"
                  mapM_ (putStrLn . show) searchlist
@@ -131,9 +133,8 @@ searchResultsReport = TestManager [] $ \opts _tests ->
                  putStrLn ("These search results were based on the contents of the " <>
                            datadir <> " directory\n\
                            \Syntax:  BASENAME.c\n\
-                           \         BASENAME.ARCH.EXE\n\
-                           \         BASENAME.ARCH.expected  OR BASENAME.ARCH.base-expected\n\
-                           \                                AND BASENAME.ARCH.refined-expected\n\
+                           \         BASENAME.exe\n\
+                           \         BASENAME.exe.expected\n\
                            \Note that if any .expected file fails a Haskell Read\n\
                            \parse, a \".....last-actual\" file is written; it can\n\
                            \be verified and renamed to be the new expected contents.\n")
@@ -142,6 +143,7 @@ searchResultsReport = TestManager [] $ \opts _tests ->
   else Nothing
 
 
+ingredients :: [TI.Ingredient]
 ingredients = TT.includingOptions [ Option (Proxy :: Proxy ShowSearch)
                                   , Option (Proxy :: Proxy VerboseLogging)
                                   ]
@@ -155,223 +157,169 @@ main = do
   -- available for this; see:
   -- https://stackoverflow.com/questions/33040722
   -- https://github.com/feuerbach/tasty/issues/228
-  testInputs <- getTestList datadir False
-  let testNames = Set.fromList $ map name testInputs
+  concreteTestInputs <- getConcreteTestList datadir False
+  symbolicTestInputs <- getSymbolicTestList datadir False
+  -- let testNames = Set.fromList (map name testInputs)
+  let tests = concat [ map mkTest concreteTestInputs
+                     , map mkSymbolicTest symbolicTestInputs
+                     ]
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "macaw-refinement" $
-    mkNameGroup testInputs <$> toList testNames
-  where mkNameGroup inps nm =
-          TT.testGroup nm $ map mkTest $ filter ((==) nm . name) inps
+    TT.testGroup "macaw-refinement" tests
 
-
-data TestInput = TestInput { name :: String
-                           , arch :: String
-                           , expectFileBase :: Maybe FilePath
-                           , expectFileRefined :: Maybe FilePath
-                           , binaryFile :: FilePath
+data TestInput = TestInput { binaryFilePath :: FilePath
+                           , expectedFilePath :: FilePath
                            }
-  deriving (Eq,Show)
+               deriving (Eq, Show)
 
 -- | Returns a list of the TestInputs that should be run.  These are
 -- driven by the existence of a .[F-]expected file, for which there
 -- should be a corresponding .exe.  The exe and expected files are
 -- sub-named by the architecture (A) to which they apply.
-getTestList :: FilePath -> Bool -> IO [TestInput]
-getTestList basedir explain = do
+getConcreteTestList :: FilePath -> Bool -> IO [TestInput]
+getConcreteTestList basedir explain = do
   when explain $ putStrLn $ "Checking for test inputs in " <> (basedir </> "*.exe")
-  let exeGlob = "*.(" <> (intercalate "|" supportedArch) <> ").exe"
-  exeNames <- FPG.namesMatching $ basedir </> exeGlob
-  postproc <$> mapM mkTI exeNames
+
+  -- Find all of the executables we have available
+  exeNames <- FPG.namesMatching (basedir </> "*.exe")
+
+  -- For each executable, produce a TestInput iff it has an associated .expected file
+  catMaybes <$> mapM findExpectedFiles exeNames
   where
-    postproc = sorted . catMaybes
-    sorted = sortBy (compare `on` name)
-    mkTI exe = do when explain $ putStrLn $ "Checking exe " ++ exe
-                  -- exe is path/to/srcfile.A.exe
-                  let exeRmvd = fst $ FP.splitExtension exe
-                      (srcPathAndName, testArch') = FP.splitExtension exeRmvd
-                      testName = FP.takeFileName srcPathAndName
-                  if length testArch' < 2
-                    then do when explain $ putStrLn $ "  no arch, skipping"
-                            return Nothing
-                    else mkTIAN exe (drop 1 testArch') testName
-    mkTIAN exe testArch testName = do
-          when explain $ putStrLn $ "  arch = " <> testArch
-          when explain $ putStrLn $ "  name = " <> testName
-          let expRoot = basedir </> testName <.> testArch
-              expBaseName = expRoot <.> "base-expected"
-              expRefinedName = expRoot <.> "refined-expected"
-              expName = expRoot <.> "expected"
-          base <- doesFileExist expBaseName
-          refn <- doesFileExist expRefinedName
-          expt <- doesFileExist expName
-          let expn = if expt then Just expName else Nothing
-          mkTIANE exe testArch testName
-            (if base then Just expBaseName else expn)
-            (if refn then Just expRefinedName else expn)
-    mkTIANE exe testArch testName expBase expRefn = do
-      when explain $ case expBase of
-                       Just f -> putStrLn $ "  expected base = " <> f
-                       Nothing -> return ()
-      when explain $ case expRefn of
-                       Just f -> putStrLn $ "  expected refined = " <> f
-                       Nothing -> return ()
-      case (expBase, expRefn) of
-        (Nothing, Nothing) -> return Nothing
-        _ -> return $ Just $ TestInput { name = testName
-                                       , arch = testArch
-                                       , binaryFile = exe
-                                       , expectFileBase = expBase
-                                       , expectFileRefined = expRefn
-                                       }
+    findExpectedFiles exeName = do
+      let expectedFilename = exeName <.> "expected"
+      SD.doesFileExist expectedFilename >>= \case
+        True -> return $ Just TestInput { binaryFilePath = exeName
+                                        , expectedFilePath = expectedFilename
+                                        }
+        False -> return Nothing
 
+getSymbolicTestList :: FilePath -> Bool -> IO [TestInput]
+getSymbolicTestList basedir explain = do
+  when explain $ putStrLn ("Checking for symbolic test inputs in " <> (basedir </> "*.symex"))
+  exeNames <- FPG.namesMatching (basedir </> "*.exe")
+  catMaybes <$> mapM findExpectedFiles exeNames
+  where
+    findExpectedFiles exeName = do
+      let expected = exeName <.> "symex"
+      SD.doesFileExist expected >>= \case
+        True -> return $ Just TestInput { binaryFilePath = exeName
+                                        , expectedFilePath = expected
+                                        }
+        False -> return Nothing
 
+-- Refinement configuration for the test suite
+testOptions :: Bool -> FilePath -> Options
+testOptions verb file = Options { inputFile = file
+                                , unrefined = False
+                                , summaryOnly = False
+                                , verbose = verb
+                                , solver = MR.Yices
+                                , solverInteractionFile = Nothing
+                                , maximumModelCount = 20
+                                , threadCount = 1
+                                , timeoutSeconds = 60
+                                }
+
+-- | Test that macaw-refinement can find all of the expected jump targets
+--
+-- Jump targets are provided in .expected files that are 'read' in.
 mkTest :: TestInput -> TT.TestTree
-mkTest testinp =
-  let readbin = BS.readFile $ binaryFile testinp
-      cleanup = return . const ()
-      formName ref = if ref then "refined" else "base"
-      tests = catMaybes [ mkT False <$> expectFileBase testinp
-                        , mkT True <$> expectFileRefined testinp
-                        ]
-      mkT ref fn = \v r -> TTH.testCase (formName ref) $
-                           testExpected ref fn testinp v r
-  in TT.askOption $ \(VerboseLogging beVerbose) ->
-     TT.withResource readbin cleanup $
-     \readBinary ->
-       TT.testGroup (arch testinp) $ map (\t -> t beVerbose readBinary) tests
+mkTest testinp = do
+  TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
+    let opts = testOptions beVerbose (binaryFilePath testinp)
+    withElf opts $ \_ archInfo bin _unrefinedDI -> do
+      withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
+        let actual = blockAddresses refinedDI
+        expectedInput <- readFile (expectedFilePath testinp)
+        case readEither expectedInput of
+          Left err -> TTH.assertFailure (printf "Failed to parse expected input file [%s]: %s" (expectedFilePath testinp) err)
+          Right (expected :: [(Word64, [Word64])]) -> do
+            -- We iterate over the *expected* functions so that we can just
+            -- specify expected results for interesting bits and ignore the
+            -- other discovered functions.
+            F.forM_ expected $ \(faddr, expectedBlockAddrs) -> do
+              let expectedAddrSet = Set.fromList expectedBlockAddrs
+              case M.lookup faddr actual of
+                Nothing -> TTH.assertFailure (printf "Missing expected function at address 0x%x" faddr)
+                Just actualBlockAddrs -> do
+                  F.forM_ expectedBlockAddrs $ \expectedBlockAddr -> do
+                    let msg = printf "Missing expected block at 0x%x in function 0x%x" expectedBlockAddr faddr
+                    TTH.assertBool msg (Set.member expectedBlockAddr actualBlockAddrs)
+                  F.forM_ actualBlockAddrs $ \actualBlockAddr -> do
+                    let msg = printf "Found an unexpected block in the binary at 0x%x in function 0x%x" actualBlockAddr faddr
+                    TTH.assertBool msg (Set.member actualBlockAddr expectedAddrSet)
 
+posFn :: (MC.MemWidth (MC.ArchAddrWidth arch)) => proxy arch -> MC.MemSegmentOff (MC.ArchAddrWidth arch) -> WPL.Position
+posFn _ = WPL.OtherPos . T.pack . show
 
-testExpected useRefinement expFile testinp beVerbose readBinary = do
-  bs <- readBinary
-  case E.parseElf bs of
-      E.Elf64Res warnings elf -> mapM_ print warnings >> withElf64 elf
-      E.Elf32Res warnings elf -> mapM_ print warnings >> withElf32 elf
-      _ -> let badMsg = binaryFile testinp <> " is not a 64-bit ELF file"
-           in do when beVerbose $ putStrLn badMsg
-                 TTH.assertBool badMsg False
-  where
-    withElf64 elf =
-      case E.elfMachine elf of
-        E.EM_PPC64 -> do
-          bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
-          let pli = ppc64_linux_info bin
-          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
-        E.EM_X86_64 ->
-          withBinaryDiscoveredInfo testinp useRefinement expFile MX86.x86_64_linux_info =<<
-            MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
-        m -> error $ "no 64-bit ELF support for " ++ show m
-    withElf32 elf =
-      case E.elfMachine elf of
-        E.EM_PPC -> do
-          bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
-          let pli = ppc32_linux_info bin
-          withBinaryDiscoveredInfo testinp useRefinement expFile pli bin
-        m -> error $ "no 32-bit ELF support for " ++ show m
+-- | This test is similar to 'mkTest', but instead of checking the set of
+-- recovered blocks, it translates the function into Crucible using
+-- macaw-symbolic and symbolically executes it.
+--
+-- This test is fairly simple in that it isn't checking any interesting
+-- property, but only that the simulator does not error out due to unresolved
+-- control flow.
+mkSymbolicTest :: TestInput -> TT.TestTree
+mkSymbolicTest testinp = do
+  TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
+    let opts = testOptions beVerbose (binaryFilePath testinp)
+    halloc <- CFH.newHandleAllocator
+    Some gen <- PN.newIONonceGenerator
+    sym <- CBS.newSimpleBackend CBS.FloatRealRepr gen
+    expectedInput <- readFile (expectedFilePath testinp)
+    let symExecFuncAddrs :: Set.Set Word64
+        Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
+    withElf opts $ \proxy archInfo bin _unrefinedDI -> do
+      withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
+        let Just archVals = MS.archVals proxy
+        let archFns = MS.archFunctions archVals
+        let mem = MBL.memoryImage bin
+        F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
+          let Just funcAddr = fromIntegral <$> MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi)
+          case Set.member funcAddr symExecFuncAddrs of
+            False -> return ()
+            True -> do
+              let funcName = WF.functionNameFromText (T.pack ("target@" ++ show (MD.discoveredFunAddr dfi)))
+              printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
+              CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
+              regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
+              -- FIXME: We probably need to pull endianness from somewhere else
+              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
+              let globalMap = MSM.mapRegionPointers memPtrTbl
+              bbMapRef <- newIORef mempty
+              let ?badBehaviorMap = bbMapRef
+              let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
+                    error "Could not find function handle"
+              let validityCheck _ _ _ _ = return Nothing
+              MS.withArchEval archVals sym $ \archEvalFns -> do
+                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn validityCheck cfg regs
+                case res of
+                  CS.FinishedResult _ (CS.TotalRes _) -> return ()
+                  CS.FinishedResult _ (CS.PartialRes {}) -> return ()
+                  CS.AbortedResult _ ares ->
+                    case ares of
+                      CS.AbortedExec rsn _ -> TTH.assertFailure ("Symbolic execution aborted: " ++ show rsn)
+                      CS.AbortedExit {} -> TTH.assertFailure "Symbolic execution exited"
+                      CS.AbortedBranch {} -> return ()
+                  CS.TimeoutResult {} -> TTH.assertFailure "Symbolic execution timed out"
 
-withBinaryDiscoveredInfo :: ( X.MonadThrow m
-                            , MS.SymArchConstraints arch
-                            , 16 <= MC.ArchAddrWidth arch
-                            , MBL.BinaryLoader arch binFmt
-                            , MonadIO m) =>
-                            TestInput
-                         -> Bool
-                         -> FilePath
-                         -> AI.ArchitectureInfo arch
-                         -> MBL.LoadedBinary arch binFmt
-                         -> m ()
-withBinaryDiscoveredInfo testinp useRefinement expFile arch_info bin = do
-  entries <- toList <$> entryPoints bin
-  let baseCFG = MD.cfgFromAddrs arch_info (memoryImage bin) M.empty entries []
-      actualBase = cfgToExpected testinp bin (Just baseCFG) Nothing
-  if useRefinement
-    then do refinedCFG <- refineDiscovery bin baseCFG
-            let refinedBase = cfgToExpected testinp bin Nothing (Just refinedCFG)
-            compareToExpected "refined" refinedBase expFile
-    else compareToExpected "base" actualBase expFile
-
-
-compareToExpected formName actual fn =
-  let cfgName = formName <> " CFG" in
-  do expectedData <- liftIO $ readFile fn
-     case readEither expectedData of
-       Right expInfo ->
-         -- KWQ: TODO: refine this down to individual components if it fails
-         liftIO $ TTH.assertEqual ("discovered " <> cfgName) expInfo actual
-       Left e ->
-         let badMsg = "error parsing expected " <> cfgName <> " data in " <> fn <> ": " <> e
-             outFileName = take (length fn - length "expected") fn <> "last-actual"
-         in liftIO $ do writeFile outFileName $ show actual
-                        putStrLn $ "Generated actual output to: " <> outFileName
-                        TTH.assertBool badMsg False
-
-----------------------------------------------------------------------
-
--- | The ExpectedInfo is the format of information stored in the
--- .expected files.  Ideally this would be a 'Show' output so that a
--- 'Read' could import native data structures for a more refined
--- comparison, but unfortunately the 'read . show == id' intent is not
--- held for Macaw/Flexdis86, so the actual stored and compared format
--- is generally the 'pretty' output of the structures.
-data ExpectedInfo arch = Expected
-  { expBinaryName  :: String
-  , expEntryPoints :: [EntryPoint arch]
-  , expFunctions   :: [Function arch]
-  }
-  deriving (Show, Read, Eq)
-
-data EntryPoint arch = EntryPoint (Address arch)
-  deriving (Show, Read, Eq)
-
-data Function arch = Function (Address arch) [Block arch]
-  deriving (Show, Read, Eq)
-
-data Block arch = Block (Address arch) StatementList
-  deriving (Show, Read, Eq)
-
-data Address arch = Address { addrSegmentBase :: Int
-                            , addrSegmentOffset :: Int
-                            , addrSegoffOffset :: Int
-                            , addrPretty :: String
-                            }
-  deriving (Show, Read, Eq)
-
-mkAddress :: (MemWidth (RegAddrWidth (ArchReg arch))) =>
-             MC.MemSegmentOff (MC.ArchAddrWidth arch) -> Address arch
-mkAddress addr = Address { addrSegmentBase = fromEnum $ segmentBase $ segoffSegment addr
-                         , addrSegmentOffset = fromEnum $ memWordToUnsigned $ segmentOffset $ segoffSegment addr
-                         , addrSegoffOffset = fromEnum $ memWordToUnsigned $ segoffOffset addr
-                         , addrPretty = show $ pretty addr
-                         }
-
-type StatementList = String  -- no Read or Eq for Macaw.Discovery.StatementList, so just use String format
-
-cfgToExpected :: (MBL.BinaryLoader arch binFmt) =>
-                 TestInput
-              -> MBL.LoadedBinary arch binFmt
-              -> Maybe (MD.DiscoveryState arch)
-              -> Maybe (MD.DiscoveryState arch)
-              -> ExpectedInfo arch
-cfgToExpected testinp bin mbCFG mbRefCFG =
-  let eps = case entryPoints bin of
-              Left _ -> []
-              Right epl -> toList epl
-      fns = case (mbCFG, mbRefCFG) of
-              (Nothing, Nothing) -> error "must specify a discovered Macaw CFG"
-              (Just _, Just _) -> error "must specify only one discovered Macaw CFG"
-              (Just di, Nothing) -> getFunctions di
-              (Nothing, Just di) -> getFunctions di
-  in Expected { expBinaryName = binaryFile testinp
-              , expEntryPoints = (EntryPoint . mkAddress) <$> eps
-              , expFunctions = fns
-              }
-
-getFunctions :: MD.DiscoveryState arch -> [Function arch]
-getFunctions di =
-  AI.withArchConstraints (MD.archInfo di) $
-  fmap (\(funAddr, Some dfi) ->
-           Function
-           (mkAddress funAddr)
-           (fmap (\(blkAddr, pb) ->
-                    Block (mkAddress blkAddr) (show $ MD.blockStatementList pb))
-            (dfi ^. MD.parsedBlocks . to M.toList)))
-  (di ^. MD.funInfo . to M.toList)
+-- | Allocate a fresh value for a machine register
+--
+-- Only Bool and BV types are supported
+mkReg :: (CB.IsSymInterface sym, MT.HasRepr (MC.ArchReg arch) MT.TypeRepr)
+      => MS.MacawSymbolicArchFunctions arch
+      -> sym
+      -> MC.ArchReg arch tp
+      -> IO (CS.RegValue' sym (MS.ToCrucibleType tp))
+mkReg archFns sym r =
+  case MT.typeRepr r of
+    MT.BoolTypeRepr ->
+      CS.RV <$> WI.freshConstant sym (MS.crucGenArchRegName archFns r) WT.BaseBoolRepr
+    MT.BVTypeRepr w ->
+      CS.RV <$> (CLM.llvmPointer_bv sym =<< WI.freshConstant sym (MS.crucGenArchRegName archFns r) (WT.BaseBVRepr w))
+    MT.TupleTypeRepr{}  ->
+      error "macaw-symbolic do not support tuple types."
+    MT.FloatTypeRepr{}  ->
+      error "macaw-symbolic do not support float types."
+    MT.VecTypeRepr{}  ->
+      error "macaw-symbolic do not support vector types."

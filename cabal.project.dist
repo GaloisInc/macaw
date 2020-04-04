@@ -16,6 +16,8 @@ packages: macaw-ppc/
           deps/semmc/semmc-ppc/
           deps/semmc/semmc-arm/
           deps/semmc/semmc-asl/
+          deps/semmc/semmc-synthesis/
+          deps/semmc/semmc-learning/
           deps/dismantle/dismantle-tablegen/
           deps/dismantle/dismantle-ppc/
           deps/dismantle/dismantle-arm/

@@ -1,3 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Refinement.FuncBlockUtils
   ( BlockIdentifier(..)
   , blockID
@@ -8,17 +11,11 @@ module Data.Macaw.Refinement.FuncBlockUtils
   )
 where
 
-import           Control.Lens
+import           Control.Lens ( (^.) )
 import qualified Data.Foldable as F
-import           Data.Macaw.CFG.AssignRhs ( ArchSegmentOff )
-import           Data.Macaw.Discovery.State ( DiscoveryFunInfo
-                                            , ParsedBlock(..)
-                                            , ParsedTermStmt(..)
-                                            , parsedBlocks
-                                            , stmtsTerm
-                                            )
+import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Discovery.State as MDS
 import qualified Data.Map as Map
-import           Data.Semigroup
 
 import           Prelude
 
@@ -27,30 +24,32 @@ import           Prelude
 -- abstraction for this allows this code to be more independent of the
 -- underlying block information.
 newtype BlockIdentifier arch ids = BlockIdentifier
-  { biArchSegmentOff :: ArchSegmentOff arch
+  { biArchSegmentOff :: MC.ArchSegmentOff arch
   }
   deriving (Eq, Ord)
 
+deriving instance (MC.MemWidth (MC.RegAddrWidth (MC.ArchReg arch))) => Show (BlockIdentifier arch ids)
+
 -- | Obtain the local 'BlockIdentifier' value for a block.
-blockID :: ParsedBlock arch ids -> BlockIdentifier arch ids
-blockID =  BlockIdentifier . pblockAddr
+blockID :: MDS.ParsedBlock arch ids -> BlockIdentifier arch ids
+blockID =  BlockIdentifier . MDS.pblockAddr
 
 
 -- | Return the ID's for all blocks in the function
-funBlockIDs :: DiscoveryFunInfo arch ids -> [BlockIdentifier arch ids]
-funBlockIDs fi = map blockID $ Map.elems (fi ^. parsedBlocks)
+funBlockIDs :: MDS.DiscoveryFunInfo arch ids -> [BlockIdentifier arch ids]
+funBlockIDs fi = map blockID $ Map.elems (fi ^. MDS.parsedBlocks)
 
-blockInFunction :: DiscoveryFunInfo arch ids
-                -> ArchSegmentOff arch
+blockInFunction :: MDS.DiscoveryFunInfo arch ids
+                -> MC.ArchSegmentOff arch
                 -> Maybe (BlockIdentifier arch ids)
-blockInFunction fi addr = blockID <$> (fi ^. parsedBlocks) Map.!? addr
+blockInFunction fi addr = blockID <$> (fi ^. MDS.parsedBlocks) Map.!? addr
 
 -- | Returns the actual block (if it exists) from the Discovery State
 -- (in the first function for which it exists).
-getBlock :: DiscoveryFunInfo arch ids
+getBlock :: MDS.DiscoveryFunInfo arch ids
          -> BlockIdentifier arch ids
-         -> Maybe (ParsedBlock arch ids)
-getBlock fi blkID = (fi ^. parsedBlocks) Map.!? biArchSegmentOff blkID
+         -> Maybe (MDS.ParsedBlock arch ids)
+getBlock fi blkID = (fi ^. MDS.parsedBlocks) Map.!? biArchSegmentOff blkID
 
 -- | This function identifies the possible target addresses (of other
 -- blocks within this function) from the terminal statement in the
@@ -59,24 +58,29 @@ getBlock fi blkID = (fi ^. parsedBlocks) Map.!? biArchSegmentOff blkID
 -- function; it may return target addresses that lie outside of the
 -- function, but it is not required to, nor will it return other
 -- external targets.
-blockTransferTo :: DiscoveryFunInfo arch ids
+blockTransferTo :: MDS.DiscoveryFunInfo arch ids
                 -> BlockIdentifier arch ids
-                -> [ArchSegmentOff arch]
+                -> [MC.ArchSegmentOff arch]
 blockTransferTo fi blkID =
   let lclTgtAddrs termStmt =
         case termStmt of
-          ParsedCall _ mbTgt | Just tgt <- mbTgt -> [tgt]
-                             | otherwise -> []
-          ParsedJump _ tgt -> [tgt]
-          ParsedLookupTable _ _ tgts -> F.toList tgts
-          ParsedReturn {} -> []
-          ParsedIte _ thenS elseS -> lclTgtAddrs (stmtsTerm thenS) <>
-                                    lclTgtAddrs (stmtsTerm elseS)
-          PLTStub _ tgt _ -> undefined -- KWQ tgt?
-          ParsedArchTermStmt _ _ mbTgt | Just tgt <- mbTgt -> [tgt]
+          -- The target is absent for tail calls, which never return.  When the
+          -- target is present, that is the return site in cases where the
+          -- function returns.
+          MDS.ParsedCall _ mbTgt | Just tgt <- mbTgt -> [tgt]
+                                 | otherwise -> []
+          MDS.ParsedJump _ tgt -> [tgt]
+          MDS.ParsedLookupTable _ _ tgts -> F.toList tgts
+          MDS.ParsedReturn {} -> []
+          MDS.ParsedBranch _regs _cond trueTarget falseTarget -> [ trueTarget, falseTarget ]
+          MDS.PLTStub _ tgt _ ->
+            -- PLT stubs are really calls and jump outside of the function, but
+            -- will usually return. We should return the return addr here
+            [tgt]
+          MDS.ParsedArchTermStmt _ _ mbTgt | Just tgt <- mbTgt -> [tgt]
                                        | otherwise -> []
-          ParsedTranslateError {} -> []
-          ClassifyFailure {} -> []
+          MDS.ParsedTranslateError {} -> []
+          MDS.ClassifyFailure {} -> []
   in case getBlock fi blkID of
-       Just fBlk -> lclTgtAddrs $ stmtsTerm $ blockStatementList fBlk
+       Just fBlk -> lclTgtAddrs $ MDS.pblockTermStmt fBlk
        Nothing -> error "block ID not valid" -- impossible

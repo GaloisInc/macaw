@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE MultiWayIf #-}
 -- | Architecture-independent translation of semmc semantics (via SimpleBuilder)
 -- into macaw IR.
 --
@@ -26,6 +27,9 @@ module Data.Macaw.SemMC.TH (
   genExecInstructionLogStdErr,
   genExecInstructionLogging,
   addEltTH,
+  appToExprTH,
+  evalNonceAppTH,
+  evalBoundVar,
   natReprTH,
   floatInfoTH,
   floatInfoFromPrecisionTH,
@@ -690,14 +694,9 @@ addEltTH endianness interps elt = do
         S.AppExpr appElt -> do
           translatedExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
-        S.BoundVarExpr bVar
-          | Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
-              bindExpr elt [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
-          | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
-            bindExpr elt [| return $ O.extractValue $(varE (regsValName interps)) $(varE name) |]
-          | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
-            bindExpr elt [| return $(varE name) |]
-          | otherwise -> fail $ "bound var not found: " ++ show bVar
+        S.BoundVarExpr bVar -> do
+          translatedBV <- evalBoundVar endianness interps bVar
+          bindExpr elt (return translatedBV)
         S.NonceAppExpr n -> do
           translatedExpr <- evalNonceAppTH endianness interps (S.nonceExprApp n)
           bindExpr elt (return translatedExpr)
@@ -709,6 +708,21 @@ addEltTH endianness interps elt = do
         S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
 
+evalBoundVar :: forall arch t fs ctp .
+                (A.Architecture arch)
+             => M.Endianness
+             -> BoundVarInterpretations arch t fs
+             -> S.ExprBoundVar t ctp
+             -> MacawQ arch t fs Exp
+evalBoundVar endianness interps bVar =
+  if | Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
+       liftQ [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
+     | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
+       liftQ [| return $ O.extractValue $(varE (regsValName interps)) $(varE name) |]
+     | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
+       liftQ [| return $(varE name) |]
+     | otherwise -> fail $ "bound var not found: " ++ show bVar
+  
 symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 

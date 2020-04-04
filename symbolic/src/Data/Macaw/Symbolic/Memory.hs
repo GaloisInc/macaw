@@ -37,10 +37,12 @@
 -- >>> :set -XDataKinds
 -- >>> :set -XFlexibleContexts
 -- >>> :set -XGADTs
+-- >>> :set -XImplicitParams
 -- >>> :set -XScopedTypeVariables
 -- >>> :set -XTypeApplications
 -- >>> :set -XTypeOperators
 -- >>> import           GHC.TypeLits
+-- >>> import           Data.IORef
 -- >>> import qualified Data.Macaw.CFG as MC
 -- >>> import qualified Data.Macaw.Symbolic as MS
 -- >>> import qualified Data.Macaw.Symbolic.Memory as MSM
@@ -78,22 +80,24 @@
 --        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
 --        -- ^ The CFG to simulate
 --        -> IO ()
--- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval }
---        initialRegs mem lfh cfg = withArchEval sym $ \archEvalFns -> do
---   let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---   memModelVar <- CLM.mkMemVar hdlAlloc
---   (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
---   let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
---   let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred
---   let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
---   let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
---   let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
---   let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
---   let executionFeatures = []
---   execRes <- CS.executeCrucible executionFeatures initialState
---   case execRes of
---     CS.FinishedResult {} -> return ()
---     _ -> putStrLn "Simulation failed"
+-- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs mem lfh cfg = do
+--   bbMapRef <- newIORef mempty
+--   let ?badBehaviorMap = bbMapRef
+--   withArchEval sym $ \archEvalFns -> do
+--     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
+--     memModelVar <- CLM.mkMemVar hdlAlloc
+--     (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
+--     let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
+--     let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
+--     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
+--     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
+--     let executionFeatures = []
+--     execRes <- CS.executeCrucible executionFeatures initialState
+--     case execRes of
+--       CS.FinishedResult {} -> return ()
+--       _ -> putStrLn "Simulation failed"
 -- :}
 module Data.Macaw.Symbolic.Memory (
   -- * Memory Management

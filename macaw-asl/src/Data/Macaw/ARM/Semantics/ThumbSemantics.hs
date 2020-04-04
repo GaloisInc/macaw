@@ -22,20 +22,21 @@ import qualified Data.Macaw.Types as MT
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.ARM.T32 -- as ThumbDis -- must be present to supply definitions for genExecInstruction output
 import qualified SemMC.Architecture.AArch32 as ARMSem
-import           SemMC.Architecture.ARM.Opcodes ( allT32Semantics, allT32OpcodeInfo, allDefinedFunctions )
+import           SemMC.Architecture.ARM.Opcodes ( allT32OpcodeInfo )
 
 
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Instruction
                 -> Maybe (Generator ARMSem.AArch32 ids s ())
-execInstruction = $(genExecInstruction (Proxy @ARMSem.AArch32)
-                    (locToRegTH (Proxy @ARMSem.AArch32))
-                    armNonceAppEval
-                    (armAppEvaluator MC.LittleEndian)
-                    't32InstructionMatcher
-                    allT32Semantics
-                    allT32OpcodeInfo
-                    allDefinedFunctions
-                    ([t| Operand |], [t| ARMSem.AArch32 |])
-                    MC.LittleEndian
-                   )
+execInstruction = \_ _ -> Nothing
+  -- $(genExecInstruction (Proxy @ARMSem.AArch32)
+  --    (locToRegTH (Proxy @ARMSem.AArch32))
+  --    armNonceAppEval
+  --    (armAppEvaluator MC.LittleEndian)
+  --    't32InstructionMatcher
+  --    allT32Semantics
+  --    allT32OpcodeInfo
+  --    allDefinedFunctions
+  --    ([t| Operand |], [t| ARMSem.AArch32 |])
+  --    MC.LittleEndian
+  --   )

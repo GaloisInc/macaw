@@ -546,7 +546,7 @@ regLocation sz
   | Just Refl <- testEquality sz n16 = reg_low16
   | Just Refl <- testEquality sz n32 = reg_low32
   | Just Refl <- testEquality sz n64 = fullRegister
-  | otherwise = fail "regLocation: Unknown bit width"
+  | otherwise = error "regLocation: Unknown bit width"
 
 def_cmpxchg :: InstructionDef
 def_cmpxchg  = defBinaryLV "cmpxchg" $ \d s -> do

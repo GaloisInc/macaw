@@ -14,7 +14,7 @@ extra-deps:
 - panic-0.4.0.1@sha256:fb46577c9e0ca38c37960572f958a8469f2b577e963ed4f3ea1904d8400d828b,702
 - zenc-0.1.1@sha256:e4be3e5e9fe1a1ade05910909c6e5b5a8eff72e697868b03955c9781b0443947,964
 # Submodules added to extra-deps so that we do not fail on warnings.
-- ./deps/crucible/what4
+- ./deps/what4/what4
 - ./deps/crucible/crucible
 - ./deps/crucible/crucible-llvm
 - ./deps/llvm-pretty

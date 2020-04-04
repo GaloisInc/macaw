@@ -1,0 +1,31 @@
+* Overview
+
+This test suite tests the SMT-based refinement of indirect jump for macaw.
+
+The test suite consists of test binaries compiled from C sources using both clang and gcc.  Each C source is compiled into a number of variants through the Makefile; each target encodes all of its parameters in its filename:
+
+- gcc (compiled using gcc)
+- clang (compiled using clang)
+- nopie (position dependent executables)
+- pie (position independent executables)
+- opt (optimized)
+- noopt (unoptimized)
+
+Furthermore, each program is compiled for both PowerPC and x86_64.  Note that only gcc is used for PowerPC, as there was no convenient cross compile-enabled clang easily isntallable at the time of the test suite creation.  We compile this large number of variants to try to expose the refinement code to as much compiler variation as possible.
+
+** Shortcomings
+
+- Note that the PIE versions of binaries are not currently tested.  This is because the loader is having trouble converting the entrypoint address into an absolute address in PIE binaries; the memory loader thinks that PIE binaries are shared libraries and thus places all of their code and data into separate memory segments.  This is an annoying artifact of how position independent executables are implemented in Linux: they are basically shared libraries.
+
+* Notes
+
+Some notes on specific test cases:
+
+** switch-loop.ppc.gcc.nopie.opt.exe
+
+This example does not actually work because breaking the backedge of the loop hides important constraints.  The expected output reflects macaw simply finding a classify failure and refinement failing.  The x86 variants of this test actually work:
+
+- In the clang version, macaw-base is able to resolve the indirect jump
+- In the gcc version, refinement succeeds
+
+Note that this family of tests is in place to ensure that the loop breaking code in the refinement setup works and successfully prevents the symbolic execution engine from infinitely unrolling loops.
