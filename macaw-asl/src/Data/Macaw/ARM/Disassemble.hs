@@ -188,7 +188,6 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
           nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
-          curPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
@@ -211,15 +210,12 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
-                UnfinishedPartialBlock preBlock
-                  -- FIXME: we are ignoring the max offset for now
-                  | v <- preBlock ^. (pBlockState . curIP)
-                  , v == curPCVal
-                  , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
-                  -- , Just simplifiedIP <- simplifyValue v
-                  -- , simplifiedIP == nextPCVal
-                  -- , simplifiedIP == curPCVal
-                  -- , nextPCOffset < maxOffset
+                UnfinishedPartialBlock preBlock -> do
+                  -- If the branch taken flag is anything besides a
+                  -- concrete False value, then we are at the end of a
+                  -- block.
+                  case preBlock ^. (pBlockState . boundValue branchTakenReg) of
+                    CValue (BoolCValue False) | Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ nextPCVal) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockState = preBlock'
@@ -227,7 +223,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                          , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
-                  | otherwise -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
+                    _ -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
                 FinishedPartialBlock b -> return (nextPCOffset, b)
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
