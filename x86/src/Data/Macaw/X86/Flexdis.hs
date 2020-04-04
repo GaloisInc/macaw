@@ -5,6 +5,7 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This provides a facility for disassembling x86 instructions from a
 Macaw memory object.
 -}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -16,6 +17,7 @@ module Data.Macaw.X86.Flexdis
   ) where
 
 import           Control.Monad.Except
+import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
 import           Data.Bits
 import qualified Data.ByteString as BS
@@ -95,6 +97,11 @@ throwDecodeError e = do
 instance MemWidth w => Monad (MemoryByteReader w) where
   return = MBR . return
   MBR m >>= f = MBR $ m >>= unMBR . f
+#if !MIN_VERSION_base(4,13,0)
+  fail = MF.fail
+#endif
+
+instance (MemWidth w) => MF.MonadFail (MemoryByteReader w) where
   fail msg = throwDecodeError $ UserDecodeError msg
 
 -- | Run a memory byte reader starting from the given offset.

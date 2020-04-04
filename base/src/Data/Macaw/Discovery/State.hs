@@ -84,11 +84,6 @@ data FunctionExploreReason w
   | CodePointerInMem !(MemSegmentOff w)
     -- | The user requested that we analyze this address as a function.
   | UserRequest
-    -- | Internal Block Target enhancement.  This should not normally
-    -- occur because block target enhancement is usually only
-    -- performed for previously discovered functions, which would
-    -- already have one of the above exploration reasons.
-  | BlockTargetEnhancement
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -108,6 +103,7 @@ data BlockExploreReason w
    | SplitAt !(MemSegmentOff w) !(BlockExploreReason w)
      -- The user requested that we analyze this address as a function.
      -- UserRequest
+
   deriving (Eq, Show)
 
 ------------------------------------------------------------------------
@@ -304,7 +300,13 @@ data DiscoveryFunInfo arch ids
                       , discoveredFunSymbol :: !(Maybe BSC.ByteString)
                         -- ^ A symbol associated with the definition.
                       , _parsedBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
-                        -- ^ Maps an address block starts with
+                        -- ^ Maps the start addresses of function blocks to their contents
+                      , discoveredClassifyFailureResolutions :: [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                        -- ^ A side mapping that records jump targets for
+                        -- 'ClassifyFailure' block terminators that have been
+                        -- gleaned from an external source.  When interpreting
+                        -- the function, this map can be used to complete the
+                        -- control flow of functions with 'ClassifyFailure's.
                       }
 
 -- | Returns the "name" associated with a function.

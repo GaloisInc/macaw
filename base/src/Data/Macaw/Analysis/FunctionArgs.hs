@@ -41,7 +41,6 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
-import           Data.Semigroup ( Semigroup, (<>) )
 import           Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -269,7 +268,7 @@ instance OrdF r => Monoid (FinalRegisterDemands r) where
 data ArchTermStmtRegEffects arch
    = ArchTermStmtRegEffects { termRegDemands :: ![Some (ArchReg arch)]
                               -- ^ Registers demanded by term statement
-                            , termRegTransfers :: [Some (ArchReg arch)]
+                            , termRegTransfers :: ![Some (ArchReg arch)]
                               -- ^ Registers that are not modified by
                               -- terminal statement.
                             }
@@ -337,8 +336,6 @@ data FunctionArgsState arch ids = FAS
     -- | A cache of the assignments and their deps.  The key is not
     -- included in the set of deps (but probably should be).
   , _assignmentCache :: !(AssignmentCache (ArchReg arch) ids)
-    -- | Warnings from summarization in reverse order.
-  , reversedWarnings :: [String]
   }
 
 blockDemandMap :: Simple Lens (FunctionArgsState arch ids)
@@ -348,26 +345,19 @@ blockDemandMap = lens _blockDemandMap (\s v -> s { _blockDemandMap = v })
 assignmentCache :: Simple Lens (FunctionArgsState arch ids) (AssignmentCache (ArchReg arch) ids)
 assignmentCache = lens _assignmentCache (\s v -> s { _assignmentCache = v })
 
-initFunctionArgsState :: [String] -> FunctionArgsState arch ids
-initFunctionArgsState prevWarn =
+initFunctionArgsState :: FunctionArgsState arch ids
+initFunctionArgsState =
   FAS { _blockDemandMap    = Map.empty
       , _assignmentCache   = Map.empty
-      , reversedWarnings   = prevWarn
       }
 
 -- | Monad that runs for computing the dependcies of each block.
 type FunctionArgsM arch ids a = StateT (FunctionArgsState arch ids) (Reader (FunArgContext arch)) a
 
 evalFunctionArgsM :: FunArgContext arch
-                  -> [String]
                   -> FunctionArgsM arch ids a
                   -> a
-evalFunctionArgsM ctx prevWarn m = runReader (evalStateT m (initFunctionArgsState prevWarn)) ctx
-
--- | Reord a warning in the state
-addWarning :: String -> FunctionArgsM arch ids ()
-addWarning msg =
-  modify $ \s -> s { reversedWarnings = msg : reversedWarnings s }
+evalFunctionArgsM ctx m = runReader (evalStateT m initFunctionArgsState) ctx
 
 -- ----------------------------------------------------------------------------------------
 -- Phase one functions
@@ -716,8 +706,8 @@ summarizeBlock b = do
          demands <- withAssignmentCache $
            foldlM regUses Set.empty (termRegDemands e)
          addBlockDemands blockAddr $ demandAlways (registerDemandSet demands)
+      -- Record registers transered.
       recordBlockTransfer blockAddr regs (termRegTransfers e)
-
     ParsedTranslateError _ -> do
       -- We ignore demands for translate errors.
       pure mempty
@@ -725,45 +715,33 @@ summarizeBlock b = do
       -- We ignore demands for classify failure.
       pure mempty
 
-
 transferRegDemand :: ( MemWidth (ArchAddrWidth arch)
                      , OrdF (ArchReg arch)
                      , ShowF (ArchReg arch)
                      )
-                  => ArchSegmentOff arch
-                      -- ^ Address of predecessor block.
-                  -> ArchSegmentOff arch
-                  -- ^ Address of next block
-                  -> FinalRegisterDemands (ArchReg arch)
+                  => FinalRegisterDemands (ArchReg arch)
                   -> DemandSet (ArchReg arch)
                   -- ^ Demands of the start of the next block
                   -> Some (ArchReg arch)
                      -- ^ The register to back propagate
                   -> FunctionArgsM arch ids (DemandSet (ArchReg arch))
-transferRegDemand prev next (FRD xfer) s (Some r) =
+transferRegDemand (FRD xfer) s (Some r) =
   case Map.lookup (Some r) xfer of
     Just t -> pure $ mappend s t
-    Nothing -> do
-      addWarning $ "Could not back-propagate " ++ showF r
-        ++ " in transition from " ++ show prev
-        ++ " to " ++ show next ++ "."
-      pure s
+    Nothing -> pure s
 
 transferDemands :: ( MemWidth (ArchAddrWidth arch)
                    , OrdF (ArchReg arch)
                    , ShowF (ArchReg arch)
                    )
-                => ArchSegmentOff arch
-                   -- ^ Address of predecessor block.
-                -> ArchSegmentOff arch
-                   -- ^ Address of next block
-                -> FinalRegisterDemands (ArchReg arch)
-                   -- ^ Final registers demanded from previous block.
+                => FinalRegisterDemands (ArchReg arch)
+                   -- ^ Map from registers to demand sets in
+                   -- previous block needed to compute that register.
                 -> DemandSet (ArchReg arch)
                    -- ^ Demands of the start of the next block
                 -> FunctionArgsM arch ids (DemandSet (ArchReg arch))
-transferDemands prev next xfer (DemandSet regs funs) = do
-  foldlM (transferRegDemand prev next xfer) (DemandSet Set.empty funs) regs
+transferDemands xfer (DemandSet regs funs) = do
+  foldlM (transferRegDemand xfer) (DemandSet Set.empty funs) regs
 
 -- | Given new demands on a register, this back propagates the demands
 -- to the predecessor blocks.
@@ -774,8 +752,6 @@ calculateOnePred :: ( MemWidth (ArchAddrWidth arch)
                  => Map (ArchSegmentOff arch) (FinalRegisterDemands (ArchReg arch))
                     -- ^ Maps the entry point of each block in the function to the
                     -- register demands map for that block.
-                 -> ArchSegmentOff arch
-                    -- ^ Address of the current block
                  -> BlockDemands (ArchReg arch)
                     -- ^ New demands for this block.
                  -> Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch))
@@ -784,13 +760,13 @@ calculateOnePred :: ( MemWidth (ArchAddrWidth arch)
                  -> ArchSegmentOff arch
                     -- ^ Address of the previous block.
                  -> FunctionArgsM arch ids (Map (ArchSegmentOff arch) (BlockDemands (ArchReg arch)))
-calculateOnePred xferMap addr (BD newDemands) pendingMap predAddr = do
+calculateOnePred xferMap (BD newDemands) pendingMap predAddr = do
   let xfer = xferMap^.ix predAddr
 
   -- update uses, returning value before this iteration
   BD seenDemands <- use (blockDemandMap . ix predAddr)
 
-  demands' <- traverse (transferDemands predAddr addr xfer) newDemands
+  demands' <- traverse (transferDemands xfer) newDemands
 
   let diff :: OrdF r => DemandSet r -> DemandSet r -> Maybe (DemandSet r)
       diff ds1 ds2 | ds' == mempty = Nothing
@@ -825,7 +801,7 @@ calculateLocalFixpoint predMap xferMap new =
      Nothing -> pure ()
      Just ((currAddr, newDemands), rest) -> do
        -- propagate new demands bacl to predecessors of this block.
-       next <- foldlM (calculateOnePred xferMap currAddr newDemands) rest (predMap^.ix currAddr)
+       next <- foldlM (calculateOnePred xferMap newDemands) rest (predMap^.ix currAddr)
        calculateLocalFixpoint predMap xferMap next
 
 -- | Intermediate information used to infer global demands.
@@ -833,8 +809,6 @@ data FunctionSummaries r = FunctionSummaries {
     _funArgMap       :: !(ArgDemandsMap r)
   , _funResMap       :: !(Map (RegSegmentOff r) (FinalRegisterDemands r))
   , _alwaysDemandMap :: !(Map (RegSegmentOff r) (DemandSet r))
-  , summaryWarnings :: ![String]
-    -- ^ Warnings over summarization.
   }
 
 funArgMap :: Simple Lens (FunctionSummaries r) (ArgDemandsMap r)
@@ -902,24 +876,17 @@ summarizeFunction :: forall arch
               -> Some (DiscoveryFunInfo arch)
               -> FunctionSummaries (ArchReg arch)
 summarizeFunction ctx acc (Some finfo) = do
-  evalFunctionArgsM ctx (summaryWarnings acc) $ do
+  evalFunctionArgsM ctx $ do
     -- Get address of this function
     let addr = discoveredFunAddr finfo
-
     xferMap <- traverse summarizeBlock (finfo^.parsedBlocks)
-
     -- Propagate block demands until we are done.
     new <- use blockDemandMap
     calculateLocalFixpoint (predBlockMap finfo) xferMap new
-
     -- Get registers demanded by initial block map.
     entryDemands <- use $ blockDemandMap . ix addr
-
-    warn <- gets reversedWarnings
-
     -- Record the demands in this function.
-    let acc1 = acc { summaryWarnings = warn }
-    pure $! recordInferredFunctionDemands (archDemandInfo ctx) addr entryDemands acc1
+    pure $! recordInferredFunctionDemands (archDemandInfo ctx) addr entryDemands acc
 
 -- | Return the demand set for the given registers at the given address.
 postRegisterSetDemandsAtAddr :: OrdF r
@@ -935,8 +902,8 @@ postRegisterSetDemandsAtAddr m addr retRegs =
 calculateGlobalFixpoint :: forall r
                         .  OrdF r
                         => FunctionSummaries r
-                        -> (AddrDemandMap r, [String])
-calculateGlobalFixpoint s = (go (s^.alwaysDemandMap) (s^.alwaysDemandMap), reverse (summaryWarnings s))
+                        -> AddrDemandMap r
+calculateGlobalFixpoint s = go (s^.alwaysDemandMap) (s^.alwaysDemandMap)
   where
     argDemandsMap = s^.funArgMap
 
@@ -990,7 +957,7 @@ functionDemands :: forall arch
                    -- ^ State of memory for resolving segment offsets.
                 -> [Some (DiscoveryFunInfo arch)]
                    -- ^ List of function to compute demands for.
-                -> (AddrDemandMap (ArchReg arch), [String])
+                -> AddrDemandMap (ArchReg arch)
 functionDemands archFns addrMap symMap mem entries
     | common <- Set.intersection compAddrSet (Map.keysSet addrMap)
     , Set.null common == False =
@@ -1004,7 +971,6 @@ functionDemands archFns addrMap symMap mem entries
            { _funArgMap = Map.empty
            , _funResMap = Map.empty
            , _alwaysDemandMap = Map.empty
-           , summaryWarnings = []
            }
 
     compAddrSet = Set.fromList $ viewSome discoveredFunAddr <$> entries

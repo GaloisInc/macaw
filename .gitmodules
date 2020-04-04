@@ -39,4 +39,4 @@
 	url = https://github.com/GaloisInc/what4-serialize.git
 [submodule "deps/what4"]
 	path = deps/what4
-	url = https://github.com/GaloisInc/what4.git
+	url = git@github.com:GaloisInc/what4.git
