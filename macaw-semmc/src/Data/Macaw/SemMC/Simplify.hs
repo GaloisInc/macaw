@@ -43,6 +43,8 @@ simplifyApp a =
     OrApp _ t@(BoolValue True)        -> Just t
     OrApp (BoolValue False) r         -> Just r
     OrApp l (BoolValue False)         -> Just l
+    NotApp (BoolValue False)          -> Just (BoolValue True)
+    NotApp (BoolValue True)           -> Just (BoolValue False)
     Mux _ (BoolValue c) t e           -> if c then Just t else Just e
     BVAnd _ l r
       | Just Refl <- testEquality l r -> Just l

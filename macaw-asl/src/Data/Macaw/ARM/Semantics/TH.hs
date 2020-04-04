@@ -10,6 +10,12 @@
 module Data.Macaw.ARM.Semantics.TH
     ( armAppEvaluator
     , armNonceAppEval
+    , getGPR
+    , setGPR
+    , getSIMD
+    , setSIMD
+    , concreteIte
+    , loadSemantics
     )
     where
 
@@ -22,7 +28,7 @@ import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
-import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, asName )
+import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName, asName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import qualified Data.Parameterized.Context as Ctx
@@ -36,12 +42,18 @@ import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import qualified SemMC.Architecture.AArch32 as ARM
+import qualified SemMC.Architecture.ARM.Opcodes as ARM
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.ARM.Location as Loc
 import qualified SemMC.Architecture.Location as L
 import qualified What4.BaseTypes as WT
 import qualified What4.Expr.Builder as WB
 
+import qualified Language.ASL.Globals as ASL
+import qualified Language.ASL.Globals.Definitions as ASL
+
+loadSemantics :: IO (ARM.ASLSemantics)
+loadSemantics = ARM.loadSemantics (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
 -- n.b. although MacawQ is a monad and therefore has a fail
 -- definition, using error provides *much* better error diagnostics
@@ -69,48 +81,25 @@ armNonceAppEval bvi nonceApp =
           "uf_simd_set" ->
             case args of
               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
-                rgf <- addEltTH M.LittleEndian bvi rgf
-                rid <- addEltTH M.LittleEndian bvi rid
-                val <- addEltTH M.LittleEndian bvi val
-                liftQ [| do reg <- case $(return rid) of
-                              M.BVValue w i
-                                | intValue w == 5 -> case integerToReg i of
-                                    Just reg -> return reg
-                                    Nothing -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments $(return rid)))
-                              _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete (uf_simd_set): " <> show (M.ppValueAssignments $(return rid)))
-                            G.setRegVal reg $(return val)
-                            return $(return rgf)
-                       |]
+                rgfE <- addEltTH M.LittleEndian bvi rgf
+                ridE <- addEltTH M.LittleEndian bvi rid
+                valE <- addEltTH M.LittleEndian bvi val
+                liftQ [| setSIMD $(return rgfE) $(return ridE) $(return valE) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_set" ->
             case args of
               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
-                rgf <- addEltTH M.LittleEndian bvi rgf
-                rid <- addEltTH M.LittleEndian bvi rid
-                val <- addEltTH M.LittleEndian bvi val
-                liftQ [| do reg <- case $(return rid) of
-                              M.BVValue w i
-                                | intValue w == 4 -> case integerToReg i of
-                                    Just reg -> return reg
-                                    Nothing -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments $(return rid)))
-                              _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete (uf_gpr_set): " <> show (M.ppValueAssignments $(return rid)))
-                            G.setRegVal reg $(return val)
-                            return $(return rgf)
-                       |]
+                rgfE <- addEltTH M.LittleEndian bvi rgf
+                ridE <- addEltTH M.LittleEndian bvi rid
+                valE <- addEltTH M.LittleEndian bvi val
+                liftQ [| setGPR $(return rgfE) $(return ridE) $(return valE) |]
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
               Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                 Just $ do
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| do reg <- case $(return rid) of
-                                M.BVValue w i
-                                  | intValue w == 5 -> case integerToReg i of
-                                      Just reg -> return reg
-                                      Nothing -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_get): " <> show (M.ppValueAssignments $(return rid)))
-                                _ -> E.throwError (G.GeneratorMessage $ "SIMD identifier not concrete (uf_simd_get: " <> show (M.ppValueAssignments $(return rid)))
-                              G.getRegVal reg
-                         |]
+                  liftQ [| getSIMD $(return rid) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
@@ -118,17 +107,10 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| do reg <- case $(return rid) of
-                                M.BVValue w i
-                                  | intValue w == 4 -> case integerToReg i of
-                                      Just reg -> return reg
-                                      Nothing -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments $(return rid)))
-                                _ -> E.throwError (G.GeneratorMessage $ "GPR identifier not concrete (uf_gpr_get): " <> show (M.ppValueAssignments $(return rid)))
-                              G.getRegVal reg
-                         |]
+                  liftQ [| getGPR $(return rid) |]
               _ -> fail "Invalid uf_gpr_get"
-          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
-          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
+          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
@@ -150,6 +132,52 @@ armNonceAppEval bvi nonceApp =
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
+setGPR :: M.Value ARM.AArch32 ids tp
+       -> M.Value ARM.AArch32 ids (M.BVType 4)
+       -> M.Value ARM.AArch32 ids (M.BVType 32)
+       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+setGPR handle regid v = do
+  reg <- case regid of
+    M.BVValue w i
+      | intValue w == 4
+      , Just reg <- integerToReg i -> return reg
+    _ -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments v))
+  G.setRegVal reg v
+  return handle
+
+getGPR :: M.Value ARM.AArch32 ids tp 
+       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
+getGPR v = do
+  reg <- case v of
+    M.BVValue w i
+      | intValue w == 4
+      , Just reg <- integerToReg i -> return reg
+    _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
+  G.getRegVal reg
+
+setSIMD :: M.Value ARM.AArch32 ids tp
+       -> M.Value ARM.AArch32 ids (M.BVType 8)
+       -> M.Value ARM.AArch32 ids (M.BVType 128)
+       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+setSIMD handle regid v = do
+  reg <- case regid of
+    M.BVValue w i
+      | intValue w == 8
+      , Just reg <- integerToSIMDReg i -> return reg
+    _ -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments v))
+  G.setRegVal reg v
+  return handle
+
+getSIMD :: M.Value ARM.AArch32 ids tp 
+       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
+getSIMD v = do
+  reg <- case v of
+    M.BVValue w i
+      | intValue w == 8
+      , Just reg <- integerToSIMDReg i -> return reg
+    _ ->  E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_get): " <> show (M.ppValueAssignments v))
+  G.getRegVal reg
+
 what4TypeTH :: WT.BaseTypeRepr tp -> Q Exp
 what4TypeTH (WT.BaseBVRepr natRepr) = [| M.BVTypeRepr $(natReprTH natRepr) |]
 what4TypeTH WT.BaseBoolRepr = [| M.BoolTypeRepr |]
@@ -166,13 +194,47 @@ addArchAssignment :: (M.HasRepr (M.ArchFn ARM.AArch32 (M.Value ARM.AArch32 ids))
 addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalArchFn expr (M.typeRepr expr))
 
 
+-- | indicates that this is a placeholder type (i.e. memory or registers)
+isPlaceholderType :: WT.BaseTypeRepr tp -> Bool
+isPlaceholderType tp = case tp of
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) -> True
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> True
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
+  _ -> False
+
+translatePlaceholder :: M.Endianness
+                     -> BoundVarInterpretations ARM.AArch32 t fs
+                     -> WB.Expr t tp
+                     -> MacawQ ARM.AArch32 t fs Exp
+translatePlaceholder endianness interps e = case e of
+  WB.AppExpr app -> appToExprTH endianness (WB.appExprApp app) interps
+  WB.NonceAppExpr n -> do
+    val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
+    liftQ [| G.ValueExpr <$> $(return val) |]
+  WB.BoundVarExpr bvar -> do
+    val <- evalBoundVar endianness interps bvar
+    liftQ [| G.ValueExpr <$> $(return val) |]
+  _ -> fail $ "translatePlaceholder: unexpected expression kind: " ++ show e
+
+concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
+            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+concreteIte v t f = case v of
+  M.CValue (M.BoolCValue b) -> if b then t else f
+  _ ->  E.throwError (G.GeneratorMessage $ "concreteIte: requires concrete value" <> show (M.ppValueAssignments v))
+
 armAppEvaluator :: M.Endianness
                 -> BoundVarInterpretations ARM.AArch32 t fs
                 -> WB.App (WB.Expr t) ctp
                 -> Maybe (MacawQ ARM.AArch32 t fs Exp)
 armAppEvaluator endianness interps elt =
     case elt of
-
+      WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
+        testE <- addEltTH endianness interps test
+        tE <- translatePlaceholder endianness interps t
+        fE <- translatePlaceholder endianness interps f
+        liftQ [| concreteIte $(return testE) $(return tE) $(return fE) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
