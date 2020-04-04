@@ -124,7 +124,7 @@ import qualified Control.Monad.IO.Unlift as MU
 import qualified Control.Scheduler as CS
 import qualified Data.Foldable as F
 import qualified Data.Macaw.CFG as MC
-import qualified Data.Macaw.CFG.Rewriter as RW
+import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Refinement.FuncBlockUtils as RFU
 import           Data.Macaw.Refinement.Logging ( RefinementLog(..) )
 import qualified Data.Macaw.Refinement.Path as RP

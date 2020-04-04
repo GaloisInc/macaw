@@ -658,7 +658,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
         addTermStmt (CR.Return regs)
       return (lbl, blk:blks)
       where
-      syntheticPos w = C.OtherPos ("synthetic return block for mkBlockSliceRegCFG; offset " <> T.pack (show w))
+      syntheticPos w = WPL.OtherPos ("synthetic return block for mkBlockSliceRegCFG; offset " <> T.pack (show w))
 
 -- | Construct a Crucible CFG from a (possibly incomplete) collection of macaw blocks
 --
