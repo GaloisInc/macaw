@@ -71,8 +71,8 @@ ppcNonceAppEval bvi nonceApp =
           case FC.toListFC Some args of
             [Some op, Some frA, Some fpscr] -> case getOpName op of
               Just name -> do
-                valA <- addEltTH bvi frA
-                valFpscr <- addEltTH bvi fpscr
+                valA <- addEltTH M.BigEndian bvi frA
+                valFpscr <- addEltTH M.BigEndian bvi fpscr
                 liftQ [|
                     addArchExpr $
                       FPSCR1 $(lift name) $(return valA) $(return valFpscr)
@@ -84,9 +84,9 @@ ppcNonceAppEval bvi nonceApp =
           case FC.toListFC Some args of
             [Some op, Some frA, Some frB, Some fpscr] -> case getOpName op of
               Just name -> do
-                valA <- addEltTH bvi frA
-                valB <- addEltTH bvi frB
-                valFpscr <- addEltTH bvi fpscr
+                valA <- addEltTH M.BigEndian bvi frA
+                valB <- addEltTH M.BigEndian bvi frB
+                valFpscr <- addEltTH M.BigEndian bvi fpscr
                 liftQ [|
                     addArchExpr $ FPSCR2
                       $(lift name)
@@ -102,10 +102,10 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some frA, Some frB, Some frC, Some fpscr] ->
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi frA
-                  valB <- addEltTH bvi frB
-                  valC <- addEltTH bvi frC
-                  valFpscr <- addEltTH bvi fpscr
+                  valA <- addEltTH M.BigEndian bvi frA
+                  valB <- addEltTH M.BigEndian bvi frB
+                  valC <- addEltTH M.BigEndian bvi frC
+                  valFpscr <- addEltTH M.BigEndian bvi fpscr
                   liftQ [|
                       addArchExpr $ FPSCR3
                         $(lift name)
@@ -122,8 +122,8 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some frA, Some fpscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi frA
-                  valFpscr <- addEltTH bvi fpscr
+                  valA <- addEltTH M.BigEndian bvi frA
+                  valFpscr <- addEltTH M.BigEndian bvi fpscr
                   liftQ [| addArchExpr $ FP1 $(lift name) $(return valA) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
@@ -132,9 +132,9 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some frA, Some frB, Some fpscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi frA
-                  valB <- addEltTH bvi frB
-                  valFpscr <- addEltTH bvi fpscr
+                  valA <- addEltTH M.BigEndian bvi frA
+                  valB <- addEltTH M.BigEndian bvi frB
+                  valFpscr <- addEltTH M.BigEndian bvi fpscr
                   liftQ [| addArchExpr $ FP2 $(lift name) $(return valA) $(return valB) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
@@ -143,10 +143,10 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some frA, Some frB, Some frC, Some fpscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi frA
-                  valB <- addEltTH bvi frB
-                  valC <- addEltTH bvi frC
-                  valFpscr <- addEltTH bvi fpscr
+                  valA <- addEltTH M.BigEndian bvi frA
+                  valB <- addEltTH M.BigEndian bvi frB
+                  valC <- addEltTH M.BigEndian bvi frC
+                  valFpscr <- addEltTH M.BigEndian bvi fpscr
                   liftQ [| addArchExpr $ FP3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
@@ -155,8 +155,8 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some rA, Some vscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi rA
-                  valVscr <- addEltTH bvi vscr
+                  valA <- addEltTH M.BigEndian bvi rA
+                  valVscr <- addEltTH M.BigEndian bvi vscr
                   liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
@@ -165,9 +165,9 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some rA, Some rB, Some vscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi rA
-                  valB <- addEltTH bvi rB
-                  valVscr <- addEltTH bvi vscr
+                  valA <- addEltTH M.BigEndian bvi rA
+                  valB <- addEltTH M.BigEndian bvi rB
+                  valVscr <- addEltTH M.BigEndian bvi vscr
                   liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
@@ -176,10 +176,10 @@ ppcNonceAppEval bvi nonceApp =
             [Some op, Some rA, Some rB, Some rC, Some vscr] -> do
               case getOpName op of
                 Just name -> do
-                  valA <- addEltTH bvi rA
-                  valB <- addEltTH bvi rB
-                  valC <- addEltTH bvi rC
-                  valVscr <- addEltTH bvi vscr
+                  valA <- addEltTH M.BigEndian bvi rA
+                  valB <- addEltTH M.BigEndian bvi rB
+                  valC <- addEltTH M.BigEndian bvi rC
+                  valVscr <- addEltTH M.BigEndian bvi vscr
                   liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valVscr) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
@@ -245,7 +245,7 @@ floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
     [Some a] -> case fnName of
       "double_to_single" -> do
-        fpval <- addEltTH bvi a
+        fpval <- addEltTH M.BigEndian bvi a
         liftQ [|
             addArchExpr $
               FPCoerce M.SingleFloatRepr M.DoubleFloatRepr $(return fpval)
@@ -268,28 +268,28 @@ ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                 -> Maybe (MacawQ arch t fs Exp)
 ppcAppEvaluator interps = \case
   S.BVSdiv w bv1 bv2 -> return $ do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH M.BigEndian interps bv1
+    e2 <- addEltTH M.BigEndian interps bv2
     liftQ [| addArchAssignment (SDiv $(natReprTH w) $(return e1) $(return e2))
            |]
   S.BVUdiv w bv1 bv2 -> return $ do
-    e1 <- addEltTH interps bv1
-    e2 <- addEltTH interps bv2
+    e1 <- addEltTH M.BigEndian interps bv1
+    e2 <- addEltTH M.BigEndian interps bv2
     liftQ [| addArchAssignment (UDiv $(natReprTH w) $(return e1) $(return e2))
            |]
 
   S.FloatNeg fpp fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPNeg $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
   S.FloatAbs fpp fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPAbs $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
   S.FloatSqrt fpp r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPSqrt
           $(floatInfoFromPrecisionTH fpp)
@@ -298,8 +298,8 @@ ppcAppEvaluator interps = \case
       |]
 
   S.FloatAdd fpp r fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
         addArchAssignment $ FPAdd
           $(floatInfoFromPrecisionTH fpp)
@@ -308,8 +308,8 @@ ppcAppEvaluator interps = \case
           $(return e2)
       |]
   S.FloatSub fpp r fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
         addArchAssignment $ FPSub
           $(floatInfoFromPrecisionTH fpp)
@@ -318,8 +318,8 @@ ppcAppEvaluator interps = \case
           $(return e2)
       |]
   S.FloatMul fpp r fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
         addArchAssignment $ FPMul
           $(floatInfoFromPrecisionTH fpp)
@@ -328,8 +328,8 @@ ppcAppEvaluator interps = \case
           $(return e2)
       |]
   S.FloatDiv fpp r fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
         addArchAssignment $ FPDiv
           $(floatInfoFromPrecisionTH fpp)
@@ -339,9 +339,9 @@ ppcAppEvaluator interps = \case
       |]
 
   S.FloatFMA fpp r fp1 fp2 fp3 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
-    e3 <- addEltTH interps fp3
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
+    e3 <- addEltTH M.BigEndian interps fp3
     liftQ [|
         addArchAssignment $ FPFMA
           $(floatInfoFromPrecisionTH fpp)
@@ -352,24 +352,24 @@ ppcAppEvaluator interps = \case
       |]
 
   S.FloatLt fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [| addArchAssignment $ FPLt $(return e1) $(return e2) |]
   S.FloatFpEq fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [| addArchAssignment $ FPEq $(return e1) $(return e2) |]
   S.FloatLe fp1 fp2 -> return $ do
-    e1 <- addEltTH interps fp1
-    e2 <- addEltTH interps fp2
+    e1 <- addEltTH M.BigEndian interps fp1
+    e2 <- addEltTH M.BigEndian interps fp2
     liftQ [| addArchAssignment $ FPLe $(return e1) $(return e2) |]
 
   S.FloatIsNaN fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [| addArchAssignment $ FPIsNaN $(return e) |]
 
   S.FloatCast fpp r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPCast
           $(floatInfoFromPrecisionTH fpp)
@@ -377,7 +377,7 @@ ppcAppEvaluator interps = \case
           $(return e)
       |]
   S.FloatRound fpp r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPRound
           $(floatInfoFromPrecisionTH fpp)
@@ -385,31 +385,31 @@ ppcAppEvaluator interps = \case
           $(return e)
       |]
   S.FloatToBinary fpp fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $
           FPToBinary $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
   S.FloatFromBinary fpp fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $
           FPFromBinary $(floatInfoFromPrecisionTH fpp) $(return e)
       |]
   S.FloatToSBV w r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $
           FPToSBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
       |]
   S.FloatToBV w r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $
           FPToUBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
       |]
   S.SBVToFloat fpp r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPFromSBV
           $(floatInfoFromPrecisionTH fpp)
@@ -417,7 +417,7 @@ ppcAppEvaluator interps = \case
           $(return e)
       |]
   S.BVToFloat fpp r fp -> return $ do
-    e <- addEltTH interps fp
+    e <- addEltTH M.BigEndian interps fp
     liftQ [|
         addArchAssignment $ FPFromUBV
           $(floatInfoFromPrecisionTH fpp)
