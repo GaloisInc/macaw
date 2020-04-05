@@ -54,10 +54,17 @@ initialBlockRegs :: forall ids .
                  -> RegState (ArchReg ARM.AArch32) (Value ARM.AArch32 ids)
 initialBlockRegs addr _preconds = MSG.initRegState addr &
   -- FIXME: Set all simple globals to 0??
+  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__UnpredictableBehavior")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__UndefinedBehavior")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__AssertionFailure")) .~ BoolValue False &
+  -- FIXME: PSTATE_T is 0 for ARM mode, 1 for Thumb mode. For now, we
+  -- are setting this concretely to 0 at the start of a block, but
+  -- once we get Thumb support, we will want to refer to the semantics
+  -- for this.
+  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ BVValue knownNat 0 &
+  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ BVValue knownNat 1 &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ BoolValue False

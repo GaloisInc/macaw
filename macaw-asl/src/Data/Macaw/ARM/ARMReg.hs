@@ -17,6 +17,7 @@ module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
     -- , armRegToGPR
     , arm_LR
+    , branchTaken
     -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
     , locToRegTH
@@ -74,6 +75,9 @@ data ARMReg tp where
 -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
 arm_LR = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+
+branchTaken :: ARMReg BoolType
+branchTaken = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
 
 instance Show (ARMReg tp) where
   show r = case r of

@@ -188,7 +188,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
           nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
-          curPCVal = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
+          -- curPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
@@ -206,20 +206,16 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                                                     T32I i' -> ThumbD.ppInstruction i'))
             addStmt (InstructionStart blockOff (T.pack lineStr))
             addStmt (Comment (T.pack  lineStr))
+            setRegVal branchTaken (CValue (BoolCValue False))
             asAtomicStateUpdate (MM.segoffAddr curPCAddr) transformer)
           case egs1 of
             Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
                 UnfinishedPartialBlock preBlock
-                  -- FIXME: we are ignoring the max offset for now
-                  | v <- preBlock ^. (pBlockState . curIP)
-                  , v == curPCVal
+                  -- If __BranchTaken is concretely False, then we are not done with the block.
+                  | CValue (BoolCValue False) <- preBlock ^. (pBlockState . boundValue branchTaken)
                   , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
-                  -- , Just simplifiedIP <- simplifyValue v
-                  -- , simplifiedIP == nextPCVal
-                  -- , simplifiedIP == curPCVal
-                  -- , nextPCOffset < maxOffset
                       let preBlock' = (pBlockState . curIP .~ nextPCVal) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockState = preBlock'
@@ -227,7 +223,25 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                          , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
-                  | otherwise -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
+                  -- If the current PC is a mux, and either branch is
+                  -- concrete and equal to the current pc, we need to
+                  -- increment that value.
+                  | AssignedValue (Assignment aid (EvalApp (Mux tp test t f))) <- preBlock ^. (pBlockState . curIP) -> do
+                      -- if either t or f is concretely equal to curPCAddr, modify it to nextPCVal
+                      -- set curIP
+                      case (t, f) of
+                        (CValue (BVCValue _ fallThroughPC), _) | Just fallThroughPC == (memWordToUnsigned <$> asAbsoluteAddr curPC) -> do
+                          let newIP = AssignedValue (Assignment aid (EvalApp (Mux tp test nextPCVal f)))
+                          let preBlock' = (pBlockState . curIP .~ newIP) preBlock
+                          return (nextPCOffset, finishBlock' preBlock' FetchAndExecute)
+                        (_, CValue (BVCValue _ fallThroughPC)) | Just fallThroughPC == (memWordToUnsigned <$> asAbsoluteAddr curPC) -> do
+                          let newIP = AssignedValue (Assignment aid (EvalApp (Mux tp test t nextPCVal)))
+                          let preBlock' = (pBlockState . curIP .~ newIP) preBlock
+                          return (nextPCOffset, finishBlock' preBlock' FetchAndExecute)
+                        _ -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
+                  -- Otherwise, we are still at the end of a block.
+                  | otherwise -> do
+                      return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
                 FinishedPartialBlock b -> return (nextPCOffset, b)
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
