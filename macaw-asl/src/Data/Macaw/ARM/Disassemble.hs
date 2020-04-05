@@ -212,10 +212,12 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
-                UnfinishedPartialBlock preBlock
-                  -- If __BranchTaken is concretely False, then we are not done with the block.
-                  | CValue (BoolCValue False) <- preBlock ^. (pBlockState . boundValue branchTaken)
-                  , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
+                UnfinishedPartialBlock preBlock -> do
+                  -- If the branch taken flag is anything besides a
+                  -- concrete False value, then we are at the end of a
+                  -- block.
+                  case preBlock ^. (pBlockState . boundValue branchTakenReg) of
+                    CValue (BoolCValue False) | Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
                       let preBlock' = (pBlockState . curIP .~ nextPCVal) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockState = preBlock'

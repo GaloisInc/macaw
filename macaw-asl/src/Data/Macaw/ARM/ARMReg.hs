@@ -23,6 +23,7 @@ module Data.Macaw.ARM.ARMReg
     , locToRegTH
     , integerToReg
     , integerToSIMDReg
+    , branchTakenReg
     )
     where
 
@@ -202,6 +203,9 @@ locToRegTH _ (SA.Location globalRef) = do
     WT.BaseBVRepr _ ->
       [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
     tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ LitE (StringL refName)) |]
+
+branchTakenReg :: ARMReg BoolType
+branchTakenReg = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
 
 integerToReg :: Integer -> Maybe (ARMReg (BVType 32))
 integerToReg 0  = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R0")

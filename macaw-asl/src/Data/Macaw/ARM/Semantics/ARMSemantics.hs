@@ -28,6 +28,7 @@ import qualified SemMC.Architecture.AArch32 as ARMSem
 import           SemMC.Architecture.ARM.Opcodes ( ASLSemantics(..), allA32OpcodeInfo )
 import           Data.Parameterized.Some
 
+
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Instruction
                 -> Maybe (Generator ARMSem.AArch32 ids s ())

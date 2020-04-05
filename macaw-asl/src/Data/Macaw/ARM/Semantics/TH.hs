@@ -109,7 +109,20 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| getGPR $(return rid) |]
               _ -> fail "Invalid uf_gpr_get"
+          "uf_write_mem_" ->
+            case args of
+              Ctx.Empty Ctx.:> mem Ctx.:> addr Ctx.:> val
+               | WT.BaseBVRepr memWidthRepr <- WB.exprType val -> Just $ do
+                memE <- addEltTH M.LittleEndian bvi mem
+                addrE <- addEltTH M.LittleEndian bvi addr
+                valE <- addEltTH M.LittleEndian bvi val
+                let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
+                appendStmt [| G.addStmt (M.WriteMem $(return addrE) (M.BVMemRepr $(natReprFromIntTH memWidth) M.LittleEndian) $(return valE)) |]
+                return memE
+              _ -> fail "invalid write_mem"
+
           "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
@@ -131,6 +144,9 @@ armNonceAppEval bvi nonceApp =
                Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
+
+natReprFromIntTH :: Int -> Q Exp
+natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
 setGPR :: M.Value ARM.AArch32 ids tp
        -> M.Value ARM.AArch32 ids (M.BVType 4)
@@ -202,19 +218,20 @@ isPlaceholderType tp = case tp of
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
   _ -> False
 
-translatePlaceholder :: M.Endianness
-                     -> BoundVarInterpretations ARM.AArch32 t fs
-                     -> WB.Expr t tp
-                     -> MacawQ ARM.AArch32 t fs Exp
-translatePlaceholder endianness interps e = case e of
+translateExpr :: M.Endianness
+              -> BoundVarInterpretations ARM.AArch32 t fs
+              -> WB.Expr t tp
+              -> MacawQ ARM.AArch32 t fs Exp
+translateExpr endianness interps e = case e of
   WB.AppExpr app -> appToExprTH endianness (WB.appExprApp app) interps
-  WB.NonceAppExpr n -> do
-    val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
-    liftQ [| G.ValueExpr <$> $(return val) |]
   WB.BoundVarExpr bvar -> do
     val <- evalBoundVar endianness interps bvar
     liftQ [| G.ValueExpr <$> $(return val) |]
-  _ -> fail $ "translatePlaceholder: unexpected expression kind: " ++ show e
+  WB.NonceAppExpr n -> do
+    val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
+    liftQ [| G.ValueExpr <$> $(return val) |]
+  _ -> fail $ "translateExpr: unexpected expression kind: " ++ show e
+
 
 concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
             -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
@@ -232,8 +249,8 @@ armAppEvaluator endianness interps elt =
     case elt of
       WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
         testE <- addEltTH endianness interps test
-        tE <- translatePlaceholder endianness interps t
-        fE <- translatePlaceholder endianness interps f
+        tE <- translateExpr endianness interps t
+        fE <- translateExpr endianness interps f
         liftQ [| concreteIte $(return testE) $(return tE) $(return fE) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1

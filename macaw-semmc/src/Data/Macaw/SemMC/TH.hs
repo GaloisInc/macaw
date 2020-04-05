@@ -603,7 +603,10 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               -- | L.isMemoryLocation loc
               -- , S.AppExpr _ <- expr -> do
               --     error $ "WRITE TO MEM: APP"
-              | L.isMemoryLocation loc -> return ()
+              | L.isMemoryLocation loc -> do
+                  mem <- addEltTH endianness interps expr
+                  appendStmt [| return () |]
+
               | otherwise -> do
                   valExp <- addEltTH endianness interps expr
                   appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
