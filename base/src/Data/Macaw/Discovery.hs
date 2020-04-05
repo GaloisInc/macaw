@@ -1118,7 +1118,15 @@ branchClassifier = classifierName "Branch" $ do
     -- The block ends with a Mux, so we turn this into a `ParsedBranch` statement.
     let ipVal = finalRegs^.boundValue ip_reg
     (c,t,f) <- case valueAsApp ipVal of
+                 Just (Mux _ c1 t f)
+                   | Just (Mux _ c2 t1 _f1) <- valueAsApp t
+                   , Just (Mux _ c3 _t2 f2) <- valueAsApp f
+                   , c1 == c2
+                   , c2 == c3
+                   -> pure (c1, t1, f2)
+                   
                  Just (Mux _ c t f) -> pure (c,t,f)
+
                  _ -> fail $ "IP is not an mux:\n"
                           ++ show (ppValueAssignments ipVal)
     trueTgtAddr  <- classifyDirectJump ctx "True branch"  t

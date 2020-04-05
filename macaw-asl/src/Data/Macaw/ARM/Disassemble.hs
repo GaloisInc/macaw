@@ -9,7 +9,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
-
+{-# LANGUAGE MultiWayIf #-}
 {-
 
 General notes regarding the disassembly process for ARM.
@@ -75,7 +75,7 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import           Data.Macaw.ARM.ARMReg
--- import           Data.Macaw.ARM.Arch ( ARMArchConstraints )
+import           Data.Macaw.ARM.Arch()
 import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
@@ -93,6 +93,7 @@ import qualified Dismantle.ARM.T32 as ThumbD
 import           Text.Printf ( printf )
 
 import qualified SemMC.Architecture.AArch32 as ARM
+import Debug.Trace
 
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)
@@ -212,12 +213,12 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
-                UnfinishedPartialBlock preBlock -> do
-                  -- If the branch taken flag is anything besides a
-                  -- concrete False value, then we are at the end of a
-                  -- block.
-                  case preBlock ^. (pBlockState . boundValue branchTakenReg) of
-                    CValue (BoolCValue False) | Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
+                UnfinishedPartialBlock preBlock ->
+                  if | CValue (BoolCValue False) <- preBlock ^. (pBlockState . boundValue branchTakenReg)
+                     , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
+                    -- If the branch taken flag is anything besides a
+                    -- concrete False value, then we are at the end of a
+                    -- block.
                       let preBlock' = (pBlockState . curIP .~ nextPCVal) preBlock
                       let gs2 = GenState { assignIdGen = assignIdGen gs
                                          , _blockState = preBlock'
@@ -225,25 +226,8 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                          , genRegUpdates = MapF.empty
                                          }
                       disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
-                  -- If the current PC is a mux, and either branch is
-                  -- concrete and equal to the current pc, we need to
-                  -- increment that value.
-                  | AssignedValue (Assignment aid (EvalApp (Mux tp test t f))) <- preBlock ^. (pBlockState . curIP) -> do
-                      -- if either t or f is concretely equal to curPCAddr, modify it to nextPCVal
-                      -- set curIP
-                      case (t, f) of
-                        (CValue (BVCValue _ fallThroughPC), _) | Just fallThroughPC == (memWordToUnsigned <$> asAbsoluteAddr curPC) -> do
-                          let newIP = AssignedValue (Assignment aid (EvalApp (Mux tp test nextPCVal f)))
-                          let preBlock' = (pBlockState . curIP .~ newIP) preBlock
-                          return (nextPCOffset, finishBlock' preBlock' FetchAndExecute)
-                        (_, CValue (BVCValue _ fallThroughPC)) | Just fallThroughPC == (memWordToUnsigned <$> asAbsoluteAddr curPC) -> do
-                          let newIP = AssignedValue (Assignment aid (EvalApp (Mux tp test t nextPCVal)))
-                          let preBlock' = (pBlockState . curIP .~ newIP) preBlock
-                          return (nextPCOffset, finishBlock' preBlock' FetchAndExecute)
-                        _ -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
-                  -- Otherwise, we are still at the end of a block.
-                  | otherwise -> do
-                      return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
+                     -- Otherwise, we are still at the end of a block.
+                     | otherwise -> return (nextPCOffset, finishBlock' preBlock FetchAndExecute)
                 FinishedPartialBlock b -> return (nextPCOffset, b)
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
