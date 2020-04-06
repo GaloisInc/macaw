@@ -16,7 +16,9 @@ module Data.Macaw.RISCV (
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified GRIFT.Types as GT
 
-riscv_info :: GT.RVRepr rv -> MI.ArchitectureInfo rv
+import Data.Macaw.RISCV.RISCVReg
+
+riscv_info :: RISCV rv => GT.RVRepr rv -> MI.ArchitectureInfo rv
 riscv_info _ = MI.ArchitectureInfo
   { MI.withArchConstraints = \_ -> undefined -- \x -> x
   , MI.archAddrWidth = undefined
