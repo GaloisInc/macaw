@@ -1,5 +1,6 @@
 packages: macaw-ppc/
           macaw-arm/
+	  macaw-riscv/
           macaw-semmc/
           macaw-ppc-symbolic/
           base/
@@ -31,3 +32,7 @@ packages: macaw-ppc/
           deps/flexdis86/binary-symbols/
           deps/llvm-pretty/
           deps/llvm-pretty-bc-parser/
+	  deps/grift/grift/
+	  deps/bv-sized/
+	  deps/bv-sized-float/
+	  deps/softfloat-hs
