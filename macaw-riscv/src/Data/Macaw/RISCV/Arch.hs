@@ -53,3 +53,5 @@ instance MC.IPAlignment (rv :: GT.RV) where
   toIPAligned = id
 
 type instance MC.ArchTermStmt rv = RISCVArchTermStmt rv
+
+type instance MC.ArchBlockPrecond rv = ()
