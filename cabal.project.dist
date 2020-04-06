@@ -1,6 +1,7 @@
 packages: macaw-ppc/
           macaw-arm/
           macaw-aarch32/
+          macaw-aarch32-symbolic/
           macaw-semmc/
           macaw-ppc-symbolic/
           base/
