@@ -122,7 +122,7 @@ import           Data.Macaw.Utils.Pretty
 
 
 -- | A pair containing a segment and valid offset within the segment.
-type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)
+type ArchSegmentOff (arch :: k) = MemSegmentOff (ArchAddrWidth arch)
 
 -- Note:
 -- The declarations in this file follow a top-down order, so the top-level
@@ -724,7 +724,7 @@ class IsArchStmt (f :: (Type -> Kind.Type) -> Kind.Type)  where
              -> Doc ann
 
 -- | Constructs expected by architectures type classes.
-type ArchConstraints arch
+type ArchConstraints (arch :: k)
    = ( RegisterInfo (ArchReg arch)
      , FoldableFC (ArchFn arch)
      , IsArchFn   (ArchFn arch)

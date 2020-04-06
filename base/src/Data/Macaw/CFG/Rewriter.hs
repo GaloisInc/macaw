@@ -17,7 +17,9 @@ blocks or even add new blocks for new Branch TermStmt targets.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.CFG.Rewriter
@@ -56,7 +58,7 @@ import           Data.Macaw.Types
 import           Data.Macaw.CFG.Block (TermStmt)
 
 -- | Information needed for rewriting.
-data RewriteContext arch s src tgt
+data RewriteContext (arch :: k) s src tgt
    = RewriteContext { rwctxNonceGen  :: !(NonceGenerator (ST s) tgt)
                       -- ^ Generator for making new nonces in the target ST monad
                     , rwctxArchFn
@@ -122,7 +124,7 @@ mkRewriteContext nonceGen archFn archStmt termStmt secAddrMap = do
                          }
 
 -- | State used by rewriter for tracking states
-data RewriteState arch s src tgt
+data RewriteState (arch :: k) s src tgt
    = RewriteState { -- | Access to the context for the rewriter
                     rwContext        :: !(RewriteContext arch s src tgt)
                   , _rwRevStmts      :: ![Stmt arch tgt]
@@ -133,7 +135,7 @@ rwRevStmts :: Simple Lens (RewriteState arch s src tgt) [Stmt arch tgt]
 rwRevStmts = lens _rwRevStmts (\s v -> s { _rwRevStmts = v })
 
 -- | Monad for constant propagation within a block.
-newtype Rewriter arch s src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch s src tgt) (ST s) a }
+newtype Rewriter (arch :: k) s src tgt a = Rewriter { unRewriter :: StateT (RewriteState arch s src tgt) (ST s) a }
   deriving (Functor, Applicative, Monad)
 
 -- | Run the rewriter with the given context
