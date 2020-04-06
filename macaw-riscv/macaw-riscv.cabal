@@ -18,6 +18,7 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Data.Macaw.RISCV
                        Data.Macaw.RISCV.Arch
+                       Data.Macaw.RISCV.Eval
                        Data.Macaw.RISCV.RISCVReg
                        -- Data.Macaw.PPC.Arch
                        -- Data.Macaw.PPC.Disassemble
@@ -33,6 +34,7 @@ library
                        ansi-wl-pprint,
                        bv-sized,
                        grift,
+                       lens,
                        macaw-base,
                        parameterized-utils
   hs-source-dirs:      src

@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -93,3 +94,10 @@ instance RISCV rv => MC.RegisterInfo (RISCVReg rv) where
   ip_reg = PC
   syscall_num_reg = error "syscall_num_reg undefined"
   syscallArgumentRegs = error "syscallArgumentRegs undefined"
+
+riscvAddrWidth :: GT.RVRepr rv
+               -> MM.AddrWidthRepr (MC.RegAddrWidth (MC.ArchReg rv))
+riscvAddrWidth rvRepr = case GT.rvBaseArch rvRepr of
+  GT.RV32Repr -> MM.Addr32
+  GT.RV64Repr -> MM.Addr64
+  GT.RV128Repr -> error "RV128 not supported"
