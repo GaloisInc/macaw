@@ -40,3 +40,12 @@
 [submodule "deps/grift"]
 	path = deps/grift
 	url = https://github.com/GaloisInc/grift.git
+[submodule "deps/bv-sized"]
+	path = deps/bv-sized
+	url = https://github.com/GaloisInc/bv-sized
+[submodule "deps/bv-sized-float"]
+	path = deps/bv-sized-float
+	url = https://github.com/GaloisInc/bv-sized-float
+[submodule "deps/softfloat-hs"]
+	path = deps/softfloat-hs
+	url = https://github.com/GaloisInc/softfloat-hs

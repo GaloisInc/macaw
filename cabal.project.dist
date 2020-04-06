@@ -1,9 +1,11 @@
 packages: base/
           macaw-aarch32/
           macaw-aarch32-symbolic/
+          macaw-arm/
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
+	      macaw-riscv/
           x86/
           symbolic/
           x86_symbolic/
@@ -36,3 +38,7 @@ packages: base/
           deps/llvm-pretty-bc-parser/
           deps/asl-translator/
           deps/arm-asl-parser/
+	      deps/grift/grift/
+	      deps/bv-sized/
+	      deps/bv-sized-float/
+	      deps/softfloat-hs/
