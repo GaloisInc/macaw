@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.RISCV
+                       Data.Macaw.RISCV.RISCVReg
                        -- Data.Macaw.PPC.Arch
                        -- Data.Macaw.PPC.Disassemble
                        -- Data.Macaw.PPC.Eval
@@ -28,9 +29,10 @@ library
                        -- Data.Macaw.PPC.Semantics.PPC32
                        -- Data.Macaw.PPC.Semantics.TH
   build-depends:       base >=4.9 && <5,
+                       bv-sized,
+                       grift,
                        macaw-base,
-                       parameterized-utils,
-                       grift
+                       parameterized-utils
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
