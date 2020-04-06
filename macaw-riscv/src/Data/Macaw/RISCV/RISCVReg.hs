@@ -15,6 +15,7 @@ import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.CFG as MC
 
 import           Data.Parameterized.Classes
+import           Data.Parameterized.Some (Some(..))
 import           Data.Parameterized.NatRepr (knownNat)
 import           Data.Parameterized.TH.GADT ( structuralTypeEquality
                                             , structuralTypeOrd
@@ -31,7 +32,7 @@ data RISCVReg rv tp where
   CSR :: CSR -> RISCVReg rv (MT.BVType (GT.RVWidth rv))
   PrivLevel :: RISCVReg rv (MT.BVType 2)
 
-data CSR
+data CSR = MCause
 
 instance Eq CSR where
   (==) = undefined
@@ -74,9 +75,13 @@ type RISCV rv = ( GT.KnownRV rv
                 )
 
 instance RISCV rv => MC.RegisterInfo (RISCVReg rv) where
-  archRegs = []
-  archRegSet = undefined
-  sp_reg = undefined
-  ip_reg = undefined
-  syscall_num_reg = undefined
-  syscallArgumentRegs = undefined
+  archRegs = [Some PC] ++
+             ((Some . GPR) <$> [1..31]) ++
+             ((Some . FPR) <$> [0..31]) ++
+             [Some (CSR MCause)] ++
+             [Some PrivLevel]
+  archRegSet = error "archRegSet undefined"
+  sp_reg = GPR 2
+  ip_reg = PC
+  syscall_num_reg = error "syscall_num_reg undefined"
+  syscallArgumentRegs = error "syscallArgumentRegs undefined"
