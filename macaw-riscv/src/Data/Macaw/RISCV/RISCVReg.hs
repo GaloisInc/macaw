@@ -20,10 +20,11 @@ import           Data.Parameterized.NatRepr (knownNat)
 import           Data.Parameterized.TH.GADT ( structuralTypeEquality
                                             , structuralTypeOrd
                                             )
+import           Data.Functor.Const
 
 import qualified Data.BitVector.Sized as BV
+import qualified Data.Parameterized.Map as MapF
 import qualified GRIFT.Types as GT
-
 
 data RISCVReg rv tp where
   PC  :: RISCVReg rv (MT.BVType (GT.RVWidth rv))
@@ -74,13 +75,20 @@ type RISCV rv = ( GT.KnownRV rv
                 , MM.MemWidth (GT.RVWidth rv)
                 )
 
-instance RISCV rv => MC.RegisterInfo (RISCVReg rv) where
-  archRegs = [Some PC] ++
+riscvRegs :: [Some (RISCVReg rv)]
+riscvRegs = [Some PC] ++
              ((Some . GPR) <$> [1..31]) ++
              ((Some . FPR) <$> [0..31]) ++
              [Some (CSR MCause)] ++
              [Some PrivLevel]
-  archRegSet = error "archRegSet undefined"
+
+riscvRegSet :: MapF.MapF (RISCVReg rv) (Const ())
+riscvRegSet = MapF.fromList (mkPair <$> riscvRegs)
+  where mkPair (Some reg) = MapF.Pair reg (Const ())
+
+instance RISCV rv => MC.RegisterInfo (RISCVReg rv) where
+  archRegs = riscvRegs
+  archRegSet = riscvRegSet
   sp_reg = GPR 2
   ip_reg = PC
   syscall_num_reg = error "syscall_num_reg undefined"
