@@ -39,6 +39,7 @@ import           Data.Word ( Word32 )
 import           GHC.TypeLits
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
@@ -87,6 +88,9 @@ instance Show (ARMReg tp) where
 
 instance ShowF ARMReg where
     showF = show
+
+instance MC.PrettyF ARMReg where
+  prettyF = PP.text . showF
 
 $(return [])  -- allow template haskell below to see definitions above
 
