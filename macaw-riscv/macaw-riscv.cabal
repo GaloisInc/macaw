@@ -17,6 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Macaw.RISCV
+                       Data.Macaw.RISCV.Arch
                        Data.Macaw.RISCV.RISCVReg
                        -- Data.Macaw.PPC.Arch
                        -- Data.Macaw.PPC.Disassemble
@@ -29,6 +30,7 @@ library
                        -- Data.Macaw.PPC.Semantics.PPC32
                        -- Data.Macaw.PPC.Semantics.TH
   build-depends:       base >=4.9 && <5,
+                       ansi-wl-pprint,
                        bv-sized,
                        grift,
                        macaw-base,
