@@ -34,3 +34,6 @@
 [submodule "deps/what4-serialize"]
 	path = deps/what4-serialize
 	url = https://github.com/GaloisInc/what4-serialize.git
+[submodule "deps/grift"]
+	path = deps/grift
+	url = https://github.com/GaloisInc/grift.git
