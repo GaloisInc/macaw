@@ -6,6 +6,7 @@ statements and compute the final value.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.CFG.DemandSet
   ( DemandComp
@@ -38,7 +39,7 @@ type AssignIdSet ids = Set (Some (AssignId ids))
 
 -- | This provides the architecture specific functions needed to
 -- resolve demand sets.
-data DemandContext arch
+data DemandContext (arch :: k)
    = DemandContext { archFnHasSideEffects :: !(forall v tp . ArchFn arch v tp -> Bool)
                      -- ^ This returns true if the architecture
                      -- function has implicit side effects (and thus

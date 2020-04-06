@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -47,7 +48,7 @@ type RegAddrWord r = MemWord (RegAddrWidth r)
 --
 -- Registers include things like the general purpose registers, any flag
 -- registers that can be read and written without side effects,
-type family ArchReg (arch :: Kind.Type) = (reg :: Type -> Kind.Type) | reg -> arch
+type family ArchReg (arch :: k) = (reg :: Type -> Kind.Type) | reg -> arch
   -- Note the injectivity constraint. This makes GHC quit bothering us
   -- about ambigous types for functions taking ArchRegs as arguments.
 
@@ -61,13 +62,13 @@ type family ArchReg (arch :: Kind.Type) = (reg :: Type -> Kind.Type) | reg -> ar
 -- visited when folding over values.  In particular,
 --
 -- One Furthermore, they can only return a value
-type family ArchFn (arch :: Kind.Type) = (fn :: (Type -> Kind.Type) -> Type -> Kind.Type) | fn -> arch
+type family ArchFn (arch :: k) = (fn :: (Type -> Kind.Type) -> Type -> Kind.Type) | fn -> arch
 
 -- | A type family for defining architecture-specific statements.
 --
 -- The second parameter is used to denote the underlying values in the
 -- statements so that we can use ArchStmts with multiple CFGs.
-type family ArchStmt (arch :: Kind.Type) = (stmt :: (Type -> Kind.Type) -> Kind.Type) | stmt -> arch
+type family ArchStmt (arch :: k) = (stmt :: (Type -> Kind.Type) -> Kind.Type) | stmt -> arch
 
 -- | A type family for defining architecture-specific statements that
 -- may have instruction-specific effects on control-flow and register state.
@@ -79,17 +80,17 @@ type family ArchStmt (arch :: Kind.Type) = (stmt :: (Type -> Kind.Type) -> Kind.
 -- values, it may or may not return to the current function.  If it does return to the
 -- current function, it is assumed to be at most one location, and the block-translator
 -- must provide that value at translation time.
-type family ArchTermStmt (arch :: Kind.Type) :: Kind.Type -> Kind.Type
+type family ArchTermStmt (arch :: k) :: Kind.Type -> Kind.Type
    -- NOTE: Not injective because PPC32 and PPC64 use the same type.
 
 -- | Number of bits in addreses for architecture.
-type ArchAddrWidth arch = RegAddrWidth (ArchReg arch)
+type ArchAddrWidth (arch :: k) = RegAddrWidth (ArchReg arch)
 
 -- | A word for the given architecture bitwidth.
-type ArchAddrWord arch = RegAddrWord (ArchReg arch)
+type ArchAddrWord (arch :: k) = RegAddrWord (ArchReg arch)
 
 -- | An address for a given architecture.
-type ArchMemAddr arch = MemAddr (ArchAddrWidth arch)
+type ArchMemAddr (arch :: k) = MemAddr (ArchAddrWidth arch)
 
 ------------------------------------------------------------------------
 -- MemRepr
@@ -177,7 +178,7 @@ instance HasRepr MemRepr TypeRepr where
 
 -- | The right hand side of an assignment is an expression that
 -- returns a value.
-data AssignRhs (arch :: Kind.Type) (f :: Type -> Kind.Type) tp where
+data AssignRhs (arch :: k) (f :: Type -> Kind.Type) tp where
   -- | An expression that is computed from evaluating subexpressions.
   EvalApp :: !(App f tp)
           -> AssignRhs arch f tp

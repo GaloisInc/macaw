@@ -6,7 +6,9 @@ This exports the pre-classification term statement and block data
 types.
 -}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE PolyKinds #-}
 
 module Data.Macaw.CFG.Block
   ( Block(..)
@@ -27,7 +29,7 @@ import           Data.Macaw.CFG.Core
 --
 -- This is the unclassified definition that is generated directly from
 -- the architecture specific disassembler.
-data TermStmt arch ids
+data TermStmt (arch :: k) ids
      -- | Fetch and execute the next instruction from the given processor state.
   = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
     -- | The block ended prematurely due to an error in instruction
@@ -60,7 +62,7 @@ instance ArchConstraints arch
 -- | The type for code blocks returned by the disassembler.
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
-data Block arch ids
+data Block (arch :: k) ids
    = Block { blockStmts :: !([Stmt arch ids])
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
