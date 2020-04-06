@@ -24,6 +24,7 @@ library
   build-depends:       base >=4.10 && <5,
                        parameterized-utils,
                        crucible,
+                       macaw-base,
                        semmc-aarch32,
                        macaw-aarch32,
                        macaw-symbolic

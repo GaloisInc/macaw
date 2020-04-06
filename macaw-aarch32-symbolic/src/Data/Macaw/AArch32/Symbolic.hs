@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
 
@@ -9,6 +10,8 @@ module Data.Macaw.AArch32.Symbolic (
 import           Data.Kind ( Type )
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Backend as MSB
+import qualified Data.Macaw.Types as MT
+import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified SemMC.Architecture.AArch32 as SA
 
@@ -28,3 +31,9 @@ instance CE.PrettyApp AArch32StmtExtension where
 
 type instance MSB.MacawArchStmtExtension SA.AArch32 =
   AArch32StmtExtension
+
+-- Dummy register context
+--
+-- For now, just add one register
+type RegContext = Ctx.EmptyCtx Ctx.::> MT.BVType 32
+type instance MS.ArchRegContext SA.AArch32 = RegContext
