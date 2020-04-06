@@ -37,3 +37,6 @@
 [submodule "deps/what4"]
 	path = deps/what4
 	url = git@github.com:GaloisInc/what4.git
+[submodule "deps/grift"]
+	path = deps/grift
+	url = https://github.com/GaloisInc/grift.git
