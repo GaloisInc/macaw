@@ -30,6 +30,7 @@ library
                      , ansi-wl-pprint
                      , asl-translator
                      , bytestring
+                     , bv-sized
                      , cereal
                      , containers
                      , crucible

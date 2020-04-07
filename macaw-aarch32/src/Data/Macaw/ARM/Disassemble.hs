@@ -76,7 +76,6 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch()
-import           Data.Macaw.AbsDomain.AbsState as MA
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
@@ -93,7 +92,6 @@ import qualified Dismantle.ARM.T32 as ThumbD
 import           Text.Printf ( printf )
 
 import qualified SemMC.Architecture.AArch32 as ARM
-import Debug.Trace
 
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)
@@ -185,8 +183,8 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
     Right (i, bytesRead) -> do
       -- FIXME: Set PSTATE.T based on whether instruction is A32I or T32I
       -- traceM ("II: " ++ show i)
-      let curPC = MM.segmentOffAddr seg off
-          nextPCOffset = off + bytesRead
+      -- let curPC = MM.segmentOffAddr seg off
+      let nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
           -- curPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
@@ -241,18 +239,17 @@ readInstruction :: (MM.MemWidth w)
                 -> Either (ARMMemoryError w) (InstructionSet, MM.MemWord w)
 readInstruction addr = do
   let seg = MM.segoffSegment addr
-      segRelAddrRaw = MM.segoffAddr addr
-      -- Addresses specified in ARM instructions have the low bit
-      -- clear, but Thumb (T32) target addresses have the low bit sit.
-      -- This is only manifested in the instruction addresses: the
-      -- actual PC for fetching instructions clears the low bit to
-      -- generate aligned memory accesses.
-      loBit = MM.addrOffset segRelAddrRaw .&. 1
-      segRelAddr = segRelAddrRaw { addrOffset = MM.addrOffset segRelAddrRaw `xor` loBit }
+  let segRelAddr = MM.segoffAddr addr
+  -- Addresses specified in ARM instructions have the low bit
+  -- clear, but Thumb (T32) target addresses have the low bit sit.
+  -- This is only manifested in the instruction addresses: the
+  -- actual PC for fetching instructions clears the low bit to
+  -- generate aligned memory accesses.
+  let alignedMsegOff = MM.clearSegmentOffLeastBit addr
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
-      let ao = addrOffset segRelAddr
-      alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
+      -- traceM ("Orig addr = " ++ show addr ++ " modified to " ++ show ao)
+      -- alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
       contents <- liftMemError $ MM.segoffContentsAfter alignedMsegOff
       case contents of
         [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
@@ -275,12 +272,6 @@ readInstruction addr = do
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents
   else ET.throwError $ ARMMemoryError (MM.PermissionsError segRelAddr)
-
-liftMaybe :: ARMMemoryError w -> Maybe a -> Either (ARMMemoryError w) a
-liftMaybe err ma =
-  case ma of
-    Just a -> Right a
-    Nothing -> Left err
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (ARMMemoryError w) a
 liftMemError e =
