@@ -18,6 +18,7 @@ import qualified Data.Macaw.Architecture.Info as MI
 import qualified GRIFT.Types as GT
 
 import Data.Macaw.RISCV.Arch ()
+import Data.Macaw.RISCV.Disassemble (riscvDisassembleFn)
 import Data.Macaw.RISCV.Eval
 import Data.Macaw.RISCV.RISCVReg
 
@@ -26,10 +27,10 @@ riscv_info rvRepr = MI.ArchitectureInfo
   { MI.withArchConstraints = \x -> x
   , MI.archAddrWidth = riscvAddrWidth rvRepr
   , MI.archEndianness = MC.LittleEndian
-  , MI.extractBlockPrecond = \_ _ -> undefined
+  , MI.extractBlockPrecond = \_ _ -> Right ()
   , MI.initialBlockRegs = \startIP _ -> riscvInitialBlockRegs rvRepr startIP
-  , MI.disassembleFn = \_ _ _ _ -> undefined
-  , MI.mkInitialAbsState = \_ _ -> undefined
+  , MI.disassembleFn = riscvDisassembleFn rvRepr
+  , MI.mkInitialAbsState = riscvInitialAbsState rvRepr
   , MI.absEvalArchFn = \_ _ -> undefined
   , MI.absEvalArchStmt = \_ _ -> undefined
   , MI.identifyCall = \_ _ _ -> undefined
