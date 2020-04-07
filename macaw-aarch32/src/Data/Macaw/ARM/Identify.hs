@@ -10,7 +10,7 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Lens ( (^.) )
-import           Data.Macaw.ARM.Arch
+import qualified Data.Macaw.ARM.ARMReg as AR
 import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                , AbsValue(..)
                                                , transferValue
@@ -18,6 +18,7 @@ import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
 import           Data.Semigroup
 import qualified Data.Sequence as Seq
@@ -42,8 +43,14 @@ identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
              -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
              -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
              -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
-identifyCall _mem _stmts0 _rs = Nothing  -- KWQ: for now, nothing is identified as a call
-
+identifyCall mem stmts0 rs
+  | not (null stmts0)
+  , MC.RelocatableValue {} <- rs ^. MC.boundValue AR.arm_LR
+  , Just retVal <- MSS.simplifyValue (rs ^. MC.boundValue AR.arm_LR)
+  , Just retAddrVal <- MC.valueAsMemAddr retVal
+  , Just retAddr <- MM.asSegmentOff mem retAddrVal =
+      Just (stmts0, retAddr)
+  | otherwise = Nothing
 
 -- | Intended to identify a return statement.
 --

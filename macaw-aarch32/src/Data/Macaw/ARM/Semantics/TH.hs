@@ -25,14 +25,15 @@ import qualified Control.Monad.Except as E
 import qualified Control.Monad.State.Strict as St
 import qualified Data.Map as Map
 import qualified Data.Functor.Const as C
+import qualified Data.Bits as B
+import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
 import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
-import qualified Data.Macaw.SemMC.Operands as O
-import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName, asName )
+import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import qualified Data.Parameterized.Context as Ctx
@@ -44,13 +45,11 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits as TL
+import           Data.Parameterized.NatRepr
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Opcodes as ARM
-import qualified SemMC.Architecture as A
-import qualified SemMC.Architecture.ARM.Location as Loc
-import qualified SemMC.Architecture.Location as L
 import qualified What4.BaseTypes as WT
 import qualified What4.Expr.Builder as WB
 
@@ -58,7 +57,6 @@ import qualified Data.Kind as Kind
 import           Numeric.Natural
 
 import qualified Language.ASL.Globals as ASL
-import qualified Language.ASL.Globals.Definitions as ASL
 
 loadSemantics :: IO (ARM.ASLSemantics)
 loadSemantics = ARM.loadSemantics (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
@@ -155,12 +153,12 @@ armNonceAppEval bvi nonceApp =
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
                 assertTH <- addEltTH M.LittleEndian bvi assert
-                bv <- addEltTH M.LittleEndian bvi bv
+                bvElt <- addEltTH M.LittleEndian bvi bv
                 liftQ [| case $(return assertTH) of
-                          M.BoolValue True -> return $(return bv)
+                          M.BoolValue True -> return $(return bvElt)
                           M.BoolValue False -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed!")
                           -- FIXME: THIS SHOULD THROW AN ERROR
-                          _ -> return $(return bv)
+                          _ -> return $(return bvElt)
                           -- nm -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed: <FIXME: PRINT NAME>")
                        |]
               _ -> fail "Invalid call to assertBV"
@@ -314,6 +312,25 @@ concreteIte v t f = case v of
   M.CValue (M.BoolCValue b) -> if b then t else f
   _ ->  E.throwError (G.GeneratorMessage $ "concreteIte: requires concrete value" <> show (M.ppValueAssignments v))
 
+-- | A smart constructor for division
+--
+-- The smart constructor recognizes divisions that can be converted into shifts.
+-- We convert the operation to a shift if the divisior is a power of two.
+sdiv :: (1 <= n)
+     => NatRepr n
+     -> M.Value ARM.AArch32 ids (M.BVType n)
+     -> M.Value ARM.AArch32 ids (M.BVType n)
+     -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids (M.BVType n))
+sdiv repr dividend divisor =
+  case divisor of
+    M.BVValue nr val
+      | bv <- BVS.bitVector' repr val
+      , BVS.bvPopCount bv == 1 ->
+        withKnownNat repr $
+          let app = M.BVSar nr dividend (M.BVValue nr (fromIntegral (B.countTrailingZeros bv)))
+          in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalApp app)
+    _ -> addArchAssignment (SDiv repr dividend divisor)
+
 armAppEvaluator :: M.Endianness
                 -> BoundVarInterpretations ARM.AArch32 t fs
                 -> WB.App (WB.Expr t) ctp
@@ -328,8 +345,7 @@ armAppEvaluator endianness interps elt =
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| addArchAssignment (SDiv $(natReprTH w) $(return e1) $(return e2))
-               |]
+        liftQ [| sdiv $(natReprTH w) $(return e1) $(return e2) |]
       WB.BVUrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2

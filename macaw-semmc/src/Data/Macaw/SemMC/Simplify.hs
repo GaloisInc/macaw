@@ -52,6 +52,7 @@ simplifyApp a =
     BVOr  sz l r                      -> binopbv (.|.) sz l r
     BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
     BVShr sz l r                      -> binopbv (\l' r' -> shiftR l' (fromIntegral r')) sz l r
+    BVSar sz l r                      -> binopbv (\l' r' -> shiftR (toSigned sz l') (fromIntegral (toSigned sz r'))) sz l r
     BVAdd _ l (BVValue _ 0)           -> Just l
     BVAdd _ (BVValue _ 0) r           -> Just r
     BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->
@@ -66,10 +67,17 @@ simplifyApp a =
     BVMul rep l r                     -> binopbv (*) rep l r
     SExt (BVValue u n) sz             -> Just (BVValue sz (toUnsigned sz (toSigned u n)))
     UExt (BVValue _ n) sz             -> Just (mkLit sz n)
+    UExt (RelocatableValue _arep addr) sz -> do
+      memword <- MM.asAbsoluteAddr addr
+      return $ mkLit sz (fromIntegral memword)
     Trunc (BVValue _ x) sz            -> Just (mkLit sz x)
 
     Eq l r                            -> boolop (==) l r
     BVComplement sz x                 -> unop complement sz x
+    BVSignedLe v1 v2                  -> signedRelOp (<=) v1 v2
+    BVSignedLt v1 v2                  -> signedRelOp (<) v1 v2
+    BVUnsignedLe v1 v2                -> unsignedRelOp (<=) v1 v2
+    BVUnsignedLt v1 v2                -> unsignedRelOp (<) v1 v2
     _                                 -> Nothing
   where
     unop :: forall n . (tp ~ BVType n)
@@ -97,3 +105,19 @@ simplifyApp a =
     binopbv f sz (BVValue _ l) (BVValue _ r) =
       Just (mkLit sz (f l r))
     binopbv _ _ _ _ = Nothing
+    signedRelOp :: forall n
+                 . (Integer -> Integer -> Bool)
+                -> Value arch ids (BVType n)
+                -> Value arch ids (BVType n)
+                -> Maybe (Value arch ids BoolType)
+    signedRelOp op (BVValue r1 v1) (BVValue _ v2) =
+      Just (BoolValue (op (toSigned r1 v1) (toSigned r1 v2)))
+    signedRelOp _ _ _ = Nothing
+    unsignedRelOp :: forall n
+                   . (Integer -> Integer -> Bool)
+                  -> Value arch ids (BVType n)
+                  -> Value arch ids (BVType n)
+                  -> Maybe (Value arch ids BoolType)
+    unsignedRelOp op (BVValue r1 v1) (BVValue _ v2) =
+      Just (BoolValue (op (toUnsigned r1 v1) (toUnsigned r1 v2)))
+    unsignedRelOp _ _ _ = Nothing
