@@ -266,7 +266,7 @@ initialRegisterState :: forall arch sym m ids
                         )
                      => sym
                      -> MS.ArchVals arch
-                     -> MS.GlobalMap sym (M.ArchAddrWidth arch)
+                     -> MS.GlobalMap sym LLVM.Mem (M.ArchAddrWidth arch)
                      -> LLVM.MemImpl sym
                      -- ^ The memory state to start from
                      -> M.ParsedBlock arch ids
@@ -308,7 +308,7 @@ addKnownRegValue :: forall arch sym m tp w
                     )
                  => sym
                  -> MS.ArchVals arch
-                 -> MS.GlobalMap sym (M.ArchAddrWidth arch)
+                 -> MS.GlobalMap sym LLVM.Mem (M.ArchAddrWidth arch)
                  -> LLVM.MemImpl sym
                  -> C.RegEntry sym (MS.ArchRegStruct arch)
                  -> M.ArchReg arch tp

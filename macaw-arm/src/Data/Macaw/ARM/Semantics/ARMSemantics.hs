@@ -12,7 +12,7 @@ module Data.Macaw.ARM.Semantics.ARMSemantics
 
 import           Data.Macaw.ARM.ARMReg ( locToRegTH )
 import           Data.Macaw.ARM.Arch ( a32InstructionMatcher )
---import           Data.Macaw.ARM.Operand
+import           Data.Macaw.ARM.Operand ()
 import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.SemMC.Generator ( Generator )
