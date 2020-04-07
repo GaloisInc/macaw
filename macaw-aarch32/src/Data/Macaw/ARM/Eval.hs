@@ -63,6 +63,7 @@ initialBlockRegs addr _preconds = MSG.initRegState addr &
   -- once we get Thumb support, we will want to refer to the semantics
   -- for this.
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
+  boundValue ARMWriteMode .~ BVValue knownNat 0 &
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ BVValue knownNat 0 &
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
   boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ BVValue knownNat 1 &
@@ -70,6 +71,7 @@ initialBlockRegs addr _preconds = MSG.initRegState addr &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ BoolValue False &
   boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ BoolValue False
+
 
 extractBlockPrecond :: ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (ArchReg ARM.AArch32)
