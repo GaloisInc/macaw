@@ -6,7 +6,8 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE DeriveLift #-}
 module Data.Macaw.ARM.Semantics.TH
     ( armAppEvaluator
     , armNonceAppEval
@@ -24,17 +25,19 @@ import qualified Control.Monad.Except as E
 import qualified Data.Bits as B
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
+import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName )
-import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
+import           GHC.TypeLits as TL
 import           Language.Haskell.TH
+import           Language.Haskell.TH.Syntax
 import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Opcodes as ARM
 import qualified What4.BaseTypes as WT
@@ -49,15 +52,14 @@ loadSemantics = ARM.loadSemantics (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = T
 -- definition, using error provides *much* better error diagnostics
 -- than fail does.
 
-
 -- | Called to evaluate architecture-specific applications in the
 -- current Nonce context.  If this is not recognized as an
 -- architecture-specific Application, return Nothing, in which case
 -- the caller will try the set of default Application evaluators.
-armNonceAppEval :: forall t fs tp .
-                   BoundVarInterpretations ARM.AArch32 t fs
-                -> WB.NonceApp t (WB.Expr t) tp
-                -> Maybe (MacawQ ARM.AArch32 t fs Exp)
+armNonceAppEval :: forall t fs tp
+                  . BoundVarInterpretations ARM.AArch32 t fs
+                 -> WB.NonceApp t (WB.Expr t) tp
+                 -> Maybe (MacawQ ARM.AArch32 t fs Exp)
 armNonceAppEval bvi nonceApp =
     -- The default nonce app eval (defaultNonceAppEvaluator in
     -- macaw-semmc:Data.Macaw.SemMC.TH) will search the
@@ -86,8 +88,9 @@ armNonceAppEval bvi nonceApp =
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
-              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+              Ctx.Empty Ctx.:> array Ctx.:> ix ->
                 Just $ do
+                  _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| getSIMD $(return rid) |]
               _ -> fail "Invalid uf_simd_get"
@@ -99,21 +102,40 @@ armNonceAppEval bvi nonceApp =
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| getGPR $(return rid) |]
               _ -> fail "Invalid uf_gpr_get"
-          "uf_write_mem_" ->
+          _ | "uf_write_mem_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> mem Ctx.:> addr Ctx.:> val
-               | WT.BaseBVRepr memWidthRepr <- WB.exprType val -> Just $ do
+               | WT.BaseBVRepr memWidthRepr <- WB.exprType val ->
+                 Just $ do
                 memE <- addEltTH M.LittleEndian bvi mem
                 addrE <- addEltTH M.LittleEndian bvi addr
                 valE <- addEltTH M.LittleEndian bvi val
                 let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
-                appendStmt [| G.addStmt (M.WriteMem $(return addrE) (M.BVMemRepr $(natReprFromIntTH memWidth) M.LittleEndian) $(return valE)) |]
-                return memE
+                liftQ [| writeMem $(return memE) $(return addrE) $(natReprFromIntTH memWidth) $(return valE) |]
               _ -> fail "invalid write_mem"
 
           "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_update_gprs"
+            | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
+              appendStmt [| setWriteMode WriteGPRs |]
+              gprs' <- addEltTH M.LittleEndian bvi gprs
+              appendStmt [| setWriteMode WriteNone |]
+              liftQ [| return $(return gprs') |]
+              
+          "uf_update_simds"
+            | Ctx.Empty Ctx.:> simds <- args -> Just $ do
+              appendStmt [| setWriteMode WriteSIMDs |]
+              simds' <- addEltTH M.LittleEndian bvi simds
+              appendStmt [| setWriteMode WriteNone |]
+              liftQ [| return $(return simds') |]
+          "uf_update_memory"
+            | Ctx.Empty Ctx.:> mem <- args -> Just $ do
+              appendStmt [| setWriteMode WriteMemory |]
+              mem' <- addEltTH M.LittleEndian bvi mem
+              appendStmt [| setWriteMode WriteNone |]
+              liftQ [| return $(return mem') |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
@@ -138,6 +160,48 @@ armNonceAppEval bvi nonceApp =
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
+data WriteMode =
+  WriteNone
+  | WriteGPRs
+  | WriteSIMDs
+  | WriteMemory
+  deriving (Show, Eq, Lift)
+
+getWriteMode :: G.Generator ARM.AArch32 ids s WriteMode
+getWriteMode = do
+  G.getRegVal ARMWriteMode >>= \case
+      M.BVValue _ i -> return $ case i of
+        0 -> WriteNone
+        1 -> WriteGPRs
+        2 -> WriteSIMDs
+        3 -> WriteMemory
+        _ -> error "impossible"
+      _ -> error "impossible"
+        
+setWriteMode :: WriteMode -> G.Generator ARM.AArch32 ids s ()
+setWriteMode wm =
+  let
+    i = case wm of
+      WriteNone -> 0
+      WriteGPRs -> 1
+      WriteSIMDs -> 2
+      WriteMemory -> 3
+  in G.setRegVal ARMWriteMode (M.BVValue knownNat i)
+
+writeMem :: 1 <= w
+         => M.Value ARM.AArch32 ids tp
+         -> M.Value ARM.AArch32 ids (M.BVType 32)
+         -> M.NatRepr w
+         -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
+         -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+writeMem mem addr sz val = do
+  wm <- getWriteMode
+  case wm of
+    WriteMemory -> do
+      G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
+      return mem
+    _ -> return mem
+                                 
 setGPR :: M.Value ARM.AArch32 ids tp
        -> M.Value ARM.AArch32 ids (M.BVType 4)
        -> M.Value ARM.AArch32 ids (M.BVType 32)
@@ -148,7 +212,9 @@ setGPR handle regid v = do
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments v))
-  G.setRegVal reg v
+  getWriteMode >>= \case
+    WriteGPRs -> G.setRegVal reg v
+    _ -> return ()
   return handle
 
 getGPR :: M.Value ARM.AArch32 ids tp 
@@ -171,7 +237,9 @@ setSIMD handle regid v = do
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments v))
-  G.setRegVal reg v
+  getWriteMode >>= \case
+    WriteSIMDs -> G.setRegVal reg v
+    _ -> return ()
   return handle
 
 getSIMD :: M.Value ARM.AArch32 ids tp 

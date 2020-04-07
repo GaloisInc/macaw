@@ -60,6 +60,7 @@ baseToMacawTypeRepr (WT.BaseBVRepr w) = MT.BVTypeRepr w
 baseToMacawTypeRepr WT.BaseBoolRepr = MT.BoolTypeRepr
 baseToMacawTypeRepr _ = error "ARMReg: unsupported what4 type"
 
+
 -- | Defines the Register set for the ARM processor.
 data ARMReg tp where
   -- | 'ASL.GlobalRef' that refers to a bitvector.
@@ -73,6 +74,7 @@ data ARMReg tp where
                    , tp' ~ ASL.GlobalsType s
                    , tp ~ BaseToMacawType tp')
                 => ASL.GlobalRef s -> ARMReg tp
+  ARMWriteMode :: tp ~ BVType 2 => ARMReg tp
 
 -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (BVType w)
@@ -85,6 +87,7 @@ instance Show (ARMReg tp) where
   show r = case r of
     ARMGlobalBV globalRef -> show (ASL.globalRefSymbol globalRef)
     ARMGlobalBool globalRef -> show (ASL.globalRefSymbol globalRef)
+    ARMWriteMode -> "ARMWriteMode"
 
 instance ShowF ARMReg where
     showF = show
