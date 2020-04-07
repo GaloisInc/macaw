@@ -34,6 +34,9 @@ data RISCVReg rv tp where
   CSR :: CSR -> RISCVReg rv (MT.BVType (GT.RVWidth rv))
   PrivLevel :: RISCVReg rv (MT.BVType 2)
 
+ra :: RISCVReg rv (MT.BVType (GT.RVWidth rv))
+ra = GPR 0x01
+
 data CSR = MCause
 
 instance Eq CSR where
