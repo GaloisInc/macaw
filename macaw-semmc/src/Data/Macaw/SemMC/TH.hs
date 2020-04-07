@@ -586,9 +586,18 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               --     Nothing -> fail ("Unknown defined function: " ++ fnName)
               | L.isMemoryLocation loc
               , S.NonceAppExpr n <- expr
-              , S.FnApp symFn args <- S.nonceExprApp n
-              , Just _ <- matchWriteMemWidth (symFnName symFn) -> 
-                  void $ writeMemTH interps symFn args endianness
+              -> do
+                  mtranslator <- withNonceAppEvaluator $ \evalNonceApp ->
+                    return (evalNonceApp interps (S.nonceExprApp n))
+                  case mtranslator of
+                    Just translator -> do
+                      _mem <- translator
+                      appendStmt [| return () |]
+                    _ | S.FnApp symFn args <- S.nonceExprApp n
+                      , Just _ <- matchWriteMemWidth (symFnName symFn)
+                      -> void $ writeMemTH interps symFn args endianness
+                    _ -> error "translateDefinition: unexpected memory write"
+
               -- | L.isMemoryLocation loc
               -- , S.BoundVarExpr bVar <- expr
               -- , Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
@@ -603,9 +612,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               -- | L.isMemoryLocation loc
               -- , S.AppExpr _ <- expr -> do
               --     error $ "WRITE TO MEM: APP"
-              | L.isMemoryLocation loc -> do
-                  mem <- addEltTH endianness interps expr
-                  appendStmt [| return () |]
+
 
               | otherwise -> do
                   valExp <- addEltTH endianness interps expr
@@ -851,9 +858,9 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
                       let call = appE (varE (A.exprInterpName fi)) $ foldr1 appE (map varE argNames)
                       liftQ [| return $ O.extractValue $(varE (regsValName bvi)) ($(call)) |]
               | Just _ <- matchWriteMemWidth fnName -> do
-                  Some memExpr <- writeMemTH bvi symFn args endianness
-                  mem <- addEltTH endianness bvi memExpr
-                  liftQ [| return $(return mem) |]
+                Some memExpr <- writeMemTH bvi symFn args endianness
+                mem <- addEltTH endianness bvi memExpr
+                liftQ [| return $(return mem) |]
               | otherwise -> error $ "Unsupported function: " ++ show fnName ++ "(" ++ show fnArgTypes ++ ") -> " ++ show fnRetType
     _ -> error "Unsupported NonceApp case"
 

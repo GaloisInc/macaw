@@ -22,9 +22,6 @@ module Data.Macaw.ARM.Semantics.TH
 
 import           Control.Monad (void)
 import qualified Control.Monad.Except as E
-import qualified Control.Monad.State.Strict as St
-import qualified Data.Map as Map
-import qualified Data.Functor.Const as C
 import qualified Data.Bits as B
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
@@ -34,27 +31,17 @@ import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName )
-import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Classes
-import qualified Data.Parameterized.List as L
-import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
-import           Data.Parameterized.Some ( Some(..) )
-import qualified Data.Parameterized.TraversableFC as FC
-import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeLits as TL
-import           Data.Parameterized.NatRepr
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Opcodes as ARM
 import qualified What4.BaseTypes as WT
 import qualified What4.Expr.Builder as WB
-
-import qualified Data.Kind as Kind
-import           Numeric.Natural
 
 import qualified Language.ASL.Globals as ASL
 
