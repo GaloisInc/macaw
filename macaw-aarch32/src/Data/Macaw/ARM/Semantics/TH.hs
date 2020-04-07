@@ -126,9 +126,9 @@ armNonceAppEval bvi nonceApp =
               
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
-              liftQ [| setWriteMode WriteSIMDs |]
+              appendStmt [| setWriteMode WriteSIMDs |]
               simds' <- addEltTH M.LittleEndian bvi simds
-              liftQ [| setWriteMode WriteNone |]
+              appendStmt [| setWriteMode WriteNone |]
               liftQ [| return $(return simds') |]
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
