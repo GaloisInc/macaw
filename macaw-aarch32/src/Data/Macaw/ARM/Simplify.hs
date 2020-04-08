@@ -65,7 +65,6 @@ simplifyTruncExt r3 = do
     Just Refl -> do
       let newConstant = MC.mkLit targetSize constantVal
       return (MC.BVAdd targetSize val newConstant)
-      return newApp
 
 simplifyTrivialTruncExt :: MC.App (MC.Value ARM.AArch32 ids) tp
                         -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
