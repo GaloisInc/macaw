@@ -62,6 +62,7 @@ simplifyApp a =
       | Just Refl <- testEquality l r -> Just l
     BVAnd sz l r                      -> binopbv (.&.) sz l r
     BVOr  sz l r                      -> binopbv (.|.) sz l r
+    BVXor sz l r                      -> binopbv xor sz l r
     BVShl _ l (BVValue _ 0)           -> Just l
     BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
     BVShr _ l (BVValue _ 0)           -> Just l

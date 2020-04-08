@@ -197,15 +197,9 @@ addExpr expr =
           let app1 = FC.fmapFC simplify app
           case MSS.simplifyArchApp app1 of
             Nothing -> do
-              traceM ("AddExpr (not simplified): " ++ show (ppApp PP.pretty app))
-              v <- AssignedValue <$> addAssignment (EvalApp app1)
-              traceM ("  as " ++ show v)
-              return v
-            Just simplApp -> do
-              traceM ("AddExpr (simplified): " ++ show (ppApp PP.pretty simplApp))
-              v <- AssignedValue <$> addAssignment (EvalApp simplApp)
-              traceM ("  as " ++ show v)
-              return v
+              AssignedValue <$> addAssignment (EvalApp app1)
+            Just simplApp ->
+              AssignedValue <$> addAssignment (EvalApp simplApp)
 
 data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
