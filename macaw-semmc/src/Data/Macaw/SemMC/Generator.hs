@@ -56,6 +56,7 @@ import qualified Data.Foldable as F
 import           Data.Maybe ( fromMaybe )
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
+import           GHC.Stack ( HasCallStack )
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
@@ -63,9 +64,11 @@ import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
+import qualified Data.Parameterized.TraversableFC as FC
 
-import           Data.Macaw.SemMC.Simplify ( simplifyValue, simplifyApp )
-
+import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Data.Macaw.SemMC.Simplify as MSS
+import Debug.Trace
 data Expr arch ids tp where
   ValueExpr :: !(Value arch ids tp) -> Expr arch ids tp
   AppExpr   :: !(App (Value arch ids) tp) -> Expr arch ids tp
@@ -162,25 +165,47 @@ getRegVal reg = do
   return (genState ^. curRegState . boundValue reg)
 
 -- | Update the value of a machine register (in the 'Generator' state) with a
--- new macaw 'Value'.  This function applies a simplifier ('simplifyValue') to
+-- new macaw 'Value'.  This function applies a simplifier ('MSS.simplifyValue') to
 -- the value first, if possible.
-setRegVal :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
+setRegVal :: ( MSS.SimplifierExtension arch
+             , OrdF (ArchReg arch)
+             , MM.MemWidth (RegAddrWidth (ArchReg arch))
+             )
           => ArchReg arch tp
           -> Value arch ids tp
           -> Generator arch ids s ()
 setRegVal reg val = do
   St.modify $ \s -> s { genRegUpdates = MapF.insert reg val (genRegUpdates s) }
-  curRegState . boundValue reg .= fromMaybe val (simplifyValue val)
+  curRegState . boundValue reg .= fromMaybe val (MSS.simplifyValue val)
 
-addExpr :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
+addExpr :: ( MSS.SimplifierExtension arch
+           , OrdF (ArchReg arch)
+           , MM.MemWidth (RegAddrWidth (ArchReg arch))
+           , ShowF (ArchReg arch)
+           )
         => Expr arch ids tp
         -> Generator arch ids s (Value arch ids tp)
 addExpr expr =
   case expr of
-    ValueExpr val -> return val
+    ValueExpr val
+      | Just simpVal <- MSS.simplifyValue val -> return simpVal
+      | otherwise -> return val
     AppExpr app
-      | Just val <- simplifyApp app -> return val
-      | otherwise -> AssignedValue <$> addAssignment (EvalApp app)
+      | Just val <- MSS.simplifyApp app -> return val
+      | otherwise -> do
+          let simplify v = fromMaybe v (MSS.simplifyValue v)
+          let app1 = FC.fmapFC simplify app
+          case MSS.simplifyArchApp app1 of
+            Nothing -> do
+              traceM ("AddExpr (not simplified): " ++ show (ppApp PP.pretty app))
+              v <- AssignedValue <$> addAssignment (EvalApp app1)
+              traceM ("  as " ++ show v)
+              return v
+            Just simplApp -> do
+              traceM ("AddExpr (simplified): " ++ show (ppApp PP.pretty simplApp))
+              v <- AssignedValue <$> addAssignment (EvalApp simplApp)
+              traceM ("  as " ++ show v)
+              return v
 
 data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
@@ -270,13 +295,29 @@ liftST = Generator . lift . lift . lift
 
 -- | Append an assignment statement to the list of statements in the current
 -- 'PreBlock'
-addAssignment :: AssignRhs arch (Value arch ids) tp
+addAssignment :: ( MSS.SimplifierExtension arch
+                 , OrdF (ArchReg arch)
+                 , MemWidth (ArchAddrWidth arch)
+                 , ShowF (ArchReg arch)
+                 , HasCallStack
+                 )
+              => AssignRhs arch (Value arch ids) tp
               -> Generator arch ids s (Assignment arch ids tp)
 addAssignment rhs = do
   l <- newAssignId
   let a = Assignment l rhs
   addStmt (AssignStmt a)
   return a
+  -- case MSS.simplifyValue (AssignedValue a) of
+  --   Nothing -> do
+  --     addStmt (AssignStmt a)
+  --     return a
+  --   Just (AssignedValue simplifiedAssignment) -> do
+  --     addStmt (AssignStmt simplifiedAssignment)
+  --     return simplifiedAssignment
+  --   simp -> error ("Simplified an assignment to: " ++ show simp)
+      -- addStmt (AssignStmt a)
+      -- return a
 
 -- | Get all of the current register values
 --

@@ -45,6 +45,8 @@ import qualified What4.Expr.Builder as WB
 
 import qualified Language.ASL.Globals as ASL
 
+import           Data.Macaw.ARM.Simplify ()
+
 loadSemantics :: IO (ARM.ASLSemantics)
 loadSemantics = ARM.loadSemantics (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
@@ -315,7 +317,7 @@ sdiv repr dividend divisor =
       , BVS.bvPopCount bv == 1 ->
         withKnownNat repr $
           let app = M.BVSar nr dividend (M.BVValue nr (fromIntegral (B.countTrailingZeros bv)))
-          in (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.EvalApp app)
+          in G.ValueExpr <$> G.addExpr (G.AppExpr app)
     _ -> addArchAssignment (SDiv repr dividend divisor)
 
 armAppEvaluator :: M.Endianness

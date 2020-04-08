@@ -38,6 +38,8 @@ import           GHC.TypeLits
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
 
+import           Data.Macaw.ARM.Simplify ()
+
 callParams :: (forall tp . ARMReg tp -> Bool)
            -> MA.CallParams ARMReg
 callParams preservePred =
@@ -78,8 +80,7 @@ extractBlockPrecond :: ArchSegmentOff ARM.AArch32
                     -> Either String (MI.ArchBlockPrecond ARM.AArch32)
 extractBlockPrecond _ _ = Right ()
 
--- | Set up an initial abstract state that holds at the beginning of a basic
--- block.
+-- | Set up an initial abstract state that holds at the beginning of a function.
 --
 -- The 'MM.Memory' is the mapped memory region
 --
@@ -150,4 +151,4 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
 
 preserveRegAcrossSyscall :: ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =
-    Some r `Set.member` linuxSystemCallPreservedRegisters
+  Some r `Set.member` linuxSystemCallPreservedRegisters

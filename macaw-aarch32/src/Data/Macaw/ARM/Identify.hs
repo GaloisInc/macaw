@@ -1,7 +1,9 @@
 -- | Provides functions used to identify calls and returns in the instructions.
 
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Data.Macaw.ARM.Identify
     ( identifyCall
@@ -10,24 +12,37 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( guard )
 import qualified Data.Macaw.ARM.ARMReg as AR
 import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                , AbsValue(..)
                                                , transferValue
                                                , ppAbsValue
+                                               , absAssignments
+                                               , AbsBlockStack
+                                               , ppAbsStack
+                                               , curAbsStack
                                                )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
+import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.NatRepr as PN
+import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Semigroup
 import qualified Data.Sequence as Seq
 
 import qualified SemMC.Architecture.AArch32 as ARM
 
+import           Data.Macaw.ARM.Simplify ()
+
 import Prelude
 
--- import           Debug.Trace
+import qualified Language.ASL.Globals as ASL
+import           Text.Printf ( printf )
+import           Debug.Trace
 debug :: Show a => a -> b -> b
 -- debug = trace
 debug = flip const
@@ -66,10 +81,24 @@ identifyReturn :: Seq.Seq (MC.Stmt ARM.AArch32 ids)
                -> AbsProcessorState (MC.ArchReg ARM.AArch32) ids
                -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids))
 identifyReturn stmts s finalRegSt8 =
+  trace (printf "IP=%s (abstract=%s)" (show ipval) (show ipabs)) $
+  trace (showAbs (finalRegSt8 ^. absAssignments) (finalRegSt8 ^. curAbsStack)) $
   if isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
   then Just stmts
   else Nothing
+  where
+    ipval = s ^. MC.boundValue MC.ip_reg
+    ipabs = transferValue finalRegSt8 ipval
 
+showAbs :: MapF.MapF (MC.AssignId ids) (AbsValue 32)
+        -> AbsBlockStack 32
+        -> String
+showAbs m stk = unlines ( "Abs State:"
+                        : fmap showPair (MapF.toList m)
+                        ) ++ show (ppAbsStack stk)
+  where
+    showPair :: MapF.Pair (MC.AssignId ids) (AbsValue 32) -> String
+    showPair (MapF.Pair aid absv) = printf "%s: %s" (show aid) (show absv)
 
 -- | Determines if the supplied value is the symbolic return address
 -- from Macaw, modulo any ARM semantics operations (lots of ite caused

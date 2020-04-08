@@ -3,6 +3,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.SemMC.Simplify (
+  SimplifierExtension(..),
   simplifyValue,
   simplifyApp
   ) where
@@ -12,13 +13,22 @@ import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr ( NatRepr, toSigned, toUnsigned )
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
-import           Data.Macaw.Types ( BVType, BoolType )
+import           Data.Macaw.Types ( BVType, BoolType, TypeRepr )
+
+class SimplifierExtension arch where
+  -- | This simplifier extension is called before the normal simplifier; if it
+  -- returns a simplified term, the normal simplifier is short-circuited.
+  simplifyArchApp :: App (Value arch ids) tp -> Maybe (App (Value arch ids) tp)
+  simplifyArchFn :: ArchFn arch (Value arch ids) tp -> TypeRepr tp -> Maybe (Value arch ids tp)
 
 -- | A very restricted value simplifier
 --
 -- The full rewriter is too heavyweight here, as it produces new bound values
 -- instead of fully reducing the calculation we want to a literal.
-simplifyValue :: (OrdF (ArchReg arch), MM.MemWidth (ArchAddrWidth arch))
+simplifyValue :: ( SimplifierExtension arch
+                 , OrdF (ArchReg arch)
+                 , MM.MemWidth (ArchAddrWidth arch)
+                 )
               => Value arch ids tp
               -> Maybe (Value arch ids tp)
 simplifyValue v =
@@ -27,6 +37,8 @@ simplifyValue v =
     RelocatableValue {} -> Just v
     AssignedValue (Assignment { assignRhs = EvalApp app }) ->
       simplifyApp app
+    AssignedValue (Assignment { assignRhs = EvalArchFn archFn rep }) ->
+      simplifyArchFn archFn rep
     _ -> Nothing
 
 simplifyApp :: forall arch ids tp
@@ -50,8 +62,11 @@ simplifyApp a =
       | Just Refl <- testEquality l r -> Just l
     BVAnd sz l r                      -> binopbv (.&.) sz l r
     BVOr  sz l r                      -> binopbv (.|.) sz l r
+    BVShl _ l (BVValue _ 0)           -> Just l
     BVShl sz l r                      -> binopbv (\l' r' -> shiftL l' (fromIntegral r')) sz l r
+    BVShr _ l (BVValue _ 0)           -> Just l
     BVShr sz l r                      -> binopbv (\l' r' -> shiftR l' (fromIntegral r')) sz l r
+    BVSar _ l (BVValue _ 0)           -> Just l
     BVSar sz l r                      -> binopbv (\l' r' -> shiftR (toSigned sz l') (fromIntegral (toSigned sz r'))) sz l r
     BVAdd _ l (BVValue _ 0)           -> Just l
     BVAdd _ (BVValue _ 0) r           -> Just r

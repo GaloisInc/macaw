@@ -24,6 +24,7 @@ library
                      , Data.Macaw.ARM.Semantics.ARMSemantics
                      , Data.Macaw.ARM.Semantics.ThumbSemantics
                      , Data.Macaw.ARM.Semantics.TH
+                     , Data.Macaw.ARM.Simplify
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <5
