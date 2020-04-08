@@ -224,6 +224,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                          , _blockState = preBlock'
                                          , genAddr = nextPCSegAddr
                                          , genRegUpdates = MapF.empty
+                                         , _blockStateSnapshot = preBlock' ^. pBlockState
                                          }
                       disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
                      -- Otherwise, we are still at the end of a block.

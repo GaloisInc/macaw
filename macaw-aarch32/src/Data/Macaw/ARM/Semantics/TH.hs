@@ -227,7 +227,7 @@ getGPR v = do
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
-  G.getRegVal reg
+  G.getRegSnapshotVal reg
 
 setSIMD :: M.Value ARM.AArch32 ids tp
        -> M.Value ARM.AArch32 ids (M.BVType 8)
