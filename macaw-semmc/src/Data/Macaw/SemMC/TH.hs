@@ -65,7 +65,7 @@ import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Nonce as PN
 import qualified Data.Parameterized.Pair as Pair
-import           Data.Parameterized.Some ( Some(..), mapSome )
+import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Lang.Crucible.Backend.Simple as S
 import qualified What4.BaseTypes as CT

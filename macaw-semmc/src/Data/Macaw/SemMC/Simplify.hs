@@ -94,6 +94,8 @@ simplifyApp a =
     BVSignedLt v1 v2                  -> signedRelOp (<) v1 v2
     BVUnsignedLe v1 v2                -> unsignedRelOp (<=) v1 v2
     BVUnsignedLt v1 v2                -> unsignedRelOp (<) v1 v2
+    Mux _ _ t f
+      | Just Refl <- testEquality t f -> Just t
     _                                 -> Nothing
   where
     unop :: forall n . (tp ~ BVType n)

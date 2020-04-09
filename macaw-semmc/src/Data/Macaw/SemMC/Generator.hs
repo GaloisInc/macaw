@@ -94,6 +94,11 @@ data GenState arch ids s =
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
            , _blockStateSnapshot :: !(RegState (ArchReg arch) (Value arch ids))
+           , appCache :: !(MapF.MapF (App (Value arch ids)) (Value arch ids))
+           -- ^ A localized cache of already-allocated values
+           --
+           -- Locally caching values will let us retain sharing more, and make
+           -- some rewriting simpler later
            }
 
 emptyPreBlock :: RegState (ArchReg arch) (Value arch ids)
@@ -117,6 +122,7 @@ initGenState nonceGen addr st =
            , genAddr = addr
            , genRegUpdates = MapF.empty
            , _blockStateSnapshot = s0 ^. pBlockState
+           , appCache = MapF.empty
            }
   where
     s0 = emptyPreBlock st 0 addr
@@ -200,6 +206,18 @@ setRegVal reg val = do
   St.modify $ \s -> s { genRegUpdates = MapF.insert reg val (genRegUpdates s) }
   curRegState . boundValue reg .= fromMaybe val (MSS.simplifyValue val)
 
+findCachedApp :: (OrdF (ArchReg arch))
+              => App (Value arch ids) tp
+              -> Generator arch ids s (Maybe (Value arch ids tp))
+findCachedApp a = MapF.lookup a <$> St.gets appCache
+
+cacheAppValue :: (OrdF (ArchReg arch))
+              => App (Value arch ids) tp
+              -> Value arch ids tp
+              -> Generator arch ids s ()
+cacheAppValue a v =
+  St.modify $ \s -> s { appCache = MapF.insert a v (appCache s) }
+
 addExpr :: ( MSS.SimplifierExtension arch
            , OrdF (ArchReg arch)
            , MM.MemWidth (RegAddrWidth (ArchReg arch))
@@ -215,13 +233,29 @@ addExpr expr =
     AppExpr app
       | Just val <- MSS.simplifyApp app -> return val
       | otherwise -> do
-          let simplify v = fromMaybe v (MSS.simplifyValue v)
-          let app1 = FC.fmapFC simplify app
-          case MSS.simplifyArchApp app1 of
+          mval <- findCachedApp app
+          case mval of
+            Just val -> return val
             Nothing -> do
-              AssignedValue <$> addAssignment (EvalApp app1)
-            Just simplApp ->
-              AssignedValue <$> addAssignment (EvalApp simplApp)
+              let simplify v = fromMaybe v (MSS.simplifyValue v)
+              let app1 = FC.fmapFC simplify app
+              case MSS.simplifyArchApp app1 of
+                Nothing -> do
+                  mval2 <- findCachedApp app1
+                  case mval2 of
+                    Nothing -> do
+                      v <- AssignedValue <$> addAssignment (EvalApp app1)
+                      cacheAppValue app1 v
+                      return v
+                    Just v -> return v
+                Just simplApp -> do
+                  mval2 <- findCachedApp simplApp
+                  case mval2 of
+                    Nothing -> do
+                      v <- AssignedValue <$> addAssignment (EvalApp simplApp)
+                      cacheAppValue simplApp v
+                      return v
+                    Just v -> return v
 
 data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
@@ -324,16 +358,6 @@ addAssignment rhs = do
   let a = Assignment l rhs
   addStmt (AssignStmt a)
   return a
-  -- case MSS.simplifyValue (AssignedValue a) of
-  --   Nothing -> do
-  --     addStmt (AssignStmt a)
-  --     return a
-  --   Just (AssignedValue simplifiedAssignment) -> do
-  --     addStmt (AssignStmt simplifiedAssignment)
-  --     return simplifiedAssignment
-  --   simp -> error ("Simplified an assignment to: " ++ show simp)
-      -- addStmt (AssignStmt a)
-      -- return a
 
 -- | Get all of the current register values
 --

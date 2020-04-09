@@ -82,7 +82,6 @@ import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import           Data.Macaw.SemMC.Generator
-import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.Types
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
@@ -225,6 +224,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                          , genAddr = nextPCSegAddr
                                          , genRegUpdates = MapF.empty
                                          , _blockStateSnapshot = preBlock' ^. pBlockState
+                                         , appCache = appCache gs
                                          }
                       disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
                      -- Otherwise, we are still at the end of a block.
