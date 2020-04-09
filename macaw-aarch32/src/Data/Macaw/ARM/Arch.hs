@@ -1,6 +1,7 @@
 {-# LANGUAGE BinaryLiterals #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -17,15 +18,15 @@
 module Data.Macaw.ARM.Arch where
 
 import           Data.Bits ( (.&.) )
+import           Data.Kind ( Type )
 import qualified Data.Macaw.Architecture.Info as MAI
-import           Data.Macaw.ARM.ARMReg
+import           Data.Macaw.ARM.ARMReg ()
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
                                          , evalRewrittenArchFn )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
-import qualified Data.Macaw.SemMC.Operands as O
 import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableF as TF
@@ -41,15 +42,13 @@ import qualified Text.PrettyPrint.HughesPJClass as HPP
 -- ----------------------------------------------------------------------
 -- ARM-specific statement definitions
 
-data ARMStmt (v :: MT.Type -> *) where
-    WhatShouldThisBe :: ARMStmt v
+data ARMStmt (v :: MT.Type -> Type) where
 
 type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
         case stmt of
-          WhatShouldThisBe -> PP.text "arm_what?"
 
 instance TF.FunctorF ARMStmt where
   fmapF = TF.fmapFDefault
@@ -60,7 +59,6 @@ instance TF.FoldableF ARMStmt where
 instance TF.TraversableF ARMStmt where
   traverseF _go stmt =
     case stmt of
-      WhatShouldThisBe -> pure WhatShouldThisBe
 
 rewriteStmt :: ARMStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt ()
 rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
@@ -88,9 +86,6 @@ instance MC.PrettyF ARMTermStmt where
                in case ts of
                     ARMSyscall imm -> PP.text "arm_syscall" PP.<+> dpp2app imm
 
-
--- instance PrettyF (ArchTermStmt ARM.AArch32))
-
 rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
     case s of
@@ -101,7 +96,7 @@ rewriteTermStmt s =
 -- current state of the heap and the set of registeres defined so far
 -- and the result type, but should not affect the processor state.
 
-data ARMPrimFn (f :: MT.Type -> *) tp where
+data ARMPrimFn (f :: MT.Type -> Type) tp where
   SDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
@@ -127,7 +122,6 @@ instance MC.IsArchFn ARMPrimFn where
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
           URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
           SRem _ lhs rhs -> ppBinary "arm_srem" <$> pp lhs <*> pp rhs
-      where ppUnary s v' = PP.text s PP.<+> v'
 
 instance FCls.FunctorFC ARMPrimFn where
   fmapFC = FCls.fmapFCDefault
@@ -142,19 +136,16 @@ instance FCls.TraversableFC ARMPrimFn where
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
       URem rep lhs rhs -> URem rep <$> go lhs <*> go rhs
       SRem rep lhs rhs -> SRem rep <$> go lhs <*> go rhs
-      -- ARMPrimFn rep -> pure (ARMPrimFn rep)
-      -- URem w <$> go dividend <*> go divisor
 
 type instance MC.ArchFn ARM.AArch32 = ARMPrimFn
 
-instance (1 <= MC.RegAddrWidth ARMReg) => MT.HasRepr (ARMPrimFn (MC.Value arm ids)) MT.TypeRepr where
+instance MT.HasRepr (ARMPrimFn (MC.Value ARM.AArch32 ids)) MT.TypeRepr where
   typeRepr f =
     case f of
       UDiv rep _ _ -> MT.BVTypeRepr rep
       SDiv rep _ _ -> MT.BVTypeRepr rep
       URem rep _ _ -> MT.BVTypeRepr rep
       SRem rep _ _ -> MT.BVTypeRepr rep
-      -- ARMPrimFn rep -> rep
 
 instance MC.IPAlignment ARM.AArch32 where
   -- A formula which results in an address that will be loaded into
@@ -228,29 +219,6 @@ rewritePrimFn f =
     SRem rep lhs rhs -> do
       tgtFn <- SRem rep <$> rewriteValue lhs <*> rewriteValue rhs
       evalRewrittenArchFn tgtFn
-    -- ARMPrimFn rep -> evalRewrittenArchFn (ARMPrimFn rep)
-    -- URem w dividend divisor -> do
-    --   tgtFn <- URem w <$> rewriteValue dividend <*> rewriteValue divisor
-    --   evalRewrittenArchFn tgtFn
-
-
--- ----------------------------------------------------------------------
--- The aggregate set of architectural constraints to express for ARM
--- computations
-
--- type ARMArchConstraints arm = ( MC.ArchReg arm ~ ARMReg
---                               , MC.ArchFn arm ~ ARMPrimFn arm
---                               , MC.ArchStmt arm ~ ARMStmt
---                               , MC.ArchTermStmt arm ~ ARMTermStmt
---                               , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg arm))
---                               , 1 <= MC.RegAddrWidth ARMReg
---                               , KnownNat (MC.RegAddrWidth ARMReg)
---                               , MC.ArchConstraints arm
---                               )
-
--- FIXME: Why was a maybe usable as an index to extract a value?                              
-                              -- , O.ExtractValue arm ARMOperands.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
-                              -- , O.ExtractValue arm (Maybe ARMOperands.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg arm)))
 
 
 -- ----------------------------------------------------------------------
@@ -269,7 +237,6 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
       ARMDis.SVC_A1 ->
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
-            regs <- G.getRegs
             G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
       _ -> Nothing
 
@@ -280,7 +247,7 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
 t32InstructionMatcher :: ThumbDis.Instruction -> Maybe (G.Generator ARM.AArch32 ids s ())
-t32InstructionMatcher (ThumbDis.Instruction opc operands) =
+t32InstructionMatcher (ThumbDis.Instruction opc _operands) =
     case opc of
       -- ThumbDis.TSVC -> case operands of
       --                    ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
