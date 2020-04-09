@@ -1,4 +1,4 @@
-R { funcs = [ (0x8000, [(0x8000, 12), (0x800c,16)])
+R { funcs = [ (0x100b8, [(0x100b8, 16)])
             ]
-  , ignoreBlocks = [0x803c]
+  , ignoreBlocks = [0x100c8]
   }
