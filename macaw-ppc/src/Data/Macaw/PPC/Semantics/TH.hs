@@ -41,6 +41,7 @@ import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.SemMC.TH ( natReprTH, floatInfoFromPrecisionTH, addEltTH, symFnName, asName )
 
@@ -58,6 +59,7 @@ ppcNonceAppEval :: forall arch t fs tp
                  . (A.Architecture arch,
                     L.Location arch ~ APPC.Location arch,
                     1 <= A.RegWidth arch,
+                    MSS.SimplifierExtension arch,
                     M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
                 => BoundVarInterpretations arch t fs
                 -> S.NonceApp t (S.Expr t) tp
@@ -216,7 +218,12 @@ elementaryFPName :: String -> Maybe String
 elementaryFPName = L.stripPrefix "uf_fp_"
 
 addArchAssignment
-  :: (M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr)
+  :: ( M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr
+     , MSS.SimplifierExtension arch
+     , OrdF (M.ArchReg arch)
+     , MM.MemWidth (M.ArchAddrWidth arch)
+     , ShowF (M.ArchReg arch)
+     )
   => M.ArchFn arch (M.Value arch ids) tp
   -> G.Generator arch ids s (G.Expr arch ids tp)
 addArchAssignment expr = G.ValueExpr . M.AssignedValue <$>
@@ -226,6 +233,8 @@ addArchExpr
   :: ( MM.MemWidth (M.RegAddrWidth (M.ArchReg arch))
      , OrdF (M.ArchReg arch)
      , M.HasRepr (M.ArchFn arch (M.Value arch ids)) M.TypeRepr
+     , MSS.SimplifierExtension arch
+     , ShowF (M.ArchReg arch)
      )
   => M.ArchFn arch (M.Value arch ids) tp
   -> G.Generator arch ids s (M.Value arch ids tp)
@@ -235,6 +244,7 @@ floatingPointTH :: forall arch t fs f c
                  . (L.Location arch ~ APPC.Location arch,
                      A.Architecture arch,
                      1 <= A.RegWidth arch,
+                     MSS.SimplifierExtension arch,
                      M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch,
                      FC.FoldableFC f)
                  => BoundVarInterpretations arch t fs
@@ -262,6 +272,7 @@ floatingPointTH bvi fnName args =
 ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
                     A.Architecture arch,
                     1 <= A.RegWidth arch,
+                    MSS.SimplifierExtension arch,
                     M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
                 => BoundVarInterpretations arch t fs
                 -> S.App (S.Expr t) ctp

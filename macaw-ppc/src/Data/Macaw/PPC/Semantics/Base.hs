@@ -46,6 +46,7 @@ import Data.Parameterized.NatRepr ( knownNat
                                   )
 
 import           Data.Macaw.SemMC.Generator
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
 import           Data.Macaw.PPC.PPCReg
 
@@ -55,7 +56,7 @@ type family FromCrucibleBaseType (btp :: S.BaseType) :: M.Type where
   FromCrucibleBaseType (S.BaseFloatType fpp) =
     M.FloatType (MS.FromCrucibleFloatInfo (SFP.FloatPrecisionToInfo fpp))
 
-crucAppToExpr :: (M.ArchConstraints ppc) =>
+crucAppToExpr :: (M.ArchConstraints ppc, MSS.SimplifierExtension ppc) =>
                  S.App (S.Expr t) ctp
               -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 crucAppToExpr (S.NotPred bool) = AppExpr . M.NotApp <$> addElt bool
@@ -169,7 +170,7 @@ crucAppToExpr _ = error "crucAppToExpr: unimplemented crucible operation"
 
 data BoolMapOp = AndOp | OrOp
 
-evalBoolMap :: M.ArchConstraints ppc =>
+evalBoolMap :: (M.ArchConstraints ppc, MSS.SimplifierExtension ppc) =>
                BoolMapOp -> Bool -> BooM.BoolMap (S.Expr t)
             -> Generator ppc ids s (Expr ppc ids 'M.BoolType)
 evalBoolMap op defVal bmap =
@@ -212,6 +213,7 @@ interpretFormula :: forall var ppc t ctp s ids
                     , PPCArchConstraints var
                     , 1 <= SA.RegWidth ppc
                     , M.RegAddrWidth (PPCReg ppc) ~ SA.RegWidth ppc
+                    , MSS.SimplifierExtension ppc
                     )
                  => APPC.Location ppc ctp
                  -> S.Expr t ctp
@@ -226,7 +228,7 @@ interpretFormula loc elt = do
       setRegVal reg (M.AssignedValue assignment)
 
 -- Convert a Crucible element into an expression.
-eltToExpr :: M.ArchConstraints ppc =>
+eltToExpr :: (M.ArchConstraints ppc, MSS.SimplifierExtension ppc) =>
              S.Expr t ctp
           -> Generator ppc ids s (Expr ppc ids (FromCrucibleBaseType ctp))
 eltToExpr (S.AppExpr appElt) = crucAppToExpr (S.appExprApp appElt)
@@ -235,7 +237,7 @@ eltToExpr (S.SemiRingLiteral (SR.SemiRingBVRepr _ w) val _) =
 eltToExpr _ = undefined
 
 -- Add a Crucible element in the Generator monad.
-addElt :: M.ArchConstraints ppc =>
+addElt :: (M.ArchConstraints ppc, MSS.SimplifierExtension ppc) =>
           S.Expr t ctp
        -> Generator ppc ids s (M.Value ppc ids (FromCrucibleBaseType ctp))
 addElt elt = eltToExpr elt >>= addExpr
