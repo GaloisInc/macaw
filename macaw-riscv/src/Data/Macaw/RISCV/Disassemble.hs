@@ -14,7 +14,6 @@ module Data.Macaw.RISCV.Disassemble
   ) where
 
 import qualified Control.Monad.Except as E
-import qualified Control.Monad.RWS as RWS
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
@@ -24,25 +23,22 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.List as L
-import qualified Data.Parameterized.Map as MapF
-import qualified Data.Sequence as Seq
-import qualified GHC.TypeLits as T
 import qualified GRIFT.InstructionSet as G
 import qualified GRIFT.Decode as G
 import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
 import qualified GRIFT.Types as G
 
-import           Control.Lens (view, use, assign, makeLenses)
+import           Control.Lens (view)
 import           Control.Monad.ST (ST)
-import           Control.Monad.Trans (lift)
 import           Data.Parameterized.NatRepr
-import           Data.Parameterized.Nonce ( NonceGenerator, freshNonce )
+import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.Some (Some(..))
 import           Data.Word (Word8)
 
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
+import           Data.Macaw.RISCV.Disassemble.Monad
 
 data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
 
@@ -58,12 +54,12 @@ bvWidth :: BV.BitVector w -> NatRepr w
 bvWidth (BV.BitVector wRepr _) = wRepr
 
 -- | Read a single RISC-V instruction.
-readInstruction :: forall rv w . MM.MemWidth w
+_readInstruction :: forall rv w . MM.MemWidth w
                 => G.RVRepr rv
                 -> G.InstructionSet rv
                 -> MM.MemSegmentOff w
                 -> Either (RISCVMemoryError w) (Some (G.Instruction rv), MM.MemWord w)
-readInstruction rvRepr iset addr = do
+_readInstruction rvRepr iset addr = do
   let seg = MM.segoffSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
     False -> E.throwError (RISCVMemoryError (MM.PermissionsError (MM.segoffAddr addr)))
@@ -106,79 +102,15 @@ liftMemError e =
 
 ------------
 
-data DisInstEnv s ids rv fmt = DisInstEnv { _disInst :: G.Instruction rv fmt
-                                          , _disInstBytes :: Integer
-                                          , _disInstWord :: Integer
-                                          , _disNonceGen :: NonceGenerator (ST s) ids
-                                          }
-makeLenses ''DisInstEnv
-
-data DisInstState (rv :: G.RV) ids = DisInstState { _disRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
-                                                  }
-makeLenses ''DisInstState
-
-data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
-                         | NonConstantFPR (G.InstExpr fmt rv 5)
-                         | ZeroWidthExpr (G.InstExpr fmt rv 0)
-                         | forall w w' . WidthNotLTExpr (G.InstExpr fmt rv w) (NatRepr w')
-
--- | Monad for disassembling a single instruction.
-newtype DisInstM s ids rv fmt a = DisInstM
-  { unDisInstM :: E.ExceptT (DisInstError rv fmt) (RWS.RWST (DisInstEnv s ids rv fmt) (Seq.Seq (MC.Stmt rv ids)) (DisInstState rv ids) (ST s)) a }
-  deriving ( Functor
-           , Applicative
-           , Monad
-           , RWS.MonadReader (DisInstEnv s ids rv fmt)
-           , RWS.MonadWriter (Seq.Seq (MC.Stmt rv ids))
-           , RWS.MonadState (DisInstState rv ids)
-           , E.MonadError (DisInstError rv fmt)
-           )
-
 widthPos :: G.InstExpr fmt rv w -> (1 <= w => DisInstM s ids rv fmt a) -> DisInstM s ids rv fmt a
 widthPos e a = case isZeroOrGT1 (G.exprWidth e) of
   Left Refl -> E.throwError (ZeroWidthExpr e)
   Right LeqProof -> a
 
-widthLt :: G.InstExpr fmt rv w -> NatRepr w' -> ((w + 1) <= w' => DisInstM s ids rv fmt a) -> DisInstM s ids rv fmt a
-widthLt e w a = case testNatCases (G.exprWidth e) w of
+_widthLt :: G.InstExpr fmt rv w -> NatRepr w' -> ((w + 1) <= w' => DisInstM s ids rv fmt a) -> DisInstM s ids rv fmt a
+_widthLt e w a = case testNatCases (G.exprWidth e) w of
   NatCaseLT LeqProof -> a
   _ -> E.throwError (WidthNotLTExpr e w)
-
-liftST :: ST s a -> DisInstM s ids rv fmt a
-liftST = DisInstM . lift . lift
-
-addAssignment :: MC.AssignRhs rv (MC.Value rv ids) tp
-              -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-addAssignment rhs = do
-  ng <- view disNonceGen
-  id <- liftST $ freshNonce ng
-  let asgn = MC.Assignment (MC.AssignId id) rhs
-  addStmt (MC.AssignStmt asgn)
-  return (MC.AssignedValue asgn)
-
-evalApp :: MC.App (MC.Value rv ids) tp
-        -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-evalApp = addAssignment . MC.EvalApp
-
-readMem :: MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
-        -> MC.MemRepr tp
-        -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-readMem addr bytes = addAssignment $ MC.ReadMem addr bytes
-
-getReg :: MC.ArchReg rv tp -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-getReg r = use (disRegState . MC.boundValue r)
-
-setReg :: MC.ArchReg rv tp -> MC.Value rv ids tp -> DisInstM s ids rv fmt ()
-setReg r v = assign (disRegState . MC.boundValue r) v
-
-addStmt :: MC.Stmt rv ids -> DisInstM s ids rv fmt ()
-addStmt stmt = RWS.tell (Seq.singleton stmt)
-
-writeMem :: MC.ArchAddrValue rv ids
-         -> MC.MemRepr tp
-         -> MC.Value rv ids tp
-         -> DisInstM s ids rv fmt ()
-writeMem addr bytes val = addStmt (MC.WriteMem addr bytes val)
 
 disLocApp :: (1 <= w, RISCV rv)
           => G.LocApp (G.InstExpr fmt rv) rv w
@@ -231,27 +163,28 @@ disBVApp bvApp = case bvApp of
   -- should never throw an error.
   G.ZExtApp _w _e -> error "TODO: Disassemble ZExtApp"
   G.SExtApp _w _e -> error "TODO: Disassemble SExtApp"
+  G.ExtractApp _w _ix _e -> error "TODO: Disassemble ExtractApp"
   G.ConcatApp _w _e1 _e2 -> error "TODO: Disassemble ConcatApp"
   G.IteApp w test e1 e2 -> do
     testVal <- disInstExpr test
     testValBool <- bvToBool testVal
     e1Val <- disInstExpr e1
     e2Val <- disInstExpr e2
-    addAssignment (MC.EvalApp (MC.Mux (MT.BVTypeRepr w) testValBool e1Val e2Val))
+    evalApp (MC.Mux (MT.BVTypeRepr w) testValBool e1Val e2Val)
   where unaryOp op e = do
           eVal <- disInstExpr e
-          addAssignment (MC.EvalApp (op eVal))
+          evalApp (op eVal)
         binaryOp op e1 e2 = do
           e1Val <- disInstExpr e1
           e2Val <- disInstExpr e2
-          addAssignment (MC.EvalApp (op e1Val e2Val))
+          evalApp (op e1Val e2Val)
         binaryOpBool op e1 e2 = do
           eq <- binaryOp op e1 e2
           boolToBV eq
-        boolToBV bool = addAssignment (MC.EvalApp (MC.Mux (MT.BVTypeRepr (knownNat @1)) bool
-                                                   (MC.BVValue knownNat 1)
-                                                   (MC.BVValue knownNat 0)))
-        bvToBool bv = addAssignment (MC.EvalApp (MC.Eq bv (MC.BVValue (knownNat @1) 1)))
+        boolToBV bool = evalApp (MC.Mux (MT.BVTypeRepr (knownNat @1)) bool
+                                  (MC.BVValue knownNat 1)
+                                  (MC.BVValue knownNat 0))
+        bvToBool bv = evalApp (MC.Eq bv (MC.BVValue (knownNat @1) 1))
 
 disStateApp :: (1 <= w, RISCV rv)
             => G.StateApp (G.InstExpr fmt rv) rv w
@@ -298,7 +231,7 @@ collapseStmt stmt = case stmt of
     in collectBranch testExpr lAssignStmts rAssignStmts
   where collectBranch testExpr lAssignStmts rAssignStmts =
           [ AssignStmt loc (G.iteE testExpr e (G.stateExpr (G.LocApp loc))) | AssignStmt loc e <- lAssignStmts ] ++
-          [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- lAssignStmts ]
+          [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- rAssignStmts ]
 
 disAssignStmt :: RISCV rv => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disAssignStmt stmt = case stmt of
@@ -328,8 +261,8 @@ disAssignStmt stmt = case stmt of
     setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
-disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
-disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
+_disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+_disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
 
 riscvDisassembleFn :: G.RVRepr rv
                    -> NonceGenerator (ST s) ids
