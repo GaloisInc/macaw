@@ -17,7 +17,7 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified GRIFT.Types as GT
 
-import Data.Macaw.RISCV.Arch ()
+import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.Disassemble (riscvDisassembleFn)
 import Data.Macaw.RISCV.Eval
 import Data.Macaw.RISCV.RISCVReg
