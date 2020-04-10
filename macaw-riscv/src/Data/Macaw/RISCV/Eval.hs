@@ -14,6 +14,7 @@ import qualified GRIFT.Types as GT
 
 import Control.Lens ((.~), (&))
 
+import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.RISCVReg
 
 riscvInitialBlockRegs :: RISCV rv

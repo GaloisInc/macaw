@@ -35,6 +35,7 @@ library
                        ansi-wl-pprint,
                        bv-sized,
                        bytestring,
+                       containers,
                        grift,
                        lens,
                        macaw-base,

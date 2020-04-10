@@ -1,6 +1,7 @@
+{-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -8,11 +9,16 @@ module Data.Macaw.RISCV.Arch where
 
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.TraversableF as F
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Macaw.Types as MT
 import qualified GRIFT.Types as GT
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
+
+type RISCV rv = ( GT.KnownRV rv
+                , MM.MemWidth (GT.RVWidth rv)
+                )
 
 -- | RISC-V architecture-specific functions
 data RISCVArchFn (rv :: GT.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)

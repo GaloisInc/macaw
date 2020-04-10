@@ -15,6 +15,8 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.CFG as MC
 
+import           Data.Macaw.RISCV.Arch
+
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some (Some(..))
 import           Data.Parameterized.NatRepr (knownNat)
@@ -74,10 +76,6 @@ instance GT.KnownRV rv => MT.HasRepr (RISCVReg rv) MT.TypeRepr where
 
 type instance MC.ArchReg rv = RISCVReg rv
 type instance MC.RegAddrWidth (RISCVReg rv) = GT.RVWidth rv
-
-type RISCV rv = ( GT.KnownRV rv
-                , MM.MemWidth (GT.RVWidth rv)
-                )
 
 riscvRegs :: [Some (RISCVReg rv)]
 riscvRegs = [Some PC] ++
