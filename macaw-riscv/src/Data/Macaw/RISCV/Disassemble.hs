@@ -305,11 +305,27 @@ disAssignStmt stmt = case stmt of
   AssignStmt (G.PCApp _) valExpr -> do
     val <- disInstExpr valExpr
     setReg PC val
+  AssignStmt (G.GPRApp _ ridExpr) valExpr -> do
+    rid <- disInstExpr ridExpr
+    val <- disInstExpr valExpr
+    case rid of
+      MC.BVValue _ ridVal -> setReg (GPR (BV.bitVector ridVal)) val
+      _ -> E.throwError (NonConstantGPR ridExpr)
+  AssignStmt (G.FPRApp _ ridExpr) valExpr -> do
+    rid <- disInstExpr ridExpr
+    val <- disInstExpr valExpr
+    case rid of
+      MC.BVValue _ ridVal -> setReg (FPR (BV.bitVector ridVal)) val
+      _ -> E.throwError (NonConstantGPR ridExpr)
   AssignStmt (G.MemApp bytes addrExpr) valExpr -> withLeqProof (leqMulPos (knownNat @8) bytes) $ do
     addr <- disInstExpr addrExpr
     val <- disInstExpr valExpr
     writeMem addr (MC.BVMemRepr bytes MC.LittleEndian) val
-  AssignStmt _ _ -> undefined
+  AssignStmt (G.ResApp _addr) _valExpr -> error "TODO: Disassemble ResApp"
+  AssignStmt (G.CSRApp _w _rid) _valExpr -> error "TODO: Disassemble CSRApp"
+  AssignStmt G.PrivApp valExpr -> do
+    val <- disInstExpr valExpr
+    setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
 disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
