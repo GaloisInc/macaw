@@ -17,6 +17,7 @@ import qualified Control.Monad.Except as E
 import qualified Control.Monad.RWS as RWS
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
+import qualified Data.Foldable as F
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MC
 import qualified Data.Macaw.Memory as MM
@@ -32,7 +33,7 @@ import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
 import qualified GRIFT.Types as G
 
-import           Control.Lens (use, assign, makeLenses)
+import           Control.Lens (view, use, assign, makeLenses)
 import           Control.Monad.ST (ST)
 import           Control.Monad.Trans (lift)
 import           Data.Parameterized.NatRepr
@@ -105,13 +106,15 @@ liftMemError e =
 
 ------------
 
-data DisInstEnv s ids rv fmt = DisInstEnv { disInst :: G.Instruction rv fmt
-                                          , disNonceGen :: NonceGenerator (ST s) ids
+data DisInstEnv s ids rv fmt = DisInstEnv { _disInst :: G.Instruction rv fmt
+                                          , _disInstBytes :: Integer
+                                          , _disInstWord :: Integer
+                                          , _disNonceGen :: NonceGenerator (ST s) ids
                                           }
+makeLenses ''DisInstEnv
 
 data DisInstState (rv :: G.RV) ids = DisInstState { _disRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
                                                   }
-
 makeLenses ''DisInstState
 
 data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
@@ -126,6 +129,7 @@ newtype DisInstM s ids rv fmt a = DisInstM
            , Applicative
            , Monad
            , RWS.MonadReader (DisInstEnv s ids rv fmt)
+           , RWS.MonadWriter (Seq.Seq (MC.Stmt rv ids))
            , RWS.MonadState (DisInstState rv ids)
            , E.MonadError (DisInstError rv fmt)
            )
@@ -143,37 +147,57 @@ widthLt e w a = case testNatCases (G.exprWidth e) w of
 liftST :: ST s a -> DisInstM s ids rv fmt a
 liftST = DisInstM . lift . lift
 
+addAssignment :: MC.AssignRhs rv (MC.Value rv ids) tp
+              -> DisInstM s ids rv fmt (MC.Value rv ids tp)
+addAssignment rhs = do
+  ng <- view disNonceGen
+  id <- liftST $ freshNonce ng
+  let asgn = MC.Assignment (MC.AssignId id) rhs
+  addStmt (MC.AssignStmt asgn)
+  return (MC.AssignedValue asgn)
+
+evalApp :: MC.App (MC.Value rv ids) tp
+        -> DisInstM s ids rv fmt (MC.Value rv ids tp)
+evalApp = addAssignment . MC.EvalApp
+
+readMem :: MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
+        -> MC.MemRepr tp
+        -> DisInstM s ids rv fmt (MC.Value rv ids tp)
+readMem addr bytes = addAssignment $ MC.ReadMem addr bytes
+
 getReg :: MC.ArchReg rv tp -> DisInstM s ids rv fmt (MC.Value rv ids tp)
 getReg r = use (disRegState . MC.boundValue r)
 
 setReg :: MC.ArchReg rv tp -> MC.Value rv ids tp -> DisInstM s ids rv fmt ()
 setReg r v = assign (disRegState . MC.boundValue r) v
 
-addAssignment :: MC.AssignRhs rv (MC.Value rv ids) tp
-              -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-addAssignment rhs = do
-  ng <- disNonceGen <$> RWS.ask
-  id <- liftST $ freshNonce ng
-  return (MC.AssignedValue (MC.Assignment (MC.AssignId id) rhs))
+addStmt :: MC.Stmt rv ids -> DisInstM s ids rv fmt ()
+addStmt stmt = RWS.tell (Seq.singleton stmt)
+
+writeMem :: MC.ArchAddrValue rv ids
+         -> MC.MemRepr tp
+         -> MC.Value rv ids tp
+         -> DisInstM s ids rv fmt ()
+writeMem addr bytes val = addStmt (MC.WriteMem addr bytes val)
 
 disLocApp :: (1 <= w, RISCV rv)
           => G.LocApp (G.InstExpr fmt rv) rv w
           -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disLocApp locApp = case locApp of
   G.PCApp _w -> getReg PC
-  G.GPRApp _w rid -> do
-    ridVal <- disInstExpr rid
-    case ridVal of
-      MC.BVValue _w val -> getReg (GPR (BV.bitVector val))
-      _ -> E.throwError (NonConstantGPR rid)
-  G.FPRApp _w rid -> do
-    ridVal <- disInstExpr rid
-    case ridVal of
-      MC.BVValue _w val -> getReg (FPR (BV.bitVector val))
-      _ -> E.throwError (NonConstantFPR rid)
-  G.MemApp bytes addr -> do
-    addrVal <- disInstExpr addr
-    addAssignment (MC.ReadMem addrVal (MC.BVMemRepr bytes MC.LittleEndian))
+  G.GPRApp _w ridExpr -> do
+    rid <- disInstExpr ridExpr
+    case rid of
+      MC.BVValue _w ridVal -> getReg (GPR (BV.bitVector ridVal))
+      _ -> E.throwError (NonConstantGPR ridExpr)
+  G.FPRApp _w ridExpr -> do
+    rid <- disInstExpr ridExpr
+    case rid of
+      MC.BVValue _w ridVal -> getReg (FPR (BV.bitVector ridVal))
+      _ -> E.throwError (NonConstantFPR ridExpr)
+  G.MemApp bytes addrExpr -> do
+    addr <- disInstExpr addrExpr
+    readMem addr (MC.BVMemRepr bytes MC.LittleEndian)
   G.ResApp _addr -> error "TODO: disassemble ResApp"
   G.CSRApp _w _rid -> error "TODO: disassemble CSRApp"
   G.PrivApp -> getReg PrivLevel
@@ -214,7 +238,6 @@ disBVApp bvApp = case bvApp of
     e1Val <- disInstExpr e1
     e2Val <- disInstExpr e2
     addAssignment (MC.EvalApp (MC.Mux (MT.BVTypeRepr w) testValBool e1Val e2Val))
-  _ -> undefined
   where unaryOp op e = do
           eVal <- disInstExpr e
           addAssignment (MC.EvalApp (op eVal))
@@ -236,28 +259,61 @@ disStateApp :: (1 <= w, RISCV rv)
 disStateApp stateApp = case stateApp of
   G.LocApp locApp -> disLocApp locApp
   G.AppExpr bvApp -> disBVApp bvApp
-  G.FloatAppExpr _flApp -> undefined
+  G.FloatAppExpr _flApp -> error "TODO: Disassemble FloatAppExpr"
+
+instOperand :: G.OperandID fmt w -> G.Instruction rv fmt -> BV.BitVector w
+instOperand (G.OperandID oix) (G.Inst _ (G.Operands _ operands)) = operands L.!! oix
 
 disInstExpr :: (1 <= w, RISCV rv)
             => G.InstExpr fmt rv w
             -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disInstExpr instExpr = case instExpr of
   G.InstLitBV (BV.BitVector w val) -> return (MC.BVValue w val)
-  G.InstAbbrevApp _abbrevApp -> undefined
-  G.OperandExpr _w _oid -> undefined
-  G.InstBytes _w -> undefined
-  G.InstWord _w -> undefined
+  G.InstAbbrevApp abbrevApp -> disInstExpr (G.expandAbbrevApp abbrevApp)
+  G.OperandExpr w oid -> do
+    inst <- view disInst
+    let BV.BitVector _ val = instOperand oid inst
+    return (MC.BVValue w val)
+  G.InstBytes w -> do
+    instBytes <- view disInstBytes
+    return (MC.BVValue w instBytes)
+  G.InstWord w -> do
+    instWord <- view disInstWord
+    return (MC.BVValue w instWord)
   G.InstStateApp stateApp -> disStateApp stateApp
 
--- | Translate a GRIFT statement into Macaw statement(s).
+data AssignStmt expr rv = forall w . AssignStmt !(G.LocApp (expr rv) rv w) !(expr rv w)
+
+-- | Convert a 'G.Stmt' into a list of assignment statements. It isn't
+-- clear what happens if the assignments overlap, so we make the
+-- assumption that they don't for now (which should be mostly the
+-- case, as branch statements are mostly used for exception handling).
+collapseStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
+collapseStmt stmt = case stmt of
+  G.AssignStmt loc e -> [AssignStmt loc e]
+  G.AbbrevStmt abbrevStmt -> mconcat (F.toList (collapseStmt <$> (G.expandAbbrevStmt abbrevStmt)))
+  G.BranchStmt testExpr lStmts rStmts ->
+    let lAssignStmts = mconcat (F.toList (collapseStmt <$> F.toList lStmts))
+        rAssignStmts = mconcat (F.toList (collapseStmt <$> F.toList rStmts))
+    in collectBranch testExpr lAssignStmts rAssignStmts
+  where collectBranch testExpr lAssignStmts rAssignStmts =
+          [ AssignStmt loc (G.iteE testExpr e (G.stateExpr (G.LocApp loc))) | AssignStmt loc e <- lAssignStmts ] ++
+          [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- lAssignStmts ]
+
+disAssignStmt :: RISCV rv => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disAssignStmt stmt = case stmt of
+  AssignStmt (G.PCApp _) valExpr -> do
+    val <- disInstExpr valExpr
+    setReg PC val
+  AssignStmt (G.MemApp bytes addrExpr) valExpr -> withLeqProof (leqMulPos (knownNat @8) bytes) $ do
+    addr <- disInstExpr addrExpr
+    val <- disInstExpr valExpr
+    writeMem addr (MC.BVMemRepr bytes MC.LittleEndian) val
+  AssignStmt _ _ -> undefined
+
+-- | Translate a GRIFT assignment statement into Macaw statement(s).
 disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
-disStmt gStmt = case gStmt of
-  G.AssignStmt (G.PCApp _) gExpr -> do
-    pcVal <- disInstExpr gExpr
-    setReg PC pcVal
-  G.AssignStmt _ _ -> undefined
-  G.AbbrevStmt abbrevStmt -> undefined
-  G.BranchStmt gExpr lStmts rStmts -> undefined
+disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
 
 riscvDisassembleFn :: G.RVRepr rv
                    -> NonceGenerator (ST s) ids
