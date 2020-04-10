@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
@@ -28,8 +29,10 @@ import qualified GRIFT.Decode as G
 import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
 import qualified GRIFT.Types as G
+import qualified Data.Sequence as Seq
+import qualified Data.Text as T
 
-import           Control.Lens (view)
+import           Control.Lens ((^.))
 import           Control.Monad.ST (ST)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator)
@@ -41,6 +44,7 @@ import           Data.Macaw.RISCV.RISCVReg
 import           Data.Macaw.RISCV.Disassemble.Monad
 
 data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
+  deriving Show
 
 readBytesLE :: [Word8] -> Some BV.BitVector
 readBytesLE [] = Some BV.bv0
@@ -54,12 +58,12 @@ bvWidth :: BV.BitVector w -> NatRepr w
 bvWidth (BV.BitVector wRepr _) = wRepr
 
 -- | Read a single RISC-V instruction.
-_readInstruction :: forall rv w . MM.MemWidth w
+readInstruction :: forall rv w . MM.MemWidth w
                 => G.RVRepr rv
                 -> G.InstructionSet rv
                 -> MM.MemSegmentOff w
-                -> Either (RISCVMemoryError w) (Some (G.Instruction rv), MM.MemWord w)
-_readInstruction rvRepr iset addr = do
+                -> Either (RISCVMemoryError w) (Integer, Some (G.Instruction rv), Integer)
+readInstruction rvRepr iset addr = do
   let seg = MM.segoffSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
     False -> E.throwError (RISCVMemoryError (MM.PermissionsError (MM.segoffAddr addr)))
@@ -82,17 +86,17 @@ _readInstruction rvRepr iset addr = do
                     Some cinstBV | NatCaseEQ <- testNatCases (bvWidth cinstBV) (knownNat @16) -> return cinstBV
                     _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
                   case G.decodeC rvRepr cinstBV of
-                    Just sinst -> return (sinst, 2)
+                    Just sinst -> return (BV.bvIntegerU cinstBV, sinst, 2)
                     Nothing -> do
                       instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
                         Some instBV | NatCaseEQ <- testNatCases (bvWidth instBV) (knownNat @32) -> return instBV
                         _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
-                      return (G.decode iset instBV, 4)
+                      return (BV.bvIntegerU instBV, G.decode iset instBV, 4)
                 _ -> do
                   instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
                     Some instBV | NatCaseEQ <- testNatCases (bvWidth instBV) (knownNat @32) -> return instBV
                     _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
-                  return (G.decode iset instBV, 4)
+                  return (BV.bvIntegerU instBV, G.decode iset instBV, 4)
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (RISCVMemoryError w) a
 liftMemError e =
@@ -112,7 +116,7 @@ _widthLt e w a = case testNatCases (G.exprWidth e) w of
   NatCaseLT LeqProof -> a
   _ -> E.throwError (WidthNotLTExpr e w)
 
-disLocApp :: (1 <= w, RISCV rv)
+disLocApp :: (1 <= w, G.KnownRV rv)
           => G.LocApp (G.InstExpr fmt rv) rv w
           -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disLocApp locApp = case locApp of
@@ -134,7 +138,7 @@ disLocApp locApp = case locApp of
   G.CSRApp _w _rid -> error "TODO: disassemble CSRApp"
   G.PrivApp -> getReg PrivLevel
 
-disBVApp :: (1 <= w, RISCV rv)
+disBVApp :: (1 <= w, G.KnownRV rv)
          => G.BVApp (G.InstExpr fmt rv) w
          -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disBVApp bvApp = case bvApp of
@@ -186,7 +190,7 @@ disBVApp bvApp = case bvApp of
                                   (MC.BVValue knownNat 0))
         bvToBool bv = evalApp (MC.Eq bv (MC.BVValue (knownNat @1) 1))
 
-disStateApp :: (1 <= w, RISCV rv)
+disStateApp :: (1 <= w, G.KnownRV rv)
             => G.StateApp (G.InstExpr fmt rv) rv w
             -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disStateApp stateApp = case stateApp of
@@ -197,21 +201,21 @@ disStateApp stateApp = case stateApp of
 instOperand :: G.OperandID fmt w -> G.Instruction rv fmt -> BV.BitVector w
 instOperand (G.OperandID oix) (G.Inst _ (G.Operands _ operands)) = operands L.!! oix
 
-disInstExpr :: (1 <= w, RISCV rv)
+disInstExpr :: (1 <= w, G.KnownRV rv)
             => G.InstExpr fmt rv w
             -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
 disInstExpr instExpr = case instExpr of
   G.InstLitBV (BV.BitVector w val) -> return (MC.BVValue w val)
   G.InstAbbrevApp abbrevApp -> disInstExpr (G.expandAbbrevApp abbrevApp)
   G.OperandExpr w oid -> do
-    inst <- view disInst
+    inst <- getDisInst
     let BV.BitVector _ val = instOperand oid inst
     return (MC.BVValue w val)
   G.InstBytes w -> do
-    instBytes <- view disInstBytes
+    instBytes <- getDisInstBytes
     return (MC.BVValue w instBytes)
   G.InstWord w -> do
-    instWord <- view disInstWord
+    instWord <- getDisInstWord
     return (MC.BVValue w instWord)
   G.InstStateApp stateApp -> disStateApp stateApp
 
@@ -221,7 +225,7 @@ data AssignStmt expr rv = forall w . AssignStmt !(G.LocApp (expr rv) rv w) !(exp
 -- clear what happens if the assignments overlap, so we make the
 -- assumption that they don't for now (which should be mostly the
 -- case, as branch statements are mostly used for exception handling).
-collapseStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
+collapseStmt :: G.KnownRV rv => G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
 collapseStmt stmt = case stmt of
   G.AssignStmt loc e -> [AssignStmt loc e]
   G.AbbrevStmt abbrevStmt -> mconcat (F.toList (collapseStmt <$> (G.expandAbbrevStmt abbrevStmt)))
@@ -233,7 +237,7 @@ collapseStmt stmt = case stmt of
           [ AssignStmt loc (G.iteE testExpr e (G.stateExpr (G.LocApp loc))) | AssignStmt loc e <- lAssignStmts ] ++
           [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- rAssignStmts ]
 
-disAssignStmt :: RISCV rv => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disAssignStmt :: G.KnownRV rv => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disAssignStmt stmt = case stmt of
   AssignStmt (G.PCApp _) valExpr -> do
     val <- disInstExpr valExpr
@@ -261,8 +265,51 @@ disAssignStmt stmt = case stmt of
     setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
-_disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
-_disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
+disStmt :: G.KnownRV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
+
+disassembleBlock :: RISCV rv
+                 => G.RVRepr rv
+                 -- ^ The RISC-V configuration
+                 -> G.InstructionSet rv
+                 -- ^ The RISC-V instruction set for this particular
+                 -- RISC-V configuration
+                 -> Seq.Seq (MC.Stmt rv ids)
+                 -- ^ The statements disassembled thus far
+                 -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                 -- ^ The register state at this point of the block
+                 -> NonceGenerator (ST s) ids
+                 -- ^ The nonce generator used for block disassembly
+                 -> MC.ArchSegmentOff rv
+                 -- ^ The current program counter value
+                 -> MM.MemWord (MC.ArchAddrWidth rv)
+                 -- ^ The current offset into the block
+                 -> MM.MemWord (MC.ArchAddrWidth rv)
+                 -- ^ The maximum offset we should disassemble to
+                 -> ST s (MC.Block rv ids, MM.MemWord (MC.ArchAddrWidth rv))
+disassembleBlock rvRepr iset blockStmts blockState ng curIP blockOff maxOffset = G.withRV rvRepr $ do
+  let off = MM.segoffOffset curIP
+  case readInstruction rvRepr iset curIP of
+    Left err -> do
+      let block = MC.Block { MC.blockStmts = F.toList blockStmts
+                           , MC.blockTerm = MC.TranslateError blockState (T.pack (show err))
+                           }
+      return (block, off)
+    Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
+      let G.InstSemantics sem _ = G.semanticsFromOpcode iset opcode
+      (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ disStmt (sem ^. G.semStmts)
+      -- TODO: Add instruction name and semantics description?
+      let instStmts = (MC.InstructionStart blockOff "" Seq.<|
+                       MC.Comment "" Seq.<|
+                       instStmts') Seq.|>
+                      MC.ArchState (MM.segoffAddr curIP) (disInstRegUpdates disInstState)
+      case status of
+        Left err -> do
+          let block = MC.Block { MC.blockStmts = F.toList blockStmts
+                               , MC.blockTerm = MC.TranslateError blockState (T.pack (show err))
+                               }
+          return (block, off)
+        Right _ -> undefined
 
 riscvDisassembleFn :: G.RVRepr rv
                    -> NonceGenerator (ST s) ids

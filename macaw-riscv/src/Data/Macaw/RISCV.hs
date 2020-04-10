@@ -15,15 +15,15 @@ module Data.Macaw.RISCV (
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Architecture.Info as MI
-import qualified GRIFT.Types as GT
+import qualified GRIFT.Types as G
 
 import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.Disassemble (riscvDisassembleFn)
 import Data.Macaw.RISCV.Eval
 import Data.Macaw.RISCV.RISCVReg
 
-riscv_info :: RISCV rv => GT.RVRepr rv -> MI.ArchitectureInfo rv
-riscv_info rvRepr = MI.ArchitectureInfo
+riscv_info :: RISCV rv => G.RVRepr rv -> MI.ArchitectureInfo rv
+riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   { MI.withArchConstraints = \x -> x
   , MI.archAddrWidth = riscvAddrWidth rvRepr
   , MI.archEndianness = MC.LittleEndian

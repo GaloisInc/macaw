@@ -3,13 +3,16 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV.Disassemble.Monad
-  ( DisInstM(..)
-  , DisInstEnv, disInst, disInstBytes, disInstWord
+  ( -- * Instruction disassembly
+    DisInstM(..), runDisInstM
   , DisInstError(..)
+  , DisInstState(disInstRegUpdates)
+  , getDisInst, getDisInstBytes, getDisInstWord
   , getReg, readMem, evalApp
   , setReg, writeMem
   ) where
@@ -17,6 +20,7 @@ module Data.Macaw.RISCV.Disassemble.Monad
 import qualified Control.Monad.Except as E
 import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics as G
+import qualified Data.Parameterized.Map as MapF
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Types as MT
 import qualified Control.Monad.RWS as RWS
@@ -34,6 +38,9 @@ import           Data.Parameterized.Nonce (NonceGenerator, freshNonce)
 
 import           Data.Macaw.RISCV.RISCVReg ()
 
+-- | To disassemble the instruction, we need access to the
+-- instruction, its size in bytes, and the integer it was decoded
+-- from, along with a 'NonceGenerator' supplied by the caller.
 data DisInstEnv s ids rv fmt = DisInstEnv { _disInst :: G.Instruction rv fmt
                                           , _disInstBytes :: Integer
                                           , _disInstWord :: Integer
@@ -41,14 +48,26 @@ data DisInstEnv s ids rv fmt = DisInstEnv { _disInst :: G.Instruction rv fmt
                                           }
 makeLenses ''DisInstEnv
 
-data DisInstState (rv :: G.RV) ids = DisInstState { _disRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
-                                                  }
+-- | The state we maintain during instruction disassembly is two
+-- 'MC.RegState' maps. The first is complete for every register and is
+-- passed in by the caller, representing the register state in the
+-- context of the block in which this instruction is executing. The
+-- second only records the updates this particular instruction is
+-- making to the register state.
+data DisInstState (rv :: G.RV) ids = DisInstState {
+  _disInstRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids),
+  disInstRegUpdates :: MapF.MapF (MC.ArchReg rv) (MC.Value rv ids)
+  }
 makeLenses ''DisInstState
 
+-- | Instruction disassembly error.
 data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
                          | NonConstantFPR (G.InstExpr fmt rv 5)
                          | ZeroWidthExpr (G.InstExpr fmt rv 0)
                          | forall w w' . WidthNotLTExpr (G.InstExpr fmt rv w) (NatRepr w')
+
+instance Show (DisInstError rv fmt) where
+  show _ = "Instruction disassembly error"
 
 -- | Monad for disassembling a single instruction.
 newtype DisInstM s ids rv fmt a = DisInstM
@@ -61,6 +80,32 @@ newtype DisInstM s ids rv fmt a = DisInstM
            , RWS.MonadState (DisInstState rv ids)
            , E.MonadError (DisInstError rv fmt)
            )
+
+runDisInstM :: G.Instruction rv fmt
+            -- ^ The instruction we are disassembling
+            -> Integer
+            -- ^ The size of the instruction, in bytes
+            -> Integer
+            -- ^ The original, undecoded instruction word
+            -> NonceGenerator (ST s) ids
+            -- ^ The nonce generator used for block disassembly
+            -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+            -- ^ The block's register state at the start of the instruction
+            -> DisInstM s ids rv fmt a
+            -> ST s (Either (DisInstError rv fmt) a, DisInstState rv ids, Seq.Seq (MC.Stmt rv ids))
+runDisInstM inst instBytes instWord ng blockRegState action =
+  RWS.runRWST (E.runExceptT (unDisInstM action)) env st
+  where env = DisInstEnv inst instBytes instWord ng
+        st  = DisInstState blockRegState MapF.empty
+
+getDisInst :: DisInstM s ids rv fmt (G.Instruction rv fmt)
+getDisInst = view disInst
+
+getDisInstBytes :: DisInstM s ids rv fmt Integer
+getDisInstBytes = view disInstBytes
+
+getDisInstWord :: DisInstM s ids rv fmt Integer
+getDisInstWord = view disInstWord
 
 liftST :: ST s a -> DisInstM s ids rv fmt a
 liftST = DisInstM . lift . lift
@@ -84,10 +129,12 @@ readMem :: MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
 readMem addr bytes = addAssignment $ MC.ReadMem addr bytes
 
 getReg :: MC.ArchReg rv tp -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-getReg r = use (disRegState . MC.boundValue r)
+getReg r = use (disInstRegState . MC.boundValue r)
 
 setReg :: MC.ArchReg rv tp -> MC.Value rv ids tp -> DisInstM s ids rv fmt ()
-setReg r v = assign (disRegState . MC.boundValue r) v
+setReg r v = do
+  RWS.modify $ \s -> s { disInstRegUpdates = MapF.insert r v (disInstRegUpdates s) }
+  assign (disInstRegState . MC.boundValue r) v
 
 addStmt :: MC.Stmt rv ids -> DisInstM s ids rv fmt ()
 addStmt stmt = RWS.tell (Seq.singleton stmt)
