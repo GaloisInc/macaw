@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV.Arch where
 
@@ -16,8 +17,7 @@ import qualified Data.Macaw.Types as MT
 import qualified GRIFT.Types as GT
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
-type RISCV rv = ( GT.KnownRV rv
-                , MM.MemWidth (GT.RVWidth rv)
+type RISCV rv = ( MM.MemWidth (GT.RVWidth rv)
                 )
 
 -- | RISC-V architecture-specific functions
