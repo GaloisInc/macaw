@@ -19,6 +19,7 @@ library
   exposed-modules:     Data.Macaw.RISCV
                        Data.Macaw.RISCV.Arch
                        Data.Macaw.RISCV.Disassemble
+                       Data.Macaw.RISCV.Disassemble.Monad
                        Data.Macaw.RISCV.Eval
                        Data.Macaw.RISCV.RISCVReg
                        -- Data.Macaw.PPC.Arch
