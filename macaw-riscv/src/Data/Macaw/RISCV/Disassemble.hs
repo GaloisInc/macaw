@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -31,7 +32,7 @@ import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
 import qualified GRIFT.Types as G
 
-import           Control.Lens ((^.), (&))
+import           Control.Lens (use, assign, makeLenses)
 import           Control.Monad.ST (ST)
 import           Control.Monad.Trans (lift)
 import           Data.Parameterized.NatRepr
@@ -108,8 +109,10 @@ data DisInstEnv s ids rv fmt = DisInstEnv { disInst :: G.Instruction rv fmt
                                           , disNonceGen :: NonceGenerator (ST s) ids
                                           }
 
-data DisInstState (rv :: G.RV) ids = DisInstState { disRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+data DisInstState (rv :: G.RV) ids = DisInstState { _disRegState :: MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
                                                   }
+
+makeLenses ''DisInstState
 
 data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
                          | NonConstantFPR (G.InstExpr fmt rv 5)
@@ -141,9 +144,10 @@ liftST :: ST s a -> DisInstM s ids rv fmt a
 liftST = DisInstM . lift . lift
 
 getReg :: MC.ArchReg rv tp -> DisInstM s ids rv fmt (MC.Value rv ids tp)
-getReg r = do
-  regState <- disRegState <$> RWS.get
-  return (regState ^. MC.boundValue r)
+getReg r = use (disRegState . MC.boundValue r)
+
+setReg :: MC.ArchReg rv tp -> MC.Value rv ids tp -> DisInstM s ids rv fmt ()
+setReg r v = assign (disRegState . MC.boundValue r) v
 
 addAssignment :: MC.AssignRhs rv (MC.Value rv ids) tp
               -> DisInstM s ids rv fmt (MC.Value rv ids tp)
@@ -250,7 +254,7 @@ disStmt :: RISCV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disStmt gStmt = case gStmt of
   G.AssignStmt (G.PCApp _) gExpr -> do
     pcVal <- disInstExpr gExpr
-    undefined
+    setReg PC pcVal
   G.AssignStmt _ _ -> undefined
   G.AbbrevStmt abbrevStmt -> undefined
   G.BranchStmt gExpr lStmts rStmts -> undefined
