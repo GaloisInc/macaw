@@ -11,7 +11,7 @@ module Data.Macaw.RISCV.Disassemble.Monad
   ( -- * Instruction disassembly
     DisInstM(..), runDisInstM
   , DisInstError(..)
-  , DisInstState(disInstRegUpdates)
+  , DisInstState, disInstRegState, disInstRegUpdates
   , getDisInst, getDisInstBytes, getDisInstWord
   , getReg, readMem, evalApp
   , setReg, writeMem

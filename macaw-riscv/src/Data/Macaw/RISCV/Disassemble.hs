@@ -12,6 +12,7 @@
 
 module Data.Macaw.RISCV.Disassemble
   ( riscvDisassembleFn
+  , disassembleBlock
   ) where
 
 import qualified Control.Monad.Except as E
@@ -287,29 +288,53 @@ disassembleBlock :: RISCV rv
                  -> MM.MemWord (MC.ArchAddrWidth rv)
                  -- ^ The maximum offset we should disassemble to
                  -> ST s (MC.Block rv ids, MM.MemWord (MC.ArchAddrWidth rv))
-disassembleBlock rvRepr iset blockStmts blockState ng curIP blockOff maxOffset = G.withRV rvRepr $ do
-  let off = MM.segoffOffset curIP
-  case readInstruction rvRepr iset curIP of
+                 -- ^ Return the disassembled block and its size.
+disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffset = G.withRV rvRepr $ do
+  case readInstruction rvRepr iset curIPAddr of
     Left err -> do
       let block = MC.Block { MC.blockStmts = F.toList blockStmts
                            , MC.blockTerm = MC.TranslateError blockState (T.pack (show err))
                            }
-      return (block, off)
+      return (block, blockOff)
     Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
       let G.InstSemantics sem _ = G.semanticsFromOpcode iset opcode
       (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ disStmt (sem ^. G.semStmts)
+      let regUpdates = disInstRegUpdates disInstState
+          blockState' = disInstState ^. disInstRegState
       -- TODO: Add instruction name and semantics description?
       let instStmts = (MC.InstructionStart blockOff "" Seq.<|
                        MC.Comment "" Seq.<|
                        instStmts') Seq.|>
-                      MC.ArchState (MM.segoffAddr curIP) (disInstRegUpdates disInstState)
+                      MC.ArchState (MM.segoffAddr curIPAddr) regUpdates
+      let blockStmts' = blockStmts <> instStmts
       case status of
         Left err -> do
           let block = MC.Block { MC.blockStmts = F.toList blockStmts
                                , MC.blockTerm = MC.TranslateError blockState (T.pack (show err))
                                }
-          return (block, off)
-        Right _ -> undefined
+          return (block, blockOff)
+        Right _ -> case (isBlockTerminator opcode, blockOff >= maxOffset, MM.incSegmentOff curIPAddr (fromIntegral bytesRead)) of
+          (False, False, Just nextIPAddr) ->
+            disassembleBlock rvRepr iset blockStmts' blockState' ng nextIPAddr (blockOff + fromIntegral bytesRead) maxOffset
+          _ -> do
+            let block = MC.Block { MC.blockStmts = F.toList blockStmts'
+                                 , MC.blockTerm = MC.FetchAndExecute blockState'
+                                 }
+            return (block, blockOff)
+  where isBlockTerminator :: G.Opcode rv fmt -> Bool
+        isBlockTerminator G.Jal = True
+        isBlockTerminator G.Jalr = True
+        isBlockTerminator G.Ecall = True
+        isBlockTerminator G.Ebreak = True
+        isBlockTerminator G.Beq = True
+        isBlockTerminator G.Bne = True
+        isBlockTerminator G.Blt = True
+        isBlockTerminator G.Bge = True
+        isBlockTerminator G.Bltu = True
+        isBlockTerminator G.Bgeu = True
+        isBlockTerminator G.Mret = True
+        isBlockTerminator _ = False
+
 
 riscvDisassembleFn :: G.RVRepr rv
                    -> NonceGenerator (ST s) ids
