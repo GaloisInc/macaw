@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
@@ -36,7 +37,7 @@ import           Control.Monad.Trans (lift)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator, freshNonce)
 
-import           Data.Macaw.RISCV.RISCVReg ()
+import           Data.Macaw.RISCV.RISCVReg ( )
 
 -- | To disassemble the instruction, we need access to the
 -- instruction, its size in bytes, and the integer it was decoded
@@ -64,6 +65,7 @@ makeLenses ''DisInstState
 data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
                          | NonConstantFPR (G.InstExpr fmt rv 5)
                          | ZeroWidthExpr (G.InstExpr fmt rv 0)
+                         | ZeroGPRAssign
                          | forall w w' . WidthNotLTExpr (G.InstExpr fmt rv w) (NatRepr w')
 
 instance Show (DisInstError rv fmt) where
