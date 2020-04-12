@@ -124,6 +124,7 @@ disLocApp locApp = case locApp of
   G.GPRApp _w ridExpr -> do
     rid <- disInstExpr ridExpr
     case rid of
+      MC.BVValue _w 0 -> return (MC.BVValue knownNat 0)
       MC.BVValue _w ridVal -> getReg (GPR (BV.bitVector ridVal))
       _ -> E.throwError (NonConstantGPR ridExpr)
   G.FPRApp _w ridExpr -> do
@@ -246,6 +247,7 @@ disAssignStmt stmt = case stmt of
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
+      MC.BVValue _ 0 -> E.throwError ZeroGPRAssign
       MC.BVValue _ ridVal -> setReg (GPR (BV.bitVector ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
   AssignStmt (G.FPRApp _ ridExpr) valExpr -> do
