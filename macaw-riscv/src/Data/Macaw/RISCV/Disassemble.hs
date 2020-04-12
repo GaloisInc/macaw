@@ -106,8 +106,6 @@ liftMemError e =
     Left err -> Left (RISCVMemoryError err)
     Right a -> Right a
 
-------------
-
 widthPos :: G.InstExpr fmt rv w -> (1 <= w => DisInstM s ids rv fmt a) -> DisInstM s ids rv fmt a
 widthPos e a = case isZeroOrGT1 (G.exprWidth e) of
   Left Refl -> E.throwError (ZeroWidthExpr e)
