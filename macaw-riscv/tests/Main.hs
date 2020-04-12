@@ -3,14 +3,14 @@ module Main ( main ) where
 import System.FilePath.Glob ( namesMatching )
 import qualified Test.Tasty as T
 
-import qualified PPC64Tests as PPC64
-import qualified PPC64InstructionCoverage as PPC64
+import qualified RISCVTests as RISCV
 
 main :: IO ()
 main = do
-  testFiles <- namesMatching "tests/ppc/*.s.expected"
-  bins <- namesMatching "tests/ppc/bin/*"
-  T.defaultMain $ T.testGroup "PPCMacawTests" [
-    PPC64.ppcAsmTests testFiles,
-    PPC64.ppc64InstructionCoverageTests bins
+  testFiles <- namesMatching "tests/riscv/*.expected"
+  bins <- namesMatching "tests/riscv/bin/*"
+  print testFiles
+  T.defaultMain $ T.testGroup "RISCVMacawTests" [
+    RISCV.riscvAsmTests testFiles
+    -- RISCV.riscvInstructionCoverageTests bins
     ]

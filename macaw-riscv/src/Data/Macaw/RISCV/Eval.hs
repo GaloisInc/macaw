@@ -4,6 +4,7 @@
 module Data.Macaw.RISCV.Eval
   ( riscvInitialBlockRegs
   , riscvInitialAbsState
+  , riscvCallParams
   ) where
 
 import qualified Data.Macaw.AbsDomain.AbsState as MA
@@ -34,3 +35,9 @@ riscvInitialAbsState rvRepr _mem startAddr = s0
   where
     initRegVals = MapF.fromList [ MapF.Pair ra MA.ReturnAddr ]
     s0 = G.withRV rvRepr $ MA.fnStartAbsBlockState startAddr initRegVals []
+
+riscvCallParams :: MA.CallParams (RISCVReg rv)
+riscvCallParams = MA.CallParams { MA.postCallStackDelta = 0
+                                , MA.preserveReg = const False
+                                , MA.stackGrowsDown = True
+                                }
