@@ -38,6 +38,18 @@ riscvInitialAbsState rvRepr _mem startAddr = s0
 
 riscvCallParams :: MA.CallParams (RISCVReg rv)
 riscvCallParams = MA.CallParams { MA.postCallStackDelta = 0
-                                , MA.preserveReg = const False
+                                , MA.preserveReg = riscvPreserveReg
                                 , MA.stackGrowsDown = True
                                 }
+
+riscvPreserveReg :: RISCVReg rv tp -> Bool
+riscvPreserveReg (GPR rid)
+  | rid == 2 = True
+  | rid == 8 = True
+  | rid == 9 = True
+  | rid >= 18 && rid <= 27 = True
+riscvPreserveReg (FPR rid)
+  | rid == 8 = True
+  | rid == 9 = True
+  | rid >= 18 && rid <= 27 = True
+riscvPreserveReg _ = False
