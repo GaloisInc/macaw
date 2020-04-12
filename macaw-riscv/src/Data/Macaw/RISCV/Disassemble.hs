@@ -26,6 +26,7 @@ import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.List as L
 import qualified GRIFT.InstructionSet as G
+import qualified GRIFT.InstructionSet.Known as G
 import qualified GRIFT.Decode as G
 import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
@@ -335,12 +336,13 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
         isBlockTerminator G.Mret = True
         isBlockTerminator _ = False
 
-
-riscvDisassembleFn :: G.RVRepr rv
+riscvDisassembleFn :: RISCV rv
+                   => G.RVRepr rv
                    -> NonceGenerator (ST s) ids
                    -> MC.ArchSegmentOff rv
                    -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
                    -> Int
                    -> ST s (MC.Block rv ids, Int)
-riscvDisassembleFn _rvRepr _nonceGen _startAddr _regState _maxSize = do
-  undefined
+riscvDisassembleFn rvRepr ng startAddr regState maxSize = do
+  (block, bytes) <- disassembleBlock rvRepr (G.knownISetWithRepr rvRepr) mempty regState ng startAddr 0 (fromIntegral maxSize)
+  return (block, fromIntegral bytes)
