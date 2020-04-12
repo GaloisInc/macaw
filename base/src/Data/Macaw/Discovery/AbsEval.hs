@@ -7,6 +7,7 @@ This provides a set of functions for abstract evaluation of statements.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.Discovery.AbsEval
   ( absEvalStmt
