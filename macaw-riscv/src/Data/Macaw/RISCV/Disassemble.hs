@@ -36,6 +36,7 @@ import qualified Data.Text as T
 
 import           Control.Lens ((^.))
 import           Control.Monad.ST (ST)
+import           Data.Parameterized (showF)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.Some (Some(..))
@@ -44,8 +45,6 @@ import           Data.Word (Word8)
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
 import           Data.Macaw.RISCV.Disassemble.Monad
-
-import Debug.Trace (traceM)
 
 data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
                         | IllegalInstruction
@@ -117,11 +116,6 @@ widthPos e a = case isZeroOrGT1 (G.exprWidth e) of
   Left Refl -> E.throwError (ZeroWidthExpr e)
   Right LeqProof -> a
 
-_widthLt :: G.InstExpr fmt rv w -> NatRepr w' -> ((w + 1) <= w' => DisInstM s ids rv fmt a) -> DisInstM s ids rv fmt a
-_widthLt e w a = case testNatCases (G.exprWidth e) w of
-  NatCaseLT LeqProof -> a
-  _ -> E.throwError (WidthNotLTExpr e w)
-
 disLocApp :: (1 <= w, G.KnownRV rv)
           => G.LocApp (G.InstExpr fmt rv) rv w
           -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
@@ -169,23 +163,47 @@ disBVApp bvApp = case bvApp of
   G.EqApp e1 e2 -> widthPos e1 $ binaryOpBool MC.Eq e1 e2
   G.LtuApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
   G.LtsApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVUnsignedLt e1 e2
-  -- TODO: The following two cases should use either extension or
-  -- truncation depending on what the widths of the vectors are. They
-  -- should never throw an error.
+  -- In GRIFT, we use "ext" to truncate bitvectors, which is weird but
+  -- true. So we have to check the widths fo the expressions involved
+  -- and emit either an extension, a truncation, or just return the
+  -- expression back.
   G.ZExtApp w e -> widthPos e $ do
     eVal <- disInstExpr e
     case testNatCases w (G.exprWidth e) of
-      NatCaseGT LeqProof -> evalApp (MC.SExt eVal w)
+      NatCaseGT LeqProof -> evalApp (MC.UExt eVal w)
       NatCaseEQ -> return eVal
-      NatCaseLT _-> error "sext LT"
+      NatCaseLT LeqProof -> evalApp (MC.Trunc eVal w)
   G.SExtApp w e -> widthPos e $ do
     eVal <- disInstExpr e
     case testNatCases w (G.exprWidth e) of
       NatCaseGT LeqProof -> evalApp (MC.SExt eVal w)
       NatCaseEQ -> return eVal
-      NatCaseLT _-> error "sext LT"
-  G.ExtractApp _w _ix _e -> error "TODO: Disassemble ExtractApp"
-  G.ConcatApp _w _e1 _e2 -> error "TODO: Disassemble ConcatApp"
+      NatCaseLT LeqProof -> evalApp (MC.Trunc eVal w)
+  -- We sometimes "extract" the entire expression, so this should just
+  -- get translated to the expression itself.
+  G.ExtractApp w ix e -> widthPos e $ do
+    eVal <- disInstExpr e
+    let eWidth = G.exprWidth e
+        shiftAmount = MC.BVValue eWidth (intValue ix)
+    shiftedVal <- evalApp (MC.BVShr eWidth shiftAmount eVal)
+    case testNatCases w (G.exprWidth e) of
+      NatCaseLT LeqProof -> evalApp (MC.Trunc shiftedVal w)
+      NatCaseEQ -> return shiftedVal
+      _ -> E.throwError $ BadExprWidth e
+  G.ConcatApp w e1 e2 -> case (isZeroOrGT1 (G.exprWidth e1),
+                               isZeroOrGT1 (G.exprWidth e2)) of
+    (Right e1PosProof@LeqProof, Right e2PosProof@LeqProof) -> do
+      e1Val <- disInstExpr e1
+      e2Val <- disInstExpr e2
+      LeqProof <- return $ leqAdd2 (leqRefl e1) e2PosProof
+      LeqProof <- return $ leqAdd2 e1PosProof (leqRefl e2)
+      Refl <- return $ plusComm (knownNat @1) e2
+      e1ExtVal <- evalApp (MC.UExt e1Val w)
+      e2ExtVal <- evalApp (MC.UExt e2Val w)
+      let shiftAmount = MC.BVValue w (intValue w - intValue (G.exprWidth e1))
+      e1ShiftedVal <- evalApp (MC.BVShl w e1ExtVal shiftAmount)
+      evalApp (MC.BVOr w e1ShiftedVal e2ExtVal)
+    _ -> error "FOO"
   G.IteApp w test e1 e2 -> do
     testVal <- disInstExpr test
     testValBool <- bvToBool testVal
@@ -263,7 +281,8 @@ disAssignStmt stmt = case stmt of
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
-      MC.BVValue _ 0 -> E.throwError ZeroGPRAssign
+      MC.BVValue _ 0 -> return () -- it's ok to assign to 0; the value
+                                  -- just gets thrown out
       MC.BVValue _ ridVal -> setReg (GPR (BV.bitVector ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
   AssignStmt (G.FPRApp _ ridExpr) valExpr -> do
@@ -314,31 +333,34 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
                            }
       return (block, blockOff)
     Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
-      traceM $ "  II: " <> show opcode
+      -- traceM $ "  II[" <> show curIPAddr <> "]: " <> show opcode
       let G.InstSemantics sem _ = G.semanticsFromOpcode iset opcode
       (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ disStmt (sem ^. G.semStmts)
       let regUpdates = disInstRegUpdates disInstState
           blockState' = disInstState ^. disInstRegState
       -- TODO: Add instruction name and semantics description?
-      let instStmts = (MC.InstructionStart blockOff "" Seq.<|
+      let instStmts = (MC.InstructionStart blockOff (T.pack $ showF i) Seq.<|
                        MC.Comment "" Seq.<|
                        instStmts') Seq.|>
                       MC.ArchState (MM.segoffAddr curIPAddr) regUpdates
       let blockStmts' = blockStmts <> instStmts
+      let blockOff' = blockOff + fromIntegral bytesRead
       case status of
         Left err -> do
           let block = MC.Block { MC.blockStmts = F.toList blockStmts
                                , MC.blockTerm = MC.TranslateError blockState (T.pack (show err))
                                }
           return (block, blockOff)
-        Right _ -> case (isBlockTerminator opcode, blockOff >= maxOffset, MM.incSegmentOff curIPAddr (fromIntegral bytesRead)) of
+        Right _ -> case (isBlockTerminator opcode,
+                         blockOff' >= maxOffset,
+                         MM.incSegmentOff curIPAddr (fromIntegral bytesRead)) of
           (False, False, Just nextIPAddr) ->
-            disassembleBlock rvRepr iset blockStmts' blockState' ng nextIPAddr (blockOff + fromIntegral bytesRead) maxOffset
+            disassembleBlock rvRepr iset blockStmts' blockState' ng nextIPAddr blockOff' maxOffset
           _ -> do
             let block = MC.Block { MC.blockStmts = F.toList blockStmts'
                                  , MC.blockTerm = MC.FetchAndExecute blockState'
                                  }
-            return (block, blockOff)
+            return (block, blockOff + fromIntegral bytesRead)
   where isBlockTerminator :: G.Opcode rv fmt -> Bool
         isBlockTerminator G.Jal = True
         isBlockTerminator G.Jalr = True

@@ -34,7 +34,6 @@ import           Control.Lens ( makeLenses
                               )
 import           Control.Monad.ST (ST)
 import           Control.Monad.Trans (lift)
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator, freshNonce)
 
 import           Data.Macaw.RISCV.RISCVReg ( )
@@ -65,11 +64,13 @@ makeLenses ''DisInstState
 data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
                          | NonConstantFPR (G.InstExpr fmt rv 5)
                          | ZeroWidthExpr (G.InstExpr fmt rv 0)
-                         | ZeroGPRAssign
-                         | forall w w' . WidthNotLTExpr (G.InstExpr fmt rv w) (NatRepr w')
+                         | forall w . BadExprWidth (G.InstExpr fmt rv w)
 
 instance Show (DisInstError rv fmt) where
-  show _ = "Instruction disassembly error"
+  show (NonConstantGPR _e) = "NonConstantGPR in expression"
+  show (NonConstantFPR _e) = "NonConstantFPR in expression"
+  show (ZeroWidthExpr _e) = "Expression has width zero"
+  show (BadExprWidth _e) = "Bad expression width"
 
 -- | Monad for disassembling a single instruction.
 newtype DisInstM s ids rv fmt a = DisInstM

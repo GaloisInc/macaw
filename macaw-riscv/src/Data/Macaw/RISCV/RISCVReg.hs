@@ -39,7 +39,7 @@ data RISCVReg rv tp where
 ra :: RISCVReg rv (MT.BVType (GT.RVWidth rv))
 ra = GPR 0x01
 
-data CSR = MCause
+data CSR
 
 instance Eq CSR where
   (==) = undefined
@@ -81,7 +81,7 @@ riscvRegs :: [Some (RISCVReg rv)]
 riscvRegs = [Some PC] ++
              ((Some . GPR) <$> [1..31]) ++
              ((Some . FPR) <$> [0..31]) ++
-             [Some (CSR MCause)] ++
+             -- [Some (CSR MCause)] ++
              [Some PrivLevel]
 
 riscvRegSet :: MapF.MapF (RISCVReg rv) (Const ())
