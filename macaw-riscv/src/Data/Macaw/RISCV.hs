@@ -22,6 +22,7 @@ import qualified GRIFT.Types as G
 import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.Disassemble (riscvDisassembleFn)
 import Data.Macaw.RISCV.Eval
+import Data.Macaw.RISCV.Identify
 import Data.Macaw.RISCV.RISCVReg
 
 riscvDemandContext :: MD.DemandContext (rv :: G.RV)
@@ -41,7 +42,7 @@ riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   , MI.mkInitialAbsState = riscvInitialAbsState rvRepr
   , MI.absEvalArchFn = \_ _ -> undefined
   , MI.absEvalArchStmt = \_ _ -> undefined
-  , MI.identifyCall = \_ _ _ -> undefined
+  , MI.identifyCall = riscvIdentifyCall rvRepr
   , MI.archCallParams = riscvCallParams
   , MI.checkForReturnAddr = \_ _ -> undefined
   , MI.identifyReturn = \_ _ _ -> undefined
