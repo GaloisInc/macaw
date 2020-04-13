@@ -21,15 +21,15 @@ type RISCV rv = ( MM.MemWidth (GT.RVWidth rv)
                 )
 
 -- | RISC-V architecture-specific functions
-data RISCVArchFn (rv :: GT.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)
+data RISCVPrimFn (rv :: GT.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)
 
-instance FC.FoldableFC (RISCVArchFn rv) where
+instance FC.FoldableFC (RISCVPrimFn rv) where
   foldMapFC _ _ = undefined
 
-instance MC.IsArchFn (RISCVArchFn rv) where
+instance MC.IsArchFn (RISCVPrimFn rv) where
   ppArchFn _ _ = undefined
 
-type instance MC.ArchFn rv = RISCVArchFn rv
+type instance MC.ArchFn rv = RISCVPrimFn rv
 
 -- | RISC-V architecture-specific statements
 data RISCVArchStmt (rv :: GT.RV) (expr :: MT.Type -> K.Type)
@@ -61,3 +61,6 @@ instance MC.IPAlignment (rv :: GT.RV) where
 type instance MC.ArchTermStmt (rv :: GT.RV) = RISCVArchTermStmt rv
 
 type instance MC.ArchBlockPrecond (rv :: GT.RV) = ()
+
+riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool
+riscvPrimFnHasSideEffects _ = False
