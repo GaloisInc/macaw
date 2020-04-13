@@ -22,6 +22,8 @@ module Data.Macaw.SemMC.Generator (
   -- * State updates
   PartialBlock(..),
   curRegState,
+  getRegVal,
+  getRegSnapshotVal,
   setRegVal,
   addStmt,
   addAssignment,
@@ -55,6 +57,7 @@ import qualified Data.Foldable as F
 import           Data.Maybe ( fromMaybe )
 import qualified Data.Sequence as Seq
 import           Data.Word (Word64)
+import           GHC.Stack ( HasCallStack )
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
@@ -62,8 +65,9 @@ import qualified Data.Macaw.Memory as MM
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.Nonce as NC
+import qualified Data.Parameterized.TraversableFC as FC
 
-import           Data.Macaw.SemMC.Simplify ( simplifyValue, simplifyApp )
+import qualified Data.Macaw.SemMC.Simplify as MSS
 
 data Expr arch ids tp where
   ValueExpr :: !(Value arch ids tp) -> Expr arch ids tp
@@ -77,11 +81,11 @@ data PreBlock arch ids =
            }
 
 -- | An accessor for the current statements in the 'PreBlock'
-pBlockStmts :: Simple Lens (PreBlock arch ids) (Seq.Seq (Stmt arch ids))
+pBlockStmts :: Lens' (PreBlock arch ids) (Seq.Seq (Stmt arch ids))
 pBlockStmts = lens _pBlockStmts (\s v -> s { _pBlockStmts = v })
 
 -- | An accessor for the current register state held in the 'PreBlock'
-pBlockState :: Simple Lens (PreBlock arch ids) (RegState (ArchReg arch) (Value arch ids))
+pBlockState :: Lens' (PreBlock arch ids) (RegState (ArchReg arch) (Value arch ids))
 pBlockState = lens _pBlockState (\s v -> s { _pBlockState = v })
 
 data GenState arch ids s =
@@ -89,6 +93,12 @@ data GenState arch ids s =
            , _blockState :: !(PreBlock arch ids)
            , genAddr :: MM.MemSegmentOff (ArchAddrWidth arch)
            , genRegUpdates :: MapF.MapF (ArchReg arch) (Value arch ids)
+           , _blockStateSnapshot :: !(RegState (ArchReg arch) (Value arch ids))
+           , appCache :: !(MapF.MapF (App (Value arch ids)) (Value arch ids))
+           -- ^ A localized cache of already-allocated values
+           --
+           -- Locally caching values will let us retain sharing more, and make
+           -- some rewriting simpler later
            }
 
 emptyPreBlock :: RegState (ArchReg arch) (Value arch ids)
@@ -108,10 +118,14 @@ initGenState :: NC.NonceGenerator (ST s) ids
              -> GenState arch ids s
 initGenState nonceGen addr st =
   GenState { assignIdGen = nonceGen
-           , _blockState = emptyPreBlock st 0 addr
+           , _blockState = s0
            , genAddr = addr
            , genRegUpdates = MapF.empty
+           , _blockStateSnapshot = s0 ^. pBlockState
+           , appCache = MapF.empty
            }
+  where
+    s0 = emptyPreBlock st 0 addr
 
 initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
                  1 <= RegAddrWidth (ArchReg arch),
@@ -122,11 +136,19 @@ initRegState :: (KnownNat (RegAddrWidth (ArchReg arch)),
 initRegState startIP =
   mkRegState Initial & curIP .~ RelocatableValue (addrWidthRepr startIP) (MM.segoffAddr startIP)
 
-blockState :: Simple Lens (GenState arch ids s) (PreBlock arch ids)
+blockState :: Lens' (GenState arch ids s) (PreBlock arch ids)
 blockState = lens _blockState (\s v -> s { _blockState = v })
 
-curRegState :: Simple Lens (GenState arch ids s) (RegState (ArchReg arch) (Value arch ids))
+curRegState :: Lens' (GenState arch ids s) (RegState (ArchReg arch) (Value arch ids))
 curRegState = blockState . pBlockState
+
+-- | An accessor to read the initial register state from before the current
+-- instruction started executing.
+--
+-- This is useful to avoid seeing partial updates to register state during the
+-- execution of an instruction
+blockStateSnapshot :: Lens' (GenState arch ids s) (RegState (ArchReg arch) (Value arch ids))
+blockStateSnapshot = lens _blockStateSnapshot (\s v -> s { _blockStateSnapshot = v })
 
 -- | This combinator collects state modifications by a single instruction into a single 'ArchState' statement
 --
@@ -146,32 +168,94 @@ asAtomicStateUpdate :: ArchMemAddr arch
                     -- ^ An action recording the state transformations of the instruction
                     -> Generator arch ids s a
 asAtomicStateUpdate insnAddr transformer = do
-  St.modify $ \s -> s { genRegUpdates = MapF.empty }
+  pblock <- St.gets _blockState
+  St.modify $ \s -> s { genRegUpdates = MapF.empty
+                      , _blockStateSnapshot = pblock ^. pBlockState
+                      }
   res <- transformer
   updates <- St.gets genRegUpdates
   addStmt (ArchState insnAddr updates)
   return res
 
+-- | Get the value of a machine register (in the 'Generator' state).
+getRegVal :: OrdF (ArchReg arch)
+          => ArchReg arch tp
+          -> Generator arch ids s (Value arch ids tp)
+getRegVal reg = do
+  genState <- St.get
+  return (genState ^. curRegState . boundValue reg)
+
+getRegSnapshotVal :: (OrdF (ArchReg arch))
+                  => ArchReg arch tp
+                  -> Generator arch ids s (Value arch ids tp)
+getRegSnapshotVal reg = do
+  genState <- St.get
+  return (genState ^. blockStateSnapshot . boundValue reg)
+
 -- | Update the value of a machine register (in the 'Generator' state) with a
--- new macaw 'Value'.  This function applies a simplifier ('simplifyValue') to
+-- new macaw 'Value'.  This function applies a simplifier ('MSS.simplifyValue') to
 -- the value first, if possible.
-setRegVal :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
+setRegVal :: ( MSS.SimplifierExtension arch
+             , OrdF (ArchReg arch)
+             , MM.MemWidth (RegAddrWidth (ArchReg arch))
+             )
           => ArchReg arch tp
           -> Value arch ids tp
           -> Generator arch ids s ()
 setRegVal reg val = do
   St.modify $ \s -> s { genRegUpdates = MapF.insert reg val (genRegUpdates s) }
-  curRegState . boundValue reg .= fromMaybe val (simplifyValue val)
+  curRegState . boundValue reg .= fromMaybe val (MSS.simplifyValue val)
 
-addExpr :: (OrdF (ArchReg arch), MM.MemWidth (RegAddrWidth (ArchReg arch)))
+findCachedApp :: (OrdF (ArchReg arch))
+              => App (Value arch ids) tp
+              -> Generator arch ids s (Maybe (Value arch ids tp))
+findCachedApp a = MapF.lookup a <$> St.gets appCache
+
+cacheAppValue :: (OrdF (ArchReg arch))
+              => App (Value arch ids) tp
+              -> Value arch ids tp
+              -> Generator arch ids s ()
+cacheAppValue a v =
+  St.modify $ \s -> s { appCache = MapF.insert a v (appCache s) }
+
+addExpr :: ( MSS.SimplifierExtension arch
+           , OrdF (ArchReg arch)
+           , MM.MemWidth (RegAddrWidth (ArchReg arch))
+           , ShowF (ArchReg arch)
+           )
         => Expr arch ids tp
         -> Generator arch ids s (Value arch ids tp)
 addExpr expr =
   case expr of
-    ValueExpr val -> return val
+    ValueExpr val
+      | Just simpVal <- MSS.simplifyValue val -> return simpVal
+      | otherwise -> return val
     AppExpr app
-      | Just val <- simplifyApp app -> return val
-      | otherwise -> AssignedValue <$> addAssignment (EvalApp app)
+      | Just val <- MSS.simplifyApp app -> return val
+      | otherwise -> do
+          mval <- findCachedApp app
+          case mval of
+            Just val -> return val
+            Nothing -> do
+              let simplify v = fromMaybe v (MSS.simplifyValue v)
+              let app1 = FC.fmapFC simplify app
+              case MSS.simplifyArchApp app1 of
+                Nothing -> do
+                  mval2 <- findCachedApp app1
+                  case mval2 of
+                    Nothing -> do
+                      v <- AssignedValue <$> addAssignment (EvalApp app1)
+                      cacheAppValue app1 v
+                      return v
+                    Just v -> return v
+                Just simplApp -> do
+                  mval2 <- findCachedApp simplApp
+                  case mval2 of
+                    Nothing -> do
+                      v <- AssignedValue <$> addAssignment (EvalApp simplApp)
+                      cacheAppValue simplApp v
+                      return v
+                    Just v -> return v
 
 data GeneratorError = InvalidEncoding
                     | GeneratorMessage String
@@ -261,7 +345,13 @@ liftST = Generator . lift . lift . lift
 
 -- | Append an assignment statement to the list of statements in the current
 -- 'PreBlock'
-addAssignment :: AssignRhs arch (Value arch ids) tp
+addAssignment :: ( MSS.SimplifierExtension arch
+                 , OrdF (ArchReg arch)
+                 , MemWidth (ArchAddrWidth arch)
+                 , ShowF (ArchReg arch)
+                 , HasCallStack
+                 )
+              => AssignRhs arch (Value arch ids) tp
               -> Generator arch ids s (Assignment arch ids tp)
 addAssignment rhs = do
   l <- newAssignId

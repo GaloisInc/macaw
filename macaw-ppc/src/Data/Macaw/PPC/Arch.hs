@@ -50,8 +50,13 @@ import qualified SemMC.Architecture.PPC.Eval as E
 
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import           Data.Macaw.PPC.Operand ()
 import           Data.Macaw.PPC.PPCReg
+
+instance MSS.SimplifierExtension (SP.AnyPPC v) where
+  simplifyArchApp = const Nothing
+  simplifyArchFn _ _ = Nothing
 
 -- The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.  PowerPC doesn't need any

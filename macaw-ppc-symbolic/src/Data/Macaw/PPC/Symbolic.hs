@@ -125,7 +125,7 @@ getReg = (^. (Ctx.field @n))
 
 ppc64MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC64 sym
-                 -> MS.MacawArchEvalFn sym MP.PPC64
+                 -> MS.MacawArchEvalFn sym mem MP.PPC64
 ppc64MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
@@ -133,7 +133,7 @@ ppc64MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
 
 ppc32MacawEvalFn :: (C.IsSymInterface sym)
                  => F.SymFuns MP.PPC32 sym
-                 -> MS.MacawArchEvalFn sym MP.PPC32
+                 -> MS.MacawArchEvalFn sym mem MP.PPC32
 ppc32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
@@ -145,6 +145,9 @@ instance MS.ArchInfo MP.PPC64 where
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
         k (ppc64MacawEvalFn sfns)
+    , MS.withArchEvalTrace = \sym k -> do
+        sfns <- liftIO $ F.newSymFuns sym
+        k (ppc64MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
@@ -154,6 +157,9 @@ instance MS.ArchInfo MP.PPC32 where
   archVals _ = Just $ MS.ArchVals
     { MS.archFunctions = ppc32MacawSymbolicFns
     , MS.withArchEval = \sym k -> do
+        sfns <- liftIO $ F.newSymFuns sym
+        k (ppc32MacawEvalFn sfns)
+    , MS.withArchEvalTrace = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
         k (ppc32MacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x

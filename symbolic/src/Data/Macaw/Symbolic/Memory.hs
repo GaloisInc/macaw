@@ -476,7 +476,7 @@ mapRegionPointers :: ( MC.MemWidth w
                      , CB.IsSymInterface sym
                      )
                   => MemPtrTable sym w
-                  -> MS.GlobalMap sym w
+                  -> MS.GlobalMap sym CL.Mem w
 mapRegionPointers mpt = \sym mem regionNum offsetVal ->
   case WI.asNat regionNum of
     Just 0 -> do

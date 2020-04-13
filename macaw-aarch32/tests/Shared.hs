@@ -57,8 +57,7 @@ withMemory :: forall w m a
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _ e k =
-    let options = MM.LoadOptions { MM.loadRegionIndex = Just 0
-                                 , MM.loadRegionBaseOffset = 0
+    let options = MM.LoadOptions { MM.loadOffset = Just 0
                                  }
     in case MM.memoryForElf options e of
          Left err -> C.throwM (MemoryLoadError err)

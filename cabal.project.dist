@@ -1,5 +1,6 @@
 packages: macaw-ppc/
-          macaw-arm/
+          macaw-aarch32/
+          macaw-aarch32-symbolic/
           macaw-semmc/
           macaw-ppc-symbolic/
           base/
@@ -8,17 +9,19 @@ packages: macaw-ppc/
           x86_symbolic/
           refinement/
           deps/macaw-loader/macaw-loader
-          deps/macaw-loader/macaw-loader-arm
+          deps/macaw-loader/macaw-loader-aarch32
           deps/macaw-loader/macaw-loader-ppc
           deps/macaw-loader/macaw-loader-x86
           deps/semmc/semmc/
           deps/semmc/semmc-ppc/
           deps/semmc/semmc-arm/
+          deps/semmc/semmc-aarch32/
           deps/semmc/semmc-synthesis/
           deps/semmc/semmc-learning/
           deps/dismantle/dismantle-tablegen/
           deps/dismantle/dismantle-ppc/
           deps/dismantle/dismantle-arm/
+          deps/dismantle/dismantle-arm-xml/
           deps/dismantle/dismantle-thumb/
           deps/parameterized-utils/
           deps/crucible/crucible/
@@ -31,3 +34,5 @@ packages: macaw-ppc/
           deps/flexdis86/binary-symbols/
           deps/llvm-pretty/
           deps/llvm-pretty-bc-parser/
+          deps/asl-translator/
+          deps/arm-asl-parser/

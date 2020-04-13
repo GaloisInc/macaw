@@ -15,7 +15,7 @@ module Data.Macaw.ARM
     where
 
 import           Data.Macaw.ARM.Arch
-import           Data.Macaw.ARM.Disassemble ( disassembleFn, initialBlockRegs )
+import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
 import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn, isReturnValue )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
@@ -39,28 +39,28 @@ arm_linux_info =
     MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                         , MI.archAddrWidth = MM.Addr32
                         , MI.archEndianness = MM.LittleEndian
-                        , MI.mkInitialRegsForBlock = initialBlockRegs
+                        , MI.extractBlockPrecond = extractBlockPrecond
+                        , MI.initialBlockRegs = initialBlockRegs
                         , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
-                        , MI.mkInitialAbsState = mkInitialAbsState proxy
-                        , MI.absEvalArchFn = absEvalArchFn proxy
-                        , MI.absEvalArchStmt = absEvalArchStmt proxy
-                        , MI.postCallAbsState = error "TBD: postCallAbsState proxy"
-                        , MI.identifyCall = identifyCall proxy
-                        , MI.checkForReturnAddr = \r s -> isReturnValue proxy s (r ^. MC.boundValue ARMReg.arm_LR)
-                        , MI.identifyReturn = identifyReturn proxy
+                        , MI.mkInitialAbsState = mkInitialAbsState
+                        , MI.absEvalArchFn = absEvalArchFn
+                        , MI.absEvalArchStmt = absEvalArchStmt
+                        , MI.identifyCall = identifyCall
+                        , MI.archCallParams = callParams preserveRegAcrossSyscall
+                        , MI.checkForReturnAddr = \r s -> isReturnValue s (r ^. MC.boundValue ARMReg.arm_LR)
+                        , MI.identifyReturn = identifyReturn
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
                         , MI.rewriteArchTermStmt = rewriteTermStmt
-                        , MI.archDemandContext = archDemandContext proxy
-                        , MI.postArchTermStmtAbsState = postARMTermStmtAbsState (preserveRegAcrossSyscall proxy)
+                        , MI.archDemandContext = archDemandContext
+                        , MI.postArchTermStmtAbsState = postARMTermStmtAbsState preserveRegAcrossSyscall
                         }
         where
           proxy = Proxy @ARM.AArch32
 
 
-archDemandContext :: (ARMArchConstraints arm) => proxy arm
-                  -> MDS.DemandContext arm
-archDemandContext _ =
+archDemandContext :: MDS.DemandContext ARM.AArch32
+archDemandContext =
   MDS.DemandContext { MDS.demandConstraints    = \a -> a
                     , MDS.archFnHasSideEffects = armPrimFnHasSideEffects
                     }

@@ -318,7 +318,7 @@ x86_64MacawSymbolicFns =
 x86_64MacawEvalFn
   :: (C.IsSymInterface sym, MM.HasLLVMAnn sym)
   => SymFuns sym
-  -> MacawArchEvalFn sym M.X86_64
+  -> MacawArchEvalFn sym MM.Mem M.X86_64
 x86_64MacawEvalFn fs =
   MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state ->
     case ext_stmt of

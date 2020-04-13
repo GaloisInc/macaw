@@ -30,6 +30,7 @@ library
     Data.Macaw.Symbolic
     Data.Macaw.Symbolic.Backend
     Data.Macaw.Symbolic.Memory
+    Data.Macaw.Symbolic.MemTraceOps
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
