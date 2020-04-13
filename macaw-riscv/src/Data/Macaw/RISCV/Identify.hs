@@ -19,3 +19,9 @@ riscvIdentifyReturn :: G.RVRepr rv
                     -> MA.AbsProcessorState (MC.ArchReg rv) ids
                     -> Maybe (Seq.Seq (MC.Stmt rv ids))
 riscvIdentifyReturn _ _ _ _ = Nothing
+
+riscvCheckForReturnAddr :: G.RVRepr rv
+                        -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                        -> MA.AbsProcessorState (MC.ArchReg rv) ids
+                        -> Bool
+riscvCheckForReturnAddr _ _ _ = False
