@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -14,6 +15,7 @@ module Data.Macaw.RISCV (
   ) where
 
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.CFG.DemandSet as MD
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified GRIFT.Types as G
 
@@ -21,6 +23,12 @@ import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.Disassemble (riscvDisassembleFn)
 import Data.Macaw.RISCV.Eval
 import Data.Macaw.RISCV.RISCVReg
+
+riscvDemandContext :: MD.DemandContext (rv :: G.RV)
+riscvDemandContext = MD.DemandContext
+  { MD.demandConstraints = \a -> a
+  , MD.archFnHasSideEffects = riscvPrimFnHasSideEffects
+  }
 
 riscv_info :: RISCV rv => G.RVRepr rv -> MI.ArchitectureInfo rv
 riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
@@ -40,6 +48,6 @@ riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   , MI.rewriteArchFn = \_ -> undefined
   , MI.rewriteArchStmt = \_ -> undefined
   , MI.rewriteArchTermStmt = \_ -> undefined
-  , MI.archDemandContext = undefined
+  , MI.archDemandContext = riscvDemandContext
   , MI.postArchTermStmtAbsState = \_ _ _ _ _ -> undefined
   }
