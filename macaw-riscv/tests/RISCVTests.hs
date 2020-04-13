@@ -80,7 +80,10 @@ instance (Read a) => Read (Hex a) where
 
 -- | The type of expected results for test cases
 data ExpectedResultFileData =
-  R { funcs :: [(Hex Word64, [(Hex Word64, Word64)])]
+  R { fileEntryPoint :: Maybe (Hex Word64)
+    -- ^ An optional entry point. If this isn't provided, we just use
+    -- the one in the ELF file.
+    , funcs :: [(Hex Word64, [(Hex Word64, Word64)])]
     -- ^ The first element of the pair is the address of entry point
     -- of the function.  The list is a list of the addresses of the
     -- basic blocks in the function (including the first block).
@@ -92,8 +95,9 @@ data ExpectedResultFileData =
     }
   deriving (Read, Show, Eq)
 
-type ExpectedResult = (M.Map (Hex Word64) (S.Set (Hex Word64, Word64)),
-                        S.Set (Hex Word64))
+type ExpectedResult = (Maybe (Hex Word64),
+                       M.Map (Hex Word64) (S.Set (Hex Word64, Word64)),
+                       S.Set (Hex Word64))
 
 data ExpectedException = BadExpectedFile String
                          deriving (Typeable, Show)
@@ -113,7 +117,7 @@ getExpected expectedFilename = do
           -- expectedEntries maps function entry points to the set of block starts
           -- within the function.
           ignoredBlocks = S.fromList (ignoreBlocks er)
-      in return (expectedEntries, ignoredBlocks)
+      in return (fileEntryPoint er, expectedEntries, ignoredBlocks)
 
 
 testDiscovery :: ExpectedResult -> E.Elf w -> IO ()
@@ -125,9 +129,11 @@ testDiscovery expRes elf =
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
 testDiscovery32 :: ExpectedResult -> E.Elf 32 -> IO ()
-testDiscovery32 (funcblocks, ignored) elf =
+testDiscovery32 (mEntryPoint, funcblocks, ignored) elf =
   withMemory MM.Addr32 elf $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem epinfo
+    let Just entryPoint = case mEntryPoint of
+          Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
+          Nothing -> MM.asSegmentOff mem epinfo
         epinfo = findEntryPoint elf mem
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
@@ -178,9 +184,11 @@ testDiscovery32 (funcblocks, ignored) elf =
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
 testDiscovery64 :: ExpectedResult -> E.Elf 64 -> IO ()
-testDiscovery64 (funcblocks, ignored) elf =
+testDiscovery64 (mEntryPoint, funcblocks, ignored) elf =
   withMemory MM.Addr64 elf $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem epinfo
+    let Just entryPoint = case mEntryPoint of
+          Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
+          Nothing -> MM.asSegmentOff mem epinfo
         epinfo = findEntryPoint elf mem
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
