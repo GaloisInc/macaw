@@ -11,7 +11,13 @@ module Data.Macaw.RISCV (
   -- * Macaw configurations
   riscv_info,
   -- * Type-level tags
-  -- * PPC Types
+  G.RV(..),
+  G.RVRepr(..),
+  -- * RISC-V Types
+  RISCVReg(..),
+  RISCVTermStmt,
+  RISCVStmt,
+  RISCVPrimFn
   ) where
 
 import qualified Data.Macaw.CFG as MC

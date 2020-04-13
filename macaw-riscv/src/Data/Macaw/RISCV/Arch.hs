@@ -15,7 +15,6 @@ import qualified Data.Parameterized.TraversableF as F
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Macaw.Types as MT
 import qualified GRIFT.Types as GT
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 type RISCV rv = ( MM.MemWidth (GT.RVWidth rv)
                 )
@@ -32,22 +31,21 @@ instance MC.IsArchFn (RISCVPrimFn rv) where
 type instance MC.ArchFn rv = RISCVPrimFn rv
 
 -- | RISC-V architecture-specific statements
-data RISCVArchStmt (rv :: GT.RV) (expr :: MT.Type -> K.Type)
+data RISCVStmt (rv :: GT.RV) (expr :: MT.Type -> K.Type)
 
-instance F.FoldableF (RISCVArchStmt rv) where
+instance F.FoldableF (RISCVStmt rv) where
   foldMapF _ _ = undefined
 
-instance MC.IsArchStmt (RISCVArchStmt rv) where
+instance MC.IsArchStmt (RISCVStmt rv) where
   ppArchStmt _ _ = undefined
 
-type instance MC.ArchStmt rv = RISCVArchStmt rv
+type instance MC.ArchStmt rv = RISCVStmt rv
 
 -- | RISC-V block termination statements
-data RISCVArchTermStmt (rv :: GT.RV) ids where
-  Ecall :: RISCVArchTermStmt rv ids
+data RISCVTermStmt (rv :: GT.RV) ids
 
-instance MC.PrettyF (RISCVArchTermStmt rv) where
-  prettyF Ecall = PP.text "ecall"
+instance MC.PrettyF (RISCVTermStmt rv) where
+  prettyF = undefined
 
 -- The IPAlignment instance will likely need to take computations like
 -- this into account (for JAL):
@@ -58,7 +56,7 @@ instance MC.IPAlignment (rv :: GT.RV) where
   fromIPAligned = Just
   toIPAligned = id
 
-type instance MC.ArchTermStmt (rv :: GT.RV) = RISCVArchTermStmt rv
+type instance MC.ArchTermStmt (rv :: GT.RV) = RISCVTermStmt rv
 
 type instance MC.ArchBlockPrecond (rv :: GT.RV) = ()
 

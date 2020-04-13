@@ -185,7 +185,7 @@ disBVApp bvApp = case bvApp of
     eVal <- disInstExpr e
     let eWidth = G.exprWidth e
         shiftAmount = MC.BVValue eWidth (intValue ix)
-    shiftedVal <- evalApp (MC.BVShr eWidth shiftAmount eVal)
+    shiftedVal <- evalApp (MC.BVShr eWidth eVal shiftAmount)
     case testNatCases w (G.exprWidth e) of
       NatCaseLT LeqProof -> evalApp (MC.Trunc shiftedVal w)
       NatCaseEQ -> return shiftedVal
