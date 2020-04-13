@@ -21,6 +21,7 @@ library
                        Data.Macaw.RISCV.Disassemble
                        Data.Macaw.RISCV.Disassemble.Monad
                        Data.Macaw.RISCV.Eval
+                       Data.Macaw.RISCV.Identify
                        Data.Macaw.RISCV.RISCVReg
                        -- Data.Macaw.PPC.Arch
                        -- Data.Macaw.PPC.Disassemble
