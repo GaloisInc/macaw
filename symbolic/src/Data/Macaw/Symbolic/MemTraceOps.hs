@@ -14,6 +14,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.Symbolic.MemTraceOps where
 
 import           Control.Applicative
@@ -108,6 +109,7 @@ instance IntrinsicClass (ExprBuilder t st fs) "memory_trace" where
   muxIntrinsic _ _ _ (Empty :> BVRepr _) p l r = pure $ case Seq.spanl (uncurry (==)) (Seq.zip l r) of
     (_, Seq.Empty) -> l
     (eqs, Seq.unzip -> (l', r')) -> (fst <$> eqs) Seq.:|> MergeOps p l' r'
+  muxIntrinsic _ _ _ _ _ _ _ = error "Unexpected operands in memory_trace mux"
 
 memTraceIntrinsicTypes :: IsSymInterface (ExprBuilder t st fs) => IntrinsicTypes (ExprBuilder t st fs)
 memTraceIntrinsicTypes = id
@@ -142,8 +144,8 @@ execMacawStmtExtension (MacawArchEvalFn archStmtFn) mvar globs stmt
         doCondWriteMem sym (regValue cond) addrWidth (regValue addr) (regValue def) memRepr
 
     MacawGlobalPtr w addr -> \cst -> addrWidthClass w $ doGetGlobal cst mvar globs addr
-    MacawFreshSymbolic t -> undefined
-    MacawLookupFunctionHandle typeReps registers -> undefined
+    MacawFreshSymbolic _t -> error "MacawFreshSymbolic is unsupported in the trace memory model"
+    MacawLookupFunctionHandle _typeReps _registers -> error "MacawLookupFunctionHandle is unsupported in the trace memory model"
 
     MacawArchStmtExtension archStmt -> archStmtFn mvar globs archStmt
 
@@ -210,7 +212,7 @@ execMacawStmtExtension (MacawArchEvalFn archStmtFn) mvar globs stmt
         (ioFreshConstant sym "PtrSub_region_mismatch" knownRepr)
       pure (LLVMPointer reg'' off'')
 
-    PtrAnd w x y -> ptrOp w x y $ \sym reg off reg' off' -> do
+    PtrAnd w x y -> ptrOp w x y $ \sym reg _off reg' _off' -> do
       -- TODO: assertions, like in PtrAdd and PtrSub
       reg'' <- cases sym
         [ (isZero sym reg, pure reg')

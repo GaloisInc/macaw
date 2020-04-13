@@ -43,7 +43,6 @@ module Data.Macaw.Symbolic.Backend (
   ) where
 
 import qualified Lang.Crucible.CFG.Core as C
-import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.Simulator as C
 import qualified Data.Macaw.CFG.Core as M
 

@@ -352,6 +352,8 @@ instance ArchInfo M.X86_64 where
         sfns <- liftIO $ newSymFuns sym
         k $ x86_64MacawEvalFn sfns
     , withArchConstraints = \x -> x
+    , withArchEvalTrace = \_ _ ->
+        error "The trace memory model is not supported on x86 yet"
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
     }
