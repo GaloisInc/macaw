@@ -1,3 +1,4 @@
-R { funcs = [(0x100c0, [])]
+R { fileEntryPoint = Just 0x100c0
+  , funcs = [(0x100c0, [])]
   , ignoreBlocks = []
   }
