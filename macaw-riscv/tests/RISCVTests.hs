@@ -13,7 +13,6 @@ module RISCVTests
 import           Control.Lens hiding ( ignored )
 import           Control.Monad ( when )
 import           Control.Monad.Catch ( throwM, Exception )
-import           Data.Bits
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
@@ -23,7 +22,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Monoid
-import           Data.Parameterized (knownRepr)
 import qualified Data.Parameterized.Some as PU
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
@@ -138,7 +136,7 @@ testDiscovery32 (funcblocks, ignored) elf =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GRepr) mem mempty [entryPoint] []
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GCRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
@@ -191,7 +189,7 @@ testDiscovery64 (funcblocks, ignored) elf =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GRepr) mem mempty [entryPoint] []
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GCRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr

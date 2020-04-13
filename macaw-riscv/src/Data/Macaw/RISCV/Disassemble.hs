@@ -45,7 +45,10 @@ import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
 import           Data.Macaw.RISCV.Disassemble.Monad
 
+import Debug.Trace (traceM)
+
 data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
+                        | IllegalInstruction
   deriving Show
 
 readBytesLE :: [Word8] -> Some BV.BitVector
@@ -80,7 +83,7 @@ readInstruction rvRepr iset addr = do
         MM.ByteRegion bs : _rest
           | BS.null bs -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
           | otherwise -> do
-              case rvRepr of
+              (instBV, Some inst, instBytes) <- case rvRepr of
                 -- If the C extension is present, first attempt to
                 -- decode 2 bytes. If that fails, decode 4 bytes.
                 G.RVRepr _ (G.ExtensionsRepr _ _ _ _ G.CYesRepr) -> do
@@ -99,6 +102,9 @@ readInstruction rvRepr iset addr = do
                     Some instBV | NatCaseEQ <- testNatCases (bvWidth instBV) (knownNat @32) -> return instBV
                     _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
                   return (BV.bvIntegerU instBV, G.decode iset instBV, 4)
+              case inst of
+                (G.Inst G.Illegal _) -> E.throwError IllegalInstruction
+                _ -> return (instBV, Some inst, instBytes)
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (RISCVMemoryError w) a
 liftMemError e =
@@ -166,8 +172,18 @@ disBVApp bvApp = case bvApp of
   -- TODO: The following two cases should use either extension or
   -- truncation depending on what the widths of the vectors are. They
   -- should never throw an error.
-  G.ZExtApp _w _e -> error "TODO: Disassemble ZExtApp"
-  G.SExtApp _w _e -> error "TODO: Disassemble SExtApp"
+  G.ZExtApp w e -> widthPos e $ do
+    eVal <- disInstExpr e
+    case testNatCases w (G.exprWidth e) of
+      NatCaseGT LeqProof -> evalApp (MC.SExt eVal w)
+      NatCaseEQ -> return eVal
+      NatCaseLT _-> error "sext LT"
+  G.SExtApp w e -> widthPos e $ do
+    eVal <- disInstExpr e
+    case testNatCases w (G.exprWidth e) of
+      NatCaseGT LeqProof -> evalApp (MC.SExt eVal w)
+      NatCaseEQ -> return eVal
+      NatCaseLT _-> error "sext LT"
   G.ExtractApp _w _ix _e -> error "TODO: Disassemble ExtractApp"
   G.ConcatApp _w _e1 _e2 -> error "TODO: Disassemble ConcatApp"
   G.IteApp w test e1 e2 -> do
@@ -298,6 +314,7 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
                            }
       return (block, blockOff)
     Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
+      traceM $ "  II: " <> show opcode
       let G.InstSemantics sem _ = G.semanticsFromOpcode iset opcode
       (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ disStmt (sem ^. G.semStmts)
       let regUpdates = disInstRegUpdates disInstState
