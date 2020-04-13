@@ -9,7 +9,7 @@ packages: macaw-ppc/
           x86_symbolic/
           refinement/
           deps/macaw-loader/macaw-loader
-          deps/macaw-loader/macaw-loader-arm
+          deps/macaw-loader/macaw-loader-aarch32
           deps/macaw-loader/macaw-loader-ppc
           deps/macaw-loader/macaw-loader-x86
           deps/semmc/semmc/
