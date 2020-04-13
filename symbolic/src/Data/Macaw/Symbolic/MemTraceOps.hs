@@ -14,6 +14,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE NoStarIsType #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.Symbolic.MemTraceOps where
 

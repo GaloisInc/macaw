@@ -1243,7 +1243,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -- ^ Initial register state for the simulation
 --        -> CLM.MemImpl sym
 --        -- ^ The initial memory state of the simulator
---        -> MS.GlobalMap sym (MC.ArchAddrWidth arch)
+--        -> MS.GlobalMap sym MM.Mem (MC.ArchAddrWidth arch)
 --        -- ^ A translator of machine code addresses to LLVM pointers
 --        -> MS.LookupFunctionHandle sym arch
 --        -- ^ A translator for machine code addresses to function handles
