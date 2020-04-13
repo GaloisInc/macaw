@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE DataKinds #-}
@@ -14,6 +15,9 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
+#if __GLASGOW_HASKELL__ >= 805
+{-# LANGUAGE NoStarIsType #-}
+#endif
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.Symbolic.MemTraceOps where
 
