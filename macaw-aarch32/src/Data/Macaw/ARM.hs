@@ -26,7 +26,6 @@ import           Control.Lens ( (^.) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
 import qualified Data.Macaw.Memory as MM
-import           Data.Proxy ( Proxy(..) )
 import qualified SemMC.Architecture.AArch32 as ARM
 
 
@@ -41,7 +40,7 @@ arm_linux_info =
                         , MI.archEndianness = MM.LittleEndian
                         , MI.extractBlockPrecond = extractBlockPrecond
                         , MI.initialBlockRegs = initialBlockRegs
-                        , MI.disassembleFn = disassembleFn proxy ARMSem.execInstruction ThumbSem.execInstruction
+                        , MI.disassembleFn = disassembleFn ARMSem.execInstruction ThumbSem.execInstruction
                         , MI.mkInitialAbsState = mkInitialAbsState
                         , MI.absEvalArchFn = absEvalArchFn
                         , MI.absEvalArchStmt = absEvalArchStmt
@@ -55,9 +54,6 @@ arm_linux_info =
                         , MI.archDemandContext = archDemandContext
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState preserveRegAcrossSyscall
                         }
-        where
-          proxy = Proxy @ARM.AArch32
-
 
 archDemandContext :: MDS.DemandContext ARM.AArch32
 archDemandContext =

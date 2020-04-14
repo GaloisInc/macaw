@@ -12,24 +12,12 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( guard )
 import qualified Data.Macaw.ARM.ARMReg as AR
-import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
-                                               , AbsValue(..)
-                                               , transferValue
-                                               , ppAbsValue
-                                               , absAssignments
-                                               , AbsBlockStack
-                                               )
+import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
-import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Map as MapF
-import qualified Data.Parameterized.NatRepr as PN
-import qualified Data.Parameterized.TraversableFC as FC
-import           Data.Semigroup
 import qualified Data.Sequence as Seq
 
 import qualified SemMC.Architecture.AArch32 as ARM
@@ -37,13 +25,6 @@ import qualified SemMC.Architecture.AArch32 as ARM
 import           Data.Macaw.ARM.Simplify ()
 
 import Prelude
-
-import qualified Language.ASL.Globals as ASL
-
-debug :: Show a => a -> b -> b
--- debug = trace
-debug = flip const
-
 
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
@@ -75,7 +56,7 @@ identifyCall mem stmts0 rs
 -- addresses.
 identifyReturn :: Seq.Seq (MC.Stmt ARM.AArch32 ids)
                -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
-               -> AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+               -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
                -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids))
 identifyReturn stmts s finalRegSt8 =
   if isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
@@ -86,18 +67,10 @@ identifyReturn stmts s finalRegSt8 =
 -- from Macaw, modulo any ARM semantics operations (lots of ite caused
 -- by the conditional execution bits for most instructions, clearing
 -- of the low bits (1 in T32 mode, 2 in A32 mode).
-isReturnValue :: AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+isReturnValue :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MC.Value ARM.AArch32 ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.AArch32)))
               -> Bool
 isReturnValue absProcState val =
-  case transferValue absProcState val of
-    ReturnAddr -> True
-    -- TBD: fill in the code here to recognize the expression that
-    -- clears the lower bit(s), along the lines of what is done by PPC
-    -- Identify.hs for the shifting operations.
-    o -> debug ("######################## Unrecognized return value: " <>
-                show (MC.ppValue 0 val) <>
-                " or " <>
-                show (ppAbsValue o)
-               ) False
-
+  case MA.transferValue absProcState val of
+    MA.ReturnAddr -> True
+    _ -> False

@@ -20,7 +20,6 @@ library
                      , Data.Macaw.ARM.Disassemble
                      , Data.Macaw.ARM.Eval
                      , Data.Macaw.ARM.Identify
-                     , Data.Macaw.ARM.Operand
                      , Data.Macaw.ARM.Semantics.ARMSemantics
                      , Data.Macaw.ARM.Semantics.ThumbSemantics
                      , Data.Macaw.ARM.Semantics.TH
