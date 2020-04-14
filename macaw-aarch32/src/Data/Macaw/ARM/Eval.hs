@@ -33,7 +33,6 @@ import           Data.Parameterized.NatRepr (knownNat)
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.Map as MapF
 import qualified Data.Set as Set
-import           GHC.TypeLits
 
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM

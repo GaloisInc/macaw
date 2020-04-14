@@ -38,7 +38,7 @@ execInstruction =
          aconv :: (Some (Opcode Operand), BS.ByteString) -> (Some (ARMSem.ARMOpcode ARMSem.ARMOperand), BS.ByteString)
          aconv (o,b) = (mapSome ARMSem.A32Opcode o, b)
        genExecInstruction (Proxy @ARMSem.AArch32)
-                    (locToRegTH (Proxy @ARMSem.AArch32))
+                    locToRegTH
                     armNonceAppEval
                     (armAppEvaluator MC.LittleEndian)
                     'a32InstructionMatcher

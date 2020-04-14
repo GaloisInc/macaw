@@ -12,23 +12,16 @@ module Data.Macaw.ARM.Identify
     ) where
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( guard )
 import qualified Data.Macaw.ARM.ARMReg as AR
 import           Data.Macaw.AbsDomain.AbsState ( AbsProcessorState
                                                , AbsValue(..)
                                                , transferValue
                                                , ppAbsValue
-                                               , absAssignments
-                                               , AbsBlockStack
                                                )
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
-import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Map as MapF
-import qualified Data.Parameterized.NatRepr as PN
-import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Semigroup
 import qualified Data.Sequence as Seq
 
@@ -37,8 +30,6 @@ import qualified SemMC.Architecture.AArch32 as ARM
 import           Data.Macaw.ARM.Simplify ()
 
 import Prelude
-
-import qualified Language.ASL.Globals as ASL
 
 debug :: Show a => a -> b -> b
 -- debug = trace

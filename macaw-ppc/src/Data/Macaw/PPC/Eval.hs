@@ -18,7 +18,6 @@ module Data.Macaw.PPC.Eval (
   preserveRegAcrossSyscall
   ) where
 
-import           Data.Proxy
 import           GHC.TypeLits
 
 import           Control.Lens ( (&), (.~), (^.) )

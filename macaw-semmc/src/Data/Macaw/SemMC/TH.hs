@@ -45,10 +45,10 @@ import           Control.Monad (void)
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
-
 import qualified Data.Foldable as F
 import qualified Data.List as L
 import qualified Data.Map as Map
+import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
 import           Data.Semigroup ((<>))
 import qualified Data.Text as T
@@ -176,13 +176,13 @@ libraryDefinitions ltr ena ae archType lib endianness = do
   varMap :: Map.Map String Name <- Map.fromList <$> traverse fnName ffs
 
   -- Create lookup functions for names and calls
-  let lookupName name = Map.lookup name varMap
-      lookupCall name = (liftQ . varE) <$> lookupName name
-  decs <- traverse (translate lookupName lookupCall) (MapF.elems lib)
+  let lookupVarName name = Map.lookup name varMap
+      lookupCall name = (liftQ . varE) <$> lookupVarName name
+  decs <- traverse (translate lookupVarName lookupCall) (MapF.elems lib)
   return (concat decs, lookupCall)
   where
     fnName :: Some (FunctionFormula (Sym t fs)) -> Q (String, Name)
-    fnName (Some ff@(FunctionFormula { ffName = name })) = do
+    fnName (Some (FunctionFormula { ffName = name })) = do
       var <- newName ("_df_" ++ name)
       return (name, var)
 
@@ -190,8 +190,8 @@ libraryDefinitions ltr ena ae archType lib endianness = do
               -> (String -> Maybe (MacawQ arch t fs Exp))
               -> Some (FunctionFormula (Sym t fs))
               -> Q [Dec]
-    translate lookupName lookupCall (Some ff@(FunctionFormula {})) = do
-      (var, sig, def) <- translateFunction ltr ena ae lookupName lookupCall archType ff endianness
+    translate lookupVarName lookupCall (Some ff@(FunctionFormula {})) = do
+      (_var, sig, def) <- translateFunction ltr ena ae lookupVarName lookupCall archType ff endianness
       return [sig, def]
 
 -- | Generate a single case for one opcode of the case expression.
@@ -641,9 +641,8 @@ translateFunction :: forall arch t fs args ret .
                   -> M.Endianness
                   -> Q (Name, Dec, Dec)
 translateFunction ltr ena ae fnName df archType ff endianness = do
-  let var = case fnName (ffName ff) of
-        Nothing -> error $ "undefined function " ++ ffName ff
-        Just var -> var
+  let funNameErr = error ("Undefined function " ++ ffName ff)
+  let var = fromMaybe funNameErr (fnName (ffName ff))
   argVars :: [Name]
     <- sequence $ FC.toListFC (\bv -> newName (bvarName bv)) (ffArgVars ff)
   let argVarMap :: MapF.MapF (SI.BoundVar (Sym t fs)) (C.Const Name)
@@ -705,7 +704,7 @@ addEltTH endianness interps elt = do
           translatedExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           bindExpr elt [| G.addExpr =<< $(return translatedExpr) |]
         S.BoundVarExpr bVar -> do
-          translatedBV <- evalBoundVar endianness interps bVar
+          translatedBV <- evalBoundVar interps bVar
           bindExpr elt (return translatedBV)
         S.NonceAppExpr n -> do
           translatedExpr <- evalNonceAppTH endianness interps (S.nonceExprApp n)
@@ -713,18 +712,16 @@ addEltTH endianness interps elt = do
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
             bindExpr elt [| genBVValue $(natReprTH w) $(lift val) |]
---            bindExpr elt [| return (M.BVValue $(natReprTH w) $(lift val)) |]
           | otherwise -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
         S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
 
 evalBoundVar :: forall arch t fs ctp .
                 (A.Architecture arch)
-             => M.Endianness
-             -> BoundVarInterpretations arch t fs
+             => BoundVarInterpretations arch t fs
              -> S.ExprBoundVar t ctp
              -> MacawQ arch t fs Exp
-evalBoundVar endianness interps bVar =
+evalBoundVar interps bVar =
   if | Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
        liftQ [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
      | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->

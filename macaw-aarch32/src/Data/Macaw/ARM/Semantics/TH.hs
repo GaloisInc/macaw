@@ -285,7 +285,7 @@ translateExpr :: M.Endianness
 translateExpr endianness interps e = case e of
   WB.AppExpr app -> appToExprTH endianness (WB.appExprApp app) interps
   WB.BoundVarExpr bvar -> do
-    val <- evalBoundVar endianness interps bvar
+    val <- evalBoundVar interps bvar
     liftQ [| G.ValueExpr <$> $(return val) |]
   WB.NonceAppExpr n -> do
     val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)

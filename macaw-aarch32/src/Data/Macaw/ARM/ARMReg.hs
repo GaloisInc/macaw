@@ -15,10 +15,8 @@
 
 module Data.Macaw.ARM.ARMReg
     ( ARMReg(..)
-    -- , armRegToGPR
     , arm_LR
     , branchTaken
-    -- , ArchWidth(..)
     , linuxSystemCallPreservedRegisters
     , locToRegTH
     , integerToReg
@@ -29,23 +27,20 @@ module Data.Macaw.ARM.ARMReg
 
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.NatRepr as NR
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Parameterized.SymbolRepr (symbolRepr)
 import           Data.Parameterized.TraversableFC (toListFC, fmapFC)
 import qualified Data.Parameterized.TH.GADT as TH
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import           Data.Word ( Word32 )
 import           GHC.TypeLits
 import           Language.Haskell.TH
-import           Language.Haskell.TH.Syntax ( lift )
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import           Data.Macaw.Types  as MT
--- ( TypeRepr(..), HasRepr, BVType
---                                   , typeRepr, n32 )
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as SA
 import qualified SemMC.Architecture.ARM.Location as SA
@@ -126,6 +121,7 @@ instance HasRepr ARMReg TypeRepr where
         case r of
           ARMGlobalBV globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
           ARMGlobalBool globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
+          ARMWriteMode -> MT.BVTypeRepr (NR.knownNat @2)
 
 type instance MC.ArchReg SA.AArch32 = ARMReg
 type instance MC.RegAddrWidth ARMReg = 32
@@ -134,7 +130,6 @@ instance ( 1 <= MC.RegAddrWidth ARMReg
          , KnownNat (MC.RegAddrWidth ARMReg)
          , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg SA.AArch32))
          , MC.ArchReg SA.AArch32 ~ ARMReg
-         -- , ArchWidth arm
          ) =>
     MC.RegisterInfo ARMReg where
       archRegs = armRegs
@@ -153,28 +148,6 @@ armRegs = toListFC asARMReg ( fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalRefs Ct
           WT.BaseBoolRepr -> Some (ARMGlobalBool gr)
           WT.BaseBVRepr _ -> Some (ARMGlobalBV gr)
           tp -> error $ "unsupported global type " <> show tp
-          
--- baseToMacawTypeRepr (WT.BaseBVRepr w) = MT.BVTypeRepr w
--- baseToMacawTypeRepr WT.BaseBoolRepr = MT.BoolTypeRepr
--- baseToMacawTypeRepr _ = error "ARMReg: unsupported what4 type"
-          
--- armRegs = [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R1"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R9"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R10"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R11"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R12"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
---           , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
---           ]
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
 --
@@ -199,17 +172,16 @@ linuxSystemCallPreservedRegisters =
 
 -- | Translate a location from the semmc semantics into a location suitable for
 -- use in macaw
-locToRegTH :: proxy arm
-           -> SA.Location arm ctp
+locToRegTH :: SA.Location SA.AArch32 ctp
            -> Q Exp
-locToRegTH _ (SA.Location globalRef) = do
+locToRegTH (SA.Location globalRef) = do
   let refName = T.unpack (symbolRepr (ASL.globalRefSymbol globalRef))
   case ASL.globalRefRepr globalRef of
     WT.BaseBoolRepr ->
       [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
     WT.BaseBVRepr _ ->
       [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (LitT (StrTyLit refName)))) |]
-    tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ LitE (StringL refName)) |]
+    _tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ LitE (StringL refName)) |]
 
 branchTakenReg :: ARMReg BoolType
 branchTakenReg = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")
