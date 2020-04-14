@@ -572,18 +572,18 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
               -- defined functions that write to memory, but we end up
               -- calling locToRegTH on the memory object, which is a
               -- problem.
-              -- | L.isMemoryLocation loc
-              -- , S.NonceAppExpr n <- expr
-              -- , S.FnApp symFn args <- S.nonceExprApp n
-              -- , S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
-              --   let fnName = symFnName symFn
-              --   funMaybe <- definedFunction fnName
-              --   case funMaybe of
-              --     Just fun -> do
-              --       argExprs <- sequence $ FC.toListFC (addEltTH endianness interps) args
-              --       return ()
-              --       -- return $ foldl AppE fun argExprs
-              --     Nothing -> fail ("Unknown defined function: " ++ fnName)
+              -- -- | L.isMemoryLocation loc
+              -- -- , S.NonceAppExpr n <- expr
+              -- -- , S.FnApp symFn args <- S.nonceExprApp n
+              -- -- , S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
+              -- --   let fnName = symFnName symFn
+              -- --   funMaybe <- definedFunction fnName
+              -- --   case funMaybe of
+              -- --     Just fun -> do
+              -- --       argExprs <- sequence $ FC.toListFC (addEltTH endianness interps) args
+              -- --       return ()
+              -- --       -- return $ foldl AppE fun argExprs
+              -- --     Nothing -> fail ("Unknown defined function: " ++ fnName)
               | L.isMemoryLocation loc
               , S.NonceAppExpr n <- expr
               -> do
@@ -598,20 +598,20 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
                       -> void $ writeMemTH interps symFn args endianness
                     _ -> error "translateDefinition: unexpected memory write"
 
-              -- | L.isMemoryLocation loc
-              -- , S.BoundVarExpr bVar <- expr
-              -- , Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
-              --     return ()
-              --     -- appendStmt [| error "BOUND VAR MEM" |]
-              --     -- bindExpr expr [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
-              -- | L.isMemoryLocation loc
-              -- , S.BoundVarExpr bVar <- expr -> do
-              --     return ()
-              --     -- , Nothing <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
-              --     -- appendStmt [| error $(return $ LitE (StringL ("BAD BOUND VAR MEM: " <> show bVar))) |]
-              -- | L.isMemoryLocation loc
-              -- , S.AppExpr _ <- expr -> do
-              --     error $ "WRITE TO MEM: APP"
+              -- -- | L.isMemoryLocation loc
+              -- -- , S.BoundVarExpr bVar <- expr
+              -- -- , Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
+              -- --     return ()
+              -- --     -- appendStmt [| error "BOUND VAR MEM" |]
+              -- --     -- bindExpr expr [| return ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
+              -- -- | L.isMemoryLocation loc
+              -- -- , S.BoundVarExpr bVar <- expr -> do
+              -- --     return ()
+              -- --     -- , Nothing <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
+              -- --     -- appendStmt [| error $(return $ LitE (StringL ("BAD BOUND VAR MEM: " <> show bVar))) |]
+              -- -- | L.isMemoryLocation loc
+              -- -- , S.AppExpr _ <- expr -> do
+              -- --     error $ "WRITE TO MEM: APP"
 
 
               | otherwise -> do
