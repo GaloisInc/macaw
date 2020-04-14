@@ -20,11 +20,11 @@ module Data.Macaw.ARM.Eval
     where
 
 import           Control.Lens ( (&), (^.), (.~) )
-import           Data.Macaw.ARM.ARMReg
-import           Data.Macaw.ARM.Arch
-import           Data.Macaw.AbsDomain.AbsState as MA
+import qualified Data.Macaw.ARM.ARMReg as AR
+import qualified Data.Macaw.ARM.Arch as AA
+import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.Architecture.Info as MI
-import           Data.Macaw.CFG
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as MSG
@@ -39,8 +39,8 @@ import qualified SemMC.Architecture.AArch32 as ARM
 
 import           Data.Macaw.ARM.Simplify ()
 
-callParams :: (forall tp . ARMReg tp -> Bool)
-           -> MA.CallParams ARMReg
+callParams :: (forall tp . AR.ARMReg tp -> Bool)
+           -> MA.CallParams AR.ARMReg
 callParams preservePred =
   MA.CallParams { MA.postCallStackDelta = 0
                 , MA.preserveReg = preservePred
@@ -49,33 +49,33 @@ callParams preservePred =
 
 -- FIXME: initialize some of the globals to FALSE
 initialBlockRegs :: forall ids .
-                    ArchSegmentOff ARM.AArch32
+                    MC.ArchSegmentOff ARM.AArch32
                     -- ^ The address of the block
-                 -> ArchBlockPrecond ARM.AArch32
-                 -> RegState (ArchReg ARM.AArch32) (Value ARM.AArch32 ids)
+                 -> MC.ArchBlockPrecond ARM.AArch32
+                 -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
 initialBlockRegs addr _preconds = MSG.initRegState addr &
   -- FIXME: Set all simple globals to 0??
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__UnpredictableBehavior")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__UndefinedBehavior")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__AssertionFailure")) .~ BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__UnpredictableBehavior")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__UndefinedBehavior")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__AssertionFailure")) .~ MC.BoolValue False &
   -- FIXME: PSTATE_T is 0 for ARM mode, 1 for Thumb mode. For now, we
   -- are setting this concretely to 0 at the start of a block, but
   -- once we get Thumb support, we will want to refer to the semantics
   -- for this.
-  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
-  boundValue ARMWriteMode .~ BVValue knownNat 0 &
-  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ BVValue knownNat 0 &
-  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ BVValue knownNat 0 &
-  boundValue (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ BVValue knownNat 1 &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ BoolValue False &
-  boundValue (ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ BoolValue False
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
+  MC.boundValue AR.ARMWriteMode .~ MC.BVValue knownNat 0 &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ MC.BVValue knownNat 0 &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ MC.BVValue knownNat 1 &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ MC.BoolValue False &
+  MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ MC.BoolValue False
 
 
-extractBlockPrecond :: ArchSegmentOff ARM.AArch32
-                    -> MA.AbsBlockState (ArchReg ARM.AArch32)
+extractBlockPrecond :: MC.ArchSegmentOff ARM.AArch32
+                    -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
                     -> Either String (MI.ArchBlockPrecond ARM.AArch32)
 extractBlockPrecond _ _ = Right ()
 
@@ -88,53 +88,53 @@ extractBlockPrecond _ _ = Right ()
 -- Note that we don't initialize the abstract stack.  On ARM, there are no
 -- initial stack entries (since the return address is in the link register).
 --
-mkInitialAbsState :: MM.Memory (RegAddrWidth (ArchReg ARM.AArch32))
-                  -> ArchSegmentOff ARM.AArch32
-                  -> MA.AbsBlockState (ArchReg ARM.AArch32)
+mkInitialAbsState :: MM.Memory 32
+                  -> MC.ArchSegmentOff ARM.AArch32
+                  -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
 mkInitialAbsState _mem startAddr =
-  s0 & MA.absRegState . boundValue arm_LR .~ MA.ReturnAddr
+  s0 & MA.absRegState . MC.boundValue AR.arm_LR .~ MA.ReturnAddr
   -- FIXME: Initialize every single global to macaw's "Initial" value
   where initRegVals = MapF.fromList []
         s0 = MA.fnStartAbsBlockState startAddr initRegVals []
 
 
-absEvalArchFn :: AbsProcessorState (ArchReg ARM.AArch32) ids
-              -> ArchFn ARM.AArch32 (Value ARM.AArch32 ids) tp
-              -> AbsValue (RegAddrWidth (ArchReg ARM.AArch32)) tp
+absEvalArchFn :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+              -> MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
+              -> MA.AbsValue 32 tp
 absEvalArchFn _r f =
   case f of
-    UDiv{} -> MA.TopV
-    SDiv{} -> MA.TopV
-    URem{} -> MA.TopV
-    SRem{} -> MA.TopV
+    AA.UDiv{} -> MA.TopV
+    AA.SDiv{} -> MA.TopV
+    AA.URem{} -> MA.TopV
+    AA.SRem{} -> MA.TopV
 
 -- For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
-absEvalArchStmt :: AbsProcessorState (ArchReg ARM.AArch32) ids
-                -> ArchStmt ARM.AArch32 (Value ARM.AArch32 ids)
-                -> AbsProcessorState (ArchReg ARM.AArch32) ids
+absEvalArchStmt :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+                -> MC.ArchStmt ARM.AArch32 (MC.Value ARM.AArch32 ids)
+                -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
 absEvalArchStmt s _ = s
 
 
-postARMTermStmtAbsState :: (forall tp . ARMReg tp -> Bool)
-                        -> MM.Memory (RegAddrWidth (ArchReg ARM.AArch32))
-                        -> AbsProcessorState ARMReg ids
+postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
+                        -> MM.Memory 32
+                        -> MA.AbsProcessorState AR.ARMReg ids
                         -> MJ.IntraJumpBounds ARM.AArch32 ids
-                        -> RegState ARMReg (Value ARM.AArch32 ids)
-                        -> ARMTermStmt ids
-                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ARM.AArch32)), AbsBlockState ARMReg, MJ.InitJumpBounds ARM.AArch32)
+                        -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
+                        -> AA.ARMTermStmt ids
+                        -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
-    ARMSyscall _ ->
-      case simplifyValue (regState ^. curIP) of
-        Just (RelocatableValue _ addr)
+    AA.ARMSyscall _ ->
+      case simplifyValue (regState ^. MC.curIP) of
+        Just (MC.RelocatableValue _ addr)
           | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          , MA.stackGrowsDown = True
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
+        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
     -- FIXME: Check semantics for SVC. Is there a special function
     -- that we need to translate?
     -- ThumbSyscall _ ->
@@ -148,6 +148,6 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
     --     _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
 
 
-preserveRegAcrossSyscall :: ArchReg ARM.AArch32 tp -> Bool
+preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =
-  Some r `Set.member` linuxSystemCallPreservedRegisters
+  Some r `Set.member` AR.linuxSystemCallPreservedRegisters
