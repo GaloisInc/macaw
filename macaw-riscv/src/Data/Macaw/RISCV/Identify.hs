@@ -6,7 +6,6 @@ module Data.Macaw.RISCV.Identify where
 import qualified GRIFT.Types as G
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
-import qualified Data.Macaw.Discovery.AbsEval as MDE
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Sequence as Seq
@@ -33,7 +32,7 @@ riscvIdentifyCall :: RISCV rv
                   -> Maybe (Seq.Seq (MC.Stmt rv ids), MC.ArchSegmentOff rv)
 riscvIdentifyCall _ mem stmts0 rs
   | not (null stmts0)
-  , retVal@(MC.RelocatableValue {}) <- rs ^. MC.boundValue (GPR 0x1)
+  , retVal@(MC.RelocatableValue {}) <- rs ^. MC.boundValue GPR_RA
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (stmts0, retAddr)
@@ -59,22 +58,18 @@ riscvIdentifyReturn rvRepr stmts0 rs absState = G.withRV rvRepr $ do
 matchReturn :: RISCV rv
             => G.RVRepr rv
             -> MA.AbsProcessorState (MC.ArchReg rv) ids
-            -> MC.Value rv ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg rv)))
+            -> MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVAnd _ addr (MC.BVValue _ mask)))) <- return ip
   guard (mask == 0xfffffffffffffffe)
   case MA.transferValue absProcState addr of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)
-    _ -> case addr of
-      MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
-        | MA.ReturnAddr <- MDE.absEvalReadMem absProcState readAddr memRep ->
-            return (Some MA.ReturnAddr)
-      _ -> Nothing
+    _ -> Nothing
 
 riscvCheckForReturnAddr :: RISCV rv
                         => G.RVRepr rv
                         -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
                         -> MA.AbsProcessorState (MC.ArchReg rv) ids
                         -> Bool
-riscvCheckForReturnAddr rvRepr r s = isJust $ matchReturn rvRepr s (r ^. MC.boundValue (GPR 0x1))
+riscvCheckForReturnAddr rvRepr r s = isJust $ matchReturn rvRepr s (r ^. MC.boundValue GPR_RA)

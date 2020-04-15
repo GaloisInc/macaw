@@ -28,12 +28,12 @@ riscvInitialBlockRegs rvRepr startIP = G.withRV rvRepr $
 
 riscvInitialAbsState :: RISCV rv
                      => G.RVRepr rv
-                     -> MM.Memory (MC.RegAddrWidth (MC.ArchReg rv))
+                     -> MM.Memory (MC.ArchAddrWidth rv)
                      -> MC.ArchSegmentOff rv
                      -> MA.AbsBlockState (MC.ArchReg rv)
 riscvInitialAbsState rvRepr _mem startAddr = s0
   where
-    initRegVals = MapF.fromList [ MapF.Pair ra MA.ReturnAddr ]
+    initRegVals = MapF.fromList [ MapF.Pair GPR_RA MA.ReturnAddr ]
     s0 = G.withRV rvRepr $ MA.fnStartAbsBlockState startAddr initRegVals []
 
 riscvCallParams :: MA.CallParams (RISCVReg rv)
@@ -43,11 +43,19 @@ riscvCallParams = MA.CallParams { MA.postCallStackDelta = 0
                                 }
 
 riscvPreserveReg :: RISCVReg rv tp -> Bool
-riscvPreserveReg (GPR rid)
-  | rid == 2 = True
-  | rid == 8 = True
-  | rid == 9 = True
-  | rid >= 18 && rid <= 27 = True
+riscvPreserveReg GPR_SP = True
+riscvPreserveReg GPR_S0 = True
+riscvPreserveReg GPR_S1 = True
+riscvPreserveReg GPR_S2 = True
+riscvPreserveReg GPR_S3 = True
+riscvPreserveReg GPR_S4 = True
+riscvPreserveReg GPR_S5 = True
+riscvPreserveReg GPR_S6 = True
+riscvPreserveReg GPR_S7 = True
+riscvPreserveReg GPR_S8 = True
+riscvPreserveReg GPR_S9 = True
+riscvPreserveReg GPR_S10 = True
+riscvPreserveReg GPR_S11 = True
 riscvPreserveReg (FPR rid)
   | rid == 8 = True
   | rid == 9 = True
