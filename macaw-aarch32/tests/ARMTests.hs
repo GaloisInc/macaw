@@ -25,7 +25,6 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
-import           Debug.Trace
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
@@ -39,7 +38,7 @@ import           Prelude
 
 -- | Set to true to build with chatty output.
 isChatty :: Bool
-isChatty = True
+isChatty = False
 
 -- | Used to generate output when chatty
 chatty :: String -> IO ()
@@ -154,7 +153,6 @@ testDiscovery32 (funcblocks, ignored) elf =
         do let actualEntry = fromIntegral $ getAbsFunAddr dfi
                actualBlockStarts = S.fromList [ (baddr, bsize)
                                               | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                              , trace ("Parsed Block: " ++ show pbr) True
                                               , let baddr = fromIntegral $ getAbsBlkAddr pbr
                                               , let bsize = fromIntegral (MD.blockSize pbr)
                                               ]

@@ -156,6 +156,8 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
                                          , _blockState = preBlock'
                                          , genAddr = nextIPSegAddr
                                          , genRegUpdates = MapF.empty
+                                         , appCache = appCache gs
+                                         , _blockStateSnapshot = preBlock' ^. pBlockState
                                          }
                       disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
 

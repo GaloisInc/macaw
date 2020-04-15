@@ -36,6 +36,7 @@ library
                        macaw-base >= 0.3.2,
                        macaw-symbolic,
                        dismantle-tablegen,
+                       ansi-wl-pprint,
                        semmc,
                        what4
   hs-source-dirs:      src

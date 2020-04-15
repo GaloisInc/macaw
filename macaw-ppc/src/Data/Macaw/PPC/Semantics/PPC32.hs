@@ -11,6 +11,7 @@ module Data.Macaw.PPC.Semantics.PPC32
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.PPC
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 import           SemMC.Architecture.PPC32 ( PPC )
 import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo, allDefinedFunctions )
@@ -28,4 +29,5 @@ execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC))
                     'ppcInstructionMatcher
                     allSemantics allOpcodeInfo allDefinedFunctions
                     ([t| Dismantle.PPC.Operand |], [t| PPC |])
+                    MM.BigEndian
                    )

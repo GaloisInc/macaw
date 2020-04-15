@@ -2,6 +2,7 @@
 {-# LANGUAGE RankNTypes #-}
 module Data.Macaw.SemMC.TH.Monad (
   BoundVarInterpretations(..),
+  QState(..),
   MacawQ,
   runMacawQ,
   liftQ,

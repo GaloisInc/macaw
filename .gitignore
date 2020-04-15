@@ -1,6 +1,7 @@
 *.o
 *~
 *.hi
+cabal.project
 dist/
 dist-newstyle/
 cabal.sandbox.config

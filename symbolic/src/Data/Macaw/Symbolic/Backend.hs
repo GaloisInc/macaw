@@ -43,7 +43,6 @@ module Data.Macaw.Symbolic.Backend (
   ) where
 
 import qualified Lang.Crucible.CFG.Core as C
-import qualified Lang.Crucible.LLVM.MemModel as MM
 import qualified Lang.Crucible.Simulator as C
 import qualified Data.Macaw.CFG.Core as M
 
@@ -64,8 +63,8 @@ type EvalStmtFunc f p sym ext =
 -- architecture-specific backends - client code should not need to construct
 -- values of this type, and instead should obtain values of this type from the
 -- 'withArchEval' function.
-newtype MacawArchEvalFn sym arch =
-  MacawArchEvalFn (C.GlobalVar MM.Mem -> MO.GlobalMap sym (M.ArchAddrWidth arch) -> EvalStmtFunc (CG.MacawArchStmtExtension arch) (MO.MacawSimulatorState sym) sym (CG.MacawExt arch))
+newtype MacawArchEvalFn sym mem arch =
+  MacawArchEvalFn (C.GlobalVar mem -> MO.GlobalMap sym mem (M.ArchAddrWidth arch) -> EvalStmtFunc (CG.MacawArchStmtExtension arch) (MO.MacawSimulatorState sym) sym (CG.MacawExt arch))
 
 -- $archBackend
 --

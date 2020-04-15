@@ -44,6 +44,7 @@ import qualified Data.Vector as V
 import           Data.Parameterized (Some(..))
 import qualified Data.Parameterized.Context as Ctx
 
+
 import           What4.Interface
 
 import           Lang.Crucible.Backend
@@ -58,6 +59,7 @@ import           Lang.Crucible.Simulator.ExecutionTree
           , gpGlobals
           )
 import           Lang.Crucible.Simulator.GlobalState (lookupGlobal,insertGlobal)
+import           Lang.Crucible.Simulator.Intrinsics (GetIntrinsic, Intrinsic)
 import           Lang.Crucible.Simulator.RegMap (RegEntry,regValue)
 import           Lang.Crucible.Simulator.RegValue (RegValue)
 import           Lang.Crucible.Simulator.SimError (SimErrorReason(AssertFailureSimError))
@@ -143,11 +145,12 @@ ptrBase = fst . llvmPointerView
 -- The 'GlobalMap' is responsible for 1) determining which LLVM allocation
 -- contains the relocatable value, and 2) returning the corresponding address in
 -- that allocation.
-type GlobalMap sym w = sym                        {-^ The symbolic backend -} ->
-                       MemImpl sym                {-^ The global handle to the memory model -} ->
-                       RegValue sym NatType       {-^ The region index of the pointer being translated -} ->
-                       RegValue sym (BVType w)    {-^ The offset of the pointer into the region -} ->
-                       IO (LLVMPtr sym w)
+type GlobalMap sym mem w
+  = sym                        {-^ The symbolic backend -} ->
+    GetIntrinsic sym mem       {-^ The global handle to the memory model -} ->
+    RegValue sym NatType       {-^ The region index of the pointer being translated -} ->
+    RegValue sym (BVType w)    {-^ The offset of the pointer into the region -} ->
+    IO (LLVMPtr sym w)
 
 {- | Every now and then we encounter memory operations that
 just read/write to some constant.  Normally, we do not allow
@@ -165,7 +168,7 @@ tryGlobPtr ::
   IsSymInterface sym =>
   sym ->
   RegValue sym Mem ->
-  GlobalMap sym w ->
+  GlobalMap sym Mem w ->
   LLVMPtr sym w ->
   IO (LLVMPtr sym w)
 tryGlobPtr sym mem mapBVAddress val
@@ -197,16 +200,16 @@ type PtrOp sym w a =
 
 -- | Get the current model of the memory.
 getMem :: CrucibleState s sym ext rtp blocks r ctx ->
-          GlobalVar Mem ->
-          IO (MemImpl sym)
+          GlobalVar (IntrinsicType nm args) ->
+          IO (Intrinsic sym nm args)
 getMem st mvar =
   case lookupGlobal mvar (st ^. stateTree . actFrame . gpGlobals) of
     Just mem -> return mem
     Nothing  -> fail ("Global heap value not initialized: " ++ show mvar)
 
 setMem :: CrucibleState s sym ext rtp blocks r ctx ->
-          GlobalVar Mem ->
-          MemImpl sym ->
+          GlobalVar (IntrinsicType nm args) ->
+          Intrinsic sym nm args ->
           CrucibleState s sym ext rtp blocks r ctx
 setMem st mvar mem =
   st & stateTree . actFrame . gpGlobals %~ insertGlobal mvar mem
@@ -338,8 +341,8 @@ addrWidthAtLeast16 M.Addr64 = LeqProof
 doGetGlobal ::
   (IsSymInterface sym, M.MemWidth w) =>
   CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
-  GlobalVar Mem                            {- ^ Model of memory   -} ->
-  GlobalMap sym w ->
+  GlobalVar (IntrinsicType nm args)        {- ^ Model of memory   -} ->
+  GlobalMap sym (IntrinsicType nm args) w ->
   M.MemAddr w                              {- ^ Address identifier -} ->
   IO ( RegValue sym (LLVMPointerType w)
      , CrucibleState s sym ext rtp blocks r ctx

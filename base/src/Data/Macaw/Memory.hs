@@ -5,6 +5,7 @@ Maintainer  : jhendrix@galois.com
 Declares 'Memory', a type for representing segmented memory with permissions.
 -}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DeriveLift #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -162,6 +163,7 @@ import           Data.Proxy
 import           Data.Word
 import           GHC.Natural
 import           GHC.TypeLits
+import           Language.Haskell.TH.Syntax
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
@@ -213,7 +215,7 @@ addrWidthNatRepr Addr64 = knownNat
 -- In a big endian representation, the most significant byte is stored first;
 -- In a little endian representation, the most significant byte is stored last.
 data Endianness = BigEndian | LittleEndian
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Lift)
 
 instance Hashable Endianness where
   hashWithSalt s BigEndian    = s `hashWithSalt` (0::Int)
