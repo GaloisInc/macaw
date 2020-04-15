@@ -11,9 +11,43 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Data.Macaw.RISCV.RISCVReg where
+module Data.Macaw.RISCV.RISCVReg
+  ( -- * RISC-V macaw register state
+    RISCVReg(..)
+    -- ** Patterns for GPRs
+  , pattern GPR_RA
+  , pattern GPR_SP
+  , pattern GPR_GP
+  , pattern GPR_TP
+  , pattern GPR_T0
+  , pattern GPR_T1
+  , pattern GPR_T2
+  , pattern GPR_S0
+  , pattern GPR_S1
+  , pattern GPR_A0
+  , pattern GPR_A1
+  , pattern GPR_A2
+  , pattern GPR_A3
+  , pattern GPR_A4
+  , pattern GPR_A5
+  , pattern GPR_A6
+  , pattern GPR_A7
+  , pattern GPR_S2
+  , pattern GPR_S3
+  , pattern GPR_S4
+  , pattern GPR_S5
+  , pattern GPR_S6
+  , pattern GPR_S7
+  , pattern GPR_S8
+  , pattern GPR_S9
+  , pattern GPR_S10
+  , pattern GPR_S11
+  , pattern GPR_T3
+  , pattern GPR_T4
+  , pattern GPR_T5
+  , pattern GPR_T6
+  ) where
 
-import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.CFG as MC
 
@@ -32,6 +66,7 @@ import qualified Data.Parameterized.Map as MapF
 import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics.Utils as G
 
+-- | RISC-V register.
 data RISCVReg rv tp where
   -- | Program counter.
   PC  :: RISCVReg rv (MT.BVType (G.RVWidth rv))
@@ -48,7 +83,6 @@ data RISCVReg rv tp where
   EXC :: RISCVReg rv MT.BoolType
 
 -- | Return address
--- pattern GPR_RA :: forall (rv :: G.RV) (tp :: MT.Type) . tp ~ (MT.BVType (G.RVWidth rv)) => RISCVReg rv tp
 pattern GPR_RA :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
                   RISCVReg rv tp
 pattern GPR_RA = GPR 1
@@ -61,7 +95,7 @@ pattern GPR_SP = GPR 2
 -- | Global pointer
 pattern GPR_GP :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
                   RISCVReg rv tp
-pattern GPR_GP = GPR 2
+pattern GPR_GP = GPR 3
 
 -- | Thread pointer
 pattern GPR_TP :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
@@ -205,37 +239,37 @@ pattern GPR_T6 = GPR 31
 
 instance Show (RISCVReg rv tp) where
   show PC = "pc"
-  show (GPR_RA) = "ra"
-  show (GPR_SP) = "sp"
-  show (GPR_GP) = "gp"
-  show (GPR_TP) = "tp"
-  show (GPR_T0) = "t0"
-  show (GPR_T1) = "t1"
-  show (GPR_T2) = "t2"
-  show (GPR_S0) = "s0"
-  show (GPR_S1) = "s1"
-  show (GPR_A0) = "a0"
-  show (GPR_A1) = "a1"
-  show (GPR_A2) = "a2"
-  show (GPR_A3) = "a3"
-  show (GPR_A4) = "a4"
-  show (GPR_A5) = "a5"
-  show (GPR_A6) = "a6"
-  show (GPR_A7) = "a7"
-  show (GPR_S2) = "s2"
-  show (GPR_S3) = "s3"
-  show (GPR_S4) = "s4"
-  show (GPR_S5) = "s5"
-  show (GPR_S6) = "s6"
-  show (GPR_S7) = "s7"
-  show (GPR_S8) = "s8"
-  show (GPR_S9) = "s9"
-  show (GPR_S10) = "s10"
-  show (GPR_S11) = "s11"
-  show (GPR_T3) = "t3"
-  show (GPR_T4) = "t4"
-  show (GPR_T5) = "t5"
-  show (GPR_T6) = "t6"
+  show GPR_RA = "ra"
+  show GPR_SP = "sp"
+  show GPR_GP = "gp"
+  show GPR_TP = "tp"
+  show GPR_T0 = "t0"
+  show GPR_T1 = "t1"
+  show GPR_T2 = "t2"
+  show GPR_S0 = "s0"
+  show GPR_S1 = "s1"
+  show GPR_A0 = "a0"
+  show GPR_A1 = "a1"
+  show GPR_A2 = "a2"
+  show GPR_A3 = "a3"
+  show GPR_A4 = "a4"
+  show GPR_A5 = "a5"
+  show GPR_A6 = "a6"
+  show GPR_A7 = "a7"
+  show GPR_S2 = "s2"
+  show GPR_S3 = "s3"
+  show GPR_S4 = "s4"
+  show GPR_S5 = "s5"
+  show GPR_S6 = "s6"
+  show GPR_S7 = "s7"
+  show GPR_S8 = "s8"
+  show GPR_S9 = "s9"
+  show GPR_S10 = "s10"
+  show GPR_S11 = "s11"
+  show GPR_T3 = "t3"
+  show GPR_T4 = "t4"
+  show GPR_T5 = "t5"
+  show GPR_T6 = "t6"
   show (GPR rid) = error $ "PANIC: bad gpr id " <> show rid
   show (FPR rid) = "fpr[" <> show rid <> "]"
   show (CSR csr) = show csr
@@ -281,10 +315,3 @@ instance (G.KnownRV rv, RISCV rv) => MC.RegisterInfo (RISCVReg rv) where
   ip_reg = PC
   syscall_num_reg = error "syscall_num_reg undefined"
   syscallArgumentRegs = error "syscallArgumentRegs undefined"
-
-riscvAddrWidth :: G.RVRepr rv
-               -> MM.AddrWidthRepr (MC.ArchAddrWidth rv)
-riscvAddrWidth rvRepr = case G.rvBaseArch rvRepr of
-  G.RV32Repr -> MM.Addr32
-  G.RV64Repr -> MM.Addr64
-  G.RV128Repr -> error "RV128 not supported"

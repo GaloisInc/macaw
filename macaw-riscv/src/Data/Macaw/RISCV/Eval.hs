@@ -5,6 +5,7 @@ module Data.Macaw.RISCV.Eval
   ( riscvInitialBlockRegs
   , riscvInitialAbsState
   , riscvCallParams
+  , riscvAddrWidth
   ) where
 
 import qualified Data.Macaw.AbsDomain.AbsState as MA
@@ -18,6 +19,7 @@ import Control.Lens ((.~), (&))
 import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.RISCVReg
 
+-- | At the beginning of each block, the PC holds the address of the block.
 riscvInitialBlockRegs :: RISCV rv
                       => G.RVRepr rv
                       -> MC.ArchSegmentOff rv
@@ -26,6 +28,7 @@ riscvInitialBlockRegs rvRepr startIP = G.withRV rvRepr $
   MC.mkRegState MC.Initial &
   MC.curIP .~ MC.RelocatableValue (riscvAddrWidth rvRepr) (MM.segoffAddr startIP)
 
+-- | At the beginning of each function, GPR_RA holds the return address.
 riscvInitialAbsState :: RISCV rv
                      => G.RVRepr rv
                      -> MM.Memory (MC.ArchAddrWidth rv)
@@ -61,3 +64,10 @@ riscvPreserveReg (FPR rid)
   | rid == 9 = True
   | rid >= 18 && rid <= 27 = True
 riscvPreserveReg _ = False
+
+riscvAddrWidth :: G.RVRepr rv
+               -> MM.AddrWidthRepr (MC.ArchAddrWidth rv)
+riscvAddrWidth rvRepr = case G.rvBaseArch rvRepr of
+  G.RV32Repr -> MM.Addr32
+  G.RV64Repr -> MM.Addr64
+  G.RV128Repr -> error "RV128 not supported"
