@@ -65,12 +65,14 @@ data DisInstError rv fmt = NonConstantGPR (G.InstExpr fmt rv 5)
                          | NonConstantFPR (G.InstExpr fmt rv 5)
                          | ZeroWidthExpr (G.InstExpr fmt rv 0)
                          | forall w . BadExprWidth (G.InstExpr fmt rv w)
+                         | GenericError String
 
 instance Show (DisInstError rv fmt) where
   show (NonConstantGPR _e) = "NonConstantGPR in expression"
   show (NonConstantFPR _e) = "NonConstantFPR in expression"
   show (ZeroWidthExpr _e) = "Expression has width zero"
   show (BadExprWidth _e) = "Bad expression width"
+  show (GenericError s) = s
 
 -- | Monad for disassembling a single instruction.
 newtype DisInstM s ids rv fmt a = DisInstM
