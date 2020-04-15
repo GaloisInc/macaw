@@ -3,7 +3,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -31,49 +33,209 @@ import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics.Utils as G
 
 data RISCVReg rv tp where
+  -- | Program counter.
   PC  :: RISCVReg rv (MT.BVType (G.RVWidth rv))
+  -- | General-purpose registers. GPR[0] is not really a register, so
+  -- it should never be directly read from or written to.
   GPR :: BV.BitVector 5 -> RISCVReg rv (MT.BVType (G.RVWidth rv))
+  -- | Floating-point registers.
   FPR :: BV.BitVector 5 -> RISCVReg rv (MT.BVType (G.RVFloatWidth rv))
+  -- | Control/status registers.
   CSR :: G.CSR -> RISCVReg rv (MT.BVType (G.RVWidth rv))
+  -- | Current privilege level.
   PrivLevel :: RISCVReg rv (MT.BVType 2)
+  -- | Trip this if something bad happens.
   EXC :: RISCVReg rv MT.BoolType
 
-ra :: RISCVReg rv (MT.BVType (G.RVWidth rv))
-ra = GPR 0x01
+-- | Return address
+-- pattern GPR_RA :: forall (rv :: G.RV) (tp :: MT.Type) . tp ~ (MT.BVType (G.RVWidth rv)) => RISCVReg rv tp
+pattern GPR_RA :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_RA = GPR 1
+
+-- | Stack pointer
+pattern GPR_SP :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_SP = GPR 2
+
+-- | Global pointer
+pattern GPR_GP :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_GP = GPR 2
+
+-- | Thread pointer
+pattern GPR_TP :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_TP = GPR 4
+
+-- | Temporary/Alternate link register
+pattern GPR_T0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T0 = GPR 5
+
+-- | Temporary
+pattern GPR_T1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T1 = GPR 6
+
+-- | Temporary
+pattern GPR_T2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T2 = GPR 7
+
+-- | Saved register/frame pointer
+pattern GPR_S0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S0 = GPR 8
+
+-- | Saved register
+pattern GPR_S1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S1 = GPR 9
+
+-- | Function argument/return value
+pattern GPR_A0 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A0 = GPR 10
+
+-- | Function argument/return value
+pattern GPR_A1 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A1 = GPR 11
+
+-- | Function argument
+pattern GPR_A2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A2 = GPR 12
+
+-- | Function argument
+pattern GPR_A3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A3 = GPR 13
+
+-- | Function argument
+pattern GPR_A4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A4 = GPR 14
+
+-- | Function argument
+pattern GPR_A5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A5 = GPR 15
+
+-- | Function argument
+pattern GPR_A6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A6 = GPR 16
+
+-- | Function argument
+pattern GPR_A7 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_A7 = GPR 17
+
+-- | Saved register
+pattern GPR_S2 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S2 = GPR 18
+
+-- | Saved register
+pattern GPR_S3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S3 = GPR 19
+
+-- | Saved register
+pattern GPR_S4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S4 = GPR 20
+
+-- | Saved register
+pattern GPR_S5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S5 = GPR 21
+
+-- | Saved register
+pattern GPR_S6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S6 = GPR 22
+
+-- | Saved register
+pattern GPR_S7 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S7 = GPR 23
+
+-- | Saved register
+pattern GPR_S8 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S8 = GPR 24
+
+-- | Saved register
+pattern GPR_S9 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_S9 = GPR 25
+
+-- | Saved register
+pattern GPR_S10 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                   RISCVReg rv tp
+pattern GPR_S10 = GPR 26
+
+-- | Saved register
+pattern GPR_S11 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                   RISCVReg rv tp
+pattern GPR_S11 = GPR 27
+
+-- | Temporary
+pattern GPR_T3 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T3 = GPR 28
+
+-- | Temporary
+pattern GPR_T4 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T4 = GPR 29
+
+-- | Temporary
+pattern GPR_T5 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T5 = GPR 30
+
+-- | Temporary
+pattern GPR_T6 :: forall rv tp . () => (tp ~ 'MT.BVType (G.RVWidth rv)) =>
+                  RISCVReg rv tp
+pattern GPR_T6 = GPR 31
 
 instance Show (RISCVReg rv tp) where
   show PC = "pc"
-  show (GPR 1) = "ra"
-  show (GPR 2) = "sp"
-  show (GPR 3) = "gp"
-  show (GPR 4) = "tp"
-  show (GPR 5) = "t0"
-  show (GPR 6) = "t1"
-  show (GPR 7) = "t2"
-  show (GPR 8) = "s0"
-  show (GPR 9) = "s1"
-  show (GPR 10) = "a0"
-  show (GPR 11) = "a1"
-  show (GPR 12) = "a2"
-  show (GPR 13) = "a3"
-  show (GPR 14) = "a4"
-  show (GPR 15) = "a5"
-  show (GPR 16) = "a6"
-  show (GPR 17) = "a7"
-  show (GPR 18) = "s2"
-  show (GPR 19) = "s3"
-  show (GPR 20) = "s4"
-  show (GPR 21) = "s5"
-  show (GPR 22) = "s6"
-  show (GPR 23) = "s7"
-  show (GPR 24) = "s8"
-  show (GPR 25) = "s9"
-  show (GPR 26) = "s10"
-  show (GPR 27) = "s11"
-  show (GPR 28) = "t3"
-  show (GPR 29) = "t4"
-  show (GPR 30) = "t5"
-  show (GPR 31) = "t6"
+  show (GPR_RA) = "ra"
+  show (GPR_SP) = "sp"
+  show (GPR_GP) = "gp"
+  show (GPR_TP) = "tp"
+  show (GPR_T0) = "t0"
+  show (GPR_T1) = "t1"
+  show (GPR_T2) = "t2"
+  show (GPR_S0) = "s0"
+  show (GPR_S1) = "s1"
+  show (GPR_A0) = "a0"
+  show (GPR_A1) = "a1"
+  show (GPR_A2) = "a2"
+  show (GPR_A3) = "a3"
+  show (GPR_A4) = "a4"
+  show (GPR_A5) = "a5"
+  show (GPR_A6) = "a6"
+  show (GPR_A7) = "a7"
+  show (GPR_S2) = "s2"
+  show (GPR_S3) = "s3"
+  show (GPR_S4) = "s4"
+  show (GPR_S5) = "s5"
+  show (GPR_S6) = "s6"
+  show (GPR_S7) = "s7"
+  show (GPR_S8) = "s8"
+  show (GPR_S9) = "s9"
+  show (GPR_S10) = "s10"
+  show (GPR_S11) = "s11"
+  show (GPR_T3) = "t3"
+  show (GPR_T4) = "t4"
+  show (GPR_T5) = "t5"
+  show (GPR_T6) = "t6"
   show (GPR rid) = error $ "PANIC: bad gpr id " <> show rid
   show (FPR rid) = "fpr[" <> show rid <> "]"
   show (CSR csr) = show csr
@@ -115,13 +277,13 @@ riscvRegSet = MapF.fromList (mkPair <$> riscvRegs)
 instance (G.KnownRV rv, RISCV rv) => MC.RegisterInfo (RISCVReg rv) where
   archRegs = riscvRegs
   archRegSet = riscvRegSet
-  sp_reg = GPR 2
+  sp_reg = GPR_SP
   ip_reg = PC
   syscall_num_reg = error "syscall_num_reg undefined"
   syscallArgumentRegs = error "syscallArgumentRegs undefined"
 
 riscvAddrWidth :: G.RVRepr rv
-               -> MM.AddrWidthRepr (MC.RegAddrWidth (MC.ArchReg rv))
+               -> MM.AddrWidthRepr (MC.ArchAddrWidth rv)
 riscvAddrWidth rvRepr = case G.rvBaseArch rvRepr of
   G.RV32Repr -> MM.Addr32
   G.RV64Repr -> MM.Addr64
