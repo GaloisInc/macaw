@@ -136,7 +136,9 @@ disLocApp locApp = case locApp of
     addr <- disInstExpr addrExpr
     readMem addr (MC.BVMemRepr bytes MC.LittleEndian)
   G.ResApp _addr -> error "TODO: disassemble ResApp"
-  G.CSRApp _w _rid -> error "TODO: disassemble CSRApp"
+  G.CSRApp _w _rid -> do
+    setReg EXC (MC.BoolValue True)
+    return (MC.BVValue knownNat 0)
   G.PrivApp -> getReg PrivLevel
 
 disBVApp :: (1 <= w, G.KnownRV rv)
@@ -161,8 +163,8 @@ disBVApp bvApp = case bvApp of
   G.AbsApp _w _e -> error "TODO: Disassemble AbsApp"
   G.SignumApp _w _e -> error "TODO: Disassemble SignumApp"
   G.EqApp e1 e2 -> widthPos e1 $ binaryOpBool MC.Eq e1 e2
-  G.LtuApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
-  G.LtsApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVUnsignedLt e1 e2
+  G.LtsApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
+  G.LtuApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVUnsignedLt e1 e2
   -- In GRIFT, we use "ext" to truncate bitvectors, which is weird but
   -- true. So we have to check the widths fo the expressions involved
   -- and emit either an extension, a truncation, or just return the
@@ -256,10 +258,7 @@ disInstExpr instExpr = case instExpr of
 
 data AssignStmt expr rv = forall w . AssignStmt !(G.LocApp (expr rv) rv w) !(expr rv w)
 
--- | Convert a 'G.Stmt' into a list of assignment statements. It isn't
--- clear what happens if the assignments overlap, so we make the
--- assumption that they don't for now (which should be mostly the
--- case, as branch statements are mostly used for exception handling).
+-- | Convert a 'G.Stmt' into a list of assignment statements.
 collapseStmt :: G.KnownRV rv => G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
 collapseStmt stmt = case stmt of
   G.AssignStmt loc e -> [AssignStmt loc e]
@@ -272,7 +271,7 @@ collapseStmt stmt = case stmt of
           [ AssignStmt loc (G.iteE testExpr e (G.stateExpr (G.LocApp loc))) | AssignStmt loc e <- lAssignStmts ] ++
           [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- rAssignStmts ]
 
-disAssignStmt :: G.KnownRV rv => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disAssignStmt :: (RISCV rv, G.KnownRV rv) => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disAssignStmt stmt = case stmt of
   AssignStmt (G.PCApp _) valExpr -> do
     val <- disInstExpr valExpr
@@ -281,7 +280,7 @@ disAssignStmt stmt = case stmt of
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
-      MC.BVValue _ 0 -> return () -- it's ok to assign to 0; the value
+      MC.BVValue _ 0 -> return () -- it's ok to assign to x0; the value
                                   -- just gets thrown out
       MC.BVValue _ ridVal -> setReg (GPR (BV.bitVector ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
@@ -296,13 +295,13 @@ disAssignStmt stmt = case stmt of
     val <- disInstExpr valExpr
     writeMem addr (MC.BVMemRepr bytes MC.LittleEndian) val
   AssignStmt (G.ResApp _addr) _valExpr -> error "TODO: Disassemble ResApp"
-  AssignStmt (G.CSRApp _w _rid) _valExpr -> error "TODO: Disassemble CSRApp"
+  AssignStmt (G.CSRApp _w _rid) _valExpr -> setReg EXC (MC.BoolValue True)
   AssignStmt G.PrivApp valExpr -> do
     val <- disInstExpr valExpr
     setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
-disStmt :: G.KnownRV rv => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disStmt :: (RISCV rv, G.KnownRV rv) => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
 
 disassembleBlock :: RISCV rv
