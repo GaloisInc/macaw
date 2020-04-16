@@ -12,7 +12,6 @@
 
 module Data.Macaw.RISCV.Disassemble
   ( riscvDisassembleFn
-  , disassembleBlock
   ) where
 
 import qualified Control.Monad.Except as E

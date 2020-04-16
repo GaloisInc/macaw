@@ -33,10 +33,10 @@ type RISCV rv = ( MM.MemWidth (G.RVWidth rv)
 data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)
 
 instance FC.FoldableFC (RISCVPrimFn rv) where
-  foldMapFC _ _ = undefined
+  foldMapFC _ _ = error "foldMapFC undefined for RISCVPrimFn"
 
 instance MC.IsArchFn (RISCVPrimFn rv) where
-  ppArchFn _ _ = undefined
+  ppArchFn _ _ = error "ppArchFn undefined for RISCVPrimFn"
 
 type instance MC.ArchFn rv = RISCVPrimFn rv
 
@@ -44,10 +44,10 @@ type instance MC.ArchFn rv = RISCVPrimFn rv
 data RISCVStmt (rv :: G.RV) (expr :: MT.Type -> K.Type)
 
 instance F.FoldableF (RISCVStmt rv) where
-  foldMapF _ _ = undefined
+  foldMapF _ _ = error "foldMapF undefined for RISCVStmt"
 
 instance MC.IsArchStmt (RISCVStmt rv) where
-  ppArchStmt _ _ = undefined
+  ppArchStmt _ _ = error "ppArchStmt undefined for RISCVStmt"
 
 type instance MC.ArchStmt rv = RISCVStmt rv
 
@@ -55,7 +55,7 @@ type instance MC.ArchStmt rv = RISCVStmt rv
 data RISCVTermStmt (rv :: G.RV) ids
 
 instance MC.PrettyF (RISCVTermStmt rv) where
-  prettyF = undefined
+  prettyF = error "PrettyF undefined for RISCVTermStmt"
 
 -- The IPAlignment instance will likely need to take computations like
 -- this into account (for JAL):
@@ -73,4 +73,4 @@ type instance MC.ArchTermStmt (rv :: G.RV) = RISCVTermStmt rv
 type instance MC.ArchBlockPrecond (rv :: G.RV) = ()
 
 riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool
-riscvPrimFnHasSideEffects _ = undefined
+riscvPrimFnHasSideEffects _ = error "riscvPrimFnHasSideEffects undefined for RISCVPrimFn"
