@@ -133,6 +133,10 @@ readMem :: MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
         -> DisInstM s ids rv fmt (MC.Value rv ids tp)
 readMem addr bytes = addAssignment $ MC.ReadMem addr bytes
 
+-- FIXME: This is wrong. What we really want to do is reference the
+-- value of the register before executing the instruction. See JALR as
+-- an example -- if the link register is equal to the register
+-- containing the jump address, then things are going to go bad
 getReg :: MC.ArchReg rv tp -> DisInstM s ids rv fmt (MC.Value rv ids tp)
 getReg r = use (disInstRegState . MC.boundValue r)
 

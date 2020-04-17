@@ -13,7 +13,7 @@ module Data.Macaw.RISCV.Arch
   , RISCVStmt
   , RISCVTermStmt
   , riscvPrimFnHasSideEffects
-  , type RISCV
+  , type RISCVConstraints
   ) where
 
 import qualified Data.Kind as K
@@ -26,8 +26,8 @@ import qualified GRIFT.Types as G
 
 -- | Macaw-specific constraints we need for the RISC-V configuration
 -- type parameter.
-type RISCV rv = ( MM.MemWidth (G.RVWidth rv)
-                )
+type RISCVConstraints rv = ( MM.MemWidth (G.RVWidth rv)
+                           )
 
 -- | RISC-V architecture-specific functions (none)
 data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)
