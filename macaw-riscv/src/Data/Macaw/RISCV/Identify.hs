@@ -24,7 +24,7 @@ import           Data.Macaw.RISCV.RISCVReg
 -- but it seems probable that it is. Therefore, we probably don't want
 -- to check that to identify a call site. We need to do some more
 -- experimentation with gcc and llvm to see how x5 is used.
-riscvIdentifyCall :: RISCV rv
+riscvIdentifyCall :: RISCVConstraints rv
                   => G.RVRepr rv
                   -> MM.Memory (MC.ArchAddrWidth rv)
                   -> Seq.Seq (MC.Stmt rv ids)
@@ -41,7 +41,7 @@ riscvIdentifyCall _ mem stmts0 rs
 -- | To see if this block is executing a return, we check the
 -- instruction pointer to see if it is equal to the abstract value
 -- 'MC.ReturnAddr'.
-riscvIdentifyReturn :: RISCV rv
+riscvIdentifyReturn :: RISCVConstraints rv
                     => G.RVRepr rv
                     -> Seq.Seq (MC.Stmt rv ids)
                     -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
@@ -55,7 +55,7 @@ riscvIdentifyReturn rvRepr stmts0 rs absState = G.withRV rvRepr $ do
 
 -- FIXME: Right now, this code only works for RV64GC. We're going to
 -- have to write it based on the rvRepr argument.
-matchReturn :: RISCV rv
+matchReturn :: RISCVConstraints rv
             => G.RVRepr rv
             -> MA.AbsProcessorState (MC.ArchReg rv) ids
             -> MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
@@ -67,7 +67,7 @@ matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
     MA.ReturnAddr -> return (Some MA.ReturnAddr)
     _ -> Nothing
 
-riscvCheckForReturnAddr :: RISCV rv
+riscvCheckForReturnAddr :: RISCVConstraints rv
                         => G.RVRepr rv
                         -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
                         -> MA.AbsProcessorState (MC.ArchReg rv) ids

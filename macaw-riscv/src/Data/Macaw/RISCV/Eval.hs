@@ -20,7 +20,7 @@ import Data.Macaw.RISCV.Arch
 import Data.Macaw.RISCV.RISCVReg
 
 -- | At the beginning of each block, the PC holds the address of the block.
-riscvInitialBlockRegs :: RISCV rv
+riscvInitialBlockRegs :: RISCVConstraints rv
                       => G.RVRepr rv
                       -> MC.ArchSegmentOff rv
                       -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
@@ -29,7 +29,7 @@ riscvInitialBlockRegs rvRepr startIP = G.withRV rvRepr $
   MC.curIP .~ MC.RelocatableValue (riscvAddrWidth rvRepr) (MM.segoffAddr startIP)
 
 -- | At the beginning of each function, GPR_RA holds the return address.
-riscvInitialAbsState :: RISCV rv
+riscvInitialAbsState :: RISCVConstraints rv
                      => G.RVRepr rv
                      -> MM.Memory (MC.ArchAddrWidth rv)
                      -> MC.ArchSegmentOff rv

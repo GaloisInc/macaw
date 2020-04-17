@@ -308,7 +308,7 @@ riscvRegSet :: MapF.MapF (RISCVReg rv) (Const ())
 riscvRegSet = MapF.fromList (mkPair <$> riscvRegs)
   where mkPair (Some reg) = MapF.Pair reg (Const ())
 
-instance (G.KnownRV rv, RISCV rv) => MC.RegisterInfo (RISCVReg rv) where
+instance (G.KnownRV rv, RISCVConstraints rv) => MC.RegisterInfo (RISCVReg rv) where
   archRegs = riscvRegs
   archRegSet = riscvRegSet
   sp_reg = GPR_SP

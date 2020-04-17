@@ -37,7 +37,7 @@ riscvDemandContext = MD.DemandContext
   , MD.archFnHasSideEffects = riscvPrimFnHasSideEffects
   }
 
-riscv_info :: RISCV rv => G.RVRepr rv -> MI.ArchitectureInfo rv
+riscv_info :: RISCVConstraints rv => G.RVRepr rv -> MI.ArchitectureInfo rv
 riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   { MI.withArchConstraints = \x -> x
   , MI.archAddrWidth = riscvAddrWidth rvRepr

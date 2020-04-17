@@ -270,7 +270,7 @@ collapseStmt stmt = case stmt of
           [ AssignStmt loc (G.iteE testExpr e (G.stateExpr (G.LocApp loc))) | AssignStmt loc e <- lAssignStmts ] ++
           [ AssignStmt loc (G.iteE testExpr (G.stateExpr (G.LocApp loc)) e) | AssignStmt loc e <- rAssignStmts ]
 
-disAssignStmt :: (RISCV rv, G.KnownRV rv) => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disAssignStmt :: (RISCVConstraints rv, G.KnownRV rv) => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disAssignStmt stmt = case stmt of
   AssignStmt (G.PCApp _) valExpr -> do
     val <- disInstExpr valExpr
@@ -300,10 +300,10 @@ disAssignStmt stmt = case stmt of
     setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
-disStmt :: (RISCV rv, G.KnownRV rv) => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disStmt :: (RISCVConstraints rv, G.KnownRV rv) => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
 
-disassembleBlock :: RISCV rv
+disassembleBlock :: RISCVConstraints rv
                  => G.RVRepr rv
                  -- ^ The RISC-V configuration
                  -> G.InstructionSet rv
@@ -373,7 +373,7 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
         isBlockTerminator G.Mret = True
         isBlockTerminator _ = False
 
-riscvDisassembleFn :: RISCV rv
+riscvDisassembleFn :: RISCVConstraints rv
                    => G.RVRepr rv
                    -> NonceGenerator (ST s) ids
                    -> MC.ArchSegmentOff rv
