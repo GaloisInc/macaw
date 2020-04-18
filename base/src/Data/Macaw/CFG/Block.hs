@@ -9,7 +9,6 @@ types.
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE PolyKinds #-}
 
 module Data.Macaw.CFG.Block
   ( Block(..)
@@ -29,7 +28,7 @@ import           Data.Macaw.CFG.Core
 --
 -- This is the unclassified definition that is generated directly from
 -- the architecture specific disassembler.
-data TermStmt (arch :: k) ids
+data TermStmt arch ids
      -- | Fetch and execute the next instruction from the given processor state.
   = FetchAndExecute !(RegState (ArchReg arch) (Value arch ids))
     -- | The block ended prematurely due to an error in instruction
@@ -66,7 +65,7 @@ instance ArchConstraints arch
 -- | The type for code blocks returned by the disassembler.
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
-data Block (arch :: k) ids
+data Block arch ids
    = Block { blockStmts :: !([Stmt arch ids])
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
