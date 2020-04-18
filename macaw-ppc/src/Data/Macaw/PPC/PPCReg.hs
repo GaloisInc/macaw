@@ -107,15 +107,6 @@ linuxCalleeSaveRegisters _ =
 type instance MC.RegAddrWidth (PPCReg v) = PPC.AddrWidth v
 type instance MC.ArchReg (PPC.AnyPPC v) = PPCReg v
 
--- {-# DEPRECATED
---       ArchWidth "Use 'SemMC.Architecture.AddrWidth' and 'SemMC.Architecture.addrWidth'."
--- #-}
--- class ArchWidth arch where
---   pointerNatRepr :: proxy arch -> NatRepr (MC.RegAddrWidth (PPCReg arch))
-
--- instance PPC.KnownVariant v => ArchWidth (PPC.AnyPPC v) where
---   pointerNatRepr _ = PPC.addrWidth (PPC.knownVariant @v)
-
 instance (PPC.KnownVariant v) => HasRepr (PPCReg v) TypeRepr where
   typeRepr r =
     case r of
