@@ -117,7 +117,7 @@ widthPos e a = case isZeroOrGT1 (G.exprWidth e) of
 
 disLocApp :: (1 <= w, G.KnownRV rv)
           => G.LocApp (G.InstExpr fmt rv) rv w
-          -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
+          -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids (MT.BVType w))
 disLocApp locApp = case locApp of
   G.PCApp _w -> getReg PC
   G.GPRApp _w ridExpr -> do
@@ -142,7 +142,7 @@ disLocApp locApp = case locApp of
 
 disBVApp :: (1 <= w, G.KnownRV rv)
          => G.BVApp (G.InstExpr fmt rv) w
-         -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
+         -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids (MT.BVType w))
 disBVApp bvApp = case bvApp of
   G.AndApp w e1 e2 -> binaryOp (MC.BVAnd w) e1 e2
   G.OrApp w e1 e2 -> binaryOp (MC.BVOr w) e1 e2
@@ -228,7 +228,7 @@ disBVApp bvApp = case bvApp of
 
 disStateApp :: (1 <= w, G.KnownRV rv)
             => G.StateApp (G.InstExpr fmt rv) rv w
-            -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
+            -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids (MT.BVType w))
 disStateApp stateApp = case stateApp of
   G.LocApp locApp -> disLocApp locApp
   G.AppExpr bvApp -> disBVApp bvApp
@@ -239,7 +239,7 @@ instOperand (G.OperandID oix) (G.Inst _ (G.Operands _ operands)) = operands L.!!
 
 disInstExpr :: (1 <= w, G.KnownRV rv)
             => G.InstExpr fmt rv w
-            -> DisInstM s ids rv fmt (MC.Value rv ids (MT.BVType w))
+            -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids (MT.BVType w))
 disInstExpr instExpr = case instExpr of
   G.InstLitBV (BV.BitVector w val) -> return (MC.BVValue w val)
   G.InstAbbrevApp abbrevApp -> disInstExpr (G.expandAbbrevApp abbrevApp)
@@ -309,19 +309,19 @@ disassembleBlock :: RISCVConstraints rv
                  -> G.InstructionSet rv
                  -- ^ The RISC-V instruction set for this particular
                  -- RISC-V configuration
-                 -> Seq.Seq (MC.Stmt rv ids)
+                 -> Seq.Seq (MC.Stmt (RISCV rv) ids)
                  -- ^ The statements disassembled thus far
-                 -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                 -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
                  -- ^ The register state at this point of the block
                  -> NonceGenerator (ST s) ids
                  -- ^ The nonce generator used for block disassembly
-                 -> MC.ArchSegmentOff rv
+                 -> MC.ArchSegmentOff (RISCV rv)
                  -- ^ The current program counter value
-                 -> MM.MemWord (MC.ArchAddrWidth rv)
+                 -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
                  -- ^ The current offset into the block
-                 -> MM.MemWord (MC.ArchAddrWidth rv)
+                 -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
                  -- ^ The maximum offset we should disassemble to
-                 -> ST s (MC.Block rv ids, MM.MemWord (MC.ArchAddrWidth rv))
+                 -> ST s (MC.Block (RISCV rv) ids, MM.MemWord (MC.ArchAddrWidth (RISCV rv)))
                  -- ^ Return the disassembled block and its size.
 disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffset = G.withRV rvRepr $ do
   case readInstruction rvRepr iset curIPAddr of
@@ -376,10 +376,10 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
 riscvDisassembleFn :: RISCVConstraints rv
                    => G.RVRepr rv
                    -> NonceGenerator (ST s) ids
-                   -> MC.ArchSegmentOff rv
-                   -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                   -> MC.ArchSegmentOff (RISCV rv)
+                   -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
                    -> Int
-                   -> ST s (MC.Block rv ids, Int)
+                   -> ST s (MC.Block (RISCV rv) ids, Int)
 riscvDisassembleFn rvRepr ng startAddr regState maxSize = do
   (block, bytes) <- disassembleBlock rvRepr (G.knownISetWithRepr rvRepr) mempty regState ng startAddr 0 (fromIntegral maxSize)
   return (block, fromIntegral bytes)

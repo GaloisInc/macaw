@@ -31,13 +31,13 @@ import Data.Macaw.RISCV.Eval
 import Data.Macaw.RISCV.Identify
 import Data.Macaw.RISCV.RISCVReg
 
-riscvDemandContext :: MD.DemandContext (rv :: G.RV)
+riscvDemandContext :: MD.DemandContext (RISCV rv)
 riscvDemandContext = MD.DemandContext
   { MD.demandConstraints = \a -> a
   , MD.archFnHasSideEffects = riscvPrimFnHasSideEffects
   }
 
-riscv_info :: RISCVConstraints rv => G.RVRepr rv -> MI.ArchitectureInfo rv
+riscv_info :: RISCVConstraints rv => G.RVRepr rv -> MI.ArchitectureInfo (RISCV rv)
 riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   { MI.withArchConstraints = \x -> x
   , MI.archAddrWidth = riscvAddrWidth rvRepr

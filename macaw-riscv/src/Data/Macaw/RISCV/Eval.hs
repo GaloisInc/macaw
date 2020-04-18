@@ -22,8 +22,8 @@ import Data.Macaw.RISCV.RISCVReg
 -- | At the beginning of each block, the PC holds the address of the block.
 riscvInitialBlockRegs :: RISCVConstraints rv
                       => G.RVRepr rv
-                      -> MC.ArchSegmentOff rv
-                      -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                      -> MC.ArchSegmentOff (RISCV rv)
+                      -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
 riscvInitialBlockRegs rvRepr startIP = G.withRV rvRepr $
   MC.mkRegState MC.Initial &
   MC.curIP .~ MC.RelocatableValue (riscvAddrWidth rvRepr) (MM.segoffAddr startIP)
@@ -31,15 +31,15 @@ riscvInitialBlockRegs rvRepr startIP = G.withRV rvRepr $
 -- | At the beginning of each function, GPR_RA holds the return address.
 riscvInitialAbsState :: RISCVConstraints rv
                      => G.RVRepr rv
-                     -> MM.Memory (MC.ArchAddrWidth rv)
-                     -> MC.ArchSegmentOff rv
-                     -> MA.AbsBlockState (MC.ArchReg rv)
+                     -> MM.Memory (MC.ArchAddrWidth (RISCV rv))
+                     -> MC.ArchSegmentOff (RISCV rv)
+                     -> MA.AbsBlockState (MC.ArchReg (RISCV rv))
 riscvInitialAbsState rvRepr _mem startAddr = s0
   where
     initRegVals = MapF.fromList [ MapF.Pair GPR_RA MA.ReturnAddr ]
     s0 = G.withRV rvRepr $ MA.fnStartAbsBlockState startAddr initRegVals []
 
-riscvCallParams :: MA.CallParams (RISCVReg rv)
+riscvCallParams :: MA.CallParams (MC.ArchReg (RISCV rv))
 riscvCallParams = MA.CallParams { MA.postCallStackDelta = 0
                                 , MA.preserveReg = riscvPreserveReg
                                 , MA.stackGrowsDown = True
@@ -66,7 +66,7 @@ riscvPreserveReg (FPR rid)
 riscvPreserveReg _ = False
 
 riscvAddrWidth :: G.RVRepr rv
-               -> MM.AddrWidthRepr (MC.ArchAddrWidth rv)
+               -> MM.AddrWidthRepr (MC.ArchAddrWidth (RISCV rv))
 riscvAddrWidth rvRepr = case G.rvBaseArch rvRepr of
   G.RV32Repr -> MM.Addr32
   G.RV64Repr -> MM.Addr64

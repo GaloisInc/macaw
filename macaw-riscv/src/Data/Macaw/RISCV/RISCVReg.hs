@@ -294,7 +294,7 @@ instance G.KnownRV rv => MT.HasRepr (RISCVReg rv) MT.TypeRepr where
   typeRepr PrivLevel = MT.BVTypeRepr knownNat
   typeRepr EXC = MT.BoolTypeRepr
 
-type instance MC.ArchReg rv = RISCVReg rv
+type instance MC.ArchReg (RISCV rv) = RISCVReg rv
 type instance MC.RegAddrWidth (RISCVReg rv) = G.RVWidth rv
 
 riscvRegs :: [Some (RISCVReg rv)]
