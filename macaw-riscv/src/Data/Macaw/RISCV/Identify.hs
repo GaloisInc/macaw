@@ -26,10 +26,10 @@ import           Data.Macaw.RISCV.RISCVReg
 -- experimentation with gcc and llvm to see how x5 is used.
 riscvIdentifyCall :: RISCVConstraints rv
                   => G.RVRepr rv
-                  -> MM.Memory (MC.ArchAddrWidth rv)
-                  -> Seq.Seq (MC.Stmt rv ids)
-                  -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
-                  -> Maybe (Seq.Seq (MC.Stmt rv ids), MC.ArchSegmentOff rv)
+                  -> MM.Memory (MC.ArchAddrWidth (RISCV rv))
+                  -> Seq.Seq (MC.Stmt (RISCV rv) ids)
+                  -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
+                  -> Maybe (Seq.Seq (MC.Stmt (RISCV rv) ids), MC.ArchSegmentOff (RISCV rv))
 riscvIdentifyCall _ mem stmts0 rs
   | not (null stmts0)
   , retVal@(MC.RelocatableValue {}) <- rs ^. MC.boundValue GPR_RA
@@ -43,12 +43,12 @@ riscvIdentifyCall _ mem stmts0 rs
 -- 'MC.ReturnAddr'.
 riscvIdentifyReturn :: RISCVConstraints rv
                     => G.RVRepr rv
-                    -> Seq.Seq (MC.Stmt rv ids)
-                    -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
+                    -> Seq.Seq (MC.Stmt (RISCV rv) ids)
+                    -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
                     -- ^ Register state after executing the block
-                    -> MA.AbsProcessorState (MC.ArchReg rv) ids
+                    -> MA.AbsProcessorState (MC.ArchReg (RISCV rv)) ids
                     -- ^ Abstract state at the start of the block
-                    -> Maybe (Seq.Seq (MC.Stmt rv ids))
+                    -> Maybe (Seq.Seq (MC.Stmt (RISCV rv) ids))
 riscvIdentifyReturn rvRepr stmts0 rs absState = G.withRV rvRepr $ do
   Some MA.ReturnAddr <- matchReturn rvRepr absState (rs ^. MC.boundValue MC.ip_reg)
   return stmts0
@@ -57,8 +57,8 @@ riscvIdentifyReturn rvRepr stmts0 rs absState = G.withRV rvRepr $ do
 -- have to write it based on the rvRepr argument.
 matchReturn :: RISCVConstraints rv
             => G.RVRepr rv
-            -> MA.AbsProcessorState (MC.ArchReg rv) ids
-            -> MC.Value rv ids (MT.BVType (MC.ArchAddrWidth rv))
+            -> MA.AbsProcessorState (MC.ArchReg (RISCV rv)) ids
+            -> MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVAnd _ addr (MC.BVValue _ mask)))) <- return ip
@@ -69,7 +69,7 @@ matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
 
 riscvCheckForReturnAddr :: RISCVConstraints rv
                         => G.RVRepr rv
-                        -> MC.RegState (MC.ArchReg rv) (MC.Value rv ids)
-                        -> MA.AbsProcessorState (MC.ArchReg rv) ids
+                        -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
+                        -> MA.AbsProcessorState (MC.ArchReg (RISCV rv)) ids
                         -> Bool
 riscvCheckForReturnAddr rvRepr r s = isJust $ matchReturn rvRepr s (r ^. MC.boundValue GPR_RA)

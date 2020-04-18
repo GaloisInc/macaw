@@ -9,7 +9,8 @@
 module Data.Macaw.RISCV.Arch
   ( -- * RISC-V functions, statements, and terminators
     -- | There are none at this time.
-    RISCVPrimFn
+    RISCV
+  , RISCVPrimFn
   , RISCVStmt
   , RISCVTermStmt
   , riscvPrimFnHasSideEffects
@@ -23,6 +24,8 @@ import qualified Data.Parameterized.TraversableF as F
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Macaw.Types as MT
 import qualified GRIFT.Types as G
+
+data RISCV (rv :: G.RV)
 
 -- | Macaw-specific constraints we need for the RISC-V configuration
 -- type parameter.
@@ -38,7 +41,7 @@ instance FC.FoldableFC (RISCVPrimFn rv) where
 instance MC.IsArchFn (RISCVPrimFn rv) where
   ppArchFn _ _ = error "ppArchFn undefined for RISCVPrimFn"
 
-type instance MC.ArchFn rv = RISCVPrimFn rv
+type instance MC.ArchFn (RISCV rv) = RISCVPrimFn rv
 
 -- | RISC-V architecture-specific statements (none)
 data RISCVStmt (rv :: G.RV) (expr :: MT.Type -> K.Type)
@@ -49,7 +52,7 @@ instance F.FoldableF (RISCVStmt rv) where
 instance MC.IsArchStmt (RISCVStmt rv) where
   ppArchStmt _ _ = error "ppArchStmt undefined for RISCVStmt"
 
-type instance MC.ArchStmt rv = RISCVStmt rv
+type instance MC.ArchStmt (RISCV rv) = RISCVStmt rv
 
 -- | RISC-V block termination statements (none)
 data RISCVTermStmt (rv :: G.RV) ids
@@ -64,13 +67,13 @@ instance MC.PrettyF (RISCVTermStmt rv) where
 -- But for now, we leave it as trivial.
 -- | This is an orphan instance because we are reusing the 'G.RV' type
 -- from GRIFT.
-instance MC.IPAlignment (rv :: G.RV) where
+instance MC.IPAlignment (RISCV rv) where
   fromIPAligned = Just
   toIPAligned = id
 
-type instance MC.ArchTermStmt (rv :: G.RV) = RISCVTermStmt rv
+type instance MC.ArchTermStmt (RISCV rv) = RISCVTermStmt rv
 
-type instance MC.ArchBlockPrecond (rv :: G.RV) = ()
+type instance MC.ArchBlockPrecond (RISCV rv) = ()
 
 riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool
 riscvPrimFnHasSideEffects _ = error "riscvPrimFnHasSideEffects undefined for RISCVPrimFn"
