@@ -10,11 +10,9 @@ target binaries.
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -983,7 +981,6 @@ branchBlockState ainfo ps0 stmts regs c0 isTrue0 =
               if b then tv else fv
           | otherwise =
               v
-        refinedRegs :: RegState (ArchReg a) (Value a ids)
         refinedRegs = mapRegsWith mapReg regs
      in finalAbsBlockState (foldl' (absEvalStmt ainfo) ps stmts) refinedRegs
 

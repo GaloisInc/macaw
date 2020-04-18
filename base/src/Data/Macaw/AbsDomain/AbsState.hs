@@ -5,7 +5,6 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -1147,7 +1146,7 @@ setAbsIP a b
 -- | The absolute value associated with a given architecture.
 --
 -- This is only a function of the address width.
-type ArchAbsValue (arch :: k) = AbsValue (RegAddrWidth (ArchReg arch))
+type ArchAbsValue arch = AbsValue (RegAddrWidth (ArchReg arch))
 
 -- | This stores the abstract state of the system which may be within
 -- a block.

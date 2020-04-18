@@ -4,7 +4,6 @@ This defines the architecture-specific information needed for code discovery.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
@@ -45,7 +44,7 @@ import           Data.Macaw.Memory
 -- poping from the x86 stack.
 --
 -- If no preconditions are needed, this can just be set to the unit type.
-type family ArchBlockPrecond (arch :: k)
+type family ArchBlockPrecond (arch :: K.Type)
 
 -- | Function for disassembling a range of code (usually a function in
 -- the target code image) into blocks.
@@ -56,7 +55,7 @@ type family ArchBlockPrecond (arch :: k)
 -- This returns the list of blocks, the number of bytes in the blocks,
 -- and any potential error that prematurely terminated translating the
 -- block.
-type DisassembleFn (arch :: k)
+type DisassembleFn arch
    = forall s ids
    .  NonceGenerator (ST s) ids
    -> ArchSegmentOff arch
@@ -78,7 +77,7 @@ type IntraJumpTarget arch =
 
 
 -- | This records architecture specific functions for analysis.
-data ArchitectureInfo (arch :: k)
+data ArchitectureInfo arch
    = ArchitectureInfo
      { withArchConstraints :: forall a . (ArchConstraints arch => a) -> a
        -- ^ Provides the architecture constraints to any computation
