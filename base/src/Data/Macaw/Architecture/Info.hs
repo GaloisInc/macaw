@@ -44,7 +44,7 @@ import           Data.Macaw.Memory
 -- poping from the x86 stack.
 --
 -- If no preconditions are needed, this can just be set to the unit type.
-type family ArchBlockPrecond (arch :: K.Type)
+type family ArchBlockPrecond (arch :: K.Type) :: K.Type
 
 -- | Function for disassembling a range of code (usually a function in
 -- the target code image) into blocks.
