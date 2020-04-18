@@ -43,40 +43,39 @@ import           Data.Macaw.PPC.PPCReg
 import qualified Data.Macaw.BinaryLoader.PPC as BLP
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 
-ppcCallParams :: (PPCReg ppc ~ ArchReg ppc) => (forall tp . PPCReg ppc tp -> Bool) -> MA.CallParams (PPCReg ppc)
+ppcCallParams :: (forall tp . PPCReg v tp -> Bool) -> MA.CallParams (PPCReg v)
 ppcCallParams preservePred =
   MA.CallParams { MA.postCallStackDelta = 0
                 , MA.preserveReg = preservePred
                 , MA.stackGrowsDown = True
                 }
 
-ppcInitialBlockRegs :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-                    => ArchSegmentOff ppc
-                    -> MI.ArchBlockPrecond ppc
-                    -> RegState (PPCReg ppc) (Value ppc ids)
+ppcInitialBlockRegs :: (PPCArchConstraints v)
+                    => ArchSegmentOff (SP.AnyPPC v)
+                    -> MI.ArchBlockPrecond (SP.AnyPPC v)
+                    -> RegState (PPCReg v) (Value (SP.AnyPPC v) ids)
 ppcInitialBlockRegs addr _preconds = MSG.initRegState addr
 
-ppcExtractBlockPrecond :: (MI.ArchBlockPrecond ppc ~ ())
-                       => ArchSegmentOff ppc
-                       -> MA.AbsBlockState (ArchReg ppc)
-                       -> Either String (MI.ArchBlockPrecond ppc)
+ppcExtractBlockPrecond :: ArchSegmentOff (SP.AnyPPC v)
+                       -> MA.AbsBlockState (PPCReg v)
+                       -> Either String (MI.ArchBlockPrecond (SP.AnyPPC v))
 ppcExtractBlockPrecond _ _ = Right ()
 
-preserveRegAcrossSyscall :: (ArchReg ppc ~ PPCReg ppc, 1 <= RegAddrWidth (PPCReg ppc))
-                         => proxy ppc
-                         -> ArchReg ppc tp
+preserveRegAcrossSyscall :: (1 <= RegAddrWidth (PPCReg v))
+                         => proxy v
+                         -> PPCReg v tp
                          -> Bool
 preserveRegAcrossSyscall proxy r = S.member (Some r) (linuxSystemCallPreservedRegisters proxy)
 
-postPPCTermStmtAbsState :: forall var ppc ids
-                         . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-                        => (forall tp . PPCReg ppc tp -> Bool)
-                        -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                        -> AbsProcessorState (PPCReg ppc) ids
-                        -> MJ.IntraJumpBounds ppc ids
-                        -> RegState (PPCReg ppc) (Value ppc ids)
-                        -> PPCTermStmt ppc ids
-                        -> Maybe (MM.MemSegmentOff (RegAddrWidth (ArchReg ppc)), AbsBlockState (PPCReg ppc), MJ.InitJumpBounds ppc)
+postPPCTermStmtAbsState :: forall var ids
+                         . (PPCArchConstraints var)
+                        => (forall tp . PPCReg var tp -> Bool)
+                        -> MM.Memory (SP.AddrWidth var)
+                        -> AbsProcessorState (PPCReg var) ids
+                        -> MJ.IntraJumpBounds (SP.AnyPPC var) ids
+                        -> RegState (PPCReg var) (Value (SP.AnyPPC var) ids)
+                        -> PPCTermStmt var ids
+                        -> Maybe (MM.MemSegmentOff (SP.AddrWidth var), AbsBlockState (PPCReg var), MJ.InitJumpBounds (SP.AnyPPC var))
 postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
     PPCSyscall ->
@@ -113,15 +112,14 @@ postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
 -- One value that is definitely set is the link register, which holds the
 -- abstract return value.  When available, we also populate the abstract state
 -- with the Table of Contents pointer (in r2).
-mkInitialAbsState :: ( ppc ~ SP.AnyPPC var
-                     , PPCArchConstraints var
-                     , BLP.HasTOC ppc binFmt
+mkInitialAbsState :: ( PPCArchConstraints var
+                     , BLP.HasTOC (SP.AnyPPC var) binFmt
                      )
-                  => proxy ppc
-                  -> BL.LoadedBinary ppc binFmt
-                  -> MM.Memory (RegAddrWidth (ArchReg ppc))
-                  -> ArchSegmentOff ppc
-                  -> MA.AbsBlockState (ArchReg ppc)
+                  => proxy var
+                  -> BL.LoadedBinary (SP.AnyPPC var) binFmt
+                  -> MM.Memory (SP.AddrWidth var)
+                  -> ArchSegmentOff (SP.AnyPPC var)
+                  -> MA.AbsBlockState (PPCReg var)
 mkInitialAbsState _ binData _mem startAddr =
   case TOC.lookupTOCAbs (BLP.getTOC binData) startAddr of
     Just tocAddr -> s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
@@ -130,11 +128,11 @@ mkInitialAbsState _ binData _mem startAddr =
     initRegVals = MapF.fromList [ MapF.Pair PPC_LNK MA.ReturnAddr ]
     s0 = MA.fnStartAbsBlockState startAddr initRegVals []
 
-absEvalArchFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-              => proxy ppc
-              -> AbsProcessorState (ArchReg ppc) ids
-              -> ArchFn ppc (Value ppc ids) tp
-              -> AbsValue (RegAddrWidth (ArchReg ppc)) tp
+absEvalArchFn :: (PPCArchConstraints var)
+              => proxy var
+              -> AbsProcessorState (PPCReg var) ids
+              -> PPCPrimFn var (Value (SP.AnyPPC var) ids) tp
+              -> AbsValue (SP.AddrWidth var) tp
 absEvalArchFn _ _r = \case
   SDiv{}         -> MA.TopV
   UDiv{}         -> MA.TopV
@@ -171,8 +169,8 @@ absEvalArchFn _ _r = \case
 
 -- | For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
-absEvalArchStmt :: proxy ppc
-                -> AbsProcessorState (ArchReg ppc) ids
-                -> ArchStmt ppc (Value ppc ids)
-                -> AbsProcessorState (ArchReg ppc) ids
+absEvalArchStmt :: proxy v
+                -> AbsProcessorState (PPCReg v) ids
+                -> PPCStmt v (Value (SP.AnyPPC v) ids)
+                -> AbsProcessorState (PPCReg v) ids
 absEvalArchStmt _ s _ = s

@@ -20,13 +20,11 @@ module Data.Macaw.PPC.PPCReg (
   PPCReg(..),
   linuxSystemCallPreservedRegisters,
   linuxCalleeSaveRegisters,
-  ArchWidth(..),
   locToRegTH
   ) where
 
 import           GHC.TypeLits
 
-import           Data.Proxy ( Proxy(..) )
 import qualified Data.Set as S
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax ( lift )
@@ -44,25 +42,21 @@ import qualified SemMC.Architecture.PPC.Location as APPC
 
 -- | The register type for PowerPC, parameterized by architecture to support
 -- both PowerPC32 and PowerPC64
-
--- TODO: Refactor so that this takes the PPC variant as an argument
--- rather than the architecture (which is always @PPC.AnyPPC v@ for
--- some @v@).  This is likely to be disruptive.
-data PPCReg arch tp where
-  PPC_GP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => D.GPR -> PPCReg arch (BVType w)
+data PPCReg v tp where
+  PPC_GP :: (w ~ PPC.AddrWidth v, 1 <= w) => D.GPR -> PPCReg v (BVType w)
   PPC_FR :: D.VSReg -> PPCReg arch (BVType 128)
-  PPC_IP :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
-  PPC_LNK :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
-  PPC_CTR :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
-  PPC_CR :: PPCReg arch (BVType 32)
-  PPC_XER :: (w ~ MC.RegAddrWidth (PPCReg arch), 1 <= w) => PPCReg arch (BVType w)
-  PPC_FPSCR :: PPCReg arch (BVType 32)
-  PPC_VSCR :: PPCReg arch (BVType 32)
+  PPC_IP :: (w ~ PPC.AddrWidth v, 1 <= w) => PPCReg v (BVType w)
+  PPC_LNK :: (w ~ PPC.AddrWidth v, 1 <= w) => PPCReg v (BVType w)
+  PPC_CTR :: (w ~ PPC.AddrWidth v, 1 <= w) => PPCReg v (BVType w)
+  PPC_CR :: PPCReg v (BVType 32)
+  PPC_XER :: (w ~ PPC.AddrWidth v, 1 <= w) => PPCReg v (BVType w)
+  PPC_FPSCR :: PPCReg v (BVType 32)
+  PPC_VSCR :: PPCReg v (BVType 32)
 
-deriving instance Eq (PPCReg arch tp)
-deriving instance Ord (PPCReg arch tp)
+deriving instance Eq (PPCReg v tp)
+deriving instance Ord (PPCReg v tp)
 
-instance Show (PPCReg arch tp) where
+instance Show (PPCReg v tp) where
   show r =
     case r of
       PPC_GP (D.GPR gpr) -> 'r':show gpr
@@ -75,18 +69,18 @@ instance Show (PPCReg arch tp) where
       PPC_FPSCR -> "fpscr"
       PPC_VSCR -> "vscr"
 
-instance ShowF (PPCReg arch) where
+instance ShowF (PPCReg v) where
   showF = show
 
-instance MC.PrettyF (PPCReg arch) where
+instance MC.PrettyF (PPCReg v) where
   prettyF = PP.text . showF
 
 $(return [])
 
-instance TestEquality (PPCReg arch) where
+instance TestEquality (PPCReg v) where
   testEquality = $(TH.structuralTypeEquality [t| PPCReg |] [])
 
-instance OrdF (PPCReg arch) where
+instance OrdF (PPCReg v) where
   compareF = $(TH.structuralTypeOrd [t| PPCReg |] [])
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
@@ -98,40 +92,40 @@ instance OrdF (PPCReg arch) where
 -- NOTE: As the name implies, this is Linux-specific.  Other ABIs will require
 -- an analysis here.  That said, these are the register specs suggested by the
 -- architecture manual, so they should be pretty consistent across ABIs.
-linuxSystemCallPreservedRegisters :: (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
-                                  => proxy ppc
-                                  -> S.Set (Some (PPCReg ppc))
+linuxSystemCallPreservedRegisters :: (w ~ PPC.AddrWidth v, 1 <= w)
+                                  => proxy v
+                                  -> S.Set (Some (PPCReg v))
 linuxSystemCallPreservedRegisters _ =
   S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
 
-linuxCalleeSaveRegisters :: (w ~ MC.RegAddrWidth (PPCReg ppc), 1 <= w)
-                         => proxy ppc
-                         -> S.Set (Some (PPCReg ppc))
+linuxCalleeSaveRegisters :: (w ~ PPC.AddrWidth v, 1 <= w)
+                         => proxy v
+                         -> S.Set (Some (PPCReg v))
 linuxCalleeSaveRegisters _ =
   S.fromList [ Some (PPC_GP (D.GPR rnum)) | rnum <- [14..31] ]
 
-type instance MC.RegAddrWidth (PPCReg (PPC.AnyPPC v)) = PPC.AddrWidth v
-type instance MC.ArchReg (PPC.AnyPPC v) = PPCReg (PPC.AnyPPC v)
+type instance MC.RegAddrWidth (PPCReg v) = PPC.AddrWidth v
+type instance MC.ArchReg (PPC.AnyPPC v) = PPCReg v
 
-{-# DEPRECATED
-      ArchWidth "Use 'SemMC.Architecture.AddrWidth' and 'SemMC.Architecture.addrWidth'."
-#-}
-class ArchWidth arch where
-  pointerNatRepr :: proxy arch -> NatRepr (MC.RegAddrWidth (PPCReg arch))
+-- {-# DEPRECATED
+--       ArchWidth "Use 'SemMC.Architecture.AddrWidth' and 'SemMC.Architecture.addrWidth'."
+-- #-}
+-- class ArchWidth arch where
+--   pointerNatRepr :: proxy arch -> NatRepr (MC.RegAddrWidth (PPCReg arch))
 
-instance PPC.KnownVariant v => ArchWidth (PPC.AnyPPC v) where
-  pointerNatRepr _ = PPC.addrWidth (PPC.knownVariant @v)
+-- instance PPC.KnownVariant v => ArchWidth (PPC.AnyPPC v) where
+--   pointerNatRepr _ = PPC.addrWidth (PPC.knownVariant @v)
 
-instance (PPC.KnownVariant v, ppc ~ PPC.AnyPPC v) => HasRepr (PPCReg ppc) TypeRepr where
+instance (PPC.KnownVariant v) => HasRepr (PPCReg v) TypeRepr where
   typeRepr r =
     case r of
-      PPC_GP {} -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
+      PPC_GP {} -> BVTypeRepr (PPC.addrWidth (PPC.knownVariant @v))
       PPC_FR {} -> BVTypeRepr n128
-      PPC_IP -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
-      PPC_LNK -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
-      PPC_CTR -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
+      PPC_IP -> BVTypeRepr (PPC.addrWidth (PPC.knownVariant @v))
+      PPC_LNK -> BVTypeRepr (PPC.addrWidth (PPC.knownVariant @v))
+      PPC_CTR -> BVTypeRepr (PPC.addrWidth (PPC.knownVariant @v))
       PPC_CR -> BVTypeRepr n32
-      PPC_XER -> BVTypeRepr (pointerNatRepr (Proxy @ppc))
+      PPC_XER -> BVTypeRepr (PPC.addrWidth (PPC.knownVariant @v))
       PPC_FPSCR -> BVTypeRepr n32
       PPC_VSCR -> BVTypeRepr n32
 
@@ -139,7 +133,7 @@ instance (PPC.KnownVariant v, ppc ~ PPC.AnyPPC v) => HasRepr (PPCReg ppc) TypeRe
 -- to be included since GHC doesn't *know* it's always satisfiable :-\
 instance ( PPC.KnownVariant v, MM.MemWidth (PPC.AddrWidth v)
          ) =>
-         MC.RegisterInfo (PPCReg (PPC.AnyPPC v)) where
+         MC.RegisterInfo (PPCReg v) where
   archRegs = ppcRegs
   sp_reg = PPC_GP (D.GPR 1)
   ip_reg = PPC_IP
@@ -150,7 +144,7 @@ instance ( PPC.KnownVariant v, MM.MemWidth (PPC.AddrWidth v)
 
 ppcRegs :: forall v
          . ( PPC.KnownVariant v )
-        => [Some (PPCReg (PPC.AnyPPC v))]
+        => [Some (PPCReg v)]
 ppcRegs = concat [ gprs
                  , sprs
                  , fprs
@@ -166,9 +160,9 @@ ppcRegs = concat [ gprs
 
 -- | Translate a location from the semmc semantics into a location suitable for
 -- use in macaw
-locToRegTH :: (PPC.KnownVariant v, ppc ~ PPC.AnyPPC v)
-           => proxy ppc
-           -> APPC.Location ppc ctp
+locToRegTH :: (PPC.KnownVariant v)
+           => proxy v
+           -> APPC.Location (PPC.AnyPPC v) ctp
            -> Q Exp
 locToRegTH _ (APPC.LocGPR (D.GPR gpr)) = [| PPC_GP (D.GPR $(lift gpr)) |]
 locToRegTH _ (APPC.LocVSR (D.VSReg vsr)) = [| PPC_FR (D.VSReg $(lift vsr)) |]

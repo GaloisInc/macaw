@@ -13,7 +13,7 @@ import           Dismantle.PPC
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
-import           SemMC.Architecture.PPC64 ( PPC )
+import qualified SemMC.Architecture.PPC as SP
 import           SemMC.Architecture.PPC64.Opcodes ( allSemantics, allOpcodeInfo
                                                   , allDefinedFunctions )
 
@@ -23,6 +23,6 @@ import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
 
-execInstruction :: MC.Value PPC ids (MT.BVType 64) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher allSemantics allOpcodeInfo allDefinedFunctions
-                    ([t| Dismantle.PPC.Operand |], [t| PPC |]) MM.BigEndian)
+execInstruction :: MC.Value (SP.AnyPPC SP.V64) ids (MT.BVType 64) -> Instruction -> Maybe (Generator (SP.AnyPPC SP.V64) ids s ())
+execInstruction = $(genExecInstruction (Proxy @(SP.AnyPPC SP.V64)) (locToRegTH (Proxy @SP.V64)) ppcNonceAppEval ppcAppEvaluator 'ppcInstructionMatcher allSemantics allOpcodeInfo allDefinedFunctions
+                    ([t| Dismantle.PPC.Operand |], [t| (SP.AnyPPC SP.V64) |]) MM.BigEndian)
