@@ -21,7 +21,6 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.List as L
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax (lift)
-import           GHC.TypeLits
 
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as Map
@@ -31,9 +30,8 @@ import qualified What4.Expr.Builder as S
 import qualified What4.Interface as S
 
 import qualified SemMC.Architecture as A
-import qualified SemMC.Architecture.Location as L
+import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Eval as PE
-import qualified SemMC.Architecture.PPC.Location as APPC
 import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Memory as MM
@@ -46,7 +44,6 @@ import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.SemMC.TH ( natReprTH, floatInfoFromPrecisionTH, addEltTH, symFnName, asName )
 
 import           Data.Macaw.PPC.Arch
-import           Data.Macaw.PPC.PPCReg
 
 getOpName :: S.Expr t x -> Maybe String
 getOpName e
@@ -55,15 +52,11 @@ getOpName e
     Just $ show $ S.symFnName fn
   | otherwise = Nothing
 
-ppcNonceAppEval :: forall arch t fs tp
-                 . (A.Architecture arch,
-                    L.Location arch ~ APPC.Location arch,
-                    1 <= A.RegWidth arch,
-                    MSS.SimplifierExtension arch,
-                    M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
-                => BoundVarInterpretations arch t fs
+ppcNonceAppEval :: forall v t fs tp
+                 . (A.Architecture (SP.AnyPPC v))
+                => BoundVarInterpretations (SP.AnyPPC v) t fs
                 -> S.NonceApp t (S.Expr t) tp
-                -> Maybe (MacawQ arch t fs Exp)
+                -> Maybe (MacawQ (SP.AnyPPC v) t fs Exp)
 ppcNonceAppEval bvi nonceApp =
   case nonceApp of
     S.FnApp symFn args -> do
@@ -199,7 +192,7 @@ ppcNonceAppEval bvi nonceApp =
                   case S.nonceExprApp nonceApp' of
                     S.FnApp symFn' args' -> do
                       let recName = symFnName symFn'
-                      case lookup recName (A.locationFuncInterpretation (Proxy @arch)) of
+                      case lookup recName (A.locationFuncInterpretation (Proxy @(SP.AnyPPC v))) of
                         Nothing -> fail ("Unsupported UF: " ++ recName)
                         Just fi -> do
                           case FC.toListFC (asName fnName bvi) args' of
@@ -240,17 +233,14 @@ addArchExpr
   -> G.Generator arch ids s (M.Value arch ids tp)
 addArchExpr expr = G.addExpr =<< addArchAssignment expr
 
-floatingPointTH :: forall arch t fs f c
-                 . (L.Location arch ~ APPC.Location arch,
-                     A.Architecture arch,
-                     1 <= A.RegWidth arch,
-                     MSS.SimplifierExtension arch,
-                     M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch,
+floatingPointTH :: forall v t fs f c
+                 . ( A.Architecture (SP.AnyPPC v),
+                     MSS.SimplifierExtension (SP.AnyPPC v),
                      FC.FoldableFC f)
-                 => BoundVarInterpretations arch t fs
+                 => BoundVarInterpretations (SP.AnyPPC v) t fs
                  -> String
                  -> f (S.Expr t) c
-                 -> MacawQ arch t fs Exp
+                 -> MacawQ (SP.AnyPPC v) t fs Exp
 floatingPointTH bvi fnName args =
   case FC.toListFC Some args of
     [Some a] -> case fnName of
@@ -269,14 +259,12 @@ floatingPointTH bvi fnName args =
         _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
     _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
 
-ppcAppEvaluator :: (L.Location arch ~ APPC.Location arch,
-                    A.Architecture arch,
-                    1 <= A.RegWidth arch,
-                    MSS.SimplifierExtension arch,
-                    M.RegAddrWidth (PPCReg arch) ~ A.RegWidth arch)
-                => BoundVarInterpretations arch t fs
+ppcAppEvaluator :: (A.Architecture (SP.AnyPPC v),
+                    MSS.SimplifierExtension (SP.AnyPPC v)
+                   )
+                => BoundVarInterpretations (SP.AnyPPC v) t fs
                 -> S.App (S.Expr t) ctp
-                -> Maybe (MacawQ arch t fs Exp)
+                -> Maybe (MacawQ (SP.AnyPPC v) t fs Exp)
 ppcAppEvaluator interps = \case
   S.BVSdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH M.BigEndian interps bv1

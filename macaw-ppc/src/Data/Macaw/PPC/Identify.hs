@@ -31,10 +31,10 @@ import           Data.Macaw.PPC.PPCReg
 -- @mtlr@ and put a stack value into the link register.  That might look like a
 -- call...
 identifyCall :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-             => proxy ppc
+             => proxy var
              -> MM.Memory (MC.ArchAddrWidth ppc)
              -> Seq.Seq (MC.Stmt ppc ids)
-             -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
+             -> MC.RegState (PPCReg var) (MC.Value ppc ids)
              -> Maybe (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
 identifyCall _ mem stmts0 rs
   | not (null stmts0)
@@ -52,19 +52,19 @@ identifyCall _ mem stmts0 rs
 -- An instruction executing a return from a function will place the
 -- Macaw 'ReturnAddr' value (placed in the LNK register by
 -- 'mkInitialAbsState') into the instruction pointer.
-identifyReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-               => proxy ppc
-               -> Seq.Seq (MC.Stmt ppc ids)
-               -> MC.RegState (MC.ArchReg ppc) (MC.Value ppc ids)
-               -> MA.AbsProcessorState (MC.ArchReg ppc) ids
-               -> Maybe (Seq.Seq (MC.Stmt ppc ids))
+identifyReturn :: (PPCArchConstraints var)
+               => proxy var
+               -> Seq.Seq (MC.Stmt (SP.AnyPPC var) ids)
+               -> MC.RegState (PPCReg var) (MC.Value (SP.AnyPPC var) ids)
+               -> MA.AbsProcessorState (PPCReg var) ids
+               -> Maybe (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
 identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
 
-matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var, MC.ArchReg ppc ~ PPCReg ppc)
-            => MA.AbsProcessorState (MC.ArchReg ppc) ids
-            -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+            => MA.AbsProcessorState (PPCReg var) ids
+            -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn absProcState' ip = do
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
@@ -80,7 +80,7 @@ matchReturn absProcState' ip = do
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
-stripExtTrunc :: MC.Value ppc ids tp -> Some (MC.Value ppc ids)
+stripExtTrunc :: MC.Value (SP.AnyPPC v) ids tp -> Some (MC.Value (SP.AnyPPC v) ids)
 stripExtTrunc v =
   case v of
     MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.Trunc v' _))) -> stripExtTrunc v'

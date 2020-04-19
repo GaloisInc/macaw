@@ -82,7 +82,7 @@ type PPC64 = AnyPPC V64
 -- | The type tag for 32-bit PowerPC
 type PPC32 = AnyPPC V32
 
-archDemandContext :: (ppc ~ PPC.AnyPPC var, PPCArchConstraints var) => proxy ppc -> MDS.DemandContext ppc
+archDemandContext :: (PPCArchConstraints var) => proxy var -> MDS.DemandContext (PPC.AnyPPC var)
 archDemandContext _ =
   MDS.DemandContext { MDS.demandConstraints = \a -> a
                     , MDS.archFnHasSideEffects = ppcPrimFnHasSideEffects
@@ -112,7 +112,7 @@ ppc64_linux_info binData =
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
                       }
   where
-    proxy = Proxy @PPC64.PPC
+    proxy = Proxy @PPC.V64
 
 ppc32_linux_info :: ( BLP.HasTOC PPC32.PPC binFmt
                     ) =>
@@ -139,5 +139,4 @@ ppc32_linux_info binData =
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
                       }
   where
-    proxy = Proxy @PPC32.PPC
-
+    proxy = Proxy @PPC.V32

@@ -13,7 +13,7 @@ import           Dismantle.PPC
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
-import           SemMC.Architecture.PPC32 ( PPC )
+import qualified SemMC.Architecture.PPC as SP
 import           SemMC.Architecture.PPC32.Opcodes ( allSemantics, allOpcodeInfo, allDefinedFunctions )
 
 import           Data.Macaw.SemMC.Generator ( Generator )
@@ -22,12 +22,12 @@ import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
 
-execInstruction :: MC.Value PPC ids (MT.BVType 32) -> Instruction -> Maybe (Generator PPC ids s ())
-execInstruction = $(genExecInstruction (Proxy @PPC) (locToRegTH (Proxy @PPC))
+execInstruction :: MC.Value (SP.AnyPPC SP.V32) ids (MT.BVType 32) -> Instruction -> Maybe (Generator (SP.AnyPPC SP.V32) ids s ())
+execInstruction = $(genExecInstruction (Proxy @(SP.AnyPPC SP.V32)) (locToRegTH (Proxy @SP.V32))
                     ppcNonceAppEval
                     ppcAppEvaluator
                     'ppcInstructionMatcher
                     allSemantics allOpcodeInfo allDefinedFunctions
-                    ([t| Dismantle.PPC.Operand |], [t| PPC |])
+                    ([t| Dismantle.PPC.Operand |], [t| (SP.AnyPPC SP.V32) |])
                     MM.BigEndian
                    )

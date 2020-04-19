@@ -40,7 +40,6 @@ import qualified SemMC.Architecture.PPC as SP
 import           Data.Macaw.SemMC.Generator
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
-import           Data.Macaw.PPC.PPCReg
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
@@ -186,7 +185,7 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
 -- Return a list of disassembled blocks as well as the total number of bytes
 -- occupied by those blocks.
 disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
-              => proxy ppc
+              => proxy var
               -> (Value ppc ids (BVType (ArchAddrWidth ppc)) -> D.Instruction -> Maybe (Generator ppc ids s ()))
               -- ^ A function to look up the semantics for an instruction.  The
               -- lookup is provided with the value of the IP in case IP-relative
@@ -266,13 +265,13 @@ liftST = DisM . lift
 -- that translation of the basic block resulted in an error (with the exception
 -- string stored as its argument).  This allows macaw to carry errors in the
 -- instruction stream, which is useful for debugging and diagnostics.
-failAt :: forall ppc ids s a
-        . (ArchReg ppc ~ PPCReg ppc, MM.MemWidth (ArchAddrWidth ppc))
-       => GenState ppc ids s
-       -> MM.MemWord (ArchAddrWidth ppc)
-       -> MM.MemSegmentOff (ArchAddrWidth ppc)
-       -> TranslationErrorReason (ArchAddrWidth ppc)
-       -> DisM ppc ids s a
+failAt :: forall v ids s a
+        . (MM.MemWidth (SP.AddrWidth v))
+       => GenState (SP.AnyPPC v) ids s
+       -> MM.MemWord (SP.AddrWidth v)
+       -> MM.MemSegmentOff (SP.AddrWidth v)
+       -> TranslationErrorReason (SP.AddrWidth v)
+       -> DisM (SP.AnyPPC v) ids s a
 failAt gs offset curIPAddr reason = do
   let exn = TranslationError { transErrorAddr = curIPAddr
                              , transErrorReason = reason

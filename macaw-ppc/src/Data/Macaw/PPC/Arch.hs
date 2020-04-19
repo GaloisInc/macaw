@@ -43,8 +43,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 
 import qualified Dismantle.PPC as D
-import qualified SemMC.Architecture.PPC32 as PPC32
-import qualified SemMC.Architecture.PPC64 as PPC64
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Architecture.PPC.Eval as E
 
@@ -61,88 +59,86 @@ instance MSS.SimplifierExtension (SP.AnyPPC v) where
 -- The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.  PowerPC doesn't need any
 -- additional information, so we use ()
-type instance MAI.ArchBlockPrecond PPC32.PPC = ()
-type instance MAI.ArchBlockPrecond PPC64.PPC = ()
+type instance MAI.ArchBlockPrecond (SP.AnyPPC v) = ()
 
-data PPCTermStmt ppc ids where
+data PPCTermStmt (v :: SP.Variant) ids where
   -- | A representation of the PowerPC @sc@ instruction
   --
   -- That instruction technically takes an argument, but it must be zero so we
   -- don't preserve it.
-  PPCSyscall :: PPCTermStmt ppc ids
+  PPCSyscall :: PPCTermStmt v ids
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
-  PPCTrap :: PPCTermStmt ppc ids
+  PPCTrap :: PPCTermStmt v ids
   -- | A conditional trap
-  PPCTrapdword :: MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-               -> MC.Value ppc ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-               -> MC.Value ppc ids (MT.BVType 5)
-               -> PPCTermStmt ppc ids
+  PPCTrapdword :: MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
+               -> MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
+               -> MC.Value (SP.AnyPPC v) ids (MT.BVType 5)
+               -> PPCTermStmt v ids
 
-instance (MC.RegisterInfo (MC.ArchReg ppc)) => Show (PPCTermStmt ppc ids) where
+instance Show (PPCTermStmt v ids) where
   show ts = show (MC.prettyF ts)
 
-type instance MC.ArchTermStmt PPC64.PPC = PPCTermStmt PPC64.PPC
-type instance MC.ArchTermStmt PPC32.PPC = PPCTermStmt PPC32.PPC
+type instance MC.ArchTermStmt (SP.AnyPPC v) = PPCTermStmt v
 
-instance (MC.RegisterInfo (MC.ArchReg ppc)) => MC.PrettyF (PPCTermStmt ppc) where
+instance MC.PrettyF (PPCTermStmt v) where
   prettyF ts =
     case ts of
       PPCSyscall -> PP.text "ppc_syscall"
       PPCTrap -> PP.text "ppc_trap"
       PPCTrapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
 
-rewriteTermStmt :: PPCTermStmt ppc src -> Rewriter ppc s src tgt (PPCTermStmt ppc tgt)
+rewriteTermStmt :: PPCTermStmt v src -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v tgt)
 rewriteTermStmt s =
   case s of
     PPCSyscall -> return PPCSyscall
     PPCTrap -> return PPCTrap
     PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
-data PPCStmt ppc (v :: MT.Type -> *) where
-  Attn :: PPCStmt ppc v
-  Sync :: PPCStmt ppc v
-  Isync :: PPCStmt ppc v
+data PPCStmt (v :: SP.Variant) (f :: MT.Type -> *) where
+  Attn :: PPCStmt v f
+  Sync :: PPCStmt v f
+  Isync :: PPCStmt v f
   -- These are data cache hints
-  Dcba   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbf   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbi   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbst  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbz   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbzl  :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Dcbt   :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
-  Dcbtst :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 5) -> PPCStmt ppc v
+  Dcba   :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbf   :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbi   :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbst  :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbz   :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbzl  :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Dcbt   :: f (MT.BVType (SP.AddrWidth v)) -> f (MT.BVType 5) -> PPCStmt v f
+  Dcbtst :: f (MT.BVType (SP.AddrWidth v)) -> f (MT.BVType 5) -> PPCStmt v f
   -- Instruction cache hints
-  Icbi :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Icbt :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> v (MT.BVType 4) -> PPCStmt ppc v
+  Icbi :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Icbt :: f (MT.BVType (SP.AddrWidth v)) -> f (MT.BVType 4) -> PPCStmt v f
   -- Hardware Transactional Memory
-  Tabort :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc))) -> PPCStmt ppc v
-  Tabortdc :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-           -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-           -> v (MT.BVType 5)
-           -> PPCStmt ppc v
-  Tabortdci :: v (MT.BVType 5)
-            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-            -> v (MT.BVType 5)
-            -> PPCStmt ppc v
-  Tabortwc :: v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-           -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-           -> v (MT.BVType 5)
-           -> PPCStmt ppc v
-  Tabortwci :: v (MT.BVType 5)
-            -> v (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-            -> v (MT.BVType 5)
-            -> PPCStmt ppc v
-  Tbegin :: v (MT.BVType 1) -> PPCStmt ppc v
-  Tcheck :: v (MT.BVType 3) -> PPCStmt ppc v
-  Tend :: v (MT.BVType 1) -> PPCStmt ppc v
+  Tabort :: f (MT.BVType (SP.AddrWidth v)) -> PPCStmt v f
+  Tabortdc :: f (MT.BVType (SP.AddrWidth v))
+           -> f (MT.BVType (SP.AddrWidth v))
+           -> f (MT.BVType 5)
+           -> PPCStmt v f
+  Tabortdci :: f (MT.BVType 5)
+            -> f (MT.BVType (SP.AddrWidth v))
+            -> f (MT.BVType 5)
+            -> PPCStmt v f
+  Tabortwc :: f (MT.BVType (SP.AddrWidth v))
+           -> f (MT.BVType (SP.AddrWidth v))
+           -> f (MT.BVType 5)
+           -> PPCStmt v f
+  Tabortwci :: f (MT.BVType 5)
+            -> f (MT.BVType (SP.AddrWidth v))
+            -> f (MT.BVType 5)
+            -> PPCStmt v f
+  Tbegin :: f (MT.BVType 1) -> PPCStmt v f
+  Tcheck :: f (MT.BVType 3) -> PPCStmt v f
+  Tend :: f (MT.BVType 1) -> PPCStmt v f
 
-instance TF.FunctorF (PPCStmt ppc) where
+instance TF.FunctorF (PPCStmt v) where
   fmapF = TF.fmapFDefault
 
-instance TF.FoldableF (PPCStmt ppc) where
+instance TF.FoldableF (PPCStmt v) where
   foldMapF = TF.foldMapFDefault
 
-instance TF.TraversableF (PPCStmt ppc) where
+instance TF.TraversableF (PPCStmt v) where
   traverseF go stmt =
     case stmt of
       Attn -> pure Attn
@@ -167,7 +163,7 @@ instance TF.TraversableF (PPCStmt ppc) where
       Tcheck v -> Tcheck <$> go v
       Tend v -> Tend <$> go v
 
-instance MC.IsArchStmt (PPCStmt ppc) where
+instance MC.IsArchStmt (PPCStmt v) where
   ppArchStmt pp stmt =
     case stmt of
       Attn -> PP.text "ppc_attn"
@@ -192,10 +188,9 @@ instance MC.IsArchStmt (PPCStmt ppc) where
       Tcheck v -> PP.text "ppc_tcheck" PP.<+> pp v
       Tend v -> PP.text "ppc_tend" PP.<+> pp v
 
-type instance MC.ArchStmt PPC64.PPC = PPCStmt PPC64.PPC
-type instance MC.ArchStmt PPC32.PPC = PPCStmt PPC32.PPC
+type instance MC.ArchStmt (SP.AnyPPC v) = PPCStmt v
 
-instance MC.IPAlignment PPC64.PPC where
+instance MC.IPAlignment (SP.AnyPPC SP.V64) where
   fromIPAligned cleanAddr
     | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
     , MC.BVValue _ 2 <- two
@@ -214,7 +209,7 @@ instance MC.IPAlignment PPC64.PPC where
 
     | otherwise = Nothing
     where
-      valueAsExtTwo :: MC.BVValue PPC64.PPC ids 64 -> Maybe (MC.BVValue PPC64.PPC ids 62)
+      valueAsExtTwo :: MC.BVValue (SP.AnyPPC SP.V64) ids 64 -> Maybe (MC.BVValue (SP.AnyPPC SP.V64) ids 62)
       valueAsExtTwo v
         | Just (MC.SExt v' _) <- MC.valueAsApp v
         , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 62)
@@ -228,138 +223,138 @@ instance MC.IPAlignment PPC64.PPC where
 
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
-instance MC.IPAlignment PPC32.PPC where
+instance MC.IPAlignment (SP.AnyPPC SP.V32) where
   fromIPAligned _ = error "IP alignment rules are not yet implemented for PPC32"
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
-rewriteStmt :: (MC.ArchStmt ppc ~ PPCStmt ppc) => PPCStmt ppc (MC.Value ppc src) -> Rewriter ppc s src tgt ()
+rewriteStmt :: PPCStmt v (MC.Value (SP.AnyPPC v) src) -> Rewriter (SP.AnyPPC v) s src tgt ()
 rewriteStmt s = do
   s' <- TF.traverseF rewriteValue s
   appendRewrittenArchStmt s'
 
-data PPCPrimFn ppc f tp where
+data PPCPrimFn v f tp where
   -- | Unsigned division
   --
   -- Division by zero does not have side effects, but instead produces an undefined value
-  UDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
-       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-       -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+  UDiv :: NR.NatRepr (SP.AddrWidth v)
+       -> f (MT.BVType (SP.AddrWidth v))
+       -> f (MT.BVType (SP.AddrWidth v))
+       -> PPCPrimFn v f (MT.BVType (SP.AddrWidth v))
   -- | Signed division
   --
   -- Division by zero does not have side effects, but instead produces an undefined value
-  SDiv :: NR.NatRepr (MC.RegAddrWidth (MC.ArchReg ppc))
-       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-       -> f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
-       -> PPCPrimFn ppc f (MT.BVType (MC.RegAddrWidth (MC.ArchReg ppc)))
+  SDiv :: NR.NatRepr (SP.AddrWidth v)
+       -> f (MT.BVType (SP.AddrWidth v))
+       -> f (MT.BVType (SP.AddrWidth v))
+       -> PPCPrimFn v f (MT.BVType (SP.AddrWidth v))
 
   -- | Interpreted floating point functions.
   FPNeg
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPAbs
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPSqrt
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
 
   FPAdd
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPSub
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPMul
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPDiv
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPFMA
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
 
   FPLt
     :: !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f MT.BoolType
+    -> PPCPrimFn v f MT.BoolType
   FPEq
     :: !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f MT.BoolType
+    -> PPCPrimFn v f MT.BoolType
   FPLe
     :: !(f (MT.FloatType fi))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f MT.BoolType
+    -> PPCPrimFn v f MT.BoolType
 
-  FPIsNaN :: !(f (MT.FloatType fi)) -> PPCPrimFn ppc f MT.BoolType
+  FPIsNaN :: !(f (MT.FloatType fi)) -> PPCPrimFn v f MT.BoolType
 
   FPCast
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi'))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPRound
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi) 
+    -> PPCPrimFn v f (MT.FloatType fi)
   -- | Treat a floating-point as a bitvector.
   FPToBinary
     :: (1 <= MT.FloatInfoBits fi)
     => !(MT.FloatInfoRepr fi)
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.FloatBVType fi)
+    -> PPCPrimFn v f (MT.FloatBVType fi)
   -- | Treat a bitvector as a floating-point.
   FPFromBinary
     :: !(MT.FloatInfoRepr fi)
     -> !(f (MT.FloatBVType fi))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPToSBV
     :: (1 <= w)
     => !(MT.NatRepr w)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.BVType w)
+    -> PPCPrimFn v f (MT.BVType w)
   FPToUBV
     :: (1 <= w)
     => !(MT.NatRepr w)
     -> !(f (MT.BVType 2))
     -> !(f (MT.FloatType fi))
-    -> PPCPrimFn ppc f (MT.BVType w)
+    -> PPCPrimFn v f (MT.BVType w)
   FPFromSBV
     :: (1 <= w)
     => !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.BVType w))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
   FPFromUBV
     :: (1 <= w)
     => !(MT.FloatInfoRepr fi)
     -> !(f (MT.BVType 2))
     -> !(f (MT.BVType w))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
 
   -- | Coerce a floating-point to another precision format without
   --   precision loss.
@@ -367,63 +362,63 @@ data PPCPrimFn ppc f tp where
     :: !(MT.FloatInfoRepr fi)
     -> !(MT.FloatInfoRepr fi')
     -> !(f (MT.FloatType fi'))
-    -> PPCPrimFn ppc f (MT.FloatType fi)
+    -> PPCPrimFn v f (MT.FloatType fi)
 
   -- | Uninterpreted floating point functions
   FPSCR1
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 24)
+    -> PPCPrimFn v f (MT.BVType 24)
   FPSCR2
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 24)
+    -> PPCPrimFn v f (MT.BVType 24)
   FPSCR3
     :: !String
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 128))
     -> !(f (MT.BVType 32))
-    -> PPCPrimFn ppc f (MT.BVType 24)
+    -> PPCPrimFn v f (MT.BVType 24)
 
   -- | Uninterpreted floating point functions
   FP1 :: !String -- the name of the function
       -> !(f (MT.BVType 128)) -- arg 1
       -> !(f (MT.BVType 32)) -- current fpscr
-      -> PPCPrimFn ppc f (MT.BVType 160)
+      -> PPCPrimFn v f (MT.BVType 160)
   FP2 :: !String
       -> !(f (MT.BVType 128))
       -> !(f (MT.BVType 128))
       -> !(f (MT.BVType 32))
-      -> PPCPrimFn ppc f (MT.BVType 160)
+      -> PPCPrimFn v f (MT.BVType 160)
   FP3 :: !String
       -> !(f (MT.BVType 128))
       -> !(f (MT.BVType 128))
       -> !(f (MT.BVType 128))
       -> !(f (MT.BVType 32))
-      -> PPCPrimFn ppc f (MT.BVType 160)
+      -> PPCPrimFn v f (MT.BVType 160)
 
   -- | Uninterpreted vector functions
   Vec1 :: !String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 32))
-       -> PPCPrimFn ppc f (MT.BVType 160)
+       -> PPCPrimFn v f (MT.BVType 160)
   Vec2 :: String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 32))
-       -> PPCPrimFn ppc f (MT.BVType 160)
+       -> PPCPrimFn v f (MT.BVType 160)
   Vec3 :: String -- the name of the function
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 128))
        -> !(f (MT.BVType 32))
-       -> PPCPrimFn ppc f (MT.BVType 160)
+       -> PPCPrimFn v f (MT.BVType 160)
 
-instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v) MT.TypeRepr where
+instance (1 <= SP.AddrWidth v) => MT.HasRepr (PPCPrimFn v f) MT.TypeRepr where
   typeRepr = \case
     UDiv rep _ _ -> MT.BVTypeRepr rep
     SDiv rep _ _ -> MT.BVTypeRepr rep
@@ -463,7 +458,7 @@ instance (1 <= MC.RegAddrWidth (MC.ArchReg ppc)) => MT.HasRepr (PPCPrimFn ppc v)
 
 -- | Right now, none of the primitive functions has a side effect.  That will
 -- probably change.
-ppcPrimFnHasSideEffects :: PPCPrimFn ppc f tp -> Bool
+ppcPrimFnHasSideEffects :: PPCPrimFn v f tp -> Bool
 ppcPrimFnHasSideEffects = \case
   UDiv{}         -> False
   SDiv{}         -> False
@@ -498,12 +493,10 @@ ppcPrimFnHasSideEffects = \case
   Vec2{}         -> False
   Vec3{}         -> False
 
-rewritePrimFn :: ( ppc ~ SP.AnyPPC var
-                 , PPCArchConstraints var
-                 , MC.ArchFn ppc ~ PPCPrimFn ppc
+rewritePrimFn :: ( PPCArchConstraints v
                  )
-              => PPCPrimFn ppc (MC.Value ppc src) tp
-              -> Rewriter ppc s src tgt (MC.Value ppc tgt tp)
+              => PPCPrimFn v (MC.Value (SP.AnyPPC v) src) tp
+              -> Rewriter (SP.AnyPPC v) s src tgt (MC.Value (SP.AnyPPC v) tgt tp)
 rewritePrimFn = \case
   UDiv rep lhs rhs -> do
     tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
@@ -578,7 +571,7 @@ rewritePrimFn = \case
     tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue vscr
     evalRewrittenArchFn tgtFn
 
-ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn ppc f tp -> m PP.Doc
+ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn v f tp -> m PP.Doc
 ppPrimFn pp = \case
   UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
   SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
@@ -618,16 +611,16 @@ ppPrimFn pp = \case
   pp3 s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
   pp4 s v1' v2' v3' v4' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
 
-instance MC.IsArchFn (PPCPrimFn ppc) where
+instance MC.IsArchFn (PPCPrimFn v) where
   ppArchFn = ppPrimFn
 
-instance FC.FunctorFC (PPCPrimFn ppc) where
+instance FC.FunctorFC (PPCPrimFn v) where
   fmapFC = FC.fmapFCDefault
 
-instance FC.FoldableFC (PPCPrimFn ppc) where
+instance FC.FoldableFC (PPCPrimFn v) where
   foldMapFC = FC.foldMapFCDefault
 
-instance FC.TraversableFC (PPCPrimFn ppc) where
+instance FC.TraversableFC (PPCPrimFn v) where
   traverseFC go = \case
     UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
     SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
@@ -662,46 +655,41 @@ instance FC.TraversableFC (PPCPrimFn ppc) where
     Vec2 name op1 op2 vscr -> Vec2 name <$> go op1 <*> go op2 <*> go vscr
     Vec3 name op1 op2 op3 vscr -> Vec3 name <$> go op1 <*> go op2 <*> go op3 <*> go vscr
 
-type instance MC.ArchFn PPC64.PPC = PPCPrimFn PPC64.PPC
-type instance MC.ArchFn PPC32.PPC = PPCPrimFn PPC32.PPC
+type instance MC.ArchFn (SP.AnyPPC v) = PPCPrimFn v
 
-type PPCArchConstraints var = ( MC.ArchReg (SP.AnyPPC var) ~ PPCReg (SP.AnyPPC var)
-                              , MC.ArchFn (SP.AnyPPC var) ~ PPCPrimFn (SP.AnyPPC var)
-                              , MC.ArchStmt (SP.AnyPPC var) ~ PPCStmt (SP.AnyPPC var)
-                              , MC.ArchTermStmt (SP.AnyPPC var) ~ PPCTermStmt (SP.AnyPPC var)
-                              , MM.MemWidth (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var)))
-                              , 1 <= MC.RegAddrWidth (PPCReg (SP.AnyPPC var))
-                              , KnownNat (MC.RegAddrWidth (PPCReg (SP.AnyPPC var)))
+type PPCArchConstraints var = ( MM.MemWidth (SP.AddrWidth var)
+                              , 1 <= SP.AddrWidth var
                               , SP.KnownVariant var
                               , MC.ArchConstraints (SP.AnyPPC var)
-                              , O.ExtractValue (SP.AnyPPC var) D.GPR (MT.BVType (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var))))
-                              , O.ExtractValue (SP.AnyPPC var) (Maybe D.GPR) (MT.BVType (MC.RegAddrWidth (MC.ArchReg (SP.AnyPPC var))))
+                              , KnownNat (SP.AddrWidth var)
+                              , O.ExtractValue (SP.AnyPPC var) D.GPR (MT.BVType (SP.AddrWidth var))
+                              , O.ExtractValue (SP.AnyPPC var) (Maybe D.GPR) (MT.BVType (SP.AddrWidth var))
                               )
 
-memrrToEffectiveAddress :: forall var ppc ids s n
-                         . (ppc ~ SP.AnyPPC var
-                           , n ~ MC.RegAddrWidth (MC.ArchReg ppc)
-                           , PPCArchConstraints var
+memrrToEffectiveAddress :: forall v ids s n
+                         . ( PPCArchConstraints v
+                           , n ~ SP.AddrWidth v
                            )
-                        => MC.RegState (PPCReg ppc) (MC.Value ppc ids)
+                        => MC.RegState (PPCReg v) (MC.Value (SP.AnyPPC v) ids)
                         -> D.MemRR
-                        -> G.Generator ppc ids s (MC.Value ppc ids (MT.BVType n))
+                        -> G.Generator (SP.AnyPPC v) ids s (MC.Value (SP.AnyPPC v) ids (MT.BVType n))
 memrrToEffectiveAddress regs memrr = do
   let offset = O.extractValue regs (E.interpMemrrOffsetExtractor memrr)
   let base = O.extractValue regs (E.interpMemrrBaseExtractor memrr)
   let isr0 = O.extractValue regs (E.interpIsR0 (E.interpMemrrBaseExtractor memrr))
-  let repr = MT.knownNat @n
+  let repr = SP.addrWidth (SP.knownVariant @v)
   let zero = MC.BVValue repr 0
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
   G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
 -- | A helper to increment the IP by 4, meant to be used to implement
 -- arch-specific statements that need to update the IP (i.e., all but syscalls).
-incrementIP :: (PPCArchConstraints var) => G.Generator (SP.AnyPPC var) ids s ()
+incrementIP :: forall var ids s . (PPCArchConstraints var) => G.Generator (SP.AnyPPC var) ids s ()
 incrementIP = do
   rs <- G.getRegs
   let ipVal = rs ^. MC.boundValue PPC_IP
-  e <- G.addExpr (G.AppExpr (MC.BVAdd knownRepr ipVal (MC.BVValue knownRepr 0x4)))
+  let ptrRepr = SP.addrWidth (SP.knownVariant @var)
+  e <- G.addExpr (G.AppExpr (MC.BVAdd ptrRepr ipVal (MC.BVValue ptrRepr 0x4)))
   G.setRegVal PPC_IP e
 
 -- | Manually-provided semantics for instructions whose full semantics cannot be
@@ -714,14 +702,13 @@ incrementIP = do
 -- NOTE: For SC and TRAP (which we treat as system calls), we don't need to
 -- update the IP here, as the update is handled in the abstract interpretation
 -- of system calls in 'postPPCTermStmtAbsState'.
-ppcInstructionMatcher :: forall var ppc ids s n
-                       . ( ppc ~ SP.AnyPPC var
-                         , PPCArchConstraints var
-                         , n ~ MC.ArchAddrWidth ppc
+ppcInstructionMatcher :: forall var ids s n
+                       . ( PPCArchConstraints var
+                         , n ~ SP.AddrWidth var
                          , 17 <= n
                          )
                       => D.Instruction
-                      -> Maybe (G.Generator ppc ids s ())
+                      -> Maybe (G.Generator (SP.AnyPPC var) ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =
   case opc of
     D.SC -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
@@ -739,7 +726,7 @@ ppcInstructionMatcher (D.Instruction opc operands) =
         D.S16imm imm D.:< D.Gprc rA D.:< D.U5imm to D.:< D.Nil -> Just $ do
           regs <- G.getRegs
           let vB = O.extractValue regs imm
-          let repr = MT.knownNat @n
+          let repr = SP.addrWidth (SP.knownVariant @var)
           vB' <- G.addExpr (G.AppExpr (MC.SExt vB repr))
           let vA = O.extractValue regs rA
           let vTo = O.extractValue regs to
