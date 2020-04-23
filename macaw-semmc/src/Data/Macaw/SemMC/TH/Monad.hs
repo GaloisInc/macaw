@@ -1,8 +1,8 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.SemMC.TH.Monad (
   BoundVarInterpretations(..),
-  QState(..),
   MacawQ,
   runMacawQ,
   liftQ,
@@ -11,7 +11,11 @@ module Data.Macaw.SemMC.TH.Monad (
   withLocToReg,
   withNonceAppEvaluator,
   withAppEvaluator,
+  cacheExpr,
   bindExpr,
+  bindTH,
+  letTH,
+  inLocalBlock,
   definedFunction
   ) where
 
@@ -94,6 +98,33 @@ runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
           -> Q [Stmt]
 runMacawQ ltr ena ea df act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea df)
 
+-- | This combinator creates a new scope of statement accumulation so that we
+-- can make blocks of code in a @do@ block in the 'Generator' monad.
+--
+-- These can be used to create blocks that are conditionally-evaluated.  The
+-- return value is a TH expression that is a @do@ block containing all of the
+-- generated statements under the given local computation.
+--
+-- Note that we don't make any specific provisions for error handling/cleanup -
+-- errors should just trigger TH errors at compile time.
+--
+-- Note that we make a fresh expression cache to ensure that we don't end up
+-- with scoping issues.
+inLocalBlock :: MacawQ arch t fs Exp
+             -- ^ A computation that generates statements in a fresh block
+             -> MacawQ arch t fs Exp
+inLocalBlock k = do
+  savedState <- St.get
+  St.modify' $ \s -> s { accumulatedStatements = Seq.empty
+                       }
+  res <- k
+  blockStmts <- St.gets accumulatedStatements
+  ret <- liftQ $ noBindS [| return $(return res) |]
+  -- St.put savedState
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements savedState }
+  return (DoE (F.toList blockStmts ++ [ret]))
+
+
 -- | Lift a TH computation (in the 'Q' monad) into the monad.
 liftQ :: Q a -> MacawQ arch t fs a
 liftQ q = MacawQ (lift q)
@@ -149,6 +180,25 @@ bindExpr elt eq = do
                        }
   return res
 
+cacheExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs ()
+cacheExpr elt e = do
+  St.modify' $ \s -> s { expressionCache = M.insert (Some elt) e (expressionCache s) }
+
+letTH :: ExpQ -> MacawQ arch t fs Exp
+letTH eq = do
+  e <- liftQ eq
+  n <- liftQ (newName "lval")
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                       }
+  return (VarE n)
+
+bindTH :: ExpQ -> MacawQ arch t fs Exp
+bindTH eq = do
+  e <- liftQ eq
+  n <- liftQ (newName "bval")
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
+                       }
+  return (VarE n)
 
 definedFunction :: String -> MacawQ arch t fs (Maybe Exp)
 definedFunction name = do
