@@ -42,7 +42,6 @@ import           Data.Bits
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
-import           Data.Macaw.Memory (Endianness(..))
 import           Data.Macaw.Types
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes

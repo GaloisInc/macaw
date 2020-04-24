@@ -36,7 +36,6 @@ module Data.Macaw.X86.InstructionDef
 import qualified Flexdis86 as F
 import           Data.Macaw.Types
 import           Data.Parameterized.NatRepr
-import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.X86.Conditions
 import           Data.Macaw.X86.Generator

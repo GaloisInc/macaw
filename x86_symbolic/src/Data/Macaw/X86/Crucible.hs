@@ -48,7 +48,6 @@ import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), empty )
 import           What4.Concrete
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
-import           What4.Symbol (userSymbol)
 
 import           Lang.Crucible.Backend (IsSymInterface, assert)
 import           Lang.Crucible.CFG.Expr

@@ -52,7 +52,6 @@ import qualified Control.Monad.Fail as MF
 import           Data.Parameterized.NatRepr
 import qualified Data.Text as T
 import qualified Flexdis86 as F
-import           GHC.TypeLits (KnownNat)
 
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block ( TermStmt(TranslateError) )
