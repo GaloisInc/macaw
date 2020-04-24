@@ -64,7 +64,9 @@ module Data.Macaw.X86.Generator
 import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
+#if __GLASGOW_HASKELL__ < 808
 import           Control.Monad.Fail
+#endif
 import           Control.Monad.Reader
 import           Control.Monad.ST
 import           Control.Monad.State.Strict

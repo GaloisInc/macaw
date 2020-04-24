@@ -35,7 +35,6 @@ import           Data.Word
 import qualified Flexdis86 as F
 
 import           Data.Macaw.CFG
-import           Data.Macaw.Memory (Endianness (LittleEndian))
 import           Data.Macaw.Types
 
 

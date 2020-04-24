@@ -28,7 +28,7 @@ import           Data.List
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import qualified Data.Vector as V
-import           GHC.TypeNats (type (<=), KnownNat)
+import           GHC.TypeNats (KnownNat)
 import           Numeric
 
 import Data.Macaw.CFG.AssignRhs (ArchAddrWidth, MemRepr(..))
