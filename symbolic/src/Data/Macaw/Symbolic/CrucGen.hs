@@ -83,7 +83,7 @@ import           Control.Lens hiding (Empty, (:>))
 import           Control.Monad.Except
 import qualified Control.Monad.Fail as MF
 import           Control.Monad.State.Strict
-import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
@@ -850,7 +850,7 @@ addLemma x y =
 
 -- | Create a crucible value for a bitvector literal.
 bvLit :: (1 <= w) => NatRepr w -> Integer -> CrucGen arch ids s (CR.Atom s (C.BVType w))
-bvLit w i = crucibleValue (C.BVLit w (i .&. maxUnsigned w))
+bvLit w i = crucibleValue (C.BVLit w (BV.mkBV w i))
 
 bitOp2 :: (1 <= w)
        => NatRepr w
@@ -954,8 +954,8 @@ appToCrucible app = do
     M.BVAdc w x y c -> do
       z <- appAtom =<< C.BVAdd w <$> v2c' w x <*> v2c' w y
       d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
-                                             <*> appAtom (C.BVLit w 1)
-                                             <*> appAtom (C.BVLit w 0)
+                                             <*> appAtom (C.BVLit w (BV.one w))
+                                             <*> appAtom (C.BVLit w (BV.zero w))
       appBVAtom w (C.BVAdd w z d)
 
     M.BVSub w x y -> do
@@ -969,8 +969,8 @@ appToCrucible app = do
     M.BVSbb w x y c -> do
       z <- appAtom =<< C.BVSub w <$> v2c' w x <*> v2c' w y
       d <- appAtom =<< C.BaseIte (C.BaseBVRepr w) <$> v2c c
-                                             <*> appAtom (C.BVLit w 1)
-                                             <*> appAtom (C.BVLit w 0)
+                                             <*> appAtom (C.BVLit w (BV.one w))
+                                             <*> appAtom (C.BVLit w (BV.zero w))
       appBVAtom w (C.BVSub w z d)
 
 
@@ -1495,7 +1495,7 @@ addIPSwitch blockLabelMap targets macaw_ip = do
           let Just bvAddr = M.segoffAsAbsoluteAddr thenAddr
           -- Make a Crucible instruction sequence that compares the current IP
           -- against a possible target taken from the input list.
-          return ( [ CR.DefineAtom ptrBitsAtom $ CR.EvalApp $ C.BVLit width (toInteger bvAddr)
+          return ( [ CR.DefineAtom ptrBitsAtom $ CR.EvalApp $ C.BVLit width (BV.mkBV width (toInteger bvAddr))
                    , CR.DefineAtom ptrAtom $ CR.EvalApp $ C.ExtensionApp $ BitsToPtr width ptrBitsAtom
                    , CR.DefineAtom eqAtom $ CR.EvalExt $ PtrEq widthRepr ipVal ptrAtom
                    ]
@@ -1574,7 +1574,7 @@ addSwitch blockLabelMap idx possibleAddrs = do
         let thnLbl = parsedBlockLabel blockLabelMap thnAddr
 
         return ( [ CR.DefineAtom thnIdxBitsAtom $
-                     CR.EvalApp $ C.BVLit width (toInteger thnIdx)
+                     CR.EvalApp $ C.BVLit width (BV.mkBV width (toInteger thnIdx))
                  , CR.DefineAtom thnIdxAtom $
                      CR.EvalApp $ C.ExtensionApp $
                        BitsToPtr width thnIdxBitsAtom

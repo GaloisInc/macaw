@@ -10,6 +10,7 @@ license-file:  LICENSE
 library
   build-depends:
     base >= 4,
+    bv-sized,
     ansi-wl-pprint,
     containers,
     IntervalMap >= 0.6 && < 0.7,

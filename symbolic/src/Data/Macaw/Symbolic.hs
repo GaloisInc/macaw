@@ -126,6 +126,7 @@ import           Control.Monad.IO.Class
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Nonce ( NonceGenerator, newIONonceGenerator )
@@ -894,8 +895,8 @@ evalMacawExprExtension sym _iTypes _logFn f e0 =
       c <- f cv
       let w' = incNat w
       Just LeqProof <- pure $ testLeq (knownNat :: NatRepr 1) w'
-      one  <- What4.Interface.bvLit sym w' 1
-      zero <- What4.Interface.bvLit sym w' 0
+      one  <- What4.Interface.bvLit sym w' (BV.one w')
+      zero <- What4.Interface.bvLit sym w' (BV.zero w')
       cext <- baseTypeIte sym c one zero
       case op of
         Uadc -> do

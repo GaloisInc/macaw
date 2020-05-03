@@ -118,6 +118,7 @@ import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.IntervalMap.Strict as IM
 
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Macaw.CFG as MC
@@ -253,9 +254,9 @@ populateMemory proxy sym mmc mem symArray0 =
         MC.RelocationRegion {} -> error $
           "SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk
         MC.BSSRegion sz ->
-          liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat 0
+          liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
         MC.ByteRegion bytes ->
-          liftIO $ mapM (WI.bvLit sym PN.knownNat . fromIntegral) $ BS.unpack bytes
+          liftIO $ mapM (WI.bvLit sym PN.knownNat . BV.mkBV PN.knownNat . fromIntegral) $ BS.unpack bytes
       populateSegmentChunk proxy sym mmc mem symArray seg addr concreteBytes allocs2
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the
@@ -356,7 +357,7 @@ populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
       F.forM_ (zip [0.. size - 1] bytes) $ \(idx, byte) -> do
         let byteAddr = MC.incAddr (fromIntegral idx) addr
         let Just absByteAddr = MC.asAbsoluteAddr byteAddr
-        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
+        index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (BV.mkBV (MC.memWidth mem) (fromIntegral absByteAddr))
         eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
         prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
         let desc = "Byte@" ++ show byteAddr
@@ -415,26 +416,26 @@ mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
         | otherwise =
           case range of
             IM.IntervalCO lo hi -> do
-              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
-              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lobv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger lo))
+              hibv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger hi))
               lob <- WI.bvUlt sym lobv off
               hib <- WI.bvUle sym off hibv
               WI.andPred sym lob hib
             IM.ClosedInterval lo hi -> do
-              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
-              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lobv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger lo))
+              hibv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger hi))
               lob <- WI.bvUlt sym lobv off
               hib <- WI.bvUlt sym off hibv
               WI.andPred sym lob hib
             IM.OpenInterval lo hi -> do
-              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
-              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lobv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger lo))
+              hibv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger hi))
               lob <- WI.bvUle sym lobv off
               hib <- WI.bvUle sym off hibv
               WI.andPred sym lob hib
             IM.IntervalOC lo hi -> do
-              lobv <- WI.bvLit sym (memRepr mpt) (fromIntegral lo)
-              hibv <- WI.bvLit sym (memRepr mpt) (fromIntegral hi)
+              lobv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger lo))
+              hibv <- WI.bvLit sym (memRepr mpt) (BV.mkBV (memRepr mpt) (toInteger hi))
               lob <- WI.bvUle sym lobv off
               hib <- WI.bvUlt sym off hibv
               WI.andPred sym lob hib
