@@ -36,3 +36,4 @@ packages: macaw-ppc/
           deps/llvm-pretty-bc-parser/
           deps/asl-translator/
           deps/arm-asl-parser/
+	  deps/bv-sized
