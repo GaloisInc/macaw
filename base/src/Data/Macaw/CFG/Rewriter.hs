@@ -507,13 +507,17 @@ rewriteApp app = do
     -- (x << j) testBit i ~> x testBit (i-j)
     -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | j + i <= maxUnsigned w -> do
+      | j + i < intValue w ->
       rewriteApp (BVTestBit x (BVValue w (j + i)))
+      | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
-      | i < intValue w -> do
-      rewriteApp (BVTestBit x (BVValue w (min (j + i) (intValue w-1))))
+      | j + i < intValue w ->
+      rewriteApp (BVTestBit x (BVValue w (j + i)))
+      | i < intValue w -> pure (boolLitValue True)
+      | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
-      | j <= i -> rewriteApp (BVTestBit x (BVValue w (i - j)))
+      | 0 <= i - j && i <= intValue w ->
+      rewriteApp (BVTestBit x (BVValue w (i - j)))
       | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
