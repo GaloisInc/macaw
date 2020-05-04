@@ -849,8 +849,8 @@ addLemma x y =
 
 
 -- | Create a crucible value for a bitvector literal.
-bvLit :: (1 <= w) => NatRepr w -> Integer -> CrucGen arch ids s (CR.Atom s (C.BVType w))
-bvLit w i = crucibleValue (C.BVLit w (BV.mkBV w i))
+bvLit :: (1 <= w) => NatRepr w -> BV.BV w -> CrucGen arch ids s (CR.Atom s (C.BVType w))
+bvLit w bv = crucibleValue (C.BVLit w bv)
 
 bitOp2 :: (1 <= w)
        => NatRepr w
@@ -1005,7 +1005,7 @@ appToCrucible app = do
     -- Bitwise operations
     M.BVTestBit x i -> do
       let w = M.typeWidth x
-      one <- bvLit w 1
+      one <- bvLit w (BV.one w)
       -- Create mask for ith index
       i_mask <- appAtom =<< C.BVShl w one <$> (toBits w =<< v2c i)
       -- Mask off index
@@ -1059,7 +1059,7 @@ appToCrucible app = do
         fromBits w =<<
           foldl
             (\a b -> appAtom =<< C.BVAdd w <$> a <*> b)
-            (bvLit w 0)
+            (bvLit w (BV.one w))
             (natForEach (knownNat @1) w bvBit)
       NatCaseEQ -> v2c x
       NatCaseGT LeqProof
@@ -1098,13 +1098,13 @@ countZeros :: (1 <= w) =>
   CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
 countZeros w f vx = do
   cx <- v2c vx >>= toBits w
-  isZeros <- forM [0..intValue w-1] $ \i -> do
+  isZeros <- forM (BV.enumFromToUnsigned (BV.zero w) (BV.sub w (BV.width w) (BV.one w))) $ \i -> do
     shiftAmt <- bvLit w i
     shiftedx <- appAtom (f w cx shiftAmt)
     xIsNonzero <- appAtom (C.BVNonzero w shiftedx)
     appAtom (C.BoolToBV w xIsNonzero)
-  czero <- bvLit w 0
-  cw <- bvLit w (intValue w)
+  czero <- bvLit w (BV.zero w)
+  cw <- bvLit w (BV.width w)
   cn <- foldM ((appAtom .) . C.BVAdd w) czero isZeros
   appAtom (C.BVSub w cw cn) >>= fromBits w
 
