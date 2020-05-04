@@ -19,6 +19,7 @@ module Data.Macaw.AbsDomain.Refine
 
 
 import           Control.Lens
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
 
@@ -86,9 +87,9 @@ refineApp app av regs =
    -- FIXME: HACK
    -- This detects r - x < 0 || r - x == 0, i.e. r <= x
    OrApp (getAssignApp -> Just (UsbbOverflows r xv@(BVValue sz x) (BoolValue False)))
-         (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))
+         (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ (BV.BV 0))))
      | Just Refl <- testEquality r r'
-     , Just Refl <- testEquality y (mkLit sz (negate x))
+     , Just Refl <- testEquality y (BVValue sz (BV.negate sz x))
      , Just b    <- asConcreteSingleton av ->
        refineLeq r xv b regs
 
@@ -97,9 +98,9 @@ refineApp app av regs =
    AndApp (getAssignApp -> Just
              (NotApp (getAssignApp -> Just (UsbbOverflows r xv@(BVValue sz x) (BoolValue False)))))
           (getAssignApp -> Just
-             (NotApp (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ 0)))))
+             (NotApp (getAssignApp -> Just (Eq (getAssignApp -> Just (BVAdd _ r' y)) (BVValue _ (BV.BV 0))))))
      | Just Refl <- testEquality r r'
-     , Just Refl <- testEquality y (mkLit sz (negate x))
+     , Just Refl <- testEquality y (BVValue sz (BV.negate sz x))
      , Just b    <- asConcreteSingleton av ->
        refineLt xv r b regs
 

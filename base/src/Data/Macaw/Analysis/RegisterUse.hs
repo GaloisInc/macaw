@@ -59,6 +59,7 @@ import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State.Strict
+import qualified Data.BitVector.Sized as BV
 import           Data.Foldable
 import           Data.Kind
 import           Data.Map.Strict (Map)
@@ -530,11 +531,11 @@ processApp aid app = do
   am <- gets sisAssignMap
   case fmapFC (valueToStartExpr ctx am) app of
     BVAdd _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
-      setAssignVal aid (FrameExpr (o+fromInteger c))
+      setAssignVal aid (FrameExpr (o + fromInteger (BV.asUnsigned c)))
     BVAdd _ (IVCValue (BVCValue _ c)) (FrameExpr o) ->
-      setAssignVal aid (FrameExpr (o+fromInteger c))
+      setAssignVal aid (FrameExpr (o + fromInteger (BV.asUnsigned c)))
     BVSub _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
-      setAssignVal aid (FrameExpr (o-fromInteger c))
+      setAssignVal aid (FrameExpr (o - fromInteger (BV.asUnsigned c)))
     appExpr -> do
       c <- gets sisAppCache
       -- Check to see if we have seen an app equivalent to

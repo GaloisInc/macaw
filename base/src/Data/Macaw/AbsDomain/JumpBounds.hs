@@ -35,6 +35,7 @@ module Data.Macaw.AbsDomain.JumpBounds
 
 import           Control.Monad.Reader
 import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import           Data.Foldable
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
@@ -280,7 +281,7 @@ exprRangePred stkCns rpCns brCns e =
               SomeRangePred r
         _ -> NoRangePred
     StackOffsetExpr _ -> NoRangePred
-    CExpr (BVCValue w i) -> SomeRangePred (mkRangeBound w (fromInteger i) (fromInteger i))
+    CExpr (BVCValue w i) -> SomeRangePred (mkRangeBound w (BV.asNatural i) (BV.asNatural i))
     CExpr _ -> NoRangePred
     AppExpr n _app
       -- If a bound has been deliberately asserted to this assignment
@@ -311,8 +312,8 @@ exprRangePred stkCns rpCns brCns e =
         BVAdd _ x (CExpr (BVCValue _ c))
           | SomeRangePred r <- exprRangePred stkCns rpCns brCns x
           , w <- rangeWidth r
-          , lr <- rangeLowerBound r + fromInteger (toUnsigned w c)
-          , ur <- rangeUpperBound r + fromInteger (toUnsigned w c)
+          , lr <- rangeLowerBound r + fromInteger (BV.asUnsigned c)
+          , ur <- rangeUpperBound r + fromInteger (BV.asUnsigned c)
           , lr `shiftR` fromIntegral (natValue w) == ur `shiftR` fromIntegral (natValue w)
           , lr' <- fromInteger (toUnsigned w (toInteger lr))
           , ur' <- fromInteger (toUnsigned w (toInteger ur)) ->
@@ -512,7 +513,7 @@ addRangePred v p =
     CExpr cv ->
       case cv of
         BVCValue _ c -> do
-          when (toUnsigned (rangeWidth p) c > toInteger (rangeUpperBound p)) $ do
+          when (BV.asUnsigned c > toInteger (rangeUpperBound p)) $ do
             Left "Constant is greater than asserted bounds."
           pure $! emptyBranchConstraints
         RelocatableCValue{} ->
@@ -524,8 +525,8 @@ addRangePred v p =
       case a of
         BVAdd _ x (CExpr (BVCValue w c))
           | RangePred _wp l u <- p
-          , l' <- toInteger l - c
-          , u' <- toInteger u - c
+          , l' <- toInteger l - BV.asUnsigned c
+          , u' <- toInteger u - BV.asUnsigned c
             -- Check overflow is consistent
           , l' `shiftR` fromIntegral (natValue w) == u' `shiftR` fromIntegral (natValue w) -> do
               addRangePred x (RangePred w (fromInteger (toUnsigned w l')) (fromInteger (toUnsigned w u')))
@@ -570,47 +571,47 @@ assertPred cns (AssignedValue a) isTrue =
   case assignRhs a of
     EvalApp (Eq x (BVValue w c)) -> do
       addRangePred (intraStackValueExpr (intraStackConstraints cns) x)
-                   (mkRangeBound w (fromInteger c) (fromInteger c))
+                   (mkRangeBound w (BV.asNatural c) (BV.asNatural c))
     EvalApp (Eq (BVValue w c) x) -> do
       addRangePred (intraStackValueExpr (intraStackConstraints cns) x)
-                   (mkRangeBound w (fromInteger c) (fromInteger c))
+                   (mkRangeBound w (BV.asNatural c) (BV.asNatural c))
     -- Given x < c), assert x <= c-1
-    EvalApp (BVUnsignedLt x (BVValue _ c)) -> do
+    EvalApp (BVUnsignedLt x (BVValue w c)) -> do
       if isTrue then do
-        when (c == 0) $ Left "x < 0 must be false."
+        when (c == BV.zero w) $ Left "x < 0 must be false."
         addRangePred (intraStackValueExpr (intraStackConstraints cns) x)  $!
-          mkUpperBound (typeWidth x) (fromInteger (c-1))
+          mkUpperBound (typeWidth x) (BV.asNatural c - 1)
        else do
         addRangePred (intraStackValueExpr (intraStackConstraints cns) x)  $!
-          mkLowerBound (typeWidth x) (fromInteger c)
+          mkLowerBound (typeWidth x) (BV.asNatural c)
     -- Given not (c < y), assert y <= c
     EvalApp (BVUnsignedLt (BVValue w c) y) -> do
       p <-
         if isTrue then do
-          when (c >= maxUnsigned w) $  Left "x <= max_unsigned must be true"
-          pure $! mkLowerBound w (fromInteger (c+1))
+          when (c == BV.maxUnsigned w) $  Left "x < max_unsigned must be true"
+          pure $! mkLowerBound w (BV.asNatural c + 1)
          else do
-          pure $! mkUpperBound w (fromInteger c)
+          pure $! mkUpperBound w (BV.asNatural c)
       addRangePred (intraStackValueExpr (intraStackConstraints cns) y) p
     -- Given x <= c, assert x <= c
     EvalApp (BVUnsignedLe x (BVValue w c)) -> do
       p <-
         if isTrue then
-          pure $! mkUpperBound w (fromInteger c)
+          pure $! mkUpperBound w (BV.asNatural c)
          else do
-          when (c >= maxUnsigned w) $  Left "x <= max_unsigned must be true"
-          pure $! mkLowerBound w (fromInteger (c+1))
+          when (c == BV.maxUnsigned w) $  Left "x < max_unsigned must be true"
+          pure $! mkLowerBound w (BV.asNatural c + 1)
       addRangePred (intraStackValueExpr (intraStackConstraints cns) x) p
     -- Given not (c <= y), assert y <= (c-1)
-    EvalApp (BVUnsignedLe (BVValue _ c) y)
+    EvalApp (BVUnsignedLe (BVValue w c) y)
       | isTrue -> do
           addRangePred (intraStackValueExpr (intraStackConstraints cns) y)
-                       (mkLowerBound (typeWidth y) (fromInteger c))
+                       (mkLowerBound (typeWidth y) (BV.asNatural c))
       | otherwise -> do
-          when (c == 0) $ Left "0 <= x cannot be false"
+          when (c == BV.zero w) $ Left "0 <= x cannot be false"
           addRangePred
             (intraStackValueExpr (intraStackConstraints cns) y)
-            (mkUpperBound (typeWidth y) (fromInteger (c-1)))
+            (mkUpperBound (typeWidth y) (BV.asNatural c - 1))
     EvalApp (AndApp l r) ->
       if isTrue then
         conjoinBranchConstraints

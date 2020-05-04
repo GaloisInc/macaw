@@ -741,11 +741,11 @@ intraStackRhsExpr cns aid arhs =
     EvalApp app -> do
       let stackFn v =
             case intraStackValueExpr cns v of
-              StackOffsetExpr i -> Just (toInteger i)
+              StackOffsetExpr i -> Just (BV.mkBV memWidthNatRepr (toInteger i))
               _ -> Nothing
       case appAsStackOffset stackFn app of
         Just (StackOffsetView o) -> do
-          StackOffsetExpr $ fromInteger o
+          StackOffsetExpr $ fromInteger (BV.asUnsigned o)
         _ ->
           let a = fmapFC (intraStackValueExpr cns) app
            in AppExpr aid a

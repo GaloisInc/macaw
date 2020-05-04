@@ -68,6 +68,7 @@ import qualified Control.Monad.Fail as Fail
 import           Control.Monad.Reader
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
+import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Foldable
@@ -568,16 +569,16 @@ matchBoundedMemArray mem aps jmpBounds val = do
   Just (base, offset) <- pure $ valueAsMemOffset mem aps addr
   Just (stride, ixVal) <- pure $ valueAsStaticMultiplication offset
    -- Check stride covers at least number of bytes read.
-  when (memReprBytes tp > stride) $ do
+  when (memReprBytes tp > BV.asNatural stride) $ do
     fail "Stride does not cover size of relocation."
   -- Resolve a static upper bound to array.
 
   -- Take the given number of bytes out of each slices
-  slices <- extractJumpTableSlices jmpBounds base stride ixVal tp
+  slices <- extractJumpTableSlices jmpBounds base (BV.asNatural stride) ixVal tp
 
   let r = BoundedMemArray
           { arBase     = base
-          , arStride   = stride
+          , arStride   = BV.asNatural stride
           , arEltType  = tp
           , arSlices   = slices
           }
@@ -847,7 +848,7 @@ identifyCallTargets mem absState regs = do
   let def = identifyConcreteAddresses mem $ transferValue absState (regs^.boundValue ip_reg)
   case regs^.boundValue ip_reg of
     BVValue _ x ->
-      maybeToList $ resolveAbsoluteAddr mem (fromInteger x)
+      maybeToList $ resolveAbsoluteAddr mem (fromInteger (BV.asUnsigned x))
     RelocatableValue _ a ->
       maybeToList $ asSegmentOff mem a
     SymbolValue{} -> []

@@ -65,7 +65,7 @@ import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.State.Strict
 import           Data.Bits
-import qualified Data.BitVector.Sized
+import qualified Data.BitVector.Sized as BV
 import           Data.Foldable
 import           Data.Int
 import           Data.Map (Map)
@@ -1245,9 +1245,7 @@ transferValue :: forall a ids tp
 transferValue c v = do
   case v of
     BoolValue b -> BoolConst b
-    BVValue w i
-      | 0 <= i && i <= maxUnsigned w -> abstractSingleton (absMem c) w i
-      | otherwise -> error $ "transferValue given illegal value " ++ show (pretty v)
+    BVValue w bv -> abstractSingleton (absMem c) w (BV.asUnsigned bv)
     -- TODO: Ensure a relocatable value is in code.
     RelocatableValue _w i
       | Just addr <- asSegmentOff (absMem c) i
