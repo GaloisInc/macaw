@@ -50,12 +50,12 @@ import qualified Data.List as L
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
-import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import           Text.Read ( readMaybe )
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.HasRepr as HR
@@ -80,7 +80,7 @@ import qualified What4.Symbol as Sy
 import qualified Dismantle.Instruction as D
 import qualified Dismantle.Tablegen.TH.Capture as DT
 
-import qualified SemMC.BoundVar as BV
+import qualified SemMC.BoundVar as BVar
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
@@ -327,16 +327,16 @@ collectVarForLocation _ loc bv = MapF.insert bv loc
 -- to be able to compute a TH expression to refer to it.
 --
 -- We have to unwrap and rewrap the 'C.Const' because the type parameter
--- changes when we switch from 'BV.BoundVar' to 'SI.BoundVar'.  See the
+-- changes when we switch from 'BVar.BoundVar' to 'SI.BoundVar'.  See the
 -- SemMC.BoundVar module for information about the nature of that change
 -- (basically, from 'Symbol' to BaseType).
 collectOperandVars :: forall sh tp arch t fs
                     . SL.List (C.Const Name) sh
                    -> SL.Index sh tp
-                   -> BV.BoundVar (Sym t fs) arch tp
+                   -> BVar.BoundVar (Sym t fs) arch tp
                    -> MapF.MapF (SI.BoundVar (Sym t fs)) (C.Const Name)
                    -> MapF.MapF (SI.BoundVar (Sym t fs)) (C.Const Name)
-collectOperandVars varNames ix (BV.BoundVar bv) m =
+collectOperandVars varNames ix (BVar.BoundVar bv) m =
   case varNames SL.!! ix of
     C.Const name -> MapF.insert bv (C.Const name) m
 {-
@@ -685,8 +685,8 @@ translateBaseType tp =
 
 -- | wrapper around bitvector constants that forces some type
 -- variables to match those of the monadic context.
-genBVValue :: 1 SI.<= w => NR.NatRepr w -> Integer -> G.Generator arch ids s (M.Value arch ids (M.BVType w))
-genBVValue repr i = return (M.BVValue repr i)
+genBVValue :: 1 SI.<= w => NR.NatRepr w -> BV.BV w -> G.Generator arch ids s (M.Value arch ids (M.BVType w))
+genBVValue repr bv = return (M.BVValue repr bv)
 
 addEltTH :: forall arch t fs ctp .
             (A.Architecture arch)
