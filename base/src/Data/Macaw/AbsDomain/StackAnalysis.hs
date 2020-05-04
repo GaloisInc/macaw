@@ -75,6 +75,7 @@ module Data.Macaw.AbsDomain.StackAnalysis
 
 import           Control.Monad.Reader
 import           Control.Monad.State
+import qualified Data.BitVector.Sized as BV
 import           Data.Functor
 import           Data.Kind
 import           Data.Map.Strict (Map)

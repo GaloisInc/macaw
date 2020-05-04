@@ -65,6 +65,7 @@ import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.State.Strict
 import           Data.Bits
+import qualified Data.BitVector.Sized
 import           Data.Foldable
 import           Data.Int
 import           Data.Map (Map)

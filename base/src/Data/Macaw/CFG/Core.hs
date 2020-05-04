@@ -46,7 +46,6 @@ module Data.Macaw.CFG.Core
   , asBaseOffset
   , asInt64Constant
   , IPAlignment(..)
-  , mkLit
   , bvValue
   , ppValueAssignments
   , ppValueAssignmentList
@@ -94,7 +93,7 @@ module Data.Macaw.CFG.Core
 import           Control.Lens
 import           Control.Monad.Identity
 import           Control.Monad.State.Strict
-import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import           Data.Int (Int64)
 import qualified Data.Kind as Kind
 import           Data.Maybe (isNothing, catMaybes)
@@ -112,7 +111,6 @@ import           Data.Text (Text)
 import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
-import           Numeric.Natural
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
 
@@ -200,9 +198,7 @@ instance ShowF (AssignId ids) where
 -- | A constant whose value does not change during execution.
 data CValue arch tp where
   -- | A constant bitvector
-  --
-  -- The integer should be between 0 and 2^n-1.
-  BVCValue :: (1 <= n) => !(NatRepr n) -> !Integer -> CValue arch (BVType n)
+  BVCValue :: (1 <= n) => !(NatRepr n) -> !(BV.BV n) -> CValue arch (BVType n)
   -- | A constant Boolean
   BoolCValue :: !Bool -> CValue arch BoolType
   -- | A memory address
@@ -266,19 +262,13 @@ instance Hashable (CValue arch tp) where
 instance HashableF (CValue arch) where
   hashWithSaltF = hashWithSalt
 
-ppLit :: NatRepr n -> Integer -> Doc
-ppLit w i
-  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
-  | otherwise = error "ppLit given negative value"
+ppLit :: NatRepr n -> BV.BV n -> Doc
+ppLit w bv = text ("0x" ++ showHex (BV.asUnsigned bv) "") <+>
+             text "::" <+> brackets (text (show w))
 
 ppCValue :: Prec -> CValue arch tp -> Doc
 ppCValue _ (BoolCValue b) = text $ if b then "true" else "false"
-ppCValue p (BVCValue w i)
-  | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
-  | otherwise =
-    -- TODO: We may want to report an error here.
-    parenIf (p > colonPrec) $
-    text (show i) <+> text "::" <+> brackets (text (show w))
+ppCValue p (BVCValue w i) =parenIf (p > colonPrec) $ ppLit w i
 ppCValue p (RelocatableCValue _ a) = parenIf (p > plusPrec) $ text (show a)
 ppCValue _ (SymbolCValue _ a) = text (show a)
 
@@ -315,9 +305,9 @@ data Value arch ids tp where
 pattern BVValue :: ()
                 => forall n . (tp ~ (BVType n), 1 <= n)
                 => NatRepr n
-                -> Integer
+                -> BV.BV n
                 -> Value arch ids tp
-pattern BVValue w i = CValue (BVCValue w i)
+pattern BVValue w bv = CValue (BVCValue w bv)
 
 -- | A constant Boolean
 pattern BoolValue :: () => (tp ~ BoolType) => Bool -> Value arch ids tp
@@ -406,12 +396,8 @@ instance OrdF (ArchReg arch)
 ------------------------------------------------------------------------
 -- Value operations
 
-mkLit :: (1 <= n) => NatRepr n -> Integer -> Value arch ids (BVType n)
-mkLit n v = BVValue n (v .&. mask)
-  where mask = maxUnsigned n
-
 bvValue :: (KnownNat n, 1 <= n) => Integer -> Value arch ids (BVType n)
-bvValue i = mkLit knownNat i
+bvValue i = BVValue knownNat (BV.mkBV knownNat i)
 
 -- | Return the right-hand side if this is an assignment.
 valueAsRhs :: Value arch ids tp -> Maybe (AssignRhs arch (Value arch ids) tp)
@@ -433,25 +419,28 @@ valueAsArchFn _ = Nothing
 valueAsMemAddr :: MemWidth (ArchAddrWidth arch)
                => BVValue arch ids (ArchAddrWidth arch)
                -> Maybe (ArchMemAddr arch)
-valueAsMemAddr (BVValue _ val)      = Just $ absoluteAddr (fromInteger val)
+valueAsMemAddr (BVValue _ bv)      = Just $ absoluteAddr (fromInteger (BV.asUnsigned bv))
 valueAsMemAddr (RelocatableValue _ i) = Just i
 valueAsMemAddr _ = Nothing
 
 valueAsStaticMultiplication
   :: BVValue arch ids w
-  -> Maybe (Natural, BVValue arch ids w)
+  -> Maybe (BV.BV w, BVValue arch ids w)
 valueAsStaticMultiplication v
-  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (fromInteger mul, v')
-  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (fromInteger mul, v')
-  | Just (BVShl _ v' (BVValue _ sh))  <- valueAsApp v = Just (2^sh, v')
+  | Just (BVMul _ (BVValue _ mul) v') <- valueAsApp v = Just (mul, v')
+  | Just (BVMul _ v' (BVValue _ mul)) <- valueAsApp v = Just (mul, v')
+  | Just (BVShl w v' (BVValue _ sh))  <- valueAsApp v = Just (BV.bit' w (BV.asNatural sh), v')
   -- the PowerPC way to shift left is a bit obtuse...
+  -- BGS: Better quadruple-check this.
   | Just (BVAnd w v' (BVValue _ c)) <- valueAsApp v
   , Just (BVOr _ l r) <- valueAsApp v'
   , Just (BVShl _ l' (BVValue _ shl)) <- valueAsApp l
   , Just (BVShr _ _ (BVValue _ shr)) <- valueAsApp r
-  , c == complement (2^shl-1) `mod` bit (fromInteger (intValue w))
-  , shr >= intValue w - shl
-  = Just (2^shl, l')
+  , c == BV.complement w (BV.sub w
+                          (BV.bit' w (BV.asNatural shl))
+                          (BV.one w))
+  , BV.ule (BV.sub w (BV.width w) shl) shr
+  = Just (BV.bit' w (BV.asNatural shl), l')
   | otherwise = Nothing
 
 -- | Returns a segment offset associated with the value if one can be defined.
@@ -462,24 +451,31 @@ valueAsSegmentOff mem v = do
   a <- addrWidthClass (memAddrWidth mem) (valueAsMemAddr v)
   asSegmentOff mem a
 
+-- BGS: Here, 'o' should have never been negative in any meaningful
+-- way, so we interpret it as unsigned even in a context where we want
+-- an 'Int64'.
 asInt64Constant :: Value arch ids (BVType 64) -> Maybe Int64
-asInt64Constant (BVValue _ o) = Just (fromInteger o)
+asInt64Constant (BVValue _ o) = Just (fromInteger (BV.asUnsigned o))
 asInt64Constant _ = Nothing
 
-asBaseOffset :: Value arch ids (BVType w) -> (Value arch ids (BVType w), Integer)
+asBaseOffset :: HasRepr (ArchReg arch) TypeRepr
+             => Value arch ids (BVType w)
+             -> (Value arch ids (BVType w), BV.BV w)
 asBaseOffset x
   | Just (BVAdd _ x_base (BVValue _  x_off)) <- valueAsApp x = (x_base, x_off)
-  | otherwise = (x,0)
+  | otherwise = case typeRepr x of
+      BVTypeRepr n -> (x,BV.zero n)
 
 -- | A stack offset that can also capture the width must match the pointer width.
 data StackOffsetView arch tp where
-  StackOffsetView :: !Integer -> StackOffsetView arch (BVType (ArchAddrWidth arch))
+  StackOffsetView :: !(BV.BV (ArchAddrWidth arch))
+                  -> StackOffsetView arch (BVType (ArchAddrWidth arch))
 
 -- | This pattern matches on an app to see if it can be used to adjust a
 -- stack offset.
 appAsStackOffset :: forall arch ids tp
                  .  MemWidth (ArchAddrWidth arch)
-                 => (Value arch ids (BVType (ArchAddrWidth arch)) -> Maybe Integer)
+                 => (Value arch ids (BVType (ArchAddrWidth arch)) -> Maybe (BV.BV (ArchAddrWidth arch)))
                  -- ^ Function for inferring if argument is a stack offset.
                  -> App (Value arch ids) tp
                  -> Maybe (StackOffsetView arch tp)
@@ -487,13 +483,13 @@ appAsStackOffset stackFn app =
   case app of
     BVAdd w (BVValue _ i) y -> do
       Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
-      (\j -> StackOffsetView (i+j)) <$> stackFn y
+      (\j -> StackOffsetView (BV.add w i j)) <$> stackFn y
     BVAdd w x (BVValue _ j) -> do
       Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
-      (\i -> StackOffsetView (i+j)) <$> stackFn x
+      (\i -> StackOffsetView (BV.add w i j)) <$> stackFn x
     BVSub w x (BVValue _ j) -> do
       Refl <- testEquality w (memWidthNatRepr @(ArchAddrWidth arch))
-      (\i -> StackOffsetView (i-j)) <$> stackFn x
+      (\i -> StackOffsetView (BV.sub w i j)) <$> stackFn x
     _ ->
       Nothing
 
@@ -686,7 +682,7 @@ asStackAddrOffset addr
   | Initial base <- addr
   , Just Refl <- testEquality base sp_reg =
       case typeRepr base of
-        BVTypeRepr w -> Just (BVValue w 0)
+        BVTypeRepr w -> Just (BVValue w (BV.zero w))
   | otherwise =
     Nothing
 
