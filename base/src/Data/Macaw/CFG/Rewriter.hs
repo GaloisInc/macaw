@@ -37,7 +37,6 @@ import           Control.Lens
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.BinarySymbols
-import           Data.Bits
 import qualified Data.BitVector.Sized as BV
 import qualified Data.BitVector.Sized.Overflow as BV
 import           Data.List
@@ -340,7 +339,7 @@ rewriteApp app = do
     BVSub w x (BVValue _ yc) -> do
       rewriteApp (BVAdd w x (BVValue w (BV.negate w yc)))
 
-    BVUnsignedLe (BVValue w x) (BVValue _ y) -> do
+    BVUnsignedLe (BVValue _ x) (BVValue _ y) -> do
       pure $ boolLitValue $ BV.ule x y
     BVUnsignedLe (BVValue w x) _ | x == BV.minUnsigned w -> do
       pure $ boolLitValue True
@@ -503,78 +502,81 @@ rewriteApp app = do
     -- (x << j) testBit i ~> x testBit (i-j)
     -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | j + i < intValue w ->
-      rewriteApp (BVTestBit x (BVValue w (j + i)))
+      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.addOf w j i
+      , BV.ult k (BV.width w) ->
+      rewriteApp (BVTestBit x (BVValue w k))
       | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
-      | j + i < intValue w ->
-      rewriteApp (BVTestBit x (BVValue w (j + i)))
-      | i < intValue w -> pure (boolLitValue True)
+      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.addOf w j i
+      , BV.ult k (BV.width w) ->
+      rewriteApp (BVTestBit x (BVValue w k))
+      | BV.ult i (BV.width w) -> pure (boolLitValue True)
       | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
-      | 0 <= i - j && i <= intValue w ->
-      rewriteApp (BVTestBit x (BVValue w (i - j)))
+      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.subOf w i j
+      , BV.ult i (BV.width w) ->
+      rewriteApp (BVTestBit x (BVValue w k))
       | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
-      pure (BVValue w (toUnsigned w (complement x)))
+      pure (BVValue w (BV.complement w x))
 
     BVAnd w (BVValue _ x) (BVValue _ y) -> do
-      pure (BVValue w (x .&. y))
+      pure (BVValue w (BV.and x y))
     -- Ensure constant with and is second argument.
     BVAnd w x@BVValue{} y -> do
       rewriteApp (BVAnd w y x)
-    BVAnd _ _ y@(BVValue _ 0) -> do
+    BVAnd _ _ y@(BVValue _ (BV.BV 0)) -> do
       pure y
-    BVAnd w x (BVValue _ yc) | yc == maxUnsigned w -> do
+    BVAnd w x (BVValue _ yc) | yc == BV.maxUnsigned w -> do
       pure x
     BVAnd _ x y | x == y -> pure x
 
     BVOr w (BVValue _ x) (BVValue _ y) -> do
-      pure (BVValue w (x .|. y))
+      pure (BVValue w (BV.or x y))
     BVOr w x@BVValue{} y -> do
       rewriteApp (BVOr w y x)
-    BVOr _ x (BVValue _ 0) -> pure x
-    BVOr w _ y@(BVValue _ yc) | yc == maxUnsigned w -> pure y
+    BVOr _ x (BVValue _ (BV.BV 0)) -> pure x
+    BVOr w _ y@(BVValue _ yc) | yc == BV.maxUnsigned w -> pure y
     BVOr _ x y | x == y -> pure x
 
     BVXor w (BVValue _ x) (BVValue _ y) -> do
-      pure (BVValue w (x `xor` y))
+      pure (BVValue w (BV.xor x y))
     BVXor w x@BVValue{} y -> rewriteApp (BVXor w y x)
-    BVXor _ x (BVValue _ 0) -> pure x
-    BVXor w x (BVValue _ yc) | yc == maxUnsigned w -> do
+    BVXor _ x (BVValue _ (BV.BV 0)) -> pure x
+    BVXor w x (BVValue _ yc) | yc == BV.maxUnsigned w -> do
       rewriteApp (BVComplement w x)
     -- x `xor` y -> 0
     BVXor w x y | identValue x y -> do
-      pure (BVValue w 0)
+      pure (BVValue w (BV.zero w))
 
 
-    BVShl w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (intValue w)
-      pure (BVValue w (toUnsigned w (x `shiftL` fromInteger s)))
-    BVShr w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (intValue w)
-      pure (BVValue w (toUnsigned w (x `shiftR` fromInteger s)))
-    BVSar w (BVValue _ x) (BVValue _ y) | y < toInteger (maxBound :: Int) -> do
-      let s = min y (intValue w)
-      pure (BVValue w (toUnsigned w (toSigned w x `shiftR` fromInteger s)))
+    BVShl w (BVValue _ x) (BVValue _ y) | BV.asUnsigned y < toInteger (maxBound :: Int) -> do
+      let s = min (BV.asNatural y) (natValue w)
+      pure (BVValue w (BV.shl w x s))
+    BVShr w (BVValue _ x) (BVValue _ y) | BV.asUnsigned y < toInteger (maxBound :: Int) -> do
+      let s = min (BV.asNatural y) (natValue w)
+      pure (BVValue w (BV.lshr x s))
+    BVSar w (BVValue _ x) (BVValue _ y) | BV.asUnsigned y < toInteger (maxBound :: Int) -> do
+      let s = min (BV.asNatural y) (natValue w)
+      pure (BVValue w (BV.ashr w x s))
 
-    BVShl _ v (BVValue _ 0) -> pure v
-    BVShr _ v (BVValue _ 0) -> pure v
-    BVSar _ v (BVValue _ 0) -> pure v
+    BVShl _ v (BVValue _ (BV.BV 0)) -> pure v
+    BVShr _ v (BVValue _ (BV.BV 0)) -> pure v
+    BVSar _ v (BVValue _ (BV.BV 0)) -> pure v
 
-    BVShl w _ (BVValue _ n) | n >= intValue w ->
-      pure (BVValue w 0)
-    BVShr w _ (BVValue _ n) | n >= intValue w ->
-      pure (BVValue w 0)
+    BVShl w _ (BVValue _ n) | BV.ule (BV.width w) n ->
+      pure (BVValue w (BV.zero w))
+    BVShr w _ (BVValue _ n) | BV.ule (BV.width w) n ->
+      pure (BVValue w (BV.zero w))
 
     PopCount w (BVValue _ x) -> do
-      pure $ BVValue w $ fromIntegral $ popCount $ toUnsigned w x
+      pure $ BVValue w (BV.popCount x) -- $ fromIntegral $ popCount $ toUnsigned w x
     Bsr w (BVValue _ x) -> do
       let i = fromJust $ find
-                (\j -> toUnsigned w x `shiftR` fromIntegral j == 0)
-                [0 .. intValue w]
-      pure $ BVValue w $ intValue w - i
+                (\j -> BV.lshr x j == BV.zero w)
+                [0 .. natValue w]
+      pure $ BVValue w $ BV.sub w (BV.width w) (BV.mkBV w (toInteger i))
 
     Eq (BoolValue x) (BoolValue y) -> do
       pure $! boolLitValue (x == y)
@@ -603,17 +605,17 @@ rewriteApp app = do
 
     -- x + o = y ~> x = (y - o)
     Eq (valueAsApp -> Just (BVAdd w x (BVValue _ o))) (BVValue _ yc) -> do
-      rewriteApp (Eq x (BVValue w (toUnsigned w (yc - o))))
+      rewriteApp (Eq x (BVValue w (BV.sub w yc o)))
 
-    Eq (valueAsApp -> Just (BVSub _ x y)) (BVValue _ 0) -> do
+    Eq (valueAsApp -> Just (BVSub _ x y)) (BVValue _ (BV.BV 0)) -> do
       rewriteApp (Eq x y)
 
-    Eq (valueAsApp -> Just (UExt x _)) (BVValue _ yc) -> do
+    Eq (valueAsApp -> Just (UExt x _)) (BVValue w yc) -> do
       let u = typeWidth x
-      if yc > maxUnsigned u then
+      if BV.ult (BV.zext w (BV.maxUnsigned u)) yc then
         pure (BoolValue False)
        else
-        rewriteApp (Eq x (BVValue u (toUnsigned u yc)))
+        rewriteApp (Eq x (BVValue u (BV.trunc u yc)))
 
     -- no normal rewrites available, now try mhnf for enabling Discovery
     _ -> rewriteMhnf app
