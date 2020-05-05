@@ -513,10 +513,10 @@ rewriteApp app = do
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
       | j + i < intValue w ->
       rewriteApp (BVTestBit x (BVValue w (j + i)))
-      | i < intValue w -> pure (boolLitValue True)
-      | otherwise -> pure (boolLitValue False)
+      | i < intValue w ->
+      rewriteApp (BVTestBit x (BVValue w (intValue w - 1)))
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
-      | 0 <= i - j && i < intValue w ->
+      | j <= i ->
       rewriteApp (BVTestBit x (BVValue w (i - j)))
       | otherwise -> pure (boolLitValue False)
 
