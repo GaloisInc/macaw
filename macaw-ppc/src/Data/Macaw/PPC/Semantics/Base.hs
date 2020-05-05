@@ -24,6 +24,7 @@ import qualified Data.Foldable as F
 import           Data.Proxy
 import           GHC.TypeLits
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Classes
 import qualified What4.BaseTypes as S
 import qualified What4.Expr.BoolMap as BooM
@@ -40,7 +41,6 @@ import qualified Data.Macaw.Symbolic as MS
 
 import Data.Parameterized.NatRepr ( knownNat
                                   , addNat
-                                  , intValue
                                   , natValue
                                   )
 
@@ -78,20 +78,17 @@ crucAppToExpr (S.BVSlt bv1 bv2) = AppExpr <$> do
   M.BVSignedLt <$> addElt bv1 <*> addElt bv2
 crucAppToExpr (S.BVUlt bv1 bv2) = AppExpr <$> do
   M.BVUnsignedLt <$> addElt bv1 <*> addElt bv2
-crucAppToExpr (S.BVConcat w bv1 bv2) = AppExpr <$> do
-  let u = S.bvWidth bv1
-      v = S.bvWidth bv2
-  bv1Val <- addElt bv1
-  bv2Val <- addElt bv2
-  S.LeqProof <- return $ S.leqAdd2 (S.leqRefl u) (S.leqProof (knownNat @1) v)
-  pf1@S.LeqProof <- return $ S.leqAdd2 (S.leqRefl v) (S.leqProof (knownNat @1) u)
-  Refl <- return $ S.plusComm u v
-  S.LeqProof <- return $ S.leqTrans pf1 (S.leqRefl w)
-  bv1Ext <- addExpr (AppExpr (M.UExt bv1Val w)) ---(u `addNat` v)))
-  bv2Ext <- addExpr (AppExpr (M.UExt bv2Val w))
-  bv1Shifter <- addExpr (ValueExpr (M.BVValue w (intValue v)))
-  bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
-  return $ M.BVOr w bv1Shf bv2Ext
+-- crucAppToExpr (S.BVConcat w bv1 bv2) = AppExpr <$> do
+--   let u = S.bvWidth bv1
+--       v = S.bvWidth bv2
+--   bv1Val <- addElt bv1
+--   bv2Val <- addElt bv2
+--   S.NatCaseLT S.LeqProof <- return $ S.testNatCases u w
+--   bv1Ext <- addExpr (AppExpr (M.UExt bv1Val w))
+--   bv2Ext <- addExpr (AppExpr (M.UExt bv2Val w))
+--   bv1Shifter <- addExpr (ValueExpr (M.BVValue w (BV.width v)))
+--   bv1Shf <- addExpr (AppExpr (M.BVShl w bv1Ext bv1Shifter))
+--   return $ M.BVOr w bv1Shf bv2Ext
 crucAppToExpr (S.BVSelect idx n bv) = do
   let w = S.bvWidth bv
   bvVal <- addElt bv
@@ -104,7 +101,9 @@ crucAppToExpr (S.BVSelect idx n bv) = do
       Refl <- return $ S.plusComm (knownNat @1) idx
       pf3@S.LeqProof <- return $ S.leqTrans pf2 pf1
       S.LeqProof <- return $ S.leqTrans pf3 (S.leqProof (idx `addNat` n) w)
-      bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.mkLit w (intValue idx))))
+      -- BGS: Cheating a bit here. Really should use zext instead of
+      -- trunc', but I don't want to write proofs.
+      bvShf <- addExpr (AppExpr (M.BVShr w bvVal (M.BVValue w (BV.trunc' w (BV.width idx)))))
       return $ AppExpr (M.Trunc bvShf n)
     False -> do
       -- Is there a way to just "know" that n = w?
@@ -112,7 +111,7 @@ crucAppToExpr (S.BVSelect idx n bv) = do
       return $ ValueExpr bvVal
 crucAppToExpr (S.BVTestBit idx bv) = AppExpr <$> do
   M.BVTestBit
-    <$> addExpr (ValueExpr (M.BVValue (S.bvWidth bv) (fromIntegral idx)))
+    <$> addExpr (ValueExpr (M.BVValue (S.bvWidth bv) (BV.mkBV (S.bvWidth bv) (toInteger idx))))
     <*> addElt bv
 
 crucAppToExpr (S.SemiRingSum sm) =
@@ -137,11 +136,11 @@ crucAppToExpr (S.SemiRingProd pd) =
     case WSum.prodRepr pd of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let pmul x y = AppExpr <$> do M.BVMul w <$> addExpr x <*> addExpr y
-            unit = return $ ValueExpr $ M.BVValue w 1
+            unit = return $ ValueExpr $ M.BVValue w (BV.one w)
         in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let pmul x y = AppExpr <$> do M.BVAnd w <$> addExpr x <*> addExpr y
-            unit = return $ ValueExpr $ M.BVValue w $ S.maxUnsigned w
+            unit = return $ ValueExpr $ M.BVValue w $ BV.maxUnsigned w
         in WSum.prodEvalM pmul eltToExpr pd >>= maybe unit return
       _ -> error "unsupported SemiRingProd repr for macaw PPC base semantics"
 
@@ -149,7 +148,7 @@ crucAppToExpr (S.BVOrBits w bs) = do
   let por x y = do
         y' <- y
         AppExpr <$> do M.BVOr w <$> addExpr x <*> addExpr y'
-  let unit = return (ValueExpr (M.BVValue w 0))
+  let unit = return (ValueExpr (M.BVValue w (BV.zero w)))
   bs' <- mapM eltToExpr (S.bvOrToList bs)
   foldr por unit bs'
 

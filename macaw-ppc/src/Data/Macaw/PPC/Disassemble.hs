@@ -26,6 +26,7 @@ import           Text.Printf ( printf )
 
 import qualified Dismantle.PPC as D
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Block
 import qualified Data.Macaw.CFG.Core as MC
@@ -128,7 +129,8 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
       -- physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curIPAddr) of
                  Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (SP.addrWidth SP.knownVariant) (fromIntegral addr))
+                 Just addr -> return (BVValue w (BV.mkBV w (toInteger addr)))
+                   where w = SP.addrWidth SP.knownVariant
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
         Just transformer -> do

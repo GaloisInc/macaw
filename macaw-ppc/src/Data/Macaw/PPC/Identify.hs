@@ -9,6 +9,7 @@ where
 
 import           Control.Lens ( (^.) )
 import           Control.Monad ( guard )
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
 
@@ -67,9 +68,9 @@ matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn absProcState' ip = do
-  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
+  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ (BV.BV shiftAmt))))) <- return ip
   guard (shiftAmt == 0x2)
-  Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
+  Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ (BV.BV shiftAmt')))))) <- return (stripExtTrunc addr)
   guard (shiftAmt' == 0x2)
   case MA.transferValue absProcState' addr' of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)

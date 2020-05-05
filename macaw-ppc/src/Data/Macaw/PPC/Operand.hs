@@ -17,7 +17,7 @@ module Data.Macaw.PPC.Operand () where
 
 import           Control.Lens ( (^.) )
 
-import           Data.Word ( Word32 )
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Macaw.CFG.Core as MC
 import           Data.Macaw.Types
@@ -35,7 +35,8 @@ instance (PPC.KnownVariant v, w ~ PPC.AddrWidth v) => ExtractValue (PPC.AnyPPC v
   extractValue regs mgpr =
     case mgpr of
       Just gpr -> extractValue regs gpr
-      Nothing -> MC.BVValue (PPC.addrWidth (PPC.knownVariant @v)) 0
+      Nothing -> MC.BVValue w (BV.zero w)
+        where w = PPC.addrWidth (PPC.knownVariant @v)
 
 instance ExtractValue (PPC.AnyPPC v) D.FR (BVType 128) where
   extractValue regs (D.FR fr) = regs ^. MC.boundValue (R.PPC_FR (D.VSReg fr))
@@ -47,25 +48,25 @@ instance ExtractValue (PPC.AnyPPC v) D.VSReg (BVType 128) where
   extractValue regs (D.VSReg vsr) = regs ^. MC.boundValue (R.PPC_FR (D.VSReg vsr))
 
 instance ExtractValue (PPC.AnyPPC v) D.AbsBranchTarget (BVType 24) where
-  extractValue _ (D.ABT w) = MC.BVValue NR.knownNat (toIntegerWord w)
+  extractValue _ (D.ABT w) = MC.BVValue NR.knownNat (toBV w)
 
 instance ExtractValue (PPC.AnyPPC v) D.CondBranchTarget (BVType 14) where
-  extractValue _ (D.CBT i) = MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ (D.CBT i) = MC.BVValue NR.knownNat (toBV i)
 
 instance ExtractValue (PPC.AnyPPC v) D.AbsCondBranchTarget (BVType 14) where
-  extractValue _ (D.ACBT w) = MC.BVValue NR.knownNat (toIntegerWord w)
+  extractValue _ (D.ACBT w) = MC.BVValue NR.knownNat (toBV w)
 
 instance ExtractValue (PPC.AnyPPC v) D.BranchTarget (BVType 24) where
-  extractValue _ (D.BT i) = MC.BVValue NR.knownNat (toIntegerWord i)
+  extractValue _ (D.BT i) = MC.BVValue NR.knownNat (toBV i)
 
 instance ExtractValue (PPC.AnyPPC v) D.CRBitM (BVType 4) where
-  extractValue _ (D.CRBitM b) = MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRBitM b) = MC.BVValue NR.knownNat (toBV b)
 
 instance ExtractValue (PPC.AnyPPC v) D.CRBitRC (BVType 5) where
-  extractValue _ (D.CRBitRC b) = MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRBitRC b) = MC.BVValue NR.knownNat (toBV b)
 
 instance ExtractValue (PPC.AnyPPC v) D.CRRC (BVType 3) where
-  extractValue _ (D.CRRC b) = MC.BVValue NR.knownNat (toIntegerWord b)
+  extractValue _ (D.CRRC b) = MC.BVValue NR.knownNat (toBV b)
 
 instance (PPC.KnownVariant v, w ~ PPC.AddrWidth v) => ToRegister D.GPR (R.PPCReg v) (BVType w) where
   toRegister = R.PPC_GP
@@ -79,15 +80,6 @@ instance ToRegister D.VR (R.PPCReg v) (BVType 128) where
 instance ToRegister D.VSReg (R.PPCReg v) (BVType 128) where
   toRegister = R.PPC_FR
 
--- | Convert to a positive integer through a word type
---
--- We convert through a word because the integer returned is not allowed to be
--- negative.  Negative values must be converted to an unsigned word form, which
--- we can then promote to Integer.
---
--- For PowerPC, Word32 is large enough to accommodate all literal values
-toIntegerWord :: (Integral a) => a -> Integer
-toIntegerWord i = toInteger w
-  where
-    w :: Word32
-    w = fromIntegral i
+-- | Convert to a bitvector
+toBV :: (Integral a, KnownNat w) => a -> BV.BV w
+toBV i = BV.mkBV NR.knownNat (toInteger i)

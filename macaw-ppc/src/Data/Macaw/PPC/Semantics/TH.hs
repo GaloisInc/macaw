@@ -22,6 +22,7 @@ import qualified Data.List as L
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax (lift)
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
@@ -428,4 +429,4 @@ ppcAppEvaluator interps = \case
 
 roundingModeToBitsTH :: S.RoundingMode -> Q Exp
 roundingModeToBitsTH r =
-  [| M.BVValue $(natReprTH (M.knownNat @2)) $(lift $ U.roundingModeToBits r) |]
+  [| M.BVValue $(natReprTH (M.knownNat @2)) $(lift $ BV.mkBV (M.knownNat @2) (U.roundingModeToBits r)) |]

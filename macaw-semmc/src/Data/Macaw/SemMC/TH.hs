@@ -1021,7 +1021,7 @@ defaultAppEvaluator endianness elt interps = case elt of
 
   S.BVOrBits w bs -> do
     -- This is a TH Expr that is of type (Macaw) Value at run-time
-    zero <- liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) 0)) |]
+    zero <- liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) (BV.zero $(natReprTH w)))) |]
     -- These are all TH Exprs that are of the (Macaw) Value at run-time
     bs' <- mapM (addEltTH endianness interps) (S.bvOrToList bs)
     let por x y = do

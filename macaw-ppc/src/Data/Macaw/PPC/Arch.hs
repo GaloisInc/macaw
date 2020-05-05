@@ -30,6 +30,7 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import qualified Text.PrettyPrint.ANSI.Leijen as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
@@ -193,18 +194,18 @@ type instance MC.ArchStmt (SP.AnyPPC v) = PPCStmt v
 instance MC.IPAlignment (SP.AnyPPC SP.V64) where
   fromIPAligned cleanAddr
     | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
-    , MC.BVValue _ 2 <- two
+    , MC.BVValue _ (BV.BV 2) <- two
     , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
     , Just (MC.Trunc addrDiv4' _) <- MC.valueAsApp smallAddrDiv4
     , Just NR.Refl <- NR.testEquality (MT.typeWidth addrDiv4') (MT.knownNat :: NR.NatRepr 64)
     , Just (MC.BVShr _ dirtyAddr two') <- MC.valueAsApp addrDiv4'
-    , MC.BVValue _ 2 <- two'
+    , MC.BVValue _ (BV.BV 2) <- two'
     = Just dirtyAddr
 
-    | Just (MC.BVAnd _ dirtyAddr (MC.BVValue _ 0xfffffffffffffffc)) <- MC.valueAsApp cleanAddr
+    | Just (MC.BVAnd _ dirtyAddr (MC.BVValue _ (BV.BV 0xfffffffffffffffc))) <- MC.valueAsApp cleanAddr
     = Just dirtyAddr
 
-    | Just (MC.BVAnd _ (MC.BVValue _ 0xfffffffffffffffc) dirtyAddr) <- MC.valueAsApp cleanAddr
+    | Just (MC.BVAnd _ (MC.BVValue _ (BV.BV 0xfffffffffffffffc)) dirtyAddr) <- MC.valueAsApp cleanAddr
     = Just dirtyAddr
 
     | otherwise = Nothing
@@ -678,7 +679,7 @@ memrrToEffectiveAddress regs memrr = do
   let base = O.extractValue regs (E.interpMemrrBaseExtractor memrr)
   let isr0 = O.extractValue regs (E.interpIsR0 (E.interpMemrrBaseExtractor memrr))
   let repr = SP.addrWidth (SP.knownVariant @v)
-  let zero = MC.BVValue repr 0
+  let zero = MC.BVValue repr (BV.zero repr)
   b <- G.addExpr (G.AppExpr (MC.Mux (MT.BVTypeRepr repr) isr0 zero base))
   G.addExpr (G.AppExpr (MC.BVAdd repr b offset))
 
@@ -689,7 +690,7 @@ incrementIP = do
   rs <- G.getRegs
   let ipVal = rs ^. MC.boundValue PPC_IP
   let ptrRepr = SP.addrWidth (SP.knownVariant @var)
-  e <- G.addExpr (G.AppExpr (MC.BVAdd ptrRepr ipVal (MC.BVValue ptrRepr 0x4)))
+  e <- G.addExpr (G.AppExpr (MC.BVAdd ptrRepr ipVal (MC.BVValue ptrRepr (BV.mkBV ptrRepr 0x4))))
   G.setRegVal PPC_IP e
 
 -- | Manually-provided semantics for instructions whose full semantics cannot be
