@@ -7,6 +7,7 @@ module Data.Macaw.ARM.Simplify (
   ) where
 
 import           Control.Applicative ( (<|>) )
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
@@ -32,10 +33,10 @@ armSimplifyArchFn :: MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
                   -> Maybe (MC.Value ARM.AArch32 ids tp)
 armSimplifyArchFn af _rep =
   case af of
-    AA.SRem _ z@(MC.BVValue _ 0) _ -> return z
-    AA.URem _ z@(MC.BVValue _ 0) _ -> return z
-    AA.SDiv _ z@(MC.BVValue _ 0) _ -> return z
-    AA.UDiv _ z@(MC.BVValue _ 0) _ -> return z
+    AA.SRem _ z@(MC.BVValue _ (BV.BV 0)) _ -> return z
+    AA.URem _ z@(MC.BVValue _ (BV.BV 0)) _ -> return z
+    AA.SDiv _ z@(MC.BVValue _ (BV.BV 0)) _ -> return z
+    AA.UDiv _ z@(MC.BVValue _ (BV.BV 0)) _ -> return z
     _ -> Nothing
 
 
@@ -66,7 +67,7 @@ simplifyTruncExt r3 = do
   case testEquality valwidth targetSize of
     Nothing -> Nothing
     Just Refl -> do
-      let newConstant = MC.mkLit targetSize constantVal
+      let newConstant = MC.BVValue targetSize (BV.trunc targetSize constantVal)
       return (MC.BVAdd targetSize val newConstant)
 
 simplifyTrivialTruncExt :: MC.App (MC.Value ARM.AArch32 ids) tp
@@ -81,7 +82,7 @@ simplifyTrivialTruncExt r3 = do
   case testEquality valwidth targetSize of
     Nothing -> Nothing
     Just Refl -> do
-      let newConstant = MC.BVValue targetSize (PN.toSigned targetSize 0)
+      let newConstant = MC.BVValue targetSize (BV.zero targetSize)
       return (MC.BVAdd targetSize val newConstant)
 
 -- | Coalesce adjacent additions by a constant
@@ -93,7 +94,7 @@ coalesceAdditionByConstant :: MC.App (MC.Value ARM.AArch32 ids) tp
 coalesceAdditionByConstant r3 = do
   MC.BVAdd rep3 r2 (MC.BVValue _bvrep3 c3) <- return r3
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVAdd _rep2 r1 (MC.BVValue bvrep2 c2)))) <- return r2
-  let newConstant = MC.mkLit bvrep2 (c2 + c3)
+  let newConstant = MC.BVValue bvrep2 (BV.add bvrep2 c2 c3)
   return (MC.BVAdd rep3 r1 newConstant)
 
 -- | Around conditional branches, we generate nested muxes that have the same conditions.
@@ -139,7 +140,7 @@ distributeAddOverConstantMux app = do
   (MC.BVValue crep c, Just (MC.Mux mrep cond t f)) <- withConstantFirst l r
   MC.RelocatableValue trep taddr <- return t
   MC.RelocatableValue frep faddr <- return f
-  let cval = PN.toSigned crep c
+  let cval = BV.asSigned crep c
   let taddr' = MC.incAddr cval taddr
   let faddr' = MC.incAddr cval faddr
   return (MC.Mux mrep cond (MC.RelocatableValue trep taddr') (MC.RelocatableValue frep faddr'))

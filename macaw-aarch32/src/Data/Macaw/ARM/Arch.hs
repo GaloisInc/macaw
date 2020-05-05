@@ -25,6 +25,8 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
                                          , evalRewrittenArchFn )
+
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.Types as MT
@@ -175,8 +177,8 @@ instance MC.IPAlignment ARM.AArch32 where
   --
   fromIPAligned cleanedAddrVal
     | Just (MC.BVAnd _ mask dirtyAddrVal) <- MC.valueAsApp cleanedAddrVal
-    , MC.BVValue natS v <- mask
-    , s <- natVal natS
+    , MC.BVValue natS (BV.BV v) <- mask
+    , s <- NR.intValue natS
     = if v `elem` [ ((2^s) - 1) - 1  -- bxWritePC toT32
                   , ((2^s) - 1) - 2  -- bxWritePC !toT32, branchWritePC T32, branchWritePCRel T32
                   , ((2^s) - 1) - 3  -- branchWritePC A32, branchWritePCRel A32

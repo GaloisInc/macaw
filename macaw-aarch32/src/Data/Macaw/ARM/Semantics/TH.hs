@@ -22,8 +22,7 @@ module Data.Macaw.ARM.Semantics.TH
 
 import           Control.Monad (void)
 import qualified Control.Monad.Except as E
-import qualified Data.Bits as B
-import qualified Data.BitVector.Sized as BVS
+import qualified Data.BitVector.Sized as BV
 import           Data.List (isPrefixOf)
 import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.ARM.ARMReg
@@ -172,7 +171,7 @@ data WriteMode =
 getWriteMode :: G.Generator ARM.AArch32 ids s WriteMode
 getWriteMode = do
   G.getRegVal ARMWriteMode >>= \case
-      M.BVValue _ i -> return $ case i of
+      M.BVValue _ (BV.BV i) -> return $ case i of
         0 -> WriteNone
         1 -> WriteGPRs
         2 -> WriteSIMDs
@@ -188,7 +187,7 @@ setWriteMode wm =
       WriteGPRs -> 1
       WriteSIMDs -> 2
       WriteMemory -> 3
-  in G.setRegVal ARMWriteMode (M.BVValue knownNat i)
+  in G.setRegVal ARMWriteMode (M.BVValue knownNat (BV.mkBV knownNat i))
 
 writeMem :: 1 <= w
          => M.Value ARM.AArch32 ids tp
@@ -210,7 +209,7 @@ setGPR :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
 setGPR handle regid v = do
   reg <- case regid of
-    M.BVValue w i
+    M.BVValue w (BV.BV i)
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments v))
@@ -223,7 +222,7 @@ getGPR :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
 getGPR v = do
   reg <- case v of
-    M.BVValue w i
+    M.BVValue w (BV.BV i)
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
@@ -235,7 +234,7 @@ setSIMD :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
 setSIMD handle regid v = do
   reg <- case regid of
-    M.BVValue w i
+    M.BVValue w (BV.BV i)
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments v))
@@ -248,7 +247,7 @@ getSIMD :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
 getSIMD v = do
   reg <- case v of
-    M.BVValue w i
+    M.BVValue w (BV.BV i)
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_get): " <> show (M.ppValueAssignments v))
@@ -312,11 +311,10 @@ sdiv :: (1 <= n)
      -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids (M.BVType n))
 sdiv repr dividend divisor =
   case divisor of
-    M.BVValue nr val
-      | bv <- BVS.bitVector' repr val
-      , BVS.bvPopCount bv == 1 ->
+    M.BVValue nr bv
+      | BV.asUnsigned (BV.popCount bv) == 1 ->
         withKnownNat repr $
-          let app = M.BVSar nr dividend (M.BVValue nr (fromIntegral (B.countTrailingZeros bv)))
+          let app = M.BVSar nr dividend (M.BVValue nr (BV.ctz nr bv))
           in G.ValueExpr <$> G.addExpr (G.AppExpr app)
     _ -> addArchAssignment (SDiv repr dividend divisor)
 
