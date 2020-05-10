@@ -66,7 +66,7 @@ simplifyApp a =
     BVShl _ l (BVValue _ (BV.BV 0))   -> Just l
     BVShl sz l r                      -> binopbv (\l' r' -> BV.shl sz l' (BV.asNatural r')) sz l r
     BVShr _ l (BVValue _ (BV.BV 0))   -> Just l
-    BVShr sz l r                      -> binopbv (\l' r' -> BV.lshr l' (BV.asNatural r')) sz l r
+    BVShr sz l r                      -> binopbv (\l' r' -> BV.lshr sz l' (BV.asNatural r')) sz l r
     BVSar _ l (BVValue _ (BV.BV 0))   -> Just l
     BVSar sz l r                      -> binopbv (\l' r' -> BV.ashr sz l' (BV.asNatural r')) sz l r
     BVAdd _ l (BVValue _ (BV.BV 0))   -> Just l

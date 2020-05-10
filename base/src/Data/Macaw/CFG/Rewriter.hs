@@ -556,7 +556,7 @@ rewriteApp app = do
       pure (BVValue w (BV.shl w x s))
     BVShr w (BVValue _ x) (BVValue _ y) | BV.asUnsigned y < toInteger (maxBound :: Int) -> do
       let s = min (BV.asNatural y) (natValue w)
-      pure (BVValue w (BV.lshr x s))
+      pure (BVValue w (BV.lshr w x s))
     BVSar w (BVValue _ x) (BVValue _ y) | BV.asUnsigned y < toInteger (maxBound :: Int) -> do
       let s = min (BV.asNatural y) (natValue w)
       pure (BVValue w (BV.ashr w x s))
@@ -574,7 +574,7 @@ rewriteApp app = do
       pure $ BVValue w (BV.popCount x) -- $ fromIntegral $ popCount $ toUnsigned w x
     Bsr w (BVValue _ x) -> do
       let i = fromJust $ find
-                (\j -> BV.lshr x j == BV.zero w)
+                (\j -> BV.lshr w x j == BV.zero w)
                 [0 .. natValue w]
       pure $ BVValue w $ BV.sub w (BV.width w) (BV.mkBV w (toInteger i))
 

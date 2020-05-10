@@ -72,6 +72,7 @@ import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
 import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Macaw.ARM.ARMReg as AR
@@ -192,7 +193,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
                  Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (MC.BVValue (PN.knownNat @32) (fromIntegral addr))
+                 Just addr -> return (MC.BVValue (PN.knownNat @32) (BV.trunc PN.knownNat (BV.word64 (MM.memWordValue addr))))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs off curPCAddr (UnsupportedInstruction i)
         Just transformer -> do

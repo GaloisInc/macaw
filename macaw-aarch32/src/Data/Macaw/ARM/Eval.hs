@@ -20,6 +20,7 @@ module Data.Macaw.ARM.Eval
     where
 
 import           Control.Lens ( (&), (^.), (.~) )
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Macaw.ARM.ARMReg as AR
 import qualified Data.Macaw.ARM.Arch as AA
 import qualified Data.Macaw.AbsDomain.AbsState as MA
@@ -63,11 +64,11 @@ initialBlockRegs addr _preconds = MSG.initRegState addr &
   -- are setting this concretely to 0 at the start of a block, but
   -- once we get Thumb support, we will want to refer to the semantics
   -- for this.
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
-  MC.boundValue AR.ARMWriteMode .~ MC.BVValue knownNat 0 &
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ MC.BVValue knownNat 0 &
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ MC.BVValue knownNat 1 &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat (BV.zero knownNat) &
+  MC.boundValue AR.ARMWriteMode .~ MC.BVValue knownNat (BV.zero knownNat) &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ MC.BVValue knownNat (BV.zero knownNat) &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat (BV.zero knownNat) &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ MC.BVValue knownNat (BV.one knownNat) &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ MC.BoolValue False &
