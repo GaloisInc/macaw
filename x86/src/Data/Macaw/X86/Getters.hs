@@ -49,6 +49,7 @@ module Data.Macaw.X86.Getters
 
 import           Control.Lens ((&))
 import qualified Control.Monad.Fail as MF
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.NatRepr
 import qualified Data.Text as T
 import qualified Flexdis86 as F
@@ -109,34 +110,34 @@ reg64Loc = fullRegister . X86_GP
 -- Getters
 
 getImm32 :: F.Imm32 -> BVExpr ids 32
-getImm32 (F.Imm32Concrete w) = bvLit n32 (toInteger w)
+getImm32 (F.Imm32Concrete w) = bvLit n32 (BV.int32 w)
 getImm32 (F.Imm32SymbolOffset sym off _)
   | off < 0 =
     bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
-    .- bvLit n32 (negate (toInteger off))
+    .- bvLit n32 (BV.negate n32 (BV.trunc n32 (BV.int64 off)))
   | otherwise =
     bvTrunc' n32 (ValueExpr (SymbolValue Addr64 sym))
-    .+ bvLit n32 (toInteger off)
+    .+ bvLit n32 (BV.trunc n32 (BV.int64 off))
 
 getUImm64 :: F.UImm64 -> BVExpr ids 64
-getUImm64 (F.UImm64Concrete w) = bvLit n64 (toInteger w)
+getUImm64 (F.UImm64Concrete w) = bvLit n64 (BV.word64 w)
 getUImm64 (F.UImm64SymbolOffset sym off) =
-  ValueExpr (SymbolValue Addr64 sym) .+ bvLit n64 (toInteger off)
+  ValueExpr (SymbolValue Addr64 sym) .+ bvLit n64 (BV.int64 off)
 
 -- | Return the value of a 32-bit displacement.
 getDisplacement32 :: F.Displacement -> BVExpr ids 32
-getDisplacement32 F.NoDisplacement = bvLit n32 0
-getDisplacement32 (F.Disp8 x) = bvLit n32 (toInteger x)
+getDisplacement32 F.NoDisplacement = bvLit n32 (BV.zero n32)
+getDisplacement32 (F.Disp8 x) = bvLit n32 (BV.zext n32 (BV.int8 x))
 getDisplacement32 (F.Disp32 x) =  getImm32 x
 
 -- | Return the value of a 32-bit displacement.
 getDisplacement64 :: F.Displacement -> BVExpr ids 64
-getDisplacement64 F.NoDisplacement = bvLit n64 0
-getDisplacement64 (F.Disp8 x)      = bvLit n64 (toInteger x)
-getDisplacement64 (F.Disp32 (F.Imm32Concrete x)) = bvLit n64 (toInteger x)
+getDisplacement64 F.NoDisplacement = bvLit n64 (BV.zero n64)
+getDisplacement64 (F.Disp8 x)      = bvLit n64 (BV.zext n64 (BV.int8 x))
+getDisplacement64 (F.Disp32 (F.Imm32Concrete x)) = bvLit n64 (BV.zext n64 (BV.int32 x))
 getDisplacement64 (F.Disp32 (F.Imm32SymbolOffset sym off _)) =
   ValueExpr (SymbolValue Addr64 sym)
-    .+ bvLit n64 (toInteger off)
+    .+ bvLit n64 (BV.int64 off)
 
 -- | Calculates the address corresponding to an AddrRef
 getBVAddress :: F.AddrRef -> X86Generator st ids (BVExpr ids 64)
@@ -145,13 +146,13 @@ getBVAddress ar =
    -- FIXME: It seems that there is no sign extension here ...
     F.Addr_32 seg m_r32 m_int_r32 i32 -> do
       base <- case m_r32 of
-                Nothing -> return $! bvKLit 0
+                Nothing -> return $! bvKLit (BV.zero knownNat)
                 Just r  -> get (reg32Loc r)
       scale <-
         case m_int_r32 of
-          Nothing     -> return $! bvKLit 0
+          Nothing     -> return $! bvKLit (BV.zero knownNat)
           Just (i, r) ->
-            bvTrunc n32 . (bvLit n32 (toInteger i) .*)
+            bvTrunc n32 . (bvLit n32 (BV.mkBV n32 (toInteger i)) .*)
               <$> get (reg32Loc r)
 
       let offset = uext n64 (base .+ scale .+ getDisplacement32 i32)
@@ -160,7 +161,7 @@ getBVAddress ar =
     F.Offset_32    _seg _w32 ->
       fail "Offset_32"
     F.Offset_64 seg w64 -> do
-      mk_absolute seg (bvLit n64 (toInteger w64))
+      mk_absolute seg (bvLit n64 (BV.word64 w64))
     F.Addr_64 seg m_r64 m_int_r64 disp -> do
       base <- case m_r64 of
                 Nothing -> return v0_64
@@ -169,14 +170,14 @@ getBVAddress ar =
         case m_int_r64 of
           Nothing     -> return v0_64
           Just (i, r) ->
-            bvTrunc n64 . (bvLit n64 (toInteger i) .*) <$> get (reg64Loc r)
+            bvTrunc n64 . (bvLit n64 (BV.mkBV n64 (toInteger i)) .*) <$> get (reg64Loc r)
       let offset = base .+ scale .+ getDisplacement64 disp
       mk_absolute seg offset
     F.IP_Offset_64 seg disp -> do
       ipVal <- get rip
       mk_absolute seg (ipVal .+ getDisplacement64 disp)
   where
-    v0_64 = bvLit n64 0
+    v0_64 = bvLit n64 (BV.zero n64)
     -- | Add the segment base to compute an absolute address.
     mk_absolute :: F.Segment -> Addr ids -> X86Generator st ids (Expr ids (BVType 64))
     mk_absolute seg offset =
@@ -294,14 +295,14 @@ getBVLocation l expected = do
 getSomeBVValue :: F.Value -> X86Generator st ids (SomeBV (Expr ids))
 getSomeBVValue v =
   case v of
-    F.ByteImm  w      -> pure $! SomeBV $ bvLit n8  $ toInteger w
-    F.ByteSignedImm w -> pure $! SomeBV $ bvLit n8  $ toInteger w
-    F.WordImm  w      -> pure $! SomeBV $ bvLit n16 $ toInteger w
-    F.WordSignedImm w -> pure $! SomeBV $ bvLit n16 $ toInteger w
+    F.ByteImm  w      -> pure $! SomeBV $ bvLit n8  $ BV.word8 w
+    F.ByteSignedImm w -> pure $! SomeBV $ bvLit n8  $ BV.int8 w
+    F.WordImm  w      -> pure $! SomeBV $ bvLit n16 $ BV.word16 w
+    F.WordSignedImm w -> pure $! SomeBV $ bvLit n16 $ BV.int16 w
     F.DWordImm i      -> pure $! SomeBV $ getImm32 i
-    F.DWordSignedImm w -> pure $! SomeBV $ bvLit n32 $ toInteger w
+    F.DWordSignedImm w -> pure $! SomeBV $ bvLit n32 $ (BV.int32 w)
     F.QWordImm (F.UImm64Concrete  w) ->
-      pure $! SomeBV $ bvLit n64 $ toInteger w
+      pure $! SomeBV $ bvLit n64 $ (BV.word64 w)
     F.JumpOffset _ _  -> fail "Jump Offset should not be treated as a BVValue."
     _ -> do
       SomeBV l <- getSomeBVLocation v
@@ -339,20 +340,20 @@ getSignExtendedValue v out_w =
 
     F.ByteImm  i
       | Just Refl <- testEquality n8 out_w ->
-        pure $! bvLit n8 (toInteger i)
+        pure $! bvLit n8 (BV.word8 i)
     F.WordImm  i
       | Just Refl <- testEquality n16 out_w ->
-        pure $! bvLit n16 (toInteger i)
+        pure $! bvLit n16 (BV.word16 i)
     F.DWordImm (F.Imm32Concrete i)
       | Just Refl <- testEquality n32 out_w ->
-        pure $! bvLit n32 (toInteger i)
+        pure $! bvLit n32 (BV.int32 i)
     F.QWordImm (F.UImm64Concrete i)
       | Just Refl <- testEquality n64 out_w ->
-        pure $! bvLit n64 (toInteger i)
+        pure $! bvLit n64 (BV.word64 i)
 
-    F.ByteSignedImm  i -> pure $! bvLit out_w (toInteger i)
-    F.WordSignedImm  i -> pure $! bvLit out_w (toInteger i)
-    F.DWordSignedImm i -> pure $! bvLit out_w (toInteger i)
+    F.ByteSignedImm  i -> pure $! bvLit out_w (BV.mkBV out_w (toInteger i))
+    F.WordSignedImm  i -> pure $! bvLit out_w (BV.mkBV out_w (toInteger i))
+    F.DWordSignedImm i -> pure $! bvLit out_w (BV.mkBV out_w (toInteger i))
 
     F.ByteReg  r -> mk $ reg8Loc  r
     F.WordReg  r -> mk $ reg16Loc r
@@ -394,7 +395,7 @@ resolveJumpOffset s (F.RelativeOffset insOff symId off)
   = ValueExpr (SymbolValue Addr64 symId)
   -- We add the offset and the offset within the instruction of this offset,
     -- but have to subtract the current IP
-  .+ bvLit n64 (toInteger off + toInteger (genInstructionSize s) - toInteger insOff)
+  .+ bvLit n64 (BV.mkBV n64 (toInteger off + toInteger (genInstructionSize s) - toInteger insOff))
 
 -- | Return the target of a call or jump instruction.
 getCallTarget :: F.Value
@@ -432,7 +433,7 @@ doJump cond v =
       -- Set the ip value.
       rip .= ipVal
     F.QWordImm (F.UImm64Concrete w) -> do
-      modify rip $ mux cond $ bvKLit (toInteger w)
+      modify rip $ mux cond $ bvKLit (BV.word64 w)
     _ -> do
       ipVal <- eval =<< get rip
       let msg = "Data.Macaw.X86.Getters.doJump: Unexpected argument: " ++ show v ++ " at " ++ show ipVal
