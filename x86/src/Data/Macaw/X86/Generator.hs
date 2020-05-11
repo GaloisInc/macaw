@@ -11,6 +11,7 @@ modeling X86 semantics.
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -50,8 +51,7 @@ module Data.Macaw.X86.Generator
   , asApp
   , asArchFn
   , asBoolLit
-  , asUnsignedBVLit
-  , asSignedBVLit
+  , asBVLit
   , eval
   , getRegValue
   , setReg
@@ -70,7 +70,7 @@ import           Control.Monad.Fail
 import           Control.Monad.Reader
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
-import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import           Data.Foldable
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.Block
@@ -81,7 +81,6 @@ import           Data.Maybe
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
-import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableFC
 import           Data.Sequence (Seq)
@@ -147,15 +146,10 @@ asBoolLit :: Expr ids BoolType -> Maybe Bool
 asBoolLit (ValueExpr (BoolValue b)) = Just b
 asBoolLit _ = Nothing
 
--- | If expression is a literal bitvector, then return as an unsigned integer.
-asUnsignedBVLit :: Expr ids (BVType w) -> Maybe Integer
-asUnsignedBVLit (ValueExpr (BVValue w v)) = Just (toUnsigned w v)
-asUnsignedBVLit _ = Nothing
-
--- | If expression is a literal bitvector, then return as an signed integer.
-asSignedBVLit :: Expr ids (BVType w) -> Maybe Integer
-asSignedBVLit (ValueExpr (BVValue w v)) = Just (toSigned w v)
-asSignedBVLit _ = Nothing
+-- | If expression is a literal bitvector, then return it.
+asBVLit :: Expr ids (BVType w) -> Maybe (BV.BV w)
+asBVLit (ValueExpr (BVValue _ v)) = Just v
+asBVLit _ = Nothing
 
 ------------------------------------------------------------------------
 -- PreBlock
@@ -414,27 +408,27 @@ constPropagate :: forall ids tp. App (Value X86_64 ids) tp -> Maybe (Value X86_6
 constPropagate v =
   case v of
    BVAnd _ l r
-     | Just _ <- testEquality l r -> Just l
-   BVAnd sz l r                   -> binop (.&.) sz l r
+     | Just _ <- testEquality l r   -> Just l
+   BVAnd sz l r                     -> binop BV.and sz l r
    -- Units
-   BVAdd _  l (BVValue _ 0)       -> Just l
-   BVAdd _  (BVValue _ 0) r       -> Just r
-   BVAdd sz l r                   -> binop (+) sz l r
-   BVMul _  l (BVValue _ 1)       -> Just l
-   BVMul _  (BVValue _ 1) r       -> Just r
+   BVAdd _  l (BVValue _ (BV.BV 0)) -> Just l
+   BVAdd _  (BVValue _ (BV.BV 0)) r -> Just r
+   BVAdd sz l r                     -> binop (BV.add sz) sz l r
+   BVMul _  l (BVValue _ (BV.BV 1)) -> Just l
+   BVMul _  (BVValue _ (BV.BV 1)) r -> Just r
 
-   UExt  (BVValue _ n) sz         -> Just $ mkLit sz n
+   UExt  (BVValue _ x) sz           -> Just $ BVValue sz (BV.zext sz x)
 
    -- Word operations
-   Trunc (BVValue _ x) sz         -> Just $ mkLit sz x
+   Trunc (BVValue _ x) sz           -> Just $ BVValue sz (BV.trunc sz x)
 
    -- Boolean operations
-   BVUnsignedLt l r               -> boolop (<) l r
-   Eq l r                         -> boolop (==) l r
-   BVComplement sz x              -> unop complement sz x
-   _                              -> Nothing
+   BVUnsignedLt l r                 -> boolop (<) l r
+   Eq l r                           -> boolop (==) l r
+   BVComplement sz x                -> unop (BV.complement sz) sz x
+   _                                -> Nothing
   where
-    boolop :: (Integer -> Integer -> Bool)
+    boolop :: (forall w . BV.BV w -> BV.BV w -> Bool)
            -> Value X86_64 ids utp
            -> Value X86_64 ids utp
            -> Maybe (Value X86_64 ids BoolType)
@@ -442,17 +436,20 @@ constPropagate v =
     boolop _ _ _ = Nothing
 
     unop :: (tp ~ BVType n)
-         => (Integer -> Integer)
-         -> NatRepr n -> Value X86_64 ids tp -> Maybe (Value X86_64 ids tp)
-    unop f sz (BVValue _ l)  = Just $ mkLit sz (f l)
+         => (BV.BV n -> BV.BV n)
+         -> NatRepr n
+         -> Value X86_64 ids tp
+         -> Maybe (Value X86_64 ids tp)
+    unop f sz (BVValue _ l)  = Just $ BVValue sz (f l)
     unop _ _ _               = Nothing
 
-    binop :: (tp ~ BVType n) => (Integer -> Integer -> Integer)
+    binop :: (tp ~ BVType n)
+          => (BV.BV n -> BV.BV n -> BV.BV n)
           -> NatRepr n
           -> Value X86_64 ids tp
           -> Value X86_64 ids tp
           -> Maybe (Value X86_64 ids tp)
-    binop f sz (BVValue _ l) (BVValue _ r) = Just $ mkLit sz (f l r)
+    binop f sz (BVValue _ l) (BVValue _ r) = Just $ BVValue sz (f l r)
     binop _ _ _ _                          = Nothing
 
 evalApp :: App (Value X86_64 ids) tp -> X86Generator st_s ids (Value X86_64 ids tp)

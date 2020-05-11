@@ -12,6 +12,7 @@ library
   build-depends:
     base >= 4,
     ansi-wl-pprint,
+    bv-sized >= 1.0.0 && < 1.1,
     bytestring,
     containers,
     flexdis86 >= 0.1.2,

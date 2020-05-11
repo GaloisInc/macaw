@@ -9,6 +9,7 @@ This defines the X86_64 architecture type and the supporting definitions.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 module Data.Macaw.X86.ArchTypes
@@ -38,7 +39,7 @@ module Data.Macaw.X86.ArchTypes
   , repValSizeMemRepr
   ) where
 
-import           Data.Bits
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -1005,13 +1006,14 @@ rewriteX86PrimFn f =
   case f of
     EvenParity (BVValue _ xv) -> do
       let go 8 r = r
-          go i r = go (i+1) $! (xv `testBit` i /= r)
+          go i r = go (i+1) $! (BV.testBit' i xv /= r)
       pure $ BoolValue (go 0 True)
     MMXExtend e -> do
       tgtExpr <- rewriteValue e
       case tgtExpr of
         BVValue _ i -> do
-          pure $ BVValue (knownNat :: NatRepr 80) $ 0xffff `shiftL` 64 .|. i
+          pure $ BVValue (knownNat :: NatRepr 80)
+            (BV.concat knownNat knownNat (BV.maxUnsigned (knownNat @16)) i)
         _ -> evalRewrittenArchFn (MMXExtend tgtExpr)
     _ -> do
       evalRewrittenArchFn =<< traverseFC rewriteValue f
