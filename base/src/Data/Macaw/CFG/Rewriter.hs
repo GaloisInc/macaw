@@ -38,7 +38,6 @@ import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.BinarySymbols
 import qualified Data.BitVector.Sized as BV
-import qualified Data.BitVector.Sized.Overflow as BV
 import           Data.List
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -501,21 +500,18 @@ rewriteApp app = do
     -- (x >> j) testBit i ~> x testBit (i+j)
     -- (x << j) testBit i ~> x testBit (i-j)
     -- plus a couple special cases for when the tested bit falls outside the shifted value
+    -- (x >> j) testBit i ~> x testBit (i+j)
+    -- (x << j) testBit i ~> x testBit (i-j)
+    -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.addOf w j i
-      , BV.ult k (BV.width w) ->
-      rewriteApp (BVTestBit x (BVValue w k))
+      | BV.add w j i < BV.width w ->
+      rewriteApp (BVTestBit x (BVValue w (BV.add w j i)))
       | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
-      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.addOf w j i
-      , BV.ult k (BV.width w) ->
-      rewriteApp (BVTestBit x (BVValue w k))
-      | BV.ult i (BV.width w) -> pure (boolLitValue True)
-      | otherwise -> pure (boolLitValue False)
+      | BV.ult i (BV.width w) -> do
+      rewriteApp (BVTestBit x (BVValue w (min (BV.add w j i) (BV.maxUnsigned w))))
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
-      | BV.Overflow BV.NoUnsignedOverflow _ k <- BV.subOf w i j
-      , BV.ult i (BV.width w) ->
-      rewriteApp (BVTestBit x (BVValue w k))
+      | j <= i -> rewriteApp (BVTestBit x (BVValue w (BV.sub w i j)))
       | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
