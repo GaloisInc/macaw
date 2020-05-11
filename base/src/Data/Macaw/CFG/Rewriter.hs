@@ -500,18 +500,15 @@ rewriteApp app = do
     -- (x >> j) testBit i ~> x testBit (i+j)
     -- (x << j) testBit i ~> x testBit (i-j)
     -- plus a couple special cases for when the tested bit falls outside the shifted value
-    -- (x >> j) testBit i ~> x testBit (i+j)
-    -- (x << j) testBit i ~> x testBit (i-j)
-    -- plus a couple special cases for when the tested bit falls outside the shifted value
     BVTestBit (valueAsApp -> Just (BVShr w x (BVValue _ j))) (BVValue _ i)
-      | BV.add w j i < BV.width w ->
+      | BV.asUnsigned j + BV.asUnsigned i < intValue w ->
       rewriteApp (BVTestBit x (BVValue w (BV.add w j i)))
       | otherwise -> pure (boolLitValue False)
     BVTestBit (valueAsApp -> Just (BVSar w x (BVValue _ j))) (BVValue _ i)
-      | BV.ult i (BV.width w) -> do
-      rewriteApp (BVTestBit x (BVValue w (min (BV.add w j i) (BV.maxUnsigned w))))
+      | BV.asUnsigned i < intValue w -> do
+      rewriteApp (BVTestBit x (BVValue w (BV.mkBV w $ min (BV.asUnsigned j + BV.asUnsigned i) (intValue w-1))))
     BVTestBit (valueAsApp -> Just (BVShl w x (BVValue _ j))) (BVValue _ i)
-      | j <= i -> rewriteApp (BVTestBit x (BVValue w (BV.sub w i j)))
+      | BV.asUnsigned j <= BV.asUnsigned i -> rewriteApp (BVTestBit x (BVValue w (BV.sub w i j)))
       | otherwise -> pure (boolLitValue False)
 
     BVComplement w (BVValue _ x) -> do
