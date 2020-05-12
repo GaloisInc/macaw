@@ -56,6 +56,16 @@ data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             -- TH.  The cached values are not the translated exprs;
                             -- instead, they are names that are bound for those
                             -- terms (via 'VarE')
+                            , lazyExpressionCache :: !(M.Map (Some (S.Expr t)) Exp)
+                            -- ^ This is the same as expressionCache, except
+                            -- that each expression is translated as a let
+                            -- binding (that references its arguments in an
+                            -- applicative style).
+                            --
+                            -- This supports translation of
+                            -- conditionally-evaluated code (specifically,
+                            -- ensuring that side effects only execute if
+                            -- required).
                             , locToReg :: forall tp . L.Location arch tp -> Q Exp
                             , nonceAppEvaluator :: forall tp
                                                  . BoundVarInterpretations arch t fs

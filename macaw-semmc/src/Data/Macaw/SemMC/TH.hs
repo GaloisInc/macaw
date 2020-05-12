@@ -705,8 +705,9 @@ addEltTH endianness interps elt = do
       case elt of
         S.AppExpr appElt -> do
           x <- appToExprTH endianness (S.appExprApp appElt) interps
-          cacheExpr elt x
-          return x
+          bindExpr elt x
+          -- cacheExpr elt x
+          -- return x
           -- bindExpr elt [| return $(return x) |]
         S.BoundVarExpr bVar -> do
           x <- evalBoundVar interps bVar
@@ -906,6 +907,23 @@ appToExprTH endianness app interps = do
     Just translator -> translator
     Nothing -> defaultAppEvaluator endianness app interps
 
+
+-- Idea: Parameterize this by the function to use to recursively-evaluate
+-- sub-terms.  One will be the current 'addEltTH'.  Another would be the lazier
+-- version that accumulates let bindings.
+--
+-- This will probably also need a combinator argument to figure out how to apply
+-- arguments.  In the current formulation, they just get passed as pure values.
+-- In the lazy version, arguments need to be recursively evaluated (using
+-- applicative?).  Recursively building them all up seems really challenging,
+-- but it should be okay as long as we don't lose sharing in the term
+-- definitions.  It will still be substantial work to make it compile, though.
+--
+-- In fact, we might just be able to change the recursive evaluator to generate
+-- either bind statements or let expressions.  Then for concreteIte, we could
+-- make a totally separate evaluator that looks up references to let-bound
+-- things and evaluates them in the (simplified) structure of concreteIte (but
+-- referring to the let-bound generated code that preserves sharing)
 defaultAppEvaluator :: (A.Architecture arch)
                     => M.Endianness
                     -> S.App (S.Expr t) ctp
@@ -915,7 +933,7 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
     -- liftQ [| return (G.AppExpr (M.NotApp $(return e))) |]
-    bindTH [| G.addExpr (G.AppExpr (M.NotApp $(return e))) |]
+    return [| G.addExpr (G.AppExpr (M.NotApp $(return e))) |]
     -- liftQ [| return $(return x) |]
   S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap
   S.BaseIte bt _ test t f -> do
@@ -923,15 +941,15 @@ defaultAppEvaluator endianness elt interps = case elt of
     tE <- addEltTH endianness interps t
     fE <- addEltTH endianness interps f
     case bt of
-      CT.BaseBoolRepr -> bindTH [| addApp
+      CT.BaseBoolRepr -> return [| addApp
                                    (M.Mux M.BoolTypeRepr
                                     $(return testE) $(return tE) $(return fE))
                                 |]
-      CT.BaseBVRepr w -> bindTH [| addApp
+      CT.BaseBVRepr w -> return [| addApp
                                    (M.Mux (M.BVTypeRepr $(natReprTH w))
                                     $(return testE) $(return tE) $(return fE))
                                 |]
-      CT.BaseFloatRepr fpp -> bindTH [| addApp
+      CT.BaseFloatRepr fpp -> return [| addApp
                                         (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp))
                                          $(return testE) $(return tE) $(return fE))
                                      |]
@@ -946,27 +964,27 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BaseEq _bt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.Eq $(return e1) $(return e2)) |]
+    return [| addApp (M.Eq $(return e1) $(return e2)) |]
   S.BVSlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.BVSignedLt $(return e1) $(return e2)) |]
+    return [| addApp (M.BVSignedLt $(return e1) $(return e2)) |]
   S.BVUlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.BVUnsignedLt $(return e1) $(return e2)) |]
+    return [| addApp (M.BVUnsignedLt $(return e1) $(return e2)) |]
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| G.addExpr =<< TR.bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
+    return [| G.addExpr =<< TR.bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
         e <- addEltTH endianness interps bv
-        bindTH [| G.addExpr =<< TR.bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
+        return [| G.addExpr =<< TR.bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
       False -> do
         e <- addEltTH endianness interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
@@ -975,7 +993,7 @@ defaultAppEvaluator endianness elt interps = case elt of
                |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
-    bindTH [| addApp (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)) $(return bvValExp))
+    return [| addApp (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)) $(return bvValExp))
             |]
 
   S.SemiRingSum sm ->
@@ -1034,21 +1052,21 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.BVShl $(natReprTH w) $(return e1) $(return e2)) |]
+    return [| addApp (M.BVShl $(natReprTH w) $(return e1) $(return e2)) |]
   S.BVLshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.BVShr $(natReprTH w) $(return e1) $(return e2)) |]
+    return [| addApp (M.BVShr $(natReprTH w) $(return e1) $(return e2)) |]
   S.BVAshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    bindTH [| addApp (M.BVSar $(natReprTH w) $(return e1) $(return e2)) |]
+    return [| addApp (M.BVSar $(natReprTH w) $(return e1) $(return e2)) |]
   S.BVZext w bv -> do
     e <- addEltTH endianness interps bv
-    bindTH [| addApp (M.UExt $(return e) $(natReprTH w)) |]
+    return [| addApp (M.UExt $(return e) $(natReprTH w)) |]
   S.BVSext w bv -> do
     e <- addEltTH endianness interps bv
-    bindTH [| addApp (M.SExt $(return e) $(natReprTH w)) |]
+    return [| addApp (M.SExt $(return e) $(natReprTH w)) |]
 
   -- S.StructCtor tps flds -> do
   --   es <- sequence $ FC.toListFC (addEltTH endianness interps) flds

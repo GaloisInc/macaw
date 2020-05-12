@@ -219,7 +219,7 @@ setGPR handle regid v = do
     _ -> return ()
   return handle
 
-getGPR :: M.Value ARM.AArch32 ids tp 
+getGPR :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
 getGPR v = do
   reg <- case v of
@@ -244,7 +244,7 @@ setSIMD handle regid v = do
     _ -> return ()
   return handle
 
-getSIMD :: M.Value ARM.AArch32 ids tp 
+getSIMD :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
 getSIMD v = do
   reg <- case v of
@@ -347,6 +347,22 @@ armAppEvaluator :: M.Endianness
 armAppEvaluator endianness interps elt =
     case elt of
       WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
+        -- NOTE: This case is very special.  The placeholder types denote
+        -- conditionals that are guarding the state update functions with
+        -- mutation.
+        --
+        -- We need to ensure that state updates are only done lazily.  This
+        -- works because the arguments to the branches are expressions in the
+        -- Generator monad.  We can do this translation while preserving sharing
+        -- by turning every recrusively-traversed term into a let binding at the
+        -- top-level.  After that, we can build bodies for the "arms" of the
+        -- concreteIte that instantiate those terms in the appropriate monadic
+        -- context.  It is slightly problematic that the core TH translation
+        -- doesn't really support that because it wants to (more efficiently)
+        -- evaluate all of the monadic stuff.  However, we don't need quite as
+        -- much generality for this code, so maybe a smaller core that just does
+        -- all of the necessary applicative binding of 'Generator' terms will be
+        -- sufficient.
         testE <- addEltTH endianness interps test
         -- tE <- inLocalBlock (addEltTH endianness interps t)
         -- fE <- inLocalBlock (addEltTH endianness interps f)
@@ -369,7 +385,7 @@ armAppEvaluator endianness interps elt =
                |]
       WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
       WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
-      WB.BaseIte bt _ test t f -> 
+      WB.BaseIte bt _ test t f ->
         case bt of
           WT.BaseArrayRepr {} -> Just $ do
             -- Just return the true branch, since both true and false branches should be the memory or registers.
