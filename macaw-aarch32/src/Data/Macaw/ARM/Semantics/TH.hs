@@ -90,17 +90,17 @@ armNonceAppEval bvi nonceApp =
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
-              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+              Ctx.Empty Ctx.:> array Ctx.:> ix ->
                 Just $ do
-                  -- _rgf <- addEltTH M.LittleEndian bvi array
+                  _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| getSIMD =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
-              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
+              Ctx.Empty Ctx.:> array Ctx.:> ix ->
                 Just $ do
-                  -- _rgf <- addEltTH M.LittleEndian bvi array
+                  _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
                   liftQ [| getGPR =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_gpr_get"
@@ -128,23 +128,26 @@ armNonceAppEval bvi nonceApp =
 
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
-              appendStmt [| setWriteMode WriteGPRs |]
               gprs' <- addEltTH M.LittleEndian bvi gprs
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(refBinding gprs') |]
-
+              liftQ [| do setWriteMode WriteGPRs
+                          $(refBinding gprs')
+                          setWriteMode WriteNone
+                     |]
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
-              appendStmt [| setWriteMode WriteSIMDs |]
               simds' <- addEltTH M.LittleEndian bvi simds
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(refBinding simds') |]
+              liftQ [| do setWriteMode WriteSIMDs
+                          $(refBinding simds')
+                          setWriteMode WriteNone
+                     |]
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
-              appendStmt [| setWriteMode WriteMemory |]
               mem' <- addEltTH M.LittleEndian bvi mem
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(refBinding mem') |]
+              liftQ [| do setWriteMode WriteMemory
+                          $(refBinding mem')
+                          setWriteMode WriteNone
+                     |]
+
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
