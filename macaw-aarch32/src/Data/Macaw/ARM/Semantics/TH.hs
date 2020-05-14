@@ -374,17 +374,10 @@ armAppEvaluator endianness interps elt =
         -- all of the necessary applicative binding of 'Generator' terms will be
         -- sufficient.
         testE <- addEltTH endianness interps test
-        -- tE <- inLocalBlock (addEltTH endianness interps t)
-        -- fE <- inLocalBlock (addEltTH endianness interps f)
-        {-
-TR: commenting these out for now since they might be obsolete after the new translation is complete
-
-        tE <- translateExpr endianness interps t
-        fE <- translateExpr endianness interps f
--}
-        tE <- addEltTH endianness interps t
-        fE <- addEltTH endianness interps f
-        liftQ [| join (concreteIte <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
+        inConditionalContext $ do
+          tE <- addEltTH endianness interps t
+          fE <- addEltTH endianness interps f
+          liftQ [| join (concreteIte <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2

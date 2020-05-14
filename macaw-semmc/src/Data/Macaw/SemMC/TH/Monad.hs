@@ -20,7 +20,8 @@ module Data.Macaw.SemMC.TH.Monad (
   letTH,
   extractBound,
   refBinding,
-  inLocalBlock,
+  inConditionalContext,
+  isTopLevel,
   definedFunction
   ) where
 
@@ -83,6 +84,11 @@ data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                                            -> Maybe (MacawQ arch t fs Exp)
                             , definedFunctionEvaluator :: String
                                                        -> Maybe (MacawQ arch t fs Exp)
+                            , translationDepth :: !Int
+                            -- ^ At depth 0, we are translating at the top level
+                            -- (and should eagerly bind side-effecting
+                            -- operations).  At higher depths we are inside of
+                            -- conditionals and should use lazy binding.
                             }
 
 emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
@@ -97,6 +103,7 @@ emptyQState ltr ena ae df = QState { accumulatedStatements = Seq.empty
                                    , nonceAppEvaluator = ena
                                    , appEvaluator = ae
                                    , definedFunctionEvaluator = df
+                                   , translationDepth = 0
                                    }
 
 newtype MacawQ arch t fs a = MacawQ { unQ :: St.StateT (QState arch t fs) Q a }
@@ -114,6 +121,17 @@ runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
           -> Q [Stmt]
 runMacawQ ltr ena ea df act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea df)
 
+isTopLevel :: MacawQ arch t fs Bool
+isTopLevel = (==0) <$> St.gets translationDepth
+
+inConditionalContext :: MacawQ arch t fs a
+                     -> MacawQ arch t fs a
+inConditionalContext k = do
+  St.modify' $ \s -> s { translationDepth = translationDepth s + 1 }
+  res <- k
+  St.modify' $ \s -> s { translationDepth = translationDepth s - 1 }
+  return res
+
 -- | This combinator creates a new scope of statement accumulation so that we
 -- can make blocks of code in a @do@ block in the 'Generator' monad.
 --
@@ -126,19 +144,19 @@ runMacawQ ltr ena ea df act = (F.toList . accumulatedStatements) <$> St.execStat
 --
 -- Note that we make a fresh expression cache to ensure that we don't end up
 -- with scoping issues.
-inLocalBlock :: MacawQ arch t fs Exp
-             -- ^ A computation that generates statements in a fresh block
-             -> MacawQ arch t fs Exp
-inLocalBlock k = do
-  savedState <- St.get
-  St.modify' $ \s -> s { accumulatedStatements = Seq.empty
-                       }
-  res <- k
-  blockStmts <- St.gets accumulatedStatements
-  ret <- liftQ $ noBindS [| return $(return res) |]
-  -- St.put savedState
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements savedState }
-  return (DoE (F.toList blockStmts ++ [ret]))
+-- inLocalBlock :: MacawQ arch t fs Exp
+--              -- ^ A computation that generates statements in a fresh block
+--              -> MacawQ arch t fs Exp
+-- inLocalBlock k = do
+--   savedState <- St.get
+--   St.modify' $ \s -> s { accumulatedStatements = Seq.empty
+--                        }
+--   res <- k
+--   blockStmts <- St.gets accumulatedStatements
+--   ret <- liftQ $ noBindS [| return $(return res) |]
+--   -- St.put savedState
+--   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements savedState }
+--   return (DoE (F.toList blockStmts ++ [ret]))
 
 
 -- | Lift a TH computation (in the 'Q' monad) into the monad.

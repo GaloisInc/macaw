@@ -723,7 +723,10 @@ addEltTH endianness interps elt = do
           bindExpr elt [| return $(return x) |]
         S.NonceAppExpr n -> do
           x <- evalNonceAppTH endianness interps (S.nonceExprApp n)
-          letBindExpr elt x
+          istl <- isTopLevel
+          if istl
+            then bindExpr elt (return x)
+            else letBindExpr elt x
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
             -- Similar to the BoolExpr case, we always eagerly evaluate
