@@ -719,8 +719,7 @@ addEltTH endianness interps elt = do
           letBindExpr elt genExpr
           -- bindExpr elt x
         S.BoundVarExpr bVar -> do
-          x <- evalBoundVar interps bVar
-          bindExpr elt [| return $(return x) |]
+          EagerBoundExp <$> evalBoundVar interps bVar
         S.NonceAppExpr n -> do
           x <- evalNonceAppTH endianness interps (S.nonceExprApp n)
           istl <- isTopLevel
