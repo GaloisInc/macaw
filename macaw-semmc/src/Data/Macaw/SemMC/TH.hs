@@ -41,7 +41,7 @@ module Data.Macaw.SemMC.TH (
 import           GHC.TypeLits ( Symbol )
 
 import           Control.Lens ( (^.) )
-import           Control.Monad (void)
+import           Control.Monad ( ap, join, void )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
@@ -569,7 +569,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
             OperandParameter _w idx -> do
               let C.Const name = varNames SL.!! idx
               newVal <- addEltTH endianness interps expr
-              appendStmt [| G.setRegVal (O.toRegister $(varE name)) $(return newVal) |]
+              appendStmt [| G.setRegVal (O.toRegister $(varE name)) =<< $(refBinding newVal) |]
             LiteralParameter loc
               -- FIXME: The below case is necessary for calls to
               -- defined functions that write to memory, but we end up
@@ -619,7 +619,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
 
               | otherwise -> do
                   valExp <- addEltTH endianness interps expr
-                  appendStmt [| G.setRegVal $(ltr loc) $(return valExp) |]
+                  appendStmt [| G.setRegVal $(ltr loc) =<< $(refBinding valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
@@ -627,7 +627,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
                 Just fi -> do
                   valExp <- addEltTH endianness interps expr
                   appendStmt [| case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
-                                   Just reg -> G.setRegVal (O.toRegister reg) $(return valExp)
+                                   Just reg -> G.setRegVal (O.toRegister reg) =<< $(refBinding valExp)
                                    Nothing -> fail ("Invalid instruction form at " ++ show $(varE ipVarName) ++ " in " ++ $(litE (stringL str)))
                                |]
 
@@ -664,7 +664,7 @@ translateFunction ltr ena ae fnName df archType ff endianness = do
         _ -> error $ "expected a defined function; found " ++ show (ffDef ff)
   stmts <- runMacawQ ltr ena ae df $ do
     val <- addEltTH endianness interps expr
-    appendStmt [| return $(return val) |]
+    appendStmt [| $(refBinding val) |]
   idsTy <- varT <$> newName "ids"
   sTy <- varT <$> newName "s"
   let translate :: forall tp. CT.BaseTypeRepr tp -> Q Type
@@ -696,7 +696,7 @@ addEltTH :: forall arch t fs ctp .
          => M.Endianness
          -> BoundVarInterpretations arch t fs
          -> S.Expr t ctp
-         -> MacawQ arch t fs Exp
+         -> MacawQ arch t fs BoundExp
 addEltTH endianness interps elt = do
   mexp <- lookupElt elt
   case mexp of
@@ -704,23 +704,40 @@ addEltTH endianness interps elt = do
     Nothing ->
       case elt of
         S.AppExpr appElt -> do
-          x <- appToExprTH endianness (S.appExprApp appElt) interps
-          bindExpr elt x
-          -- cacheExpr elt x
-          -- return x
-          -- bindExpr elt [| return $(return x) |]
+          -- AppExprs (general expression forms) can be translated either
+          -- eagerly or lazily.  Eager translations use monadic bindings, while
+          -- lazy bindings are let-bound expressions in the 'G.Generator' monad.
+          --
+          -- Note that the app translator will always return an Expr of
+          -- 'G.Generator' type.  We will cache it here as a let binding.
+          --
+          -- NOTE: For now, we are translating all exprs of this form lazily.
+          -- This may produce less dynamic sharing, but will be easier to manage
+          -- for now.  Once that works, we can be smarter and translate what we
+          -- can eagerly.
+          genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
+          letBindExpr elt genExpr
+          -- bindExpr elt x
         S.BoundVarExpr bVar -> do
           x <- evalBoundVar interps bVar
           bindExpr elt [| return $(return x) |]
         S.NonceAppExpr n -> do
           x <- evalNonceAppTH endianness interps (S.nonceExprApp n)
-          bindExpr elt [| return $(return x) |]
+          letBindExpr elt x
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
+            -- Similar to the BoolExpr case, we always eagerly evaluate
+            -- bitvector literals and return the VarE that wraps the name
+            -- referring to the generated constant.
             bindExpr elt [| genBVValue $(natReprTH w) $(lift val) |]
-          | otherwise -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
-        S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
-        S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
+          | otherwise -> EagerBoundExp <$> liftQ [| error "SemiRingLiteral Elts are not supported" |]
+        S.StringExpr {} -> EagerBoundExp <$> liftQ [| error "StringExpr elts are not supported" |]
+        S.BoolExpr b _loc ->
+          -- This case always eagerly evaluates the literal; that is fine.  It
+          -- will be cached in the normal expression cache.  The value returned
+          -- is the VarE that wraps the name referring to the generated
+          -- constant.
+          bindExpr elt [| return (M.BoolValue $(lift b)) |]
 
 evalBoundVar :: forall arch t fs ctp .
                 (A.Architecture arch)
@@ -729,9 +746,9 @@ evalBoundVar :: forall arch t fs ctp .
              -> MacawQ arch t fs Exp
 evalBoundVar interps bVar =
   if | Just loc <- MapF.lookup bVar (locVars interps) -> withLocToReg $ \ltr -> do
-       letTH [| ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
+       liftQ [| ($(varE (regsValName interps)) ^. M.boundValue $(ltr loc)) |]
      | Just (C.Const name) <- MapF.lookup bVar (opVars interps) ->
-       letTH [| O.extractValue $(varE (regsValName interps)) $(varE name) |]
+       liftQ [| O.extractValue $(varE (regsValName interps)) $(varE name) |]
      | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
        return (VarE name)
        -- liftQ [| return $(varE name) |]
@@ -760,7 +777,7 @@ writeMemTH bvi symFn args endianness =
         let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
         addrValExp <- addEltTH endianness bvi addr
         writtenValExp <- addEltTH endianness bvi val
-        appendStmt [| G.addStmt (M.WriteMem $(return addrValExp) (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) $(return writtenValExp)) |]
+        appendStmt [| G.addStmt <$> (M.WriteMem <$> $(refBinding addrValExp) <*> (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) <$> $(refBinding writtenValExp)) |]
         return (Some mem)
       tp -> fail ("Invalid memory write value type for " <> symFnName symFn <> ": " <> showF tp)
     l -> fail ("Invalid memory write argument list for " <> symFnName symFn <> ": " <> show l)
@@ -806,7 +823,9 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
       --     case funMaybe of
       --       Just fun -> do
               argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
-              bindTH (return (foldl AppE fun argExprs))
+              let applyQ e be = [| $(e) `ap` $(refBinding be) |]
+              liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
+              -- bindTH (return (foldl AppE fun argExprs))
               -- return $ foldl AppE fun argExprs
 
             -- Nothing -> fail ("Unknown defined function: " ++ fnName)
@@ -824,30 +843,30 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  bindTH [| addApp (M.Bsr (NR.knownNat @32) $(return locExp)) |]
+                  liftQ [| addApp <$> (M.Bsr (NR.knownNat @32) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_clz_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  bindTH [| addApp (M.Bsr (NR.knownNat @64) $(return locExp)) |]
+                  liftQ [| addApp <$> (M.Bsr (NR.knownNat @64) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_popcnt_32" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  bindTH [| addApp (M.PopCount (NR.knownNat @32) $(return locExp)) |]
+                  liftQ [| addApp <$> (M.PopCount (NR.knownNat @32) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_popcnt_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  bindTH [| addApp (M.PopCount (NR.knownNat @64) $(return locExp)) |]
+                  liftQ [| addApp <$> (M.PopCount (NR.knownNat @64) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_undefined" -> do
               case S.nonceAppType nonceApp of
                 CT.BaseBVRepr n ->
-                  bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH n))) |]
+                  liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.BVTypeRepr $(natReprTH n))) |]
                 nt -> fail ("Invalid type for undefined: " ++ show nt)
             _ | Just nBytes <- readMemBytes fnName -> do
                 case FC.toListFC Some args of
@@ -856,8 +875,9 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
                     -- first is just a stand-in in the semantics to represent the
                     -- memory.
                     addr <- addEltTH endianness bvi addrElt
-                    bindTH [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) endianness
-                            in M.AssignedValue <$> G.addAssignment (M.ReadMem $(return addr) memRep)
+                    liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) endianness
+                                 assignGen = join (G.addAssignment <$> (M.ReadMem <$> $(refBinding addr) <*> pure memRep))
+                              in M.AssignedValue <$> assignGen
                            |]
                   _ -> fail ("Unexpected arguments to read_mem: " ++ showF args)
               | let interp = A.locationFuncInterpretation (Proxy @arch)
@@ -873,7 +893,7 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
               | Just _ <- matchWriteMemWidth fnName -> do
                 Some memExpr <- writeMemTH bvi symFn args endianness
                 mem <- addEltTH endianness bvi memExpr
-                liftQ [| return $(return mem) |]
+                liftQ [| return $(refBinding mem) |]
               | otherwise -> error $ "Unsupported function: " ++ show fnName ++ "(" ++ show fnArgTypes ++ ") -> " ++ show fnRetType
     _ -> error "Unsupported NonceApp case"
 
@@ -907,7 +927,6 @@ appToExprTH endianness app interps = do
     Just translator -> translator
     Nothing -> defaultAppEvaluator endianness app interps
 
-
 -- Idea: Parameterize this by the function to use to recursively-evaluate
 -- sub-terms.  One will be the current 'addEltTH'.  Another would be the lazier
 -- version that accumulates let bindings.
@@ -932,26 +951,26 @@ defaultAppEvaluator :: (A.Architecture arch)
 defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
-    -- liftQ [| return (G.AppExpr (M.NotApp $(return e))) |]
-    return [| G.addExpr (G.AppExpr (M.NotApp $(return e))) |]
-    -- liftQ [| return $(return x) |]
-  S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap
+    liftQ [| addApp =<< (M.NotApp <$> $(refBinding e)) |]
+  S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap >>= extractBound
   S.BaseIte bt _ test t f -> do
+    -- FIXME: Generate code that dynamically checks for a concrete condition and
+    -- make an ite instead of a mux if possible
     testE <- addEltTH endianness interps test
     tE <- addEltTH endianness interps t
     fE <- addEltTH endianness interps f
     case bt of
-      CT.BaseBoolRepr -> return [| addApp
-                                   (M.Mux M.BoolTypeRepr
-                                    $(return testE) $(return tE) $(return fE))
+      CT.BaseBoolRepr -> liftQ [| addApp =<<
+                                   (M.Mux M.BoolTypeRepr <$>
+                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
                                 |]
-      CT.BaseBVRepr w -> return [| addApp
-                                   (M.Mux (M.BVTypeRepr $(natReprTH w))
-                                    $(return testE) $(return tE) $(return fE))
+      CT.BaseBVRepr w -> liftQ [| addApp =<<
+                                   (M.Mux (M.BVTypeRepr $(natReprTH w)) <$>
+                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
                                 |]
-      CT.BaseFloatRepr fpp -> return [| addApp
-                                        (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp))
-                                         $(return testE) $(return tE) $(return fE))
+      CT.BaseFloatRepr fpp -> liftQ [| addApp =<<
+                                        (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) <$>
+                                         $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
                                      |]
       CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
@@ -964,80 +983,74 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BaseEq _bt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.Eq $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.Eq <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVSlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.BVSignedLt $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.BVSignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVUlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.BVUnsignedLt $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.BVUnsignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| G.addExpr =<< TR.bvconcat $(return e1) $(return e2) $(natReprTH v) $(natReprTH u) $(natReprTH w) |]
+    liftQ [| G.addExpr =<< join ((TR.bvconcat <$> $(refBinding e1) <*> $(refBinding e2) <*> pure $(natReprTH v) <*> pure $(natReprTH u) <*> pure $(natReprTH w))) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
         e <- addEltTH endianness interps bv
-        return [| G.addExpr =<< TR.bvselect $(return e) $(natReprTH n) $(natReprTH idx) $(natReprTH w) |]
+        liftQ [| G.addExpr =<< join ((TR.bvselect <$> $(refBinding e) <*> pure $(natReprTH n) <*> pure $(natReprTH idx) <*> pure $(natReprTH w))) |]
       False -> do
         e <- addEltTH endianness interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
-                   Just Refl -> return $(return e)
+                   Just Refl -> return $(refBinding e)
                    Nothing -> error "Invalid reprs for BVSelect translation"
                |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
-    return [| addApp (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)) $(return bvValExp))
+    liftQ [| addApp =<< (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)) <$> $(refBinding bvValExp))
             |]
 
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let smul mul e = do y <- addEltTH endianness interps e
-                            bindTH [| addApp
-                                      (M.BVMul $(natReprTH w)
-                                       (M.BVValue $(natReprTH w) $(lift mul))
-                                       $(return y))
+                            letTH [| addApp =<< (M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift mul)) <$> $(refBinding y))
                                    |]
             sval v = do
-              liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
+              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
             add x y = do
-              bindTH [| addApp (M.BVAdd $(natReprTH w) $(return x) $(return y)) |]
-        in WSum.evalM add smul sval sm
+              letTH [| addApp =<< (M.BVAdd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+        in WSum.evalM add smul sval sm >>= extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let smul mul e = do y <- addEltTH endianness interps e
-                            bindTH [| addApp
-                                      (M.BVAnd $(natReprTH w)
-                                       (M.BVValue $(natReprTH w) $(lift mul))
-                                       $(return y))
+                            letTH [| addApp =<< (M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift mul)) <$> $(refBinding y))
                                    |]
             sval v = do
-              liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
+              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
             add x y = do
-              bindTH [| addApp (M.BVXor $(natReprTH w) $(return x) $(return y)) |]
-        in WSum.evalM add smul sval sm
+              letTH [| addApp =<< (M.BVXor $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+        in WSum.evalM add smul sval sm >>= extractBound
       _ -> liftQ [| error "unsupported SemiRingSum repr for macaw semmc TH" |]
 
   S.SemiRingProd pd ->
     case WSum.prodRepr pd of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let pmul x y = do
-              bindTH [| addApp (M.BVMul $(natReprTH w) $(return x) $(return y)) |]
-            unit = liftQ [| return $ M.BVValue $(natReprTH w) 1 |]
+              letTH [| addApp =<< (M.BVMul $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+            unit = liftQ [| pure (M.BVValue $(natReprTH w) 1) |]
             convert = addEltTH endianness interps
-        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+        in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let pmul x y = do
-              bindTH [| addApp (M.BVAnd $(natReprTH w) $(return x) $(return y)) |]
-            unit = liftQ [| return (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
+              letTH [| addApp =<< (M.BVAnd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+            unit = liftQ [| pure (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
             convert = addEltTH endianness interps
-        in WSum.prodEvalM pmul convert pd >>= maybe unit return
+        in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
       _ -> liftQ [| error "unsupported SemiRingProd repr for macaw semmc TH" |]
 
   S.BVOrBits w bs -> do
@@ -1046,54 +1059,48 @@ defaultAppEvaluator endianness elt interps = case elt of
     -- These are all TH Exprs that are of the (Macaw) Value at run-time
     bs' <- mapM (addEltTH endianness interps) (S.bvOrToList bs)
     let por x y = do
-          bindTH [| addApp (M.BVOr $(natReprTH w) $(return x) $(return y)) |]
-    F.foldrM por zero bs'
+          letTH [| addApp =<< (M.BVOr $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+    F.foldrM por (EagerBoundExp zero) bs' >>= extractBound
 
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.BVShl $(natReprTH w) $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.BVShl $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVLshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.BVShr $(natReprTH w) $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.BVShr $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVAshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    return [| addApp (M.BVSar $(natReprTH w) $(return e1) $(return e2)) |]
+    liftQ [| addApp =<< (M.BVSar $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.BVZext w bv -> do
     e <- addEltTH endianness interps bv
-    return [| addApp (M.UExt $(return e) $(natReprTH w)) |]
+    liftQ [| addApp =<< (M.UExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
   S.BVSext w bv -> do
     e <- addEltTH endianness interps bv
-    return [| addApp (M.SExt $(return e) $(natReprTH w)) |]
+    liftQ [| addApp =<< (M.SExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
 
-  -- S.StructCtor tps flds -> do
-  --   es <- sequence $ FC.toListFC (addEltTH endianness interps) flds
-  
-  -- S.StructField fld ix ixTp -> error $ "struct fields unsupported"
   _ -> error $ "unsupported Crucible elt: " <> show elt
---  _ -> liftQ [| error $ "unsupported Crucible elt" |]
-
 
 ----------------------------------------------------------------------
 
 data BoolMapOp = AndOp | OrOp
 
 
-evalBoolMap :: A.Architecture arch =>
-               M.Endianness
+evalBoolMap :: A.Architecture arch
+            => M.Endianness
             -> BoundVarInterpretations arch t fs
             -> BoolMapOp
             -> Bool
             -> BooM.BoolMap (S.Expr t)
-            -> MacawQ arch t fs Exp
+            -> MacawQ arch t fs BoundExp
 evalBoolMap endianness interps op defVal bmap =
   case BooM.viewBoolMap bmap of
-    BooM.BoolMapUnit ->     bindTH [| G.addExpr (boolBase $(lift defVal)) |]
-    BooM.BoolMapDualUnit -> bindTH [| G.addExpr (bNotBase $(lift defVal)) |]
+    BooM.BoolMapUnit ->     letTH [| G.addExpr (boolBase $(lift defVal)) |]
+    BooM.BoolMapDualUnit -> letTH [| G.addExpr (bNotBase $(lift defVal)) |]
     BooM.BoolMapTerms ts ->
-         do d <- bindTH [| G.addExpr (boolBase $(lift defVal)) |]
+         do d <- letTH [| G.addExpr (boolBase $(lift defVal)) |]
             F.foldl (joinBool endianness interps op) (return d) ts
 
 
@@ -1101,21 +1108,21 @@ boolBase, bNotBase :: A.Architecture arch => Bool -> G.Expr arch t 'M.BoolType
 boolBase = G.ValueExpr . M.BoolValue
 bNotBase = boolBase . not
 
-joinBool :: A.Architecture arch =>
-            M.Endianness
+joinBool :: A.Architecture arch
+         => M.Endianness
          -> BoundVarInterpretations arch t fs
          -> BoolMapOp
-         -> MacawQ arch t fs Exp
+         -> MacawQ arch t fs BoundExp
          -> (S.Expr t SI.BaseBoolType, S.Polarity)
-         -> MacawQ arch t fs Exp
+         -> MacawQ arch t fs BoundExp
 joinBool endianness interps op e r =
   do n <- case r of
             (t, BooM.Positive) -> do addEltTH endianness interps t
             (t, BooM.Negative) -> do p <- addEltTH endianness interps t
-                                     bindTH [| G.addExpr (G.AppExpr (M.NotApp $(return p))) |]
+                                     letTH [| addApp =<< (M.NotApp <$> $(refBinding p)) |]
      j <- e
      case op of
        AndOp ->
-         bindTH [| G.addExpr (G.AppExpr (M.AndApp $(return j) $(return n))) |]
+         letTH [| addApp =<< (M.AndApp <$> $(refBinding j) <*> $(refBinding n)) |]
        OrOp  ->
-         bindTH [| G.addExpr (G.AppExpr (M.OrApp $(return j) $(return n))) |]
+         letTH [| addApp =<< (M.OrApp <$> $(refBinding j) <*> $(refBinding n)) |]

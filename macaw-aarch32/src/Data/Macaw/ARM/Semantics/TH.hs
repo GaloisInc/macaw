@@ -19,7 +19,7 @@ module Data.Macaw.ARM.Semantics.TH
     )
     where
 
-import           Control.Monad (void)
+import           Control.Monad ( ap, join )
 import qualified Control.Monad.Except as E
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.Bits as B
@@ -28,7 +28,7 @@ import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
-import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName, bindTH )
+import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
@@ -78,7 +78,7 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                bindTH [| setSIMD $(return rgfE) $(return ridE) $(return valE) |]
+                liftQ [| join (setSIMD <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_set" ->
             case args of
@@ -86,23 +86,23 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                bindTH [| setGPR $(return rgfE) $(return ridE) $(return valE) |]
+                liftQ [| join (setGPR <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
-              Ctx.Empty Ctx.:> array Ctx.:> ix ->
+              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                 Just $ do
-                  _rgf <- addEltTH M.LittleEndian bvi array
+                  -- _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  bindTH [| getSIMD $(return rid) |]
+                  liftQ [| getSIMD =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
-              Ctx.Empty Ctx.:> array Ctx.:> ix ->
+              Ctx.Empty Ctx.:> _array Ctx.:> ix ->
                 Just $ do
-                  _rgf <- addEltTH M.LittleEndian bvi array
+                  -- _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  bindTH [| getGPR $(return rid) |]
+                  liftQ [| getGPR =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_gpr_get"
           _ | "uf_write_mem_" `isPrefixOf` fnName ->
             case args of
@@ -113,49 +113,56 @@ armNonceAppEval bvi nonceApp =
                 addrE <- addEltTH M.LittleEndian bvi addr
                 valE <- addEltTH M.LittleEndian bvi val
                 let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
-                bindTH [| writeMem $(return memE) $(return addrE) $(natReprFromIntTH memWidth) $(return valE) |]
+                liftQ [| join (writeMem <$> $(refBinding memE) <*> $(refBinding addrE) <*> pure $(natReprFromIntTH memWidth) <*> $(refBinding valE)) |]
               _ -> fail "invalid write_mem"
 
-          "uf_init_gprs" -> Just $ bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_memory" -> Just $ bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_simds" -> Just $ bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+          -- NOTE: These three cases occasionally end up unused.  Because we let
+          -- bind almost everything, that can lead to the 'arch' type parameter
+          -- being ambiguous, which is an error for various reasons.
+          --
+          -- To fix that, we add an explicit type application here.
+          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+
+
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
               appendStmt [| setWriteMode WriteGPRs |]
               gprs' <- addEltTH M.LittleEndian bvi gprs
               appendStmt [| setWriteMode WriteNone |]
-              bindTH [| return $(return gprs') |]
-              
+              liftQ [| return $(refBinding gprs') |]
+
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
               appendStmt [| setWriteMode WriteSIMDs |]
               simds' <- addEltTH M.LittleEndian bvi simds
               appendStmt [| setWriteMode WriteNone |]
-              bindTH [| return $(return simds') |]
+              liftQ [| return $(refBinding simds') |]
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
               appendStmt [| setWriteMode WriteMemory |]
               mem' <- addEltTH M.LittleEndian bvi mem
               appendStmt [| setWriteMode WriteNone |]
-              bindTH [| return $(return mem') |]
+              liftQ [| return $(refBinding mem') |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
                 assertTH <- addEltTH M.LittleEndian bvi assert
                 bvElt <- addEltTH M.LittleEndian bvi bv
-                liftQ [| case $(return assertTH) of
-                          M.BoolValue True -> return $(return bvElt)
+                liftQ [| case $(refBinding assertTH) of
+                          M.BoolValue True -> return $(refBinding bvElt)
                           M.BoolValue False -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed!")
                           -- FIXME: THIS SHOULD THROW AN ERROR
-                          _ -> return $(return bvElt)
+                          _ -> return $(refBinding bvElt)
                           -- nm -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed: <FIXME: PRINT NAME>")
                        |]
               _ -> fail "Invalid call to assertBV"
 
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->
-               Just $ bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->
-               Just $ bindTH [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
@@ -179,7 +186,7 @@ getWriteMode = do
         3 -> WriteMemory
         _ -> error "impossible"
       _ -> error "impossible"
-        
+
 setWriteMode :: WriteMode -> G.Generator ARM.AArch32 ids s ()
 setWriteMode wm =
   let
@@ -203,7 +210,7 @@ writeMem mem addr sz val = do
       G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
       return mem
     _ -> return mem
-                                 
+
 setGPR :: M.Value ARM.AArch32 ids tp
        -> M.Value ARM.AArch32 ids (M.BVType 4)
        -> M.Value ARM.AArch32 ids (M.BVType 32)
@@ -277,7 +284,7 @@ isPlaceholderType tp = case tp of
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> True
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
   _ -> False
-
+{-
 translateExpr :: M.Endianness
               -> BoundVarInterpretations ARM.AArch32 t fs
               -> WB.Expr t tp
@@ -293,7 +300,7 @@ translateExpr endianness interps e = case e of
     val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
     liftQ [| $(return val) |]
   _ -> fail $ "translateExpr: unexpected expression kind: " ++ show e
-
+-}
 -- | This combinator provides conditional evaluation of its branches
 --
 -- Many conditionals in the semantics are translated as muxes (effectively
@@ -366,33 +373,39 @@ armAppEvaluator endianness interps elt =
         testE <- addEltTH endianness interps test
         -- tE <- inLocalBlock (addEltTH endianness interps t)
         -- fE <- inLocalBlock (addEltTH endianness interps f)
+        {-
+TR: commenting these out for now since they might be obsolete after the new translation is complete
+
         tE <- translateExpr endianness interps t
         fE <- translateExpr endianness interps f
-        bindTH [| concreteIte $(return testE) (return $(return tE)) (return $(return fE)) |]
+-}
+        tE <- addEltTH endianness interps t
+        fE <- addEltTH endianness interps f
+        liftQ [| join (concreteIte <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        bindTH [| G.addExpr =<< sdiv $(natReprTH w) $(return e1) $(return e2) |]
+        liftQ [| G.addExpr =<< join (sdiv $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
       WB.BVUrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        bindTH [| G.addExpr =<< addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
+        liftQ [| G.addExpr =<< join (addArchAssignment <$> (URem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
                |]
       WB.BVSrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        bindTH [| G.addExpr =<< addArchAssignment (SRem $(natReprTH w) $(return e1) $(return e2))
+        liftQ [| G.addExpr =<< join (addArchAssignment <$> (SRem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
                |]
       WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
       WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
-      WB.BaseIte bt _ test t f ->
+      WB.BaseIte bt _ _test t _f ->
         case bt of
           WT.BaseArrayRepr {} -> Just $ do
             -- Just return the true branch, since both true and false branches should be the memory or registers.
-            void $ addEltTH endianness interps test
+            -- void $ addEltTH endianness interps test
             et <- addEltTH endianness interps t
-            void $ addEltTH endianness interps f
-            return et
+            -- void $ addEltTH endianness interps f
+            extractBound et
             -- liftQ $ [| G.ValueExpr $(return et) |]
             -- liftQ [| G.ValueExpr <$> M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           _ -> Nothing

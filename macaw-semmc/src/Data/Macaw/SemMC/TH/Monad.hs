@@ -1,8 +1,10 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.SemMC.TH.Monad (
   BoundVarInterpretations(..),
+  BoundExp(..),
   MacawQ,
   runMacawQ,
   liftQ,
@@ -13,8 +15,11 @@ module Data.Macaw.SemMC.TH.Monad (
   withAppEvaluator,
   cacheExpr,
   bindExpr,
+  letBindExpr,
   bindTH,
   letTH,
+  extractBound,
+  refBinding,
   inLocalBlock,
   definedFunction
   ) where
@@ -87,6 +92,7 @@ emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
             -> QState arch t fs
 emptyQState ltr ena ae df = QState { accumulatedStatements = Seq.empty
                                    , expressionCache = M.empty
+                                   , lazyExpressionCache = M.empty
                                    , locToReg = ltr
                                    , nonceAppEvaluator = ena
                                    , appEvaluator = ae
@@ -145,10 +151,14 @@ withLocToReg k = do
   k f
 
 -- | Look up an 'S.Expr' in the cache
-lookupElt :: S.Expr t tp -> MacawQ arch t fs (Maybe Exp)
+lookupElt :: S.Expr t tp -> MacawQ arch t fs (Maybe BoundExp)
 lookupElt elt = do
   c <- St.gets expressionCache
-  return (M.lookup (Some elt) c)
+  case M.lookup (Some elt) c of
+    Just e -> return (Just (EagerBoundExp e))
+    Nothing -> do
+      lc <- St.gets lazyExpressionCache
+      return (LazyBoundExp <$> M.lookup (Some elt) lc)
 
 withNonceAppEvaluator :: forall tp arch t fs
                        . ((BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)) -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp)))
@@ -170,6 +180,14 @@ appendStmt eq = do
   e <- liftQ eq
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> NoBindS e }
 
+-- | A wrapper around a TH 'Exp' that records how it was bound in its current
+-- context, letting a holder of a 'BoundExp' know how to evaluate it
+data BoundExp where
+  -- | The 'Exp' represents a let bound 'Generator' action (and needs to be sequenced to evaluate it)
+  LazyBoundExp :: Exp -> BoundExp
+  -- | The 'Exp' represents an actual run-time macaw Value
+  EagerBoundExp :: Exp -> BoundExp
+
 -- | Bind a TH expression to a name (as a 'Stmt') and return the expression that
 -- refers to the bound value.  For example, if you call
 --
@@ -180,7 +198,7 @@ appendStmt eq = do
 -- > newName <- expr
 --
 -- and the new name is returned.
-bindExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs Exp
+bindExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
 bindExpr elt eq = do
   e <- liftQ eq
   n <- liftQ (newName "val")
@@ -188,27 +206,36 @@ bindExpr elt eq = do
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
                        , expressionCache = M.insert (Some elt) res (expressionCache s)
                        }
-  return res
+  return (EagerBoundExp res)
+
+letBindExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs BoundExp
+letBindExpr elt e = do
+  n <- liftQ (newName "lval")
+  let res = VarE n
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                       , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
+                       }
+  return (LazyBoundExp res)
 
 cacheExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs ()
 cacheExpr elt e = do
   St.modify' $ \s -> s { expressionCache = M.insert (Some elt) e (expressionCache s) }
 
-letTH :: ExpQ -> MacawQ arch t fs Exp
+letTH :: ExpQ -> MacawQ arch t fs BoundExp
 letTH eq = do
   e <- liftQ eq
   n <- liftQ (newName "lval")
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
                        }
-  return (VarE n)
+  return (LazyBoundExp (VarE n))
 
-bindTH :: ExpQ -> MacawQ arch t fs Exp
+bindTH :: ExpQ -> MacawQ arch t fs BoundExp
 bindTH eq = do
   e <- liftQ eq
   n <- liftQ (newName "bval")
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
                        }
-  return (VarE n)
+  return (EagerBoundExp (VarE n))
 
 definedFunction :: String -> MacawQ arch t fs (Maybe Exp)
 definedFunction name = do
@@ -216,3 +243,19 @@ definedFunction name = do
   case df name of
     Just expr -> Just <$> expr
     Nothing -> return Nothing
+
+extractBound :: BoundExp -> MacawQ arch t fs Exp
+extractBound be =
+  case be of
+    LazyBoundExp e -> liftQ [| $(return e) |]
+    EagerBoundExp e -> liftQ [| pure $(return e) |]
+
+-- | Like 'extractBound', but for use inside of TH splices
+refBinding :: BoundExp -> Q Exp
+refBinding be =
+  case be of
+    -- In this case, we already have an evaluated expression so we just inject
+    -- it into the context with 'pure'
+    EagerBoundExp e -> [| pure $(return e) |]
+    -- If it is lazy, we need it "bare" in the applicative wrappers
+    LazyBoundExp e -> return e
