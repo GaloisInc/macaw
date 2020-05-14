@@ -717,7 +717,6 @@ addEltTH endianness interps elt = do
           -- can eagerly.
           genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           letBindExpr elt genExpr
-          -- bindExpr elt x
         S.BoundVarExpr bVar -> do
           EagerBoundExp <$> evalBoundVar interps bVar
         S.NonceAppExpr n -> do
