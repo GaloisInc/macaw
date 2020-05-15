@@ -738,7 +738,8 @@ addEltTH endianness interps elt = do
           -- will be cached in the normal expression cache.  The value returned
           -- is the VarE that wraps the name referring to the generated
           -- constant.
-          bindExpr elt [| return (M.BoolValue $(lift b)) |]
+          EagerBoundExp <$> liftQ [| M.BoolValue $(lift b) |]
+          -- bindExpr elt [| return (M.BoolValue $(lift b)) |]
 
 evalBoundVar :: forall arch t fs ctp .
                 (A.Architecture arch)
