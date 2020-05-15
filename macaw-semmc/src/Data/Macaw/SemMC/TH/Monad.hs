@@ -16,8 +16,10 @@ module Data.Macaw.SemMC.TH.Monad (
   cacheExpr,
   bindExpr,
   letBindExpr,
+  letBindPureExpr,
   bindTH,
   letTH,
+  letPureTH,
   extractBound,
   refBinding,
   inConditionalContext,
@@ -132,33 +134,6 @@ inConditionalContext k = do
   St.modify' $ \s -> s { translationDepth = translationDepth s - 1 }
   return res
 
--- | This combinator creates a new scope of statement accumulation so that we
--- can make blocks of code in a @do@ block in the 'Generator' monad.
---
--- These can be used to create blocks that are conditionally-evaluated.  The
--- return value is a TH expression that is a @do@ block containing all of the
--- generated statements under the given local computation.
---
--- Note that we don't make any specific provisions for error handling/cleanup -
--- errors should just trigger TH errors at compile time.
---
--- Note that we make a fresh expression cache to ensure that we don't end up
--- with scoping issues.
--- inLocalBlock :: MacawQ arch t fs Exp
---              -- ^ A computation that generates statements in a fresh block
---              -> MacawQ arch t fs Exp
--- inLocalBlock k = do
---   savedState <- St.get
---   St.modify' $ \s -> s { accumulatedStatements = Seq.empty
---                        }
---   res <- k
---   blockStmts <- St.gets accumulatedStatements
---   ret <- liftQ $ noBindS [| return $(return res) |]
---   -- St.put savedState
---   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements savedState }
---   return (DoE (F.toList blockStmts ++ [ret]))
-
-
 -- | Lift a TH computation (in the 'Q' monad) into the monad.
 liftQ :: Q a -> MacawQ arch t fs a
 liftQ q = MacawQ (lift q)
@@ -226,6 +201,16 @@ bindExpr elt eq = do
                        }
   return (EagerBoundExp res)
 
+letBindPureExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
+letBindPureExpr elt eq = do
+  e <- liftQ eq
+  n <- liftQ (newName "lval")
+  let res = VarE n
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                       , expressionCache = M.insert (Some elt) res (expressionCache s)
+                       }
+  return (EagerBoundExp res)
+
 letBindExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs BoundExp
 letBindExpr elt e = do
   n <- liftQ (newName "lval")
@@ -246,6 +231,16 @@ letTH eq = do
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
                        }
   return (LazyBoundExp (VarE n))
+
+-- | Like 'letTH': create a let binding, but unlike letTH, wrap it in an 'EagerBoundExp'
+-- to indicate that it is already evaluated.
+letPureTH :: ExpQ -> MacawQ arch t fs BoundExp
+letPureTH eq = do
+  e <- liftQ eq
+  n <- liftQ (newName "lval")
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                       }
+  return (EagerBoundExp (VarE n))
 
 bindTH :: ExpQ -> MacawQ arch t fs BoundExp
 bindTH eq = do

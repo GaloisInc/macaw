@@ -126,27 +126,65 @@ armNonceAppEval bvi nonceApp =
           "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
 
 
+          -- NOTE: These cases are tricky because they generate groups of
+          -- statements that need to behave a bit differently in (eager)
+          -- top-level code generation and (lazy) conditional code generation.
+          --
+          -- In either case, the calls to 'setWriteMode' /must/ bracket the
+          -- memory/register update function.
+          --
+          -- In the eager translation case, that means that we have to lexically
+          -- emit the update between the write mode guards (so that the effect
+          -- actually happens).
+          --
+          -- In contrast, the lazy translation case has to emit the write
+          -- operation as a lazy let binding to preserve sharing, but group all
+          -- three statements in the actual 'Generator' monad.
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
-              gprs' <- addEltTH M.LittleEndian bvi gprs
-              liftQ [| do setWriteMode WriteGPRs
-                          $(refBinding gprs')
-                          setWriteMode WriteNone
-                     |]
+              istl <- isTopLevel
+              case istl of
+                False -> do
+                  gprs' <- addEltTH M.LittleEndian bvi gprs
+                  liftQ [| do setWriteMode WriteGPRs
+                              $(refBinding gprs')
+                              setWriteMode WriteNone
+                         |]
+                True -> do
+                  appendStmt [| setWriteMode WriteGPRs |]
+                  gprs' <- addEltTH M.LittleEndian bvi gprs
+                  appendStmt [| setWriteMode WriteNone |]
+                  extractBound gprs'
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
-              simds' <- addEltTH M.LittleEndian bvi simds
-              liftQ [| do setWriteMode WriteSIMDs
-                          $(refBinding simds')
-                          setWriteMode WriteNone
-                     |]
+                istl <- isTopLevel
+                case istl of
+                  False -> do
+                    simds' <- addEltTH M.LittleEndian bvi simds
+                    liftQ [| do setWriteMode WriteSIMDs
+                                $(refBinding simds')
+                                setWriteMode WriteNone
+                           |]
+                  True -> do
+                    appendStmt [| setWriteMode WriteSIMDs |]
+                    simds' <- addEltTH M.LittleEndian bvi simds
+                    appendStmt [| setWriteMode WriteNone |]
+                    extractBound simds'
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
-              mem' <- addEltTH M.LittleEndian bvi mem
-              liftQ [| do setWriteMode WriteMemory
-                          $(refBinding mem')
-                          setWriteMode WriteNone
-                     |]
+                istl <- isTopLevel
+                case istl of
+                  False -> do
+                    mem' <- addEltTH M.LittleEndian bvi mem
+                    liftQ [| do setWriteMode WriteMemory
+                                $(refBinding mem')
+                                setWriteMode WriteNone
+                           |]
+                  True -> do
+                    appendStmt [| setWriteMode WriteMemory |]
+                    mem' <- addEltTH M.LittleEndian bvi mem
+                    appendStmt [| setWriteMode WriteNone |]
+                    extractBound mem'
 
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
@@ -287,23 +325,7 @@ isPlaceholderType tp = case tp of
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> True
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
   _ -> False
-{-
-translateExpr :: M.Endianness
-              -> BoundVarInterpretations ARM.AArch32 t fs
-              -> WB.Expr t tp
-              -> MacawQ ARM.AArch32 t fs Exp
-translateExpr endianness interps e = case e of
-  WB.AppExpr app -> do
-    x <- appToExprTH endianness (WB.appExprApp app) interps
-    bindExpr e [| return $(return x) |]
-  WB.BoundVarExpr bvar -> do
-    val <- evalBoundVar interps bvar
-    liftQ [| $(return val) |]
-  WB.NonceAppExpr n -> do
-    val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
-    liftQ [| $(return val) |]
-  _ -> fail $ "translateExpr: unexpected expression kind: " ++ show e
--}
+
 -- | This combinator provides conditional evaluation of its branches
 --
 -- Many conditionals in the semantics are translated as muxes (effectively
@@ -402,7 +424,5 @@ armAppEvaluator endianness interps elt =
             et <- addEltTH endianness interps t
             void $ addEltTH endianness interps f
             extractBound et
-            -- liftQ $ [| G.ValueExpr $(return et) |]
-            -- liftQ [| G.ValueExpr <$> M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
           _ -> Nothing
       _ -> Nothing

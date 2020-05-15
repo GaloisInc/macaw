@@ -50,7 +50,6 @@ import qualified Data.List as L
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
-import           Data.Semigroup ((<>))
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
@@ -83,6 +82,7 @@ import qualified SemMC.BoundVar as BV
 import           SemMC.Formula
 import qualified SemMC.Architecture as A
 import qualified SemMC.Architecture.Location as L
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified SemMC.Util as U
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Types as M
@@ -718,7 +718,8 @@ addEltTH endianness interps elt = do
           genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
           letBindExpr elt genExpr
         S.BoundVarExpr bVar -> do
-          EagerBoundExp <$> evalBoundVar interps bVar
+          x <- evalBoundVar interps bVar
+          letBindPureExpr elt [| $(return x) |]
         S.NonceAppExpr n -> do
           x <- evalNonceAppTH endianness interps (S.nonceExprApp n)
           istl <- isTopLevel
@@ -738,8 +739,7 @@ addEltTH endianness interps elt = do
           -- will be cached in the normal expression cache.  The value returned
           -- is the VarE that wraps the name referring to the generated
           -- constant.
-          EagerBoundExp <$> liftQ [| M.BoolValue $(lift b) |]
-          -- bindExpr elt [| return (M.BoolValue $(lift b)) |]
+          letBindPureExpr elt [| M.BoolValue $(lift b) |]
 
 evalBoundVar :: forall arch t fs ctp .
                 (A.Architecture arch)
@@ -753,7 +753,6 @@ evalBoundVar interps bVar =
        liftQ [| O.extractValue $(varE (regsValName interps)) $(varE name) |]
      | Just (C.Const name) <- MapF.lookup bVar (valVars interps) ->
        return (VarE name)
-       -- liftQ [| return $(varE name) |]
      | otherwise -> fail $ "bound var not found: " ++ show bVar
 
 symFnName :: S.ExprSymFn t args ret -> String
@@ -804,6 +803,13 @@ evalNonceAppTH endianness bvi nonceApp = do
     Just translator -> translator
     Nothing -> defaultNonceAppEvaluator endianness bvi nonceApp
 
+addApp :: ( MSS.SimplifierExtension arch
+          , OrdF (M.ArchReg arch)
+          , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+          , ShowF (M.ArchReg arch)
+          )
+       => M.App (M.Value arch ids) tp
+       -> G.Generator arch ids s (M.Value arch ids tp)
 addApp a = G.addExpr (G.AppExpr a)
 
 defaultNonceAppEvaluator :: forall arch t fs tp
@@ -819,22 +825,11 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
       funMaybe <- definedFunction fnName
       case funMaybe of
         Just fun -> do
-      -- | S.DefinedFnInfo {} <- S.symFnInfo symFn -> do
-      --     let fnName = symFnName symFn
-      --     funMaybe <- definedFunction fnName
-      --     case funMaybe of
-      --       Just fun -> do
-              argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
-              let applyQ e be = [| $(e) `ap` $(refBinding be) |]
-              liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
-              -- bindTH (return (foldl AppE fun argExprs))
-              -- return $ foldl AppE fun argExprs
-
-            -- Nothing -> fail ("Unknown defined function: " ++ fnName)
+          argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
+          let applyQ e be = [| $(e) `ap` $(refBinding be) |]
+          liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
         _ -> do
-      -- | otherwise -> do
-          let fnName = symFnName symFn
-              fnArgTypes = S.symFnArgTypes symFn
+          let fnArgTypes = S.symFnArgTypes symFn
               fnRetType = S.symFnReturnType symFn
           case fnName of
             -- For count leading zeros, we don't have a SimpleBuilder term to reduce
@@ -929,22 +924,6 @@ appToExprTH endianness app interps = do
     Just translator -> translator
     Nothing -> defaultAppEvaluator endianness app interps
 
--- Idea: Parameterize this by the function to use to recursively-evaluate
--- sub-terms.  One will be the current 'addEltTH'.  Another would be the lazier
--- version that accumulates let bindings.
---
--- This will probably also need a combinator argument to figure out how to apply
--- arguments.  In the current formulation, they just get passed as pure values.
--- In the lazy version, arguments need to be recursively evaluated (using
--- applicative?).  Recursively building them all up seems really challenging,
--- but it should be okay as long as we don't lose sharing in the term
--- definitions.  It will still be substantial work to make it compile, though.
---
--- In fact, we might just be able to change the recursive evaluator to generate
--- either bind statements or let expressions.  Then for concreteIte, we could
--- make a totally separate evaluator that looks up references to let-bound
--- things and evaluates them in the (simplified) structure of concreteIte (but
--- referring to the let-bound generated code that preserves sharing)
 defaultAppEvaluator :: (A.Architecture arch)
                     => M.Endianness
                     -> S.App (S.Expr t) ctp
