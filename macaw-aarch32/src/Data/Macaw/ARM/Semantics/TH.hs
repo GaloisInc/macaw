@@ -22,7 +22,6 @@ module Data.Macaw.ARM.Semantics.TH
 
 import           Control.Monad (void)
 import qualified Control.Monad.Except as E
-import qualified Data.Bits as B
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
 import           Data.Macaw.SemMC.TH.Monad
@@ -313,10 +312,10 @@ sdiv :: (1 <= n)
 sdiv repr dividend divisor =
   case divisor of
     M.BVValue nr val
-      | bv <- BVS.bitVector' repr val
-      , BVS.bvPopCount bv == 1 ->
+      | bv <- BVS.mkBV repr val
+      , BVS.asUnsigned (BVS.popCount bv) == 1 ->
         withKnownNat repr $
-          let app = M.BVSar nr dividend (M.BVValue nr (fromIntegral (B.countTrailingZeros bv)))
+          let app = M.BVSar nr dividend (M.BVValue nr (BVS.asUnsigned (BVS.ctz repr bv)))
           in G.ValueExpr <$> G.addExpr (G.AppExpr app)
     _ -> addArchAssignment (SDiv repr dividend divisor)
 
