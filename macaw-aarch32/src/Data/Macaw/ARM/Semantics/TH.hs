@@ -19,7 +19,7 @@ module Data.Macaw.ARM.Semantics.TH
     )
     where
 
-import           Control.Monad ( ap, join )
+import           Control.Monad ( join, void )
 import qualified Control.Monad.Except as E
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.Bits as B
@@ -394,13 +394,13 @@ armAppEvaluator endianness interps elt =
                |]
       WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
       WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
-      WB.BaseIte bt _ _test t _f ->
+      WB.BaseIte bt _ test t f ->
         case bt of
           WT.BaseArrayRepr {} -> Just $ do
             -- Just return the true branch, since both true and false branches should be the memory or registers.
-            -- void $ addEltTH endianness interps test
+            void $ addEltTH endianness interps test
             et <- addEltTH endianness interps t
-            -- void $ addEltTH endianness interps f
+            void $ addEltTH endianness interps f
             extractBound et
             -- liftQ $ [| G.ValueExpr $(return et) |]
             -- liftQ [| G.ValueExpr <$> M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
