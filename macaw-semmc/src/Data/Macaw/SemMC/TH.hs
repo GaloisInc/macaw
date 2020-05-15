@@ -778,7 +778,7 @@ writeMemTH bvi symFn args endianness =
         let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
         addrValExp <- addEltTH endianness bvi addr
         writtenValExp <- addEltTH endianness bvi val
-        appendStmt [| G.addStmt <$> (M.WriteMem <$> $(refBinding addrValExp) <*> (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) <$> $(refBinding writtenValExp)) |]
+        appendStmt [| G.addStmt =<< (M.WriteMem <$> $(refBinding addrValExp) <*> pure (M.BVMemRepr $(natReprFromIntTH memWidth) endianness) <*> $(refBinding writtenValExp)) |]
         return (Some mem)
       tp -> fail ("Invalid memory write value type for " <> symFnName symFn <> ": " <> showF tp)
     l -> fail ("Invalid memory write argument list for " <> symFnName symFn <> ": " <> show l)
@@ -840,25 +840,25 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp <$> (M.Bsr (NR.knownNat @32) <$> $(refBinding locExp)) |]
+                  liftQ [| addApp =<< (M.Bsr (NR.knownNat @32) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_clz_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp <$> (M.Bsr (NR.knownNat @64) <$> $(refBinding locExp)) |]
+                  liftQ [| addApp =<< (M.Bsr (NR.knownNat @64) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for clz: " ++ showF args)
             "uf_popcnt_32" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp <$> (M.PopCount (NR.knownNat @32) <$> $(refBinding locExp)) |]
+                  liftQ [| addApp =<< (M.PopCount (NR.knownNat @32) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_popcnt_64" ->
               case FC.toListFC Some args of
                 [Some loc] -> do
                   locExp <- addEltTH endianness bvi loc
-                  liftQ [| addApp <$> (M.PopCount (NR.knownNat @64) <$> $(refBinding locExp)) |]
+                  liftQ [| addApp =<< (M.PopCount (NR.knownNat @64) <$> $(refBinding locExp)) |]
                 _ -> fail ("Unsupported argument list for popcnt: " ++ showF args)
             "uf_undefined" -> do
               case S.nonceAppType nonceApp of
