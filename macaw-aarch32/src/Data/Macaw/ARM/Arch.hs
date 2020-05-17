@@ -114,6 +114,156 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
        -> f (MT.BVType w)
        -> ARMPrimFn f (MT.BVType w)
 
+  UnsignedRSqrtEstimate :: (1 <= w)
+                        => NR.NatRepr w
+                        -> f (MT.BVType w)
+                        -> ARMPrimFn f (MT.BVType w)
+
+  FPSub :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPAdd :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMul :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPDiv :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+
+  FPRecipEstimate :: (1 <= w)
+                  => NR.NatRepr w
+                  -> f (MT.BVType w)
+                  -> f (MT.BVType 32)
+                  -> ARMPrimFn f (MT.BVType w)
+  FPRecipStep :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f (MT.BVType w)
+  FPSqrtEstimate :: (1 <= w)
+                 => NR.NatRepr w
+                 -> f (MT.BVType w)
+                 -> f (MT.BVType 32)
+                 -> ARMPrimFn f (MT.BVType w)
+  FPRSqrtStep :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f (MT.BVType w)
+  FPSqrt :: (1 <= w)
+         => NR.NatRepr w
+         -> f (MT.BVType w)
+         -> f (MT.BVType 32)
+         -> ARMPrimFn f (MT.BVType w)
+
+  FPMax :: (1 <= w)
+        => f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMin :: (1 <= w)
+        => f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMaxNum :: (1 <= w)
+           => f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+  FPMinNum :: (1 <= w)
+           => f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+
+  FPMulAdd :: (1 <= w)
+           => NR.NatRepr w
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+
+  FPCompareGE :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareGT :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareEQ :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareNE :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareUN :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+
+  FPToFixed :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f MT.BoolType
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FixedToFP :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f MT.BoolType
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FPConvert :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FPToFixedJS :: f (MT.BVType 64)
+              -> f (MT.BVType 32)
+              -> f MT.BoolType
+              -> ARMPrimFn f (MT.BVType 32)
+  FPRoundInt :: (1 <= w)
+             => NR.NatRepr w
+             -> f (MT.BVType w)
+             -> f (MT.BVType 32)
+             -> f (MT.BVType 3)
+             -> f MT.BoolType
+             -> ARMPrimFn f (MT.BVType w)
+
 instance MC.IsArchFn ARMPrimFn where
     ppArchFn pp f =
         let ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
