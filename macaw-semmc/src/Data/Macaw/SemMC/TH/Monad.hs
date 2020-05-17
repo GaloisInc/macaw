@@ -13,7 +13,6 @@ module Data.Macaw.SemMC.TH.Monad (
   withLocToReg,
   withNonceAppEvaluator,
   withAppEvaluator,
-  cacheExpr,
   bindExpr,
   letBindExpr,
   letBindPureExpr,
@@ -218,10 +217,6 @@ letBindExpr elt e = do
                        , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
                        }
   return (LazyBoundExp res)
-
-cacheExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs ()
-cacheExpr elt e = do
-  St.modify' $ \s -> s { expressionCache = M.insert (Some elt) e (expressionCache s) }
 
 letTH :: ExpQ -> MacawQ arch t fs BoundExp
 letTH eq = do
