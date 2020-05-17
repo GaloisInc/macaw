@@ -338,15 +338,7 @@ collectOperandVars :: forall sh tp arch t fs
 collectOperandVars varNames ix (BV.BoundVar bv) m =
   case varNames SL.!! ix of
     C.Const name -> MapF.insert bv (C.Const name) m
-{-
-     genExecInstruction :: forall k arch (a :: [k] -> *) (proxy :: *
-                                                                        -> *).
-                                (A.Architecture arch, OrdF a, ShowF a, LF.LiftF a) =>
-                                proxy arch
-                                -> (forall (tp :: CT.BaseType). L.Location arch tp -> Q Exp)
-                                -> (forall (tp :: CT.BaseType) t.
 
--}
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
 -- LogCfg to disable any logging during the generation.
 genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
@@ -375,7 +367,7 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
                    -- function, as the type would actually refer to types that
                    -- we cannot mention in this shared code (i.e.,
                    -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch) -- [(Some a, BS.ByteString)]
+                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
@@ -383,7 +375,7 @@ genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
-                   -> Library (Sym t fs) -- [(String, BS.ByteString)]
+                   -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
@@ -424,7 +416,7 @@ genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *
                    -- function, as the type would actually refer to types that
                    -- we cannot mention in this shared code (i.e.,
                    -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch) -- [(Some a, BS.ByteString)]
+                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
@@ -432,7 +424,7 @@ genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
-                   -> Library (Sym t fs) -- [(String, BS.ByteString)]
+                   -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
@@ -481,7 +473,7 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) 
                    -- function, as the type would actually refer to types that
                    -- we cannot mention in this shared code (i.e.,
                    -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch) -- [(Some a, BS.ByteString)]
+                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
@@ -489,7 +481,7 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) 
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
-                   -> Library (Sym t fs) -- [(String, BS.ByteString)]
+                   -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
                    -> (Q Type, Q Type)
@@ -503,14 +495,6 @@ genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) 
                    -> Q (Exp, [Dec])
 genExecInstructionLogging _proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg endianness =
     U.withLogCfg logcfg $ do
-  {-
-      Some ng <- runIO PN.newIONonceGenerator
-      sym <- runIO (S.newSimpleBackend S.FloatIEEERepr ng)
-      -- runIO (S.startCaching sym)
-      env <- runIO (formulaEnv (Proxy @arch) sym)
-      lib <- runIO (loadLibrary (Proxy @arch) sym env functions)
-      formulas <- runIO (loadFormulas sym env lib semantics)
--}
       let lib = functions
       let formulas = semantics
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
