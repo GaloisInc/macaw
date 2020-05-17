@@ -19,7 +19,6 @@ module Data.Macaw.SemMC.TH.Monad (
   letBindPureExpr,
   bindTH,
   letTH,
-  letPureTH,
   extractBound,
   refBinding,
   inConditionalContext,
@@ -231,16 +230,6 @@ letTH eq = do
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
                        }
   return (LazyBoundExp (VarE n))
-
--- | Like 'letTH': create a let binding, but unlike letTH, wrap it in an 'EagerBoundExp'
--- to indicate that it is already evaluated.
-letPureTH :: ExpQ -> MacawQ arch t fs BoundExp
-letPureTH eq = do
-  e <- liftQ eq
-  n <- liftQ (newName "lval")
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       }
-  return (EagerBoundExp (VarE n))
 
 bindTH :: ExpQ -> MacawQ arch t fs BoundExp
 bindTH eq = do
