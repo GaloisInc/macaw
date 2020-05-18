@@ -23,6 +23,7 @@
 -- architecture-specific translations.
 
 module Data.Macaw.SemMC.TH (
+  MacawTHConfig(..),
   genExecInstruction,
   genExecInstructionLogStdErr,
   genExecInstructionLogging,
@@ -109,24 +110,19 @@ type Sym t fs = S.SimpleBackend t fs
 --
 -- where each case in ${CASES} is defined by 'mkSemanticsCase'; each case
 -- matches one opcode.
-instructionMatcher :: (OrdF a, LF.LiftF a, A.Architecture arch, ShowF a)
-                   => (forall tp . L.Location arch tp -> Q Exp)
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+instructionMatcher :: forall opc arch t fs
+                    . (OrdF opc, LF.LiftF opc, A.Architecture arch, ShowF opc)
+                   => MacawTHConfig arch opc t fs
                    -> Library (Sym t fs)
-                   -> Name
-                   -- ^ The name of the architecture-specific instruction
-                   -- matcher to run before falling back to the generic one
-                   -> MapF.MapF a (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo a))
-                   -> (Q Type, Q Type)
-                   -> M.Endianness
+                   -> MapF.MapF opc (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo opc))
                    -> Q (Exp, [Dec])
-instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType endianness = do
+instructionMatcher thConf lib formulas = do
   ipVarName <- newName "_ipVal"
   opcodeVar <- newName "opcode"
   operandListVar <- newName "operands"
-  (libDefs, df) <- libraryDefinitions ltr ena ae (snd operandResultType) lib endianness
-  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endianness) (MapF.toList formulas)
+  (libDefs, df) <- libraryDefinitions thConf lib
+  let fs = filter (\(Pair.Pair opc _) -> genOpcodeCase thConf opc) $ MapF.toList formulas
+  (normalCases, bodyDefs) <- unzip <$> mapM (mkSemanticsCase thConf df ipVarName operandListVar) fs
   (fallthruNm, unimp) <- unimplementedInstruction
   fallthroughCase <- match wildP (normalB (appE (varE fallthruNm) (varE opcodeVar))) []
   let allCases :: [Match]
@@ -135,7 +131,7 @@ instructionMatcher ltr ena ae lib archSpecificMatcher formulas operandResultType
                         ]
   instrVar <- newName "i"
   instrArg <- asP instrVar [p| D.Instruction $(varP opcodeVar) $(varP operandListVar) |]
-  matcherRes <- appE (varE archSpecificMatcher) (varE instrVar)
+  matcherRes <- appE (varE (instructionMatchHook thConf)) (varE instrVar)
   actionVar <- newName "action"
   let fullDefs = libDefs ++ concatMap (\(t,i) -> [t,i]) bodyDefs
   let instrCase = LetE [unimp] $ CaseE (VarE opcodeVar) allCases
@@ -161,15 +157,11 @@ unimplementedInstruction = do
 -- | Create a function declaration for each function in the library.
 -- Generates the declarations and a lookup function to use to generate
 -- calls.
-libraryDefinitions :: forall arch t fs . A.Architecture arch
-                   => (forall tp . L.Location arch tp -> Q Exp)
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -> Q Type
+libraryDefinitions :: forall arch opc t fs . A.Architecture arch
+                   => MacawTHConfig arch opc t fs
                    -> Library (Sym t fs)
-                   -> M.Endianness
                    -> Q ([Dec], String -> Maybe (MacawQ arch t fs Exp))
-libraryDefinitions ltr ena ae archType lib endianness = do
+libraryDefinitions thConf lib = do
   -- First, construct map for all function names
   let ffs = MapF.elems lib
   varMap :: Map.Map String Name <- Map.fromList <$> traverse fnName ffs
@@ -177,7 +169,8 @@ libraryDefinitions ltr ena ae archType lib endianness = do
   -- Create lookup functions for names and calls
   let lookupVarName name = Map.lookup name varMap
       lookupCall name = (liftQ . varE) <$> lookupVarName name
-  decs <- traverse (translate lookupVarName lookupCall) (MapF.elems lib)
+      libFuns = filter (genLibraryFunction thConf) $ MapF.elems lib
+  decs <- traverse (translate lookupVarName lookupCall) libFuns
   return (concat decs, lookupCall)
   where
     fnName :: Some (FunctionFormula (Sym t fs)) -> Q (String, Name)
@@ -190,7 +183,7 @@ libraryDefinitions ltr ena ae archType lib endianness = do
               -> Some (FunctionFormula (Sym t fs))
               -> Q [Dec]
     translate lookupVarName lookupCall (Some ff@(FunctionFormula {})) = do
-      (_var, sig, def) <- translateFunction ltr ena ae lookupVarName lookupCall archType ff endianness
+      (_var, sig, def) <- translateFunction thConf lookupVarName lookupCall ff
       return [sig, def]
 
 -- | Generate a single case for one opcode of the case expression.
@@ -204,33 +197,29 @@ libraryDefinitions ltr ena ae archType lib endianness = do
 -- > bodyfun operands = ${BODY}
 --
 -- where the ${BODY} is generated by 'mkOperandListCase'
-mkSemanticsCase :: (LF.LiftF a, A.Architecture arch, ShowF a)
-                => (forall tp . L.Location arch tp -> Q Exp)
-                -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+mkSemanticsCase :: (LF.LiftF opc, A.Architecture arch, ShowF opc)
+                => MacawTHConfig arch opc t fs
                 -> (String -> Maybe (MacawQ arch t fs Exp))
                 -> Name
                 -> Name
-                -> (Q Type, Q Type)
-                -> M.Endianness
-                -> MapF.Pair a (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo a))
+                -> MapF.Pair opc (Product (ParameterizedFormula (Sym t fs) arch) (DT.CaptureInfo opc))
                 -> Q (Match, (Dec, Dec))
-mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endianness (MapF.Pair opc (Pair semantics capInfo)) =
+mkSemanticsCase thConf df ipVarName operandListVar (MapF.Pair opc (Pair semantics capInfo)) =
     do arg1Nm <- newName "operands"
        ofname <- newName $ "opc_" <> (filter ((/=) '"') $ nameBase $ DT.capturedOpcodeName capInfo)
        lTypeVar <- newName "l"
        idsTypeVar <- newName "ids"
        sTypeVar <- newName "s"
-       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(snd operandResultType)), U.HasCallStack)
-                                  => M.Value $(snd operandResultType) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(snd operandResultType)))
-                                  -> SL.List $(fst operandResultType) $(varT lTypeVar)
-                                  -> Maybe (G.Generator $(snd operandResultType)
+       ofsig <- sigD ofname [t|   (M.RegisterInfo (M.ArchReg $(archTypeQ thConf)), U.HasCallStack)
+                                  => M.Value $(archTypeQ thConf) $(varT idsTypeVar) (M.BVType (M.ArchAddrWidth $(archTypeQ thConf)))
+                                  -> SL.List $(operandTypeQ thConf) $(varT lTypeVar)
+                                  -> Maybe (G.Generator $(archTypeQ thConf)
                                                         $(varT idsTypeVar)
                                                         $(varT sTypeVar) ())
                               |]
        ofdef <- funD ofname
                  [clause [varP ipVarName, varP arg1Nm]
-                  (normalB (mkOperandListCase ltr ena ae df ipVarName arg1Nm opc semantics capInfo endianness))
+                  (normalB (mkOperandListCase thConf df ipVarName arg1Nm opc semantics capInfo))
                   []]
        mtch <- match (conP (DT.capturedOpcodeName capInfo) []) (normalB (appE (appE (varE ofname) (varE ipVarName)) (varE operandListVar))) []
        return (mtch, (ofsig, ofdef))
@@ -260,19 +249,16 @@ mkSemanticsCase ltr ena ae df ipVarName operandListVar operandResultType endiann
 --
 -- in an example with three general purpose register operands.
 mkOperandListCase :: (A.Architecture arch)
-                  => (forall tp0 . L.Location arch tp0 -> Q Exp)
-                  -> (forall tp0 . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp0 -> Maybe (MacawQ arch t fs Exp))
-                  -> (forall tp0 . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp0 -> Maybe (MacawQ arch t fs Exp))
+                  => MacawTHConfig arch opc t fs
                   -> (String -> Maybe (MacawQ arch t fs Exp))
                   -> Name
                   -> Name
-                  -> a tp
+                  -> opc tp
                   -> ParameterizedFormula (Sym t fs) arch tp
-                  -> DT.CaptureInfo a tp
-                  -> M.Endianness
+                  -> DT.CaptureInfo opc tp
                   -> Q Exp
-mkOperandListCase ltr ena ae df ipVarName operandListVar opc semantics capInfo endianness = do
-  body <- genCaseBody ltr ena ae df ipVarName opc semantics (DT.capturedOperandNames capInfo) endianness
+mkOperandListCase thConf df ipVarName operandListVar opc semantics capInfo = do
+  body <- genCaseBody thConf df ipVarName opc semantics (DT.capturedOperandNames capInfo)
   DT.genCase capInfo operandListVar body
 
 -- | This is the function that translates formulas (semantics) into expressions
@@ -286,21 +272,18 @@ mkOperandListCase ltr ena ae df ipVarName operandListVar opc semantics capInfo e
 --
 -- The two maps (locVars and opVars) are crucial for translating parameterized
 -- formulas into expressions.
-genCaseBody :: forall a sh t fs arch
+genCaseBody :: forall opc sh t fs arch
              . (A.Architecture arch)
-            => (forall tp . L.Location arch tp -> Q Exp)
-            -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-            -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+            => MacawTHConfig arch opc t fs
             -> (String -> Maybe (MacawQ arch t fs Exp))
             -> Name
-            -> a sh
+            -> opc sh
             -> ParameterizedFormula (Sym t fs) arch sh
             -> SL.List (C.Const Name) sh
-            -> M.Endianness
             -> Q Exp
-genCaseBody ltr ena ae df ipVarName _opc semantics varNames endianness = do
+genCaseBody thConf df ipVarName _opc semantics varNames = do
   regsName <- newName "_regs"
-  translateFormula ltr ena ae df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames endianness
+  translateFormula thConf df ipVarName semantics (BoundVarInterpretations locVarsMap opVarsMap argVarsMap regsName) varNames
   where
     locVarsMap :: MapF.MapF (SI.BoundVar (Sym t fs)) (L.Location arch)
     locVarsMap = MapF.foldrWithKey (collectVarForLocation (Proxy @arch)) MapF.empty (pfLiteralVars semantics)
@@ -341,99 +324,59 @@ collectOperandVars varNames ix (BV.BoundVar bv) m =
 
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
 -- LogCfg to disable any logging during the generation.
-genExecInstruction :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstruction :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
                     . (A.Architecture arch,
-                       HR.HasRepr a (A.ShapeRepr arch),
-                       OrdF a,
-                       ShowF a,
-                       LF.LiftF a)
+                       HR.HasRepr opc (A.ShapeRepr arch),
+                       OrdF opc,
+                       ShowF opc,
+                       LF.LiftF opc)
                    => proxy arch
-                   -> (forall tp . L.Location arch tp -> Q Exp)
-                   -- ^ A translation of 'L.Location' references into 'Exp's
-                   -- that generate macaw IR to reference those expressions
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ A translation of uninterpreted functions into macaw IR;
-                   -- returns 'Nothing' if the handler does not know how to
-                   -- translate the 'S.NonceApp'.
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
-                   -- translate division operations into architecture-specific
-                   -- statements, which have no representation in macaw.
-                   -> Name
-                   -- ^ The arch-specific instruction matcher for translating
-                   -- instructions directly into macaw IR; this is usually used
-                   -- for translating trap and system call type instructions.
-                   -- This has to be specified by 'Name' instead of as a normal
-                   -- function, as the type would actually refer to types that
-                   -- we cannot mention in this shared code (i.e.,
-                   -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
+                   -> MacawTHConfig arch opc t fs
+                   -> MapF.MapF opc (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
-                   -> [Some (DT.CaptureInfo a)]
+                   -> [Some (DT.CaptureInfo opc)]
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
-                   -> (Q Type, Q Type)
-                   -> M.Endianness
                    -> Q Exp
-genExecInstruction proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType endianness = do
+genExecInstruction proxy thConf semantics captureInfo functions = do
   logCfg <- runIO $ U.mkNonLogCfg
-  (r, decs) <- genExecInstructionLogging proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg endianness
+  (r, decs) <- genExecInstructionLogging proxy thConf semantics captureInfo functions logCfg
   runIO $ U.logEndWith logCfg
   addTopDecls decs
   return r
 
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
 -- LogCfg to disable any logging during the generation.
-genExecInstructionLogStdErr :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstructionLogStdErr :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
                     . (A.Architecture arch,
-                       HR.HasRepr a (A.ShapeRepr arch),
-                       OrdF a,
-                       ShowF a,
-                       LF.LiftF a)
+                       HR.HasRepr opc (A.ShapeRepr arch),
+                       OrdF opc,
+                       ShowF opc,
+                       LF.LiftF opc)
                    => proxy arch
-                   -> (forall tp . L.Location arch tp -> Q Exp)
-                   -- ^ A translation of 'L.Location' references into 'Exp's
-                   -- that generate macaw IR to reference those expressions
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ A translation of uninterpreted functions into macaw IR;
-                   -- returns 'Nothing' if the handler does not know how to
-                   -- translate the 'S.NonceApp'.
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
-                   -- translate division operations into architecture-specific
-                   -- statements, which have no representation in macaw.
-                   -> Name
-                   -- ^ The arch-specific instruction matcher for translating
-                   -- instructions directly into macaw IR; this is usually used
-                   -- for translating trap and system call type instructions.
-                   -- This has to be specified by 'Name' instead of as a normal
-                   -- function, as the type would actually refer to types that
-                   -- we cannot mention in this shared code (i.e.,
-                   -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
+                   -> MacawTHConfig arch opc t fs
+                   -> MapF.MapF opc (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
-                   -> [Some (DT.CaptureInfo a)]
+                   -> [Some (DT.CaptureInfo opc)]
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
-                   -> (Q Type, Q Type)
-                   -> M.Endianness
                    -> Q Exp
-genExecInstructionLogStdErr proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType endianness = do
+genExecInstructionLogStdErr proxy thConf semantics captureInfo functions = do
   logCfg <- runIO $ U.mkLogCfg "genExecInstruction"
   logThread <- runIO $ U.asyncLinked (U.stdErrLogEventConsumer (const True) logCfg)
-  (r, decs) <- genExecInstructionLogging proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logCfg endianness
+  (r, decs) <- genExecInstructionLogging proxy thConf semantics captureInfo functions logCfg
   runIO $ U.logEndWith logCfg
   runIO $ Async.wait logThread
   addTopDecls decs
@@ -447,58 +390,37 @@ genExecInstructionLogStdErr proxy ltr ena ae archInsnMatcher semantics captureIn
 -- all of the things we would need to for that).
 --
 -- The structure of the term produced is documented in 'instructionMatcher'
-genExecInstructionLogging :: forall arch (a :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstructionLogging :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
                              . (A.Architecture arch,
-                                HR.HasRepr a (A.ShapeRepr arch),
-                                OrdF a,
-                                ShowF a,
-                                LF.LiftF a)
+                                HR.HasRepr opc (A.ShapeRepr arch),
+                                OrdF opc,
+                                ShowF opc,
+                                LF.LiftF opc)
                    => proxy arch
-                   -> (forall tp . L.Location arch tp -> Q Exp)
-                   -- ^ A translation of 'L.Location' references into 'Exp's
-                   -- that generate macaw IR to reference those expressions
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ A translation of uninterpreted functions into macaw IR;
-                   -- returns 'Nothing' if the handler does not know how to
-                   -- translate the 'S.NonceApp'.
-                   -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                   -- ^ Similarly, a translator for 'S.App's; mostly intended to
-                   -- translate division operations into architecture-specific
-                   -- statements, which have no representation in macaw.
-                   -> Name
-                   -- ^ The arch-specific instruction matcher for translating
-                   -- instructions directly into macaw IR; this is usually used
-                   -- for translating trap and system call type instructions.
-                   -- This has to be specified by 'Name' instead of as a normal
-                   -- function, as the type would actually refer to types that
-                   -- we cannot mention in this shared code (i.e.,
-                   -- architecture-specific instruction types).
-                   -> MapF.MapF a (ParameterizedFormula (Sym t fs) arch)
+                   -> MacawTHConfig arch opc t fs
+                   -> MapF.MapF opc (ParameterizedFormula (Sym t fs) arch)
                    -- ^ A list of opcodes (with constraint information
                    -- witnessed) paired with the bytestrings containing their
                    -- semantics.  This comes from semmc.
-                   -> [Some (DT.CaptureInfo a)]
+                   -> [Some (DT.CaptureInfo opc)]
                    -- ^ Extra information for each opcode to let us generate
                    -- some TH to match them.  This comes from the semantics
                    -- definitions in semmc.
                    -> Library (Sym t fs)
                    -- ^ A list of defined function names paired with the
                    -- bytestrings containing their definitions.
-                   -> (Q Type, Q Type)
                    -> U.LogCfg
                    -- ^ Logging configuration (explicit rather than
                    -- the typical implicit expression because I don't
                    -- know how to pass implicits to TH splices
                    -- invocations.
-                   -> M.Endianness
-                   -- ^ Endianness for this instruction set.
                    -> Q (Exp, [Dec])
-genExecInstructionLogging _proxy ltr ena ae archInsnMatcher semantics captureInfo functions operandResultType logcfg endianness =
+genExecInstructionLogging _proxy thConf semantics captureInfo functions logcfg =
     U.withLogCfg logcfg $ do
       let lib = functions
       let formulas = semantics
       let formulasWithInfo = foldr (attachInfo formulas) MapF.empty captureInfo
-      instructionMatcher ltr ena ae lib archInsnMatcher formulasWithInfo operandResultType endianness
+      instructionMatcher thConf lib formulasWithInfo
         where
           attachInfo m0 (Some ci) m =
               let co = DT.capturedOpcode ci
@@ -524,21 +446,18 @@ floatInfoFromPrecisionTH =
 doSequenceQ :: [StmtQ] -> [Stmt] -> Q Exp
 doSequenceQ stmts body = doE (stmts ++ map return body)
 
-translateFormula :: forall arch t fs sh .
+translateFormula :: forall arch opc t fs sh .
                     (A.Architecture arch)
-                 => (forall tp . L.Location arch tp -> Q Exp)
-                 -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                 -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+                 => MacawTHConfig arch opc t fs
                  -> (String -> Maybe (MacawQ arch t fs Exp))
                  -> Name
                  -> ParameterizedFormula (Sym t fs) arch sh
                  -> BoundVarInterpretations arch t fs
                  -> SL.List (C.Const Name) sh
-                 -> M.Endianness
                  -> Q Exp
-translateFormula ltr ena ae df ipVarName semantics interps varNames endianness = do
+translateFormula thConf df ipVarName semantics interps varNames = do
   let preamble = [ bindS (varP (regsValName interps)) [| G.getRegs |] ]
-  exps <- runMacawQ ltr ena ae df (mapM_ translateDefinition (MapF.toList (pfDefs semantics)))
+  exps <- runMacawQ thConf df (mapM_ translateDefinition (MapF.toList (pfDefs semantics)))
   -- In the event that we have an empty list of expressions, insert a
   -- final return ()
   final <- NoBindS <$> [| return () |]
@@ -552,7 +471,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
           case param of
             OperandParameter _w idx -> do
               let C.Const name = varNames SL.!! idx
-              newVal <- addEltTH endianness interps expr
+              newVal <- addEltTH (archEndianness thConf) interps expr
               appendStmt [| G.setRegVal (O.toRegister $(varE name)) =<< $(refBinding newVal) |]
             LiteralParameter loc
               -- FIXME: The below case is necessary for calls to
@@ -582,7 +501,7 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
                       appendStmt [| return () |]
                     _ | S.FnApp symFn args <- S.nonceExprApp n
                       , Just _ <- matchWriteMemWidth (symFnName symFn)
-                      -> void $ writeMemTH interps symFn args endianness
+                      -> void $ writeMemTH interps symFn args (archEndianness thConf)
                     _ -> error "translateDefinition: unexpected memory write"
 
               -- -- | L.isMemoryLocation loc
@@ -602,32 +521,28 @@ translateFormula ltr ena ae df ipVarName semantics interps varNames endianness =
 
 
               | otherwise -> do
-                  valExp <- addEltTH endianness interps expr
-                  appendStmt [| G.setRegVal $(ltr loc) =<< $(refBinding valExp) |]
+                  valExp <- addEltTH (archEndianness thConf) interps expr
+                  appendStmt [| G.setRegVal $(locationTranslator thConf loc) =<< $(refBinding valExp) |]
             FunctionParameter str (WrappedOperand _ opIx) _w -> do
               let C.Const boundOperandName = varNames SL.!! opIx
               case lookup str (A.locationFuncInterpretation (Proxy @arch)) of
                 Nothing -> fail ("Function has no definition: " ++ str)
                 Just fi -> do
-                  valExp <- addEltTH endianness interps expr
+                  valExp <- addEltTH (archEndianness thConf) interps expr
                   appendStmt [| case $(varE (A.exprInterpName fi)) $(varE boundOperandName) of
                                    Just reg -> G.setRegVal (O.toRegister reg) =<< $(refBinding valExp)
                                    Nothing -> fail ("Invalid instruction form at " ++ show $(varE ipVarName) ++ " in " ++ $(litE (stringL str)))
                                |]
 
-translateFunction :: forall arch t fs args ret .
+translateFunction :: forall arch opc t fs args ret .
                      (A.Architecture arch)
-                  => (forall tp . L.Location arch tp -> Q Exp)
-                  -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-                  -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+                  => MacawTHConfig arch opc t fs
                   -> (String -> Maybe Name)
                   -- ^ names of all functions that we might call
                   -> (String -> Maybe (MacawQ arch t fs Exp))
-                  -> Q Type
                   -> FunctionFormula (Sym t fs) '(args, ret)
-                  -> M.Endianness
                   -> Q (Name, Dec, Dec)
-translateFunction ltr ena ae fnName df archType ff endianness = do
+translateFunction thConf fnName df ff = do
   let funNameErr = error ("Undefined function " ++ ffName ff)
   let var = fromMaybe funNameErr (fnName (ffName ff))
   argVars :: [Name]
@@ -646,16 +561,16 @@ translateFunction ltr ena ae fnName df archType ff endianness = do
       expr = case S.symFnInfo (ffDef ff) of
         S.DefinedFnInfo _ e _ -> e
         _ -> error $ "expected a defined function; found " ++ show (ffDef ff)
-  stmts <- runMacawQ ltr ena ae df $ do
-    val <- addEltTH endianness interps expr
+  stmts <- runMacawQ thConf df $ do
+    val <- addEltTH (archEndianness thConf) interps expr
     appendStmt [| $(refBinding val) |]
   idsTy <- varT <$> newName "ids"
   sTy <- varT <$> newName "s"
   let translate :: forall tp. CT.BaseTypeRepr tp -> Q Type
       translate tp =
-        [t| M.Value $(archType) $(idsTy) $(translateBaseType tp) |]
+        [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
       argHsTys = FC.toListFC translate (ffArgTypes ff)
-      retHsTy = [t| G.Generator $(archType) $(idsTy) $(sTy)
+      retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy)
                      $(translate (ffRetType ff)) |]
       ty = foldr (\a r -> [t| $(a) -> $(r) |]) retHsTy argHsTys
       body = doE (map return stmts)
@@ -811,6 +726,8 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
         Just fun -> do
           argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
           let applyQ e be = [| $(e) `ap` $(refBinding be) |]
+          -- FIXME: Check if all argExprs are 'EagerBoundExp's; if so, generate
+          -- a pure let bound version instead
           liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
         _ -> do
           let fnArgTypes = S.symFnArgTypes symFn

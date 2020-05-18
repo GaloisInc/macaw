@@ -19,8 +19,8 @@ module Data.Macaw.ARM.Arch where
 
 import           Data.Bits ( (.&.) )
 import           Data.Kind ( Type )
-import qualified Data.Macaw.Architecture.Info as MAI
 import           Data.Macaw.ARM.ARMReg ()
+import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
@@ -28,6 +28,8 @@ import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewritt
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.Types as MT
+import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FCls
@@ -43,6 +45,11 @@ import qualified Text.PrettyPrint.HughesPJClass as HPP
 -- ARM-specific statement definitions
 
 data ARMStmt (v :: MT.Type -> Type) where
+  -- | This is not great; it doesn't give us much ability to precisely reason
+  -- about anything.  We'd have to havok every bit of state if we saw one.
+  UninterpretedOpcode :: ARMDis.Opcode ARMDis.Operand sh
+                      -> PL.List ARMDis.Operand sh
+                      -> ARMStmt v
 
 type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
@@ -388,7 +395,17 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
             G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
-      _ -> Nothing
+      _ | isUninterpretedOpcode opc -> Just $ do
+            G.addStmt (MC.ExecArchStmt (UninterpretedOpcode opc operands))
+        | otherwise -> Nothing
+
+-- | This is a coarse heuristic to treat any instruction beginning with 'V' as a
+-- vector instruction that we want to leave uninterpreted, as translating all of
+-- the vector instructions faithfully is too much code (for now)
+isUninterpretedOpcode opc =
+  case show opc of
+    'V':_ -> True
+    _ -> False
 
 -- | Manually-provided semantics for T32 (thumb) instructions whose full
 -- semantics cannot be expressed in our semantics format.

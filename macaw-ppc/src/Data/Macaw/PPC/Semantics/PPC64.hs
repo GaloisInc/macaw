@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -fno-warn-unused-matches -ddump-splices -ddump-to-file -dth-dec-file #-}
@@ -25,7 +26,7 @@ import qualified SemMC.Formula as SF
 import qualified SemMC.Util as SU
 
 import           Data.Macaw.SemMC.Generator ( Generator )
-import           Data.Macaw.SemMC.TH ( genExecInstruction )
+import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction )
 import           Data.Macaw.PPC.Arch ( ppcInstructionMatcher )
 import           Data.Macaw.PPC.PPCReg ( locToRegTH )
 import           Data.Macaw.PPC.Semantics.TH ( ppcAppEvaluator, ppcNonceAppEval )
@@ -42,14 +43,23 @@ execInstruction =
        env <- TH.runIO (SF.formulaEnv proxy sym)
        lib <- TH.runIO (SF.loadLibrary proxy sym env allDefinedFunctions)
        formulas <- TH.runIO (SF.loadFormulas sym env lib allSemantics)
+
+       let genOpc :: forall tps . Opcode Operand tps -> Bool
+           genOpc _ = True
+       let thConf = MacawTHConfig { locationTranslator = locToRegTH (Proxy @SP.V64)
+                                  , nonceAppTranslator = ppcNonceAppEval
+                                  , appTranslator = ppcAppEvaluator
+                                  , instructionMatchHook = 'ppcInstructionMatcher
+                                  , archEndianness = MM.BigEndian
+                                  , operandTypeQ = [t| Dismantle.PPC.Operand |]
+                                  , archTypeQ = [t| (SP.AnyPPC SP.V64) |]
+                                  , genLibraryFunction = \_ -> True
+                                  , genOpcodeCase = genOpc
+                                  }
+
        genExecInstruction proxy
-                          (locToRegTH (Proxy @SP.V64))
-                          ppcNonceAppEval
-                          ppcAppEvaluator
-                          'ppcInstructionMatcher
+                          thConf
                           formulas
                           allOpcodeInfo
                           lib
-                          ([t| Dismantle.PPC.Operand |], [t| (SP.AnyPPC SP.V64) |])
-                          MM.BigEndian
    )

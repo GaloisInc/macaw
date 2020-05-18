@@ -2,7 +2,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeInType #-}
 module Data.Macaw.SemMC.TH.Monad (
+  MacawTHConfig(..),
   BoundVarInterpretations(..),
   BoundExp(..),
   MacawQ,
@@ -34,9 +36,11 @@ import qualified Data.Map.Strict as M
 import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
+import qualified Data.Macaw.CFG as M
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Backend.Simple as S
+import qualified SemMC.Formula as SF
 import qualified What4.Expr.Builder as S
 import qualified What4.Interface as SI
 
@@ -52,6 +56,36 @@ data BoundVarInterpretations arch t fs =
                           -- combine all three into one map.
                           , regsValName :: Name
                           }
+
+data MacawTHConfig arch opc t fs =
+  MacawTHConfig { locationTranslator :: forall tp . L.Location arch tp -> Q Exp
+                -- ^ A translation of 'L.Location' references into 'Exp's
+                -- that generate macaw IR to reference those expressions
+                , nonceAppTranslator :: forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)
+                -- ^ A translation of uninterpreted functions into macaw IR;
+                -- returns 'Nothing' if the handler does not know how to
+                -- translate the 'S.NonceApp'.
+                , appTranslator :: forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)
+                -- ^ Similarly, a translator for 'S.App's; mostly intended to
+                -- translate division operations into architecture-specific
+                -- statements, which have no representation in macaw.
+                , instructionMatchHook :: Name
+                -- ^ The arch-specific instruction matcher for translating
+                -- instructions directly into macaw IR; this is usually used
+                -- for translating trap and system call type instructions.
+                -- This has to be specified by 'Name' instead of as a normal
+                -- function, as we insert calls to it via TH (which has to be
+                -- done by name)
+                , archEndianness :: M.Endianness
+                -- ^ The endianness of the architecture we are translating.
+                -- Note that it is fixed: we don't support endianness switching
+                , operandTypeQ :: Q Type
+                -- ^ A TH action to generate the operand type for the architecture
+                , archTypeQ :: Q Type
+                -- ^ A TH action to generate the type tag for the architecture
+                , genLibraryFunction :: forall sym . Some (SF.FunctionFormula sym) -> Bool
+                , genOpcodeCase :: forall tps . opc tps -> Bool
+                }
 
 data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             -- ^ The list of template haskell statements accumulated
@@ -91,20 +125,18 @@ data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             -- conditionals and should use lazy binding.
                             }
 
-emptyQState :: (forall tp . L.Location arch tp -> Q Exp)
-            -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-            -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+emptyQState :: MacawTHConfig arch opc t fs
             -> (String -> Maybe (MacawQ arch t fs Exp))
             -> QState arch t fs
-emptyQState ltr ena ae df = QState { accumulatedStatements = Seq.empty
-                                   , expressionCache = M.empty
-                                   , lazyExpressionCache = M.empty
-                                   , locToReg = ltr
-                                   , nonceAppEvaluator = ena
-                                   , appEvaluator = ae
-                                   , definedFunctionEvaluator = df
-                                   , translationDepth = 0
-                                   }
+emptyQState thConf df = QState { accumulatedStatements = Seq.empty
+                               , expressionCache = M.empty
+                               , lazyExpressionCache = M.empty
+                               , locToReg = locationTranslator thConf
+                               , nonceAppEvaluator = nonceAppTranslator thConf
+                               , appEvaluator = appTranslator thConf
+                               , definedFunctionEvaluator = df
+                               , translationDepth = 0
+                               }
 
 newtype MacawQ arch t fs a = MacawQ { unQ :: St.StateT (QState arch t fs) Q a }
   deriving (Functor,
@@ -113,13 +145,11 @@ newtype MacawQ arch t fs a = MacawQ { unQ :: St.StateT (QState arch t fs) Q a }
             MF.MonadFail,
             St.MonadState (QState arch t fs))
 
-runMacawQ :: (forall tp . L.Location arch tp -> Q Exp)
-          -> (forall tp . BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
-          -> (forall tp . BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp))
+runMacawQ :: MacawTHConfig arch opc t fs
           -> (String -> Maybe (MacawQ arch t fs Exp))
           -> MacawQ arch t fs ()
           -> Q [Stmt]
-runMacawQ ltr ena ea df act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState ltr ena ea df)
+runMacawQ thConf df act = (F.toList . accumulatedStatements) <$> St.execStateT (unQ act) (emptyQState thConf df)
 
 isTopLevel :: MacawQ arch t fs Bool
 isTopLevel = (==0) <$> St.gets translationDepth
