@@ -175,7 +175,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMaxNum <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< (FPMaxNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
                 _ -> fail "Invalid fpMaxNum arguments"
           _ | "uf_fpMinNum" `isPrefixOf` fnName ->
               case args of
@@ -183,7 +183,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMinNum <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< (FPMinNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
                 _ -> fail "Invalid fpMinNum arguments"
           _ | "uf_fpMax" `isPrefixOf` fnName ->
               case args of
@@ -191,7 +191,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMax <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< (FPMax knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
                 _ -> fail "Invalid fpMax arguments"
           _ | "uf_fpMin" `isPrefixOf` fnName ->
               case args of
@@ -199,7 +199,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMin <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< (FPMin knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
                 _ -> fail "Invalid fpMin arguments"
 
           _ | "uf_fpRecipEstimate" `isPrefixOf` fnName ->
