@@ -595,7 +595,7 @@ armAppEvaluator endianness interps elt =
         -- We need to ensure that state updates are only done lazily.  This
         -- works because the arguments to the branches are expressions in the
         -- Generator monad.  We can do this translation while preserving sharing
-        -- by turning every recrusively-traversed term into a let binding at the
+        -- by turning every recursively-traversed term into a let binding at the
         -- top-level.  After that, we can build bodies for the "arms" of the
         -- concreteIte that instantiate those terms in the appropriate monadic
         -- context.  It is slightly problematic that the core TH translation
