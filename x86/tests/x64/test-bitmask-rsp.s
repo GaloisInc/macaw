@@ -2,9 +2,9 @@
         .globl _start
 _start:
         movq %rsp, %rax
-	subq $64, %rsp
-	andq $-32, %rsp
-	movq %rax, 32(%rsp)
+        subq $64, %rsp
+        andq $-32, %rsp
+        movq %rax, 32(%rsp)
 
         movq 32(%rsp), %rsi
         leaq (%rsi), %rsp
