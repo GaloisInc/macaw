@@ -56,4 +56,4 @@ testMacaw fpath elf = do
   when (FP.takeFileName fpath == "gzip") $
     -- This is pretty specific, and mostly just designed to notify us
     -- when there has been a change
-    T.assertEqual "number of found blocks" 37218 (length allFoundBlockAddrs)
+    T.assertEqual "number of found blocks" 37211 (length allFoundBlockAddrs)
