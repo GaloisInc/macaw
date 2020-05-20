@@ -845,7 +845,7 @@ bitop :: MemWidth w
       -> AbsValue w (BVType u)
 bitop doOp w (StackOffsetAbsVal a j) (FinSet t)
   | [o] <- Set.toList t
-  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ doOp o $ toInteger j
+  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ flip doOp o $ toInteger j
 bitop doOp w (FinSet t) (StackOffsetAbsVal a j)
   | [o] <- Set.toList t
   = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ doOp o $ toInteger j
