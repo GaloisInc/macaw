@@ -25,4 +25,4 @@ script:
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
  # Build packages
- - cabal v2-test --project-file=cabal.project.dist --ghc-options="-Wall -Werror" x86 x86_symbolic
+ - cabal v2-test --project-file=cabal.project.dist x86 x86_symbolic
