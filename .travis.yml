@@ -14,17 +14,12 @@ cache:
     - $HOME/.ghc
     - $HOME/.cabal
 
-matrix:
-  include:
-  - env: STACK_YAML=stack-8.4.yaml
-  - env: STACK_YAML=stack-8.6.yaml
-
 install:
 # Changes ssh paths into http path, so that we can do a read-only clone of
 # our submodules without worrying about ssh keys.
 - sed -i 's/git@github.com:/https:\/\/github.com\//' .gitmodules
 - git submodule update --init
-- cabal v2-update --project-file=cabal.project
+- cabal v2-update --project-file=cabal.project.dist
 
 script:
 # Here starts the actual work to be performed for the package under test;
