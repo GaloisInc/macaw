@@ -117,7 +117,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curIPAddr
   let off = MM.segoffOffset curIPAddr
   case readInstruction curIPAddr of
-    Left err -> failAt gs off curIPAddr (DecodeError err)
+    Left err -> failAt gs blockOff curIPAddr (DecodeError err)
     Right (i, bytesRead) -> do
 --      traceM ("II: " ++ show i)
       let nextIPOffset = off + bytesRead
@@ -127,10 +127,10 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curIPAddr) of
-                 Nothing -> failAt gs off curIPAddr (InstructionAtUnmappedAddr i)
+                 Nothing -> failAt gs blockOff curIPAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (BVValue (SP.addrWidth SP.knownVariant) (fromIntegral addr))
       case lookupSemantics ipVal i of
-        Nothing -> failAt gs off curIPAddr (UnsupportedInstruction i)
+        Nothing -> failAt gs blockOff curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
@@ -141,7 +141,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer)
           case egs1 of
-            Left genErr -> failAt gs off curIPAddr (GenerationError i genErr)
+            Left genErr -> failAt gs blockOff curIPAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
                 UnfinishedPartialBlock preBlock
@@ -176,7 +176,7 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   (nextIPOffset, block) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextIPOffset > startOffset) $ do
     let reason = InvalidNextIP (fromIntegral nextIPOffset) (fromIntegral startOffset)
-    failAt gs0 nextIPOffset startAddr reason
+    failAt gs0 0 startAddr reason
   return (block, fromIntegral (nextIPOffset - startOffset))
 
 -- | Disassemble a block from the given start address (which points into the
@@ -202,11 +202,11 @@ disassembleFn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
 disassembleFn _ lookupSemantics nonceGen startAddr regState maxSize = do
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize))
   case mr of
-    Left (blocks, off, _exn) ->
+    Left (blocks, bytes, _exn) ->
       -- Note that we discard exn here: it is actually extraneous since the
       -- 'failAt' function converts exceptions raised during translation into
       -- macaw 'TranslationError' block terminators.
-      return (blocks, off)
+      return (blocks, bytes)
     Right (blocks, bytes) -> return (blocks, bytes)
 
 type LocatedError ppc ids = (Block ppc ids, Int, TranslationError (ArchAddrWidth ppc))
@@ -272,10 +272,10 @@ failAt :: forall v ids s a
        -> MM.MemSegmentOff (SP.AddrWidth v)
        -> TranslationErrorReason (SP.AddrWidth v)
        -> DisM (SP.AnyPPC v) ids s a
-failAt gs offset curIPAddr reason = do
+failAt gs bytesConsumed curIPAddr reason = do
   let exn = TranslationError { transErrorAddr = curIPAddr
                              , transErrorReason = reason
                              }
   let term = (`TranslateError` T.pack (show exn))
   let b = finishBlock' (gs ^. blockState) term
-  ET.throwError (b, fromIntegral offset, exn)
+  ET.throwError (b, fromIntegral bytesConsumed, exn)
