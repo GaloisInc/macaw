@@ -24,6 +24,7 @@ import qualified Data.Foldable as F
 import           Data.Proxy
 import           GHC.TypeLits
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized.Classes
 import qualified What4.BaseTypes as S
 import qualified What4.Expr.BoolMap as BooM
@@ -121,14 +122,14 @@ crucAppToExpr (S.SemiRingSum sm) =
         let smul mul e = do x <- sval mul
                             y <- eltToExpr e
                             AppExpr <$> do M.BVMul w <$> addExpr x <*> addExpr y
-            sval v = return $ ValueExpr $ M.BVValue w v
+            sval v = return $ ValueExpr $ M.BVValue w (BV.asUnsigned v)
             add x y = AppExpr <$> do M.BVAdd w <$> addExpr x <*> addExpr y
         in WSum.evalM add smul sval sm
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let smul mul e = do x <- sval mul
                             y <- eltToExpr e
                             AppExpr <$> do M.BVAnd w <$> addExpr x <*> addExpr y
-            sval v = return $ ValueExpr $ M.BVValue w v
+            sval v = return $ ValueExpr $ M.BVValue w (BV.asUnsigned v)
             add x y = AppExpr <$> do M.BVXor w <$> addExpr x <*> addExpr y
         in WSum.evalM add smul sval sm
       _ -> error "unsupported SemiRingSum repr for macaw PPC base semantics"
@@ -228,7 +229,7 @@ eltToExpr :: (M.ArchConstraints (SP.AnyPPC var), MSS.SimplifierExtension (SP.Any
           -> Generator (SP.AnyPPC var) ids s (Expr (SP.AnyPPC var) ids (FromCrucibleBaseType ctp))
 eltToExpr (S.AppExpr appElt) = crucAppToExpr (S.appExprApp appElt)
 eltToExpr (S.SemiRingLiteral (SR.SemiRingBVRepr _ w) val _) =
-  return $ ValueExpr (M.BVValue w val)
+  return $ ValueExpr (M.BVValue w (BV.asUnsigned val))
 eltToExpr _ = error "Unexpected expr type in eltToExpr"
 
 -- Add a Crucible element in the Generator monad.

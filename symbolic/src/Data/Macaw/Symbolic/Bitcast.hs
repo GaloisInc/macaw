@@ -10,6 +10,7 @@ module Data.Macaw.Symbolic.Bitcast (
 import           GHC.TypeLits
 
 import           Control.Monad ( forM, when )
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Vector as V
 
@@ -64,7 +65,7 @@ doBitcast sym x eqPr =
       let doPack :: (Integer,SymBV sym (n GHC.TypeLits.* w)) -> MM.LLVMPtr sym w -> IO (Integer, SymBV sym (n GHC.TypeLits.* w))
           doPack (i,r) y = do
             extY <- bvZext sym outW =<< MM.projectLLVM_bv sym y
-            shiftAmt <- bvLit sym outW i
+            shiftAmt <- bvLit sym outW (BV.mkBV outW i)
             r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
             pure (i+1,r')
       (_,r) <- F.foldlM doPack (1,extH) rest
@@ -75,7 +76,7 @@ doBitcast sym x eqPr =
       LeqProof <- pure $ plus1LeqDbl n w
       xbv <- MM.projectLLVM_bv sym x
       V.generateM (fromIntegral (natValue n)) $ \i -> do
-        shiftAmt <- bvLit sym inW (toInteger i)
+        shiftAmt <- bvLit sym inW (BV.mkBV inW (toInteger i))
         MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
     M.FromFloat f -> do
       Refl <- pure $ checkMacawFloatEq f

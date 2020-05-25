@@ -28,6 +28,7 @@ import           Control.Lens ( (^.) )
 import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Monad.IO.Unlift as MU
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import           Data.IORef
 import qualified Data.Macaw.BinaryLoader as MBL
@@ -278,7 +279,7 @@ initialRegisterState sym archVals globalMappingFn memory entryBlock spVal = do
   -- Build an IP value to populate the initial register state with
   let entryAddr = M.segoffAddr (M.pblockAddr entryBlock)
   ip_base <- liftIO $ W.natLit sym (fromIntegral (M.addrBase entryAddr))
-  ip_off <- liftIO $ W.bvLit sym W.knownNat (M.memWordToUnsigned (M.addrOffset entryAddr))
+  ip_off <- liftIO $ W.bvLit sym W.knownNat (BV.mkBV W.knownNat $ M.memWordToUnsigned (M.addrOffset entryAddr))
   entryIPVal <- liftIO $ globalMappingFn sym memory ip_base ip_off
 
   -- liftIO $ printf "Entry initial state"
@@ -325,7 +326,7 @@ addKnownRegValue sym archVals globalMappingFn memory regsStruct reg val =
             Just Refl -> do
               -- This is a value with the same width as a pointer.  We attempt
               -- to translate it into a pointer using the global map if possible
-              off <- liftIO $ W.bvLit sym ptrWidthRepr singleBV
+              off <- liftIO $ W.bvLit sym ptrWidthRepr (BV.mkBV ptrWidthRepr singleBV)
               ptr <- liftIO $ globalMappingFn sym memory base off
               return (MS.updateReg archVals regsStruct reg ptr)
             Nothing ->
@@ -333,7 +334,7 @@ addKnownRegValue sym archVals globalMappingFn memory regsStruct reg val =
                 LLVM.LLVMPointerRepr nr -> do
                   -- Otherwise, this is just a bitvector of a non-pointer size,
                   -- so we just make it into a plain bitvector.
-                  bvVal <- liftIO $ W.bvLit sym nr singleBV
+                  bvVal <- liftIO $ W.bvLit sym nr (BV.mkBV nr singleBV)
                   let ptr = LLVM.LLVMPointer base bvVal
                   return (MS.updateReg archVals regsStruct reg ptr)
                 _ -> return regsStruct
@@ -377,8 +378,8 @@ genIPConstraint ctx sym ipVal = liftIO $ do
     genSegConstraint repr seg = do
       let low = MM.segmentOffset seg
       let high = low + MM.segmentSize seg
-      lo <- W.bvLit sym repr (fromIntegral low)
-      hi <- W.bvLit sym repr (fromIntegral high)
+      lo <- W.bvLit sym repr (BV.mkBV repr (toInteger low))
+      hi <- W.bvLit sym repr (BV.mkBV repr (toInteger high))
       lb <- W.bvUle sym lo ipVal
       ub <- W.bvUle sym ipVal hi
       W.andPred sym lb ub
@@ -408,7 +409,7 @@ genModels proxy sym solver_proc assumptions expr count
           next_ground_val <- liftIO $ W.groundEval evalFn expr
           next_bv_val <- liftIO $ W.bvLit sym W.knownNat next_ground_val
           not_current_ground_val <- liftIO $ W.bvNe sym expr next_bv_val
-          LJ.writeLogM (RL.GeneratedModel @arch next_ground_val)
+          LJ.writeLogM (RL.GeneratedModel @arch (BV.asUnsigned next_ground_val))
           more_ground_vals <- genModels proxy sym solver_proc (not_current_ground_val : assumptions) expr (count - 1)
           return $ next_ground_val : more_ground_vals
         _ -> return []
@@ -455,7 +456,7 @@ extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = d
     let resolveAddr off = M.resolveAbsoluteAddr (binaryMemory ctx) $
                            M.memWord $ fromIntegral $
                            M.memWordToUnsigned ip_base_mem_word + off
-    let resolved = mapMaybe resolveAddr ip_off_ground_vals
+    let resolved = mapMaybe resolveAddr (BV.asUnsigned <$> ip_off_ground_vals)
     unlift $ LJ.writeLogM (RL.ResolvedAddresses @arch resolved)
     case length resolved of
       0 -> return NoModels
@@ -517,8 +518,8 @@ initializeMemory _ sym mem = do
   let ?ptrWidth = W.knownNat
   let stackBytes = 2 * 1024 * 1024
   stackArray <- liftIO $ W.freshConstant sym (W.safeSymbol "stack") C.knownRepr
-  stackSize <- liftIO $ W.bvLit sym ?ptrWidth stackBytes
-  stackSizex2 <- liftIO $ W.bvLit sym ?ptrWidth (2 * stackBytes)
+  stackSize <- liftIO $ W.bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth stackBytes)
+  stackSizex2 <- liftIO $ W.bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (2 * stackBytes))
   (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc sym LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSizex2 LLVM.noAlignment
   mem2 <- liftIO $ LLVM.doArrayStore sym mem1 stackBasePtr LLVM.noAlignment stackArray stackSize
   initSPVal <- liftIO $ LLVM.ptrAdd sym C.knownRepr stackBasePtr stackSize

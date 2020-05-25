@@ -28,6 +28,7 @@ library
                        Data.Macaw.PPC.Semantics.PPC32
                        Data.Macaw.PPC.Semantics.TH
   build-depends:       base >=4.9 && <5,
+                       bv-sized >= 1.0.0 && < 1.1,
                        bytestring,
                        containers,
                        constraints,

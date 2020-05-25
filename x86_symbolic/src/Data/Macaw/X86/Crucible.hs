@@ -34,6 +34,7 @@ import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
 import           Data.Kind ( Type )
+import qualified Data.BitVector.Sized as BV
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
@@ -114,9 +115,9 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
   case asConcrete bv_count of
     Just (ConcreteBV _ count) -> do
       res_crux_state <- foldM func state
-        =<< mapM (\index -> bvLit sym knownNat $ index * val_byte_size)
+        =<< mapM (\index -> bvLit sym knownNat $ BV.mkBV knownNat $ index * val_byte_size)
           -- [0..((if dir then 1 else -1) * (count - 1))]
-          [0..(count - 1)]
+          [0..(BV.asUnsigned count - 1)]
       return ((), res_crux_state)
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
@@ -513,7 +514,7 @@ getDenominator dw sym macawDenom = do
   let symi = symIface sym
   den <- getBitVal symi macawDenom
   -- Check denominator is not 0
-  do let bvZ = app (BVLit dw 0)
+  do let bvZ = app (BVLit dw (BV.zero dw))
      denNotZero <- evalApp sym $ Not (app (BVEq dw den bvZ))
      let errMsg = "denominator not zero"
      assert symi denNotZero (C.AssertFailureSimError errMsg (errMsg ++ " in Data.Macaw.X86.Crucible.getDenominator"))
@@ -761,7 +762,7 @@ evalApp :: forall sym t.  IsSymInterface sym =>
 evalApp sym = evalApp' sym (evalE sym)
 
 bv :: (KnownNat w, 1 <= w) => Int -> E sym (BVType w)
-bv i = app (BVLit knownNat (fromIntegral i))
+bv i = app (BVLit knownNat (BV.mkBV knownNat (toInteger i)))
 
 bvTestBit :: (KnownNat w, 1 <= w) => E sym (BVType w) -> Int -> E sym BoolType
 bvTestBit e n = app $ BVNonzero knownNat $

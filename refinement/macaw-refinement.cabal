@@ -48,6 +48,7 @@ source-repository head
 library
   build-depends: base >= 4
                , ansi-wl-pprint
+               , bv-sized >= 1.0.0
                , containers
                , crucible >= 0.4
                , crucible-llvm

@@ -56,6 +56,7 @@ import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import           Text.Read ( readMaybe )
 
+import qualified Data.BitVector.Sized as BVS
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.HasRepr as HR
@@ -711,7 +712,7 @@ addEltTH endianness interps elt = do
           bindExpr elt (return translatedExpr)
         S.SemiRingLiteral srTy val _
           | (SR.SemiRingBVRepr _ w) <- srTy ->
-            bindExpr elt [| genBVValue $(natReprTH w) $(lift val) |]
+            bindExpr elt [| genBVValue $(natReprTH w) $(lift (BVS.asUnsigned val)) |]
           | otherwise -> liftQ [| error "SemiRingLiteral Elts are not supported" |]
         S.StringExpr {} -> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc -> bindExpr elt [| return (M.BoolValue $(lift b)) |]
@@ -962,7 +963,7 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
     liftQ [| G.AppExpr <$> (M.BVTestBit <$>
-                            G.addExpr (G.ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx))) <*>
+                            G.addExpr (G.ValueExpr (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx)))) <*>
                             pure $(return bvValExp)) |]
 
   S.SemiRingSum sm ->
@@ -972,10 +973,10 @@ defaultAppEvaluator endianness elt interps = case elt of
                             liftQ [| return
                                      (G.AppExpr
                                       (M.BVMul $(natReprTH w)
-                                       (M.BVValue $(natReprTH w) $(lift mul))
+                                       (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul)))
                                        $(return y)))
                                    |]
-            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift v))) |]
+            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)))) |]
             add x y = liftQ [| G.AppExpr <$> (M.BVAdd $(natReprTH w)
                                               <$> (G.addExpr =<< $(return x))
                                               <*> (G.addExpr =<< $(return y)))
@@ -986,10 +987,10 @@ defaultAppEvaluator endianness elt interps = case elt of
                             liftQ [| return
                                      (G.AppExpr
                                       (M.BVAnd $(natReprTH w)
-                                       (M.BVValue $(natReprTH w) $(lift mul))
+                                       (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul)))
                                        $(return y)))
                                    |]
-            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift v))) |]
+            sval v = liftQ [| return (G.ValueExpr (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)))) |]
             add x y = liftQ [| G.AppExpr <$> (M.BVXor $(natReprTH w)
                                               <$> (G.addExpr =<< $(return x))
                                               <*> (G.addExpr =<< $(return y)))
