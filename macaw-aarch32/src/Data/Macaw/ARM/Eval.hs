@@ -107,6 +107,31 @@ absEvalArchFn _r f =
     AA.SDiv{} -> MA.TopV
     AA.URem{} -> MA.TopV
     AA.SRem{} -> MA.TopV
+    AA.UnsignedRSqrtEstimate {} -> MA.TopV
+    AA.FPSub {} -> MA.TopV
+    AA.FPAdd {} -> MA.TopV
+    AA.FPMul {} -> MA.TopV
+    AA.FPDiv {} -> MA.TopV
+    AA.FPRecipEstimate {} -> MA.TopV
+    AA.FPRecipStep {} -> MA.TopV
+    AA.FPSqrtEstimate {} -> MA.TopV
+    AA.FPRSqrtStep {} -> MA.TopV
+    AA.FPSqrt {} -> MA.TopV
+    AA.FPMax {} -> MA.TopV
+    AA.FPMin {} -> MA.TopV
+    AA.FPMaxNum {} -> MA.TopV
+    AA.FPMinNum {} -> MA.TopV
+    AA.FPMulAdd {} -> MA.TopV
+    AA.FPCompareGE {} -> MA.TopV
+    AA.FPCompareGT {} -> MA.TopV
+    AA.FPCompareEQ {} -> MA.TopV
+    AA.FPCompareNE {} -> MA.TopV
+    AA.FPCompareUN {} -> MA.TopV
+    AA.FPToFixed {} -> MA.TopV
+    AA.FixedToFP {} -> MA.TopV
+    AA.FPConvert {} -> MA.TopV
+    AA.FPToFixedJS {} -> MA.TopV
+    AA.FPRoundInt {} -> MA.TopV
 
 -- For now, none of the architecture-specific statements have an effect on the
 -- abstract value.

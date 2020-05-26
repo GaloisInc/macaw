@@ -69,8 +69,8 @@ ppcNonceAppEval bvi nonceApp =
                 valA <- addEltTH M.BigEndian bvi frA
                 valFpscr <- addEltTH M.BigEndian bvi fpscr
                 liftQ [|
-                    addArchExpr $
-                      FPSCR1 $(lift name) $(return valA) $(return valFpscr)
+                    addArchExpr =<<
+                        (FPSCR1 $(lift name) <$> $(refBinding valA) <*> $(refBinding valFpscr))
                   |]
               Nothing ->
                 fail $ "Invalid argument list for un_op_fpscr: " ++ showF args
@@ -83,11 +83,11 @@ ppcNonceAppEval bvi nonceApp =
                 valB <- addEltTH M.BigEndian bvi frB
                 valFpscr <- addEltTH M.BigEndian bvi fpscr
                 liftQ [|
-                    addArchExpr $ FPSCR2
-                      $(lift name)
-                      $(return valA)
-                      $(return valB)
-                      $(return valFpscr)
+                    addArchExpr =<< (FPSCR2
+                      $(lift name) <$>
+                      $(refBinding valA) <*>
+                      $(refBinding valB) <*>
+                      $(refBinding valFpscr))
                   |]
               Nothing ->
                 fail $ "Invalid argument list for un_op_fpscr: " ++ showF args
@@ -102,12 +102,12 @@ ppcNonceAppEval bvi nonceApp =
                   valC <- addEltTH M.BigEndian bvi frC
                   valFpscr <- addEltTH M.BigEndian bvi fpscr
                   liftQ [|
-                      addArchExpr $ FPSCR3
-                        $(lift name)
-                        $(return valA)
-                        $(return valB)
-                        $(return valC)
-                        $(return valFpscr)
+                      addArchExpr =<< (FPSCR3
+                        $(lift name) <$>
+                        $(refBinding valA) <*>
+                        $(refBinding valB) <*>
+                        $(refBinding valC) <*>
+                        $(refBinding valFpscr))
                     |]
                 Nothing -> fail $
                   "Invalid argument list for un_op_fpscr: " ++ showF args
@@ -119,7 +119,7 @@ ppcNonceAppEval bvi nonceApp =
                 Just name -> do
                   valA <- addEltTH M.BigEndian bvi frA
                   valFpscr <- addEltTH M.BigEndian bvi fpscr
-                  liftQ [| addArchExpr $ FP1 $(lift name) $(return valA) $(return valFpscr) |]
+                  liftQ [| addArchExpr =<< (FP1 $(lift name) <$> $(refBinding valA) <*> $(refBinding valFpscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp1: " ++ showF args
         "uf_ppc_fp2" -> return $ do
@@ -130,7 +130,7 @@ ppcNonceAppEval bvi nonceApp =
                   valA <- addEltTH M.BigEndian bvi frA
                   valB <- addEltTH M.BigEndian bvi frB
                   valFpscr <- addEltTH M.BigEndian bvi fpscr
-                  liftQ [| addArchExpr $ FP2 $(lift name) $(return valA) $(return valB) $(return valFpscr) |]
+                  liftQ [| addArchExpr =<< (FP2 $(lift name) <$> $(refBinding valA) <*> $(refBinding valB) <*> $(refBinding valFpscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
         "uf_ppc_fp3" -> return $ do
@@ -142,7 +142,7 @@ ppcNonceAppEval bvi nonceApp =
                   valB <- addEltTH M.BigEndian bvi frB
                   valC <- addEltTH M.BigEndian bvi frC
                   valFpscr <- addEltTH M.BigEndian bvi fpscr
-                  liftQ [| addArchExpr $ FP3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valFpscr) |]
+                  liftQ [| addArchExpr =<< (FP3 $(lift name) <$> $(refBinding valA) <*> $(refBinding valB) <*> $(refBinding valC) <*> $(refBinding valFpscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.fp2: " ++ showF args
         "uf_ppc_vec1" -> return $ do
@@ -152,7 +152,7 @@ ppcNonceAppEval bvi nonceApp =
                 Just name -> do
                   valA <- addEltTH M.BigEndian bvi rA
                   valVscr <- addEltTH M.BigEndian bvi vscr
-                  liftQ [| addArchExpr $ Vec1 $(lift name) $(return valA) $(return valVscr) |]
+                  liftQ [| addArchExpr =<< (Vec1 $(lift name) <$> $(refBinding valA) <*> $(refBinding valVscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec1: " ++ showF args
         "uf_ppc_vec2" -> return $ do
@@ -163,7 +163,7 @@ ppcNonceAppEval bvi nonceApp =
                   valA <- addEltTH M.BigEndian bvi rA
                   valB <- addEltTH M.BigEndian bvi rB
                   valVscr <- addEltTH M.BigEndian bvi vscr
-                  liftQ [| addArchExpr $ Vec2 $(lift name) $(return valA) $(return valB) $(return valVscr) |]
+                  liftQ [| addArchExpr =<< (Vec2 $(lift name) <$> $(refBinding valA) <*> $(refBinding valB) <*> $(refBinding valVscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec2: " ++ showF args
         "uf_ppc_vec3" -> return $ do
@@ -175,7 +175,7 @@ ppcNonceAppEval bvi nonceApp =
                   valB <- addEltTH M.BigEndian bvi rB
                   valC <- addEltTH M.BigEndian bvi rC
                   valVscr <- addEltTH M.BigEndian bvi vscr
-                  liftQ [| addArchExpr $ Vec3 $(lift name) $(return valA) $(return valB) $(return valC) $(return valVscr) |]
+                  liftQ [| addArchExpr =<< (Vec3 $(lift name) <$> $(refBinding valA) <*> $(refBinding valB) <*> $(refBinding valC) <*> $(refBinding valVscr)) |]
                 Nothing -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
             _ -> fail $ "Invalid argument list for ppc.vec3: " ++ showF args
         "uf_ppc_is_r0" -> return $ do
@@ -247,8 +247,8 @@ floatingPointTH bvi fnName args =
       "double_to_single" -> do
         fpval <- addEltTH M.BigEndian bvi a
         liftQ [|
-            addArchExpr $
-              FPCoerce M.SingleFloatRepr M.DoubleFloatRepr $(return fpval)
+            addArchExpr =<<
+                (FPCoerce M.SingleFloatRepr M.DoubleFloatRepr <$> $(refBinding fpval))
           |]
       _ -> fail ("Unsupported unary floating point intrinsic: " ++ fnName)
     [Some _a, Some _b] ->
@@ -258,6 +258,8 @@ floatingPointTH bvi fnName args =
       case fnName of
         _ -> fail ("Unsupported ternary floating point intrinsic: " ++ fnName)
     _ -> fail ("Unsupported floating point intrinsic: " ++ fnName)
+
+
 
 ppcAppEvaluator :: (A.Architecture (SP.AnyPPC v),
                     MSS.SimplifierExtension (SP.AnyPPC v)
@@ -269,72 +271,72 @@ ppcAppEvaluator interps = \case
   S.BVSdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH M.BigEndian interps bv1
     e2 <- addEltTH M.BigEndian interps bv2
-    liftQ [| addArchAssignment (SDiv $(natReprTH w) $(return e1) $(return e2))
+    liftQ [| addArchExpr =<< (SDiv $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2))
            |]
   S.BVUdiv w bv1 bv2 -> return $ do
     e1 <- addEltTH M.BigEndian interps bv1
     e2 <- addEltTH M.BigEndian interps bv2
-    liftQ [| addArchAssignment (UDiv $(natReprTH w) $(return e1) $(return e2))
+    liftQ [| addArchExpr =<< (UDiv $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2))
            |]
 
   S.FloatNeg fpp fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPNeg $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchExpr =<< (FPNeg $(floatInfoFromPrecisionTH fpp) <$> $(refBinding e))
       |]
   S.FloatAbs fpp fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPAbs $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchExpr =<< (FPAbs $(floatInfoFromPrecisionTH fpp) <$> $(refBinding e))
       |]
   S.FloatSqrt fpp r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPSqrt
+        addArchExpr =<< (FPSqrt
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e))
       |]
 
   S.FloatAdd fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
-        addArchAssignment $ FPAdd
+        addArchExpr =<< (FPAdd
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e1)
-          $(return e2)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e1) <*>
+          $(refBinding e2))
       |]
   S.FloatSub fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
-        addArchAssignment $ FPSub
+        addArchExpr =<< (FPSub
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e1)
-          $(return e2)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e1) <*>
+          $(refBinding e2))
       |]
   S.FloatMul fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
-        addArchAssignment $ FPMul
+        addArchExpr =<< (FPMul
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e1)
-          $(return e2)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e1) <*>
+          $(refBinding e2))
       |]
   S.FloatDiv fpp r fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
     liftQ [|
-        addArchAssignment $ FPDiv
+        addArchExpr =<< (FPDiv
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e1)
-          $(return e2)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e1) <*>
+          $(refBinding e2))
       |]
 
   S.FloatFMA fpp r fp1 fp2 fp3 -> return $ do
@@ -342,86 +344,86 @@ ppcAppEvaluator interps = \case
     e2 <- addEltTH M.BigEndian interps fp2
     e3 <- addEltTH M.BigEndian interps fp3
     liftQ [|
-        addArchAssignment $ FPFMA
+        addArchExpr =<< (FPFMA
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e1)
-          $(return e2)
-          $(return e3)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e1) <*>
+          $(refBinding e2) <*>
+          $(refBinding e3))
       |]
 
   S.FloatLt fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
-    liftQ [| addArchAssignment $ FPLt $(return e1) $(return e2) |]
+    liftQ [| addArchExpr =<< (FPLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.FloatFpEq fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
-    liftQ [| addArchAssignment $ FPEq $(return e1) $(return e2) |]
+    liftQ [| addArchExpr =<< (FPEq <$> $(refBinding e1) <*> $(refBinding e2)) |]
   S.FloatLe fp1 fp2 -> return $ do
     e1 <- addEltTH M.BigEndian interps fp1
     e2 <- addEltTH M.BigEndian interps fp2
-    liftQ [| addArchAssignment $ FPLe $(return e1) $(return e2) |]
+    liftQ [| addArchExpr =<< (FPLe <$> $(refBinding e1) <*> $(refBinding e2)) |]
 
   S.FloatIsNaN fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
-    liftQ [| addArchAssignment $ FPIsNaN $(return e) |]
+    liftQ [| addArchExpr =<< (FPIsNaN <$> $(refBinding e)) |]
 
   S.FloatCast fpp r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPCast
+        addArchExpr =<< (FPCast
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e))
       |]
   S.FloatRound fpp r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPRound
+        addArchExpr =<< (FPRound
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e))
       |]
   S.FloatToBinary fpp fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $
-          FPToBinary $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchExpr =<<
+            (FPToBinary $(floatInfoFromPrecisionTH fpp) <$> $(refBinding e))
       |]
   S.FloatFromBinary fpp fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $
-          FPFromBinary $(floatInfoFromPrecisionTH fpp) $(return e)
+        addArchExpr =<<
+            (FPFromBinary $(floatInfoFromPrecisionTH fpp) <$> $(refBinding e))
       |]
   S.FloatToSBV w r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $
-          FPToSBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
+        addArchExpr =<<
+            (FPToSBV $(natReprTH w) $(roundingModeToBitsTH r) <$> $(refBinding e))
       |]
   S.FloatToBV w r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $
-          FPToUBV $(natReprTH w) $(roundingModeToBitsTH r) $(return e)
+        addArchExpr =<<
+            (FPToUBV $(natReprTH w) $(roundingModeToBitsTH r) <$> $(refBinding e))
       |]
   S.SBVToFloat fpp r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPFromSBV
+        addArchExpr =<< (FPFromSBV
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e))
       |]
   S.BVToFloat fpp r fp -> return $ do
     e <- addEltTH M.BigEndian interps fp
     liftQ [|
-        addArchAssignment $ FPFromUBV
+        addArchExpr =<< (FPFromUBV
           $(floatInfoFromPrecisionTH fpp)
-          $(roundingModeToBitsTH r)
-          $(return e)
+          $(roundingModeToBitsTH r) <$>
+          $(refBinding e))
       |]
 
   _ -> Nothing

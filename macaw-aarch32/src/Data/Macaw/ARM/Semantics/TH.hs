@@ -15,26 +15,26 @@ module Data.Macaw.ARM.Semantics.TH
     , setGPR
     , getSIMD
     , setSIMD
-    , concreteIte
     , loadSemantics
     )
     where
 
-import           Control.Monad (void)
+import           Control.Monad ( join, void )
 import qualified Control.Monad.Except as E
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
-import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
-import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName )
+import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName )
+import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
-import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits as TL
+import qualified Lang.Crucible.Backend.Simple as CBS
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import qualified SemMC.Architecture.AArch32 as ARM
@@ -46,8 +46,8 @@ import qualified Language.ASL.Globals as ASL
 
 import           Data.Macaw.ARM.Simplify ()
 
-loadSemantics :: IO (ARM.ASLSemantics)
-loadSemantics = ARM.loadSemantics (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
+loadSemantics :: CBS.SimpleBackend t fs -> IO (ARM.ASLSemantics (CBS.SimpleBackend t fs))
+loadSemantics sym = ARM.loadSemantics sym (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
 -- n.b. although MacawQ is a monad and therefore has a fail
 -- definition, using error provides *much* better error diagnostics
@@ -77,7 +77,7 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                liftQ [| setSIMD $(return rgfE) $(return ridE) $(return valE) |]
+                liftQ [| join (setSIMD <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_set" ->
             case args of
@@ -85,7 +85,7 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                liftQ [| setGPR $(return rgfE) $(return ridE) $(return valE) |]
+                liftQ [| join (setGPR <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
@@ -93,7 +93,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| getSIMD $(return rid) |]
+                  liftQ [| getSIMD =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
@@ -101,7 +101,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| getGPR $(return rid) |]
+                  liftQ [| getGPR =<< $(refBinding rid) |]
               _ -> fail "Invalid uf_gpr_get"
           _ | "uf_write_mem_" `isPrefixOf` fnName ->
             case args of
@@ -112,41 +112,299 @@ armNonceAppEval bvi nonceApp =
                 addrE <- addEltTH M.LittleEndian bvi addr
                 valE <- addEltTH M.LittleEndian bvi val
                 let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
-                liftQ [| writeMem $(return memE) $(return addrE) $(natReprFromIntTH memWidth) $(return valE) |]
+                liftQ [| join (writeMem <$> $(refBinding memE) <*> $(refBinding addrE) <*> pure $(natReprFromIntTH memWidth) <*> $(refBinding valE)) |]
               _ -> fail "invalid write_mem"
 
-          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+
+
+          _ | "uf_unsignedRSqrtEstimate" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op -> Just $ do
+                  ope <- addEltTH M.LittleEndian bvi op
+                  liftQ [| G.addExpr =<< (UnsignedRSqrtEstimate knownNat <$> $(refBinding ope)) |]
+                _ -> fail "Invalid unsignedRSqrtEstimate arguments"
+
+          -- NOTE: This must come before fpMul, since fpMul is a prefix of this
+          _ | "uf_fpMulAdd" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMulAdd knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMulAdd arguments"
+
+
+          _ | "uf_fpSub" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPSub knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpSub arguments"
+          _ | "uf_fpAdd" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPAdd knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpAdd arguments"
+          _ | "uf_fpMul" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMul knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMul arguments"
+          _ | "uf_fpDiv" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMul knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpDiv arguments"
+
+          _ | "uf_fpMaxNum" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMaxNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMaxNum arguments"
+          _ | "uf_fpMinNum" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMinNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMinNum arguments"
+          _ | "uf_fpMax" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMax knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMax arguments"
+          _ | "uf_fpMin" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPMin knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpMin arguments"
+
+          _ | "uf_fpRecipEstimate" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPRecipEstimate knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpRecipEstimate arguments"
+          _ | "uf_fpRecipStep" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPRecipStep knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpRecipStep arguments"
+          _ | "uf_fpSqrtEstimate" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPSqrtEstimate knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpSqrtEstimate arguments"
+          _ | "uf_fprSqrtStep" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPRSqrtStep knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fprSqrtStep arguments"
+          _ | "uf_fpSqrt" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPSqrt knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpSqrt arguments"
+
+          _ | "uf_fpCompareGE" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPCompareGE knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpCompareGE arguments"
+          _ | "uf_fpCompareGT" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPCompareGT knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpCompareGT arguments"
+          _ | "uf_fpCompareEQ" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPCompareEQ knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpCompareEQ arguments"
+          _ | "uf_fpCompareNE" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPCompareNE knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpCompareNE arguments"
+          _ | "uf_fpCompareUN" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< (FPCompareUN knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                _ -> fail "Invalid fpCompareUN arguments"
+
+          "uf_fpToFixedJS" ->
+            case args of
+              Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 -> Just $ do
+                op1e <- addEltTH M.LittleEndian bvi op1
+                op2e <- addEltTH M.LittleEndian bvi op2
+                op3e <- addEltTH M.LittleEndian bvi op3
+                liftQ [| G.addExpr =<< (FPToFixedJS <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e)) |]
+              _ -> fail "Invalid fpToFixedJS arguments"
+          _ | "uf_fpToFixed" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 Ctx.:> op4 Ctx.:> op5 -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  op4e <- addEltTH M.LittleEndian bvi op4
+                  op5e <- addEltTH M.LittleEndian bvi op5
+                  liftQ [| G.addExpr =<< (FPToFixed knonwNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e)) |]
+                _ -> fail "Invalid fpToFixed arguments"
+          _ | "uf_fixedToFP" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 Ctx.:> op4 Ctx.:> op5 -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  op4e <- addEltTH M.LittleEndian bvi op4
+                  op5e <- addEltTH M.LittleEndian bvi op5
+                  liftQ [| G.addExpr =<< (FixedToFP knonwNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e)) |]
+                _ -> fail "Invalid fixedToFP arguments"
+          _ | "uf_fpConvert" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  liftQ [| G.addExpr =<< (FPConvert knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e)) |]
+                _ -> fail "Invalid fpConvert arguments"
+          _ | "uf_fpRoundInt" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 Ctx.:> op4 -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  op4e <- addEltTH M.LittleEndian bvi op4
+                  liftQ [| G.addExpr =<< (FPRoundInt knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e)) |]
+                _ -> fail "Invalid fpRoundInt arguments"
+
+          -- NOTE: These three cases occasionally end up unused.  Because we let
+          -- bind almost everything, that can lead to the 'arch' type parameter
+          -- being ambiguous, which is an error for various reasons.
+          --
+          -- To fix that, we add an explicit type application here.
+          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+
+
+          -- NOTE: These cases are tricky because they generate groups of
+          -- statements that need to behave a bit differently in (eager)
+          -- top-level code generation and (lazy) conditional code generation.
+          --
+          -- In either case, the calls to 'setWriteMode' /must/ bracket the
+          -- memory/register update function.
+          --
+          -- In the eager translation case, that means that we have to lexically
+          -- emit the update between the write mode guards (so that the effect
+          -- actually happens).
+          --
+          -- In contrast, the lazy translation case has to emit the write
+          -- operation as a lazy let binding to preserve sharing, but group all
+          -- three statements in the actual 'Generator' monad.
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
-              appendStmt [| setWriteMode WriteGPRs |]
-              gprs' <- addEltTH M.LittleEndian bvi gprs
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(return gprs') |]
-              
+              istl <- isTopLevel
+              case istl of
+                False -> do
+                  gprs' <- addEltTH M.LittleEndian bvi gprs
+                  liftQ [| do setWriteMode WriteGPRs
+                              $(refBinding gprs')
+                              setWriteMode WriteNone
+                         |]
+                True -> do
+                  appendStmt [| setWriteMode WriteGPRs |]
+                  gprs' <- addEltTH M.LittleEndian bvi gprs
+                  appendStmt [| setWriteMode WriteNone |]
+                  extractBound gprs'
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
-              appendStmt [| setWriteMode WriteSIMDs |]
-              simds' <- addEltTH M.LittleEndian bvi simds
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(return simds') |]
+                istl <- isTopLevel
+                case istl of
+                  False -> do
+                    simds' <- addEltTH M.LittleEndian bvi simds
+                    liftQ [| do setWriteMode WriteSIMDs
+                                $(refBinding simds')
+                                setWriteMode WriteNone
+                           |]
+                  True -> do
+                    appendStmt [| setWriteMode WriteSIMDs |]
+                    simds' <- addEltTH M.LittleEndian bvi simds
+                    appendStmt [| setWriteMode WriteNone |]
+                    extractBound simds'
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
-              appendStmt [| setWriteMode WriteMemory |]
-              mem' <- addEltTH M.LittleEndian bvi mem
-              appendStmt [| setWriteMode WriteNone |]
-              liftQ [| return $(return mem') |]
+                istl <- isTopLevel
+                case istl of
+                  False -> do
+                    mem' <- addEltTH M.LittleEndian bvi mem
+                    liftQ [| do setWriteMode WriteMemory
+                                $(refBinding mem')
+                                setWriteMode WriteNone
+                           |]
+                  True -> do
+                    appendStmt [| setWriteMode WriteMemory |]
+                    mem' <- addEltTH M.LittleEndian bvi mem
+                    appendStmt [| setWriteMode WriteNone |]
+                    extractBound mem'
+
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
                 assertTH <- addEltTH M.LittleEndian bvi assert
                 bvElt <- addEltTH M.LittleEndian bvi bv
-                liftQ [| case $(return assertTH) of
-                          M.BoolValue True -> return $(return bvElt)
+                liftQ [| case $(refBinding assertTH) of
+                          M.BoolValue True -> return $(refBinding bvElt)
                           M.BoolValue False -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed!")
                           -- FIXME: THIS SHOULD THROW AN ERROR
-                          _ -> return $(return bvElt)
+                          _ -> return $(refBinding bvElt)
                           -- nm -> E.throwError (G.GeneratorMessage $ "Bitvector length assertion failed: <FIXME: PRINT NAME>")
                        |]
               _ -> fail "Invalid call to assertBV"
@@ -178,7 +436,7 @@ getWriteMode = do
         3 -> WriteMemory
         _ -> error "impossible"
       _ -> error "impossible"
-        
+
 setWriteMode :: WriteMode -> G.Generator ARM.AArch32 ids s ()
 setWriteMode wm =
   let
@@ -202,7 +460,7 @@ writeMem mem addr sz val = do
       G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
       return mem
     _ -> return mem
-                                 
+
 setGPR :: M.Value ARM.AArch32 ids tp
        -> M.Value ARM.AArch32 ids (M.BVType 4)
        -> M.Value ARM.AArch32 ids (M.BVType 32)
@@ -218,7 +476,7 @@ setGPR handle regid v = do
     _ -> return ()
   return handle
 
-getGPR :: M.Value ARM.AArch32 ids tp 
+getGPR :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
 getGPR v = do
   reg <- case v of
@@ -243,7 +501,7 @@ setSIMD handle regid v = do
     _ -> return ()
   return handle
 
-getSIMD :: M.Value ARM.AArch32 ids tp 
+getSIMD :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
 getSIMD v = do
   reg <- case v of
@@ -277,25 +535,29 @@ isPlaceholderType tp = case tp of
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
   _ -> False
 
-translateExpr :: M.Endianness
-              -> BoundVarInterpretations ARM.AArch32 t fs
-              -> WB.Expr t tp
-              -> MacawQ ARM.AArch32 t fs Exp
-translateExpr endianness interps e = case e of
-  WB.AppExpr app -> appToExprTH endianness (WB.appExprApp app) interps
-  WB.BoundVarExpr bvar -> do
-    val <- evalBoundVar interps bvar
-    liftQ [| G.ValueExpr <$> $(return val) |]
-  WB.NonceAppExpr n -> do
-    val <- evalNonceAppTH endianness interps (WB.nonceExprApp n)
-    liftQ [| G.ValueExpr <$> $(return val) |]
-  _ -> fail $ "translateExpr: unexpected expression kind: " ++ show e
-
-
+-- | This combinator provides conditional evaluation of its branches
+--
+-- Many conditionals in the semantics are translated as muxes (effectively
+-- if-then-else expressions).  This is great most of the time, but problematic
+-- if the branches include side effects (e.g., memory writes).  We only want
+-- side effects to happen if the condition really is true.
+--
+-- This combinator checks to see if the condition is concretely true or false
+-- (as expected) and then evaluates the corresponding 'G.Generator' action.
+--
+-- It is meant to be used in a context like:
+--
+-- > val <- concreteIte condition trueThings falseThings
+--
+-- where @condition@ has type Value and the branches have type 'G.Generator'
+-- 'M.Value' (i.e., the branches get to return a value).
+--
+-- NOTE: This function panics (and throws an error) if the argument is not
+-- concrete.
 concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
-            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
-            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
-            -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
 concreteIte v t f = case v of
   M.CValue (M.BoolCValue b) -> if b then t else f
   _ ->  E.throwError (G.GeneratorMessage $ "concreteIte: requires concrete value" <> show (M.ppValueAssignments v))
@@ -326,34 +588,50 @@ armAppEvaluator :: M.Endianness
 armAppEvaluator endianness interps elt =
     case elt of
       WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
+        -- NOTE: This case is very special.  The placeholder types denote
+        -- conditionals that are guarding the state update functions with
+        -- mutation.
+        --
+        -- We need to ensure that state updates are only done lazily.  This
+        -- works because the arguments to the branches are expressions in the
+        -- Generator monad.  We can do this translation while preserving sharing
+        -- by turning every recursively-traversed term into a let binding at the
+        -- top-level.  After that, we can build bodies for the "arms" of the
+        -- concreteIte that instantiate those terms in the appropriate monadic
+        -- context.  It is slightly problematic that the core TH translation
+        -- doesn't really support that because it wants to (more efficiently)
+        -- evaluate all of the monadic stuff.  However, we don't need quite as
+        -- much generality for this code, so maybe a smaller core that just does
+        -- all of the necessary applicative binding of 'Generator' terms will be
+        -- sufficient.
         testE <- addEltTH endianness interps test
-        tE <- translateExpr endianness interps t
-        fE <- translateExpr endianness interps f
-        liftQ [| concreteIte $(return testE) $(return tE) $(return fE) |]
+        inConditionalContext $ do
+          tE <- addEltTH endianness interps t
+          fE <- addEltTH endianness interps f
+          liftQ [| join (concreteIte <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| sdiv $(natReprTH w) $(return e1) $(return e2) |]
+        liftQ [| G.addExpr =<< join (sdiv $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
       WB.BVUrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| addArchAssignment (URem $(natReprTH w) $(return e1) $(return e2))
+        liftQ [| G.addExpr =<< join (addArchAssignment <$> (URem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
                |]
       WB.BVSrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| addArchAssignment (SRem $(natReprTH w) $(return e1) $(return e2))
+        liftQ [| G.addExpr =<< join (addArchAssignment <$> (SRem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
                |]
       WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
       WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
-      WB.BaseIte bt _ test t f -> 
+      WB.BaseIte bt _ test t f ->
         case bt of
           WT.BaseArrayRepr {} -> Just $ do
             -- Just return the true branch, since both true and false branches should be the memory or registers.
             void $ addEltTH endianness interps test
             et <- addEltTH endianness interps t
             void $ addEltTH endianness interps f
-            liftQ $ [| return (G.ValueExpr $(return et)) |]
-            -- liftQ [| G.ValueExpr <$> M.AssignedValue <$> G.addAssignment (M.SetUndefined (M.TupleTypeRepr L.Nil)) |]
+            extractBound et
           _ -> Nothing
       _ -> Nothing
