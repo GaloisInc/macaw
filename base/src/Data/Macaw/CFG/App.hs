@@ -480,6 +480,7 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
       TupleField f _ i -> f P.!! i
 
       Trunc _ w -> BVTypeRepr w

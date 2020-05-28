@@ -17,10 +17,13 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Memory.ElfLoader
-  ( SectionIndexMap
-  , memoryForElf
+  ( memoryForElf
   , memoryForElf'
   , memoryForElfAllSymbols
+  , memoryForElfSections
+  , memoryForElfSegments
+  , SectionIndexMap
+  , resolveElfFuncSymbols
   , MemLoadWarning(..)
   , resolveElfContents
   , elfAddrWidth
@@ -546,7 +549,7 @@ relaTargetX86_64 _ symtab rel addend _isRel =
                         , relocationOffset     = addend
                         , relocationIsRel      = False
                         , relocationSize       = 4
-                        , relocationIsSigned = False
+                        , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
                         , relocationJumpSlot   = False
                         }
@@ -557,6 +560,18 @@ relaTargetX86_64 _ symtab rel addend _isRel =
                         , relocationIsRel      = False
                         , relocationSize       = 4
                         , relocationIsSigned   = True
+                        , relocationEndianness = LittleEndian
+                        , relocationJumpSlot   = False
+                        }
+    Elf.R_X86_64_COPY -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      when (addend /= 0) $ do
+        throwError$ RelocationUnsupportedType (show (Elf.relType rel))
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = 0
+                        , relocationIsRel      = False
+                        , relocationSize       = 8
+                        , relocationIsSigned   = False
                         , relocationEndianness = LittleEndian
                         , relocationJumpSlot   = False
                         }
@@ -1191,11 +1206,11 @@ allocatedNames (nm,True) = [nm, ".rela" <> nm]
 
 allocatedSectionInfo :: [AllocatedSectionInfo]
 allocatedSectionInfo =
-  [ (,) ".text"   True
+  [ (,) ".text"     True
   , (,) ".eh_frame" True
-  , (,) ".data"   True
-  , (,) ".bss"    False
-  , (,) ".rodata" True
+  , (,) ".data"     True
+  , (,) ".bss"      False
+  , (,) ".rodata"   True
   ]
 
 allowedSectionNames :: Set BS.ByteString
@@ -1298,7 +1313,7 @@ memoryForElfSections e =
     let symtab =
           case Elf.elfSymtab e of
             [] -> NoSymbolTable
-            elfSymTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries elfSymTab)
+            symTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries symTab)
 
     -- Insert sections
     forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
@@ -1383,7 +1398,8 @@ memoryForElf :: LoadOptions
                               )
 memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   (mem, secMap, warnings) <- memoryForElf' opt e
-  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap e
+  let isRelevant ste = Elf.steType ste == Elf.STT_FUNC
+  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap isRelevant e
   pure (mem, funcSymbols, warnings, symErrs)
 
 -- | Load allocated Elf sections into memory.
@@ -1399,7 +1415,8 @@ memoryForElfAllSymbols :: LoadOptions
                               )
 memoryForElfAllSymbols opt e = do
   (mem, secMap, warnings) <- memoryForElf' opt e
-  let (symErrs, funcSymbols) = resolveElfFuncSymbolsAny mem secMap e
+  let isRelevant _ = True
+  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap isRelevant e
   pure (mem, funcSymbols, warnings, symErrs)
 
 ------------------------------------------------------------------------
@@ -1482,6 +1499,7 @@ resolutionError e = mempty { resolutionErrors = [e] }
 resolvedSymbol :: MemSymbol w -> ResolvedSymbols w
 resolvedSymbol s = mempty { resolvedSymbols = Set.singleton s }
 
+-- | Construct a resolve symbol entry.
 ofResolvedSymbol :: Maybe (Either SymbolResolutionError (MemSymbol w))
                  -> ResolvedSymbols w
 ofResolvedSymbol Nothing = mempty
@@ -1502,7 +1520,7 @@ hasSectionIndex section idx = fromIntegral (elfSectionIndex section) == idx
 -- It takes the memory constructed from the Elf file, the section
 -- index map, and the elf file.  It returns errors from resolve symbols,
 -- and a map from segment offsets to bytestring.
-resolveElfFuncSymbols'
+resolveElfFuncSymbols
   :: forall w
   .  Memory w
   -> SectionIndexMap w
@@ -1510,7 +1528,7 @@ resolveElfFuncSymbols'
      -- ^ Filter on symbol table entries
   -> Elf w
   -> ([SymbolResolutionError], [MemSymbol w])
-resolveElfFuncSymbols' mem secMap p e =
+resolveElfFuncSymbols mem secMap p e =
   let l = Elf.elfSymtab e
 
       staticEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
@@ -1521,56 +1539,34 @@ resolveElfFuncSymbols' mem secMap p e =
 
       sections = e^..elfSections
 
-      sectionFn idx =
-        case filter (`hasSectionIndex` idx) sections of
-          [s] -> Just s
-          _ -> Nothing
-
       -- Get dynamic entries
       dynamicEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
       dynamicEntries
         | [symtab] <- filter (`hasSectionName` ".dynsym") sections
-        , Right entries <- Elf.getSymbolTableEntries cl dta sectionFn symtab =
+        , strtabIdx <- Elf.elfSectionLink symtab
+        , [strtab] <- filter (`hasSectionIndex` strtabIdx) sections
+        , Right entries <- Elf.getSymbolTableEntries cl dta (elfSectionData strtab) (elfSectionData symtab) =
             zip [0..] entries
         | otherwise = []
 
       allEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
       allEntries = staticEntries ++ dynamicEntries
 
+      resolvedEntries :: ResolvedSymbols w
+      resolvedEntries
+        = mconcat
+        $ fmap (ofResolvedSymbol . uncurry (resolveElfSymbol mem secMap))
+        $ filter (\(_,s) -> p s) allEntries
+
       multError =
         if length (Elf.elfSymtab e) > 1 then
           resolutionError MultipleSymbolTables
         else
           mempty
-      resolvedEntries
-        = mconcat
-        $ fmap (ofResolvedSymbol . uncurry (resolveElfSymbol mem secMap))
-        $ filter (\(_,s) -> p s) allEntries
+
       r = multError <> resolvedEntries
+
    in (resolutionErrors r, Set.toList (resolvedSymbols r))
-
-resolveElfFuncSymbols
-  :: forall w
-  .  Memory w
-  -> SectionIndexMap w
-  -> Elf w
-  -> ([SymbolResolutionError], [MemSymbol w])
-resolveElfFuncSymbols mem secMap e = resolveElfFuncSymbols' mem secMap isRelevant e
-  where isRelevant ste = Elf.steType ste == Elf.STT_FUNC
-
-
--- | Resolve symbol table entries to the addresses in a memory.
---
--- It takes the memory constructed from the Elf file, the section
--- index map, and the symbol table entries.  It returns unresolvable
--- symbols and the map from segment offsets to bytestring.
-resolveElfFuncSymbolsAny
-  :: forall w
-  .  Memory w
-  -> SectionIndexMap w
-  -> Elf w
-  -> ([SymbolResolutionError], [MemSymbol w])
-resolveElfFuncSymbolsAny mem secMap e = resolveElfFuncSymbols' mem secMap (\_ -> True) e
 
 ------------------------------------------------------------------------
 -- resolveElfContents

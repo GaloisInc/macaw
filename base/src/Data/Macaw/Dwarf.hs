@@ -59,6 +59,7 @@ import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Binary.Get
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import           Data.Dwarf as Dwarf
 import qualified Data.ElfEdit as Elf
 import           Data.Foldable
@@ -179,7 +180,7 @@ attributeAsDieID (DW_ATVAL_REF r) = pure r
 attributeAsDieID _ = fail "Could not interpret as DieID."
 
 attributeAsString :: DW_ATVAL -> Parser String
-attributeAsString (DW_ATVAL_STRING s) = pure s
+attributeAsString (DW_ATVAL_STRING s) = pure (BSC.unpack s)
 attributeAsString _ = fail "Could not interpret as string."
 
 lookupDIE :: Map DieID v -> DieID -> Parser v
@@ -546,11 +547,7 @@ parseMember file_vec d = runDIEParser "parseMember" d $ do
                  }
 
 attributeAsBaseTypeEncoding :: DW_ATVAL -> Parser DW_ATE
-attributeAsBaseTypeEncoding v = do
-  u <- attributeAsUInt v
-  case get_dw_ate u of
-    Just r -> pure r
-    Nothing -> fail $ "Could not parser attribute encoding 0x" ++ showHex u "."
+attributeAsBaseTypeEncoding v = DW_ATE <$> attributeAsUInt v
 
 data PreType
    = PreTypeF !(TypeF DieID)
@@ -964,12 +961,13 @@ parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
 
   decl       <- fromMaybe False <$> getMaybeAttribute DW_AT_declaration attributeAsBool
   inl        <- fromMaybe DW_INL_not_inlined <$>
-    getMaybeAttribute DW_AT_inline (\v -> dw_inl <$> attributeAsUInt v)
+    getMaybeAttribute DW_AT_inline (\v -> DW_INL <$> attributeAsUInt v)
   let inlined = case inl of
                   DW_INL_not_inlined          -> False
                   DW_INL_inlined              -> True
                   DW_INL_declared_not_inlined -> False
                   DW_INL_declared_inlined     -> True
+                  _ -> False
   def <-
     if decl || inlined then
       pure Nothing
@@ -1040,12 +1038,13 @@ parseInlinedSubprogram file_vec typeMap subprogramMap d =
 
   decl       <- fromMaybe False <$> getMaybeAttribute DW_AT_declaration attributeAsBool
   inl        <- fromMaybe DW_INL_not_inlined <$>
-    getMaybeAttribute DW_AT_inline (\v -> dw_inl <$> attributeAsUInt v)
+    getMaybeAttribute DW_AT_inline (\v -> DW_INL <$> attributeAsUInt v)
   let inlined = case inl of
                   DW_INL_not_inlined          -> False
                   DW_INL_inlined              -> True
                   DW_INL_declared_not_inlined -> False
                   DW_INL_declared_inlined     -> True
+                  _ -> False
   origin <- getSingleAttribute DW_AT_abstract_origin (resolveDieIDAttribute subprogramMap)
 
   def <-
@@ -1148,7 +1147,7 @@ parseCompileUnit w contents (ctx,d) =
         fail "Illegal compile unit debug_line offset"
       let bs = BS.drop (fromIntegral offset) lines_bs
       (file_list, lne) <- parseGet bs (getLNE end tgt)
-      pure (V.fromList file_list, lne)
+      pure (fmap BSC.unpack (V.fromList file_list), lne)
 
   ranges <-
     if hasAttribute DW_AT_low_pc d then do
@@ -1218,22 +1217,28 @@ dwarfInfoFromElf e = do
   case Elf.findSectionByName ".debug_info" e of
     [] -> ([], [])
     _ -> flip evalState [] $ do
-      debug_info   <- tryGetElfSection ".debug_info"   e
-      debug_abbrev <- tryGetElfSection ".debug_abbrev" e
-      debug_lines  <- tryGetElfSection ".debug_line"   e
-      debug_ranges <- tryGetElfSection ".debug_ranges" e
-      debug_str    <- tryGetElfSection ".debug_str"    e
-      let sections = Sections { dsInfoSection   = debug_info
-                              , dsAbbrevSection = debug_abbrev
-                              , dsStrSection    = debug_str
+      debug_info    <- tryGetElfSection ".debug_info"    e
+      debug_abbrev  <- tryGetElfSection ".debug_abbrev"  e
+      debug_aranges <- tryGetElfSection ".debug_aranges" e
+      debug_line    <- tryGetElfSection ".debug_line"    e
+      debug_loc     <- tryGetElfSection ".debug_loc"     e
+      debug_ranges  <- tryGetElfSection ".debug_ranges"  e
+      debug_str     <- tryGetElfSection ".debug_str"     e
+      let sections = Sections { dsInfoSection    = debug_info
+                              , dsAbbrevSection  = debug_abbrev
+                              , dsArangesSection = debug_aranges
+                              , dsLineSection    = debug_line
+                              , dsLocSection     = debug_loc
+                              , dsRangesSection  = debug_ranges
+                              , dsStrSection     = debug_str
                               }
       let w = fromIntegral $ Elf.elfClassByteWidth (Elf.elfClass e)
       let end =
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian
               Elf.ELFDATA2MSB -> BigEndian
-      let (cuDies, _m) = parseInfo end sections
-      let contents = SecContents { debugLine   = debug_lines
+      let cuDies = parseInfo end sections
+      let contents = SecContents { debugLine   = debug_line
                                  , debugRanges = debug_ranges
                                  }
       mdies <- forM cuDies $ \cuPair -> do

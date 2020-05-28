@@ -905,7 +905,6 @@ appToCrucible app = do
         M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
         M.VecTypeRepr{} -> fail "XXX: Mux on vectors not yet done."
 
-
     M.TupleField tps x i -> do
       let tps' = typeListToCrucible tps
           tp'  = typeToCrucible $ tps P.!! i
