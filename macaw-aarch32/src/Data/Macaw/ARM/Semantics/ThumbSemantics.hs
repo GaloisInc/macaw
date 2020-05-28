@@ -29,14 +29,14 @@ execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Instruction
                 -> Maybe (Generator ARMSem.AArch32 ids s ())
 execInstruction = \_ _ -> Nothing
-  -- $(genExecInstruction (Proxy @ARMSem.AArch32)
-  --    (locToRegTH (Proxy @ARMSem.AArch32))
-  --    armNonceAppEval
-  --    (armAppEvaluator MC.LittleEndian)
-  --    't32InstructionMatcher
-  --    allT32Semantics
-  --    allT32OpcodeInfo
-  --    allDefinedFunctions
-  --    ([t| Operand |], [t| ARMSem.AArch32 |])
-  --    MC.LittleEndian
-  --   )
+  -- -- $(genExecInstruction (Proxy @ARMSem.AArch32)
+  -- --    (locToRegTH (Proxy @ARMSem.AArch32))
+  -- --    armNonceAppEval
+  -- --    (armAppEvaluator MC.LittleEndian)
+  -- --    't32InstructionMatcher
+  -- --    allT32Semantics
+  -- --    allT32OpcodeInfo
+  -- --    allDefinedFunctions
+  -- --    ([t| Operand |], [t| ARMSem.AArch32 |])
+  -- --    MC.LittleEndian
+  -- --   )
