@@ -22,6 +22,7 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElfAllSymbols
   , memoryForElfSections
   , memoryForElfSegments
+  , SectionIndexMap
   , resolveElfFuncSymbols
   , MemLoadWarning(..)
   , resolveElfContents
