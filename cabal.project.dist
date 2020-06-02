@@ -23,7 +23,6 @@ packages: macaw-ppc/
           deps/dismantle/dismantle-arm/
           deps/dismantle/dismantle-arm-xml/
           deps/dismantle/dismantle-thumb/
-          deps/parameterized-utils/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/
           deps/what4/what4/
