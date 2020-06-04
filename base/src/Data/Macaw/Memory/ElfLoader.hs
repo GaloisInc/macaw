@@ -22,7 +22,6 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElfAllSymbols
   , memoryForElfSections
   , memoryForElfSegments
-  , SectionIndexMap
   , resolveElfFuncSymbols
   , MemLoadWarning(..)
   , resolveElfContents
@@ -30,6 +29,7 @@ module Data.Macaw.Memory.ElfLoader
   , adjustedLoadRegionIndex
     -- * Symbols
   , MemSymbol(..)
+  , SymbolResolutionError(..)
     -- * Re-exports
   , module Data.Macaw.Memory.LoadCommon
   , module Data.Macaw.Memory
@@ -1485,8 +1485,8 @@ data ResolvedSymbols w = ResolvedSymbols { resolutionErrors :: ![SymbolResolutio
 
 instance Semigroup (ResolvedSymbols w) where
   x <> y = ResolvedSymbols { resolutionErrors = resolutionErrors x <> resolutionErrors y
-                          , resolvedSymbols   = resolvedSymbols x <> resolvedSymbols y
-                          }
+                           , resolvedSymbols   = resolvedSymbols x <> resolvedSymbols y
+                           }
 
 instance Monoid (ResolvedSymbols w) where
   mempty = ResolvedSymbols { resolutionErrors = []
