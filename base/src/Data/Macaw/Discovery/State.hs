@@ -26,6 +26,7 @@ module Data.Macaw.Discovery.State
   , memory
   , symbolNames
   , archInfo
+  , exploreFunctionAddr
   , globalDataMap
   , funInfo
   , unexploredFunctions
@@ -345,6 +346,10 @@ data DiscoveryState arch
                       -- ^ Map addresses to known symbol names
                     , archInfo             :: !(ArchitectureInfo arch)
                       -- ^ Architecture-specific information needed for discovery.
+                    , _exploreFunctionAddr   :: !(ArchSegmentOff arch -> Bool)
+                      -- ^ This is a callback function that gives a mechanism for ensuring
+                      -- functions are never explored.  It can be used to blacklist particular
+                      -- addresses.
                     , _globalDataMap       :: !(Map (ArchMemAddr arch)
                                                 (GlobalDataInfo (ArchMemAddr arch)))
                       -- ^ Maps each address that appears to be global data to information
@@ -406,6 +411,7 @@ emptyDiscoveryState mem addrSymMap info =
   { memory               = mem
   , symbolNames          = addrSymMap
   , archInfo             = info
+  , _exploreFunctionAddr = \_ -> True
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
@@ -413,9 +419,13 @@ emptyDiscoveryState mem addrSymMap info =
   , _exploreFnPred       = Nothing
   }
 
+-- | The function used to explore discovered function addresses.
+exploreFunctionAddr :: Lens' (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
+exploreFunctionAddr = lens _exploreFunctionAddr (\s v -> s { _exploreFunctionAddr = v })
+
 -- | Map each jump table start to the address just after the end.
-globalDataMap
-  :: Simple Lens (DiscoveryState arch) (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
+globalDataMap :: Lens' (DiscoveryState arch)
+                      (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
@@ -427,6 +437,7 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
+-- | Retrieves functions that are trusted entry points.
 trustedFunctionEntryPoints
   :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
 trustedFunctionEntryPoints =

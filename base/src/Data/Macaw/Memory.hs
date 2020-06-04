@@ -115,14 +115,14 @@ module Data.Macaw.Memory
   , Endianness(..)
   , bytesToInteger
   , bsWord8
-  , bsWord16be
-  , bsWord16le
+  , ElfBS.bsWord16be
+  , ElfBS.bsWord16le
   , bsWord32
-  , bsWord32be
-  , bsWord32le
+  , ElfBS.bsWord32be
+  , ElfBS.bsWord32le
   , bsWord64
-  , bsWord64be
-  , bsWord64le
+  , ElfBS.bsWord64be
+  , ElfBS.bsWord64le
     -- * Memory search
   , findByteStringMatches
   , relativeSegmentContents
@@ -154,6 +154,7 @@ import           Data.BinarySymbols
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as L
+import qualified Data.ElfEdit.ByteString as ElfBS
 import           Data.Int (Int32, Int64)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -244,50 +245,14 @@ bsWord8 bs
     | BS.length bs /= 1 = error "bsWord8 given bytestring with bad length."
     | otherwise = BS.index bs 0
 
-bsWord16be :: BS.ByteString -> Word16
-bsWord16be bs
-    | BS.length bs /= 2 = error "bsWord16be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((1 - i) `shiftL` 3)
-
-bsWord16le :: BS.ByteString -> Word16
-bsWord16le bs
-    | BS.length bs /= 2 = error "bsWord16le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
-
-bsWord32be :: BS.ByteString -> Word32
-bsWord32be bs
-    | BS.length bs /= 4 = error "bsWord32be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((3 - i) `shiftL` 3)
-
-bsWord32le :: BS.ByteString -> Word32
-bsWord32le bs
-    | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
-
 -- | Convert a bytestring to an unsigned with the given endianness.
 bsWord32 :: Endianness -> BS.ByteString -> Word32
-bsWord32 BigEndian    = bsWord32be
-bsWord32 LittleEndian = bsWord32le
-
-bsWord64be :: BS.ByteString -> Word64
-bsWord64be bs
-    | BS.length bs /= 8 = error "bsWord64be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3 .|. w 4 .|. w 5 .|. w 6 .|. w 7
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((7 - i) `shiftL` 3)
-
-bsWord64le :: BS.ByteString -> Word64
-bsWord64le bs
-    | BS.length bs /= 8 = error "bsWord64le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3 .|. w 4 .|. w 5 .|. w 6 .|. w 7
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
+bsWord32 BigEndian    = ElfBS.bsWord32be
+bsWord32 LittleEndian = ElfBS.bsWord32le
 
 bsWord64 :: Endianness -> BS.ByteString -> Word64
-bsWord64 BigEndian    = bsWord64be
-bsWord64 LittleEndian = bsWord64le
+bsWord64 BigEndian    = ElfBS.bsWord64be
+bsWord64 LittleEndian = ElfBS.bsWord64le
 
 ------------------------------------------------------------------------
 -- MemWord
@@ -1590,27 +1555,27 @@ readWord8 mem addr = bsWord8 <$> readByteString mem addr 1
 
 -- | Read a big endian word16
 readWord16be :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
-readWord16be mem addr = bsWord16be <$> readByteString mem addr 2
+readWord16be mem addr = ElfBS.bsWord16be <$> readByteString mem addr 2
 
 -- | Read a little endian word16
 readWord16le :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
-readWord16le mem addr = bsWord16le <$> readByteString mem addr 2
+readWord16le mem addr = ElfBS.bsWord16le <$> readByteString mem addr 2
 
 -- | Read a big endian word32
 readWord32be :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
-readWord32be mem addr = bsWord32be <$> readByteString mem addr 4
+readWord32be mem addr = ElfBS.bsWord32be <$> readByteString mem addr 4
 
 -- | Read a little endian word32
 readWord32le :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
-readWord32le mem addr = bsWord32le <$> readByteString mem addr 4
+readWord32le mem addr = ElfBS.bsWord32le <$> readByteString mem addr 4
 
 -- | Read a big endian word64
 readWord64be :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
-readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
+readWord64be mem addr = ElfBS.bsWord64be <$> readByteString mem addr 8
 
 -- | Read a little endian word64
 readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
-readWord64le mem addr = bsWord64le <$> readByteString mem addr 8
+readWord64le mem addr = ElfBS.bsWord64le <$> readByteString mem addr 8
 
 data NullTermString w
    = NullTermString !BS.ByteString
@@ -1619,7 +1584,7 @@ data NullTermString w
    | NullTermMemoryError !(MemoryError w)
 
 -- | Attempt to read a null terminated bytesting.
-readNullTermString :: MemWidth w 
+readNullTermString :: MemWidth w
                   => MemSegmentOff w
                   -> NullTermString w
 readNullTermString addr = do

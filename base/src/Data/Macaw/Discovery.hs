@@ -23,6 +23,7 @@ module Data.Macaw.Discovery
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
        , State.trustedFunctionEntryPoints
+       , State.exploreFunctionAddr
        , State.AddrSymMap
        , State.funInfo
        , State.exploredFunctions
@@ -30,6 +31,7 @@ module Data.Macaw.Discovery
        , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
        , Data.Macaw.Discovery.cfgFromAddrsAndState
+       , Data.Macaw.Discovery.markAddrAsFunction
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.FunctionExploreReason(..)
        , State.BlockExploreReason(..)
@@ -269,9 +271,12 @@ markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
   -- Do nothing if function is already explored.
-  | Map.member addr (s^.funInfo) || Map.member addr (s^.unexploredFunctions) = s
+  | Map.member addr (s^.funInfo) = s
+  -- Ignore if function alrdy in set.
+  | Map.member addr (s^.unexploredFunctions) = s
   -- Ignore if address is not in an executable segment.
   | not (isExecutableSegOff addr) = s
+  | not ((s^.exploreFunctionAddr) addr) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
@@ -1689,12 +1694,12 @@ exploreMemPointers :: [(ArchSegmentOff arch, ArchSegmentOff arch)]
                    -- considering possible addresses.
                    -> DiscoveryState arch
                    -> DiscoveryState arch
-exploreMemPointers mem_words info =
+exploreMemPointers memWords info =
   flip execState info $ do
-    let mem_addrs
+    let memAddrs
           = filter (\(a,v) -> isDataCodePointer a v)
-          $ mem_words
-    mapM_ (modify . addMemCodePointer) mem_addrs
+          $ memWords
+    mapM_ (modify . addMemCodePointer) memAddrs
 
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
