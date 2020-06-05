@@ -62,12 +62,13 @@ simplifyTruncExt r3 = do
   Refl <- testEquality constantRepr (PN.knownNat @65)
   MC.AssignedValue (MC.Assignment _r1_id (MC.EvalApp (MC.UExt val rep1))) <- return r1
   Refl <- testEquality rep1 (PN.knownNat @65)
-  let MT.BVTypeRepr valwidth = MT.typeRepr val
-  case testEquality valwidth targetSize of
-    Nothing -> Nothing
-    Just Refl -> do
-      let newConstant = MC.mkLit targetSize constantVal
-      return (MC.BVAdd targetSize val newConstant)
+  case MT.typeRepr val of
+    MT.BVTypeRepr valwidth ->
+      case testEquality valwidth targetSize of
+        Nothing -> Nothing
+        Just Refl -> do
+          let newConstant = MC.mkLit targetSize constantVal
+          return (MC.BVAdd targetSize val newConstant)
 
 simplifyTrivialTruncExt :: MC.App (MC.Value ARM.AArch32 ids) tp
                         -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
@@ -77,12 +78,13 @@ simplifyTrivialTruncExt r3 = do
   Refl <- testEquality rep3 targetSize
   MC.AssignedValue (MC.Assignment _r1_id (MC.EvalApp (MC.UExt val rep1))) <- return r2
   Refl <- testEquality rep1 (PN.knownNat @65)
-  let MT.BVTypeRepr valwidth = MT.typeRepr val
-  case testEquality valwidth targetSize of
-    Nothing -> Nothing
-    Just Refl -> do
-      let newConstant = MC.BVValue targetSize (PN.toSigned targetSize 0)
-      return (MC.BVAdd targetSize val newConstant)
+  case MT.typeRepr val of
+    MT.BVTypeRepr valwidth ->
+      case testEquality valwidth targetSize of
+        Nothing -> Nothing
+        Just Refl -> do
+          let newConstant = MC.BVValue targetSize (PN.toSigned targetSize 0)
+          return (MC.BVAdd targetSize val newConstant)
 
 -- | Coalesce adjacent additions by a constant
 --
