@@ -499,6 +499,7 @@ doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
         | Just 0 <- asNat (ptrBase v) = llvmPointer_bv sym =<<
                                         bvAndBits sym (asBits x) (asBits y)
 
+        | Just _ <- asNat (ptrBase v) = return v
         | otherwise =
         cases sym (binOpLabel "ptr_align" x y) muxLLVMPtr Nothing
           [ isB ~>
