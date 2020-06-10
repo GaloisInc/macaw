@@ -143,7 +143,7 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
   (nextPCOffset, block) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do
     let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
-    failAt gs0 nextPCOffset startAddr reason
+    failAt gs0 0 startAddr reason
   return (block, fromIntegral (nextPCOffset - startOffset))
 
 
@@ -178,8 +178,8 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curPCAddr
   let off = MM.segoffOffset curPCAddr
   case readInstruction curPCAddr of
-    Left err -> failAt gs off curPCAddr (DecodeError err)
-    Right (_, 0) -> failAt gs off curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
+    Left err -> failAt gs blockOff curPCAddr (DecodeError err)
+    Right (_, 0) -> failAt gs blockOff curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
     Right (i, bytesRead) -> do
       -- FIXME: Set PSTATE.T based on whether instruction is A32I or T32I
       -- traceM ("II: " ++ show i)
@@ -191,10 +191,10 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
-                 Nothing -> failAt gs off curPCAddr (InstructionAtUnmappedAddr i)
+                 Nothing -> failAt gs blockOff curPCAddr (InstructionAtUnmappedAddr i)
                  Just addr -> return (MC.BVValue (PN.knownNat @32) (fromIntegral addr))
       case lookupSemantics ipVal i of
-        Nothing -> failAt gs off curPCAddr (UnsupportedInstruction i)
+        Nothing -> failAt gs blockOff curPCAddr (UnsupportedInstruction i)
         Just transformer -> do
           -- Once we have the semantics for the instruction (represented by a
           -- state transformer), we apply the state transformer and then extract
@@ -208,7 +208,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
             SG.setRegVal AR.branchTaken (MC.CValue (MC.BoolCValue False))
             SG.asAtomicStateUpdate (MM.segoffAddr curPCAddr) transformer)
           case egs1 of
-            Left genErr -> failAt gs off curPCAddr (GenerationError i genErr)
+            Left genErr -> failAt gs blockOff curPCAddr (GenerationError i genErr)
             Right gs1 -> do
               case gs1 of
                 SG.UnfinishedPartialBlock preBlock ->
@@ -352,10 +352,10 @@ failAt :: forall ids s a
        -> MM.MemSegmentOff 32
        -> TranslationErrorReason 32
        -> DisM ids s a
-failAt gs offset curPCAddr reason = do
+failAt gs bytesConsumed curPCAddr reason = do
   let exn = TranslationError { transErrorAddr = curPCAddr
                              , transErrorReason = reason
                              }
   let term = (`MCB.TranslateError` T.pack (show exn))
   let b = SG.finishBlock' (gs ^. SG.blockState) term
-  ET.throwError (b, fromIntegral offset, exn)
+  ET.throwError (b, fromIntegral bytesConsumed, exn)
