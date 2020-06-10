@@ -24,15 +24,16 @@ import           Control.Monad (void)
 import qualified Control.Monad.Except as E
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
-import           Data.Macaw.SemMC.TH.Monad
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.TH ( addEltTH, appToExprTH, evalNonceAppTH, evalBoundVar, natReprTH, symFnName )
+import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
-import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Classes as PC
+import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits as TL
 import           Language.Haskell.TH
@@ -292,13 +293,17 @@ translateExpr endianness interps e = case e of
   _ -> fail $ "translateExpr: unexpected expression kind: " ++ show e
 
 
-concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
+concreteIte :: M.TypeRepr tp
+            -> M.Value ARM.AArch32 ids (M.BoolType)
             -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
             -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
             -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
-concreteIte v t f = case v of
+concreteIte rep v t f = case v of
   M.CValue (M.BoolCValue b) -> if b then t else f
-  _ ->  E.throwError (G.GeneratorMessage $ "concreteIte: requires concrete value" <> show (M.ppValueAssignments v))
+  _ -> do
+    te <- t
+    fe <- f
+    G.AppExpr <$> (M.Mux rep v <$> G.addExpr te <*> G.addExpr fe)
 
 -- | A smart constructor for division
 --
@@ -329,7 +334,7 @@ armAppEvaluator endianness interps elt =
         testE <- addEltTH endianness interps test
         tE <- translateExpr endianness interps t
         fE <- translateExpr endianness interps f
-        liftQ [| concreteIte $(return testE) $(return tE) $(return fE) |]
+        liftQ [| concreteIte PC.knownRepr $(return testE) $(return tE) $(return fE) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
