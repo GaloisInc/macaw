@@ -1,36 +1,28 @@
 sudo: false
-language: minimal
+
+language: haskell
+cabal: 2.4
+ghc:
+  - 8.4.4
+  - 8.6.5
+
 git:
   submodules: false  # whether to recursively clone submodules
 
 cache:
   directories:
-    - $HOME/.stack
+    - $HOME/.ghc
+    - $HOME/.cabal
 
-matrix:
-  include:
-  - env: STACK_YAML=stack-8.4.yaml
-  - env: STACK_YAML=stack-8.6.yaml
-
-before_install:
+install:
 # Changes ssh paths into http path, so that we can do a read-only clone of
 # our submodules without worrying about ssh keys.
 - sed -i 's/git@github.com:/https:\/\/github.com\//' .gitmodules
 - git submodule update --init
+- cabal v2-update --project-file=cabal.project.dist
 
-# Download and unpack the stack executable
-- mkdir -p $HOME/.local/bin
-- export PATH=$HOME/.local/bin:$PATH
-- travis_retry curl -L https://get.haskellstack.org/stable/linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack'
-
-install:
- - travis_wait stack --no-terminal setup
-
+script:
 # Here starts the actual work to be performed for the package under test;
 # any command which exits with a non-zero exit code causes the build to fail.
  # Build packages
- - stack build --ghc-options="-Wall -Werror"
- # Run tests
- - stack test macaw-x86 macaw-x86-symbolic --ghc-options="-Wall -Werror"
- # It would be good to build documentation, but it currently seems to take too long.
- # - stack haddock
+ - cabal v2-test --project-file=cabal.project.dist x86 x86_symbolic
