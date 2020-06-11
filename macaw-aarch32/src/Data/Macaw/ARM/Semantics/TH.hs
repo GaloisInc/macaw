@@ -31,6 +31,7 @@ import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits as TL
@@ -554,13 +555,14 @@ isPlaceholderType tp = case tp of
 --
 -- NOTE: This function panics (and throws an error) if the argument is not
 -- concrete.
-concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
+concreteIte :: M.TypeRepr tp
+            -> M.Value ARM.AArch32 ids (M.BoolType)
             -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
             -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
             -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
-concreteIte v t f = case v of
+concreteIte rep v t f = case v of
   M.CValue (M.BoolCValue b) -> if b then t else f
-  _ ->  E.throwError (G.GeneratorMessage $ "concreteIte: requires concrete value" <> show (M.ppValueAssignments v))
+  _ -> G.addExpr =<< G.AppExpr <$> (M.Mux rep v <$> t <*> f)
 
 -- | A smart constructor for division
 --
@@ -608,7 +610,7 @@ armAppEvaluator endianness interps elt =
         inConditionalContext $ do
           tE <- addEltTH endianness interps t
           fE <- addEltTH endianness interps f
-          liftQ [| join (concreteIte <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
+          liftQ [| join (concreteIte PC.knownRepr <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
