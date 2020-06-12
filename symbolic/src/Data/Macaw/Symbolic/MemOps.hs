@@ -215,6 +215,10 @@ setMem st mvar mem =
   st & stateTree . actFrame . gpGlobals %~ insertGlobal mvar mem
 
 -- | Classify the arguments, and continue.
+--
+-- This combinator takes a continuation that is provided a number of (SMT)
+-- /predicates/ that classify the inputs as bitvectors or pointers.  An
+-- 'LLVMPtr' is a bitvector if its region id (base) is zero.
 ptrOp ::
   ( (1 <= w) =>
     sym ->
@@ -373,6 +377,10 @@ check sym valid name msg = assert sym valid
     errMsg = "[" ++ name ++ "] " ++ msg
 
 -- | Define an operation by cases.
+--
+-- NOTE that the cases defined using this combinator do not need to be complete;
+-- it adds a fallthrough case that asserts false (indicating that it should be
+-- impossible)
 cases ::
   (IsSymInterface sym) =>
   sym         {- ^ Simulator -} ->
@@ -463,6 +471,9 @@ doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
 -- here.  NOTE that we do not do the tests at symbolic execution time: instead,
 -- we generate a formula that encodes the necessary tests (hence the 'cases'
 -- combinator).
+--
+-- NOTE that the case of adding two pointers is not explicitly addressed in the
+-- 'cases' call below; 'cases' adds a fallthrough that asserts false.
 doPtrAdd :: PtrOp sym w (LLVMPtr sym w)
 doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
