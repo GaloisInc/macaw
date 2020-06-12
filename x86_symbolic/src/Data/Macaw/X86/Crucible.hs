@@ -50,7 +50,7 @@ import           What4.Concrete
 import           What4.Interface hiding (IsExpr)
 import           What4.InterpretedFloatingPoint
 
-import           Lang.Crucible.Backend (IsSymInterface, assert)
+import           Lang.Crucible.Backend (IsSymInterface, assert,getFloatMode)
 import           Lang.Crucible.CFG.Expr
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.Evaluation as C
@@ -219,7 +219,9 @@ evalApp' :: forall sym f t .
   (forall utp . f utp -> IO (RegValue sym utp)) ->
   App () f t ->
   IO (RegValue sym t)
-evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
+evalApp' sym ev x =
+    do fm <- getFloatMode (symIface sym)
+       C.evalApp (symIface sym) fm (symTys sym) logger evalExt ev x
   where
   logger _ _ = return ()
 
@@ -234,6 +236,7 @@ pureSem :: forall sym mt
         -> IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
 pureSem sym fn = do
   let symi = (symIface sym)
+  fm <- getFloatMode symi
   case fn of
     M.EvenParity x0 ->
       do x <- getBitVal (symIface sym) x0
@@ -257,69 +260,69 @@ pureSem sym fn = do
 
     M.SSE_UnaryOp op (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let f = case op of
-                M.SSE_Add  -> iFloatAdd  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Sub  -> iFloatSub  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Mul  -> iFloatMul  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Div  -> iFloatDiv  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Min  -> iFloatMin  @_ @(ToCrucibleFloatInfo ftp) symi
-                M.SSE_Max  -> iFloatMax  @_ @(ToCrucibleFloatInfo ftp) symi
+                M.SSE_Add  -> iFloatAdd  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Sub  -> iFloatSub  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Mul  -> iFloatMul  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Div  -> iFloatDiv  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Min  -> iFloatMin  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm
+                M.SSE_Max  -> iFloatMax  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm
       f (regValue x) (regValue y)
 
     M.SSE_VectorOp op _n (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let f = case op of
-                M.SSE_Add  -> iFloatAdd  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Sub  -> iFloatSub  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Mul  -> iFloatMul  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Div  -> iFloatDiv  @_ @(ToCrucibleFloatInfo ftp) symi RNE
-                M.SSE_Min  -> iFloatMin  @_ @(ToCrucibleFloatInfo ftp) symi
-                M.SSE_Max  -> iFloatMax  @_ @(ToCrucibleFloatInfo ftp) symi
+                M.SSE_Add  -> iFloatAdd  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Sub  -> iFloatSub  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Mul  -> iFloatMul  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Div  -> iFloatDiv  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RNE
+                M.SSE_Min  -> iFloatMin  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm
+                M.SSE_Max  -> iFloatMax  @_ @_ @(ToCrucibleFloatInfo ftp) symi fm
       DV.zipWithM f (regValue x) (regValue y)
 
     M.SSE_Sqrt (_tp :: M.SSE_FloatType ftp) (AtomWrapper x)  -> do
-      iFloatSqrt  @_ @(ToCrucibleFloatInfo ftp) symi RTP (regValue x)
+      iFloatSqrt @_ @_ @(ToCrucibleFloatInfo ftp) symi fm RTP (regValue x)
 
     M.SSE_CMPSX op (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let x' = regValue x
       let y' = regValue y
       case op of
-        M.EQ_OQ -> iFloatFpEq @_ @(ToCrucibleFloatInfo ftp) symi x' y'
-        M.LT_OS -> iFloatLt @_ @(ToCrucibleFloatInfo ftp) symi x' y'
-        M.LE_OS -> iFloatLe @_ @(ToCrucibleFloatInfo ftp) symi x' y'
+        M.EQ_OQ -> iFloatFpEq @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
+        M.LT_OS -> iFloatLt @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
+        M.LE_OS -> iFloatLe @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
         M.UNORD_Q -> do
-          x_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi x'
-          y_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi y'
+          x_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x'
+          y_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm y'
           orPred symi x_is_nan y_is_nan
         M.NEQ_UQ ->
-          notPred symi =<< iFloatFpEq @_ @(ToCrucibleFloatInfo ftp) symi x' y'
+          notPred symi =<< iFloatFpEq @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
         M.NLT_US ->
-          notPred symi =<< iFloatLt @_ @(ToCrucibleFloatInfo ftp) symi x' y'
+          notPred symi =<< iFloatLt @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
         M.NLE_US ->
-          notPred symi =<< iFloatLe @_ @(ToCrucibleFloatInfo ftp) symi x' y'
+          notPred symi =<< iFloatLe @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
         M.ORD_Q -> do
-          x_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi x'
-          y_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi y'
+          x_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x'
+          y_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm y'
           notPred symi =<< orPred symi x_is_nan y_is_nan
     M.SSE_UCOMIS (_tp :: M.SSE_FloatType ftp) (AtomWrapper x) (AtomWrapper y) -> do
       let x' = regValue x
       let y' = regValue y
-      is_eq    <- iFloatFpEq @_ @(ToCrucibleFloatInfo ftp) symi x' y'
-      is_lt    <- iFloatLt @_ @(ToCrucibleFloatInfo ftp)  symi x' y'
-      x_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi x'
-      y_is_nan <- iFloatIsNaN @_ @(ToCrucibleFloatInfo ftp) symi y'
+      is_eq    <- iFloatFpEq @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x' y'
+      is_lt    <- iFloatLt @_ @_ @(ToCrucibleFloatInfo ftp)  symi fm x' y'
+      x_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm x'
+      y_is_nan <- iFloatIsNaN @_ @_ @(ToCrucibleFloatInfo ftp) symi fm y'
       is_unord <- orPred symi x_is_nan y_is_nan
       zf <- orPred symi is_eq is_unord
       cf <- orPred symi is_lt is_unord
       let pf = is_unord
       return $ empty `extend` (RV zf) `extend` (RV pf) `extend` (RV cf)
     M.SSE_CVTSS2SD (AtomWrapper x) ->
-      iFloatCast @_ @DoubleFloat @SingleFloat symi knownRepr RNE (regValue x)
+      iFloatCast @_ @_ @DoubleFloat @SingleFloat symi fm knownRepr RNE (regValue x)
     M.SSE_CVTSD2SS (AtomWrapper x) ->
-      iFloatCast @_ @SingleFloat @DoubleFloat symi knownRepr RNE (regValue x)
+      iFloatCast @_ @_ @SingleFloat @DoubleFloat symi fm knownRepr RNE (regValue x)
     M.SSE_CVTTSX2SI w (_ :: M.SSE_FloatType ftp) (AtomWrapper x) ->
       llvmPointer_bv symi
-        =<< iFloatToSBV @_ @_ @(ToCrucibleFloatInfo ftp) symi w RTZ (regValue x)
+        =<< iFloatToSBV @_ @_ @_ @(ToCrucibleFloatInfo ftp) symi fm w RTZ (regValue x)
     M.SSE_CVTSI2SX tp _ x ->
-     iSBVToFloat symi (floatInfoFromSSEType tp) RNE
+     iSBVToFloat symi fm (floatInfoFromSSEType tp) RNE
         =<< toValBV symi x
 
     M.X87_Extend{} ->  error "X87_Extend"

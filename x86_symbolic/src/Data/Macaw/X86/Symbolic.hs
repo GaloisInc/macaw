@@ -209,7 +209,8 @@ freshValue sym str w ty =
 
     M.FloatTypeRepr fi -> do
       nm <- symName str
-      WIF.freshFloatConstant sym nm $ floatInfoToCrucible fi
+      fm <- C.getFloatMode sym
+      WIF.freshFloatConstant sym fm nm $ floatInfoToCrucible fi
 
     M.BoolTypeRepr ->
       do nm <- symName str

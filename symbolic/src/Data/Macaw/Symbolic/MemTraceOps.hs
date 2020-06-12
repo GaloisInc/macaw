@@ -82,12 +82,12 @@ data MemOp sym ptrW where
     MemTraceImpl sym ptrW ->
     MemOp sym ptrW
 
-instance Eq (MemOpCondition (ExprBuilder t st fs)) where
+instance Eq (MemOpCondition (ExprBuilder t st)) where
   Unconditional == Unconditional = True
   Conditional p == Conditional p' = p == p'
   _ == _ = False
 
-instance Eq (MemOp (ExprBuilder t st fs) ptrW) where
+instance Eq (MemOp (ExprBuilder t st) ptrW) where
   MemOp (LLVMPointer addrR addrO) dir cond repr (LLVMPointer valR valO) end
     == MemOp (LLVMPointer addrR' addrO') dir' cond' repr' (LLVMPointer valR' valO') end' = case testEquality repr repr' of
       Nothing -> False
@@ -108,15 +108,15 @@ mkMemTraceVar ::
   IO (GlobalVar (MemTrace arch))
 mkMemTraceVar ha = freshGlobalVar ha (pack "llvm_memory_trace") knownRepr
 
-instance IntrinsicClass (ExprBuilder t st fs) "memory_trace" where
+instance IntrinsicClass (ExprBuilder t st) "memory_trace" where
   -- TODO: cover other cases with a TypeError
-  type Intrinsic (ExprBuilder t st fs) "memory_trace" (EmptyCtx ::> BVType ptrW) = MemTraceImpl (ExprBuilder t st fs) ptrW
+  type Intrinsic (ExprBuilder t st) "memory_trace" (EmptyCtx ::> BVType ptrW) = MemTraceImpl (ExprBuilder t st) ptrW
   muxIntrinsic _ _ _ (Empty :> BVRepr _) p l r = pure $ case Seq.spanl (uncurry (==)) (Seq.zip l r) of
     (_, Seq.Empty) -> l
     (eqs, Seq.unzip -> (l', r')) -> (fst <$> eqs) Seq.:|> MergeOps p l' r'
   muxIntrinsic _ _ _ _ _ _ _ = error "Unexpected operands in memory_trace mux"
 
-memTraceIntrinsicTypes :: IsSymInterface (ExprBuilder t st fs) => IntrinsicTypes (ExprBuilder t st fs)
+memTraceIntrinsicTypes :: IsSymInterface (ExprBuilder t st) => IntrinsicTypes (ExprBuilder t st)
 memTraceIntrinsicTypes = id
   . MapF.insert (knownSymbol :: SymbolRepr "memory_trace") IntrinsicMuxFn
   . MapF.insert (knownSymbol :: SymbolRepr "LLVM_pointer") IntrinsicMuxFn
@@ -125,7 +125,7 @@ memTraceIntrinsicTypes = id
 type MacawTraceEvalStmtFunc sym arch = EvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 
 execMacawStmtExtension ::
-  forall sym arch t st fs. (IsSymInterface sym, KnownNat (ArchAddrWidth arch), sym ~ ExprBuilder t st fs) =>
+  forall sym arch t st. (IsSymInterface sym, KnownNat (ArchAddrWidth arch), sym ~ ExprBuilder t st) =>
   MacawArchEvalFn sym (MemTrace arch) arch ->
   GlobalVar (MemTrace arch) ->
   GlobalMap sym (MemTrace arch) (ArchAddrWidth arch) ->

@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -80,12 +81,14 @@ doBitcast sym x eqPr =
         MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
     M.FromFloat f -> do
       Refl <- pure $ checkMacawFloatEq f
-      xbv <- C.iFloatToBinary sym (floatInfoToCrucible f) x
+      fm <- getFloatMode sym
+      xbv <- C.iFloatToBinary sym fm (floatInfoToCrucible f) x
       MM.llvmPointer_bv sym xbv
     M.ToFloat f -> do
       xbv <- MM.projectLLVM_bv sym x
       Refl <- pure $ checkMacawFloatEq f
-      C.iFloatFromBinary sym (floatInfoToCrucible f) xbv
+      fm <- getFloatMode sym
+      C.iFloatFromBinary sym fm (floatInfoToCrucible f) xbv
     M.VecEqCongruence _n eltPr -> do
       forM x $ \e -> doBitcast sym e eltPr
     M.WidthEqRefl _ -> do

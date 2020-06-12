@@ -738,7 +738,8 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
      -- Load a value from the memory model type system.
-     res <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     fm <- getFloatMode sym
+     res <- Mem.assertSafe sym =<< Mem.loadRaw sym fm mem ptr ty alignment
      case memValToCrucible memRep res of
        Left err -> fail $ "[doReadMem] " ++ err
        Right crucVal -> return crucVal
@@ -775,7 +776,8 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
 
-     val <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     fm <- getFloatMode sym
+     val <- Mem.assertSafe sym =<< Mem.loadRaw sym fm mem ptr ty alignment
      let useDefault msg =
            do notC <- notPred sym cond
               let errMsg = "[doCondReadMem] " ++ msg
@@ -811,7 +813,8 @@ doWriteMem sym mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
              Right tp -> pure tp
      let alignment = noAlignment -- default to byte alignment (FIXME)
      let memVal = resolveMemVal memRep ty val
-     Mem.storeRaw sym mem ptr ty alignment memVal
+     fm <- getFloatMode sym
+     Mem.storeRaw sym fm mem ptr ty alignment memVal
 
 
 -- | Write a Macaw value to memory if a condition holds.

@@ -112,12 +112,12 @@ import qualified Data.Text as Text
 import qualified Data.Vector as Vec
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), width)
 
-import           What4.ProgramLoc as C
 import qualified What4.Symbol as C
 import qualified What4.Utils.StringLiteral as C
 
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as CR
+import           Lang.Crucible.ProgramLoc as C
 import qualified Lang.Crucible.Types as C
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
