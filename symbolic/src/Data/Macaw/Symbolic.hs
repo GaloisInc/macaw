@@ -1145,8 +1145,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
                     args = C.RegMap (Ctx.singleton (C.RegEntry macawStructRepr regStruct))
                 crucGenArchConstraints archFns $
                   C.regValue <$> C.callCFG g args
-  fm <- getFloatMode sym
-  a <- C.executeCrucible fm [] s
+  a <- C.executeCrucible [] s
   return (mvar,a)
 
 -- $translationNaming
