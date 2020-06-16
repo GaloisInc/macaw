@@ -837,27 +837,21 @@ bvmul w v v'
 bvmul _ _ _ = TopV
 
 -- FIXME: generalise
-bvand :: MemWidth w
-      => NatRepr u
-      -> AbsValue w (BVType u)
-      -> AbsValue w (BVType u)
-      -> AbsValue w (BVType u)
-bvand _w (asFinSet "bvand" -> IsFin s) (asConcreteSingleton -> Just v) =
-  FinSet (Set.map (flip (.&.) v) s)
-bvand _w (asConcreteSingleton -> Just v) (asFinSet "bvand" -> IsFin s) =
-  FinSet (Set.map ((.&.) v) s)
-bvand _ _ _ = TopV
-
--- FIXME: generalise
 bitop :: MemWidth w
       => (Integer -> Integer -> Integer)
       -> NatRepr u
       -> AbsValue w (BVType u)
       -> AbsValue w  (BVType u)
       -> AbsValue w (BVType u)
-bitop doOp _w (asFinSet "bvand" -> IsFin s) (asConcreteSingleton -> Just v)
+bitop doOp w (StackOffsetAbsVal a j) (FinSet t)
+  | [o] <- Set.toList t
+  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ flip doOp o $ toInteger j
+bitop doOp w (FinSet t) (StackOffsetAbsVal a j)
+  | [o] <- Set.toList t
+  = StackOffsetAbsVal a $ fromInteger $ toUnsigned w $ doOp o $ toInteger j
+bitop doOp _w (asFinSet "bitop" -> IsFin s) (asConcreteSingleton -> Just v)
   = FinSet (Set.map (flip doOp v) s)
-bitop doOp _w (asConcreteSingleton -> Just v) (asFinSet "bvand" -> IsFin s)
+bitop doOp _w (asConcreteSingleton -> Just v) (asFinSet "bitop" -> IsFin s)
   = FinSet (Set.map (doOp v) s)
 bitop _ _ _ _ = TopV
 
@@ -1404,7 +1398,7 @@ transferApp r a = do
     BVSub w x y -> bvsub (absMem r) w (t x) (t y)
     BVSbb w x y b -> bvsbb (absMem r) w (t x) (t y) (t b)
     BVMul w x y -> bvmul w (t x) (t y)
-    BVAnd w x y -> bvand w (t x) (t y)
+    BVAnd w x y -> bitop (.&.) w (t x) (t y)
     BVOr w x y  -> bitop (.|.) w (t x) (t y)
     BVShl w v s -> bitop (\x1 x2 -> shiftL x1 (fromInteger x2)) w (t v) (t s)
     _ -> TopV

@@ -216,6 +216,10 @@ setMem st mvar mem =
   st & stateTree . actFrame . gpGlobals %~ insertGlobal mvar mem
 
 -- | Classify the arguments, and continue.
+--
+-- This combinator takes a continuation that is provided a number of (SMT)
+-- /predicates/ that classify the inputs as bitvectors or pointers.  An
+-- 'LLVMPtr' is a bitvector if its region id (base) is zero.
 ptrOp ::
   ( (1 <= w) =>
     sym ->
@@ -375,6 +379,10 @@ check sym valid name msg = assert sym valid
     errMsg = "[" ++ name ++ "] " ++ msg
 
 -- | Define an operation by cases.
+--
+-- NOTE that the cases defined using this combinator do not need to be complete;
+-- it adds a fallthrough case that asserts false (indicating that it should be
+-- impossible)
 cases ::
   (IsSymInterface sym) =>
   sym         {- ^ Simulator -} ->
@@ -445,6 +453,29 @@ doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
            endCase =<< muxLLVMPtr sym c x y
        ]
 
+-- | Implementation of addition of two 'LLVMPtr's
+--
+-- The translation uses the 'LLVMPtr' type for both bitvectors and pointers, as
+-- they are mostly indistinguishable at the machine code level (until they are
+-- actually used as a pointer).  This operation looks a bit complicated because
+-- there are four possible cases:
+--
+-- * Adding a pointer to a bitvector
+-- * Adding a bitvector to a pointer
+-- * Adding two bitvectors
+-- * Adding two pointers (not allowed)
+--
+-- Note that the underlying pointer addition primitive from crucible-llvm,
+-- 'ptrAdd', only accepts its operands in one order: pointer and then bitvector.
+-- The cases below rearrange the operands as necessary.
+--
+-- The final case, of adding two bitvectors together, is also special cased
+-- here.  NOTE that we do not do the tests at symbolic execution time: instead,
+-- we generate a formula that encodes the necessary tests (hence the 'cases'
+-- combinator).
+--
+-- NOTE that the case of adding two pointers is not explicitly addressed in the
+-- 'cases' call below; 'cases' adds a fallthrough that asserts false.
 doPtrAdd :: PtrOp sym w (LLVMPtr sym w)
 doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
@@ -460,6 +491,20 @@ doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
        ]
      return a
 
+-- | Implementation of subtraction of 'LLVMPtr's
+--
+-- This case is substantially similar to 'doPtrAdd', except the operation matrix
+-- is:
+--
+-- * Subtracting a pointer from a bitvector (not allowed)
+-- * Subtracting a bitvector from a pointer
+-- * Subtracting two bitvectors
+-- * Subtracting two pointers
+--
+-- Note that subtracting two pointers is allowed if (and only if) they are
+-- pointers to the same region of memory.  This check is again encoded
+-- symbolically in the final case, as we can't know if it is true or not during
+-- simulation (without help from the SMT solver).
 doPtrSub :: PtrOp sym w (LLVMPtr sym w)
 doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
@@ -492,6 +537,46 @@ isAlignMask v =
      guard (all (testBit k) ones)
      return (fromIntegral (length zeros))
 
+-- | Perform bitwise and on 'LLVMPtr' values
+--
+-- This is somewhat similar to 'doPtrAdd'.  This is a special case because many
+-- machine code programs use bitwise masking to align pointers.  There are two
+-- cases here:
+--
+-- * Both values are actually bitvectors (in which case we just delegate to the
+--   low-level 'bvAndBits' operation)
+-- * One of the values is an 'LLVMPtr' and the other is a literal that looks like a mask
+--
+-- If none of those cases is obviously true, this function generates assertions
+-- that both values are actually bitvectors and uses the straightforward
+-- operations (the last case in the Haskell-level case expression).
+--
+-- This operation is tricky for two reasons:
+--
+-- 1. The underlying 'LLVMPtr' type does not support a bitwise and operation
+--    (since it makes less sense at the LLVM level, where alignment is specified
+--    explicitly for each pointer and pointer operation)
+-- 2. We do not know the alignment of the pointer being masked
+--
+-- If we knew the pointer alignment, we could simply generate an assertion that
+-- the masking operation is safe and then mask the offset portion of the
+-- pointer.  However, we do not have a guarantee of that, as pointer bases are
+-- abstract in the LLVM memory model.
+--
+-- As a result, we do not know the exact effect of the masking operation on the
+-- pointer.  Unfortunately, this means we have to treat the operation very
+-- conservatively.  We determine how many bits the program is attempting to mask
+-- off and create a symbolic constant of that size and subtract it from the
+-- offset in the pointer.  This value represents the most that could possibly be
+-- removed from the value (assuming the original pointer was actually properly
+-- aligned); however, if the pointer was not actually sufficiently aligned, the
+-- amount subtracted could be less.
+--
+-- This is not ideal, as there are not many constraints we can express about
+-- this value being subtracted off.
+--
+-- FIXME: If we had the alignment of the pointer available, we could assert that
+-- the alignment is sufficient to safely just apply the mask to the offset.
 doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
 doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
   let nw = M.addrWidthNatRepr w

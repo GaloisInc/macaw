@@ -19,8 +19,8 @@ module Data.Macaw.ARM.Arch where
 
 import           Data.Bits ( (.&.) )
 import           Data.Kind ( Type )
-import qualified Data.Macaw.Architecture.Info as MAI
 import           Data.Macaw.ARM.ARMReg ()
+import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
@@ -28,6 +28,8 @@ import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewritt
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.Types as MT
+import           Data.Parameterized.Classes ( showF )
+import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FCls
@@ -43,12 +45,18 @@ import qualified Text.PrettyPrint.HughesPJClass as HPP
 -- ARM-specific statement definitions
 
 data ARMStmt (v :: MT.Type -> Type) where
+  -- | This is not great; it doesn't give us much ability to precisely reason
+  -- about anything.  We'd have to havok every bit of state if we saw one.
+  UninterpretedOpcode :: ARMDis.Opcode ARMDis.Operand sh
+                      -> PL.List ARMDis.Operand sh
+                      -> ARMStmt v
 
 type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
         case stmt of
+          UninterpretedOpcode opc ops -> PP.pretty (show opc) PP.<+> PP.pretty (FCls.toListFC showF ops)
 
 instance TF.FunctorF ARMStmt where
   fmapF = TF.fmapFDefault
@@ -59,6 +67,7 @@ instance TF.FoldableF ARMStmt where
 instance TF.TraversableF ARMStmt where
   traverseF _go stmt =
     case stmt of
+      UninterpretedOpcode opc ops -> pure (UninterpretedOpcode opc ops)
 
 rewriteStmt :: ARMStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt ()
 rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
@@ -114,14 +123,195 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
        -> f (MT.BVType w)
        -> ARMPrimFn f (MT.BVType w)
 
+  UnsignedRSqrtEstimate :: (1 <= w)
+                        => NR.NatRepr w
+                        -> f (MT.BVType w)
+                        -> ARMPrimFn f (MT.BVType w)
+
+  FPSub :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPAdd :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMul :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPDiv :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+
+  FPRecipEstimate :: (1 <= w)
+                  => NR.NatRepr w
+                  -> f (MT.BVType w)
+                  -> f (MT.BVType 32)
+                  -> ARMPrimFn f (MT.BVType w)
+  FPRecipStep :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f (MT.BVType w)
+  FPSqrtEstimate :: (1 <= w)
+                 => NR.NatRepr w
+                 -> f (MT.BVType w)
+                 -> f (MT.BVType 32)
+                 -> ARMPrimFn f (MT.BVType w)
+  FPRSqrtStep :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f (MT.BVType w)
+  FPSqrt :: (1 <= w)
+         => NR.NatRepr w
+         -> f (MT.BVType w)
+         -> f (MT.BVType 32)
+         -> ARMPrimFn f (MT.BVType w)
+
+  FPMax :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMin :: (1 <= w)
+        => NR.NatRepr w
+        -> f (MT.BVType w)
+        -> f (MT.BVType w)
+        -> f (MT.BVType 32)
+        -> ARMPrimFn f (MT.BVType w)
+  FPMaxNum :: (1 <= w)
+           => NR.NatRepr w
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+  FPMinNum :: (1 <= w)
+           => NR.NatRepr w
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+
+  FPMulAdd :: (1 <= w)
+           => NR.NatRepr w
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType w)
+           -> f (MT.BVType 32)
+           -> ARMPrimFn f (MT.BVType w)
+
+  FPCompareGE :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareGT :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareEQ :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareNE :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+  FPCompareUN :: (1 <= w)
+              => NR.NatRepr w
+              -> f (MT.BVType w)
+              -> f (MT.BVType w)
+              -> f (MT.BVType 32)
+              -> ARMPrimFn f MT.BoolType
+
+  FPToFixed :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f MT.BoolType
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FixedToFP :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f MT.BoolType
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FPConvert :: (1 <= w, 1 <= x)
+            => NR.NatRepr w
+            -> f (MT.BVType x)
+            -> f (MT.BVType 32)
+            -> f (MT.BVType 3)
+            -> ARMPrimFn f (MT.BVType w)
+  FPToFixedJS :: f (MT.BVType 64)
+              -> f (MT.BVType 32)
+              -> f MT.BoolType
+              -> ARMPrimFn f (MT.BVType 32)
+  FPRoundInt :: (1 <= w)
+             => NR.NatRepr w
+             -> f (MT.BVType w)
+             -> f (MT.BVType 32)
+             -> f (MT.BVType 3)
+             -> f MT.BoolType
+             -> ARMPrimFn f (MT.BVType w)
+
 instance MC.IsArchFn ARMPrimFn where
     ppArchFn pp f =
-        let ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
+        let ppUnary s v' = PP.text s PP.<+> v'
+            ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
+            ppTernary s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
         in case f of
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
           URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
           SRem _ lhs rhs -> ppBinary "arm_srem" <$> pp lhs <*> pp rhs
+          UnsignedRSqrtEstimate _ v -> ppUnary "arm_unsignedRSqrtEstimate" <$> pp v
+          FPSub _ lhs rhs _fpscr -> ppBinary "arm_fpsub" <$> pp lhs <*> pp rhs
+          FPAdd _ lhs rhs _fpscr -> ppBinary "arm_fpadd" <$> pp lhs <*> pp rhs
+          FPMul _ lhs rhs _fpscr -> ppBinary "arm_fpmul" <$> pp lhs <*> pp rhs
+          FPDiv _ lhs rhs _fpscr -> ppBinary "arm_fpdiv" <$> pp lhs <*> pp rhs
+          FPRecipEstimate _ v _fpscr -> ppUnary "arm_fpRecipEstimate" <$> pp v
+          FPRecipStep _ v _fpscr -> ppUnary "arm_fpRecipStep" <$> pp v
+          FPSqrtEstimate _ v _fpscr -> ppUnary "arm_fpSqrtEstimate" <$> pp v
+          FPRSqrtStep _ v _fpscr -> ppUnary "arm_fpRSqrtStep" <$> pp v
+          FPSqrt _ v _fpscr -> ppUnary "arm_fpSqrt" <$> pp v
+          FPMax _ lhs rhs _fpscr -> ppBinary "arm_fpMax" <$> pp lhs <*> pp rhs
+          FPMin _ lhs rhs _fpscr -> ppBinary "arm_fpMin" <$> pp lhs <*> pp rhs
+          FPMaxNum _ lhs rhs _fpscr -> ppBinary "arm_fpMaxNum" <$> pp lhs <*> pp rhs
+          FPMinNum _ lhs rhs _fpscr -> ppBinary "arm_fpMinNum" <$> pp lhs <*> pp rhs
+          FPMulAdd _ o1 o2 o3 _fpscr -> ppTernary "arm_fpMulAdd" <$> pp o1 <*> pp o2 <*> pp o3
+          FPCompareGE _ lhs rhs _fpscr -> ppBinary "arm_fpCompareGE" <$> pp lhs <*> pp rhs
+          FPCompareGT _ lhs rhs _fpscr -> ppBinary "arm_fpCompareGT" <$> pp lhs <*> pp rhs
+          FPCompareEQ _ lhs rhs _fpscr -> ppBinary "arm_fpCompareEQ" <$> pp lhs <*> pp rhs
+          FPCompareNE _ lhs rhs _fpscr -> ppBinary "arm_fpCompareNE" <$> pp lhs <*> pp rhs
+          FPCompareUN _ lhs rhs _fpscr -> ppBinary "arm_fpCompareUN" <$> pp lhs <*> pp rhs
+          FPToFixed _ v _ b _ fl -> ppTernary "arm_fpToFixed" <$> pp v <*> pp b <*> pp fl
+          FixedToFP _ v _ b _ fl -> ppTernary "arm_fixedToFP" <$> pp v <*> pp b <*> pp fl
+          FPConvert _ v _fpscr fl -> ppBinary "arm_fpConvert" <$> pp v <*> pp fl
+          FPToFixedJS v _ b -> ppBinary "arm_fpToFixedJS" <$> pp v <*> pp b
+          FPRoundInt _ v _ fl b -> ppTernary "arm_fpRoundInt" <$> pp v <*> pp fl <*> pp b
 
 instance FCls.FunctorFC ARMPrimFn where
   fmapFC = FCls.fmapFCDefault
@@ -136,6 +326,32 @@ instance FCls.TraversableFC ARMPrimFn where
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
       URem rep lhs rhs -> URem rep <$> go lhs <*> go rhs
       SRem rep lhs rhs -> SRem rep <$> go lhs <*> go rhs
+      UnsignedRSqrtEstimate rep v -> UnsignedRSqrtEstimate rep <$> go v
+      FPSub rep lhs rhs fpscr -> FPSub rep <$> go lhs <*> go rhs <*> go fpscr
+      FPAdd rep lhs rhs fpscr -> FPAdd rep <$> go lhs <*> go rhs <*> go fpscr
+      FPMul rep lhs rhs fpscr -> FPMul rep <$> go lhs <*> go rhs <*> go fpscr
+      FPDiv rep lhs rhs fpscr -> FPDiv rep <$> go lhs <*> go rhs <*> go fpscr
+      FPRecipEstimate rep v fpscr -> FPRecipEstimate rep <$> go v <*> go fpscr
+      FPRecipStep rep v fpscr -> FPRecipStep rep <$> go v <*> go fpscr
+      FPSqrtEstimate rep v fpscr -> FPSqrtEstimate rep <$> go v <*> go fpscr
+      FPRSqrtStep rep v fpscr -> FPRSqrtStep rep <$> go v <*> go fpscr
+      FPSqrt rep v fpscr -> FPSqrt rep <$> go v <*> go fpscr
+      FPMax rep lhs rhs fpscr -> FPMax rep <$> go lhs <*> go rhs <*> go fpscr
+      FPMin rep lhs rhs fpscr -> FPMin rep <$> go lhs <*> go rhs <*> go fpscr
+      FPMaxNum rep lhs rhs fpscr -> FPMaxNum rep <$> go lhs <*> go rhs <*> go fpscr
+      FPMinNum rep lhs rhs fpscr -> FPMinNum rep <$> go lhs <*> go rhs <*> go fpscr
+      FPMulAdd rep a b c fpscr -> FPMulAdd rep <$> go a <*> go b <*> go c <*> go fpscr
+      FPCompareGE rep lhs rhs fpscr -> FPCompareGE rep <$> go lhs <*> go rhs <*> go fpscr
+      FPCompareGT rep lhs rhs fpscr -> FPCompareGT rep <$> go lhs <*> go rhs <*> go fpscr
+      FPCompareEQ rep lhs rhs fpscr -> FPCompareEQ rep <$> go lhs <*> go rhs <*> go fpscr
+      FPCompareNE rep lhs rhs fpscr -> FPCompareNE rep <$> go lhs <*> go rhs <*> go fpscr
+      FPCompareUN rep lhs rhs fpscr -> FPCompareUN rep <$> go lhs <*> go rhs <*> go fpscr
+      FPToFixed rep a b c d e -> FPToFixed rep <$> go a <*> go b <*> go c <*> go d <*> go e
+      FixedToFP rep a b c d e -> FixedToFP rep <$> go a <*> go b <*> go c <*> go d <*> go e
+      FPConvert rep a b c -> FPConvert rep <$> go a <*> go b <*> go c
+      FPToFixedJS a b c -> FPToFixedJS <$> go a <*> go b <*> go c
+      FPRoundInt rep a b c d -> FPRoundInt rep <$> go a <*> go b <*> go c <*> go d
+
 
 type instance MC.ArchFn ARM.AArch32 = ARMPrimFn
 
@@ -146,6 +362,33 @@ instance MT.HasRepr (ARMPrimFn (MC.Value ARM.AArch32 ids)) MT.TypeRepr where
       SDiv rep _ _ -> MT.BVTypeRepr rep
       URem rep _ _ -> MT.BVTypeRepr rep
       SRem rep _ _ -> MT.BVTypeRepr rep
+      UnsignedRSqrtEstimate rep _ -> MT.BVTypeRepr rep
+      FPSub rep _ _ _ -> MT.BVTypeRepr rep
+      FPAdd rep _ _ _ -> MT.BVTypeRepr rep
+      FPMul rep _ _ _ -> MT.BVTypeRepr rep
+      FPDiv rep _ _ _ -> MT.BVTypeRepr rep
+      FPRecipEstimate rep _ _ -> MT.BVTypeRepr rep
+      FPRecipStep rep _ _ -> MT.BVTypeRepr rep
+      FPSqrtEstimate rep _ _ -> MT.BVTypeRepr rep
+      FPRSqrtStep rep _ _ -> MT.BVTypeRepr rep
+      FPSqrt rep _ _ -> MT.BVTypeRepr rep
+      FPMax rep _ _ _ -> MT.BVTypeRepr rep
+      FPMin rep _ _ _ -> MT.BVTypeRepr rep
+      FPMaxNum rep _ _ _ -> MT.BVTypeRepr rep
+      FPMinNum rep _ _ _ -> MT.BVTypeRepr rep
+      FPMulAdd rep _ _ _ _ -> MT.BVTypeRepr rep
+      FPCompareGE {} -> MT.BoolTypeRepr
+      FPCompareGT {} -> MT.BoolTypeRepr
+      FPCompareEQ {} -> MT.BoolTypeRepr
+      FPCompareNE {} -> MT.BoolTypeRepr
+      FPCompareUN {} -> MT.BoolTypeRepr
+      FPToFixed rep _ _ _ _ _ -> MT.BVTypeRepr rep
+      FixedToFP rep _ _ _ _ _ -> MT.BVTypeRepr rep
+      FPConvert rep _ _ _ -> MT.BVTypeRepr rep
+      FPToFixedJS {} -> MT.BVTypeRepr (NR.knownNat @32)
+      FPRoundInt rep _ _ _ _ -> MT.BVTypeRepr rep
+
+
 
 instance MC.IPAlignment ARM.AArch32 where
   -- A formula which results in an address that will be loaded into
@@ -219,7 +462,56 @@ rewritePrimFn f =
     SRem rep lhs rhs -> do
       tgtFn <- SRem rep <$> rewriteValue lhs <*> rewriteValue rhs
       evalRewrittenArchFn tgtFn
-
+    UnsignedRSqrtEstimate rep v ->
+      evalRewrittenArchFn =<< (UnsignedRSqrtEstimate rep <$> rewriteValue v)
+    FPSub rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPSub rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPAdd rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPAdd rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPMul rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPMul rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPDiv rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPDiv rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPRecipEstimate rep v fpscr ->
+      evalRewrittenArchFn =<< (FPRecipEstimate rep <$> rewriteValue v <*> rewriteValue fpscr)
+    FPRecipStep rep v fpscr ->
+      evalRewrittenArchFn =<< (FPRecipStep rep <$> rewriteValue v <*> rewriteValue fpscr)
+    FPSqrtEstimate rep v fpscr ->
+      evalRewrittenArchFn =<< (FPSqrtEstimate rep <$> rewriteValue v <*> rewriteValue fpscr)
+    FPRSqrtStep rep v fpscr ->
+      evalRewrittenArchFn =<< (FPRSqrtStep rep <$> rewriteValue v <*> rewriteValue fpscr)
+    FPSqrt rep v fpscr ->
+      evalRewrittenArchFn =<< (FPSqrt rep <$> rewriteValue v <*> rewriteValue fpscr)
+    FPMax rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPMax rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPMin rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPMin rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPMaxNum rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPMaxNum rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPMinNum rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPMinNum rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPMulAdd rep a b c fpscr ->
+      evalRewrittenArchFn =<< (FPMulAdd rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c <*> rewriteValue fpscr)
+    FPCompareGE rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPCompareGE rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPCompareGT rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPCompareGT rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPCompareEQ rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPCompareEQ rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPCompareNE rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPCompareNE rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPCompareUN rep lhs rhs fpscr ->
+      evalRewrittenArchFn =<< (FPCompareUN rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
+    FPToFixed rep a b c d e ->
+      evalRewrittenArchFn =<< (FPToFixed rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c <*> rewriteValue d <*> rewriteValue e)
+    FixedToFP rep a b c d e ->
+      evalRewrittenArchFn =<< (FixedToFP rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c <*> rewriteValue d <*> rewriteValue e)
+    FPConvert rep a b c ->
+      evalRewrittenArchFn =<< (FPConvert rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c)
+    FPToFixedJS a b c ->
+      evalRewrittenArchFn =<< (FPToFixedJS <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c)
+    FPRoundInt rep a b c d ->
+      evalRewrittenArchFn =<< (FPRoundInt rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c <*> rewriteValue d)
 
 -- ----------------------------------------------------------------------
 
@@ -238,7 +530,18 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
             G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
-      _ -> Nothing
+      _ | isUninterpretedOpcode opc -> Just $ do
+            G.addStmt (MC.ExecArchStmt (UninterpretedOpcode opc operands))
+        | otherwise -> Nothing
+
+-- | This is a coarse heuristic to treat any instruction beginning with 'V' as a
+-- vector instruction that we want to leave uninterpreted, as translating all of
+-- the vector instructions faithfully is too much code (for now)
+isUninterpretedOpcode :: (Show a) => a -> Bool
+isUninterpretedOpcode opc =
+  case show opc of
+    'V':_ -> True
+    _ -> False
 
 -- | Manually-provided semantics for T32 (thumb) instructions whose full
 -- semantics cannot be expressed in our semantics format.
