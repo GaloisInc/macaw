@@ -24,6 +24,7 @@ module Data.Macaw.Symbolic.MemTraceOps where
 import           Control.Applicative
 import           Control.Lens ((%~), (&), (^.))
 import           Control.Monad.State
+import qualified Data.BitVector.Sized as BV
 import           Data.List
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
@@ -364,7 +365,7 @@ freshRegValue sym (LLVMPointer reg off) = go 0 where
   describe :: NatRepr w -> Integer -> [String]
   describe = case (asConcrete reg, asConcrete off) of
     (Just (ConcreteNat regVal), Just (ConcreteBV _ offVal)) -> \byteWidth n ->
-      ["read", show (natValue byteWidth), show regVal, "0x" ++ showHex (offVal + n) ""]
+      ["read", show (natValue byteWidth), show regVal, "0x" ++ showHex (BV.asUnsigned offVal + n) ""]
     _ -> \byteWidth _n -> ["read", show (natValue byteWidth), "symbolic_location"]
 
 doMemOpInternal :: forall sym ptrW ty.
@@ -384,10 +385,10 @@ doMemOpInternal sym dir cond ptrWidth = go where
       where bitWidth = natMultiply (knownNat @8) byteWidth
     FloatMemRepr _infoRepr _endianness -> fail "reading floats not supported in doMemOpInternal"
     PackedVecMemRepr _countRepr recRepr -> addrWidthsArePositive ptrWidth $ do
-      elemSize <- liftIO $ bvLit sym ptrWidthNatRepr (memReprByteSize recRepr)
+      elemSize <- liftIO $ bvLit sym ptrWidthNatRepr (BV.mkBV ptrWidthNatRepr (memReprByteSize recRepr))
       flip V.imapM_ regVal $ \i recRegVal -> do
         off' <- liftIO $ do
-          symbolicI <- bvLit sym ptrWidthNatRepr (toInteger i)
+          symbolicI <- bvLit sym ptrWidthNatRepr (BV.mkBV ptrWidthNatRepr (toInteger i))
           dOff <- bvMul sym symbolicI elemSize
           bvAdd sym off dOff
         go (LLVMPointer reg off') recRegVal recRepr

@@ -56,6 +56,7 @@ import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
 import           Text.Read ( readMaybe )
 
+import qualified Data.BitVector.Sized as BVS
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.HasRepr as HR
@@ -630,7 +631,7 @@ addEltTH endianness interps elt = do
             -- Similar to the BoolExpr case, we always eagerly evaluate
             -- bitvector literals and return the VarE that wraps the name
             -- referring to the generated constant.
-            bindExpr elt [| genBVValue $(natReprTH w) $(lift val) |]
+            bindExpr elt [| genBVValue $(natReprTH w) $(lift (BVS.asUnsigned val)) |]
           | otherwise -> EagerBoundExp <$> liftQ [| error "SemiRingLiteral Elts are not supported" |]
         S.StringExpr {} -> EagerBoundExp <$> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc ->
@@ -894,26 +895,26 @@ defaultAppEvaluator endianness elt interps = case elt of
                |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift idx)) <$> $(refBinding bvValExp))
+    liftQ [| addApp =<< (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx))) <$> $(refBinding bvValExp))
             |]
 
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift mul)) <$> $(refBinding y))
+                            letTH [| addApp =<< (M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
                                    |]
             sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
+              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
             add x y = do
               letTH [| addApp =<< (M.BVAdd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
         in WSum.evalM add smul sval sm >>= extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift mul)) <$> $(refBinding y))
+                            letTH [| addApp =<< (M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
                                    |]
             sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift v) |]
+              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
             add x y = do
               letTH [| addApp =<< (M.BVXor $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
         in WSum.evalM add smul sval sm >>= extractBound

@@ -41,6 +41,7 @@ import           Control.Monad (guard, when)
 import           Data.Bits (testBit)
 import qualified Data.Vector as V
 
+import qualified Data.BitVector.Sized as BV
 import           Data.Parameterized (Some(..))
 import qualified Data.Parameterized.Context as Ctx
 
@@ -355,7 +356,8 @@ doGetGlobal st mvar globs addr = do
   let sym = st^.stateSymInterface
   mem <- getMem st mvar
   regionNum <- natLit sym (fromIntegral (M.addrBase addr))
-  offset <- bvLit sym (M.addrWidthNatRepr (M.addrWidthRepr addr)) (M.memWordToUnsigned (M.addrOffset addr))
+  let w = M.addrWidthNatRepr (M.addrWidthRepr addr)
+  offset <- bvLit sym w (BV.mkBV w (M.memWordToUnsigned (M.addrOffset addr)))
   ptr <- globs sym mem regionNum offset
   return (ptr, st)
 
@@ -530,7 +532,7 @@ isAlignMask v =
   do 0 <- asNat (ptrBase v)
      let off = asBits v
          w   = fromInteger (intValue (bvWidth off))
-     k <- asUnsignedBV off
+     k <- BV.asUnsigned <$> asBV off
      let (zeros,ones) = break (testBit k) (take w [ 0 .. ])
      guard (all (testBit k) ones)
      return (fromIntegral (length zeros))
@@ -599,7 +601,7 @@ doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
                  Just LeqProof <- return (testLeq n nw)
                  let mostBits = subNat nw n
                  Just LeqProof <- return (testLeq (knownNat @1) mostBits)
-                 most <- bvLit sym mostBits 0
+                 most <- bvLit sym mostBits (BV.zero mostBits)
 
                  bts <- bvConcat sym most least
 
@@ -695,7 +697,7 @@ memReprToStorageType reqEnd memRep =
         _ -> Left $ "Do not support memory accesses to " ++ show floatRep ++ " values."
     M.PackedVecMemRepr n eltType -> do
       eltStorageType <- memReprToStorageType reqEnd eltType
-      pure $ Mem.arrayType (Bytes (intValue n)) eltStorageType
+      pure $ Mem.arrayType (natValue n) eltStorageType
 
 -- | Convert a Crucible register value to a LLVM memory mode lvalue.
 --
@@ -717,7 +719,7 @@ resolveMemVal (M.FloatMemRepr floatRep _endian) _ val =
     _ -> error $ "Do not support memory accesses to " ++ show floatRep ++ " values."
 resolveMemVal (M.PackedVecMemRepr n eltType) stp val =
   case Mem.storageTypeF stp of
-    Mem.Array cnt eltStp | cnt == Bytes (intValue n), fromIntegral (V.length val) == natValue n ->
+    Mem.Array cnt eltStp | cnt == natValue n, fromIntegral (V.length val) == natValue n ->
       Mem.LLVMValArray eltStp (resolveMemVal eltType eltStp <$> val)
     _ -> error $ "Unexpected storage type for packed vec."
 

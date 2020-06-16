@@ -10,6 +10,7 @@ license-file:  LICENSE
 library
   build-depends:
     base >= 4,
+    bv-sized >= 1.0.0,
     ansi-wl-pprint,
     containers,
     IntervalMap >= 0.6 && < 0.7,
@@ -50,6 +51,6 @@ test-suite doctests
   hs-source-dirs: test
   main-is: doctest.hs
   ghc-options: -Wall -Wcompat -threaded
-  build-depends: base, doctest >= 0.10 && < 0.17
+  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.17
 
                
