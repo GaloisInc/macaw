@@ -2932,6 +2932,8 @@ all_instructions =
       exec_mul v
   , def_neg
   , defNullary  "nop"   $ return ()
+  , defNullary  "endbr32" $ return ()
+  , defNullary  "endbr64" $ return ()
   , defUnary "not"   $ \_ val -> do
       SomeBV l <- getSomeBVLocation val
       modify l bvComplement
