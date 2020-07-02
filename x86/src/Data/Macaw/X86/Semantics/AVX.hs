@@ -143,6 +143,20 @@ avxPointwiseShiftL mnem sz =
                   arg1 <~ PointwiseShiftL elN sz amtw v a
              _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
 
+avxPointwiseLogicalShiftR :: (1 <= n) => String -> NatRepr n -> InstructionDef
+avxPointwiseLogicalShiftR mnem sz =
+  avx3 mnem $ \arg1 arg2 arg3 ->
+      do SomeBV vec <- getSomeBVValue arg2
+         SomeBV amt <- getSomeBVValue arg3
+         let vw   = typeWidth vec
+             amtw = typeWidth amt
+         withDivModNat vw sz $ \elN remi ->
+           case (testEquality remi n0, testLeq n1 elN) of
+             (Just Refl, Just LeqProof) ->
+               do v <- eval vec
+                  a <- eval amt
+                  arg1 <~ PointwiseLogicalShiftR elN sz amtw v a
+             _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
 
 avxInsert :: String -> InstructionDef
 avxInsert mnem =
@@ -196,6 +210,9 @@ all_instructions =
 
   , avxPointwiseShiftL "vpslld" n32
   , avxPointwiseShiftL "vpsllq" n64
+
+  , avxPointwiseLogicalShiftR "vpsrld" n32
+  , avxPointwiseLogicalShiftR "vpsrlq" n64
 
   , avxOp1I "vpslldq" VShiftL
   , avxOp1I "vpsrldq" VShiftR
