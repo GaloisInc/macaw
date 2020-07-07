@@ -59,7 +59,6 @@ import           Data.ElfEdit
   , ElfSectionFlags
   , elfSectionFlags
   , elfSectionName
-  , elfSectionFileSize
   , elfSectionAddr
   , elfSectionData
 
@@ -102,7 +101,7 @@ elfAddrWidth ELFCLASS64 = Addr64
 -- address and section contents.
 --
 -- The base address is expressed in terms of the underlying memory segment.
-type SectionIndexMap w = Map ElfSectionIndex (MemSegmentOff w, ElfSection (ElfWordType w))
+type SectionIndexMap w = Map Word16 (MemSegmentOff w)
 
 ------------------------------------------------------------------------
 -- Flag conversion
@@ -299,6 +298,29 @@ instance MemWidth w => Show (LoadError w) where
   show (FormatDynamicError e) =
     "Elf parsing error: " ++ show e
 
+-- | This contains information needed to resolve elf symbol addresses.
+data SymbolAddrResolver w =
+  SymbolAddrResolver { symSecCount :: Word16
+                     , symResolver :: Word16 -> ElfWordType w -> Maybe (MemSegmentOff w)
+                     }
+
+mkSymbolAddrResolver :: (MemWidth w, Integral (ElfWordType w))
+                     => V.Vector (ElfSection (ElfWordType w))
+                     -> SectionIndexMap w
+                     -> SymbolAddrResolver w
+mkSymbolAddrResolver v m = do
+  let resolveFn secIdx val = do
+        case Map.lookup secIdx m of
+          Just base
+            | Just sec <- v V.!? fromIntegral secIdx
+            , elfSectionAddr sec <= val && (val - elfSectionAddr sec) < Elf.elfSectionSize sec
+            , off <- toInteger (val - elfSectionAddr sec) ->
+              incSegmentOff base off
+          _ -> Nothing
+   in SymbolAddrResolver { symSecCount = fromIntegral (V.length v)
+                         , symResolver = resolveFn
+                         }
+
 runMemLoader :: Endianness
              -> Memory  w
              -> MemLoader w ()
@@ -324,7 +346,7 @@ loadMemSegment nm seg =
         pure ((), mls & mlsMemory .~ mem')
 
 -- | Maps file offsets to the elf section
-type ElfFileSectionMap v = IntervalMap v (ElfSection v)
+type ElfFileSectionMap v = IntervalMap v Word16
 
 ------------------------------------------------------------------------
 -- SymbolResolver
@@ -353,11 +375,11 @@ symbolWarning w = modify $ \l -> w:l
 -- names that could be stripped from executables/shared objects.
 data SymbolTable w
    = NoSymbolTable
-   | StaticSymbolTable !(V.Vector (ElfSymbolTableEntry (Elf.ElfWordType w)))
+   | StaticSymbolTable !(V.Vector (ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)))
    | DynamicSymbolTable !(Elf.DynamicSection w)
 
 -- | Take a symbol entry and symbol version and return the identifier.
-resolveSymbolId :: ElfSymbolTableEntry wtp
+resolveSymbolId :: ElfSymbolTableEntry BS.ByteString wtp
                 -> SymbolVersion
                 -> SymbolResolver SymbolIdentifier
 resolveSymbolId sym ver = do
@@ -383,7 +405,9 @@ resolveSymbolId sym ver = do
 
 resolveSymbol :: SymbolTable w
               -> Word32
-              -> SymbolResolver (ElfSymbolTableEntry (Elf.ElfWordType w), SymbolVersion)
+              -> SymbolResolver ( ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)
+                                , SymbolVersion
+                                )
 resolveSymbol NoSymbolTable _symIdx =
   throwError MissingSymbolTable
 resolveSymbol (StaticSymbolTable entries) symIdx = do
@@ -1152,16 +1176,15 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     mlsMemory %= memBindSegmentIndex segIdx seg
     -- Iterative through sections
     let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdr_offset phdr_end)
-    forM_ l $ \(i, sec) -> do
+    forM_ l $ \(i, elfIdx) -> do
       case i of
         IntervalCO shdr_start _ -> do
-          let elfIdx = ElfSectionIndex (elfSectionIndex sec)
           when (phdr_offset > shdr_start) $ do
             error "Found section header that overlaps with program header."
           let sec_offset = fromIntegral $ shdr_start - phdr_offset
           let Just addr = resolveSegmentOff seg sec_offset
-          mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
-          mlsIndexMap %= Map.insert elfIdx (addr, sec)
+          mlsMemory   %= memBindSectionIndex elfIdx addr
+          mlsIndexMap %= Map.insert elfIdx addr
         _ -> error "Unexpected shdr interval"
 
 -- | Load an elf file into memory by parsing segments.
@@ -1182,11 +1205,9 @@ memoryForElfSegments opt e = do
 
       let intervals :: ElfFileSectionMap (ElfWordType w)
           intervals = IMap.fromList
-            [ (IntervalCO start end, sec)
-            | shdr <- Map.elems (l ^. Elf.shdrs)
-            , let start = shdr^._3
-            , let sec = shdr^._1
-            , let end = start + elfSectionFileSize sec
+            [ (IntervalCO (Elf.shdrOff shdr) end, idx)
+            | (idx, shdr) <- Map.toList (l ^. Elf.shdrs)
+            , let end = Elf.shdrOff shdr + Elf.shdrFileSize shdr
             ]
       let regIndex = adjustedLoadRegionIndex e opt
       let addrOff = loadRegionBaseOffset opt
@@ -1291,10 +1312,10 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
         -- Load memory segment.
         loadMemSegment ("Section " ++ BSC.unpack (elfSectionName sec)) seg
         -- Add entry to map elf section index to start in segment.
-        let elfIdx = ElfSectionIndex (elfSectionIndex sec)
+        let elfIdx = elfSectionIndex sec
         let Just addr = resolveSegmentOff seg 0
-        mlsMemory   %= memBindSectionIndex (fromElfSectionIndex elfIdx) addr
-        mlsIndexMap %= Map.insert elfIdx (addr, sec)
+        mlsMemory   %= memBindSectionIndex elfIdx addr
+        mlsIndexMap %= Map.insert elfIdx addr
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1410,7 +1431,8 @@ memoryForElf :: LoadOptions
 memoryForElf opt e = reprConstraints (elfAddrWidth (elfClass e)) $ do
   (mem, secMap, warnings) <- memoryForElf' opt e
   let isRelevant ste = Elf.steType ste == Elf.STT_FUNC
-  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap isRelevant e
+  let resolver = mkSymbolAddrResolver (V.fromList (toListOf Elf.elfSections e)) secMap
+  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem resolver isRelevant e
   pure (mem, funcSymbols, warnings, symErrs)
 
 -- | Load allocated Elf sections into memory.
@@ -1427,8 +1449,10 @@ memoryForElfAllSymbols :: LoadOptions
 memoryForElfAllSymbols opt e = do
   (mem, secMap, warnings) <- memoryForElf' opt e
   let isRelevant _ = True
-  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem secMap isRelevant e
-  pure (mem, funcSymbols, warnings, symErrs)
+  addrWidthClass (memAddrWidth mem) $ Elf.elfClassInstances (Elf.elfClass e) $ do
+    let resolver = mkSymbolAddrResolver (V.fromList (toListOf Elf.elfSections e)) secMap
+    let (symErrs, funcSymbols) = resolveElfFuncSymbols mem resolver isRelevant e
+    pure (mem, funcSymbols, warnings, symErrs)
 
 ------------------------------------------------------------------------
 -- Elf symbol utilities
@@ -1451,17 +1475,19 @@ instance Show SymbolResolutionError where
   show (CouldNotResolveAddr sym) = "Could not resolve address of " ++ BSC.unpack sym ++ "."
   show MultipleSymbolTables = "Elf contains multiple symbol tables."
 
+
 -- | Map a symbol table entry in .symtab to the associated symbol information.
 --
 -- This drops undefined symbols by returning `Nothing, and returns
 -- either the symbol information or an error message if we cannot
 -- resolve the address.
-resolveElfSymbol :: Memory w -- ^ Memory object from Elf file.
-                 -> SectionIndexMap w -- ^ Section index mp from memory
+resolveElfSymbol :: Integral (ElfWordType w)
+                 => Memory w -- ^ Memory object from Elf file.
+                 -> SymbolAddrResolver w -- ^ Section index mp from memory
                  -> Int -- ^ Index of symbol
-                 -> ElfSymbolTableEntry (ElfWordType w)
+                 -> ElfSymbolTableEntry BS.ByteString (ElfWordType w)
                  -> Maybe (Either SymbolResolutionError (MemSymbol w))
-resolveElfSymbol mem secMap idx ste
+resolveElfSymbol mem resolver idx ste
     -- Check symbol is defined
   | Elf.steIndex ste == Elf.SHN_UNDEF = Nothing
   -- Check symbol name is non-empty
@@ -1477,18 +1503,15 @@ resolveElfSymbol mem secMap idx ste
                     }
         Nothing   -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
   -- Lookup symbol stored in specific section
-  | otherwise = reprConstraints (memAddrWidth mem) $ do
-      let val = Elf.steValue ste
-      case Map.lookup (Elf.steIndex ste) secMap of
-        Just (base,sec)
-          | elfSectionAddr sec <= val && val < elfSectionAddr sec + Elf.elfSectionSize sec
-          , off <- toInteger val - toInteger (elfSectionAddr sec)
-          , Just addr <- incSegmentOff base off -> Just $
-              Right $ MemSymbol { memSymbolName = Elf.steName ste
-                                , memSymbolStart = addr
-                                , memSymbolSize = fromIntegral (Elf.steSize ste)
-                                }
-        _ -> Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
+  | secIdx <- Elf.fromElfSectionIndex (Elf.steIndex ste)
+  , secIdx < symSecCount resolver
+  , Just addr <- symResolver resolver secIdx (Elf.steValue ste) = addrWidthClass (memAddrWidth mem) $
+      Just $ Right $ MemSymbol { memSymbolName = Elf.steName ste
+                               , memSymbolStart = addr
+                               , memSymbolSize = fromIntegral (Elf.steSize ste)
+                               }
+
+  | otherwise = Just $ Left $ CouldNotResolveAddr (Elf.steName ste)
 
 data ResolvedSymbols w = ResolvedSymbols { resolutionErrors :: ![SymbolResolutionError]
                                          , resolvedSymbols :: !(Set (MemSymbol w))
@@ -1534,15 +1557,15 @@ hasSectionIndex section idx = fromIntegral (elfSectionIndex section) == idx
 resolveElfFuncSymbols
   :: forall w
   .  Memory w
-  -> SectionIndexMap w
-  -> (ElfSymbolTableEntry (ElfWordType w) -> Bool)
+  -> SymbolAddrResolver w
+  -> (ElfSymbolTableEntry BS.ByteString (ElfWordType w) -> Bool)
      -- ^ Filter on symbol table entries
   -> Elf w
   -> ([SymbolResolutionError], [MemSymbol w])
-resolveElfFuncSymbols mem secMap p e =
+resolveElfFuncSymbols mem resolver p e =
   let l = Elf.elfSymtab e
 
-      staticEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
+      staticEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
       staticEntries = concatMap (\tbl -> zip [0..] (V.toList (Elf.elfSymbolTableEntries tbl))) l
 
       cl = elfClass e
@@ -1551,22 +1574,23 @@ resolveElfFuncSymbols mem secMap p e =
       sections = e^..elfSections
 
       -- Get dynamic entries
-      dynamicEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
+      dynamicEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
       dynamicEntries
         | [symtab] <- filter (`hasSectionName` ".dynsym") sections
         , strtabIdx <- Elf.elfSectionLink symtab
         , [strtab] <- filter (`hasSectionIndex` strtabIdx) sections
         , Right entries <- Elf.getSymbolTableEntries cl dta (elfSectionData strtab) (elfSectionData symtab) =
-            zip [0..] entries
+            zip [0..] (V.toList entries)
         | otherwise = []
 
-      allEntries :: [(Int, ElfSymbolTableEntry (ElfWordType w))]
+      allEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
       allEntries = staticEntries ++ dynamicEntries
 
       resolvedEntries :: ResolvedSymbols w
       resolvedEntries
         = mconcat
-        $ fmap (ofResolvedSymbol . uncurry (resolveElfSymbol mem secMap))
+        $ Elf.elfClassInstances (Elf.elfClass e)
+        $ fmap (ofResolvedSymbol . uncurry (resolveElfSymbol mem resolver))
         $ filter (\(_,s) -> p s) allEntries
 
       multError =

@@ -647,9 +647,9 @@ parseMember fileVec d = runDIEParser "parseMember" d $ do
   artificial <- getAttributeWithDefault DW_AT_artificial False attributeAsBool
   dloc <- parseDeclLoc fileVec
 
-  byteSize <- getMaybeAttribute DW_AT_byte_size attributeAsUInt
+  byteSize <- getMaybeAttribute DW_AT_byte_size  attributeAsUInt
   bitOff   <- getMaybeAttribute DW_AT_bit_offset attributeAsUInt
-  bitSize  <- getMaybeAttribute DW_AT_bit_size attributeAsUInt
+  bitSize  <- getMaybeAttribute DW_AT_bit_size   attributeAsUInt
 
   pure $! Member { memberName = name
                  , memberDescription = desc
@@ -734,7 +734,6 @@ parseBaseType _ = do
   size <- getSingleAttribute DW_AT_byte_size attributeAsUInt
   case (name, enc,size) of
     (_, DW_ATE_boolean, 1) -> pure $ BoolType
-
     (_, DW_ATE_signed,   _) | size >= 1 -> pure $ SignedIntType (fromIntegral size)
     (_, DW_ATE_unsigned, _) | size >= 1 -> pure $ UnsignedIntType (fromIntegral size)
 
@@ -1145,7 +1144,6 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
 
   originDieID <- getMaybeAttribute DW_AT_abstract_origin attributeAsDieID
 
-
   def <-
     if decl || inlined then
       pure Nothing
@@ -1159,17 +1157,14 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
   dloc <- parseDeclLoc fileVec
 
   typeMap' <- parseTypeMap typeMap fileVec
-
   vars <- parseVariables fileVec
   -- DW_TAG_formal_paramters children
   params <- parseParameters fileVec
+  hasUnspecifiedParams <- hasChildren DW_TAG_unspecified_parameters
 
   entryPC <- getMaybeAttribute DW_AT_entry_pc     attributeAsUInt
 
-  hasUnspecifiedParams <- hasChildren DW_TAG_unspecified_parameters
-
   retType <- getMaybeAttribute DW_AT_type attributeAsTypeRef
-
   noreturn <- getAttributeWithDefault DW_AT_noreturn False attributeAsBool
 
   allTailCallSites <- getAllTailCallSites
@@ -1177,7 +1172,6 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
   ignoreAttribute DW_AT_type
   ignoreChild DW_TAG_label
   ignoreChild DW_TAG_lexical_block
-
   pure $! Subprogram { subName       = name
                      , subDescription = desc
                      , subLinkageName = linkageName
@@ -1197,7 +1191,6 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
                      , subNoreturn   = noreturn
                      , subTypeMap    = typeMap'
                      }
-
 
 -- CompileUnit
 
@@ -1309,7 +1302,6 @@ parseCompileUnit (ctx, d) =
 
   subprograms <- lift $ traverse (parseSubprogram fileVec typeMap) subprogramDies
   let subMap = Map.fromList $ zipWith (\d' s -> (SubprogramRef (dieId d'), s)) subprogramDies subprograms
-
   variables <- parseVariables fileVec
 
   ignoreChild DW_TAG_dwarf_procedure
