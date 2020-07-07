@@ -478,6 +478,7 @@ ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
 instance HasRepr (App f) TypeRepr where
   typeRepr a =
     case a of
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
       MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
