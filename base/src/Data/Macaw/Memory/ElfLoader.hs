@@ -1312,20 +1312,30 @@ insertAllocatedSection hdr symtab sectionMap regIdx nm = do
 memoryForElfSections :: forall w
                      .  Elf w
                      -> Either String (Memory w, SectionIndexMap w, [MemLoadWarning])
-memoryForElfSections e =
-  runMemLoader (toEndianness (Elf.elfData e)) (emptyMemory (elfAddrWidth (elfClass e))) $ do
-    let hdr = Elf.elfHeader e
-    -- Create map from section name to sections with that name.
-    let sectionMap :: SectionNameMap w
-        sectionMap = foldlOf elfSections insSec Map.empty e
-          where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
+memoryForElfSections e = do
+  let hdr = Elf.elfHeader e
+  -- Create map from section name to sections with that name.
+  let sectionMap :: SectionNameMap w
+      sectionMap = foldlOf elfSections  insSec Map.empty e
+        where insSec m sec = Map.insertWith (\new old -> old ++ new) (elfSectionName sec) [sec] m
+  -- Parse Elf symbol table
+  let symtab =
+        case Elf.elfSymtab e of
+          [] -> NoSymbolTable
+          symTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries symTab)
+  memoryForElfSections' hdr sectionMap symtab
 
-    -- Parse Elf symbol table
-    let symtab =
-          case Elf.elfSymtab e of
-            [] -> NoSymbolTable
-            symTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries symTab)
-
+-- | Load allocated Elf sections into memory.
+--
+-- This is only used for object files.  This version uses low-level types
+-- for less complex parsing.
+memoryForElfSections' :: forall w
+                      .  Elf.ElfHeader w -- ^ Header for elf
+                      -> SectionNameMap w -- ^ Map from section name to contents.
+                      -> SymbolTable w -- ^ Symbol table for names.
+                      -> Either String (Memory w, SectionIndexMap w, [MemLoadWarning])
+memoryForElfSections' hdr sectionMap symtab =
+  runMemLoader (toEndianness (Elf.headerData hdr)) (emptyMemory (elfAddrWidth (Elf.headerClass hdr))) $ do
     -- Insert sections
     forM_ (zip [1..] allocatedSectionInfo) $ \(idx, (nm,_)) -> do
       insertAllocatedSection hdr symtab sectionMap idx nm

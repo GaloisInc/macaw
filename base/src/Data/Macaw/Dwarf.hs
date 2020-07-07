@@ -18,25 +18,42 @@ binaries.
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TemplateHaskell #-}
 module Data.Macaw.Dwarf
   ( -- * Compile units and declarations
-    dwarfInfoFromElf
+    Data.Macaw.Memory.Endianness(..)
+  , Dwarf.Sections
+  , Dwarf.mkSections
+  , Dwarf.CUContext
+  , Dwarf.cuOffset
+  , Dwarf.CUOffset(..)
+  , firstCUContext
+  , Dwarf.nextCUContext
+  , getCompileUnit
+  , dwarfCompileUnits
   , CompileUnit(..)
   , dwarfGlobals
+    -- ** Utility function
+  , dwarfInfoFromElf
     -- * Variables
   , Variable(..)
-  , InlineVariable(..)
     -- * Sub programs
   , Subprogram(..)
   , SubprogramDef(..)
+    -- * Inlineing
+  , SubprogramRef
   , InlinedSubprogram(..)
+  , InlineVariable(..)
+  , VariableRef
     -- * Locations
   , Location(..)
   , DeclLoc(..)
     -- * Type information
-  , Type(..)
-  , TypeF(..)
-  , BaseType(..)
+  , TypeRef
+  , typeRefFileOffset
+  , AbsType
+  , TypeApp(..)
+--  , BaseType(..)
   , StructDecl(..)
   , UnionDecl(..)
   , Member(..)
@@ -45,6 +62,11 @@ module Data.Macaw.Dwarf
   , SubroutineTypeDecl(..)
   , Subrange(..)
   , Typedef(..)
+  , TypeQual(..)
+  , TypeQualAnn(..)
+    -- * NAme and Description
+  , Name(..)
+  , Description(..)
     -- * Exports of "Data.Dwarf"
   , Dwarf.DieID
   , Dwarf.DW_OP(..)
@@ -54,12 +76,13 @@ module Data.Macaw.Dwarf
 import           Control.Lens
 import           Control.Monad
 import           Control.Monad.Except
-import qualified Control.Monad.Fail as MF
 import           Control.Monad.Reader
 import           Control.Monad.State
 import           Data.Binary.Get
 import qualified Data.ByteString as BS
-import           Data.Dwarf as Dwarf
+import qualified Data.ByteString.Char8 as BSC
+import qualified Data.Dwarf as Dwarf
+import           Data.Dwarf as Dwarf hiding (Endianess(..), firstCUContext)
 import qualified Data.ElfEdit as Elf
 import           Data.Foldable
 import           Data.Int
@@ -69,13 +92,27 @@ import qualified Data.Map as Map
 import           Data.Maybe
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import           Data.String
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Text.Printf
+
+import           Data.Macaw.Memory (Endianness(..))
 
 hasAttribute :: DW_AT -> DIE -> Bool
 hasAttribute a d = any (\p -> fst p == a) (dieAttributes d)
+
+getWhileNotEmpty :: Get a -> Get [a]
+getWhileNotEmpty act = go []
+  where go prev = do
+          e <- isEmpty
+          if e then
+            pure (reverse prev)
+           else do
+            v <- act
+            go $! v : prev
 
 ------------------------------------------------------------------------
 -- WarnMonad
@@ -96,28 +133,15 @@ instance WarnMonad s m => WarnMonad s (ReaderT r m) where
 ------------------------------------------------------------------------
 -- WarnT
 
--- | A monad transformer that adds the ability to collect a list of string messages
--- (called "warnings") and throw a string exception.  Fail is overridden
--- to generate
---
--- The warnings are strings,
-newtype WarnT m r = WarnT { unWarnT :: ExceptT String (StateT [String] m) r }
-  deriving ( Functor, Applicative )
+-- | A monad transformer that adds the ability to collect a list of messages
+-- (called "warnings") and throw a exception.
+newtype WarnT e m r = WarnT { unWarnT :: ExceptT e (StateT [e] m) r }
+  deriving (Functor, Applicative, Monad, MonadError e)
 
-instance Monad m => Monad (WarnT m) where
-  m >>= h = WarnT $ unWarnT m >>= unWarnT . h
-  return = pure
-#if !(MIN_VERSION_base(4,13,0))
-  fail = MF.fail
-#endif
-
-instance (Monad m) => MF.MonadFail (WarnT m) where
-  fail msg = WarnT $ throwError msg
-
-runWarnT :: WarnT m r -> m (Either String r, [String])
+runWarnT :: WarnT e m r -> m (Either e r, [e])
 runWarnT m = runStateT (runExceptT (unWarnT m)) []
 
-instance Monad m => WarnMonad String (WarnT m) where
+instance Monad m => WarnMonad e (WarnT e m) where
   warn msg = WarnT $ ExceptT $ StateT $ \s -> pure (Right (), msg : s)
 
   runInContext f m = WarnT $ ExceptT $ StateT $ \s -> do
@@ -128,89 +152,107 @@ instance Monad m => WarnMonad String (WarnT m) where
 -- Parser
 
 -- | The context needed to read dwarf entries.
-data ParserState = ParserState { expectedPointerWidth :: !Word64
-                                 -- ^ Number of bytes a pointer is expected to have.
-                               , readerInfo :: !Dwarf.Reader
-                               }
+newtype ParserState = ParserState { readerInfo :: Dwarf.Reader
+                                  }
 
-newtype Parser r = Parser { unParser :: ReaderT ParserState (WarnT Identity) r }
+newtype Parser r = Parser { unParser :: ReaderT ParserState (WarnT String Identity) r }
   deriving ( Functor
            , Applicative
            , Monad
+           , MonadError String
            , WarnMonad String
-           , MF.MonadFail
            )
 
 
-runParser :: Word64 -> Dwarf.Reader -> Parser r -> (Either String r, [String])
-runParser w dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
-  where s = ParserState { expectedPointerWidth = w
-                        , readerInfo = dr
+runParser :: Dwarf.Reader -> Parser r -> (Either String r, [String])
+runParser dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
+  where s = ParserState { readerInfo = dr
                         }
 
 ------------------------------------------------------------------------
 -- Parser functions
 
+-- | Error from parsing an attribute.
+data AttrError
+   = IncorrectTypeFor !String
+   | InvalidFileIndex !Word64
+
+ppAttrError :: AttrError -> String
+ppAttrError e =
+  case e of
+    IncorrectTypeFor tp -> "Incorrect type for " ++ tp
+    InvalidFileIndex idx -> "Invalid file index " ++ show idx
+
+-- | A parser for attribute values.
+type AttrParser r = Dwarf.Reader -> DW_ATVAL -> Except AttrError r
+
 convertAttribute :: DW_AT
-                 -> (DW_ATVAL -> Parser r)
-                 -> DW_ATVAL -> Parser r
-convertAttribute dat f v = runInContext h (f v)
-  where h msg = "Could not interpret attribute " ++ show dat ++ " value " ++ show v ++ ": " ++ msg
+                 -> AttrParser r
+                 -> DW_ATVAL
+                 -> Parser r
+convertAttribute dat f v = do
+  dr <- Parser $ asks readerInfo
+  case runExcept (f dr v) of
+    Left e ->
+      throwError $ "Could not interpret attribute "
+        ++ show dat ++ " value " ++ show v ++ ": " ++ ppAttrError e
+    Right r -> pure r
 
-attributeAsBlob :: DW_ATVAL -> Parser BS.ByteString
-attributeAsBlob (DW_ATVAL_BLOB b) = pure b
-attributeAsBlob _ = fail "Could not interpret as BLOB"
+attributeValue :: AttrParser DW_ATVAL
+attributeValue = \_ -> pure
 
-attributeAsBool :: DW_ATVAL -> Parser Bool
-attributeAsBool (DW_ATVAL_BOOL b) = pure b
-attributeAsBool _ = fail "Could not interpret as Bool"
+attributeAsBlob :: AttrParser BS.ByteString
+attributeAsBlob _ (DW_ATVAL_BLOB b) = pure b
+attributeAsBlob _ _ = throwError $ IncorrectTypeFor "BLOB"
 
-attributeAsInt :: DW_ATVAL -> Parser Int64
-attributeAsInt (DW_ATVAL_INT u) = pure u
-attributeAsInt _ = fail "Could not interpret as Int"
+attributeAsBool :: AttrParser Bool
+attributeAsBool _ (DW_ATVAL_BOOL b) = pure b
+attributeAsBool _ _ = throwError $ IncorrectTypeFor "Bool"
 
-attributeAsUInt :: DW_ATVAL -> Parser Word64
-attributeAsUInt (DW_ATVAL_UINT u) = pure u
-attributeAsUInt _ = fail "Could not interpret as UInt"
+attributeAsInt :: AttrParser Int64
+attributeAsInt _ (DW_ATVAL_INT u) = pure u
+attributeAsInt _ _ = throwError $ IncorrectTypeFor "Int"
+
+attributeAsUInt :: AttrParser Word64
+attributeAsUInt _ (DW_ATVAL_UINT u) = pure u
+attributeAsUInt _ _ = throwError $ IncorrectTypeFor "UInt"
 
 -- | Parse an attribute as a DIE identifier.
-attributeAsDieID :: DW_ATVAL -> Parser DieID
-attributeAsDieID (DW_ATVAL_REF r) = pure r
-attributeAsDieID _ = fail "Could not interpret as DieID."
+attributeAsDieID :: AttrParser DieID
+attributeAsDieID _ (DW_ATVAL_REF r) = pure r
+attributeAsDieID _ _ = throwError $ IncorrectTypeFor "DieID"
 
-attributeAsString :: DW_ATVAL -> Parser String
-attributeAsString (DW_ATVAL_STRING s) = pure s
-attributeAsString _ = fail "Could not interpret as string."
+-- | Parse an attribute intended to be interpreted as a displayable
+-- string.
+--
+-- The character set is not defined, but typically 7-bit ASCII.
+attributeAsString :: AttrParser BS.ByteString
+attributeAsString _ (DW_ATVAL_STRING s) = pure s
+attributeAsString _ _ = throwError $ IncorrectTypeFor "String"
 
-lookupDIE :: Map DieID v -> DieID -> Parser v
-lookupDIE m k =
-  case Map.lookup k m of
-    Just d -> pure d -- (dieRefsDIE d)
-    Nothing -> fail $ "Could not find " ++ show k
+attributeAsBaseTypeEncoding :: AttrParser DW_ATE
+attributeAsBaseTypeEncoding _ (DW_ATVAL_UINT u) = pure (DW_ATE u)
+attributeAsBaseTypeEncoding _ _ = throwError $ IncorrectTypeFor "BaseTypeEncoding"
 
-resolveDieIDAttribute :: Map DieID v -> DW_ATVAL -> Parser v
-resolveDieIDAttribute m v = lookupDIE m =<< attributeAsDieID v
+attributeAsLang :: AttrParser DW_LANG
+attributeAsLang dr v = DW_LANG <$> attributeAsUInt dr v
 
-attributeAsLang :: DW_ATVAL -> Parser DW_LANG
-attributeAsLang v = DW_LANG <$> attributeAsUInt v
+mapAttr :: (a -> b) -> AttrParser a -> AttrParser b
+mapAttr f p dr v = f <$> p dr v
+
+runGetComplete :: BS.ByteString -> Get a -> Either String a
+runGetComplete bs m =
+  case pushEndOfInput (runGetIncremental m `pushChunk` bs) of
+    Fail _ _ msg -> Left msg
+    Partial _ -> Left "Unexpected partial"
+    Done _ _ r -> Right r
 
 parseGet :: BS.ByteString -> Get a -> Parser a
 parseGet bs m =
   case pushEndOfInput (runGetIncremental m `pushChunk` bs) of
-    Fail _ _ msg -> fail msg
-    Partial _ -> fail "Unexpected partial"
-    Done _ _ r -> do
-      pure r
-
-attributeAsFilename :: V.Vector FilePath -> DW_ATVAL -> Parser FilePath
-attributeAsFilename v val = do
-  idx <- attributeAsUInt val
-  if idx == 0 then
-    pure ""
-   else
-    case v V.!? fromIntegral (idx - 1) of
-      Just e -> pure e
-      Nothing -> fail $ "Could not match filename index " ++ show idx ++ "."
+    Fail _ _ msg -> throwError msg
+    Partial _ -> throwError "Unexpected partial"
+    Done _ _ r -> pure r
 
 ------------------------------------------------------------------------
 -- Range
@@ -252,27 +294,31 @@ taggedError :: String -> String -> String
 taggedError nm msg =
   "Error parsing " ++ nm ++ ":\n" ++ unlines (("  " ++) <$> lines msg)
 
-runDIEParser :: String -> DIE -> DIEParser r -> Parser r
-runDIEParser ctx d act = runInContext (taggedError (ctx ++ " " ++ show (dieId d) ++ " " ++ show (dieTag d))) $ do
-  let childMap :: Map DW_TAG [DIE]
-      childMap = foldr' (\d' -> Map.insertWith (++) (dieTag d') [d']) Map.empty (dieChildren d)
-      attrMap  = foldr' (\(k,v) -> Map.insertWith (++) k [v])     Map.empty (dieAttributes d)
-      s0 = DPS { dpsDIE = d
-               , dpsAttributeMap = attrMap
-               , _dpsSeenAttributes = Set.empty
-               , dpsChildrenMap = childMap
-               , _dpsSeenChildren = Set.empty
-               }
-  (r, s1) <- runStateT act s0
-  do let missingTags = Map.keysSet childMap `Set.difference` (s1^.dpsSeenChildren)
-     when (not (Set.null missingTags)) $ do
-       forM_ (dieChildren d) $ \child -> do
-         when (not (Set.member (dieTag child) (s1^.dpsSeenChildren))) $ do
-           warn $ "Unexpected child for " ++ ctx ++ ": " ++ show child
-  do let missingAttrs = Map.keysSet attrMap `Set.difference` (s1^.dpsSeenAttributes)
-     when (not (Set.null missingAttrs)) $ do
-       warn $ "Unexpected attributes: " ++ show (Set.toList missingAttrs) ++ "\n" ++ show d
-  pure r
+runDIEParser :: String
+             -> DIE
+             -> DIEParser r
+             -> Parser r
+runDIEParser ctx d act =
+  runInContext (taggedError (ctx ++ " " ++ show (dieId d) ++ " " ++ show (dieTag d))) $ do
+    let childMap :: Map DW_TAG [DIE]
+        childMap = foldr' (\d' -> Map.insertWith (\_ o -> d' : o) (dieTag d') [d']) Map.empty (dieChildren d)
+        attrMap  = foldr' (\(k,v) -> Map.insertWith (++) k [v])     Map.empty (dieAttributes d)
+        s0 = DPS { dpsDIE = d
+                 , dpsAttributeMap = attrMap
+                 , _dpsSeenAttributes = Set.singleton DW_AT_sibling
+                 , dpsChildrenMap = childMap
+                 , _dpsSeenChildren = Set.empty
+                 }
+    (r, s1) <- runStateT act s0
+    do let missingTags = Map.keysSet childMap `Set.difference` (s1^.dpsSeenChildren)
+       when (not (Set.null missingTags)) $ do
+         forM_ (dieChildren d) $ \child -> do
+           when (not (Set.member (dieTag child) (s1^.dpsSeenChildren))) $ do
+             warn $ "Unexpected child for " ++ ctx ++ ": " ++ show child
+    do let missingAttrs = Map.keysSet attrMap `Set.difference` (s1^.dpsSeenAttributes)
+       when (not (Set.null missingAttrs)) $ do
+         warn $ "Unexpected attributes: " ++ show (Set.toList missingAttrs) ++ "\n" ++ show d
+    pure r
 
 checkTag :: DW_TAG -> DIEParser ()
 checkTag tag = do
@@ -287,59 +333,116 @@ ignoreChild :: DW_TAG -> DIEParser ()
 ignoreChild dat = do
   dpsSeenChildren %= Set.insert dat
 
-getSingleAttribute :: DW_AT -> (DW_ATVAL -> Parser v) -> DIEParser v
-getSingleAttribute dat f = do
+getSingleAttribute :: DW_AT -> AttrParser v -> DIEParser v
+getSingleAttribute dat p = do
   d <- gets dpsDIE
   m <- gets dpsAttributeMap
-  case fromMaybe [] (Map.lookup dat m) of
-    [] -> fail $ "Expected attribute " ++ show dat ++ " in " ++ show d ++ "."
+  case Map.findWithDefault [] dat m of
+    [] -> throwError $ "Expected attribute " ++ show dat ++ " in " ++ show d ++ "."
+    [v] -> do
+      ignoreAttribute dat
+      lift $ convertAttribute dat p v
+    _ -> throwError $ "Found multiple attributes for " ++ show dat ++ " in " ++ show d ++ "."
+
+getAttributeWithDefault :: DW_AT -> v -> AttrParser v -> DIEParser v
+getAttributeWithDefault dat def f = do
+  d <- gets dpsDIE
+  m <- gets dpsAttributeMap
+  case Map.findWithDefault [] dat m of
+    [] -> do
+      ignoreAttribute dat
+      pure def
     [v] -> do
       ignoreAttribute dat
       lift $ convertAttribute dat f v
-    _ -> fail $ "Found multiple attributes for " ++ show dat ++ " in " ++ show d ++ "."
+    _ -> throwError $ "Found multiple attributes for " ++ show dat ++ " in " ++ show d ++ "."
 
-getMaybeAttribute :: DW_AT -> (DW_ATVAL -> Parser v) -> DIEParser (Maybe v)
+getMaybeAttribute :: DW_AT -> AttrParser v -> DIEParser (Maybe v)
 getMaybeAttribute dat f = do
   d <- gets dpsDIE
   m <- gets dpsAttributeMap
-  case fromMaybe [] (Map.lookup dat m) of
+  case Map.findWithDefault [] dat m of
     [] -> do
       ignoreAttribute dat
       pure Nothing
     [v] -> do
       ignoreAttribute dat
       lift $ Just <$> convertAttribute dat f v
-    _ -> fail $ "Found multiple attributes for " ++ show dat ++ " in " ++ show d ++ "."
+    _ -> throwError $ "Found multiple attributes for " ++ show dat ++ " in " ++ show d ++ "."
 
 parseChildrenList :: DW_TAG -> (DIE -> Parser v) -> DIEParser [v]
 parseChildrenList tag f = do
   ignoreChild tag
   m <- gets dpsChildrenMap
-  lift $ traverse f $ fromMaybe [] $ Map.lookup tag m
+  lift $ traverse f $ Map.findWithDefault [] tag m
+
+hasChildren :: DW_TAG -> DIEParser Bool
+hasChildren tag = do
+  ignoreChild tag
+  gets $ Map.member tag . dpsChildrenMap
+
 
 ------------------------------------------------------------------------
 -- DeclLoc
 
+-- | Type synonym for file paths in Dwarf
+--
+-- The empty string denotes no file.
+newtype DwarfFilePath = DwarfFilePath { filePathVal :: BS.ByteString }
+  deriving (Eq, IsString)
+
+instance Show DwarfFilePath where
+  show = BSC.unpack . filePathVal
+
+instance Pretty DwarfFilePath where
+  pretty = text . BSC.unpack . filePathVal
+
+-- | File vector read from line-number information.
+type FileVec = V.Vector DwarfFilePath
+
 -- | A file and line number for a declaration.
-data DeclLoc = DeclLoc { locFile :: !FilePath
-                       , locLine :: !Word64
+data DeclLoc = DeclLoc { locFile   :: !DwarfFilePath
+                       , locLine   :: !Word64
+                       , locColumn :: !Word64
                        }
+
+unspecifiedDeclLoc :: DeclLoc
+unspecifiedDeclLoc = DeclLoc { locFile = "", locLine = 0, locColumn = 0 }
 
 instance Pretty DeclLoc where
   pretty loc =
-    text "decl_file:  " <+> text (locFile loc) <$$>
-    text "decl_line:  " <+> text (show (locLine loc))
+    let file | locFile loc == "" = empty
+             | otherwise = text "decl_file:   " <+> pretty (locFile loc) <> line
+        lne | locLine loc == 0 = empty
+            | otherwise  = text "decl_line:   " <+> text (show (locLine loc)) <> line
+        col | locColumn loc == 0 = empty
+            | otherwise  = text "decl_column: " <+> text (show (locColumn loc)) <> line
+     in file <> lne <> col
 
 instance Show DeclLoc where
   show = show . pretty
 
+
+attributeAsFile :: FileVec -> AttrParser DwarfFilePath
+attributeAsFile fileVec _ (DW_ATVAL_UINT i) =
+  if i == 0 then
+    pure ""
+   else if toInteger i <= toInteger (V.length fileVec) then
+    pure $! fileVec V.! fromIntegral (i-1)
+   else
+    throwError $ InvalidFileIndex i
+attributeAsFile _ _ _ = throwError $ IncorrectTypeFor "file path"
+
+
 -- | Read the decl_file and decl_line attributes from the DIE
-parseDeclLoc :: V.Vector FilePath -> DIEParser DeclLoc
-parseDeclLoc file_vec = do
-  declFile   <- getSingleAttribute DW_AT_decl_file  (attributeAsFilename file_vec)
-  declLine   <- getSingleAttribute DW_AT_decl_line  attributeAsUInt
+parseDeclLoc :: FileVec -> DIEParser DeclLoc
+parseDeclLoc fileVec = do
+  declFile   <- getAttributeWithDefault DW_AT_decl_file "" (attributeAsFile fileVec)
+  declLine   <- getAttributeWithDefault DW_AT_decl_line   0 attributeAsUInt
+  declCol    <- getAttributeWithDefault DW_AT_decl_column 0 attributeAsUInt
   pure $! DeclLoc { locFile = declFile
                   , locLine = declLine
+                  , locColumn =declCol
                   }
 
 ------------------------------------------------------------------------
@@ -352,26 +455,115 @@ ppOp o = text (show o)
 ppOps :: [DW_OP] -> Doc
 ppOps l = hsep (ppOp <$> l)
 
+readDwarfExpr :: Dwarf.Reader -> BS.ByteString -> Either String [DW_OP]
+readDwarfExpr dr bs = runGetComplete bs (getWhileNotEmpty (getDW_OP dr))
+
+{-
 parseDwarfExpr :: BS.ByteString -> Parser [DW_OP]
 parseDwarfExpr bs = do
   dr <- Parser $ asks readerInfo
-  parseGet bs (getWhileNotEmpty (getDW_OP dr))
+  case readDwarfExpr dr bs of
+    Left msg -> throwError msg
+    Right r -> pure r
+-}
+
+------------------------------------------------------------------------
+-- Name and Descripion
+
+newtype Name = Name { nameVal :: BS.ByteString }
+  deriving (Eq, Ord)
+
+instance IsString Name where
+  fromString = Name . BSC.pack
+
+instance Pretty Name where
+  pretty = text . BSC.unpack . nameVal
+
+instance Show Name where
+  show = BSC.unpack . nameVal
+
+-- | The value of a `DW_AT_description` field.
+--
+-- Note. This is the empty string if th
+newtype Description = Description { descriptionVal :: BS.ByteString }
+
+instance Show Description where
+  show = BSC.unpack . descriptionVal
+
+
+-- | Get name and description.
+--
+-- If name of description is missing, the empty string is returned.
+getNameAndDescription :: DIEParser (Name, Description)
+getNameAndDescription = do
+  (,) <$> (Name        <$> getAttributeWithDefault DW_AT_name BS.empty attributeAsString)
+      <*> (Description <$> getAttributeWithDefault DW_AT_description BS.empty attributeAsString)
+
+------------------------------------------------------------------------
+-- ConstValue
+
+data ConstValue
+  = ConstBlob BS.ByteString
+  | ConstInt  Int64
+  | ConstUInt Word64
+  | ConstString BS.ByteString
+    -- ^ A string of bytes that was originally null-terminated.
+    --
+    -- Note. The null terminator was removed and does not appear
+    -- in the Haskell `ByteString`.
+  deriving (Show)
+
+$(pure [])
+
+attributeConstValue :: AttrParser ConstValue
+attributeConstValue _ v =
+  case v of
+    DW_ATVAL_BLOB x   -> pure $! ConstBlob x
+    DW_ATVAL_INT x    -> pure $! ConstInt  x
+    DW_ATVAL_UINT x   -> pure $! ConstUInt x
+    DW_ATVAL_STRING x -> pure $! ConstString x
+    _ -> throwError $ IncorrectTypeFor "const value"
+
+$(pure [])
+
+getConstValue :: DIEParser (Maybe ConstValue)
+getConstValue = getMaybeAttribute DW_AT_const_value attributeConstValue
+
+$(pure [])
+
+------------------------------------------------------------------------
+-- TypeRef
+
+-- | A reference to a type DIE
+newtype TypeRef = TypeRef DieID
+  deriving (Eq, Ord, Show)
+
+-- | Return the offset asssociated with the type.
+typeRefFileOffset :: TypeRef -> Word64
+typeRefFileOffset (TypeRef o) = dieID o
+
+instance Pretty TypeRef where
+  pretty r = text (showHex (typeRefFileOffset r) "")
+
+$(pure [])
 
 ------------------------------------------------------------------------
 -- Enumerator
 
-data Enumerator = Enumerator { enumName :: !String
-                             , enumValue :: Int64
+data Enumerator = Enumerator { enumName :: !Name
+                             , enumDescription :: !Description
+                             , enumValue :: !ConstValue
                              }
   deriving (Show)
 
 parseEnumerator :: DIE -> Parser Enumerator
 parseEnumerator d = runDIEParser "parseEnumerator" d $ do
   checkTag DW_TAG_enumerator
-  name       <- getSingleAttribute DW_AT_name        attributeAsString
-  val        <- getSingleAttribute DW_AT_const_value attributeAsInt
-  pure Enumerator { enumName = name
-                  , enumValue = val
+  (name, desc) <- getNameAndDescription
+  val <- getSingleAttribute DW_AT_const_value attributeConstValue
+  pure Enumerator { enumName        = name
+                  , enumDescription = desc
+                  , enumValue       = val
                   }
 
 ------------------------------------------------------------------------
@@ -383,87 +575,135 @@ data Subrange tp = Subrange { subrangeType :: tp
   deriving (Show)
 
 
-subrangeTypeLens :: Lens (Subrange a) (Subrange b) a b
-subrangeTypeLens = lens subrangeType (\s v -> s { subrangeType = v })
+--subrangeTypeLens :: Lens (Subrange a) (Subrange b) a b
+--subrangeTypeLens = lens subrangeType (\s v -> s { subrangeType = v })
 
-getWhileNotEmpty :: Get a -> Get [a]
-getWhileNotEmpty act = go []
-  where go prev = do
-          e <- isEmpty
-          if e then
-            pure (reverse prev)
-           else do
-            v <- act
-            go $! v : prev
-
-parseSubrange :: DIE -> Parser (Subrange DieID)
+parseSubrange :: DIE -> Parser (Subrange TypeRef)
 parseSubrange d = runDIEParser "parseSubrange" d $ do
   dr <- lift $ Parser $ asks readerInfo
-  tp    <- getSingleAttribute DW_AT_type attributeAsDieID
-  upper <- getSingleAttribute DW_AT_upper_bound $ \case
-    DW_ATVAL_UINT w ->
-      pure [DW_OP_const8u w]
-    DW_ATVAL_BLOB bs -> do
-      parseGet bs (getWhileNotEmpty (getDW_OP dr))
-    _ -> fail "Invalid upper bound"
+  tp       <- getSingleAttribute DW_AT_type attributeAsTypeRef
+  upperVal <- getSingleAttribute DW_AT_upper_bound attributeValue
 
-  pure Subrange { subrangeType = tp
-                , subrangeUpperBound = upper
-                }
+  upper <-
+    case upperVal of
+      DW_ATVAL_UINT w -> pure [DW_OP_const8u w]
+      DW_ATVAL_BLOB bs -> lift $ parseGet bs (getWhileNotEmpty (getDW_OP dr))
+      _ -> throwError "Invalid upper bound"
+
+  pure $! Subrange { subrangeType = tp
+                   , subrangeUpperBound = upper
+                   }
 
 ------------------------------------------------------------------------
 -- Type
 
+{-
 data BaseType = BaseTypeDef { baseSize     :: !Word64
                             , baseEncoding :: !DW_ATE
                             , baseName     :: !String
                             }
   deriving (Show)
+-}
 
-data Member tp = Member { memberName :: !String
-                        , memberDeclLoc  :: !(Maybe DeclLoc)
-                        , memberLoc      :: !(Maybe Word64)
-                        , memberType     :: tp
-                        }
+data Member = Member { memberName     :: !Name
+                     , memberDescription :: !Description
+                     , memberDeclLoc  :: !DeclLoc
+                     , memberLoc      :: !(Maybe Word64)
+                     , memberType     :: !TypeRef
+                     , memberArtificial :: !Bool
+                     , memberByteSize   :: !(Maybe Word64)
+                     , memberBitOffset  :: !(Maybe Word64)
+                     , memberBitSize    :: !(Maybe Word64)
+                     }
   deriving (Show)
 
-data StructDecl tp = StructDecl { structName     :: !String
-                                , structByteSize :: !Word64
-                                , structLoc      :: !DeclLoc
-                                , structMembers  :: ![Member tp]
-                                }
+data StructDecl = StructDecl { structName     :: !Name
+                             , structDescription :: !Description
+                             , structByteSize :: !Word64
+                             , structLoc      :: !DeclLoc
+                             , structMembers  :: ![Member]
+                             }
   deriving (Show)
 
-data UnionDecl tp = UnionDecl { unionName     :: !String
-                              , unionByteSize :: !Word64
-                              , unionLoc      :: !DeclLoc
-                              , unionMembers  :: ![Member tp]
-                              }
+data UnionDecl = UnionDecl { unionName     :: !Name
+                           , unionDescription :: !Description
+                           , unionByteSize :: !Word64
+                           , unionLoc      :: !DeclLoc
+                           , unionMembers  :: ![Member]
+                           }
   deriving (Show)
 
-data EnumDecl = EnumDecl { enumDeclName :: Maybe String
+data EnumDecl = EnumDecl { enumDeclName     :: !Name
+                         , enumDeclDescription :: !Description
                          , enumDeclByteSize :: !Word64
                          , enumDeclLoc      :: !DeclLoc
+                           -- | The underlying type of an enum.
+                         , enumDeclType     :: !(Maybe TypeRef)
                          , enumDeclCases    :: ![Enumerator]
                          }
   deriving (Show)
 
-data SubroutineTypeDecl tp
+data SubroutineTypeDecl
    = SubroutineTypeDecl { fntypePrototyped :: !(Maybe Bool)
                         , fntypeFormals    :: ![DIE]
-                        , fntypeType       :: !(Maybe tp)
+                        , fntypeType       :: !(Maybe TypeRef)
                         }
   deriving (Show)
 
-data Typedef tp = Typedef { typedefName :: !String
-                          , typedefLoc  :: !DeclLoc
-                          , typedefType :: tp
-                          }
+data Typedef = Typedef { typedefName :: !Name
+                       , typedefDescription :: !Description
+                       , typedefLoc  :: !DeclLoc
+                       , typedefType :: !TypeRef
+                       }
   deriving (Show)
 
+parseMember :: FileVec -> DIE -> Parser Member
+parseMember fileVec d = runDIEParser "parseMember" d $ do
+  checkTag DW_TAG_member
+  (name, desc) <- getNameAndDescription
+  tp         <- getSingleAttribute DW_AT_type attributeAsTypeRef
+  memLoc     <- getMaybeAttribute  DW_AT_data_member_location  attributeAsUInt
+  artificial <- getAttributeWithDefault DW_AT_artificial False attributeAsBool
+  dloc <- parseDeclLoc fileVec
 
+  byteSize <- getMaybeAttribute DW_AT_byte_size attributeAsUInt
+  bitOff   <- getMaybeAttribute DW_AT_bit_offset attributeAsUInt
+  bitSize  <- getMaybeAttribute DW_AT_bit_size attributeAsUInt
 
-data TypeF tp
+  pure $! Member { memberName = name
+                 , memberDescription = desc
+                 , memberDeclLoc  = dloc
+                 , memberLoc = memLoc
+                 , memberType = tp
+                 , memberArtificial = artificial
+                 , memberByteSize  = byteSize
+                 , memberBitOffset = bitOff
+                 , memberBitSize   = bitSize
+                 }
+
+attributeAsTypeRef :: AttrParser TypeRef
+attributeAsTypeRef _ (DW_ATVAL_REF r) = pure (TypeRef r)
+attributeAsTypeRef _ _ = throwError $ IncorrectTypeFor "type reference"
+
+-- | A qualifier on a type.
+data TypeQual
+   = ConstQual
+   | VolatileQual
+   | RestrictQual
+  deriving (Show)
+
+-- | A type qualifier annotation.
+data TypeQualAnn = TypeQualAnn { tqaTypeQual :: !TypeQual
+                               , tqaName     :: !Name
+                               , tqaDescription :: !Description
+                               , tqaDeclLoc     :: !DeclLoc
+                               , tqaAlign       :: !Word64
+                               , tqaType        :: !(Maybe TypeRef)
+                               }
+  deriving (Show)
+
+-- | A type form
+data TypeApp
    = BoolType
      -- ^ A 1-byte boolean value (0 is false, nonzero is true)
    | UnsignedIntType !Int
@@ -481,217 +721,157 @@ data TypeF tp
    | SignedCharType
      -- ^ A 1-byte signed character.
 
-   | ArrayType tp ![Subrange tp]
-   | PointerType !(Maybe tp)
-     -- ^ A pointer with the given type (or 'Nothing') to indicate this is a void pointer.
-   | StructType !(StructDecl tp)
+   | ArrayType !TypeRef ![Subrange TypeRef]
+   | PointerType !Word64 !(Maybe TypeRef)
+     -- ^ A pointer with the given type (or 'Nothing') to indicate
+     -- this is a void pointer.  The word is the byte count.
+   | StructType !StructDecl
      -- ^ Denotes a C struct
-   | UnionType !(UnionDecl tp)
+   | UnionType !UnionDecl
      -- ^ Denotes a C union
    | EnumType !EnumDecl
-   | SubroutinePtrType !(SubroutineTypeDecl tp)
-   | TypedefType !(Typedef tp)
+   | SubroutinePtrType !SubroutineTypeDecl
+   | TypedefType !Typedef
+   | TypeQualType !TypeQualAnn
+     -- ^ Restrict modifier on type.
+   | SubroutineTypeF !SubroutineTypeDecl
+     -- ^ Subroutine type
   deriving (Show)
-
-structMembersLens :: Lens (StructDecl a) (StructDecl b) [Member a] [Member b]
-structMembersLens = lens structMembers (\s v -> s { structMembers = v })
-
-unionMembersLens :: Lens (UnionDecl a) (UnionDecl b) [Member a] [Member b]
-unionMembersLens = lens unionMembers (\s v -> s { unionMembers = v })
-
-memberTypeLens :: Lens (Member a) (Member b) a b
-memberTypeLens = lens memberType (\s v -> s { memberType = v })
-
-subroutineTypeLens :: Lens (SubroutineTypeDecl a) (SubroutineTypeDecl b) (Maybe a) (Maybe b)
-subroutineTypeLens = lens fntypeType (\s v -> s { fntypeType = v })
-
-typedefTypeLens :: Lens (Typedef a) (Typedef b) a b
-typedefTypeLens = lens typedefType (\s v -> s { typedefType = v })
-
-traverseSubtypes :: Traversal (TypeF a) (TypeF b) a b
-traverseSubtypes f tf =
-  case tf of
-    BoolType          -> pure BoolType
-    UnsignedIntType w -> pure (UnsignedIntType w)
-    SignedIntType w   -> pure (SignedIntType w)
-    FloatType         -> pure FloatType
-    DoubleType        -> pure DoubleType
-    UnsignedCharType  -> pure UnsignedCharType
-    SignedCharType    -> pure SignedCharType
-    ArrayType etp d -> ArrayType <$> f etp <*> (traverse . subrangeTypeLens) f d
-    PointerType tp -> PointerType <$> traverse f tp
-    StructType s -> StructType <$> (structMembersLens . traverse . memberTypeLens) f s
-    UnionType  u -> UnionType  <$> (unionMembersLens . traverse . memberTypeLens) f u
-    EnumType e -> pure (EnumType e)
-    SubroutinePtrType d -> SubroutinePtrType <$> (subroutineTypeLens . traverse) f d
-    TypedefType tp -> TypedefType <$> typedefTypeLens f tp
-
-parseMember :: V.Vector FilePath -> DIE -> Parser (Member DieID)
-parseMember file_vec d = runDIEParser "parseMember" d $ do
-  checkTag DW_TAG_member
-  name       <- getSingleAttribute DW_AT_name       attributeAsString
-  tp         <- getSingleAttribute DW_AT_type attributeAsDieID
-  memLoc     <- getMaybeAttribute  DW_AT_data_member_location  attributeAsUInt
-  artificial <- fromMaybe False <$> getMaybeAttribute DW_AT_artificial attributeAsBool
-  mdloc <-
-    if artificial then
-      pure Nothing
-     else
-      Just <$> parseDeclLoc file_vec
-
-  pure $! Member { memberName = name
-                 , memberDeclLoc  = mdloc
-                 , memberLoc = memLoc
-                 , memberType = tp
-                 }
-
-attributeAsBaseTypeEncoding :: DW_ATVAL -> Parser DW_ATE
-attributeAsBaseTypeEncoding v = do
-  u <- attributeAsUInt v
-  case get_dw_ate u of
-    Just r -> pure r
-    Nothing -> fail $ "Could not parser attribute encoding 0x" ++ showHex u "."
-
-data PreType
-   = PreTypeF !(TypeF DieID)
-   | EmptyConst
-     -- ^ Denotes an const die with no attributes
-   | ConstTypeF !DieID
-     -- ^ A const value with the given die ID.
-   | VolatileTypeF !DieID
-   | SubroutineTypeF !(SubroutineTypeDecl DieID)
 
 -- | A type parser takes the file vector and returns either a `TypeF` or `Nothing`.
 --
 -- The nothing value is returned, because `DW_TAG_const_type` with no `DW_AT_type`
 -- attribute.
-type TypeParser = V.Vector FilePath -> DIEParser PreType
+type TypeParser = FileVec -> DIEParser TypeApp
 
 parseBaseType :: TypeParser
 parseBaseType _ = do
-  name <- getSingleAttribute DW_AT_name      attributeAsString
+  (name, _) <- getNameAndDescription
   enc  <- getSingleAttribute DW_AT_encoding  attributeAsBaseTypeEncoding
   size <- getSingleAttribute DW_AT_byte_size attributeAsUInt
   case (name, enc,size) of
-    (_, DW_ATE_boolean, 1) -> pure $ PreTypeF BoolType
+    (_, DW_ATE_boolean, 1) -> pure $ BoolType
 
-    (_, DW_ATE_signed,   _) | size >= 1 -> pure $ PreTypeF $ SignedIntType (fromIntegral size)
-    (_, DW_ATE_unsigned, _) | size >= 1 -> pure $ PreTypeF $ UnsignedIntType (fromIntegral size)
+    (_, DW_ATE_signed,   _) | size >= 1 -> pure $ SignedIntType (fromIntegral size)
+    (_, DW_ATE_unsigned, _) | size >= 1 -> pure $ UnsignedIntType (fromIntegral size)
 
-    (_, DW_ATE_float,    4) -> pure $ PreTypeF $ FloatType
-    (_, DW_ATE_float,    8) -> pure $ PreTypeF $ DoubleType
+    (_, DW_ATE_float,    4) -> pure $! FloatType
+    (_, DW_ATE_float,    8) -> pure $! DoubleType
 
-    (_, DW_ATE_signed_char, 1)   -> pure $ PreTypeF $ SignedCharType
-    (_, DW_ATE_unsigned_char, 1) -> pure $ PreTypeF $ UnsignedCharType
-    _ -> fail ("Unsupported base type " ++ show name ++ " " ++ show enc ++ " " ++ show size)
-
-parseConstType :: TypeParser
-parseConstType _ = do
-  ma <- getMaybeAttribute DW_AT_type attributeAsDieID
-  case ma of
-    Just a  -> pure $ ConstTypeF a
-    Nothing -> pure $ EmptyConst
-
-
-parseVolatileType :: TypeParser
-parseVolatileType _ = do
-  VolatileTypeF <$> getSingleAttribute DW_AT_type attributeAsDieID
+    (_, DW_ATE_signed_char, 1)   -> pure $! SignedCharType
+    (_, DW_ATE_unsigned_char, 1) -> pure $! UnsignedCharType
+    _ -> throwError $ "Unsupported base type " ++ show name ++ " " ++ show enc ++ " " ++ show size
 
 parsePointerType :: TypeParser
 parsePointerType _ = do
-  expected <- lift $ Parser $ asks expectedPointerWidth
-  mtp <- getMaybeAttribute DW_AT_type attributeAsDieID
-  w <- getSingleAttribute DW_AT_byte_size attributeAsUInt
-  when (w /= expected) $ do
-    fail $ "Found pointer width of " ++ show w ++ " when " ++ show expected ++ " expected."
-  pure $ PreTypeF $ PointerType mtp
+  mtp <- getMaybeAttribute DW_AT_type attributeAsTypeRef
+  w   <- getSingleAttribute DW_AT_byte_size attributeAsUInt
+  pure $! PointerType w mtp
 
 parseStructureType :: TypeParser
-parseStructureType file_vec = do
-  name       <- fromMaybe "" <$> getMaybeAttribute DW_AT_name       attributeAsString
-  byte_size  <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
-  declLoc    <- parseDeclLoc file_vec
-  ignoreAttribute DW_AT_sibling
+parseStructureType fileVec = do
+  (name, desc) <- getNameAndDescription
+  byteSize  <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
+  dloc    <- parseDeclLoc fileVec
 
-  members <- parseChildrenList DW_TAG_member (parseMember file_vec)
+  members <- parseChildrenList DW_TAG_member $ parseMember fileVec
 
   let struct = StructDecl { structName     = name
-                          , structByteSize = byte_size
-                          , structLoc      = declLoc
+                          , structDescription = desc
+                          , structByteSize = byteSize
+                          , structLoc      = dloc
                           , structMembers  = members
                           }
-  pure $ PreTypeF $ StructType struct
+  pure $! StructType struct
 
 parseUnionType :: TypeParser
-parseUnionType file_vec = do
-  name       <- fromMaybe "" <$> getMaybeAttribute DW_AT_name       attributeAsString
-  byte_size  <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
-  declLoc    <- parseDeclLoc file_vec
-  ignoreAttribute DW_AT_sibling
+parseUnionType fileVec = do
+  (name, desc) <- getNameAndDescription
+  byteSize  <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
+  dloc    <- parseDeclLoc fileVec
 
-  members <- parseChildrenList DW_TAG_member (parseMember file_vec)
+  members <- parseChildrenList DW_TAG_member $ parseMember fileVec
 
   let u = UnionDecl { unionName     = name
-                    , unionByteSize = byte_size
-                    , unionLoc      = declLoc
+                    , unionDescription = desc
+                    , unionByteSize = byteSize
+                    , unionLoc      = dloc
                     , unionMembers  = members
                     }
-  pure $ PreTypeF $ UnionType u
+  pure $! UnionType u
 
 parseTypedefType :: TypeParser
-parseTypedefType file_vec = do
-  name       <- getSingleAttribute DW_AT_name       attributeAsString
-  declLoc    <- parseDeclLoc file_vec
-  tp <- getSingleAttribute DW_AT_type attributeAsDieID
+parseTypedefType fileVec = do
+  (name, desc) <- getNameAndDescription
+  dloc    <- parseDeclLoc fileVec
+  tp <- getSingleAttribute DW_AT_type attributeAsTypeRef
 
   let td = Typedef { typedefName = name
-                   , typedefLoc  = declLoc
+                   , typedefDescription = desc
+                   , typedefLoc  = dloc
                    , typedefType = tp
                    }
-  pure $ PreTypeF $ TypedefType td
+  pure $! TypedefType td
 
 parseArrayType :: TypeParser
 parseArrayType _ = do
-  eltType <- getSingleAttribute DW_AT_type attributeAsDieID
-  ignoreAttribute DW_AT_sibling
+  eltType <- getSingleAttribute DW_AT_type attributeAsTypeRef
+
   sr <- parseChildrenList DW_TAG_subrange_type parseSubrange
-  pure $ PreTypeF $ ArrayType eltType sr
+  pure $! ArrayType eltType sr
 
 parseEnumerationType :: TypeParser
-parseEnumerationType file_vec = do
-  mname      <- getMaybeAttribute  DW_AT_name       attributeAsString
-  byte_size  <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
-  declLoc    <- parseDeclLoc file_vec
-  ignoreAttribute DW_AT_sibling
-
+parseEnumerationType fileVec = do
+  (name, desc) <- getNameAndDescription
+  byteSize     <- getSingleAttribute DW_AT_byte_size  attributeAsUInt
+  dloc           <- parseDeclLoc fileVec
+  _enc           <- getMaybeAttribute DW_AT_encoding attributeAsBaseTypeEncoding
+  underlyingType <- getMaybeAttribute DW_AT_type attributeAsTypeRef
   cases <- parseChildrenList DW_TAG_enumerator parseEnumerator
-  let e = EnumDecl { enumDeclName     = mname
-                   , enumDeclByteSize = byte_size
-                   , enumDeclLoc      = declLoc
+  let e = EnumDecl { enumDeclName     = name
+                   , enumDeclDescription = desc
+                   , enumDeclByteSize = byteSize
+                   , enumDeclType     = underlyingType
+                   , enumDeclLoc      = dloc
                    , enumDeclCases    = cases
                    }
-  pure $ PreTypeF $ EnumType e
+  pure $! EnumType e
 
 -- | Parse a subroutine type.
 parseSubroutineType :: TypeParser
 parseSubroutineType _ = do
   proto <- getMaybeAttribute DW_AT_prototyped attributeAsBool
-  ignoreAttribute DW_AT_sibling
   formals <- parseChildrenList DW_TAG_formal_parameter pure
 
-  tp <- getMaybeAttribute DW_AT_type attributeAsDieID
+  tp <- getMaybeAttribute DW_AT_type attributeAsTypeRef
 
   let sub = SubroutineTypeDecl { fntypePrototyped = proto
                                , fntypeFormals    = formals
                                , fntypeType       = tp
                                }
-  pure $ SubroutineTypeF sub
+  pure $! SubroutineTypeF sub
+
+parseTypeQualifier :: TypeQual -> TypeParser
+parseTypeQualifier tq fileVec = do
+  (name, desc) <- getNameAndDescription
+  loc   <- parseDeclLoc fileVec
+  alignment <- getAttributeWithDefault DW_AT_alignment 0 attributeAsUInt
+  mtp   <- getMaybeAttribute DW_AT_type attributeAsTypeRef
+  let ann = TypeQualAnn { tqaTypeQual = tq
+                        , tqaName = name
+                        , tqaDescription = desc
+                        , tqaDeclLoc = loc
+                        , tqaAlign = alignment
+                        , tqaType = mtp
+                        }
+  pure $! TypeQualType ann
 
 typeParsers :: Map DW_TAG TypeParser
 typeParsers = Map.fromList
   [ (,) DW_TAG_base_type        parseBaseType
-  , (,) DW_TAG_const_type       parseConstType
-  , (,) DW_TAG_volatile_type    parseVolatileType
+  , (,) DW_TAG_const_type       (parseTypeQualifier ConstQual)
+  , (,) DW_TAG_volatile_type    (parseTypeQualifier VolatileQual)
+  , (,) DW_TAG_restrict_type    (parseTypeQualifier RestrictQual)
   , (,) DW_TAG_pointer_type     parsePointerType
   , (,) DW_TAG_structure_type   parseStructureType
   , (,) DW_TAG_union_type       parseUnionType
@@ -701,192 +881,166 @@ typeParsers = Map.fromList
   , (,) DW_TAG_subroutine_type  parseSubroutineType
   ]
 
+type AbsType = (Either String TypeApp, [String])
+
 -- | Parse a type given a vector identifying file vectors.
-parseTypeMap :: V.Vector FilePath -> DIEParser (Map DieID Type)
-parseTypeMap file_vec = do
-  let go :: (DW_TAG, TypeParser) -> DIEParser [(DieID, PreType)]
-      go (tag, act) = do
-        parseChildrenList tag $ \d ->
-          (\tf -> (dieId d, tf)) <$> runDIEParser "parseTypeF" d (act file_vec)
-  resolveTypeMap . concat <$> traverse go (Map.toList typeParsers)
+parseTypeMap :: Map TypeRef AbsType
+             -> FileVec
+             -> DIEParser (Map TypeRef AbsType)
+parseTypeMap preMap fileVec = do
+  mapM_ ignoreChild  (Map.keys typeParsers)
+  dr <- lift $ Parser $ asks readerInfo
+  childMap <- gets dpsChildrenMap
+  let insDIE :: TypeParser
+             -> Map TypeRef AbsType
+             -> DIE
+             -> Map TypeRef AbsType
+      insDIE act m d =
+        Map.insert (TypeRef (dieId d))
+                   (runParser dr (runDIEParser "parseTypeF" d (act fileVec)))
+                   m
+
+  let insTagChildren :: Map TypeRef AbsType
+                     -> DW_TAG
+                     -> TypeParser
+                     -> Map TypeRef AbsType
+      insTagChildren m tag act =
+        foldl' (insDIE act) m (Map.findWithDefault [] tag childMap)
+
+  pure $! Map.foldlWithKey' insTagChildren preMap typeParsers
 
 ------------------------------------------------------------------------
--- Type
+-- Location
 
--- | A type in the Dwarf file as represented by a recursive application
--- of 'TypeF'.
-data Type = Type { typeF :: !(TypeF Type)
-                 , typeIsConst :: !Bool
-                 , typeIsVolatile :: !Bool
-                 }
+data DwarfExpr = DwarfExpr !Dwarf.Reader !BS.ByteString
 
-instance Show Type where
-  show = show . ppType
+instance Eq DwarfExpr where
+  DwarfExpr _ x == DwarfExpr _ y = x == y
 
-ppTypeF :: TypeF Type -> Doc
-ppTypeF tp =
-  case tp of
-    BoolType            -> text "bool"
-    UnsignedIntType w   -> text "unsignedt<" <> text (show (8*w)) <> ">"
-    SignedIntType w     -> text "signed<"    <> text (show (8*w)) <> ">"
-    FloatType           -> text "float"
-    DoubleType          -> text "double"
-    UnsignedCharType    -> text "uchar"
-    SignedCharType      -> text "schar"
-    PointerType x       -> text "pointer" <+> maybe (text "unknown") ppType x
-    StructType s        -> text "struct"  <+> text (structName s)
-    UnionType  u        -> text "union"   <+> text (unionName  u)
-    EnumType e          -> text "enum"        <+> text (show e)
-    TypedefType d       -> text "typedef"     <+> text (typedefName d)
-    ArrayType etp l     -> text "array"       <+> ppType etp <+> text (show l)
-    SubroutinePtrType d -> text "subroutine*" <+> text (show d)
+instance Ord DwarfExpr where
+  compare (DwarfExpr _ x) (DwarfExpr _ y) = compare x y
 
-ppType :: Type -> Doc
-ppType tp =  (if typeIsConst tp then text "const " else empty)
-          <> (if typeIsVolatile tp then text "volatile " else empty)
-          <> ppTypeF (typeF tp)
+parseDwarfExpr :: DwarfExpr -> Either String [DW_OP]
+parseDwarfExpr (DwarfExpr dr bs) = readDwarfExpr dr bs
 
--- | Resolve pretype to map from die identifiers to type.
-resolveTypeMap :: [(DieID, PreType)] -> Map DieID Type
-resolveTypeMap m = r
-  where premap :: Map DieID PreType
-        premap = Map.fromList m
-        r = Map.fromAscList
-          [ (d, tp)
-          | (d, tf) <- Map.toAscList premap
-          , Just tp <- [resolve tf]
-          ]
+instance Show DwarfExpr where
+  show expr =
+    case parseDwarfExpr expr of
+      Left e -> e
+      Right ops -> show ops
 
-        resolve :: PreType -> Maybe Type
-        resolve (PreTypeF (PointerType (Just d)))
-          | Just (SubroutineTypeF decl) <- Map.lookup d premap =
-              Just $ Type { typeF = SubroutinePtrType (decl & subroutineTypeLens . traverse %~ g)
-                          , typeIsConst = False
-                          , typeIsVolatile = False
-                          }
+-- | Provides a way of computing the location of a variable.
+data Location
+   = ComputedLoc !DwarfExpr
+   | OffsetLoc !Word64
+  deriving (Eq,Ord)
 
-        resolve (PreTypeF tf) = Just $ Type { typeF = tf & traverseSubtypes %~ g
-                                            , typeIsConst = False
-                                            , typeIsVolatile = False
-                                            }
-        resolve EmptyConst = Nothing
-        resolve (ConstTypeF d) = Just $ (g d) { typeIsConst = True }
-        resolve (VolatileTypeF d) = Just $ (g d) { typeIsVolatile = True }
-        resolve (SubroutineTypeF _) = Nothing
+attributeAsLocation :: AttrParser Location
+attributeAsLocation dr = \case
+  DW_ATVAL_BLOB b -> pure (ComputedLoc (DwarfExpr dr b))
+  DW_ATVAL_UINT w -> pure (OffsetLoc w)
+  _ -> throwError $ IncorrectTypeFor "Location"
 
-        g :: DieID -> Type
-        g d = fromMaybe (error $ "Could not find die ID " ++ show d) $
-              Map.lookup d r
+instance Pretty Location where
+  pretty (ComputedLoc expr) =
+    case parseDwarfExpr expr of
+      Left e -> text e
+      Right ops -> ppOps ops
+  pretty (OffsetLoc w) = text ("offset 0x" ++ showHex w "")
 
 ------------------------------------------------------------------------
 -- Variable
 
--- | Provides a way of computing the location of a variable.
-data Location
-   = ComputedLoc [DW_OP]
-   | OffsetLoc Word64
-  deriving (Eq, Ord)
-
-instance Pretty Location where
-  pretty (ComputedLoc ops) = ppOps ops
-  pretty (OffsetLoc w) = text ("offset 0x" ++ showHex w "")
-
 data Variable = Variable { varDieID    :: !DieID
-                         , varName     :: !String
+                         , varName     :: !Name
+                         , varDescription :: !Description
                          , varDecl     :: !Bool
                            -- ^ Indicates if this variable is just a declaration
                          , varDeclLoc  :: !DeclLoc
-                         , varType     :: !Type
+                         , varType     :: !(Maybe TypeRef)
                          , varLocation :: !(Maybe Location)
+                         , varConstValue :: !(Maybe ConstValue)
                          }
 
 instance Pretty Variable where
   pretty v =
-    text "name:    " <+> text (varName v) <$$>
+    text "name:    " <+> pretty (varName v) <$$>
     pretty (varDeclLoc v) <$$>
-    text "type:    " <+> ppType (varType v) <$$>
+    text "type:    " <+> pretty (varType v) <$$>
     maybe (text "") (\l -> text "location:" <+> pretty l) (varLocation v)
 
 instance Show Variable where
    show = show . pretty
 
-parseType :: Map DieID tp -> DieID -> Parser tp
+{-
+parseType :: Map DieID Type -> DieID -> Parser Type
 parseType m k =
   case Map.lookup k m of
     Just v -> pure v
-    Nothing -> fail $ "Could not resolve type with id " ++ show k ++ "."
+    Nothing -> throwError $ "Could not resolve type with id " ++ show k ++ "."
+-}
 
-data ConstValue
-  = ConstBlob BS.ByteString
-  | ConstInt  Int64
-  | ConstUInt Word64
+------------------------------------------------------------------------
+-- Variable
 
-parseVariable :: V.Vector FilePath
-              -> Map DieID Type
-              -> DIE
-              -> Parser Variable
-parseVariable = parseVariableOrParameter DW_TAG_variable
+parseVariableOrParameter :: String -> FileVec -> DIE -> Parser Variable
+parseVariableOrParameter nm fileVec d =
+  runDIEParser nm d $ do
+    mloc       <- getMaybeAttribute DW_AT_location attributeAsLocation
+    (name, desc) <- getNameAndDescription
+    dloc    <- parseDeclLoc fileVec
+    mvarType    <- getMaybeAttribute DW_AT_type attributeAsTypeRef
 
-parseParameter :: V.Vector FilePath
-               -> Map DieID Type
-               -> DIE
-               -> Parser Variable
-parseParameter = parseVariableOrParameter DW_TAG_formal_parameter
+    constVal   <- getConstValue
 
-parseVariableOrParameter :: Dwarf.DW_TAG
-                         -> V.Vector FilePath
-                         -> Map DieID Type
-                         -> DIE
-                         -> Parser Variable
-parseVariableOrParameter tag file_vec typeMap d = runDIEParser "parseVariable" d $ do
-  checkTag tag
+    decl  <- getAttributeWithDefault DW_AT_declaration False attributeAsBool
+    _exte <- getMaybeAttribute DW_AT_external attributeAsBool
 
-  mloc       <- getMaybeAttribute DW_AT_location $ \case
-                  DW_ATVAL_BLOB b -> ComputedLoc <$> parseDwarfExpr b
-                  DW_ATVAL_UINT w -> pure (OffsetLoc w)
-                  _ -> fail $ "Could not interpret location"
+    ignoreAttribute DW_AT_artificial
+    ignoreAttribute DW_AT_specification
 
-  name       <- getSingleAttribute DW_AT_name       attributeAsString
-  declLoc    <- parseDeclLoc file_vec
-  var_type   <- getSingleAttribute DW_AT_type $
-                      parseType typeMap <=< attributeAsDieID
+    pure $! Variable { varDieID    = dieId d
+                     , varName     = name
+                     , varDescription = desc
+                     , varDecl     = decl
+                     , varDeclLoc  = dloc
+                     , varType     = mvarType
+                     , varLocation = mloc
+                     , varConstValue = constVal
+                     }
 
-  _cv   <- getMaybeAttribute DW_AT_const_value $ \case
-             DW_ATVAL_BLOB bs -> pure $! ConstBlob bs
-             DW_ATVAL_INT  w  -> pure $! ConstInt  w
-             DW_ATVAL_UINT w  -> pure $! ConstUInt w
-             _ -> fail $ "Could not interpret const value."
-  decl <- fmap (fromMaybe False) $ getMaybeAttribute DW_AT_declaration $ attributeAsBool
-  _exte <- getMaybeAttribute DW_AT_external    $ attributeAsBool
+$(pure [])
 
-  pure $! Variable { varDieID    = dieId d
-                   , varName     = name
-                   , varDecl     = decl
-                   , varDeclLoc  = declLoc
-                   , varType     = var_type
-                   , varLocation = mloc
-                   }
+parseVariables :: FileVec -> DIEParser [Variable]
+parseVariables fileVec = do
+  parseChildrenList DW_TAG_variable $
+    parseVariableOrParameter "parseVariable" fileVec
 
-data InlineVariable = InlineVariable { ivarOrigin :: Variable
+parseParameters :: FileVec -> DIEParser [Variable]
+parseParameters fileVec = do
+  parseChildrenList DW_TAG_formal_parameter  $
+    parseVariableOrParameter "parseParameter" fileVec
+
+$(pure [])
+
+
+-- | A reference to a variable
+newtype VariableRef = VariableRef DieID
+  deriving (Eq,Ord)
+
+-- | A reference to a variable that has been defined in one function and
+-- inlined into this function.
+data InlineVariable = InlineVariable { ivarOrigin :: !VariableRef
                                      , ivarLoc    :: !(Maybe Location)
                                      }
 
-attributeAsLocation :: DW_ATVAL -> Parser Location
-attributeAsLocation = \case
-  DW_ATVAL_BLOB b -> ComputedLoc <$> parseDwarfExpr b
-  DW_ATVAL_UINT w -> pure (OffsetLoc w)
-  _ -> fail $ "Could not interpret location"
-
-parseInlineVariable :: Map DieID Variable
-                    -> DIE
-                    -> Parser InlineVariable
-parseInlineVariable varMap d = runDIEParser "parseInlineVariable" d $ do
+parseInlineVariable :: DIE -> Parser InlineVariable
+parseInlineVariable d = runDIEParser "parseInlineVariable" d $ do
   checkTag DW_TAG_variable
-
-  origin <- getSingleAttribute DW_AT_abstract_origin (resolveDieIDAttribute varMap)
+  originDieID <- getSingleAttribute DW_AT_abstract_origin attributeAsDieID
   mloc       <- getMaybeAttribute DW_AT_location attributeAsLocation
-
-  pure $! InlineVariable { ivarOrigin = origin
+  ignoreAttribute DW_AT_const_value
+  pure $! InlineVariable { ivarOrigin = VariableRef originDieID
                          , ivarLoc    = mloc
                          }
 
@@ -894,194 +1048,260 @@ parseInlineVariable varMap d = runDIEParser "parseInlineVariable" d $ do
 -- Subprogram
 
 
-data SubprogramDef = SubprogramDef { subRange  :: !Dwarf.Range
-                                   , subFrameBase  :: ![DW_OP]
+data SubprogramDef = SubprogramDef { subLowPC :: !(Maybe Word64)
+                                   , subHighPC :: !(Maybe Word64)
+                                   , subFrameBase  :: !(Maybe DwarfExpr)
                                    , subGNUAllCallSites :: !(Maybe Bool)
                                    }
 
 instance Pretty SubprogramDef where
   pretty d =
-     vcat [ text "low_pc:     " <+> text (showHex l "")
-          , text "high_pc:    " <+> text (showHex h "")
+     vcat [ text "low_pc:     " <+> text (maybe "UNDEF" (`showHex` "") (subLowPC  d))
+          , text "high_pc:    " <+> text (maybe "UNDEF" (`showHex` "") (subHighPC d))
           , text "frame_base: " <+> text (show (subFrameBase d))
           , text "GNU_all_call_sites: " <+> text (show (subGNUAllCallSites d))
           ]
-    where Range l h = subRange d
 
-parseSubprogramDef :: V.Vector FilePath
-                   -> Map DieID Type
-                   -> DIEParser SubprogramDef
-parseSubprogramDef _ _ = do
-  lowPC      <- getSingleAttribute DW_AT_low_pc     attributeAsUInt
-  highPC     <- getSingleAttribute DW_AT_high_pc    attributeAsUInt
-  frameBase  <- getSingleAttribute DW_AT_frame_base $
-                  parseDwarfExpr <=< attributeAsBlob
+-- | Get `DW_AT_GNU_all_tail_call_sites`
+getAllTailCallSites :: DIEParser Bool
+getAllTailCallSites = getAttributeWithDefault DW_AT_GNU_all_tail_call_sites False attributeAsBool
+
+parseSubprogramDef :: DIEParser SubprogramDef
+parseSubprogramDef = do
+  dr <- lift $ Parser $ asks readerInfo
+  lowPC      <- getMaybeAttribute DW_AT_low_pc     attributeAsUInt
+  highPC     <- getMaybeAttribute DW_AT_high_pc    attributeAsUInt
+  frameBase  <- getMaybeAttribute DW_AT_frame_base attributeAsBlob
   callSites  <- getMaybeAttribute  DW_AT_GNU_all_call_sites attributeAsBool
-  ignoreChild DW_TAG_formal_parameter
   ignoreChild DW_TAG_lexical_block
   ignoreChild DW_TAG_GNU_call_site
   ignoreChild DW_TAG_inlined_subroutine
-  pure $ SubprogramDef { subRange     = Range lowPC (lowPC + highPC)
-                       , subFrameBase = frameBase
+  pure $ SubprogramDef { subLowPC     = lowPC
+                       , subHighPC    = highPC
+                       , subFrameBase = DwarfExpr dr <$> frameBase
                        , subGNUAllCallSites = callSites
                        }
 
-data Subprogram = Subprogram { subExternal   :: !Bool
-                             , subName       :: !String
-                             , subDeclLoc    :: !(Maybe DeclLoc)
-                             , subPrototyped :: !Bool
-                             , subDef        :: !(Maybe SubprogramDef)
-                             , subVars :: !(Map DieID Variable)
-                             , subParams :: !(Map DieID Variable)
-                             , subRetType :: !(Maybe Type)
+data Subprogram = Subprogram { subName        :: !Name
+                             , subDescription :: !Description
+                             , subLinkageName :: !BS.ByteString
+                             , subExternal    :: !Bool
+                             , subIsDeclaration :: !Bool
+                               -- ^ Indicates this is a declaration and not a defining declaration.
+                             , subEntryPC     :: !(Maybe Word64)
+                             , subArtificial  :: !Bool
+                             , subGNUAllTailCallSites :: !Bool
+                             , subDeclLoc     :: !DeclLoc
+                             , subPrototyped  :: !Bool
+                             , subDef         :: !(Maybe SubprogramDef)
+                             , subVars        :: !(Map VariableRef Variable)
+                             , subParams      :: ![Variable]
+                             , subUnspecifiedParams :: !Bool
+                             , subRetType     :: !(Maybe TypeRef)
+                               -- | Flag indicating function declared with
+                               -- "noreturn" attribute
+                             , subNoreturn    :: !Bool
+                               -- | Type map for resolving types in subprogram.
+                             , subTypeMap     :: !(Map TypeRef AbsType)
                              }
-
-
 
 instance Pretty Subprogram where
   pretty sub =
-    vcat [ text "external:   " <+> text (show (subExternal sub))
-         , text "name:       " <+> text (subName sub)
-         , maybe (text "") pretty (subDeclLoc sub)
+    vcat [ text "name:       " <+> pretty (subName sub)
+         , text "external:   " <+> text (show (subExternal sub))
+         , pretty (subDeclLoc sub)
          , text "prototyped: " <+> text (show (subPrototyped sub))
          , maybe (text "") pretty (subDef sub)
          , ppList "variables" (pretty <$> Map.elems (subVars sub))
-         , ppList "parameters" (pretty <$> Map.elems (subParams sub))
-         , text "return type: " <+> text (show (subRetType sub))
+         , ppList "parameters" (pretty <$> subParams sub)
+         , text "return type: " <+> pretty (subRetType sub)
          ]
 
 instance Show Subprogram where
   show = show . pretty
 
-parseSubprogram :: V.Vector FilePath
-                -> Map DieID Type
+isInlined :: DW_INL -> Parser Bool
+isInlined inl =
+  case inl of
+    DW_INL_not_inlined          -> pure False
+    DW_INL_inlined              -> pure True
+    DW_INL_declared_not_inlined -> pure False
+    DW_INL_declared_inlined     -> pure True
+    _ -> do
+      warn "Unexpected inline attribute."
+      pure False
+
+-- | For some reason, DW_AT_linkage_name is duplicated in some elf files,
+-- so we handle this specially.
+getLinkageName ::  DIEParser BS.ByteString
+getLinkageName = do
+  let attrName = DW_AT_linkage_name
+  ignoreAttribute attrName
+  m <- gets dpsAttributeMap
+  case Map.findWithDefault [] attrName m of
+    [] -> do
+      pure BS.empty
+    v:r -> do
+      d <- gets dpsDIE
+      linkageName <- lift $ convertAttribute attrName attributeAsString v
+      forM_ r $ \rv -> do
+        case rv of
+          DW_ATVAL_STRING rvs | rvs == linkageName -> pure ()
+          _ -> throwError $ printf "Found distinct attributes for %s in %d." (show attrName) (show d)
+      pure linkageName
+
+getInlineAttribute :: DIEParser DW_INL
+getInlineAttribute =
+  getAttributeWithDefault DW_AT_inline DW_INL_not_inlined (mapAttr DW_INL attributeAsUInt)
+
+-- | Parse a subprogram
+--
+-- Tag has type `DW_TAG_subprogram`
+parseSubprogram :: FileVec
+                -> Map TypeRef AbsType
                 -> DIE
                 -> Parser Subprogram
-parseSubprogram file_vec typeMap d = runDIEParser "parseSubprogram" d $ do
+parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
   checkTag DW_TAG_subprogram
+  ext  <- getAttributeWithDefault DW_AT_external False attributeAsBool
+  decl <- getAttributeWithDefault DW_AT_declaration False attributeAsBool
+  inl <-  getInlineAttribute
 
-  ext        <- fromMaybe False <$> getMaybeAttribute DW_AT_external   attributeAsBool
+  inlined <- lift $ isInlined inl
 
-  decl       <- fromMaybe False <$> getMaybeAttribute DW_AT_declaration attributeAsBool
-  inl        <- fromMaybe DW_INL_not_inlined <$>
-    getMaybeAttribute DW_AT_inline (\v -> dw_inl <$> attributeAsUInt v)
-  let inlined = case inl of
-                  DW_INL_not_inlined          -> False
-                  DW_INL_inlined              -> True
-                  DW_INL_declared_not_inlined -> False
-                  DW_INL_declared_inlined     -> True
   def <-
     if decl || inlined then
       pure Nothing
      else do
-      Just <$> parseSubprogramDef file_vec typeMap
+      Just <$> parseSubprogramDef
 
-  name       <- getSingleAttribute DW_AT_name       attributeAsString
-  prototyped <- getMaybeAttribute DW_AT_prototyped attributeAsBool
-  artificial <- fromMaybe False <$> getMaybeAttribute DW_AT_artificial attributeAsBool
-  mloc <-
-    if artificial then
-      pure Nothing
-     else
-      Just <$> parseDeclLoc file_vec
+  (name, desc) <- getNameAndDescription
+  linkageName <- getLinkageName
+  prototyped <- getAttributeWithDefault DW_AT_prototyped False attributeAsBool
+  artificial <- getAttributeWithDefault DW_AT_artificial False attributeAsBool
+  dloc <- parseDeclLoc fileVec
 
-  typeMap' <- Map.union typeMap <$> parseTypeMap file_vec
+  typeMap' <- parseTypeMap typeMap fileVec
 
-  vars <- parseChildrenList DW_TAG_variable (parseVariable file_vec typeMap')
-  params <- parseChildrenList DW_TAG_formal_parameter $
-    parseParameter file_vec typeMap'
-  retType <- getMaybeAttribute DW_AT_type $
-    parseType typeMap' <=< attributeAsDieID
+  vars <- parseVariables fileVec
+  -- DW_TAG_formal_paramters children
+  params <- parseParameters fileVec
 
-  ignoreAttribute DW_AT_GNU_all_tail_call_sites
-  ignoreAttribute DW_AT_sibling
+  entryPC <- getMaybeAttribute DW_AT_entry_pc     attributeAsUInt
+
+
+  hasUnspecifiedParams <- hasChildren DW_TAG_unspecified_parameters
+
+  retType <- getMaybeAttribute DW_AT_type attributeAsTypeRef
+
+  noreturn <- getAttributeWithDefault DW_AT_noreturn False attributeAsBool
+
+  allTailCallSites <- getAllTailCallSites
+
   ignoreAttribute DW_AT_type
-
-  ignoreChild DW_TAG_formal_parameter
   ignoreChild DW_TAG_label
   ignoreChild DW_TAG_lexical_block
-  ignoreChild DW_TAG_unspecified_parameters
 
-  pure Subprogram { subExternal   = ext
-                  , subName       = name
-                  , subDeclLoc    = mloc
-                  , subPrototyped = fromMaybe False prototyped
-                  , subDef        = def
-                  , subVars       = Map.fromList [ (varDieID v, v) | v <- vars ]
-                  , subParams     = Map.fromList [ (varDieID p, p) | p <- params ]
-                  , subRetType    = retType
-                  }
+  pure $! Subprogram { subName       = name
+                     , subDescription = desc
+                     , subLinkageName = linkageName
+                     , subExternal   = ext
+                     , subIsDeclaration = decl
+                     , subEntryPC    = entryPC
+                     , subArtificial = artificial
+                     , subGNUAllTailCallSites = allTailCallSites
+                     , subDeclLoc    = dloc
+                     , subPrototyped = prototyped
+                     , subDef        = def
+                     , subVars       = Map.fromList [ (VariableRef (varDieID v), v) | v <- vars ]
+                     , subParams     = params
+                     , subUnspecifiedParams = hasUnspecifiedParams
+                     , subRetType    = retType
+                     , subNoreturn   = noreturn
+                     , subTypeMap    = typeMap'
+                     }
 
 ------------------------------------------------------------------------
 -- Inlined Subprogram
 
-data InlinedSubprogram = InlinedSubprogram { isubExternal   :: !Bool
-                                           , isubOrigin     :: !Subprogram
-                                           , isubDef        :: !(Maybe SubprogramDef)
-                                           , isubVars       :: ![InlineVariable]
-                                           }
+-- | A reference to a subprogram.
+newtype SubprogramRef = SubprogramRef DieID
+  deriving (Eq, Ord)
+
+
+data InlinedSubprogram =
+  InlinedSubprogram
+  { isubExternal   :: !Bool
+  , isubOrigin     :: !SubprogramRef
+  , isubDef        :: !(Maybe SubprogramDef)
+  , isubVars       :: ![InlineVariable]
+  , isubGNUAllTailCallSites :: !Bool
+  }
 
 instance Pretty InlinedSubprogram where
   pretty sub =
     text "external:   " <+> text (show (isubExternal sub)) <$$>
-    text "origin:" <$$>
-    indent 2 (pretty (isubOrigin sub)) <$$>
     maybe (text "") pretty (isubDef sub)
+--    text "origin:" <$$>
+--    indent 2 (pretty (isubOrigin sub)) <$$>
 
-parseInlinedSubprogram :: V.Vector FilePath
-                       -> Map DieID Type
-                       -> Map DieID Subprogram
+
+parseInlinedSubprogram :: FileVec
+                       -> Map TypeRef AbsType
                        -> DIE
                        -> Parser InlinedSubprogram
-parseInlinedSubprogram file_vec typeMap subprogramMap d =
- runDIEParser "parseInlinedSubprogram" d $ do
-  checkTag DW_TAG_subprogram
-  ext        <- fromMaybe False <$> getMaybeAttribute DW_AT_external   attributeAsBool
+parseInlinedSubprogram _fileVec _typeMap d =
+  runDIEParser "parseInlinedSubprogram" d $ do
+    checkTag DW_TAG_subprogram
+    ext  <- getAttributeWithDefault DW_AT_external False  attributeAsBool
+    decl <- getAttributeWithDefault DW_AT_declaration False attributeAsBool
+    inl  <- getInlineAttribute
+    inlined <- lift $ isInlined inl
+    originDieID <- getSingleAttribute DW_AT_abstract_origin attributeAsDieID
 
-  decl       <- fromMaybe False <$> getMaybeAttribute DW_AT_declaration attributeAsBool
-  inl        <- fromMaybe DW_INL_not_inlined <$>
-    getMaybeAttribute DW_AT_inline (\v -> dw_inl <$> attributeAsUInt v)
-  let inlined = case inl of
-                  DW_INL_not_inlined          -> False
-                  DW_INL_inlined              -> True
-                  DW_INL_declared_not_inlined -> False
-                  DW_INL_declared_inlined     -> True
-  origin <- getSingleAttribute DW_AT_abstract_origin (resolveDieIDAttribute subprogramMap)
+    allTailCallSites <- getAllTailCallSites
 
-  def <-
-    if decl || inlined then
-      pure Nothing
-     else do
-      Just <$> parseSubprogramDef file_vec typeMap
+    def <-
+      if decl || inlined then
+        pure Nothing
+      else do
+        Just <$> parseSubprogramDef
+
+    ignoreChild DW_TAG_label
+    ignoreChild DW_TAG_formal_parameter
+    ivars <- parseChildrenList DW_TAG_variable parseInlineVariable
 
 
-  let varMap = subVars origin
-  ivars <- parseChildrenList DW_TAG_variable (parseInlineVariable varMap)
-
-  ignoreAttribute DW_AT_sibling
-
-  pure InlinedSubprogram
-        { isubExternal   = ext
-        , isubOrigin     = origin
-        , isubDef        = def
-        , isubVars       = ivars
-        }
+    pure InlinedSubprogram
+      { isubExternal   = ext
+      , isubOrigin     = SubprogramRef originDieID
+      , isubDef        = def
+      , isubVars       = ivars
+      , isubGNUAllTailCallSites = allTailCallSites
+      }
 
 ------------------------------------------------------------------------
 -- CompileUnit
 
 -- | The output of one compilation.
-data CompileUnit = CompileUnit { cuProducer    :: String
+data CompileUnit = CompileUnit { cuCtx :: !CUContext
+                               , cuProducer    :: !BS.ByteString
                                , cuLanguage    :: Maybe DW_LANG
-                               , cuName        :: String
-                               , cuCompDir     :: String
+                               , cuName        :: !Name
+                               , cuDescription :: !Description
+                               , cuCompDir     :: !BS.ByteString
                                , cuGNUMacros   :: !(Maybe Word64)
+                               , cuSubprogramMap :: !(Map SubprogramRef Subprogram)
+                                 -- ^ Map from subprogram reference to a subprogram.
                                , cuSubprograms :: ![Subprogram]
                                , cuInlinedSubprograms :: ![InlinedSubprogram]
                                , cuVariables   :: ![Variable]
                                  -- ^ Global variables in this unit
+                               , cuTypeMap     :: !(Map TypeRef AbsType)
                                , cuRanges      :: ![Dwarf.Range]
                                , cuLNE         :: ![DW_LNE]
+                               , cuFileVec     :: !FileVec
+                                 -- ^ File vector for file references.
                                }
 
 instance Show CompileUnit where
@@ -1089,10 +1309,10 @@ instance Show CompileUnit where
 
 instance Pretty CompileUnit where
   pretty cu =
-    vcat [ text "producer:    " <+> text (cuProducer cu)
+    vcat [ text "producer:    " <+> text (BSC.unpack (cuProducer cu))
          , text "language:    " <+> text (show (cuLanguage cu))
-         , text "name:        " <+> text (cuName cu)
-         , text "comp_dir:    " <+> text (cuCompDir cu)
+         , text "name:        " <+> pretty (cuName cu)
+         , text "comp_dir:    " <+> text (BSC.unpack (cuCompDir cu))
          , text "GNU_macros:  " <+> text (show (cuGNUMacros cu))
          , ppList "variables"           (pretty <$> cuVariables cu)
          , ppList "subprograms"         (pretty <$> cuSubprograms cu)
@@ -1101,18 +1321,12 @@ instance Pretty CompileUnit where
          ]
 
 ppList :: String -> [Doc] -> Doc
-ppList _ [] = text ""
+ppList nm [] = text nm <> text ": []"
 ppList nm l = (text nm <> colon) <$$> indent 2 (vcat l)
 
-data SectionContents = SecContents { debugLine :: !BS.ByteString
-                                     -- ^ .debug_line section contents
-                                   , debugRanges :: !BS.ByteString
-                                     -- ^ .debug_ranges
-                                   }
-
-    -- Section 7.20 - Address Range Table
+-- Section 7.20 - Address Range Table
 -- Returns the ranges that belong to a CU
-getAddressRangeTable :: Endianess
+getAddressRangeTable :: Dwarf.Endianess
                      -> Encoding
                      -> BS.ByteString
                      -> Parser [Dwarf.Range]
@@ -1125,30 +1339,31 @@ getAddressRangeTable end enc bs = parseGet bs (go [])
            else
             pure $! reverse prev
 
-parseCompileUnit :: Word64 -- ^ Expected number of bytes in a pointer.
-                 -> SectionContents
-                 -> (CUContext, DIE)
+parseCompileUnit :: (CUContext, DIE)
                  -> (Either String CompileUnit, [String])
-parseCompileUnit w contents (ctx,d) =
- runParser w (cuReader ctx) $ runDIEParser "parseCompileUnit" d $ do
+parseCompileUnit (ctx, d) =
+ runParser (cuReader ctx) $ runDIEParser "parseCompileUnit" d $ do
+  let contents = cuSections ctx
   checkTag DW_TAG_compile_unit
   let dr = cuReader ctx
   let end = drEndianess dr
   let tgt = drTarget64 dr
   prod      <- getSingleAttribute DW_AT_producer   attributeAsString
   lang      <- getMaybeAttribute  DW_AT_language   attributeAsLang
-  name      <- getSingleAttribute DW_AT_name       attributeAsString
+  (name, desc) <- getNameAndDescription
   compDir   <- getSingleAttribute DW_AT_comp_dir   attributeAsString
   -- Get offset into .debug_line for this compile units line number information
-  (file_vec, lne) <- fmap (fromMaybe (V.empty, [])) $
-    getMaybeAttribute DW_AT_stmt_list $ \v -> do
-      offset <- attributeAsUInt v
-      let lines_bs = debugLine contents
-      when (fromIntegral offset > BS.length lines_bs) $ do
-        fail "Illegal compile unit debug_line offset"
-      let bs = BS.drop (fromIntegral offset) lines_bs
-      (file_list, lne) <- parseGet bs (getLNE end tgt)
-      pure (V.fromList file_list, lne)
+  mStmtOffset <- getMaybeAttribute DW_AT_stmt_list attributeAsUInt
+  (fileVec, lne) <-
+    case mStmtOffset of
+      Nothing -> pure (V.empty, [])
+      Just offset -> do
+        let lines_bs = dsLineSection contents
+        when (fromIntegral offset > BS.length lines_bs) $ do
+          throwError "Illegal compile unit debug_line offset"
+        let bs = BS.drop (fromIntegral offset) lines_bs
+        (fileList, lne) <- lift $ parseGet bs (getLNE end tgt)
+        pure (fmap DwarfFilePath (V.fromList fileList), lne)
 
   ranges <-
     if hasAttribute DW_AT_low_pc d then do
@@ -1156,51 +1371,97 @@ parseCompileUnit w contents (ctx,d) =
      if hasAttribute DW_AT_high_pc d then do
        highPC   <- getSingleAttribute DW_AT_high_pc    attributeAsUInt
        when (hasAttribute DW_AT_ranges d) $ do
-         fail $ "Unexpected ranges"
+         throwError $ "Unexpected ranges"
        pure $! [Range lowPC (lowPC + highPC)]
       else do
         range_offset   <- getSingleAttribute DW_AT_ranges     attributeAsUInt
         lift $ getAddressRangeTable end (drEncoding dr) $
-           BS.drop (fromIntegral range_offset) $ debugRanges contents
+           BS.drop (fromIntegral range_offset) $ dsRangesSection contents
    else do
      when (hasAttribute DW_AT_high_pc d) $ do
-       fail $ "Unexpected high_pc\n" ++ show d
+       throwError $ "Unexpected high_pc\n" ++ show d
      when (hasAttribute DW_AT_ranges d) $ do
-       fail $ "Unexpected ranges\n" ++ show d
+       throwError $ "Unexpected ranges\n" ++ show d
      pure []
 
   gnuMacros <- getMaybeAttribute DW_AT_GNU_macros attributeAsUInt
   -- Type map for children
-  typeMap <- parseTypeMap file_vec
+  typeMap <- parseTypeMap Map.empty fileVec
 
 
   (inlinedDies, subprogramDies) <-
     partition (hasAttribute DW_AT_abstract_origin) <$>
       parseChildrenList DW_TAG_subprogram pure
 
-  subprograms <- lift $ traverse (parseSubprogram file_vec typeMap) subprogramDies
-  let subMap = Map.fromList $ zipWith (\d' s -> (dieId d', s)) subprogramDies subprograms
-  inlinedSubs <- lift $ traverse (parseInlinedSubprogram file_vec typeMap subMap) inlinedDies
+  subprograms <- lift $ traverse (parseSubprogram fileVec typeMap) subprogramDies
+  let subMap = Map.fromList $ zipWith (\d' s -> (SubprogramRef (dieId d'), s)) subprogramDies subprograms
+  inlinedSubs <- lift $ traverse (parseInlinedSubprogram fileVec typeMap) inlinedDies
 
-  variables <- parseChildrenList DW_TAG_variable (parseVariable file_vec typeMap)
+  variables <- parseVariables fileVec
 
-  pure $! CompileUnit { cuProducer           = prod
+  ignoreChild DW_TAG_dwarf_procedure
+
+
+  pure $! CompileUnit { cuCtx                = ctx
+                      , cuProducer           = prod
                       , cuLanguage           = lang
                       , cuName               = name
+                      , cuDescription        = desc
                       , cuCompDir            = compDir
                       , cuGNUMacros          = gnuMacros
+                      , cuSubprogramMap      = subMap
                       , cuSubprograms        = subprograms
                       , cuInlinedSubprograms = inlinedSubs
                       , cuVariables   = variables
+                      , cuTypeMap     = typeMap
                       , cuRanges      = ranges
                       , cuLNE         = lne
+                      , cuFileVec     = fileVec
                       }
 
 ------------------------------------------------------------------------
--- loadDwarf
+-- dwarfCompileUnits
 
-tryGetElfSection :: BS.ByteString -> Elf.Elf v -> State [String] BS.ByteString
-tryGetElfSection nm e =
+getCompileUnit :: CUContext -> (Either String CompileUnit, [String])
+getCompileUnit ctx =
+  case cuFirstDie ctx of
+    Left e -> (Left e, [])
+    Right d -> parseCompileUnit (ctx, d)
+
+firstCUContext :: Endianness -> Dwarf.Sections -> Maybe (Either String CUContext)
+firstCUContext end sections = do
+  let dwEnd = case end of
+                LittleEndian -> Dwarf.LittleEndian
+                BigEndian    -> Dwarf.BigEndian
+  Dwarf.firstCUContext dwEnd sections
+
+{-# DEPRECATED dwarfCompileUnits "Use firstCUContext, nextCUContext and getCompileUnit" #-}
+
+-- | Return dwarf information out of buffers.
+dwarfCompileUnits:: Endianness
+                 -> Dwarf.Sections
+                 -> ([String], [CompileUnit])
+dwarfCompileUnits end sections = do
+  let go :: [String]
+         -> [CompileUnit]
+         -> Maybe (Either String CUContext)
+         -> ([String], [CompileUnit])
+      go prevWarn cus Nothing = (reverse prevWarn, reverse cus)
+      go prevWarn cus (Just (Left e)) = (reverse (e:prevWarn), reverse cus)
+      go prevWarn cus (Just (Right ctx)) =
+        case getCompileUnit ctx of
+          (Left msg, warnings) ->
+            go (warnings ++ msg:prevWarn) cus (nextCUContext ctx)
+          (Right cu, warnings) ->
+            go (warnings ++ prevWarn) (cu:cus) (nextCUContext ctx)
+   in go [] [] (firstCUContext end sections)
+
+------------------------------------------------------------------------
+-- dwarfInfoFromElf
+
+-- | Elf informaton
+tryGetElfSection :: Elf.Elf v -> BS.ByteString -> State [String] BS.ByteString
+tryGetElfSection e nm =
   case Elf.findSectionByName nm e of
     [] -> do
       let msg = "Could not find " ++ show nm ++ " section."
@@ -1217,36 +1478,14 @@ dwarfInfoFromElf :: Elf.Elf v -> ([String], [CompileUnit])
 dwarfInfoFromElf e = do
   case Elf.findSectionByName ".debug_info" e of
     [] -> ([], [])
-    _ -> flip evalState [] $ do
-      debug_info   <- tryGetElfSection ".debug_info"   e
-      debug_abbrev <- tryGetElfSection ".debug_abbrev" e
-      debug_lines  <- tryGetElfSection ".debug_line"   e
-      debug_ranges <- tryGetElfSection ".debug_ranges" e
-      debug_str    <- tryGetElfSection ".debug_str"    e
-      let sections = Sections { dsInfoSection   = debug_info
-                              , dsAbbrevSection = debug_abbrev
-                              , dsStrSection    = debug_str
-                              }
-      let w = fromIntegral $ Elf.elfClassByteWidth (Elf.elfClass e)
+    _ ->
       let end =
             case Elf.elfData e of
               Elf.ELFDATA2LSB -> LittleEndian
               Elf.ELFDATA2MSB -> BigEndian
-      let (cuDies, _m) = parseInfo end sections
-      let contents = SecContents { debugLine   = debug_lines
-                                 , debugRanges = debug_ranges
-                                 }
-      mdies <- forM cuDies $ \cuPair -> do
-        let (mr, warnings) = parseCompileUnit w contents cuPair
-        case mr of
-          Left msg -> do
-            modify $ ((msg:warnings) ++)
-            pure Nothing
-          Right cu -> do
-            modify $ (warnings ++)
-            pure $ Just cu
-      warnings <- get
-      pure (reverse warnings, catMaybes mdies)
+          (sections, bufWarn) = runState (mkSections (tryGetElfSection e)) []
+          (cuWarn, cu) = dwarfCompileUnits end sections
+       in (reverse bufWarn ++ cuWarn, cu)
 
 -- | This returns all the variables in the given compile units.
 dwarfGlobals :: [CompileUnit] -> [Variable]
