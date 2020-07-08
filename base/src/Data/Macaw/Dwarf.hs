@@ -209,10 +209,6 @@ attributeAsBool :: AttrParser Bool
 attributeAsBool _ (DW_ATVAL_BOOL b) = pure b
 attributeAsBool _ _ = throwError $ IncorrectTypeFor "Bool"
 
-attributeAsInt :: AttrParser Int64
-attributeAsInt _ (DW_ATVAL_INT u) = pure u
-attributeAsInt _ _ = throwError $ IncorrectTypeFor "Int"
-
 attributeAsUInt :: AttrParser Word64
 attributeAsUInt _ (DW_ATVAL_UINT u) = pure u
 attributeAsUInt _ _ = throwError $ IncorrectTypeFor "UInt"
@@ -405,9 +401,6 @@ data DeclLoc = DeclLoc { locFile   :: !DwarfFilePath
                        , locLine   :: !Word64
                        , locColumn :: !Word64
                        }
-
-unspecifiedDeclLoc :: DeclLoc
-unspecifiedDeclLoc = DeclLoc { locFile = "", locLine = 0, locColumn = 0 }
 
 instance Pretty DeclLoc where
   pretty loc =
