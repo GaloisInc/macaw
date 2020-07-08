@@ -1,0 +1,27 @@
+-- This adds -Wall and -Werror for runs where we want to catch warnings.
+
+package macaw-base
+  ghc-options: -Wall -Werror
+-- Macaw-semmc has warnings
+package macaw-semmc
+  ghc-options: -Wall
+package macaw-symbolic
+  ghc-options: -Wall -Werror
+-- Macaw-ppc has warnings.
+package macaw-ppc
+  ghc-options: -Wall
+package macaw-aarch32
+  ghc-options: -Wall -Werror
+-- Macaw-aarch32-symbolic has warnings.
+package macaw-aarch32-symbolic
+  ghc-options: -Wall
+package macaw-ppc
+  ghc-options: -Wall -Werror
+package macaw-ppc-symbolic
+  ghc-options: -Wall -Werror
+package macaw-x86
+  ghc-options: -Wall -Werror
+package macaw-x86-symbolic
+  ghc-options: -Wall -Werror
+package macaw-refinement
+  ghc-options: -Wall -Werror
