@@ -221,7 +221,7 @@ all_instructions =
   , avxPointwise2 "vpaddd" PtAdd n32
   , avxPointwise2 "vpaddq" PtAdd n64
 
-  , avxPointwise2 "vpsubd" PtAdd n32
+  , avxPointwise2 "vpsubd" PtSub n32
 
   , avxOp2 "vpand" VPAnd
   , avxOp2 "vpor" VPOr
