@@ -665,7 +665,7 @@ data X86PrimFn f tp where
   -- | Shift right each element in the vector by the given amount.
   -- The new ("shifted-in") bits are 0.
   --
-  -- For the expression @PointwiseShiftR n w amtw vec amt@:
+  -- For the expression @PointwiseShiftLogicalR n w amtw vec amt@:
   --
   -- * @n@ is the number of elements in the vector
   -- * @w@ is the size of each element in bits
