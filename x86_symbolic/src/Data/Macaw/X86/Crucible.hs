@@ -414,6 +414,11 @@ pureSem sym fn = do
          vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
               fmap (\x -> bvShiftL elSz shSz x amt') xs
 
+    M.PointwiseLogicalShiftR elNum elSz shSz bits amt ->
+      do amt' <- getBitVal (symIface sym) amt
+         vecOp1 sym LittleEndian (natMultiply elNum elSz) elSz bits $ \xs ->
+              fmap (\x -> bvLogicalShiftR elSz shSz x amt') xs
+
     M.Pointwise2 elNum elSz op v1 v2 ->
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
@@ -791,6 +796,14 @@ bvShiftL w i vw vi = app (BVShl w vw amt)
                 NatCaseLT LeqProof -> app (BVZext w i vi)
                 NatCaseGT LeqProof -> app (BVTrunc w i vi)
 
+bvLogicalShiftR :: (1 <= w, 1 <= i) =>
+  NatRepr w -> NatRepr i ->
+  E sym (BVType w) -> E sym (BVType i) -> E sym (BVType w)
+bvLogicalShiftR w i vw vi = app (BVLshr w vw amt)
+  where amt = case testNatCases i w of
+                NatCaseEQ -> vi
+                NatCaseLT LeqProof -> app (BVZext w i vi)
+                NatCaseGT LeqProof -> app (BVTrunc w i vi)
 
 
 --------------------------------------------------------------------------------

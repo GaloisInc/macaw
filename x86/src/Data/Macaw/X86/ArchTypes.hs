@@ -662,6 +662,24 @@ data X86PrimFn f tp where
                   -> !(f (BVType sz))
                   -> X86PrimFn f (BVType (elNum * elSize))
 
+  -- | Shift right each element in the vector by the given amount.
+  -- The new ("shifted-in") bits are 0.
+  --
+  -- For the expression @PointwiseShiftLogicalR n w amtw vec amt@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @amtw@ is the size of the shift amount in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @amt@ is the shift amount in bits
+  PointwiseLogicalShiftR :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
+                            !(NatRepr elNum)
+                         -> !(NatRepr elSize)
+                         -> !(NatRepr sz)
+                         -> !(f (BVType (elNum * elSize)))
+                         -> !(f (BVType sz))
+                         -> X86PrimFn f (BVType (elNum * elSize))
+
   -- | Pointwise binary operation on vectors. Should not have side effects.
   --
   -- For the expression @Pointwise2 n w op vec1 vec2@:
@@ -723,6 +741,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       X87_FMul{} -> knownRepr
       X87_FST tp _ -> FloatTypeRepr (typeRepr tp)
       PointwiseShiftL n w _ _ _ -> packedAVX n w
+      PointwiseLogicalShiftR n w _ _ _ -> packedAVX n w
       VInsert n w _ _ _ -> packedAVX n w
       VOp1 w _ _ -> BVTypeRepr w
       VOp2 w _ _ _ -> BVTypeRepr w
@@ -779,6 +798,7 @@ instance TraversableFC X86PrimFn where
       VOp1 w o x   -> VOp1 w o <$> go x
       VOp2 w o x y -> VOp2 w o <$> go x <*> go y
       PointwiseShiftL e n s x y -> PointwiseShiftL e n s <$> go x <*> go y
+      PointwiseLogicalShiftR e n s x y -> PointwiseLogicalShiftR e n s <$> go x <*> go y
       Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
       VExtractF128 x i -> (`VExtractF128` i) <$> go x
       VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
@@ -831,6 +851,8 @@ instance IsArchFn X86PrimFn where
       VOp2 _ o x y -> sexprA (show o) [ pp x, pp y ]
       PointwiseShiftL _ w _ x y -> sexprA "pointwiseShiftL"
                                      [ ppShow (widthVal w), pp x, pp y ]
+      PointwiseLogicalShiftR _ w _ x y -> sexprA "pointwiseLogicalShiftR"
+                                            [ ppShow (widthVal w), pp x, pp y ]
       Pointwise2 _ w o x y -> sexprA (show o)
                                 [ ppShow (widthVal w) , pp x , pp y ]
       VExtractF128 x i -> sexprA "vextractf128" [ pp x, ppShow i ]
@@ -882,6 +904,7 @@ x86PrimFnHasSideEffects f =
     VOp1 {} -> False
     VOp2 {} -> False
     PointwiseShiftL {} -> False
+    PointwiseLogicalShiftR {} -> False
     Pointwise2 {} -> False
     VExtractF128 {} -> False
     VInsert {} -> False
