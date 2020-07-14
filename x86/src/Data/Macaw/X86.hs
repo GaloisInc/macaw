@@ -381,6 +381,7 @@ transferAbsValue r f =
     VOp2 {} -> TopV
     Pointwise2 {} -> TopV
     PointwiseShiftL {} -> TopV
+    PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
 
