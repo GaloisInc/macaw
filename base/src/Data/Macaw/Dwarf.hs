@@ -60,7 +60,7 @@ module Data.Macaw.Dwarf
   , Typedef(..)
   , TypeQual(..)
   , TypeQualAnn(..)
-    -- * NAme and Description
+    -- * Name and Description
   , Name(..)
   , Description(..)
     -- * Exports of "Data.Dwarf"
