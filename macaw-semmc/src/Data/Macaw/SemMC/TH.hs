@@ -655,7 +655,7 @@ evalBoundVar interps bVar =
        return (VarE name)
      | otherwise -> fail $ "bound var not found: " ++ show bVar
 
-symFnName :: S.ExprSymFn t args ret -> String
+symFnName :: S.ExprSymFn t (S.Expr t) args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 
 bvarName :: S.ExprBoundVar t tp -> String
@@ -666,7 +666,7 @@ bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 writeMemTH :: forall arch t fs args ret
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
-           -> S.ExprSymFn t args ret
+           -> S.ExprSymFn t (S.Expr t) args ret
            -> Ctx.Assignment (S.Expr t) args
            -> M.Endianness
            -> MacawQ arch t fs (Some (S.Expr t))
