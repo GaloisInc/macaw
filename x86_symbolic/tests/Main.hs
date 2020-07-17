@@ -11,7 +11,6 @@ import           Control.Monad
 import           Control.Monad.ST
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as Elf
-import           Data.IORef
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some

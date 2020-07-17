@@ -19,6 +19,7 @@ module Data.Macaw.Discovery.State
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
+  , NoReturnFunStatus(..)
   , AddrSymMap
   , exploredFunctions
   , ppDiscoveryStateBlocks
@@ -51,7 +52,6 @@ import           Data.Maybe (maybeToList)
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
-import           Data.Set (Set)
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -333,6 +333,16 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
      in text "function" <+> nm <$$> vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
+-- NoReturnFunStatus
+
+-- | Flags whether a function is labeled no return or not.
+data NoReturnFunStatus
+   = NoReturnFun
+     -- ^ Function labeled no return
+   | MayReturnFun
+     -- ^ Function may retun
+
+------------------------------------------------------------------------
 -- DiscoveryState
 
 type UnexploredFunctionMap arch =
@@ -363,7 +373,7 @@ data DiscoveryState arch
                       -- they are analyzed.
                       --
                       -- The keys in this map and `_funInfo` should be mutually disjoint.
-                    , _trustedFunctionEntryPoints :: !(Set (ArchSegmentOff arch))
+                    , _trustedFunctionEntryPoints :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
                       -- ^ This is the set of addresses that we treat
                       -- as definitely belonging to function entry
                       -- points.
@@ -415,7 +425,7 @@ emptyDiscoveryState mem addrSymMap info =
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustedFunctionEntryPoints = Map.keysSet addrSymMap
+  , _trustedFunctionEntryPoints = fmap (\_ -> MayReturnFun) addrSymMap
   , _exploreFnPred       = Nothing
   }
 
@@ -439,7 +449,7 @@ funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
 -- | Retrieves functions that are trusted entry points.
 trustedFunctionEntryPoints
-  :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) NoReturnFunStatus)
 trustedFunctionEntryPoints =
   lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 

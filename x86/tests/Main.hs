@@ -8,6 +8,6 @@ import qualified ElfX64Linux as T
 main :: IO ()
 main = do
   x64AsmTests <- namesMatching "tests/x64/*.expected"
-  T.defaultMain $ T.testGroup "ReoptTests" [
+  T.defaultMain $ T.testGroup "Macaw x86 Tests" [
     T.elfX64LinuxTests x64AsmTests
     ]

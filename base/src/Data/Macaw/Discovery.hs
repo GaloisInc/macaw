@@ -51,6 +51,7 @@ module Data.Macaw.Discovery
        , State.discoveredFunName
        , State.discoveredClassifyFailureResolutions
        , State.parsedBlocks
+       , State.NoReturnFunStatus(..)
          -- * Parsed block
        , State.ParsedBlock
        , State.pblockAddr
@@ -93,6 +94,7 @@ import           GHC.IO (ioToST)
 import           Numeric.Natural
 import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
+import           Text.Printf (printf)
 
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -816,7 +818,7 @@ recordWriteStmts ainfo mem absState jmpBounds writtenAddrs (stmt:stmts) =
 data ParseContext arch ids =
   ParseContext { pctxMemory         :: !(Memory (ArchAddrWidth arch))
                , pctxArchInfo       :: !(ArchitectureInfo arch)
-               , pctxKnownFnEntries :: !(Set (ArchSegmentOff arch))
+               , pctxKnownFnEntries :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
                  -- ^ Entry addresses for known functions (e.g. from
                  -- symbol information)
                  --
@@ -840,6 +842,7 @@ addrMemRepr arch_info =
     Addr32 -> BVMemRepr n4 (archEndianness arch_info)
     Addr64 -> BVMemRepr n8 (archEndianness arch_info)
 
+-- | Identify new potentialfunction entry points by looking at IP.
 identifyCallTargets :: forall arch ids
                     .  (RegisterInfo (ArchReg arch))
                     => Memory (ArchAddrWidth arch)
@@ -1105,7 +1108,7 @@ classifyDirectJump ctx nm v = do
     fail $ nm ++ " value " ++ show a ++ " is not executable."
   when (a == pctxFunAddr ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " refers to function start."
-  when (a `Set.member` pctxKnownFnEntries ctx) $ do
+  when (a `Map.member` pctxKnownFnEntries ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " is a known function entry."
   pure a
 
@@ -1231,15 +1234,15 @@ directJumpClassifier = classifierName "Jump" $ do
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
 
-    tgt_mseg <- classifyDirectJump ctx "Jump" (classifierFinalRegState bcc ^. boundValue ip_reg)
+    tgtMSeg <- classifyDirectJump ctx "Jump" (classifierFinalRegState bcc ^. boundValue ip_reg)
 
     let abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
-    let abst' = abst & setAbsIP tgt_mseg
+    let abst' = abst & setAbsIP tgtMSeg
     let tgtBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
-                          , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgt_mseg
+                          , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgtMSeg
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = [(tgt_mseg, abst', tgtBnds)]
+                          , intraJumpTargets = [(tgtMSeg, abst', tgtBnds)]
                           , newFunctionAddrs = []
                           }
 
@@ -1313,13 +1316,56 @@ pltStubClassifier = classifierName "PLT stub" $ do
                           , newFunctionAddrs = []
                           }
 
+noreturnCallParsedContents :: BlockClassifierContext arch ids -> ParsedContents arch ids
+noreturnCallParsedContents bcc =
+  let ctx  = classifierParseContext bcc
+      mem  = pctxMemory ctx
+      regs = classifierFinalRegState bcc
+      absState = classifierAbsState bcc
+      ainfo = pctxArchInfo (classifierParseContext bcc)
+   in withArchConstraints ainfo $
+        ParsedContents { parsedNonterm = toList (classifierStmts bcc)
+                       , parsedTerm  = ParsedCall regs Nothing
+                       , writtenCodeAddrs = classifierWrittenAddrs bcc
+                       , intraJumpTargets = []
+                       , newFunctionAddrs = identifyCallTargets mem absState regs
+                       }
+
+-- | Attempt to recognize tail call.
+noreturnCallClassifier :: BlockClassifier arch ids
+noreturnCallClassifier = classifierName "no return call" $ do
+  bcc <- ask
+  let ctx = classifierParseContext bcc
+  let ainfo = pctxArchInfo ctx
+  -- Check for tail call when the calling convention seems to be satisfied.
+  withArchConstraints ainfo $ do
+    let regs = classifierFinalRegState bcc
+    let ipVal = regs ^. boundValue ip_reg
+    -- Get memory address
+    ma <-
+      case valueAsMemAddr ipVal of
+        Nothing ->  fail $ printf "Noreturn target %s is not a valid address." (show ipVal)
+        Just a -> pure a
+    -- Get address
+    a <- case asSegmentOff (pctxMemory ctx) ma of
+           Nothing ->
+             fail $ printf "Noreturn target %s is not a segment offset." (show ipVal)
+           Just sa -> pure sa
+    -- Check function labeled noreturn
+    case Map.lookup a (pctxKnownFnEntries ctx) of
+      Nothing -> fail $ printf "Noreturn target %s is not a known function entry." (show a)
+      Just MayReturnFun -> fail $ printf "No return targert %s not labeled noreturn." (show a)
+      Just NoReturnFun -> pure ()
+    -- Return no
+    pure $! noreturnCallParsedContents bcc
+
+
 -- | Attempt to recognize tail call.
 tailCallClassifier :: BlockClassifier arch ids
 tailCallClassifier = classifierName "Tail call" $ do
   bcc <- ask
   let ctx = classifierParseContext bcc
   let ainfo = pctxArchInfo ctx
-  let mem   = pctxMemory ctx
   -- Check for tail call when the calling convention seems to be satisfied.
   withArchConstraints ainfo $ do
 
@@ -1334,12 +1380,7 @@ tailCallClassifier = classifierName "Tail call" $ do
       fail "Expected stack height of 0"
     -- Return address is pushed
     unless (checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)) empty
-    pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
-                          , parsedTerm  = ParsedCall (classifierFinalRegState bcc) Nothing
-                          , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = []
-                          , newFunctionAddrs = identifyCallTargets mem (classifierAbsState bcc) (classifierFinalRegState bcc)
-                          }
+    pure $! noreturnCallParsedContents bcc
 
 useExternalTargets :: ( OrdF (ArchReg arch)
                       , RegisterInfo (ArchReg arch)
@@ -1385,6 +1426,7 @@ parseFetchAndExecute ctx initRegs stmts finalRegs absState jmpBounds writtenAddr
         , classifierFinalRegState = finalRegs
         }
   let cl = branchClassifier
+        <|> noreturnCallClassifier
         <|> callClassifier
         <|> returnClassifier
         <|> directJumpClassifier

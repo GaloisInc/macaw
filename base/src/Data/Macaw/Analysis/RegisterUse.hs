@@ -108,7 +108,7 @@ funBlockPreds info = Map.fromListWith (++)
 -- RegisterUseError
 
 -- | Errors from register use
-data RegisterUseError arch 
+data RegisterUseError arch
    = CallStackHeightError !(MemAddr (ArchAddrWidth arch))
    | UnresolvedFunctionTypeError !(ArchSegmentOff arch) !String
 
@@ -217,7 +217,7 @@ joinValueRegUseDomain :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                          -- respectively.
                       -> BoundLoc (ArchReg arch) tp
                       -> ValueRegUseDomain arch tp
-                        -- ^ Old domain for location. 
+                        -- ^ Old domain for location.
                       -> Changed s ()
 joinValueRegUseDomain newCns cnsRef cacheRef l oldDomain = do
   case (oldDomain, locDomain newCns l) of
@@ -750,7 +750,7 @@ memoNextDomain loc e = do
   m <- gets insSeenValues
   case MapF.lookup e m of
     Just d -> do
-      modify $ \s -> InferNextState { insSeenValues = m 
+      modify $ \s -> InferNextState { insSeenValues = m
                                     , insPVM = pvmBind loc e (insPVM s)
                                     }
       pure (Just d)
@@ -1053,9 +1053,9 @@ assignmentCache = lens assignDeps (\s v -> s { assignDeps = v })
 -- CallRegs
 
 -- | Identifies demand information about a particular call.
-data CallRegs (arch :: Type) = 
+data CallRegs (arch :: Type) (ids :: Type) =
   CallRegs { callRegsFnType :: !(ArchFunType arch)
-           , callArgRegs :: [Some (ArchReg arch)]
+           , callArgValues :: [Some (Value arch ids)]
            , callReturnRegs :: [Some (ArchReg arch)]
            }
 
@@ -1102,12 +1102,12 @@ data RegisterUseContext arch
       -- | Callback function for summarizing register usage of terminal
       -- statements.
     , reguseTermFn :: !(forall ids . ArchTermStmtUsageFn arch ids)
-      -- | Given the address of a call instruction and regisdters, this returns the 
+      -- | Given the address of a call instruction and regisdters, this returns the
       -- values read and returned.
     , callDemandFn    :: !(forall ids
-                          .  ArchSegmentOff arch 
+                          .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either (RegisterUseError arch) (CallRegs arch))
+                          -> Either (RegisterUseError arch) (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1257,10 +1257,10 @@ inferStartConstraints rctx blockMap addr = do
   propStartConstraints rctx blockMap Map.empty (Map.singleton addr cns)
 
 -- | Pretty print start constraints for debugging purposes.
-ppStartConstraints :: forall arch ids 
+ppStartConstraints :: forall arch ids
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc 
+                   -> Doc
 ppStartConstraints m = vcat (pp <$> Map.toList m)
   where pp :: (ArchSegmentOff arch, StartInferInfo arch ids) -> Doc
         pp (addr, (_,_,_,pvm)) =
@@ -1272,10 +1272,10 @@ ppStartConstraints m = vcat (pp <$> Map.toList m)
           text "to" <+> pretty preaddr <> text ":" <$$>
           indent 2 (ppPVM pvm)
 
-_ppStartConstraints :: forall arch ids 
+_ppStartConstraints :: forall arch ids
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc 
+                   -> Doc
 _ppStartConstraints = ppStartConstraints
 
 ------------------------------------------------------------------------
@@ -1621,19 +1621,19 @@ mkBlockUsageSummary ctx cns sis blk = do
         callFn <- asks callDemandFn
         -- Get function type associated with function
         off <- gets blockCurOff
-        let insnAddr = 
+        let insnAddr =
               let msg = "internal: Expected valid instruction address."
                in fromMaybe (error msg) (incSegmentOff addr (toInteger off))
-        ftr <- 
+        demandValue (regs^.boundValue ip_reg)
+        ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
             Left e -> throwError e
-        demandValue (regs^.boundValue ip_reg)
+        -- Demand argument registers
+        traverse_ (\(Some v) -> demandValue v) (callArgValues ftr)
         -- Store call register type information
         modify $ \s -> s { blockCallFunType = Just (callRegsFnType ftr) }
-        -- Demand argument registers
-        traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) (callArgRegs ftr)
-
+        -- Get other things
         cache <- gets assignDeps
         savedRegs <- asks calleeSavedRegisters
         let insReg m (Some r) = setRegDep r (valueDeps cns cache (regs^.boundValue r)) m
