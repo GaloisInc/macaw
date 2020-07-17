@@ -42,8 +42,6 @@ module Data.Macaw.Dwarf
   , SubprogramDef(..)
     -- * Inlineing
   , SubprogramRef
-  , InlinedSubprogram(..)
-  , InlineVariable(..)
   , VariableRef
     -- * Locations
   , Location(..)
@@ -709,6 +707,8 @@ data TypeApp
      -- ^ An IEEE single precision floating point value.
    | DoubleType
      -- ^ An IEEE double precision floating point value.
+   | LongDoubleType
+     -- ^ A long double type.
    | UnsignedCharType
      -- ^ A 1-byte unsigned character.
    | SignedCharType
@@ -750,6 +750,7 @@ parseBaseType _ = do
 
     (_, DW_ATE_float,    4) -> pure $! FloatType
     (_, DW_ATE_float,    8) -> pure $! DoubleType
+    ("long double", DW_ATE_float, 16) -> pure $! LongDoubleType
 
     (_, DW_ATE_signed_char, 1)   -> pure $! SignedCharType
     (_, DW_ATE_unsigned_char, 1) -> pure $! UnsignedCharType
@@ -944,6 +945,13 @@ instance Pretty Location where
 ------------------------------------------------------------------------
 -- Variable
 
+-- | A reference to a variable
+newtype VariableRef = VariableRef DieID
+  deriving (Eq,Ord)
+
+instance Pretty VariableRef where
+  pretty (VariableRef (DieID w)) = text ("0x" ++ showHex w "")
+
 data Variable = Variable { varDieID    :: !DieID
                          , varName     :: !Name
                          , varDescription :: !Description
@@ -953,6 +961,8 @@ data Variable = Variable { varDieID    :: !DieID
                          , varType     :: !(Maybe TypeRef)
                          , varLocation :: !(Maybe Location)
                          , varConstValue :: !(Maybe ConstValue)
+                         , varOrigin :: !(Maybe VariableRef)
+                           -- ^ A variable reference if this variable comes from an inlined function.
                          }
 
 instance Pretty Variable where
@@ -991,6 +1001,7 @@ parseVariableOrParameter nm fileVec d =
 
     ignoreAttribute DW_AT_artificial
     ignoreAttribute DW_AT_specification
+    originDieID <- getMaybeAttribute DW_AT_abstract_origin attributeAsDieID
 
     pure $! Variable { varDieID    = dieId d
                      , varName     = name
@@ -1000,6 +1011,7 @@ parseVariableOrParameter nm fileVec d =
                      , varType     = mvarType
                      , varLocation = mloc
                      , varConstValue = constVal
+                     , varOrigin = VariableRef <$> originDieID
                      }
 
 $(pure [])
@@ -1016,30 +1028,15 @@ parseParameters fileVec = do
 
 $(pure [])
 
-
--- | A reference to a variable
-newtype VariableRef = VariableRef DieID
-  deriving (Eq,Ord)
-
--- | A reference to a variable that has been defined in one function and
--- inlined into this function.
-data InlineVariable = InlineVariable { ivarOrigin :: !VariableRef
-                                     , ivarLoc    :: !(Maybe Location)
-                                     }
-
-parseInlineVariable :: DIE -> Parser InlineVariable
-parseInlineVariable d = runDIEParser "parseInlineVariable" d $ do
-  checkTag DW_TAG_variable
-  originDieID <- getSingleAttribute DW_AT_abstract_origin attributeAsDieID
-  mloc       <- getMaybeAttribute DW_AT_location attributeAsLocation
-  ignoreAttribute DW_AT_const_value
-  pure $! InlineVariable { ivarOrigin = VariableRef originDieID
-                         , ivarLoc    = mloc
-                         }
-
 ------------------------------------------------------------------------
 -- Subprogram
 
+-- | A reference to a subprogram.
+newtype SubprogramRef = SubprogramRef DieID
+  deriving (Eq, Ord)
+
+instance Pretty SubprogramRef where
+  pretty (SubprogramRef (DieID d)) = text ("0x" ++ showHex d "")
 
 data SubprogramDef = SubprogramDef { subLowPC :: !(Maybe Word64)
                                    , subHighPC :: !(Maybe Word64)
@@ -1079,6 +1076,8 @@ data Subprogram = Subprogram { subName        :: !Name
                              , subDescription :: !Description
                              , subLinkageName :: !BS.ByteString
                              , subExternal    :: !Bool
+                             , subOrigin      :: !(Maybe SubprogramRef)
+                               -- ^ Origin for inlined functions.
                              , subIsDeclaration :: !Bool
                                -- ^ Indicates this is a declaration and not a defining declaration.
                              , subEntryPC     :: !(Maybe Word64)
@@ -1088,7 +1087,11 @@ data Subprogram = Subprogram { subName        :: !Name
                              , subPrototyped  :: !Bool
                              , subDef         :: !(Maybe SubprogramDef)
                              , subVars        :: !(Map VariableRef Variable)
-                             , subParams      :: ![Variable]
+                               -- | Maps variable ref to subprogram variable.
+                               --
+                               -- Note. Parameters offsets are ordered so in-order
+                               -- traversal of map is order of parameters.
+                             , subParamMap    :: !(Map VariableRef Variable)
                              , subUnspecifiedParams :: !Bool
                              , subRetType     :: !(Maybe TypeRef)
                                -- | Flag indicating function declared with
@@ -1106,7 +1109,7 @@ instance Pretty Subprogram where
          , text "prototyped: " <+> text (show (subPrototyped sub))
          , maybe (text "") pretty (subDef sub)
          , ppList "variables" (pretty <$> Map.elems (subVars sub))
-         , ppList "parameters" (pretty <$> subParams sub)
+         , ppList "parameters" (pretty <$> Map.elems (subParamMap sub))
          , text "return type: " <+> pretty (subRetType sub)
          ]
 
@@ -1156,11 +1159,14 @@ parseSubprogram :: FileVec
                 -> Parser Subprogram
 parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
   checkTag DW_TAG_subprogram
-  ext  <- getAttributeWithDefault DW_AT_external False attributeAsBool
+  ext  <- getAttributeWithDefault DW_AT_external    False attributeAsBool
   decl <- getAttributeWithDefault DW_AT_declaration False attributeAsBool
-  inl <-  getInlineAttribute
 
+  inl <-  getInlineAttribute
   inlined <- lift $ isInlined inl
+
+  originDieID <- getMaybeAttribute DW_AT_abstract_origin attributeAsDieID
+
 
   def <-
     if decl || inlined then
@@ -1182,7 +1188,6 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
 
   entryPC <- getMaybeAttribute DW_AT_entry_pc     attributeAsUInt
 
-
   hasUnspecifiedParams <- hasChildren DW_TAG_unspecified_parameters
 
   retType <- getMaybeAttribute DW_AT_type attributeAsTypeRef
@@ -1199,6 +1204,7 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
                      , subDescription = desc
                      , subLinkageName = linkageName
                      , subExternal   = ext
+                     , subOrigin     = SubprogramRef <$> originDieID
                      , subIsDeclaration = decl
                      , subEntryPC    = entryPC
                      , subArtificial = artificial
@@ -1207,73 +1213,14 @@ parseSubprogram fileVec typeMap d = runDIEParser "parseSubprogram" d $ do
                      , subPrototyped = prototyped
                      , subDef        = def
                      , subVars       = Map.fromList [ (VariableRef (varDieID v), v) | v <- vars ]
-                     , subParams     = params
+                     , subParamMap   = Map.fromList [ (VariableRef (varDieID v), v) | v <- params ]
                      , subUnspecifiedParams = hasUnspecifiedParams
                      , subRetType    = retType
                      , subNoreturn   = noreturn
                      , subTypeMap    = typeMap'
                      }
 
-------------------------------------------------------------------------
--- Inlined Subprogram
 
--- | A reference to a subprogram.
-newtype SubprogramRef = SubprogramRef DieID
-  deriving (Eq, Ord)
-
-
-data InlinedSubprogram =
-  InlinedSubprogram
-  { isubExternal   :: !Bool
-  , isubOrigin     :: !SubprogramRef
-  , isubDef        :: !(Maybe SubprogramDef)
-  , isubVars       :: ![InlineVariable]
-  , isubGNUAllTailCallSites :: !Bool
-  }
-
-instance Pretty InlinedSubprogram where
-  pretty sub =
-    text "external:   " <+> text (show (isubExternal sub)) <$$>
-    maybe (text "") pretty (isubDef sub)
---    text "origin:" <$$>
---    indent 2 (pretty (isubOrigin sub)) <$$>
-
-
-parseInlinedSubprogram :: FileVec
-                       -> Map TypeRef AbsType
-                       -> DIE
-                       -> Parser InlinedSubprogram
-parseInlinedSubprogram _fileVec _typeMap d =
-  runDIEParser "parseInlinedSubprogram" d $ do
-    checkTag DW_TAG_subprogram
-    ext  <- getAttributeWithDefault DW_AT_external False  attributeAsBool
-    decl <- getAttributeWithDefault DW_AT_declaration False attributeAsBool
-    inl  <- getInlineAttribute
-    inlined <- lift $ isInlined inl
-    originDieID <- getSingleAttribute DW_AT_abstract_origin attributeAsDieID
-
-    allTailCallSites <- getAllTailCallSites
-
-    def <-
-      if decl || inlined then
-        pure Nothing
-      else do
-        Just <$> parseSubprogramDef
-
-    ignoreChild DW_TAG_label
-    ignoreChild DW_TAG_formal_parameter
-    ivars <- parseChildrenList DW_TAG_variable parseInlineVariable
-
-
-    pure InlinedSubprogram
-      { isubExternal   = ext
-      , isubOrigin     = SubprogramRef originDieID
-      , isubDef        = def
-      , isubVars       = ivars
-      , isubGNUAllTailCallSites = allTailCallSites
-      }
-
-------------------------------------------------------------------------
 -- CompileUnit
 
 -- | The output of one compilation.
@@ -1287,7 +1234,6 @@ data CompileUnit = CompileUnit { cuCtx :: !CUContext
                                , cuSubprogramMap :: !(Map SubprogramRef Subprogram)
                                  -- ^ Map from subprogram reference to a subprogram.
                                , cuSubprograms :: ![Subprogram]
-                               , cuInlinedSubprograms :: ![InlinedSubprogram]
                                , cuVariables   :: ![Variable]
                                  -- ^ Global variables in this unit
                                , cuTypeMap     :: !(Map TypeRef AbsType)
@@ -1309,7 +1255,6 @@ instance Pretty CompileUnit where
          , text "GNU_macros:  " <+> text (show (cuGNUMacros cu))
          , ppList "variables"           (pretty <$> cuVariables cu)
          , ppList "subprograms"         (pretty <$> cuSubprograms cu)
-         , ppList "inlined subprograms" (pretty <$> cuInlinedSubprograms cu)
          , ppList "ranges"              (ppRange <$> cuRanges cu)
          ]
 
@@ -1382,18 +1327,14 @@ parseCompileUnit (ctx, d) =
   typeMap <- parseTypeMap Map.empty fileVec
 
 
-  (inlinedDies, subprogramDies) <-
-    partition (hasAttribute DW_AT_abstract_origin) <$>
-      parseChildrenList DW_TAG_subprogram pure
+  subprogramDies <- parseChildrenList DW_TAG_subprogram pure
 
   subprograms <- lift $ traverse (parseSubprogram fileVec typeMap) subprogramDies
   let subMap = Map.fromList $ zipWith (\d' s -> (SubprogramRef (dieId d'), s)) subprogramDies subprograms
-  inlinedSubs <- lift $ traverse (parseInlinedSubprogram fileVec typeMap) inlinedDies
 
   variables <- parseVariables fileVec
 
   ignoreChild DW_TAG_dwarf_procedure
-
 
   pure $! CompileUnit { cuCtx                = ctx
                       , cuProducer           = prod
@@ -1404,7 +1345,6 @@ parseCompileUnit (ctx, d) =
                       , cuGNUMacros          = gnuMacros
                       , cuSubprogramMap      = subMap
                       , cuSubprograms        = subprograms
-                      , cuInlinedSubprograms = inlinedSubs
                       , cuVariables   = variables
                       , cuTypeMap     = typeMap
                       , cuRanges      = ranges
