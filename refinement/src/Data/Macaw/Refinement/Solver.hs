@@ -28,7 +28,7 @@ data Solver = CVC4 | Yices | Z3
 
 withNewBackend :: (MonadIO m)
                => Solver
-               -> (forall proxy t solver fs sym . (sym ~ CBS.SimpleBackend t fs, CB.IsSymInterface sym, WPO.OnlineSolver t solver) => proxy solver -> WPF.ProblemFeatures -> sym -> m a)
+               -> (forall proxy t solver fs sym . (sym ~ CBS.SimpleBackend t fs, CB.IsSymInterface sym, WPO.OnlineSolver solver) => proxy solver -> WPF.ProblemFeatures -> sym -> m a)
                -> m a
 withNewBackend s k = do
   sym :: CBS.SimpleBackend PN.GlobalNonceGenerator (WE.Flags WE.FloatUninterpreted)
@@ -40,7 +40,7 @@ withNewBackend s k = do
       let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs .|. WPF.useNonlinearArithmetic
       k proxy features sym
     Yices -> do
-      let proxy = Proxy @(WSY.Connection PN.GlobalNonceGenerator)
+      let proxy = Proxy @WSY.Connection
       liftIO $ WC.extendConfig WSY.yicesOptions (WI.getConfiguration sym)
       -- For some reason, non-linear arithmetic is required for cvc4 and z3 but doesn't work at all with yices
       let features = WPF.useBitvectors .|. WPF.useSymbolicArrays .|. WPF.useStructs .|. WPF.useLinearArithmetic
