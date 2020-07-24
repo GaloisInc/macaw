@@ -253,7 +253,8 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
               -- This one is for DQ, i.e., 64-bit things
               -- but there are equivalents for all sizes, so we should
               -- probably parameterize on size.
-
+            | VPUnpackHQDQ
+              -- ^ @A,B,C,D + P,Q,R,S = A,P,B,Q@
 
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
@@ -276,6 +277,7 @@ instance Show AVXOp2 where
              VAESEncLast  -> "vaesenclast"
              VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
              VPUnpackLQDQ -> "vpunpacklqdq"
+             VPUnpackHQDQ -> "vpunpackhqdq"
 
 instance Show AVXPointWiseOp2 where
   show x = case x of
@@ -704,6 +706,23 @@ data X86PrimFn f tp where
     -> !Word8
     -> X86PrimFn f (BVType 128)
 
+  AESNI_AESEnc
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESEncLast
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESDec
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESDecLast
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
@@ -747,6 +766,10 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       VOp2 w _ _ _ -> BVTypeRepr w
       Pointwise2 n w _ _ _ -> packedAVX n w
       VExtractF128 {} -> knownRepr
+      AESNI_AESEnc{} -> knownRepr
+      AESNI_AESEncLast{} -> knownRepr
+      AESNI_AESDec{} -> knownRepr
+      AESNI_AESDecLast{} -> knownRepr
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -802,6 +825,10 @@ instance TraversableFC X86PrimFn where
       Pointwise2 n w o x y -> Pointwise2 n w o <$> go x <*> go y
       VExtractF128 x i -> (`VExtractF128` i) <$> go x
       VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
+      AESNI_AESEnc x y -> AESNI_AESEnc <$> go x <*> go y
+      AESNI_AESEncLast x y -> AESNI_AESEncLast <$> go x <*> go y
+      AESNI_AESDec x y -> AESNI_AESDec <$> go x <*> go y
+      AESNI_AESDecLast x y -> AESNI_AESDecLast <$> go x <*> go y
 
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc
@@ -862,6 +889,10 @@ instance IsArchFn X86PrimFn where
                                             , pp e
                                             , ppShow (widthVal i)
                                             ]
+      AESNI_AESEnc x y -> sexprA "aesenc" [pp x, pp y]
+      AESNI_AESEncLast x y -> sexprA "aesenclast" [pp x, pp y]
+      AESNI_AESDec x y -> sexprA "aesdec" [pp x, pp y]
+      AESNI_AESDecLast x y -> sexprA "aesdeclast" [pp x, pp y]
 
 
 -- | This returns true if evaluating the primitive function implicitly
@@ -908,6 +939,10 @@ x86PrimFnHasSideEffects f =
     Pointwise2 {} -> False
     VExtractF128 {} -> False
     VInsert {} -> False
+    AESNI_AESEnc {} -> False
+    AESNI_AESEncLast {} -> False
+    AESNI_AESDec {} -> False
+    AESNI_AESDecLast {} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt

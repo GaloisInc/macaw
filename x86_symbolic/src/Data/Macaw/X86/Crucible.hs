@@ -180,11 +180,19 @@ data Sym s = Sym { symIface :: s
 data SymFuns s = SymFuns
   { fnAesEnc ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
-    -- ^ One round of AES
+    -- ^ One round of AES encryption
 
   , fnAesEncLast ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
-    -- ^ Last round of AES
+    -- ^ Last round of AES encryption
+
+  , fnAesDec ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ One round of AES decryption
+
+  , fnAesDecLast ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ Last round of AES decryption
 
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
@@ -197,6 +205,8 @@ newSymFuns :: forall sym. IsSymInterface sym => sym -> IO (SymFuns sym)
 newSymFuns s =
   do fnAesEnc     <- bin "aesEnc"
      fnAesEncLast <- bin "aesEncLast"
+     fnAesDec     <- bin "aesDec"
+     fnAesDecLast <- bin "aesDecLast"
      fnClMul      <- bin "clMul"
      return SymFuns { .. }
 
@@ -382,6 +392,10 @@ pureSem sym fn = do
                     in case mul2Plus n of
                          Refl -> V.take n (PV.interleave xs ys)
 
+        M.VPUnpackHQDQ -> vecOp2 sym BigEndian w (knownNat @64) x y $
+          \xs ys -> let n = V.length xs
+                    in case mul2Plus n of
+                         Refl -> V.take n (PV.interleave xs ys)
 
         M.VAESEnc
           | Just Refl <- testEquality w n128 ->
@@ -424,6 +438,38 @@ pureSem sym fn = do
         V.zipWith (semPointwise op elSz) xs ys
 
     M.VExtractF128 {} -> error "VExtractF128"
+
+    M.AESNI_AESEnc x y ->
+      do let f = fnAesEnc (symFuns sym)
+             s = symIface sym
+         state <- toValBV s x
+         key   <- toValBV s y
+         let ps = extend (extend empty state) key
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.AESNI_AESEncLast x y ->
+      do let f = fnAesEncLast (symFuns sym)
+             s = symIface sym
+         state <- toValBV s x
+         key   <- toValBV s y
+         let ps = extend (extend empty state) key
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.AESNI_AESDec x y ->
+      do let f = fnAesDec (symFuns sym)
+             s = symIface sym
+         state <- toValBV s x
+         key   <- toValBV s y
+         let ps = extend (extend empty state) key
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.AESNI_AESDecLast x y ->
+      do let f = fnAesDecLast (symFuns sym)
+             s = symIface sym
+         state <- toValBV s x
+         key   <- toValBV s y
+         let ps = extend (extend empty state) key
+         llvmPointer_bv s =<< applySymFn s f ps
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->

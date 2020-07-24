@@ -51,6 +51,8 @@ module Data.Macaw.X86
        , x86DemandContext
        ) where
 
+import Debug.Trace
+
 import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
@@ -384,6 +386,10 @@ transferAbsValue r f =
     PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
+    AESNI_AESEnc {} -> TopV
+    AESNI_AESEncLast {} -> TopV
+    AESNI_AESDec {} -> TopV
+    AESNI_AESDecLast {} -> TopV
 
 -- | Extra constraints on block for disassembling.
 data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
@@ -510,10 +516,18 @@ identifyX86Return :: Seq (Stmt X86_64 ids)
                   -> RegState X86Reg (Value X86_64 ids)
                   -> AbsProcessorState X86Reg ids
                   -> Maybe (Seq (Stmt X86_64 ids))
-identifyX86Return stmts s finalRegSt8 =
+identifyX86Return stmts s finalRegSt8 = do
+  traceShowM $ s ^. boundValue ip_reg
+  case s ^. boundValue ip_reg of
+    AssignedValue a -> traceShowM $ "assigned: " ++ show (assignId a)
+    _ -> pure ()
   case transferValue finalRegSt8 (s^.boundValue ip_reg) of
-    ReturnAddr -> Just stmts
-    _ -> Nothing
+    ReturnAddr -> do
+      traceM "identified return"
+      Just stmts
+    v -> do
+      traceM $ "failed to identify return: " ++ show v
+      Nothing
 
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =

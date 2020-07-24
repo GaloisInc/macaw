@@ -227,12 +227,15 @@ all_instructions =
   , avxOp2 "vpor" VPOr
   , avxOp2 "vpxor" VPXor
   , avxOp2 "vpshufb" VPShufB
+  , avxOp2 "vxorps" VPXor
 
   , avxOp2I "vpalignr" VPAlignR
 
   , avxOp2 "vaesenc" VAESEnc
   , avxOp2 "vaesenclast" VAESEncLast
+
   , avxOp2 "vpunpcklqdq" VPUnpackLQDQ
+  , avxOp2 "vpunpckhqdq" VPUnpackHQDQ
 
   , avx3 "vextractf128" $ \arg1 arg2 arg ->
       do SomeBV vec <- getSomeBVValue arg2

@@ -79,6 +79,8 @@ module Data.Macaw.Symbolic.CrucGen
   , crucibleValue
   ) where
 
+import Debug.Trace
+
 import           Control.Lens hiding (Empty, (:>))
 import           Control.Monad.Except
 import qualified Control.Monad.Fail as MF
@@ -1433,12 +1435,12 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt $ CR.ErrorStmt msgVal
-    M.ClassifyFailure regs _failureReasons
+    M.ClassifyFailure regs failureReasons
       | Just targets <- lookup thisAddr externalResolutions -> do
           setMachineRegs =<< createRegStruct regs
           addIPSwitch blockLabelMap targets (regs ^. M.boundValue M.ip_reg)
       | otherwise -> do
-          msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions)
+          msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions ++ "(" ++ show failureReasons ++ ")")
           addTermStmt $ CR.ErrorStmt msgVal
 
 -- | This is like 'addSwitch', but for unstructured indirect control flow

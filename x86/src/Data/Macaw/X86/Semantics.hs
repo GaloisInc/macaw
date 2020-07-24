@@ -15,6 +15,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE NondecreasingIndentation #-}
+{-# LANGUAGE MultiWayIf #-}
 module Data.Macaw.X86.Semantics
   ( execInstruction
   ) where
@@ -3068,6 +3069,46 @@ all_instructions =
   , def_fsubrp
   , defNullary "emms" $ addArchStmt EMMS
   , defNullary "femms" $ addArchStmt EMMS
+  , defBinary "aesenc" $ \_ v1 v2 -> do
+      SomeBV state <- getSomeBVLocation v1
+      SomeBV key <- getSomeBVLocation v2
+      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
+         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
+             s <- eval =<< get state
+             k <- eval =<< get key
+             res <- evalArchFn (AESNI_AESEnc s k)
+             state .= res
+         | otherwise -> fail "aesenc: State and key must be 128-bit"
+  , defBinary "aesenclast" $ \_ v1 v2 -> do
+      SomeBV state <- getSomeBVLocation v1
+      SomeBV key <- getSomeBVLocation v2
+      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
+         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
+             s <- eval =<< get state
+             k <- eval =<< get key
+             res <- evalArchFn (AESNI_AESEncLast s k)
+             state .= res
+         | otherwise -> fail "aesenclast: State and key must be 128-bit"
+  , defBinary "aesdec" $ \_ v1 v2 -> do
+      SomeBV state <- getSomeBVLocation v1
+      SomeBV key <- getSomeBVLocation v2
+      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
+         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
+             s <- eval =<< get state
+             k <- eval =<< get key
+             res <- evalArchFn (AESNI_AESDec s k)
+             state .= res
+         | otherwise -> fail "aesdec: State and key must be 128-bit"
+  , defBinary "aesdeclast" $ \_ v1 v2 -> do
+      SomeBV state <- getSomeBVLocation v1
+      SomeBV key <- getSomeBVLocation v2
+      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
+         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
+             s <- eval =<< get state
+             k <- eval =<< get key
+             res <- evalArchFn (AESNI_AESDecLast s k)
+             state .= res
+         | otherwise -> fail "aesdeclast: State and key must be 128-bit"
   ]
   ++ def_cmov_list
   ++ def_jcc_list

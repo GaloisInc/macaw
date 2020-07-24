@@ -61,6 +61,8 @@ module Data.Macaw.AbsDomain.AbsState
   , hasMaximum
   ) where
 
+import Debug.Trace
+
 import           Control.Exception (assert)
 import           Control.Lens
 import           Control.Monad.State.Strict
