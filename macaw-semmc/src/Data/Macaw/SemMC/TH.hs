@@ -616,7 +616,10 @@ addEltTH endianness interps elt = do
           -- for now.  Once that works, we can be smarter and translate what we
           -- can eagerly.
           genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
-          letBindExpr elt genExpr
+          istl <- isTopLevel
+          if istl
+            then bindExpr elt (return genExpr)
+            else letBindExpr elt genExpr
         S.BoundVarExpr bVar -> do
           x <- evalBoundVar interps bVar
           letBindPureExpr elt [| $(return x) |]
@@ -726,10 +729,11 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
       case funMaybe of
         Just fun -> do
           argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
-          let applyQ e be = [| $(e) `ap` $(refBinding be) |]
-          -- FIXME: Check if all argExprs are 'EagerBoundExp's; if so, generate
-          -- a pure let bound version instead
-          liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
+          case all isEager argExprs of
+            True -> liftQ $ foldl appE (return fun) (map refEager argExprs)
+            False -> do
+              let applyQ e be = [| $(e) `ap` $(refBinding be) |]
+              liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
         _ -> do
           let fnArgTypes = S.symFnArgTypes symFn
               fnRetType = S.symFnReturnType symFn
@@ -834,27 +838,19 @@ defaultAppEvaluator :: (A.Architecture arch)
 defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
-    liftQ [| addApp =<< (M.NotApp <$> $(refBinding e)) |]
+    liftQ $ joinPure1 [| addApp |] [| M.NotApp |] e
   S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap >>= extractBound
   S.BaseIte bt _ test t f -> do
     -- FIXME: Generate code that dynamically checks for a concrete condition and
     -- make an ite instead of a mux if possible
+
     testE <- addEltTH endianness interps test
     tE <- addEltTH endianness interps t
     fE <- addEltTH endianness interps f
     case bt of
-      CT.BaseBoolRepr -> liftQ [| addApp =<<
-                                   (M.Mux M.BoolTypeRepr <$>
-                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                |]
-      CT.BaseBVRepr w -> liftQ [| addApp =<<
-                                   (M.Mux (M.BVTypeRepr $(natReprTH w)) <$>
-                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                |]
-      CT.BaseFloatRepr fpp -> liftQ [| addApp =<<
-                                        (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) <$>
-                                         $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                     |]
+      CT.BaseBoolRepr -> liftQ $ joinPure3 [| addApp |] [| M.Mux M.BoolTypeRepr |] testE tE fE
+      CT.BaseBVRepr w -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.BVTypeRepr $(natReprTH w)) |] testE tE fE
+      CT.BaseFloatRepr fpp -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) |] testE tE fE
       CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
@@ -866,27 +862,27 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BaseEq _bt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.Eq <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.Eq |] e1 e2
   S.BVSlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVSignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVSignedLt |] e1 e2
   S.BVUlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVUnsignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVUnsignedLt |] e1 e2
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| G.addExpr =<< join ((TR.bvconcat <$> $(refBinding e1) <*> $(refBinding e2) <*> pure $(natReprTH v) <*> pure $(natReprTH u) <*> pure $(natReprTH w))) |]
+    liftQ $ [| G.addExpr =<< $(joinOp2 [| \v1 v2 -> TR.bvconcat v1 v2 $(natReprTH v) $(natReprTH u) $(natReprTH w) |] e1 e2) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
         e <- addEltTH endianness interps bv
-        liftQ [| G.addExpr =<< join ((TR.bvselect <$> $(refBinding e) <*> pure $(natReprTH n) <*> pure $(natReprTH idx) <*> pure $(natReprTH w))) |]
+        liftQ [| G.addExpr =<< $(joinOp1 [| \v1 -> TR.bvselect v1 $(natReprTH n) $(natReprTH idx) $(natReprTH w) |] e) |]
       False -> do
         e <- addEltTH endianness interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
@@ -895,28 +891,28 @@ defaultAppEvaluator endianness elt interps = case elt of
                |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx))) <$> $(refBinding bvValExp))
-            |]
+    liftQ $ joinPure1 [| addApp |] [| M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx))) |] bvValExp
 
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
-        let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
-                                   |]
+        let smul mul e = do
+              y <- addEltTH endianness interps e
+              bindPure1 [| addApp |] [| M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) |] y
+
             sval v = do
               EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
             add x y = do
-              letTH [| addApp =<< (M.BVAdd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVAdd $(natReprTH w) |] x y
         in WSum.evalM add smul sval sm >>= extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
-                                   |]
+                            bindPure1 [| addApp |] [| M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) |] y
+
             sval v = do
               EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
             add x y = do
-              letTH [| addApp =<< (M.BVXor $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVXor $(natReprTH w) |] x y
         in WSum.evalM add smul sval sm >>= extractBound
       _ -> liftQ [| error "unsupported SemiRingSum repr for macaw semmc TH" |]
 
@@ -924,13 +920,13 @@ defaultAppEvaluator endianness elt interps = case elt of
     case WSum.prodRepr pd of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let pmul x y = do
-              letTH [| addApp =<< (M.BVMul $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVMul $(natReprTH w) |] x y
             unit = liftQ [| pure (M.BVValue $(natReprTH w) 1) |]
             convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let pmul x y = do
-              letTH [| addApp =<< (M.BVAnd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVAnd $(natReprTH w) |] x y
             unit = liftQ [| pure (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
             convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
@@ -942,27 +938,27 @@ defaultAppEvaluator endianness elt interps = case elt of
     -- These are all TH Exprs that are of the (Macaw) Value at run-time
     bs' <- mapM (addEltTH endianness interps) (S.bvOrToList bs)
     let por x y = do
-          letTH [| addApp =<< (M.BVOr $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+          bindPure2 [| addApp |] [| M.BVOr $(natReprTH w) |] x y
     F.foldrM por (EagerBoundExp zero) bs' >>= extractBound
 
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVShl $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVShl $(natReprTH w) |] e1 e2
   S.BVLshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVShr $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVShr $(natReprTH w) |] e1 e2
   S.BVAshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVSar $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVSar $(natReprTH w) |] e1 e2
   S.BVZext w bv -> do
     e <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.UExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
+    liftQ $ joinPure1 [| addApp |] [| (\x -> M.UExt x $(natReprTH w)) |] e
   S.BVSext w bv -> do
     e <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.SExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
+    liftQ $ joinPure1 [| addApp |] [| (\x -> M.SExt x $(natReprTH w)) |] e
 
   _ -> error $ "unsupported Crucible elt: " <> show elt
 

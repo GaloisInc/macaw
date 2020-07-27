@@ -33,6 +33,7 @@ import qualified SemMC.Architecture.AArch32 as ARMSem
 import           SemMC.Architecture.ARM.Opcodes ( ASLSemantics(..), allA32OpcodeInfo )
 import qualified SemMC.Formula as SF
 import qualified What4.Expr.Builder as WEB
+import qualified What4.Interface as S
 
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Instruction
@@ -62,6 +63,8 @@ execInstruction =
                                   , archTypeQ = [t| ARMSem.AArch32 |]
                                   , genLibraryFunction = notVecLib
                                   , genOpcodeCase = notVecOpc
+                                  , getExprFields = Just $ getFlds
+                                  , archTranslateType = armTranslateType
                                   }
 
        genExecInstruction (Proxy @ARMSem.AArch32)

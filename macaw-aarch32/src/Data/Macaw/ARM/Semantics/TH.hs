@@ -1,13 +1,16 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE GADTs #-}
 module Data.Macaw.ARM.Semantics.TH
     ( armAppEvaluator
     , armNonceAppEval
@@ -16,6 +19,9 @@ module Data.Macaw.ARM.Semantics.TH
     , getSIMD
     , setSIMD
     , loadSemantics
+    , armGetFields
+    , armTranslateType
+    , FieldGetter(..)
     )
     where
 
@@ -27,12 +33,13 @@ import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.SemMC.Generator as G
-import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName )
+import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, translateBaseTypeRepr )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits as TL
 import qualified Lang.Crucible.Backend.Simple as CBS
@@ -78,7 +85,7 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                liftQ [| join (setSIMD <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
+                liftQ $ joinOp3 [| setSIMD |] rgfE ridE valE
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_set" ->
             case args of
@@ -86,7 +93,7 @@ armNonceAppEval bvi nonceApp =
                 rgfE <- addEltTH M.LittleEndian bvi rgf
                 ridE <- addEltTH M.LittleEndian bvi rid
                 valE <- addEltTH M.LittleEndian bvi val
-                liftQ [| join (setGPR <$> $(refBinding rgfE) <*> $(refBinding ridE) <*> $(refBinding valE)) |]
+                liftQ $ joinOp3 [| setGPR |] rgfE ridE valE
               _ -> fail "Invalid uf_gpr_get"
           "uf_simd_get" ->
             case args of
@@ -94,7 +101,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| getSIMD =<< $(refBinding rid) |]
+                  liftQ $ joinOp1 [| getSIMD |] rid
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
@@ -102,7 +109,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ [| getGPR =<< $(refBinding rid) |]
+                  liftQ $ joinOp1 [| getGPR |] rid
               _ -> fail "Invalid uf_gpr_get"
           _ | "uf_write_mem_" `isPrefixOf` fnName ->
             case args of
@@ -113,9 +120,8 @@ armNonceAppEval bvi nonceApp =
                 addrE <- addEltTH M.LittleEndian bvi addr
                 valE <- addEltTH M.LittleEndian bvi val
                 let memWidth = fromIntegral (intValue memWidthRepr) `div` 8
-                liftQ [| join (writeMem <$> $(refBinding memE) <*> $(refBinding addrE) <*> pure $(natReprFromIntTH memWidth) <*> $(refBinding valE)) |]
+                liftQ $ joinOp3 [| writeMem $(natReprFromIntTH memWidth) |] memE addrE valE
               _ -> fail "invalid write_mem"
-
 
 
           _ | "uf_unsignedRSqrtEstimate" `isPrefixOf` fnName ->

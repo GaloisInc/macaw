@@ -24,9 +24,21 @@ module Data.Macaw.SemMC.TH.Monad (
   refBinding,
   inConditionalContext,
   isTopLevel,
-  definedFunction
+  definedFunction,
+  isEager,
+  refEager,
+  joinOp1,
+  joinOp2,
+  joinOp3,
+  joinPure1,
+  joinPure2,
+  joinPure3,
+  bindPure1,
+  bindPure2,
+  bindPure3
   ) where
 
+import           Control.Monad ( join )
 import qualified Control.Monad.Fail as MF
 import qualified Control.Monad.State.Strict as St
 import           Control.Monad.Trans ( lift )
@@ -37,6 +49,8 @@ import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
 import qualified Data.Macaw.CFG as M
+import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Backend.Simple as S
@@ -286,3 +300,60 @@ refBinding be =
     EagerBoundExp e -> [| pure $(return e) |]
     -- If it is lazy, we need it "bare" in the applicative wrappers
     LazyBoundExp e -> return e
+
+isEager :: BoundExp -> Bool
+isEager be = case be of
+  EagerBoundExp _ -> True
+  LazyBoundExp _ -> False
+
+refEager :: BoundExp -> Q Exp
+refEager be = case be of
+  EagerBoundExp e -> return e
+  LazyBoundExp _ -> fail "refEager: cannot eagerly reference a lazy value"
+
+
+joinOp1 :: ExpQ -> BoundExp -> Q Exp
+joinOp1 fun arg1 = case isEager arg1 of
+  True -> [| $(fun) $(refEager arg1) |]
+  False -> [| $(fun) =<< $(refBinding arg1) |]
+
+joinOp2 :: ExpQ -> BoundExp -> BoundExp -> Q Exp
+joinOp2 fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> [| $(fun) $(refEager arg1) $(refEager arg2) |]
+  False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2)) |]
+
+joinOp3 :: ExpQ -> BoundExp -> BoundExp -> BoundExp -> Q Exp
+joinOp3 fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> [| $(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3)|]
+  False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2) <*> $(refBinding arg3)) |]
+
+joinPure1 :: ExpQ -> ExpQ -> BoundExp -> Q Exp
+joinPure1 mfun fun arg1 = case isEager arg1 of
+  True -> [| $(mfun) ($(fun) $(refEager arg1)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) |]
+
+bindPure1 :: ExpQ -> ExpQ -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure1 mfun fun arg1 = case isEager arg1 of
+  True -> bindTH $ joinPure1 mfun fun arg1
+  False -> letTH $ joinPure1 mfun fun arg1
+
+joinPure2 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> Q Exp
+joinPure2 mfun fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> [| $(mfun) ($(fun) $(refEager arg1) $(refEager arg2)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) <*> $(refBinding arg2) |]
+
+bindPure2 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure2 mfun fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> bindTH $ joinPure2 mfun fun arg1 arg2
+  False -> letTH $ joinPure2 mfun fun arg1 arg2
+
+joinPure3 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> BoundExp -> Q Exp
+joinPure3 mfun fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> [| $(mfun) ($(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) <*> $(refBinding arg2) <*> $(refBinding arg3) |]
+
+
+bindPure3 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure3 mfun fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> bindTH $ joinPure3 mfun fun arg1 arg2 arg3
+  False -> letTH $ joinPure3 mfun fun arg1 arg2 arg3
