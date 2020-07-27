@@ -96,6 +96,8 @@ simplifyApp a =
     BVUnsignedLt v1 v2                -> unsignedRelOp (<) v1 v2
     Mux _ _ t f
       | Just Refl <- testEquality t f -> Just t
+    Mux _ c (BoolValue True) (BoolValue False) -> Just c
+    Mux _ c (BoolValue False) (BoolValue True) -> simplifyApp (NotApp c)
     _                                 -> Nothing
   where
     unop :: forall n . (tp ~ BVType n)

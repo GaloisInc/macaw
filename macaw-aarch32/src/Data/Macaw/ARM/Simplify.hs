@@ -24,7 +24,9 @@ instance MSS.SimplifierExtension ARM.AArch32 where
                       coalesceAdditionByConstant a <|>
                       simplifyNestedMux a <|>
                       distributeAddOverConstantMux a <|>
-                      doubleNegation a
+                      doubleNegation a <|>
+                      negatedTrivialMux a <|>
+                      negatedMux a
   simplifyArchFn = armSimplifyArchFn
 
 armSimplifyArchFn :: MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
@@ -153,5 +155,22 @@ doubleNegation app = do
   MC.NotApp r1 <- return app
   MC.NotApp r2 <- MC.valueAsApp r1
   MC.valueAsApp r2
+
+
+negatedTrivialMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+                  -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+negatedTrivialMux app = case app of
+  MC.Mux _ cond (MC.BoolValue False) (MC.BoolValue True) ->
+    case MSS.simplifyArchApp (MC.NotApp cond) of
+      Just app' -> return app'
+      _ -> return $ MC.NotApp cond
+  _ -> Nothing
+
+negatedMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+           -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+negatedMux app = do
+  MC.Mux rep c l r <- return app
+  MC.NotApp c' <- MC.valueAsApp c
+  return $ MC.Mux rep c' r l
 
 -- Potentially Normalize negations?
