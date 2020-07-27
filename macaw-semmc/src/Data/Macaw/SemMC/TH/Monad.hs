@@ -19,6 +19,7 @@ module Data.Macaw.SemMC.TH.Monad (
   letBindExpr,
   letBindPureExpr,
   bindTH,
+  letBindPat,
   letTH,
   extractBound,
   refBinding,
@@ -277,6 +278,14 @@ bindTH eq = do
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
                        }
   return (EagerBoundExp (VarE n))
+
+letBindPat :: S.Expr t tp -> (PatQ, ExpQ) -> ExpQ -> MacawQ arch t fs ()
+letBindPat elt (patq,resq) eq = do
+  pat <- liftQ patq
+  res <- liftQ resq
+  e <- liftQ eq
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD pat (NormalB e) []]
+                       , expressionCache = M.insert (Some elt) res (expressionCache s) }
 
 definedFunction :: String -> MacawQ arch t fs (Maybe Exp)
 definedFunction name = do
