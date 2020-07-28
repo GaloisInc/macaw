@@ -370,7 +370,6 @@ armNonceAppEval bvi nonceApp =
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
                 simds' <- addEltTH M.LittleEndian bvi simds
                 appendStmt $ [| join (execWriteAction <$> $(refBinding simds')) |]
-                appendStmt [| setWriteMode WriteNone |]
                 liftQ [| return $ M.BoolValue True |]
 
           "uf_update_memory"
@@ -412,15 +411,9 @@ natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
 
-data ARMWriteActionK =
-    ARMWriteGPRsK
-  | ARMWriteMemoryK
-  | ARMWriteSIMDsK
-
-data ARMWriteActionRepr (tp :: ARMWriteActionK) where
-  ARMWriteGPRs :: ARMWriteActionRepr 'ARMWriteGPRsK
-  ARMWriteMemory :: ARMWriteActionRepr 'ARMWriteMemoryK
-  ARMWriteSIMDs :: ARMWriteActionRepr 'ARMWriteSIMDsK
+data ARMWriteGPRs = ARMWriteGPRs
+data ARMWriteMemory = ARMWriteMemory
+data ARMWriteSIMDs = ARMWriteSIMDs
 
 newtype ARMWriteAction ids s tp where
   ARMWriteAction :: G.Generator ARM.AArch32 ids s tp -> ARMWriteAction ids s tp
@@ -429,28 +422,21 @@ newtype ARMWriteAction ids s tp where
 execWriteAction :: ARMWriteAction ids s tp -> G.Generator ARM.AArch32 ids s tp
 execWriteAction (ARMWriteAction f) = f
 
-data WriteMode =
-  WriteNone
-  | WriteGPRs
-  | WriteSIMDs
-  | WriteMemory
-  deriving (Show, Eq, Lift)
-
 writeMem :: 1 <= w
          => M.NatRepr w
-         -> ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteMemoryK)
+         -> ARMWriteAction ids s ARMWriteMemory
          -> M.Value ARM.AArch32 ids (M.BVType 32)
          -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
-         -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteMemoryK))
+         -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteMemory)
 writeMem sz mem addr val = return $ do
   _ <- mem
   ARMWriteAction $ G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
   return $ ARMWriteMemory
 
-setGPR :: ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteGPRsK)
+setGPR :: ARMWriteAction ids s ARMWriteGPRs
        -> M.Value ARM.AArch32 ids (M.BVType 4)
        -> M.Value ARM.AArch32 ids (M.BVType 32)
-       -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteGPRsK))
+       -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteGPRs)
 setGPR handle regid v = do
   reg <- case regid of
     M.BVValue w i
@@ -472,10 +458,10 @@ getGPR v = do
     _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
   G.getRegSnapshotVal reg
 
-setSIMD :: ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteSIMDsK)
+setSIMD :: ARMWriteAction ids s ARMWriteSIMDs
         -> M.Value ARM.AArch32 ids (M.BVType 8)
         -> M.Value ARM.AArch32 ids (M.BVType 128)
-        -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteSIMDsK))
+        -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteSIMDs)
 setSIMD handle regid v = do
   reg <- case regid of
     M.BVValue w i
@@ -566,11 +552,11 @@ armTranslateType idsTy sTy tp = case tp of
     translateBaseType :: forall tp'. WT.BaseTypeRepr tp' -> Q Type
     translateBaseType tp' =  case tp' of
       _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteMemoryK) |]
+          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteMemory |]
       _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteSIMDsK) |]
+          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteSIMDs |]
       _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteGPRsK) |]
+          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteGPRs |]
       WT.BaseBoolRepr -> [t| M.Value ARM.AArch32 $(idsTy) M.BoolType |]
       WT.BaseBVRepr n -> [t| M.Value ARM.AArch32 $(idsTy) (M.BVType $(litT (numTyLit (intValue n)))) |]
       _ -> fail $ "unsupported base type: " ++ show tp
