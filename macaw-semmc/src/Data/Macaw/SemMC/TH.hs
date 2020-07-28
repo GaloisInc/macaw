@@ -36,18 +36,24 @@ module Data.Macaw.SemMC.TH (
   floatInfoTH,
   floatInfoFromPrecisionTH,
   symFnName,
-  asName
+  asName,
+  translateBaseType,
+  translateBaseTypeRepr,
+  sequenceAFC,
+  AppFC(..),
+  execAppFC
   ) where
 
 import           GHC.TypeLits ( Symbol )
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( ap, join, void )
+import           Control.Monad ( ap, join, void, liftM, foldM, forM )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
 import qualified Data.Foldable as F
 import qualified Data.List as L
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
@@ -846,7 +852,15 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
     liftQ $ joinPure1 [| addApp |] [| M.NotApp |] e
-  S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap >>= extractBound
+  S.ConjPred boolmap -> do
+    l <- boolMapList (addEltTH endianness interps) boolmap
+    case all (\(bnd,_) -> isEager bnd) l of
+      True -> do
+        tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refEager bnd, lift b])) l
+        liftQ [| allPreds $(return tms) |]
+      False -> do
+        tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refBinding bnd, lift b])) l
+        liftQ [| joinPreds $(return tms) |]
   S.BaseIte bt _ test t f -> do
     -- FIXME: Generate code that dynamically checks for a concrete condition and
     -- make an ite instead of a mux if possible
@@ -902,25 +916,26 @@ defaultAppEvaluator endianness elt interps = case elt of
 
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
-      SR.SemiRingBVRepr SR.BVArithRepr w ->
+      SR.SemiRingBVRepr fl w ->
         let smul mul e = do
               y <- addEltTH endianness interps e
-              bindPure1 [| addApp |] [| M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) |] y
-
+              return $ [(y, BVS.asUnsigned mul)]
+            one = case fl of
+              SR.BVArithRepr -> 1
+              SR.BVBitsRepr -> WT.maxUnsigned w 
             sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
-            add x y = do
-              bindPure2 [| addApp |] [| M.BVAdd $(natReprTH w) |] x y
-        in WSum.evalM add smul sval sm >>= extractBound
-      SR.SemiRingBVRepr SR.BVBitsRepr w ->
-        let smul mul e = do y <- addEltTH endianness interps e
-                            bindPure1 [| addApp |] [| M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) |] y
+              bnd <- EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
+              return $ [(bnd, one)]
 
-            sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
-            add x y = do
-              bindPure2 [| addApp |] [| M.BVXor $(natReprTH w) |] x y
-        in WSum.evalM add smul sval sm >>= extractBound
+        in do
+          bnds <- WSum.evalM (\a b -> return $ a ++ b) smul sval sm
+          case all (\(bnd,_) -> isEager bnd) bnds of
+            True -> do
+              tms <- liftQ $ listE $ map (\(bnd, i) -> (tupE [refEager bnd, lift i])) bnds
+              liftQ [| sumBVs $(liftFlavor fl) $(natReprTH w) $(return tms) |]
+            False -> do
+              tms <- liftQ $ listE $ map (\(bnd, i) -> (tupE [refBinding bnd, lift i])) bnds
+              liftQ [| joinSumBVs $(liftFlavor fl) $(natReprTH w) $(return tms) |]
       _ -> liftQ [| error "unsupported SemiRingSum repr for macaw semmc TH" |]
 
   S.SemiRingProd pd ->
@@ -1012,3 +1027,103 @@ joinBool endianness interps op e r =
          letTH [| addApp =<< (M.AndApp <$> $(refBinding j) <*> $(refBinding n)) |]
        OrOp  ->
          letTH [| addApp =<< (M.OrApp <$> $(refBinding j) <*> $(refBinding n)) |]
+
+
+
+
+
+getBVOps ::  1 SI.<= n
+         => CT.NatRepr n
+         -> SR.BVFlavorRepr t
+         -> (M.Value arch ids (M.BVType n)
+              -> M.Value arch ids (M.BVType n)
+              -> M.App (M.Value arch ids) (M.BVType n)
+            , M.Value arch ids (M.BVType n)
+              -> M.Value arch ids (M.BVType n)
+              -> M.App (M.Value arch ids) (M.BVType n))
+getBVOps repr fl = case fl of
+    SR.BVArithRepr -> (M.BVMul repr, M.BVAdd repr)
+    SR.BVBitsRepr -> (M.BVAnd repr, M.BVXor repr)
+
+liftFlavor :: SR.BVFlavorRepr t -> Q Exp
+liftFlavor fl = case fl of
+  SR.BVArithRepr -> [| SR.BVArithRepr |]
+  SR.BVBitsRepr -> [| SR.BVBitsRepr |]
+
+sumBVs :: 1 SI.<= n
+       => ( MSS.SimplifierExtension arch
+          , OrdF (M.ArchReg arch)
+          , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+          , ShowF (M.ArchReg arch)
+          )
+       => SR.BVFlavorRepr t
+       -> CT.NatRepr n
+       -> [(M.Value arch ids (M.BVType n), Integer)]
+       -> G.Generator arch ids s (M.Value arch ids (M.BVType n))
+sumBVs fl repr vs = do
+  let (mulOp, addOp) = getBVOps repr fl
+  vals <- mapM (\(x,y) -> G.addExpr $ G.AppExpr $ mulOp x (M.BVValue repr y)) vs
+  foldM (\a b -> G.addExpr $ G.AppExpr $ addOp a b) (M.BVValue repr 0) vals
+
+joinSumBVs :: 1 SI.<= n
+           => ( MSS.SimplifierExtension arch
+              , OrdF (M.ArchReg arch)
+              , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+              , ShowF (M.ArchReg arch)
+              )
+           => SR.BVFlavorRepr t
+           -> CT.NatRepr n
+           -> [(G.Generator arch ids s (M.Value arch ids (M.BVType n)), Integer)]
+           -> G.Generator arch ids s (M.Value arch ids (M.BVType n))
+joinSumBVs fl repr vs = do
+  let (mulOp, addOp) = getBVOps repr fl
+  vals <- mapM (\(xF,y) -> xF >>= \x -> G.addExpr $ G.AppExpr $ mulOp x (M.BVValue repr y)) vs
+  foldM (\a b -> G.addExpr $ G.AppExpr $ addOp a b) (M.BVValue repr 0) vals
+
+
+allPreds :: ( MSS.SimplifierExtension arch
+            , OrdF (M.ArchReg arch)
+            , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+            , ShowF (M.ArchReg arch)
+            )
+         => [(M.Value arch ids M.BoolType, Bool)]
+         -> G.Generator arch ids s (M.Value arch ids M.BoolType)
+allPreds vs = do
+  let
+    mkApp b (a, True) =  G.addExpr $ G.AppExpr $ M.AndApp a b
+    mkApp b (a, False) = do
+      notA <- G.addExpr $ G.AppExpr $ M.NotApp a
+      G.addExpr $ G.AppExpr $ M.AndApp notA b
+  foldM mkApp (M.BoolValue True) vs 
+
+joinPreds :: ( MSS.SimplifierExtension arch
+             , OrdF (M.ArchReg arch)
+             , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+             , ShowF (M.ArchReg arch)
+             )
+          => [(G.Generator arch ids s (M.Value arch ids M.BoolType), Bool)]
+          -> G.Generator arch ids s (M.Value arch ids M.BoolType)
+joinPreds vs = do
+  let
+    mkApp b (aF, True) = do
+      a <- aF
+      G.addExpr $ G.AppExpr $ M.AndApp a b
+    mkApp b (aF, False) = do
+      a <- aF
+      notA <- G.addExpr $ G.AppExpr $ M.NotApp a
+      G.addExpr $ G.AppExpr $ M.AndApp notA b
+  foldM mkApp (M.BoolValue True) vs 
+
+
+
+boolMapList :: (forall tp. S.Expr t tp -> MacawQ arch t fs BoundExp)
+            -> BooM.BoolMap (S.Expr t)
+            -> MacawQ arch t fs [(BoundExp, Bool)]
+boolMapList f bm = case BooM.viewBoolMap bm of
+  BooM.BoolMapUnit -> return []
+  BooM.BoolMapDualUnit -> do
+    bnd <- EagerBoundExp <$> liftQ [| M.BoolValue False |]
+    return $ [(bnd, True)]
+  BooM.BoolMapTerms ts -> liftM NE.toList $ forM ts $ \(e, p) -> do
+    eE <- f e
+    return $ (eE, p == BooM.Positive)
