@@ -100,6 +100,9 @@ data MacawTHConfig arch opc t fs =
                 -- ^ A TH action to generate the type tag for the architecture
                 , genLibraryFunction :: forall sym . Some (SF.FunctionFormula sym) -> Bool
                 , genOpcodeCase :: forall tps . opc tps -> Bool
+                , archTranslateType :: forall tp. Q Type -> Q Type -> SI.BaseTypeRepr tp -> Maybe (Q Type)
+                -- ^ An optional override when translating What4 types, where the first two
+                -- arguments correspond to the 'ids' and 's' type variables.
                 }
 
 data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)

@@ -568,11 +568,12 @@ translateFunction thConf fnName df ff = do
   idsTy <- varT <$> newName "ids"
   sTy <- varT <$> newName "s"
   let translate :: forall tp. CT.BaseTypeRepr tp -> Q Type
-      translate tp =
-        [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
+      translate tp = case archTranslateType thConf idsTy sTy tp of
+        Just t -> t
+        Nothing -> [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
+         
       argHsTys = FC.toListFC translate (ffArgTypes ff)
-      retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy)
-                     $(translate (ffRetType ff)) |]
+      retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy) $(translate (ffRetType ff)) |]
       ty = foldr (\a r -> [t| $(a) -> $(r) |]) retHsTy argHsTys
       body = doE (map return stmts)
   sig <- sigD var ty
@@ -580,10 +581,16 @@ translateFunction thConf fnName df ff = do
   return (var, sig, def)
 
 translateBaseType :: CT.BaseTypeRepr tp -> Q Type
-translateBaseType tp =
+translateBaseType tp =  case tp of
+  CT.BaseBoolRepr -> [t| M.BoolType |]
+  CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
+  _ -> fail $ "unsupported base type: " ++ show tp
+
+translateBaseTypeRepr :: CT.BaseTypeRepr tp -> Q Exp
+translateBaseTypeRepr tp =
   case tp of
-    CT.BaseBoolRepr -> [t| M.BoolType |]
-    CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
+    CT.BaseBoolRepr -> [| M.BoolTypeRepr |]
+    CT.BaseBVRepr n -> [| M.BVTypeRepr $(natReprTH n) |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
 -- | wrapper around bitvector constants that forces some type
