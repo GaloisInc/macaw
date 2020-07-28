@@ -239,40 +239,54 @@ data BoundExp where
 -- and the new name is returned.
 bindExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
 bindExpr elt eq = do
+  pureFn <- liftQ $ [| pure |]
   e <- liftQ eq
-  n <- liftQ (newName "val")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
-                       , expressionCache = M.insert (Some elt) res (expressionCache s)
-                       }
-  return (EagerBoundExp res)
+  case e of
+    AppE f (VarE n) | pureFn == f -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "val")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
+                           , expressionCache = M.insert (Some elt) res (expressionCache s)
+                           }
+      return (EagerBoundExp res)
 
 letBindPureExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
 letBindPureExpr elt eq = do
   e <- liftQ eq
-  n <- liftQ (newName "lval")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       , expressionCache = M.insert (Some elt) res (expressionCache s)
-                       }
-  return (EagerBoundExp res)
+  case e of
+    VarE n -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "lval")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                           , expressionCache = M.insert (Some elt) res (expressionCache s)
+                           }
+      return (EagerBoundExp res)
 
 letBindExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs BoundExp
 letBindExpr elt e = do
-  n <- liftQ (newName "lval")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
-                       }
-  return (LazyBoundExp res)
+  pureFn <- liftQ $ [| pure |]
+  case e of
+    AppE f (VarE n) | pureFn == f -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "lval")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                           , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
+                           }
+      return (LazyBoundExp res)
 
 letTH :: ExpQ -> MacawQ arch t fs BoundExp
 letTH eq = do
   e <- liftQ eq
-  n <- liftQ (newName "lval")
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       }
-  return (LazyBoundExp (VarE n))
+  case e of
+    VarE n -> return $ LazyBoundExp $ VarE n
+    _ -> do
+     n <- liftQ (newName "lval")
+     St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                          }
+     return (LazyBoundExp (VarE n))
 
 bindTH :: ExpQ -> MacawQ arch t fs BoundExp
 bindTH eq = do
