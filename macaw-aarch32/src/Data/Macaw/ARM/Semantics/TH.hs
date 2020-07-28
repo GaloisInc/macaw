@@ -79,6 +79,29 @@ armNonceAppEval bvi nonceApp =
         let fnName = symFnName symFn
             tp = WB.symFnReturnType symFn
         in case fnName of
+          -- NOTE: The state fields corresponding to the assertion
+          -- failure, undefined behavior and unpredictable behavior flags
+          -- are not used, and have been wrapped in the following 3 functions.
+          -- To save time, for now we can simply avoid translating them.
+          
+          "uf_update_assert" -> case args of
+            Ctx.Empty Ctx.:> _assertVar -> Just $ do
+              --assertVarE <- addEltTH M.LittleEndian bvi assertVar
+              --liftQ [| $(refBinding assertVarE) |]
+              liftQ [| return $ M.BoolValue False |]
+            _ -> fail "Invalid uf_update_assert"
+          "uf_update_undefB" -> case args of
+            Ctx.Empty Ctx.:> _undefVar -> Just $ do
+              --undefVarE <- addEltTH M.LittleEndian bvi undefVar
+              --liftQ [| $(refBinding undefVarE) |]
+              liftQ [| return $ M.BoolValue False |]
+            _ -> fail "Invalid uf_update_undefB"
+          "uf_update_unpredB" -> case args of
+            Ctx.Empty Ctx.:> _unpredVar -> Just $ do
+              --unpredVarE <- addEltTH M.LittleEndian bvi unpredVar
+              --liftQ [| $(refBinding unpredVarE) |]
+              liftQ [| return $ M.BoolValue False |]
+            _ -> fail "Invalid uf_update_unpredB"
           "uf_simd_set" ->
             case args of
               Ctx.Empty Ctx.:> rgf Ctx.:> rid Ctx.:> val -> Just $ do
@@ -331,77 +354,41 @@ armNonceAppEval bvi nonceApp =
                   op4e <- addEltTH M.LittleEndian bvi op4
                   liftQ [| G.addExpr =<< (FPRoundInt knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e)) |]
                 _ -> fail "Invalid fpRoundInt arguments"
+                
 
-          -- NOTE: These three cases occasionally end up unused.  Because we let
-          -- bind almost everything, that can lead to the 'arch' type parameter
-          -- being ambiguous, which is an error for various reasons.
-          --
-          -- To fix that, we add an explicit type application here.
-          "uf_init_gprs" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_memory" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
-          "uf_init_simds" -> Just $ liftQ [| M.AssignedValue <$> G.addAssignment @ARM.AArch32 (M.SetUndefined $(what4TypeTH tp)) |]
+          "uf_init_gprs" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteGPRs) |]
+          "uf_init_memory" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteMemory)|]
+          "uf_init_simds" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteSIMDs) |]
 
 
-          -- NOTE: These cases are tricky because they generate groups of
-          -- statements that need to behave a bit differently in (eager)
-          -- top-level code generation and (lazy) conditional code generation.
-          --
-          -- In either case, the calls to 'setWriteMode' /must/ bracket the
-          -- memory/register update function.
-          --
-          -- In the eager translation case, that means that we have to lexically
-          -- emit the update between the write mode guards (so that the effect
-          -- actually happens).
-          --
-          -- In contrast, the lazy translation case has to emit the write
-          -- operation as a lazy let binding to preserve sharing, but group all
-          -- three statements in the actual 'Generator' monad.
+          -- These functions indicate that the wrapped monadic actions in the corresponding
+          -- 'ARMWriteAction' should be executed, committing their stateful actions.
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
-              istl <- isTopLevel
-              case istl of
-                False -> do
-                  gprs' <- addEltTH M.LittleEndian bvi gprs
-                  liftQ [| do setWriteMode WriteGPRs
-                              $(refBinding gprs')
-                              setWriteMode WriteNone
-                         |]
-                True -> do
-                  appendStmt [| setWriteMode WriteGPRs |]
-                  gprs' <- addEltTH M.LittleEndian bvi gprs
-                  appendStmt [| setWriteMode WriteNone |]
-                  extractBound gprs'
+                gprs' <- addEltTH M.LittleEndian bvi gprs
+                appendStmt $ [| join (execWriteAction <$> $(refBinding gprs')) |]
+                liftQ [| return $ M.BoolValue True |]
+                  
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
-                istl <- isTopLevel
-                case istl of
-                  False -> do
-                    simds' <- addEltTH M.LittleEndian bvi simds
-                    liftQ [| do setWriteMode WriteSIMDs
-                                $(refBinding simds')
-                                setWriteMode WriteNone
-                           |]
-                  True -> do
-                    appendStmt [| setWriteMode WriteSIMDs |]
-                    simds' <- addEltTH M.LittleEndian bvi simds
-                    appendStmt [| setWriteMode WriteNone |]
-                    extractBound simds'
+                simds' <- addEltTH M.LittleEndian bvi simds
+                appendStmt $ [| join (execWriteAction <$> $(refBinding simds')) |]
+                appendStmt [| setWriteMode WriteNone |]
+                liftQ [| return $ M.BoolValue True |]
+
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
-                istl <- isTopLevel
-                case istl of
-                  False -> do
-                    mem' <- addEltTH M.LittleEndian bvi mem
-                    liftQ [| do setWriteMode WriteMemory
-                                $(refBinding mem')
-                                setWriteMode WriteNone
-                           |]
-                  True -> do
-                    appendStmt [| setWriteMode WriteMemory |]
-                    mem' <- addEltTH M.LittleEndian bvi mem
-                    appendStmt [| setWriteMode WriteNone |]
-                    extractBound mem'
+                mem' <- addEltTH M.LittleEndian bvi mem
+                appendStmt $ [| join (execWriteAction <$> $(refBinding mem')) |]
+                liftQ [| return $ M.BoolValue True |]
 
+          "uf_noop" | Ctx.Empty <- args -> Just $ liftQ [| return $ M.BoolValue True |]
+
+          "uf_join_units"
+            | Ctx.Empty Ctx.:> u1 Ctx.:> u2 <- args -> Just $ do
+                _ <- addEltTH M.LittleEndian bvi u1
+                _ <- addEltTH M.LittleEndian bvi u2
+                liftQ [| return $ M.BoolValue True |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
@@ -417,14 +404,32 @@ armNonceAppEval bvi nonceApp =
               _ -> fail "Invalid call to assertBV"
 
           _ | "uf_UNDEFINED_" `isPrefixOf` fnName ->
-               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(translateBaseTypeRepr tp)) |]
           _ | "uf_INIT_GLOBAL_" `isPrefixOf` fnName ->
-               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(what4TypeTH tp)) |]
+               Just $ liftQ [| M.AssignedValue <$> G.addAssignment (M.SetUndefined $(translateBaseTypeRepr tp)) |]
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
+
+
+data ARMWriteActionK =
+    ARMWriteGPRsK
+  | ARMWriteMemoryK
+  | ARMWriteSIMDsK
+
+data ARMWriteActionRepr (tp :: ARMWriteActionK) where
+  ARMWriteGPRs :: ARMWriteActionRepr 'ARMWriteGPRsK
+  ARMWriteMemory :: ARMWriteActionRepr 'ARMWriteMemoryK
+  ARMWriteSIMDs :: ARMWriteActionRepr 'ARMWriteSIMDsK
+
+newtype ARMWriteAction ids s tp where
+  ARMWriteAction :: G.Generator ARM.AArch32 ids s tp -> ARMWriteAction ids s tp
+  deriving (Functor, Applicative, Monad)
+
+execWriteAction :: ARMWriteAction ids s tp -> G.Generator ARM.AArch32 ids s tp
+execWriteAction (ARMWriteAction f) = f
 
 data WriteMode =
   WriteNone
@@ -433,55 +438,31 @@ data WriteMode =
   | WriteMemory
   deriving (Show, Eq, Lift)
 
-getWriteMode :: G.Generator ARM.AArch32 ids s WriteMode
-getWriteMode = do
-  G.getRegVal ARMWriteMode >>= \case
-      M.BVValue _ i -> return $ case i of
-        0 -> WriteNone
-        1 -> WriteGPRs
-        2 -> WriteSIMDs
-        3 -> WriteMemory
-        _ -> error "impossible"
-      _ -> error "impossible"
-
-setWriteMode :: WriteMode -> G.Generator ARM.AArch32 ids s ()
-setWriteMode wm =
-  let
-    i = case wm of
-      WriteNone -> 0
-      WriteGPRs -> 1
-      WriteSIMDs -> 2
-      WriteMemory -> 3
-  in G.setRegVal ARMWriteMode (M.BVValue knownNat i)
-
 writeMem :: 1 <= w
-         => M.Value ARM.AArch32 ids tp
+         => M.NatRepr w
+         -> ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteMemoryK)
          -> M.Value ARM.AArch32 ids (M.BVType 32)
-         -> M.NatRepr w
          -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
-         -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
-writeMem mem addr sz val = do
-  wm <- getWriteMode
-  case wm of
-    WriteMemory -> do
-      G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
-      return mem
-    _ -> return mem
+         -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteMemoryK))
+writeMem sz mem addr val = return $ do
+  _ <- mem
+  ARMWriteAction $ G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
+  return $ ARMWriteMemory
 
-setGPR :: M.Value ARM.AArch32 ids tp
+setGPR :: ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteGPRsK)
        -> M.Value ARM.AArch32 ids (M.BVType 4)
        -> M.Value ARM.AArch32 ids (M.BVType 32)
-       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+       -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteGPRsK))
 setGPR handle regid v = do
   reg <- case regid of
     M.BVValue w i
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments v))
-  getWriteMode >>= \case
-    WriteGPRs -> G.setRegVal reg v
-    _ -> return ()
-  return handle
+  return $ do
+    _ <- handle
+    ARMWriteAction $ G.setRegVal reg v
+    return $ ARMWriteGPRs
 
 getGPR :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
@@ -493,20 +474,21 @@ getGPR v = do
     _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
   G.getRegSnapshotVal reg
 
-setSIMD :: M.Value ARM.AArch32 ids tp
-       -> M.Value ARM.AArch32 ids (M.BVType 8)
-       -> M.Value ARM.AArch32 ids (M.BVType 128)
-       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
+setSIMD :: ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteSIMDsK)
+        -> M.Value ARM.AArch32 ids (M.BVType 8)
+        -> M.Value ARM.AArch32 ids (M.BVType 128)
+        -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s (ARMWriteActionRepr 'ARMWriteSIMDsK))
 setSIMD handle regid v = do
   reg <- case regid of
     M.BVValue w i
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments v))
-  getWriteMode >>= \case
-    WriteSIMDs -> G.setRegVal reg v
-    _ -> return ()
-  return handle
+  return $ do
+    _ <- handle
+    ARMWriteAction $ G.setRegVal reg v
+    return $ ARMWriteSIMDs
+
 
 getSIMD :: M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
@@ -516,13 +498,7 @@ getSIMD v = do
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_get): " <> show (M.ppValueAssignments v))
-  G.getRegVal reg
-
-what4TypeTH :: WT.BaseTypeRepr tp -> Q Exp
-what4TypeTH (WT.BaseBVRepr natRepr) = [| M.BVTypeRepr $(natReprTH natRepr) |]
-what4TypeTH WT.BaseBoolRepr = [| M.BoolTypeRepr |]
-what4TypeTH tp = error $ "Unsupported base type: " <> show tp
-
+  G.getRegSnapshotVal reg
 
 -- ----------------------------------------------------------------------
 
@@ -542,33 +518,17 @@ isPlaceholderType tp = case tp of
   _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
   _ -> False
 
--- | This combinator provides conditional evaluation of its branches
---
--- Many conditionals in the semantics are translated as muxes (effectively
--- if-then-else expressions).  This is great most of the time, but problematic
--- if the branches include side effects (e.g., memory writes).  We only want
--- side effects to happen if the condition really is true.
---
--- This combinator checks to see if the condition is concretely true or false
--- (as expected) and then evaluates the corresponding 'G.Generator' action.
---
--- It is meant to be used in a context like:
---
--- > val <- concreteIte condition trueThings falseThings
---
--- where @condition@ has type Value and the branches have type 'G.Generator'
--- 'M.Value' (i.e., the branches get to return a value).
---
--- NOTE: This function panics (and throws an error) if the argument is not
--- concrete.
-concreteIte :: M.TypeRepr tp
-            -> M.Value ARM.AArch32 ids (M.BoolType)
-            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
-            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
-            -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids tp)
-concreteIte rep v t f = case v of
+-- | For placeholder types, we can't translate them into a Mux, and so we
+-- need to rely on the conditional being resolved to a concrete value so
+-- we can translate it into a haskell if-then-else.
+
+concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
+            -> a
+            -> a
+            -> a
+concreteIte v t f = case v of
   M.CValue (M.BoolCValue b) -> if b then t else f
-  _ -> G.addExpr =<< G.AppExpr <$> (M.Mux rep v <$> t <*> f)
+  _ -> error "concreteIte: value must be concrete"
 
 -- | A smart constructor for division
 --
@@ -589,6 +549,57 @@ sdiv repr dividend divisor =
           in G.ValueExpr <$> G.addExpr (G.AppExpr app)
     _ -> addArchAssignment (SDiv repr dividend divisor)
 
+
+mkTupT :: [TypeQ] -> Q Type
+mkTupT [t] = t
+mkTupT ts = foldl appT (tupleT (length ts)) ts
+
+
+
+armTranslateType :: Q Type
+                 -> Q Type
+                 -> WT.BaseTypeRepr tp
+                 -> Maybe (Q Type)
+armTranslateType idsTy sTy tp = case tp of
+  WT.BaseStructRepr reprs -> Just $ mkTupT $ FC.toListFC translateBaseType reprs
+  _ | isPlaceholderType tp -> Just $ translateBaseType tp
+  _ -> Nothing
+  where
+    translateBaseType :: forall tp'. WT.BaseTypeRepr tp' -> Q Type
+    translateBaseType tp' =  case tp' of
+      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) ->
+          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteMemoryK) |]
+      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) ->
+          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteSIMDsK) |]
+      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) ->
+          [t| ARMWriteAction $(idsTy) $(sTy) (ARMWriteActionRepr 'ARMWriteGPRsK) |]
+      WT.BaseBoolRepr -> [t| M.Value ARM.AArch32 $(idsTy) M.BoolType |]
+      WT.BaseBVRepr n -> [t| M.Value ARM.AArch32 $(idsTy) (M.BVType $(litT (numTyLit (intValue n)))) |]
+      _ -> fail $ "unsupported base type: " ++ show tp
+
+extractTuple :: Int -> Int -> Q Exp
+extractTuple len i = do
+  nm <- newName "x"
+  let pat = tupP $ [ if i' == i then varP nm else wildP | i' <- [0..len-1] ]
+  lamE [pat] (varE nm)
+
+joinTuple :: [ExpQ] -> Q Exp
+joinTuple es = go [] es
+  where
+    go :: [Name] -> [ExpQ] -> Q Exp
+    go ns (e : es') = do
+      n <- newName "bval"
+      [| $(e) >>= $(lamE [varP n] (go (n : ns) es')) |]
+    go ns [] = [| return $(tupE $ map varE (reverse ns)) |]
+
+refField :: Ctx.Size ctx -> Ctx.Index ctx tp -> BoundExp -> MacawQ arch t fs BoundExp
+refField sz idx e = case Ctx.viewSize sz of
+  Ctx.IncSize sz' | Ctx.ZeroSize <- Ctx.viewSize sz' -> return e
+  _ -> case e of
+    EagerBoundExp (TupE es) | Ctx.indexVal idx < length es -> return $ EagerBoundExp $ es !! (Ctx.indexVal idx)
+    EagerBoundExp _ -> bindTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) $(refEager e) |]
+    LazyBoundExp _ -> letTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) <$> $(refBinding e) |]
+
 armAppEvaluator :: M.Endianness
                 -> BoundVarInterpretations ARM.AArch32 t fs
                 -> WB.App (WB.Expr t) ctp
@@ -596,41 +607,60 @@ armAppEvaluator :: M.Endianness
 armAppEvaluator endianness interps elt =
     case elt of
       WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
-        -- NOTE: This case is very special.  The placeholder types denote
-        -- conditionals that are guarding the state update functions with
-        -- mutation.
-        --
-        -- We need to ensure that state updates are only done lazily.  This
-        -- works because the arguments to the branches are expressions in the
-        -- Generator monad.  We can do this translation while preserving sharing
-        -- by turning every recursively-traversed term into a let binding at the
-        -- top-level.  After that, we can build bodies for the "arms" of the
-        -- concreteIte that instantiate those terms in the appropriate monadic
-        -- context.  It is slightly problematic that the core TH translation
-        -- doesn't really support that because it wants to (more efficiently)
-        -- evaluate all of the monadic stuff.  However, we don't need quite as
-        -- much generality for this code, so maybe a smaller core that just does
-        -- all of the necessary applicative binding of 'Generator' terms will be
-        -- sufficient.
+        -- In this case, the placeholder type indicates that
+        -- expression is to be translated as a (wrapped) stateful action
+        -- rather than an actual macaw term. This is therefore translated
+        -- as a Haskell if-then-else statement, rather than
+        -- a Mux.
         testE <- addEltTH endianness interps test
-        inConditionalContext $ do
-          tE <- addEltTH endianness interps t
-          fE <- addEltTH endianness interps f
-          liftQ [| join (concreteIte PC.knownRepr <$> $(refBinding testE) <*> (return $(refBinding tE)) <*> (return $(refBinding fE))) |]
+        tE <- addEltTH endianness interps t
+        fE <- addEltTH endianness interps f
+        case all isEager [testE, tE, fE] of
+          True -> liftQ [| return $ concreteIte $(refEager testE) $(refEager tE) $(refEager fE) |]
+          False -> liftQ [| concreteIte <$> $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE) |]
+      WB.StructField struct _ _ |
+          (WT.BaseStructRepr (Ctx.Empty Ctx.:> _)) <- WT.exprType struct -> Just $ do
+        structE <- addEltTH endianness interps struct
+        extractBound structE
+      WB.StructField struct idx _ -> Just $ do
+        WT.BaseStructRepr reprs <- return $ WT.exprType struct
+        bnd <- lookupElt struct >>= \case
+          Just bnd -> return bnd
+          Nothing -> do
+            bnd <- addEltTH endianness interps struct
+            case isEager bnd of
+              True -> do
+                nms <- sequence $ FC.toListFC (\_ -> liftQ (newName "lval")) reprs
+                letBindPat struct (tupP $ map varP nms, tupE $ map varE nms) (refEager bnd)
+                res <- liftQ $ tupE $ map varE nms
+                return $ EagerBoundExp res
+              False -> return bnd
+        
+        fldBnd <- refField (Ctx.size reprs) idx bnd
+        extractBound fldBnd
+      WB.StructCtor _ (Ctx.Empty Ctx.:> e) -> Just $ do
+        bnd <- addEltTH endianness interps e
+        extractBound bnd
+
+      WB.StructCtor _ flds -> Just $ do
+        fldEs <- sequence $ FC.toListFC (addEltTH endianness interps) flds
+        case all isEager fldEs of
+          True -> liftQ $ [| return $(tupE (map refEager fldEs)) |]
+          False -> liftQ $ joinTuple (map refBinding fldEs)            
+            
       WB.BVSdiv w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| G.addExpr =<< join (sdiv $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+        liftQ [| G.addExpr =<< $(joinOp2 [| sdiv $(natReprTH w) |] e1 e2) |]
       WB.BVUrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| G.addExpr =<< join (addArchAssignment <$> (URem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
-               |]
+        liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (URem $(natReprTH w) e1E e2E) |] e1 e2) |]
+               
       WB.BVSrem w bv1 bv2 -> return $ do
         e1 <- addEltTH endianness interps bv1
         e2 <- addEltTH endianness interps bv2
-        liftQ [| G.addExpr =<< join (addArchAssignment <$> (SRem $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)))
-               |]
+        liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (SRem $(natReprTH w) e1E e2E) |] e1 e2) |]
       WB.IntegerToBV _ _ -> return $ liftQ [| error "IntegerToBV" |]
       WB.SBVToInteger _ -> return $ liftQ [| error "SBVToInteger" |]
       WB.BaseIte bt _ test t f ->
