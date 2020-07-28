@@ -19,9 +19,7 @@ module Data.Macaw.ARM.Semantics.TH
     , getSIMD
     , setSIMD
     , loadSemantics
-    , armGetFields
     , armTranslateType
-    , FieldGetter(..)
     )
     where
 
@@ -37,7 +35,6 @@ import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, translate
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
 import           Data.Parameterized.Classes
-import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.NatRepr
@@ -410,6 +407,7 @@ armNonceAppEval bvi nonceApp =
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
+
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
@@ -619,11 +617,11 @@ armAppEvaluator endianness interps elt =
           True -> liftQ [| return $ concreteIte $(refEager testE) $(refEager tE) $(refEager fE) |]
           False -> liftQ [| concreteIte <$> $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE) |]
       WB.StructField struct _ _ |
-          (WT.BaseStructRepr (Ctx.Empty Ctx.:> _)) <- WT.exprType struct -> Just $ do
+          (WT.BaseStructRepr (Ctx.Empty Ctx.:> _)) <- WB.exprType struct -> Just $ do
         structE <- addEltTH endianness interps struct
         extractBound structE
       WB.StructField struct idx _ -> Just $ do
-        WT.BaseStructRepr reprs <- return $ WT.exprType struct
+        WT.BaseStructRepr reprs <- return $ WB.exprType struct
         bnd <- lookupElt struct >>= \case
           Just bnd -> return bnd
           Nothing -> do

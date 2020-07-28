@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import           Data.Macaw.ARM.ARMReg ( locToRegTH )
 import           Data.Macaw.ARM.Arch ( a32InstructionMatcher )
-import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval, loadSemantics )
+import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval, loadSemantics, armTranslateType )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.SemMC.Generator ( Generator )
 import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction )
@@ -63,7 +63,6 @@ execInstruction =
                                   , archTypeQ = [t| ARMSem.AArch32 |]
                                   , genLibraryFunction = notVecLib
                                   , genOpcodeCase = notVecOpc
-                                  , getExprFields = Just $ getFlds
                                   , archTranslateType = armTranslateType
                                   }
 

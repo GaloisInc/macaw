@@ -38,10 +38,7 @@ module Data.Macaw.SemMC.TH (
   symFnName,
   asName,
   translateBaseType,
-  translateBaseTypeRepr,
-  sequenceAFC,
-  AppFC(..),
-  execAppFC
+  translateBaseTypeRepr
   ) where
 
 import           GHC.TypeLits ( Symbol )
@@ -922,7 +919,7 @@ defaultAppEvaluator endianness elt interps = case elt of
               return $ [(y, BVS.asUnsigned mul)]
             one = case fl of
               SR.BVArithRepr -> 1
-              SR.BVBitsRepr -> WT.maxUnsigned w 
+              SR.BVBitsRepr -> SI.maxUnsigned w 
             sval v = do
               bnd <- EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
               return $ [(bnd, one)]
@@ -989,14 +986,14 @@ defaultAppEvaluator endianness elt interps = case elt of
 data BoolMapOp = AndOp | OrOp
 
 
-evalBoolMap :: A.Architecture arch
+_evalBoolMap :: A.Architecture arch
             => M.Endianness
             -> BoundVarInterpretations arch t fs
             -> BoolMapOp
             -> Bool
             -> BooM.BoolMap (S.Expr t)
             -> MacawQ arch t fs BoundExp
-evalBoolMap endianness interps op defVal bmap =
+_evalBoolMap endianness interps op defVal bmap =
   case BooM.viewBoolMap bmap of
     BooM.BoolMapUnit ->     letTH [| G.addExpr (boolBase $(lift defVal)) |]
     BooM.BoolMapDualUnit -> letTH [| G.addExpr (bNotBase $(lift defVal)) |]
