@@ -148,7 +148,7 @@ armNonceAppEval bvi nonceApp =
               case args of
                 Ctx.Empty Ctx.:> op -> Just $ do
                   ope <- addEltTH M.LittleEndian bvi op
-                  liftQ [| G.addExpr =<< (UnsignedRSqrtEstimate knownNat <$> $(refBinding ope)) |]
+                  liftQ [| G.addExpr =<< $(joinOp1 [| \e1E -> addArchAssignment (UnsignedRSqrtEstimate knownNat e1E) |] ope) |]
                 _ -> fail "Invalid unsignedRSqrtEstimate arguments"
 
           -- NOTE: This must come before fpMul, since fpMul is a prefix of this
@@ -159,7 +159,8 @@ armNonceAppEval bvi nonceApp =
                   op2e <- addEltTH M.LittleEndian bvi op2
                   op3e <- addEltTH M.LittleEndian bvi op3
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMulAdd knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< join ((\o1 o2 o3 o4 -> addArchAssignment (FPMulAdd knownNat o1 o2 o3 o4)) <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding fpcre))  |]
+
                 _ -> fail "Invalid fpMulAdd arguments"
 
 
@@ -169,7 +170,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPSub knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPSub knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpSub arguments"
           _ | "uf_fpAdd" `isPrefixOf` fnName ->
               case args of
@@ -177,7 +178,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPAdd knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPAdd knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpAdd arguments"
           _ | "uf_fpMul" `isPrefixOf` fnName ->
               case args of
@@ -185,7 +186,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMul knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPMul knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpMul arguments"
           _ | "uf_fpDiv" `isPrefixOf` fnName ->
               case args of
@@ -193,7 +194,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMul knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPDiv knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpDiv arguments"
 
           _ | "uf_fpMaxNum" `isPrefixOf` fnName ->
@@ -202,7 +203,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMaxNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPMaxNum knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpMaxNum arguments"
           _ | "uf_fpMinNum" `isPrefixOf` fnName ->
               case args of
@@ -210,7 +211,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMinNum knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPMinNum knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpMinNum arguments"
           _ | "uf_fpMax" `isPrefixOf` fnName ->
               case args of
@@ -218,7 +219,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMax knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPMax knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpMax arguments"
           _ | "uf_fpMin" `isPrefixOf` fnName ->
               case args of
@@ -226,7 +227,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPMin knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPMin knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpMin arguments"
 
           _ | "uf_fpRecipEstimate" `isPrefixOf` fnName ->
@@ -234,35 +235,35 @@ armNonceAppEval bvi nonceApp =
                 Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
                   op1e <- addEltTH M.LittleEndian bvi op1
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPRecipEstimate knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPRecipEstimate knownNat e1E e2E) |] op1e fpcre) |]
                 _ -> fail "Invalid fpRecipEstimate arguments"
           _ | "uf_fpRecipStep" `isPrefixOf` fnName ->
               case args of
-                Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 -> Just $ do
                   op1e <- addEltTH M.LittleEndian bvi op1
-                  fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPRecipStep knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPRecipStep knownNat e1E e2E) |] op1e op2e) |]
                 _ -> fail "Invalid fpRecipStep arguments"
           _ | "uf_fpSqrtEstimate" `isPrefixOf` fnName ->
               case args of
                 Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
                   op1e <- addEltTH M.LittleEndian bvi op1
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPSqrtEstimate knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPSqrtEstimate knownNat e1E e2E) |] op1e fpcre) |]
                 _ -> fail "Invalid fpSqrtEstimate arguments"
           _ | "uf_fprSqrtStep" `isPrefixOf` fnName ->
               case args of
                 Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
                   op1e <- addEltTH M.LittleEndian bvi op1
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPRSqrtStep knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPRSqrtStep knownNat e1E e2E) |] op1e fpcre) |]
                 _ -> fail "Invalid fprSqrtStep arguments"
           _ | "uf_fpSqrt" `isPrefixOf` fnName ->
               case args of
                 Ctx.Empty Ctx.:> op1 Ctx.:> fpcr -> Just $ do
                   op1e <- addEltTH M.LittleEndian bvi op1
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPSqrt knownNat <$> $(refBinding op1e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPSqrt knownNat e1E e2E) |] op1e fpcre) |]
                 _ -> fail "Invalid fpSqrt arguments"
 
           _ | "uf_fpCompareGE" `isPrefixOf` fnName ->
@@ -271,7 +272,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPCompareGE knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPCompareGE knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpCompareGE arguments"
           _ | "uf_fpCompareGT" `isPrefixOf` fnName ->
               case args of
@@ -279,7 +280,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPCompareGT knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPCompareGT knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpCompareGT arguments"
           _ | "uf_fpCompareEQ" `isPrefixOf` fnName ->
               case args of
@@ -287,7 +288,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPCompareEQ knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPCompareEQ knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpCompareEQ arguments"
           _ | "uf_fpCompareNE" `isPrefixOf` fnName ->
               case args of
@@ -295,7 +296,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPCompareNE knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPCompareNE knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpCompareNE arguments"
           _ | "uf_fpCompareUN" `isPrefixOf` fnName ->
               case args of
@@ -303,7 +304,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   fpcre <- addEltTH M.LittleEndian bvi fpcr
-                  liftQ [| G.addExpr =<< (FPCompareUN knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding fpcre)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPCompareUN knownNat e1E e2E e3E) |] op1e op2e fpcre) |]
                 _ -> fail "Invalid fpCompareUN arguments"
 
           "uf_fpToFixedJS" ->
@@ -312,7 +313,7 @@ armNonceAppEval bvi nonceApp =
                 op1e <- addEltTH M.LittleEndian bvi op1
                 op2e <- addEltTH M.LittleEndian bvi op2
                 op3e <- addEltTH M.LittleEndian bvi op3
-                liftQ [| G.addExpr =<< (FPToFixedJS <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e)) |]
+                liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPToFixedJS e1E e2E e3E) |] op1e op2e op3e) |]
               _ -> fail "Invalid fpToFixedJS arguments"
           _ | "uf_fpToFixed" `isPrefixOf` fnName ->
               case args of
@@ -322,7 +323,7 @@ armNonceAppEval bvi nonceApp =
                   op3e <- addEltTH M.LittleEndian bvi op3
                   op4e <- addEltTH M.LittleEndian bvi op4
                   op5e <- addEltTH M.LittleEndian bvi op5
-                  liftQ [| G.addExpr =<< (FPToFixed knonwNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e)) |]
+                  liftQ [| G.addExpr =<< join ((\o1 o2 o3 o4 o5 -> addArchAssignment (FPToFixed knownNat o1 o2 o3 o4 o5)) <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e)) |]
                 _ -> fail "Invalid fpToFixed arguments"
           _ | "uf_fixedToFP" `isPrefixOf` fnName ->
               case args of
@@ -332,7 +333,7 @@ armNonceAppEval bvi nonceApp =
                   op3e <- addEltTH M.LittleEndian bvi op3
                   op4e <- addEltTH M.LittleEndian bvi op4
                   op5e <- addEltTH M.LittleEndian bvi op5
-                  liftQ [| G.addExpr =<< (FixedToFP knonwNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e)) |]
+                  liftQ [| G.addExpr =<< join ((\o1 o2 o3 o4 o5 -> addArchAssignment (FixedToFP knownNat o1 o2 o3 o4 o5)) <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e) <*> $(refBinding op5e))  |]
                 _ -> fail "Invalid fixedToFP arguments"
           _ | "uf_fpConvert" `isPrefixOf` fnName ->
               case args of
@@ -340,7 +341,7 @@ armNonceAppEval bvi nonceApp =
                   op1e <- addEltTH M.LittleEndian bvi op1
                   op2e <- addEltTH M.LittleEndian bvi op2
                   op3e <- addEltTH M.LittleEndian bvi op3
-                  liftQ [| G.addExpr =<< (FPConvert knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e)) |]
+                  liftQ [| G.addExpr =<< $(joinOp3 [| \e1E e2E e3E -> addArchAssignment (FPConvert knownNat e1E e2E e3E) |] op1e op2e op3e) |]
                 _ -> fail "Invalid fpConvert arguments"
           _ | "uf_fpRoundInt" `isPrefixOf` fnName ->
               case args of
@@ -349,9 +350,9 @@ armNonceAppEval bvi nonceApp =
                   op2e <- addEltTH M.LittleEndian bvi op2
                   op3e <- addEltTH M.LittleEndian bvi op3
                   op4e <- addEltTH M.LittleEndian bvi op4
-                  liftQ [| G.addExpr =<< (FPRoundInt knownNat <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e)) |]
+                  liftQ [| G.addExpr =<< join ((\o1 o2 o3 o4 -> addArchAssignment (FPRoundInt knownNat o1 o2 o3 o4)) <$> $(refBinding op1e) <*> $(refBinding op2e) <*> $(refBinding op3e) <*> $(refBinding op4e))  |]
                 _ -> fail "Invalid fpRoundInt arguments"
-                
+
 
           "uf_init_gprs" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteGPRs) |]
           "uf_init_memory" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteMemory)|]

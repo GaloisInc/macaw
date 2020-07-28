@@ -161,7 +161,7 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
   FPRecipStep :: (1 <= w)
               => NR.NatRepr w
               -> f (MT.BVType w)
-              -> f (MT.BVType 32)
+              -> f (MT.BVType w)
               -> ARMPrimFn f (MT.BVType w)
   FPSqrtEstimate :: (1 <= w)
                  => NR.NatRepr w
@@ -171,7 +171,7 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
   FPRSqrtStep :: (1 <= w)
               => NR.NatRepr w
               -> f (MT.BVType w)
-              -> f (MT.BVType 32)
+              -> f (MT.BVType w)
               -> ARMPrimFn f (MT.BVType w)
   FPSqrt :: (1 <= w)
          => NR.NatRepr w
