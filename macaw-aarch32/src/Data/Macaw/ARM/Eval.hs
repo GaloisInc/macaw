@@ -64,7 +64,6 @@ initialBlockRegs addr _preconds = MSG.initRegState addr &
   -- once we get Thumb support, we will want to refer to the semantics
   -- for this.
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
-  MC.boundValue AR.ARMWriteMode .~ MC.BVValue knownNat 0 &
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ MC.BVValue knownNat 0 &
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ MC.BVValue knownNat 1 &

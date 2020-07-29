@@ -365,19 +365,19 @@ armNonceAppEval bvi nonceApp =
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
                 gprs' <- addEltTH M.LittleEndian bvi gprs
                 appendStmt $ [| join (execWriteAction <$> $(refBinding gprs')) |]
-                liftQ [| return $ M.BoolValue True |]
+                liftQ [| return $ unitValue |]
                   
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
                 simds' <- addEltTH M.LittleEndian bvi simds
                 appendStmt $ [| join (execWriteAction <$> $(refBinding simds')) |]
-                liftQ [| return $ M.BoolValue True |]
+                liftQ [| return $ unitValue |]
 
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
                 mem' <- addEltTH M.LittleEndian bvi mem
                 appendStmt $ [| join (execWriteAction <$> $(refBinding mem')) |]
-                liftQ [| return $ M.BoolValue True |]
+                liftQ [| return $ unitValue |]
 
           "uf_noop" | Ctx.Empty <- args -> Just $ liftQ [| return $ M.BoolValue True |]
 
@@ -385,7 +385,7 @@ armNonceAppEval bvi nonceApp =
             | Ctx.Empty Ctx.:> u1 Ctx.:> u2 <- args -> Just $ do
                 _ <- addEltTH M.LittleEndian bvi u1
                 _ <- addEltTH M.LittleEndian bvi u2
-                liftQ [| return $ M.BoolValue True |]
+                liftQ [| return $ unitValue |]
           _ | "uf_assertBV_" `isPrefixOf` fnName ->
             case args of
               Ctx.Empty Ctx.:> assert Ctx.:> bv -> Just $ do
@@ -407,6 +407,9 @@ armNonceAppEval bvi nonceApp =
           _ -> Nothing
       _ -> Nothing -- fallback to default handling
 
+
+unitValue :: M.Value ARM.AArch32 ids (M.TupleType '[])
+unitValue =  M.Initial ARMDummyReg
 
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
