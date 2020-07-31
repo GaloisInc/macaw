@@ -9,10 +9,7 @@ ghc:
 git:
   submodules: false  # whether to recursively clone submodules
 
-cache:
-  directories:
-    - $HOME/.ghc
-    - $HOME/.cabal
+cache: false
 
 install:
 # Changes ssh paths into http path, so that we can do a read-only clone of
