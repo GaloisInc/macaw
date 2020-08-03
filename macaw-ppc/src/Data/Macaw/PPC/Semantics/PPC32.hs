@@ -54,6 +54,7 @@ execInstruction =
                                   , archTypeQ = [t| (SP.AnyPPC SP.V32) |]
                                   , genLibraryFunction = \_ -> True
                                   , genOpcodeCase = genOpc
+                                  , archTranslateType = \_ _ _ -> Nothing
                                   }
 
        genExecInstruction proxy

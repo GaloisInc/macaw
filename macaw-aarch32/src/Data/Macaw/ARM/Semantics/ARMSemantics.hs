@@ -16,7 +16,7 @@ import qualified Data.ByteString as BS
 import qualified Data.List as L
 import           Data.Macaw.ARM.ARMReg ( locToRegTH )
 import           Data.Macaw.ARM.Arch ( a32InstructionMatcher )
-import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval, loadSemantics )
+import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval, loadSemantics, armTranslateType )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.SemMC.Generator ( Generator )
 import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction )
@@ -33,6 +33,7 @@ import qualified SemMC.Architecture.AArch32 as ARMSem
 import           SemMC.Architecture.ARM.Opcodes ( ASLSemantics(..), allA32OpcodeInfo )
 import qualified SemMC.Formula as SF
 import qualified What4.Expr.Builder as WEB
+import qualified What4.Interface as S
 
 execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Instruction
@@ -62,6 +63,7 @@ execInstruction =
                                   , archTypeQ = [t| ARMSem.AArch32 |]
                                   , genLibraryFunction = notVecLib
                                   , genOpcodeCase = notVecOpc
+                                  , archTranslateType = armTranslateType
                                   }
 
        genExecInstruction (Proxy @ARMSem.AArch32)

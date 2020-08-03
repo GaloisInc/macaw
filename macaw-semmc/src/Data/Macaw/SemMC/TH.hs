@@ -36,18 +36,21 @@ module Data.Macaw.SemMC.TH (
   floatInfoTH,
   floatInfoFromPrecisionTH,
   symFnName,
-  asName
+  asName,
+  translateBaseType,
+  translateBaseTypeRepr
   ) where
 
 import           GHC.TypeLits ( Symbol )
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( ap, join, void )
+import           Control.Monad ( ap, join, void, liftM, foldM, forM )
 import qualified Control.Concurrent.Async as Async
 import qualified Data.Functor.Const as C
 import           Data.Functor.Product
 import qualified Data.Foldable as F
 import qualified Data.List as L
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
@@ -568,11 +571,12 @@ translateFunction thConf fnName df ff = do
   idsTy <- varT <$> newName "ids"
   sTy <- varT <$> newName "s"
   let translate :: forall tp. CT.BaseTypeRepr tp -> Q Type
-      translate tp =
-        [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
+      translate tp = case archTranslateType thConf idsTy sTy tp of
+        Just t -> t
+        Nothing -> [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
+         
       argHsTys = FC.toListFC translate (ffArgTypes ff)
-      retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy)
-                     $(translate (ffRetType ff)) |]
+      retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy) $(translate (ffRetType ff)) |]
       ty = foldr (\a r -> [t| $(a) -> $(r) |]) retHsTy argHsTys
       body = doE (map return stmts)
   sig <- sigD var ty
@@ -580,10 +584,16 @@ translateFunction thConf fnName df ff = do
   return (var, sig, def)
 
 translateBaseType :: CT.BaseTypeRepr tp -> Q Type
-translateBaseType tp =
+translateBaseType tp =  case tp of
+  CT.BaseBoolRepr -> [t| M.BoolType |]
+  CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
+  _ -> fail $ "unsupported base type: " ++ show tp
+
+translateBaseTypeRepr :: CT.BaseTypeRepr tp -> Q Exp
+translateBaseTypeRepr tp =
   case tp of
-    CT.BaseBoolRepr -> [t| M.BoolType |]
-    CT.BaseBVRepr n -> appT [t| M.BVType |] (litT (numTyLit (intValue n)))
+    CT.BaseBoolRepr -> [| M.BoolTypeRepr |]
+    CT.BaseBVRepr n -> [| M.BVTypeRepr $(natReprTH n) |]
     _ -> fail $ "unsupported base type: " ++ show tp
 
 -- | wrapper around bitvector constants that forces some type
@@ -616,7 +626,10 @@ addEltTH endianness interps elt = do
           -- for now.  Once that works, we can be smarter and translate what we
           -- can eagerly.
           genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
-          letBindExpr elt genExpr
+          istl <- isTopLevel
+          if istl
+            then bindExpr elt (return genExpr)
+            else letBindExpr elt genExpr
         S.BoundVarExpr bVar -> do
           x <- evalBoundVar interps bVar
           letBindPureExpr elt [| $(return x) |]
@@ -655,7 +668,7 @@ evalBoundVar interps bVar =
        return (VarE name)
      | otherwise -> fail $ "bound var not found: " ++ show bVar
 
-symFnName :: S.ExprSymFn t args ret -> String
+symFnName :: S.ExprSymFn t (S.Expr t) args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 
 bvarName :: S.ExprBoundVar t tp -> String
@@ -666,7 +679,7 @@ bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 writeMemTH :: forall arch t fs args ret
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
-           -> S.ExprSymFn t args ret
+           -> S.ExprSymFn t (S.Expr t) args ret
            -> Ctx.Assignment (S.Expr t) args
            -> M.Endianness
            -> MacawQ arch t fs (Some (S.Expr t))
@@ -726,10 +739,11 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
       case funMaybe of
         Just fun -> do
           argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
-          let applyQ e be = [| $(e) `ap` $(refBinding be) |]
-          -- FIXME: Check if all argExprs are 'EagerBoundExp's; if so, generate
-          -- a pure let bound version instead
-          liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
+          case all isEager argExprs of
+            True -> liftQ $ foldl appE (return fun) (map refEager argExprs)
+            False -> do
+              let applyQ e be = [| $(e) `ap` $(refBinding be) |]
+              liftQ [| join $(foldl applyQ [| return $(return fun) |] argExprs) |]
         _ -> do
           let fnArgTypes = S.symFnArgTypes symFn
               fnRetType = S.symFnReturnType symFn
@@ -834,27 +848,27 @@ defaultAppEvaluator :: (A.Architecture arch)
 defaultAppEvaluator endianness elt interps = case elt of
   S.NotPred bool -> do
     e <- addEltTH endianness interps bool
-    liftQ [| addApp =<< (M.NotApp <$> $(refBinding e)) |]
-  S.ConjPred boolmap -> evalBoolMap endianness interps AndOp True boolmap >>= extractBound
+    liftQ $ joinPure1 [| addApp |] [| M.NotApp |] e
+  S.ConjPred boolmap -> do
+    l <- boolMapList (addEltTH endianness interps) boolmap
+    case all (\(bnd,_) -> isEager bnd) l of
+      True -> do
+        tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refEager bnd, lift b])) l
+        liftQ [| allPreds $(return tms) |]
+      False -> do
+        tms <- liftQ $ listE $ map (\(bnd, b) -> (tupE [refBinding bnd, lift b])) l
+        liftQ [| joinPreds $(return tms) |]
   S.BaseIte bt _ test t f -> do
     -- FIXME: Generate code that dynamically checks for a concrete condition and
     -- make an ite instead of a mux if possible
+
     testE <- addEltTH endianness interps test
     tE <- addEltTH endianness interps t
     fE <- addEltTH endianness interps f
     case bt of
-      CT.BaseBoolRepr -> liftQ [| addApp =<<
-                                   (M.Mux M.BoolTypeRepr <$>
-                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                |]
-      CT.BaseBVRepr w -> liftQ [| addApp =<<
-                                   (M.Mux (M.BVTypeRepr $(natReprTH w)) <$>
-                                    $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                |]
-      CT.BaseFloatRepr fpp -> liftQ [| addApp =<<
-                                        (M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) <$>
-                                         $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE))
-                                     |]
+      CT.BaseBoolRepr -> liftQ $ joinPure3 [| addApp |] [| M.Mux M.BoolTypeRepr |] testE tE fE
+      CT.BaseBVRepr w -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.BVTypeRepr $(natReprTH w)) |] testE tE fE
+      CT.BaseFloatRepr fpp -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) |] testE tE fE
       CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
@@ -866,27 +880,27 @@ defaultAppEvaluator endianness elt interps = case elt of
   S.BaseEq _bt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.Eq <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.Eq |] e1 e2
   S.BVSlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVSignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVSignedLt |] e1 e2
   S.BVUlt bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVUnsignedLt <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVUnsignedLt |] e1 e2
   S.BVConcat w bv1 bv2 -> do
     let u = S.bvWidth bv1
         v = S.bvWidth bv2
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| G.addExpr =<< join ((TR.bvconcat <$> $(refBinding e1) <*> $(refBinding e2) <*> pure $(natReprTH v) <*> pure $(natReprTH u) <*> pure $(natReprTH w))) |]
+    liftQ $ [| G.addExpr =<< $(joinOp2 [| \v1 v2 -> TR.bvconcat v1 v2 $(natReprTH v) $(natReprTH u) $(natReprTH w) |] e1 e2) |]
   S.BVSelect idx n bv -> do
     let w = S.bvWidth bv
     case natValue n + 1 <= natValue w of
       True -> do
         e <- addEltTH endianness interps bv
-        liftQ [| G.addExpr =<< join ((TR.bvselect <$> $(refBinding e) <*> pure $(natReprTH n) <*> pure $(natReprTH idx) <*> pure $(natReprTH w))) |]
+        liftQ [| G.addExpr =<< $(joinOp1 [| \v1 -> TR.bvselect v1 $(natReprTH n) $(natReprTH idx) $(natReprTH w) |] e) |]
       False -> do
         e <- addEltTH endianness interps bv
         liftQ [| case testEquality $(natReprTH n) $(natReprTH w) of
@@ -895,42 +909,43 @@ defaultAppEvaluator endianness elt interps = case elt of
                |]
   S.BVTestBit idx bv -> do
     bvValExp <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx))) <$> $(refBinding bvValExp))
-            |]
+    liftQ $ joinPure1 [| addApp |] [| M.BVTestBit (M.BVValue $(natReprTH (S.bvWidth bv)) $(lift (toInteger idx))) |] bvValExp
 
   S.SemiRingSum sm ->
     case WSum.sumRepr sm of
-      SR.SemiRingBVRepr SR.BVArithRepr w ->
-        let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVMul $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
-                                   |]
+      SR.SemiRingBVRepr fl w ->
+        let smul mul e = do
+              y <- addEltTH endianness interps e
+              return $ [(y, BVS.asUnsigned mul)]
+            one = case fl of
+              SR.BVArithRepr -> 1
+              SR.BVBitsRepr -> SI.maxUnsigned w 
             sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
-            add x y = do
-              letTH [| addApp =<< (M.BVAdd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
-        in WSum.evalM add smul sval sm >>= extractBound
-      SR.SemiRingBVRepr SR.BVBitsRepr w ->
-        let smul mul e = do y <- addEltTH endianness interps e
-                            letTH [| addApp =<< (M.BVAnd $(natReprTH w) (M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned mul))) <$> $(refBinding y))
-                                   |]
-            sval v = do
-              EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
-            add x y = do
-              letTH [| addApp =<< (M.BVXor $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
-        in WSum.evalM add smul sval sm >>= extractBound
+              bnd <- EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
+              return $ [(bnd, one)]
+
+        in do
+          bnds <- WSum.evalM (\a b -> return $ a ++ b) smul sval sm
+          case all (\(bnd,_) -> isEager bnd) bnds of
+            True -> do
+              tms <- liftQ $ listE $ map (\(bnd, i) -> (tupE [refEager bnd, lift i])) bnds
+              liftQ [| sumBVs $(liftFlavor fl) $(natReprTH w) $(return tms) |]
+            False -> do
+              tms <- liftQ $ listE $ map (\(bnd, i) -> (tupE [refBinding bnd, lift i])) bnds
+              liftQ [| joinSumBVs $(liftFlavor fl) $(natReprTH w) $(return tms) |]
       _ -> liftQ [| error "unsupported SemiRingSum repr for macaw semmc TH" |]
 
   S.SemiRingProd pd ->
     case WSum.prodRepr pd of
       SR.SemiRingBVRepr SR.BVArithRepr w ->
         let pmul x y = do
-              letTH [| addApp =<< (M.BVMul $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVMul $(natReprTH w) |] x y
             unit = liftQ [| pure (M.BVValue $(natReprTH w) 1) |]
             convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
       SR.SemiRingBVRepr SR.BVBitsRepr w ->
         let pmul x y = do
-              letTH [| addApp =<< (M.BVAnd $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+              bindPure2 [| addApp |] [| M.BVAnd $(natReprTH w) |] x y
             unit = liftQ [| pure (M.BVValue $(natReprTH w) $(lift $ SI.maxUnsigned w)) |]
             convert = addEltTH endianness interps
         in WSum.prodEvalM pmul convert pd >>= maybe unit extractBound
@@ -942,70 +957,124 @@ defaultAppEvaluator endianness elt interps = case elt of
     -- These are all TH Exprs that are of the (Macaw) Value at run-time
     bs' <- mapM (addEltTH endianness interps) (S.bvOrToList bs)
     let por x y = do
-          letTH [| addApp =<< (M.BVOr $(natReprTH w) <$> $(refBinding x) <*> $(refBinding y)) |]
+          bindPure2 [| addApp |] [| M.BVOr $(natReprTH w) |] x y
     F.foldrM por (EagerBoundExp zero) bs' >>= extractBound
 
   S.BVShl w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVShl $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVShl $(natReprTH w) |] e1 e2
   S.BVLshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVShr $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVShr $(natReprTH w) |] e1 e2
   S.BVAshr w bv1 bv2 -> do
     e1 <- addEltTH endianness interps bv1
     e2 <- addEltTH endianness interps bv2
-    liftQ [| addApp =<< (M.BVSar $(natReprTH w) <$> $(refBinding e1) <*> $(refBinding e2)) |]
+    liftQ $ joinPure2 [| addApp |] [| M.BVSar $(natReprTH w) |] e1 e2
   S.BVZext w bv -> do
     e <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.UExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
+    liftQ $ joinPure1 [| addApp |] [| (\x -> M.UExt x $(natReprTH w)) |] e
   S.BVSext w bv -> do
     e <- addEltTH endianness interps bv
-    liftQ [| addApp =<< (M.SExt <$> $(refBinding e) <*> pure $(natReprTH w)) |]
+    liftQ $ joinPure1 [| addApp |] [| (\x -> M.SExt x $(natReprTH w)) |] e
 
   _ -> error $ "unsupported Crucible elt: " <> show elt
 
 ----------------------------------------------------------------------
 
-data BoolMapOp = AndOp | OrOp
+getBVOps ::  1 SI.<= n
+         => CT.NatRepr n
+         -> SR.BVFlavorRepr t
+         -> (M.Value arch ids (M.BVType n)
+              -> M.Value arch ids (M.BVType n)
+              -> M.App (M.Value arch ids) (M.BVType n)
+            , M.Value arch ids (M.BVType n)
+              -> M.Value arch ids (M.BVType n)
+              -> M.App (M.Value arch ids) (M.BVType n))
+getBVOps repr fl = case fl of
+    SR.BVArithRepr -> (M.BVMul repr, M.BVAdd repr)
+    SR.BVBitsRepr -> (M.BVAnd repr, M.BVXor repr)
+
+liftFlavor :: SR.BVFlavorRepr t -> Q Exp
+liftFlavor fl = case fl of
+  SR.BVArithRepr -> [| SR.BVArithRepr |]
+  SR.BVBitsRepr -> [| SR.BVBitsRepr |]
+
+sumBVs :: 1 SI.<= n
+       => ( MSS.SimplifierExtension arch
+          , OrdF (M.ArchReg arch)
+          , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+          , ShowF (M.ArchReg arch)
+          )
+       => SR.BVFlavorRepr t
+       -> CT.NatRepr n
+       -> [(M.Value arch ids (M.BVType n), Integer)]
+       -> G.Generator arch ids s (M.Value arch ids (M.BVType n))
+sumBVs fl repr vs = do
+  let (mulOp, addOp) = getBVOps repr fl
+  vals <- mapM (\(x,y) -> G.addExpr $ G.AppExpr $ mulOp x (M.BVValue repr y)) vs
+  foldM (\a b -> G.addExpr $ G.AppExpr $ addOp a b) (M.BVValue repr 0) vals
+
+joinSumBVs :: 1 SI.<= n
+           => ( MSS.SimplifierExtension arch
+              , OrdF (M.ArchReg arch)
+              , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+              , ShowF (M.ArchReg arch)
+              )
+           => SR.BVFlavorRepr t
+           -> CT.NatRepr n
+           -> [(G.Generator arch ids s (M.Value arch ids (M.BVType n)), Integer)]
+           -> G.Generator arch ids s (M.Value arch ids (M.BVType n))
+joinSumBVs fl repr vs = do
+  let (mulOp, addOp) = getBVOps repr fl
+  vals <- mapM (\(xF,y) -> xF >>= \x -> G.addExpr $ G.AppExpr $ mulOp x (M.BVValue repr y)) vs
+  foldM (\a b -> G.addExpr $ G.AppExpr $ addOp a b) (M.BVValue repr 0) vals
 
 
-evalBoolMap :: A.Architecture arch
-            => M.Endianness
-            -> BoundVarInterpretations arch t fs
-            -> BoolMapOp
-            -> Bool
+allPreds :: ( MSS.SimplifierExtension arch
+            , OrdF (M.ArchReg arch)
+            , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+            , ShowF (M.ArchReg arch)
+            )
+         => [(M.Value arch ids M.BoolType, Bool)]
+         -> G.Generator arch ids s (M.Value arch ids M.BoolType)
+allPreds vs = do
+  let
+    mkApp b (a, True) =  G.addExpr $ G.AppExpr $ M.AndApp a b
+    mkApp b (a, False) = do
+      notA <- G.addExpr $ G.AppExpr $ M.NotApp a
+      G.addExpr $ G.AppExpr $ M.AndApp notA b
+  foldM mkApp (M.BoolValue True) vs 
+
+joinPreds :: ( MSS.SimplifierExtension arch
+             , OrdF (M.ArchReg arch)
+             , M.MemWidth (M.RegAddrWidth (M.ArchReg arch))
+             , ShowF (M.ArchReg arch)
+             )
+          => [(G.Generator arch ids s (M.Value arch ids M.BoolType), Bool)]
+          -> G.Generator arch ids s (M.Value arch ids M.BoolType)
+joinPreds vs = do
+  let
+    mkApp b (aF, True) = do
+      a <- aF
+      G.addExpr $ G.AppExpr $ M.AndApp a b
+    mkApp b (aF, False) = do
+      a <- aF
+      notA <- G.addExpr $ G.AppExpr $ M.NotApp a
+      G.addExpr $ G.AppExpr $ M.AndApp notA b
+  foldM mkApp (M.BoolValue True) vs 
+
+
+
+boolMapList :: (forall tp. S.Expr t tp -> MacawQ arch t fs BoundExp)
             -> BooM.BoolMap (S.Expr t)
-            -> MacawQ arch t fs BoundExp
-evalBoolMap endianness interps op defVal bmap =
-  case BooM.viewBoolMap bmap of
-    BooM.BoolMapUnit ->     letTH [| G.addExpr (boolBase $(lift defVal)) |]
-    BooM.BoolMapDualUnit -> letTH [| G.addExpr (bNotBase $(lift defVal)) |]
-    BooM.BoolMapTerms ts ->
-         do d <- letTH [| G.addExpr (boolBase $(lift defVal)) |]
-            F.foldl (joinBool endianness interps op) (return d) ts
-
-
-boolBase, bNotBase :: A.Architecture arch => Bool -> G.Expr arch t 'M.BoolType
-boolBase = G.ValueExpr . M.BoolValue
-bNotBase = boolBase . not
-
-joinBool :: A.Architecture arch
-         => M.Endianness
-         -> BoundVarInterpretations arch t fs
-         -> BoolMapOp
-         -> MacawQ arch t fs BoundExp
-         -> (S.Expr t SI.BaseBoolType, S.Polarity)
-         -> MacawQ arch t fs BoundExp
-joinBool endianness interps op e r =
-  do n <- case r of
-            (t, BooM.Positive) -> do addEltTH endianness interps t
-            (t, BooM.Negative) -> do p <- addEltTH endianness interps t
-                                     letTH [| addApp =<< (M.NotApp <$> $(refBinding p)) |]
-     j <- e
-     case op of
-       AndOp ->
-         letTH [| addApp =<< (M.AndApp <$> $(refBinding j) <*> $(refBinding n)) |]
-       OrOp  ->
-         letTH [| addApp =<< (M.OrApp <$> $(refBinding j) <*> $(refBinding n)) |]
+            -> MacawQ arch t fs [(BoundExp, Bool)]
+boolMapList f bm = case BooM.viewBoolMap bm of
+  BooM.BoolMapUnit -> return []
+  BooM.BoolMapDualUnit -> do
+    bnd <- EagerBoundExp <$> liftQ [| M.BoolValue False |]
+    return $ [(bnd, True)]
+  BooM.BoolMapTerms ts -> liftM NE.toList $ forM ts $ \(e, p) -> do
+    eE <- f e
+    return $ (eE, p == BooM.Positive)

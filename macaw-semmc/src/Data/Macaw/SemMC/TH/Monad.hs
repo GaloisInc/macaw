@@ -19,14 +19,27 @@ module Data.Macaw.SemMC.TH.Monad (
   letBindExpr,
   letBindPureExpr,
   bindTH,
+  letBindPat,
   letTH,
   extractBound,
   refBinding,
   inConditionalContext,
   isTopLevel,
-  definedFunction
+  definedFunction,
+  isEager,
+  refEager,
+  joinOp1,
+  joinOp2,
+  joinOp3,
+  joinPure1,
+  joinPure2,
+  joinPure3,
+  bindPure1,
+  bindPure2,
+  bindPure3
   ) where
 
+import           Control.Monad ( join )
 import qualified Control.Monad.Fail as MF
 import qualified Control.Monad.State.Strict as St
 import           Control.Monad.Trans ( lift )
@@ -37,6 +50,8 @@ import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
 import qualified Data.Macaw.CFG as M
+import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Backend.Simple as S
@@ -85,6 +100,9 @@ data MacawTHConfig arch opc t fs =
                 -- ^ A TH action to generate the type tag for the architecture
                 , genLibraryFunction :: forall sym . Some (SF.FunctionFormula sym) -> Bool
                 , genOpcodeCase :: forall tps . opc tps -> Bool
+                , archTranslateType :: forall tp. Q Type -> Q Type -> SI.BaseTypeRepr tp -> Maybe (Q Type)
+                -- ^ An optional override when translating What4 types, where the first two
+                -- arguments correspond to the 'ids' and 's' type variables.
                 }
 
 data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
@@ -221,40 +239,54 @@ data BoundExp where
 -- and the new name is returned.
 bindExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
 bindExpr elt eq = do
+  pureFn <- liftQ $ [| pure |]
   e <- liftQ eq
-  n <- liftQ (newName "val")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
-                       , expressionCache = M.insert (Some elt) res (expressionCache s)
-                       }
-  return (EagerBoundExp res)
+  case e of
+    AppE f (VarE n) | pureFn == f -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "val")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
+                           , expressionCache = M.insert (Some elt) res (expressionCache s)
+                           }
+      return (EagerBoundExp res)
 
 letBindPureExpr :: S.Expr t tp -> ExpQ -> MacawQ arch t fs BoundExp
 letBindPureExpr elt eq = do
   e <- liftQ eq
-  n <- liftQ (newName "lval")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       , expressionCache = M.insert (Some elt) res (expressionCache s)
-                       }
-  return (EagerBoundExp res)
+  case e of
+    VarE n -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "lval")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                           , expressionCache = M.insert (Some elt) res (expressionCache s)
+                           }
+      return (EagerBoundExp res)
 
 letBindExpr :: S.Expr t tp -> Exp -> MacawQ arch t fs BoundExp
 letBindExpr elt e = do
-  n <- liftQ (newName "lval")
-  let res = VarE n
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
-                       }
-  return (LazyBoundExp res)
+  pureFn <- liftQ $ [| pure |]
+  case e of
+    AppE f (VarE n) | pureFn == f -> return $ EagerBoundExp $ VarE n
+    _ -> do
+      n <- liftQ (newName "lval")
+      let res = VarE n
+      St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                           , lazyExpressionCache = M.insert (Some elt) res (lazyExpressionCache s)
+                           }
+      return (LazyBoundExp res)
 
 letTH :: ExpQ -> MacawQ arch t fs BoundExp
 letTH eq = do
   e <- liftQ eq
-  n <- liftQ (newName "lval")
-  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
-                       }
-  return (LazyBoundExp (VarE n))
+  case e of
+    VarE n -> return $ LazyBoundExp $ VarE n
+    _ -> do
+     n <- liftQ (newName "lval")
+     St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD (VarP n) (NormalB e) []]
+                          }
+     return (LazyBoundExp (VarE n))
 
 bindTH :: ExpQ -> MacawQ arch t fs BoundExp
 bindTH eq = do
@@ -263,6 +295,14 @@ bindTH eq = do
   St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> BindS (VarP n) e
                        }
   return (EagerBoundExp (VarE n))
+
+letBindPat :: S.Expr t tp -> (PatQ, ExpQ) -> ExpQ -> MacawQ arch t fs ()
+letBindPat elt (patq,resq) eq = do
+  pat <- liftQ patq
+  res <- liftQ resq
+  e <- liftQ eq
+  St.modify' $ \s -> s { accumulatedStatements = accumulatedStatements s Seq.|> LetS [ValD pat (NormalB e) []]
+                       , expressionCache = M.insert (Some elt) res (expressionCache s) }
 
 definedFunction :: String -> MacawQ arch t fs (Maybe Exp)
 definedFunction name = do
@@ -286,3 +326,60 @@ refBinding be =
     EagerBoundExp e -> [| pure $(return e) |]
     -- If it is lazy, we need it "bare" in the applicative wrappers
     LazyBoundExp e -> return e
+
+isEager :: BoundExp -> Bool
+isEager be = case be of
+  EagerBoundExp _ -> True
+  LazyBoundExp _ -> False
+
+refEager :: BoundExp -> Q Exp
+refEager be = case be of
+  EagerBoundExp e -> return e
+  LazyBoundExp _ -> fail "refEager: cannot eagerly reference a lazy value"
+
+
+joinOp1 :: ExpQ -> BoundExp -> Q Exp
+joinOp1 fun arg1 = case isEager arg1 of
+  True -> [| $(fun) $(refEager arg1) |]
+  False -> [| $(fun) =<< $(refBinding arg1) |]
+
+joinOp2 :: ExpQ -> BoundExp -> BoundExp -> Q Exp
+joinOp2 fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> [| $(fun) $(refEager arg1) $(refEager arg2) |]
+  False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2)) |]
+
+joinOp3 :: ExpQ -> BoundExp -> BoundExp -> BoundExp -> Q Exp
+joinOp3 fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> [| $(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3)|]
+  False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2) <*> $(refBinding arg3)) |]
+
+joinPure1 :: ExpQ -> ExpQ -> BoundExp -> Q Exp
+joinPure1 mfun fun arg1 = case isEager arg1 of
+  True -> [| $(mfun) ($(fun) $(refEager arg1)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) |]
+
+bindPure1 :: ExpQ -> ExpQ -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure1 mfun fun arg1 = case isEager arg1 of
+  True -> bindTH $ joinPure1 mfun fun arg1
+  False -> letTH $ joinPure1 mfun fun arg1
+
+joinPure2 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> Q Exp
+joinPure2 mfun fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> [| $(mfun) ($(fun) $(refEager arg1) $(refEager arg2)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) <*> $(refBinding arg2) |]
+
+bindPure2 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure2 mfun fun arg1 arg2 = case all isEager [arg1, arg2] of
+  True -> bindTH $ joinPure2 mfun fun arg1 arg2
+  False -> letTH $ joinPure2 mfun fun arg1 arg2
+
+joinPure3 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> BoundExp -> Q Exp
+joinPure3 mfun fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> [| $(mfun) ($(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3)) |]
+  False -> [| $(mfun) =<< ($(fun) <$> $(refBinding arg1)) <*> $(refBinding arg2) <*> $(refBinding arg3) |]
+
+
+bindPure3 :: ExpQ -> ExpQ -> BoundExp -> BoundExp -> BoundExp -> MacawQ arch t fs BoundExp
+bindPure3 mfun fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
+  True -> bindTH $ joinPure3 mfun fun arg1 arg2 arg3
+  False -> letTH $ joinPure3 mfun fun arg1 arg2 arg3

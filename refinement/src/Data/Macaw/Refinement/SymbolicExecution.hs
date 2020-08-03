@@ -387,7 +387,7 @@ genIPConstraint ctx sym ipVal = liftIO $ do
 -- | Probe the SMT solver for additional models of the given expression up to a maximum @count@
 genModels
   :: forall t solver fs m arch sym w proxy
-   . ( W.OnlineSolver t solver
+   . ( W.OnlineSolver solver
      , KnownNat w
      , 1 <= w
      , MonadIO m
@@ -417,7 +417,7 @@ genModels proxy sym solver_proc assumptions expr count
 
 extractIPModels :: forall arch solver m sym t fp
                  . ( MS.SymArchConstraints arch
-                   , W.OnlineSolver t solver
+                   , W.OnlineSolver solver
                    , MU.MonadUnliftIO m
                    , CB.IsSymInterface sym
                    , sym ~ CBS.SimpleBackend t fp

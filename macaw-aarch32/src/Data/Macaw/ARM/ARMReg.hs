@@ -32,6 +32,7 @@ import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.SymbolRepr as PSR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TH.GADT as PTH
+import qualified Data.Parameterized.List as P
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import           GHC.TypeLits
@@ -73,7 +74,7 @@ data ARMReg tp where
                    , tp' ~ ASL.GlobalsType s
                    , tp ~ BaseToMacawType tp')
                 => ASL.GlobalRef s -> ARMReg tp
-  ARMWriteMode :: tp ~ MT.BVType 2 => ARMReg (MT.BVType 2)
+  ARMDummyReg :: ARMReg (MT.TupleType '[])
 
 -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
@@ -86,7 +87,7 @@ instance Show (ARMReg tp) where
   show r = case r of
     ARMGlobalBV globalRef -> show (ASL.globalRefSymbol globalRef)
     ARMGlobalBool globalRef -> show (ASL.globalRefSymbol globalRef)
-    ARMWriteMode -> "ARMWriteMode"
+    ARMDummyReg -> "()"
 
 instance ShowF ARMReg where
     showF = show
@@ -125,7 +126,7 @@ instance MT.HasRepr ARMReg MT.TypeRepr where
         case r of
           ARMGlobalBV globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
           ARMGlobalBool globalRef -> baseToMacawTypeRepr (ASL.globalRefRepr globalRef)
-          ARMWriteMode -> MT.BVTypeRepr (NR.knownNat @2)
+          ARMDummyReg -> MT.TupleTypeRepr P.Nil
 
 type instance MC.ArchReg SA.AArch32 = ARMReg
 type instance MC.RegAddrWidth ARMReg = 32
@@ -151,6 +152,7 @@ armRegs = FC.toListFC asARMReg ( FC.fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalR
         asARMReg gr = case ASL.globalRefRepr gr of
           WT.BaseBoolRepr -> Some (ARMGlobalBool gr)
           WT.BaseBVRepr _ -> Some (ARMGlobalBV gr)
+          WT.BaseStructRepr Ctx.Empty -> Some ARMDummyReg
           tp -> error $ "unsupported global type " <> show tp
 
 -- | The set of registers preserved across Linux system calls is defined by the ABI.
@@ -185,6 +187,8 @@ locToRegTH (SA.Location globalRef) = do
       [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
     WT.BaseBVRepr _ ->
       [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
+    WT.BaseStructRepr Ctx.Empty ->
+      [| ARMDummyReg |]
     _tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ TH.LitE (TH.StringL refName)) |]
 
 branchTakenReg :: ARMReg MT.BoolType
