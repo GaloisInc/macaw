@@ -218,6 +218,7 @@ all_instructions =
   , avxOp1I "vpsrldq" VShiftR
   , avxOp1I "vpshufd" VShufD
 
+  , avxPointwise2 "vpaddb" PtAdd n8
   , avxPointwise2 "vpaddd" PtAdd n32
   , avxPointwise2 "vpaddq" PtAdd n64
 
@@ -227,11 +228,13 @@ all_instructions =
   , avxOp2 "vpor" VPOr
   , avxOp2 "vpxor" VPXor
   , avxOp2 "vpshufb" VPShufB
+  , avxOp2 "vxorps" VPXor
 
   , avxOp2I "vpalignr" VPAlignR
 
   , avxOp2 "vaesenc" VAESEnc
   , avxOp2 "vaesenclast" VAESEncLast
+
   , avxOp2 "vpunpcklqdq" VPUnpackLQDQ
   , avxOp2 "vpunpckhqdq" VPUnpackHQDQ
 
