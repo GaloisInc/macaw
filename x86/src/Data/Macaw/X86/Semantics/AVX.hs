@@ -10,7 +10,7 @@ import Data.Parameterized.Some
 import qualified Flexdis86 as F
 
 import Data.Macaw.CFG.Core(Value,bvValue)
-import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n128, n256)
+import Data.Macaw.Types(BVType,typeWidth,n0,n1,n8,n32,n64,n128,n256)
 
 import Data.Macaw.X86.InstructionDef
 import Data.Macaw.X86.Monad((.=), uext, subRegister)
