@@ -625,18 +625,18 @@ addEltTH endianness interps elt = do
           -- This may produce less dynamic sharing, but will be easier to manage
           -- for now.  Once that works, we can be smarter and translate what we
           -- can eagerly.
-          genExpr <- appToExprTH endianness (S.appExprApp appElt) interps
+          (genExpr, ef) <- evalWithEffects $ appToExprTH endianness (S.appExprApp appElt) interps
           istl <- isTopLevel
-          if istl
+          if istl || not ef
             then bindExpr elt (return genExpr)
             else letBindExpr elt genExpr
         S.BoundVarExpr bVar -> do
           x <- evalBoundVar interps bVar
           letBindPureExpr elt [| $(return x) |]
         S.NonceAppExpr n -> do
-          x <- evalNonceAppTH endianness interps (S.nonceExprApp n)
+          (x, ef) <- evalWithEffects $ evalNonceAppTH endianness interps (S.nonceExprApp n)
           istl <- isTopLevel
-          if istl
+          if istl || not ef
             then bindExpr elt (return x)
             else letBindExpr elt x
         S.SemiRingLiteral srTy val _
@@ -739,6 +739,7 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
       case funMaybe of
         Just fun -> do
           argExprs <- sequence $ FC.toListFC (addEltTH endianness bvi) args
+          setEffectful
           case all isEager argExprs of
             True -> liftQ $ foldl appE (return fun) (map refEager argExprs)
             False -> do
@@ -788,6 +789,7 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
                     -- first is just a stand-in in the semantics to represent the
                     -- memory.
                     addr <- addEltTH endianness bvi addrElt
+                    setEffectful
                     liftQ [| let memRep = M.BVMemRepr (NR.knownNat :: NR.NatRepr $(litT (numTyLit (fromIntegral nBytes)))) endianness
                                  assignGen = join (G.addAssignment <$> (M.ReadMem <$> $(refBinding addr) <*> pure memRep))
                               in M.AssignedValue <$> assignGen
@@ -806,6 +808,7 @@ defaultNonceAppEvaluator endianness bvi nonceApp =
               | Just _ <- matchWriteMemWidth fnName -> do
                 Some memExpr <- writeMemTH bvi symFn args endianness
                 mem <- addEltTH endianness bvi memExpr
+                setEffectful
                 liftQ [| return $(refBinding mem) |]
               | otherwise -> error $ "Unsupported function: " ++ show fnName ++ "(" ++ show fnArgTypes ++ ") -> " ++ show fnRetType
     _ -> error "Unsupported NonceApp case"

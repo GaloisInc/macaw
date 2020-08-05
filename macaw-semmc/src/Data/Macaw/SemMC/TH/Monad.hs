@@ -26,6 +26,8 @@ module Data.Macaw.SemMC.TH.Monad (
   inConditionalContext,
   isTopLevel,
   definedFunction,
+  evalWithEffects,
+  setEffectful,
   isEager,
   refEager,
   joinOp1,
@@ -141,6 +143,9 @@ data QState arch t fs = QState { accumulatedStatements :: !(Seq.Seq Stmt)
                             -- (and should eagerly bind side-effecting
                             -- operations).  At higher depths we are inside of
                             -- conditionals and should use lazy binding.
+                            , effectfulStatements :: !Bool
+                            -- ^ True of the evaluated statement may have
+                            -- observable effects
                             }
 
 emptyQState :: MacawTHConfig arch opc t fs
@@ -154,6 +159,7 @@ emptyQState thConf df = QState { accumulatedStatements = Seq.empty
                                , appEvaluator = appTranslator thConf
                                , definedFunctionEvaluator = df
                                , translationDepth = 0
+                               , effectfulStatements = False
                                }
 
 newtype MacawQ arch t fs a = MacawQ { unQ :: St.StateT (QState arch t fs) Q a }
@@ -179,6 +185,21 @@ inConditionalContext k = do
   res <- k
   St.modify' $ \s -> s { translationDepth = translationDepth s - 1 }
   return res
+
+setEffectful :: MacawQ arch t fs ()
+setEffectful = St.modify' $ \s -> s { effectfulStatements = True }
+
+-- | Returns 'True' if the translated expression could possibly have
+-- observable effects in the Generator monad
+evalWithEffects :: MacawQ arch t fs a
+                -> MacawQ arch t fs (a, Bool)
+evalWithEffects k = do
+  ef <- St.gets effectfulStatements
+  St.modify' $ \s -> s { effectfulStatements = False }
+  res <- k
+  ef' <- St.gets effectfulStatements
+  St.modify' $ \s -> s { effectfulStatements = ef }
+  return (res, ef')
 
 -- | Lift a TH computation (in the 'Q' monad) into the monad.
 liftQ :: Q a -> MacawQ arch t fs a
