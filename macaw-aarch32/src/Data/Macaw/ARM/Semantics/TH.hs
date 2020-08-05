@@ -27,6 +27,7 @@ import           Control.Monad ( join, void )
 import qualified Control.Monad.Except as E
 import qualified Data.BitVector.Sized as BVS
 import           Data.List (isPrefixOf)
+import           Data.Proxy
 import           Data.Macaw.ARM.ARMReg
 import           Data.Macaw.ARM.Arch
 import qualified Data.Macaw.CFG as M
@@ -34,6 +35,10 @@ import qualified Data.Macaw.SemMC.Generator as G
 import           Data.Macaw.SemMC.TH ( addEltTH, natReprTH, symFnName, translateBaseTypeRepr )
 import           Data.Macaw.SemMC.TH.Monad
 import qualified Data.Macaw.Types as M
+import           Data.Parameterized.Some
+import qualified Data.Parameterized.Vector as V
+import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.Map ( MapF )
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
@@ -121,7 +126,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ $ joinOp1 [| getSIMD |] rid
+                  liftQ $ joinOp1 [| getSIMD Snapshot |] rid
               _ -> fail "Invalid uf_simd_get"
           "uf_gpr_get" ->
             case args of
@@ -129,7 +134,7 @@ armNonceAppEval bvi nonceApp =
                 Just $ do
                   _rgf <- addEltTH M.LittleEndian bvi array
                   rid <- addEltTH M.LittleEndian bvi ix
-                  liftQ $ joinOp1 [| getGPR |] rid
+                  liftQ $ joinOp1 [| getGPR Snapshot |] rid
               _ -> fail "Invalid uf_gpr_get"
           _ | "uf_write_mem_" `isPrefixOf` fnName ->
             case args of
@@ -354,9 +359,9 @@ armNonceAppEval bvi nonceApp =
                 _ -> fail "Invalid fpRoundInt arguments"
 
 
-          "uf_init_gprs" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteGPRs) |]
-          "uf_init_memory" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteMemory)|]
-          "uf_init_simds" -> Just $ liftQ [| return $ ARMWriteAction (return ARMWriteSIMDs) |]
+          "uf_init_gprs" -> Just $ liftQ [| return $ emptyGPRWrites |]
+          "uf_init_memory" -> Just $ liftQ [| return $ emptyMemoryWrites |]
+          "uf_init_simds" -> Just $ liftQ [| return $ emptySIMDWrites |]
 
 
           -- These functions indicate that the wrapped monadic actions in the corresponding
@@ -364,19 +369,19 @@ armNonceAppEval bvi nonceApp =
           "uf_update_gprs"
             | Ctx.Empty Ctx.:> gprs <- args -> Just $ do
                 gprs' <- addEltTH M.LittleEndian bvi gprs
-                appendStmt $ [| join (execWriteAction <$> $(refBinding gprs')) |]
+                appendStmt $ [| join (execWriteGPRs <$> $(refBinding gprs')) |]
                 liftQ [| return $ unitValue |]
                   
           "uf_update_simds"
             | Ctx.Empty Ctx.:> simds <- args -> Just $ do
                 simds' <- addEltTH M.LittleEndian bvi simds
-                appendStmt $ [| join (execWriteAction <$> $(refBinding simds')) |]
+                appendStmt $ [| join (execWriteSIMDs <$> $(refBinding simds')) |]
                 liftQ [| return $ unitValue |]
 
           "uf_update_memory"
             | Ctx.Empty Ctx.:> mem <- args -> Just $ do
                 mem' <- addEltTH M.LittleEndian bvi mem
-                appendStmt $ [| join (execWriteAction <$> $(refBinding mem')) |]
+                appendStmt $ [| join (execMemoryWrites <$> $(refBinding mem')) |]
                 liftQ [| return $ unitValue |]
 
           "uf_noop" | Ctx.Empty <- args -> Just $ liftQ [| return $ M.BoolValue True |]
@@ -414,79 +419,275 @@ unitValue =  M.Initial ARMDummyReg
 natReprFromIntTH :: Int -> Q Exp
 natReprFromIntTH i = [| knownNat :: M.NatRepr $(litT (numTyLit (fromIntegral i))) |]
 
+-- | A representation of an
+-- un-executed effectful generator action, where 'addr' is a generalized
+-- address (either a memory address, or a register number) and 'val' is the value
+-- to be written.
+data WriteAction f addr val where
+  -- | A single write action 
+  WriteAction :: forall f addr val
+               . (1 <= addr, 1 <= val)
+              => M.NatRepr addr
+              -> M.NatRepr val
+              -> f M.BoolType
+              -- ^ a guard which indicates whether or not this action should be committed
+              -> f (M.BVType addr)
+              -> f (M.BVType (8 TL.* val))
+              -> WriteAction f addr val
 
-data ARMWriteGPRs = ARMWriteGPRs
-data ARMWriteMemory = ARMWriteMemory
-data ARMWriteSIMDs = ARMWriteSIMDs
+-- | A sequence of a known number of write actions
+data WriteSeq f addr val n where
+  WriteSeq :: 1 <= n => V.Vector n (WriteAction f addr val) -> WriteSeq f addr val n
+  EmptyWriteSeq :: WriteSeq f addr val 0
 
-newtype ARMWriteAction ids s tp where
-  ARMWriteAction :: G.Generator ARM.AArch32 ids s tp -> ARMWriteAction ids s tp
-  deriving (Functor, Applicative, Monad)
+appendWriteSeqs :: WriteSeq f addr val n
+                -> WriteSeq f addr val m
+                -> WriteSeq f addr val (n + m)
+appendWriteSeqs s1 s2 = case (s1, s2) of
+  (EmptyWriteSeq, _) -> s2
+  (_, EmptyWriteSeq) -> s1
+  (WriteSeq v1, WriteSeq v2)
+     | LeqProof <- leqAddPos (V.length v1) (V.length v2)
+     -> WriteSeq $ V.append v1 v2
 
-execWriteAction :: ARMWriteAction ids s tp -> G.Generator ARM.AArch32 ids s tp
-execWriteAction (ARMWriteAction f) = f
+data ARMWriteActions ids addr val where
+  ARMWriteActions :: WriteSeq (M.Value ARM.AArch32 ids) addr val n -> ARMWriteActions ids addr val
+
+getValRepr :: M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
+           -> NatRepr w
+getValRepr val
+  | M.BVTypeRepr (val8Repr :: NatRepr (8 TL.* val)) <- M.typeRepr val
+  , Refl <- mulComm (Proxy @8) (Proxy @val)
+  = divNat @8 @val val8Repr (knownNat @8)
+getValRepr _ = error "impossible"
+
+addWriteAction :: forall addr ids val
+                . 1 <= val
+               => 1 <= addr
+               => M.Value ARM.AArch32 ids (M.BVType addr)
+               -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* val))
+               -> ARMWriteActions ids addr val
+               -> ARMWriteActions ids addr val
+addWriteAction addr val acts = appendWriteActions (singletonWriteAction addr val) acts
+
+emptyGPRWrites :: ARMWriteActions ids 4 4
+emptyGPRWrites = ARMWriteActions EmptyWriteSeq
+
+emptySIMDWrites :: ARMWriteActions ids 8 16
+emptySIMDWrites = ARMWriteActions EmptyWriteSeq
+
+emptyMemoryWrites :: MemoryWriteActions ids
+emptyMemoryWrites = MemoryWriteActions $ MapF.empty
+
+singletonWriteAction :: forall addr ids val
+                      . 1 <= val
+                     => 1 <= addr
+                     => M.Value ARM.AArch32 ids (M.BVType addr)
+                     -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* val))
+                     -> ARMWriteActions ids addr val
+singletonWriteAction addr val
+  | M.BVTypeRepr addrRepr <- M.typeRepr addr
+  , valRepr <- getValRepr val
+  , act <- WriteAction addrRepr valRepr (M.BoolValue True) addr val
+  = ARMWriteActions (WriteSeq (V.singleton act))
+singletonWriteAction _ _ = error "impossible"
+
+appendWriteActions :: ARMWriteActions ids addr val
+                   -> ARMWriteActions ids addr val
+                   -> ARMWriteActions ids addr val
+appendWriteActions (ARMWriteActions acts1) (ARMWriteActions acts2)
+ = ARMWriteActions $ appendWriteSeqs acts1 acts2
+
+-- | Zip two sequences of write actions together. The shorter of the two sequences will
+-- be padded with 'Nothing' until they are equal length.
+zipWriteSeqs :: Monad m
+             => (Maybe (WriteAction f addr val) -> Maybe (WriteAction f addr val) -> m (WriteAction f addr val))
+             -> WriteSeq f addr val n
+             -> WriteSeq f addr val k
+             -> m (Some (WriteSeq f addr val))
+zipWriteSeqs f s1 s2 = case (s1, s2) of
+  (WriteSeq v1, EmptyWriteSeq) -> (Some . WriteSeq) <$> mapM (\a -> f (Just a) Nothing) v1
+  (EmptyWriteSeq, WriteSeq v2) -> (Some . WriteSeq) <$> mapM (\b -> f Nothing (Just b)) v2
+  (WriteSeq v1, WriteSeq v2) -> do
+    SomeVector v <- someMaxVector <$> zipWithM' f v1 v2
+    return $ Some $ WriteSeq v
+  _ -> return $ Some $ EmptyWriteSeq
+
+muxWriteAction :: forall ids s addr val
+                . M.Value ARM.AArch32 ids M.BoolType
+               -> ARMWriteActions ids addr val
+               -> ARMWriteActions ids addr val
+               -> G.Generator ARM.AArch32 ids s (ARMWriteActions ids addr val)
+muxWriteAction cond (ARMWriteActions actsT) (ARMWriteActions actsF) = do
+  Some acts <- zipWriteSeqs (mkMux cond) actsT actsF
+  return $ ARMWriteActions acts
+
+muxMemoryWrites :: forall ids s
+                 . M.Value ARM.AArch32 ids M.BoolType
+                -> MemoryWriteActions ids
+                -> MemoryWriteActions ids
+                -> G.Generator ARM.AArch32 ids s (MemoryWriteActions ids)
+muxMemoryWrites cond (MemoryWriteActions mem1) (MemoryWriteActions mem2) =
+  MemoryWriteActions <$> MapF.mergeWithKeyM (\_ act1 act2 -> Just <$> muxWriteAction cond act1 act2) return return mem1 mem2
+
+mkMux :: M.Value ARM.AArch32 ids M.BoolType
+      -> Maybe (WriteAction (M.Value ARM.AArch32 ids) addr val)
+      -> Maybe (WriteAction (M.Value ARM.AArch32 ids) addr val)
+      -> G.Generator ARM.AArch32 ids s (WriteAction (M.Value ARM.AArch32 ids) addr val)
+mkMux cond_outer mvt mvf = case (mvt, mvf) of
+  (Just (WriteAction addrRepr valRepr condT addrT valT), Nothing) -> do
+    cond <- G.addExpr (G.AppExpr (M.AndApp cond_outer condT))
+    return $ WriteAction addrRepr valRepr cond addrT valT
+  (Nothing, Just (WriteAction addrRepr valRepr condF addrF valF)) -> do
+    notCond_outer <- G.addExpr (G.AppExpr (M.NotApp cond_outer))
+    cond <- G.addExpr (G.AppExpr (M.AndApp notCond_outer condF))
+    return $ WriteAction addrRepr valRepr cond addrF valF
+  (Just (WriteAction addrRepr valRepr condT addrT valT) , Just (WriteAction _ _ condF addrF valF)) -> do
+    cond <- G.addExpr (G.AppExpr (M.Mux M.BoolTypeRepr cond_outer condT condF))
+    addr <- G.addExpr (G.AppExpr (M.Mux (M.typeRepr addrT) cond_outer addrT addrF))
+    val <- G.addExpr (G.AppExpr (M.Mux (M.typeRepr valT) cond_outer valT valF))
+    return $ WriteAction addrRepr valRepr cond addr val
+  (Nothing, Nothing) -> error "mkMux: unexpected no-op action"
+
+execWriteGPRs :: forall ids s
+               . ARMWriteActions ids 4 4
+              -> G.Generator ARM.AArch32 ids s ()
+execWriteGPRs (ARMWriteActions (WriteSeq acts)) = mapM_ go acts
+  where
+    go :: WriteAction (M.Value ARM.AArch32 ids) 4 4 -> G.Generator ARM.AArch32 ids s ()
+    go (WriteAction _ _ cond addr val) = case cond of
+      M.CValue (M.BoolCValue True) -> execSetGPR addr val
+      M.CValue (M.BoolCValue False) -> return ()
+      _ -> do
+        old_v <- getGPR Current addr
+        val' <- G.addExpr (G.AppExpr (M.Mux (M.typeRepr val) cond val old_v))
+        execSetGPR addr val'
+execWriteGPRs (ARMWriteActions EmptyWriteSeq) = return ()
+
+execWriteSIMDs :: forall ids s
+                . ARMWriteActions ids 8 16
+               -> G.Generator ARM.AArch32 ids s ()
+execWriteSIMDs (ARMWriteActions (WriteSeq acts)) = mapM_ go acts
+  where
+    go :: WriteAction (M.Value ARM.AArch32 ids) 8 16 -> G.Generator ARM.AArch32 ids s ()
+    go (WriteAction _ _ cond addr val) = case cond of
+      M.CValue (M.BoolCValue True) -> execSetSIMD addr val
+      M.CValue (M.BoolCValue False) -> return ()
+      _ -> do
+        old_v <- getSIMD Current addr
+        val' <- G.addExpr (G.AppExpr (M.Mux (M.typeRepr val) cond val old_v))
+        execSetSIMD addr val'
+execWriteSIMDs (ARMWriteActions EmptyWriteSeq) = return ()
+
+execMemoryWrites :: forall ids s
+                  . MemoryWriteActions ids
+                 -> G.Generator ARM.AArch32 ids s ()
+execMemoryWrites (MemoryWriteActions mem) = MapF.traverseWithKey_ execW mem
+  where
+    execW :: forall n. NatRepr n -> ARMWriteActions ids 32 n -> G.Generator ARM.AArch32 ids s ()
+    execW _ (ARMWriteActions (WriteSeq acts)) = mapM_ go acts
+    execW _ (ARMWriteActions EmptyWriteSeq) = return ()
+
+    go :: forall n. WriteAction (M.Value ARM.AArch32 ids) 32 n -> G.Generator ARM.AArch32 ids s ()
+    go (WriteAction _ sz cond addr val) = case cond of
+      M.CValue (M.BoolCValue True) -> execWriteMem sz addr val
+      M.CValue (M.BoolCValue False) -> return ()
+      _ -> do
+        old_v <- readMem sz addr
+        val' <- G.addExpr (G.AppExpr (M.Mux (M.typeRepr val) cond val old_v))
+        execWriteMem sz addr val'
+
+
+data MemoryWriteActions ids where
+  MemoryWriteActions :: MapF NatRepr (ARMWriteActions ids 32) -> MemoryWriteActions ids
+
 
 writeMem :: 1 <= w
          => M.NatRepr w
-         -> ARMWriteAction ids s ARMWriteMemory
+         -> MemoryWriteActions ids
          -> M.Value ARM.AArch32 ids (M.BVType 32)
          -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
-         -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteMemory)
-writeMem sz mem addr val = return $ do
-  _ <- mem
-  ARMWriteAction $ G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
-  return $ ARMWriteMemory
+         -> G.Generator ARM.AArch32 ids s (MemoryWriteActions ids)
+writeMem sz (MemoryWriteActions mem) addr val =
+  return $ MemoryWriteActions $ MapF.insertWith appendWriteActions sz (singletonWriteAction addr val) mem
 
-setGPR :: ARMWriteAction ids s ARMWriteGPRs
-       -> M.Value ARM.AArch32 ids (M.BVType 4)
-       -> M.Value ARM.AArch32 ids (M.BVType 32)
-       -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteGPRs)
-setGPR handle regid v = do
+
+readMem :: 1 <= w
+        => M.NatRepr w
+        -> M.Value ARM.AArch32 ids (M.BVType 32)
+        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType (8 TL.* w)))
+readMem sz addr = M.AssignedValue <$> G.addAssignment (M.ReadMem addr (M.BVMemRepr sz M.LittleEndian))
+
+execWriteMem :: 1 <= w
+             => M.NatRepr w
+             -> M.Value ARM.AArch32 ids (M.BVType 32)
+             -> M.Value ARM.AArch32 ids (M.BVType (8 TL.* w))
+             -> G.Generator ARM.AArch32 ids s ()
+execWriteMem sz addr val = G.addStmt (M.WriteMem addr (M.BVMemRepr sz M.LittleEndian) val)
+
+execSetGPR :: M.Value ARM.AArch32 ids (M.BVType 4)
+           -> M.Value ARM.AArch32 ids (M.BVType 32)
+           -> G.Generator ARM.AArch32 ids s ()
+execSetGPR regid v = do
   reg <- case regid of
     M.BVValue w i
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_set): " <> show (M.ppValueAssignments v))
-  return $ do
-    _ <- handle
-    ARMWriteAction $ G.setRegVal reg v
-    return $ ARMWriteGPRs
+  G.setRegVal reg v
 
-getGPR :: M.Value ARM.AArch32 ids tp
+
+setGPR :: ARMWriteActions ids 4 4
+       -> M.Value ARM.AArch32 ids (M.BVType 4)
+       -> M.Value ARM.AArch32 ids (M.BVType 32)
+       -> G.Generator ARM.AArch32 ids s (ARMWriteActions ids 4 4)
+setGPR acts regid v = return $ addWriteAction regid v acts
+
+data AccessMode = Current | Snapshot
+
+getGPR :: AccessMode
+       -> M.Value ARM.AArch32 ids tp
        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 32))
-getGPR v = do
+getGPR mode v = do
   reg <- case v of
     M.BVValue w i
       | intValue w == 4
       , Just reg <- integerToReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad GPR identifier (uf_gpr_get): " <> show (M.ppValueAssignments v))
-  G.getRegSnapshotVal reg
+  case mode of
+    Current -> G.getRegVal reg
+    Snapshot -> G.getRegSnapshotVal reg
 
-setSIMD :: ARMWriteAction ids s ARMWriteSIMDs
-        -> M.Value ARM.AArch32 ids (M.BVType 8)
-        -> M.Value ARM.AArch32 ids (M.BVType 128)
-        -> G.Generator ARM.AArch32 ids s (ARMWriteAction ids s ARMWriteSIMDs)
-setSIMD handle regid v = do
+execSetSIMD :: M.Value ARM.AArch32 ids (M.BVType 8)
+            -> M.Value ARM.AArch32 ids (M.BVType 128)
+            -> G.Generator ARM.AArch32 ids s ()
+execSetSIMD regid v = do
   reg <- case regid of
     M.BVValue w i
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ -> E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_set): " <> show (M.ppValueAssignments v))
-  return $ do
-    _ <- handle
-    ARMWriteAction $ G.setRegVal reg v
-    return $ ARMWriteSIMDs
+  G.setRegVal reg v
+
+setSIMD :: ARMWriteActions ids 8 16
+        -> M.Value ARM.AArch32 ids (M.BVType 8)
+        -> M.Value ARM.AArch32 ids (M.BVType 128)
+        -> G.Generator ARM.AArch32 ids s (ARMWriteActions ids 8 16)
+setSIMD acts regid v = return $ addWriteAction regid v acts
 
 
-getSIMD :: M.Value ARM.AArch32 ids tp
-       -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
-getSIMD v = do
+getSIMD :: AccessMode
+        -> M.Value ARM.AArch32 ids tp
+        -> G.Generator ARM.AArch32 ids s (M.Value ARM.AArch32 ids (M.BVType 128))
+getSIMD mode v = do
   reg <- case v of
     M.BVValue w i
       | intValue w == 8
       , Just reg <- integerToSIMDReg i -> return reg
     _ ->  E.throwError (G.GeneratorMessage $ "Bad SIMD identifier (uf_simd_get): " <> show (M.ppValueAssignments v))
-  G.getRegSnapshotVal reg
+  case mode of
+    Current -> G.getRegVal reg
+    Snapshot -> G.getRegSnapshotVal reg
 
 -- ----------------------------------------------------------------------
 
@@ -500,23 +701,16 @@ addArchAssignment expr = (G.ValueExpr . M.AssignedValue) <$> G.addAssignment (M.
 
 -- | indicates that this is a placeholder type (i.e. memory or registers)
 isPlaceholderType :: WT.BaseTypeRepr tp -> Bool
-isPlaceholderType tp = case tp of
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) -> True
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> True
-  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> True
-  _ -> False
+isPlaceholderType tp = isJust (typeAsWriteKind tp)
 
--- | For placeholder types, we can't translate them into a Mux, and so we
--- need to rely on the conditional being resolved to a concrete value so
--- we can translate it into a haskell if-then-else.
+data WriteK = MemoryWrite | GPRWrite | SIMDWrite
 
-concreteIte :: M.Value ARM.AArch32 ids (M.BoolType)
-            -> a
-            -> a
-            -> a
-concreteIte v t f = case v of
-  M.CValue (M.BoolCValue b) -> if b then t else f
-  _ -> error "concreteIte: value must be concrete"
+typeAsWriteKind :: WT.BaseTypeRepr tp -> Maybe WriteK
+typeAsWriteKind tp = case tp of
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) -> Just MemoryWrite
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) -> Just GPRWrite
+  _ | Just Refl <- testEquality tp (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) -> Just SIMDWrite
+  _ -> Nothing
 
 -- | A smart constructor for division
 --
@@ -548,22 +742,20 @@ armTranslateType :: Q Type
                  -> Q Type
                  -> WT.BaseTypeRepr tp
                  -> Maybe (Q Type)
-armTranslateType idsTy sTy tp = case tp of
+armTranslateType idsTy _ tp = case tp of
   WT.BaseStructRepr reprs -> Just $ mkTupT $ FC.toListFC translateBaseType reprs
   _ | isPlaceholderType tp -> Just $ translateBaseType tp
   _ -> Nothing
   where
     translateBaseType :: forall tp'. WT.BaseTypeRepr tp' -> Q Type
-    translateBaseType tp' =  case tp' of
-      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.MemoryBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteMemory |]
-      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllSIMDBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteSIMDs |]
-      _ | Just Refl <- testEquality tp' (knownRepr :: WT.BaseTypeRepr ASL.AllGPRBaseType) ->
-          [t| ARMWriteAction $(idsTy) $(sTy) ARMWriteGPRs |]
-      WT.BaseBoolRepr -> [t| M.Value ARM.AArch32 $(idsTy) M.BoolType |]
-      WT.BaseBVRepr n -> [t| M.Value ARM.AArch32 $(idsTy) (M.BVType $(litT (numTyLit (intValue n)))) |]
-      _ -> fail $ "unsupported base type: " ++ show tp
+    translateBaseType tp' =  case typeAsWriteKind tp' of
+      Just MemoryWrite -> [t| MemoryWriteActions $(idsTy) |]
+      Just GPRWrite -> [t| ARMWriteActions $(idsTy) 4 4 |]
+      Just SIMDWrite -> [t| ARMWriteActions $(idsTy) 8 16 |]
+      _ -> case tp' of
+        WT.BaseBoolRepr -> [t| M.Value ARM.AArch32 $(idsTy) M.BoolType |]
+        WT.BaseBVRepr n -> [t| M.Value ARM.AArch32 $(idsTy) (M.BVType $(litT (numTyLit (intValue n)))) |]
+        _ -> fail $ "unsupported base type: " ++ show tp
 
 extractTuple :: Int -> Int -> Q Exp
 extractTuple len i = do
@@ -594,18 +786,17 @@ armAppEvaluator :: M.Endianness
                 -> Maybe (MacawQ ARM.AArch32 t fs Exp)
 armAppEvaluator endianness interps elt =
     case elt of
-      WB.BaseIte bt _ test t f | isPlaceholderType bt -> return $ do
+      WB.BaseIte bt _ test t f | Just wk <- typeAsWriteKind bt -> return $ do
         -- In this case, the placeholder type indicates that
         -- expression is to be translated as a (wrapped) stateful action
-        -- rather than an actual macaw term. This is therefore translated
-        -- as a Haskell if-then-else statement, rather than
-        -- a Mux.
+        -- rather than an actual macaw term. The mux condition is therefore mapped
+        -- across all of the stateful actions
         testE <- addEltTH endianness interps test
         tE <- addEltTH endianness interps t
         fE <- addEltTH endianness interps f
-        case all isEager [testE, tE, fE] of
-          True -> liftQ [| return $ concreteIte $(refEager testE) $(refEager tE) $(refEager fE) |]
-          False -> liftQ [| concreteIte <$> $(refBinding testE) <*> $(refBinding tE) <*> $(refBinding fE) |]
+        case wk of
+          MemoryWrite -> liftQ $ joinOp3 [| muxMemoryWrites |] testE tE fE
+          _ -> liftQ $ joinOp3 [| muxWriteAction |] testE tE fE
       WB.StructField struct _ _ |
           (WT.BaseStructRepr (Ctx.Empty Ctx.:> _)) <- WB.exprType struct -> Just $ do
         structE <- addEltTH endianness interps struct
@@ -661,3 +852,63 @@ armAppEvaluator endianness interps elt =
             extractBound et
           _ -> Nothing
       _ -> Nothing
+
+
+------------------------------------
+
+-- General vector functions
+
+-- | Pad a vector with a tail of 'Nothing' to match a given size
+padVector :: forall k n a
+          . 1 <= k
+         => 1 <= n
+         => n <= k
+         => M.NatRepr k
+         -> V.Vector n a
+         -> V.Vector k (Maybe a)
+padVector k v = case testStrictLeq (V.length v) k of
+  Right Refl -> fmap Just v
+  Left n_lt_k
+    | Refl <- minusPlusCancel k (knownNat @1)
+    , n <- V.length v
+    , Refl <- plusMinusCancel n (knownNat @1)
+    , Refl <- plusMinusCancel (knownNat @1) n 
+    , one_le_one <- leqProof (knownNat @1) (knownNat @1)
+    , one_le_n <- leqProof (knownNat @1) n
+    , Refl <- plusComm (knownNat @1) n
+    , LeqProof :: LeqProof 1 (k-1) <- leqSub2 n_lt_k one_le_n
+    , LeqProof :: LeqProof n (k-1) <- leqSub2 n_lt_k one_le_one
+    , padded <- padVector (decNat k) v
+    -> V.snoc padded Nothing
+
+data MaxVector n k a where
+  MaxVector1 :: (1 <= k, n <= k) => V.Vector k a -> MaxVector n k a
+  MaxVector2 :: (1 <= n, k <= n) => V.Vector n a -> MaxVector n k a
+
+data SomeVector a where
+  SomeVector :: 1 <= n => V.Vector n a -> SomeVector a
+
+someMaxVector :: MaxVector n k a -> SomeVector a
+someMaxVector mv = case mv of
+  MaxVector1 v -> SomeVector v
+  MaxVector2 v -> SomeVector v
+
+-- | Zip two mismatched vectors, producing a vector which is the larger of the two sizes
+zipWithM' :: 1 <= n
+          => 1 <= k
+          => Monad m
+          => (Maybe a -> Maybe b -> m c)
+          -> V.Vector n a
+          -> V.Vector k b
+          -> m (MaxVector n k c)
+zipWithM' f v1 v2
+  | n :: NatRepr n <- V.length v1
+  , k :: NatRepr k <- V.length v2
+  = case testNatCases n k of
+      NatCaseLT prf
+        | LeqProof <- addIsLeqLeft1 @n @1 prf
+        -> MaxVector1 <$> V.zipWithM f (padVector (V.length v2) v1) (fmap Just v2)
+      NatCaseEQ -> MaxVector1 <$> V.zipWithM f (fmap Just v1) (fmap Just v2)
+      NatCaseGT prf
+        | LeqProof <-  addIsLeqLeft1 @k @1 prf
+        -> MaxVector2 <$> V.zipWithM f (fmap Just v1) (padVector (V.length v1) v2)
