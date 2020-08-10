@@ -508,6 +508,7 @@ initializeMemory :: forall arch sym m proxy
                   . ( MS.SymArchConstraints arch
                     , 16 <= M.ArchAddrWidth arch
                     , CB.IsSymInterface sym
+                    , LLVM.HasLLVMAnn sym
                     , MonadIO m
                     )
                  => proxy arch
