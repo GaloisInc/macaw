@@ -117,7 +117,6 @@ import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
-import Data.IORef ( newIORef )
 import qualified Data.IntervalMap.Strict as IM
 
 import qualified Data.Parameterized.NatRepr as PN
@@ -197,6 +196,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , KnownNat (MC.ArchAddrWidth arch)
                    , CB.IsSymInterface sym
                    , Ord (WI.SymExpr sym WI.BaseNatType)
+                   , CL.HasLLVMAnn sym
                    , MonadIO m
                    )
                 => proxy arch
@@ -223,8 +223,6 @@ newGlobalMemory proxy sym endian mmc mem = do
                          memImpl1 sizeBV CLD.noAlignment
 
   (symArray2, tbl) <- populateMemory proxy sym mmc mem symArray1
-  bbmap <- liftIO $ newIORef mempty
-  let ?badBehaviorMap = bbmap
   memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
 
