@@ -196,6 +196,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , KnownNat (MC.ArchAddrWidth arch)
                    , CB.IsSymInterface sym
                    , Ord (WI.SymExpr sym WI.BaseNatType)
+                   , CL.HasLLVMAnn sym
                    , MonadIO m
                    )
                 => proxy arch
@@ -479,6 +480,7 @@ mkGlobalPointerValidityPred mpt = \sym puse mcond ptr -> do
 mapRegionPointers :: ( MC.MemWidth w
                      , 16 <= w
                      , CB.IsSymInterface sym
+                     , CL.HasLLVMAnn sym
                      )
                   => MemPtrTable sym w
                   -> MS.GlobalMap sym CL.Mem w
