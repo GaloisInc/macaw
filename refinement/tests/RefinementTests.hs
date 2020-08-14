@@ -284,10 +284,10 @@ mkSymbolicTest testinp = do
               CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
               -- FIXME: We probably need to pull endianness from somewhere else
-              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
-              let globalMap = MSM.mapRegionPointers memPtrTbl
               bbMapRef <- newIORef mempty
               let ?badBehaviorMap = bbMapRef
+              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
+              let globalMap = MSM.mapRegionPointers memPtrTbl
               let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
                     error "Could not find function handle"
               let validityCheck _ _ _ _ = return Nothing

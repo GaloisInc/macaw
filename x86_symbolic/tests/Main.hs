@@ -117,11 +117,11 @@ main = do
 
   symFuns <- MX.newSymFuns sym
 
-  (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
-  let globalMap = MSM.mapRegionPointers memPtrTbl
-
   bbMapRef <- newIORef mempty
   let ?badBehaviorMap = bbMapRef
+
+  (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
+  let globalMap = MSM.mapRegionPointers memPtrTbl
 
   let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
       lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do
