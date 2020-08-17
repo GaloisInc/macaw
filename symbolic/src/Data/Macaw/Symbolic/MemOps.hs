@@ -823,7 +823,7 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
      -- Load a value from the memory model type system.
-     res <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     res <- Mem.assertSafe sym ptr =<< Mem.loadRaw sym mem ptr ty alignment
      case memValToCrucible memRep res of
        Left err -> fail $ "[doReadMem] " ++ err
        Right crucVal -> return crucVal
@@ -860,7 +860,7 @@ doCondReadMem sym mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 
      let alignment = noAlignment -- default to byte alignment (FIXME)
 
-     val <- Mem.assertSafe sym =<< Mem.loadRaw sym mem ptr ty alignment
+     val <- Mem.assertSafe sym ptr =<< Mem.loadRaw sym mem ptr ty alignment
      let useDefault msg =
            do notC <- notPred sym cond
               let errMsg = "[doCondReadMem] " ++ msg
