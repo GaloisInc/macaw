@@ -10,7 +10,7 @@ import Data.Parameterized.Some
 import qualified Flexdis86 as F
 
 import Data.Macaw.CFG.Core(Value,bvValue)
-import Data.Macaw.Types(BVType,typeWidth,n0,n1,n32,n64,n128, n256)
+import Data.Macaw.Types(BVType,typeWidth,n0,n1,n8,n32,n64,n128,n256)
 
 import Data.Macaw.X86.InstructionDef
 import Data.Macaw.X86.Monad((.=), uext, subRegister)
@@ -218,6 +218,7 @@ all_instructions =
   , avxOp1I "vpsrldq" VShiftR
   , avxOp1I "vpshufd" VShufD
 
+  , avxPointwise2 "vpaddb" PtAdd n8
   , avxPointwise2 "vpaddd" PtAdd n32
   , avxPointwise2 "vpaddq" PtAdd n64
 
@@ -227,12 +228,15 @@ all_instructions =
   , avxOp2 "vpor" VPOr
   , avxOp2 "vpxor" VPXor
   , avxOp2 "vpshufb" VPShufB
+  , avxOp2 "vxorps" VPXor
 
   , avxOp2I "vpalignr" VPAlignR
 
   , avxOp2 "vaesenc" VAESEnc
   , avxOp2 "vaesenclast" VAESEncLast
+
   , avxOp2 "vpunpcklqdq" VPUnpackLQDQ
+  , avxOp2 "vpunpckhqdq" VPUnpackHQDQ
 
   , avx3 "vextractf128" $ \arg1 arg2 arg ->
       do SomeBV vec <- getSomeBVValue arg2

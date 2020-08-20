@@ -253,7 +253,8 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
               -- This one is for DQ, i.e., 64-bit things
               -- but there are equivalents for all sizes, so we should
               -- probably parameterize on size.
-
+            | VPUnpackHQDQ
+              -- ^ @A,B,C,D + P,Q,R,S = A,P,B,Q@
 
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
@@ -276,6 +277,7 @@ instance Show AVXOp2 where
              VAESEncLast  -> "vaesenclast"
              VPCLMULQDQ i -> "vpclmulqdq_" ++ show i
              VPUnpackLQDQ -> "vpunpacklqdq"
+             VPUnpackHQDQ -> "vpunpackhqdq"
 
 instance Show AVXPointWiseOp2 where
   show x = case x of

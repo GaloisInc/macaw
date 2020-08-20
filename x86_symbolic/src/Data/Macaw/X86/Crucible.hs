@@ -382,6 +382,10 @@ pureSem sym fn = do
                     in case mul2Plus n of
                          Refl -> V.take n (PV.interleave xs ys)
 
+        M.VPUnpackHQDQ -> vecOp2 sym BigEndian w (knownNat @64) x y $
+          \xs ys -> let n = V.length xs
+                    in case mul2Plus n of
+                         Refl -> V.take n (PV.interleave xs ys)
 
         M.VAESEnc
           | Just Refl <- testEquality w n128 ->

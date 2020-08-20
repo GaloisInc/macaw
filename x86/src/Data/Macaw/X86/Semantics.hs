@@ -319,6 +319,13 @@ def_bswap = defUnary "bswap" $ \_ val -> do
   v0 <- get l
   l .= (bvUnvectorize (typeWidth l) $ reverse $ bvVectorize n8 v0)
 
+def_movbe :: InstructionDef
+def_movbe = defBinary "movbe" $ \_ loc val -> do
+  SomeBV l <- getSomeBVLocation loc
+  SomeBV v <- getSomeBVLocation val
+  v0 <- get v
+  l .= bvUnvectorize (typeWidth l) (reverse $ bvVectorize n8 v0)
+
 def_xadd :: InstructionDef
 def_xadd =
   defBinaryLL "xadd" $ \_ d s -> do
@@ -2913,6 +2920,7 @@ all_instructions =
   , def_bsf
   , def_bsr
   , def_bswap
+  , def_movbe
   , def_cbw
   , def_cwde
   , def_cdqe
