@@ -259,6 +259,7 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
   | PtSub -- ^ Pointwise subtract; overflow wraps around; no overflow flags
+  | PtCmpGt
 
 instance Show AVXOp1 where
   show x = case x of
@@ -283,6 +284,7 @@ instance Show AVXPointWiseOp2 where
   show x = case x of
              PtAdd -> "ptadd"
              PtSub -> "ptsub"
+             PtCmpGt -> "ptcmpgt"
 
 ------------------------------------------------------------------------
 -- X86PrimFn
