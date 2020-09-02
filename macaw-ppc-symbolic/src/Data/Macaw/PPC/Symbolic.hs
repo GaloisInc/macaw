@@ -151,7 +151,7 @@ instance MS.ArchInfo (SP.AnyPPC SP.V32) where
     }
 
 ppcRegName :: MP.PPCReg v tp -> C.SolverSymbol
-ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
+ppcRegName r = C.systemSymbol ("r!" ++ show (MC.prettyF r))
 
 ppcRegAssignment :: forall v
                   . ( MP.KnownVariant v )
