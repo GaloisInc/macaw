@@ -13,6 +13,7 @@ library
     bv-sized >= 1.0.0,
     ansi-wl-pprint,
     containers,
+    constraints,
     IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,
@@ -31,12 +32,11 @@ library
     Data.Macaw.Symbolic
     Data.Macaw.Symbolic.Backend
     Data.Macaw.Symbolic.Memory
-    Data.Macaw.Symbolic.MemTraceOps
+    Data.Macaw.Symbolic.MemOps
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
     Data.Macaw.Symbolic.PersistentState
-    Data.Macaw.Symbolic.MemOps
 
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top

@@ -13,6 +13,12 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE QuantifiedConstraints #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE FlexibleInstances #-}
+
 -- | The macaw-symbolic library translates Macaw functions (or blocks) into
 -- Crucible CFGs for further analysis or symbolic execution.
 --
@@ -48,6 +54,10 @@
 module Data.Macaw.Symbolic
   ( ArchInfo(..)
   , ArchVals(..)
+  , withArchEval
+  , IsMemoryModel(..)
+  , HasMemoryModel(..)
+  , LLVMMemory
   , SB.MacawArchEvalFn
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
@@ -98,6 +108,7 @@ module Data.Macaw.Symbolic
   -- ** The Macaw extension to Crucible
   , CG.MacawExt
   , CG.MacawExprExtension(..)
+  , evalMacawExprExtension
   , CG.MacawStmtExtension(..)
   , CG.MacawOverflowOp(..)
     -- * Simulating generated Crucible CFGs
@@ -105,7 +116,6 @@ module Data.Macaw.Symbolic
     -- $simulationExample
   , SymArchConstraints
   , macawExtensions
-  , macawTraceExtensions
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
   , MO.MacawSimulatorState(..)
@@ -126,6 +136,8 @@ import           Control.Monad.IO.Class
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
+import           Data.Constraint
+import           Data.Proxy
 import           Data.Maybe
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
 import qualified Data.Parameterized.Context as Ctx
@@ -135,7 +147,6 @@ import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
 
-import qualified What4.Expr.Builder as W4E
 import qualified What4.FunctionName as C
 import           What4.Interface
 import qualified What4.Utils.StringLiteral as C
@@ -168,8 +179,6 @@ import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
 import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
-import qualified Data.Macaw.Symbolic.MemTraceOps as MT
-
 
 -- | A class to capture the architecture-specific information required to
 -- translate macaw IR into Crucible.
@@ -185,30 +194,34 @@ import qualified Data.Macaw.Symbolic.MemTraceOps as MT
 class ArchInfo arch where
   archVals :: proxy arch -> Maybe (ArchVals arch)
 
+data LLVMMemory
+
+class IsMemoryModel mem where
+  type MemModelType mem arch :: C.CrucibleType
+  type MemModelConstraint mem sym :: Constraint
+
+instance IsMemoryModel LLVMMemory where
+  type MemModelType LLVMMemory arch = MM.Mem
+  type MemModelConstraint LLVMMemory sym = MM.HasLLVMAnn sym
+
+class IsMemoryModel mem => HasMemoryModel arch mem where
+  -- | This function provides a context with a callback that gives access to the
+  -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
+  -- is a required argument for 'macawExtensions'.
+  withArchEvalGen
+      :: forall a m sym proxy
+       . (IsSymInterface sym, MemModelConstraint mem sym, MonadIO m)
+      => proxy mem
+      -> sym
+      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
+      -> m a
+
 -- | The information to support use of macaw-symbolic for a given architecture
-data ArchVals arch = ArchVals
+data ArchVals arch = HasMemoryModel arch LLVMMemory => ArchVals
   { archFunctions :: MacawSymbolicArchFunctions arch
   -- ^ This is the set of functions used by the translator, and is passed as the
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
-  , withArchEval
-      :: forall a m sym
-       . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
-      => sym
-      -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
-      -> m a
-  -- ^ This function provides a context with a callback that gives access to the
-  -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
-  -- is a required argument for 'macawExtensions'.
-  , withArchEvalTrace
-      :: forall a m sym
-       . (IsSymInterface sym, MonadIO m)
-      => sym
-      -> (SB.MacawArchEvalFn sym (MT.MemTrace arch) arch -> m a)
-      -> m a
-  -- ^ This function provides a context with a callback that gives access to the
-  -- set of architecture-specific function evaluators ('MacawArchEvalTraceFn')
-  -- that trace memory operations, which is a required argument for
-  -- 'macawTraceExtensions'.
+
   , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
   -- ^ This function captures the constraints necessary to invoke the symbolic
   -- simulator on a Crucible CFG generated from macaw.
@@ -226,6 +239,17 @@ data ArchVals arch = ArchVals
       -> C.RegValue sym (PS.ToCrucibleType tp)
       -> C.RegEntry sym (CG.ArchRegStruct arch)
   }
+
+
+withArchEval
+  :: forall arch a m sym
+   . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
+  => ArchVals arch
+  -> sym
+  -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
+  -> m a
+withArchEval (ArchVals {}) sym f = withArchEvalGen (Proxy @LLVMMemory) sym f
+
 
 -- | All of the constraints on an architecture necessary for translating and
 -- simulating macaw functions in Crucible
@@ -1088,20 +1112,6 @@ macawExtensions f mvar globs lookupH toMemPred =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
                   }
-
--- | Like 'macawExtensions', but with an alternative memory model that records
--- memory operations without trying to carefully guess the results of
--- performing them.
-macawTraceExtensions ::
-  (IsSymInterface sym, KnownNat (M.ArchAddrWidth arch), sym ~ W4E.ExprBuilder t st fs) =>
-  SB.MacawArchEvalFn sym (MT.MemTrace arch) arch ->
-  C.GlobalVar (MT.MemTrace arch) ->
-  GlobalMap sym (MT.MemTrace arch) (M.ArchAddrWidth arch) ->
-  C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawTraceExtensions archStmtFn mvar globs = C.ExtensionImpl
-  { C.extensionEval = evalMacawExprExtension
-  , C.extensionExec = MT.execMacawStmtExtension archStmtFn mvar globs
-  }
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock

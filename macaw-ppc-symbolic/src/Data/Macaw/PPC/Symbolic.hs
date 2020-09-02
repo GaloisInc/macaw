@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.PPC.Symbolic (
   ppcMacawSymbolicFns,
@@ -123,29 +124,27 @@ ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s
 
+instance MS.IsMemoryModel mem => MS.HasMemoryModel (SP.AnyPPC SP.V64) mem where
+  withArchEvalGen _ sym k = do
+    sfns <- liftIO $ F.newSymFuns sym
+    k (ppcMacawEvalFn sfns)
+
 instance MS.ArchInfo (SP.AnyPPC SP.V64) where
   archVals _ = Just $ MS.ArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
-    , MS.withArchEval = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
-    , MS.withArchEvalTrace = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
     }
 
+instance MS.IsMemoryModel mem => MS.HasMemoryModel (SP.AnyPPC SP.V32) mem where
+  withArchEvalGen _ sym k = do
+    sfns <- liftIO $ F.newSymFuns sym
+    k (ppcMacawEvalFn sfns)
+
 instance MS.ArchInfo (SP.AnyPPC SP.V32) where
   archVals _ = Just $ MS.ArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
-    , MS.withArchEval = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
-    , MS.withArchEvalTrace = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
