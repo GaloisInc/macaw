@@ -13,7 +13,6 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 -- | The macaw-symbolic library translates Macaw functions (or blocks) into
@@ -49,11 +48,12 @@
 --   and returns a single value (the full set of machine registers reflecting
 --   any modifications)
 module Data.Macaw.Symbolic
-  ( ArchInfo(..)
-  , ArchVals(..)
-  , withArchEval
+  ( GenArchInfo(..)
+  , ArchInfo
+  , GenArchVals(..)
+  , ArchVals
+  , archVals
   , IsMemoryModel(..)
-  , HasMemoryModel(..)
   , LLVMMemory
   , SB.MacawArchEvalFn
     -- * Translation of Macaw IR into Crucible
@@ -188,8 +188,20 @@ import           Data.Macaw.Symbolic.MemOps as MO
 -- The return value is a 'Maybe' so that architectures that do not yet support
 -- the translation can return 'Nothing', while still allowing fully generic client
 -- code to be written in terms of this class constraint.
-class ArchInfo arch where
-  archVals :: proxy arch -> Maybe (ArchVals arch)
+--
+-- The 'mem' type parameter indicates the memory model to be used for translation.
+-- The type alias 'ArchInfo' specializes this class to the llvm memory model
+-- using the 'LLVMMemory' type tag.
+class GenArchInfo mem arch where
+  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+
+type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+archVals
+  :: ArchInfo arch
+  => proxy arch
+  -> Maybe (ArchVals arch)
+archVals p = genArchVals (Proxy @LLVMMemory) p
 
 data LLVMMemory
 
@@ -201,24 +213,20 @@ instance IsMemoryModel LLVMMemory where
   type MemModelType LLVMMemory arch = MM.Mem
   type MemModelConstraint LLVMMemory sym = MM.HasLLVMAnn sym
 
-class IsMemoryModel mem => HasMemoryModel arch mem where
-  -- | This function provides a context with a callback that gives access to the
-  -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
-  -- is a required argument for 'macawExtensions'.
-  withArchEvalGen
-      :: forall a m sym proxy
-       . (IsSymInterface sym, MemModelConstraint mem sym, MonadIO m)
-      => proxy mem
-      -> sym
-      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
-      -> m a
-
 -- | The information to support use of macaw-symbolic for a given architecture
-data ArchVals arch = HasMemoryModel arch LLVMMemory => ArchVals
+data GenArchVals mem arch = GenArchVals
   { archFunctions :: MacawSymbolicArchFunctions arch
   -- ^ This is the set of functions used by the translator, and is passed as the
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
-
+  , withArchEval
+      :: forall a m sym
+       . (IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m)
+      => sym
+      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
+      -> m a
+  -- ^ This function provides a context with a callback that gives access to the
+  -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
+  -- is a required argument for 'macawExtensions'.
   , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
   -- ^ This function captures the constraints necessary to invoke the symbolic
   -- simulator on a Crucible CFG generated from macaw.
@@ -237,16 +245,7 @@ data ArchVals arch = HasMemoryModel arch LLVMMemory => ArchVals
       -> C.RegEntry sym (CG.ArchRegStruct arch)
   }
 
-
-withArchEval
-  :: forall arch a m sym
-   . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
-  => ArchVals arch
-  -> sym
-  -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
-  -> m a
-withArchEval (ArchVals {}) sym f = withArchEvalGen (Proxy @LLVMMemory) sym f
-
+type ArchVals arch = GenArchVals LLVMMemory arch
 
 -- | All of the constraints on an architecture necessary for translating and
 -- simulating macaw functions in Crucible

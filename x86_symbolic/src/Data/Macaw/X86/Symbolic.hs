@@ -345,14 +345,12 @@ x86UpdateReg reg_struct_entry macaw_reg val =
     Just res_reg_struct -> reg_struct_entry { C.regValue = res_reg_struct }
     Nothing -> error $ "unexpected register: " ++ showF macaw_reg
 
-instance HasMemoryModel M.X86_64 LLVMMemory where
-  withArchEvalGen _ sym k = do
-    sfns <- liftIO $ newSymFuns sym
-    k $ x86_64MacawEvalFn sfns
- 
-instance ArchInfo M.X86_64 where
-  archVals _ = Just $ ArchVals
+instance GenArchInfo LLVMMemory M.X86_64 where
+  genArchVals _ _ = Just $ GenArchVals
     { archFunctions = x86_64MacawSymbolicFns
+    , withArchEval = \sym k -> do
+        sfns <- liftIO $ newSymFuns sym
+        k $ x86_64MacawEvalFn sfns
     , withArchConstraints = \x -> x  
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
