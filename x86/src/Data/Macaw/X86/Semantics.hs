@@ -2056,9 +2056,28 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
 
   l .= bvUnvectorize (typeWidth l) ls'
 
--- PSRLW Shift packed words right logical
+-- | PSRLW Shift packed words right logical
 -- PSRLD Shift packed doublewords right logical
 -- PSRLQ Shift packed quadword right logical
+
+def_psrlx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
+def_psrlx suf elsz = defBinaryLVpoly ("psrl" ++ suf) $ \l count -> do
+  lv <- get l
+  let ls  = bvVectorize elsz lv
+      -- This is somewhat tedious: we want to make sure that we don't
+      -- truncate e.g. 2^31 to 0, so we saturate if the size is over
+      -- the number of bits we want to shift.  We can always fit the
+      -- width into count bits (assuming we are passed 16, 32, or 64).
+      nbits   = bvLit (typeWidth count) (intValue elsz)
+      countsz = case testNatCases (typeWidth count) elsz of
+                  NatCaseLT LeqProof -> uext' elsz count
+                  NatCaseEQ          -> count
+                  NatCaseGT LeqProof -> bvTrunc' elsz count
+
+      ls' = map (\y -> mux (bvUlt count nbits) (bvShr y countsz) (bvLit elsz 0)) ls
+
+  l .= bvUnvectorize (typeWidth l) ls'
+
 -- PSRAW Shift packed words right arithmetic
 -- PSRAD Shift packed doublewords right arithmetic
 
@@ -2333,11 +2352,38 @@ def_xorps = def_bifpx "xorps" bvXor n32
 
 -- *** SSE Shuffle and Unpack Instructions
 
--- SHUFPS Shuffles values in packed single-precision floating-point operands
 -- UNPCKHPS Unpacks and interleaves the two high-order values from two single-precision floating-point operands
 
 interleave :: [a] -> [a] -> [a]
 interleave xs ys = concat (zipWith (\x y -> [x, y]) xs ys)
+
+-- | SHUFPS Shuffles values in packed single-precision floating-point operands
+def_shufps :: InstructionDef
+def_shufps = defTernaryLVV "shufps" $ \dest src2 imm -> do
+  src1 <- get dest
+  if | Just Refl <- testEquality (typeWidth src1) n128
+     , Just Refl <- testEquality (typeWidth src2) n128
+     , Just Refl <- testEquality (typeWidth imm) n8 -> do
+       dest .= bvUnvectorize knownNat
+         (zipWith ($)
+           [ select4 src2
+           , select4 src2
+           , select4 src1
+           , select4 src1
+           ]
+           $ bvVectorize knownNat imm
+         )
+     | otherwise -> fail "shufps: Invalid operands"
+  where
+    select4 :: Expr ids (BVType 128) -> Expr ids (BVType 2) -> Expr ids (BVType 32)
+    select4 src control =
+      let
+        (srchi, srclo) = bvSplit src
+        (srchihi, srchilo) = bvSplit srchi
+        (srclohi, srclolo) = bvSplit srclo
+        hi = bvBit control $ bvLit (typeWidth control) 1
+        lo = bvBit control $ bvLit (typeWidth control) 0
+      in mux hi (mux lo srchihi srchilo) (mux lo srclohi srclolo)
 
 -- | UNPCKLPS Unpacks and interleaves the two low-order values from two single-precision floating-point operands
 def_unpcklps :: InstructionDef
@@ -2678,6 +2724,16 @@ def_pslldq = defBinaryLVge "pslldq" $ \l v -> do
                  (bvLit (typeWidth v0) 16)
   l .= v0 `bvShl` (temp .* bvLit (typeWidth v0) 8)
 
+def_psrldq :: InstructionDef
+def_psrldq = defBinaryLVge "psrldq" $ \l v -> do
+  v0 <- get l
+  -- temp is 16 if v is greater than 15, otherwise v
+  let not15 = bvComplement $ bvLit (typeWidth v) 15
+      temp = mux (is_zero $ not15 .&. v)
+                 (uext (typeWidth v0) v)
+                 (bvLit (typeWidth v0) 16)
+  l .= v0 `bvShr` (temp .* bvLit (typeWidth v0) 8)
+
 -- PSRLDQ Shift double quadword right logical
 -- PUNPCKHQDQ Unpack high quadwords
 -- PUNPCKLQDQ Unpack low quadwords
@@ -2882,6 +2938,9 @@ all_instructions =
   , def_psllx "w" n16
   , def_psllx "d" n32
   , def_psllx "q" n64
+  , def_psrlx "w" n16
+  , def_psrlx "d" n32
+  , def_psrlx "q" n64
   , def_ucomisd
   , def_xorpd
   , def_xorps
@@ -2897,6 +2956,7 @@ all_instructions =
   , def_cmpsX "cmpss" SSE_Single
   , def_andpd
   , def_orpd
+  , def_shufps
   , def_unpcklps
 
     -- regular instructions
@@ -3062,6 +3122,7 @@ all_instructions =
 
   , defTernaryLVV  "pshufd" exec_pshufd
   , def_pslldq
+  , def_psrldq
   , def_lddqu
   , defTernaryLVV "palignr" exec_palignr
     -- X87 FP instructions
@@ -3117,6 +3178,28 @@ all_instructions =
              res <- evalArchFn (AESNI_AESDecLast s k)
              state .= res
          | otherwise -> fail "aesdeclast: State and key must be 128-bit"
+  , defTernary "aeskeygenassist" $ \_ vdest vsrc vimm -> do
+      SomeBV dest <- getSomeBVLocation vdest
+      SomeBV src <- getSomeBVLocation vsrc
+      if | Just Refl <- testEquality (typeWidth dest) n128
+         , Just Refl <- testEquality (typeWidth src) n128
+         , F.ByteImm k <- vimm -> do
+             s <- eval =<< get src
+             res <- evalArchFn (AESNI_AESKeyGenAssist s k)
+             dest .= res
+         | otherwise -> fail "aeskeygenassist: Invalid operands"
+  , defTernaryLVV "pclmulqdq" $ \dest src2 imm -> do
+      src1 <- get dest
+      if | Just Refl <- testEquality (typeWidth src1) n128
+         , Just Refl <- testEquality (typeWidth src2) n128
+         , Just Refl <- testEquality (typeWidth imm) n8 -> do
+             let (src1h, src1l) = bvSplit src1
+             let (src2h, src2l) = bvSplit src2
+             temp1 <- eval $ mux (bvBit imm $ bvLit (typeWidth imm) 0) src2h src2l
+             temp2 <- eval $ mux (bvBit imm $ bvLit (typeWidth imm) 4) src1h src1l
+             res <- evalArchFn (CLMul temp1 temp2)
+             dest .= res
+         | otherwise -> fail "pclmulqdq: Operands must be 128-bit"
   ]
   ++ def_cmov_list
   ++ def_jcc_list

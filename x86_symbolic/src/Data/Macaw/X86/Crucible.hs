@@ -194,6 +194,10 @@ data SymFuns s = SymFuns
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
     -- ^ Last round of AES decryption
 
+  , fnAesKeyGenAssist ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 8) (BaseBVType 128)
+    -- ^ Assist in expanding AES cipher key
+
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
     -- ^ Carryless multiplication
@@ -207,6 +211,7 @@ newSymFuns s =
      fnAesEncLast <- bin "aesEncLast"
      fnAesDec <- bin "aesDecLast"
      fnAesDecLast <- bin "aesDecLast"
+     fnAesKeyGenAssist <- bin "aesKeyGenAssist"
      fnClMul      <- bin "clMul"
      return SymFuns { .. }
 
@@ -439,6 +444,14 @@ pureSem sym fn = do
 
     M.VExtractF128 {} -> error "VExtractF128"
 
+    M.CLMul x y ->
+      do let f = fnClMul (symFuns sym)
+             s = symIface sym
+         src1 <- toValBV s x
+         src2 <- toValBV s y
+         let ps = extend (extend empty src1) src2
+         llvmPointer_bv s =<< applySymFn s f ps
+
     M.AESNI_AESEnc x y ->
       do let f = fnAesEnc (symFuns sym)
              s = symIface sym
@@ -466,6 +479,13 @@ pureSem sym fn = do
          state <- toValBV s x
          key <- toValBV s y
          let ps = extend (extend empty state) key
+         llvmPointer_bv s =<< applySymFn s f ps
+    M.AESNI_AESKeyGenAssist x i ->
+      do let f = fnAesKeyGenAssist (symFuns sym)
+             s = symIface sym
+         src <- toValBV s x
+         roundConst <- bvLit s knownNat $ BV.mkBV knownNat $ fromIntegral i
+         let ps = extend (extend empty src) roundConst
          llvmPointer_bv s =<< applySymFn s f ps
 
 semPointwise :: (1 <= w) =>
