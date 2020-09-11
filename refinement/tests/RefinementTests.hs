@@ -42,7 +42,6 @@ module Main ( main ) where
 
 import           Control.Monad ( when )
 import qualified Data.Foldable as F
-import           Data.IORef
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
@@ -283,9 +282,8 @@ mkSymbolicTest testinp = do
               printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
               CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
+              let ?recordLLVMAnnotation = \_ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
-              bbMapRef <- newIORef mempty
-              let ?badBehaviorMap = bbMapRef
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl
               let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->

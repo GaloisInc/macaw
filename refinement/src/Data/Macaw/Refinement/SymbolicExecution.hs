@@ -30,7 +30,6 @@ import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Control.Monad.IO.Unlift as MU
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
-import           Data.IORef
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.Discovery as M
@@ -184,8 +183,7 @@ smtSolveTransfer ctx slice
       case some_cfg of
         C.SomeCFG cfg -> do
           let executionFeatures = []
-          bbMapRef <- liftIO $ newIORef mempty
-          let ?badBehaviorMap = bbMapRef
+          let ?recordLLVMAnnotation = \_ _ -> pure ()
           initialState <- initializeSimulator ctx sym archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption

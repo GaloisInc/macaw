@@ -117,8 +117,7 @@ main = do
 
   symFuns <- MX.newSymFuns sym
 
-  bbMapRef <- newIORef mempty
-  let ?badBehaviorMap = bbMapRef
+  let ?recordLLVMAnnotation = \_ _ -> pure ()
 
   (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
   let globalMap = MSM.mapRegionPointers memPtrTbl
