@@ -261,7 +261,16 @@ pureSem sym fn = do
     M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.RDTSC{}       -> error "RDTSC"
     M.XGetBV {} -> error "XGetBV"
-    M.PShufb {} -> error "PShufb"
+    M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
+      case sw of
+        M.SIMDByteCount_XMM
+          | Just pxs <- V.fromList n16 $ DV.toList $ regValue vxs
+          , Just pys <- V.fromList n16 $ DV.toList $ regValue vys -> do
+              xs <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pxs
+              ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pys
+              let res = DV.fromList $ V.toList $ shuffleB xs ys
+              mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
+        _ -> error "PShufB"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
     M.MMXExtend {} -> error "MMXExtend"
