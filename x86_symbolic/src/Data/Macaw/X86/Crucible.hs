@@ -504,11 +504,11 @@ semPointwise op w x y =
   case op of
     M.PtAdd -> app (BVAdd w x y)
     M.PtSub -> app (BVSub w x y)
-    M.PtCmpGt ->
-      let c = app (BVSle w y x)
-          t = app (BVLit w (BV.mkBV w (-1)))
-          e = app (BVLit w (BV.mkBV w 0))
-      in app (BVIte c w t e)
+    M.PtCmpGt -> app $ BVIte
+      (app (BVSlt w y x))
+      w
+      (app (BVLit w (BV.mkBV w (-1))))
+      (app (BVLit w (BV.mkBV w 0)))
 
 -- | Assumes big-endian split
 -- See `vpalign` Intel instruction.
