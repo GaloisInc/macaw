@@ -840,7 +840,7 @@ instance TraversableFC X86PrimFn where
       VInsert n w v e i -> (\v' e' -> VInsert n w v' e' i) <$> go v <*> go e
       CLMul x y -> CLMul <$> go x <*> go y
       AESNI_AESEnc x y -> AESNI_AESEnc <$> go x <*> go y
-      AESNI_AESEncLast x y -> AESNI_AESDec <$> go x <*> go y
+      AESNI_AESEncLast x y -> AESNI_AESEncLast <$> go x <*> go y
       AESNI_AESDec x y -> AESNI_AESDec <$> go x <*> go y
       AESNI_AESDecLast x y -> AESNI_AESDecLast <$> go x <*> go y
       AESNI_AESKeyGenAssist x i -> AESNI_AESKeyGenAssist <$> go x <*> pure i
