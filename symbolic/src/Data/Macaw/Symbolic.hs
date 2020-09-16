@@ -1252,8 +1252,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -- ^ The CFG to simulate
 --        -> IO ()
 -- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs initialMem globalMap lfh cfg = do
---   bbMapRef <- newIORef mempty
---   let ?badBehaviorMap = bbMapRef
+--   let ?recordLLVMAnnotation = \_ _ -> pure ()
 --   withArchEval sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc
