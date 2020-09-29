@@ -21,8 +21,11 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElf'
   , memoryForElfAllSymbols
   , memoryForElfSections
-  , memoryForElfSegments
   , SectionIndexMap
+  , SectionNameMap
+  , SymbolTable(..)
+  , memoryForElfSections'
+  , memoryForElfSegments
   , resolveElfFuncSymbols
   , MemLoadWarning(..)
   , resolveElfContents
@@ -333,16 +336,17 @@ runMemLoader end mem m =
                }
     in case runExcept $ execStateT m s of
          Left e -> Left $ addrWidthClass (memAddrWidth mem) (show e)
-         Right mls -> Right (mls^.mlsMemory, mls^.mlsIndexMap, reverse (mlsWarnings mls))
+         Right mls -> do
+           Right (mls^.mlsMemory, mls^.mlsIndexMap, reverse (mlsWarnings mls))
 
 -- | This adds a Macaw mem segment to the memory
 loadMemSegment :: MemWidth w => String -> MemSegment w -> MemLoader w ()
 loadMemSegment nm seg =
-  StateT $ \mls -> do
+  StateT $ \mls ->
     case insertMemSegment seg (mls^.mlsMemory) of
       Left e ->
         throwError $ LoadInsertError nm e
-      Right mem' -> do
+      Right mem' ->
         pure ((), mls & mlsMemory .~ mem')
 
 -- | Maps file offsets to the elf section
@@ -375,7 +379,8 @@ symbolWarning w = modify $ \l -> w:l
 -- names that could be stripped from executables/shared objects.
 data SymbolTable w
    = NoSymbolTable
-   | StaticSymbolTable !(V.Vector (ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)))
+   | StaticSymbolTable
+       !(V.Vector (ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)))
    | DynamicSymbolTable !(Elf.DynamicSection w)
 
 -- | Take a symbol entry and symbol version and return the identifier.
@@ -405,9 +410,10 @@ resolveSymbolId sym ver = do
 
 resolveSymbol :: SymbolTable w
               -> Word32
-              -> SymbolResolver ( ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)
-                                , SymbolVersion
-                                )
+              -> SymbolResolver
+                  ( ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)
+                  , SymbolVersion
+                  )
 resolveSymbol NoSymbolTable _symIdx =
   throwError MissingSymbolTable
 resolveSymbol (StaticSymbolTable entries) symIdx = do
@@ -1051,7 +1057,7 @@ withAndroidRelaEntries :: ( w ~ Elf.RelocationWidth tp
                        -> (V.Vector (Elf.RelaEntry tp) -> MemLoader w a)
                        -- ^ Continutation to run with bytes.
                        -> MemLoader w a
-withAndroidRelaEntries dmap virtMap offTag sizeTag failVal cont = do
+withAndroidRelaEntries dmap virtMap offTag sizeTag failVal cont =
   withDynamicBytes dmap virtMap offTag sizeTag failVal $ \bytes -> do
     w <- uses mlsMemory memAddrWidth
     reprConstraints w $
@@ -1334,6 +1340,7 @@ memoryForElfSections e = do
         case Elf.elfSymtab e of
           [] -> NoSymbolTable
           symTab:_rest -> StaticSymbolTable (Elf.elfSymbolTableEntries symTab)
+  -- Create memory for elf sections
   memoryForElfSections' hdr sectionMap symtab
 
 -- | Load allocated Elf sections into memory.
@@ -1566,7 +1573,9 @@ resolveElfFuncSymbols mem resolver p e =
   let l = Elf.elfSymtab e
 
       staticEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
-      staticEntries = concatMap (\tbl -> zip [0..] (V.toList (Elf.elfSymbolTableEntries tbl))) l
+      staticEntries =
+        let mk tbl = zip [0..] (V.toList (Elf.elfSymbolTableEntries tbl))
+         in concatMap mk l
 
       cl = elfClass e
       dta = Elf.elfData e
@@ -1574,7 +1583,8 @@ resolveElfFuncSymbols mem resolver p e =
       sections = e^..elfSections
 
       -- Get dynamic entries
-      dynamicEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
+      dynamicEntries
+        :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
       dynamicEntries
         | [symtab] <- filter (`hasSectionName` ".dynsym") sections
         , strtabIdx <- Elf.elfSectionLink symtab
