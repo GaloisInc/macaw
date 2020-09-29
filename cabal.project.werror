@@ -1,0 +1,8 @@
+package macaw-base
+  ghc-options: -Werror
+package macaw-symbolic
+  ghc-options: -Werror
+package macaw-x86
+  ghc-options: -Werror
+package macaw-x86-xsymbolic
+  ghc-options: -Werror
