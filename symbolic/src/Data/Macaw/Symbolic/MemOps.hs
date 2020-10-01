@@ -441,6 +441,18 @@ isValidPtr sym mem w p =
     let ?ptrWidth = M.addrWidthNatRepr w
     isValidPointer sym p mem
 
+isNullPtr ::
+  (IsSymInterface sym) =>
+  sym ->
+  M.AddrWidthRepr w ->
+  LLVMPtr sym w ->
+  IO (Pred sym)
+isNullPtr sym w p =
+ do LeqProof <- pure $ addrWidthIsPos w
+    LeqProof <- pure $ addrWidthAtLeast16 w
+    let ?ptrWidth = M.addrWidthNatRepr w
+    Mem.ptrIsNull sym Mem.PtrWidth p
+
 doPtrMux :: Pred sym -> PtrOp sym w (LLVMPtr sym w)
 doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
@@ -652,6 +664,9 @@ doPtrEq :: PtrOp sym w (RegValue sym BoolType)
 doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
+     xNull <- isNullPtr sym w x
+     yNull <- isNullPtr sym w y
+     both_null <- andPred sym xNull yNull
      undef <- mkUndefinedBool sym "ptr_eq"
      let nw = M.addrWidthNatRepr w
      cases sym (binOpLabel "ptr_eq" x y) itePred (Just undef)
@@ -662,6 +677,9 @@ doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
                ok <- andPred sym okP1 okP2
                ps <- ptrEq sym nw x y
                endCaseCheck ok "Comparing invalid pointers" ps
+       , both_null ~> endCase (truePred sym)
+       , xNull ~> endCase (falsePred sym)
+       , yNull ~> endCase (falsePred sym)
        ]
 
 getEnd :: MemImpl sym -> M.Endianness
