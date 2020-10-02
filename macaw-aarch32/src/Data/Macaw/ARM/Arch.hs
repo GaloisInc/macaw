@@ -355,7 +355,7 @@ instance FCls.TraversableFC ARMPrimFn where
 
 type instance MC.ArchFn ARM.AArch32 = ARMPrimFn
 
-instance MT.HasRepr (ARMPrimFn (MC.Value ARM.AArch32 ids)) MT.TypeRepr where
+instance MT.HasRepr (ARMPrimFn f) MT.TypeRepr where
   typeRepr f =
     case f of
       UDiv rep _ _ -> MT.BVTypeRepr rep
