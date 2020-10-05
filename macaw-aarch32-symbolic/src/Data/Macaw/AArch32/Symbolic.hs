@@ -4,11 +4,9 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
-<<<<<<< HEAD
 {-# LANGUAGE MultiParamTypeClasses #-}
-=======
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
->>>>>>> origin/master
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
   aarch32MacawSymbolicFns
@@ -82,7 +80,6 @@ instance MS.GenArchInfo mem SA.AArch32 where
                     , MS.withArchEval = \sym k -> do
                         sfns <- liftIO $ AF.newSymFuns sym
                         k (aarch32MacawEvalFn sfns)
-                    , MS.withArchEvalTrace = error "Removing withArchEvalTrace"
                     , MS.withArchConstraints = \x -> x
                     , MS.lookupReg = aarch32LookupReg
                     , MS.updateReg = aarch32UpdateReg
