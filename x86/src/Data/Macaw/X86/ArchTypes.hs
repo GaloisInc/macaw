@@ -259,7 +259,7 @@ data AVXOp2 = VPAnd             -- ^ Bitwise and
 data AVXPointWiseOp2 =
     PtAdd -- ^ Pointwise add;  overflow wraps around; no overflow flags
   | PtSub -- ^ Pointwise subtract; overflow wraps around; no overflow flags
-  | PtCmpGt
+  | PtCmpGt -- ^ Pointwise greater than
 
 instance Show AVXOp1 where
   show x = case x of
