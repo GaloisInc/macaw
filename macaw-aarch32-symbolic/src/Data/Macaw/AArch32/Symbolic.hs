@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
 
@@ -18,8 +19,8 @@ import qualified SemMC.Architecture.AArch32 as SA
 import qualified Lang.Crucible.CFG.Extension as CE
 import qualified Lang.Crucible.Types as CT
 
-instance MS.ArchInfo SA.AArch32 where
-  archVals _ = Nothing
+instance MS.GenArchInfo MS.LLVMMemory SA.AArch32 where
+  genArchVals _ _ = Nothing
 
 data AArch32StmtExtension (f :: CT.CrucibleType -> Type) (ctp :: CT.CrucibleType) where
 
