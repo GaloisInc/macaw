@@ -49,6 +49,7 @@ import qualified Data.Macaw.X86.X86Reg as R
 import qualified Data.Macaw.X86.Semantics.AVX as AVX
 import qualified Data.Macaw.X86.Semantics.BMI2 as BMI2
 import qualified Data.Macaw.X86.Semantics.ADX as ADX
+import qualified Data.Macaw.X86.Semantics.AESNI as AESNI
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
@@ -2894,6 +2895,7 @@ def_xgetbv =
 
 
 
+
 ------------------------------------------------------------------------
 -- Instruction list
 
@@ -3138,68 +3140,6 @@ all_instructions =
   , def_fsubrp
   , defNullary "emms" $ addArchStmt EMMS
   , defNullary "femms" $ addArchStmt EMMS
-  , defBinary "aesenc" $ \_ v1 v2 -> do
-      SomeBV state <- getSomeBVLocation v1
-      SomeBV key <- getSomeBVLocation v2
-      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
-         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
-             s <- eval =<< get state
-             k <- eval =<< get key
-             res <- evalArchFn (AESNI_AESEnc s k)
-             state .= res
-         | otherwise -> fail "aesenc: State and key must be 128-bit"
-  , defBinary "aesenclast" $ \_ v1 v2 -> do
-      SomeBV state <- getSomeBVLocation v1
-      SomeBV key <- getSomeBVLocation v2
-      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
-         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
-             s <- eval =<< get state
-             k <- eval =<< get key
-             res <- evalArchFn (AESNI_AESEncLast s k)
-             state .= res
-         | otherwise -> fail "aesenclast: State and key must be 128-bit"
-  , defBinary "aesdec" $ \_ v1 v2 -> do
-      SomeBV state <- getSomeBVLocation v1
-      SomeBV key <- getSomeBVLocation v2
-      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
-         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
-             s <- eval =<< get state
-             k <- eval =<< get key
-             res <- evalArchFn (AESNI_AESDec s k)
-             state .= res
-         | otherwise -> fail "aesdec: State and key must be 128-bit"
-  , defBinary "aesdeclast" $ \_ v1 v2 -> do
-      SomeBV state <- getSomeBVLocation v1
-      SomeBV key <- getSomeBVLocation v2
-      if | Just Refl <- testEquality (typeWidth state) (knownNat @128)
-         , Just Refl <- testEquality (typeWidth key) (knownNat @128) -> do
-             s <- eval =<< get state
-             k <- eval =<< get key
-             res <- evalArchFn (AESNI_AESDecLast s k)
-             state .= res
-         | otherwise -> fail "aesdeclast: State and key must be 128-bit"
-  , defTernary "aeskeygenassist" $ \_ vdest vsrc vimm -> do
-      SomeBV dest <- getSomeBVLocation vdest
-      SomeBV src <- getSomeBVLocation vsrc
-      if | Just Refl <- testEquality (typeWidth dest) n128
-         , Just Refl <- testEquality (typeWidth src) n128
-         , F.ByteImm k <- vimm -> do
-             s <- eval =<< get src
-             res <- evalArchFn (AESNI_AESKeyGenAssist s k)
-             dest .= res
-         | otherwise -> fail "aeskeygenassist: Invalid operands"
-  , defTernaryLVV "pclmulqdq" $ \dest src2 imm -> do
-      src1 <- get dest
-      if | Just Refl <- testEquality (typeWidth src1) n128
-         , Just Refl <- testEquality (typeWidth src2) n128
-         , Just Refl <- testEquality (typeWidth imm) n8 -> do
-             let (src1h, src1l) = bvSplit src1
-             let (src2h, src2l) = bvSplit src2
-             temp1 <- eval $ mux (bvBit imm $ bvLit (typeWidth imm) 0) src2h src2l
-             temp2 <- eval $ mux (bvBit imm $ bvLit (typeWidth imm) 4) src1h src1l
-             res <- evalArchFn (CLMul temp1 temp2)
-             dest .= res
-         | otherwise -> fail "pclmulqdq: Operands must be 128-bit"
   ]
   ++ def_cmov_list
   ++ def_jcc_list
@@ -3207,6 +3147,7 @@ all_instructions =
   ++ AVX.all_instructions
   ++ BMI2.all_instructions
   ++ ADX.all_instructions
+  ++ AESNI.all_instructions
 
 ------------------------------------------------------------------------
 -- execInstruction
