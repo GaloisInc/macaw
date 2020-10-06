@@ -80,9 +80,9 @@
 --        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
 --        -- ^ The CFG to simulate
 --        -> IO ()
--- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs mem lfh cfg = do
+-- useCFG hdlAlloc sym avals initialRegs mem lfh cfg =
 --   let ?recordLLVMAnnotation = \_ _ -> pure ()
---   withArchEval sym $ \archEvalFns -> do
+--   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc
 --     (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem

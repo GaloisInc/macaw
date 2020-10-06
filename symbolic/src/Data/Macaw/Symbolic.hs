@@ -1257,11 +1257,9 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
 --        -- ^ The CFG to simulate
 --        -> IO ()
--- useCFG hdlAlloc sym archVals initialRegs initialMem globalMap lfh cfg = do
---   let
---     ?recordLLVMAnnotation = \_ _ -> pure ()
---     withArchEval = MS.withArchEval archVals
---   withArchEval sym $ \archEvalFns -> do
+-- useCFG hdlAlloc sym avals initialRegs initialMem globalMap lfh cfg =
+--   let ?recordLLVMAnnotation = \_ _ -> pure ()
+--   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc
 --     -- For demonstration purposes, do not enforce any pointer validity constraints
