@@ -81,7 +81,7 @@
 --        -- ^ The CFG to simulate
 --        -> IO ()
 -- useCFG hdlAlloc sym avals initialRegs mem lfh cfg =
---   let ?recordLLVMAnnotation = \_ _ -> pure ()
+--   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc

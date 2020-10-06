@@ -1192,7 +1192,8 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 -- translate dfi useCFG =
 --   case MS.archVals (Proxy @arch) of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
---     Just MS.ArchVals { MS.archFunctions = archFns } -> do
+--     Just avals -> do
+--       let archFns = MS.archFunctions avals
 --       hdlAlloc <- CFH.newHandleAllocator
 --       let nameText = TE.decodeUtf8With TEE.lenientDecode (MD.discoveredFunName dfi)
 --       let name = WFN.functionNameFromText nameText
@@ -1258,7 +1259,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -- ^ The CFG to simulate
 --        -> IO ()
 -- useCFG hdlAlloc sym avals initialRegs initialMem globalMap lfh cfg =
---   let ?recordLLVMAnnotation = \_ _ -> pure ()
+--   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc
