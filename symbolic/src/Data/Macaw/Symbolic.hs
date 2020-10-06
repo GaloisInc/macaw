@@ -126,6 +126,7 @@ module Data.Macaw.Symbolic
   ) where
 
 import           GHC.TypeLits
+import           GHC.Exts
 
 import           Control.Lens ((^.))
 import           Control.Monad
@@ -133,7 +134,6 @@ import           Control.Monad.IO.Class
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
-import           Data.Constraint
 import           Data.Proxy
 import           Data.Maybe
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
