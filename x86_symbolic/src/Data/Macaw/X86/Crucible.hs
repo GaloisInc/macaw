@@ -241,6 +241,21 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
+pureSemAESNI
+  :: forall sym. IsSymInterface sym
+  => Sym sym
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128))
+  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
+  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
+  -> IO (RegValue sym (ToCrucibleType (M.BVType 128)))
+pureSemAESNI sym proj x y =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     state <- toValBV s x
+     key <- toValBV s y
+     let ps = extend (extend empty state) key
+     llvmPointer_bv s =<< applySymFn s f ps
+
 -- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: forall sym mt
         .  IsSymInterface sym
@@ -461,34 +476,10 @@ pureSem sym fn = do
          let ps = extend (extend empty src1) src2
          llvmPointer_bv s =<< applySymFn s f ps
 
-    M.AESNI_AESEnc x y ->
-      do let f = fnAesEnc (symFuns sym)
-             s = symIface sym
-         state <- toValBV s x
-         key <- toValBV s y
-         let ps = extend (extend empty state) key
-         llvmPointer_bv s =<< applySymFn s f ps
-    M.AESNI_AESEncLast x y ->
-      do let f = fnAesEncLast (symFuns sym)
-             s = symIface sym
-         state <- toValBV s x
-         key <- toValBV s y
-         let ps = extend (extend empty state) key
-         llvmPointer_bv s =<< applySymFn s f ps
-    M.AESNI_AESDec x y ->
-      do let f = fnAesDec (symFuns sym)
-             s = symIface sym
-         state <- toValBV s x
-         key <- toValBV s y
-         let ps = extend (extend empty state) key
-         llvmPointer_bv s =<< applySymFn s f ps
-    M.AESNI_AESDecLast x y ->
-      do let f = fnAesDecLast (symFuns sym)
-             s = symIface sym
-         state <- toValBV s x
-         key <- toValBV s y
-         let ps = extend (extend empty state) key
-         llvmPointer_bv s =<< applySymFn s f ps
+    M.AESNI_AESEnc x y -> pureSemAESNI sym fnAesEnc x y
+    M.AESNI_AESEncLast x y -> pureSemAESNI sym fnAesEncLast x y
+    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDecLast x y
+    M.AESNI_AESDecLast x y -> pureSemAESNI sym fnAesDecLast x y
     M.AESNI_AESKeyGenAssist x i ->
       do let f = fnAesKeyGenAssist (symFuns sym)
              s = symIface sym
