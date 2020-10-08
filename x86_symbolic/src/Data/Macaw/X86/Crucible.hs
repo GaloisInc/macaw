@@ -285,7 +285,7 @@ pureSem sym fn = do
               ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pys
               let res = DV.fromList $ V.toList $ shuffleB xs ys
               mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
-        _ -> error "PShufB"
+        _ -> error "PShufb is not implemented for 64-bit operands"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
     M.MMXExtend {} -> error "MMXExtend"
@@ -478,7 +478,7 @@ pureSem sym fn = do
 
     M.AESNI_AESEnc x y -> pureSemAESNI sym fnAesEnc x y
     M.AESNI_AESEncLast x y -> pureSemAESNI sym fnAesEncLast x y
-    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDecLast x y
+    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDec x y
     M.AESNI_AESDecLast x y -> pureSemAESNI sym fnAesDecLast x y
     M.AESNI_AESKeyGenAssist x i ->
       do let f = fnAesKeyGenAssist (symFuns sym)
