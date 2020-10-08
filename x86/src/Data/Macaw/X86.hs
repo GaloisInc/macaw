@@ -22,12 +22,15 @@ x86_64 programs.
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86
-       ( x86_64_freeBSD_info
+       ( x86_64_info
+       , x86_64_freeBSD_info
        , x86_64_linux_info
        , x86_64CallParams
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
+       , CallParams(..)
+       , ArchitectureInfo(..)
        , X86BlockPrecond(..)
        , ExploreLoc(..)
        , rootLoc
