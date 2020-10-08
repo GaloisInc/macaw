@@ -19,12 +19,21 @@ extra-source-files:  CHANGELOG.md
 
 library
   exposed-modules:     Data.Macaw.AArch32.Symbolic
-  -- other-modules:
+  other-modules:       Data.Macaw.AArch32.Symbolic.AtomWrapper
+                       Data.Macaw.AArch32.Symbolic.Functions
+                       Data.Macaw.AArch32.Symbolic.Panic
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
+                       containers,
+                       lens,
+                       panic,
                        parameterized-utils,
+                       asl-translator,
+                       what4,
                        crucible,
+                       crucible-llvm,
                        macaw-base,
+                       dismantle-arm-xml,
                        semmc-aarch32,
                        macaw-aarch32,
                        macaw-symbolic
