@@ -22,12 +22,15 @@ x86_64 programs.
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86
-       ( x86_64_freeBSD_info
+       ( x86_64_info
+       , x86_64_freeBSD_info
        , x86_64_linux_info
        , x86_64CallParams
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
+       , CallParams(..)
+       , ArchitectureInfo(..)
        , X86BlockPrecond(..)
        , ExploreLoc(..)
        , rootLoc
@@ -375,6 +378,14 @@ transferAbsValue r f =
     X87_FAdd{}  -> TopV
     X87_FSub{}  -> TopV
     X87_FMul{}  -> TopV
+
+    CLMul{} -> TopV
+
+    AESNI_AESEnc{} -> TopV
+    AESNI_AESEncLast{} -> TopV
+    AESNI_AESDec{} -> TopV
+    AESNI_AESDecLast{} -> TopV
+    AESNI_AESKeyGenAssist{} -> TopV
 
     -- XXX: Is 'TopV' the right thing for the AVX instruction below?
     VOp1 {} -> TopV

@@ -180,11 +180,23 @@ data Sym s = Sym { symIface :: s
 data SymFuns s = SymFuns
   { fnAesEnc ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
-    -- ^ One round of AES
+    -- ^ One round of AES encryption
 
   , fnAesEncLast ::
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
-    -- ^ Last round of AES
+    -- ^ Last round of AES encryption
+
+  , fnAesDec ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ One round of AES decryption
+
+  , fnAesDecLast ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ Last round of AES decryption
+
+  , fnAesKeyGenAssist ::
+      SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 8) (BaseBVType 128)
+    -- ^ Assist in expanding AES cipher key
 
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
@@ -197,6 +209,9 @@ newSymFuns :: forall sym. IsSymInterface sym => sym -> IO (SymFuns sym)
 newSymFuns s =
   do fnAesEnc     <- bin "aesEnc"
      fnAesEncLast <- bin "aesEncLast"
+     fnAesDec <- bin "aesDecLast"
+     fnAesDecLast <- bin "aesDecLast"
+     fnAesKeyGenAssist <- bin "aesKeyGenAssist"
      fnClMul      <- bin "clMul"
      return SymFuns { .. }
 
@@ -226,6 +241,21 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
+pureSemAESNI
+  :: forall sym. IsSymInterface sym
+  => Sym sym
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128))
+  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
+  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
+  -> IO (RegValue sym (ToCrucibleType (M.BVType 128)))
+pureSemAESNI sym proj x y =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     state <- toValBV s x
+     key <- toValBV s y
+     let ps = extend (extend empty state) key
+     llvmPointer_bv s =<< applySymFn s f ps
+
 -- | Semantics for operations that do not affect Crucible's state directly.
 pureSem :: forall sym mt
         .  IsSymInterface sym
@@ -246,7 +276,16 @@ pureSem sym fn = do
     M.CMPXCHG8B{} -> error "CMPXCHG8B"
     M.RDTSC{}       -> error "RDTSC"
     M.XGetBV {} -> error "XGetBV"
-    M.PShufb {} -> error "PShufb"
+    M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
+      case sw of
+        M.SIMDByteCount_XMM
+          | Just pxs <- V.fromList n16 $ DV.toList $ regValue vxs
+          , Just pys <- V.fromList n16 $ DV.toList $ regValue vys -> do
+              xs <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pxs
+              ys <- mapM (pure . ValBV n8 <=< projectLLVM_bv (symIface sym)) pys
+              let res = DV.fromList $ V.toList $ shuffleB xs ys
+              mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
+        _ -> error "PShufb is not implemented for 64-bit operands"
     M.MemCmp{}      -> error "MemCmp"
     M.RepnzScas{}   -> error "RepnzScas"
     M.MMXExtend {} -> error "MMXExtend"
@@ -429,6 +468,26 @@ pureSem sym fn = do
 
     M.VExtractF128 {} -> error "VExtractF128"
 
+    M.CLMul x y ->
+      do let f = fnClMul (symFuns sym)
+             s = symIface sym
+         src1 <- toValBV s x
+         src2 <- toValBV s y
+         let ps = extend (extend empty src1) src2
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.AESNI_AESEnc x y -> pureSemAESNI sym fnAesEnc x y
+    M.AESNI_AESEncLast x y -> pureSemAESNI sym fnAesEncLast x y
+    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDec x y
+    M.AESNI_AESDecLast x y -> pureSemAESNI sym fnAesDecLast x y
+    M.AESNI_AESKeyGenAssist x i ->
+      do let f = fnAesKeyGenAssist (symFuns sym)
+             s = symIface sym
+         src <- toValBV s x
+         roundConst <- bvLit s knownNat $ BV.mkBV knownNat $ fromIntegral i
+         let ps = extend (extend empty src) roundConst
+         llvmPointer_bv s =<< applySymFn s f ps
+
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
     E sym (BVType w) -> E sym (BVType w) -> E sym (BVType w)
@@ -436,6 +495,11 @@ semPointwise op w x y =
   case op of
     M.PtAdd -> app (BVAdd w x y)
     M.PtSub -> app (BVSub w x y)
+    M.PtCmpGt -> app $ BVIte
+      (app (BVSlt w y x))
+      w
+      (app (BVLit w (BV.mkBV w (-1))))
+      (app (BVLit w (BV.mkBV w 0)))
 
 -- | Assumes big-endian split
 -- See `vpalign` Intel instruction.
