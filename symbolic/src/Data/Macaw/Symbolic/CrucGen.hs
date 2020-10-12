@@ -42,6 +42,7 @@ module Data.Macaw.Symbolic.CrucGen
   , ArchRegStruct
   , MacawArchConstraints
   , MacawArchStmtExtension
+  , MacawBlockEnd(..)
     -- ** Operations for implementing new backends.
   , CrucGen
   , MacawMonad
@@ -77,6 +78,7 @@ module Data.Macaw.Symbolic.CrucGen
   , archAddrWidth
   , evalAtom
   , crucibleValue
+  , termStmtToBlockEnd
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -421,6 +423,9 @@ data MacawStmtExtension (arch :: K.Type)
                         -> !Text.Text
                         -> MacawStmtExtension arch f C.UnitType
 
+  -- | This is called at the end of a block to classify how it was exited
+  MacawBlockEnd :: !(MacawBlockEnd arch) -> MacawStmtExtension arch f C.UnitType
+
   -- NOTE: The Ptr* operations below are statements and not expressions
   -- because they need to read the memory variable, to determine if their
   -- inputs are valid pointers.
@@ -485,6 +490,15 @@ instance TraversableFC (MacawArchStmtExtension arch)
       => FoldableFC (MacawStmtExtension arch) where
   foldMapFC = foldMapFCDefault
 
+data MacawBlockEnd arch =
+    MacawBlockEndJump
+  | MacawBlockEndCall
+  | MacawBlockEndReturn
+  | MacawBlockEndBranch
+  | MacawBlockEndArch
+  | MacawBlockEndFail
+  deriving (Eq, Ord, Show)
+
 sexpr :: String -> [Doc] -> Doc
 sexpr s [] = text s
 sexpr s l  = parens (text s <+> hsep l)
@@ -514,6 +528,8 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
         in sexpr "macawArchStateUpdate" [pretty addr, semiBraces (MapF.foldrWithKey prettyArchStateBinding [] m)]
       MacawInstructionStart baddr ioff t ->
         sexpr "macawInstructionStart" [ pretty baddr, pretty ioff, text (show t) ]
+      MacawBlockEnd blend ->
+        sexpr "macawBlockEnd" [ text (show blend) ]
       PtrEq _ x y    -> sexpr "ptr_eq" [ f x, f y ]
       PtrLt _ x y    -> sexpr "ptr_lt" [ f x, f y ]
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
@@ -538,6 +554,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
   appType MacawInstructionStart {} = C.knownRepr
+  appType MacawBlockEnd {} = C.knownRepr
   appType PtrEq {}            = C.knownRepr
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
@@ -1386,10 +1403,14 @@ addMacawParsedTermStmt :: BlockLabelMap arch s
                        -- resolved ClassifyFailures
                        -> M.ArchSegmentOff arch
                           -- ^ Address of this block
+                       -> Maybe (MacawBlockEnd arch)
+                          -- ^ Optionally override how this block exit is interpreted
+                          -- logically
                        -> M.ParsedTermStmt arch ids
                        -> CrucGen arch ids s ()
-addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
+addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr mblockend tstmt = do
  archFns <- translateFns <$> get
+ void $ evalMacawStmt (MacawBlockEnd (fromMaybe (termStmtToBlockEnd tstmt) mblockend))
  crucGenArchConstraints archFns $ do
   case tstmt of
     M.ParsedCall regs mret -> do
@@ -1440,6 +1461,19 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       | otherwise -> do
           msgVal <- crucibleValue $ C.StringLit $ C.UnicodeLiteral $ Text.pack ("Could not identify block at " ++ show thisAddr ++ " with external resolutions: " ++ show externalResolutions)
           addTermStmt $ CR.ErrorStmt msgVal
+
+termStmtToBlockEnd :: forall arch ids. M.ParsedTermStmt arch ids -> MacawBlockEnd arch
+termStmtToBlockEnd tm0 =
+  case tm0 of
+    M.ParsedReturn {} -> MacawBlockEndReturn
+    M.ParsedCall {} -> MacawBlockEndCall
+    M.ParsedJump {} -> MacawBlockEndJump
+    M.ParsedBranch {} -> MacawBlockEndBranch
+    M.ParsedLookupTable {} -> MacawBlockEndJump
+    M.ParsedArchTermStmt {} -> MacawBlockEndArch
+    M.ClassifyFailure {} -> MacawBlockEndFail
+    M.PLTStub {} -> MacawBlockEndCall
+    M.ParsedTranslateError{} -> MacawBlockEndFail
 
 -- | This is like 'addSwitch', but for unstructured indirect control flow
 --
@@ -1609,9 +1643,10 @@ addParsedBlock :: forall arch ids s
                -- ^ Function for generating position from offset from start of this block.
                -> CR.Reg s (ArchRegStruct arch)
                     -- ^ Register that stores Macaw registers
+               -> Maybe (MacawBlockEnd arch)
                -> M.ParsedBlock arch ids
                -> MacawMonad arch ids s [CR.Block (MacawExt arch) s (MacawFunctionResult arch)]
-addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock = do
+addParsedBlock archFns blockLabelMap externalResolutions posFn regReg mblockend macawBlock = do
   crucGenArchConstraints archFns $ do
   let base = M.pblockAddr macawBlock
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
@@ -1627,7 +1662,7 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
   (b,bs) <-
     runCrucGen archFns thisPosFn lbl regReg $ do
       mapM_ (addMacawStmt startAddr) (M.pblockStmts  macawBlock)
-      addMacawParsedTermStmt blockLabelMap externalResolutions startAddr (M.pblockTermStmt macawBlock)
+      addMacawParsedTermStmt blockLabelMap externalResolutions startAddr mblockend (M.pblockTermStmt macawBlock)
   pure (reverse (b : bs))
 
 traverseArchStateUpdateMap :: (Applicative m)

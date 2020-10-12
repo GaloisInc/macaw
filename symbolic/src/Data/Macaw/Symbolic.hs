@@ -107,6 +107,7 @@ module Data.Macaw.Symbolic
   , CG.MacawExprExtension(..)
   , evalMacawExprExtension
   , CG.MacawStmtExtension(..)
+  , CG.MacawBlockEnd(..)
   , CG.MacawOverflowOp(..)
     -- * Simulating generated Crucible CFGs
     -- $simulationNotes
@@ -440,6 +441,7 @@ mkParsedBlockRegCFG :: forall arch ids
 mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
   mkCrucRegCFG archFns halloc "" $ do
     let strippedBlock = b { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt b) }
+    let block_end = termStmtToBlockEnd $ M.pblockTermStmt b
 
     let entryAddr = M.pblockAddr strippedBlock
 
@@ -475,7 +477,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
         addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap entryAddr)
 
     -- Generate code for Macaw block after entry
-    crucibleBlock <- addParsedBlock archFns blockLabelMap [] posFn regReg strippedBlock
+    crucibleBlock <- addParsedBlock archFns blockLabelMap [] posFn regReg (Just block_end) strippedBlock
 
     -- (stubCrucibleBlocks,_) <- unzip <$>
     --   (forM (Map.elems stubMap)$ \c -> do
@@ -610,8 +612,9 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ = crucGenArc
           -- preserves the existing register state, which is important when
           -- generating the Crucible return.
           let retTerm = termStmtToReturn (M.pblockTermStmt block)
-          addMacawParsedTermStmt labelMapWithReturns [] blockAddr retTerm
-        False -> addMacawParsedTermStmt labelMapWithReturns [] blockAddr (M.pblockTermStmt block)
+          let blockEnd = termStmtToBlockEnd (M.pblockTermStmt block)
+          addMacawParsedTermStmt labelMapWithReturns [] blockAddr (Just blockEnd) retTerm
+        False -> addMacawParsedTermStmt labelMapWithReturns [] blockAddr Nothing (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
   return (entryLabel, initCrucBlock : (initExtraCrucBlocks ++ concat crucBlocks ++ concat syntheticBlocks ++ retBlocks))
   where
@@ -733,6 +736,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
           (tail blocks)
     let last_block = (last blocks) { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt (last blocks)) }
     let block_path = first_blocks ++ [last_block]
+    let block_ends = map (termStmtToBlockEnd . M.pblockTermStmt) blocks
 
     -- Get type for representing Machine registers
     let arch_reg_struct_type = C.StructRepr $ crucArchRegTypes arch_fns
@@ -773,7 +777,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
         addTermStmt $ CR.Jump (parsedBlockLabel block_label_map entry_addr)
 
     -- Generate code for Macaw blocks
-    crucible_blocks <- forM block_path $ \block -> do
+    crucible_blocks <- forM (zip block_ends block_path) $ \(block_end, block) -> do
       let block_addr = M.pblockAddr block
       let label = block_label_map Map.! block_addr
 
@@ -788,7 +792,7 @@ mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
         addStmt $ CR.Assume cond msg
 
         mapM_ (addMacawStmt block_addr) (M.pblockStmts block)
-        addMacawParsedTermStmt block_label_map [] block_addr (M.pblockTermStmt block)
+        addMacawParsedTermStmt block_label_map [] block_addr (Just block_end) (M.pblockTermStmt block)
       pure (reverse (first_crucible_block:first_extra_crucible_blocks))
 
     pure (entry_label, init_crucible_block :
@@ -866,7 +870,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     -- Generate code for Macaw blocks after entry
     restCrucibleBlocks <-
       forM blockList $ \b -> do
-        addParsedBlock archFns blockLabelMap (M.discoveredClassifyFailureResolutions fn) posFn regReg b
+        addParsedBlock archFns blockLabelMap (M.discoveredClassifyFailureResolutions fn) posFn regReg Nothing b
     -- Return initialization block followed by actual blocks.
     pure (entryLabel, initCrucibleBlock :
                         initExtraCrucibleBlocks ++ concat restCrucibleBlocks)
@@ -1078,6 +1082,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
+    MacawBlockEnd {}            -> return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y

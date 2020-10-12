@@ -8,6 +8,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -48,6 +49,7 @@ import qualified Data.Macaw.X86.X86Reg as R
 import qualified Data.Macaw.X86.Semantics.AVX as AVX
 import qualified Data.Macaw.X86.Semantics.BMI2 as BMI2
 import qualified Data.Macaw.X86.Semantics.ADX as ADX
+import qualified Data.Macaw.X86.Semantics.AESNI as AESNI
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
@@ -2055,9 +2057,28 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
 
   l .= bvUnvectorize (typeWidth l) ls'
 
--- PSRLW Shift packed words right logical
+-- | PSRLW Shift packed words right logical
 -- PSRLD Shift packed doublewords right logical
 -- PSRLQ Shift packed quadword right logical
+
+def_psrlx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
+def_psrlx suf elsz = defBinaryLVpoly ("psrl" ++ suf) $ \l count -> do
+  lv <- get l
+  let ls  = bvVectorize elsz lv
+      -- This is somewhat tedious: we want to make sure that we don't
+      -- truncate e.g. 2^31 to 0, so we saturate if the size is over
+      -- the number of bits we want to shift.  We can always fit the
+      -- width into count bits (assuming we are passed 16, 32, or 64).
+      nbits   = bvLit (typeWidth count) (intValue elsz)
+      countsz = case testNatCases (typeWidth count) elsz of
+                  NatCaseLT LeqProof -> uext' elsz count
+                  NatCaseEQ          -> count
+                  NatCaseGT LeqProof -> bvTrunc' elsz count
+
+      ls' = map (\y -> mux (bvUlt count nbits) (bvShr y countsz) (bvLit elsz 0)) ls
+
+  l .= bvUnvectorize (typeWidth l) ls'
+
 -- PSRAW Shift packed words right arithmetic
 -- PSRAD Shift packed doublewords right arithmetic
 
@@ -2332,11 +2353,38 @@ def_xorps = def_bifpx "xorps" bvXor n32
 
 -- *** SSE Shuffle and Unpack Instructions
 
--- SHUFPS Shuffles values in packed single-precision floating-point operands
 -- UNPCKHPS Unpacks and interleaves the two high-order values from two single-precision floating-point operands
 
 interleave :: [a] -> [a] -> [a]
 interleave xs ys = concat (zipWith (\x y -> [x, y]) xs ys)
+
+-- | SHUFPS Shuffles values in packed single-precision floating-point operands
+def_shufps :: InstructionDef
+def_shufps = defTernaryLVV "shufps" $ \dest src2 imm -> do
+  src1 <- get dest
+  if | Just Refl <- testEquality (typeWidth src1) n128
+     , Just Refl <- testEquality (typeWidth src2) n128
+     , Just Refl <- testEquality (typeWidth imm) n8 -> do
+       dest .= bvUnvectorize knownNat
+         (zipWith ($)
+           [ select4 src2
+           , select4 src2
+           , select4 src1
+           , select4 src1
+           ]
+           $ bvVectorize knownNat imm
+         )
+     | otherwise -> fail "shufps: Invalid operands"
+  where
+    select4 :: Expr ids (BVType 128) -> Expr ids (BVType 2) -> Expr ids (BVType 32)
+    select4 src control =
+      let
+        (srchi, srclo) = bvSplit src
+        (srchihi, srchilo) = bvSplit srchi
+        (srclohi, srclolo) = bvSplit srclo
+        hi = bvBit control $ bvLit (typeWidth control) 1
+        lo = bvBit control $ bvLit (typeWidth control) 0
+      in mux hi (mux lo srchihi srchilo) (mux lo srclohi srclolo)
 
 -- | UNPCKLPS Unpacks and interleaves the two low-order values from two single-precision floating-point operands
 def_unpcklps :: InstructionDef
@@ -2677,6 +2725,16 @@ def_pslldq = defBinaryLVge "pslldq" $ \l v -> do
                  (bvLit (typeWidth v0) 16)
   l .= v0 `bvShl` (temp .* bvLit (typeWidth v0) 8)
 
+def_psrldq :: InstructionDef
+def_psrldq = defBinaryLVge "psrldq" $ \l v -> do
+  v0 <- get l
+  -- temp is 16 if v is greater than 15, otherwise v
+  let not15 = bvComplement $ bvLit (typeWidth v) 15
+      temp = mux (is_zero $ not15 .&. v)
+                 (uext (typeWidth v0) v)
+                 (bvLit (typeWidth v0) 16)
+  l .= v0 `bvShr` (temp .* bvLit (typeWidth v0) 8)
+
 -- PSRLDQ Shift double quadword right logical
 -- PUNPCKHQDQ Unpack high quadwords
 -- PUNPCKLQDQ Unpack low quadwords
@@ -2837,6 +2895,7 @@ def_xgetbv =
 
 
 
+
 ------------------------------------------------------------------------
 -- Instruction list
 
@@ -2881,6 +2940,9 @@ all_instructions =
   , def_psllx "w" n16
   , def_psllx "d" n32
   , def_psllx "q" n64
+  , def_psrlx "w" n16
+  , def_psrlx "d" n32
+  , def_psrlx "q" n64
   , def_ucomisd
   , def_xorpd
   , def_xorps
@@ -2896,6 +2958,7 @@ all_instructions =
   , def_cmpsX "cmpss" SSE_Single
   , def_andpd
   , def_orpd
+  , def_shufps
   , def_unpcklps
 
     -- regular instructions
@@ -3061,6 +3124,7 @@ all_instructions =
 
   , defTernaryLVV  "pshufd" exec_pshufd
   , def_pslldq
+  , def_psrldq
   , def_lddqu
   , defTernaryLVV "palignr" exec_palignr
     -- X87 FP instructions
@@ -3083,6 +3147,7 @@ all_instructions =
   ++ AVX.all_instructions
   ++ BMI2.all_instructions
   ++ ADX.all_instructions
+  ++ AESNI.all_instructions
 
 ------------------------------------------------------------------------
 -- execInstruction
