@@ -3,16 +3,14 @@ on:
   push:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        name: [linux-8.8.4]
-        include:
-        - name: linux-8.8.4
-          ghc-ver: 8.8.4
+        ghc-ver: ["8.6.5", "8.8.4", "8.10.1"]
       # complete all jobs
       fail-fast: false
+    name: Macaw - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@v2
@@ -28,9 +26,9 @@ jobs:
       with:
         path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
         # Prefer previous SHA hash if it is still cached
-        key: ${{ matrix.name }}-${{ github.sha }}
+        key: linux-${{ matrix.ghc-ver }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: ${{ matrix.name }}
+        restore-keys: linux-${{ matrix.ghc-ver }}
     - name: Link cabal project files
       run: |
         ln -s cabal.project.dist                                  cabal.project
