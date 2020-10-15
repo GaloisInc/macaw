@@ -10,6 +10,8 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE DeriveLift #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 module Data.Macaw.ARM.Semantics.TH
     ( armAppEvaluator
@@ -789,9 +791,21 @@ refField :: Ctx.Size ctx -> Ctx.Index ctx tp -> BoundExp -> MacawQ arch t fs Bou
 refField sz idx e = case Ctx.viewSize sz of
   Ctx.IncSize sz' | Ctx.ZeroSize <- Ctx.viewSize sz' -> return e
   _ -> case e of
-    EagerBoundExp (TupE es) | Ctx.indexVal idx < length es -> return $ EagerBoundExp $ es !! (Ctx.indexVal idx)
+    EagerBoundExp (TupE es) | Just v <- lookupInt es (Ctx.indexVal idx) -> return $ EagerBoundExp v
     EagerBoundExp _ -> bindTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) $(refEager e) |]
     LazyBoundExp _ -> letTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) <$> $(refBinding e) |]
+
+-- | Compatibility class to handle the fact that the field for 'TupE' changed between
+-- version 2.15 and 2.16 to be '[Maybe Exp]'
+-- See: https://gitlab.haskell.org/ghc/ghc/-/issues/15843
+class IntIndexable t a where
+  lookupInt :: t -> Int -> Maybe a
+
+instance IntIndexable [a] a where
+  lookupInt l i = if i < length l then Just (l !! i) else Nothing
+
+instance IntIndexable [Maybe a] a where
+  lookupInt l i = if i < length l then l !! i else Nothing
 
 armAppEvaluator :: M.Endianness
                 -> BoundVarInterpretations ARM.AArch32 t fs
