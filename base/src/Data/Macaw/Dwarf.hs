@@ -100,16 +100,6 @@ import           Data.Macaw.Memory (Endianness(..))
 hasAttribute :: DW_AT -> DIE -> Bool
 hasAttribute a d = any (\p -> fst p == a) (dieAttributes d)
 
-getWhileNotEmpty :: Get a -> Get [a]
-getWhileNotEmpty act = go []
-  where go prev = do
-          e <- isEmpty
-          if e then
-            pure (reverse prev)
-           else do
-            v <- act
-            go $! v : prev
-
 ------------------------------------------------------------------------
 -- WarnMonad
 
@@ -231,13 +221,6 @@ attributeAsLang dr v = DW_LANG <$> attributeAsUInt dr v
 
 mapAttr :: (a -> b) -> AttrParser a -> AttrParser b
 mapAttr f p dr v = f <$> p dr v
-
-runGetComplete :: BS.ByteString -> Get a -> Either String a
-runGetComplete bs m =
-  case pushEndOfInput (runGetIncremental m `pushChunk` bs) of
-    Fail _ _ msg -> Left msg
-    Partial _ -> Left "Unexpected partial"
-    Done _ _ r -> Right r
 
 parseGet :: BS.ByteString -> Get a -> Parser a
 parseGet bs m =
@@ -444,18 +427,6 @@ ppOp o = text (show o)
 ppOps :: [DW_OP] -> Doc
 ppOps l = hsep (ppOp <$> l)
 
-readDwarfExpr :: Dwarf.Reader -> BS.ByteString -> Either String [DW_OP]
-readDwarfExpr dr bs = runGetComplete bs (getWhileNotEmpty (getDW_OP dr))
-
-{-
-parseDwarfExpr :: BS.ByteString -> Parser [DW_OP]
-parseDwarfExpr bs = do
-  dr <- Parser $ asks readerInfo
-  case readDwarfExpr dr bs of
-    Left msg -> throwError msg
-    Right r -> pure r
--}
-
 ------------------------------------------------------------------------
 -- Name and Descripion
 
@@ -568,7 +539,10 @@ parseSubrange d = runDIEParser "parseSubrange" d $ do
   upper <-
     case upperVal of
       DW_ATVAL_UINT w -> pure [DW_OP_const8u w]
-      DW_ATVAL_BLOB bs -> lift $ parseGet bs (getWhileNotEmpty (getDW_OP dr))
+      DW_ATVAL_BLOB bs ->
+        case parseDW_OPs dr bs of
+          Left (_,_, msg) -> throwError msg
+          Right ops -> pure ops
       _ -> throwError "Invalid upper bound"
 
   pure $! Subrange { subrangeType = tp
@@ -903,14 +877,11 @@ instance Eq DwarfExpr where
 instance Ord DwarfExpr where
   compare (DwarfExpr _ x) (DwarfExpr _ y) = compare x y
 
-parseDwarfExpr :: DwarfExpr -> Either String [DW_OP]
-parseDwarfExpr (DwarfExpr dr bs) = readDwarfExpr dr bs
-
 instance Show DwarfExpr where
-  show expr =
-    case parseDwarfExpr expr of
-      Left e -> e
-      Right ops -> show ops
+  show (DwarfExpr dr bs) =
+    case Dwarf.parseDW_OPs dr bs of
+      Left (_, _, msg) -> msg
+      Right r -> show r
 
 -- | Provides a way of computing the location of a variable.
 data Location
@@ -925,9 +896,9 @@ attributeAsLocation dr = \case
   _ -> throwError $ IncorrectTypeFor "Location"
 
 instance Pretty Location where
-  pretty (ComputedLoc expr) =
-    case parseDwarfExpr expr of
-      Left e -> text e
+  pretty (ComputedLoc (DwarfExpr dr bs)) =
+    case Dwarf.parseDW_OPs dr bs of
+      Left (_, _, msg) -> text msg
       Right ops -> ppOps ops
   pretty (OffsetLoc w) = text ("offset 0x" ++ showHex w "")
 

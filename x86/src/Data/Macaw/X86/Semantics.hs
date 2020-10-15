@@ -1434,7 +1434,7 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
     dest_v  <- eval v_rdi
     is_reverse_v <- eval df
     nsame <- evalArchFn $ MemCmp bytesPerOp count_v src_v dest_v is_reverse_v
-    let equal = (nsame .=. count)
+    let equal = (nsame .=. ValueExpr count_v)
         nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
     -- we need to set the flags as if the last comparison was done, hence this.

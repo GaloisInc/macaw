@@ -49,6 +49,7 @@ module Data.Macaw.Discovery
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
        , State.discoveredFunName
+       , State.discoveredFunSymbol
        , State.discoveredClassifyFailureResolutions
        , State.parsedBlocks
        , State.NoReturnFunStatus(..)
@@ -1868,9 +1869,7 @@ discoveryLogFn disOpt symMap (AnalyzeFunction addr) = ioToST $ do
 discoveryLogFn disOpt _ (AnalyzeBlock addr) = ioToST $ do
   when (logAtAnalyzeBlock disOpt) $ do
     hPutStrLn stderr $ "  Analyzing block: " ++ show addr
-
     hFlush stderr
-
 
 ppFunReason :: MemWidth w => FunctionExploreReason w -> String
 ppFunReason rsn =

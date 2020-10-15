@@ -21,9 +21,6 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElf'
   , memoryForElfAllSymbols
   , memoryForElfSections
-  , SectionIndexMap
-  , SectionNameMap
-  , SymbolTable(..)
   , memoryForElfSections'
   , memoryForElfSegments
   , resolveElfFuncSymbols
@@ -34,6 +31,7 @@ module Data.Macaw.Memory.ElfLoader
     -- * Symbols
   , MemSymbol(..)
   , SymbolResolutionError(..)
+  , SymbolTable(..)
     -- * Re-exports
   , module Data.Macaw.Memory.LoadCommon
   , module Data.Macaw.Memory
@@ -379,8 +377,7 @@ symbolWarning w = modify $ \l -> w:l
 -- names that could be stripped from executables/shared objects.
 data SymbolTable w
    = NoSymbolTable
-   | StaticSymbolTable
-       !(V.Vector (ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)))
+   | StaticSymbolTable !(V.Vector (ElfSymbolTableEntry BS.ByteString (Elf.ElfWordType w)))
    | DynamicSymbolTable !(Elf.DynamicSection w)
 
 -- | Take a symbol entry and symbol version and return the identifier.
@@ -1208,7 +1205,6 @@ memoryForElfSegments opt e = do
       let contents = elfLayoutBytes l
       -- Create relocation map
       relocMap <- dynamicRelocationMap hdr (Elf.allPhdrs l) contents
-
       let intervals :: ElfFileSectionMap (ElfWordType w)
           intervals = IMap.fromList
             [ (IntervalCO (Elf.shdrOff shdr) end, idx)
@@ -1583,8 +1579,7 @@ resolveElfFuncSymbols mem resolver p e =
       sections = e^..elfSections
 
       -- Get dynamic entries
-      dynamicEntries
-        :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
+      dynamicEntries :: [(Int, ElfSymbolTableEntry BS.ByteString (ElfWordType w))]
       dynamicEntries
         | [symtab] <- filter (`hasSectionName` ".dynsym") sections
         , strtabIdx <- Elf.elfSectionLink symtab
