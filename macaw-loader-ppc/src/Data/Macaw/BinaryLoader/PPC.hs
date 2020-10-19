@@ -14,7 +14,9 @@ module Data.Macaw.BinaryLoader.PPC
 where
 
 import qualified Control.Monad.Catch as X
+import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
+import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.BinaryLoader.PPC.ELF as BE
@@ -22,6 +24,7 @@ import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
+import qualified Data.Map.Strict as Map
 import           Data.Maybe ( mapMaybe )
 import           Data.Typeable ( Typeable )
 import           GHC.TypeLits
@@ -33,6 +36,7 @@ class HasTOC arch binFmt where
 
 data PPCElfData w = PPCElfData { elf :: E.Elf w
                                , memSymbols :: [EL.MemSymbol w]
+                               , symbolIndex :: Map.Map (MC.MemAddr w) BS.ByteString
                                }
 
 -- NOTE: This funny constraint is necessary because we don't have access to the
@@ -46,6 +50,7 @@ instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => BL.BinaryLoader PPC32.PPC (E.Elf 3
   type Diagnostic PPC32.PPC (E.Elf 32) = EL.MemLoadWarning
   loadBinary = loadPPCBinary BL.Elf32Repr
   entryPoints = ppcEntryPoints
+  symbolFor = ppcLookupSymbol
 
 instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => HasTOC PPC32.PPC (E.Elf 32) where
   getTOC = BL.archBinaryData
@@ -56,9 +61,19 @@ instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => BL.BinaryLoader PPC64.PPC (E.Elf 6
   type Diagnostic PPC64.PPC (E.Elf 64) = EL.MemLoadWarning
   loadBinary = loadPPCBinary BL.Elf64Repr
   entryPoints = ppcEntryPoints
+  symbolFor = ppcLookupSymbol
 
 instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => HasTOC PPC64.PPC (E.Elf 64) where
   getTOC = BL.archBinaryData
+
+ppcLookupSymbol :: (X.MonadThrow m, MC.MemWidth w, BL.BinaryFormatData arch binFmt ~ PPCElfData w)
+                => BL.LoadedBinary arch binFmt
+                -> MC.MemAddr w
+                -> m BS.ByteString
+ppcLookupSymbol loadedBinary funcAddr =
+  case Map.lookup funcAddr (symbolIndex (BL.binaryFormatData loadedBinary)) of
+    Nothing -> X.throwM (PPCNoFunctionAddressForTOCEntry funcAddr)
+    Just sym -> return sym
 
 ppcEntryPoints :: (X.MonadThrow m,
                    MC.MemWidth w,
@@ -97,6 +112,7 @@ loadPPCBinary :: (X.MonadThrow m,
                   BL.ArchBinaryData ppc (E.Elf w) ~ TOC.TOC w,
                   BL.BinaryFormatData ppc (E.Elf w) ~ PPCElfData w,
                   MC.ArchAddrWidth ppc ~ w,
+                  Integral (E.ElfWordType w),
                   BL.Diagnostic ppc (E.Elf w) ~ EL.MemLoadWarning,
                   MC.MemWidth w,
                   Typeable w,
@@ -118,15 +134,28 @@ loadPPCBinary binRep lopts e = do
                                  , BL.binaryFormatData =
                                    PPCElfData { elf = e
                                               , memSymbols = symbols
+                                              , symbolIndex = indexSymbols toc symbols
                                               }
                                  , BL.loadDiagnostics = warnings
                                  , BL.binaryRepr = binRep
                                  }
 
+indexSymbols :: (Foldable t)
+             => TOC.TOC w
+             -> t (EL.MemSymbol w)
+             -> Map.Map (EL.MemAddr w) BS.ByteString
+indexSymbols toc = F.foldl' doIndex Map.empty
+  where
+    doIndex m memSym =
+      case TOC.mapTOCEntryAddress toc (MC.segoffAddr (EL.memSymbolStart memSym)) of
+        Nothing -> m
+        Just funcAddr -> Map.insert funcAddr (EL.memSymbolName memSym) m
+
 data PPCLoadException = PPCElfLoadError String
                       | PPCTOCLoadError X.SomeException
                       | forall w . (MC.MemWidth w) => PPCElfMemoryError (MC.MemoryError w)
                       | forall w . (MC.MemWidth w) => PPCInvalidAbsoluteAddress (MC.MemAddr w)
+                      | forall w . (MC.MemWidth w) => PPCNoFunctionAddressForTOCEntry (MC.MemAddr w)
 
 deriving instance Show PPCLoadException
 

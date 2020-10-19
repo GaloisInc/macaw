@@ -7,6 +7,7 @@ module Data.Macaw.BinaryLoader.PPC.TOC
   , lookupTOC
   , lookupTOCAbs
   , entryPoints
+  , mapTOCEntryAddress
   , TOCException(..)
   )
 where
@@ -32,9 +33,18 @@ instance (MM.MemWidth w, MT.KnownNat w) => X.Exception (TOCException w)
 -- Note that different ABIs and container formats store the TOC in different
 -- places in the binary; this abstraction only concerns itself with the values
 -- in the TOC and not their representation on disk.
-newtype TOC w = TOC (M.Map (MM.MemAddr w) (W.W w))
+data TOC w = TOC { funcTOCPtrValues :: M.Map (MM.MemAddr w) (W.W w)
+                 -- ^ The map from actual function address to the value of the
+                 -- TOC pointer at the start of that function (NOTE: This value
+                 -- is almost always not the same as the address of the TOC
+                 -- entry for the function).
+                 , symbolAddressMapping :: M.Map (MM.MemAddr w) (MM.MemAddr w)
+                 -- ^ The mapping from symbol table addresses (which point to
+                 -- TOC entries) to the addresses of the actual corresponding
+                 -- functions in the .text section
+                 }
 
-toc :: M.Map (MM.MemAddr w) (W.W w) -> TOC w
+toc :: M.Map (MM.MemAddr w) (W.W w) -> M.Map (MM.MemAddr w) (MM.MemAddr w) -> TOC w
 toc = TOC
 
 -- | A variant of 'lookupTOC' that returns a macaw 'MA.AbsValue'
@@ -56,7 +66,7 @@ lookupTOCAbs t addr = toAbsVal <$> lookupTOC t addr
 -- function begins executing) for the function whose entry point is at address
 -- @addr@.
 lookupTOC :: forall w . (MM.MemWidth w) => TOC w -> MM.MemSegmentOff w -> Maybe (W.W w)
-lookupTOC (TOC m) addr = M.lookup (MM.segoffAddr addr) m
+lookupTOC t addr = M.lookup (MM.segoffAddr addr) (funcTOCPtrValues t)
 
 -- | Return the addresses of all of the functions present in the TOC
 --
@@ -64,4 +74,7 @@ lookupTOC (TOC m) addr = M.lookup (MM.segoffAddr addr) m
 -- or library.
 -- entryPoints :: TOC ppc -> [MC.MemAddr (MC.ArchAddrWidth ppc)]
 entryPoints :: TOC w -> [MM.MemAddr w]
-entryPoints (TOC m) = M.keys m
+entryPoints t = M.keys (funcTOCPtrValues t)
+
+mapTOCEntryAddress :: TOC w -> MM.MemAddr w -> Maybe (MM.MemAddr w)
+mapTOCEntryAddress t a = M.lookup a (symbolAddressMapping t)

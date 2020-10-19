@@ -16,6 +16,8 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Data.Macaw.BinaryLoader.AArch32
   build-depends:       base >=4.9 && <5,
+                       bytestring,
+                       containers,
                        exceptions,
                        elf-edit,
                        macaw-base,

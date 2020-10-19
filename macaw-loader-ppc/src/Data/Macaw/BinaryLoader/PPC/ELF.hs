@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -7,7 +8,7 @@ module Data.Macaw.BinaryLoader.PPC.ELF
   )
 where
 
-import           Control.Monad ( replicateM, unless )
+import           Control.Monad ( unless )
 import qualified Control.Monad.Catch as X
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ElfEdit as E
@@ -34,41 +35,70 @@ import           GHC.TypeLits ( KnownNat, natVal )
 parseTOC :: forall w m
           . (KnownNat w,
              MM.MemWidth w,
+             Integral (E.ElfWordType w),
              X.MonadThrow m)
          => E.Elf w
          -> m (TOC.TOC w)
 parseTOC e =
   case E.findSectionByName (C8.pack ".opd") e of
     [sec] ->
-      case G.runGet (parseFunctionDescriptors @w (fromIntegral ptrSize)) (E.elfSectionData sec) of
+      case G.runGet (parseFunctionDescriptors @w (fromIntegral ptrSize) (E.elfSectionAddr sec)) (E.elfSectionData sec) of
         Left msg -> X.throwM ((TOC.TOCParseError msg) :: TOC.TOCException w)
-        Right t -> return (TOC.toc t)
+        Right t -> return t
     _ -> X.throwM ((TOC.MissingTOCSection ".opd") :: TOC.TOCException w)
   where
     ptrSize = natVal (Proxy @w)
 
-parseFunctionDescriptors :: (KnownNat w, MM.MemWidth w)
+-- | Parse the @.opd@ section as a Table of Contents (TOC)
+--
+-- We pass in the address of the TOC so that we can map symbol table entry
+-- addresses to actual function addresses (symbol table addresses point to TOC
+-- entries instead of function addresses).
+parseFunctionDescriptors :: (KnownNat w, MM.MemWidth w, Integral (E.ElfWordType w))
                          => Int
-                         -> G.Get (M.Map (MM.MemAddr w) (W.W w))
-parseFunctionDescriptors ptrSize = do
+                         -> E.ElfWordType w
+                         -> G.Get (TOC.TOC w)
+parseFunctionDescriptors ptrSize tocBaseAddr = do
   let recordBytes = (3 * ptrSize) `div` 8
-  let recordParser =
+  let recordParser entryAddr =
         case ptrSize of
-          32 -> getFunctionDescriptor G.getWord32be
-          64 -> getFunctionDescriptor G.getWord64be
+          32 -> getFunctionDescriptor entryAddr G.getWord32be
+          64 -> getFunctionDescriptor entryAddr G.getWord64be
           _ -> error ("Invalid pointer size: " ++ show ptrSize)
   totalBytes <- G.remaining
   unless (totalBytes `mod` recordBytes == 0) $ do
     fail "The .opd section is not divisible by the record size"
-  funcDescs <- replicateM (totalBytes `div` recordBytes) recordParser
-  return (M.fromList funcDescs)
+  let nRecords = totalBytes `div` recordBytes
+  let tocBase = MM.absoluteAddr (fromIntegral tocBaseAddr)
+  funcDescs <- mapM recordParser (map (toTOCEntryAddr recordBytes tocBase) [0..(nRecords - 1)])
+  let tocPtrMap = M.fromList [ (funcAddr, tocValue) | (_, funcAddr, tocValue) <- funcDescs ]
+  let symbolMapping = M.fromList [ (tocEntryAddr, funcAddr) | (tocEntryAddr, funcAddr, _) <- funcDescs ]
+  return (TOC.toc tocPtrMap symbolMapping)
 
+toTOCEntryAddr :: (MM.MemWidth w)
+               => Int
+               -> MM.MemAddr w
+               -> Int
+               -> MM.MemAddr w
+toTOCEntryAddr recordBytes tocBaseAddr recordNum =
+  MM.incAddr (toInteger (recordBytes * recordNum)) tocBaseAddr
+
+-- | Parse a function descriptor from the TOC
+--
+-- A function descriptor is three pointers:
+--
+-- 1. The address of the function
+-- 2. The address of the TOC that should be in the TOC pointer (usually a distinguished register)
+-- 3. Unused
 getFunctionDescriptor :: (KnownNat w, Integral a, MM.MemWidth w)
-                      => G.Get a
-                      -> G.Get (MM.MemAddr w, W.W w)
-getFunctionDescriptor ptrParser = do
+                      => MM.MemAddr w
+                      -- ^ The entry address
+                      -> G.Get a
+                      -- ^ The parser for a pointer
+                      -> G.Get (MM.MemAddr w, MM.MemAddr w, W.W w)
+getFunctionDescriptor tocEntryAddr ptrParser = do
   entryAddr <- ptrParser
   tocAddr <- ptrParser
   _ <- ptrParser
   let mso = MM.absoluteAddr (fromIntegral entryAddr)
-  return (mso, fromIntegral tocAddr)
+  return (tocEntryAddr, mso, fromIntegral tocAddr)

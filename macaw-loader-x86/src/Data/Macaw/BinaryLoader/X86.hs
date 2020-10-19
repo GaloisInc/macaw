@@ -11,6 +11,7 @@ module Data.Macaw.BinaryLoader.X86 (
   ) where
 
 import qualified Control.Monad.Catch as X
+import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
@@ -18,12 +19,14 @@ import qualified Data.Macaw.BinaryLoader as BL
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
+import qualified Data.Map.Strict as Map
 import           Data.Maybe ( mapMaybe )
 
 import qualified Data.Macaw.X86 as MX
 
 data X86ElfData w = X86ElfData { elf :: E.Elf w
                                , memSymbols :: [EL.MemSymbol w]
+                               , symbolIndex :: Map.Map (MM.MemAddr 64) BS.ByteString
                                }
 
 instance BL.BinaryLoader MX.X86_64 (E.Elf 64) where
@@ -32,6 +35,16 @@ instance BL.BinaryLoader MX.X86_64 (E.Elf 64) where
   type Diagnostic MX.X86_64 (E.Elf 64) = EL.MemLoadWarning
   loadBinary = loadX86Binary
   entryPoints = x86EntryPoints
+  symbolFor = x86LookupSymbol
+
+x86LookupSymbol :: (X.MonadThrow m)
+                => BL.LoadedBinary MX.X86_64 (E.Elf 64)
+                -> MM.MemAddr 64
+                -> m BS.ByteString
+x86LookupSymbol loadedBinary addr =
+  case Map.lookup addr (symbolIndex (BL.binaryFormatData loadedBinary)) of
+    Just sym -> return sym
+    Nothing -> X.throwM (MissingSymbolFor addr)
 
 x86EntryPoints :: (X.MonadThrow m)
                => BL.LoadedBinary MX.X86_64 (E.Elf 64)
@@ -65,13 +78,21 @@ loadX86Binary lopts e = do
                              , BL.binaryFormatData =
                                X86ElfData { elf = e
                                           , memSymbols = symbols
+                                          , symbolIndex = indexSymbols symbols
                                           }
                              , BL.loadDiagnostics = warnings
                              , BL.binaryRepr = BL.Elf64Repr
                              }
 
+indexSymbols :: [EL.MemSymbol 64] -> Map.Map (MM.MemAddr 64) BS.ByteString
+indexSymbols = F.foldl' doIndex Map.empty
+  where
+    doIndex m memSym =
+      Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
+
 data X86LoadException = X86ElfLoadError String
-                      | forall w . (MM.MemWidth w) => InvalidEntryPoint (MM.MemAddr w)
+                      | InvalidEntryPoint (MM.MemAddr 64)
+                      | MissingSymbolFor (MM.MemAddr 64)
 
 deriving instance Show X86LoadException
 

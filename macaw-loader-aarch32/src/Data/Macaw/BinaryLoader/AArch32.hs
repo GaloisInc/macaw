@@ -11,6 +11,7 @@ module Data.Macaw.BinaryLoader.AArch32 (
   ) where
 
 import qualified Control.Monad.Catch as X
+import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as DLN
@@ -18,6 +19,7 @@ import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
+import qualified Data.Map.Strict as Map
 import           Data.Maybe ( mapMaybe )
 
 import qualified Data.Macaw.ARM as MA
@@ -25,6 +27,7 @@ import qualified Data.Macaw.ARM as MA
 data AArch32ElfData =
   AArch32ElfData { elf :: EE.Elf 32
                  , memSymbols :: [EL.MemSymbol 32]
+                 , symbolIndex :: Map.Map (MM.MemAddr 32) BS.ByteString
                  }
 
 instance MBL.BinaryLoader MA.ARM (EE.Elf 32) where
@@ -33,6 +36,16 @@ instance MBL.BinaryLoader MA.ARM (EE.Elf 32) where
   type Diagnostic MA.ARM (EE.Elf 32) = EL.MemLoadWarning
   loadBinary = loadAArch32Binary
   entryPoints = aarch32EntryPoints
+  symbolFor = aarch32LookupSymbol
+
+aarch32LookupSymbol :: (X.MonadThrow m)
+                    => MBL.LoadedBinary MA.ARM (EE.Elf 32)
+                    -> MM.MemAddr 32
+                    -> m BS.ByteString
+aarch32LookupSymbol loadedBinary addr =
+  case Map.lookup addr (symbolIndex (MBL.binaryFormatData loadedBinary)) of
+    Just sym -> return sym
+    Nothing -> X.throwM (MissingSymbolFor addr)
 
 aarch32EntryPoints :: (X.MonadThrow m)
                    => MBL.LoadedBinary MA.ARM (EE.Elf 32)
@@ -66,13 +79,21 @@ loadAArch32Binary lopts e =
                               , MBL.binaryFormatData =
                                 AArch32ElfData { elf = e
                                                , memSymbols = symbols
+                                               , symbolIndex = indexSymbols symbols
                                                }
                               , MBL.loadDiagnostics = warnings
                               , MBL.binaryRepr = MBL.Elf32Repr
                               }
 
+indexSymbols :: [EL.MemSymbol 32] -> Map.Map (MM.MemAddr 32) BS.ByteString
+indexSymbols = F.foldl' doIndex Map.empty
+  where
+    doIndex m memSym =
+      Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
+
 data AArch32LoadException = AArch32ElfLoadError String
-                          | forall w . (MM.MemWidth w) => InvalidEntryPoint (MM.MemAddr w)
+                          | InvalidEntryPoint (MM.MemAddr 32)
+                          | MissingSymbolFor (MM.MemAddr 32)
 
 deriving instance Show AArch32LoadException
 

@@ -12,6 +12,7 @@ module Data.Macaw.BinaryLoader (
   ) where
 
 import qualified Control.Monad.Catch as X
+import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as E
 import           Data.Kind ( Type )
 import qualified Data.List.NonEmpty as NEL
@@ -83,6 +84,22 @@ class (MM.MemWidth (MR.ArchAddrWidth arch)) =>
                  LoadedBinary arch binFmt
               -> m (NEL.NonEmpty (MM.MemSegmentOff (MM.ArchAddrWidth arch)))
 
+  -- | Look up the symbol for the function or global at the given address, if any
+  --
+  -- This can fail if the address:
+  --
+  -- * Does not correspond to a global or function
+  -- * Does not have an associated symbol
+  --
+  -- Symbols are 'BS.ByteString's because there is no encoding prescribed for them
+  --
+  -- This function is provided as 1) a container format independent method for
+  -- accessing symbol information, and 2) to handle complex translations that
+  -- may be required to interpret symbol addresses on a per-architecture basis.
+  symbolFor :: (X.MonadThrow m)
+            => LoadedBinary arch binFmt
+            -> MM.MemAddr (MM.ArchAddrWidth arch)
+            -> m BS.ByteString
 
 -- | Return a runtime representative of the pointer width of the architecture
 addressWidth :: LoadedBinary arch binFmt -> NR.NatRepr (MM.ArchAddrWidth arch)
