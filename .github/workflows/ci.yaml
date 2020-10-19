@@ -21,8 +21,8 @@ jobs:
     - name: Get GHC
       run: |
         sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }}
-        echo "::add-path::/opt/cabal/bin"
-        echo "::add-path::/opt/ghc/${{ matrix.ghc-ver }}/bin"
+        echo "/opt/cabal/bin" >> $GITHUB_PATH
+        echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
     - name: Cache
       uses: actions/cache@v1
       with:
