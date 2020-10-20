@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        ghc-ver: ["8.6.5", "8.8.4", "8.10.1"]
+        ghc-ver: ["8.6.5", "8.8.4"]
       # complete all jobs
       fail-fast: false
     name: Macaw - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
