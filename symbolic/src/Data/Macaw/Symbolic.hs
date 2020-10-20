@@ -437,7 +437,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
     -- Create atom for entry
     inputAtom <- mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType) >>= \case
       Empty :> atm -> return atm
-      _ -> error "Invalid input atom creation for mkParsedBlockRegCFG"
+      _ -> error "Invalid input atom creation for mkParsedBlockRegCFG" -- TODO: fix warning
     -- Create map from Macaw (address,blockId pairs) to Crucible labels
     blockLabelMap :: BlockLabelMap arch s <-
       mkBlockLabelMap [strippedBlock]
@@ -827,7 +827,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     ng <- mmNonceGenerator
     inputAtom <- mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType) >>= \case
       Empty :> atm -> return atm
-      _ -> error "Error creating input atom for mkFunRegCFG"
+      _ -> error "Error creating input atom for mkFunRegCFG"  -- TODO: fix warning
     -- Create map from Macaw (address,blockId pairs) to Crucible labels
     blockLabelMap :: BlockLabelMap arch s <-
       mkBlockLabelMap blockList

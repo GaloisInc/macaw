@@ -789,7 +789,7 @@ refField :: Ctx.Size ctx -> Ctx.Index ctx tp -> BoundExp -> MacawQ arch t fs Bou
 refField sz idx e = case Ctx.viewSize sz of
   Ctx.IncSize sz' | Ctx.ZeroSize <- Ctx.viewSize sz' -> return e
   _ -> case e of
-    EagerBoundExp (TupE es) | Ctx.indexVal idx < length es -> return $ EagerBoundExp $ es !! (Ctx.indexVal idx)
+    EagerBoundExp (TupE es) | Ctx.indexVal idx < length es -> return $ EagerBoundExp $ es !! (Ctx.indexVal idx) -- TODO: fix error
     EagerBoundExp _ -> bindTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) $(refEager e) |]
     LazyBoundExp _ -> letTH [| $(extractTuple (Ctx.sizeInt sz) (Ctx.indexVal idx)) <$> $(refBinding e) |]
 
