@@ -492,12 +492,21 @@ instance TraversableFC (MacawArchStmtExtension arch)
 
 data MacawBlockEnd arch =
     MacawBlockEndJump
-  | MacawBlockEndCall
+  | MacawBlockEndCall !(Maybe (M.ArchSegmentOff arch))
   | MacawBlockEndReturn
   | MacawBlockEndBranch
-  | MacawBlockEndArch
+  | MacawBlockEndArch !(Maybe (M.ArchSegmentOff arch))
   | MacawBlockEndFail
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance M.MemWidth (M.RegAddrWidth (M.ArchReg arch)) => Show (MacawBlockEnd arch) where
+  show blend = case blend of
+    MacawBlockEndJump -> "macawBlockEndJump"
+    MacawBlockEndCall a -> "macawBlockEndCall: " ++ show a
+    MacawBlockEndReturn -> "macawBlockEndReturn"
+    MacawBlockEndBranch -> "macawBlockEndBranch"
+    MacawBlockEndArch a -> "macawBlockEndArch: " ++ show a
+    MacawBlockEndFail -> "macawBlockEndFail"
 
 sexpr :: String -> [Doc] -> Doc
 sexpr s [] = text s
@@ -1466,13 +1475,13 @@ termStmtToBlockEnd :: forall arch ids. M.ParsedTermStmt arch ids -> MacawBlockEn
 termStmtToBlockEnd tm0 =
   case tm0 of
     M.ParsedReturn {} -> MacawBlockEndReturn
-    M.ParsedCall {} -> MacawBlockEndCall
+    M.ParsedCall _ ret -> MacawBlockEndCall ret
     M.ParsedJump {} -> MacawBlockEndJump
     M.ParsedBranch {} -> MacawBlockEndBranch
     M.ParsedLookupTable {} -> MacawBlockEndJump
-    M.ParsedArchTermStmt {} -> MacawBlockEndArch
+    M.ParsedArchTermStmt _ _ ret -> MacawBlockEndArch ret
     M.ClassifyFailure {} -> MacawBlockEndFail
-    M.PLTStub {} -> MacawBlockEndCall
+    M.PLTStub {} -> MacawBlockEndCall Nothing
     M.ParsedTranslateError{} -> MacawBlockEndFail
 
 -- | This is like 'addSwitch', but for unstructured indirect control flow
