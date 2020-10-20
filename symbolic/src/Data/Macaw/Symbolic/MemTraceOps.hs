@@ -25,7 +25,7 @@ import           Control.Applicative
 import           Control.Lens ((%~), (&), (^.))
 import           Control.Monad.State
 import qualified Data.BitVector.Sized as BV
-import           Data.List
+import           Data.List (intercalate)
 import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import qualified Data.Vector as V

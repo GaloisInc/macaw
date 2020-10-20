@@ -63,7 +63,7 @@ import           Data.Dwarf as Dwarf
 import qualified Data.ElfEdit as Elf
 import           Data.Foldable
 import           Data.Int
-import           Data.List
+import           Data.List (partition, sortOn)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Maybe
