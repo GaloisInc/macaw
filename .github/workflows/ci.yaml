@@ -3,21 +3,24 @@ on:
   push:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        name: [linux-8.8.4]
-        include:
-        - name: linux-8.8.4
-          ghc-ver: 8.8.4
+        ghc-ver: ["8.6.5", "8.8.4"]
       # complete all jobs
       fail-fast: false
+    name: Macaw - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@v2
       with:
         submodules: true
+    - name: Copy cabal project files
+      run: |
+        cp cabal.project.dist                                  cabal.project
+        cp cabal.project.werror                                cabal.project.local
+        cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
     - name: Get GHC
       run: |
         sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }}
@@ -28,14 +31,9 @@ jobs:
       with:
         path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
         # Prefer previous SHA hash if it is still cached
-        key: ${{ matrix.name }}-${{ github.sha }}
+        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: ${{ matrix.name }}
-    - name: Link cabal project files
-      run: |
-        ln -s cabal.project.dist                                  cabal.project
-        ln -s cabal.project.werror                                cabal.project.local
-        ln -s cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
+        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
     - name: Cabal update
       run: cabal update
       # Build macaw-base dependencies and crucible separately just so later
