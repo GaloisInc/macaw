@@ -260,7 +260,7 @@ compareElf dwarfDump path bytes = do
        else do
         BSL.writeFile "lldd" llvmDwarfDump
         BSL.writeFile "mcdd" myDwarfDump
-        reportError path "Output different: See mydd and lldd"
+        reportError path "Output different: See mcdd and lldd"
     Right _ -> do
       -- For now we skip 32bit and non-x86 files.
       pure ()
