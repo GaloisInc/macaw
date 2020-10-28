@@ -4,6 +4,8 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
@@ -72,17 +74,16 @@ aarch32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s ->
     AArch32PrimStmt p -> AF.stmtSemantics fs p s
     AArch32PrimTerm p -> AF.termSemantics fs p s
 
-instance MS.ArchInfo SA.AArch32 where
-  archVals _ = Just $ MS.ArchVals
-               { MS.archFunctions = aarch32MacawSymbolicFns
-               , MS.withArchEval = \sym k -> do
-                   sfns <- liftIO $ AF.newSymFuns sym
-                   k (aarch32MacawEvalFn sfns)
-               , MS.withArchEvalTrace = error "Removing withArchEvalTrace"
-               , MS.withArchConstraints = \x -> x
-               , MS.lookupReg = aarch32LookupReg
-               , MS.updateReg = aarch32UpdateReg
-               }
+instance MS.GenArchInfo mem SA.AArch32 where
+  genArchVals _ _ = Just $ MS.GenArchVals
+                    { MS.archFunctions = aarch32MacawSymbolicFns
+                    , MS.withArchEval = \sym k -> do
+                        sfns <- liftIO $ AF.newSymFuns sym
+                        k (aarch32MacawEvalFn sfns)
+                    , MS.withArchConstraints = \x -> x
+                    , MS.lookupReg = aarch32LookupReg
+                    , MS.updateReg = aarch32UpdateReg
+                    }
 
 data AArch32StmtExtension (f :: CT.CrucibleType -> Type) (ctp :: CT.CrucibleType) where
   AArch32PrimFn :: MAA.ARMPrimFn (AA.AtomWrapper f) t -> AArch32StmtExtension f (MS.ToCrucibleType t)
