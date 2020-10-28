@@ -67,8 +67,8 @@ doBitcast sym x eqPr =
             extY <- bvZext sym outW =<< MM.projectLLVM_bv sym y
             shiftAmt <- bvLit sym outW (BV.mkBV outW i)
             r' <- bvOrBits sym r =<< bvShl sym extY shiftAmt
-            pure (i+1,r')
-      (_,r) <- F.foldlM doPack (1,extH) rest
+            pure (i+intValue w,r')
+      (_,r) <- F.foldlM doPack (intValue w,extH) rest
       MM.llvmPointer_bv sym r
     M.UnpackBits n w -> do
       let inW = natMultiply n w
@@ -76,7 +76,7 @@ doBitcast sym x eqPr =
       LeqProof <- pure $ plus1LeqDbl n w
       xbv <- MM.projectLLVM_bv sym x
       V.generateM (fromIntegral (natValue n)) $ \i -> do
-        shiftAmt <- bvLit sym inW (BV.mkBV inW (toInteger i))
+        shiftAmt <- bvLit sym inW (BV.mkBV inW (toInteger i * intValue w))
         MM.llvmPointer_bv sym =<< bvTrunc sym w =<< bvLshr sym xbv shiftAmt
     M.FromFloat f -> do
       Refl <- pure $ checkMacawFloatEq f
