@@ -66,7 +66,7 @@ module Data.Macaw.ARM.Disassemble
     )
     where
 
-import           Control.Lens ( (^.), (.~), (&) )
+import           Control.Lens ( (^.), (.~) )
 import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
@@ -127,35 +127,33 @@ disassembleFn lookupA32Semantics lookupT32Semantics nonceGen startAddr regState 
   -- (because macaw does not maintain abstract states between function calls).
   -- We account for that by force setting PSTATE_T to 1 (true) if the low bit of
   -- the address is set.  Otherwise, we take the initial value.
-  let (dmode, regState') = setThumbState startAddr regState
+  let dmode = thumbState regState
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
                                       T32I inst -> lookupT32Semantics ipval inst
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock
                                dmode
                                lookupSemantics
-                               nonceGen (MC.clearSegmentOffLeastBit startAddr) regState' maxSize))
+                               nonceGen (MC.clearSegmentOffLeastBit startAddr) regState maxSize))
   case mr of
     Left (blocks, off, _exn) -> return (blocks, off)
     Right (blocks, bytes) -> return (blocks, bytes)
 
+-- | The mode we are decoding this block in (ARM vs Thumb)
+--
+-- We turn this into an explicit data type so that we don't need to check the
+-- low bit of the address or PSTATE everywhere.
 data DecodeMode = A32 | T32
   deriving (Show)
 
-setThumbState :: MM.MemSegmentOff 32
-              -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
-              -> (DecodeMode, MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids))
-setThumbState startAddr regState
-  | lowBitSet startAddr = (T32, regState & MC.boundValue pstate_t .~ MC.BVValue (PN.knownNat @1) 1)
-  | otherwise =
-    let pstate_t_val = regState ^. MC.boundValue pstate_t
-        mode = if pstate_t_val == MC.BVValue PN.knownNat 0 then A32 else T32
-    in (mode, regState)
+-- | If the low-bit of the address is set
+thumbState :: MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
+           -> DecodeMode
+thumbState regState =
+  let pstate_t_val = regState ^. MC.boundValue pstate_t
+  in if pstate_t_val == MC.BVValue PN.knownNat 0 then A32 else T32
   where
     pstate_t = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
-
-lowBitSet :: MC.ArchSegmentOff ARM.AArch32 -> Bool
-lowBitSet addr = MC.clearSegmentOffLeastBit addr /= addr
 
 tryDisassembleBlock :: DecodeMode
                     -> (MC.Value ARM.AArch32 ids (MT.BVType 32) -> InstructionSet -> Maybe (SG.Generator ARM.AArch32 ids s ()))
