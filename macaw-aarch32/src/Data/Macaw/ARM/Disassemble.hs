@@ -121,14 +121,12 @@ disassembleFn :: (MC.Value ARM.AArch32 ids (MT.BVType 32) -> ARMD.Instruction ->
               -- ^ Maximum size of the block (a safeguard)
               -> ST s (MCB.Block ARM.AArch32 ids, Int)
 disassembleFn lookupA32Semantics lookupT32Semantics nonceGen startAddr regState maxSize = do
-  let ca = MC.clearSegmentOffLeastBit startAddr
-  -- traceM ("Disassemble function from " ++ show startAddr ++ "/off=" ++ show (MC.msegOffset startAddr, ca, MC.msegOffset ca))
-  -- FIXME: If the low bit is set, explicitly initialize PSTATE_T to 1.  Otherwise, initialize it to 0
-  --
-  -- We don't have any good side channels here, so we need to make sure that
-  -- every block in the discovery queue has its low bit set if in thumb mode.
-  -- We don't have a great way to do that, however (e.g., on a FetchAndExecute).
-  -- I suppose we could mess with `nextPCOffset`.
+  -- NOTE: The core discovery loop passes in an initial register state with the
+  -- PSTATE_T (thumb state) bit set or not set based on the predecessor blocks.
+  -- However, that does not account for mode switches between function calls
+  -- (because macaw does not maintain abstract states between function calls).
+  -- We account for that by force setting PSTATE_T to 1 (true) if the low bit of
+  -- the address is set.  Otherwise, we take the initial value.
   let (dmode, regState') = setThumbState startAddr regState
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
@@ -145,11 +143,14 @@ data DecodeMode = A32 | T32
   deriving (Show)
 
 setThumbState :: MM.MemSegmentOff 32
-              -> MC.RegState AR.ARMReg (MC.Value arch ids)
-              -> (DecodeMode, MC.RegState AR.ARMReg (MC.Value arch ids))
+              -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
+              -> (DecodeMode, MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids))
 setThumbState startAddr regState
   | lowBitSet startAddr = (T32, regState & MC.boundValue pstate_t .~ MC.BVValue (PN.knownNat @1) 1)
-  | otherwise = (A32, regState & MC.boundValue pstate_t .~ MC.BVValue (PN.knownNat @1) 0)
+  | otherwise =
+    let pstate_t_val = regState ^. MC.boundValue pstate_t
+        mode = if pstate_t_val == MC.BVValue PN.knownNat 0 then A32 else T32
+    in (mode, regState)
   where
     pstate_t = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
 
@@ -208,9 +209,7 @@ disassembleBlock dmode lookupSemantics gs curPCAddr blockOff maxOffset = do
     Left err -> failAt gs blockOff curPCAddr (DecodeError err)
     Right (_, 0) -> failAt gs blockOff curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
     Right (i, bytesRead) -> do
-      -- FIXME: Set PSTATE.T based on whether instruction is A32I or T32I
-      -- traceM ("II: " ++ show i)
-      -- let curPC = MM.segmentOffAddr seg off
+      -- traceM (show (curPCAddr, "II: ", show i))
       let nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: MC.Value ARM.AArch32 ids (MT.BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC

@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
@@ -37,6 +38,7 @@ import qualified Data.Set as Set
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
 
+import qualified Data.Macaw.ARM.Arch as MAA
 import           Data.Macaw.ARM.Simplify ()
 
 callParams :: (forall tp . AR.ARMReg tp -> Bool)
@@ -53,30 +55,32 @@ initialBlockRegs :: forall ids .
                     -- ^ The address of the block
                  -> MC.ArchBlockPrecond ARM.AArch32
                  -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
-initialBlockRegs addr _preconds = MSG.initRegState addr &
+initialBlockRegs addr preconds = MSG.initRegState addr &
   -- FIXME: Set all simple globals to 0??
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__UnpredictableBehavior")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__UndefinedBehavior")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__AssertionFailure")) .~ MC.BoolValue False &
-  -- FIXME: PSTATE_T is 0 for ARM mode, 1 for Thumb mode. For now, we
-  -- are setting this concretely to 0 at the start of a block, but
-  -- once we get Thumb support, we will want to refer to the semantics
-  -- for this.
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
+  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ boolAsBV (MAA.bpPSTATE_T preconds) &
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_IT")) .~ MC.BVValue knownNat 0 &
-  MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) .~ MC.BVValue knownNat 0 &
   MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_nRW")) .~ MC.BVValue knownNat 1 &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingInterrupt")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__PendingPhysicalSError")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__Sleeping")) .~ MC.BoolValue False &
   MC.boundValue (AR.ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")) .~ MC.BoolValue False
-
+  where
+    boolAsBV b = if b then MC.bvValue 1 else MC.bvValue 0
 
 extractBlockPrecond :: MC.ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
                     -> Either String (MI.ArchBlockPrecond ARM.AArch32)
-extractBlockPrecond _ _ = Right ()
+extractBlockPrecond _ absState =
+  case absState ^. MA.absRegState . MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) of
+    MA.FinSet (Set.toList -> [bi]) -> Right (MAA.ARMBlockPrecond { MAA.bpPSTATE_T = bi == 1 })
+    MA.FinSet {} -> Left "Multiple FinSet values for PSTATE_T"
+    MA.StridedInterval {} -> Left "StridedInterval where PSTATE_T expected"
+    MA.SubValue {} -> Left "SubValue where PSTATE_T expected"
+    MA.TopV -> Left "TopV where PSTATE_T expected"
 
 -- | Set up an initial abstract state that holds at the beginning of a function.
 --
@@ -92,10 +96,15 @@ mkInitialAbsState :: MM.Memory 32
                   -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
 mkInitialAbsState _mem startAddr =
   s0 & MA.absRegState . MC.boundValue AR.arm_LR .~ MA.ReturnAddr
+     & MA.absRegState . MC.boundValue pstate_t_reg .~ MA.FinSet (Set.fromList [pstate_t_val])
   -- FIXME: Initialize every single global to macaw's "Initial" value
   where initRegVals = MapF.fromList []
         s0 = MA.fnStartAbsBlockState startAddr initRegVals []
+        pstate_t_reg = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
+        pstate_t_val = if lowBitSet startAddr then 1 else 0
 
+lowBitSet :: MC.ArchSegmentOff ARM.AArch32 -> Bool
+lowBitSet addr = MC.clearSegmentOffLeastBit addr /= addr
 
 absEvalArchFn :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp

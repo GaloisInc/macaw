@@ -75,7 +75,13 @@ rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 -- The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.  PowerPC doesn't need any
 -- additional information, so we use ()
-type instance MAI.ArchBlockPrecond ARM.AArch32 = ()
+type instance MAI.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
+
+data ARMBlockPrecond =
+  ARMBlockPrecond { bpPSTATE_T :: Bool
+                  }
+  deriving (Eq, Ord, Show)
+
 
 -- ----------------------------------------------------------------------
 -- ARM terminal statements (which have instruction-specific effects on
