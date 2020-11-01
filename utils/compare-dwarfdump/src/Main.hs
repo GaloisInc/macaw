@@ -69,7 +69,6 @@ instance WriteMonad IO where
 -- | Pretty print instructions for a CIE or FDE.
 ppInsns :: WriteMonad m
         => FilePath -- ^ File we are parsing
-        -> Dwarf.TargetSize
         -> BS.ByteString -- ^ .eh_frame/.debug_frame data
         -> Dwarf.DW_CIE -- ^ CIE for instructions
         -> Word64 -- ^ Offset for CIE/FDE
@@ -77,7 +76,8 @@ ppInsns :: WriteMonad m
         -> Dwarf.Encoding -- ^ Encoding of instructions
         -> BS.ByteString -- ^ Buffer for instructions
         -> m ()
-ppInsns path tgtSize ehFrameData cie off ctxSize enc insnBuf = do
+ppInsns path ehFrameData cie off ctxSize enc insnBuf = do
+  let tgtSize = Dwarf.cieTargetSize cie
   let end = Dwarf.cieEndianess cie
   let rdr = Dwarf.reader end enc tgtSize
   let ppCtx = Dwarf.CallFramePPCtx { Dwarf.ppDataAlignment = Dwarf.cieDataAlignmentFactor cie
@@ -100,16 +100,30 @@ ppInsns path tgtSize ehFrameData cie off ctxSize enc insnBuf = do
         writeBuilder "  "
         writeLn $ Dwarf.ppCFA ppCtx insn
 
+-- | Information about .eh_frame/.debug_frame
+data Frame = Frame { frameCtx :: !Dwarf.FrameContext
+                     -- ^ Flag to indicate if this is .eh_frame or
+                     -- .debug_frame.
+                   , frameData :: !BS.ByteString
+                     -- ^ Byres in frame
+                   , frameAddr :: !Word64
+                     -- ^ Address frame is loaded at.
+                   , frameExcept :: Maybe (Elf.ElfSection Word64)
+                     -- ^ Section for .gcc_except_table if defined.
+                     --
+                     -- Used so we validate that we understand the
+                     -- LSDA address.
+                   }
+
 -- | Print out all the FDEs for the given CIE in Dwarf dump format.
 ppFDEs :: WriteMonad m
        => FilePath
-       -> Dwarf.FrameContext
-       -> BS.ByteString
-       -> Dwarf.DW_CIE
-       -> Word64
+       -> Frame
+       -> Dwarf.DW_CIE -- ^ CIE for this FDE
+       -> Word64 -- Offset within eh frame.
        -> m Dwarf.FDEParseError
-ppFDEs path ctx ehFrameData cie off = do
-  case Dwarf.getFDEAt ctx Dwarf.TargetSize64 ehFrameData cie off of
+ppFDEs path f cie off = do
+  case Dwarf.getFDEAt (frameCtx f) (frameData f) cie off of
     Left e -> pure e
     Right (fde, off') -> do
       let addr = Dwarf.fdeStartAddress fde
@@ -126,13 +140,19 @@ ppFDEs path ctx ehFrameData cie off = do
       writeBuilder "..."
       writeBuilder $ fromString $ ppHex (addr + Dwarf.fdeAddressRange fde)
       writeBuilder "\n"
-      case Dwarf.fdeLsdaAddress fde of
-        Just a -> do
-          writeLn $ "  LSDA Address: " <> ppAddr a
+      case Dwarf.fdeLsdaAddress fde (frameAddr f + off) of
         Nothing -> pure ()
-      ppInsns path Dwarf.TargetSize64 ehFrameData cie off (Dwarf.fdeSize fde) (Dwarf.fdeEncoding fde)
+        Just (a,ra) -> do
+          writeLn $ "  LSDA Address: " <> ppAddr a
+          case frameExcept f of
+            Nothing -> pure ()
+            Just s -> do
+              let inRange = Elf.elfSectionAddr s <= ra
+                         && (ra - Elf.elfSectionAddr s) < Elf.elfSectionSize s
+              when (not inRange) $ reportError path "Invvalid LSDA address."
+      ppInsns path (frameData f) cie off (Dwarf.fdeSize fde) (Dwarf.fdeEncoding fde)
               (Dwarf.fdeInstructions fde)
-      ppFDEs path ctx ehFrameData cie off'
+      ppFDEs path f cie off'
 
 ppBuffer :: BS.ByteString -> String
 ppBuffer b = unwords $ fmap ppByte $ BS.unpack b
@@ -149,18 +169,16 @@ ppLastCIE lastOff = do
   writeLn ""
   writeLn ""
 
-
 -- | Pretty print CIEs in file with
 ppCIEs :: WriteMonad m
        => FilePath
-       -> Dwarf.FrameContext
        -> Dwarf.Endianess
-       -> BS.ByteString
+       -> Frame
        -> Word64
        -> m ()
-ppCIEs _ _ _ d off | BS.length d <= fromIntegral off = pure ()
-ppCIEs path ctx end ehFrameData off = do
-  case Dwarf.getCIE ctx end Dwarf.TargetSize64 ehFrameData off of
+ppCIEs _ _ f off | BS.length (frameData f) <= fromIntegral off = pure ()
+ppCIEs path end f off = do
+  case Dwarf.getCIE (frameCtx f) end Dwarf.TargetSize64 (frameData f) off of
     Left (_, msg) ->
       reportError path $ "CIE " <> showHex off " parse failure: " <> msg
     Right (_, Nothing) -> do
@@ -181,26 +199,31 @@ ppCIEs path ctx end ehFrameData off = do
       writeLn $ "  Return address column: " ++ show (Dwarf.cieReturnAddressRegister cie)
       case Dwarf.ciePersonality cie of
         Dwarf.NoCiePersonality -> pure ()
-        Dwarf.IndirectCiePersonality a -> writeLn $ "  Personality Address: " ++ ppAddr a
-        Dwarf.DirectCiePersonality   a -> writeLn $ "  Personality Address: " ++ ppAddr a
+        Dwarf.IndirectCiePersonality _ a -> writeLn $ "  Personality Address: " ++ ppAddr a
+        Dwarf.DirectCiePersonality   _ a -> writeLn $ "  Personality Address: " ++ ppAddr a
       unless (BS.null (Dwarf.cieAugmentationData cie)) $ do
         writeLn $ "  Augmentation data:     " ++ ppBuffer (Dwarf.cieAugmentationData cie)
       writeLn ""
-      ppInsns path Dwarf.TargetSize64 ehFrameData cie off (Dwarf.cieSize cie) (Dwarf.cieEncoding cie)
+      ppInsns path (frameData f) cie off (Dwarf.cieSize cie) (Dwarf.cieEncoding cie)
               (Dwarf.cieInitialInstructions cie)
-      fdeErr <- ppFDEs path ctx ehFrameData cie off'
+      fdeErr <- ppFDEs path f  cie off'
       writeBuilder "\n"
       case fdeErr of
         Dwarf.FDEReachedEnd -> pure ()
         Dwarf.FDEParseError fdeOff msg -> do
           reportError path $ "FDE error " ++ showHex fdeOff ": " ++ msg
         Dwarf.FDECIE nextCIEOff -> do
-          ppCIEs path ctx end ehFrameData nextCIEOff
+          ppCIEs path end f nextCIEOff
         Dwarf.FDEEnd lastOff -> do
           ppLastCIE lastOff
 
 mkDwarfdumpOutput :: WriteMonad m => FilePath -> Elf.Elf 64 -> m ()
 mkDwarfdumpOutput path elfFile = do
+  let mExceptTable =
+        case Elf.findSectionByName ".gcc_except_table" elfFile of
+          [s] -> Just s
+          _ -> Nothing
+
   writeBuilder $ fromString path
   writeBuilder ":\tfile format ELF64-x86-64\n\n"
   writeBuilder ".debug_frame contents:\n\n"
@@ -215,19 +238,33 @@ mkDwarfdumpOutput path elfFile = do
       let frameData = BSL.toStrict $ Zlib.decompress $ BSL.fromStrict $ BS.drop 12 compressedData
       when (fromIntegral (BS.length frameData) /= uncompressedSize) $ do
         reportError path "Uncompressed .zdebug_frame size is incorrect."
-      ppCIEs path Dwarf.DebugFrame Dwarf.LittleEndian frameData 0
+      let f = Frame { frameCtx = Dwarf.DebugFrame
+                    , frameData = frameData
+                    , frameAddr = Elf.elfSectionAddr frameSection
+                    , frameExcept = mExceptTable
+                    }
+      ppCIEs path Dwarf.LittleEndian f 0
     _ -> pure ()
   case Elf.findSectionByName ".debug_frame" elfFile of
     [frameSection] -> do
       let frameData = Elf.elfSectionData frameSection
-      ppCIEs path Dwarf.DebugFrame Dwarf.LittleEndian frameData 0
+      let f = Frame { frameCtx = Dwarf.DebugFrame
+                    , frameData = frameData
+                    , frameAddr = Elf.elfSectionAddr frameSection
+                    , frameExcept = mExceptTable
+                    }
+      ppCIEs path Dwarf.LittleEndian f 0
     _ -> pure ()
 
   writeBuilder "\n.eh_frame contents:\n\n"
   case Elf.findSectionByName ".eh_frame" elfFile of
-    [ehFrame] -> do
-      let ehFrameData = Elf.elfSectionData ehFrame
-      ppCIEs path Dwarf.EhFrame Dwarf.LittleEndian ehFrameData 0
+    [frameSection] -> do
+      let f = Frame { frameCtx = Dwarf.EhFrame
+                    , frameData = Elf.elfSectionData frameSection
+                    , frameAddr = Elf.elfSectionAddr frameSection
+                    , frameExcept = mExceptTable
+                    }
+      ppCIEs path Dwarf.LittleEndian f 0
     _ -> pure ()
 
 newtype Exporter a = Exporter (State Bld.Builder a)

@@ -23,7 +23,7 @@ module Data.Macaw.Discovery
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
        , State.trustedFunctionEntryPoints
-       , State.exploreFunctionAddr
+       , State.exploreFnPred
        , State.AddrSymMap
        , State.funInfo
        , State.exploredFunctions
@@ -279,7 +279,7 @@ markAddrAsFunction rsn addr s
   | Map.member addr (s^.unexploredFunctions) = s
   -- Ignore if address is not in an executable segment.
   | not (isExecutableSegOff addr) = s
-  | not ((s^.exploreFunctionAddr) addr) = s
+  | not ((s^.exploreFnPred) addr) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
@@ -323,6 +323,7 @@ data FunState arch s ids
    = FunState { funReason :: !(FunctionExploreReason (ArchAddrWidth arch))
               , funNonceGen  :: !(NonceGenerator (ST s) ids)
               , curFunAddr   :: !(ArchSegmentOff arch)
+                -- ^ Address of the function
               , _curFunCtx   :: !(DiscoveryState arch)
                 -- ^ Discovery state without this function
               , _curFunBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
@@ -1071,21 +1072,29 @@ instance Fail.MonadFail Classifier where
   [@RegState ...@]: Final register values
 -}
 data BlockClassifierContext arch ids = BlockClassifierContext
-  { classifierParseContext  :: ParseContext arch ids
+  { classifierParseContext  :: !(ParseContext arch ids)
   -- ^ Information needed to construct abstract processor states
-  , classifierInitRegState  :: RegState (ArchReg arch) (Value arch ids)
+  , classifierInitRegState  :: !(RegState (ArchReg arch) (Value arch ids))
   -- ^ The (concrete) register state at the beginning of the block
-  , classifierStmts         :: Seq (Stmt arch ids)
+  , classifierStmts         :: !(Seq (Stmt arch ids))
   -- ^ The statements of the block (without the terminator)
-  , classifierAbsState      :: AbsProcessorState (ArchReg arch) ids
+  , classifierBlockSize     :: !Int
+    -- ^ Size of block being classified.
+  , classifierAbsState      :: !(AbsProcessorState (ArchReg arch) ids)
   -- ^ The abstract processor state before the terminator is executed
-  , classifierJumpBounds    :: Jmp.IntraJumpBounds arch ids
+  , classifierJumpBounds    :: !(Jmp.IntraJumpBounds arch ids)
   -- ^ The relational abstract processor state before the terminator is executed
-  , classifierWrittenAddrs  :: [ArchSegmentOff arch]
+  , classifierWrittenAddrs  :: !([ArchSegmentOff arch])
   -- ^ The addresses of observed memory writes in the block
-  , classifierFinalRegState :: RegState (ArchReg arch) (Value arch ids)
+  , classifierFinalRegState :: !(RegState (ArchReg arch) (Value arch ids))
   -- ^ The final (concrete) register state before the terminator is executed
   }
+
+classifierEndBlock :: BlockClassifierContext arch ids
+                   -> MemAddr (ArchAddrWidth arch)
+classifierEndBlock ctx = withArchConstraints (pctxArchInfo (classifierParseContext ctx)) $
+  let blockStart = segoffAddr (pctxAddr (classifierParseContext ctx))
+   in incAddr (toInteger (classifierBlockSize ctx)) blockStart
 
 type BlockClassifier arch ids =
   ReaderT (BlockClassifierContext arch ids)
@@ -1321,13 +1330,15 @@ noreturnCallParsedContents :: BlockClassifierContext arch ids -> ParsedContents 
 noreturnCallParsedContents bcc =
   let ctx  = classifierParseContext bcc
       mem  = pctxMemory ctx
-      regs = classifierFinalRegState bcc
       absState = classifierAbsState bcc
-      ainfo = pctxArchInfo (classifierParseContext bcc)
-   in withArchConstraints ainfo $
+      regs = classifierFinalRegState bcc
+      blockEnd = classifierEndBlock bcc
+   in withArchConstraints (pctxArchInfo ctx) $
         ParsedContents { parsedNonterm = toList (classifierStmts bcc)
                        , parsedTerm  = ParsedCall regs Nothing
-                       , writtenCodeAddrs = classifierWrittenAddrs bcc
+                       , writtenCodeAddrs =
+                           filter (\a -> segoffAddr a /= blockEnd) $
+                             classifierWrittenAddrs bcc
                        , intraJumpTargets = []
                        , newFunctionAddrs = identifyCallTargets mem absState regs
                        }
@@ -1337,9 +1348,8 @@ noreturnCallClassifier :: BlockClassifier arch ids
 noreturnCallClassifier = classifierName "no return call" $ do
   bcc <- ask
   let ctx = classifierParseContext bcc
-  let ainfo = pctxArchInfo ctx
   -- Check for tail call when the calling convention seems to be satisfied.
-  withArchConstraints ainfo $ do
+  withArchConstraints (pctxArchInfo ctx) $ do
     let regs = classifierFinalRegState bcc
     let ipVal = regs ^. boundValue ip_reg
     -- Get memory address
@@ -1355,11 +1365,10 @@ noreturnCallClassifier = classifierName "no return call" $ do
     -- Check function labeled noreturn
     case Map.lookup a (pctxKnownFnEntries ctx) of
       Nothing -> fail $ printf "Noreturn target %s is not a known function entry." (show a)
-      Just MayReturnFun -> fail $ printf "No return targert %s not labeled noreturn." (show a)
+      Just MayReturnFun -> fail $ printf "Return target %s labeled mayreturn." (show a)
       Just NoReturnFun -> pure ()
     -- Return no
     pure $! noreturnCallParsedContents bcc
-
 
 -- | Attempt to recognize tail call.
 tailCallClassifier :: BlockClassifier arch ids
@@ -1404,42 +1413,24 @@ useExternalTargets bcc = do
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  (RegisterInfo (ArchReg arch))
-                     => ParseContext arch ids
-                     -> RegState (ArchReg arch) (Value arch ids)
-                        -- ^ Initial register values
+                     => BlockClassifierContext arch ids
                      -> [Stmt arch ids]
-                        -- ^ Statements
-                     -> RegState (ArchReg arch) (Value arch ids)
-                        -- ^ Final register values
-                     -> AbsProcessorState (ArchReg arch) ids
-                     -> Jmp.IntraJumpBounds arch ids
-                     -> [ArchSegmentOff arch]
                      -> ParsedContents arch ids
-parseFetchAndExecute ctx initRegs stmts finalRegs absState jmpBounds writtenAddrs = do
-  -- Try to figure out what control flow statement we have.
-  let classCtx = BlockClassifierContext
-        { classifierParseContext = ctx
-        , classifierInitRegState = initRegs
-        , classifierStmts = Seq.fromList stmts
-        , classifierAbsState = absState
-        , classifierJumpBounds = jmpBounds
-        , classifierWrittenAddrs = writtenAddrs
-        , classifierFinalRegState = finalRegs
-        }
+parseFetchAndExecute classCtx stmts = do
   let cl = branchClassifier
-        <|> noreturnCallClassifier
-        <|> callClassifier
-        <|> returnClassifier
-        <|> directJumpClassifier
-        <|> jumpTableClassifier
-        <|> pltStubClassifier
-        <|> tailCallClassifier
+           <|> noreturnCallClassifier
+           <|> callClassifier
+           <|> returnClassifier
+           <|> directJumpClassifier
+           <|> jumpTableClassifier
+           <|> pltStubClassifier
+           <|> tailCallClassifier
   case runReaderT cl classCtx of
     ClassifySucceeded _ m -> m
     ClassifyFailed rsns ->
       ParsedContents { parsedNonterm = stmts
-                     , parsedTerm  = ClassifyFailure finalRegs rsns
-                     , writtenCodeAddrs = writtenAddrs
+                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) rsns
+                     , writtenCodeAddrs = classifierWrittenAddrs classCtx
                      , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []
                      }
@@ -1452,11 +1443,13 @@ parseBlock :: ParseContext arch ids
            -- ^ Initial register values
            -> Block arch ids
               -- ^ Block to parse
+           -> Int
+              -- ^ Size of block
            -> AbsBlockState (ArchReg arch)
               -- ^ Abstract state at start of block
            -> Jmp.InitJumpBounds arch
            -> ParsedContents arch ids
-parseBlock ctx initRegs b absBlockState blockBnds = do
+parseBlock ctx initRegs b sz absBlockState blockBnds = do
   let ainfo = pctxArchInfo ctx
   let mem   = pctxMemory ctx
   withArchConstraints (pctxArchInfo ctx) $ do
@@ -1465,8 +1458,19 @@ parseBlock ctx initRegs b absBlockState blockBnds = do
              initJmpBounds = Jmp.mkIntraJumpBounds blockBnds
           in recordWriteStmts ainfo mem initAbsState initJmpBounds [] (blockStmts b)
    case blockTerm b of
-    FetchAndExecute finalRegs ->
-      parseFetchAndExecute ctx initRegs (blockStmts b) finalRegs absState jmpBounds writtenAddrs
+    FetchAndExecute finalRegs -> do
+      -- Try to figure out what control flow statement we have.
+      let classCtx = BlockClassifierContext
+            { classifierParseContext = ctx
+            , classifierInitRegState = initRegs
+            , classifierStmts = Seq.fromList (blockStmts b)
+            , classifierBlockSize = sz
+            , classifierAbsState = absState
+            , classifierJumpBounds = jmpBounds
+            , classifierWrittenAddrs = writtenAddrs
+            , classifierFinalRegState = finalRegs
+            }
+      parseFetchAndExecute classCtx (blockStmts b)
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg ->
@@ -1533,7 +1537,7 @@ addBlock src finfo pr = do
                          , pctxAddr           = src
                          , pctxExtResolution  = extRes
                          }
-  let pc = parseBlock ctx initRegs b (foundAbstractState finfo) (foundJumpBounds finfo)
+  let pc = parseBlock ctx initRegs b sz (foundAbstractState finfo) (foundJumpBounds finfo)
   let pb = ParsedBlock { pblockAddr    = src
                        , pblockPrecond = Right pr
                        , blockSize     = sz
@@ -1654,7 +1658,6 @@ analyzeFunction logFn addr rsn s =
     Just finfo -> pure (s, finfo)
     Nothing -> runFunctionAnalysis logFn addr rsn s []
 
-
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
 -- analyzed all function entry points.
@@ -1663,36 +1666,10 @@ analyzeFunction logFn addr rsn s =
 -- analyze unexploredFunctions at addresses that do not satisfy this predicate.
 analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
-  case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
+  case Map.lookupMin (info^.unexploredFunctions) of
     Nothing -> info
     Just (addr, rsn) ->
       analyzeDiscoveredFunctions $! fst (runST ((analyzeFunction (\_ -> pure ()) addr rsn info)))
-  where exploreOK unexploredFnMap
-          -- filter unexplored functions using the predicate if present
-          | Just xpFnPred <- info^.exploreFnPred
-          = Map.filterWithKey (\addr _r -> xpFnPred addr) unexploredFnMap
-          | otherwise = unexploredFnMap
-
-
--- | Extend the analysis of a previously analyzed function with new
--- information about the transfers for a block in that function.  The
--- assumption is that the block in question previously had an unknown
--- transfer state condition, and that the new transfer addresses were
--- discovered by other means (e.g. SMT analysis).  The block in
--- question's terminal statement will be replaced by an ITE (from IP
--- -> new addresses) and the new addresses will be added to the
--- frontier for additional discovery.
-addDiscoveredFunctionBlockTargets :: DiscoveryState arch
-                                  -> DiscoveryFunInfo arch ids
-                                  -- ^ The function for which we have learned additional information
-                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
-                                  -> DiscoveryState arch
-addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
-  let rsn = discoveredFunReason origFunInfo
-      funAddr = discoveredFunAddr origFunInfo
-  in fst $ runST (runFunctionAnalysis (\_ -> pure ())
-                                      funAddr rsn initState
-                                      resolvedTargets)
 
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.
@@ -1720,6 +1697,25 @@ runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
            & unexploredFunctions %~ Map.delete addr
   seq finfo $ seq s $ pure (s', Some finfo)
 
+
+-- | Extend the analysis of a previously analyzed function with new
+-- information about the transfers for a block in that function.  The
+-- assumption is that the block in question previously had an unknown
+-- transfer state condition, and that the new transfer addresses were
+-- discovered by other means (e.g. SMT analysis).  The block in
+-- question's terminal statement will be replaced by an ITE (from IP
+-- -> new addresses) and the new addresses will be added to the
+-- frontier for additional discovery.
+addDiscoveredFunctionBlockTargets :: DiscoveryState arch
+                                  -> DiscoveryFunInfo arch ids
+                                  -- ^ The function for which we have learned additional information
+                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                                  -> DiscoveryState arch
+addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
+  let rsn = discoveredFunReason origFunInfo
+      funAddr = discoveredFunAddr origFunInfo
+      logBlock _ = pure ()
+  in fst $ runST $ runFunctionAnalysis logBlock funAddr rsn initState resolvedTargets
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
@@ -1787,25 +1783,27 @@ cfgFromAddrs ainfo mem addrSymMap =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-resolveFuns :: (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
-               -- ^ Callback for discovered functions
-               --
-               -- Should return true if we should analyze the function and false otherwise.
-            -> (ArchSegmentOff arch -> ArchSegmentOff arch -> ST s ())
-               -- ^ Callback for logging blocks discovered within function
-               -- Arguments include the address of function and address of block.
+resolveFuns :: DiscoveryOptions
+               -- ^ Options controlling discovery
             -> DiscoveryState arch
-            -> ST s (DiscoveryState arch)
-resolveFuns analyzeFun analyzeBlock info = seq info $
+            -> IO (DiscoveryState arch)
+resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
   case Map.minViewWithKey (info^.unexploredFunctions) of
     Nothing -> pure info
-    Just ((addr, rsn), rest) -> do
-      p <- analyzeFun addr rsn
-      if p then do
-        (info',_) <- analyzeFunction (analyzeBlock addr) addr rsn info
-        resolveFuns analyzeFun analyzeBlock info'
-       else
-        resolveFuns analyzeFun analyzeBlock (info & unexploredFunctions .~ rest)
+    Just ((addr, rsn), _) -> do
+      let symMap = symbolNames info
+      when (logAtAnalyzeFunction disOpts) $ do
+        hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
+        hFlush stderr
+      if Map.member addr (info^.funInfo) then
+        resolveFuns disOpts info
+       else do
+        let analyzeBlock baddr = ioToST $ do
+              when (logAtAnalyzeBlock disOpts) $ do
+                hPutStrLn stderr $ "  Analyzing block: " ++ show baddr
+                hFlush stderr
+        (info', _) <- stToIO $ runFunctionAnalysis analyzeBlock addr rsn info []
+        resolveFuns disOpts info'
 
 ------------------------------------------------------------------------
 -- Top-level discovery
@@ -1888,37 +1886,23 @@ completeDiscoveryState :: forall arch
                        .  DiscoveryState arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
-                       -> (ArchSegmentOff arch -> Bool)
-                          -- ^ Predicate to check if we should explore a function
-                          --
-                          -- Return true to explore all functions.
                        -> IO (DiscoveryState arch)
-completeDiscoveryState initState disOpt funPred = do
+completeDiscoveryState initState disOpt = do
  let ainfo = archInfo initState
  let mem = memory initState
  let symMap = symbolNames initState
- stToIO $ withArchConstraints ainfo $ do
+ withArchConstraints ainfo $ do
   -- Add symbol table entries to discovery state if requested
   let postSymState
         | exploreFunctionSymbols disOpt =
             initState & markAddrsAsFunction InitAddr (Map.keys symMap)
         | otherwise = initState
-  let analyzeFn addr rsn = ioToST $ do
-        let b = funPred addr
-        when (b && logAtAnalyzeFunction disOpt) $ do
-          hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
-          hFlush stderr
-        pure $! b
-  let analyzeBlock _ addr = ioToST $ do
-        when (logAtAnalyzeBlock disOpt) $ do
-          hPutStrLn stderr $ "  Analyzing block: " ++ show addr
-          hFlush stderr
   -- Discover functions
-  postPhase1Discovery <- resolveFuns analyzeFn analyzeBlock postSymState
+  postPhase1Discovery <- resolveFuns disOpt postSymState
   -- Discovery functions from memory
   if exploreCodeAddrInMem disOpt then do
     -- Execute hack of just searching for pointers in memory.
     let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
-    resolveFuns analyzeFn analyzeBlock $ postPhase1Discovery & exploreMemPointers mem_contents
+    resolveFuns disOpt $ postPhase1Discovery & exploreMemPointers mem_contents
    else
     return postPhase1Discovery

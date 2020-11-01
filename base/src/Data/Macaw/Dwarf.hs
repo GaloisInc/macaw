@@ -541,7 +541,7 @@ parseSubrange d = runDIEParser "parseSubrange" d $ do
       DW_ATVAL_UINT w -> pure [DW_OP_const8u w]
       DW_ATVAL_BLOB bs ->
         case parseDW_OPs dr bs of
-          Left (_,_, msg) -> throwError msg
+          Left (_, _, msg) -> throwError msg
           Right ops -> pure ops
       _ -> throwError "Invalid upper bound"
 

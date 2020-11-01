@@ -27,7 +27,6 @@ module Data.Macaw.Discovery.State
   , memory
   , symbolNames
   , archInfo
-  , exploreFunctionAddr
   , globalDataMap
   , funInfo
   , unexploredFunctions
@@ -356,10 +355,6 @@ data DiscoveryState arch
                       -- ^ Map addresses to known symbol names
                     , archInfo             :: !(ArchitectureInfo arch)
                       -- ^ Architecture-specific information needed for discovery.
-                    , _exploreFunctionAddr   :: !(ArchSegmentOff arch -> Bool)
-                      -- ^ This is a callback function that gives a mechanism for ensuring
-                      -- functions are never explored.  It can be used to blacklist particular
-                      -- addresses.
                     , _globalDataMap       :: !(Map (ArchMemAddr arch)
                                                 (GlobalDataInfo (ArchMemAddr arch)))
                       -- ^ Maps each address that appears to be global data to information
@@ -387,9 +382,14 @@ data DiscoveryState arch
                       -- order in which functions are visited, this
                       -- set should be initialized upfront, and not
                       -- changed.
-                    , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
+                    , _exploreFnPred :: !(ArchSegmentOff arch -> Bool)
                       -- ^ if present, this predicate decides whether to explore
-                      -- a function at the given address or not
+                      -- a function at the given address or not.
+                      --
+                      -- If omitted, all functions are included.
+                      --
+                      -- Note. We use maybe so that we can avoid applying a filter
+                      -- when the value is `Nothing`.
                     }
 
 -- | Return list of all functions discovered so far.
@@ -421,17 +421,12 @@ emptyDiscoveryState mem addrSymMap info =
   { memory               = mem
   , symbolNames          = addrSymMap
   , archInfo             = info
-  , _exploreFunctionAddr = \_ -> True
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
   , _trustedFunctionEntryPoints = fmap (\_ -> MayReturnFun) addrSymMap
-  , _exploreFnPred       = Nothing
+  , _exploreFnPred       = \_ -> True
   }
-
--- | The function used to explore discovered function addresses.
-exploreFunctionAddr :: Lens' (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
-exploreFunctionAddr = lens _exploreFunctionAddr (\s v -> s { _exploreFunctionAddr = v })
 
 -- | Map each jump table start to the address just after the end.
 globalDataMap :: Lens' (DiscoveryState arch)
@@ -453,7 +448,7 @@ trustedFunctionEntryPoints
 trustedFunctionEntryPoints =
   lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 
-exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
+exploreFnPred :: Simple Lens (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
 
 ------------------------------------------------------------------------
