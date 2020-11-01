@@ -33,6 +33,7 @@ import qualified Data.Macaw.AArch32.Symbolic.AtomWrapper as AA
 import qualified Data.Macaw.AArch32.Symbolic.Panic as AP
 import qualified Data.Macaw.ARM.Arch as MAA
 import qualified Dismantle.ARM.A32 as ARMDis
+import qualified Dismantle.ARM.T32 as ThumbDis
 import qualified SemMC.Architecture.AArch32 as SA
 
 data SomeSymFun sym where
@@ -43,7 +44,8 @@ data SymFuns sym =
           }
 
 data AArch32Exception where
-  MissingSemanticsForInstruction :: ARMDis.Opcode ARMDis.Operand s -> AArch32Exception
+  MissingSemanticsForA32Instruction :: ARMDis.Opcode ARMDis.Operand s -> AArch32Exception
+  MissingSemanticsForT32Instruction :: ThumbDis.Opcode ThumbDis.Operand s -> AArch32Exception
   MissingSemanticsForFunction :: String -> AArch32Exception
   UnsupportedSyscall :: AArch32Exception
 
@@ -76,6 +78,8 @@ termSemantics _sfns tstmt _st0 =
   case tstmt of
     MAA.ARMSyscall _payload ->
       X.throwIO UnsupportedSyscall
+    MAA.ThumbSyscall _payload ->
+      X.throwIO UnsupportedSyscall
 
 -- | Semantics for statement syntax extensions
 --
@@ -89,8 +93,10 @@ stmtSemantics :: (CB.IsSymInterface sym)
               -> IO (CS.RegValue sym CT.UnitType, S sym rtp bs r ctx)
 stmtSemantics _sfns stmt _st0 =
   case stmt of
-    MAA.UninterpretedOpcode opc _ops ->
-      X.throwIO (MissingSemanticsForInstruction opc)
+    MAA.UninterpretedA32Opcode opc _ops ->
+      X.throwIO (MissingSemanticsForA32Instruction opc)
+    MAA.UninterpretedT32Opcode opc _ops ->
+      X.throwIO (MissingSemanticsForT32Instruction opc)
 
 funcSemantics :: (CB.IsSymInterface sym, MS.ToCrucibleType mt ~ t)
               => SymFuns sym
