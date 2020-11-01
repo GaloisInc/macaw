@@ -35,6 +35,7 @@ library
     Data.Macaw.X86.Monad
     Data.Macaw.X86.Semantics
     Data.Macaw.X86.Semantics.ADX
+    Data.Macaw.X86.Semantics.AESNI
     Data.Macaw.X86.Semantics.AVX
     Data.Macaw.X86.Semantics.BMI2
     Data.Macaw.X86.SyscallInfo

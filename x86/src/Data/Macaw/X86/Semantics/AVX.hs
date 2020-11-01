@@ -224,6 +224,8 @@ all_instructions =
 
   , avxPointwise2 "vpsubd" PtSub n32
 
+  , avxPointwise2 "vpcmpgtd" PtCmpGt n32
+
   , avxOp2 "vpand" VPAnd
   , avxOp2 "vpor" VPOr
   , avxOp2 "vpxor" VPXor

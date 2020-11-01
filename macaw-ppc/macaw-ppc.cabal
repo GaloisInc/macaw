@@ -31,7 +31,6 @@ library
                        bv-sized >= 1.0.0 && < 1.1,
                        bytestring,
                        containers,
-                       constraints,
                        exceptions,
                        crucible,
                        text,

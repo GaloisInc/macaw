@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.PPC.Symbolic (
   ppcMacawSymbolicFns,
@@ -123,13 +124,11 @@ ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s
 
-instance MS.ArchInfo (SP.AnyPPC SP.V64) where
-  archVals _ = Just $ MS.ArchVals
+
+instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V64) where
+  genArchVals _ _ = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
-    , MS.withArchEvalTrace = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
         k (ppcMacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
@@ -137,13 +136,10 @@ instance MS.ArchInfo (SP.AnyPPC SP.V64) where
     , MS.updateReg = archUpdateReg
     }
 
-instance MS.ArchInfo (SP.AnyPPC SP.V32) where
-  archVals _ = Just $ MS.ArchVals
+instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V32) where
+  genArchVals _ _ = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
-        sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
-    , MS.withArchEvalTrace = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
         k (ppcMacawEvalFn sfns)
     , MS.withArchConstraints = \x -> x
@@ -152,7 +148,7 @@ instance MS.ArchInfo (SP.AnyPPC SP.V32) where
     }
 
 ppcRegName :: MP.PPCReg v tp -> C.SolverSymbol
-ppcRegName r = C.systemSymbol ("!" ++ show (MC.prettyF r))
+ppcRegName r = C.systemSymbol ("r!" ++ show (MC.prettyF r))
 
 ppcRegAssignment :: forall v
                   . ( MP.KnownVariant v )

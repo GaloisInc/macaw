@@ -13,6 +13,8 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+
 -- | The macaw-symbolic library translates Macaw functions (or blocks) into
 -- Crucible CFGs for further analysis or symbolic execution.
 --
@@ -46,8 +48,13 @@
 --   and returns a single value (the full set of machine registers reflecting
 --   any modifications)
 module Data.Macaw.Symbolic
-  ( ArchInfo(..)
-  , ArchVals(..)
+  ( GenArchInfo(..)
+  , ArchInfo
+  , GenArchVals(..)
+  , ArchVals
+  , archVals
+  , IsMemoryModel(..)
+  , LLVMMemory
   , SB.MacawArchEvalFn
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
@@ -98,6 +105,7 @@ module Data.Macaw.Symbolic
   -- ** The Macaw extension to Crucible
   , CG.MacawExt
   , CG.MacawExprExtension(..)
+  , evalMacawExprExtension
   , CG.MacawStmtExtension(..)
   , CG.MacawOverflowOp(..)
     -- * Simulating generated Crucible CFGs
@@ -105,7 +113,6 @@ module Data.Macaw.Symbolic
     -- $simulationExample
   , SymArchConstraints
   , macawExtensions
-  , macawTraceExtensions
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
   , MO.MacawSimulatorState(..)
@@ -119,6 +126,7 @@ module Data.Macaw.Symbolic
   ) where
 
 import           GHC.TypeLits
+import           GHC.Exts
 
 import           Control.Lens ((^.))
 import           Control.Monad
@@ -126,6 +134,7 @@ import           Control.Monad.IO.Class
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
 import qualified Data.Map.Strict as Map
+import           Data.Proxy
 import           Data.Maybe
 import           Data.Parameterized.Context (EmptyCtx, (::>), pattern Empty, pattern (:>))
 import qualified Data.Parameterized.Context as Ctx
@@ -135,7 +144,6 @@ import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
 
-import qualified What4.Expr.Builder as W4E
 import qualified What4.FunctionName as C
 import           What4.Interface
 import qualified What4.Utils.StringLiteral as C
@@ -168,8 +176,6 @@ import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
 import           Data.Macaw.Symbolic.CrucGen as CG hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
-import qualified Data.Macaw.Symbolic.MemTraceOps as MT
-
 
 -- | A class to capture the architecture-specific information required to
 -- translate macaw IR into Crucible.
@@ -182,33 +188,45 @@ import qualified Data.Macaw.Symbolic.MemTraceOps as MT
 -- The return value is a 'Maybe' so that architectures that do not yet support
 -- the translation can return 'Nothing', while still allowing fully generic client
 -- code to be written in terms of this class constraint.
-class ArchInfo arch where
-  archVals :: proxy arch -> Maybe (ArchVals arch)
+--
+-- The 'mem' type parameter indicates the memory model to be used for translation.
+-- The type alias 'ArchInfo' specializes this class to the llvm memory model
+-- using the 'LLVMMemory' type tag.
+class GenArchInfo mem arch where
+  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+
+type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+archVals
+  :: ArchInfo arch
+  => proxy arch
+  -> Maybe (ArchVals arch)
+archVals p = genArchVals (Proxy @LLVMMemory) p
+
+data LLVMMemory
+
+class IsMemoryModel mem where
+  type MemModelType mem arch :: C.CrucibleType
+  type MemModelConstraint mem sym :: Constraint
+
+instance IsMemoryModel LLVMMemory where
+  type MemModelType LLVMMemory arch = MM.Mem
+  type MemModelConstraint LLVMMemory sym = MM.HasLLVMAnn sym
 
 -- | The information to support use of macaw-symbolic for a given architecture
-data ArchVals arch = ArchVals
+data GenArchVals mem arch = GenArchVals
   { archFunctions :: MacawSymbolicArchFunctions arch
   -- ^ This is the set of functions used by the translator, and is passed as the
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
       :: forall a m sym
-       . (IsSymInterface sym, MM.HasLLVMAnn sym, MonadIO m)
+       . (IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m)
       => sym
-      -> (SB.MacawArchEvalFn sym MM.Mem arch -> m a)
+      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
       -> m a
   -- ^ This function provides a context with a callback that gives access to the
   -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
   -- is a required argument for 'macawExtensions'.
-  , withArchEvalTrace
-      :: forall a m sym
-       . (IsSymInterface sym, MonadIO m)
-      => sym
-      -> (SB.MacawArchEvalFn sym (MT.MemTrace arch) arch -> m a)
-      -> m a
-  -- ^ This function provides a context with a callback that gives access to the
-  -- set of architecture-specific function evaluators ('MacawArchEvalTraceFn')
-  -- that trace memory operations, which is a required argument for
-  -- 'macawTraceExtensions'.
   , withArchConstraints :: forall a . (SymArchConstraints arch => a) -> a
   -- ^ This function captures the constraints necessary to invoke the symbolic
   -- simulator on a Crucible CFG generated from macaw.
@@ -226,6 +244,8 @@ data ArchVals arch = ArchVals
       -> C.RegValue sym (PS.ToCrucibleType tp)
       -> C.RegEntry sym (CG.ArchRegStruct arch)
   }
+
+type ArchVals arch = GenArchVals LLVMMemory arch
 
 -- | All of the constraints on an architecture necessary for translating and
 -- simulating macaw functions in Crucible
@@ -435,9 +455,7 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
                         }
     ng <- mmNonceGenerator
     -- Create atom for entry
-    inputAtom <- mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType) >>= \case
-      Empty :> atm -> return atm
-      _ -> error "Invalid input atom creation for mkParsedBlockRegCFG"
+    inputAtom <- Ctx.last <$> (mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType))
     -- Create map from Macaw (address,blockId pairs) to Crucible labels
     blockLabelMap :: BlockLabelMap arch s <-
       mkBlockLabelMap [strippedBlock]
@@ -825,9 +843,7 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
                         }
     -- Create atom for entry
     ng <- mmNonceGenerator
-    inputAtom <- mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType) >>= \case
-      Empty :> atm -> return atm
-      _ -> error "Error creating input atom for mkFunRegCFG"
+    inputAtom <- Ctx.last <$> (mmExecST $ CR.mkInputAtoms ng entryPos (Empty :> regType))
     -- Create map from Macaw (address,blockId pairs) to Crucible labels
     blockLabelMap :: BlockLabelMap arch s <-
       mkBlockLabelMap blockList
@@ -1089,20 +1105,6 @@ macawExtensions f mvar globs lookupH toMemPred =
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
                   }
 
--- | Like 'macawExtensions', but with an alternative memory model that records
--- memory operations without trying to carefully guess the results of
--- performing them.
-macawTraceExtensions ::
-  (IsSymInterface sym, KnownNat (M.ArchAddrWidth arch), sym ~ W4E.ExprBuilder t st fs) =>
-  SB.MacawArchEvalFn sym (MT.MemTrace arch) arch ->
-  C.GlobalVar (MT.MemTrace arch) ->
-  GlobalMap sym (MT.MemTrace arch) (M.ArchAddrWidth arch) ->
-  C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawTraceExtensions archStmtFn mvar globs = C.ExtensionImpl
-  { C.extensionEval = evalMacawExprExtension
-  , C.extensionExec = MT.execMacawStmtExtension archStmtFn mvar globs
-  }
-
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
@@ -1186,7 +1188,8 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 -- translate dfi useCFG =
 --   case MS.archVals (Proxy @arch) of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
---     Just MS.ArchVals { MS.archFunctions = archFns } -> do
+--     Just avals -> do
+--       let archFns = MS.archFunctions avals
 --       hdlAlloc <- CFH.newHandleAllocator
 --       let nameText = TE.decodeUtf8With TEE.lenientDecode (MD.discoveredFunName dfi)
 --       let name = WFN.functionNameFromText nameText
@@ -1251,9 +1254,9 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --        -> CC.CFG (MS.MacawExt arch) blocks (MS.MacawFunctionArgs arch) (MS.MacawFunctionResult arch)
 --        -- ^ The CFG to simulate
 --        -> IO ()
--- useCFG hdlAlloc sym MS.ArchVals { MS.withArchEval = withArchEval } initialRegs initialMem globalMap lfh cfg = do
---   let ?recordLLVMAnnotation = \_ _ -> pure ()
---   withArchEval sym $ \archEvalFns -> do
+-- useCFG hdlAlloc sym avals initialRegs initialMem globalMap lfh cfg =
+--   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
+--   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
 --     memModelVar <- CLM.mkMemVar hdlAlloc
 --     -- For demonstration purposes, do not enforce any pointer validity constraints
