@@ -71,6 +71,12 @@ initialBlockRegs addr preconds = MSG.initRegState addr &
   where
     boolAsBV b = if b then MC.bvValue 1 else MC.bvValue 0
 
+-- | We use the block precondition to propagate the value of PSTATE_T throughout
+-- functions.
+--
+-- We consider it an error if PSTATE_T is not concrete. Technically we could
+-- modify macaw to discover code with an abstract PSTATE_T as both T32 and A32,
+-- but it isn't worth the complexity until we encounter it in the wild.
 extractBlockPrecond :: MC.ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
                     -> Either String (MI.ArchBlockPrecond ARM.AArch32)
@@ -91,6 +97,8 @@ extractBlockPrecond _ absState =
 -- Note that we don't initialize the abstract stack.  On ARM, there are no
 -- initial stack entries (since the return address is in the link register).
 --
+-- We set the initial @PSTATE_T@ for a function based on the low bit of its
+-- address.
 mkInitialAbsState :: MM.Memory 32
                   -> MC.ArchSegmentOff ARM.AArch32
                   -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
