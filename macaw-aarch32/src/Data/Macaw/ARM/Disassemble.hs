@@ -17,7 +17,7 @@ General notes regarding the disassembly process for ARM.
 ARM disassembly is complicated by the different instruction set states
 that an ARM processor supports.  There are technically 4 different
 instruction sets: ARM32, Thumb32, Thumb32EE, and Jazelle.  At the
-present time, only the first two are supported by macaw-arm
+present time, only the first two are supported by macaw-aarch32
 (identified hereafter as A32 and T32).
 
 When macaw base's Discovery is attempting to discover code to
@@ -40,9 +40,7 @@ To handle the above:
 
   * The disassembly should only try to disassemble for the current
     mode, and should exit (with the FetchAndExecute status) whenever
-    the ISETSTATE changes. (This may require enhancing the
-    post-semantics disassembleBlock functionality below to detect
-    ISETSTATE differences).
+    the ISETSTATE changes.
 
   * The macaw-base functionality will then create a block up to this
     point, and the FetchAndExecute status will cause the instructions
@@ -51,14 +49,6 @@ To handle the above:
     frontier will inform the subsequent call to disassemblyFn which
     ISETSTATE is applicable for that disassembly.
 
-Notes:
-
-  * At the present time (Aug 15 2018), the code below *improperly*
-    attempts to use the low bit of the PC register to determine which
-    operational mode is newly in effect.  This is wrong because the
-    semantics for an instruction will effect the ISETSTATE change and
-    then clear the bits when writing to the PC.  This should be
-    re-worked to use the above described functionality instead.
 -}
 
 module Data.Macaw.ARM.Disassemble
@@ -211,7 +201,6 @@ disassembleBlock dmode lookupSemantics gs curPCAddr blockOff maxOffset = do
       let nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: MC.Value ARM.AArch32 ids (MT.BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
-          -- curPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
@@ -267,15 +256,9 @@ readInstruction :: (MM.MemWidth w)
 readInstruction dmode addr = do
   let seg = MM.segoffSegment addr
   let segRelAddr = MM.segoffAddr addr
-  -- Addresses specified in ARM instructions have the low bit
-  -- clear, but Thumb (T32) target addresses have the low bit sit.
-  -- This is only manifested in the instruction addresses: the
-  -- actual PC for fetching instructions clears the low bit to
-  -- generate aligned memory accesses.
   let alignedMsegOff = MM.clearSegmentOffLeastBit addr
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
-      -- alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
       contents <- liftMemError $ MM.segoffContentsAfter alignedMsegOff
       case contents of
         [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)

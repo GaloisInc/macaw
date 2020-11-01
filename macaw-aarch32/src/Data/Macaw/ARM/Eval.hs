@@ -1,12 +1,11 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE ViewPatterns #-}
-
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Data.Macaw.ARM.Eval
     ( initialBlockRegs
@@ -176,18 +175,16 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
         _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
-    -- FIXME: Check semantics for SVC. Is there a special function
-    -- that we need to translate?
-    -- ThumbSyscall _ ->
-    --   case simplifyValue (regState^.curIP) of
-    --     Just (RelocatableValue _ addr)
-    --       | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 2 addr) -> do
-    --           let params = MA.CallParams { MA.postCallStackDelta = 0
-    --                                      , MA.preserveReg = preservePred
-    --                                      }
-    --           Just (nextPC, MA.absEvalCall params s0 regState nextPC)
-    --     _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. curIP))
-
+    AA.ThumbSyscall _ ->
+      case simplifyValue (regState ^. MC.curIP) of
+        Just (MC.RelocatableValue _ addr)
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 2 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
+                                         }
+              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
+        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
 
 preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =
