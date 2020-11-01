@@ -72,11 +72,15 @@ instance TF.TraversableF ARMStmt where
 rewriteStmt :: ARMStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt ()
 rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
--- The ArchBlockPrecond type holds data required for an architecture to compute
--- new abstract states at the beginning on a block.  PowerPC doesn't need any
--- additional information, so we use ()
+-- | The ArchBlockPrecond type holds data required for an architecture to compute
+-- new abstract states at the beginning on a block.
 type instance MAI.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
 
+-- | In order to know how to decode a block, we need to know the value of
+-- PSTATE_T (which is the Thumb/ARM mode) at the beginning of a block. We use
+-- the 'MAI.ArchBlockPrecond' to communicate this between blocks (the core
+-- discovery loop maintains it, and we compute the initial value when entering a
+-- function).
 data ARMBlockPrecond =
   ARMBlockPrecond { bpPSTATE_T :: Bool
                   }
