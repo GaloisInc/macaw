@@ -1,7 +1,7 @@
 name:                macaw-aarch32
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Support for 32 bit ARM in macaw
+description:         This library implements 32 bit ARM support (both the ARM and Thumb encodings) for the macaw library. The semantics are derived from the official ARM semantics (encoded in ASL).
 license:             BSD3
 license-file:        LICENSE
 author:              Kevin Quick
