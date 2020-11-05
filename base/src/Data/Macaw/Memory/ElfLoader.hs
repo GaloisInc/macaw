@@ -752,16 +752,6 @@ relaTargetARM64 end msegIndex symtab rel addend relFlag =
                          , relocationEndianness = end
                          , relocationJumpSlot   = True
                          }
-    Elf.R_AARCH64_GLOB_DAT -> do
-      sym <- resolveRelocationSym symtab (Elf.relSym rel)
-      pure $! Relocation { relocationSym        = sym
-                         , relocationOffset     = addend
-                         , relocationIsRel      = False
-                         , relocationSize       = 8
-                         , relocationIsSigned   = False
-                         , relocationEndianness = end
-                         , relocationJumpSlot   = False
-                         }
     tp -> do
       throwError $ RelocationUnsupportedType (show tp)
 

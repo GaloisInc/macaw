@@ -23,7 +23,7 @@ module Data.Macaw.DebugLogging
        ) where
 
 import Data.IORef
-import Data.List
+import Data.List (find, (\\))
 import Debug.Trace
 import System.IO.Unsafe -- For debugKeys
 import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))

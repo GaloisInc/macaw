@@ -193,7 +193,6 @@ getBVAddress ar =
         F.DS -> pure offset
         F.FS -> (.+ offset) <$> evalArchFn ReadFSBase
         F.GS -> (.+ offset) <$> evalArchFn ReadGSBase
-        _ -> error "Unexpected segment"
 
 -- | Translate a flexdis address-refrence into a one-byte address.
 getBV8Addr :: F.AddrRef -> X86Generator st ids (Location (Addr ids) (BVType 8))
