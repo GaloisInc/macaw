@@ -40,7 +40,7 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , StackExpr(..)
   , intraStackRhsExpr
   , intraStackSetAssignId
-  , discardStackInfo
+  , discardMemInfo
   , writeStackOff
     -- ** Block terminator updates
   , postJumpStackConstraints
@@ -49,28 +49,30 @@ module Data.Macaw.AbsDomain.StackAnalysis
     -- * LocMap
   , LocMap(..)
   , locMapEmpty
+  , locMapNull
   , locMapToList
   , locLookup
   , nonOverlapLocInsert
   , locOverwriteWith
   , ppLocMap
   , foldLocMap
-    -- * StackMap
-  , StackMap
-  , emptyStackMap
-  , stackMapLookup
-  , StackMapLookup(..)
-  , stackMapOverwrite
-  , stackMapMapWithKey
-  , stackMapTraverseWithKey_
-  , stackMapTraverseMaybeWithKey
-  , stackMapDropAbove
-  , stackMapDropBelow
+    -- * MemMap
+  , MemMap
+  , emptyMemMap
+  , memMapLookup
+  , MemMapLookup(..)
+  , memMapOverwrite
+  , memMapMapWithKey
+  , memMapTraverseWithKey_
+  , memMapTraverseMaybeWithKey
+  , memMapDropAbove
+  , memMapDropBelow
     -- * NextStateMonad
   , NextStateMonad
   , runNextStateMonad
   , getNextStateRepresentatives
     -- * Miscelaneous
+  , MemVal(..)
   ) where
 
 import           Control.Monad.Reader
@@ -86,6 +88,7 @@ import           Data.Parameterized.Pair
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
 import           Data.STRef
+import           GHC.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 import           Text.Printf
 
@@ -107,7 +110,7 @@ ppAddend o | memIntValue o < 0 =
 
 ppStackOff :: MemInt w -> MemRepr tp -> Doc
 ppStackOff o repr =
-  text "*(stack_frame" <+> ppAddend o <> text "," <+> pretty repr <> text ")"
+  text "*(stack_frame" <+> ppAddend o <> text ", " <> pretty repr <> text ")"
 
 ------------------------------------------------------------------------
 -- JoinClassPair
@@ -137,14 +140,19 @@ instance FunctorF MemVal where
 ------------------------------------------------------------------------
 -- BoundLoc
 
--- | Either a register or stack offset.
+-- | A location within a function tracked by our bounds analysis
+-- algorithms.
 --
--- These locations are tracked by our bounds analysis algorithm.
+-- Locations for these purposes are registers, stack offsets, and
+-- global memory offsets.
 data BoundLoc (r :: M.Type -> Type) (tp :: M.Type) where
   -- | @RegLoc r@ denotes the register @r@.
   RegLoc :: !(r tp) -> BoundLoc r tp
   -- | @StackkOffLoc o repr@ denotes the bytes from address range
   -- @[initSP + o .. initSP + o + memReprBytes repr)@.
+  --
+  -- @initSP@ denotes the stack offset at the start of function
+  -- execution.
   --
   -- We should note that this makes no claim that those addresses
   -- are valid.
@@ -175,8 +183,7 @@ instance OrdF r => OrdF (BoundLoc r) where
 
 instance ShowF r => Pretty (BoundLoc r tp) where
   pretty (RegLoc r) = text (showF r)
-  pretty (StackOffLoc i tp) =
-    text "*(stack_frame " <+> ppAddend i <> text ") :" <> pretty tp
+  pretty (StackOffLoc i tp) = ppStackOff i tp
 
 instance ShowF r => PrettyF (BoundLoc r) where
   prettyF = pretty
@@ -186,172 +193,213 @@ instance ShowF r => Show (BoundLoc r tp) where
 
 instance ShowF r => ShowF (BoundLoc r)
 
-
 ------------------------------------------------------------------------
--- StackMap
+-- MemMap
 
 -- | This is a data structure for representing values written to
 -- concrete stack offsets.
-newtype StackMap w (v :: M.Type -> Type) = SM (Map (MemInt w) (MemVal v))
+newtype MemMap o (v :: M.Type -> Type) = SM (Map o (MemVal v))
 
-instance FunctorF (StackMap w) where
+instance FunctorF (MemMap o) where
   fmapF f (SM m) = SM (fmap (fmapF f) m)
 
 -- | Empty stack map
-emptyStackMap :: StackMap w p
-emptyStackMap = SM Map.empty
+emptyMemMap :: MemMap o v
+emptyMemMap = SM Map.empty
 
--- | Pretty print a stack map given a term
-ppStackMap :: (forall tp . Doc -> v tp -> Doc) -> StackMap w v -> Doc
-ppStackMap f (SM m)
-  | Map.null m = text "empty-stack-map"
-  | otherwise =
-      vcat $
-      [ f (ppStackOff o repr) v
-      | (o,MemVal repr v) <- Map.toList m
-      ]
+memMapNull :: MemMap o v -> Bool
+memMapNull (SM m) = Map.null m
 
-instance PrettyF v => Pretty (StackMap w v) where
-  pretty = ppStackMap (\nm d -> nm <+> text ":=" <+> prettyF d)
-
--- | Result returned by @stackMapLookup@.
-data StackMapLookup w p tp where
-  -- 1| We found a value at the exact offset and repr
-  SMLResult :: !(p tp) -> StackMapLookup w p tp
+-- | Result returned by @memMapLookup@.
+data MemMapLookup o p tp where
+  -- | We found a value at the exact offset and repr
+  MMLResult :: !(p tp) -> MemMapLookup o p tp
   -- | We found a value that had an overlapping offset and repr.
-  SMLOverlap  :: !(MemInt w)
+  MMLOverlap  :: !o
               -> !(MemRepr utp)
               -> !(p utp)
-              -> StackMapLookup w p tp
+              -> MemMapLookup o p tp
   -- | We found neither an exact match nor an overlapping write.
-  SMLNone :: StackMapLookup w p tp
+  MMLNone :: MemMapLookup o p tp
+
+class Ord o => MemIndex o where
+  endOffset :: o -> Natural -> Maybe o
+  -- | @memOverlap b r i@ returns @True@ if @b <= i@ and
+  -- @i - b < sizeOf r@.
+  memOverlap :: o -> MemRepr tp -> o -> Bool
+
+instance MemWidth w => MemIndex (MemInt w) where
+  endOffset off sz | toInteger endI == end = Just endI
+                   | otherwise = Nothing
+    where end = toInteger off + toInteger sz
+          endI = fromIntegral end
+  memOverlap b r i
+    = b <= i
+    && toInteger (memIntValue i)
+       <  toInteger (memIntValue b) + toInteger (memReprBytes r)
+
+instance MemWidth w => MemIndex (MemWord w) where
+  endOffset off sz | fromIntegral endI == end = Just endI
+                   | otherwise = Nothing
+    where end = fromIntegral off + sz
+          endI = fromIntegral end
+  memOverlap b r i
+    = memWordValue b <= memWordValue i
+    && fromIntegral (memWordValue i - memWordValue b) < memReprBytes r
+
 
 -- | Lookup value (if any) at given offset and representation.
-stackMapLookup :: MemWidth w
-               => MemInt w
-               -> MemRepr tp
-               -> StackMap w p
-               -> StackMapLookup w p tp
-stackMapLookup off repr (SM m) =  do
-  let end = off + fromIntegral (memReprBytes repr)
-  if end < off then
-    error $ "stackMapLookup given bad offset."
-   else
-    case Map.lookupLT end m of
-      Just (oldOff, MemVal oldRepr val)
+memMapLookup :: MemIndex o
+             => o
+             -> MemRepr tp
+             -> MemMap o p
+             -> MemMapLookup o p tp
+memMapLookup off repr (SM m) =  do
+  case endOffset off (memReprBytes repr) of
+    Nothing -> MMLNone
+    Just end ->
+      case Map.lookupLT end m of
+        Nothing -> MMLNone
+        Just (oldOff, MemVal oldRepr val)
           -- If match exact
-        | oldOff == off
-        , Just Refl <- testEquality oldRepr repr ->
-          SMLResult val
-        -- If previous write ends after this write starts
-        | oldOff + fromIntegral (memReprBytes oldRepr) > off ->
-          SMLOverlap oldOff oldRepr val
-        | otherwise ->
-          SMLNone
-      Nothing -> SMLNone
-
-clearPreWrites :: Ord i => i -> i -> Map i v -> Map i v
-clearPreWrites l h m =
-  case Map.lookupLT h m of
-    Just (o,_v) | o >= l -> clearPreWrites l h (Map.delete o m)
-    _ -> m
-
-clearPostWrites :: Ord i => i -> i -> Map i v -> Map i v
-clearPostWrites l h m =
-  case Map.lookupGE l m of
-    Just (o,_v) | o < h -> clearPostWrites l h (Map.delete o m)
-    _ -> m
+          | oldOff == off
+          , Just Refl <- testEquality oldRepr repr ->
+          MMLResult val
+          -- If previous write ends after this write starts
+          | memOverlap oldOff oldRepr off ->
+            MMLOverlap oldOff oldRepr val
+          | otherwise ->
+            MMLNone
 
 -- | This assigns a region of bytes to a particular value in the stack.
 --
 -- It overwrites any values that overlap with the location.
-stackMapOverwrite :: forall w p tp
-                  .  MemWidth w
-                  => MemInt w -- ^ Offset in the stack to write to
-                  -> MemRepr tp -- ^ Type of value to write
-                  -> p tp  -- ^ Value to write
-                  -> StackMap w p
-                  -> StackMap w p
-stackMapOverwrite off repr v (SM m) =
-  let e = off + fromIntegral (memReprBytes repr)
-   in SM $ Map.insert off (MemVal repr v)
-         $ clearPreWrites off e
-         $ clearPostWrites off e m
+memMapOverwrite :: forall o p tp
+                .  (Ord o, Num o)
+                => o -- ^ Offset in the stack to write to
+                -> MemRepr tp -- ^ Type of value to write
+                -> p tp  -- ^ Value to write
+                -> MemMap o p
+                -> MemMap o p
+memMapOverwrite off repr v (SM m)
+   | e <= off = error "stackOverwrite fail"
+   | otherwise =
+     let (lm, _) = Map.split off m
+         (_, hm) = Map.split e m
+      in SM $ Map.insert off (MemVal repr v) lm <> hm
+  where e = off + fromIntegral (memReprBytes repr) + 1
 
 -- | This sets the value at an offset without checking to clear any
 -- previous writes to values.
-unsafeStackMapInsert :: MemInt w -> MemRepr tp -> p tp -> StackMap w p -> StackMap w p
-unsafeStackMapInsert o repr v (SM m) = SM (Map.insert o (MemVal repr v) m)
+unsafeMemMapInsert :: Ord o => o -> MemRepr tp -> p tp -> MemMap o p -> MemMap o p
+unsafeMemMapInsert o repr v (SM m) = SM (Map.insert o (MemVal repr v) m)
 
-stackMapFoldlWithKey :: (forall tp . r -> MemInt w -> MemRepr tp -> v tp -> r)
-                     -> r
-                     -> StackMap w v
-                     -> r
-stackMapFoldlWithKey f z (SM m) =
+memMapFoldlWithKey :: (forall tp . r -> o -> MemRepr tp -> v tp -> r)
+                   -> r
+                   -> MemMap o v
+                   -> r
+memMapFoldlWithKey f z (SM m) =
   Map.foldlWithKey (\r k (MemVal repr v) -> f r k repr v) z m
 
-stackMapFoldrWithKey :: (forall tp . MemInt w -> MemRepr tp -> v tp -> r -> r)
-                     -> r
-                     -> StackMap w v
-                     -> r
-stackMapFoldrWithKey f z (SM m) =
+memMapFoldrWithKey :: (forall tp . o -> MemRepr tp -> v tp -> r -> r)
+                   -> r
+                   -> MemMap o v
+                   -> r
+memMapFoldrWithKey f z (SM m) =
   Map.foldrWithKey (\k (MemVal repr v) r -> f k repr v r) z m
 
-stackMapTraverseWithKey_ :: Applicative m
-                         => (forall tp . MemInt w -> MemRepr tp -> v tp -> m ())
-                         -> StackMap w v
-                         -> m ()
-stackMapTraverseWithKey_ f (SM m) =
+memMapTraverseWithKey_ :: Applicative m
+                       => (forall tp . o -> MemRepr tp -> v tp -> m ())
+                       -> MemMap o v
+                       -> m ()
+memMapTraverseWithKey_ f (SM m) =
   Map.foldrWithKey (\k (MemVal repr v) r -> f k repr v *> r) (pure ()) m
 
-stackMapMapWithKey :: (forall tp . MemInt w -> MemRepr tp -> a tp -> b tp)
-                   -> StackMap w a
-                   -> StackMap w b
-stackMapMapWithKey f (SM m) =
+memMapMapWithKey :: (forall tp . o -> MemRepr tp -> a tp -> b tp)
+                 -> MemMap o a
+                 -> MemMap o b
+memMapMapWithKey f (SM m) =
   SM (Map.mapWithKey (\o (MemVal repr v) -> MemVal repr (f o repr v)) m)
 
-stackMapTraverseMaybeWithKey :: Applicative m
-                             => (forall tp . MemInt w -> MemRepr tp -> a tp -> m (Maybe (b tp)))
-                                -- ^ Traversal function
-                             -> StackMap w a
-                             -> m (StackMap w b)
-stackMapTraverseMaybeWithKey f (SM m) =
-  SM <$> Map.traverseMaybeWithKey (\o (MemVal repr v) -> fmap (MemVal repr) <$> f o repr v) m
+memMapTraverseMaybeWithKey
+  :: Applicative m
+  => (forall tp . o -> MemRepr tp -> a tp -> m (Maybe (b tp)))
+  -- ^ Traversal function
+  -> MemMap o a
+  -> m (MemMap o b)
+memMapTraverseMaybeWithKey f (SM m) =
+  SM <$> Map.traverseMaybeWithKey
+       (\o (MemVal repr v) -> fmap (MemVal repr) <$> f o repr v) m
 
--- @stackMapDropAbove bnd m@ includes only entries in @m@ whose bytes do not go above @bnd@.
-stackMapDropAbove :: MemWidth w => Integer -> StackMap w p -> StackMap w p
-stackMapDropAbove bnd (SM m) = SM (Map.filterWithKey p m)
+-- @memMapDropAbove bnd m@ includes only entries in @m@ whose bytes
+-- do not go above @bnd@.
+memMapDropAbove :: Integral o => Integer -> MemMap o p -> MemMap o p
+memMapDropAbove bnd (SM m) = SM (Map.filterWithKey p m)
   where p o (MemVal r _) = toInteger o  + toInteger (memReprBytes r) <= bnd
 
--- @stackMapDropBelow bnd m@ includes only entries in @m@ whose bytes do not go below @bnd@.
-stackMapDropBelow :: MemWidth w => Integer -> StackMap w p -> StackMap w p
-stackMapDropBelow bnd (SM m) = SM (Map.filterWithKey p m)
+-- @memMapDropBelow bnd m@ includes only entries in @m@ whose bytes
+-- do not go below @bnd@.
+memMapDropBelow :: Integral o => Integer -> MemMap o p -> MemMap o p
+memMapDropBelow bnd (SM m) = SM (Map.filterWithKey p m)
   where p o _ = toInteger o >= bnd
 
 ------------------------------------------------------------------------
 -- LocMap
 
--- | A map from register/concrete stack offsets to values
+-- | A map from `BoundLoc` locations to values.
 data LocMap (r :: M.Type -> Type) (v :: M.Type -> Type)
   = LocMap { locMapRegs :: !(MapF r v)
-           , locMapStack :: !(StackMap (RegAddrWidth r) v)
+           , locMapStack :: !(MemMap (MemInt (RegAddrWidth r)) v)
            }
+
+-- | Return true if map is null.
+locMapNull :: LocMap r v -> Bool
+locMapNull m
+  = MapF.null (locMapRegs m)
+  && memMapNull (locMapStack m)
 
 -- | An empty location map.
 locMapEmpty :: LocMap r v
-locMapEmpty = LocMap { locMapRegs = MapF.empty, locMapStack = emptyStackMap }
+locMapEmpty = LocMap { locMapRegs  = MapF.empty
+                     , locMapStack = emptyMemMap
+                     }
 
 -- | Construct a list out of a location map.
-locMapToList :: LocMap r v -> [Pair (BoundLoc r) v]
-locMapToList m =
-  let sl = stackMapFoldrWithKey (\i repr v z -> Pair (StackOffLoc i repr) v : z) [] (locMapStack m)
-   in MapF.foldrWithKey (\r v z -> Pair (RegLoc r) v:z) sl (locMapRegs m)
+locMapToList :: forall r v . LocMap r v -> [Pair (BoundLoc r) v]
+locMapToList m0 =
+  let prependRegPair r v z = Pair (RegLoc r) v : z
+      prependStackPair i repr v z = Pair (StackOffLoc i repr) v : z
+   in flip (MapF.foldrWithKey prependRegPair) (locMapRegs m0) $
+      flip (memMapFoldrWithKey prependStackPair) (locMapStack m0) $
+      []
+
+-- | Fold over values in a location map.
+foldLocMap :: forall a r v
+           .  (forall tp . a -> BoundLoc r tp -> v tp -> a)
+           -> a
+           -> LocMap r v
+           -> a
+foldLocMap f a0 m0 =
+  flip (memMapFoldlWithKey (\a o r v -> f a (StackOffLoc o r) v)) (locMapStack m0) $
+  flip (MapF.foldlWithKey (\a r v -> f a (RegLoc r) v)) (locMapRegs m0) a0
+
+locMapTraverseWithKey_ :: forall m r p
+                       .  Applicative m
+                       => (forall tp . BoundLoc r tp -> p tp -> m ())
+                       -> LocMap r p
+                       -> m ()
+locMapTraverseWithKey_ f m0 = do
+  let regFn :: r utp -> p utp -> m ()
+      regFn r v = f (RegLoc r) v
+      stackFn :: MemInt (RegAddrWidth r) -> MemRepr utp -> p utp -> m ()
+      stackFn o r c = f (StackOffLoc o r) c
+  MapF.traverseWithKey_ regFn (locMapRegs m0)
+   *> memMapTraverseWithKey_ stackFn (locMapStack m0)
 
 -- | Pretty print a location map.
 ppLocMap :: ShowF r => (forall tp . Doc -> p tp -> Doc) -> LocMap r p -> [Doc]
 ppLocMap f m =
-  let ppPair (Pair (RegLoc r) v) = f (text (showF r)) v
-      ppPair (Pair (StackOffLoc i repr) v) = f (ppStackOff i repr) v
+  let ppPair (Pair l v) = f (pretty l) v
    in ppPair <$> locMapToList m
 
 -- | Return value associated with location or nothing if it is not
@@ -362,19 +410,10 @@ locLookup :: (MemWidth (RegAddrWidth r), OrdF r)
           -> Maybe (v tp)
 locLookup (RegLoc r) m = MapF.lookup r (locMapRegs m)
 locLookup (StackOffLoc o repr) m =
-  case stackMapLookup o repr (locMapStack m) of
-    SMLResult r -> Just r
-    SMLOverlap _ _ _ -> Nothing
-    SMLNone -> Nothing
-
--- | Fold over values in a location map.
-foldLocMap :: (forall tp . a -> BoundLoc r tp -> p tp -> a)
-            -> a
-            -> LocMap r p
-            -> a
-foldLocMap f a0 m =
-  let a1 = MapF.foldlWithKey (\a r v -> f a (RegLoc r) v) a0 (locMapRegs m)
-   in stackMapFoldlWithKey (\a o r v -> f a (StackOffLoc o r) v) a1 (locMapStack m)
+  case memMapLookup o repr (locMapStack m) of
+    MMLResult r -> Just r
+    MMLOverlap _ _ _ -> Nothing
+    MMLNone -> Nothing
 
 -- | This associates the location with a value in the map, replacing any existing binding.
 --
@@ -384,7 +423,7 @@ nonOverlapLocInsert :: OrdF r => BoundLoc r tp -> v tp -> LocMap r v -> LocMap r
 nonOverlapLocInsert (RegLoc r) v m =
   m { locMapRegs = MapF.insert r v (locMapRegs m) }
 nonOverlapLocInsert (StackOffLoc off repr) v m =
-  m { locMapStack = unsafeStackMapInsert off repr v (locMapStack m) }
+  m { locMapStack = unsafeMemMapInsert off repr v (locMapStack m) }
 
 locOverwriteWith :: (OrdF r, MemWidth (RegAddrWidth r))
                  => (v tp -> v tp -> v tp) -- ^ Update takes new and  old.
@@ -395,11 +434,11 @@ locOverwriteWith :: (OrdF r, MemWidth (RegAddrWidth r))
 locOverwriteWith upd (RegLoc r) v m =
   m { locMapRegs = MapF.insertWith upd r v (locMapRegs m) }
 locOverwriteWith upd (StackOffLoc o repr) v m =
-  let nv = case stackMapLookup o repr (locMapStack m) of
-             SMLNone -> v
-             SMLOverlap _ _ _ -> v
-             SMLResult oldv -> upd v oldv
-   in m { locMapStack = stackMapOverwrite o repr nv (locMapStack m) }
+  let nv = case memMapLookup o repr (locMapStack m) of
+             MMLNone -> v
+             MMLOverlap _ _ _ -> v
+             MMLResult oldv -> upd v oldv
+   in m { locMapStack = memMapOverwrite o repr nv (locMapStack m) }
 
 ------------------------------------------------------------------------
 -- StackEqConstraint
@@ -425,19 +464,27 @@ ppStackEqConstraint d (EqualLoc   l) = d <+> text "=" <+> pretty l
 ------------------------------------------------------------------------
 -- BlockStartStackConstraints
 
--- | Constraints on start of block
+-- | Constraints on start of block.
+--
+-- This class maintains equality constraints between locations and
+-- stack offsets.  It is used in jump bounds and other analysis
+-- libraries where we want to know when two registers or stack
+-- locations are equal.
 newtype BlockStartStackConstraints arch =
   BSSC { unBSSC :: LocMap (ArchReg arch) (StackEqConstraint (ArchReg arch)) }
 
 -- | Pretty print the lines in stack constraints.
-ppBlockStartStackConstraints :: ShowF (ArchReg arch) => BlockStartStackConstraints arch -> [Doc]
+ppBlockStartStackConstraints :: ShowF (ArchReg arch)
+                             => BlockStartStackConstraints arch
+                             -> [Doc]
 ppBlockStartStackConstraints = ppLocMap ppStackEqConstraint . unBSSC
 
-fnEntryBlockStartStackConstraints :: RegisterInfo (ArchReg arch) => BlockStartStackConstraints arch
+fnEntryBlockStartStackConstraints :: RegisterInfo (ArchReg arch)
+                                  => BlockStartStackConstraints arch
 fnEntryBlockStartStackConstraints =
   BSSC { unBSSC =
            LocMap { locMapRegs = MapF.singleton sp_reg (IsStackOff 0)
-                  , locMapStack = emptyStackMap
+                  , locMapStack = emptyMemMap
                   }
        }
 
@@ -467,7 +514,9 @@ data StackOffConstraint w tp where
 blockStartLocRepAndCns :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                        => BlockStartStackConstraints arch
                        -> BoundLoc (ArchReg arch) tp
-                       -> (BoundLoc (ArchReg arch) tp, Maybe (StackOffConstraint (ArchAddrWidth arch) tp))
+                       -> ( BoundLoc (ArchReg arch) tp
+                          , Maybe (StackOffConstraint (ArchAddrWidth arch) tp)
+                          )
 blockStartLocRepAndCns cns l =
   case locLookup l (unBSSC cns) of
     Just (EqualLoc loc) -> blockStartLocRepAndCns cns loc
@@ -530,19 +579,22 @@ joinNewLoc old new cnsRef procRef cntr thisLoc oldCns = do
         case mp of
           Nothing -> pure ()
           Just (StackOffCns o) ->
-            modifySTRef' cnsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (IsStackOff o) (unBSSC cns))
+            modifySTRef' cnsRef $ \cns ->
+              BSSC (nonOverlapLocInsert thisLoc (IsStackOff o) (unBSSC cns))
     Just resRep ->
       -- Assert r is equal to resRep
        changedST $
-       modifySTRef' cnsRef $ \cns -> BSSC (nonOverlapLocInsert thisLoc (EqualLoc resRep) (unBSSC cns))
+       modifySTRef' cnsRef $ \cns ->
+         BSSC (nonOverlapLocInsert thisLoc (EqualLoc resRep) (unBSSC cns))
 
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact inx the old bounds is implied by the new bounds.
-joinBlockStartStackConstraints :: forall arch s
-                               .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                               => BlockStartStackConstraints arch
-                               -> BlockStartStackConstraints arch
-                               -> Changed s (BlockStartStackConstraints arch, JoinClassMap (ArchReg arch))
+joinBlockStartStackConstraints
+  :: forall arch s
+  .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+  => BlockStartStackConstraints arch
+  -> BlockStartStackConstraints arch
+  -> Changed s (BlockStartStackConstraints arch, JoinClassMap (ArchReg arch))
 joinBlockStartStackConstraints old new = do
   -- Reference to new bounds.
   cnsRef <- changedST $ newSTRef (BSSC locMapEmpty)
@@ -551,14 +603,7 @@ joinBlockStartStackConstraints old new = do
   -- combined bounds.
   procRef <- changedST $ newSTRef MapF.empty
   cntr    <- changedST $ newSTRef 0
-  --
-  MapF.traverseWithKey_
-    (\r -> joinNewLoc old new cnsRef procRef cntr (RegLoc r))
-    (locMapRegs (unBSSC old))
-  stackMapTraverseWithKey_
-    (\i r c -> joinNewLoc old new cnsRef procRef cntr (StackOffLoc i r) c)
-    (locMapStack (unBSSC old))
-
+  locMapTraverseWithKey_ (joinNewLoc old new cnsRef procRef cntr) (unBSSC old)
   -- Check number of equivalence classes in result and original
   -- The count should not have decreased, but may increase if two elements
   -- are no longer equal, and we need to check this.
@@ -568,7 +613,6 @@ joinBlockStartStackConstraints old new = do
     error "Original class count should be bound by resultClassCount"
   -- Record changed if any classes are different.
   markChanged (origClassCount < resultClassCount)
-
   changedST $ (,) <$> readSTRef cnsRef <*> readSTRef procRef
 
 ------------------------------------------------------------------------
@@ -592,7 +636,7 @@ data StackExpr arch ids tp where
   ClassRepExpr :: !(BoundLoc (ArchReg arch) tp) -> StackExpr arch ids tp
   -- | An assignment that is not interpreted, and just treated as a constant.
   UninterpAssignExpr :: !(AssignId ids tp)
-                     -> !(TypeRepr tp)
+                     -> !(AssignRhs arch (Value arch ids) tp)
                      -> StackExpr arch ids tp
   -- | Denotes the value of the stack pointer at function start plus some constant.
   StackOffsetExpr :: !(MemInt (ArchAddrWidth arch))
@@ -642,13 +686,19 @@ instance OrdF (ArchReg arch) => OrdF (StackExpr arch ids) where
 
   compareF (AppExpr xn _xa) (AppExpr yn _ya) = compareF xn yn
 
+instance TestEquality (ArchReg arch) => Eq (StackExpr arch ids tp) where
+  x == y = isJust (testEquality x y)
+
+instance OrdF (ArchReg arch) => Ord (StackExpr arch ids tp) where
+  compare x y = toOrdering (compareF x y)
+
 instance ( HasRepr (ArchReg arch) TypeRepr
          , MemWidth (ArchAddrWidth arch)
          ) => HasRepr (StackExpr arch ids) TypeRepr where
   typeRepr e =
     case e of
       ClassRepExpr x    -> typeRepr x
-      UninterpAssignExpr _ tp   -> tp
+      UninterpAssignExpr _ rhs   -> typeRepr rhs
       StackOffsetExpr _ -> addrTypeRepr
       CExpr x           -> typeRepr x
       AppExpr _ a       -> typeRepr a
@@ -686,7 +736,7 @@ blockStartLocExpr cns loc =
 data BlockIntraStackConstraints arch ids
    = BISC { biscInitConstraints :: !(BlockStartStackConstraints arch)
             -- ^ Bounds at execution start.
-          , stackExprMap :: !(StackMap (ArchAddrWidth arch) (StackExpr arch ids))
+          , stackExprMap :: !(MemMap (MemInt (ArchAddrWidth arch)) (StackExpr arch ids))
             -- ^ Maps stack offsets to the expression associated with them at the current
             -- location.
           , assignExprMap :: !(MapF (AssignId ids) (StackExpr arch ids))
@@ -705,7 +755,7 @@ mkBlockIntraStackConstraints cns =
                 -> StackExpr arch ids tp
       stackExpr i tp _ = blockStartLocExpr cns (StackOffLoc i tp)
    in BISC { biscInitConstraints = cns
-           , stackExprMap   = stackMapMapWithKey stackExpr (locMapStack (unBSSC cns))
+           , stackExprMap   = memMapMapWithKey stackExpr (locMapStack (unBSSC cns))
            , assignExprMap  = MapF.empty
            }
 
@@ -750,9 +800,9 @@ intraStackRhsExpr cns aid arhs =
            in AppExpr aid a
     ReadMem addr repr
       | StackOffsetExpr o <- intraStackValueExpr cns addr
-      , SMLResult e <- stackMapLookup o repr (stackExprMap cns) ->
+      , MMLResult e <- memMapLookup o repr (stackExprMap cns) ->
         e
-    _ -> UninterpAssignExpr aid (typeRepr arhs)
+    _ -> UninterpAssignExpr aid arhs
 
 -- | Associate the given bound expression with the assignment.
 intraStackSetAssignId :: AssignId ids tp
@@ -762,12 +812,12 @@ intraStackSetAssignId :: AssignId ids tp
 intraStackSetAssignId aid expr cns =
   cns { assignExprMap = MapF.insert aid expr (assignExprMap cns) }
 
--- | Discard information about the stack in the bounds due to an
--- operation that may affect the stack.
-discardStackInfo :: BlockIntraStackConstraints arch ids
+-- | Discard information about memory due to an operation that may
+-- affect arbitrary memory.
+discardMemInfo :: BlockIntraStackConstraints arch ids
                  -> BlockIntraStackConstraints arch ids
-discardStackInfo cns =
-  cns { stackExprMap = emptyStackMap }
+discardMemInfo cns =
+  cns { stackExprMap = emptyMemMap }
 
 -- | Update the stack to point to the given expression.
 writeStackOff :: forall arch ids tp
@@ -778,7 +828,7 @@ writeStackOff :: forall arch ids tp
               -> Value arch ids tp
               -> BlockIntraStackConstraints arch ids
 writeStackOff cns off repr v =
-  cns { stackExprMap = stackMapOverwrite off repr (intraStackValueExpr cns v) (stackExprMap cns) }
+  cns { stackExprMap = memMapOverwrite off repr (intraStackValueExpr cns v) (stackExprMap cns) }
 
 ------------------------------------------------------------------------
 -- NextStateMonad
@@ -806,7 +856,8 @@ runNextStateMonad (NSM m) = evalState m $! NBS { nbsExprMap = MapF.empty, nbsRep
 -- Note that each equivalence class has a unique stack expression, so
 -- all the locations in an equivalence class should have the same
 -- expression.
-getNextStateRepresentatives :: NextStateMonad arch ids [Pair (BoundLoc (ArchReg arch)) (StackExpr arch ids)]
+getNextStateRepresentatives
+  :: NextStateMonad arch ids [Pair (BoundLoc (ArchReg arch)) (StackExpr arch ids)]
 getNextStateRepresentatives = NSM $ gets nbsRepLocs
 
 ------------------------------------------------------------------------
@@ -814,16 +865,17 @@ getNextStateRepresentatives = NSM $ gets nbsRepLocs
 
 -- | Return the constraint associated with the given location and expression
 -- or nothing if the constraint is the top one and should be stored.
-nextStateStackEqConstraint :: ( MemWidth (ArchAddrWidth arch)
-                              , HasRepr (ArchReg arch) TypeRepr
-                              , OrdF (ArchReg arch)
-                              , ShowF (ArchReg arch)
-                              )
-                           => BoundLoc (ArchReg arch) tp
-                           -- ^ Location expression is stored at.
-                           -> StackExpr arch ids tp
-                           -- ^ Expression to infer predicate or.
-                           -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
+nextStateStackEqConstraint
+  :: ( MemWidth (ArchAddrWidth arch)
+     , HasRepr (ArchReg arch) TypeRepr
+     , OrdF (ArchReg arch)
+     , ShowF (ArchReg arch)
+     )
+  => BoundLoc (ArchReg arch) tp
+     -- ^ Location expression is stored at.
+  -> StackExpr arch ids tp
+     -- ^ Expression to infer predicate or.
+  -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
 nextStateStackEqConstraint loc e = do
   s <- NSM $ get
   case MapF.lookup e (nbsExprMap s) of
@@ -846,13 +898,21 @@ postJumpStackConstraints :: forall arch ids
                          -- ^ Constraints at end of block.
                          -> RegState (ArchReg arch) (Value arch ids)
                          -- ^ Register values at start of next state.
+                         --
+                         -- Note. ip_reg is ignored, so it does not have to be up-to-date.
                          -> NextStateMonad arch ids (BlockStartStackConstraints arch)
 postJumpStackConstraints cns regs = do
-  rm <- MapF.traverseMaybeWithKey
-          (\r v -> nextStateStackEqConstraint (RegLoc r) (intraStackValueExpr cns v))
-          (regStateMap regs)
-  sm <- stackMapTraverseMaybeWithKey (\i repr e -> nextStateStackEqConstraint (StackOffLoc i repr) e)
-                                     (stackExprMap cns)
+  let postReg :: ArchReg arch tp
+              -> Value arch ids tp
+              -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
+      postReg r v =
+        case testEquality r ip_reg of
+          Just Refl -> pure Nothing
+          Nothing -> nextStateStackEqConstraint (RegLoc r) (intraStackValueExpr cns v)
+  rm <- MapF.traverseMaybeWithKey postReg (regStateMap regs)
+  sm <- memMapTraverseMaybeWithKey
+          (\i repr e -> nextStateStackEqConstraint (StackOffLoc i repr) e)
+          (stackExprMap cns)
   pure $! BSSC (LocMap { locMapRegs = rm, locMapStack = sm })
 
 -- | Get the constraint associated with a register after a call.
@@ -867,6 +927,8 @@ postCallConstraint :: RegisterInfo (ArchReg arch)
                    -- ^ Value of register at time call occurs.
                    -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
 postCallConstraint params cns r v
+  | Just Refl <- testEquality r ip_reg =
+      pure Nothing
   | Just Refl <- testEquality r sp_reg
   , StackOffsetExpr o <- intraStackValueExpr cns v = do
       pure $! (Just $! IsStackOff (o+fromInteger (postCallStackDelta params)))
@@ -892,17 +954,19 @@ postCallStackConstraints params cns regs = do
             | stackGrowsDown params ->
                 let newOff = toInteger spOff + postCallStackDelta params
                     -- Keep entries at offsets above return address.
-                 in stackMapDropBelow newOff finalStack
+                 in memMapDropBelow newOff finalStack
             | otherwise ->
                 let newOff = toInteger spOff + postCallStackDelta params
                     -- Keep entries whose high address is below new stack offset
-                 in stackMapDropAbove newOff finalStack
-          _ -> emptyStackMap
+                 in memMapDropAbove newOff finalStack
+          _ -> emptyMemMap
   let nextStackFn :: MemInt (ArchAddrWidth arch)
                   -> MemRepr tp
                   -> StackExpr arch ids tp
                   -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
       nextStackFn i repr e =
         nextStateStackEqConstraint (StackOffLoc i repr) e
-  sm <- stackMapTraverseMaybeWithKey nextStackFn filteredStack
-  pure $! BSSC (LocMap { locMapRegs = rm, locMapStack = sm })
+  sm <- memMapTraverseMaybeWithKey nextStackFn filteredStack
+  pure $! BSSC (LocMap { locMapRegs = rm
+                       , locMapStack = sm
+                       })
