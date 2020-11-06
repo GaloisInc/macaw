@@ -1042,7 +1042,7 @@ instance Show (MemAddr w) where
     . showString "+"
     . shows off
 
-instance MemWidth w => Pretty (MemAddr w) where
+instance Pretty (MemAddr w) where
   pretty = text . show
 
 -- | Given an absolute address, this returns a segment and offset into the segment.
