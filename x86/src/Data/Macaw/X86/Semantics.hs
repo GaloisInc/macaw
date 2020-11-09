@@ -908,7 +908,10 @@ def_sbb = defBinaryLV "sbb" $ \l v -> do
   af_loc .= uadd4_overflows v cbv .||. usub4_overflows v0 v'
   cf_loc .= uadd_overflows v cbv .||. (usub_overflows  v0 v')
   -- Set result value.
-  let res = v0 .- v'
+  let res =
+        if v0 == v
+        then mux cf (bvLit w (-1)) (bvLit w 0)
+        else v0 .- v'
   set_result_flags res
   l .= res
 
