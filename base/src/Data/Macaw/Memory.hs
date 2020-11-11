@@ -153,7 +153,6 @@ import           Control.Monad
 import           Data.BinarySymbols
 import           Data.Bits
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as L
 import qualified Data.ElfEdit.ByteString as ElfBS
 import           Data.Int (Int32, Int64)
 import           Data.Map.Strict (Map)
@@ -615,23 +614,23 @@ contentsRanges = Map.toList . segContentsMap
 -- Presymbol data
 
 -- | Contents of segment/section before symbol folded in.
-data PresymbolData = PresymbolData { preBytes :: !L.ByteString
+data PresymbolData = PresymbolData { preBytes :: !BS.ByteString
                                    , preBSS :: !Integer
                                    }
 
 -- | Return number of presymbol bytes remaining
 presymbolBytesLeft :: PresymbolData -> Integer
-presymbolBytesLeft p = toInteger (L.length (preBytes p)) + preBSS p
+presymbolBytesLeft p = toInteger (BS.length (preBytes p)) + preBSS p
 
-mkPresymbolData :: L.ByteString -> Integer -> PresymbolData
+mkPresymbolData :: BS.ByteString -> Integer -> PresymbolData
 mkPresymbolData contents0 sz
-  | sz < toInteger (L.length contents0) =
-      PresymbolData { preBytes = L.take (fromInteger sz) contents0
+  | sz < toInteger (BS.length contents0) =
+      PresymbolData { preBytes = BS.take (fromInteger sz) contents0
                     , preBSS = 0
                     }
   | otherwise =
       PresymbolData { preBytes = contents0
-                    , preBSS = sz - toInteger (L.length contents0)
+                    , preBSS = sz - toInteger (BS.length contents0)
                     }
 
 -- | @bssSegment cnt@ creates a BSS region with size @cnt@.
@@ -650,10 +649,10 @@ allSymbolData :: MemWidth w
               -> [(MemWord w, MemChunk w)]
               -> [(MemWord w, MemChunk w)]
 allSymbolData off (PresymbolData contents bssSize)
-  | L.null contents = bssSegment off bssSize
+  | BS.null contents = bssSegment off bssSize
   | otherwise =
-    bssSegment (off + fromIntegral (L.length contents)) bssSize
-      . ((off,  ByteRegion (L.toStrict contents)) :)
+    bssSegment (off + fromIntegral (BS.length contents)) bssSize
+      . ((off,  ByteRegion contents) :)
 
 
 -- | Take the difference between given amount of data out of presymbol data.
@@ -669,43 +668,41 @@ splitSegment _baseAddr pre curAddr targetAddr dta
   | targetAddr == curAddr = (pre, dta)
 splitSegment baseAddr pre curAddr targetAddr (PresymbolData contents bssSize)
    -- Case where relocation is contained within regular contents
-  | toInteger cnt <= toInteger (L.length contents) =
-    ( (curAddr - baseAddr, ByteRegion (L.toStrict (L.take (fromIntegral cnt) contents))) : pre
-    , PresymbolData (L.drop (fromIntegral cnt) contents) bssSize
+  | toInteger cnt <= toInteger (BS.length contents) =
+    ( (curAddr - baseAddr, ByteRegion (BS.take (fromIntegral cnt) contents)) : pre
+    , PresymbolData (BS.drop (fromIntegral cnt) contents) bssSize
     )
   -- If contents is empty, then we just have BSS.
-  | L.null contents =
+  | BS.null contents =
       if bssSize < toInteger (targetAddr - curAddr) then
         error "Out of bytes"
       else
         ( (curAddr - baseAddr, BSSRegion cnt) : pre
-        , PresymbolData L.empty (bssSize - toInteger cnt)
+        , PresymbolData BS.empty (bssSize - toInteger cnt)
         )
   -- We take all of file-based data and at least some BSS.
   | otherwise =
-      ( [ ( curAddr - baseAddr + fromIntegral (L.length contents)
-          , BSSRegion (cnt - fromIntegral (L.length contents))
+      ( [ ( curAddr - baseAddr + fromIntegral (BS.length contents)
+          , BSSRegion (cnt - fromIntegral (BS.length contents))
           )
-        , (curAddr - baseAddr
-          , ByteRegion (L.toStrict contents)
-          )
+        , (curAddr - baseAddr, ByteRegion contents)
         ] ++ pre
-      , PresymbolData L.empty (bssSize - (toInteger cnt - toInteger (L.length contents)))
+      , PresymbolData BS.empty (bssSize - (toInteger cnt - toInteger (BS.length contents)))
       )
  where cnt = targetAddr - curAddr
 
 -- | @dropSegment cnt dta@ drops @cnt@ bytes from @dta@.
-dropSegment :: Int64 -> PresymbolData -> PresymbolData
+dropSegment :: Int -> PresymbolData -> PresymbolData
 dropSegment cnt (PresymbolData contents bssSize)
-  | cnt <= L.length contents = PresymbolData (L.drop cnt contents) bssSize
-  | otherwise = PresymbolData L.empty (bssSize - toInteger (cnt - L.length contents))
+  | cnt <= BS.length contents = PresymbolData (BS.drop cnt contents) bssSize
+  | otherwise = PresymbolData BS.empty (bssSize - toInteger (cnt - BS.length contents))
 
 -- | Return the given bytes
-takePresymbolBytes :: Int64 -> PresymbolData -> Maybe BS.ByteString
+takePresymbolBytes :: Int -> PresymbolData -> Maybe BS.ByteString
 takePresymbolBytes cnt p
   | toInteger cnt  <= presymbolBytesLeft p =
-      Just $ L.toStrict (L.take cnt (preBytes p))
-          <> BS.replicate (fromIntegral cnt - fromIntegral (L.length (preBytes p))) 0
+      Just $ BS.take cnt (preBytes p)
+          <> BS.replicate (cnt - BS.length (preBytes p)) 0
   | otherwise =
       Nothing
 
@@ -836,7 +833,7 @@ memSegment :: forall m w
               -- ^ Linktime address of segment.
            -> Perm.Flags
               -- ^ Permissions for segment.
-           -> L.ByteString
+           -> BS.ByteString
            -- ^ File contents for segment.
            -> MemWord w
            -- ^ Expected size (must be positive)

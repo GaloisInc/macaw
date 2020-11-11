@@ -23,5 +23,5 @@ getElfSections e =
 getELFSymbols :: (Show (E.ElfWordType w), Data.Bits.Bits (E.ElfWordType w), Integral (E.ElfWordType w)) => E.Elf w -> Doc
 getELFSymbols elf =
     let symtab = elf^.to E.elfSymtab
-        ps = fmap (E.ppSymbolTableEntries . toList . E.elfSymbolTableEntries) symtab
+        ps = fmap (E.ppSymbolTableEntries . toList . E.symtabEntries) symtab
     in vsep ps

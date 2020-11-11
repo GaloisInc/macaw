@@ -5,6 +5,7 @@ and reports inconsistencies.
 It currently only supports .eh_frame and .debug_frame sections.
 -}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -284,9 +285,10 @@ runExporter (Exporter m) = Bld.toLazyByteString (execState m mempty)
 compareElf :: FilePath -> FilePath -> BS.ByteString -> IO ()
 compareElf dwarfDump path bytes = do
   putStrLn $ "Checking " <> path
-  case Elf.parseElfHeaderInfo bytes of
+  case Elf.decodeElfHeaderInfo bytes of
     Left (_o, m) -> reportError path m
-    Right (Elf.Elf64 elfHdr) | Elf.EM_X86_64 <- Elf.headerMachine (Elf.header elfHdr)  -> do
+    Right (Elf.SomeElf elfHdr) | Elf.ELFCLASS64 <- Elf.headerClass (Elf.header elfHdr)
+                               , Elf.EM_X86_64 <- Elf.headerMachine (Elf.header elfHdr) -> do
       let (errs, elfFile) = Elf.getElf elfHdr
       forM_ errs $ \e -> hPutStrLn stderr (show e)
       let myDwarfDump = runExporter (mkDwarfdumpOutput path elfFile)
