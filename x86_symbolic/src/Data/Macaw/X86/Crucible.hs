@@ -198,6 +198,10 @@ data SymFuns s = SymFuns
       SymFn s (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 8) (BaseBVType 128)
     -- ^ Assist in expanding AES cipher key
 
+  , fnAesIMC ::
+      SymFn s (EmptyCtx ::> BaseBVType 128) (BaseBVType 128)
+    -- ^ Perform the AES InvMixColumn transformation
+
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
     -- ^ Carryless multiplication
@@ -213,6 +217,9 @@ newSymFuns s =
      fnAesDecLast <- bin "aesDecLast"
      fnAesKeyGenAssist <- bin "aesKeyGenAssist"
      fnClMul      <- bin "clMul"
+     fnAesIMC <- case userSymbol "aesIMC" of
+       Left _ -> fail "Invalid symbol name"
+       Right a -> freshTotalUninterpFn s a (extend empty knownRepr) knownRepr
      return SymFuns { .. }
 
   where
@@ -486,6 +493,12 @@ pureSem sym fn = do
          src <- toValBV s x
          roundConst <- bvLit s knownNat $ BV.mkBV knownNat $ fromIntegral i
          let ps = extend (extend empty src) roundConst
+         llvmPointer_bv s =<< applySymFn s f ps
+    M.AESNI_AESIMC x ->
+      do let f = fnAesIMC (symFuns sym)
+             s = symIface sym
+         src <- toValBV s x
+         let ps = extend empty src
          llvmPointer_bv s =<< applySymFn s f ps
 
 semPointwise :: (1 <= w) =>
