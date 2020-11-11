@@ -24,8 +24,8 @@ import qualified Data.Parameterized.NatRepr as NR
 
 
 data BinaryRepr binFmt where
-  Elf32Repr :: BinaryRepr (E.Elf 32)
-  Elf64Repr :: BinaryRepr (E.Elf 64)
+  Elf32Repr :: BinaryRepr (E.ElfHeaderInfo 32)
+  Elf64Repr :: BinaryRepr (E.ElfHeaderInfo 64)
 
 instance PC.TestEquality BinaryRepr where
   testEquality Elf32Repr Elf32Repr = Just PC.Refl

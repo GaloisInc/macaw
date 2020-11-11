@@ -24,21 +24,21 @@ import           Data.Maybe ( mapMaybe )
 
 import qualified Data.Macaw.X86 as MX
 
-data X86ElfData w = X86ElfData { elf :: E.Elf w
+data X86ElfData w = X86ElfData { elf :: E.ElfHeaderInfo w
                                , memSymbols :: [EL.MemSymbol w]
                                , symbolIndex :: Map.Map (MM.MemAddr 64) BS.ByteString
                                }
 
-instance BL.BinaryLoader MX.X86_64 (E.Elf 64) where
-  type ArchBinaryData MX.X86_64 (E.Elf 64) = ()
-  type BinaryFormatData MX.X86_64 (E.Elf 64) = X86ElfData 64
-  type Diagnostic MX.X86_64 (E.Elf 64) = EL.MemLoadWarning
+instance BL.BinaryLoader MX.X86_64 (E.ElfHeaderInfo 64) where
+  type ArchBinaryData MX.X86_64 (E.ElfHeaderInfo 64) = ()
+  type BinaryFormatData MX.X86_64 (E.ElfHeaderInfo 64) = X86ElfData 64
+  type Diagnostic MX.X86_64 (E.ElfHeaderInfo 64) = EL.MemLoadWarning
   loadBinary = loadX86Binary
   entryPoints = x86EntryPoints
   symbolFor = x86LookupSymbol
 
 x86LookupSymbol :: (X.MonadThrow m)
-                => BL.LoadedBinary MX.X86_64 (E.Elf 64)
+                => BL.LoadedBinary MX.X86_64 (E.ElfHeaderInfo 64)
                 -> MM.MemAddr 64
                 -> m BS.ByteString
 x86LookupSymbol loadedBinary addr =
@@ -47,7 +47,7 @@ x86LookupSymbol loadedBinary addr =
     Nothing -> X.throwM (MissingSymbolFor addr)
 
 x86EntryPoints :: (X.MonadThrow m)
-               => BL.LoadedBinary MX.X86_64 (E.Elf 64)
+               => BL.LoadedBinary MX.X86_64 (E.ElfHeaderInfo 64)
                -> m (NEL.NonEmpty (MM.MemSegmentOff 64))
 x86EntryPoints loadedBinary = do
   case MM.asSegmentOff mem addr of
@@ -56,18 +56,18 @@ x86EntryPoints loadedBinary = do
     Nothing -> X.throwM (InvalidEntryPoint addr)
   where
     mem = BL.memoryImage loadedBinary
-    addr = MM.absoluteAddr (MM.memWord (fromIntegral (E.elfEntry (elf (BL.binaryFormatData loadedBinary)))))
+    addr = MM.absoluteAddr (MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
     elfData = elf (BL.binaryFormatData loadedBinary)
     symbols = [ MM.absoluteAddr (MM.memWord (fromIntegral (E.steValue entry)))
-              | st <- E.elfSymtab elfData
-              , entry <- F.toList (E.elfSymbolTableEntries st)
+              | Just (Right st) <- [E.decodeHeaderSymtab elfData]
+              , entry <- F.toList (E.symtabEntries st)
               , E.steType entry == E.STT_FUNC
               ]
 
 loadX86Binary :: (X.MonadThrow m)
               => LC.LoadOptions
-              -> E.Elf 64
-              -> m (BL.LoadedBinary MX.X86_64 (E.Elf 64))
+              -> E.ElfHeaderInfo 64
+              -> m (BL.LoadedBinary MX.X86_64 (E.ElfHeaderInfo 64))
 loadX86Binary lopts e = do
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (X86ElfLoadError err)

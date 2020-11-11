@@ -22,7 +22,7 @@ library
                      , cereal
                      , containers
                      , dismantle-tablegen
-                     , elf-edit
+                     , elf-edit >= 0.39
                      , exceptions
                      , macaw-base
                      , macaw-loader

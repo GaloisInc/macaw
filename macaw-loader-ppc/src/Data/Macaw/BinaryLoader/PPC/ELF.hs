@@ -12,6 +12,7 @@ import           Control.Monad ( unless )
 import qualified Control.Monad.Catch as X
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ElfEdit as E
+import           Data.Foldable (toList)
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Map.Strict as M
@@ -37,12 +38,17 @@ parseTOC :: forall w m
              MM.MemWidth w,
              Integral (E.ElfWordType w),
              X.MonadThrow m)
-         => E.Elf w
+         => E.ElfHeaderInfo w
          -> m (TOC.TOC w)
-parseTOC e =
-  case E.findSectionByName (C8.pack ".opd") e of
-    [sec] ->
-      case G.runGet (parseFunctionDescriptors @w (fromIntegral ptrSize) (E.elfSectionAddr sec)) (E.elfSectionData sec) of
+parseTOC e = do
+  shdrs <-
+    case E.headerNamedShdrs e of
+      Left _ -> X.throwM ((TOC.TOCParseError "Failed to parse section names.") :: TOC.TOCException w)
+      Right r -> pure (toList r)
+  case filter (\s -> E.shdrName s == C8.pack ".opd") shdrs of
+    [sec] -> do
+      let buffer = E.slice (E.shdrFileRange sec) (E.headerFileContents e)
+      case G.runGet (parseFunctionDescriptors @w (fromIntegral ptrSize) (E.shdrAddr sec)) buffer of
         Left msg -> X.throwM ((TOC.TOCParseError msg) :: TOC.TOCException w)
         Right t -> return t
     _ -> X.throwM ((TOC.MissingTOCSection ".opd") :: TOC.TOCException w)
