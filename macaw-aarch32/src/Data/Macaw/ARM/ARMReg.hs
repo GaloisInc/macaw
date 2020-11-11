@@ -27,7 +27,6 @@ module Data.Macaw.ARM.ARMReg
 
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.NatRepr as NR
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.SymbolRepr as PSR
 import qualified Data.Parameterized.TraversableFC as FC
@@ -161,6 +160,14 @@ armRegs = FC.toListFC asARMReg ( FC.fmapFC ASL.SimpleGlobalRef ASL.simpleGlobalR
 -- https://stackoverflow.com/questions/12946958/system-call-in-arm,
 -- R0-R6 are used to pass syscall arguments, r7 specifies the
 -- syscall#, and r0 is the return code.
+--
+-- NOTE: Macaw also uses this to calculate which registers are preserved across
+-- calls.
+--
+-- NOTE: We are forcing the assumption that the thumb state doesn't change after
+-- a call returns. That is technically not true, but macaw is not set up to
+-- handle the case where it isn't true (and nothing works if we don't make that
+-- assumption).
 linuxSystemCallPreservedRegisters :: Set.Set (Some ARMReg)
 linuxSystemCallPreservedRegisters =
   Set.fromList [ Some (ARMGlobalBV (ASL.knownGlobalRef @"_R8"))
@@ -171,6 +178,7 @@ linuxSystemCallPreservedRegisters =
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R13"))
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"_R14"))
                , Some (ARMGlobalBV (ASL.knownGlobalRef @"_PC"))
+               , Some (ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T"))
                ]
   -- Currently, we are only considering the non-volatile GPRs.  There
   -- are also a set of non-volatile floating point registers.  I have

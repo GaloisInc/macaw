@@ -8,9 +8,6 @@ module Data.Macaw.ARM
       arm_linux_info,
       -- * Type-level tags
       ARM,
-      -- * ELF support
-      -- tocBaseForELF
-      -- tocEntryAddrsForELF
     )
     where
 

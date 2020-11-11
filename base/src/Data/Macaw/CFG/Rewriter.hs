@@ -38,7 +38,7 @@ import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.BinarySymbols
 import           Data.Bits
-import           Data.List
+import           Data.List (find)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
