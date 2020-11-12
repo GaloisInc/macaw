@@ -1258,9 +1258,12 @@ returnClassifier = classifierName "Return" $ do
   bcc <- ask
   let ainfo = pctxArchInfo (classifierParseContext bcc)
   withArchConstraints ainfo $ do
-    Just prev_stmts <-
-      pure $ identifyReturn ainfo (classifierStmts bcc) (classifierFinalRegState bcc) (classifierAbsState bcc)
-    pure $ ParsedContents { parsedNonterm = toList prev_stmts
+    Just prevStmts <-
+      pure $ identifyReturn ainfo
+                            (classifierStmts bcc)
+                            (classifierFinalRegState bcc)
+                            (classifierAbsState bcc)
+    pure $ ParsedContents { parsedNonterm = toList prevStmts
                           , parsedTerm = ParsedReturn (classifierFinalRegState bcc)
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
                           , intraJumpTargets = []
