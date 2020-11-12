@@ -280,7 +280,7 @@ markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
 markAddrAsFunction rsn addr s
   -- Do nothing if function is already explored.
   | Map.member addr (s^.funInfo) = s
-  -- Ignore if function alrdy in set.
+  -- Ignore if function already in set.
   | Map.member addr (s^.unexploredFunctions) = s
   -- Ignore if address is not in an executable segment.
   | not (isExecutableSegOff addr) = s
@@ -1258,7 +1258,8 @@ returnClassifier = classifierName "Return" $ do
   bcc <- ask
   let ainfo = pctxArchInfo (classifierParseContext bcc)
   withArchConstraints ainfo $ do
-    Just prev_stmts <- pure $ identifyReturn ainfo (classifierStmts bcc) (classifierFinalRegState bcc) (classifierAbsState bcc)
+    Just prev_stmts <-
+      pure $ identifyReturn ainfo (classifierStmts bcc) (classifierFinalRegState bcc) (classifierAbsState bcc)
     pure $ ParsedContents { parsedNonterm = toList prev_stmts
                           , parsedTerm = ParsedReturn (classifierFinalRegState bcc)
                           , writtenCodeAddrs = classifierWrittenAddrs bcc

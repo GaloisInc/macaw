@@ -658,18 +658,18 @@ processStmt stmtIdx stmt = do
       case valueToStartExpr ctx s addr of
         FrameExpr o -> do
           stk <- gets sisStack
-          case memMapLookup o repr stk of
-            MMLResult sv -> do
-              addMemAccessInfo (FrameCondWriteAccess o repr sv)
-              sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
-            MMLOverlap{} -> do
-              let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-              addMemAccessInfo (FrameCondWriteOverlapAccess o)
-              sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
-            MMLNone -> do
-              let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-              addMemAccessInfo (FrameCondWriteAccess o repr sv)
-              sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
+          sv <- case memMapLookup o repr stk of
+                  MMLResult sv -> do
+                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
+                    pure sv
+                  MMLOverlap{} -> do
+                    addMemAccessInfo (FrameCondWriteOverlapAccess o)
+                    pure $ ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+                  MMLNone -> do
+                    let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
+                    pure sv
+          sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
         _ -> do
           addMemAccessInfo NotFrameAccess
     -- Do nothing with instruction start/comment/register update

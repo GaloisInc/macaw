@@ -383,13 +383,8 @@ data DiscoveryState arch
                       -- set should be initialized upfront, and not
                       -- changed.
                     , _exploreFnPred :: !(ArchSegmentOff arch -> Bool)
-                      -- ^ if present, this predicate decides whether to explore
-                      -- a function at the given address or not.
-                      --
-                      -- If omitted, all functions are included.
-                      --
-                      -- Note. We use maybe so that we can avoid applying a filter
-                      -- when the value is `Nothing`.
+                      -- ^ This predicate decides whether to explore a
+                      -- function at the given address or not.
                     }
 
 -- | Return list of all functions discovered so far.

@@ -1450,43 +1450,23 @@ memoryForElf' :: LoadOptions
                                 )
 memoryForElf' opt elf isRelevant = elfHeaderConstraints elf $ do
   let shdrs = Elf.headerShdrs elf
-  let contents = Elf.headerFileContents elf
-  ((mem, secMap, warnings), dynamicEntries) <-
+  -- Get the elf memory, section map, warnings based on type.
+  (mem, secMap, warnings) <-
     case Elf.headerType (Elf.header elf) of
       -- We load object files by section
       Elf.ET_REL -> do
         when (isJust (loadOffset opt)) $ do
           Left $ "Object file sections have multiple offsets, and do not support loading at address."
-        r <- memoryForElfSections elf
-        pure (r, V.empty)
-      Elf.ET_EXEC -> do
-        r <- memoryForElfSegments opt elf
-        pure (r, V.empty)
+        memoryForElfSections elf
+      Elf.ET_EXEC ->
+        memoryForElfSegments opt elf
       -- Dynamic include dynamic information
-      _ -> do
-        r <- memoryForElfSegments opt elf
-
-        -- Get dynamic entries
-        let hdr = Elf.header elf
-        let cl = Elf.headerClass hdr
-        let dta = Elf.headerData hdr
-
-
-
-        let dynamicEntries
-              | [symtab] <- V.toList $ V.filter (\s -> Elf.shdrType s == Elf.SHT_DYNSYM) shdrs
-              , strtabIdx <- Elf.shdrLink symtab
-              , Just strtab <- shdrs V.!? fromIntegral strtabIdx
-              , symtabData <- shdrData contents symtab
-              , strtabData <- shdrData contents strtab
-              , Right entries <-Elf.decodeSymtab cl dta strtabData symtabData =
-                  entries
-              | otherwise = V.empty
-        pure (r, dynamicEntries)
-  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem shdrs secMap isRelevant dynamicEntries elf
+      _ ->
+        memoryForElfSegments opt elf
+  -- Get dynamic symbol table entries
+  -- Resolve ellf symbol table information
+  let (symErrs, funcSymbols) = resolveElfFuncSymbols mem shdrs secMap isRelevant elf
   pure (mem, funcSymbols, warnings, symErrs)
-
-
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1603,35 +1583,48 @@ ofResolvedSymbol (Just (Left e)) = resolutionError e
 ofResolvedSymbol (Just (Right s)) = resolvedSymbol s
 
 -- | Resolve symbol table entries defined in this Elf file to
--- a mem symbol
---
--- It takes the memory constructed from the Elf file, the section
--- index map, and the elf file.  It returns errors from resolve symbols,
--- and a map from segment offsets to bytestring.
+-- a mem symbol.
 resolveElfFuncSymbols
   :: forall w
   .  (MemWidth w, Integral (ElfWordType w))
   => Memory w
+     -- ^ Memory loaded
   -> V.Vector (Elf.Shdr Word32 (Elf.ElfWordType w))
      -- ^ Section headers for symbol table
   -> SectionIndexMap w
+     -- ^ Map from s
   -> (Elf.SymtabEntry BS.ByteString (ElfWordType w) -> Bool)
      -- ^ Filter on symbol table entries
-  -> V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w))
   -> Elf.ElfHeaderInfo w
+     -- ^ elf header information
   -> ([SymbolResolutionError], [MemSymbol w])
-resolveElfFuncSymbols mem shdrs secMap p dynamicEntries elf =
+resolveElfFuncSymbols mem shdrs secMap p elf =
    let resolver = mkSymbolAddrResolver shdrs secMap
        hdr = Elf.header elf
        contents = Elf.headerFileContents elf
+
+       cl  = Elf.headerClass hdr
+       dta = Elf.headerData hdr
 
        staticEntries =
          case elfStaticSymbolTable hdr contents shdrs of
            Nothing -> []
            Just v -> V.toList $ V.imap (\i s-> (i, s)) v
 
+       dynamicEntries
+         | Elf.headerType (Elf.header elf) == Elf.ET_DYN
+         ,  [symtab] <- V.toList $ V.filter (\s -> Elf.shdrType s == Elf.SHT_DYNSYM) shdrs
+         , strtabIdx <- Elf.shdrLink symtab
+         , Just strtab <- shdrs V.!? fromIntegral strtabIdx
+         , symtabData <- shdrData contents symtab
+         , strtabData <- shdrData contents strtab
+         , Right entries <-Elf.decodeSymtab cl dta strtabData symtabData =
+             V.toList $ V.imap (\i s -> (i, s)) entries
+         | otherwise =
+             []
+
        allEntries :: [(Int, Elf.SymtabEntry BS.ByteString (ElfWordType w))]
-       allEntries = staticEntries ++ V.toList (V.imap (\i s -> (i, s)) dynamicEntries)
+       allEntries = staticEntries ++ dynamicEntries
 
        r :: ResolvedSymbols w
        r = mconcat

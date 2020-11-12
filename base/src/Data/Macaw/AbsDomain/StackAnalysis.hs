@@ -258,7 +258,10 @@ data MemMapLookup o p tp where
   MMLNone :: MemMapLookup o p tp
 
 class Ord o => MemIndex o where
+  -- | @endOffset o w@ returns @Just (o + w)@ if it can be computed
+  -- without overflowing.
   endOffset :: o -> Natural -> Maybe o
+
   -- | @memOverlap b r i@ returns @True@ if @b <= i@ and
   -- @i - b < sizeOf r@.
   memOverlap :: o -> MemRepr tp -> o -> Bool
@@ -316,14 +319,12 @@ memMapOverwrite :: forall o p tp
                 -> p tp  -- ^ Value to write
                 -> MemMap o p
                 -> MemMap o p
-memMapOverwrite off repr v (SM m)
-   | e <= off = error "stackOverwrite fail"
-   | memReprBytes repr == 0 = SM m
-   | otherwise =
-     let (lm, _) = Map.split off m
-         (_, hm) = Map.split e m
-      in SM $ Map.insert off (MemVal repr v) lm <> hm
-  where e = off + fromIntegral (memReprBytes repr) - 1
+memMapOverwrite off repr v (SM m) =
+   let e = off + fromIntegral (memReprBytes repr) - 1
+       (lm, _) = Map.split off m
+       hm | off <= e = snd (Map.split e m)
+          | otherwise = Map.empty
+    in SM $ Map.insert off (MemVal repr v) lm <> hm
 
 -- | This sets the value at an offset without checking to clear any
 -- previous writes to values.
@@ -510,7 +511,7 @@ ppStackEqConstraint d (IsUExt l w) = d <> text " = (uext " <> pretty l <+> text 
 
 -- | Constraints on start of block.
 --
--- This class maintains equality constraints between locations and
+-- This datatype maintains equality constraints between locations and
 -- stack offsets.  It is used in jump bounds and other analysis
 -- libraries where we want to know when two registers or stack
 -- locations are equal.
@@ -711,7 +712,6 @@ joinOldLoc ctx thisLoc oldCns = do
         -- Increment number of equivalence classes when we see an old
         -- representative.
         modifySTRef' (jctxClassCountRef ctx) (+1)
-        -- Update predicate to point o
         let (subRep, _) = blockStartLocRepAndCns (jctxOldCns ctx) oldSubLoc
         pure (thisLoc, Just (UExtCns subRep w))
   _ <- joinNextLoc ctx thisLoc oldRepPredPair
@@ -1070,7 +1070,7 @@ nextStateStackEqConstraint
   => BoundLoc (ArchReg arch) tp
      -- ^ Location expression is stored at.
   -> StackExpr arch ids tp
-     -- ^ Expression to infer predicate or.
+     -- ^ Expression to infer predicate for.
   -> NextStateMonad arch ids (Maybe (StackEqConstraint (ArchReg arch) tp))
 nextStateStackEqConstraint loc e = do
   s <- NSM $ get

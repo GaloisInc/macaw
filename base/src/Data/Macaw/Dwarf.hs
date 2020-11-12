@@ -160,13 +160,13 @@ runParser dr p = runIdentity (runWarnT (runReaderT (unParser p) s))
 
 -- | Error from parsing an attribute.
 data AttrError
-   = IncorrectTypeFor !String
+   = IncorrectTypeFor !BSC.ByteString
    | InvalidFileIndex !Word64
 
 ppAttrError :: AttrError -> String
 ppAttrError e =
   case e of
-    IncorrectTypeFor tp -> "Incorrect type for " ++ tp
+    IncorrectTypeFor tp -> "Incorrect type for " <> BSC.unpack tp
     InvalidFileIndex idx -> "Invalid file index " ++ show idx
 
 -- | A parser for attribute values.
