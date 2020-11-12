@@ -99,6 +99,8 @@ import           System.IO
 import           Text.PrettyPrint.ANSI.Leijen (pretty)
 import           Text.Printf (printf)
 
+#define USE_REWRITER
+
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.AbsDomain.Refine
@@ -106,14 +108,15 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+#ifdef USE_REWRITER
 import           Data.Macaw.CFG.Rewriter
+#endif
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
-#define USE_REWRITER 1
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -799,7 +802,10 @@ matchRelativeJumpTable = classifierName "Relative jump table" $ do
   --     ip = jmptbl + jmptbl[index]
   -- where jmptbl is a pointer to the lookup table.
   Just unalignedIP <- pure $ fromIPAligned ip
-  Just (tgtBase, tgtOffset) <- pure $ valueAsMemOffset mem aps unalignedIP
+  (tgtBase, tgtOffset) <-
+    case valueAsMemOffset mem aps unalignedIP of
+      Just p -> pure p
+      Nothing -> fail $ "Unaligned IP not a mem offset: " <> show unalignedIP
   SomeExt shortOffset ext <- pure $ matchExtension tgtOffset
   (arrayRead, idx) <- lift $ matchBoundedMemArray mem aps jmpBounds shortOffset
   unless (isReadOnlyBoundedMemArray arrayRead) $ do
@@ -1528,7 +1534,6 @@ addBlock src finfo pr = do
   s <- use curFunCtx
   let ainfo = archInfo s
   let initRegs = initialBlockRegs ainfo src pr
-  let mem = memory s
 
   nonceGen <- gets funNonceGen
   prev_block_map <- use $ curFunBlocks
@@ -1541,6 +1546,7 @@ addBlock src finfo pr = do
   -- Rewrite returned blocks to simplify expressions
 #ifdef USE_REWRITER
   (_,b) <- do
+    let mem = memory s
     let archStmt = rewriteArchStmt ainfo
     let secAddrMap = memSectionIndexMap mem
     let rw = \_ -> pure

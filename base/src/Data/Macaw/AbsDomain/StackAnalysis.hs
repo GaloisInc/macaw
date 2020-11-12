@@ -7,7 +7,33 @@ domain also tracks equalities between nodes so that analysis
 algorithms built on top of this are modulo known equivalences
 between registers and stack locations.
 
+The theory is defined over bitvector with a predefined
+"address width" @addrWidth@ for the number of bits in the
+address space
+
+> p := t = u
+>   |  t = stack_frame + c
+>   |  t = uext u w    (1 <= width u && width u < w)
+>
+> t := r (@r@ is a register)
+>   |  *(stack_frame + c)
+
+@c@ is a signed @addrWidth@-bit bitvector.  @stack_frame@ denotes
+a @addrWidth@-bit bitvector for the stack frame.  @w@ is a width
+parameter.
+
+Given a set of axioms using the constraint @P@ we have the following
+proof rules:
+
+> A,p |= p                                                       (assumption)
+> A   |= t = t                                                   (reflexivity)
+> A   |= t = u => A |= u = t                                     (symmetry)
+> A   |= t = u && A |= u = v => A |= t = v                       (transitivity)
+> A   |= t = uext u w && A |= u = uext v w' => A |= t = uext v w (double uext)
+> A   |= t = uext u w && A |= u = v => A |= t = uext v w         (uext congruence)
+
 -}
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -15,6 +41,8 @@ between registers and stack locations.
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.AbsDomain.StackAnalysis
   ( -- * Block level datatypes
@@ -77,16 +105,17 @@ module Data.Macaw.AbsDomain.StackAnalysis
 
 import           Control.Monad.Reader
 import           Control.Monad.State
-import           Data.Functor
 import           Data.Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Pair
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
+import           Data.Proxy
 import           Data.STRef
 import           GHC.Natural
 import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
@@ -193,11 +222,17 @@ instance ShowF r => Show (BoundLoc r tp) where
 
 instance ShowF r => ShowF (BoundLoc r)
 
+instance TestEquality r => Eq (BoundLoc r tp) where
+  x == y = isJust (testEquality x y)
+
 ------------------------------------------------------------------------
 -- MemMap
 
 -- | This is a data structure for representing values written to
--- concrete stack offsets.
+-- concrete offsets in memory.
+--
+-- The offset type is a parameter so that we can use signed or
+-- unsigned offsets.
 newtype MemMap o (v :: M.Type -> Type) = SM (Map o (MemVal v))
 
 instance FunctorF (MemMap o) where
@@ -283,11 +318,12 @@ memMapOverwrite :: forall o p tp
                 -> MemMap o p
 memMapOverwrite off repr v (SM m)
    | e <= off = error "stackOverwrite fail"
+   | memReprBytes repr == 0 = SM m
    | otherwise =
      let (lm, _) = Map.split off m
          (_, hm) = Map.split e m
       in SM $ Map.insert off (MemVal repr v) lm <> hm
-  where e = off + fromIntegral (memReprBytes repr) + 1
+  where e = off + fromIntegral (memReprBytes repr) - 1
 
 -- | This sets the value at an offset without checking to clear any
 -- previous writes to values.
@@ -452,14 +488,22 @@ data StackEqConstraint r tp where
   -- As stacks grow down on many architectures, the offset will
   -- typically be negative.
   IsStackOff :: !(MemInt (RegAddrWidth r)) -> StackEqConstraint r (BVType (RegAddrWidth r))
-  -- | This indicates the value is equal to the value stored at the
+  -- | Indicates the value is equal to the value stored at the
   -- location.
   EqualLoc   :: !(BoundLoc r tp) -> StackEqConstraint r tp
+  -- | Indicates the value is the unsigned extension of the value
+  -- at another location.
+  IsUExt :: (1 <= u, u+1 <= w)
+         => !(BoundLoc r (BVType u))
+         -> !(NatRepr w)
+         -> StackEqConstraint r (BVType w)
+
 
 ppStackEqConstraint :: ShowF r => Doc -> StackEqConstraint r tp -> Doc
 ppStackEqConstraint d (IsStackOff i) =
   d <+> text "= stack_frame" <+> ppAddend i
-ppStackEqConstraint d (EqualLoc   l) = d <+> text "=" <+> pretty l
+ppStackEqConstraint d (EqualLoc   l) = d <> text " = " <> pretty l
+ppStackEqConstraint d (IsUExt l w) = d <> text " = (uext " <> pretty l <+> text (show w) <> text ")"
 
 ------------------------------------------------------------------------
 -- BlockStartStackConstraints
@@ -488,9 +532,10 @@ fnEntryBlockStartStackConstraints =
                   }
        }
 
--- | @blockStartLocStackOffset c l@ returns an offset of the stack
--- pointer that the value stored in @l@ is inferred to be equivalent
--- to when the block starts execution.
+-- | @blockStartLocStackOffset c l@ determines if @l@ has the form @stack_frame + o@
+-- using the constraints @c@ for some stack offset @o@.
+--
+-- If it does, then this returns @Just o@.  Otherwise it returns @Nothing@.
 blockStartLocStackOffset :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                          => BlockStartStackConstraints arch
                          -> BoundLoc (ArchReg arch) tp
@@ -500,27 +545,43 @@ blockStartLocStackOffset cns loc =
     Nothing -> Nothing
     Just (IsStackOff o) -> Just o
     Just (EqualLoc loc') -> blockStartLocStackOffset cns loc'
+    -- Unsigned extensions cannot be stack offsets.
+    Just (IsUExt _ _) -> Nothing
 
-data StackOffConstraint w tp where
-  StackOffCns :: !(MemInt w) -> StackOffConstraint w (BVType w)
+-- | Constraint on a class representative
+data StackOffConstraint r tp where
+  StackOffCns :: !(MemInt (RegAddrWidth r)) -> StackOffConstraint r (BVType (RegAddrWidth r))
+  UExtCns :: (1 <= u, u+1 <= w)
+          => !(BoundLoc r (BVType u))
+          -> !(NatRepr w)
+          -> StackOffConstraint r (BVType w)
+
+instance TestEquality r => Eq (StackOffConstraint r tp) where
+  StackOffCns i == StackOffCns j = i == j
+  UExtCns xl _ == UExtCns yl _ =
+    case testEquality xl yl of
+      Just Refl -> True
+      Nothing  -> False
+  _ == _ = False
 
 -- | @boundsLocRep cns loc@ returns the representative location for
 -- @loc@.
 --
 -- This representative location has the property that a location must
 -- have the same value as its representative location, and if two
--- locations have provably equal values in the bounds, then they must
+-- locations have provably equal values in @cns@, then they must
 -- have the same representative.
 blockStartLocRepAndCns :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                        => BlockStartStackConstraints arch
                        -> BoundLoc (ArchReg arch) tp
                        -> ( BoundLoc (ArchReg arch) tp
-                          , Maybe (StackOffConstraint (ArchAddrWidth arch) tp)
+                          , Maybe (StackOffConstraint (ArchReg arch) tp)
                           )
 blockStartLocRepAndCns cns l =
   case locLookup l (unBSSC cns) of
     Just (EqualLoc loc) -> blockStartLocRepAndCns cns loc
-    Just (IsStackOff o) -> (l,Just (StackOffCns o))
+    Just (IsStackOff o) -> (l, Just (StackOffCns o))
+    Just (IsUExt loc w) -> (l, Just (UExtCns loc w))
     Nothing -> (l, Nothing)
 
 ------------------------------------------------------------------------
@@ -530,68 +591,140 @@ blockStartLocRepAndCns cns l =
 -- representative in merged map.
 type JoinClassMap r = MapF (JoinClassPair (BoundLoc r)) (BoundLoc r)
 
-joinStackEqConstraint :: Maybe (StackOffConstraint w tp)
-                      -> Maybe (StackOffConstraint w tp)
-                      -> Changed s (Maybe (StackOffConstraint w tp))
-joinStackEqConstraint Nothing _ = pure Nothing
-joinStackEqConstraint p@(Just (StackOffCns i)) (Just (StackOffCns j)) | i == j = pure p
-joinStackEqConstraint _ _ = markChanged True $> Nothing
+-- | Information needed to join classes.
+data JoinContext s arch = JoinContext { jctxOldCns :: !(BlockStartStackConstraints arch)
+                                        -- ^ Old constraints being joined
+                                      , jctxNewCns :: !(BlockStartStackConstraints arch)
+                                        -- ^ New constraints being joined.
+                                      , jctxNextCnsRef :: !(STRef s (BlockStartStackConstraints arch))
+                                        -- ^ Reference maintaining current bounds.
+                                      , jctxClassMapRef :: !(STRef s (JoinClassMap (ArchReg arch)))
+                                        -- ^ The map from (oldClassRep, newClassRep) pairs to the
+                                        -- next class map.
+                                      , jctxClassCountRef :: !(STRef s Int)
+                                        -- ^ Reference that stores numbers of classes seen in
+                                        -- old reference so we can see if new number of classes
+                                        -- is different.
+                                      }
 
--- | Join locations
-joinNewLoc :: forall s arch tp
-           .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-           => BlockStartStackConstraints arch
-           -> BlockStartStackConstraints arch
-           -> STRef s (BlockStartStackConstraints arch)
-           -- ^ The current index bounds.
-           -> STRef s (JoinClassMap (ArchReg arch))
-           -- ^ The map from (oldClassRep, newClassRep) pairs to the
-           -- result class rep.
-           -> STRef s Int
-           -- ^ Stores the number of equivalence classes we have seen in
-           -- in the old class
-           -- Used so determining if any classes are changed.
+-- | @setNextConstraint ctx loc cns@ asserts that @loc@ satisfies the
+-- constraint @cns@ in the next constraint ref of @ctx@.
+setNextConstraint :: OrdF (ArchReg arch)
+                  => JoinContext s arch
+                  -> BoundLoc (ArchReg arch) tp
+                  -> StackEqConstraint (ArchReg arch) tp
+                  -> Changed s ()
+setNextConstraint ctx thisLoc eqCns =
+  changedST $  modifySTRef' (jctxNextCnsRef ctx) $ \cns ->
+    BSSC (nonOverlapLocInsert thisLoc eqCns (unBSSC cns))
+
+type LocConPair r tp = (BoundLoc r tp, Maybe (StackOffConstraint r tp))
+
+-- | @locAreEqual cns x y@ return true if @cns |= x = y@.
+locAreEqual :: ( MemWidth (ArchAddrWidth arch)
+               , OrdF (ArchReg arch)
+               )
+            => BlockStartStackConstraints arch
+            -> BoundLoc (ArchReg arch) tp
+            -> BoundLoc (ArchReg arch) tp
+            -> Bool
+locAreEqual cns x y =
+  let (xr, _) = blockStartLocRepAndCns cns x
+      (yr, _) = blockStartLocRepAndCns cns y
+   in xr == yr
+
+joinNextLoc :: forall s arch tp
+           .  ( MemWidth (ArchAddrWidth arch)
+              , OrdF (ArchReg arch)
+              , HasRepr (ArchReg arch) TypeRepr
+              )
+           => JoinContext s arch
            -> BoundLoc (ArchReg arch) tp
-              -- ^ Location in join that we have not yet visited.
+              -- ^ Location to use for next representative if we need
+              -- need to make old.
+           -> LocConPair (ArchReg arch) tp
+           -> Changed s (BoundLoc (ArchReg arch) tp)
+joinNextLoc ctx thisLoc (oldRep, oldPred) = do
+  -- Get representative in new lcoaton.
+  let (newRep, newPred) = blockStartLocRepAndCns (jctxNewCns ctx) thisLoc
+  m <- changedST $ readSTRef (jctxClassMapRef ctx)
+  -- Make pair containing old and new rep so we can lookup if we
+  -- already have visited this class.
+  let pair = JoinClassPair oldRep newRep
+  case MapF.lookup pair m of
+    -- If we have visited then we just assert @thisLoc@ is equal to
+    -- the previously added rep.
+    Just resRep -> do
+      -- Assert r is equal to resRep
+      setNextConstraint ctx thisLoc (EqualLoc resRep)
+      return resRep
+    -- If we have not visited these reps, then we need to join the
+    -- constraint
+    Nothing -> do
+      changedST $ writeSTRef (jctxClassMapRef ctx) $! MapF.insert pair thisLoc m
+      case (oldPred, newPred) of
+        (Nothing, _) ->
+          pure ()
+        (Just (StackOffCns x), Just (StackOffCns y))
+          | x == y -> do
+            setNextConstraint ctx thisLoc (IsStackOff x)
+          -- In old, thisLoc == uext xl w
+          -- In new, thisLoc == uext yl w
+          -- We see if xl and yl have same rep in old loc.
+          -- If so, then we
+        (Just (UExtCns xl w), Just (UExtCns yl _))
+          | Just Refl <- testEquality (typeWidth xl) (typeWidth yl)
+          , locAreEqual (jctxOldCns ctx) xl yl
+          , locAreEqual (jctxNewCns ctx) xl yl -> do
+            let xlRep = blockStartLocRepAndCns (jctxOldCns ctx) xl
+            nextSubRep <- joinNextLoc ctx xl xlRep
+            setNextConstraint ctx thisLoc (IsUExt nextSubRep w)
+        (Just _, _) -> do
+          markChanged True
+      pure thisLoc
+
+-- | @joinOldLoc ctx l eq@ visits a location in a old map and ensures
+-- it is bound.
+joinOldLoc :: forall s arch tp
+           .  ( MemWidth (ArchAddrWidth arch)
+              , OrdF (ArchReg arch)
+              , HasRepr (ArchReg arch) TypeRepr
+              )
+           => JoinContext s arch
+           -> BoundLoc (ArchReg arch) tp
+              -- ^ Location that appears in old constraints.
            -> StackEqConstraint (ArchReg arch) tp
               -- ^ Constraint on location in original list.
            -> Changed s ()
-joinNewLoc old new cnsRef procRef cntr thisLoc oldCns = do
-  (oldRep, oldPred) <- changedST $
+joinOldLoc ctx thisLoc oldCns = do
+  oldRepPredPair <- changedST $
     case oldCns of
       EqualLoc oldLoc ->
-        pure (blockStartLocRepAndCns old oldLoc)
+        pure (blockStartLocRepAndCns (jctxOldCns ctx) oldLoc)
       IsStackOff o -> do
         -- Increment number of equivalence classes when we see an old
         -- representative.
-        modifySTRef' cntr (+1)
+        modifySTRef' (jctxClassCountRef ctx) (+1)
         -- Return this loc
         pure (thisLoc, Just (StackOffCns o))
-  let (newRep, newPred) = blockStartLocRepAndCns new thisLoc
-  m <- changedST $ readSTRef procRef
-  -- See if we have already added a representative for this class.
-  let pair = JoinClassPair oldRep newRep
-  case MapF.lookup pair m of
-    Nothing -> do
-      mp <- joinStackEqConstraint oldPred newPred
-      changedST $ do
-        writeSTRef procRef $! MapF.insert pair thisLoc m
-        case mp of
-          Nothing -> pure ()
-          Just (StackOffCns o) ->
-            modifySTRef' cnsRef $ \cns ->
-              BSSC (nonOverlapLocInsert thisLoc (IsStackOff o) (unBSSC cns))
-    Just resRep ->
-      -- Assert r is equal to resRep
-       changedST $
-       modifySTRef' cnsRef $ \cns ->
-         BSSC (nonOverlapLocInsert thisLoc (EqualLoc resRep) (unBSSC cns))
+      IsUExt oldSubLoc w -> do
+        -- Increment number of equivalence classes when we see an old
+        -- representative.
+        modifySTRef' (jctxClassCountRef ctx) (+1)
+        -- Update predicate to point o
+        let (subRep, _) = blockStartLocRepAndCns (jctxOldCns ctx) oldSubLoc
+        pure (thisLoc, Just (UExtCns subRep w))
+  _ <- joinNextLoc ctx thisLoc oldRepPredPair
+  pure ()
 
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact inx the old bounds is implied by the new bounds.
 joinBlockStartStackConstraints
   :: forall arch s
-  .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+  .  (MemWidth (ArchAddrWidth arch)
+     , OrdF (ArchReg arch)
+     , HasRepr (ArchReg arch) TypeRepr
+     )
   => BlockStartStackConstraints arch
   -> BlockStartStackConstraints arch
   -> Changed s (BlockStartStackConstraints arch, JoinClassMap (ArchReg arch))
@@ -603,7 +736,13 @@ joinBlockStartStackConstraints old new = do
   -- combined bounds.
   procRef <- changedST $ newSTRef MapF.empty
   cntr    <- changedST $ newSTRef 0
-  locMapTraverseWithKey_ (joinNewLoc old new cnsRef procRef cntr) (unBSSC old)
+  let ctx = JoinContext { jctxOldCns = old
+                        , jctxNewCns = new
+                        , jctxNextCnsRef = cnsRef
+                        , jctxClassMapRef = procRef
+                        , jctxClassCountRef = cntr
+                        }
+  locMapTraverseWithKey_ (joinOldLoc ctx) (unBSSC old)
   -- Check number of equivalence classes in result and original
   -- The count should not have decreased, but may increase if two elements
   -- are no longer equal, and we need to check this.
@@ -647,9 +786,25 @@ data StackExpr arch ids tp where
   -- | This is a pure function applied to other index expressions that
   -- may be worth interpreting (but could be treated as an uninterp
   -- assign expr also.
+  UExtExpr :: (1 <= u, u+1 <= w)
+           => StackExpr arch ids (BVType u)
+           -> NatRepr w
+           -> StackExpr arch ids (BVType w)
+
+  -- | This is a pure function applied to other index expressions that
+  -- may be worth interpreting (but could be treated as an uninterp
+  -- assign expr also.
   AppExpr :: !(AssignId ids tp)
           -> !(App (StackExpr arch ids) tp)
           -> StackExpr arch ids tp
+
+instance ShowF (ArchReg arch) => Show (StackExpr arch ids tp) where
+  show (ClassRepExpr l) = "(ClassRepExpr " <> show l <> ")"
+  show (UninterpAssignExpr a _r) = "(UninterpAssignExpr " <> show a <> " _)"
+  show (StackOffsetExpr o) = "(StackOffsetExpr " <> show o <> ")"
+  show (CExpr c) = "(CExpr " <> show c <> ")"
+  show (UExtExpr u w) = "(UExtExpr " <> show u <> " " <> show w <> ")"
+  show (AppExpr a _r) = "(AppExpr " <> show a <> " _)"
 
 instance TestEquality (ArchReg arch) => TestEquality (StackExpr arch ids) where
   testEquality (ClassRepExpr x) (ClassRepExpr y) =
@@ -663,6 +818,10 @@ instance TestEquality (ArchReg arch) => TestEquality (StackExpr arch ids) where
       Nothing
   testEquality (CExpr x) (CExpr y) =
     testEquality x y
+  testEquality (UExtExpr x xw) (UExtExpr y yw) = do
+    Refl <- testEquality xw yw
+    Refl <- testEquality x y
+    pure Refl
   testEquality (AppExpr xn _xa) (AppExpr yn _ya) =
     testEquality xn yn
   testEquality _ _ = Nothing
@@ -684,6 +843,12 @@ instance OrdF (ArchReg arch) => OrdF (StackExpr arch ids) where
   compareF CExpr{} _ = LTF
   compareF _ CExpr{} = GTF
 
+  compareF (UExtExpr x xw) (UExtExpr y yw) =
+    joinOrderingF (compareF xw yw) $
+    joinOrderingF (compareF x y) $ EQF
+  compareF UExtExpr{} _ = LTF
+  compareF _ UExtExpr{} = GTF
+
   compareF (AppExpr xn _xa) (AppExpr yn _ya) = compareF xn yn
 
 instance TestEquality (ArchReg arch) => Eq (StackExpr arch ids tp) where
@@ -701,6 +866,9 @@ instance ( HasRepr (ArchReg arch) TypeRepr
       UninterpAssignExpr _ rhs   -> typeRepr rhs
       StackOffsetExpr _ -> addrTypeRepr
       CExpr x           -> typeRepr x
+      UExtExpr (_ :: StackExpr arch ids (BVType u)) (w :: NatRepr w) ->
+        case leqTrans (leqAdd (LeqProof @1 @u) (Proxy :: Proxy 1)) (LeqProof @(u+1) @w) of
+          LeqProof -> BVTypeRepr w
       AppExpr _ a       -> typeRepr a
 
 instance ShowF (ArchReg arch) => Pretty (StackExpr arch id tp) where
@@ -708,9 +876,13 @@ instance ShowF (ArchReg arch) => Pretty (StackExpr arch id tp) where
     case e of
       ClassRepExpr l -> pretty l
       UninterpAssignExpr n _ -> parens (text "uninterp" <+> ppAssignId n)
-      StackOffsetExpr o -> parens (text "+ stack_off" <+> pretty o)
+      StackOffsetExpr o
+        | memIntValue o > 0 -> parens (text "+ stack_off" <+> pretty o)
+        | memIntValue o < 0 -> parens (text "- stack_off" <+> pretty (negate (toInteger (memIntValue o))))
+        | otherwise -> text "stack_off"
       CExpr v -> pretty v
-      AppExpr n _ -> parens (text "app" <+> ppAssignId n)
+      UExtExpr l w -> parens (text "uext " <> pretty l <+> text (show w))
+      AppExpr n _ -> ppAssignId n
 
 instance ShowF (ArchReg arch) => PrettyF (StackExpr arch id) where
   prettyF = pretty
@@ -728,6 +900,7 @@ blockStartLocExpr cns loc =
     Nothing -> ClassRepExpr loc
     Just (IsStackOff o) -> StackOffsetExpr o
     Just (EqualLoc loc') -> blockStartLocExpr cns loc'
+    Just (IsUExt loc' w) -> UExtExpr (blockStartLocExpr cns loc') w
 
 ------------------------------------------------------------------------
 -- BlockIntraStackConstraints
@@ -742,6 +915,27 @@ data BlockIntraStackConstraints arch ids
           , assignExprMap :: !(MapF (AssignId ids) (StackExpr arch ids))
             -- ^ Maps processed assignments to index expressions.
           }
+
+instance ShowF (ArchReg arch) => Pretty (BlockIntraStackConstraints arch ids) where
+  pretty cns =
+    let ppStk :: MemInt (ArchAddrWidth arch) -> MemRepr tp -> StackExpr arch ids tp -> Doc
+        ppStk o r v = text (show o) <> text ", " <> pretty r <> text " := " <> pretty v
+        sm :: Doc
+        sm = memMapFoldrWithKey (\o r v d -> ppStk o r v <$$> d) empty (stackExprMap cns)
+        ppAssign :: AssignId ids tp -> StackExpr arch ids tp -> Doc -> Doc
+        ppAssign a (AppExpr u app) d =
+          case testEquality a u of
+            Nothing -> ppAssignId a <> text " := " <> ppAssignId u <$$> d
+            Just Refl -> ppAssignId a <> text " := " <> ppApp pretty app <$$> d
+        ppAssign a e d = ppAssignId a <> text " := " <> pretty e <$$> d
+        am :: Doc
+        am = MapF.foldrWithKey ppAssign empty (assignExprMap cns)
+     in vcat [ text "stackExprMap:"
+             , indent 2 sm
+             , text "assignExprMap:"
+             , indent 2 am
+             ]
+
 
 -- | Create index bounds from initial index bounds.
 mkBlockIntraStackConstraints :: forall arch ids
@@ -762,7 +956,7 @@ mkBlockIntraStackConstraints cns =
 -- | Return the value of the index expression given the bounds.
 intraStackValueExpr :: forall arch ids tp
                     .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
-                    => BlockIntraStackConstraints  arch ids
+                    => BlockIntraStackConstraints arch ids
                     -> Value arch ids tp
                     -> StackExpr arch ids tp
 intraStackValueExpr cns val =
@@ -787,6 +981,8 @@ intraStackRhsExpr :: forall arch ids tp
                   -> StackExpr arch ids tp
 intraStackRhsExpr cns aid arhs =
   case arhs of
+    EvalApp (UExt x w) ->
+      UExtExpr (intraStackValueExpr cns x) w
     EvalApp app -> do
       let stackFn v =
             case intraStackValueExpr cns v of
@@ -815,7 +1011,7 @@ intraStackSetAssignId aid expr cns =
 -- | Discard information about memory due to an operation that may
 -- affect arbitrary memory.
 discardMemInfo :: BlockIntraStackConstraints arch ids
-                 -> BlockIntraStackConstraints arch ids
+               -> BlockIntraStackConstraints arch ids
 discardMemInfo cns =
   cns { stackExprMap = emptyMemMap }
 

@@ -36,8 +36,9 @@ module Data.Macaw.AbsDomain.JumpBounds
 import           Control.Monad.Reader
 import           Data.Bits
 import           Data.Foldable
-import qualified Data.Map.Strict as Map
 import           Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import           Data.Monoid
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
@@ -67,6 +68,7 @@ data RangePred u =
             , rangeLowerBound :: !Natural
             , rangeUpperBound :: !Natural
             }
+  deriving (Show)
 
 mkLowerBound :: NatRepr u -> Natural -> RangePred u
 mkLowerBound w l = RangePred w l (fromInteger (maxUnsigned w))
@@ -140,7 +142,10 @@ functionStartBounds =
 -- | Return a jump bounds that implies both input bounds, or `Nothing`
 -- if every fact in the old bounds is implied by the new bounds.
 joinInitialBounds :: forall arch
-                  .  (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+                  .  ( MemWidth (ArchAddrWidth arch)
+                     , OrdF (ArchReg arch)
+                     , HasRepr (ArchReg arch) TypeRepr
+                     )
                   => InitJumpBounds arch
                   -> InitJumpBounds arch
                   -> Maybe (InitJumpBounds arch)
@@ -168,7 +173,7 @@ data IntraJumpBounds arch ids
                      , intraMemCleared :: !Bool
                        -- ^ Flag to indicate if we had any memory
                        -- writes in block that could have altered
-                       -- invariants on memory accesses.
+                       -- invariants on non-stack memory accesses.
                      }
 
 -- | Create index bounds from initial index bounds.
@@ -194,18 +199,36 @@ modifyIntraStackConstraints ::IntraJumpBounds arch ids
 modifyIntraStackConstraints bnds f = bnds { intraStackConstraints = f (intraStackConstraints bnds) }
 
 discardMemBounds :: IntraJumpBounds arch ids -> IntraJumpBounds arch ids
-discardMemBounds bnds = bnds { intraStackConstraints = discardMemInfo (intraStackConstraints bnds)
-                             , intraMemCleared = True
-                             }
+discardMemBounds bnds =
+  bnds { intraStackConstraints = discardMemInfo (intraStackConstraints bnds)
+       , intraMemCleared = True
+       }
 
 ------------------------------------------------------------------------
 -- Execute a statement
 
+-- | Function that determines whether it thinks an
+-- architecture-specific function could modify stack.
+--
+-- Uses principal that architecture-specific functions can only depend
+-- on value if they reference it in their foldable instance.
+archFnCouldAffectStack :: forall f arch ids tp
+                       .  (FoldableFC f, MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
+                       => BlockIntraStackConstraints arch ids
+                       -> f (Value arch ids) tp
+                       -> Bool
+archFnCouldAffectStack cns = getAny . foldMapFC (Any . refStack)
+  where refStack :: Value arch ids utp -> Bool
+        refStack v =
+          case intraStackValueExpr cns v of
+            StackOffsetExpr _ -> True
+            _ -> False
 
 -- | Given a statement this modifies the bounds based on the statement.
 execStatement :: ( MemWidth (ArchAddrWidth arch)
                  , OrdF (ArchReg arch)
                  , ShowF (ArchReg arch)
+                 , FoldableFC (ArchFn arch)
                  )
               => IntraJumpBounds arch ids
               -> Stmt arch ids
@@ -213,11 +236,6 @@ execStatement :: ( MemWidth (ArchAddrWidth arch)
 execStatement bnds stmt =
   case stmt of
     AssignStmt (Assignment aid arhs) -> do
-      -- Clear all knowledge about the stack on architecture-specific
-      -- functions as they may have side effects.
-      --
-      -- Note. This is very conservative, and we may need to improve
-      -- this.
       let bnds1 = case arhs of
                     ReadMem addrVal readRepr
                       | False <- intraMemCleared bnds
@@ -225,15 +243,25 @@ execStatement bnds stmt =
                       , Just (MemVal bndRepr bnd)  <- Map.lookup addr (initAddrPredMap (intraInitBounds bnds))
                       , Just Refl <- testEquality readRepr bndRepr ->
                         bnds { intraReadPredMap = MapF.insert aid bnd (intraReadPredMap bnds) }
-                    EvalArchFn{} -> discardMemBounds bnds
+                    -- Clear all knowledge about the stack on architecture-specific
+                    -- functions that accept stack pointer as they may have side effects.
+                    --
+                    -- Note. This is very conservative, and we may need to improve
+                    -- this.
+                    EvalArchFn f _ ->
+                      if archFnCouldAffectStack (intraStackConstraints bnds) f then
+                        discardMemBounds bnds
+                       else
+                        bnds { intraMemCleared = True }
                     _ -> bnds
       -- Associate the given expression with a bounds.
        in modifyIntraStackConstraints bnds1 $ \cns ->
                     intraStackSetAssignId aid (intraStackRhsExpr cns aid arhs) cns
     WriteMem addr repr val ->
       case intraStackValueExpr (intraStackConstraints bnds) addr of
-        StackOffsetExpr addrOff -> modifyIntraStackConstraints bnds $ \cns ->
-          writeStackOff cns addrOff repr val
+        StackOffsetExpr addrOff ->
+          modifyIntraStackConstraints bnds $ \cns ->
+            writeStackOff cns addrOff repr val
         -- If we write to something other than stack, then clear all
         -- stack references.
         --
@@ -243,14 +271,15 @@ execStatement bnds stmt =
     CondWriteMem{} -> discardMemBounds bnds
     InstructionStart{} -> bnds
     Comment{} -> bnds
-    ExecArchStmt{} ->modifyIntraStackConstraints bnds discardMemInfo
+    ExecArchStmt{} -> discardMemBounds bnds
     ArchState{} -> bnds
 
 -- | Create bounds for end of block.
 blockEndBounds :: ( MemWidth (ArchAddrWidth arch)
-                 , OrdF (ArchReg arch)
-                 , ShowF (ArchReg arch)
-                 )
+                  , OrdF (ArchReg arch)
+                  , ShowF (ArchReg arch)
+                  , FoldableFC (ArchFn arch)
+                  )
                => InitJumpBounds arch
                -> [Stmt arch ids] -- ^
                -> IntraJumpBounds arch ids
@@ -308,6 +337,21 @@ exprRangePred info e = do
       , rangeNotTotal r ->
           SomeRangePred r
     -- Otherwise see what we can infer.
+    UExtExpr x w ->
+      case exprRangePred info x of
+        NoRangePred -> SomeRangePred (mkRangeBound w 0 (fromInteger (maxUnsigned w)))
+        SomeRangePred r ->
+          -- If bound covers all the bits in x, then we can extend it to all
+          -- the bits in result (since new bits are false)
+          --
+          -- Otherwise, we only have the partial bound
+          if leqF (typeWidth x) (rangeWidth r) then
+            SomeRangePred (mkRangeBound w (rangeLowerBound r) (rangeUpperBound r))
+           else
+            -- Dynamic check on range width that should never fail.
+            case testLeq (rangeWidth r) w of
+              Just LeqProof -> SomeRangePred r
+              Nothing -> error "exprRangePred given malformed app."
     AppExpr _n app ->
       case app of
         UExt x w
@@ -538,6 +582,7 @@ addRangePred :: ( MapF.OrdF (ArchReg arch)
                 , HasRepr (ArchReg arch) TypeRepr
                 , u <= w
                 , MemWidth (ArchAddrWidth arch)
+                , ShowF (ArchReg arch)
                 )
                => BlockIntraStackConstraints arch ids
                -> StackExpr arch ids (BVType w)
@@ -580,7 +625,15 @@ addRangePred cns v p =
           pure $! emptyBranchConstraints
         SymbolCValue{} ->
           pure $! emptyBranchConstraints
-
+    UExtExpr x _outWidth
+      -- If this constraint affects fewer bits than the extension,
+      -- then we just propagate the property to value
+      -- pre-extension.
+      | Just LeqProof <- testLeq (rangeWidth p) (typeWidth x) ->
+          addRangePred cns x p
+      -- Otherwise, we still can constrain our width.
+      | otherwise -> do
+          addRangePred cns x (p { rangeWidth = typeWidth x })
     AppExpr n a ->
       case a of
         BVAdd _ x (CExpr (BVCValue w c))
@@ -592,16 +645,6 @@ addRangePred cns v p =
               addRangePred cns x (RangePred w (fromInteger (toUnsigned w l'))
                                               (fromInteger (toUnsigned w u')))
 
-        UExt x _outWidth
-          -- If this constraint affects fewer bits than the extension,
-          -- then we just propagate the property to value
-          -- pre-extension.
-          | Just LeqProof <- testLeq (rangeWidth p) (typeWidth x) ->
-            addRangePred cns x p
-          -- Otherwise, we still can constraint our width,
-          | RangePred _ l u <- p -> do
-              LeqProof <- pure (leqRefl (typeWidth x))
-              addRangePred cns x (RangePred (typeWidth x) l u)
         -- Truncation passes through as we aonly affect low order bits.
         Trunc x _w ->
           case testLeq (rangeWidth p) (typeWidth x) of

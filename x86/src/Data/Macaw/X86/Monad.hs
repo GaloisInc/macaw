@@ -977,6 +977,11 @@ x .=. y
   | ValueExpr (BoolValue True)  <- y = x
   | ValueExpr (BoolValue False) <- y = boolNot x
 
+    -- Rewrite (u-v) .=. 0 to @u .=. v@.
+  | ValueExpr (BVValue _ 0) <- y
+  , Just (BVSub _ u v) <- asApp x =
+      u .=. v
+
   -- General case
   | otherwise = app $ Eq x y
 
@@ -1173,6 +1178,15 @@ bvUlt :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids Bool
 bvUlt x y
   | Just xv <- asUnsignedBVLit x, Just yv <- asUnsignedBVLit y = boolValue (xv < yv)
   | x == y = false
+    -- Simplify @xlit < uext y w@ to @xlit < y@ or @False@ depending on literal constant.
+  | Just xc <- asUnsignedBVLit x
+  , Just (UExt ysub _) <- asApp y
+  , wsub <- typeWidth ysub =
+      -- If constant is greater than max value then this is just false.
+      if xc >= maxUnsigned wsub then
+        ValueExpr (BoolValue False)
+       else
+         app $ BVUnsignedLt (ValueExpr (BVValue wsub xc)) ysub
   | otherwise =  app $ BVUnsignedLt x y
 
 -- | Unsigned less than or equal.
@@ -1364,6 +1378,10 @@ boolNot x
   | Just xv <- asBoolLit x = boolValue (not xv)
     -- not (not p) = p
   | Just (NotApp y) <- asApp x = y
+  | Just (BVUnsignedLe u v) <- asApp x = AppExpr (BVUnsignedLt v u)
+  | Just (BVUnsignedLt u v) <- asApp x = AppExpr (BVUnsignedLe v u)
+  | Just (BVSignedLe u v) <- asApp x = AppExpr (BVSignedLt v u)
+  | Just (BVSignedLt u v) <- asApp x = AppExpr (BVSignedLe v u)
   | otherwise = app $ NotApp x
 
 (.&&.) :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
@@ -1381,8 +1399,8 @@ x .&&. y
   , Just (Eq y1 y2) <- asApp yc
   , BVTypeRepr w <- typeRepr y1
   , Just Refl <- testEquality (typeWidth x1) w
-  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt x1 x2
+  , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1) =
+    bvUlt x1 x2
 
   -- x1 ~= x2 & x1 <= x2 => x1 < x2
   | Just (BVUnsignedLe y1 y2) <- asApp y
@@ -1390,8 +1408,8 @@ x .&&. y
   , Just (Eq x1 x2) <- asApp xc
   , BVTypeRepr w <- typeRepr x1
   , Just Refl <- testEquality w (typeWidth y1)
-  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt y1 y2
+  , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1) =
+    bvUlt y1 y2
   -- Default case
   | otherwise = app $ AndApp x y
 

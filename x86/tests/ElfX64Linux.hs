@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 module ElfX64Linux (
@@ -82,7 +83,7 @@ toAddr segOff = do
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery :: FilePath -> E.Elf 64 -> IO ()
+testDiscovery :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
 testDiscovery expectedFilename elf = do
   let opt = MM.defaultLoadOptions
   (warn, mem, mentry, syms) <-
@@ -119,9 +120,12 @@ testDiscovery expectedFilename elf = do
           unless (S.member addr ignoredBlocks) $ do
             let term = MD.pblockTermStmt pb
             case term of
-              MD.ClassifyFailure _ rsns ->
+              MD.ClassifyFailure _ rsns -> do
+                -- Print a reason with subsequent line sindented more.
+                let ppRsn [] = []
+                    ppRsn (h:r) = ("  " <> h) : fmap (\s -> "    " <> s) r
                 T.assertFailure $ "Unclassified block at " ++ show (MD.pblockAddr pb) ++ "\n"
-                  ++ unlines ((\s -> "  " ++ s) <$> rsns)
+                  ++ unlines (concatMap (ppRsn . lines) rsns)
               MD.ParsedTranslateError _ ->
                 T.assertFailure $ "Translate error at " ++ show (MD.pblockAddr pb) ++ " " ++ show term
               _ ->
@@ -144,16 +148,16 @@ testDiscovery expectedFilename elf = do
                 expectedBlockStarts
                 actualBlockStarts
 
-withELF :: FilePath -> (E.Elf 64 -> IO ()) -> IO ()
+withELF :: FilePath -> (E.ElfHeaderInfo 64 -> IO ()) -> IO ()
 withELF fp k = do
   bytes <- B.readFile fp
-  case E.parseElf bytes of
-    E.ElfHeaderError off msg ->
+  case E.decodeElfHeaderInfo bytes of
+    Left (off,msg) ->
       error ("Error parsing ELF header at offset " ++ show off ++ ": " ++ msg)
-    E.Elf32Res [] _e32 -> error "ELF32 is unsupported in the test suite"
-    E.Elf64Res [] e64 -> k e64
-    E.Elf32Res errs _ -> error ("Errors while parsing ELF file: " ++ show errs)
-    E.Elf64Res errs _ -> error ("Errors while parsing ELF file: " ++ show errs)
+    Right (E.SomeElf e) ->
+      case E.headerClass (E.header e) of
+        E.ELFCLASS32 -> error "ELF32 is unsupported in the test suite"
+        E.ELFCLASS64 -> k e
 
 data ElfException = MemoryLoadError String
   deriving (Typeable, Show)
