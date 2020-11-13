@@ -236,11 +236,11 @@ mkDwarfdumpOutput path elfFile = do
       when (BS.length compressedData < 12) $
         reportError path $ "Expected compressed section to contain uncompressed size."
       let uncompressedSize = Elf.bsWord64be (BS.drop 4 compressedData)
-      let frameData = BSL.toStrict $ Zlib.decompress $ BSL.fromStrict $ BS.drop 12 compressedData
-      when (fromIntegral (BS.length frameData) /= uncompressedSize) $ do
+      let secData = BSL.toStrict $ Zlib.decompress $ BSL.fromStrict $ BS.drop 12 compressedData
+      when (fromIntegral (BS.length secData) /= uncompressedSize) $ do
         reportError path "Uncompressed .zdebug_frame size is incorrect."
       let f = Frame { frameCtx = Dwarf.DebugFrame
-                    , frameData = frameData
+                    , frameData = secData
                     , frameAddr = Elf.elfSectionAddr frameSection
                     , frameExcept = mExceptTable
                     }
@@ -248,9 +248,9 @@ mkDwarfdumpOutput path elfFile = do
     _ -> pure ()
   case Elf.findSectionByName ".debug_frame" elfFile of
     [frameSection] -> do
-      let frameData = Elf.elfSectionData frameSection
+      let secData = Elf.elfSectionData frameSection
       let f = Frame { frameCtx = Dwarf.DebugFrame
-                    , frameData = frameData
+                    , frameData = secData
                     , frameAddr = Elf.elfSectionAddr frameSection
                     , frameExcept = mExceptTable
                     }
