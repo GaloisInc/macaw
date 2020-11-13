@@ -11,7 +11,6 @@ import           Control.Monad
 import           Control.Monad.ST
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as Elf
-import           Data.IORef
 import qualified Data.Map.Strict as Map
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.Some
@@ -75,12 +74,12 @@ main = do
 
   elfContents <- BS.readFile "tests/add_ubuntu64"
   elf <-
-    case Elf.parseElf elfContents of
-      Elf.Elf64Res errs e -> do
-        unless (null errs) $
-          fail "Error parsing Elf file"
-        pure e
-      _ -> fail "Expected 64-bit elf file"
+    case Elf.decodeElfHeaderInfo elfContents of
+      Left (_, msg) -> fail $ "Error parsing Elf file: " <> msg
+      Right (Elf.SomeElf e) ->
+        case Elf.headerClass (Elf.header e) of
+          Elf.ELFCLASS64 -> pure e
+          Elf.ELFCLASS32 -> fail "Expected 64-bit elf file"
 
   let loadOpt :: Elf.LoadOptions
       loadOpt = Elf.defaultLoadOptions
@@ -135,10 +134,3 @@ main = do
       pure ()
     _ -> do
       pure () -- For now, we are ok with this.
-
-{-
-  -- Steps:
-  -- Load up Elf file.
-  -- Call symbolic simulator
-  -- Check Result
--}

@@ -55,12 +55,15 @@ type family ArchReg (arch :: Kind.Type) = (reg :: Type -> Kind.Type) | reg -> ar
 --
 -- The functions associated with architecture-function depend on the
 -- contents of memory and implicit components of the processor state,
--- but they should not affect any of the architecture registers in
--- @ArchReg arch@.  They may only depend on the value stored in a
--- general purpose register if it is passed as a value that can be
--- visited when folding over values.  In particular,
+-- but they should not affect any of the architecture
+-- registers in @ArchReg arch@.
 --
--- One Furthermore, they can only return a value
+-- Architecture specific functions are required to implement
+-- `FoldableFC`, and the evaluation of an architecture specific
+-- function may only depend on the value stored in a general purpose
+-- register if it is given through the @fn@ parameter and provided
+-- when folding over values.  This is required for accurate def-use
+-- analysis of general purpose registers.
 type family ArchFn (arch :: Kind.Type) = (fn :: (Type -> Kind.Type) -> Type -> Kind.Type) | fn -> arch
 
 -- | A type family for defining architecture-specific statements.

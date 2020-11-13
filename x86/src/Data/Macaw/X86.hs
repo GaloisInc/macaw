@@ -467,7 +467,7 @@ translateBlockWithRegs gen addr initRegs maxSize = do
       pure $! (b, fromIntegral sz)
 
 -- | Attempt to identify the write to a stack return address, returning
--- instructions prior to that write and return  values.
+-- instructions prior to that write and return values.
 --
 -- This can also return Nothing if the call is not supported.
 identifyX86Call :: Memory 64

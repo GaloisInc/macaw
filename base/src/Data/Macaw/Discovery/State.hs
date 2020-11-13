@@ -19,6 +19,7 @@ module Data.Macaw.Discovery.State
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
+  , NoReturnFunStatus(..)
   , AddrSymMap
   , exploredFunctions
   , ppDiscoveryStateBlocks
@@ -50,7 +51,6 @@ import           Data.Maybe (maybeToList)
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
-import           Data.Set (Set)
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Vector as V
@@ -332,6 +332,16 @@ instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
      in text "function" <+> nm <$$> vcat (pretty <$> Map.elems (info^.parsedBlocks))
 
 ------------------------------------------------------------------------
+-- NoReturnFunStatus
+
+-- | Flags whether a function is labeled no return or not.
+data NoReturnFunStatus
+   = NoReturnFun
+     -- ^ Function labeled no return
+   | MayReturnFun
+     -- ^ Function may retun
+
+------------------------------------------------------------------------
 -- DiscoveryState
 
 type UnexploredFunctionMap arch =
@@ -358,7 +368,7 @@ data DiscoveryState arch
                       -- they are analyzed.
                       --
                       -- The keys in this map and `_funInfo` should be mutually disjoint.
-                    , _trustedFunctionEntryPoints :: !(Set (ArchSegmentOff arch))
+                    , _trustedFunctionEntryPoints :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
                       -- ^ This is the set of addresses that we treat
                       -- as definitely belonging to function entry
                       -- points.
@@ -372,9 +382,9 @@ data DiscoveryState arch
                       -- order in which functions are visited, this
                       -- set should be initialized upfront, and not
                       -- changed.
-                    , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
-                      -- ^ if present, this predicate decides whether to explore
-                      -- a function at the given address or not
+                    , _exploreFnPred :: !(ArchSegmentOff arch -> Bool)
+                      -- ^ This predicate decides whether to explore a
+                      -- function at the given address or not.
                     }
 
 -- | Return list of all functions discovered so far.
@@ -409,13 +419,13 @@ emptyDiscoveryState mem addrSymMap info =
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustedFunctionEntryPoints = Map.keysSet addrSymMap
-  , _exploreFnPred       = Nothing
+  , _trustedFunctionEntryPoints = fmap (\_ -> MayReturnFun) addrSymMap
+  , _exploreFnPred       = \_ -> True
   }
 
 -- | Map each jump table start to the address just after the end.
-globalDataMap
-  :: Simple Lens (DiscoveryState arch) (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
+globalDataMap :: Lens' (DiscoveryState arch)
+                      (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
@@ -427,12 +437,13 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
+-- | Retrieves functions that are trusted entry points.
 trustedFunctionEntryPoints
-  :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) NoReturnFunStatus)
 trustedFunctionEntryPoints =
   lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 
-exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
+exploreFnPred :: Simple Lens (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
 
 ------------------------------------------------------------------------
