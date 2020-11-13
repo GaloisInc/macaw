@@ -25,21 +25,21 @@ import           Data.Maybe ( mapMaybe )
 import qualified Data.Macaw.ARM as MA
 
 data AArch32ElfData =
-  AArch32ElfData { elf :: EE.Elf 32
+  AArch32ElfData { elf :: EE.ElfHeaderInfo 32
                  , memSymbols :: [EL.MemSymbol 32]
                  , symbolIndex :: Map.Map (MM.MemAddr 32) BS.ByteString
                  }
 
-instance MBL.BinaryLoader MA.ARM (EE.Elf 32) where
-  type ArchBinaryData MA.ARM (EE.Elf 32) = ()
-  type BinaryFormatData MA.ARM (EE.Elf 32) = AArch32ElfData
-  type Diagnostic MA.ARM (EE.Elf 32) = EL.MemLoadWarning
+instance MBL.BinaryLoader MA.ARM (EE.ElfHeaderInfo 32) where
+  type ArchBinaryData MA.ARM (EE.ElfHeaderInfo 32) = ()
+  type BinaryFormatData MA.ARM (EE.ElfHeaderInfo 32) = AArch32ElfData
+  type Diagnostic MA.ARM (EE.ElfHeaderInfo 32) = EL.MemLoadWarning
   loadBinary = loadAArch32Binary
   entryPoints = aarch32EntryPoints
   symbolFor = aarch32LookupSymbol
 
 aarch32LookupSymbol :: (X.MonadThrow m)
-                    => MBL.LoadedBinary MA.ARM (EE.Elf 32)
+                    => MBL.LoadedBinary MA.ARM (EE.ElfHeaderInfo 32)
                     -> MM.MemAddr 32
                     -> m BS.ByteString
 aarch32LookupSymbol loadedBinary addr =
@@ -48,7 +48,7 @@ aarch32LookupSymbol loadedBinary addr =
     Nothing -> X.throwM (MissingSymbolFor addr)
 
 aarch32EntryPoints :: (X.MonadThrow m)
-                   => MBL.LoadedBinary MA.ARM (EE.Elf 32)
+                   => MBL.LoadedBinary MA.ARM (EE.ElfHeaderInfo 32)
                    -> m (DLN.NonEmpty (MM.MemSegmentOff 32))
 aarch32EntryPoints loadedBinary =
   case MM.asSegmentOff mem addr of
@@ -57,18 +57,18 @@ aarch32EntryPoints loadedBinary =
       return (entryPoint DLN.:| mapMaybe (MM.asSegmentOff mem) symbols)
   where
     mem = MBL.memoryImage loadedBinary
-    addr = MM.absoluteAddr (MM.memWord (fromIntegral (EE.elfEntry (elf (MBL.binaryFormatData loadedBinary)))))
+    addr = MM.absoluteAddr (MM.memWord (fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary))))))
     elfData = elf (MBL.binaryFormatData loadedBinary)
     symbols = [ MM.absoluteAddr (MM.memWord (fromIntegral (EE.steValue entry)))
-              | st <- EE.elfSymtab elfData
-              , entry <- F.toList (EE.elfSymbolTableEntries st)
+              | Just (Right st) <- [EE.decodeHeaderSymtab elfData]
+              , entry <- F.toList (EE.symtabEntries st)
               , EE.steType entry == EE.STT_FUNC
               ]
 
 loadAArch32Binary :: (X.MonadThrow m)
                   => LC.LoadOptions
-                  -> EE.Elf 32
-                  -> m (MBL.LoadedBinary MA.ARM (EE.Elf 32))
+                  -> EE.ElfHeaderInfo 32
+                  -> m (MBL.LoadedBinary MA.ARM (EE.ElfHeaderInfo 32))
 loadAArch32Binary lopts e =
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (AArch32ElfLoadError err)

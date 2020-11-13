@@ -15,7 +15,7 @@ description:
             The 'binaryRepr' used is not just a width in order to
             allow future support of a Mach-O and/or PE repr as well as
             the ELF format.
-                     
+
 homepage:            https://github.com/GaloisInc/macaw-loader
 license:             BSD3
 license-file:        LICENSE
@@ -31,7 +31,7 @@ library
   exposed-modules: Data.Macaw.BinaryLoader
   build-depends:       base >=4.9 && <5
                      , bytestring
-                     , elf-edit
+                     , elf-edit >= 0.39
                      , exceptions
                      , macaw-base
                      , parameterized-utils
