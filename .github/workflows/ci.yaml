@@ -47,5 +47,4 @@ jobs:
     - name: Cabal ASL tests
       run: cabal test macaw-asl-tests
     - name: compare-dwarfdump
-      # We use /bin as it is fairly small, but tests a few executables.
-      run: cabal run compare-dwarfdump /bin
+      run: cabal build compare-dwarfdump
