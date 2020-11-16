@@ -108,7 +108,7 @@ funBlockPreds info = Map.fromListWith (++)
 -- RegisterUseError
 
 -- | Errors from register use
-data RegisterUseError arch 
+data RegisterUseError arch
    = CallStackHeightError !(MemAddr (ArchAddrWidth arch))
    | UnresolvedFunctionTypeError !(ArchSegmentOff arch) !String
 
@@ -217,7 +217,7 @@ joinValueRegUseDomain :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                          -- respectively.
                       -> BoundLoc (ArchReg arch) tp
                       -> ValueRegUseDomain arch tp
-                        -- ^ Old domain for location. 
+                        -- ^ Old domain for location.
                       -> Changed s ()
 joinValueRegUseDomain newCns cnsRef cacheRef l oldDomain = do
   case (oldDomain, locDomain newCns l) of
@@ -271,7 +271,7 @@ joinBlockStartConstraints (BSC oldCns) newCns = do
               -> Changed s ()
       stackFn o r d =
         joinValueRegUseDomain newCns cnsRef cacheRef (StackOffLoc o r) d
-  stackMapTraverseWithKey_ stackFn (locMapStack oldCns)
+  memMapTraverseWithKey_ stackFn (locMapStack oldCns)
 
   changedST $ BSC <$> readSTRef cnsRef
 
@@ -465,7 +465,7 @@ data InferState arch ids =
         -- Note. An uninitialized region at offset @o@ and type @repr@
         -- implicitly is associated with
         -- @ISVInitValue (RegEqualLoc (StackOffLoc o repr))@.
-        sisStack :: !(StackMap (ArchAddrWidth arch) (InferStackValue arch ids))
+        sisStack :: !(MemMap (MemInt (ArchAddrWidth arch)) (InferStackValue arch ids))
         -- | Maps assignment identifiers to the associated value.
         --
         -- If an assignment id @aid@ is not in this map, then we assume it
@@ -485,7 +485,7 @@ data InferState arch ids =
 
 -- | Current state of stack.
 sisStackLens :: Lens' (InferState arch ids)
-                      (StackMap (ArchAddrWidth arch) (InferStackValue arch ids))
+                      (MemMap (MemInt (ArchAddrWidth arch)) (InferStackValue arch ids))
 sisStackLens = lens sisStack (\s v -> s { sisStack = v })
 
 -- | Maps assignment identifiers to the associated value.
@@ -560,9 +560,9 @@ inferReadMem aid addr repr = do
   case valueToStartExpr ctx am addr of
     FrameExpr o -> do
       stk <- gets sisStack
-      case stackMapLookup o repr stk of
+      case memMapLookup o repr stk of
         -- Assigned stack read.
-        SMLResult sv -> do
+        MMLResult sv -> do
           case sv of
             ISVInitValue d -> do
               setAssignVal aid (IVDomain d)
@@ -574,10 +574,10 @@ inferReadMem aid addr repr = do
               setAssignVal aid (IVCondWrite writeIdx repr)
               addMemAccessInfo (FrameReadWriteAccess o writeIdx)
         -- Overlap reads are equal to themselves
-        SMLOverlap{} -> do
+        MMLOverlap{} -> do
           addMemAccessInfo (FrameReadOverlapAccess o)
         -- Uninitialized reads are equal to whatever  are equal to themselves.
-        SMLNone -> do
+        MMLNone -> do
           let d = RegEqualLoc (StackOffLoc o repr)
           setAssignVal aid (IVDomain d)
           addMemAccessInfo (FrameReadInitAccess o d)
@@ -596,9 +596,9 @@ inferCondReadMem addr repr = do
     -- Stack reads need to record the offset.
     FrameExpr o -> do
       stk <- gets sisStack
-      case stackMapLookup o repr stk of
+      case memMapLookup o repr stk of
         -- Assigned stack read.
-        SMLResult sv ->
+        MMLResult sv ->
           case sv of
             ISVInitValue d ->
               addMemAccessInfo (FrameReadInitAccess o d)
@@ -607,9 +607,9 @@ inferCondReadMem addr repr = do
             ISVCondWrite writeIdx _ _ _ ->
               addMemAccessInfo (FrameReadWriteAccess o writeIdx)
         -- Overlap reads are equal to themselves
-        SMLOverlap{} -> do
+        MMLOverlap{} -> do
           addMemAccessInfo (FrameReadOverlapAccess o)
-        SMLNone -> do
+        MMLNone -> do
           let d = RegEqualLoc (StackOffLoc o repr)
           addMemAccessInfo (FrameReadInitAccess o d)
     -- Non-stack reads are just equal to themselves.
@@ -638,7 +638,7 @@ processStmt stmtIdx stmt = do
         FrameExpr o -> do
           addMemAccessInfo (FrameWriteAccess o)
           -- Get value of val under current equality constraints.
-          sisStackLens %= stackMapOverwrite o repr (ISVWrite stmtIdx val)
+          sisStackLens %= memMapOverwrite o repr (ISVWrite stmtIdx val)
         -- Do nothing for things that are not stack expressions.
         --
         -- Note.  If @addr@ actually may point to the stack but we end
@@ -658,18 +658,18 @@ processStmt stmtIdx stmt = do
       case valueToStartExpr ctx s addr of
         FrameExpr o -> do
           stk <- gets sisStack
-          case stackMapLookup o repr stk of
-            SMLResult sv -> do
-              addMemAccessInfo (FrameCondWriteAccess o repr sv)
-              sisStackLens %= stackMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
-            SMLOverlap{} -> do
-              let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-              addMemAccessInfo (FrameCondWriteOverlapAccess o)
-              sisStackLens %= stackMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
-            SMLNone -> do
-              let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
-              addMemAccessInfo (FrameCondWriteAccess o repr sv)
-              sisStackLens %= stackMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
+          sv <- case memMapLookup o repr stk of
+                  MMLResult sv -> do
+                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
+                    pure sv
+                  MMLOverlap{} -> do
+                    addMemAccessInfo (FrameCondWriteOverlapAccess o)
+                    pure $ ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+                  MMLNone -> do
+                    let sv = ISVInitValue (RegEqualLoc (StackOffLoc o repr))
+                    addMemAccessInfo (FrameCondWriteAccess o repr sv)
+                    pure sv
+          sisStackLens %= memMapOverwrite o repr (ISVCondWrite stmtIdx cond val sv)
         _ -> do
           addMemAccessInfo NotFrameAccess
     -- Do nothing with instruction start/comment/register update
@@ -750,7 +750,7 @@ memoNextDomain loc e = do
   m <- gets insSeenValues
   case MapF.lookup e m of
     Just d -> do
-      modify $ \s -> InferNextState { insSeenValues = m 
+      modify $ \s -> InferNextState { insSeenValues = m
                                     , insPVM = pvmBind loc e (insPVM s)
                                     }
       pure (Just d)
@@ -808,7 +808,7 @@ intraJumpConstraints ctx s regs = runInferNextM $ do
               -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
       stackFn o repr sv =
         memoNextDomain (StackOffLoc o repr) (inferStackValueToValue ctx (sisAssignMap s) sv repr)
-  stk <- stackMapTraverseMaybeWithKey stackFn (sisStack s)
+  stk <- memMapTraverseMaybeWithKey stackFn (sisStack s)
 
   postValMap <- gets insPVM
   let cns = BSC LocMap { locMapRegs = regs'
@@ -867,7 +867,7 @@ postCallConstraints params ctx s regs =
                 -- Otherwise preserve the value.
                   memoNextDomain (StackOffLoc o repr) (inferStackValueToValue ctx (sisAssignMap s) sv repr)
 
-        stk <- stackMapTraverseMaybeWithKey stackFn (sisStack s)
+        stk <- memMapTraverseMaybeWithKey stackFn (sisStack s)
 
         postValMap <- gets insPVM
         let cns = BSC LocMap { locMapRegs = regs'
@@ -995,7 +995,7 @@ data BlockUsageSummary (arch :: Type) ids = BUS
     -- @CondReadMem@, @WriteMem@ and @CondWriteMem@.
   , blockMemAccesses :: ![MemAccessInfo arch ids]
     -- | The contents of the stack at the end of block execution.
-  , blockFinalStack :: !(StackMap (ArchAddrWidth arch) (InferStackValue arch ids))
+  , blockFinalStack :: !(MemMap (MemInt (ArchAddrWidth arch)) (InferStackValue arch ids))
     -- | Dependencies needed to execute statements with side effects.
   ,_blockExecDemands :: !(DependencySet (ArchReg arch) ids)
     -- | Map registers to the dependencies of the values they store.
@@ -1053,9 +1053,9 @@ assignmentCache = lens assignDeps (\s v -> s { assignDeps = v })
 -- CallRegs
 
 -- | Identifies demand information about a particular call.
-data CallRegs (arch :: Type) = 
+data CallRegs (arch :: Type) (ids :: Type) =
   CallRegs { callRegsFnType :: !(ArchFunType arch)
-           , callArgRegs :: [Some (ArchReg arch)]
+           , callArgValues :: [Some (Value arch ids)]
            , callReturnRegs :: [Some (ArchReg arch)]
            }
 
@@ -1102,12 +1102,12 @@ data RegisterUseContext arch
       -- | Callback function for summarizing register usage of terminal
       -- statements.
     , reguseTermFn :: !(forall ids . ArchTermStmtUsageFn arch ids)
-      -- | Given the address of a call instruction and regisdters, this returns the 
+      -- | Given the address of a call instruction and regisdters, this returns the
       -- values read and returned.
     , callDemandFn    :: !(forall ids
-                          .  ArchSegmentOff arch 
+                          .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either (RegisterUseError arch) (CallRegs arch))
+                          -> Either (RegisterUseError arch) (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1252,15 +1252,15 @@ inferStartConstraints rctx blockMap addr = do
         =  [ Pair sp_reg (ValueRegUseStackOffset 0) ]
         ++ [ Pair r (FnStartRegister r) | Some r <- calleeSavedRegisters rctx ]
   let cns = BSC LocMap { locMapRegs = MapF.fromList savedRegs
-                       , locMapStack = emptyStackMap
+                       , locMapStack = emptyMemMap
                        }
   propStartConstraints rctx blockMap Map.empty (Map.singleton addr cns)
 
 -- | Pretty print start constraints for debugging purposes.
-ppStartConstraints :: forall arch ids 
+ppStartConstraints :: forall arch ids
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc 
+                   -> Doc
 ppStartConstraints m = vcat (pp <$> Map.toList m)
   where pp :: (ArchSegmentOff arch, StartInferInfo arch ids) -> Doc
         pp (addr, (_,_,_,pvm)) =
@@ -1272,10 +1272,10 @@ ppStartConstraints m = vcat (pp <$> Map.toList m)
           text "to" <+> pretty preaddr <> text ":" <$$>
           indent 2 (ppPVM pvm)
 
-_ppStartConstraints :: forall arch ids 
+_ppStartConstraints :: forall arch ids
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc 
+                   -> Doc
 _ppStartConstraints = ppStartConstraints
 
 ------------------------------------------------------------------------
@@ -1621,19 +1621,19 @@ mkBlockUsageSummary ctx cns sis blk = do
         callFn <- asks callDemandFn
         -- Get function type associated with function
         off <- gets blockCurOff
-        let insnAddr = 
+        let insnAddr =
               let msg = "internal: Expected valid instruction address."
                in fromMaybe (error msg) (incSegmentOff addr (toInteger off))
-        ftr <- 
+        demandValue (regs^.boundValue ip_reg)
+        ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
             Left e -> throwError e
-        demandValue (regs^.boundValue ip_reg)
+        -- Demand argument registers
+        traverse_ (\(Some v) -> demandValue v) (callArgValues ftr)
         -- Store call register type information
         modify $ \s -> s { blockCallFunType = Just (callRegsFnType ftr) }
-        -- Demand argument registers
-        traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) (callArgRegs ftr)
-
+        -- Get other things
         cache <- gets assignDeps
         savedRegs <- asks calleeSavedRegisters
         let insReg m (Some r) = setRegDep r (valueDeps cns cache (regs^.boundValue r)) m

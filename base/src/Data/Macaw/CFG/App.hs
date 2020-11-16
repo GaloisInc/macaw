@@ -67,7 +67,6 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
              => !(NatRepr n)
              -> !(NatRepr w)
              -> WidthEqProof (BVType (n * w)) (VecType n (BVType w))
-
   FromFloat :: !(FloatInfoRepr ftp)
             -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
   ToFloat :: !(FloatInfoRepr ftp)
@@ -145,6 +144,12 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   Eq :: !(f tp) -> !(f tp) -> App f BoolType
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
+
+
+  -- | Create a tuple from a list of fields
+  MkTuple :: !(P.List TypeRepr flds)
+          -> !(P.List f flds)
+          -> App f (TupleType flds)
 
   -- | Extract the value out of a tuple.
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
@@ -350,8 +355,10 @@ instance HashableF f => Hashable (App f tp) where
   hashWithSalt = $(structuralHashWithSalt [t|App|]
                      [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
                      , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
-                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
-                        [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType
+                       , [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
+                       , [|\s l -> foldlFC' hashWithSaltF s l |])
                      , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
                        , [|\s _c -> s|])
                      ]
@@ -367,6 +374,8 @@ instance OrdF f => OrdF (App f) where
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                      [|compareF|])
+                  , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType,
                       [|compareF|])
                    , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|compareF|])
@@ -389,7 +398,12 @@ instance FoldableFC App where
   foldMapFC = foldMapFCDefault
 
 instance TraversableFC App where
-  traverseFC = $(structuralTraversal [t|App|] [])
+  traverseFC =
+    $(structuralTraversal [t|App|]
+      [ (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
+        , [|traverseFC|]
+        )
+      ])
 
 ------------------------------------------------------------------------
 -- App pretty printing
@@ -407,6 +421,7 @@ rendAppA pp a0 =
   case a0 of
     Eq x y      -> (,) "eq" [ pp x, pp y ]
     Mux _ c x y -> (,) "mux" [ pp c, pp x, pp y ]
+    MkTuple _ flds -> (,) "tuple" (toListFC pp flds)
     TupleField _ x i -> (,) "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
     AndApp x y -> (,) "and" [ pp x, pp y ]
     OrApp  x y -> (,) "or"  [ pp x, pp y ]
@@ -465,6 +480,7 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
       TupleField f _ i -> f P.!! i
 
       Trunc _ w -> BVTypeRepr w

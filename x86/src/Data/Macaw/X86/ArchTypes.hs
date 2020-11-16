@@ -325,7 +325,6 @@ data X86PrimFn f tp where
   -- >     return (true, eax, edx)
   -- >   else
   -- >     return (false, trunc 32 temp64, trunc 32 (temp64 >> 32))
-  --
   CMPXCHG8B :: !(f (BVType 64))
                -- Address to read
             -> !(f (BVType 32))

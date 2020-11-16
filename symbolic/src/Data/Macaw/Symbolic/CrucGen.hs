@@ -101,7 +101,6 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (Nonce, NonceGenerator, freshNonce)
 import           Data.Parameterized.Pair
-import           Data.Parameterized.Some
 import qualified Data.Parameterized.TH.GADT as U
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -871,7 +870,6 @@ appToCrucible app = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   case app of
-
     M.Eq x y ->
       do xv <- v2c x
          yv <- v2c y
@@ -905,16 +903,16 @@ appToCrucible app = do
         M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
         M.VecTypeRepr{} -> fail "XXX: Mux on vectors not yet done."
 
-
+    M.MkTuple macawTypes macawFields -> do
+      let crucTypes = typeListToCrucible macawTypes
+      crucFields <- macawListToCrucibleM v2c macawFields
+      appAtom (C.MkStruct crucTypes crucFields)
     M.TupleField tps x i -> do
-      let tps' = typeListToCrucible tps
-          tp'  = typeToCrucible $ tps P.!! i
+      let tp'  = typeToCrucible $ tps P.!! i
       x' <- v2c x
-      case Ctx.intIndex (fromIntegral $ P.indexValue i) (Ctx.size tps') of
-        Just (Some i') | Just Refl <- testEquality tp' (tps' Ctx.! i') ->
-          appAtom $ C.GetStruct x' i' tp'
-        _ -> fail ""
-
+      let sz = macawListSize tps
+      let i' = macawListIndexToCrucible sz i
+      appAtom $ C.GetStruct x' i' tp'
 
     -- Booleans
 

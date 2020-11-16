@@ -255,7 +255,11 @@ rewriteApp app = do
         pure y
        else
         pure (BoolValue False)
-    AndApp x y@BoolValue{} -> rewriteApp (AndApp y x)
+    AndApp x (BoolValue yc) ->
+      if yc then
+        pure x
+       else
+        pure (BoolValue False)
     -- x < y && x <= y   =   x < y
     AndApp   (valueAsApp -> Just (BVUnsignedLe x  y ))
            v@(valueAsApp -> Just (BVUnsignedLt x' y'))

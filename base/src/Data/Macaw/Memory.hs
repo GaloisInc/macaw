@@ -115,14 +115,14 @@ module Data.Macaw.Memory
   , Endianness(..)
   , bytesToInteger
   , bsWord8
-  , bsWord16be
-  , bsWord16le
+  , ElfBS.bsWord16be
+  , ElfBS.bsWord16le
   , bsWord32
-  , bsWord32be
-  , bsWord32le
+  , ElfBS.bsWord32be
+  , ElfBS.bsWord32le
   , bsWord64
-  , bsWord64be
-  , bsWord64le
+  , ElfBS.bsWord64be
+  , ElfBS.bsWord64le
     -- * Memory search
   , findByteStringMatches
   , relativeSegmentContents
@@ -153,7 +153,7 @@ import           Control.Monad
 import           Data.BinarySymbols
 import           Data.Bits
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as L
+import qualified Data.ElfEdit.ByteString as ElfBS
 import           Data.Int (Int32, Int64)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -244,50 +244,14 @@ bsWord8 bs
     | BS.length bs /= 1 = error "bsWord8 given bytestring with bad length."
     | otherwise = BS.index bs 0
 
-bsWord16be :: BS.ByteString -> Word16
-bsWord16be bs
-    | BS.length bs /= 2 = error "bsWord16be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((1 - i) `shiftL` 3)
-
-bsWord16le :: BS.ByteString -> Word16
-bsWord16le bs
-    | BS.length bs /= 2 = error "bsWord16le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
-
-bsWord32be :: BS.ByteString -> Word32
-bsWord32be bs
-    | BS.length bs /= 4 = error "bsWord32be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((3 - i) `shiftL` 3)
-
-bsWord32le :: BS.ByteString -> Word32
-bsWord32le bs
-    | BS.length bs /= 4 = error "bsWord32le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
-
 -- | Convert a bytestring to an unsigned with the given endianness.
 bsWord32 :: Endianness -> BS.ByteString -> Word32
-bsWord32 BigEndian    = bsWord32be
-bsWord32 LittleEndian = bsWord32le
-
-bsWord64be :: BS.ByteString -> Word64
-bsWord64be bs
-    | BS.length bs /= 8 = error "bsWord64be given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3 .|. w 4 .|. w 5 .|. w 6 .|. w 7
-  where w i = fromIntegral (BS.index bs i) `shiftL` ((7 - i) `shiftL` 3)
-
-bsWord64le :: BS.ByteString -> Word64
-bsWord64le bs
-    | BS.length bs /= 8 = error "bsWord64le given bytestring with bad length."
-    | otherwise = w 0 .|. w 1 .|. w 2 .|. w 3 .|. w 4 .|. w 5 .|. w 6 .|. w 7
-  where w i = fromIntegral (BS.index bs i) `shiftL` (i `shiftL` 3)
+bsWord32 BigEndian    = ElfBS.bsWord32be
+bsWord32 LittleEndian = ElfBS.bsWord32le
 
 bsWord64 :: Endianness -> BS.ByteString -> Word64
-bsWord64 BigEndian    = bsWord64be
-bsWord64 LittleEndian = bsWord64le
+bsWord64 BigEndian    = ElfBS.bsWord64be
+bsWord64 LittleEndian = ElfBS.bsWord64le
 
 ------------------------------------------------------------------------
 -- MemWord
@@ -650,23 +614,23 @@ contentsRanges = Map.toList . segContentsMap
 -- Presymbol data
 
 -- | Contents of segment/section before symbol folded in.
-data PresymbolData = PresymbolData { preBytes :: !L.ByteString
+data PresymbolData = PresymbolData { preBytes :: !BS.ByteString
                                    , preBSS :: !Integer
                                    }
 
 -- | Return number of presymbol bytes remaining
 presymbolBytesLeft :: PresymbolData -> Integer
-presymbolBytesLeft p = toInteger (L.length (preBytes p)) + preBSS p
+presymbolBytesLeft p = toInteger (BS.length (preBytes p)) + preBSS p
 
-mkPresymbolData :: L.ByteString -> Integer -> PresymbolData
+mkPresymbolData :: BS.ByteString -> Integer -> PresymbolData
 mkPresymbolData contents0 sz
-  | sz < toInteger (L.length contents0) =
-      PresymbolData { preBytes = L.take (fromInteger sz) contents0
+  | sz < toInteger (BS.length contents0) =
+      PresymbolData { preBytes = BS.take (fromInteger sz) contents0
                     , preBSS = 0
                     }
   | otherwise =
       PresymbolData { preBytes = contents0
-                    , preBSS = sz - toInteger (L.length contents0)
+                    , preBSS = sz - toInteger (BS.length contents0)
                     }
 
 -- | @bssSegment cnt@ creates a BSS region with size @cnt@.
@@ -685,10 +649,10 @@ allSymbolData :: MemWidth w
               -> [(MemWord w, MemChunk w)]
               -> [(MemWord w, MemChunk w)]
 allSymbolData off (PresymbolData contents bssSize)
-  | L.null contents = bssSegment off bssSize
+  | BS.null contents = bssSegment off bssSize
   | otherwise =
-    bssSegment (off + fromIntegral (L.length contents)) bssSize
-      . ((off,  ByteRegion (L.toStrict contents)) :)
+    bssSegment (off + fromIntegral (BS.length contents)) bssSize
+      . ((off,  ByteRegion contents) :)
 
 
 -- | Take the difference between given amount of data out of presymbol data.
@@ -704,43 +668,41 @@ splitSegment _baseAddr pre curAddr targetAddr dta
   | targetAddr == curAddr = (pre, dta)
 splitSegment baseAddr pre curAddr targetAddr (PresymbolData contents bssSize)
    -- Case where relocation is contained within regular contents
-  | toInteger cnt <= toInteger (L.length contents) =
-    ( (curAddr - baseAddr, ByteRegion (L.toStrict (L.take (fromIntegral cnt) contents))) : pre
-    , PresymbolData (L.drop (fromIntegral cnt) contents) bssSize
+  | toInteger cnt <= toInteger (BS.length contents) =
+    ( (curAddr - baseAddr, ByteRegion (BS.take (fromIntegral cnt) contents)) : pre
+    , PresymbolData (BS.drop (fromIntegral cnt) contents) bssSize
     )
   -- If contents is empty, then we just have BSS.
-  | L.null contents =
+  | BS.null contents =
       if bssSize < toInteger (targetAddr - curAddr) then
         error "Out of bytes"
       else
         ( (curAddr - baseAddr, BSSRegion cnt) : pre
-        , PresymbolData L.empty (bssSize - toInteger cnt)
+        , PresymbolData BS.empty (bssSize - toInteger cnt)
         )
   -- We take all of file-based data and at least some BSS.
   | otherwise =
-      ( [ ( curAddr - baseAddr + fromIntegral (L.length contents)
-          , BSSRegion (cnt - fromIntegral (L.length contents))
+      ( [ ( curAddr - baseAddr + fromIntegral (BS.length contents)
+          , BSSRegion (cnt - fromIntegral (BS.length contents))
           )
-        , (curAddr - baseAddr
-          , ByteRegion (L.toStrict contents)
-          )
+        , (curAddr - baseAddr, ByteRegion contents)
         ] ++ pre
-      , PresymbolData L.empty (bssSize - (toInteger cnt - toInteger (L.length contents)))
+      , PresymbolData BS.empty (bssSize - (toInteger cnt - toInteger (BS.length contents)))
       )
  where cnt = targetAddr - curAddr
 
 -- | @dropSegment cnt dta@ drops @cnt@ bytes from @dta@.
-dropSegment :: Int64 -> PresymbolData -> PresymbolData
+dropSegment :: Int -> PresymbolData -> PresymbolData
 dropSegment cnt (PresymbolData contents bssSize)
-  | cnt <= L.length contents = PresymbolData (L.drop cnt contents) bssSize
-  | otherwise = PresymbolData L.empty (bssSize - toInteger (cnt - L.length contents))
+  | cnt <= BS.length contents = PresymbolData (BS.drop cnt contents) bssSize
+  | otherwise = PresymbolData BS.empty (bssSize - toInteger (cnt - BS.length contents))
 
 -- | Return the given bytes
-takePresymbolBytes :: Int64 -> PresymbolData -> Maybe BS.ByteString
+takePresymbolBytes :: Int -> PresymbolData -> Maybe BS.ByteString
 takePresymbolBytes cnt p
   | toInteger cnt  <= presymbolBytesLeft p =
-      Just $ L.toStrict (L.take cnt (preBytes p))
-          <> BS.replicate (fromIntegral cnt - fromIntegral (L.length (preBytes p))) 0
+      Just $ BS.take cnt (preBytes p)
+          <> BS.replicate (cnt - BS.length (preBytes p)) 0
   | otherwise =
       Nothing
 
@@ -871,7 +833,7 @@ memSegment :: forall m w
               -- ^ Linktime address of segment.
            -> Perm.Flags
               -- ^ Permissions for segment.
-           -> L.ByteString
+           -> BS.ByteString
            -- ^ File contents for segment.
            -> MemWord w
            -- ^ Expected size (must be positive)
@@ -1077,7 +1039,7 @@ instance Show (MemAddr w) where
     . showString "+"
     . shows off
 
-instance MemWidth w => Pretty (MemAddr w) where
+instance Pretty (MemAddr w) where
   pretty = text . show
 
 -- | Given an absolute address, this returns a segment and offset into the segment.
@@ -1590,27 +1552,27 @@ readWord8 mem addr = bsWord8 <$> readByteString mem addr 1
 
 -- | Read a big endian word16
 readWord16be :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
-readWord16be mem addr = bsWord16be <$> readByteString mem addr 2
+readWord16be mem addr = ElfBS.bsWord16be <$> readByteString mem addr 2
 
 -- | Read a little endian word16
 readWord16le :: Memory w -> MemAddr w -> Either (MemoryError w) Word16
-readWord16le mem addr = bsWord16le <$> readByteString mem addr 2
+readWord16le mem addr = ElfBS.bsWord16le <$> readByteString mem addr 2
 
 -- | Read a big endian word32
 readWord32be :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
-readWord32be mem addr = bsWord32be <$> readByteString mem addr 4
+readWord32be mem addr = ElfBS.bsWord32be <$> readByteString mem addr 4
 
 -- | Read a little endian word32
 readWord32le :: Memory w -> MemAddr w -> Either (MemoryError w) Word32
-readWord32le mem addr = bsWord32le <$> readByteString mem addr 4
+readWord32le mem addr = ElfBS.bsWord32le <$> readByteString mem addr 4
 
 -- | Read a big endian word64
 readWord64be :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
-readWord64be mem addr = bsWord64be <$> readByteString mem addr 8
+readWord64be mem addr = ElfBS.bsWord64be <$> readByteString mem addr 8
 
 -- | Read a little endian word64
 readWord64le :: Memory w -> MemAddr w -> Either (MemoryError w) Word64
-readWord64le mem addr = bsWord64le <$> readByteString mem addr 8
+readWord64le mem addr = ElfBS.bsWord64le <$> readByteString mem addr 8
 
 data NullTermString w
    = NullTermString !BS.ByteString
@@ -1619,7 +1581,7 @@ data NullTermString w
    | NullTermMemoryError !(MemoryError w)
 
 -- | Attempt to read a null terminated bytesting.
-readNullTermString :: MemWidth w 
+readNullTermString :: MemWidth w
                   => MemSegmentOff w
                   -> NullTermString w
 readNullTermString addr = do

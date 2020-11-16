@@ -58,31 +58,25 @@ withElf :: Options
         -> IO a
 withElf opts k = do
   bs <- BS.readFile (inputFile opts)
-  case EE.parseElf bs of
-    EE.Elf64Res warnings elf -> mapM_ (IO.hPutStrLn IO.stderr . show) warnings >> withElf64 elf
-    EE.Elf32Res warnings elf -> mapM_ (IO.hPutStrLn IO.stderr . show) warnings >> withElf32 elf
-    EE.ElfHeaderError _ s -> do
-      IO.hPutStrLn IO.stderr ("Error loading ELF binary:\n  " ++ s)
-      IOE.exitFailure
-  where
-    withElf64 elf =
-      case EE.elfMachine elf of
-        EE.EM_PPC64 -> do
+  case EE.decodeElfHeaderInfo bs of
+    Right (EE.SomeElf elf) -> do
+      let hdr = EE.header elf
+      case (EE.headerClass hdr, EE.headerMachine hdr) of
+        (EE.ELFCLASS64, EE.EM_PPC64) -> do
           bin <- MBL.loadBinary @PPC64.PPC ML.defaultLoadOptions elf
           let archInfo = MP.ppc64_linux_info bin
           withLoadedBinary k archInfo bin
-        EE.EM_X86_64 -> do
+        (EE.ELFCLASS64, EE.EM_X86_64) -> do
           bin <- MBL.loadBinary @MX86.X86_64 ML.defaultLoadOptions elf
           withLoadedBinary k MX86.x86_64_linux_info bin
-        m -> X.throwM (UnsupportedArchitecture m)
-
-    withElf32 elf =
-      case EE.elfMachine elf of
-        EE.EM_PPC -> do
+        (EE.ELFCLASS32, EE.EM_PPC) -> do
           bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
           let archInfo = MP.ppc32_linux_info bin
           withLoadedBinary k archInfo bin
-        m -> X.throwM (UnsupportedArchitecture m)
+        (_,m) -> X.throwM (UnsupportedArchitecture m)
+    Left (_, s) -> do
+      IO.hPutStrLn IO.stderr ("Error loading ELF binary:\n  " ++ s)
+      IOE.exitFailure
 
 withLoadedBinary :: forall arch binFmt m a
                   . ( MBL.BinaryLoader arch binFmt

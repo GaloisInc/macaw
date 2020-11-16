@@ -23,7 +23,7 @@ jobs:
         cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
     - name: Get GHC
       run: |
-        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }}
+        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }} llvm
         echo "/opt/cabal/bin" >> $GITHUB_PATH
         echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
     - name: Cache
@@ -46,3 +46,5 @@ jobs:
       run: cabal test macaw-x86 macaw-x86-symbolic
     - name: Cabal ASL tests
       run: cabal test macaw-asl-tests
+    - name: compare-dwarfdump
+      run: cabal build compare-dwarfdump
