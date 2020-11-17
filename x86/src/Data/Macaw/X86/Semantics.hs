@@ -907,13 +907,18 @@ def_sbb = defBinaryLV "sbb" $ \l v -> do
   of_loc .= ssbb_overflows v0 v cf
   af_loc .= uadd4_overflows v cbv .||. usub4_overflows v0 v'
   cf_loc .= uadd_overflows v cbv .||. (usub_overflows  v0 v')
+
   -- Set result value.
   let
     res =
+      -- Here, we include a special case for when the operand is duplicated
+      -- E.g., sbb %rax, %rax
+      -- This sets rax = rax - (rax + cf) = -cf, simplifying the result a bit
       if v0 == v then
         mux cf (bvLit w (-1)) (bvLit w 0)
        else
         v0 .- v'
+
   set_result_flags res
   l .= res
 
