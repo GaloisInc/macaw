@@ -107,7 +107,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import qualified Flexdis86 as F
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter as PP
 
 import qualified Data.Macaw.X86.X86Flag as R
 
@@ -165,7 +165,7 @@ instance ShowF X86Reg where
   showF = show
 
 instance PrettyF X86Reg where
-  prettyF = text . show
+  prettyF = viaShow
 
 instance TestEquality X86Reg where
   testEquality x y = orderingIsEqual (compareF x y)

@@ -11,14 +11,14 @@ module Data.Macaw.Utils.Pretty
   ) where
 
 import           Data.Parameterized.NatRepr
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+import           Prettyprinter
 
 -- | Pretty print an operator name and argumetns as an sexpr.
-sexpr :: String -> [Doc] -> Doc
-sexpr nm d = parens (hsep (text nm : d))
+sexpr :: String -> [Doc ann] -> Doc ann
+sexpr nm d = parens (hsep (pretty nm : d))
 
-sexprA :: Applicative m => String -> [m Doc] -> m Doc
+sexprA :: Applicative m => String -> [m (Doc ann)] -> m (Doc ann)
 sexprA nm d = sexpr nm <$> sequenceA d
 
-ppNat :: Applicative m => NatRepr n -> m Doc
-ppNat n = pure (text (show n))
+ppNat :: Applicative m => NatRepr n -> m (Doc ann)
+ppNat n = pure (viaShow n)

@@ -88,7 +88,7 @@ import           Data.Sequence (Seq)
 import qualified Data.Sequence as Seq
 import           Data.Text (Text)
 import qualified Data.Text as Text
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 
 import           Data.Macaw.X86.ArchTypes
 import           Data.Macaw.X86.X86Reg
@@ -103,7 +103,7 @@ data Expr ids tp where
   -- | An expression that is computed from evaluating subexpressions.
   AppExpr :: !(App (Expr ids) tp) -> Expr ids tp
 
-collectExpr :: Expr ids tp -> State (MapF (AssignId ids) DocF) PP.Doc
+collectExpr :: Expr ids tp -> State (MapF (AssignId ids) (DocF ann)) (PP.Doc ann)
 collectExpr (ValueExpr v) = collectValueRep 0 v
 collectExpr (AppExpr a) = ppAppA collectExpr a
 

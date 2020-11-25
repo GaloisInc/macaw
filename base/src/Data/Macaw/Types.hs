@@ -38,7 +38,7 @@ import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
 import           GHC.TypeLits
 import qualified Language.Haskell.TH.Syntax as TH
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 
 -- FIXME: move
 n0 :: NatRepr 0
@@ -130,7 +130,7 @@ instance Show (FloatInfoRepr fi) where
   show X86_80FloatRepr = "x87_80"
 
 instance Pretty (FloatInfoRepr fi) where
-  pretty = text . show
+  pretty = viaShow
 
 deriving instance TH.Lift (FloatInfoRepr fi)
 
@@ -231,12 +231,12 @@ type_width (BVTypeRepr n) = n
 
 -- Pretty print using an s-expression syntax.
 instance Pretty (TypeRepr tp) where
-  pretty BoolTypeRepr = text "bool"
-  pretty (BVTypeRepr w) = parens (text "bv" <+> text (show w))
-  pretty (FloatTypeRepr fi) = text (show fi)
+  pretty BoolTypeRepr = pretty "bool"
+  pretty (BVTypeRepr w) = parens (pretty "bv" <+> viaShow w)
+  pretty (FloatTypeRepr fi) = viaShow fi
   pretty (TupleTypeRepr z) =
-    parens (foldlFC (\l tp -> l <+> pretty tp) (text "tuple") z)
-  pretty (VecTypeRepr c tp) = parens (text "vec" <+> text (show c) <+> pretty tp)
+    parens (foldlFC (\l tp -> l <+> pretty tp) (pretty "tuple") z)
+  pretty (VecTypeRepr c tp) = parens (pretty "vec" <+> viaShow c <+> pretty tp)
 
 instance Show (TypeRepr tp) where
   show = show . pretty

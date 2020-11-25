@@ -4,6 +4,7 @@
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -38,7 +39,7 @@ import qualified Dismantle.ARM.A32 as ARMDis
 import qualified Dismantle.ARM.T32 as ThumbDis
 import           GHC.TypeLits
 import qualified SemMC.Architecture.AArch32 as ARM
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 import qualified Text.PrettyPrint.HughesPJClass as HPP
 
 -- ----------------------------------------------------------------------
@@ -59,8 +60,8 @@ type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
         case stmt of
-          UninterpretedA32Opcode opc ops -> PP.pretty (show opc) PP.<+> PP.pretty (FCls.toListFC showF ops)
-          UninterpretedT32Opcode opc ops -> PP.pretty (show opc) PP.<+> PP.pretty (FCls.toListFC showF ops)
+          UninterpretedA32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
+          UninterpretedT32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
 
 instance TF.FunctorF ARMStmt where
   fmapF = TF.fmapFDefault
@@ -106,10 +107,10 @@ type instance MC.ArchTermStmt ARM.AArch32 = ARMTermStmt
 
 instance MC.PrettyF ARMTermStmt where
   prettyF ts = let dpp2app :: forall a. HPP.Pretty a => a -> PP.Doc
-                   dpp2app = PP.text . show . HPP.pPrint
+                   dpp2app = PP.viaShow . HPP.pPrint
                in case ts of
-                    ARMSyscall imm -> PP.text "arm_syscall" PP.<+> dpp2app imm
-                    ThumbSyscall imm -> PP.text "thumb_syscall" PP.<+> dpp2app imm
+                    ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
+                    ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
 
 rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
@@ -296,9 +297,9 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
 
 instance MC.IsArchFn ARMPrimFn where
     ppArchFn pp f =
-        let ppUnary s v' = PP.text s PP.<+> v'
-            ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
-            ppTernary s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
+        let ppUnary s v' = s PP.<+> v'
+            ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
+            ppTernary s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
         in case f of
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs

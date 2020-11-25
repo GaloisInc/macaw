@@ -15,8 +15,7 @@ module Data.Macaw.CFG.Block
   ) where
 
 import           Data.Text (Text)
-import qualified Data.Text as Text
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.CFG.Core
 
@@ -46,13 +45,17 @@ data TermStmt arch ids
 instance ArchConstraints arch
       => Pretty (TermStmt arch ids) where
   pretty (FetchAndExecute s) =
-    text "fetch_and_execute" <$$>
-    indent 2 (pretty s)
+    vcat
+    [ pretty "fetch_and_execute"
+    , indent 2 (pretty s) ]
   pretty (TranslateError s msg) =
-    text "ERROR: " <+> text (Text.unpack msg) <$$>
-    indent 2 (pretty s)
+    vcat
+    [ pretty "ERROR: " <+> pretty msg
+    , indent 2 (pretty s) ]
   pretty (ArchTermStmt ts regs) =
-    prettyF ts <$$> indent 2 (pretty regs)
+    vcat
+    [ prettyF ts
+    , indent 2 (pretty regs) ]
 
 ------------------------------------------------------------------------
 -- Block
@@ -67,5 +70,5 @@ data Block arch ids
              -- ^ The last statement in the block.
            }
 
-ppBlock :: ArchConstraints arch => Block arch ids -> Doc
-ppBlock b = vcat (ppStmt (text . show) <$> blockStmts b) <$$> pretty (blockTerm b)
+ppBlock :: ArchConstraints arch => Block arch ids -> Doc ann
+ppBlock b = vcat [vcat (ppStmt viaShow <$> blockStmts b), pretty (blockTerm b)]

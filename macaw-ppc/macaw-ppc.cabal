@@ -44,10 +44,10 @@ library
                        macaw-loader-ppc,
                        lens,
                        macaw-base,
-                       ansi-wl-pprint,
                        cereal,
                        mtl,
                        parameterized-utils,
+                       prettyprinter >= 1.7.0,
                        elf-edit,
                        template-haskell,
                        what4

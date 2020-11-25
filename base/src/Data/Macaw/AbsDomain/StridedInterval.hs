@@ -33,8 +33,8 @@ import           Control.Exception (assert)
 import qualified Data.Foldable as Fold
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits (Nat)
+import           Prettyprinter
 import           Test.QuickCheck
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), empty)
 
 -- import           Data.Macaw.DebugLogging
 
@@ -488,12 +488,12 @@ toList :: StridedInterval w -> [Integer]
 toList si@StridedInterval{} = map (\v -> base si + stride si * v) [0 .. range si]
 
 instance Pretty (StridedInterval w) where
-  pretty si | isEmpty si = text "[]"
-  pretty si | Just s <- isSingleton si = brackets (integer s)
-  pretty si@StridedInterval{} = brackets (integer (base si) <> comma
-                                          <+> integer (base si + stride si)
-                                          <+> text ".."
-                                          <+> integer (base si + range si * stride si))
+  pretty si | isEmpty si = pretty "[]"
+  pretty si | Just s <- isSingleton si = brackets (pretty s)
+  pretty si@StridedInterval{} = brackets (pretty (base si) <> comma
+                                          <+> pretty (base si + stride si)
+                                          <+> pretty ".."
+                                          <+> pretty (base si + range si * stride si))
 
 instance Arbitrary (StridedInterval 64) where
   arbitrary = frequency [ (1, return (empty knownNat))

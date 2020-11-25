@@ -52,7 +52,7 @@ import           Data.Parameterized.TraversableFC
 import           Data.Word (Word8)
 import qualified Flexdis86 as F
 import           Numeric.Natural
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter as PP
 
 import           Data.Macaw.X86.X86Reg
 
@@ -131,9 +131,9 @@ data X86TermStmt ids
      -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
-  prettyF X86Syscall = text "x86_syscall"
-  prettyF Hlt        = text "hlt"
-  prettyF UD2        = text "ud2"
+  prettyF X86Syscall = pretty "x86_syscall"
+  prettyF Hlt        = pretty "hlt"
+  prettyF UD2        = pretty "ud2"
 
 ------------------------------------------------------------------------
 -- SSE declarations
@@ -845,21 +845,21 @@ instance TraversableFC X86PrimFn where
       AESNI_AESKeyGenAssist x i -> AESNI_AESKeyGenAssist <$> go x <*> pure i
 
 -- | Pretty print a rep value size
-ppRepValSize :: RepValSize w -> Doc
+ppRepValSize :: RepValSize w -> Doc ann
 ppRepValSize = pretty . toInteger . repValSizeBitCount
 
 instance IsArchFn X86PrimFn where
   ppArchFn pp f = do
-    let ppShow :: (Applicative m, Show a) => a -> m Doc
-        ppShow = pure . text . show
+    let ppShow :: (Applicative m, Show a) => a -> m (Doc ann)
+        ppShow = pure . viaShow
     case f of
       EvenParity x -> sexprA "even_parity" [ pp x ]
-      ReadFSBase  -> pure $ text "fs.base"
-      ReadGSBase  -> pure $ text "gs.base"
+      ReadFSBase  -> pure $ pretty "fs.base"
+      ReadGSBase  -> pure $ pretty "gs.base"
       GetSegmentSelector s -> pure $ sexpr "get_segment_selector" [pretty (show s)]
       CPUID code  -> sexprA "cpuid" [ pp code ]
       CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
-      RDTSC       -> pure $ text "rdtsc"
+      RDTSC       -> pure $ pretty "rdtsc"
       XGetBV code -> sexprA "xgetbv" [ pp code ]
       PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
       MemCmp sz cnt src dest rev -> sexprA "memcmp" args
@@ -1051,15 +1051,15 @@ instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
     case stmt of
       SetSegmentSelector s v ->
-        text "set_segment_selector(" <> text (show s) <> text ", " <> pp v <> text ")"
-      StoreX87Control addr -> pp addr <+> text ":= x87_control"
+        pretty "set_segment_selector(" <> viaShow s <> pretty ", " <> pp v <> pretty ")"
+      StoreX87Control addr -> pp addr <+> pretty ":= x87_control"
       RepMovs bc dest src cnt dir ->
-          text "repMovs" <+> parens (hcat $ punctuate comma args)
+          pretty "repMovs" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp src, pp cnt, pp dir]
       RepStos bc dest val cnt dir ->
-          text "repStos" <+> parens (hcat $ punctuate comma args)
+          pretty "repStos" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp val, pp cnt, pp dir]
-      EMMS -> text "emms"
+      EMMS -> pretty "emms"
 
 ------------------------------------------------------------------------
 -- X86_64

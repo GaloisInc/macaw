@@ -27,7 +27,6 @@ library
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <5
-                     , ansi-wl-pprint
                      , asl-translator
                      , bytestring
                      , bv-sized >= 1.0.1 && < 1.1
@@ -64,7 +63,6 @@ test-suite macaw-asl-tests
                      , MismatchTests
                      , Shared
   build-depends:       base >=4.10 && <5
-                     , ansi-wl-pprint
                      , binary
                      , bytestring
                      , containers

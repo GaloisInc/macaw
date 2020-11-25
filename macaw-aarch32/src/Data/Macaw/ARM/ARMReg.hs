@@ -36,7 +36,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import           GHC.TypeLits
 import qualified Language.Haskell.TH as TH
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
@@ -92,7 +92,7 @@ instance ShowF ARMReg where
     showF = show
 
 instance MC.PrettyF ARMReg where
-  prettyF = PP.text . showF
+  prettyF = PP.pretty . showF
 
 $(return [])  -- allow template haskell below to see definitions above
 

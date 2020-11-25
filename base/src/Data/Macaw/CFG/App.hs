@@ -36,7 +36,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
@@ -408,15 +408,15 @@ instance TraversableFC App where
 ------------------------------------------------------------------------
 -- App pretty printing
 
-prettyPure :: (Applicative m, Pretty v) => v -> m Doc
+prettyPure :: (Applicative m, Pretty v) => v -> m (Doc ann)
 prettyPure = pure . pretty
 
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
 rendAppA :: Applicative m
-         => (forall u . f u -> m Doc)
+         => (forall u . f u -> m (Doc ann))
          -> App f tp
-         -> (String, [m Doc])
+         -> (String, [m (Doc ann)])
 rendAppA pp a0 =
   case a0 of
     Eq x y      -> (,) "eq" [ pp x, pp y ]
@@ -430,7 +430,7 @@ rendAppA pp a0 =
     Trunc x w -> (,) "trunc" [ pp x, ppNat w ]
     SExt x w -> (,) "sext" [ pp x, ppNat w ]
     UExt x w -> (,) "uext" [ pp x, ppNat w ]
-    Bitcast x tp -> (,) "bitcast" [ pp x, pure (text (show (widthEqTarget tp))) ]
+    Bitcast x tp -> (,) "bitcast" [ pp x, pure (viaShow (widthEqTarget tp)) ]
     BVAdd _ x y   -> (,) "bv_add" [ pp x, pp y ]
     BVAdc _ x y c -> (,) "bv_adc" [ pp x, pp y, pp c ]
     BVSub _ x y -> (,) "bv_sub" [ pp x, pp y ]
@@ -460,16 +460,16 @@ rendAppA pp a0 =
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
 ppAppA :: Applicative m
-      => (forall u . f u -> m Doc)
+      => (forall u . f u -> m (Doc ann))
       -> App f tp
-      -> m Doc
+      -> m (Doc ann)
 ppAppA pp a0 =
   let (nm,args) = rendAppA pp a0
    in sexpr nm <$> sequenceA args
 
-ppApp :: (forall u . f u -> Doc)
+ppApp :: (forall u . f u -> Doc ann)
       -> App f tp
-      -> Doc
+      -> Doc ann
 ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
 
 ------------------------------------------------------------------------
