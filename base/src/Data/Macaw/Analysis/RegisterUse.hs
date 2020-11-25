@@ -70,7 +70,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           GHC.Stack
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.AbsDomain.StackAnalysis
 import           Data.Macaw.CFG
@@ -704,10 +704,10 @@ pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l)) l m
 instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
   show (PVM m) = show m
 
-ppPVM :: forall arch ids . ShowF (ArchReg arch) => PostValueMap arch ids -> Doc
+ppPVM :: forall arch ids ann . ShowF (ArchReg arch) => PostValueMap arch ids -> Doc ann
 ppPVM (PVM m) = vcat $ ppVal <$> MapF.toList m
-  where ppVal :: Pair (BoundLoc (ArchReg arch)) (InferValue arch ids) -> Doc
-        ppVal (Pair l v) = pretty l <+> text ":=" <+> text (show v)
+  where ppVal :: Pair (BoundLoc (ArchReg arch)) (InferValue arch ids) -> Doc ann
+        ppVal (Pair l v) = pretty l <+> pretty ":=" <+> viaShow v
 
 type StartInferInfo arch ids =
   ( ParsedBlock arch ids
@@ -893,20 +893,20 @@ data DependencySet (r :: M.Type -> Type) ids =
            -- writes a value to the stack that is read later.
          }
 
-ppSet :: (a -> Doc) -> Set a -> Doc
+ppSet :: (a -> Doc ann) -> Set a -> Doc ann
 ppSet f s = encloseSep lbrace rbrace comma (f <$> Set.toList s)
 
-ppSomeAssignId :: Some (AssignId ids) -> Doc
-ppSomeAssignId (Some aid) = text (show aid)
+ppSomeAssignId :: Some (AssignId ids) -> Doc ann
+ppSomeAssignId (Some aid) = viaShow aid
 
-ppSomeBoundLoc :: MapF.ShowF r => Some (BoundLoc r) -> Doc
+ppSomeBoundLoc :: MapF.ShowF r => Some (BoundLoc r) -> Doc ann
 ppSomeBoundLoc (Some loc) = pretty loc
 
 instance MapF.ShowF r => Pretty (DependencySet r ids) where
   pretty ds =
-    vcat [ text "Assignments:" <+> ppSet ppSomeAssignId (dsAssignSet ds)
-         , text "Locations:  " <+> ppSet ppSomeBoundLoc (dsLocSet ds)
-         , text "Write Stmts:" <+> ppSet pretty (dsWriteStmtIndexSet ds)
+    vcat [ pretty "Assignments:" <+> ppSet ppSomeAssignId (dsAssignSet ds)
+         , pretty "Locations:  " <+> ppSet ppSomeBoundLoc (dsLocSet ds)
+         , pretty "Write Stmts:" <+> ppSet pretty (dsWriteStmtIndexSet ds)
          ]
 
 -- | Empty dependency set.
@@ -1257,25 +1257,26 @@ inferStartConstraints rctx blockMap addr = do
   propStartConstraints rctx blockMap Map.empty (Map.singleton addr cns)
 
 -- | Pretty print start constraints for debugging purposes.
-ppStartConstraints :: forall arch ids
+ppStartConstraints :: forall arch ids ann
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc
+                   -> Doc ann
 ppStartConstraints m = vcat (pp <$> Map.toList m)
-  where pp :: (ArchSegmentOff arch, StartInferInfo arch ids) -> Doc
+  where pp :: (ArchSegmentOff arch, StartInferInfo arch ids) -> Doc ann
         pp (addr, (_,_,_,pvm)) =
           let pvmEntries = vcat (ppPVMPair <$> Map.toList pvm)
-           in pretty addr <$$>
-                indent 2 (text "post-values:" <$$> indent 2 pvmEntries)
-        ppPVMPair :: (ArchSegmentOff arch, PostValueMap arch ids) -> Doc
+           in vcat [ pretty addr
+                   , indent 2 $ vcat [pretty "post-values:", indent 2 pvmEntries] ]
+        ppPVMPair :: (ArchSegmentOff arch, PostValueMap arch ids) -> Doc ann
         ppPVMPair (preaddr, pvm) =
-          text "to" <+> pretty preaddr <> text ":" <$$>
-          indent 2 (ppPVM pvm)
+          vcat
+          [ pretty "to" <+> pretty preaddr <> pretty ":"
+          , indent 2 (ppPVM pvm) ]
 
-_ppStartConstraints :: forall arch ids
+_ppStartConstraints :: forall arch ids ann
                    .  (MemWidth (ArchAddrWidth arch), ShowF (ArchReg arch))
                    => Map (ArchSegmentOff arch) (StartInferInfo arch ids)
-                   -> Doc
+                   -> Doc ann
 _ppStartConstraints = ppStartConstraints
 
 ------------------------------------------------------------------------

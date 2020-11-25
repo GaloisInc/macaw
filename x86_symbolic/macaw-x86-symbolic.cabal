@@ -9,7 +9,6 @@ license-file:  LICENSE
 
 library
   build-depends: base >= 4,
-                 ansi-wl-pprint,
                  bv-sized >= 1.0.0,
                  crucible >= 0.4,
                  crucible-llvm,
@@ -20,6 +19,7 @@ library
                  macaw-x86 >= 0.3.1,
                  mtl,
                  parameterized-utils,
+                 prettyprinter >= 1.7.0,
                  vector,
                  what4 >= 0.4
   hs-source-dirs: src

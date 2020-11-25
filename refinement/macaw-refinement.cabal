@@ -47,7 +47,6 @@ source-repository head
 
 library
   build-depends: base >= 4
-               , ansi-wl-pprint
                , bv-sized >= 1.0.0
                , containers
                , crucible >= 0.4
@@ -131,7 +130,6 @@ test-suite test-refinements
   main-is: RefinementTests.hs
   other-modules: Summary, Initialization, Options
   build-depends: base >= 4
-               , ansi-wl-pprint
                , bytestring
                , containers
                , directory

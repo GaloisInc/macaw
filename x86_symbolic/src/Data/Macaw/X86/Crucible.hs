@@ -44,7 +44,7 @@ import           Data.Semigroup
 import qualified Data.Vector as DV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
-import           Text.PrettyPrint.ANSI.Leijen hiding ( (<$>), (<>), empty )
+import           Prettyprinter
 
 import           What4.Concrete
 import           What4.Interface hiding (IsExpr)

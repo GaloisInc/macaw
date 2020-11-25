@@ -29,7 +29,7 @@ import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
-import           Text.PrettyPrint.ANSI.Leijen ( putDoc )
+import           Prettyprinter.Util ( putDocW )
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
@@ -131,7 +131,7 @@ testDiscovery32 (funcblocks, ignored) ehdr =
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (ARMELF.getElfSections ehdr) <> "\n"
             chatty $ "symbols = "
-            putDoc $ ARMELF.getELFSymbols ehdr
+            putDocW 80 $ ARMELF.getELFSymbols ehdr
             chatty ""
 
     let discoveryInfo = MD.cfgFromAddrs RO.arm_linux_info mem mempty [entryPoint] []

@@ -39,8 +39,7 @@ import           Data.Macaw.Refinement.FuncBlockUtils ( BlockIdentifier(..)
 import qualified Data.Macaw.Refinement.FuncBlockUtils as FBU
 import           Data.Maybe ( fromMaybe, mapMaybe )
 import qualified Data.Set as S
-import           Data.Text.Prettyprint.Doc
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import           Prettyprinter
 
 data CFG arch ids = CFG { cfgFunc  :: DiscoveryFunInfo arch ids
                         -- ^ The original function
@@ -366,7 +365,7 @@ instance ( MC.MemWidth (ArchAddrWidth arch) ) =>
         looptxt = if null loop then []
                   else [parens (hsep [ pretty "loops from:"
                                      , list ( prettyBlkId <$> loop )])]
-        prettyBlkId = pretty . show . PP.pretty . biArchSegmentOff
+        prettyBlkId = pretty . biArchSegmentOff
     in vsep [ hsep (label <> looptxt)
             , nest 4 $ vsep (pretty <$> anc)
             ]
