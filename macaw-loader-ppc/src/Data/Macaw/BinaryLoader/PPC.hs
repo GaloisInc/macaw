@@ -120,7 +120,7 @@ loadPPCBinary :: (X.MonadThrow m,
               => BL.BinaryRepr (E.ElfHeaderInfo w)
               -> LC.LoadOptions
               -> E.ElfHeaderInfo w
-              -> m (BL.LoadedBinary ppc (E.ElfHeaderInfo w))S
+              -> m (BL.LoadedBinary ppc (E.ElfHeaderInfo w))
 loadPPCBinary binRep lopts e = do
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (PPCElfLoadError err)
