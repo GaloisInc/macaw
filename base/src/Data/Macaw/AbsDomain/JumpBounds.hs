@@ -11,6 +11,7 @@ known equivalent values.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -421,7 +422,7 @@ instance Pretty (SubRange tp) where
   pretty (SubRange p) = pretty p
 
 ppSubRange :: Doc ann -> SubRange tp -> Doc ann
-ppSubRange d (SubRange r) = d <+> pretty "in" <+> pretty r
+ppSubRange d (SubRange r) = d <+> "in" <+> pretty r
 
 -- | Take the union of two subranges, and return `Nothing` if this is
 -- a maximum range bound.
@@ -468,9 +469,9 @@ instance ShowF (ArchReg arch) => Pretty (BranchConstraints arch ids) where
     let cl = MapF.toList (newClassRepConstraints x)
         al = MapF.toList (newUninterpAssignConstraints x)
         ppLoc :: Pair (BoundLoc (ArchReg arch)) SubRange -> Doc ann
-        ppLoc (Pair l r) = prettyF l <+> pretty ":=" <+> pretty r
+        ppLoc (Pair l r) = prettyF l <+> ":=" <+> pretty r
         ppAssign :: Pair (AssignId ids) SubRange -> Doc ann
-        ppAssign (Pair l r) = ppAssignId l <+> pretty ":=" <+> pretty r
+        ppAssign (Pair l r) = ppAssignId l <+> ":=" <+> pretty r
      in vcat (fmap ppLoc cl ++ fmap ppAssign al)
 
 instance ShowF (ArchReg arch) => Show (BranchConstraints arch ids) where

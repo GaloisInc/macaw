@@ -8,6 +8,7 @@ This defines the X86_64 architecture type and the supporting definitions.
 {-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -131,9 +132,9 @@ data X86TermStmt ids
      -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
-  prettyF X86Syscall = pretty "x86_syscall"
-  prettyF Hlt        = pretty "hlt"
-  prettyF UD2        = pretty "ud2"
+  prettyF X86Syscall = "x86_syscall"
+  prettyF Hlt        = "hlt"
+  prettyF UD2        = "ud2"
 
 ------------------------------------------------------------------------
 -- SSE declarations
@@ -854,12 +855,12 @@ instance IsArchFn X86PrimFn where
         ppShow = pure . viaShow
     case f of
       EvenParity x -> sexprA "even_parity" [ pp x ]
-      ReadFSBase  -> pure $ pretty "fs.base"
-      ReadGSBase  -> pure $ pretty "gs.base"
+      ReadFSBase  -> pure $ "fs.base"
+      ReadGSBase  -> pure $ "gs.base"
       GetSegmentSelector s -> pure $ sexpr "get_segment_selector" [pretty (show s)]
       CPUID code  -> sexprA "cpuid" [ pp code ]
       CMPXCHG8B a ax bx cx dx -> sexprA "cmpxchg8b" [ pp a, pp ax, pp bx, pp cx, pp dx ]
-      RDTSC       -> pure $ pretty "rdtsc"
+      RDTSC       -> pure $ "rdtsc"
       XGetBV code -> sexprA "xgetbv" [ pp code ]
       PShufb _ x s -> sexprA "pshufb" [ pp x, pp s ]
       MemCmp sz cnt src dest rev -> sexprA "memcmp" args
@@ -1051,15 +1052,15 @@ instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
     case stmt of
       SetSegmentSelector s v ->
-        pretty "set_segment_selector(" <> viaShow s <> pretty ", " <> pp v <> pretty ")"
-      StoreX87Control addr -> pp addr <+> pretty ":= x87_control"
+        "set_segment_selector(" <> viaShow s <> ", " <> pp v <> ")"
+      StoreX87Control addr -> pp addr <+> ":= x87_control"
       RepMovs bc dest src cnt dir ->
-          pretty "repMovs" <+> parens (hcat $ punctuate comma args)
+          "repMovs" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp src, pp cnt, pp dir]
       RepStos bc dest val cnt dir ->
-          pretty "repStos" <+> parens (hcat $ punctuate comma args)
+          "repStos" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp val, pp cnt, pp dir]
-      EMMS -> pretty "emms"
+      EMMS -> "emms"
 
 ------------------------------------------------------------------------
 -- X86_64

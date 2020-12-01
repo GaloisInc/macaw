@@ -13,6 +13,7 @@ The type of machine words, including bit vectors and floating point
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -231,12 +232,12 @@ type_width (BVTypeRepr n) = n
 
 -- Pretty print using an s-expression syntax.
 instance Pretty (TypeRepr tp) where
-  pretty BoolTypeRepr = pretty "bool"
-  pretty (BVTypeRepr w) = parens (pretty "bv" <+> viaShow w)
+  pretty BoolTypeRepr = "bool"
+  pretty (BVTypeRepr w) = parens ("bv" <+> viaShow w)
   pretty (FloatTypeRepr fi) = viaShow fi
   pretty (TupleTypeRepr z) =
-    parens (foldlFC (\l tp -> l <+> pretty tp) (pretty "tuple") z)
-  pretty (VecTypeRepr c tp) = parens (pretty "vec" <+> viaShow c <+> pretty tp)
+    parens (foldlFC (\l tp -> l <+> pretty tp) ("tuple") z)
+  pretty (VecTypeRepr c tp) = parens ("vec" <+> viaShow c <+> pretty tp)
 
 instance Show (TypeRepr tp) where
   show = show . pretty

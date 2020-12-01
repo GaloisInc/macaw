@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -110,14 +111,14 @@ data MemRepr (tp :: Type) where
   -- etc.
   PackedVecMemRepr :: !(NatRepr n) -> !(MemRepr tp) -> MemRepr (VecType n tp)
 
-ppEndianness :: Endianness -> String
+ppEndianness :: Endianness -> Doc ann
 ppEndianness LittleEndian = "le"
 ppEndianness BigEndian    = "be"
 
 instance Pretty (MemRepr tp) where
-  pretty (BVMemRepr w end) = pretty "bv" <> pretty (ppEndianness end) <> viaShow w
-  pretty (FloatMemRepr f end) = pretty f <> pretty (ppEndianness end)
-  pretty (PackedVecMemRepr w r) = pretty "v" <> viaShow w <> pretty r
+  pretty (BVMemRepr w end) = "bv" <> ppEndianness end <> viaShow w
+  pretty (FloatMemRepr f end) = pretty f <> ppEndianness end
+  pretty (PackedVecMemRepr w r) = "v" <> viaShow w <> pretty r
 
 instance Show (MemRepr tp) where
   show = show . pretty

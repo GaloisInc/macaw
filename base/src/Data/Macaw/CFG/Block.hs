@@ -6,6 +6,7 @@ This exports the pre-classification term statement and block data
 types.
 -}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Data.Macaw.CFG.Block
@@ -46,11 +47,11 @@ instance ArchConstraints arch
       => Pretty (TermStmt arch ids) where
   pretty (FetchAndExecute s) =
     vcat
-    [ pretty "fetch_and_execute"
+    [ "fetch_and_execute"
     , indent 2 (pretty s) ]
   pretty (TranslateError s msg) =
     vcat
-    [ pretty "ERROR: " <+> pretty msg
+    [ "ERROR: " <+> pretty msg
     , indent 2 (pretty s) ]
   pretty (ArchTermStmt ts regs) =
     vcat

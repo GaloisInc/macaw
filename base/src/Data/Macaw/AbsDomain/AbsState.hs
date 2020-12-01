@@ -4,6 +4,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -261,22 +262,22 @@ ppSet = encloseSep lbrace rbrace comma
 
 instance MemWidth w => Pretty (AbsValue w tp) where
   pretty (BoolConst b) = viaShow b
-  pretty (FinSet s) = pretty "finset" <+> ppIntegerSet s
-  pretty (CodePointers s b) = pretty "code" <+> ppSet (s0 ++ sd)
-    where s0 = if b then [pretty "0"] else []
+  pretty (FinSet s) = "finset" <+> ppIntegerSet s
+  pretty (CodePointers s b) = "code" <+> ppSet (s0 ++ sd)
+    where s0 = if b then ["0"] else []
           sd = f <$> Set.toList s
           f segAddr = viaShow segAddr
 
   pretty (StridedInterval s) =
-    pretty "strided" <> parens (pretty s)
+    "strided" <> parens (pretty s)
   pretty (SubValue n av) =
-    pretty "sub" <> parens (pretty (intValue n) <> comma <+> pretty av)
+    "sub" <> parens (pretty (intValue n) <> comma <+> pretty av)
   pretty (StackOffsetAbsVal a v')
     | v' >= 0   = pretty $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
     | otherwise = pretty $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
   pretty (SomeStackOffset a) = pretty $ "rsp_" ++ show a ++ " + ?"
-  pretty TopV = pretty "top"
-  pretty ReturnAddr = pretty "return_addr"
+  pretty TopV = "top"
+  pretty ReturnAddr = "return_addr"
 
 ppIntegerSet :: (Integral w, Show w) => Set w -> Doc ann
 ppIntegerSet s = ppSet (ppv <$> Set.toList s)
@@ -862,7 +863,7 @@ ppAbsValue v = Just (pretty v)
 -- | Print a list of Docs vertically separated.
 instance (MemWidth w, ShowF r) => PrettyRegValue r (AbsValue w) where
   ppValueEq _ TopV = Nothing
-  ppValueEq r v = Just (pretty (showF r) <+> pretty "=" <+> pretty v)
+  ppValueEq r v = Just (pretty (showF r) <+> "=" <+> pretty v)
 
 
 absTrue :: AbsValue w BoolType
@@ -1109,7 +1110,7 @@ instance ( ShowF r
          ) => Pretty (AbsBlockState r) where
   pretty s =
     vcat
-    [ pretty "registers:"
+    [ "registers:"
     , indent 2 (pretty (s^.absRegState))
     , stack_d
     ]
@@ -1117,7 +1118,7 @@ instance ( ShowF r
           stack_d | Map.null stack = emptyDoc
                   | otherwise =
                       vcat
-                      [ pretty "stack:"
+                      [ "stack:"
                       , indent 2 (ppAbsStack stack)
                       ]
 
@@ -1177,7 +1178,7 @@ instance (ShowF r, MemWidth (RegAddrWidth r))
       => Pretty (AbsProcessorState r ids) where
   pretty s =
     vcat
-    [ pretty "registers:"
+    [ "registers:"
     , indent 2 (pretty (s^.absInitialRegs))
     , stack_d
     ]
@@ -1185,7 +1186,7 @@ instance (ShowF r, MemWidth (RegAddrWidth r))
           stack_d | Map.null stack = emptyDoc
                   | otherwise =
                     vcat
-                    [ pretty "stack:"
+                    [ "stack:"
                     , indent 2 (ppAbsStack stack)
                     ]
 
