@@ -6,6 +6,7 @@ A strided interval domain x + [a .. b] * c
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -488,11 +489,11 @@ toList :: StridedInterval w -> [Integer]
 toList si@StridedInterval{} = map (\v -> base si + stride si * v) [0 .. range si]
 
 instance Pretty (StridedInterval w) where
-  pretty si | isEmpty si = pretty "[]"
+  pretty si | isEmpty si = "[]"
   pretty si | Just s <- isSingleton si = brackets (pretty s)
   pretty si@StridedInterval{} = brackets (pretty (base si) <> comma
                                           <+> pretty (base si + stride si)
-                                          <+> pretty ".."
+                                          <+> ".."
                                           <+> pretty (base si + range si * stride si))
 
 instance Arbitrary (StridedInterval 64) where

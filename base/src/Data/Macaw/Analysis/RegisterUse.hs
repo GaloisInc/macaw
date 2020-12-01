@@ -5,6 +5,7 @@ task needed before deleting unused code.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -707,7 +708,7 @@ instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
 ppPVM :: forall arch ids ann . ShowF (ArchReg arch) => PostValueMap arch ids -> Doc ann
 ppPVM (PVM m) = vcat $ ppVal <$> MapF.toList m
   where ppVal :: Pair (BoundLoc (ArchReg arch)) (InferValue arch ids) -> Doc ann
-        ppVal (Pair l v) = pretty l <+> pretty ":=" <+> viaShow v
+        ppVal (Pair l v) = pretty l <+> ":=" <+> viaShow v
 
 type StartInferInfo arch ids =
   ( ParsedBlock arch ids
@@ -904,9 +905,9 @@ ppSomeBoundLoc (Some loc) = pretty loc
 
 instance MapF.ShowF r => Pretty (DependencySet r ids) where
   pretty ds =
-    vcat [ pretty "Assignments:" <+> ppSet ppSomeAssignId (dsAssignSet ds)
-         , pretty "Locations:  " <+> ppSet ppSomeBoundLoc (dsLocSet ds)
-         , pretty "Write Stmts:" <+> ppSet pretty (dsWriteStmtIndexSet ds)
+    vcat [ "Assignments:" <+> ppSet ppSomeAssignId (dsAssignSet ds)
+         , "Locations:  " <+> ppSet ppSomeBoundLoc (dsLocSet ds)
+         , "Write Stmts:" <+> ppSet pretty (dsWriteStmtIndexSet ds)
          ]
 
 -- | Empty dependency set.
@@ -1266,11 +1267,11 @@ ppStartConstraints m = vcat (pp <$> Map.toList m)
         pp (addr, (_,_,_,pvm)) =
           let pvmEntries = vcat (ppPVMPair <$> Map.toList pvm)
            in vcat [ pretty addr
-                   , indent 2 $ vcat [pretty "post-values:", indent 2 pvmEntries] ]
+                   , indent 2 $ vcat ["post-values:", indent 2 pvmEntries] ]
         ppPVMPair :: (ArchSegmentOff arch, PostValueMap arch ids) -> Doc ann
         ppPVMPair (preaddr, pvm) =
           vcat
-          [ pretty "to" <+> pretty preaddr <> pretty ":"
+          [ "to" <+> pretty preaddr <> ":"
           , indent 2 (ppPVM pvm) ]
 
 _ppStartConstraints :: forall arch ids ann

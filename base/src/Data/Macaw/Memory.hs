@@ -9,6 +9,7 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -866,10 +867,10 @@ segmentSize = contentsSize . segmentContents
 -- | Pretty print a memory segment.
 ppMemSegment :: MemWidth w => MemSegment w -> Doc ann
 ppMemSegment s =
-  indent 2 $ vcat [ pretty "base   =" <+> viaShow (segmentBase s)
-                  , pretty "offset =" <+> viaShow (segmentOffset s)
-                  , pretty "flags  =" <+> viaShow (segmentFlags s)
-                  , pretty "size   =" <+> viaShow (segmentSize s)
+  indent 2 $ vcat [ "base   =" <+> viaShow (segmentBase s)
+                  , "offset =" <+> viaShow (segmentOffset s)
+                  , "flags  =" <+> viaShow (segmentFlags s)
+                  , "size   =" <+> viaShow (segmentSize s)
                   ]
 
 instance MemWidth w => Show (MemSegment w) where

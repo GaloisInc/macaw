@@ -13,6 +13,7 @@ semantics of X86 instructions.
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
@@ -577,8 +578,8 @@ ppLocation :: forall addr tp ann. (addr -> Doc ann) -> Location addr tp -> Doc a
 ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
-  FullRegister r -> pretty "%" <> viaShow r
-  X87StackRegister i -> pretty "x87_stack@" <> viaShow i
+  FullRegister r -> "%" <> viaShow r
+  X87StackRegister i -> "x87_stack@" <> viaShow i
   where
     -- | Print subrange as Python-style slice @<location>[<low>:<high>]@.
     --

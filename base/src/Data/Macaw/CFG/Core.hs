@@ -12,6 +12,7 @@ single CFG.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
@@ -150,7 +151,7 @@ parenIf True d = parens d
 parenIf False d = d
 
 bracketsep :: [Doc ann] -> Doc ann
-bracketsep [] = pretty "{}"
+bracketsep [] = "{}"
 bracketsep (h:l) = vcat $
   [lbrace <+> h]
   ++ fmap (comma <+>) l
@@ -266,17 +267,17 @@ instance HashableF (CValue arch) where
 
 ppLit :: NatRepr n -> Integer -> Doc ann
 ppLit w i
-  | i >= 0 = pretty ("0x" ++ showHex i "") <+> pretty "::" <+> brackets (viaShow w)
+  | i >= 0 = pretty ("0x" ++ showHex i "") <+> "::" <+> brackets (viaShow w)
   | otherwise = error "ppLit given negative value"
 
 ppCValue :: Prec -> CValue arch tp -> Doc ann
-ppCValue _ (BoolCValue b) = if b then pretty "true" else pretty "false"
+ppCValue _ (BoolCValue b) = if b then "true" else "false"
 ppCValue p (BVCValue w i)
   | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
   | otherwise =
     -- TODO: We may want to report an error here.
     parenIf (p > colonPrec) $
-    pretty i <+> pretty "::" <+> brackets (viaShow w)
+    pretty i <+> "::" <+> brackets (viaShow w)
 ppCValue p (RelocatableCValue _ a) = parenIf (p > plusPrec) $ viaShow a
 ppCValue _ (SymbolCValue _ a) = viaShow a
 
@@ -695,7 +696,7 @@ asStackAddrOffset addr
 ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc ann
 ppValue p (CValue c) = ppCValue p c
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
-ppValue _ (Initial r)       = pretty (showF r) PP.<> pretty "_0"
+ppValue _ (Initial r)       = pretty (showF r) PP.<> "_0"
 
 instance ShowF (ArchReg arch) => PrettyPrec (Value arch ids tp) where
   prettyPrec = ppValue
@@ -742,18 +743,18 @@ ppAssignRhs :: (Applicative m, ArchConstraints arch)
             -> AssignRhs arch f tp
             -> m (Doc ann)
 ppAssignRhs pp (EvalApp a) = ppAppA pp a
-ppAssignRhs _  (SetUndefined tp) = pure $ pretty "undef ::" <+> brackets (viaShow tp)
+ppAssignRhs _  (SetUndefined tp) = pure $ "undef ::" <+> brackets (viaShow tp)
 ppAssignRhs pp (ReadMem a repr) =
-  (\d -> pretty "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
+  (\d -> "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (CondReadMem repr c a d) = f <$> pp c <*> pp a <*> pp d
-  where f cd ad dd = pretty "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
+  where f cd ad dd = "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
 instance ArchConstraints arch => Pretty (AssignRhs arch (Value arch ids) tp) where
   pretty = runIdentity . ppAssignRhs (Identity . ppValue 10)
 
 instance ArchConstraints arch => Pretty (Assignment arch ids tp) where
-  pretty (Assignment lhs rhs) = ppAssignId lhs <+> pretty ":=" <+> pretty rhs
+  pretty (Assignment lhs rhs) = ppAssignId lhs <+> ":=" <+> pretty rhs
 
 ------------------------------------------------------------------------
 -- Pretty print a value assignment
@@ -777,7 +778,7 @@ collectValueRep _ (AssignedValue a) = do
                  State (MapF (AssignId ids) (DocF ann)) (Doc ann)
         ppVal = collectValueRep 10
     rhs <- ppAssignRhs ppVal (assignRhs a)
-    let d = ppAssignId lhs <+> pretty ":=" <+> rhs
+    let d = ppAssignId lhs <+> ":=" <+> rhs
     modify $ MapF.insert lhs (DocF d)
     return ()
   return $! ppAssignId lhs
@@ -789,10 +790,10 @@ ppValueAssignments' m =
   case MapF.elems bindings of
     [] -> rhs
     (Some (DocF h):r) ->
-      let first               = pretty "let" PP.<+> h
-          f (Some (DocF b))   = pretty "    " PP.<> b
+      let first               = "let" PP.<+> h
+          f (Some (DocF b))   = "    " PP.<> b
        in vcat [ vcat (first:fmap f r)
-               , pretty " in" PP.<+> rhs ]
+               , " in" PP.<+> rhs ]
   where (rhs, bindings) = runState m MapF.empty
 
 -- | This pretty prints all the history used to create a value.
@@ -837,7 +838,7 @@ instance ( RegisterInfo r
   ppValueEq r (Initial r')
     | Just _ <- testEquality r r' = Nothing
   ppValueEq r v
-    | otherwise   = Just $ pretty (showF r) <+> pretty "=" <+> pretty v
+    | otherwise   = Just $ pretty (showF r) <+> "=" <+> pretty v
 
 ------------------------------------------------------------------------
 -- Stmt
@@ -880,12 +881,12 @@ ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
     WriteMem     a _ rhs ->
-      pretty "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+      "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     CondWriteMem c a _ rhs ->
-      pretty "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
+      "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
         <+> ppValue 0 rhs
-    InstructionStart off mnem -> pretty "#" <+> ppOff off <+> pretty mnem
-    Comment s -> pretty "# " <> pretty s
+    InstructionStart off mnem -> "#" <+> ppOff off <+> pretty mnem
+    Comment s -> "# " <> pretty s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
     ArchState a m ->
         hang (length (show prefix)) (prefix PP.<> PP.encloseSep PP.lbrace PP.rbrace PP.semi (MapF.foldrWithKey ppUpdate [] m))
@@ -893,9 +894,9 @@ ppStmt ppOff stmt =
       ppAddr addr =
         case asAbsoluteAddr addr of
           Just absAddr -> viaShow absAddr
-          Nothing -> PP.braces (PP.pretty (addrBase addr)) PP.<> pretty "+" PP.<> viaShow (addrOffset addr)
-      prefix = pretty "#" <+> ppAddr a PP.<> pretty ": "
-      ppUpdate key val acc = pretty (showF key) <+> pretty "=>" <+> ppValue 0 val : acc
+          Nothing -> PP.braces (PP.pretty (addrBase addr)) PP.<> "+" PP.<> viaShow (addrOffset addr)
+      prefix = "#" <+> ppAddr a PP.<> ": "
+      ppUpdate key val acc = pretty (showF key) <+> "=>" <+> ppValue 0 val : acc
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
   show = show . ppStmt viaShow
