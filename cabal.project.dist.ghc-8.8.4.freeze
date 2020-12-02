@@ -228,4 +228,3 @@ constraints: any.BoundedChan ==1.0.3.0,
              any.zlib ==0.6.2.2,
              zlib -bundled-c-zlib -non-blocking-ffi -pkg-config,
              any.zlib-bindings ==0.1.1.5
-index-state: hackage.haskell.org 2020-09-29T15:11:45Z
