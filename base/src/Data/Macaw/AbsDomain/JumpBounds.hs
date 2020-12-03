@@ -11,6 +11,7 @@ known equivalent values.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -45,7 +46,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Pair
 import           Numeric.Natural
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.AbsDomain.CallParams
 import           Data.Macaw.AbsDomain.StackAnalysis
@@ -119,7 +120,7 @@ data InitJumpBounds arch
                     }
 
 -- | Pretty print jump bounds.
-ppInitJumpBounds :: forall arch . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc]
+ppInitJumpBounds :: forall arch ann . ShowF (ArchReg arch) => InitJumpBounds arch -> [Doc ann]
 ppInitJumpBounds cns
   =  ppBlockStartStackConstraints (initBndsMap cns)
   <> ppLocMap ppSubRange (initRngPredMap cns)
@@ -420,8 +421,8 @@ data SubRange tp where
 instance Pretty (SubRange tp) where
   pretty (SubRange p) = pretty p
 
-ppSubRange :: Doc -> SubRange tp -> Doc
-ppSubRange d (SubRange r) = d <+> text "in" <+> pretty r
+ppSubRange :: Doc ann -> SubRange tp -> Doc ann
+ppSubRange d (SubRange r) = d <+> "in" <+> pretty r
 
 -- | Take the union of two subranges, and return `Nothing` if this is
 -- a maximum range bound.
@@ -467,10 +468,10 @@ instance ShowF (ArchReg arch) => Pretty (BranchConstraints arch ids) where
   pretty x =
     let cl = MapF.toList (newClassRepConstraints x)
         al = MapF.toList (newUninterpAssignConstraints x)
-        ppLoc :: Pair (BoundLoc (ArchReg arch)) SubRange -> Doc
-        ppLoc (Pair l r) = prettyF l <+> text ":=" <+> pretty r
-        ppAssign :: Pair (AssignId ids) SubRange -> Doc
-        ppAssign (Pair l r) = ppAssignId l <+> text ":=" <+> pretty r
+        ppLoc :: Pair (BoundLoc (ArchReg arch)) SubRange -> Doc ann
+        ppLoc (Pair l r) = prettyF l <+> ":=" <+> pretty r
+        ppAssign :: Pair (AssignId ids) SubRange -> Doc ann
+        ppAssign (Pair l r) = ppAssignId l <+> ":=" <+> pretty r
      in vcat (fmap ppLoc cl ++ fmap ppAssign al)
 
 instance ShowF (ArchReg arch) => Show (BranchConstraints arch ids) where

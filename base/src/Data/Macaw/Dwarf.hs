@@ -92,7 +92,7 @@ import           Data.String
 import qualified Data.Vector as V
 import           Data.Word
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 import           Text.Printf
 
 import           Data.Macaw.Memory (Endianness(..))
@@ -232,9 +232,9 @@ parseGet bs m =
 ------------------------------------------------------------------------
 -- Range
 
-ppRange :: Range -> Doc
+ppRange :: Range -> Doc ann
 ppRange (Range x y) =
-    text "low:" <+> text (showHex x "") <+> text "high:" <+> text (showHex y "")
+    "low:" <+> pretty (showHex x "") <+> "high:" <+> pretty (showHex y "")
 
 ------------------------------------------------------------------------
 -- DIEParser
@@ -370,7 +370,7 @@ instance Show DwarfFilePath where
   show = BSC.unpack . filePathVal
 
 instance Pretty DwarfFilePath where
-  pretty = text . BSC.unpack . filePathVal
+  pretty = pretty . BSC.unpack . filePathVal
 
 -- | File vector read from line-number information.
 type FileVec = V.Vector DwarfFilePath
@@ -383,12 +383,12 @@ data DeclLoc = DeclLoc { locFile   :: !DwarfFilePath
 
 instance Pretty DeclLoc where
   pretty loc =
-    let file | locFile loc == "" = empty
-             | otherwise = text "decl_file:   " <+> pretty (locFile loc) <> line
-        lne | locLine loc == 0 = empty
-            | otherwise  = text "decl_line:   " <+> text (show (locLine loc)) <> line
-        col | locColumn loc == 0 = empty
-            | otherwise  = text "decl_column: " <+> text (show (locColumn loc)) <> line
+    let file | locFile loc == "" = emptyDoc
+             | otherwise = "decl_file:   " <+> pretty (locFile loc) <> line
+        lne | locLine loc == 0 = emptyDoc
+            | otherwise  = "decl_line:   " <+> pretty (locLine loc) <> line
+        col | locColumn loc == 0 = emptyDoc
+            | otherwise  = "decl_column: " <+> pretty (locColumn loc) <> line
      in file <> lne <> col
 
 instance Show DeclLoc where
@@ -420,11 +420,11 @@ parseDeclLoc fileVec = do
 ------------------------------------------------------------------------
 -- DW_OP operations
 
-ppOp :: DW_OP -> Doc
-ppOp (DW_OP_addr w) | w >= 0 = text (showHex w "")
-ppOp o = text (show o)
+ppOp :: DW_OP -> Doc ann
+ppOp (DW_OP_addr w) | w >= 0 = pretty (showHex w "")
+ppOp o = viaShow o
 
-ppOps :: [DW_OP] -> Doc
+ppOps :: [DW_OP] -> Doc ann
 ppOps l = hsep (ppOp <$> l)
 
 ------------------------------------------------------------------------
@@ -437,7 +437,7 @@ instance IsString Name where
   fromString = Name . BSC.pack
 
 instance Pretty Name where
-  pretty = text . BSC.unpack . nameVal
+  pretty = pretty . BSC.unpack . nameVal
 
 instance Show Name where
   show = BSC.unpack . nameVal
@@ -497,7 +497,7 @@ typeRefFileOffset :: TypeRef -> Word64
 typeRefFileOffset (TypeRef o) = dieID o
 
 instance Pretty TypeRef where
-  pretty r = text (showHex (typeRefFileOffset r) "")
+  pretty r = pretty (showHex (typeRefFileOffset r) "")
 
 ------------------------------------------------------------------------
 -- Enumerator
@@ -898,9 +898,9 @@ attributeAsLocation dr = \case
 instance Pretty Location where
   pretty (ComputedLoc (DwarfExpr dr bs)) =
     case Dwarf.parseDW_OPs dr bs of
-      Left (_, _, msg) -> text msg
+      Left (_, _, msg) -> pretty msg
       Right ops -> ppOps ops
-  pretty (OffsetLoc w) = text ("offset 0x" ++ showHex w "")
+  pretty (OffsetLoc w) = pretty ("offset 0x" ++ showHex w "")
 
 ------------------------------------------------------------------------
 -- Variable
@@ -910,7 +910,7 @@ newtype VariableRef = VariableRef DieID
   deriving (Eq,Ord)
 
 instance Pretty VariableRef where
-  pretty (VariableRef (DieID w)) = text ("0x" ++ showHex w "")
+  pretty (VariableRef (DieID w)) = pretty ("0x" ++ showHex w "")
 
 data Variable = Variable { varDieID    :: !DieID
                          , varName     :: !Name
@@ -927,10 +927,12 @@ data Variable = Variable { varDieID    :: !DieID
 
 instance Pretty Variable where
   pretty v =
-    text "name:    " <+> pretty (varName v) <$$>
-    pretty (varDeclLoc v) <$$>
-    text "type:    " <+> pretty (varType v) <$$>
-    maybe (text "") (\l -> text "location:" <+> pretty l) (varLocation v)
+    vcat
+    [ "name:    " <+> pretty (varName v)
+    , pretty (varDeclLoc v)
+    , "type:    " <+> pretty (varType v)
+    , maybe ("") (\l -> "location:" <+> pretty l) (varLocation v)
+    ]
 
 instance Show Variable where
    show = show . pretty
@@ -984,7 +986,7 @@ newtype SubprogramRef = SubprogramRef DieID
   deriving (Eq, Ord)
 
 instance Pretty SubprogramRef where
-  pretty (SubprogramRef (DieID d)) = text ("0x" ++ showHex d "")
+  pretty (SubprogramRef (DieID d)) = pretty ("0x" ++ showHex d "")
 
 data SubprogramDef = SubprogramDef { subLowPC :: !(Maybe Word64)
                                    , subHighPC :: !(Maybe Word64)
@@ -994,10 +996,10 @@ data SubprogramDef = SubprogramDef { subLowPC :: !(Maybe Word64)
 
 instance Pretty SubprogramDef where
   pretty d =
-     vcat [ text "low_pc:     " <+> text (maybe "UNDEF" (`showHex` "") (subLowPC  d))
-          , text "high_pc:    " <+> text (maybe "UNDEF" (`showHex` "") (subHighPC d))
-          , text "frame_base: " <+> text (show (subFrameBase d))
-          , text "GNU_all_call_sites: " <+> text (show (subGNUAllCallSites d))
+     vcat [ "low_pc:     " <+> pretty (maybe "UNDEF" (`showHex` "") (subLowPC  d))
+          , "high_pc:    " <+> pretty (maybe "UNDEF" (`showHex` "") (subHighPC d))
+          , "frame_base: " <+> viaShow (subFrameBase d)
+          , "GNU_all_call_sites: " <+> viaShow (subGNUAllCallSites d)
           ]
 
 -- | Get `DW_AT_GNU_all_tail_call_sites`
@@ -1051,14 +1053,14 @@ data Subprogram = Subprogram { subName        :: !Name
 
 instance Pretty Subprogram where
   pretty sub =
-    vcat [ text "name:       " <+> pretty (subName sub)
-         , text "external:   " <+> text (show (subExternal sub))
+    vcat [ "name:       " <+> pretty (subName sub)
+         , "external:   " <+> viaShow (subExternal sub)
          , pretty (subDeclLoc sub)
-         , text "prototyped: " <+> text (show (subPrototyped sub))
-         , maybe (text "") pretty (subDef sub)
+         , "prototyped: " <+> viaShow (subPrototyped sub)
+         , maybe ("") pretty (subDef sub)
          , ppList "variables" (pretty <$> Map.elems (subVars sub))
          , ppList "parameters" (pretty <$> Map.elems (subParamMap sub))
-         , text "return type: " <+> pretty (subRetType sub)
+         , "return type: " <+> pretty (subRetType sub)
          ]
 
 instance Show Subprogram where
@@ -1190,19 +1192,19 @@ instance Show CompileUnit where
 
 instance Pretty CompileUnit where
   pretty cu =
-    vcat [ text "producer:    " <+> text (BSC.unpack (cuProducer cu))
-         , text "language:    " <+> text (show (cuLanguage cu))
-         , text "name:        " <+> pretty (cuName cu)
-         , text "comp_dir:    " <+> text (BSC.unpack (cuCompDir cu))
-         , text "GNU_macros:  " <+> text (show (cuGNUMacros cu))
+    vcat [ "producer:    " <+> pretty (BSC.unpack (cuProducer cu))
+         , "language:    " <+> viaShow (cuLanguage cu)
+         , "name:        " <+> pretty (cuName cu)
+         , "comp_dir:    " <+> pretty (BSC.unpack (cuCompDir cu))
+         , "GNU_macros:  " <+> viaShow (cuGNUMacros cu)
          , ppList "variables"           (pretty <$> cuVariables cu)
          , ppList "subprograms"         (pretty <$> cuSubprograms cu)
          , ppList "ranges"              (ppRange <$> cuRanges cu)
          ]
 
-ppList :: String -> [Doc] -> Doc
-ppList nm [] = text nm <> text ": []"
-ppList nm l = (text nm <> colon) <$$> indent 2 (vcat l)
+ppList :: String -> [Doc ann] -> Doc ann
+ppList nm [] = pretty nm <> ": []"
+ppList nm l = vcat [pretty nm <> colon, indent 2 (vcat l)]
 
 -- Section 7.20 - Address Range Table
 -- Returns the ranges that belong to a CU

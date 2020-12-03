@@ -39,6 +39,7 @@ proof rules:
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -118,7 +119,7 @@ import           Data.Parameterized.TraversableFC
 import           Data.Proxy
 import           Data.STRef
 import           GHC.Natural
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 import           Text.Printf
 
 import           Data.Macaw.AbsDomain.CallParams
@@ -132,14 +133,14 @@ import           Data.Macaw.Utils.Changed
 addrTypeRepr :: MemWidth w => TypeRepr (BVType w)
 addrTypeRepr = BVTypeRepr memWidthNatRepr
 
-ppAddend :: MemInt w -> Doc
+ppAddend :: MemInt w -> Doc ann
 ppAddend o | memIntValue o < 0 =
-               text "-" <+> pretty (negate (toInteger (memIntValue o)))
-           | otherwise = text "+" <+> pretty o
+               "-" <+> pretty (negate (toInteger (memIntValue o)))
+           | otherwise = "+" <+> pretty o
 
-ppStackOff :: MemInt w -> MemRepr tp -> Doc
+ppStackOff :: MemInt w -> MemRepr tp -> Doc ann
 ppStackOff o repr =
-  text "*(stack_frame" <+> ppAddend o <> text ", " <> pretty repr <> text ")"
+  "*(stack_frame" <+> ppAddend o <> ", " <> pretty repr <> ")"
 
 ------------------------------------------------------------------------
 -- JoinClassPair
@@ -211,7 +212,7 @@ instance OrdF r => OrdF (BoundLoc r) where
       EQ -> compareF xr yr
 
 instance ShowF r => Pretty (BoundLoc r tp) where
-  pretty (RegLoc r) = text (showF r)
+  pretty (RegLoc r) = pretty (showF r)
   pretty (StackOffLoc i tp) = ppStackOff i tp
 
 instance ShowF r => PrettyF (BoundLoc r) where
@@ -434,7 +435,7 @@ locMapTraverseWithKey_ f m0 = do
    *> memMapTraverseWithKey_ stackFn (locMapStack m0)
 
 -- | Pretty print a location map.
-ppLocMap :: ShowF r => (forall tp . Doc -> p tp -> Doc) -> LocMap r p -> [Doc]
+ppLocMap :: ShowF r => (forall tp . Doc ann -> p tp -> Doc ann) -> LocMap r p -> [Doc ann]
 ppLocMap f m =
   let ppPair (Pair l v) = f (pretty l) v
    in ppPair <$> locMapToList m
@@ -500,11 +501,11 @@ data StackEqConstraint r tp where
          -> StackEqConstraint r (BVType w)
 
 
-ppStackEqConstraint :: ShowF r => Doc -> StackEqConstraint r tp -> Doc
+ppStackEqConstraint :: ShowF r => Doc ann -> StackEqConstraint r tp -> Doc ann
 ppStackEqConstraint d (IsStackOff i) =
-  d <+> text "= stack_frame" <+> ppAddend i
-ppStackEqConstraint d (EqualLoc   l) = d <> text " = " <> pretty l
-ppStackEqConstraint d (IsUExt l w) = d <> text " = (uext " <> pretty l <+> text (show w) <> text ")"
+  d <+> "= stack_frame" <+> ppAddend i
+ppStackEqConstraint d (EqualLoc   l) = d <> " = " <> pretty l
+ppStackEqConstraint d (IsUExt l w) = d <> " = (uext " <> pretty l <+> viaShow w <> ")"
 
 ------------------------------------------------------------------------
 -- BlockStartStackConstraints
@@ -521,7 +522,7 @@ newtype BlockStartStackConstraints arch =
 -- | Pretty print the lines in stack constraints.
 ppBlockStartStackConstraints :: ShowF (ArchReg arch)
                              => BlockStartStackConstraints arch
-                             -> [Doc]
+                             -> [Doc ann]
 ppBlockStartStackConstraints = ppLocMap ppStackEqConstraint . unBSSC
 
 fnEntryBlockStartStackConstraints :: RegisterInfo (ArchReg arch)
@@ -875,13 +876,13 @@ instance ShowF (ArchReg arch) => Pretty (StackExpr arch id tp) where
   pretty e =
     case e of
       ClassRepExpr l -> pretty l
-      UninterpAssignExpr n _ -> parens (text "uninterp" <+> ppAssignId n)
+      UninterpAssignExpr n _ -> parens ("uninterp" <+> ppAssignId n)
       StackOffsetExpr o
-        | memIntValue o > 0 -> parens (text "+ stack_off" <+> pretty o)
-        | memIntValue o < 0 -> parens (text "- stack_off" <+> pretty (negate (toInteger (memIntValue o))))
-        | otherwise -> text "stack_off"
+        | memIntValue o > 0 -> parens ("+ stack_off" <+> pretty o)
+        | memIntValue o < 0 -> parens ("- stack_off" <+> pretty (negate (toInteger (memIntValue o))))
+        | otherwise -> "stack_off"
       CExpr v -> pretty v
-      UExtExpr l w -> parens (text "uext " <> pretty l <+> text (show w))
+      UExtExpr l w -> parens ("uext " <> pretty l <+> viaShow w)
       AppExpr n _ -> ppAssignId n
 
 instance ShowF (ArchReg arch) => PrettyF (StackExpr arch id) where
@@ -918,21 +919,21 @@ data BlockIntraStackConstraints arch ids
 
 instance ShowF (ArchReg arch) => Pretty (BlockIntraStackConstraints arch ids) where
   pretty cns =
-    let ppStk :: MemInt (ArchAddrWidth arch) -> MemRepr tp -> StackExpr arch ids tp -> Doc
-        ppStk o r v = text (show o) <> text ", " <> pretty r <> text " := " <> pretty v
-        sm :: Doc
-        sm = memMapFoldrWithKey (\o r v d -> ppStk o r v <$$> d) empty (stackExprMap cns)
-        ppAssign :: AssignId ids tp -> StackExpr arch ids tp -> Doc -> Doc
+    let ppStk :: MemInt (ArchAddrWidth arch) -> MemRepr tp -> StackExpr arch ids tp -> Doc ann
+        ppStk o r v = viaShow o <> ", " <> pretty r <> " := " <> pretty v
+        sm :: Doc ann
+        sm = memMapFoldrWithKey (\o r v d -> vcat [ppStk o r v, d]) emptyDoc (stackExprMap cns)
+        ppAssign :: AssignId ids tp -> StackExpr arch ids tp -> Doc ann -> Doc ann
         ppAssign a (AppExpr u app) d =
           case testEquality a u of
-            Nothing -> ppAssignId a <> text " := " <> ppAssignId u <$$> d
-            Just Refl -> ppAssignId a <> text " := " <> ppApp pretty app <$$> d
-        ppAssign a e d = ppAssignId a <> text " := " <> pretty e <$$> d
-        am :: Doc
-        am = MapF.foldrWithKey ppAssign empty (assignExprMap cns)
-     in vcat [ text "stackExprMap:"
+            Nothing -> vcat [ppAssignId a <> " := " <> ppAssignId u, d]
+            Just Refl -> vcat [ppAssignId a <> " := " <> ppApp pretty app, d]
+        ppAssign a e d = vcat [ppAssignId a <> " := " <> pretty e, d]
+        am :: Doc ann
+        am = MapF.foldrWithKey ppAssign emptyDoc (assignExprMap cns)
+     in vcat [ "stackExprMap:"
              , indent 2 sm
-             , text "assignExprMap:"
+             , "assignExprMap:"
              , indent 2 am
              ]
 

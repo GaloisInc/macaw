@@ -9,6 +9,7 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -164,7 +165,7 @@ import           GHC.Natural
 import           GHC.TypeLits
 import           Language.Haskell.TH.Syntax
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+import           Prettyprinter
 
 import           Data.Parameterized.Classes
 import           Data.Parameterized.NatRepr
@@ -279,7 +280,7 @@ instance Show (MemWord w) where
   showsPrec _ (MemWord w) = showString "0x" . showHex w
 
 instance Pretty (MemWord w) where
-  pretty = text . show
+  pretty = viaShow
 
 instance Eq (MemWord w) where
   MemWord x == MemWord y = x == y
@@ -428,7 +429,7 @@ instance Hashable (MemInt w) where
   hashWithSalt s (MemInt w) = s `hashWithSalt` w
 
 instance Pretty (MemInt w) where
-  pretty = text . show . memIntValue
+  pretty = viaShow . memIntValue
 
 instance Show (MemInt w) where
   showsPrec p (MemInt i) = showsPrec p i
@@ -864,12 +865,12 @@ segmentSize :: MemWidth w => MemSegment w -> MemWord w
 segmentSize = contentsSize . segmentContents
 
 -- | Pretty print a memory segment.
-ppMemSegment :: MemWidth w => MemSegment w -> Doc
+ppMemSegment :: MemWidth w => MemSegment w -> Doc ann
 ppMemSegment s =
-  indent 2 $ vcat [ text "base   =" <+> text (show (segmentBase s))
-                  , text "offset =" <+> text (show (segmentOffset s))
-                  , text "flags  =" <+> text (show (segmentFlags s))
-                  , text "size   =" <+> text (show (segmentSize s))
+  indent 2 $ vcat [ "base   =" <+> viaShow (segmentBase s)
+                  , "offset =" <+> viaShow (segmentOffset s)
+                  , "flags  =" <+> viaShow (segmentFlags s)
+                  , "size   =" <+> viaShow (segmentSize s)
                   ]
 
 instance MemWidth w => Show (MemSegment w) where
@@ -1040,7 +1041,7 @@ instance Show (MemAddr w) where
     . shows off
 
 instance Pretty (MemAddr w) where
-  pretty = text . show
+  pretty = viaShow
 
 -- | Given an absolute address, this returns a segment and offset into the segment.
 absoluteAddr :: MemWord w -> MemAddr w
@@ -1166,7 +1167,7 @@ instance MemWidth w => Show (MemSegmentOff w) where
         . shows (segmentOffset seg + off)
 
 instance MemWidth w => Pretty (MemSegmentOff w) where
-  pretty = text . show
+  pretty = viaShow
 
 -- | This walks through all the memory regions and looks at each
 -- address size block of memory that is aligned at a multiple of the

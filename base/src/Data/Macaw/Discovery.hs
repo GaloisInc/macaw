@@ -95,8 +95,8 @@ import qualified Data.Vector as V
 import           GHC.IO (ioToST)
 import           Numeric
 import           Numeric.Natural
+import           Prettyprinter (pretty)
 import           System.IO
-import           Text.PrettyPrint.ANSI.Leijen (pretty)
 import           Text.Printf (printf)
 
 #define USE_REWRITER

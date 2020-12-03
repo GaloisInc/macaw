@@ -13,6 +13,7 @@ semantics of X86 instructions.
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
@@ -176,7 +177,7 @@ import           Data.Parameterized.NatRepr
 import qualified Flexdis86 as F
 import           Flexdis86.Sizes (SizeConstraint(..))
 import           GHC.TypeLits as TypeLits
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter as PP
 
 
 import           Data.Macaw.X86.ArchTypes
@@ -573,20 +574,20 @@ instance Eq addr => Eq (Location addr tp) where
 -- Going back to pretty names for subregisters is pretty ad hoc;
 -- see table at http://stackoverflow.com/a/1753627/470844. E.g.,
 -- instead of @%ah@, we produce @%rax[8:16]@.
-ppLocation :: forall addr tp. (addr -> Doc) -> Location addr tp -> Doc
+ppLocation :: forall addr tp ann. (addr -> Doc ann) -> Location addr tp -> Doc ann
 ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
-  FullRegister r -> text $ "%" ++ show r
-  X87StackRegister i -> text $ "x87_stack@" ++ show i
+  FullRegister r -> "%" <> viaShow r
+  X87StackRegister i -> "x87_stack@" <> viaShow i
   where
     -- | Print subrange as Python-style slice @<location>[<low>:<high>]@.
     --
     -- The low bit is inclusive and the high bit is exclusive, but I
     -- can't bring myself to generate @<reg>[<low>:<high>)@ :)
-    ppReg :: RegisterView w n cl -> Doc
+    ppReg :: RegisterView w n cl -> Doc ann
     ppReg rv =
-      text $ "%" ++ show (_registerViewReg rv) ++
+      pretty $ "%" ++ show (_registerViewReg rv) ++
         if b == 0 && s == (fromIntegral $ intValue (typeWidth $ _registerViewReg rv))
         then ""
         else "[" ++ show b ++ ":" ++ show s ++ "]"

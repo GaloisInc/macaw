@@ -31,7 +31,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some ( Some(..) )
 import qualified SemMC.Architecture.PPC as SP
-import           Text.PrettyPrint.ANSI.Leijen ( pretty )
+import           Prettyprinter ( pretty )
 
 import qualified Dismantle.PPC as D
 

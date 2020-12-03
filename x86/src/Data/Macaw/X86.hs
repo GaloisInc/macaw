@@ -71,7 +71,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as Text
 import           Data.Word
 import qualified Flexdis86 as F
-import           Text.PrettyPrint.ANSI.Leijen (Pretty(..), text)
+import           Prettyprinter (Pretty(..), viaShow)
 
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -111,7 +111,7 @@ data ExploreLoc
  deriving (Eq, Ord)
 
 instance Pretty ExploreLoc where
-  pretty loc = text $ show (loc_ip loc)
+  pretty loc = viaShow (loc_ip loc)
 
 rootLoc :: MemSegmentOff 64 -> ExploreLoc
 rootLoc ip = ExploreLoc { loc_ip      = ip
