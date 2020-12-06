@@ -1,19 +1,23 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
+
 module Shared (
-  withELF
+  withELF64
   ) where
 
 import qualified Data.ByteString as B
 
 import qualified Data.ElfEdit as E
 
-withELF :: FilePath -> (E.Elf 64 -> IO ()) -> IO ()
-withELF fp k = do
+withELF64 :: FilePath -> (E.ElfHeaderInfo 64 -> IO ()) -> IO ()
+withELF64 fp k = do
   bytes <- B.readFile fp
-  case E.parseElf bytes of
-    E.ElfHeaderError off msg ->
-      error ("Error parsing ELF header at offset " ++ show off ++ ": " ++ msg)
-    E.Elf32Res [] _e32 -> error "ELF32 is unsupported in the test suite"
-    E.Elf64Res [] e64 -> k e64
-    E.Elf32Res errs _ -> error ("Errors while parsing ELF file: " ++ show errs)
-    E.Elf64Res errs _ -> error ("Errors while parsing ELF file: " ++ show errs)
+  case E.decodeElfHeaderInfo bytes of
+    Left (off,err) ->
+      error ("Error parsing ELF header at offset " ++ show off ++ ": " ++ err
+            )
+    Right (E.SomeElf e) ->
+      case E.headerClass (E.header e) of
+        E.ELFCLASS64 -> k e
+        o -> error $ "Unsupported file type (wanted Elf64, got: " <> show o <> ")"
