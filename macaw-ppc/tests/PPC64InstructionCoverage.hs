@@ -27,7 +27,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.PPC as RO
 import qualified Data.Parameterized.Some as PU
-import qualified SemMC.Architecture.PPC64 as PPC64
 
 import           Shared
 
@@ -35,13 +34,12 @@ ppc64InstructionCoverageTests :: [FilePath] -> T.TestTree
 ppc64InstructionCoverageTests = T.testGroup "PPCCoverage" . map mkTest
 
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp (withELF fp (testMacaw fp))
+mkTest fp = T.testCase fp (withELF64 fp (testMacaw fp))
 
-testMacaw :: FilePath -> E.Elf 64 -> IO ()
+testMacaw :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
 testMacaw fpath elf = do
   let loadCfg = MM.defaultLoadOptions { MM.loadOffset = Just 0 }
-  loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
-               <- MBL.loadBinary loadCfg elf
+  loadedBinary <- MBL.loadBinary loadCfg elf
   entries <- MBL.entryPoints loadedBinary
   let cfg = RO.ppc64_linux_info loadedBinary
   let mem = MBL.memoryImage loadedBinary
