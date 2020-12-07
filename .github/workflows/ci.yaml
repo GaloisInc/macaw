@@ -1,0 +1,50 @@
+name: CI
+on:
+  push:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        ghc-ver: ["8.6.5", "8.8.4", "8.10.2"]
+      # complete all jobs
+      fail-fast: false
+    name: macaw-loader - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+      with:
+        submodules: true
+    - name: Copy cabal project files
+      run: |
+        cp cabal.project.dist                                  cabal.project
+    - name: Get GHC
+      run: |
+        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }}
+        echo "/opt/cabal/bin" >> $GITHUB_PATH
+        echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
+    - name: Cache
+      uses: actions/cache@v1
+      with:
+        path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+        # Prefer previous SHA hash if it is still cached
+        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        # otherwise just use most recent build.
+        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+    - name: Cabal update
+      run: cabal update
+      # Build macaw-base dependencies and crucible separately just so later
+      # steps are less verbose and major dependency failures are separate.
+    - name: Dependencies
+      run: |
+        cabal build --only-dependencies macaw-loader macaw-loader-ppc macaw-loader-aarch32 macaw-loader-x86
+    - name: macaw-loader-x86
+      run: |
+        cabal build pkg:macaw-loader-x86
+    - name: macaw-loader-aarch32
+      run: |
+        cabal build pkg:macaw-loader-aarch32
+    - name: macaw-loader-ppc
+      run: |
+        cabal build pkg:macaw-loader-ppc
