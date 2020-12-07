@@ -9,7 +9,7 @@ package macaw-symbolic
   ghc-options: -Wall -Werror
 -- Macaw-ppc has warnings.
 package macaw-ppc
-  ghc-options: -Wall
+  ghc-options: -Wall -Werror
 package macaw-aarch32
   ghc-options: -Wall -Werror
 -- Macaw-aarch32-symbolic has warnings.
