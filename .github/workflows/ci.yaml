@@ -42,9 +42,18 @@ jobs:
       run: |
         cabal build --only-dependencies macaw-base
         cabal build crucible-llvm
-    - name: Cabal x86 tests
-      run: cabal test macaw-x86 macaw-x86-symbolic
-    - name: Cabal ASL tests
-      run: cabal test macaw-asl-tests
+    - name: macaw-x86 tests
+      run: |
+        cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
+        cabal test pkg:macaw-x86
+        cabal test pkg:macaw-x86-symbolic
+    - name: macaw-aarch32 tests
+      run: |
+        cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
+        cabal test pkg:macaw-aarch32
+    - name: macaw-ppc tests
+      run: |
+        cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
+        cabal test pkg:macaw-ppc
     - name: compare-dwarfdump
       run: cabal build compare-dwarfdump

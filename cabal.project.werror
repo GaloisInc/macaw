@@ -15,8 +15,6 @@ package macaw-aarch32
 -- Macaw-aarch32-symbolic has warnings.
 package macaw-aarch32-symbolic
   ghc-options: -Wall
-package macaw-ppc
-  ghc-options: -Wall -Werror
 package macaw-ppc-symbolic
   ghc-options: -Wall -Werror
 package macaw-x86
