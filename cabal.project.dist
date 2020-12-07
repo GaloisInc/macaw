@@ -1,0 +1,31 @@
+packages:
+    macaw-loader
+    macaw-loader-x86
+    macaw-loader-ppc
+    macaw-loader-aarch32
+    submodules/elf-edit
+    submodules/dwarf
+    submodules/flexdis86
+    submodules/flexdis86/binary-symbols
+    submodules/dismantle/dismantle-tablegen
+    submodules/dismantle/dismantle-ppc
+    submodules/dismantle/dismantle-arm-xml
+    submodules/parameterized-utils
+    submodules/asl-translator
+    submodules/arm-asl-parser
+    submodules/what4/what4
+    submodules/what4-serialize
+    submodules/semmc/semmc
+    submodules/semmc/semmc-synthesis
+    submodules/semmc/semmc-learning
+    submodules/semmc/semmc-ppc
+    submodules/semmc/semmc-aarch32
+    submodules/macaw/base
+    submodules/macaw/symbolic
+    submodules/macaw/x86
+    submodules/macaw/macaw-ppc
+    submodules/macaw/macaw-aarch32
+    submodules/macaw/macaw-semmc
+    submodules/crucible/crucible
+    submodules/crucible/crucible-llvm
+
