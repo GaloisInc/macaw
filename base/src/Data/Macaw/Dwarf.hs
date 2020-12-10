@@ -63,6 +63,8 @@ module Data.Macaw.Dwarf
     -- * Name and Description
   , Name(..)
   , Description(..)
+    -- * Low-level access
+  , DwarfExpr(..)
     -- * Exports of "Data.Dwarf"
   , Dwarf.DieID
   , Dwarf.DW_OP(..)
