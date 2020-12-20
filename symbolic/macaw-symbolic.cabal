@@ -12,6 +12,7 @@ library
     base >= 4,
     bv-sized >= 1.0.0,
     containers,
+    elf-edit,
     IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,
@@ -32,6 +33,7 @@ library
     Data.Macaw.Symbolic.Backend
     Data.Macaw.Symbolic.Memory
     Data.Macaw.Symbolic.MemOps
+    Data.Macaw.Symbolic.Testing
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
