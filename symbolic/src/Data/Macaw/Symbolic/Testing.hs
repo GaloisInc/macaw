@@ -349,6 +349,13 @@ defaultExecFeatures backend =
 --
 -- This function takes the final register state and the post-state of memory,
 -- allowing arbitrary access.
+--
+-- Note that the function that clients provide could return any arbitrary
+-- post-state value (e.g., a distinguished memory location) - the rest of this
+-- test harness is agnostic.
+--
+-- The function parameter is a continuation under which the caller (i.e., the
+-- test harness) has access to the value provided by the user of the test harness.
 data ResultExtractor sym arch where
   ResultExtractor :: (forall a
                        . CS.RegEntry sym (MS.ArchRegStruct arch)
