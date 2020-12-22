@@ -196,6 +196,8 @@ simulateAndVerify :: forall arch sym ids w t st fs
                      )
                   => WS.SolverAdapter st
                   -- ^ The solver adapter to use to discharge assertions
+                  -> WS.LogData
+                  -- ^ A logger to (optionally) record solver interaction (for the goal solver)
                   -> sym
                   -- ^ The symbolic backend
                   -> [CS.GenericExecutionFeature sym]
@@ -211,7 +213,7 @@ simulateAndVerify :: forall arch sym ids w t st fs
                   -> MD.DiscoveryFunInfo arch ids
                   -- ^ The function to simulate and verify
                   -> IO SimulationResult
-simulateAndVerify goalSolver sym execFeatures archInfo archVals mem (ResultExtractor withResult) dfi =
+simulateAndVerify goalSolver logger sym execFeatures archInfo archVals mem (ResultExtractor withResult) dfi =
   MS.withArchConstraints archVals $ do
     let funName = functionName dfi
     halloc <- CFH.newHandleAllocator
@@ -239,7 +241,7 @@ simulateAndVerify goalSolver sym execFeatures archInfo archVals mem (ResultExtra
               bv_val <- CLM.projectLLVM_bv sym val
               notZero <- WI.bvNe sym bv_val zero
               goal <- WI.notPred sym notZero
-              WS.solver_adapter_check_sat goalSolver sym WS.defaultLogData [goal] $ \satRes ->
+              WS.solver_adapter_check_sat goalSolver sym logger [goal] $ \satRes ->
                 case satRes of
                   WSR.Sat {} -> return (SimulationResult Sat)
                   WSR.Unsat {} -> return (SimulationResult Unsat)
