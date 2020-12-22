@@ -1,136 +1,73 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 module Main (main) where
 
-import           Control.Monad
-import           Control.Monad.ST
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
-import qualified Data.Map.Strict as Map
-import           Data.Parameterized.Nonce
-import           Data.Parameterized.Some
+import qualified Data.Foldable as F
+import           Data.Maybe ( mapMaybe )
+import qualified Data.Parameterized.Classes as PC
+import qualified Data.Parameterized.Nonce as PN
+import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
-import qualified Data.Text as Text
-import           GHC.IO (ioToST)
-import           System.IO
+import qualified System.FilePath.Glob as SFG
+import qualified Test.Tasty as TT
+import qualified Test.Tasty.HUnit as TTH
 
-import qualified Data.Macaw.Architecture.Info as M
-import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.Discovery as M
-import qualified Data.Macaw.Memory as M
-import qualified Data.Macaw.Memory.ElfLoader as Elf
 import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.Symbolic.Memory as MSM
-import qualified Data.Macaw.Types as M
+import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified Data.Macaw.X86 as MX
-import qualified Data.Macaw.X86.Symbolic as MX
+import           Data.Macaw.X86.Symbolic ()
+import qualified What4.ProblemFeatures as WPF
+import qualified What4.Solver as WS
 
-import qualified What4.ProgramLoc as C
-import qualified What4.Interface as C
-
-import qualified Lang.Crucible.Backend as C
-import qualified Lang.Crucible.Backend.Simple as C
-import qualified Lang.Crucible.CFG.Core as C
-import qualified Lang.Crucible.FunctionHandle as C
-import           Lang.Crucible.LLVM.DataLayout (EndianForm(LittleEndian))
-import qualified Lang.Crucible.LLVM.MemModel as C
-import qualified Lang.Crucible.Simulator.ExecutionTree as C
-import qualified Lang.Crucible.Simulator.RegValue as C
-
-mkReg :: (C.IsSymInterface sym, M.HasRepr (M.ArchReg arch) M.TypeRepr)
-      => MS.MacawSymbolicArchFunctions arch
-      -> sym
-      -> M.ArchReg arch tp
-      -> IO (C.RegValue' sym (MS.ToCrucibleType tp))
-mkReg archFns sym r =
-  case M.typeRepr r of
-    M.BoolTypeRepr ->
-      C.RV <$> C.freshConstant sym (MS.crucGenArchRegName archFns r) C.BaseBoolRepr
-    M.BVTypeRepr w ->
-      C.RV <$> (C.llvmPointer_bv sym =<< C.freshConstant sym (MS.crucGenArchRegName archFns r) (C.BaseBVRepr w))
-    M.TupleTypeRepr{}  ->
-      error "macaw-symbolic do not support tuple types."
-    M.FloatTypeRepr{}  ->
-      error "macaw-symbolic do not support float types."
-    M.VecTypeRepr{}  ->
-      error "macaw-symbolic do not support vector types."
+import qualified Lang.Crucible.Backend as CB
+import qualified Lang.Crucible.Backend.Online as CBO
+import qualified Lang.Crucible.Simulator as CS
 
 main :: IO ()
 main = do
-  Some (gen :: NonceGenerator IO t) <- newIONonceGenerator
-  halloc <- C.newHandleAllocator
-  sym <- C.newSimpleBackend C.FloatRealRepr gen
+  testFilePaths <- SFG.glob "tests/*.exe"
+  let tests = TT.testGroup "Binary Tests" (map mkSymExTest testFilePaths)
+  TT.defaultMain tests
 
-  let x86ArchFns :: MS.MacawSymbolicArchFunctions MX.X86_64
-      x86ArchFns = MX.x86_64MacawSymbolicFns
+hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
+hasTestPrefix (Some dfi) = do
+  bsname <- M.discoveredFunSymbol dfi
+  if BS8.pack "test_" `BS8.isPrefixOf` bsname
+    then return (bsname, Some dfi)
+    else Nothing
 
-  let posFn :: M.MemSegmentOff 64 -> C.Position
-      posFn = C.OtherPos . Text.pack . show
+-- | X86_64 functions with a single scalar return value return it in %rax
+--
+-- Since all test functions must return a value to assert as true, this is
+-- straightforward to extract
+x86ResultExtractor :: (CB.IsSymInterface sym) => MS.ArchVals MX.X86_64 -> MST.ResultExtractor sym MX.X86_64
+x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+  let re = MS.lookupReg archVals regs MX.RAX
+  k PC.knownRepr (CS.regValue re)
 
-  elfContents <- BS.readFile "tests/add_ubuntu64"
-  elf <-
-    case Elf.decodeElfHeaderInfo elfContents of
-      Left (_, msg) -> fail $ "Error parsing Elf file: " <> msg
-      Right (Elf.SomeElf e) ->
-        case Elf.headerClass (Elf.header e) of
-          Elf.ELFCLASS64 -> pure e
-          Elf.ELFCLASS32 -> fail "Expected 64-bit elf file"
-
-  let loadOpt :: Elf.LoadOptions
-      loadOpt = Elf.defaultLoadOptions
-  (mem, nameAddrList) <-
-    case Elf.resolveElfContents loadOpt elf of
-      Left err -> fail err
-      Right (warn, mem, _mentry, nameAddrList)  -> do
-        forM_ warn $ \err -> do
-          hPutStrLn stderr err
-        pure (mem, nameAddrList)
-
-  addAddr <-
-    case [ Elf.memSymbolStart msym | msym <- nameAddrList, Elf.memSymbolName msym == "add" ] of
-      [addr] -> pure $! addr
-      [] -> fail "Could not find add function"
-      _ -> fail "Found multiple add functions"
-
-  let addrSymMap :: M.AddrSymMap 64
-      addrSymMap = Map.fromList [ (Elf.memSymbolStart msym, Elf.memSymbolName msym)
-                                | msym <- nameAddrList ]
-  let archInfo :: M.ArchitectureInfo MX.X86_64
-      archInfo =  MX.x86_64_linux_info
-
-  let ds0 :: M.DiscoveryState MX.X86_64
-      ds0 = M.emptyDiscoveryState mem addrSymMap archInfo
-
-  let logFn addr = ioToST $ do
-        putStrLn $ "Analyzing " ++ show addr
-
-  (_, Some funInfo) <- stToIO $ M.analyzeFunction logFn addAddr M.UserRequest ds0
-  C.SomeCFG g <- MS.mkFunCFG x86ArchFns halloc "add" posFn funInfo
-
-  regs <- MS.macawAssignToCrucM (mkReg x86ArchFns sym) (MS.crucGenRegAssignment x86ArchFns)
-
-  symFuns <- MX.newSymFuns sym
-
-  let ?recordLLVMAnnotation = \_ _ -> pure ()
-
-  (initMem, memPtrTbl) <-  MSM.newGlobalMemory (Proxy @MX.X86_64) sym LittleEndian MSM.ConcreteMutable mem
-  let globalMap = MSM.mapRegionPointers memPtrTbl
-
-  let lookupFn :: MS.LookupFunctionHandle sym MX.X86_64
-      lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs -> do
-        fail "Could not find function handle."
-  let validityCheck :: MS.MkGlobalPointerValidityAssertion sym 64
-      validityCheck _ _ _ _ = return Nothing
-  execResult <-
-     MS.runCodeBlock sym x86ArchFns (MX.x86_64MacawEvalFn symFuns)
-        halloc (initMem, globalMap) lookupFn validityCheck g regs
-  case execResult of
-    (_,C.FinishedResult _ (C.TotalRes _pair))-> do
-      pure ()
-    _ -> do
-      pure () -- For now, we are ok with this.
+mkSymExTest :: FilePath -> TT.TestTree
+mkSymExTest exePath = TTH.testCaseSteps exePath $ \step -> do
+  bytes <- BS.readFile exePath
+  case Elf.decodeElfHeaderInfo bytes of
+    Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
+    Right (Elf.SomeElf ehi) -> do
+      Elf.ELFCLASS64 <- return (Elf.headerClass (Elf.header ehi))
+      (mem, funInfos) <- MST.runDiscovery ehi MX.x86_64_linux_info
+      let testEntryPoints = mapMaybe hasTestPrefix funInfos
+      F.forM_ testEntryPoints $ \(name, Some dfi) -> do
+        step ("Testing " ++ BS8.unpack name)
+        Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
+        CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+          execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+          let Just archVals = MS.archVals (Proxy @MX.X86_64)
+          let extract = x86ResultExtractor archVals
+          simRes <- MST.simulateAndVerify WS.yicesAdapter sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
+          TTH.assertEqual "AssertionResult" (MST.SimulationResult MST.Unsat) simRes

@@ -23,6 +23,7 @@ module Data.Macaw.Symbolic.Testing (
   runDiscovery,
   ResultExtractor(..),
   simulateAndVerify,
+  SimulationResult(..),
   SATResult(..),
   -- * Execution features
   SomeBackend(..),
@@ -129,13 +130,13 @@ runDiscovery ehi archInfo = do
   return (mem, fns)
 
 data SATResult = Unsat | Sat | Unknown
-  deriving (Show)
+  deriving (Eq, Show)
 
 data SimulationResult = SimulationAborted
                       | SimulationTimeout
                       | SimulationPartial
                       | SimulationResult SATResult
-                      deriving (Show)
+                      deriving (Eq, Show)
 
 -- | Allocate a fresh symbolic value for initial register states
 mkInitialRegVal :: (CB.IsSymInterface sym, MT.HasRepr (MC.ArchReg arch) MT.TypeRepr)
@@ -226,13 +227,14 @@ simulateAndVerify goalSolver sym execFeatures archInfo archVals mem (ResultExtra
           CS.PartialRes {} -> return SimulationPartial
           CS.TotalRes gp -> do
             let Just postMem = CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals)
-            withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr (CS.RV val) -> do
+            withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr val -> do
               -- The function is assumed to return a value that is intended to be
               -- True.  Try to prove that (by checking the negation for unsat)
               --
               -- The result is treated as true if it is not equal to zero
               zero <- WI.bvLit sym resRepr (BVS.mkBV resRepr 0)
-              notZero <- WI.bvNe sym val zero
+              bv_val <- CLM.projectLLVM_bv sym val
+              notZero <- WI.bvNe sym bv_val zero
               goal <- WI.notPred sym notZero
               WS.solver_adapter_check_sat goalSolver sym WS.defaultLogData [goal] $ \satRes ->
                 case satRes of
@@ -352,7 +354,7 @@ data ResultExtractor sym arch where
                        . CS.RegEntry sym (MS.ArchRegStruct arch)
                       -> CLM.LLVMPtr sym (MC.ArchAddrWidth arch)
                       -> CLM.MemImpl sym
-                      -> (forall n . (1 <= n) => PN.NatRepr n -> CS.RegValue' sym (CT.BVType n) -> IO a)
+                      -> (forall n . (1 <= n) => PN.NatRepr n -> CLM.LLVMPtr sym n -> IO a)
                       -> IO a)
                   -> ResultExtractor sym arch
 
