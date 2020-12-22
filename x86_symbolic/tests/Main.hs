@@ -33,9 +33,16 @@ import qualified Lang.Crucible.Simulator as CS
 
 main :: IO ()
 main = do
-  testFilePaths <- SFG.glob "tests/*.exe"
-  let tests = TT.testGroup "Binary Tests" (map mkSymExTest testFilePaths)
-  TT.defaultMain tests
+  -- These are pass/fail in that the assertions in the "pass" set are true (and
+  -- the solver returns Unsat), while the assertions in the "fail" set are false
+  -- (and the solver returns Sat).
+  passTestFilePaths <- SFG.glob "tests/pass/*.exe"
+  failTestFilePaths <- SFG.glob "tests/fail/*.exe"
+  let passRes = MST.SimulationResult MST.Unsat
+  let failRes = MST.SimulationResult MST.Sat
+  let passTests = TT.testGroup "True assertions" (map (mkSymExTest passRes) passTestFilePaths)
+  let failTests = TT.testGroup "False assertions" (map (mkSymExTest failRes) failTestFilePaths)
+  TT.defaultMain (TT.testGroup "Binary Tests" [passTests, failTests])
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
@@ -53,21 +60,23 @@ x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
   let re = MS.lookupReg archVals regs MX.RAX
   k PC.knownRepr (CS.regValue re)
 
-mkSymExTest :: FilePath -> TT.TestTree
-mkSymExTest exePath = TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
+mkSymExTest expected exePath = TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
     Right (Elf.SomeElf ehi) -> do
-      Elf.ELFCLASS64 <- return (Elf.headerClass (Elf.header ehi))
-      (mem, funInfos) <- MST.runDiscovery ehi MX.x86_64_linux_info
-      let testEntryPoints = mapMaybe hasTestPrefix funInfos
-      F.forM_ testEntryPoints $ \(name, Some dfi) -> do
-        step ("Testing " ++ BS8.unpack name)
-        Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
-        CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
-          execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
-          let Just archVals = MS.archVals (Proxy @MX.X86_64)
-          let extract = x86ResultExtractor archVals
-          simRes <- MST.simulateAndVerify WS.yicesAdapter sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
-          TTH.assertEqual "AssertionResult" (MST.SimulationResult MST.Unsat) simRes
+      case Elf.headerClass (Elf.header ehi) of
+        Elf.ELFCLASS32 -> TTH.assertFailure "32 bit x86 binaries are not supported"
+        Elf.ELFCLASS64 -> do
+          (mem, funInfos) <- MST.runDiscovery ehi MX.x86_64_linux_info
+          let testEntryPoints = mapMaybe hasTestPrefix funInfos
+          F.forM_ testEntryPoints $ \(name, Some dfi) -> do
+            step ("Testing " ++ BS8.unpack name)
+            Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
+            CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+              execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+              let Just archVals = MS.archVals (Proxy @MX.X86_64)
+              let extract = x86ResultExtractor archVals
+              simRes <- MST.simulateAndVerify WS.yicesAdapter sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
+              TTH.assertEqual "AssertionResult" expected simRes
