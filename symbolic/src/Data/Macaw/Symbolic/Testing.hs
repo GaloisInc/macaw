@@ -157,6 +157,9 @@ mkInitialRegVal archFns sym r = do
     MT.FloatTypeRepr {} -> error ("Float-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
     MT.VecTypeRepr {} -> error ("Vector-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
 
+-- | Create a name for the given 'MD.DiscoveryFunInfo'
+--
+-- If the function has no name, just use its address
 functionName :: (MM.MemWidth (MC.ArchAddrWidth arch)) => MD.DiscoveryFunInfo arch ids -> WF.FunctionName
 functionName dfi = maybe addrName fromByteString (MD.discoveredFunSymbol dfi)
   where
