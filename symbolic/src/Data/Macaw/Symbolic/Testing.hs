@@ -250,6 +250,11 @@ simulateAndVerify goalSolver sym execFeatures archInfo archVals mem (ResultExtra
 -- 2. The stack pointer for the function
 --
 -- 3. The result of symbolic execution
+--
+-- Note that the provided 'CLM.MemImpl' is expected to have its global state
+-- populated as desired.  The default loader populates it with concrete (and
+-- mutable) values taken from the data segment of the binary (as well as the
+-- immutable contents of the text segment).
 simulateFunction :: ( ext ~ MS.MacawExt arch
                     , CCE.IsSyntaxExtension ext
                     , CB.IsSymInterface sym
@@ -280,6 +285,9 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
   -- initial contents) and a totally symbolic stack
 
   -- Allocate a stack and insert it into memory
+  --
+  -- The stack allocation uses the SMT array backed memory model (rather than
+  -- the Haskell-level memory model)
   stackArrayStorage <- WI.freshConstant sym (WSym.safeSymbol "stack_array") WI.knownRepr
   stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * 1024 * 1024))
   let ?ptrWidth = WI.knownRepr
