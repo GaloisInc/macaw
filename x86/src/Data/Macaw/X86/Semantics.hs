@@ -2451,11 +2451,11 @@ def_pselect mnem op sz = defBinaryLV mnem $ \l v -> do
 
 -- | PINSRW Insert word
 exec_pinsrx :: (1 <= w, 1 <= c)
-            => NatRepr w
-            -> NatRepr c
-            -> Location (Addr ids) (BVType c)
-            -> BVExpr ids w
-            -> Word8
+            => NatRepr w -- ^ Width of element to insert
+            -> NatRepr c -- ^ Width of destination registr
+            -> Location (Addr ids) (BVType c) -- ^ Destination operand
+            -> BVExpr ids w -- ^ Source operand
+            -> Word8 -- ^ Offset in destination
             -> X86Generator st ids ()
 exec_pinsrx w c l v off = do
   lv <- get l
