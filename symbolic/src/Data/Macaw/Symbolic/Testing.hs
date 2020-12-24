@@ -25,6 +25,7 @@ module Data.Macaw.Symbolic.Testing (
   simulateAndVerify,
   SimulationResult(..),
   SATResult(..),
+  toAddrSymMap,
   -- * Execution features
   SomeBackend(..),
   defaultExecFeatures
@@ -34,6 +35,7 @@ import qualified Control.Exception as X
 import qualified Control.Lens as L
 import qualified Control.Monad.ST as ST
 import qualified Data.BitVector.Sized as BVS
+import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.Macaw.Architecture.Info as MAI
@@ -101,23 +103,36 @@ loadELF ehi = do
         IO.hPutStrLn IO.stderr w
       return (mem, nameAddrList)
 
+-- | Convert a list of symbols into a mapping from entry point addresses to function names
+--
+-- Meant to be passed to 'runDiscovery' to compute (named) entry points
+--
+-- NOTE that the 'MM.Memory' is unused, but provided to make the API cleaner
+-- (since some clients do need a 'MM.Memory', and 'runDiscovery' passes that as
+-- an extra argument).
+toAddrSymMap :: MM.Memory w
+             -> [MEL.MemSymbol w]
+             -> Map.Map (MEL.MemSegmentOff w) BS.ByteString
+toAddrSymMap _mem nameAddrList =
+  Map.fromList [ (MEL.memSymbolStart msym, MEL.memSymbolName msym)
+               | msym <- nameAddrList
+               ]
 
 -- | Run code discovery over every function entry point (i.e., a function with a
 -- symbol attached to it, plus the program entry point) and return the resulting
 -- 'MD.DiscoveryFunInfo' for each.
---
--- FIXME: This might be adaptable to take a list of entry points instead of the
--- loaded binary.  The trick is mapping names to addresses, which is tricky for
--- PowerPC and will probably need the macaw-loader interface.
 runDiscovery :: (MC.ArchAddrWidth arch ~ w)
              => EE.ElfHeaderInfo w
+             -> (MM.Memory w -> [MEL.MemSymbol w] -> Map.Map (MM.MemSegmentOff w) BS.ByteString)
+             -- ^ A function to turn discovered symbols into (address, name)
+             -- mappings; the addresses are used as test entry points
+             --
+             -- A good default is 'toAddrySymMap'
              -> MAI.ArchitectureInfo arch
              -> IO (MM.Memory w, [Some (MD.DiscoveryFunInfo arch)])
-runDiscovery ehi archInfo = do
+runDiscovery ehi toEntryPoints archInfo = do
   (mem, nameAddrList) <- loadELF ehi
-  let addrSymMap = Map.fromList [ (MEL.memSymbolStart msym, MEL.memSymbolName msym)
-                                | msym <- nameAddrList
-                                ]
+  let addrSymMap = toEntryPoints mem nameAddrList
   let ds0 = MD.emptyDiscoveryState mem addrSymMap archInfo
   fns <- T.forM (Map.keys addrSymMap) $ \entryPoint -> do
     -- We are discovering each function in isolation for now, so we can throw
