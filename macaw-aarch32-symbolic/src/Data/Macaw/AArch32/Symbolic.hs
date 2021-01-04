@@ -10,8 +10,12 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
   aarch32MacawSymbolicFns
+  , aarch32MacawEvalFn
+  , aarch32LookupReg
+  , aarch32UpdateReg
   , lookupReg
   , updateReg
+  , AF.newSymFuns
   ) where
 
 import           GHC.TypeLits
