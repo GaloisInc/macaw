@@ -23,10 +23,11 @@ module Data.Macaw.DebugLogging
        ) where
 
 import Data.IORef
-import Data.List
+import Data.List (find, (\\))
 import Debug.Trace
+import Prettyprinter
+import Prettyprinter.Render.String
 import System.IO.Unsafe -- For debugKeys
-import Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
 #if MIN_VERSION_base(4,9,0)
 import GHC.Stack
 #else
@@ -93,8 +94,9 @@ debug cl msg x
   where
     -- fn = show (getCallStack ?loc)
 
-debug' :: DebugClass -> Doc -> a -> a
-debug' cl msg x = debug cl (displayS (renderPretty 0.8 100 msg) "") x
+debug' :: DebugClass -> Doc ann -> a -> a
+debug' cl msg x = debug cl (renderString (layoutPretty opts msg)) x
+  where opts = LayoutOptions (AvailablePerLine 100 0.8)
 
 {-# INLINE debugM #-}
 debugM :: (?loc :: CallStack, Monad m) => DebugClass -> String -> m ()
@@ -107,5 +109,6 @@ debugM cl msg
               ++ msg)
   | otherwise = return ()
 
-debugM' :: Monad m => DebugClass -> Doc -> m ()
-debugM' cl msg = debugM cl (displayS (renderPretty 0.8 100 msg) "")
+debugM' :: Monad m => DebugClass -> Doc ann -> m ()
+debugM' cl msg = debugM cl (renderString (layoutPretty opts msg))
+  where opts = LayoutOptions (AvailablePerLine 100 0.8)

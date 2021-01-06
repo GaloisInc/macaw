@@ -907,8 +907,18 @@ def_sbb = defBinaryLV "sbb" $ \l v -> do
   of_loc .= ssbb_overflows v0 v cf
   af_loc .= uadd4_overflows v cbv .||. usub4_overflows v0 v'
   cf_loc .= uadd_overflows v cbv .||. (usub_overflows  v0 v')
+
   -- Set result value.
-  let res = v0 .- v'
+  let
+    res =
+      -- Here, we include a special case for when the operand is duplicated
+      -- E.g., sbb %rax, %rax
+      -- This sets rax = rax - (rax + cf) = -cf, simplifying the result a bit
+      if v0 == v then
+        mux cf (bvLit w (-1)) (bvLit w 0)
+       else
+        v0 .- v'
+
   set_result_flags res
   l .= res
 
@@ -1434,7 +1444,7 @@ exec_cmps repz_pfx rval = repValHasSupportedWidth rval $ do
     dest_v  <- eval v_rdi
     is_reverse_v <- eval df
     nsame <- evalArchFn $ MemCmp bytesPerOp count_v src_v dest_v is_reverse_v
-    let equal = (nsame .=. count)
+    let equal = (nsame .=. ValueExpr count_v)
         nwordsSeen = mux equal count (count .- (nsame .+ bvKLit 1))
 
     -- we need to set the flags as if the last comparison was done, hence this.
@@ -2440,22 +2450,50 @@ def_pselect mnem op sz = defBinaryLV mnem $ \l v -> do
 -- PEXTRW Extract word
 
 -- | PINSRW Insert word
-exec_pinsrw :: Location (Addr ids) XMMType -> BVExpr ids 16 -> Word8 -> X86Generator st ids ()
-exec_pinsrw l v off = do
+exec_pinsrx :: (1 <= w, 1 <= c)
+            => NatRepr w -- ^ Width of element to insert
+            -> NatRepr c -- ^ Width of destination registr
+            -> Location (Addr ids) (BVType c) -- ^ Destination operand
+            -> BVExpr ids w -- ^ Source operand
+            -> Word8 -- ^ Offset in destination
+            -> X86Generator st ids ()
+exec_pinsrx w c l v off = do
   lv <- get l
-  -- FIXME: is this the right way around?
-  let ls = bvVectorize n16 lv
-      (lower, _ : upper) = splitAt (fromIntegral off - 1) ls
+  let ls = bvVectorize w lv
+      (lower, _ : upper) = splitAt (length ls - fromIntegral off - 1) ls
       ls' = lower ++ [v] ++ upper
-  l .= bvUnvectorize knownNat ls'
+  l .= bvUnvectorize c ls'
 
 def_pinsrw :: InstructionDef
 def_pinsrw = defTernary "pinsrw" $ \_ loc val imm -> do
-  l  <- getBVLocation loc knownNat
-  v  <- truncateBVValue knownNat =<< getSomeBVValue val
+  SomeBV l  <- getSomeBVLocation loc
+  v  <- truncateBVValue n16 =<< getSomeBVValue val
   case imm of
-    F.ByteImm off -> exec_pinsrw l v off
+    F.ByteImm off
+      | Just Refl <- testEquality (typeWidth l) n64
+        -> exec_pinsrx n16 n64 l v $ off Bits..&. 0x3
+      | Just Refl <- testEquality (typeWidth l) n128
+        -> exec_pinsrx n16 n128 l v $ off Bits..&. 0x7
+      | otherwise -> fail "pinsrw: Unknown bit width"
     _ -> fail "Bad offset to pinsrw"
+
+-- | PINSRB Insert byte
+-- PINSRD Insert doubleword
+-- PINSRQ Insert quadword
+def_pinsrx :: (1 <= w)
+          => String
+          -> NatRepr w
+          -> Word8
+          -> InstructionDef
+def_pinsrx mnem w mask = defTernary mnem $ \_ loc val imm -> do
+  l  <- getBVLocation loc n128
+  v  <- truncateBVValue w =<< getSomeBVValue val
+  case imm of
+    F.ByteImm off
+      | Just Refl <- testEquality (typeWidth l) n128
+        -> exec_pinsrx w n128 l v $ off Bits..&. mask
+      | otherwise -> fail $ mnem ++ ": Unknown bit width"
+    _ -> fail $ "Bad offset to " ++ mnem
 
 -- PMAXUB Maximum of packed unsigned byte integers
 -- PMAXSW Maximum of packed signed word integers
@@ -2953,7 +2991,10 @@ all_instructions =
   , def_cvtsi2sX "cvtsi2ss" SSE_Single
   , def_cvttsX2si "cvttsd2si" SSE_Double
   , def_cvttsX2si "cvttss2si" SSE_Single
-  , def_pinsrw
+  , def_pinsrx "pinsrb" n8 0xF
+  , def_pinsrw -- pinsrw is defined separately since it can be applied to both MMX and XMM registers
+  , def_pinsrx "pinsrd" n32 0x3
+  , def_pinsrx "pinsrq" n64 0x1
   , def_cmpsX "cmpsd" SSE_Double
   , def_cmpsX "cmpss" SSE_Single
   , def_andpd

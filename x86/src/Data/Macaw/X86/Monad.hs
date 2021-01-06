@@ -13,6 +13,7 @@ semantics of X86 instructions.
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
@@ -176,7 +177,7 @@ import           Data.Parameterized.NatRepr
 import qualified Flexdis86 as F
 import           Flexdis86.Sizes (SizeConstraint(..))
 import           GHC.TypeLits as TypeLits
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter as PP
 
 
 import           Data.Macaw.X86.ArchTypes
@@ -573,20 +574,20 @@ instance Eq addr => Eq (Location addr tp) where
 -- Going back to pretty names for subregisters is pretty ad hoc;
 -- see table at http://stackoverflow.com/a/1753627/470844. E.g.,
 -- instead of @%ah@, we produce @%rax[8:16]@.
-ppLocation :: forall addr tp. (addr -> Doc) -> Location addr tp -> Doc
+ppLocation :: forall addr tp ann. (addr -> Doc ann) -> Location addr tp -> Doc ann
 ppLocation ppAddr loc = case loc of
   MemoryAddr addr _tr -> ppAddr addr
   Register rv -> ppReg rv
-  FullRegister r -> text $ "%" ++ show r
-  X87StackRegister i -> text $ "x87_stack@" ++ show i
+  FullRegister r -> "%" <> viaShow r
+  X87StackRegister i -> "x87_stack@" <> viaShow i
   where
     -- | Print subrange as Python-style slice @<location>[<low>:<high>]@.
     --
     -- The low bit is inclusive and the high bit is exclusive, but I
     -- can't bring myself to generate @<reg>[<low>:<high>)@ :)
-    ppReg :: RegisterView w n cl -> Doc
+    ppReg :: RegisterView w n cl -> Doc ann
     ppReg rv =
-      text $ "%" ++ show (_registerViewReg rv) ++
+      pretty $ "%" ++ show (_registerViewReg rv) ++
         if b == 0 && s == (fromIntegral $ intValue (typeWidth $ _registerViewReg rv))
         then ""
         else "[" ++ show b ++ ":" ++ show s ++ "]"
@@ -977,6 +978,11 @@ x .=. y
   | ValueExpr (BoolValue True)  <- y = x
   | ValueExpr (BoolValue False) <- y = boolNot x
 
+    -- Rewrite (u-v) .=. 0 to @u .=. v@.
+  | ValueExpr (BVValue _ 0) <- y
+  , Just (BVSub _ u v) <- asApp x =
+      u .=. v
+
   -- General case
   | otherwise = app $ Eq x y
 
@@ -1173,6 +1179,15 @@ bvUlt :: (1 <= n) => Expr ids (BVType n) -> Expr ids (BVType n) -> Expr ids Bool
 bvUlt x y
   | Just xv <- asUnsignedBVLit x, Just yv <- asUnsignedBVLit y = boolValue (xv < yv)
   | x == y = false
+    -- Simplify @xlit < uext y w@ to @xlit < y@ or @False@ depending on literal constant.
+  | Just xc <- asUnsignedBVLit x
+  , Just (UExt ysub _) <- asApp y
+  , wsub <- typeWidth ysub =
+      -- If constant is greater than max value then this is just false.
+      if xc >= maxUnsigned wsub then
+        ValueExpr (BoolValue False)
+       else
+         app $ BVUnsignedLt (ValueExpr (BVValue wsub xc)) ysub
   | otherwise =  app $ BVUnsignedLt x y
 
 -- | Unsigned less than or equal.
@@ -1364,6 +1379,10 @@ boolNot x
   | Just xv <- asBoolLit x = boolValue (not xv)
     -- not (not p) = p
   | Just (NotApp y) <- asApp x = y
+  | Just (BVUnsignedLe u v) <- asApp x = AppExpr (BVUnsignedLt v u)
+  | Just (BVUnsignedLt u v) <- asApp x = AppExpr (BVUnsignedLe v u)
+  | Just (BVSignedLe u v) <- asApp x = AppExpr (BVSignedLt v u)
+  | Just (BVSignedLt u v) <- asApp x = AppExpr (BVSignedLe v u)
   | otherwise = app $ NotApp x
 
 (.&&.) :: Expr ids BoolType -> Expr ids BoolType -> Expr ids BoolType
@@ -1381,8 +1400,8 @@ x .&&. y
   , Just (Eq y1 y2) <- asApp yc
   , BVTypeRepr w <- typeRepr y1
   , Just Refl <- testEquality (typeWidth x1) w
-  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt x1 x2
+  , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1) =
+    bvUlt x1 x2
 
   -- x1 ~= x2 & x1 <= x2 => x1 < x2
   | Just (BVUnsignedLe y1 y2) <- asApp y
@@ -1390,8 +1409,8 @@ x .&&. y
   , Just (Eq x1 x2) <- asApp xc
   , BVTypeRepr w <- typeRepr x1
   , Just Refl <- testEquality w (typeWidth y1)
-  , ((x1,x2) == (y1,y2) || (x1,x2) == (y2,y1)) =
-      bvUlt y1 y2
+  , (x1,x2) == (y1,y2) || (x1,x2) == (y2,y1) =
+    bvUlt y1 y2
   -- Default case
   | otherwise = app $ AndApp x y
 

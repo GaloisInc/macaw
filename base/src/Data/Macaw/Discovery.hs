@@ -23,6 +23,7 @@ module Data.Macaw.Discovery
          State.DiscoveryState(..)
        , State.emptyDiscoveryState
        , State.trustedFunctionEntryPoints
+       , State.exploreFnPred
        , State.AddrSymMap
        , State.funInfo
        , State.exploredFunctions
@@ -30,6 +31,7 @@ module Data.Macaw.Discovery
        , State.unexploredFunctions
        , Data.Macaw.Discovery.cfgFromAddrs
        , Data.Macaw.Discovery.cfgFromAddrsAndState
+       , Data.Macaw.Discovery.markAddrAsFunction
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.FunctionExploreReason(..)
        , State.BlockExploreReason(..)
@@ -47,8 +49,10 @@ module Data.Macaw.Discovery
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
        , State.discoveredFunName
+       , State.discoveredFunSymbol
        , State.discoveredClassifyFailureResolutions
        , State.parsedBlocks
+       , State.NoReturnFunStatus(..)
          -- * Parsed block
        , State.ParsedBlock
        , State.pblockAddr
@@ -71,6 +75,7 @@ import           Control.Monad.State.Strict
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Foldable
+import           Data.Int
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -88,9 +93,13 @@ import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           GHC.IO (ioToST)
+import           Numeric
 import           Numeric.Natural
+import           Prettyprinter (pretty)
 import           System.IO
-import           Text.PrettyPrint.ANSI.Leijen (pretty)
+import           Text.Printf (printf)
+
+#define USE_REWRITER
 
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -99,14 +108,15 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+#ifdef USE_REWRITER
 import           Data.Macaw.CFG.Rewriter
+#endif
 import           Data.Macaw.DebugLogging
 import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
-#define USE_REWRITER 1
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -269,9 +279,12 @@ markAddrAsFunction :: FunctionExploreReason (ArchAddrWidth arch)
                    -> DiscoveryState arch
 markAddrAsFunction rsn addr s
   -- Do nothing if function is already explored.
-  | Map.member addr (s^.funInfo) || Map.member addr (s^.unexploredFunctions) = s
+  | Map.member addr (s^.funInfo) = s
+  -- Ignore if function already in set.
+  | Map.member addr (s^.unexploredFunctions) = s
   -- Ignore if address is not in an executable segment.
   | not (isExecutableSegOff addr) = s
+  | not ((s^.exploreFnPred) addr) = s
   | otherwise = addrWidthClass (memAddrWidth (memory s)) $
     -- We check that the function address ignores bytes so that we do
     -- not start disassembling at a relocation or BSS region.
@@ -315,6 +328,7 @@ data FunState arch s ids
    = FunState { funReason :: !(FunctionExploreReason (ArchAddrWidth arch))
               , funNonceGen  :: !(NonceGenerator (ST s) ids)
               , curFunAddr   :: !(ArchSegmentOff arch)
+                -- ^ Address of the function
               , _curFunCtx   :: !(DiscoveryState arch)
                 -- ^ Discovery state without this function
               , _curFunBlocks :: !(Map (ArchSegmentOff arch) (ParsedBlock arch ids))
@@ -554,15 +568,21 @@ extractJumpTableSlices jmpBounds base stride ixVal tp = do
                     (V.fromList strideSlices)
   pure slices
 
--- | See if the value can be interpreted as a read of memory
+-- | `matchBoundsMemArray mem aps bnds val` checks to try to interpret
+-- `val` as a memory read where
+--
+-- * the address read has the form @base + stride * ixVal@,
+-- * @base@ is a valid `MemSegmentOff`,
+-- * @stride@ is a natural number and,
+-- * @ixVal@ is a arbitrary value.
 matchBoundedMemArray
   :: ArchConstraints arch
   => Memory (ArchAddrWidth arch)
   -> AbsProcessorState (ArchReg arch) ids
   -> Jmp.IntraJumpBounds arch ids
      -- ^ Bounds for jump table
-  -> BVValue arch ids w  -- ^ Value to interpret
-  -> Classifier (BoundedMemArray arch (BVType w), ArchAddrValue arch ids)
+  -> Value arch ids tp  -- ^ Value to interpret
+  -> Classifier (BoundedMemArray arch tp, ArchAddrValue arch ids)
 matchBoundedMemArray mem aps jmpBounds val = do
   AssignedValue (Assignment _ (ReadMem addr tp)) <- pure val
   Just (base, offset) <- pure $ valueAsMemOffset mem aps addr
@@ -622,10 +642,10 @@ matchExtension val =
 -- | `extendDyn ext end bs` parses the bytestring using the extension
 -- and endianness information, and returns the extended value.
 extendDyn :: Extension w -> Endianness -> BS.ByteString -> Integer
-extendDyn (Extension True Addr32) end bs  = toInteger (bsWord32 end bs)
-extendDyn (Extension True Addr64) end bs  = toInteger (bsWord64 end bs)
-extendDyn (Extension False Addr32) end bs = toSigned n32 (toInteger (bsWord32 end bs))
-extendDyn (Extension False Addr64) end bs = toSigned n64 (toInteger (bsWord64 end bs))
+extendDyn (Extension False Addr32) end bs  = toInteger (bsWord32 end bs)
+extendDyn (Extension False Addr64) end bs  = toInteger (bsWord64 end bs)
+extendDyn (Extension True  Addr32) end bs = toInteger (fromIntegral (bsWord32 end bs) :: Int32)
+extendDyn (Extension True  Addr64) end bs = toInteger (fromIntegral (bsWord64 end bs) :: Int64)
 
 ------------------------------------------------------------------------
 -- JumpTableLayout
@@ -696,39 +716,49 @@ resolveRelativeJumps :: forall arch w
            --          -> MemRepr (BVType w)
                      -> BoundedMemArray arch (BVType w)
                      -> Extension w
-                     -> Maybe (V.Vector (ArchSegmentOff arch))
+                     -> Either String (V.Vector (ArchSegmentOff arch))
 resolveRelativeJumps mem base arrayRead ext = do
   let slices = arSlices arrayRead
-  BVMemRepr _sz endianness <- pure $ arEltType arrayRead
+  let BVMemRepr _ endianness = arEltType arrayRead
   forM slices $ \l -> do
-    case l of
-      [ByteRegion bs]
-        | tgtAddr <- segoffAddr base
-                     & incAddr (extendDyn ext endianness bs)
-        , Just tgt <- asSegmentOff mem (toIPAligned @arch tgtAddr)
-        , Perm.isExecutable (segmentFlags (segoffSegment tgt))
-          -> Just tgt
-      _ -> Nothing
+    bs <- case l of
+            [ByteRegion bs] -> Right bs
+            _ -> Left $ "Could not recognize slice: " <> show l
+    let tgtAddr = segoffAddr base & incAddr (extendDyn ext endianness bs)
 
-type JumpTableClassifierContext arch ids =
-    ( Memory (ArchAddrWidth arch)
-    , AbsProcessorState (ArchReg arch) ids
-    , Jmp.IntraJumpBounds arch ids
-    , ArchAddrValue arch ids
-    )
+    let brRepr = unwords [ showHex w "" | w <- BS.unpack bs ]
 
+    tgt <- case asSegmentOff mem (toIPAligned @arch tgtAddr) of
+             Just tgt -> Right tgt
+             _ -> Left $ "Could not resolve " <> show (ext, endianness, base, brRepr)
+
+    unless (Perm.isExecutable (segmentFlags (segoffSegment tgt))) $ do
+      Left "Address is not executable."
+
+    Right tgt
+
+-- | Contains information about jump table layout, addresses and index
+-- in a recognized jump table.
 type JumpTableClassifierResult arch ids =
    (JumpTableLayout arch, V.Vector (ArchSegmentOff arch), ArchAddrValue arch ids)
 
 type JumpTableClassifier arch ids s =
-  ReaderT (JumpTableClassifierContext arch ids) Classifier (JumpTableClassifierResult arch ids)
+  ReaderT (BlockClassifierContext arch ids) Classifier (JumpTableClassifierResult arch ids)
 
+-- | @matchAbsoluteJumpTable@ tries to match the control flow transfer
+-- as a jump table where the addresses in the jump table are absolute
+-- memory addresses.
 matchAbsoluteJumpTable
   :: forall arch ids s
   .  ArchConstraints arch
   => JumpTableClassifier arch ids s
 matchAbsoluteJumpTable = classifierName "Absolute jump table" $ do
-  (mem, aps, jmpBounds, ip) <- ask
+  bcc <- ask
+  let mem = pctxMemory (classifierParseContext bcc)
+  let aps = classifierAbsState bcc
+  let jmpBounds = classifierJumpBounds bcc
+  -- Get IP value to interpret as a jump table index.
+  let ip = classifierFinalRegState bcc^.curIP
   (arrayRead, idx) <- lift $ matchBoundedMemArray mem aps jmpBounds ip
   unless (isReadOnlyBoundedMemArray arrayRead) $ do
     fail "Bounded mem array is not read only."
@@ -754,45 +784,55 @@ matchAbsoluteJumpTable = classifierName "Absolute jump table" $ do
   tbl <- lift $ V.zipWithM go (V.generate (V.length (arSlices arrayRead)) id) (arSlices arrayRead)
   pure (AbsoluteJumpTable arrayRead, tbl, idx)
 
+-- | @matchAbsoluteJumpTable@ tries to match the control flow transfer
+-- as a jump table where the addresses in the jump table are IP relative jumps.
 matchRelativeJumpTable
   :: forall arch ids s
   .  ArchConstraints arch
   => JumpTableClassifier arch ids s
 matchRelativeJumpTable = classifierName "Relative jump table" $ do
-  (mem, aps, jmpBounds, ip) <- ask
+  bcc <- ask
+  let mem = pctxMemory (classifierParseContext bcc)
+  let aps = classifierAbsState bcc
+  let jmpBounds = classifierJumpBounds bcc
+  -- Get IP value to interpret as a jump table index.
+  let ip = classifierFinalRegState bcc^.curIP
+
   -- gcc-style PIC jump tables on x86 use, roughly,
   --     ip = jmptbl + jmptbl[index]
   -- where jmptbl is a pointer to the lookup table.
   Just unalignedIP <- pure $ fromIPAligned ip
-  Just (tgtBase, tgtOffset) <- pure $ valueAsMemOffset mem aps unalignedIP
+  (tgtBase, tgtOffset) <-
+    case valueAsMemOffset mem aps unalignedIP of
+      Just p -> pure p
+      Nothing -> fail $ "Unaligned IP not a mem offset: " <> show unalignedIP
   SomeExt shortOffset ext <- pure $ matchExtension tgtOffset
   (arrayRead, idx) <- lift $ matchBoundedMemArray mem aps jmpBounds shortOffset
   unless (isReadOnlyBoundedMemArray arrayRead) $ do
     fail $ "Jump table memory array must be read only."
-  Just tbl <- pure $ resolveRelativeJumps mem tgtBase arrayRead ext
+  tbl <- case resolveRelativeJumps mem tgtBase arrayRead ext of
+           Left msg -> fail msg
+           Right tbl -> pure tbl
   pure (RelativeJumpTable tgtBase arrayRead ext, tbl, idx)
 
 ------------------------------------------------------------------------
--- reecordWriteStmts
+-- recordWriteStmts
 
 -- | Mark addresses written to memory that point to code as function
 -- entry points.
 recordWriteStmts :: ArchitectureInfo arch
                  -> Memory (ArchAddrWidth arch)
                  -> AbsProcessorState (ArchReg arch) ids
-                 -> Jmp.IntraJumpBounds arch ids
                  -> [ArchSegmentOff arch]
                  -> [Stmt arch ids]
                  -> ( AbsProcessorState (ArchReg arch) ids
-                    , Jmp.IntraJumpBounds arch ids
                     , [ArchSegmentOff arch]
                     )
-recordWriteStmts _archInfo _mem absState jmpBounds writtenAddrs [] =
-  seq absState $ seq jmpBounds $ (absState, jmpBounds, writtenAddrs)
-recordWriteStmts ainfo mem absState jmpBounds writtenAddrs (stmt:stmts) =
-  seq absState $ seq jmpBounds $ do
+recordWriteStmts _archInfo _mem absState writtenAddrs [] =
+  seq absState $ (absState, writtenAddrs)
+recordWriteStmts ainfo mem absState writtenAddrs (stmt:stmts) =
+  seq absState $ do
     let absState' = absEvalStmt ainfo absState stmt
-    let jmpBounds' = withArchConstraints ainfo $ Jmp.execStatement jmpBounds stmt
     let writtenAddrs' =
           case stmt of
             WriteMem _addr repr v
@@ -802,7 +842,7 @@ recordWriteStmts ainfo mem absState jmpBounds writtenAddrs (stmt:stmts) =
                    in filter isExecutableSegOff addrs ++ writtenAddrs
             _ ->
               writtenAddrs
-    recordWriteStmts ainfo mem absState' jmpBounds' writtenAddrs' stmts
+    recordWriteStmts ainfo mem absState' writtenAddrs' stmts
 
 ------------------------------------------------------------------------
 -- ParseContext
@@ -811,7 +851,7 @@ recordWriteStmts ainfo mem absState jmpBounds writtenAddrs (stmt:stmts) =
 data ParseContext arch ids =
   ParseContext { pctxMemory         :: !(Memory (ArchAddrWidth arch))
                , pctxArchInfo       :: !(ArchitectureInfo arch)
-               , pctxKnownFnEntries :: !(Set (ArchSegmentOff arch))
+               , pctxKnownFnEntries :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
                  -- ^ Entry addresses for known functions (e.g. from
                  -- symbol information)
                  --
@@ -835,6 +875,7 @@ addrMemRepr arch_info =
     Addr32 -> BVMemRepr n4 (archEndianness arch_info)
     Addr64 -> BVMemRepr n8 (archEndianness arch_info)
 
+-- | Identify new potentialfunction entry points by looking at IP.
 identifyCallTargets :: forall arch ids
                     .  (RegisterInfo (ArchReg arch))
                     => Memory (ArchAddrWidth arch)
@@ -1062,21 +1103,29 @@ instance Fail.MonadFail Classifier where
   [@RegState ...@]: Final register values
 -}
 data BlockClassifierContext arch ids = BlockClassifierContext
-  { classifierParseContext  :: ParseContext arch ids
+  { classifierParseContext  :: !(ParseContext arch ids)
   -- ^ Information needed to construct abstract processor states
-  , classifierInitRegState  :: RegState (ArchReg arch) (Value arch ids)
+  , classifierInitRegState  :: !(RegState (ArchReg arch) (Value arch ids))
   -- ^ The (concrete) register state at the beginning of the block
-  , classifierStmts         :: Seq (Stmt arch ids)
+  , classifierStmts         :: !(Seq (Stmt arch ids))
   -- ^ The statements of the block (without the terminator)
-  , classifierAbsState      :: AbsProcessorState (ArchReg arch) ids
+  , classifierBlockSize     :: !Int
+    -- ^ Size of block being classified.
+  , classifierAbsState      :: !(AbsProcessorState (ArchReg arch) ids)
   -- ^ The abstract processor state before the terminator is executed
-  , classifierJumpBounds    :: Jmp.IntraJumpBounds arch ids
+  , classifierJumpBounds    :: !(Jmp.IntraJumpBounds arch ids)
   -- ^ The relational abstract processor state before the terminator is executed
-  , classifierWrittenAddrs  :: [ArchSegmentOff arch]
+  , classifierWrittenAddrs  :: !([ArchSegmentOff arch])
   -- ^ The addresses of observed memory writes in the block
-  , classifierFinalRegState :: RegState (ArchReg arch) (Value arch ids)
+  , classifierFinalRegState :: !(RegState (ArchReg arch) (Value arch ids))
   -- ^ The final (concrete) register state before the terminator is executed
   }
+
+classifierEndBlock :: BlockClassifierContext arch ids
+                   -> MemAddr (ArchAddrWidth arch)
+classifierEndBlock ctx = withArchConstraints (pctxArchInfo (classifierParseContext ctx)) $
+  let blockStart = segoffAddr (pctxAddr (classifierParseContext ctx))
+   in incAddr (toInteger (classifierBlockSize ctx)) blockStart
 
 type BlockClassifier arch ids =
   ReaderT (BlockClassifierContext arch ids)
@@ -1100,7 +1149,7 @@ classifyDirectJump ctx nm v = do
     fail $ nm ++ " value " ++ show a ++ " is not executable."
   when (a == pctxFunAddr ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " refers to function start."
-  when (a `Set.member` pctxKnownFnEntries ctx) $ do
+  when (a `Map.member` pctxKnownFnEntries ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " is a known function entry."
   pure a
 
@@ -1111,7 +1160,6 @@ branchClassifier = classifierName "Branch" $ do
   let finalRegs = classifierFinalRegState bcc
   let writtenAddrs = classifierWrittenAddrs bcc
   let absState = classifierAbsState bcc
-  let jmpBounds = classifierJumpBounds bcc
   let stmts = classifierStmts bcc
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
@@ -1129,10 +1177,9 @@ branchClassifier = classifierName "Branch" $ do
 
     let trueAbsState  = branchBlockState ainfo absState stmts trueRegs c True
     let falseAbsState = branchBlockState ainfo absState stmts falseRegs c False
-    let tJmp = Jmp.postBranchBounds jmpBounds c True  trueRegs
-        fJmp = Jmp.postBranchBounds jmpBounds c False falseRegs
-    case (tJmp, fJmp) of
-      (Right trueJmpState, Right falseJmpState) -> do
+    let jmpBounds = classifierJumpBounds bcc
+    case Jmp.postBranchBounds jmpBounds finalRegs c of
+      Jmp.BothFeasibleBranch trueJmpState falseJmpState -> do
         pure $ ParsedContents { parsedNonterm = toList stmts
                               , parsedTerm  =
                                   ParsedBranch finalRegs c trueTgtAddr falseTgtAddr
@@ -1144,7 +1191,7 @@ branchClassifier = classifierName "Branch" $ do
                               , newFunctionAddrs = []
                               }
       -- The false branch is impossible.
-      (Right trueJmpState, Left _) -> do
+      Jmp.TrueFeasibleBranch trueJmpState -> do
         pure $ ParsedContents { parsedNonterm = toList stmts
                               , parsedTerm  = ParsedJump finalRegs trueTgtAddr
                               , writtenCodeAddrs = writtenAddrs
@@ -1153,7 +1200,7 @@ branchClassifier = classifierName "Branch" $ do
                               , newFunctionAddrs = []
                               }
       -- The true branch is impossible.
-      (Left _ , Right falseJmpState) -> do
+      Jmp.FalseFeasibleBranch falseJmpState -> do
         pure $ ParsedContents { parsedNonterm = toList stmts
                               , parsedTerm  = ParsedJump finalRegs falseTgtAddr
                               , writtenCodeAddrs = writtenAddrs
@@ -1162,7 +1209,7 @@ branchClassifier = classifierName "Branch" $ do
                               , newFunctionAddrs = []
                               }
       -- Both branches were deemed impossible
-      (Left _ , Left _) -> do
+      Jmp.InfeasibleBranch -> do
         fail $ "Branch targets are both unreachable."
 
 -- |  Use architecture-specific callback to check if last statement was a call.
@@ -1176,7 +1223,9 @@ callClassifier = do
   let finalRegs = classifierFinalRegState bcc
   let ainfo = pctxArchInfo ctx
   let mem = pctxMemory ctx
-  Just (_prev_stmts, ret) <- pure $ identifyCall ainfo mem (classifierStmts bcc) finalRegs
+  ret <- case identifyCall ainfo mem (classifierStmts bcc) finalRegs of
+           Just (_prev_stmts, ret) -> pure ret
+           Nothing -> fail $ "Call classifer failed."
   withArchConstraints ainfo $ do
     pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
                           , parsedTerm  = ParsedCall finalRegs (Just ret)
@@ -1209,8 +1258,12 @@ returnClassifier = classifierName "Return" $ do
   bcc <- ask
   let ainfo = pctxArchInfo (classifierParseContext bcc)
   withArchConstraints ainfo $ do
-    Just prev_stmts <- pure $ identifyReturn ainfo (classifierStmts bcc) (classifierFinalRegState bcc) (classifierAbsState bcc)
-    pure $ ParsedContents { parsedNonterm = toList prev_stmts
+    Just prevStmts <-
+      pure $ identifyReturn ainfo
+                            (classifierStmts bcc)
+                            (classifierFinalRegState bcc)
+                            (classifierAbsState bcc)
+    pure $ ParsedContents { parsedNonterm = toList prevStmts
                           , parsedTerm = ParsedReturn (classifierFinalRegState bcc)
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
                           , intraJumpTargets = []
@@ -1226,15 +1279,15 @@ directJumpClassifier = classifierName "Jump" $ do
   let ainfo = pctxArchInfo ctx
   withArchConstraints ainfo $ do
 
-    tgt_mseg <- classifyDirectJump ctx "Jump" (classifierFinalRegState bcc ^. boundValue ip_reg)
+    tgtMSeg <- classifyDirectJump ctx "Jump" (classifierFinalRegState bcc ^. boundValue ip_reg)
 
     let abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
-    let abst' = abst & setAbsIP tgt_mseg
+    let abst' = abst & setAbsIP tgtMSeg
     let tgtBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
     pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
-                          , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgt_mseg
+                          , parsedTerm  = ParsedJump (classifierFinalRegState bcc) tgtMSeg
                           , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = [(tgt_mseg, abst', tgtBnds)]
+                          , intraJumpTargets = [(tgtMSeg, abst', tgtBnds)]
                           , newFunctionAddrs = []
                           }
 
@@ -1243,17 +1296,17 @@ jumpTableClassifier = classifierName "Jump table" $ do
   bcc <- ask
   let ctx = classifierParseContext bcc
   let ainfo = pctxArchInfo ctx
-  let mem = pctxMemory ctx
+  let jmpBounds = classifierJumpBounds bcc
   withArchConstraints ainfo $ do
     let jumpTableClassifiers
           =   matchAbsoluteJumpTable
           <|> matchRelativeJumpTable
     (_jt, entries, jumpIndex) <- lift $
-      runReaderT jumpTableClassifiers (mem, classifierAbsState bcc, classifierJumpBounds bcc, classifierFinalRegState bcc^.curIP)
+      runReaderT jumpTableClassifiers bcc
 
     let abst :: AbsBlockState (ArchReg arch)
         abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
-    let nextBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
+    let nextBnds = Jmp.postJumpBounds jmpBounds (classifierFinalRegState bcc)
     let term = ParsedLookupTable (classifierFinalRegState bcc) jumpIndex entries
     pure $ seq abst $
       ParsedContents { parsedNonterm = toList (classifierStmts bcc)
@@ -1308,13 +1361,56 @@ pltStubClassifier = classifierName "PLT stub" $ do
                           , newFunctionAddrs = []
                           }
 
+noreturnCallParsedContents :: BlockClassifierContext arch ids -> ParsedContents arch ids
+noreturnCallParsedContents bcc =
+  let ctx  = classifierParseContext bcc
+      mem  = pctxMemory ctx
+      absState = classifierAbsState bcc
+      regs = classifierFinalRegState bcc
+      blockEnd = classifierEndBlock bcc
+   in withArchConstraints (pctxArchInfo ctx) $
+        ParsedContents { parsedNonterm = toList (classifierStmts bcc)
+                       , parsedTerm  = ParsedCall regs Nothing
+                       , writtenCodeAddrs =
+                           filter (\a -> segoffAddr a /= blockEnd) $
+                             classifierWrittenAddrs bcc
+                       , intraJumpTargets = []
+                       , newFunctionAddrs = identifyCallTargets mem absState regs
+                       }
+
+-- | Attempt to recognize tail call.
+noreturnCallClassifier :: BlockClassifier arch ids
+noreturnCallClassifier = classifierName "no return call" $ do
+  bcc <- ask
+  let ctx = classifierParseContext bcc
+  -- Check for tail call when the calling convention seems to be satisfied.
+  withArchConstraints (pctxArchInfo ctx) $ do
+    let regs = classifierFinalRegState bcc
+    let ipVal = regs ^. boundValue ip_reg
+    -- Get memory address
+    ma <-
+      case valueAsMemAddr ipVal of
+        Nothing ->  fail $ printf "Noreturn target %s is not a valid address." (show ipVal)
+        Just a -> pure a
+    -- Get address
+    a <- case asSegmentOff (pctxMemory ctx) ma of
+           Nothing ->
+             fail $ printf "Noreturn target %s is not a segment offset." (show ipVal)
+           Just sa -> pure sa
+    -- Check function labeled noreturn
+    case Map.lookup a (pctxKnownFnEntries ctx) of
+      Nothing -> fail $ printf "Noreturn target %s is not a known function entry." (show a)
+      Just MayReturnFun -> fail $ printf "Return target %s labeled mayreturn." (show a)
+      Just NoReturnFun -> pure ()
+    -- Return no
+    pure $! noreturnCallParsedContents bcc
+
 -- | Attempt to recognize tail call.
 tailCallClassifier :: BlockClassifier arch ids
 tailCallClassifier = classifierName "Tail call" $ do
   bcc <- ask
   let ctx = classifierParseContext bcc
   let ainfo = pctxArchInfo ctx
-  let mem   = pctxMemory ctx
   -- Check for tail call when the calling convention seems to be satisfied.
   withArchConstraints ainfo $ do
 
@@ -1329,12 +1425,7 @@ tailCallClassifier = classifierName "Tail call" $ do
       fail "Expected stack height of 0"
     -- Return address is pushed
     unless (checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)) empty
-    pure $ ParsedContents { parsedNonterm = toList (classifierStmts bcc)
-                          , parsedTerm  = ParsedCall (classifierFinalRegState bcc) Nothing
-                          , writtenCodeAddrs = classifierWrittenAddrs bcc
-                          , intraJumpTargets = []
-                          , newFunctionAddrs = identifyCallTargets mem (classifierAbsState bcc) (classifierFinalRegState bcc)
-                          }
+    pure $! noreturnCallParsedContents bcc
 
 useExternalTargets :: ( OrdF (ArchReg arch)
                       , RegisterInfo (ArchReg arch)
@@ -1357,41 +1448,24 @@ useExternalTargets bcc = do
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
                      .  (RegisterInfo (ArchReg arch))
-                     => ParseContext arch ids
-                     -> RegState (ArchReg arch) (Value arch ids)
-                        -- ^ Initial register values
+                     => BlockClassifierContext arch ids
                      -> [Stmt arch ids]
-                        -- ^ Statements
-                     -> RegState (ArchReg arch) (Value arch ids)
-                        -- ^ Final register values
-                     -> AbsProcessorState (ArchReg arch) ids
-                     -> Jmp.IntraJumpBounds arch ids
-                     -> [ArchSegmentOff arch]
                      -> ParsedContents arch ids
-parseFetchAndExecute ctx initRegs stmts finalRegs absState jmpBounds writtenAddrs = do
-  -- Try to figure out what control flow statement we have.
-  let classCtx = BlockClassifierContext
-        { classifierParseContext = ctx
-        , classifierInitRegState = initRegs
-        , classifierStmts = Seq.fromList stmts
-        , classifierAbsState = absState
-        , classifierJumpBounds = jmpBounds
-        , classifierWrittenAddrs = writtenAddrs
-        , classifierFinalRegState = finalRegs
-        }
+parseFetchAndExecute classCtx stmts = do
   let cl = branchClassifier
-        <|> callClassifier
-        <|> returnClassifier
-        <|> directJumpClassifier
-        <|> jumpTableClassifier
-        <|> pltStubClassifier
-        <|> tailCallClassifier
+           <|> noreturnCallClassifier
+           <|> callClassifier
+           <|> returnClassifier
+           <|> directJumpClassifier
+           <|> jumpTableClassifier
+           <|> pltStubClassifier
+           <|> tailCallClassifier
   case runReaderT cl classCtx of
     ClassifySucceeded _ m -> m
     ClassifyFailed rsns ->
       ParsedContents { parsedNonterm = stmts
-                     , parsedTerm  = ClassifyFailure finalRegs rsns
-                     , writtenCodeAddrs = writtenAddrs
+                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) rsns
+                     , writtenCodeAddrs = classifierWrittenAddrs classCtx
                      , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []
                      }
@@ -1404,21 +1478,34 @@ parseBlock :: ParseContext arch ids
            -- ^ Initial register values
            -> Block arch ids
               -- ^ Block to parse
+           -> Int
+              -- ^ Size of block
            -> AbsBlockState (ArchReg arch)
               -- ^ Abstract state at start of block
            -> Jmp.InitJumpBounds arch
            -> ParsedContents arch ids
-parseBlock ctx initRegs b absBlockState blockBnds = do
+parseBlock ctx initRegs b sz absBlockState blockBnds = do
   let ainfo = pctxArchInfo ctx
   let mem   = pctxMemory ctx
   withArchConstraints (pctxArchInfo ctx) $ do
-   let (absState, jmpBounds, writtenAddrs) =
+   let (absState, writtenAddrs) =
          let initAbsState = initAbsProcessorState mem absBlockState
-             initJmpBounds = Jmp.mkIntraJumpBounds blockBnds
-          in recordWriteStmts ainfo mem initAbsState initJmpBounds [] (blockStmts b)
+          in recordWriteStmts ainfo mem initAbsState [] (blockStmts b)
+   let jmpBounds = Jmp.blockEndBounds blockBnds (blockStmts b)
    case blockTerm b of
-    FetchAndExecute finalRegs ->
-      parseFetchAndExecute ctx initRegs (blockStmts b) finalRegs absState jmpBounds writtenAddrs
+    FetchAndExecute finalRegs -> do
+      -- Try to figure out what control flow statement we have.
+      let classCtx = BlockClassifierContext
+            { classifierParseContext = ctx
+            , classifierInitRegState = initRegs
+            , classifierStmts = Seq.fromList (blockStmts b)
+            , classifierBlockSize = sz
+            , classifierAbsState = absState
+            , classifierJumpBounds = jmpBounds
+            , classifierWrittenAddrs = writtenAddrs
+            , classifierFinalRegState = finalRegs
+            }
+      parseFetchAndExecute classCtx (blockStmts b)
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg ->
@@ -1451,7 +1538,6 @@ addBlock src finfo pr = do
   s <- use curFunCtx
   let ainfo = archInfo s
   let initRegs = initialBlockRegs ainfo src pr
-  let mem = memory s
 
   nonceGen <- gets funNonceGen
   prev_block_map <- use $ curFunBlocks
@@ -1464,6 +1550,7 @@ addBlock src finfo pr = do
   -- Rewrite returned blocks to simplify expressions
 #ifdef USE_REWRITER
   (_,b) <- do
+    let mem = memory s
     let archStmt = rewriteArchStmt ainfo
     let secAddrMap = memSectionIndexMap mem
     let rw = \_ -> pure
@@ -1485,7 +1572,7 @@ addBlock src finfo pr = do
                          , pctxAddr           = src
                          , pctxExtResolution  = extRes
                          }
-  let pc = parseBlock ctx initRegs b (foundAbstractState finfo) (foundJumpBounds finfo)
+  let pc = parseBlock ctx initRegs b sz (foundAbstractState finfo) (foundJumpBounds finfo)
   let pb = ParsedBlock { pblockAddr    = src
                        , pblockPrecond = Right pr
                        , blockSize     = sz
@@ -1606,7 +1693,6 @@ analyzeFunction logFn addr rsn s =
     Just finfo -> pure (s, finfo)
     Nothing -> runFunctionAnalysis logFn addr rsn s []
 
-
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
 -- analyzed all function entry points.
@@ -1615,36 +1701,10 @@ analyzeFunction logFn addr rsn s =
 -- analyze unexploredFunctions at addresses that do not satisfy this predicate.
 analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
 analyzeDiscoveredFunctions info =
-  case Map.lookupMin (exploreOK $ info^.unexploredFunctions) of
+  case Map.lookupMin (info^.unexploredFunctions) of
     Nothing -> info
     Just (addr, rsn) ->
       analyzeDiscoveredFunctions $! fst (runST ((analyzeFunction (\_ -> pure ()) addr rsn info)))
-  where exploreOK unexploredFnMap
-          -- filter unexplored functions using the predicate if present
-          | Just xpFnPred <- info^.exploreFnPred
-          = Map.filterWithKey (\addr _r -> xpFnPred addr) unexploredFnMap
-          | otherwise = unexploredFnMap
-
-
--- | Extend the analysis of a previously analyzed function with new
--- information about the transfers for a block in that function.  The
--- assumption is that the block in question previously had an unknown
--- transfer state condition, and that the new transfer addresses were
--- discovered by other means (e.g. SMT analysis).  The block in
--- question's terminal statement will be replaced by an ITE (from IP
--- -> new addresses) and the new addresses will be added to the
--- frontier for additional discovery.
-addDiscoveredFunctionBlockTargets :: DiscoveryState arch
-                                  -> DiscoveryFunInfo arch ids
-                                  -- ^ The function for which we have learned additional information
-                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
-                                  -> DiscoveryState arch
-addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
-  let rsn = discoveredFunReason origFunInfo
-      funAddr = discoveredFunAddr origFunInfo
-  in fst $ runST (runFunctionAnalysis (\_ -> pure ())
-                                      funAddr rsn initState
-                                      resolvedTargets)
 
 runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Logging function to call when analyzing a new block.
@@ -1673,6 +1733,25 @@ runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
   seq finfo $ seq s $ pure (s', Some finfo)
 
 
+-- | Extend the analysis of a previously analyzed function with new
+-- information about the transfers for a block in that function.  The
+-- assumption is that the block in question previously had an unknown
+-- transfer state condition, and that the new transfer addresses were
+-- discovered by other means (e.g. SMT analysis).  The block in
+-- question's terminal statement will be replaced by an ITE (from IP
+-- -> new addresses) and the new addresses will be added to the
+-- frontier for additional discovery.
+addDiscoveredFunctionBlockTargets :: DiscoveryState arch
+                                  -> DiscoveryFunInfo arch ids
+                                  -- ^ The function for which we have learned additional information
+                                  -> [(ArchSegmentOff arch, [ArchSegmentOff arch])]
+                                  -> DiscoveryState arch
+addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
+  let rsn = discoveredFunReason origFunInfo
+      funAddr = discoveredFunAddr origFunInfo
+      logBlock _ = pure ()
+  in fst $ runST $ runFunctionAnalysis logBlock funAddr rsn initState resolvedTargets
+
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
 isDataCodePointer a v
@@ -1689,12 +1768,12 @@ exploreMemPointers :: [(ArchSegmentOff arch, ArchSegmentOff arch)]
                    -- considering possible addresses.
                    -> DiscoveryState arch
                    -> DiscoveryState arch
-exploreMemPointers mem_words info =
+exploreMemPointers memWords info =
   flip execState info $ do
-    let mem_addrs
+    let memAddrs
           = filter (\(a,v) -> isDataCodePointer a v)
-          $ mem_words
-    mapM_ (modify . addMemCodePointer) mem_addrs
+          $ memWords
+    mapM_ (modify . addMemCodePointer) memAddrs
 
 -- | Expand an initial discovery state by exploring from a given set of function
 -- entry points.
@@ -1739,25 +1818,27 @@ cfgFromAddrs ainfo mem addrSymMap =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-resolveFuns :: (ArchSegmentOff arch -> FunctionExploreReason (ArchAddrWidth arch) -> ST s Bool)
-               -- ^ Callback for discovered functions
-               --
-               -- Should return true if we should analyze the function and false otherwise.
-            -> (ArchSegmentOff arch -> ArchSegmentOff arch -> ST s ())
-               -- ^ Callback for logging blocks discovered within function
-               -- Arguments include the address of function and address of block.
+resolveFuns :: DiscoveryOptions
+               -- ^ Options controlling discovery
             -> DiscoveryState arch
-            -> ST s (DiscoveryState arch)
-resolveFuns analyzeFun analyzeBlock info = seq info $
+            -> IO (DiscoveryState arch)
+resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
   case Map.minViewWithKey (info^.unexploredFunctions) of
     Nothing -> pure info
-    Just ((addr, rsn), rest) -> do
-      p <- analyzeFun addr rsn
-      if p then do
-        (info',_) <- analyzeFunction (analyzeBlock addr) addr rsn info
-        resolveFuns analyzeFun analyzeBlock info'
-       else
-        resolveFuns analyzeFun analyzeBlock (info & unexploredFunctions .~ rest)
+    Just ((addr, rsn), _) -> do
+      let symMap = symbolNames info
+      when (logAtAnalyzeFunction disOpts) $ do
+        hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
+        hFlush stderr
+      if Map.member addr (info^.funInfo) then
+        resolveFuns disOpts info
+       else do
+        let analyzeBlock baddr = ioToST $ do
+              when (logAtAnalyzeBlock disOpts) $ do
+                hPutStrLn stderr $ "  Analyzing block: " ++ show baddr
+                hFlush stderr
+        (info', _) <- stToIO $ runFunctionAnalysis analyzeBlock addr rsn info []
+        resolveFuns disOpts info'
 
 ------------------------------------------------------------------------
 -- Top-level discovery
@@ -1821,9 +1902,7 @@ discoveryLogFn disOpt symMap (AnalyzeFunction addr) = ioToST $ do
 discoveryLogFn disOpt _ (AnalyzeBlock addr) = ioToST $ do
   when (logAtAnalyzeBlock disOpt) $ do
     hPutStrLn stderr $ "  Analyzing block: " ++ show addr
-
     hFlush stderr
-
 
 ppFunReason :: MemWidth w => FunctionExploreReason w -> String
 ppFunReason rsn =
@@ -1842,37 +1921,23 @@ completeDiscoveryState :: forall arch
                        .  DiscoveryState arch
                        -> DiscoveryOptions
                           -- ^ Options controlling discovery
-                       -> (ArchSegmentOff arch -> Bool)
-                          -- ^ Predicate to check if we should explore a function
-                          --
-                          -- Return true to explore all functions.
                        -> IO (DiscoveryState arch)
-completeDiscoveryState initState disOpt funPred = do
+completeDiscoveryState initState disOpt = do
  let ainfo = archInfo initState
  let mem = memory initState
  let symMap = symbolNames initState
- stToIO $ withArchConstraints ainfo $ do
+ withArchConstraints ainfo $ do
   -- Add symbol table entries to discovery state if requested
   let postSymState
         | exploreFunctionSymbols disOpt =
             initState & markAddrsAsFunction InitAddr (Map.keys symMap)
         | otherwise = initState
-  let analyzeFn addr rsn = ioToST $ do
-        let b = funPred addr
-        when (b && logAtAnalyzeFunction disOpt) $ do
-          hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
-          hFlush stderr
-        pure $! b
-  let analyzeBlock _ addr = ioToST $ do
-        when (logAtAnalyzeBlock disOpt) $ do
-          hPutStrLn stderr $ "  Analyzing block: " ++ show addr
-          hFlush stderr
   -- Discover functions
-  postPhase1Discovery <- resolveFuns analyzeFn analyzeBlock postSymState
+  postPhase1Discovery <- resolveFuns disOpt postSymState
   -- Discovery functions from memory
   if exploreCodeAddrInMem disOpt then do
     -- Execute hack of just searching for pointers in memory.
     let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
-    resolveFuns analyzeFn analyzeBlock $ postPhase1Discovery & exploreMemPointers mem_contents
+    resolveFuns disOpt $ postPhase1Discovery & exploreMemPointers mem_contents
    else
     return postPhase1Discovery

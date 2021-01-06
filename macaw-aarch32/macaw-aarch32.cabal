@@ -1,7 +1,7 @@
 name:                macaw-aarch32
 version:             0.1.0.0
--- synopsis:            
--- description:         
+synopsis:            Support for 32 bit ARM in macaw
+description:         This library implements 32 bit ARM support (both the ARM and Thumb encodings) for the macaw library. The semantics are derived from the official ARM semantics (encoded in ASL).
 license:             BSD3
 license-file:        LICENSE
 author:              Kevin Quick
@@ -27,7 +27,6 @@ library
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <5
-                     , ansi-wl-pprint
                      , asl-translator
                      , bytestring
                      , bv-sized >= 1.0.1 && < 1.1
@@ -43,6 +42,7 @@ library
                      , mtl
                      , parameterized-utils
                      , pretty
+                     , prettyprinter >= 1.7.0
                      , semmc
                      , semmc-aarch32
                      , template-haskell
@@ -64,7 +64,6 @@ test-suite macaw-asl-tests
                      , MismatchTests
                      , Shared
   build-depends:       base >=4.10 && <5
-                     , ansi-wl-pprint
                      , binary
                      , bytestring
                      , containers
@@ -76,6 +75,7 @@ test-suite macaw-asl-tests
                      , macaw-base
                      , macaw-aarch32
                      , parameterized-utils
+                     , prettyprinter >= 1.7.0
                      , semmc-aarch32
                      , tasty
                      , tasty-hunit

@@ -17,7 +17,7 @@ General notes regarding the disassembly process for ARM.
 ARM disassembly is complicated by the different instruction set states
 that an ARM processor supports.  There are technically 4 different
 instruction sets: ARM32, Thumb32, Thumb32EE, and Jazelle.  At the
-present time, only the first two are supported by macaw-arm
+present time, only the first two are supported by macaw-aarch32
 (identified hereafter as A32 and T32).
 
 When macaw base's Discovery is attempting to discover code to
@@ -40,9 +40,7 @@ To handle the above:
 
   * The disassembly should only try to disassemble for the current
     mode, and should exit (with the FetchAndExecute status) whenever
-    the ISETSTATE changes. (This may require enhancing the
-    post-semantics disassembleBlock functionality below to detect
-    ISETSTATE differences).
+    the ISETSTATE changes.
 
   * The macaw-base functionality will then create a block up to this
     point, and the FetchAndExecute status will cause the instructions
@@ -51,14 +49,6 @@ To handle the above:
     frontier will inform the subsequent call to disassemblyFn which
     ISETSTATE is applicable for that disassembly.
 
-Notes:
-
-  * At the present time (Aug 15 2018), the code below *improperly*
-    attempts to use the low bit of the PC register to determine which
-    operational mode is newly in effect.  This is wrong because the
-    semantics for an instruction will effect the ISETSTATE change and
-    then clear the bits when writing to the PC.  This should be
-    re-worked to use the above described functionality instead.
 -}
 
 module Data.Macaw.ARM.Disassemble
@@ -71,7 +61,6 @@ import           Control.Monad ( unless )
 import qualified Control.Monad.Except as ET
 import           Control.Monad.ST ( ST )
 import           Control.Monad.Trans ( lift )
-import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Macaw.ARM.ARMReg as AR
@@ -88,6 +77,7 @@ import qualified Data.Parameterized.Nonce as NC
 import qualified Data.Text as T
 import qualified Dismantle.ARM.A32 as ARMD
 import qualified Dismantle.ARM.T32 as ThumbD
+import qualified Language.ASL.Globals as ASL
 import           Text.Printf ( printf )
 
 import qualified SemMC.Architecture.AArch32 as ARM
@@ -121,26 +111,51 @@ disassembleFn :: (MC.Value ARM.AArch32 ids (MT.BVType 32) -> ARMD.Instruction ->
               -- ^ Maximum size of the block (a safeguard)
               -> ST s (MCB.Block ARM.AArch32 ids, Int)
 disassembleFn lookupA32Semantics lookupT32Semantics nonceGen startAddr regState maxSize = do
+  -- NOTE: The core discovery loop passes in an initial register state with the
+  -- PSTATE_T (thumb state) bit set or not set based on the predecessor blocks.
+  -- However, that does not account for mode switches between function calls
+  -- (because macaw does not maintain abstract states between function calls).
+  -- We account for that by force setting PSTATE_T to 1 (true) if the low bit of
+  -- the address is set.  Otherwise, we take the initial value.
+  let dmode = thumbState regState
   let lookupSemantics ipval instr = case instr of
                                       A32I inst -> lookupA32Semantics ipval inst
                                       T32I inst -> lookupT32Semantics ipval inst
   mr <- ET.runExceptT (unDisM (tryDisassembleBlock
+                               dmode
                                lookupSemantics
-                               nonceGen startAddr regState maxSize))
+                               nonceGen (MC.clearSegmentOffLeastBit startAddr) regState maxSize))
   case mr of
     Left (blocks, off, _exn) -> return (blocks, off)
     Right (blocks, bytes) -> return (blocks, bytes)
 
-tryDisassembleBlock :: (MC.Value ARM.AArch32 ids (MT.BVType 32) -> InstructionSet -> Maybe (SG.Generator ARM.AArch32 ids s ()))
+-- | The mode we are decoding this block in (ARM vs Thumb)
+--
+-- We turn this into an explicit data type so that we don't need to check the
+-- low bit of the address or PSTATE everywhere.
+data DecodeMode = A32 | T32
+  deriving (Show)
+
+-- | If the low-bit of the address is set
+thumbState :: MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
+           -> DecodeMode
+thumbState regState =
+  let pstate_t_val = regState ^. MC.boundValue pstate_t
+  in if pstate_t_val == MC.BVValue PN.knownNat 0 then A32 else T32
+  where
+    pstate_t = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
+
+tryDisassembleBlock :: DecodeMode
+                    -> (MC.Value ARM.AArch32 ids (MT.BVType 32) -> InstructionSet -> Maybe (SG.Generator ARM.AArch32 ids s ()))
                     -> NC.NonceGenerator (ST s) ids
                     -> MC.ArchSegmentOff ARM.AArch32
                     -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
                     -> Int
                     -> DisM ids s (MCB.Block ARM.AArch32 ids, Int)
-tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
+tryDisassembleBlock dmode lookupSemantics nonceGen startAddr regState maxSize = do
   let gs0 = SG.initGenState nonceGen startAddr regState
   let startOffset = MM.segoffOffset startAddr
-  (nextPCOffset, block) <- disassembleBlock lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
+  (nextPCOffset, block) <- disassembleBlock dmode lookupSemantics gs0 startAddr 0 (startOffset + fromIntegral maxSize)
   unless (nextPCOffset > startOffset) $ do
     let reason = InvalidNextPC (MM.absoluteAddr nextPCOffset) (MM.absoluteAddr startOffset)
     failAt gs0 0 startAddr reason
@@ -161,8 +176,9 @@ tryDisassembleBlock lookupSemantics nonceGen startAddr regState maxSize = do
 --
 -- In most of those cases, we end the block with a simple terminator.  If the IP
 -- becomes a mux, we split execution using 'conditionalBranch'.
-disassembleBlock :: forall ids s .
-                    (MC.Value ARM.AArch32 ids (MT.BVType 32) -> InstructionSet -> Maybe (SG.Generator ARM.AArch32 ids s ()))
+disassembleBlock :: forall ids s
+                  . DecodeMode
+                 -> (MC.Value ARM.AArch32 ids (MT.BVType 32) -> InstructionSet -> Maybe (SG.Generator ARM.AArch32 ids s ()))
                  -- ^ A function to look up the semantics for an instruction that we disassemble
                  -> SG.GenState ARM.AArch32 ids s
                  -> MM.MemSegmentOff 32
@@ -174,20 +190,17 @@ disassembleBlock :: forall ids s .
                  -- disassemble to; in principle, macaw can tell us to limit our
                  -- search with this.
                  -> DisM ids s (MM.MemWord 32, MCB.Block ARM.AArch32 ids)
-disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
+disassembleBlock dmode lookupSemantics gs curPCAddr blockOff maxOffset = do
   let seg = MM.segoffSegment curPCAddr
   let off = MM.segoffOffset curPCAddr
-  case readInstruction curPCAddr of
+  case readInstruction dmode curPCAddr of
     Left err -> failAt gs blockOff curPCAddr (DecodeError err)
     Right (_, 0) -> failAt gs blockOff curPCAddr (InvalidNextPC (MM.segoffAddr curPCAddr) (MM.segoffAddr curPCAddr))
     Right (i, bytesRead) -> do
-      -- FIXME: Set PSTATE.T based on whether instruction is A32I or T32I
-      -- traceM ("II: " ++ show i)
-      -- let curPC = MM.segmentOffAddr seg off
+      -- traceM (show (curPCAddr, "II: ", show i))
       let nextPCOffset = off + bytesRead
           nextPC = MM.segmentOffAddr seg nextPCOffset
           nextPCVal :: MC.Value ARM.AArch32 ids (MT.BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
-          -- curPCVal :: Value ARM.AArch32 ids (BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) curPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
       ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
@@ -225,7 +238,7 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
                                             , SG._blockStateSnapshot = preBlock' ^. SG.pBlockState
                                             , SG.appCache = SG.appCache gs
                                             }
-                      disassembleBlock lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
+                      disassembleBlock dmode lookupSemantics gs2 nextPCSegAddr (blockOff + fromIntegral bytesRead) maxOffset
                      -- Otherwise, we are still at the end of a block.
                      | otherwise -> return (nextPCOffset, SG.finishBlock' preBlock MCB.FetchAndExecute)
                 SG.FinishedPartialBlock b -> return (nextPCOffset, b)
@@ -237,21 +250,15 @@ disassembleBlock lookupSemantics gs curPCAddr blockOff maxOffset = do
 -- This code assumes that the 'MM.ByteRegion' is maximal; that is, that there
 -- are no byte regions that could be coalesced.
 readInstruction :: (MM.MemWidth w)
-                => MM.MemSegmentOff w
+                => DecodeMode
+                -> MM.MemSegmentOff w
                 -> Either (ARMMemoryError w) (InstructionSet, MM.MemWord w)
-readInstruction addr = do
+readInstruction dmode addr = do
   let seg = MM.segoffSegment addr
   let segRelAddr = MM.segoffAddr addr
-  -- Addresses specified in ARM instructions have the low bit
-  -- clear, but Thumb (T32) target addresses have the low bit sit.
-  -- This is only manifested in the instruction addresses: the
-  -- actual PC for fetching instructions clears the low bit to
-  -- generate aligned memory accesses.
   let alignedMsegOff = MM.clearSegmentOffLeastBit addr
   if MM.segmentFlags seg `MMP.hasPerm` MMP.execute
   then do
-      -- traceM ("Orig addr = " ++ show addr ++ " modified to " ++ show ao)
-      -- alignedMsegOff <- liftMaybe (ARMInvalidInstructionAddress seg ao) (MM.resolveSegmentOff seg ao)
       contents <- liftMemError $ MM.segoffContentsAfter alignedMsegOff
       case contents of
         [] -> ET.throwError $ ARMMemoryError (MM.AccessViolation segRelAddr)
@@ -266,10 +273,9 @@ readInstruction addr = do
             -- unpleasant.  We could alter the disassembler to consume strict
             -- bytestrings, at the cost of possibly making it less efficient for
             -- other clients.
-            let (bytesRead, minsn) =
-                         if MC.segoffOffset addr .&. 1 == 0
-                         then fmap (fmap A32I) $ ARMD.disassembleInstruction (LBS.fromStrict bs)
-                         else fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
+            let (bytesRead, minsn) = case dmode of
+                                       A32 -> fmap (fmap A32I) $ ARMD.disassembleInstruction (LBS.fromStrict bs)
+                                       T32 -> fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
               Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents

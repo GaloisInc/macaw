@@ -38,7 +38,7 @@ import           Control.Monad.ST
 import           Control.Monad.State.Strict
 import           Data.BinarySymbols
 import           Data.Bits
-import           Data.List
+import           Data.List (find)
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -255,7 +255,11 @@ rewriteApp app = do
         pure y
        else
         pure (BoolValue False)
-    AndApp x y@BoolValue{} -> rewriteApp (AndApp y x)
+    AndApp x (BoolValue yc) ->
+      if yc then
+        pure x
+       else
+        pure (BoolValue False)
     -- x < y && x <= y   =   x < y
     AndApp   (valueAsApp -> Just (BVUnsignedLe x  y ))
            v@(valueAsApp -> Just (BVUnsignedLt x' y'))

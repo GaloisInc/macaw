@@ -16,7 +16,6 @@ This defines the monad used to map Reopt blocks to Crucible.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
-{-# OPTIONS_GHC -Wwarn #-}
 module Data.Macaw.Symbolic.PersistentState
   ( -- * CrucPersistentState
     CrucPersistentState(..)
@@ -31,6 +30,10 @@ module Data.Macaw.Symbolic.PersistentState
   , floatInfoToCrucible
   , floatInfoFromCrucible
   , typeCtxToCrucible
+  , macawListSize
+  , macawListIndexToCrucible
+  , macawListToCrucible
+  , macawListToCrucibleM
   , typeListToCrucible
   , macawAssignToCruc
   , macawAssignToCrucM
@@ -151,13 +154,39 @@ floatInfoFromCrucible = \case
   fi ->
     error $ "Unsupported Crucible floating-point format in Macaw: " ++ show fi
 
-typeListToCrucible ::
-    P.List M.TypeRepr ctx ->
-    Assignment C.TypeRepr (ToCrucibleTypeList ctx)
-typeListToCrucible x =
+-- | Convert a list over macaw types to a context over crucible types.
+--
+-- N.B. The order of elements is reversed.
+macawListToCrucible :: (forall tp . a tp -> b (ToCrucibleType tp))
+                    -> P.List a ctx
+                    -> Assignment b (ToCrucibleTypeList ctx)
+macawListToCrucible f x =
   case x of
     P.Nil    -> Empty
-    h P.:< r -> typeListToCrucible r :> typeToCrucible h
+    h P.:< r -> macawListToCrucible f r :> f h
+
+-- | Convert a list over macaw types to a context over crucible types.
+--
+-- N.B. The order of elements is reversed.
+macawListToCrucibleM :: Applicative m
+                     => (forall tp . a tp -> m (b (ToCrucibleType tp)))
+                     -> P.List a ctx
+                     -> m (Assignment b (ToCrucibleTypeList ctx))
+macawListToCrucibleM f x =
+  case x of
+    P.Nil    -> pure Empty
+    h P.:< r -> (:>) <$> macawListToCrucibleM f r <*> f h
+
+macawListSize :: P.List a ctx -> Size (ToCrucibleTypeList ctx)
+macawListSize P.Nil = zeroSize
+macawListSize (_ P.:< r) = incSize (macawListSize r)
+
+macawListIndexToCrucible :: Size (ToCrucibleTypeList ctx) -> P.Index ctx tp -> Index (ToCrucibleTypeList ctx) (ToCrucibleType tp)
+macawListIndexToCrucible sz P.IndexHere = lastIndex sz
+macawListIndexToCrucible sz (P.IndexThere x) = skipIndex (macawListIndexToCrucible (decSize sz) x)
+
+typeListToCrucible :: P.List M.TypeRepr ctx -> Assignment C.TypeRepr (ToCrucibleTypeList ctx)
+typeListToCrucible = macawListToCrucible typeToCrucible
 
 -- | Return the types associated with a register assignment.
 typeCtxToCrucible ::

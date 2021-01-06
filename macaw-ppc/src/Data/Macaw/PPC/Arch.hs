@@ -6,6 +6,7 @@
 {-# LANGUAGE KindSignatures        #-}
 {-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE StandaloneDeriving    #-}
@@ -30,7 +31,7 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
@@ -83,9 +84,9 @@ type instance MC.ArchTermStmt (SP.AnyPPC v) = PPCTermStmt v
 instance MC.PrettyF (PPCTermStmt v) where
   prettyF ts =
     case ts of
-      PPCSyscall -> PP.text "ppc_syscall"
-      PPCTrap -> PP.text "ppc_trap"
-      PPCTrapdword vb va vto -> PP.text "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
+      PPCSyscall -> "ppc_syscall"
+      PPCTrap -> "ppc_trap"
+      PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
 
 rewriteTermStmt :: PPCTermStmt v src -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v tgt)
 rewriteTermStmt s =
@@ -166,27 +167,27 @@ instance TF.TraversableF (PPCStmt v) where
 instance MC.IsArchStmt (PPCStmt v) where
   ppArchStmt pp stmt =
     case stmt of
-      Attn -> PP.text "ppc_attn"
-      Sync -> PP.text "ppc_sync"
-      Isync -> PP.text "ppc_isync"
-      Dcba ea -> PP.text "ppc_dcba" PP.<+> pp ea
-      Dcbf ea -> PP.text "ppc_dcbf" PP.<+> pp ea
-      Dcbi ea -> PP.text "ppc_dcbi" PP.<+> pp ea
-      Dcbst ea -> PP.text "ppc_dcbst" PP.<+> pp ea
-      Dcbz ea -> PP.text "ppc_dcbz" PP.<+> pp ea
-      Dcbzl ea -> PP.text "ppc_dcbzl" PP.<+> pp ea
-      Dcbt ea th -> PP.text "ppc_dcbt" PP.<+> pp ea PP.<+> pp th
-      Dcbtst ea th -> PP.text "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
-      Icbi ea -> PP.text "ppc_icbi" PP.<+> pp ea
-      Icbt ea ct -> PP.text "ppc_icbt" PP.<+> pp ea PP.<+> pp ct
-      Tabort r -> PP.text "ppc_tabort" PP.<+> pp r
-      Tabortdc r1 r2 v -> PP.text "ppc_tabortdc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
-      Tabortdci v1 r v2 -> PP.text "ppc_tabortdci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
-      Tabortwc r1 r2 v -> PP.text "ppc_tabortwc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
-      Tabortwci v1 r v2 -> PP.text "ppc_tabortwci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
-      Tbegin v -> PP.text "ppc_tbegin" PP.<+> pp v
-      Tcheck v -> PP.text "ppc_tcheck" PP.<+> pp v
-      Tend v -> PP.text "ppc_tend" PP.<+> pp v
+      Attn -> "ppc_attn"
+      Sync -> "ppc_sync"
+      Isync -> "ppc_isync"
+      Dcba ea -> "ppc_dcba" PP.<+> pp ea
+      Dcbf ea -> "ppc_dcbf" PP.<+> pp ea
+      Dcbi ea -> "ppc_dcbi" PP.<+> pp ea
+      Dcbst ea -> "ppc_dcbst" PP.<+> pp ea
+      Dcbz ea -> "ppc_dcbz" PP.<+> pp ea
+      Dcbzl ea -> "ppc_dcbzl" PP.<+> pp ea
+      Dcbt ea th -> "ppc_dcbt" PP.<+> pp ea PP.<+> pp th
+      Dcbtst ea th -> "ppc_dcbtst" PP.<+> pp ea PP.<+> pp th
+      Icbi ea -> "ppc_icbi" PP.<+> pp ea
+      Icbt ea ct -> "ppc_icbt" PP.<+> pp ea PP.<+> pp ct
+      Tabort r -> "ppc_tabort" PP.<+> pp r
+      Tabortdc r1 r2 v -> "ppc_tabortdc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
+      Tabortdci v1 r v2 -> "ppc_tabortdci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
+      Tabortwc r1 r2 v -> "ppc_tabortwc" PP.<+> pp r1 PP.<+> pp r2 PP.<+> pp v
+      Tabortwci v1 r v2 -> "ppc_tabortwci" PP.<+> pp v1 PP.<+> pp r PP.<+> pp v2
+      Tbegin v -> "ppc_tbegin" PP.<+> pp v
+      Tcheck v -> "ppc_tcheck" PP.<+> pp v
+      Tend v -> "ppc_tend" PP.<+> pp v
 
 type instance MC.ArchStmt (SP.AnyPPC v) = PPCStmt v
 
@@ -571,7 +572,7 @@ rewritePrimFn = \case
     tgtFn <- Vec3 name <$> rewriteValue op1 <*> rewriteValue op2 <*> rewriteValue op3 <*> rewriteValue vscr
     evalRewrittenArchFn tgtFn
 
-ppPrimFn :: (Applicative m) => (forall u . f u -> m PP.Doc) -> PPCPrimFn v f tp -> m PP.Doc
+ppPrimFn :: (Applicative m) => (forall u . f u -> m (PP.Doc ann)) -> PPCPrimFn v f tp -> m (PP.Doc ann)
 ppPrimFn pp = \case
   UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
   SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
@@ -596,20 +597,20 @@ ppPrimFn pp = \case
   FPFromSBV _fi r x -> ppBinary "ppc_fp_from_sbv" <$> pp r <*> pp x
   FPFromUBV _fi r x -> ppBinary "ppc_fp_from_ubv" <$> pp r <*> pp x
   FPCoerce _fi _fi' x -> ppUnary "ppc_fp_coerce" <$> pp x
-  FPSCR1 n r1 fpscr -> ppBinary ("ppc_fp_un_op_fpscr " ++ n) <$> pp r1 <*> pp fpscr
-  FPSCR2 n r1 r2 fpscr -> pp3 ("ppc_fp_bin_op_fpscr " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
-  FPSCR3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp_tern_op_fpscr " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
-  FP1 n r1 fpscr -> ppBinary ("ppc_fp1 " ++ n) <$> pp r1 <*> pp fpscr
-  FP2 n r1 r2 fpscr -> pp3 ("ppc_fp2 " ++ n) <$> pp r1 <*> pp r2 <*> pp fpscr
-  FP3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp3 " ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
-  Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " ++ n) <$> pp r1 <*> pp vscr
-  Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" ++ n) <$> pp r1 <*> pp r2 <*> pp vscr
-  Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" ++ n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
+  FPSCR1 n r1 fpscr -> ppBinary ("ppc_fp_un_op_fpscr " <> PP.pretty n) <$> pp r1 <*> pp fpscr
+  FPSCR2 n r1 r2 fpscr -> pp3 ("ppc_fp_bin_op_fpscr " <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp fpscr
+  FPSCR3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp_tern_op_fpscr " <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
+  FP1 n r1 fpscr -> ppBinary ("ppc_fp1 " <> PP.pretty n) <$> pp r1 <*> pp fpscr
+  FP2 n r1 r2 fpscr -> pp3 ("ppc_fp2 " <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp fpscr
+  FP3 n r1 r2 r3 fpscr -> pp4 ("ppc_fp3 " <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp fpscr
+  Vec1 n r1 vscr -> ppBinary ("ppc_vec1 " <> PP.pretty n) <$> pp r1 <*> pp vscr
+  Vec2 n r1 r2 vscr -> pp3 ("ppc_vec2" <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp vscr
+  Vec3 n r1 r2 r3 vscr -> pp4 ("ppc_vec3" <> PP.pretty n) <$> pp r1 <*> pp r2 <*> pp r3 <*> pp vscr
  where
-  ppUnary s v' = PP.text s PP.<+> v'
-  ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
-  pp3 s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
-  pp4 s v1' v2' v3' v4' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
+  ppUnary s v' = s PP.<+> v'
+  ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
+  pp3 s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
+  pp4 s v1' v2' v3' v4' = s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
 
 instance MC.IsArchFn (PPCPrimFn v) where
   ppArchFn = ppPrimFn

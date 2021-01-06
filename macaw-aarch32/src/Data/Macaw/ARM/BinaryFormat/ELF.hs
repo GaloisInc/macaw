@@ -6,22 +6,22 @@ module Data.Macaw.ARM.BinaryFormat.ELF
     )
     where
 
-import           Control.Lens ( (^.), (^..), to )
 import           Data.Bits
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ElfEdit as E
 import           Data.Vector (toList)
-import           Text.PrettyPrint.ANSI.Leijen
+import           Prettyprinter
 
-
-
-getElfSections :: E.Elf w -> [String]
+getElfSections :: E.ElfHeaderInfo w -> [String]
 getElfSections e =
-    e^..E.elfSections.to (C8.unpack . E.elfSectionName)
+  case E.headerNamedShdrs e of
+    Left (_, msg) -> error $ show msg
+    Right shdrs -> toList $ (C8.unpack . E.shdrName) <$> shdrs
 
-
-getELFSymbols :: (Show (E.ElfWordType w), Data.Bits.Bits (E.ElfWordType w), Integral (E.ElfWordType w)) => E.Elf w -> Doc
+getELFSymbols :: (Show (E.ElfWordType w), Data.Bits.Bits (E.ElfWordType w), Integral (E.ElfWordType w)) => E.ElfHeaderInfo w -> Doc ann
 getELFSymbols elf =
-    let symtab = elf^.to E.elfSymtab
-        ps = fmap (E.ppSymbolTableEntries . toList . E.elfSymbolTableEntries) symtab
-    in vsep ps
+  case E.decodeHeaderSymtab elf of
+    Nothing -> emptyDoc
+    Just (Left e) -> error (show e)
+    Just (Right symtab) ->
+      E.ppSymbolTableEntries (toList (E.symtabEntries symtab))

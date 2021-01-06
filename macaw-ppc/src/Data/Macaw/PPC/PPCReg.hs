@@ -34,7 +34,7 @@ import           Data.Macaw.Types
 import           Data.Parameterized.Classes
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TH.GADT as TH
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 
 import qualified Dismantle.PPC as D
 import qualified SemMC.Architecture.PPC as PPC
@@ -73,7 +73,7 @@ instance ShowF (PPCReg v) where
   showF = show
 
 instance MC.PrettyF (PPCReg v) where
-  prettyF = PP.text . showF
+  prettyF = PP.pretty . showF
 
 $(return [])
 
