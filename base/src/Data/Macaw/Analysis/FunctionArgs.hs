@@ -952,7 +952,9 @@ functionDemands :: forall arch
                 -- ^ Maps addresses whose type has been resolved to the and result
                 -- registers.
                 -> Map BS.ByteString (KnownFunABI (ArchReg arch))
-                   -- ^ Known symbol registers.
+                   -- ^ Maps function names to know function arguments.
+                   --
+                   -- Used to handle relocations to external functions.
                 -> Memory (ArchAddrWidth arch)
                    -- ^ State of memory for resolving segment offsets.
                 -> [Some (DiscoveryFunInfo arch)]

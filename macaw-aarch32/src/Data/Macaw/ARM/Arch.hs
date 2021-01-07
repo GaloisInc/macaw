@@ -4,6 +4,7 @@
 {-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -38,7 +39,7 @@ import qualified Dismantle.ARM.A32 as ARMDis
 import qualified Dismantle.ARM.T32 as ThumbDis
 import           GHC.TypeLits
 import qualified SemMC.Architecture.AArch32 as ARM
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
+import qualified Prettyprinter as PP
 import qualified Text.PrettyPrint.HughesPJClass as HPP
 
 -- ----------------------------------------------------------------------
@@ -47,16 +48,20 @@ import qualified Text.PrettyPrint.HughesPJClass as HPP
 data ARMStmt (v :: MT.Type -> Type) where
   -- | This is not great; it doesn't give us much ability to precisely reason
   -- about anything.  We'd have to havok every bit of state if we saw one.
-  UninterpretedOpcode :: ARMDis.Opcode ARMDis.Operand sh
-                      -> PL.List ARMDis.Operand sh
-                      -> ARMStmt v
+  UninterpretedA32Opcode :: ARMDis.Opcode ARMDis.Operand sh
+                         -> PL.List ARMDis.Operand sh
+                         -> ARMStmt v
+  UninterpretedT32Opcode :: ThumbDis.Opcode ThumbDis.Operand sh
+                         -> PL.List ThumbDis.Operand sh
+                         -> ARMStmt v
 
 type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
         case stmt of
-          UninterpretedOpcode opc ops -> PP.pretty (show opc) PP.<+> PP.pretty (FCls.toListFC showF ops)
+          UninterpretedA32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
+          UninterpretedT32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
 
 instance TF.FunctorF ARMStmt where
   fmapF = TF.fmapFDefault
@@ -67,15 +72,26 @@ instance TF.FoldableF ARMStmt where
 instance TF.TraversableF ARMStmt where
   traverseF _go stmt =
     case stmt of
-      UninterpretedOpcode opc ops -> pure (UninterpretedOpcode opc ops)
+      UninterpretedA32Opcode opc ops -> pure (UninterpretedA32Opcode opc ops)
+      UninterpretedT32Opcode opc ops -> pure (UninterpretedT32Opcode opc ops)
 
 rewriteStmt :: ARMStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt ()
 rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
--- The ArchBlockPrecond type holds data required for an architecture to compute
--- new abstract states at the beginning on a block.  PowerPC doesn't need any
--- additional information, so we use ()
-type instance MAI.ArchBlockPrecond ARM.AArch32 = ()
+-- | The ArchBlockPrecond type holds data required for an architecture to compute
+-- new abstract states at the beginning on a block.
+type instance MAI.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
+
+-- | In order to know how to decode a block, we need to know the value of
+-- PSTATE_T (which is the Thumb/ARM mode) at the beginning of a block. We use
+-- the 'MAI.ArchBlockPrecond' to communicate this between blocks (the core
+-- discovery loop maintains it, and we compute the initial value when entering a
+-- function).
+data ARMBlockPrecond =
+  ARMBlockPrecond { bpPSTATE_T :: Bool
+                  }
+  deriving (Eq, Ord, Show)
+
 
 -- ----------------------------------------------------------------------
 -- ARM terminal statements (which have instruction-specific effects on
@@ -83,22 +99,24 @@ type instance MAI.ArchBlockPrecond ARM.AArch32 = ()
 
 data ARMTermStmt ids where
   ARMSyscall :: WI.W 24 -> ARMTermStmt ids
-    -- ThumbSyscall :: ThumbDis.Operand "Imm0_255" -> ARMTermStmt ids
+  ThumbSyscall :: WI.W 8 -> ARMTermStmt ids
 
 deriving instance Show (ARMTermStmt ids)
 
 type instance MC.ArchTermStmt ARM.AArch32 = ARMTermStmt
 
 instance MC.PrettyF ARMTermStmt where
-  prettyF ts = let dpp2app :: forall a. HPP.Pretty a => a -> PP.Doc
-                   dpp2app = PP.text . show . HPP.pPrint
+  prettyF ts = let dpp2app :: forall a ann. HPP.Pretty a => a -> PP.Doc ann
+                   dpp2app = PP.viaShow . HPP.pPrint
                in case ts of
-                    ARMSyscall imm -> PP.text "arm_syscall" PP.<+> dpp2app imm
+                    ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
+                    ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
 
 rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
     case s of
       ARMSyscall imm -> pure $ ARMSyscall imm
+      ThumbSyscall imm -> pure (ThumbSyscall imm)
 
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the
@@ -279,9 +297,9 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
 
 instance MC.IsArchFn ARMPrimFn where
     ppArchFn pp f =
-        let ppUnary s v' = PP.text s PP.<+> v'
-            ppBinary s v1' v2' = PP.text s PP.<+> v1' PP.<+> v2'
-            ppTernary s v1' v2' v3' = PP.text s PP.<+> v1' PP.<+> v2' PP.<+> v3'
+        let ppUnary s v' = s PP.<+> v'
+            ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
+            ppTernary s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
         in case f of
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
@@ -531,7 +549,7 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
             G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
       _ | isUninterpretedOpcode opc -> Just $ do
-            G.addStmt (MC.ExecArchStmt (UninterpretedOpcode opc operands))
+            G.addStmt (MC.ExecArchStmt (UninterpretedA32Opcode opc operands))
         | otherwise -> Nothing
 
 -- | This is a coarse heuristic to treat any instruction beginning with 'V' as a
@@ -550,13 +568,12 @@ isUninterpretedOpcode opc =
 -- to talk about in the semantics; especially useful for architecture-specific
 -- terminator statements.
 t32InstructionMatcher :: ThumbDis.Instruction -> Maybe (G.Generator ARM.AArch32 ids s ())
-t32InstructionMatcher (ThumbDis.Instruction opc _operands) =
+t32InstructionMatcher (ThumbDis.Instruction opc operands) =
     case opc of
-      -- ThumbDis.TSVC -> case operands of
-      --                    ThumbDis.Imm0_255 imm ThumbDis.:< ThumbDis.Nil ->
-      --                        Just $ G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall $ ThumbDis.Imm0_255 imm))
-      -- ThumbDis.THINT -> case operands of
-      --                     ThumbDis.Imm0_15 _imm ThumbDis.:< ThumbDis.Nil ->
-      --                         Just $ return ()
-      -- G.finishWithTerminator (MCB.ArchTermStmt (ThumbHint $ ThumbDis.Imm0_15 imm))
-      _ -> Nothing
+      ThumbDis.SVC_T1 ->
+        case operands of
+          ThumbDis.Bv8 imm ThumbDis.:< ThumbDis.Nil -> Just $ do
+            G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall imm))
+      _ | isUninterpretedOpcode opc -> Just $ do
+            G.addStmt (MC.ExecArchStmt (UninterpretedT32Opcode opc operands))
+        | otherwise -> Nothing

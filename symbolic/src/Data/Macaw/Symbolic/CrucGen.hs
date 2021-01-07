@@ -101,7 +101,6 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (Nonce, NonceGenerator, freshNonce)
 import           Data.Parameterized.Pair
-import           Data.Parameterized.Some
 import qualified Data.Parameterized.TH.GADT as U
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC
@@ -110,7 +109,7 @@ import qualified Data.Sequence as Seq
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as Vec
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), width)
+import           Prettyprinter hiding (width)
 
 import           What4.ProgramLoc as C
 import qualified What4.Symbol as C
@@ -296,7 +295,7 @@ instance C.PrettyApp (MacawExprExtension arch) where
       BitsToPtr w x  -> sexpr ("bits_to_ptr_" ++ show w) [f x]
 
       MacawNullPtr _ -> sexpr "null_ptr" []
-      MacawBitcast x p -> sexpr "bitcast" [f x, text (show (M.widthEqTarget p))]
+      MacawBitcast x p -> sexpr "bitcast" [f x, viaShow (M.widthEqTarget p)]
 
 addrWidthIsPos :: M.AddrWidthRepr w -> LeqProof 1 w
 addrWidthIsPos M.Addr32 = LeqProof
@@ -485,37 +484,35 @@ instance TraversableFC (MacawArchStmtExtension arch)
       => FoldableFC (MacawStmtExtension arch) where
   foldMapFC = foldMapFCDefault
 
-
-
-sexpr :: String -> [Doc] -> Doc
-sexpr s [] = text s
-sexpr s l  = parens (text s <+> hsep l)
+sexpr :: String -> [Doc ann] -> Doc ann
+sexpr s [] = pretty s
+sexpr s l  = parens (pretty s <+> hsep l)
 
 instance (C.PrettyApp (MacawArchStmtExtension arch),
           M.PrettyF (M.ArchReg arch),
           M.MemWidth (M.RegAddrWidth (M.ArchReg arch)))
       => C.PrettyApp (MacawStmtExtension arch) where
-  ppApp :: forall f
-        .  (forall (x :: C.CrucibleType) . f x -> Doc)
-        -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc)
+  ppApp :: forall f ann
+        .  (forall (x :: C.CrucibleType) . f x -> Doc ann)
+        -> (forall (x :: C.CrucibleType) . MacawStmtExtension arch f x -> Doc ann)
   ppApp f a0 =
     case a0 of
       MacawReadMem     _  r   a   -> sexpr "macawReadMem"      [pretty r, f a]
       MacawCondReadMem _  r c a d -> sexpr "macawCondReadMem"  [pretty r, f c, f a, f d ]
       MacawWriteMem     _ r   a v -> sexpr "macawWriteMem"     [pretty r, f a, f v]
       MacawCondWriteMem _ r c a v -> sexpr "macawCondWriteMem" [f c, pretty r, f a, f v]
-      MacawGlobalPtr _ x -> sexpr "global" [ text (show x) ]
+      MacawGlobalPtr _ x -> sexpr "global" [ viaShow x ]
 
-      MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ text (show r) ]
+      MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ viaShow r ]
       MacawLookupFunctionHandle _ regs -> sexpr "macawLookupFunctionHandle" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
       MacawArchStateUpdate addr m ->
-        let prettyArchStateBinding :: forall tp . M.ArchReg arch tp -> MacawCrucibleValue f tp -> [Doc] -> [Doc]
+        let prettyArchStateBinding :: forall tp . M.ArchReg arch tp -> MacawCrucibleValue f tp -> [Doc ann] -> [Doc ann]
             prettyArchStateBinding reg (MacawCrucibleValue val) acc =
-              (M.prettyF reg <> text " => " <> f val) : acc
-        in sexpr "macawArchStateUpdate" [pretty addr, semiBraces (MapF.foldrWithKey prettyArchStateBinding [] m)]
+              (M.prettyF reg <> " => " <> f val) : acc
+        in sexpr "macawArchStateUpdate" [pretty addr, encloseSep lbrace rbrace semi (MapF.foldrWithKey prettyArchStateBinding [] m)]
       MacawInstructionStart baddr ioff t ->
-        sexpr "macawInstructionStart" [ pretty baddr, pretty ioff, text (show t) ]
+        sexpr "macawInstructionStart" [ pretty baddr, pretty ioff, viaShow t ]
       PtrEq _ x y    -> sexpr "ptr_eq" [ f x, f y ]
       PtrLt _ x y    -> sexpr "ptr_lt" [ f x, f y ]
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
@@ -873,7 +870,6 @@ appToCrucible app = do
   archFns <- gets translateFns
   crucGenArchConstraints archFns $ do
   case app of
-
     M.Eq x y ->
       do xv <- v2c x
          yv <- v2c y
@@ -907,16 +903,16 @@ appToCrucible app = do
         M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
         M.VecTypeRepr{} -> fail "XXX: Mux on vectors not yet done."
 
-
+    M.MkTuple macawTypes macawFields -> do
+      let crucTypes = typeListToCrucible macawTypes
+      crucFields <- macawListToCrucibleM v2c macawFields
+      appAtom (C.MkStruct crucTypes crucFields)
     M.TupleField tps x i -> do
-      let tps' = typeListToCrucible tps
-          tp'  = typeToCrucible $ tps P.!! i
+      let tp'  = typeToCrucible $ tps P.!! i
       x' <- v2c x
-      case Ctx.intIndex (fromIntegral $ P.indexValue i) (Ctx.size tps') of
-        Just (Some i') | Just Refl <- testEquality tp' (tps' Ctx.! i') ->
-          appAtom $ C.GetStruct x' i' tp'
-        _ -> fail ""
-
+      let sz = macawListSize tps
+      let i' = macawListIndexToCrucible sz i
+      appAtom $ C.GetStruct x' i' tp'
 
     -- Booleans
 

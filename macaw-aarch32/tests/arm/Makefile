@@ -14,11 +14,17 @@ all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildca
 %-t32.exe: %-t32.s
 	$(T32CC) -fno-stack-protector -nostdlib $< -o $@
 
+%-mixed.exe: %-mixed.s
+	$(A32CC) -fno-stack-protector -nostdlib $< -o $@
+
 %-a32.s: %.c util.h
 	$(A32CC) -fno-stack-protector -S -c $< -o $@
 
 %-t32.s: %.c util.h
 	$(T32CC) -fno-stack-protector -S -c $< -o $@
+
+%-mixed.s: %-mixed.c
+	$(A32CC) -fno-stack-protector -S -c $< -o $@
 
 .PRECIOUS: %.s
 

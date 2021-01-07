@@ -3,39 +3,37 @@ on:
   push:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        name: [linux-8.8.4]
-        include:
-        - name: linux-8.8.4
-          ghc-ver: 8.8.4
+        ghc-ver: ["8.6.5", "8.8.4", "8.10.2"]
       # complete all jobs
       fail-fast: false
+    name: Macaw - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@v2
       with:
         submodules: true
+    - name: Copy cabal project files
+      run: |
+        cp cabal.project.dist                                  cabal.project
+        cp cabal.project.werror                                cabal.project.local
+        cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
     - name: Get GHC
       run: |
-        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }}
-        echo "::add-path::/opt/cabal/bin"
-        echo "::add-path::/opt/ghc/${{ matrix.ghc-ver }}/bin"
+        sudo apt-get install --no-install-recommends -y cabal-install-3.2 ghc-${{ matrix.ghc-ver }} llvm
+        echo "/opt/cabal/bin" >> $GITHUB_PATH
+        echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
     - name: Cache
       uses: actions/cache@v1
       with:
         path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
         # Prefer previous SHA hash if it is still cached
-        key: ${{ matrix.name }}-${{ github.sha }}
+        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: ${{ matrix.name }}
-    - name: Link cabal project files
-      run: |
-        ln -s cabal.project.dist                                  cabal.project
-        ln -s cabal.project.werror                                cabal.project.local
-        ln -s cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
+        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
     - name: Cabal update
       run: cabal update
       # Build macaw-base dependencies and crucible separately just so later
@@ -44,7 +42,18 @@ jobs:
       run: |
         cabal build --only-dependencies macaw-base
         cabal build crucible-llvm
-    - name: Cabal x86 tests
-      run: cabal test macaw-x86 macaw-x86-symbolic
-    - name: Cabal ASL tests
-      run: cabal test macaw-asl-tests
+    - name: macaw-x86 tests
+      run: |
+        cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
+        cabal test pkg:macaw-x86
+        cabal test pkg:macaw-x86-symbolic
+    - name: macaw-aarch32 tests
+      run: |
+        cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
+        cabal test pkg:macaw-aarch32
+    - name: macaw-ppc tests
+      run: |
+        cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
+        cabal test pkg:macaw-ppc
+    - name: compare-dwarfdump
+      run: cabal build compare-dwarfdump

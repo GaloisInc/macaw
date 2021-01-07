@@ -36,7 +36,7 @@ import qualified Data.Parameterized.List as P
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.TH.GADT
 import           Data.Parameterized.TraversableFC
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
@@ -67,7 +67,6 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
              => !(NatRepr n)
              -> !(NatRepr w)
              -> WidthEqProof (BVType (n * w)) (VecType n (BVType w))
-
   FromFloat :: !(FloatInfoRepr ftp)
             -> WidthEqProof (FloatType ftp) (BVType (FloatInfoBits ftp))
   ToFloat :: !(FloatInfoRepr ftp)
@@ -145,6 +144,12 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   Eq :: !(f tp) -> !(f tp) -> App f BoolType
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
+
+
+  -- | Create a tuple from a list of fields
+  MkTuple :: !(P.List TypeRepr flds)
+          -> !(P.List f flds)
+          -> App f (TupleType flds)
 
   -- | Extract the value out of a tuple.
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
@@ -350,8 +355,10 @@ instance HashableF f => Hashable (App f tp) where
   hashWithSalt = $(structuralHashWithSalt [t|App|]
                      [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
                      , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
-                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
-                        [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType
+                       , [|\s _c -> s|])
+                     , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
+                       , [|\s l -> foldlFC' hashWithSaltF s l |])
                      , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
                        , [|\s _c -> s|])
                      ]
@@ -367,6 +374,8 @@ instance OrdF f => OrdF (App f) where
                    , (ConType [t|FloatInfoRepr|] `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|TypeRepr|]      `TypeApp` AnyType, [|compareF|])
                    , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType,
+                      [|compareF|])
+                  , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType,
                       [|compareF|])
                    , (ConType [t|P.Index|] `TypeApp` AnyType `TypeApp` AnyType,
                       [|compareF|])
@@ -389,24 +398,30 @@ instance FoldableFC App where
   foldMapFC = foldMapFCDefault
 
 instance TraversableFC App where
-  traverseFC = $(structuralTraversal [t|App|] [])
+  traverseFC =
+    $(structuralTraversal [t|App|]
+      [ (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
+        , [|traverseFC|]
+        )
+      ])
 
 ------------------------------------------------------------------------
 -- App pretty printing
 
-prettyPure :: (Applicative m, Pretty v) => v -> m Doc
+prettyPure :: (Applicative m, Pretty v) => v -> m (Doc ann)
 prettyPure = pure . pretty
 
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
 rendAppA :: Applicative m
-         => (forall u . f u -> m Doc)
+         => (forall u . f u -> m (Doc ann))
          -> App f tp
-         -> (String, [m Doc])
+         -> (String, [m (Doc ann)])
 rendAppA pp a0 =
   case a0 of
     Eq x y      -> (,) "eq" [ pp x, pp y ]
     Mux _ c x y -> (,) "mux" [ pp c, pp x, pp y ]
+    MkTuple _ flds -> (,) "tuple" (toListFC pp flds)
     TupleField _ x i -> (,) "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
     AndApp x y -> (,) "and" [ pp x, pp y ]
     OrApp  x y -> (,) "or"  [ pp x, pp y ]
@@ -415,7 +430,7 @@ rendAppA pp a0 =
     Trunc x w -> (,) "trunc" [ pp x, ppNat w ]
     SExt x w -> (,) "sext" [ pp x, ppNat w ]
     UExt x w -> (,) "uext" [ pp x, ppNat w ]
-    Bitcast x tp -> (,) "bitcast" [ pp x, pure (text (show (widthEqTarget tp))) ]
+    Bitcast x tp -> (,) "bitcast" [ pp x, pure (viaShow (widthEqTarget tp)) ]
     BVAdd _ x y   -> (,) "bv_add" [ pp x, pp y ]
     BVAdc _ x y c -> (,) "bv_adc" [ pp x, pp y, pp c ]
     BVSub _ x y -> (,) "bv_sub" [ pp x, pp y ]
@@ -445,16 +460,16 @@ rendAppA pp a0 =
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
 ppAppA :: Applicative m
-      => (forall u . f u -> m Doc)
+      => (forall u . f u -> m (Doc ann))
       -> App f tp
-      -> m Doc
+      -> m (Doc ann)
 ppAppA pp a0 =
   let (nm,args) = rendAppA pp a0
    in sexpr nm <$> sequenceA args
 
-ppApp :: (forall u . f u -> Doc)
+ppApp :: (forall u . f u -> Doc ann)
       -> App f tp
-      -> Doc
+      -> Doc ann
 ppApp pp a0 = runIdentity $ ppAppA (Identity . pp) a0
 
 ------------------------------------------------------------------------
@@ -465,6 +480,7 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
       TupleField f _ i -> f P.!! i
 
       Trunc _ w -> BVTypeRepr w

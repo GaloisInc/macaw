@@ -19,6 +19,7 @@ module Data.Macaw.Discovery.State
   , ParsedBlock(..)
     -- * The interpreter state
   , DiscoveryState
+  , NoReturnFunStatus(..)
   , AddrSymMap
   , exploredFunctions
   , ppDiscoveryStateBlocks
@@ -50,12 +51,10 @@ import           Data.Maybe (maybeToList)
 import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
-import           Data.Set (Set)
 import           Data.Text (Text)
-import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen as PP hiding ((<$>))
+import           Prettyprinter as PP
 
 import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -194,44 +193,54 @@ data ParsedTermStmt arch ids
 
 ppTermStmt :: ArchConstraints arch
            => ParsedTermStmt arch ids
-           -> Doc
+           -> Doc ann
 ppTermStmt tstmt =
   case tstmt of
     ParsedCall s Nothing ->
-      text "tail_call" <$$>
-      indent 2 (pretty s)
+      vcat
+      [ "tail_call"
+      , indent 2 (pretty s) ]
     ParsedCall s (Just next) ->
-      text "call and return to" <+> text (show next) <$$>
-      indent 2 (pretty s)
+      vcat
+      [ "call and return to" <+> viaShow next
+      , indent 2 (pretty s) ]
     PLTStub regs addr sym ->
-      text "call_via_got" <+> text (show sym) <+> "(at" <+> text (show addr) PP.<> ")" <$$>
-       indent 2 (ppRegMap regs)
+      vcat
+      [ "call_via_got" <+> viaShow sym <+> "(at" <+> viaShow addr PP.<> ")"
+      , indent 2 (ppRegMap regs) ]
     ParsedJump s addr ->
-      text "jump" <+> text (show addr) <$$>
-      indent 2 (pretty s)
+      vcat
+      [ "jump" <+> viaShow addr
+      , indent 2 (pretty s) ]
     ParsedBranch r c t f  ->
-      text "branch" <+> pretty c <+> text (show t) <+> text (show f) <$$>
-      indent 2 (pretty r)
+      vcat
+      [ "branch" <+> pretty c <+> viaShow t <+> viaShow f
+      , indent 2 (pretty r) ]
     ParsedLookupTable s idx entries ->
-      text "ijump" <+> pretty idx <$$>
-      indent 2 (vcat (imap (\i v -> int i <+> text ":->" <+> text (show v))
-                           (V.toList entries))) <$$>
-      indent 2 (pretty s)
+      vcat
+      [ "ijump" <+> pretty idx
+      , indent 2 (vcat (imap (\i v -> pretty i <+> ":->" <+> viaShow v)
+                             (V.toList entries)))
+      , indent 2 (pretty s) ]
     ParsedReturn s ->
-      text "return" <$$>
-      indent 2 (pretty s)
+      vcat
+      [ "return"
+      , indent 2 (pretty s) ]
     ParsedArchTermStmt ts s maddr ->
-      let addrDoc = case maddr of
-                      Just a -> text ", return to" <+> text (show a)
-                      Nothing -> text ""
-       in prettyF ts <> addrDoc <$$>
-          indent 2 (pretty s)
+      vcat
+      [ prettyF ts <> addrDoc
+      , indent 2 (pretty s) ]
+      where
+          addrDoc = case maddr of
+                      Just a -> ", return to" <+> viaShow a
+                      Nothing -> ""
     ParsedTranslateError msg ->
-      text "translation error" <+> text (Text.unpack msg)
+      "translation error" <+> pretty msg
     ClassifyFailure s rsns ->
-      text "classify failure" <$$>
-      indent 2 (pretty s) <$$>
-      indent 2 (vcat (text <$> rsns))
+      vcat
+      [ "classify failure"
+      , indent 2 (pretty s)
+      , indent 2 (vcat (pretty <$> rsns)) ]
 
 instance ArchConstraints arch => Show (ParsedTermStmt arch ids) where
   show = show . ppTermStmt
@@ -284,10 +293,12 @@ deriving instance (ArchConstraints arch, Show (ArchBlockPrecond arch))
 instance ArchConstraints arch
       => Pretty (ParsedBlock arch ids) where
   pretty b =
-    let ppOff o = text (show (incAddr (toInteger o) (segoffAddr (pblockAddr b))))
-     in text (show (pblockAddr b)) PP.<> text ":" <$$>
-        indent 2 (vcat $ (text "; " <+>) <$> Jmp.ppInitJumpBounds (blockJumpBounds b)) <$$>
-        indent 2 (vcat (ppStmt ppOff <$> pblockStmts b) <$$> ppTermStmt (pblockTermStmt b))
+    vcat
+    [ viaShow (pblockAddr b) PP.<> ":"
+    , indent 2 (vcat $ ("; " <+>) <$> Jmp.ppInitJumpBounds (blockJumpBounds b))
+    , indent 2 (vcat [vcat (ppStmt ppOff <$> pblockStmts b), ppTermStmt (pblockTermStmt b)])
+    ]
+    where ppOff o = viaShow (incAddr (toInteger o) (segoffAddr (pblockAddr b)))
 
 ------------------------------------------------------------------------
 -- DiscoveryFunInfo
@@ -325,11 +336,24 @@ parsedBlocks = lens _parsedBlocks (\s v -> s { _parsedBlocks = v })
 
 instance ArchConstraints arch => Pretty (DiscoveryFunInfo arch ids) where
   pretty info =
-    let addr = pretty (show (discoveredFunAddr info))
+    vcat
+    [ "function" <+> nm
+    , vcat (pretty <$> Map.elems (info^.parsedBlocks)) ]
+    where
+        addr = viaShow (discoveredFunAddr info)
         nm = case discoveredFunSymbol info of
-               Just sym -> text (BSC.unpack sym) <+> "@" <+> addr
+               Just sym -> pretty (BSC.unpack sym) <+> "@" <+> addr
                Nothing -> addr
-     in text "function" <+> nm <$$> vcat (pretty <$> Map.elems (info^.parsedBlocks))
+
+------------------------------------------------------------------------
+-- NoReturnFunStatus
+
+-- | Flags whether a function is labeled no return or not.
+data NoReturnFunStatus
+   = NoReturnFun
+     -- ^ Function labeled no return
+   | MayReturnFun
+     -- ^ Function may retun
 
 ------------------------------------------------------------------------
 -- DiscoveryState
@@ -358,7 +382,7 @@ data DiscoveryState arch
                       -- they are analyzed.
                       --
                       -- The keys in this map and `_funInfo` should be mutually disjoint.
-                    , _trustedFunctionEntryPoints :: !(Set (ArchSegmentOff arch))
+                    , _trustedFunctionEntryPoints :: !(Map (ArchSegmentOff arch) NoReturnFunStatus)
                       -- ^ This is the set of addresses that we treat
                       -- as definitely belonging to function entry
                       -- points.
@@ -372,9 +396,9 @@ data DiscoveryState arch
                       -- order in which functions are visited, this
                       -- set should be initialized upfront, and not
                       -- changed.
-                    , _exploreFnPred :: Maybe (ArchSegmentOff arch -> Bool)
-                      -- ^ if present, this predicate decides whether to explore
-                      -- a function at the given address or not
+                    , _exploreFnPred :: !(ArchSegmentOff arch -> Bool)
+                      -- ^ This predicate decides whether to explore a
+                      -- function at the given address or not.
                     }
 
 -- | Return list of all functions discovered so far.
@@ -386,11 +410,10 @@ withDiscoveryArchConstraints :: DiscoveryState arch
                              -> a
 withDiscoveryArchConstraints dinfo = withArchConstraints (archInfo dinfo)
 
-ppDiscoveryStateBlocks :: DiscoveryState arch
-                      -> Doc
+ppDiscoveryStateBlocks :: DiscoveryState arch -> Doc ann
 ppDiscoveryStateBlocks info = withDiscoveryArchConstraints info $
     vcat $ f <$> Map.elems (info^.funInfo)
-  where f :: ArchConstraints arch => Some (DiscoveryFunInfo arch) -> Doc
+  where f :: ArchConstraints arch => Some (DiscoveryFunInfo arch) -> Doc ann
         f (Some v) = pretty v
 
 -- | Create empty discovery information.
@@ -409,13 +432,13 @@ emptyDiscoveryState mem addrSymMap info =
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustedFunctionEntryPoints = Map.keysSet addrSymMap
-  , _exploreFnPred       = Nothing
+  , _trustedFunctionEntryPoints = fmap (\_ -> MayReturnFun) addrSymMap
+  , _exploreFnPred       = \_ -> True
   }
 
 -- | Map each jump table start to the address just after the end.
-globalDataMap
-  :: Simple Lens (DiscoveryState arch) (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
+globalDataMap :: Lens' (DiscoveryState arch)
+                      (Map (ArchMemAddr arch) (GlobalDataInfo (ArchMemAddr arch)))
 globalDataMap = lens _globalDataMap (\s v -> s { _globalDataMap = v })
 
 -- | List of functions to explore next.
@@ -427,12 +450,13 @@ unexploredFunctions = lens _unexploredFunctions (\s v -> s { _unexploredFunction
 funInfo :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) (Some (DiscoveryFunInfo arch)))
 funInfo = lens _funInfo (\s v -> s { _funInfo = v })
 
+-- | Retrieves functions that are trusted entry points.
 trustedFunctionEntryPoints
-  :: Simple Lens (DiscoveryState arch) (Set (ArchSegmentOff arch))
+  :: Simple Lens (DiscoveryState arch) (Map (ArchSegmentOff arch) NoReturnFunStatus)
 trustedFunctionEntryPoints =
   lens _trustedFunctionEntryPoints (\s v -> s { _trustedFunctionEntryPoints = v })
 
-exploreFnPred :: Simple Lens (DiscoveryState arch) (Maybe (ArchSegmentOff arch -> Bool))
+exploreFnPred :: Simple Lens (DiscoveryState arch) (ArchSegmentOff arch -> Bool)
 exploreFnPred = lens _exploreFnPred (\s v -> s { _exploreFnPred = v })
 
 ------------------------------------------------------------------------

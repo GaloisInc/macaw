@@ -12,6 +12,7 @@ single CFG.
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
@@ -109,12 +110,10 @@ import           Data.Parameterized.TraversableFC (FoldableFC(..))
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
-import qualified Data.Text as Text
 import           GHC.TypeLits
 import           Numeric (showHex)
 import           Numeric.Natural
-import qualified Text.PrettyPrint.ANSI.Leijen as PP
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>), (<>))
+import           Prettyprinter as PP
 
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.AssignRhs
@@ -140,23 +139,23 @@ plusPrec = 6
 
 -- | Class for pretty printing with a precedence field.
 class PrettyPrec v where
-  prettyPrec :: Int -> v -> Doc
+  prettyPrec :: Int -> v -> Doc ann
 
 -- | Pretty print over all instances of a type.
 class PrettyF (f :: k -> Kind.Type) where
-  prettyF :: f tp -> Doc
+  prettyF :: f tp -> Doc ann
 
 -- | Pretty print a document with parens if condition is true
-parenIf :: Bool -> Doc -> Doc
+parenIf :: Bool -> Doc ann -> Doc ann
 parenIf True d = parens d
 parenIf False d = d
 
-bracketsep :: [Doc] -> Doc
-bracketsep [] = text "{}"
+bracketsep :: [Doc ann] -> Doc ann
+bracketsep [] = "{}"
 bracketsep (h:l) = vcat $
-  [text "{" <+> h]
-  ++ fmap (text "," <+>) l
-  ++ [text "}"]
+  [lbrace <+> h]
+  ++ fmap (comma <+>) l
+  ++ [rbrace]
 
 -- | A type repr for the address width
 addrWidthTypeRepr :: AddrWidthRepr w -> TypeRepr (BVType w)
@@ -173,8 +172,8 @@ addrWidthTypeRepr Addr64 = BVTypeRepr knownNat
 -- drawn.
 newtype AssignId (ids :: Kind.Type) (tp :: Type) = AssignId (Nonce ids tp)
 
-ppAssignId :: AssignId ids tp -> Doc
-ppAssignId (AssignId w) = text ("r" ++ show (indexValue w))
+ppAssignId :: AssignId ids tp -> Doc ann
+ppAssignId (AssignId w) = pretty 'r' <> pretty (indexValue w)
 
 instance Eq (AssignId ids tp) where
   AssignId id1 == AssignId id2 = id1 == id2
@@ -266,21 +265,21 @@ instance Hashable (CValue arch tp) where
 instance HashableF (CValue arch) where
   hashWithSaltF = hashWithSalt
 
-ppLit :: NatRepr n -> Integer -> Doc
+ppLit :: NatRepr n -> Integer -> Doc ann
 ppLit w i
-  | i >= 0 = text ("0x" ++ showHex i "") <+> text "::" <+> brackets (text (show w))
+  | i >= 0 = pretty ("0x" ++ showHex i "") <+> "::" <+> brackets (viaShow w)
   | otherwise = error "ppLit given negative value"
 
-ppCValue :: Prec -> CValue arch tp -> Doc
-ppCValue _ (BoolCValue b) = text $ if b then "true" else "false"
+ppCValue :: Prec -> CValue arch tp -> Doc ann
+ppCValue _ (BoolCValue b) = if b then "true" else "false"
 ppCValue p (BVCValue w i)
   | i >= 0 = parenIf (p > colonPrec) $ ppLit w i
   | otherwise =
     -- TODO: We may want to report an error here.
     parenIf (p > colonPrec) $
-    text (show i) <+> text "::" <+> brackets (text (show w))
-ppCValue p (RelocatableCValue _ a) = parenIf (p > plusPrec) $ text (show a)
-ppCValue _ (SymbolCValue _ a) = text (show a)
+    pretty i <+> "::" <+> brackets (viaShow w)
+ppCValue p (RelocatableCValue _ a) = parenIf (p > plusPrec) $ viaShow a
+ppCValue _ (SymbolCValue _ a) = viaShow a
 
 instance PrettyPrec (CValue arch tp) where
   prettyPrec = ppCValue
@@ -694,10 +693,10 @@ asStackAddrOffset addr
 -- Pretty print Assign, AssignRhs, Value operations
 
 -- | Pretty print a value.
-ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc
+ppValue :: ShowF (ArchReg arch) => Prec -> Value arch ids tp -> Doc ann
 ppValue p (CValue c) = ppCValue p c
 ppValue _ (AssignedValue a) = ppAssignId (assignId a)
-ppValue _ (Initial r)       = text (showF r) PP.<> text "_0"
+ppValue _ (Initial r)       = pretty (showF r) PP.<> "_0"
 
 instance ShowF (ArchReg arch) => PrettyPrec (Value arch ids tp) where
   prettyPrec = ppValue
@@ -712,18 +711,18 @@ instance ShowF (ArchReg arch) => Show (Value arch ids tp) where
 class IsArchFn (f :: (Type -> Kind.Type) -> Type -> Kind.Type)  where
   -- | A function for pretty printing an archFn of a given type.
   ppArchFn :: Applicative m
-           => (forall u . v u -> m Doc)
+           => (forall u . v u -> m (Doc ann))
               -- ^ Function for pretty printing vlaue.
            -> f v tp
-           -> m Doc
+           -> m (Doc ann)
 
 -- | Typeclass for architecture-specific statements
 class IsArchStmt (f :: (Type -> Kind.Type) -> Kind.Type)  where
   -- | A function for pretty printing an architecture statement of a given type.
-  ppArchStmt :: (forall u . v u -> Doc)
+  ppArchStmt :: (forall u . v u -> Doc ann)
                 -- ^ Function for pretty printing value.
              -> f v
-             -> Doc
+             -> Doc ann
 
 -- | Constructs expected by architectures type classes.
 type ArchConstraints arch
@@ -739,69 +738,69 @@ type ArchConstraints arch
 -- | Pretty print an assignment right-hand side using operations parameterized
 -- over an application to allow side effects.
 ppAssignRhs :: (Applicative m, ArchConstraints arch)
-            => (forall u . f u -> m Doc)
+            => (forall u . f u -> m (Doc ann))
                -- ^ Function for pretty printing value.
             -> AssignRhs arch f tp
-            -> m Doc
+            -> m (Doc ann)
 ppAssignRhs pp (EvalApp a) = ppAppA pp a
-ppAssignRhs _  (SetUndefined tp) = pure $ text "undef ::" <+> brackets (text (show tp))
+ppAssignRhs _  (SetUndefined tp) = pure $ "undef ::" <+> brackets (viaShow tp)
 ppAssignRhs pp (ReadMem a repr) =
-  (\d -> text "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
+  (\d -> "read_mem" <+> d <+> PP.parens (pretty repr)) <$> pp a
 ppAssignRhs pp (CondReadMem repr c a d) = f <$> pp c <*> pp a <*> pp d
-  where f cd ad dd = text "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
+  where f cd ad dd = "cond_read_mem" <+> PP.parens (pretty repr) <+> cd <+> ad <+> dd
 ppAssignRhs pp (EvalArchFn f _) = ppArchFn pp f
 
 instance ArchConstraints arch => Pretty (AssignRhs arch (Value arch ids) tp) where
   pretty = runIdentity . ppAssignRhs (Identity . ppValue 10)
 
 instance ArchConstraints arch => Pretty (Assignment arch ids tp) where
-  pretty (Assignment lhs rhs) = ppAssignId lhs <+> text ":=" <+> pretty rhs
+  pretty (Assignment lhs rhs) = ppAssignId lhs <+> ":=" <+> pretty rhs
 
 ------------------------------------------------------------------------
 -- Pretty print a value assignment
 
 -- | Helper type to wrap up a 'Doc' with a dummy type argument; used to put
 -- 'Doc's into heterogenous maps in the below
-newtype DocF (a :: Type) = DocF Doc
+newtype DocF ann (a :: Type) = DocF (Doc ann)
 
 -- | This pretty prints a value's representation while saving the pretty
 -- printed repreentation of subvalues in a map.
-collectValueRep :: forall arch ids tp
+collectValueRep :: forall arch ids tp ann
                 .  ArchConstraints arch
                 => Prec -- ^ Outer precedence
                 -> Value arch ids tp
-                -> State (MapF (AssignId ids) DocF) Doc
+                -> State (MapF (AssignId ids) (DocF ann)) (Doc ann)
 collectValueRep _ (AssignedValue a) = do
   let lhs = assignId a
   mr <- gets $ MapF.lookup lhs
   when (isNothing mr) $ do
     let ppVal :: forall u . Value arch ids u ->
-                 State (MapF (AssignId ids) DocF) Doc
+                 State (MapF (AssignId ids) (DocF ann)) (Doc ann)
         ppVal = collectValueRep 10
     rhs <- ppAssignRhs ppVal (assignRhs a)
-    let d = ppAssignId lhs <+> text ":=" <+> rhs
+    let d = ppAssignId lhs <+> ":=" <+> rhs
     modify $ MapF.insert lhs (DocF d)
     return ()
   return $! ppAssignId lhs
 collectValueRep p v = return $ ppValue p v
 
 -- | This pretty prints all the history used to create a value.
-ppValueAssignments' :: State (MapF (AssignId ids) DocF) Doc -> Doc
+ppValueAssignments' :: State (MapF (AssignId ids) (DocF ann)) (Doc ann) -> Doc ann
 ppValueAssignments' m =
   case MapF.elems bindings of
     [] -> rhs
     (Some (DocF h):r) ->
-      let first               = text "let" PP.<+> h
-          f (Some (DocF b))   = text "    " PP.<> b
-       in vcat (first:fmap f r) <$$>
-          text " in" PP.<+> rhs
+      let first               = "let" PP.<+> h
+          f (Some (DocF b))   = "    " PP.<> b
+       in vcat [ vcat (first:fmap f r)
+               , " in" PP.<+> rhs ]
   where (rhs, bindings) = runState m MapF.empty
 
 -- | This pretty prints all the history used to create a value.
-ppValueAssignments :: ArchConstraints arch => Value arch ids tp -> Doc
+ppValueAssignments :: ArchConstraints arch => Value arch ids tp -> Doc ann
 ppValueAssignments v = ppValueAssignments' (collectValueRep 0 v)
 
-ppValueAssignmentList :: ArchConstraints arch => [Value arch ids tp] -> Doc
+ppValueAssignmentList :: ArchConstraints arch => [Value arch ids tp] -> Doc ann
 ppValueAssignmentList vals =
   ppValueAssignments' $ do
     brackets . hcat . punctuate comma
@@ -815,11 +814,11 @@ ppValueAssignmentList vals =
 class PrettyRegValue r (f :: Type -> Kind.Type) where
   -- | ppValueEq should return a doc if the contents of the given register
   -- should be printed, and Nothing if the contents should be ignored.
-  ppValueEq :: r tp -> f tp -> Maybe Doc
+  ppValueEq :: r tp -> f tp -> Maybe (Doc ann)
 
-ppRegMap :: forall r v . PrettyRegValue r v => MapF.MapF r v -> Doc
+ppRegMap :: forall r v ann . PrettyRegValue r v => MapF.MapF r v -> Doc ann
 ppRegMap m = bracketsep $ catMaybes (f <$> MapF.toList m)
-  where f :: MapF.Pair r v -> Maybe Doc
+  where f :: MapF.Pair r v -> Maybe (Doc ann)
         f (MapF.Pair r v) = ppValueEq r v
 
 
@@ -839,7 +838,7 @@ instance ( RegisterInfo r
   ppValueEq r (Initial r')
     | Just _ <- testEquality r r' = Nothing
   ppValueEq r v
-    | otherwise   = Just $ text (showF r) <+> text "=" <+> pretty v
+    | otherwise   = Just $ pretty (showF r) <+> "=" <+> pretty v
 
 ------------------------------------------------------------------------
 -- Stmt
@@ -874,33 +873,33 @@ data Stmt arch ids
      -- execution of the instruction).
 
 ppStmt :: ArchConstraints arch
-       => (ArchAddrWord arch -> Doc)
+       => (ArchAddrWord arch -> Doc ann)
           -- ^ Function for pretty printing an instruction address offset
        -> Stmt arch ids
-       -> Doc
+       -> Doc ann
 ppStmt ppOff stmt =
   case stmt of
     AssignStmt a -> pretty a
     WriteMem     a _ rhs ->
-      text "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
+      "write_mem" <+> prettyPrec 11 a <+> ppValue 0 rhs
     CondWriteMem c a _ rhs ->
-      text "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
+      "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
         <+> ppValue 0 rhs
-    InstructionStart off mnem -> text "#" <+> ppOff off <+> text (Text.unpack mnem)
-    Comment s -> text $ "# " ++ Text.unpack s
+    InstructionStart off mnem -> "#" <+> ppOff off <+> pretty mnem
+    Comment s -> "# " <> pretty s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
     ArchState a m ->
-        hang (length (show prefix)) (prefix PP.<> PP.semiBraces (MapF.foldrWithKey ppUpdate [] m))
+        hang (length (show prefix)) (prefix PP.<> PP.encloseSep PP.lbrace PP.rbrace PP.semi (MapF.foldrWithKey ppUpdate [] m))
       where
       ppAddr addr =
         case asAbsoluteAddr addr of
-          Just absAddr -> text (show absAddr)
-          Nothing -> PP.braces (PP.int (addrBase addr)) PP.<> text "+" PP.<> text (show (addrOffset addr))
-      prefix = text "#" <+> ppAddr a PP.<> text ": "
-      ppUpdate key val acc = text (showF key) <+> text "=>" <+> ppValue 0 val : acc
+          Just absAddr -> viaShow absAddr
+          Nothing -> PP.braces (PP.pretty (addrBase addr)) PP.<> "+" PP.<> viaShow (addrOffset addr)
+      prefix = "#" <+> ppAddr a PP.<> ": "
+      ppUpdate key val acc = pretty (showF key) <+> "=>" <+> ppValue 0 val : acc
 
 instance ArchConstraints arch => Show (Stmt arch ids) where
-  show = show . ppStmt (\w -> text (show w))
+  show = show . ppStmt viaShow
 
 ------------------------------------------------------------------------
 -- References

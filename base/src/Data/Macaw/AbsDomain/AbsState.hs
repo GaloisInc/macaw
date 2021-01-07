@@ -4,6 +4,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -78,7 +79,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import           GHC.Stack
 import           Numeric (showHex)
-import           Text.PrettyPrint.ANSI.Leijen hiding ((<$>))
+import           Prettyprinter
 
 import           Data.Macaw.AbsDomain.CallParams
 import qualified Data.Macaw.AbsDomain.StridedInterval as SI
@@ -256,31 +257,31 @@ instance EqF (AbsValue w) where
 instance MemWidth w => Show (AbsValue w tp) where
   show = show . pretty
 
-ppSet :: [Doc] -> Doc
+ppSet :: [Doc ann] -> Doc ann
 ppSet = encloseSep lbrace rbrace comma
 
 instance MemWidth w => Pretty (AbsValue w tp) where
-  pretty (BoolConst b) = text (show b)
-  pretty (FinSet s) = text "finset" <+> ppIntegerSet s
-  pretty (CodePointers s b) = text "code" <+> ppSet (s0 ++ sd)
-    where s0 = if b then [text "0"] else []
+  pretty (BoolConst b) = viaShow b
+  pretty (FinSet s) = "finset" <+> ppIntegerSet s
+  pretty (CodePointers s b) = "code" <+> ppSet (s0 ++ sd)
+    where s0 = if b then ["0"] else []
           sd = f <$> Set.toList s
-          f segAddr = text (show segAddr)
+          f segAddr = viaShow segAddr
 
   pretty (StridedInterval s) =
-    text "strided" <> parens (pretty s)
+    "strided" <> parens (pretty s)
   pretty (SubValue n av) =
-    text "sub" <> parens (integer (intValue n) <> comma <+> pretty av)
+    "sub" <> parens (pretty (intValue n) <> comma <+> pretty av)
   pretty (StackOffsetAbsVal a v')
-    | v' >= 0   = text $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
-    | otherwise = text $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
-  pretty (SomeStackOffset a) = text $ "rsp_" ++ show a ++ " + ?"
-  pretty TopV = text "top"
-  pretty ReturnAddr = text "return_addr"
+    | v' >= 0   = pretty $ "rsp_" ++ show a ++ " + " ++ showHex v' ""
+    | otherwise = pretty $ "rsp_" ++ show a ++ " - " ++ showHex (negate (toInteger v')) ""
+  pretty (SomeStackOffset a) = pretty $ "rsp_" ++ show a ++ " + ?"
+  pretty TopV = "top"
+  pretty ReturnAddr = "return_addr"
 
-ppIntegerSet :: (Integral w, Show w) => Set w -> Doc
+ppIntegerSet :: (Integral w, Show w) => Set w -> Doc ann
 ppIntegerSet s = ppSet (ppv <$> Set.toList s)
-  where ppv v' | v' >= 0 = text (showHex v' "")
+  where ppv v' | v' >= 0 = pretty (showHex v' "")
                | otherwise = error "ppIntegerSet given negative value"
 
 -- | Returns a set of concrete integers that this value may be.
@@ -366,7 +367,7 @@ joinAbsValue x y
     | Set.null s = r
     | otherwise = debug DAbsInt ("dropping " ++ show dropped ++ "\n" ++ show x ++ "\n" ++ show y ++ "\n") r
   where (r,s) = runState (joinAbsValue' x y) Set.empty
-        dropped = ppSet (text . show <$> Set.toList s)
+        dropped = ppSet (viaShow <$> Set.toList s)
 
 addWords :: Set (MemSegmentOff w) -> State (Set (MemSegmentOff w)) ()
 addWords s = modify $ Set.union s
@@ -855,14 +856,14 @@ bitop doOp _w (asConcreteSingleton -> Just v) (asFinSet "bitop" -> IsFin s)
   = FinSet (Set.map (doOp v) s)
 bitop _ _ _ _ = TopV
 
-ppAbsValue :: MemWidth w => AbsValue w tp -> Maybe Doc
+ppAbsValue :: MemWidth w => AbsValue w tp -> Maybe (Doc ann)
 ppAbsValue TopV = Nothing
 ppAbsValue v = Just (pretty v)
 
 -- | Print a list of Docs vertically separated.
 instance (MemWidth w, ShowF r) => PrettyRegValue r (AbsValue w) where
   ppValueEq _ TopV = Nothing
-  ppValueEq r v = Just (text (showF r) <+> text "=" <+> pretty v)
+  ppValueEq r v = Just (pretty (showF r) <+> "=" <+> pretty v)
 
 
 absTrue :: AbsValue w BoolType
@@ -1030,9 +1031,9 @@ showSignedHex :: Integer -> ShowS
 showSignedHex x | x < 0 = showString "-0x" . showHex (negate x)
                 | otherwise = showString "0x" . showHex x
 
-ppAbsStack :: MemWidth w => AbsBlockStack w -> Doc
+ppAbsStack :: MemWidth w => AbsBlockStack w -> Doc ann
 ppAbsStack m = vcat (pp <$> Map.toDescList m)
-  where pp (o,StackEntry _ v) = text (showSignedHex (toInteger o) " :=") <+> pretty v
+  where pp (o,StackEntry _ v) = pretty (showSignedHex (toInteger o) " :=") <+> pretty v
 
 ------------------------------------------------------------------------
 -- AbsBlockState
@@ -1108,13 +1109,18 @@ instance ( ShowF r
          , MemWidth (RegAddrWidth r)
          ) => Pretty (AbsBlockState r) where
   pretty s =
-      text "registers:" <$$>
-      indent 2 (pretty (s^.absRegState)) <$$>
-      stack_d
+    vcat
+    [ "registers:"
+    , indent 2 (pretty (s^.absRegState))
+    , stack_d
+    ]
     where stack = startAbsStack s
-          stack_d | Map.null stack = empty
-                  | otherwise = text "stack:" <$$>
-                                indent 2 (ppAbsStack stack)
+          stack_d | Map.null stack = emptyDoc
+                  | otherwise =
+                      vcat
+                      [ "stack:"
+                      , indent 2 (ppAbsStack stack)
+                      ]
 
 instance (ShowF r, MemWidth (RegAddrWidth r)) => Show (AbsBlockState r) where
   show = show . pretty
@@ -1171,13 +1177,18 @@ curAbsStack = lens _curAbsStack (\s v -> s { _curAbsStack = v })
 instance (ShowF r, MemWidth (RegAddrWidth r))
       => Pretty (AbsProcessorState r ids) where
   pretty s =
-      text "registers:" <$$>
-      indent 2 (pretty (s^.absInitialRegs)) <$$>
-      stack_d
+    vcat
+    [ "registers:"
+    , indent 2 (pretty (s^.absInitialRegs))
+    , stack_d
+    ]
     where stack = s^.curAbsStack
-          stack_d | Map.null stack = empty
-                  | otherwise = text "stack:" <$$>
-                                indent 2 (ppAbsStack stack)
+          stack_d | Map.null stack = emptyDoc
+                  | otherwise =
+                    vcat
+                    [ "stack:"
+                    , indent 2 (ppAbsStack stack)
+                    ]
 
 instance (ShowF r, MemWidth (RegAddrWidth r))
       => Show (AbsProcessorState r ids) where

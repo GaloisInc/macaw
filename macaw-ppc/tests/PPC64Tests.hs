@@ -1,10 +1,11 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+
 module PPC64Tests (
   ppcAsmTests
   ) where
@@ -31,7 +32,6 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
 import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.PPC as RO
-import qualified SemMC.Architecture.PPC64 as PPC64
 
 import           Shared
 
@@ -63,7 +63,7 @@ data ExpectedResult =
 
 -- | Read in a test case from disk and output a test tree.
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ withELF exeFilename (testDiscovery fp)
+mkTest fp = T.testCase fp $ withELF64 exeFilename (testDiscovery fp)
   where
     asmFilename = dropExtension fp
     exeFilename = replaceExtension asmFilename "exe"
@@ -92,14 +92,13 @@ isTranslateError ts =
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery :: FilePath -> E.Elf 64 -> IO ()
+testDiscovery :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
 testDiscovery expectedFilename elf = do
   let loadCfg = MM.defaultLoadOptions
                   { MM.loadOffset = Just 0
                   }
 
-  loadedBinary :: MBL.LoadedBinary PPC64.PPC (E.Elf 64)
-               <- MBL.loadBinary loadCfg elf
+  loadedBinary <- MBL.loadBinary loadCfg elf
   entries <- MBL.entryPoints loadedBinary
   let cfg = RO.ppc64_linux_info loadedBinary
   let mem = MBL.memoryImage loadedBinary

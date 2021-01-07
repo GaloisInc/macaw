@@ -1,13 +1,14 @@
-packages: macaw-ppc/
+packages: base/
           macaw-aarch32/
           macaw-aarch32-symbolic/
           macaw-semmc/
+          macaw-ppc/
           macaw-ppc-symbolic/
-          base/
           x86/
           symbolic/
           x86_symbolic/
           refinement/
+          utils/compare-dwarfdump
           deps/macaw-loader/macaw-loader
           deps/macaw-loader/macaw-loader-aarch32
           deps/macaw-loader/macaw-loader-ppc

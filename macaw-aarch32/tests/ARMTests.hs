@@ -29,7 +29,7 @@ import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
-import           Text.PrettyPrint.ANSI.Leijen ( putDoc )
+import           Prettyprinter.Util ( putDocW )
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
@@ -114,24 +114,24 @@ getExpected expectedFilename = do
       in return (expectedEntries, ignoredBlocks)
 
 
-testDiscovery :: ExpectedResult -> E.Elf w -> IO ()
+testDiscovery :: ExpectedResult -> E.ElfHeaderInfo w -> IO ()
 testDiscovery expRes elf =
-    case E.elfClass elf of
+    case E.headerClass (E.header elf) of
       E.ELFCLASS32 -> testDiscovery32 expRes elf
       E.ELFCLASS64 -> error "testDiscovery64 TBD"
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery32 :: ExpectedResult -> E.Elf 32 -> IO ()
-testDiscovery32 (funcblocks, ignored) elf =
-  withMemory MM.Addr32 elf $ \mem -> do
+testDiscovery32 :: ExpectedResult -> E.ElfHeaderInfo 32 -> IO ()
+testDiscovery32 (funcblocks, ignored) ehdr =
+  withMemory MM.Addr32 ehdr $ \mem -> do
     let Just entryPoint = MM.asSegmentOff mem epinfo
-        epinfo = findEntryPoint elf mem
+        epinfo = findEntryPoint ehdr mem
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
-            chatty $ "sections = " <> show (ARMELF.getElfSections elf) <> "\n"
+            chatty $ "sections = " <> show (ARMELF.getElfSections ehdr) <> "\n"
             chatty $ "symbols = "
-            putDoc $ ARMELF.getELFSymbols elf
+            putDocW 80 $ ARMELF.getELFSymbols ehdr
             chatty ""
 
     let discoveryInfo = MD.cfgFromAddrs RO.arm_linux_info mem mempty [entryPoint] []
