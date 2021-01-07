@@ -911,6 +911,8 @@ toCoreCFG archFns (CR.SomeCFG cfg) = crucGenArchConstraints archFns $ C.toSSA cf
 
 -- * Retaining original macaw block endings when slicing CFG
 
+-- | An enum corresponding to the kind of terminal statement that originally
+-- appeared at the end of a block.
 data MacawBlockEndCase =
     MacawBlockEndJump
   | MacawBlockEndCall
@@ -920,9 +922,12 @@ data MacawBlockEndCase =
   | MacawBlockEndFail
   deriving (Eq, Ord, Enum, Bounded)
 
+-- | A summary of a 'M.ParsedTermStmt', representing how the block ended and
+-- potentally the address to return to in the case of a function call.
 data MacawBlockEnd arch = MacawBlockEnd MacawBlockEndCase !(Maybe (M.ArchSegmentOff arch))
 
--- we encode 'MacawBlockEndCase' as a 3-bit bitvector
+-- | A crucible encoding of 'MacawBlockEnd', where the 'MacawBlockEndCase' as a 3-bit bitvector
+-- and the return address is a 'MM.LLVMPointerType'.
 type MacawBlockEndType arch = C.StructType (Ctx.EmptyCtx Ctx.::> C.BVType 3 Ctx.::> C.MaybeType (MM.LLVMPointerType (M.ArchAddrWidth arch)))
 
 blockEndAtom :: forall arch ids s
@@ -953,20 +958,20 @@ assignBlockEnd archFns (Just blendVar) blend = do
   addStmt $ CR.WriteGlobal blendVar blend'
 
 isBlockEndCase :: IsSymInterface sym
-                => Proxy arch
-                -> sym
-                -> C.RegValue sym (MacawBlockEndType arch)
-                -> MacawBlockEndCase
-                -> IO (Pred sym)
+               => Proxy arch
+               -> sym
+               -> C.RegValue sym (MacawBlockEndType arch)
+               -> MacawBlockEndCase
+               -> IO (Pred sym)
 isBlockEndCase _ sym (_ Ctx.:> C.RV blendC' Ctx.:> _) blendC = do
   blendC'' <- bvLit sym knownNat (BV.mkBV knownNat (toInteger $ fromEnum blendC))
   isEq sym blendC' blendC''
 
 blockEndCase :: IsSymInterface sym
-              => Proxy arch
-              -> sym
-              -> C.RegValue sym (MacawBlockEndType arch)
-              -> IO (C.MuxTree sym MacawBlockEndCase)
+             => Proxy arch
+             -> sym
+             -> C.RegValue sym (MacawBlockEndType arch)
+             -> IO (C.MuxTree sym MacawBlockEndCase)
 blockEndCase arch sym blend = do
   foldM addCase (C.toMuxTree sym MacawBlockEndFail) [minBound..maxBound]
   where
