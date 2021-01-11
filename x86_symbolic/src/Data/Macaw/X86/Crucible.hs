@@ -217,9 +217,7 @@ newSymFuns s =
      fnAesDecLast <- bin "aesDecLast"
      fnAesKeyGenAssist <- bin "aesKeyGenAssist"
      fnClMul      <- bin "clMul"
-     fnAesIMC <- case userSymbol "aesIMC" of
-       Left _ -> fail "Invalid symbol name"
-       Right a -> freshTotalUninterpFn s a (extend empty knownRepr) knownRepr
+     fnAesIMC <- freshTotalUninterpFn s (safeSymbol "aesIMC") (extend empty knownRepr) knownRepr
      return SymFuns { .. }
 
   where
@@ -228,11 +226,7 @@ newSymFuns s =
          , KnownRepr BaseTypeRepr c
          ) =>
          String -> IO (SymFn sym (EmptyCtx ::> a ::> b) c)
-  bin name = case userSymbol name of
-               Right a -> freshTotalUninterpFn s a
-                              (extend (extend empty knownRepr) knownRepr)
-                              knownRepr
-               Left _ -> fail "Invalid symbol name"
+  bin name = freshTotalUninterpFn s (safeSymbol name) (extend (extend empty knownRepr) knownRepr) knownRepr
 
 -- | Use @Sym sym@ to to evaluate an app.
 evalApp' :: forall sym f t .
