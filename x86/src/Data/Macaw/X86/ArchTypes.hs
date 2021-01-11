@@ -733,6 +733,9 @@ data X86PrimFn f tp where
     :: !(f (BVType 128))
     -> !Word8
     -> X86PrimFn f (BVType 128)
+  AESNI_AESIMC
+    :: !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
 
 
 instance HasRepr (X86PrimFn f) TypeRepr where
@@ -783,6 +786,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       AESNI_AESDec{} -> knownRepr
       AESNI_AESDecLast{} -> knownRepr
       AESNI_AESKeyGenAssist{} -> knownRepr
+      AESNI_AESIMC{} -> knownRepr
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -844,6 +848,7 @@ instance TraversableFC X86PrimFn where
       AESNI_AESDec x y -> AESNI_AESDec <$> go x <*> go y
       AESNI_AESDecLast x y -> AESNI_AESDecLast <$> go x <*> go y
       AESNI_AESKeyGenAssist x i -> AESNI_AESKeyGenAssist <$> go x <*> pure i
+      AESNI_AESIMC x -> AESNI_AESIMC <$> go x
 
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc ann
@@ -910,6 +915,7 @@ instance IsArchFn X86PrimFn where
       AESNI_AESDec x y -> sexprA "aesdec" [pp x, pp y]
       AESNI_AESDecLast x y -> sexprA "aesdeclast" [pp x, pp y]
       AESNI_AESKeyGenAssist x i -> sexprA "aeskeygenassist" [pp x, ppShow i]
+      AESNI_AESIMC x -> sexprA "aesimc" [pp x]
 
 
 -- | This returns true if evaluating the primitive function implicitly
@@ -963,6 +969,7 @@ x86PrimFnHasSideEffects f =
     AESNI_AESDec{} -> False
     AESNI_AESDecLast{} -> False
     AESNI_AESKeyGenAssist{} -> False
+    AESNI_AESIMC{} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt

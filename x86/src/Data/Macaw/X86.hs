@@ -386,6 +386,7 @@ transferAbsValue r f =
     AESNI_AESDec{} -> TopV
     AESNI_AESDecLast{} -> TopV
     AESNI_AESKeyGenAssist{} -> TopV
+    AESNI_AESIMC{} -> TopV
 
     -- XXX: Is 'TopV' the right thing for the AVX instruction below?
     VOp1 {} -> TopV
