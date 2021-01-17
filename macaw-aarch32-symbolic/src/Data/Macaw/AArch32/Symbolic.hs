@@ -138,7 +138,7 @@ type instance MSB.MacawArchStmtExtension SA.AArch32 =
 -- semantics
 --
 -- See Note [ARM Registers]
-type RegContext = PC.MapCtx ToMacawTypeWrapper LAG.GlobalsCtx
+type RegContext = PC.MapCtx ToMacawTypeWrapper (LAG.SimpleGlobalsCtx Ctx.<+> LAG.GPRCtx Ctx.<+> LAG.SIMDCtx)
 type instance MS.ArchRegContext SA.AArch32 = RegContext
 
 data ToMacawTypeWrapper :: PC.TyFun WT.BaseType MT.Type -> Type
@@ -146,7 +146,7 @@ type instance PC.Apply ToMacawTypeWrapper t = BaseToMacawType t
 
 aarch32RegAssignment :: Ctx.Assignment MAR.ARMReg RegContext
 aarch32RegAssignment =
-  I.runIdentity (PC.traverseMapCtx (Proxy @AsMacawReg) asARMReg LAG.allGlobalRefs)
+  I.runIdentity (PC.traverseMapCtx (Proxy @AsMacawReg) asARMReg (FC.fmapFC LAG.SimpleGlobalRef LAG.simpleGlobalRefs Ctx.<++> LAG.gprGlobalRefsSym Ctx.<++> LAG.simdGlobalRefsSym))
 
 data AsMacawReg :: PC.TyFun Symbol MT.Type -> Type
 type instance PC.Apply AsMacawReg s = BaseToMacawType (LAG.GlobalsType s)
