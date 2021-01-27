@@ -404,7 +404,7 @@ termStmtToReturn tm0 =
     M.ParsedCall r _ -> M.ParsedReturn r
     M.ParsedJump r _ -> M.ParsedReturn r
     M.ParsedBranch r _ _ _ -> M.ParsedReturn r
-    M.ParsedLookupTable r _ _ -> M.ParsedReturn r
+    M.ParsedLookupTable _layout r _ _ -> M.ParsedReturn r
     M.ParsedArchTermStmt _ r _ -> M.ParsedReturn r
     M.ClassifyFailure r _ -> M.ParsedReturn r
     M.PLTStub{} -> tm0
@@ -422,7 +422,7 @@ termStmtToJump tm0 addr =
     M.ParsedBranch r _ _ _ -> M.ParsedJump r addr
     M.ParsedCall r _ -> M.ParsedJump r addr
     M.ParsedReturn r -> M.ParsedJump r addr
-    M.ParsedLookupTable r _ _ -> M.ParsedJump r addr
+    M.ParsedLookupTable _layout r _ _ -> M.ParsedJump r addr
     M.ParsedArchTermStmt _ r _ -> M.ParsedJump r addr
     M.ClassifyFailure r _ -> M.ParsedJump r addr
     M.PLTStub{} -> tm0
@@ -520,7 +520,7 @@ parsedTermTargets t =
     M.ParsedCall _ (Just ret) -> [ret]
     M.ParsedJump _ addr -> [addr]
     M.ParsedBranch _ _ taddr faddr -> [taddr, faddr]
-    M.ParsedLookupTable _ _ addrs -> F.toList addrs
+    M.ParsedLookupTable _layout _ _ addrs -> F.toList addrs
     M.ParsedReturn {} -> []
     M.ParsedArchTermStmt _ _ Nothing -> []
     M.ParsedArchTermStmt _ _ (Just addr) -> [addr]
