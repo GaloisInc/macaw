@@ -1410,7 +1410,7 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       let tlbl = parsedBlockLabel blockLabelMap trueAddr
       let flbl = parsedBlockLabel blockLabelMap falseAddr
       addTermStmt $! CR.Br crucCond tlbl flbl
-    M.ParsedLookupTable regs idx possibleAddrs -> do
+    M.ParsedLookupTable _layout regs idx possibleAddrs -> do
       setMachineRegs =<< createRegStruct regs
       addSwitch blockLabelMap idx possibleAddrs
     M.ParsedReturn regs -> do
