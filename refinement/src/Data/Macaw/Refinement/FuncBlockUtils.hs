@@ -70,7 +70,7 @@ blockTransferTo fi blkID =
           MDS.ParsedCall _ mbTgt | Just tgt <- mbTgt -> [tgt]
                                  | otherwise -> []
           MDS.ParsedJump _ tgt -> [tgt]
-          MDS.ParsedLookupTable _ _ tgts -> F.toList tgts
+          MDS.ParsedLookupTable _layout _ _ tgts -> F.toList tgts
           MDS.ParsedReturn {} -> []
           MDS.ParsedBranch _regs _cond trueTarget falseTarget -> [ trueTarget, falseTarget ]
           MDS.PLTStub _ tgt _ ->

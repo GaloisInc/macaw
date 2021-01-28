@@ -95,7 +95,7 @@ computeBackEdges cfg0 =
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [target]
            MDS.ParsedBranch _ _ target1 target2 ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [target1, target2]
-           MDS.ParsedLookupTable _ _ targets ->
+           MDS.ParsedLookupTable _layout _ _ targets ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) targets
            MDS.PLTStub _ retTarget _ ->
              addTargetsIfBackedges blockId blockAddr (addVisited acc) [retTarget]
@@ -169,7 +169,7 @@ mkPartialCFG fi = computeBackEdges graph
         MDS.ParsedBranch _ _ tgt1 tgt2 ->
           let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) [tgt1, tgt2]
           in gr { cfg = g2 }
-        MDS.ParsedLookupTable _ _ addrs ->
+        MDS.ParsedLookupTable _layout _ _ addrs ->
           let g2 = F.foldl' (addEdge (cfgAddrNodes gr) nodeId) (cfg gr) addrs
           in gr { cfg = g2 }
         MDS.ParsedCall _ (Just retAddr) ->
@@ -297,8 +297,8 @@ breakBackedges cfg0 slice =
           MDS.ParsedJump regs (replaceTarget backTargets tgt)
         MDS.ParsedBranch regs cond t1 t2 ->
           MDS.ParsedBranch regs cond (replaceTarget backTargets t1) (replaceTarget backTargets t2)
-        MDS.ParsedLookupTable regs val tgts ->
-          MDS.ParsedLookupTable regs val (fmap (replaceTarget backTargets) tgts)
+        MDS.ParsedLookupTable layout regs val tgts ->
+          MDS.ParsedLookupTable layout regs val (fmap (replaceTarget backTargets) tgts)
         MDS.ParsedReturn {} -> t
         MDS.ParsedArchTermStmt _ _ Nothing -> t
         MDS.ParsedArchTermStmt stmt regs (Just tgt) ->

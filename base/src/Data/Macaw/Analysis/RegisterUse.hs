@@ -1175,7 +1175,7 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) [t,f]
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
       pure $ (m', frontierMap')
-    ParsedLookupTable regs _idx lbls -> do
+    ParsedLookupTable _layout regs _idx lbls -> do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) lbls
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
       pure $ (m', frontierMap')
@@ -1616,7 +1616,7 @@ mkBlockUsageSummary ctx cns sis blk = do
       ParsedBranch regs cond _t _f  -> do
         demandValue cond
         recordRegMap (regStateMap regs)
-      ParsedLookupTable regs idx _tgts -> do
+      ParsedLookupTable _layout regs idx _tgts -> do
         demandValue idx
         recordRegMap (regStateMap regs)
       ParsedCall regs _mret -> do
