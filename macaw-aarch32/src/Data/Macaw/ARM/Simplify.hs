@@ -19,14 +19,7 @@ import           Data.Macaw.ARM.ARMReg ()
 import qualified Data.Macaw.ARM.Arch as AA
 
 instance MSS.SimplifierExtension ARM.AArch32 where
-  simplifyArchApp a = simplifyTruncExt a <|>
-                      simplifyTrivialTruncExt a <|>
-                      coalesceAdditionByConstant a <|>
-                      simplifyNestedMux a <|>
-                      distributeAddOverConstantMux a <|>
-                      doubleNegation a <|>
-                      negatedTrivialMux a <|>
-                      negatedMux a
+  simplifyArchApp = saturatingSimplify
   simplifyArchFn = armSimplifyArchFn
 
 armSimplifyArchFn :: MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
@@ -40,7 +33,33 @@ armSimplifyArchFn af _rep =
     AA.UDiv _ z@(MC.BVValue _ 0) _ -> return z
     _ -> Nothing
 
+simplifyOnce :: MC.App (MC.Value ARM.AArch32 ids) tp
+             -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyOnce a = simplifyTruncExt a
+              <|> simplifyTrivialTruncExt a
+              <|> coalesceAdditionByConstant a
+              <|> simplifyNestedMux a
+              <|> distributeAddOverConstantMux a
+              <|> doubleNegation a
+              <|> negatedTrivialMux a
+              <|> negatedMux a
 
+-- | Apply the simplification rules until nothing changes
+--
+-- Simplifications can trigger other simplifications, and there is no fixed
+-- order in which we can guarantee that everything will fire correctly.  Thus,
+-- we apply rules until we saturate them.
+saturatingSimplify :: MC.App (MC.Value ARM.AArch32 ids) tp
+                   -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+saturatingSimplify a0 =
+  case simplifyOnce a0 of
+    Nothing -> Nothing
+    Just a1 -> simplifyMany a1
+  where
+    simplifyMany a1 =
+      case simplifyOnce a1 of
+        Nothing -> Just a1
+        Just a2 -> simplifyMany a2
 
 -- | Simplify terms that extend a pointer, increment it, and then truncate it
 -- back to 32 bits.
