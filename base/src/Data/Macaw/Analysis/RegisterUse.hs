@@ -23,6 +23,7 @@ module Data.Macaw.Analysis.RegisterUse
   , PostTermStmtInvariants
   , PostValueMap
   , pvmFind
+  , MemSlice(..)
     -- * Architecture specific summarization
   , ArchTermStmtUsageFn
   , RegisterUseM
@@ -282,7 +283,8 @@ unionBlockStartConstraints :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch
                            => BlockStartConstraints arch
                            -> BlockStartConstraints arch
                            -> BlockStartConstraints arch
-unionBlockStartConstraints n o = fromMaybe o (runChanged (joinBlockStartConstraints o n))
+unionBlockStartConstraints n o =
+  fromMaybe o (runChanged (joinBlockStartConstraints o n))
 
 -------------------------------------------------------------------------------
 -- StmtIndex
@@ -290,14 +292,51 @@ unionBlockStartConstraints n o = fromMaybe o (runChanged (joinBlockStartConstrai
 -- | Index of a stmt in a block.
 type StmtIndex = Int
 
+-- | This is used to control
+data MemSlice wtp rtp where
+
+  NoMemSlice :: MemSlice tp tp
+  MemSlice :: !Integer -- ^ Offset of read relative to write.
+           -> !(MemRepr wtp) -- ^ Write repr
+           -> !(MemRepr rtp) -- ^ Read repr
+           -> MemSlice wtp rtp
+
+deriving instance Show (MemSlice w r)
+
+instance TestEquality (MemSlice wtp) where
+  testEquality NoMemSlice NoMemSlice = Just Refl
+  testEquality (MemSlice xo xw xr) (MemSlice yo yw yr)
+    | xo == yo, Just Refl <- testEquality xw yw = testEquality xr yr
+  testEquality _ _ = Nothing
+
+joinOrdering :: Ordering -> OrderingF a b -> OrderingF a b
+joinOrdering LT _ = LTF
+joinOrdering EQ o = o
+joinOrdering GT _ = GTF
+
+instance OrdF (MemSlice wtp) where
+  compareF NoMemSlice NoMemSlice = EQF
+  compareF NoMemSlice MemSlice{} = LTF
+  compareF MemSlice{} NoMemSlice = GTF
+  compareF (MemSlice xo xw xr) (MemSlice yo yw yr) =
+    joinOrdering (compare xo yo) $
+    joinOrderingF (compareF xw yw) $
+    compareF xr yr
+
 ------------------------------------------------------------------------
 -- StartValueExpr
 
 -- | Information about a Macaw value in the invariant inference monad.
+--
+-- This is used primarily for checking whether two values are equivalent.
 data InferValue arch ids tp where
   -- | Value register use domain
-  IVDomain :: !(ValueRegUseDomain arch tp)
-           -> InferValue arch ids tp
+  --
+  --
+  IVDomain :: !(ValueRegUseDomain arch wtp)
+           -> !(MemSlice wtp rtp)
+           -> InferValue arch ids rtp
+
   -- | The value of an assignment.
   IVAssignValue :: !(AssignId ids tp)
                 -> InferValue arch ids tp
@@ -319,14 +358,16 @@ pattern FrameExpr :: ()
                   => (tp ~ BVType (ArchAddrWidth arch))
                   => MemInt (ArchAddrWidth arch)
                   -> InferValue arch ids tp
-pattern FrameExpr o = IVDomain (ValueRegUseStackOffset o)
+pattern FrameExpr o = IVDomain (ValueRegUseStackOffset o) NoMemSlice
 
 -- This returns @Just Refl@ if the two expressions denote the same
 -- value under the assumptions about the start of the block, and the
 -- assumption that non-stack writes do not affect the curent stack
 -- frame.
 instance TestEquality (ArchReg arch) => TestEquality (InferValue arch ids) where
-  testEquality (IVDomain x) (IVDomain y) = testEquality x y
+  testEquality (IVDomain x xs) (IVDomain y ys) = do
+    Refl <- testEquality x y
+    testEquality xs ys
   testEquality (IVAssignValue x) (IVAssignValue y) = testEquality x y
   testEquality (IVCValue x) (IVCValue y) = testEquality x y
   testEquality (IVCondWrite x xtp) (IVCondWrite y ytp) =
@@ -341,10 +382,11 @@ instance TestEquality (ArchReg arch) => TestEquality (InferValue arch ids) where
 -- Note. The @OrdF@ instance is a total order over @InferValue@.
 -- If it returns @EqF@ then it guarantees the two expressions denote
 -- the same value under the assumptions about the start of the block,
--- and the assumption that non-stack writes do not affect the curent
+-- and the assumption that non-stack writes do not affect the current
 -- stack frame.
 instance OrdF (ArchReg arch) => OrdF (InferValue arch ids) where
-  compareF (IVDomain x) (IVDomain y) = compareF x y
+  compareF (IVDomain x xs) (IVDomain y ys) =
+    joinOrderingF (compareF x y) (compareF xs ys)
   compareF IVDomain{} _ = LTF
   compareF _ IVDomain{} = GTF
 
@@ -406,6 +448,25 @@ deriving instance (ShowF (ArchReg arch), MemWidth (ArchAddrWidth arch))
 
 -- | Evaluate a value in the context of the start infer state and
 -- initial register assignment.
+valueToStartExpr' :: OrdF (ArchReg arch)
+                 => StartInferContext arch
+                    -- ^ Initial value of registers
+                 -> MapF (AssignId ids) (InferValue arch ids)
+                    -- ^ Map from assignments to value.
+                 -> Value arch ids wtp
+                 -> MemSlice wtp rtp
+                 -> Maybe (InferValue arch ids rtp)
+valueToStartExpr' _ _ (CValue c) NoMemSlice = Just (IVCValue c)
+valueToStartExpr' _ _ (CValue _) MemSlice{} = Nothing
+valueToStartExpr' _ am (AssignedValue (Assignment aid _)) NoMemSlice = Just $
+  MapF.findWithDefault (IVAssignValue aid) aid am
+valueToStartExpr' _ _ (AssignedValue (Assignment _ _)) MemSlice{} = Nothing
+valueToStartExpr' ctx _ (Initial r) ms = Just $
+  IVDomain (MapF.findWithDefault (RegEqualLoc (RegLoc r)) r (sicRegs ctx)) ms
+
+
+-- | Evaluate a value in the context of the start infer state and
+-- initial register assignment.
 valueToStartExpr :: OrdF (ArchReg arch)
                  => StartInferContext arch
                     -- ^ Initial value of registers
@@ -418,6 +479,7 @@ valueToStartExpr _ am (AssignedValue (Assignment aid _)) =
   MapF.findWithDefault (IVAssignValue aid) aid am
 valueToStartExpr ctx _ (Initial r) =
   IVDomain (MapF.findWithDefault (RegEqualLoc (RegLoc r)) r (sicRegs ctx))
+           NoMemSlice
 
 inferStackValueToValue :: OrdF (ArchReg arch)
                        => StartInferContext arch
@@ -427,7 +489,7 @@ inferStackValueToValue :: OrdF (ArchReg arch)
                        -> InferStackValue arch ids tp
                        -> MemRepr tp
                        -> InferValue arch ids tp
-inferStackValueToValue _ _ (ISVInitValue d)   _    = IVDomain d
+inferStackValueToValue _ _ (ISVInitValue d)   _    = IVDomain d NoMemSlice
 inferStackValueToValue ctx m (ISVWrite _idx v)  _  = valueToStartExpr ctx m v
 inferStackValueToValue _ _ (ISVCondWrite idx _ _ _) repr = IVCondWrite idx repr
 
@@ -442,10 +504,11 @@ data MemAccessInfo arch ids
      -- | The access read a frame offset that has been written to by a
      -- previous write or cond-write in this block, and the
      -- instruction had the given index.
-   | FrameReadWriteAccess !(MemInt (ArchAddrWidth arch)) !StmtIndex
+   | FrameReadWriteAccess !StmtIndex
       -- | The access was a memory read that overlapped, but did not
      -- exactly match a previous write.
-   | FrameReadOverlapAccess !(MemInt (ArchAddrWidth arch))
+   | FrameReadOverlapAccess
+        !(MemInt (ArchAddrWidth arch))
      -- | The access was a write to the current frame.
    | FrameWriteAccess !(MemInt (ArchAddrWidth arch))
      -- | The access was a conditional write to the current frame at the
@@ -514,13 +577,16 @@ sisCurrentInstructionOffsetLens =
 type StartInfer arch ids =
   ReaderT (StartInferContext arch) (State (InferState arch ids))
 
--- | Set the value associtated with an assignment
-setAssignVal :: AssignId ids tp -> InferValue arch ids tp -> StartInfer arch ids ()
+-- | Set the value associated with an assignment
+setAssignVal :: AssignId ids tp
+             -> InferValue arch ids tp
+             -> StartInfer arch ids ()
 setAssignVal aid v = sisAssignMapLens %= MapF.insert aid v
 
 -- | Record the mem access information
 addMemAccessInfo :: MemAccessInfo arch ids -> StartInfer arch ids ()
-addMemAccessInfo i = seq i $ modify $ \s -> s { sisMemAccessStack = i : sisMemAccessStack s }
+addMemAccessInfo i =
+  seq i $ modify $ \s -> s { sisMemAccessStack = i : sisMemAccessStack s }
 
 processApp :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
            => AssignId ids tp
@@ -549,6 +615,25 @@ processApp aid app = do
         Just prevId -> do
           setAssignVal aid (IVAssignValue prevId)
 
+-- | @checkReadWithinWrite writeOff writeType readOff readType@ checks that
+-- the read is contained within the write and returns a mem slice if so.
+checkReadWithinWrite :: MemWidth w
+           => MemInt w -- ^ Write offset
+           -> MemRepr wtp -- ^ Write repr
+           -> MemInt w -- ^ Read offset
+           -> MemRepr rtp -- ^ Read repr
+           -> Maybe (MemSlice wtp rtp)
+checkReadWithinWrite wo wr ro rr
+  | wo == ro, Just Refl <- testEquality wr rr =
+      Just NoMemSlice
+  | wo <= ro
+  , d <- toInteger ro - toInteger wo
+  , rEnd <- d + toInteger (memReprBytes rr)
+  , wEnd <- toInteger (memReprBytes wr)
+  , rEnd <= wEnd =
+    Just (MemSlice d wr rr)
+  | otherwise = Nothing
+
 -- | Infer constraints from a memory read
 inferReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                => AssignId ids tp
@@ -561,31 +646,42 @@ inferReadMem aid addr repr = do
   case valueToStartExpr ctx am addr of
     FrameExpr o -> do
       stk <- gets sisStack
-      case memMapLookup o repr stk of
-        -- Assigned stack read.
-        MMLResult sv -> do
-          case sv of
-            ISVInitValue d -> do
-              setAssignVal aid (IVDomain d)
-              addMemAccessInfo (FrameReadInitAccess o d)
-            ISVWrite writeIdx v -> do
-              setAssignVal aid (valueToStartExpr ctx am v)
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-            ISVCondWrite writeIdx _ _ _ -> do
-              setAssignVal aid (IVCondWrite writeIdx repr)
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-        -- Overlap reads are equal to themselves
-        MMLOverlap{} -> do
-          addMemAccessInfo (FrameReadOverlapAccess o)
-        -- Uninitialized reads are equal to whatever  are equal to themselves.
-        MMLNone -> do
+      case memMapLookup' o repr stk of
+        Just (writeOff, MemVal writeRepr sv) ->
+          case checkReadWithinWrite writeOff writeRepr o repr of
+            -- Overlap reads just get recorded
+            Nothing ->
+              addMemAccessInfo (FrameReadOverlapAccess o)
+            -- Reads within writes get propagated.
+            Just ms ->
+              case sv of
+                ISVInitValue d -> do
+                  setAssignVal aid (IVDomain d ms)
+                  addMemAccessInfo (FrameReadInitAccess o d)
+                ISVWrite writeIdx v -> do
+                  case valueToStartExpr' ctx am v ms of
+                    Just iv -> setAssignVal aid iv
+                    Nothing -> pure ()
+                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
+                ISVCondWrite writeIdx _ _ _ -> do
+                  case ms of
+                    NoMemSlice ->
+                      setAssignVal aid (IVCondWrite writeIdx repr)
+                    MemSlice _ _ _ ->
+                      pure ()
+                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
+        -- Uninitialized reads are equal to what came before.
+        Nothing -> do
           let d = RegEqualLoc (StackOffLoc o repr)
-          setAssignVal aid (IVDomain d)
+          setAssignVal aid (IVDomain d NoMemSlice)
           addMemAccessInfo (FrameReadInitAccess o d)
     -- Non-stack reads are just equal to themselves.
     _ -> addMemAccessInfo NotFrameAccess
 
--- | Infer constraints from a memory read
+-- | Infer constraints from a memory read.
+--
+-- Unlike inferReadMem these are not assigned a value, but we still
+-- track which write was associated if possible.
 inferCondReadMem :: (MemWidth (ArchAddrWidth arch), OrdF (ArchReg arch))
                  => Value arch ids (BVType (ArchAddrWidth arch))
                  -> MemRepr tp
@@ -597,20 +693,22 @@ inferCondReadMem addr repr = do
     -- Stack reads need to record the offset.
     FrameExpr o -> do
       stk <- gets sisStack
-      case memMapLookup o repr stk of
-        -- Assigned stack read.
-        MMLResult sv ->
-          case sv of
-            ISVInitValue d ->
-              addMemAccessInfo (FrameReadInitAccess o d)
-            ISVWrite writeIdx _v ->
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-            ISVCondWrite writeIdx _ _ _ ->
-              addMemAccessInfo (FrameReadWriteAccess o writeIdx)
-        -- Overlap reads are equal to themselves
-        MMLOverlap{} -> do
-          addMemAccessInfo (FrameReadOverlapAccess o)
-        MMLNone -> do
+      case memMapLookup' o repr stk of
+        Just (writeOff, MemVal writeRepr sv) ->
+          case checkReadWithinWrite writeOff writeRepr o repr of
+            -- Overlap reads just get recorded
+            Nothing ->
+              addMemAccessInfo (FrameReadOverlapAccess o)
+            -- Reads within writes get propagated.
+            Just _ ->
+              case sv of
+                ISVInitValue d ->
+                  addMemAccessInfo (FrameReadInitAccess o d)
+                ISVWrite writeIdx _v ->
+                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
+                ISVCondWrite writeIdx _ _ _ ->
+                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
+        Nothing -> do
           let d = RegEqualLoc (StackOffLoc o repr)
           addMemAccessInfo (FrameReadInitAccess o d)
     -- Non-stack reads are just equal to themselves.
@@ -700,7 +798,7 @@ pvmFind :: OrdF (ArchReg arch)
         => BoundLoc (ArchReg arch) tp
         -> PostValueMap arch ids
         -> InferValue arch ids tp
-pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l)) l m
+pvmFind l (PVM m) = MapF.findWithDefault (IVDomain (RegEqualLoc l) NoMemSlice) l m
 
 instance ShowF (ArchReg arch) => Show (PostValueMap arch ids) where
   show (PVM m) = show m
@@ -745,8 +843,9 @@ memoNextDomain :: OrdF (ArchReg arch)
                => BoundLoc (ArchReg arch) tp
                -> InferValue arch ids tp
                -> InferNextM arch ids (Maybe (ValueRegUseDomain arch tp))
-memoNextDomain _ (IVDomain d@ValueRegUseStackOffset{}) = pure (Just d)
-memoNextDomain _ (IVDomain d@FnStartRegister{}) = pure (Just d)
+memoNextDomain _ (IVDomain d@ValueRegUseStackOffset{} NoMemSlice) =
+  pure (Just d)
+memoNextDomain _ (IVDomain d@FnStartRegister{} NoMemSlice) = pure (Just d)
 memoNextDomain loc e = do
   m <- gets insSeenValues
   case MapF.lookup e m of
@@ -1404,7 +1503,7 @@ demandReadMem aid addr _repr = do
     FrameReadInitAccess _o d -> do
       let deps = assignSet aid <> domainDeps d
       assignmentCache %= Map.insert (Some aid) deps
-    FrameReadWriteAccess _o writeIdx -> do
+    FrameReadWriteAccess writeIdx -> do
       -- Mark that this value depends on aid and any
       -- dependencies needed to compute the value stored at o.
       m <- gets blockWriteDependencies
@@ -1451,7 +1550,7 @@ demandCondReadMem aid cond addr _repr val = do
                  , valueDeps cns cache val
                  ]
       assignmentCache %= Map.insert (Some aid) deps
-    FrameReadWriteAccess _o writeIdx -> do
+    FrameReadWriteAccess writeIdx -> do
       cns <- gets blockUsageStartConstraints
       cache <- gets assignDeps
       -- Mark that this value depends on aid and any dependencies
