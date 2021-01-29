@@ -520,7 +520,8 @@ data X86PrimFn f tp where
   -- This function implicitly depends on the MXCSR register and may
   -- signal a precision exception based on the configuration of that
   -- register.
-  SSE_CVTSI2SX    :: (1 <= w)
+  SSE_CVTSI2SX
+    :: (1 <= w)
     => !(SSE_FloatType tp)
     -> !(NatRepr w)
     -> !(f (BVType w))
