@@ -107,8 +107,8 @@ data MemRepr (tp :: Type) where
   FloatMemRepr :: !(FloatInfoRepr f) -> !Endianness -> MemRepr (FloatType f)
   -- | A vector of values with zero entry first.
   --
-  -- The first value is stored at the address, the second is stored at address + sizeof eltType,
-  -- etc.
+  -- The first value is stored at the address, the second is stored at
+  -- address + sizeof eltType, etc.
   PackedVecMemRepr :: !(NatRepr n) -> !(MemRepr tp) -> MemRepr (VecType n tp)
 
 ppEndianness :: Endianness -> Doc ann
