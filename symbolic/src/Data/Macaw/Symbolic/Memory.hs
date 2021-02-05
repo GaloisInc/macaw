@@ -194,7 +194,6 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , MC.MemWidth (MC.ArchAddrWidth arch)
                    , KnownNat (MC.ArchAddrWidth arch)
                    , CB.IsSymInterface sym
-                   , Ord (WI.SymExpr sym WI.BaseNatType)
                    , CL.HasLLVMAnn sym
                    , MonadIO m
                    )
