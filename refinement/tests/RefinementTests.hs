@@ -55,7 +55,6 @@ import           Data.Maybe ( catMaybes )
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
-import           Data.Semigroup ( (<>) )
 import qualified Data.Set as Set
 import qualified Data.Tagged as DT
 import qualified Data.Text as T
