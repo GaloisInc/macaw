@@ -197,7 +197,7 @@ freshValue sym str w ty =
         Just Refl ->
           do nm_base <- symName (str ++ "_base")
              nm_off  <- symName (str ++ "_off")
-             base    <- WI.freshConstant sym nm_base C.BaseNatRepr
+             base    <- WI.freshNat sym nm_base
              offs    <- WI.freshConstant sym nm_off (C.BaseBVRepr y)
              return (MM.LLVMPointer base offs)
 

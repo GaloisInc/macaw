@@ -271,6 +271,13 @@ mkUndefinedBV ::
 mkUndefinedBV sym nm w =
   mkUndefined sym (nm ++ "bv" ++ show w ++ "_") (BaseBVRepr w)
 
+mkUndefinedNat ::
+  (IsSymInterface sym) => sym -> String -> IO (RegValue sym NatType)
+mkUndefinedNat sym unm =
+  do let name = "undefined_" ++ unm
+     nm <- mkName name
+     freshNat sym nm
+
 -- | A fresh boolean variable
 mkUndefinedBool ::
   (IsSymInterface sym) => sym -> String -> IO (RegValue sym BoolType)
@@ -280,7 +287,7 @@ mkUndefinedBool sym nm =
 mkUndefinedPtr :: (IsSymInterface sym, 1 <= w) =>
   sym -> String -> NatRepr w -> IO (LLVMPtr sym w)
 mkUndefinedPtr sym nm w =
-  do base <- mkUndefined sym ("ptr_base_" ++ nm) BaseNatRepr
+  do base <- mkUndefinedNat sym ("ptr_base_" ++ nm)
      off  <- mkUndefinedBV sym ("ptr_offset_" ++ nm) w
      return (Mem.LLVMPointer base off)
 

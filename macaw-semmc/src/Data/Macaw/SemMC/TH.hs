@@ -51,12 +51,14 @@ import           Data.Functor.Product
 import qualified Data.Foldable as F
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NE
+import qualified Data.Kind as DK
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe )
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as T
 import           Language.Haskell.TH
 import           Language.Haskell.TH.Syntax
+import qualified LibBF as BF
 import           Text.Read ( readMaybe )
 
 import qualified Data.BitVector.Sized as BVS
@@ -328,7 +330,7 @@ collectOperandVars varNames ix (BV.BoundVar bv) m =
 
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
 -- LogCfg to disable any logging during the generation.
-genExecInstruction :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstruction :: forall arch (opc :: [Symbol] -> DK.Type) (proxy :: DK.Type -> DK.Type) t fs
                     . (A.Architecture arch,
                        HR.HasRepr opc (A.ShapeRepr arch),
                        OrdF opc,
@@ -357,7 +359,7 @@ genExecInstruction proxy thConf semantics captureInfo functions = do
 
 -- | Wrapper for 'genExecInstructionLogging' which generates a no-op
 -- LogCfg to disable any logging during the generation.
-genExecInstructionLogStdErr :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstructionLogStdErr :: forall arch (opc :: [Symbol] -> DK.Type) (proxy :: DK.Type -> DK.Type) t fs
                     . (A.Architecture arch,
                        HR.HasRepr opc (A.ShapeRepr arch),
                        OrdF opc,
@@ -394,7 +396,7 @@ genExecInstructionLogStdErr proxy thConf semantics captureInfo functions = do
 -- all of the things we would need to for that).
 --
 -- The structure of the term produced is documented in 'instructionMatcher'
-genExecInstructionLogging :: forall arch (opc :: [Symbol] -> *) (proxy :: * -> *) t fs
+genExecInstructionLogging :: forall arch (opc :: [Symbol] -> DK.Type) (proxy :: DK.Type -> DK.Type) t fs
                              . (A.Architecture arch,
                                 HR.HasRepr opc (A.ShapeRepr arch),
                                 OrdF opc,
@@ -598,8 +600,27 @@ translateBaseTypeRepr tp =
 
 -- | wrapper around bitvector constants that forces some type
 -- variables to match those of the monadic context.
-genBVValue :: 1 SI.<= w => NR.NatRepr w -> Integer -> G.Generator arch ids s (M.Value arch ids (M.BVType w))
-genBVValue repr i = return (M.BVValue repr i)
+bvValue :: 1 SI.<= w => NR.NatRepr w -> Integer -> M.Value arch ids (M.BVType w)
+bvValue repr i = M.BVValue repr i
+
+-- | Lift a bitvector value into a macaw float
+genFloatValue
+  :: ( MSS.SimplifierExtension arch
+     , OrdF (M.ArchReg arch)
+     , ShowF (M.ArchReg arch)
+     , M.MemWidth (M.ArchAddrWidth arch)
+     , 1 SI.<= w
+     , (8 SI.* M.FloatInfoBytes ftp) ~ w
+     )
+  => NR.NatRepr w
+  -> M.FloatInfoRepr ftp
+  -> Integer
+  -> G.Generator arch ids s (M.Value arch ids (M.FloatType ftp))
+genFloatValue nr fi i = G.addExpr (G.AppExpr cast)
+  where
+    bv = M.BVValue nr i
+    proof = M.ToFloat fi
+    cast = M.Bitcast bv proof
 
 addEltTH :: forall arch t fs ctp .
             (A.Architecture arch)
@@ -644,8 +665,15 @@ addEltTH endianness interps elt = do
             -- Similar to the BoolExpr case, we always eagerly evaluate
             -- bitvector literals and return the VarE that wraps the name
             -- referring to the generated constant.
-            bindExpr elt [| genBVValue $(natReprTH w) $(lift (BVS.asUnsigned val)) |]
+            letBindPureExpr elt [| bvValue $(natReprTH w) $(lift (BVS.asUnsigned val)) |]
           | otherwise -> EagerBoundExp <$> liftQ [| error "SemiRingLiteral Elts are not supported" |]
+        S.FloatExpr prec flt _loc
+          | Just Refl <- testEquality prec floatSingleRepr ->
+            bindExpr elt [| genFloatValue $(natReprTH (knownNat @32)) M.SingleFloatRepr $(lift (BF.bfToBits (BF.float32 BF.NearEven) flt)) |]
+          | Just Refl <- testEquality prec floatDoubleRepr ->
+            bindExpr elt [| genFloatValue $(natReprTH (knownNat @64)) M.DoubleFloatRepr $(lift (BF.bfToBits (BF.float64 BF.NearEven) flt)) |]
+          | otherwise ->
+            EagerBoundExp <$> liftQ [| error "Unsupported float expression type" |]
         S.StringExpr {} -> EagerBoundExp <$> liftQ [| error "StringExpr elts are not supported" |]
         S.BoolExpr b _loc ->
           -- This case always eagerly evaluates the literal; that is fine.  It
@@ -653,6 +681,14 @@ addEltTH endianness interps elt = do
           -- is the VarE that wraps the name referring to the generated
           -- constant.
           letBindPureExpr elt [| M.BoolValue $(lift b) |]
+
+
+
+floatSingleRepr :: SI.FloatPrecisionRepr SI.Prec32
+floatSingleRepr = knownRepr
+
+floatDoubleRepr :: SI.FloatPrecisionRepr SI.Prec64
+floatDoubleRepr = knownRepr
 
 evalBoundVar :: forall arch t fs ctp .
                 (A.Architecture arch)
@@ -668,7 +704,7 @@ evalBoundVar interps bVar =
        return (VarE name)
      | otherwise -> fail $ "bound var not found: " ++ show bVar
 
-symFnName :: S.ExprSymFn t (S.Expr t) args ret -> String
+symFnName :: S.ExprSymFn t args ret -> String
 symFnName = T.unpack . Sy.solverSymbolAsText . S.symFnName
 
 bvarName :: S.ExprBoundVar t tp -> String
@@ -679,7 +715,7 @@ bvarName = T.unpack . Sy.solverSymbolAsText . S.bvarName
 writeMemTH :: forall arch t fs args ret
             . (A.Architecture arch)
            => BoundVarInterpretations arch t fs
-           -> S.ExprSymFn t (S.Expr t) args ret
+           -> S.ExprSymFn t args ret
            -> Ctx.Assignment (S.Expr t) args
            -> M.Endianness
            -> MacawQ arch t fs (Some (S.Expr t))
@@ -872,7 +908,6 @@ defaultAppEvaluator endianness elt interps = case elt of
       CT.BaseBoolRepr -> liftQ $ joinPure3 [| addApp |] [| M.Mux M.BoolTypeRepr |] testE tE fE
       CT.BaseBVRepr w -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.BVTypeRepr $(natReprTH w)) |] testE tE fE
       CT.BaseFloatRepr fpp -> liftQ $ joinPure3 [| addApp |] [| M.Mux (M.FloatTypeRepr $(floatInfoFromPrecisionTH fpp)) |] testE tE fE
-      CT.BaseNatRepr -> liftQ [| error "Macaw semantics for nat ITE unsupported" |]
       CT.BaseIntegerRepr -> liftQ [| error "Macaw semantics for integer ITE unsupported" |]
       CT.BaseRealRepr -> liftQ [| error "Macaw semantics for real ITE unsupported" |]
       CT.BaseStringRepr {} -> liftQ [| error "Macaw semantics for string ITE unsupported" |]
