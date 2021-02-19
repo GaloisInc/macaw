@@ -55,6 +55,15 @@ jobs:
       run: |
         cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
         cabal test pkg:macaw-ppc
+
+    - name: Install Solvers
+      if: runner.os == 'Linux'
+      run: .github/ci.sh install_system_deps
+      env:
+        Z3_VERSION: "4.8.8"
+        YICES_VERSION: "2.6.2"
+        CVC4_VERSION: "4.1.8"
+
     - name: macaw-refinement
       run: |
         cabal build pkg:macaw-refinement
