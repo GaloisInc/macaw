@@ -683,7 +683,7 @@ summarizeBlock b = do
       -- Compute all transfers
       recordBlockTransfer blockAddr regs archRegs
 
-    ParsedLookupTable regs lookupIdx _vec -> do
+    ParsedLookupTable _layout regs lookupIdx _vec -> do
       demandValue blockAddr lookupIdx
       -- record all propagations
       recordBlockTransfer blockAddr regs archRegs

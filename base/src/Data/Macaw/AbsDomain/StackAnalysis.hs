@@ -89,6 +89,7 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , MemMap
   , emptyMemMap
   , memMapLookup
+  , memMapLookup'
   , MemMapLookup(..)
   , memMapOverwrite
   , memMapMapWithKey
@@ -263,8 +264,7 @@ class Ord o => MemIndex o where
   -- without overflowing.
   endOffset :: o -> Natural -> Maybe o
 
-  -- | @memOverlap b r i@ returns @True@ if @b <= i@ and
-  -- @i - b < sizeOf r@.
+  -- | @memOverlap b r i@ returns @True@ if @i \in [b..b+sizeof r)@.
   memOverlap :: o -> MemRepr tp -> o -> Bool
 
 instance MemWidth w => MemIndex (MemInt w) where
@@ -286,6 +286,23 @@ instance MemWidth w => MemIndex (MemWord w) where
     = memWordValue b <= memWordValue i
     && fromIntegral (memWordValue i - memWordValue b) < memReprBytes r
 
+-- | Lookup value (if any) at given offset and representation.
+--
+-- This generalized @memMapLookup@ below to not require exact matches, but
+-- just some overlap.
+memMapLookup' :: MemIndex o
+              => o
+              -> MemRepr tp
+              -> MemMap o v
+              -> Maybe (o, MemVal v)
+memMapLookup' off repr (SM m) =  do
+  case endOffset off (memReprBytes repr) of
+    Nothing -> Nothing
+    Just end ->
+      case Map.lookupLT end m of
+        Just p@(oldOff, MemVal oldRepr _)
+          | memOverlap oldOff oldRepr off -> Just p
+        _ -> Nothing
 
 -- | Lookup value (if any) at given offset and representation.
 memMapLookup :: MemIndex o

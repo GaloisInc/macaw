@@ -174,6 +174,7 @@ smtSolveTransfer ctx slice
         body
         [targetBlock]
         []
+        Nothing
 
       -- F.forM_ (entryBlock : targetBlock : body) $ \pb -> liftIO $ do
       --   printf "Block %s\n" (show (M.pblockAddr pb))
@@ -260,7 +261,6 @@ initialRegisterState :: forall arch sym m ids
                       . ( MS.SymArchConstraints arch
                         , CB.IsSymInterface sym
                         , MonadIO m
-                        , Show (W.SymExpr sym WT.BaseNatType)
                         , Show (W.SymExpr sym (WT.BaseBVType (M.ArchAddrWidth arch)))
                         )
                      => sym
@@ -425,7 +425,7 @@ extractIPModels :: forall arch solver m sym t fp
                 -> sym
                 -> W.SolverProcess t solver
                 -> [W.Pred sym]
-                -> WE.Expr t WT.BaseNatType
+                -> W.SymNat sym
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
 extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = do
@@ -467,9 +467,7 @@ initializeSimulator :: forall m sym arch blocks ids tp
                        , MS.SymArchConstraints arch
                        , CB.IsSymInterface sym
                        , LLVM.HasLLVMAnn sym
-                       , Show (W.SymExpr sym W.BaseNatType)
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
-                       , Ord (W.SymExpr sym WT.BaseNatType)
                        )
                     => RefinementContext arch
                     -> sym

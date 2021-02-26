@@ -62,6 +62,9 @@ module Data.Macaw.Discovery
        , State.pblockStmts
        , State.pblockTermStmt
        , State.ParsedTermStmt(..)
+       , State.JumpTableLayout
+       , State.jtlBackingAddr
+       , State.jtlBackingSize
          -- * Simplification
        , eliminateDeadStmts
        ) where
@@ -92,6 +95,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
+import           Data.Word
 import           GHC.IO (ioToST)
 import           Numeric
 import           Numeric.Natural
@@ -116,7 +120,6 @@ import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
-
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -214,7 +217,7 @@ addParsedBlockDemands b = do
       traverseF_ addValueDemands regs
     ParsedBranch regs _ _ _ -> do
       traverseF_ addValueDemands regs
-    ParsedLookupTable regs _idx _tbl  -> do
+    ParsedLookupTable _layout regs _idx _tbl  -> do
       traverseF_ addValueDemands regs
     ParsedReturn regs -> do
       traverseF_ addValueDemands regs
@@ -452,39 +455,7 @@ mergeIntraJump src (tgt, ab, bnds) = do
       foundAddrs %= Map.insert tgt found_info
 
 -------------------------------------------------------------------------------
--- BoundedMemArray
-
--- | This describes a region of memory dereferenced in some array read.
---
--- These regions may be be sparse, given an index `i`, the
--- the address given by 'arBase' + 'arIx'*'arStride'.
-data BoundedMemArray arch tp = BoundedMemArray
-  { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
-    -- ^ The base address for array accesses.
-  , arStride :: !Natural
-    -- ^ Space between elements of the array.
-    --
-    -- This will typically be the number of bytes denoted by `arEltType`,
-    -- but may be larger for sparse arrays.  `matchBoundedMemArray` will fail
-    -- if stride is less than the number of bytes read.
-  , arEltType   :: !(MemRepr tp)
-    -- ^ Resolved type of elements in this array.
-  , arSlices       :: !(V.Vector [MemChunk (ArchAddrWidth arch)])
-    -- ^ The slices of memory in the array.
-    --
-    -- The `i`th element in the vector corresponds to the first `size`
-    -- bytes at address `base + stride * i`.
-    --
-    -- This could be computed from the previous fields, but we check we
-    -- can create it when creating the array read, so we store it to
-    -- avoid recomputing it.
-  }
-
-deriving instance RegisterInfo (ArchReg arch) => Show (BoundedMemArray arch tp)
-
--- | Return true if the address stored is readable and not writable.
-isReadOnlyBoundedMemArray :: BoundedMemArray arch  tp -> Bool
-isReadOnlyBoundedMemArray = Perm.isReadonly . segmentFlags . segoffSegment . arBase
+-- BoundedMemArray recognition
 
 absValueAsSegmentOff
   :: forall w
@@ -590,14 +561,15 @@ matchBoundedMemArray mem aps jmpBounds val = do
    -- Check stride covers at least number of bytes read.
   when (memReprBytes tp > stride) $ do
     fail "Stride does not cover size of relocation."
-  -- Resolve a static upper bound to array.
-
+  -- Convert stride to word64 (must be lossless due to as memory is at most 64-bits)
+  let stridew :: Word64
+      stridew = fromIntegral stride
   -- Take the given number of bytes out of each slices
   slices <- extractJumpTableSlices jmpBounds base stride ixVal tp
 
   let r = BoundedMemArray
           { arBase     = base
-          , arStride   = stride
+          , arStride   = stridew
           , arEltType  = tp
           , arSlices   = slices
           }
@@ -605,16 +577,6 @@ matchBoundedMemArray mem aps jmpBounds val = do
 
 ------------------------------------------------------------------------
 -- Extension
-
--- | Information about a value that is the signed or unsigned extension of another
--- value.
---
--- This is used for jump tables, and only supports widths that are in memory
-data Extension w = Extension { _extIsSigned :: !Bool
-                             , _extWidth :: !(AddrWidthRepr w)
-                               -- ^ Width of argument. is to.
-                             }
-  deriving (Show)
 
 -- | Just like Some (BVValue arch ids), but doesn't run into trouble with
 -- partially applying the BVValue type synonym.
@@ -647,29 +609,8 @@ extendDyn (Extension False Addr64) end bs  = toInteger (bsWord64 end bs)
 extendDyn (Extension True  Addr32) end bs = toInteger (fromIntegral (bsWord32 end bs) :: Int32)
 extendDyn (Extension True  Addr64) end bs = toInteger (fromIntegral (bsWord64 end bs) :: Int64)
 
-------------------------------------------------------------------------
--- JumpTableLayout
-
--- | This describes the layout of a jump table.
--- Beware: on some architectures, after reading from the jump table, the
--- resulting addresses must be aligned. See the IPAlignment class.
-data JumpTableLayout arch
-  = AbsoluteJumpTable !(BoundedMemArray arch (BVType (ArchAddrWidth arch)))
-  -- ^ `AbsoluteJumpTable r` describes a jump table where the jump
-  -- target is directly stored in the array read `r`.
-  | forall w . RelativeJumpTable !(ArchSegmentOff arch)
-                                 !(BoundedMemArray arch (BVType w))
-                                 !(Extension w)
-  -- ^ `RelativeJumpTable base read ext` describes information about a
-  -- jump table where all jump targets are relative to a fixed base
-  -- address.
-  --
-  -- The value is computed as `baseVal + readVal` where
-  --
-  -- `baseVal = fromMaybe 0 base`, `readVal` is the value stored at
-  -- the memory read described by `read` with the sign of `ext`.
-
-deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
+--------------------------------------------------------------------------------
+-- Jump table recognition
 
 -- This function resolves jump table entries.
 -- It is a recursive function that has an index into the jump table.
@@ -1301,13 +1242,13 @@ jumpTableClassifier = classifierName "Jump table" $ do
     let jumpTableClassifiers
           =   matchAbsoluteJumpTable
           <|> matchRelativeJumpTable
-    (_jt, entries, jumpIndex) <- lift $
+    (layout, entries, jumpIndex) <- lift $
       runReaderT jumpTableClassifiers bcc
 
     let abst :: AbsBlockState (ArchReg arch)
         abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
     let nextBnds = Jmp.postJumpBounds jmpBounds (classifierFinalRegState bcc)
-    let term = ParsedLookupTable (classifierFinalRegState bcc) jumpIndex entries
+    let term = ParsedLookupTable layout (classifierFinalRegState bcc) jumpIndex entries
     pure $ seq abst $
       ParsedContents { parsedNonterm = toList (classifierStmts bcc)
                      , parsedTerm = term

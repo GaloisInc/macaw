@@ -41,6 +41,18 @@ def_aeskeygenassist =
            dest .= res
        | otherwise -> fail "aeskeygenassist: Invalid operands"
 
+def_aesimc :: InstructionDef
+def_aesimc =
+  defBinary "aesimc" $ \_ vdest vsrc -> do
+    SomeBV dest <- getSomeBVLocation vdest
+    SomeBV src <- getSomeBVLocation vsrc
+    if | Just Refl <- testEquality (typeWidth dest) n128
+       , Just Refl <- testEquality (typeWidth src) n128 -> do
+           s <- eval =<< get src
+           res <- evalArchFn (AESNI_AESIMC s)
+           dest .= res
+       | otherwise -> fail "aesimc: Invalid operands"
+
 def_pclmulqdq :: InstructionDef
 def_pclmulqdq =
   defTernaryLVV "pclmulqdq" $ \dest src2 imm -> do
@@ -63,5 +75,6 @@ all_instructions =
   , def_aesni "aesdec" AESNI_AESDec
   , def_aesni "aesdeclast" AESNI_AESDecLast
   , def_aeskeygenassist
+  , def_aesimc
   , def_pclmulqdq
   ]

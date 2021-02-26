@@ -13,13 +13,8 @@ representing this information.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Discovery.State
-  ( GlobalDataInfo(..)
-  , ParsedTermStmt(..)
-  , parsedTermSucc
-  , ParsedBlock(..)
-    -- * The interpreter state
-  , DiscoveryState
-  , NoReturnFunStatus(..)
+  ( -- * DiscoveryState
+    DiscoveryState
   , AddrSymMap
   , exploredFunctions
   , ppDiscoveryStateBlocks
@@ -27,15 +22,31 @@ module Data.Macaw.Discovery.State
   , memory
   , symbolNames
   , archInfo
+  , GlobalDataInfo(..)
   , globalDataMap
   , funInfo
   , unexploredFunctions
+  , NoReturnFunStatus(..)
   , trustedFunctionEntryPoints
   , exploreFnPred
     -- * DiscoveryFunInfo
   , DiscoveryFunInfo(..)
   , discoveredFunName
   , parsedBlocks
+    -- ** Parsed block
+  , ParsedBlock(..)
+    -- ** Block terminal statements
+  , ParsedTermStmt(..)
+  , parsedTermSucc
+    -- ** JumpTableLayout
+  , JumpTableLayout(..)
+  , Extension(..)
+  , jtlBackingAddr
+  , jtlBackingSize
+    -- * BoundedMemArray
+  , BoundedMemArray(..)
+  , arByteCount
+  , isReadOnlyBoundedMemArray
     -- * Reasons for exploring
   , FunctionExploreReason(..)
   , BlockExploreReason(..)
@@ -53,6 +64,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some
 import           Data.Text (Text)
 import qualified Data.Vector as V
+import           Data.Word
 import           Numeric (showHex)
 import           Prettyprinter as PP
 
@@ -60,6 +72,7 @@ import           Data.Macaw.AbsDomain.AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
+import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
 ------------------------------------------------------------------------
@@ -121,6 +134,95 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
                             | otherwise = error "jump table with negative offset given"
   show ReferencedValue = "global addr"
 
+-------------------------------------------------------------------------------
+-- BoundedMemArray
+
+-- | This describes a region of memory dereferenced in some array read.
+--
+-- These regions may be be sparse, given an index `i`, the
+-- the address given by 'arBase' + 'arIx'*'arStride'.
+data BoundedMemArray arch tp = BoundedMemArray
+  { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
+    -- ^ The base address for array accesses.
+  , arStride :: !Word64
+    -- ^ Space between elements of the array.
+    --
+    -- This will typically be the number of bytes denoted by `arEltType`,
+    -- but may be larger for sparse arrays.  `matchBoundedMemArray` will fail
+    -- if stride is less than the number of bytes read.
+  , arEltType   :: !(MemRepr tp)
+    -- ^ Resolved type of elements in this array.
+  , arSlices       :: !(V.Vector [MemChunk (ArchAddrWidth arch)])
+    -- ^ The slices of memory in the array.
+    --
+    -- The `i`th element in the vector corresponds to the first `size`
+    -- bytes at address `base + stride * i`.
+    --
+    -- The number of elements is the length of the array.
+    --
+    -- N.B.  With the size could be computed from the previous fields,
+    -- but we check we can create it when creating the array read, so
+    -- we store it to avoid recomputing it.
+  }
+
+deriving instance RegisterInfo (ArchReg arch) => Show (BoundedMemArray arch tp)
+
+-- | Return number of bytes used by this array.
+arByteCount :: BoundedMemArray arch tp -> Word64
+arByteCount a = arStride a * fromIntegral (V.length (arSlices a))
+
+-- | Return true if the address stored is readable and not writable.
+isReadOnlyBoundedMemArray :: BoundedMemArray arch  tp -> Bool
+isReadOnlyBoundedMemArray = Perm.isReadonly . segmentFlags . segoffSegment . arBase
+
+------------------------------------------------------------------------
+-- Extension
+
+-- | Information about a value that is the signed or unsigned extension of another
+-- value.
+--
+-- This is used for jump tables, and only supports widths that are in memory
+data Extension w = Extension { _extIsSigned :: !Bool
+                             , _extWidth :: !(AddrWidthRepr w)
+                               -- ^ Width of argument. is to.
+                             }
+  deriving (Show)
+
+
+------------------------------------------------------------------------
+-- JumpTableLayout
+
+-- | This describes the layout of a jump table.
+-- Beware: on some architectures, after reading from the jump table, the
+-- resulting addresses must be aligned. See the IPAlignment class.
+data JumpTableLayout arch
+  = AbsoluteJumpTable !(BoundedMemArray arch (BVType (ArchAddrWidth arch)))
+  -- ^ `AbsoluteJumpTable r` describes a jump table where the jump
+  -- target is directly stored in the array read `r`.
+  | forall w . RelativeJumpTable !(ArchSegmentOff arch)
+                                 !(BoundedMemArray arch (BVType w))
+                                 !(Extension w)
+  -- ^ `RelativeJumpTable base read ext` describes information about a
+  -- jump table where all jump targets are relative to a fixed base
+  -- address.
+  --
+  -- The value is computed as `baseVal + readVal` where
+  --
+  -- `baseVal = fromMaybe 0 base`, `readVal` is the value stored at
+  -- the memory read described by `read` with the sign of `ext`.
+
+deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
+
+-- | Return base address of table storing contents of jump table.
+jtlBackingAddr :: JumpTableLayout arch ->  ArchSegmentOff arch
+jtlBackingAddr (AbsoluteJumpTable a) = arBase a
+jtlBackingAddr (RelativeJumpTable _ a _) = arBase a
+
+-- | Returns the number of bytes in the layout
+jtlBackingSize :: JumpTableLayout arch -> Word64
+jtlBackingSize (AbsoluteJumpTable a) = arByteCount a
+jtlBackingSize (RelativeJumpTable _ a _) = arByteCount a
+
 ------------------------------------------------------------------------
 -- ParsedTermStmt
 
@@ -175,7 +277,8 @@ data ParsedTermStmt arch ids
   -- to, and the possible addresses as a table.  If the index (when interpreted as
   -- an unsigned number) is larger than the number of entries in the vector, then the
   -- result is undefined.
-  | ParsedLookupTable !(RegState (ArchReg arch) (Value arch ids))
+  | ParsedLookupTable !(JumpTableLayout arch)
+                      !(RegState (ArchReg arch) (Value arch ids))
                       !(ArchAddrValue arch ids)
                       !(V.Vector (ArchSegmentOff arch))
   -- | A return with the given registers.
@@ -216,7 +319,7 @@ ppTermStmt tstmt =
       vcat
       [ "branch" <+> pretty c <+> viaShow t <+> viaShow f
       , indent 2 (pretty r) ]
-    ParsedLookupTable s idx entries ->
+    ParsedLookupTable _layout s idx entries ->
       vcat
       [ "ijump" <+> pretty idx
       , indent 2 (vcat (imap (\i v -> pretty i <+> ":->" <+> viaShow v)
@@ -254,7 +357,7 @@ parsedTermSucc ts = do
     PLTStub{} -> []
     ParsedJump _ tgt -> [tgt]
     ParsedBranch _ _ t f -> [t,f]
-    ParsedLookupTable _ _ v -> V.toList v
+    ParsedLookupTable _layout _ _ v -> V.toList v
     ParsedReturn{} -> []
     ParsedArchTermStmt _ _ ret -> maybeToList ret
     ParsedTranslateError{} -> []
