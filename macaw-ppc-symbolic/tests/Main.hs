@@ -112,7 +112,7 @@ toPPCAddrNameMap :: ( w ~ SAP.AddrWidth v
                  -> Map.Map (MM.MemSegmentOff w) BS8.ByteString
 toPPCAddrNameMap loadedBinary mem elfSyms =
   Map.fromList [ (realSegOff, name)
-               | (addr, name) <- Map.toList (MST.toAddrSymMap elfSyms)
+               | (addr, name) <- Map.toList (MST.toAddrSymMap mem elfSyms)
                , Just realAddr <- return (MBLP.mapTOCEntryAddress toc (MM.segoffAddr addr))
                , Just realSegOff <- return (MM.asSegmentOff mem realAddr)
                ]

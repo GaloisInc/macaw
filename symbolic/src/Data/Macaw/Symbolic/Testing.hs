@@ -203,7 +203,6 @@ simulateAndVerify :: forall arch sym ids w t st fs
                    . ( CB.IsSymInterface sym
                      , CCE.IsSyntaxExtension (MS.MacawExt arch)
                      , MM.MemWidth (MC.ArchAddrWidth arch)
-                     , Ord (WI.SymExpr sym WI.BaseNatType)
                      , w ~ MC.ArchAddrWidth arch
                      , 16 <= w
                      , MT.KnownNat w
@@ -333,7 +332,7 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
     let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction validityCheck
-    let ctx = CS.initSimContext sym CLI.llvmIntrinsicTypes halloc IO.stdout fnBindings extImpl MS.MacawSimulatorState
+    let ctx = CS.initSimContext sym CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
     return (memVar, sp, res)
