@@ -48,6 +48,7 @@ import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map as Map
 import qualified Data.Parameterized.Context as Ctx
+import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
@@ -168,6 +169,7 @@ mkInitialRegVal archFns sym r = do
       c <- WI.freshConstant sym regName (WT.BaseBVRepr w)
       ptr <- CLM.llvmPointer_bv sym c
       return (CS.RV ptr)
+    MT.TupleTypeRepr PL.Nil -> return (CS.RV Ctx.Empty)
     MT.TupleTypeRepr {} -> error ("Tuple-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
     MT.FloatTypeRepr {} -> error ("Float-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
     MT.VecTypeRepr {} -> error ("Vector-typed registers are not supported in the macaw-symbolic test harness: " ++ show regName)
