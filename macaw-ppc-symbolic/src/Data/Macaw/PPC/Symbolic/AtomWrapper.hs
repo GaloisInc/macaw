@@ -8,11 +8,12 @@ module Data.Macaw.PPC.Symbolic.AtomWrapper (
   liftAtomIn
   ) where
 
+import qualified Data.Kind as DK
 import qualified Lang.Crucible.Types as C
 import qualified Data.Macaw.Types as MT
 import qualified Data.Macaw.Symbolic as MS
 
-newtype AtomWrapper (f :: C.CrucibleType -> *) (tp :: MT.Type)
+newtype AtomWrapper (f :: C.CrucibleType -> DK.Type) (tp :: MT.Type)
   = AtomWrapper (f (MS.ToCrucibleType tp))
 
 liftAtomMap :: (forall s. f s -> g s) -> AtomWrapper f t -> AtomWrapper g t
