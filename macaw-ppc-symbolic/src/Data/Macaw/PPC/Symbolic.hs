@@ -43,6 +43,7 @@ import           Control.Monad ( void )
 import qualified Control.Monad.Catch as X
 import           Control.Monad.IO.Class ( liftIO )
 import qualified Data.Functor.Identity as I
+import qualified Data.Kind as DK
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.Some ( Some(..) )
@@ -261,7 +262,7 @@ ppcGenTermStmt :: forall v ids s ppc
 ppcGenTermStmt ts _rs =
   void (MSB.evalArchStmt (PPCPrimTerm ts))
 
-data PPCStmtExtension ppc (f :: C.CrucibleType -> *) (ctp :: C.CrucibleType) where
+data PPCStmtExtension ppc (f :: C.CrucibleType -> DK.Type) (ctp :: C.CrucibleType) where
   -- | Wrappers around the arch-specific functions in PowerPC; these are
   -- interpreted in 'funcSemantics'.
   PPCPrimFn :: MP.PPCPrimFn ppc (A.AtomWrapper f) t
