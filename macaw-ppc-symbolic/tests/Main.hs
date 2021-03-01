@@ -4,17 +4,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 module Main (main) where
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
 import qualified Data.Foldable as F
+import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
+import           GHC.TypeNats ( KnownNat, type (<=) )
 import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
@@ -24,12 +27,20 @@ import qualified Test.Tasty.HUnit as TTH
 import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.Runners as TTR
 
+import qualified Dismantle.PPC as DP
+import qualified Data.Macaw.Architecture.Info as MAI
+import qualified Data.Macaw.BinaryLoader as MBL
+import qualified Data.Macaw.BinaryLoader.PPC as MBLP
+import qualified Data.Macaw.BinaryLoader.PPC.TOC as MBLP
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
+import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.ElfLoader as MMEL
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
-import qualified Data.Macaw.X86 as MX
-import           Data.Macaw.X86.Symbolic ()
+import qualified Data.Macaw.PPC as MP
+import           Data.Macaw.PPC.Symbolic ()
+import qualified SemMC.Architecture.PPC as SAP
 import qualified What4.Config as WC
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
@@ -83,14 +94,41 @@ hasTestPrefix (Some dfi) = do
     then return (bsname, Some dfi)
     else Nothing
 
--- | X86_64 functions with a single scalar return value return it in %rax
+-- | PowerPC functions (at least in the common ABIs) with a single scalar return value return it in %r3
 --
 -- Since all test functions must return a value to assert as true, this is
 -- straightforward to extract
-x86ResultExtractor :: (CB.IsSymInterface sym) => MS.ArchVals MX.X86_64 -> MST.ResultExtractor sym MX.X86_64
-x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
-  let re = MS.lookupReg archVals regs MX.RAX
+ppcResultExtractor :: ( arch ~ MP.AnyPPC v
+                      , CB.IsSymInterface sym
+                      , MP.KnownVariant v
+                      , MM.MemWidth (SAP.AddrWidth v)
+                      , MC.ArchConstraints arch
+                      , MS.ArchInfo arch
+                      , KnownNat (SAP.AddrWidth v)
+                      )
+                   => MS.ArchVals arch
+                   -> MST.ResultExtractor sym arch
+ppcResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+  let re = MS.lookupReg archVals regs (MP.PPC_GP (DP.GPR 3))
   k PC.knownRepr (CS.regValue re)
+
+-- | This helper is required because the mapping that comes back from the macaw
+-- ELF loader doesn't account for the TOC in PowerPC64.
+toPPCAddrNameMap :: ( w ~ SAP.AddrWidth v
+                    , MBLP.HasTOC (MP.AnyPPC v) (Elf.ElfHeaderInfo w)
+                    )
+                 => MBL.LoadedBinary (MP.AnyPPC v) (Elf.ElfHeaderInfo w)
+                 -> MM.Memory w
+                 -> [MMEL.MemSymbol w]
+                 -> Map.Map (MM.MemSegmentOff w) BS8.ByteString
+toPPCAddrNameMap loadedBinary mem elfSyms =
+  Map.fromList [ (realSegOff, name)
+               | (addr, name) <- Map.toList (MST.toAddrSymMap mem elfSyms)
+               , Just realAddr <- return (MBLP.mapTOCEntryAddress toc (MM.segoffAddr addr))
+               , Just realSegOff <- return (MM.asSegmentOff mem realAddr)
+               ]
+  where
+    toc = MBLP.getTOC loadedBinary
 
 mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
 mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
@@ -99,27 +137,52 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
     Right (Elf.SomeElf ehi) -> do
       case Elf.headerClass (Elf.header ehi) of
-        Elf.ELFCLASS32 -> TTH.assertFailure "32 bit x86 binaries are not supported"
+        Elf.ELFCLASS32 -> TTH.assertFailure "PPC32 is not supported yet due to ABI differences"
         Elf.ELFCLASS64 -> do
-          (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap MX.x86_64_linux_info
-          let testEntryPoints = mapMaybe hasTestPrefix funInfos
-          F.forM_ testEntryPoints $ \(name, Some dfi) -> do
-            step ("Testing " ++ BS8.unpack name)
-            writeMacawIR saveMacaw (BS8.unpack name) dfi
-            Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
-            CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
-              -- We are using the z3 backend to discharge proof obligations, so
-              -- we need to add its options to the backend configuration
-              let solver = WS.z3Adapter
-              let backendConf = WI.getConfiguration sym
-              WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
+          loadedBinary <- MBL.loadBinary MMEL.defaultLoadOptions ehi
+          symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
 
-              execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
-              let Just archVals = MS.archVals (Proxy @MX.X86_64)
-              let extract = x86ResultExtractor archVals
-              logger <- makeGoalLogger saveSMT solver name exePath
-              simRes <- MST.simulateAndVerify solver logger sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
-              TTH.assertEqual "AssertionResult" expected simRes
+symExTestSized :: forall v w arch
+                . ( w ~ SAP.AddrWidth v
+                  , 16 <= w
+                  , 1 <= w
+                  , SAP.KnownVariant v
+                  , MM.MemWidth w
+                  , MC.ArchConstraints arch
+                  , arch ~ MP.AnyPPC v
+                  , KnownNat w
+                  , MS.ArchInfo arch
+                  , MBLP.HasTOC (MP.AnyPPC v) (Elf.ElfHeaderInfo w)
+                  )
+                => MST.SimulationResult
+               -> FilePath
+               -> SaveSMT
+               -> SaveMacaw
+               -> (String -> IO ())
+               -> Elf.ElfHeaderInfo w
+               -> MBL.LoadedBinary arch (Elf.ElfHeaderInfo w)
+               -> MAI.ArchitectureInfo arch
+               -> TTH.Assertion
+symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo = do
+   (mem, funInfos) <- MST.runDiscovery ehi (toPPCAddrNameMap loadedBinary) archInfo
+   let testEntryPoints = mapMaybe hasTestPrefix funInfos
+   F.forM_ testEntryPoints $ \(name, Some dfi) -> do
+     step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
+     writeMacawIR saveMacaw (BS8.unpack name) dfi
+     Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
+     CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+       -- We are using the z3 backend to discharge proof obligations, so
+       -- we need to add its options to the backend configuration
+       let solver = WS.z3Adapter
+       let backendConf = WI.getConfiguration sym
+       WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
+
+       execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+       let Just archVals = MS.archVals (Proxy @(MP.AnyPPC v))
+       let extract = ppcResultExtractor archVals
+       logger <- makeGoalLogger saveSMT solver name exePath
+       simRes <- MST.simulateAndVerify solver logger sym execFeatures archInfo archVals mem extract dfi
+       TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
 writeMacawIR (SaveMacaw sm) name dfi

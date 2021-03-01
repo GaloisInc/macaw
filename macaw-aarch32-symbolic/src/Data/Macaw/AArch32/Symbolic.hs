@@ -63,7 +63,7 @@ aarch32MacawSymbolicFns =
   }
 
 aarch32RegName :: MAR.ARMReg tp -> WS.SolverSymbol
-aarch32RegName r = WS.systemSymbol ("r!" ++ show (MC.prettyF r))
+aarch32RegName r = WS.safeSymbol ("r!" ++ show (MC.prettyF r))
 
 aarch32MacawEvalFn :: (CB.IsSymInterface sym)
                    => AF.SymFuns sym

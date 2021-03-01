@@ -1,3 +1,5 @@
+# Note: We build everything on all architectures, but we only test things
+# requiring SMT solvers on Linux
 name: CI
 on:
   push:
@@ -42,19 +44,6 @@ jobs:
       run: |
         cabal build --only-dependencies macaw-base
         cabal build crucible-llvm
-    - name: macaw-x86 tests
-      run: |
-        cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
-        cabal test pkg:macaw-x86
-        cabal test pkg:macaw-x86-symbolic
-    - name: macaw-aarch32 tests
-      run: |
-        cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
-        cabal test pkg:macaw-aarch32
-    - name: macaw-ppc tests
-      run: |
-        cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
-        cabal test pkg:macaw-ppc
 
     - name: Install Solvers
       if: runner.os == 'Linux'
@@ -64,9 +53,40 @@ jobs:
         YICES_VERSION: "2.6.2"
         CVC4_VERSION: "4.1.8"
 
-    - name: macaw-refinement
-      run: |
-        cabal build pkg:macaw-refinement
-        cabal test pkg:macaw-refinement
-    - name: compare-dwarfdump
+    - name: Build macaw-x86
+      run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
+
+    - name: Test macaw-x86
+      run: cabal test pkg:macaw-x86
+
+    - name: Test macaw-x86-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-x86-symbolic
+
+    - name: Build macaw-aarch32
+      run: cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
+    - name: Test macaw-aarch32
+      run: cabal test pkg:macaw-aarch32
+    - name: Test macaw-aarch32-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-aarch32-symbolic
+
+    - name: Build macaw-ppc
+      run: cabal build pkg:macaw-ppc pkg:macaw-ppc-symbolic
+
+    - name: Test macaw-ppc
+      run: cabal test pkg:macaw-ppc
+
+    - name: Test macaw-ppc-symbolic
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-ppc-symbolic
+
+    - name: Build macaw-refinement
+      run: cabal build pkg:macaw-refinement
+
+    - name: Test macaw-refinement
+      if: runner.os == 'Linux'
+      run: cabal test pkg:macaw-refinement
+
+    - name: Build compare-dwarfdump
       run: cabal build compare-dwarfdump
