@@ -63,6 +63,7 @@ test-suite macaw-ppc-symbolic-tests
     macaw-loader-ppc,
     macaw-ppc-symbolic,
     parameterized-utils,
+    prettyprinter,
     tasty,
     tasty-hunit,
     text,

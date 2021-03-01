@@ -18,6 +18,7 @@ import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           GHC.TypeNats ( KnownNat, type (<=) )
+import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
 import qualified System.IO as IO
@@ -59,8 +60,18 @@ instance TTO.IsOption SaveSMT where
   optionName = pure "save-smt"
   optionHelp = pure "Save SMT sessions to files in /tmp for debugging"
 
+-- | A tasty option to have the test suite save the macaw IR for each test case to /tmp for debugging purposes
+data SaveMacaw = SaveMacaw Bool
+
+instance TTO.IsOption SaveMacaw where
+  defaultValue = SaveMacaw False
+  parseValue v = SaveMacaw <$> TTO.safeReadBool v
+  optionName = pure "save-macaw"
+  optionHelp = pure "Save Macaw IR for each test case to /tmp for debugging"
+
 ingredients :: [TTR.Ingredient]
 ingredients = TT.includingOptions [ TTO.Option (Proxy @SaveSMT)
+                                  , TTO.Option (Proxy @SaveMacaw)
                                   ] : TT.defaultIngredients
 
 main :: IO ()
@@ -120,7 +131,7 @@ toPPCAddrNameMap loadedBinary mem elfSyms =
     toc = MBLP.getTOC loadedBinary
 
 mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
-mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
@@ -129,7 +140,7 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TTH.testCa
         Elf.ELFCLASS32 -> TTH.assertFailure "PPC32 is not supported yet due to ABI differences"
         Elf.ELFCLASS64 -> do
           loadedBinary <- MBL.loadBinary MMEL.defaultLoadOptions ehi
-          symExTestSized expected exePath saveSMT step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
+          symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
 
 symExTestSized :: forall v w arch
                 . ( w ~ SAP.AddrWidth v
@@ -146,16 +157,18 @@ symExTestSized :: forall v w arch
                 => MST.SimulationResult
                -> FilePath
                -> SaveSMT
+               -> SaveMacaw
                -> (String -> IO ())
                -> Elf.ElfHeaderInfo w
                -> MBL.LoadedBinary arch (Elf.ElfHeaderInfo w)
                -> MAI.ArchitectureInfo arch
                -> TTH.Assertion
-symExTestSized expected exePath saveSMT step ehi loadedBinary archInfo = do
+symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo = do
    (mem, funInfos) <- MST.runDiscovery ehi (toPPCAddrNameMap loadedBinary) archInfo
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
+     writeMacawIR saveMacaw (BS8.unpack name) dfi
      Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
      CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
        -- We are using the z3 backend to discharge proof obligations, so
@@ -170,6 +183,16 @@ symExTestSized expected exePath saveSMT step ehi loadedBinary archInfo = do
        logger <- makeGoalLogger saveSMT solver name exePath
        simRes <- MST.simulateAndVerify solver logger sym execFeatures archInfo archVals mem extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
+
+writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
+writeMacawIR (SaveMacaw sm) name dfi
+  | not sm = return ()
+  | otherwise = writeFile (toSavedMacawPath name) (show (PP.pretty dfi))
+
+toSavedMacawPath :: String -> FilePath
+toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
+  where
+    name = fmap escapeSlash testName
 
 -- | Construct a solver logger that saves the SMT session for the goal solving
 -- in /tmp (if requested by the save-smt option)
@@ -196,5 +219,7 @@ toSavedSMTSessionPath adapter funName p = "/tmp" </> filename <.> "smtlib2"
                       , "_"
                       , WS.solver_adapter_name adapter
                       ]
-    escapeSlash '/' = '_'
-    escapeSlash c = c
+
+escapeSlash :: Char -> Char
+escapeSlash '/' = '_'
+escapeSlash c = c

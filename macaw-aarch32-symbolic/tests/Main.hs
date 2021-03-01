@@ -16,6 +16,7 @@ import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
+import qualified Prettyprinter as PP
 import           System.FilePath ( (</>), (<.>) )
 import qualified System.FilePath.Glob as SFG
 import qualified System.IO as IO
@@ -27,12 +28,13 @@ import qualified Test.Tasty.Runners as TTR
 import qualified Language.ASL.Globals as ASL
 import qualified Data.Macaw.Architecture.Info as MAI
 
+import           Data.Macaw.AArch32.Symbolic ()
+import qualified Data.Macaw.ARM as MA
+import qualified Data.Macaw.ARM.ARMReg as MAR
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
-import qualified Data.Macaw.ARM as MA
-import qualified Data.Macaw.ARM.ARMReg as MAR
-import           Data.Macaw.AArch32.Symbolic ()
 import qualified What4.Config as WC
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
@@ -52,8 +54,18 @@ instance TTO.IsOption SaveSMT where
   optionName = pure "save-smt"
   optionHelp = pure "Save SMT sessions to files in /tmp for debugging"
 
+-- | A tasty option to have the test suite save the macaw IR for each test case to /tmp for debugging purposes
+data SaveMacaw = SaveMacaw Bool
+
+instance TTO.IsOption SaveMacaw where
+  defaultValue = SaveMacaw False
+  parseValue v = SaveMacaw <$> TTO.safeReadBool v
+  optionName = pure "save-macaw"
+  optionHelp = pure "Save Macaw IR for each test case to /tmp for debugging"
+
 ingredients :: [TTR.Ingredient]
 ingredients = TT.includingOptions [ TTO.Option (Proxy @SaveSMT)
+                                  , TTO.Option (Proxy @SaveMacaw)
                                   ] : TT.defaultIngredients
 
 main :: IO ()
@@ -89,28 +101,30 @@ armResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
   k PC.knownRepr (CS.regValue re)
 
 mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
-mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
     Right (Elf.SomeElf ehi) -> do
       case Elf.headerClass (Elf.header ehi) of
         Elf.ELFCLASS32 ->
-          symExTestSized expected exePath saveSMT step ehi MA.arm_linux_info
+          symExTestSized expected exePath saveSMT saveMacaw step ehi MA.arm_linux_info
         Elf.ELFCLASS64 -> TTH.assertFailure "64 bit ARM is not supported"
 
 symExTestSized :: MST.SimulationResult
                -> FilePath
                -> SaveSMT
+               -> SaveMacaw
                -> (String -> IO ())
                -> Elf.ElfHeaderInfo 32
                -> MAI.ArchitectureInfo MA.ARM
                -> TTH.Assertion
-symExTestSized expected exePath saveSMT step ehi archInfo = do
+symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
    (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
+     writeMacawIR saveMacaw (BS8.unpack name) dfi
      Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
      CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
        -- We are using the z3 backend to discharge proof obligations, so
@@ -125,6 +139,16 @@ symExTestSized expected exePath saveSMT step ehi archInfo = do
        logger <- makeGoalLogger saveSMT solver name exePath
        simRes <- MST.simulateAndVerify solver logger sym execFeatures archInfo archVals mem extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
+
+writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
+writeMacawIR (SaveMacaw sm) name dfi
+  | not sm = return ()
+  | otherwise = writeFile (toSavedMacawPath name) (show (PP.pretty dfi))
+
+toSavedMacawPath :: String -> FilePath
+toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
+  where
+    name = fmap escapeSlash testName
 
 -- | Construct a solver logger that saves the SMT session for the goal solving
 -- in /tmp (if requested by the save-smt option)
@@ -150,5 +174,7 @@ toSavedSMTSessionPath adapter funName p = "/tmp" </> filename <.> "smtlib2"
                       , "_"
                       , WS.solver_adapter_name adapter
                       ]
-    escapeSlash '/' = '_'
-    escapeSlash c = c
+
+escapeSlash :: Char -> Char
+escapeSlash '/' = '_'
+escapeSlash c = c

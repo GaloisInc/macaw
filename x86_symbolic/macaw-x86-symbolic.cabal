@@ -54,6 +54,7 @@ test-suite macaw-x86-symbolic-tests
     macaw-x86,
     macaw-x86-symbolic,
     parameterized-utils,
+    prettyprinter,
     tasty,
     tasty-hunit,
     text,

@@ -63,6 +63,7 @@ test-suite macaw-aarch32-symbolic-tests
     macaw-base,
     macaw-symbolic,
     parameterized-utils,
+    prettyprinter,
     tasty,
     tasty-hunit,
     text,
