@@ -20,6 +20,7 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrLt
   , doPtrLeq
   , doPtrAnd
+  , doPtrXor
   , doReadMem
   , doCondReadMem
   , doWriteMem
@@ -71,8 +72,9 @@ import           Lang.Crucible.LLVM.MemModel
           , llvmPointerView, muxLLVMPtr, llvmPointer_bv, ptrAdd, ptrSub, ptrEq
           )
 import qualified Lang.Crucible.LLVM.MemModel as Mem
+import qualified Lang.Crucible.LLVM.MemModel.Generic as Mem.G
 
-import           Lang.Crucible.LLVM.DataLayout (EndianForm(..), noAlignment)
+import           Lang.Crucible.LLVM.DataLayout (Alignment, EndianForm(..), noAlignment, exponentToAlignment)
 import           Lang.Crucible.LLVM.Bytes (Bytes(..))
 
 import           Data.Macaw.Symbolic.CrucGen (addrWidthIsPos, ArchRegStruct, MacawExt, MacawCrucibleRegTypes)
@@ -556,6 +558,16 @@ isAlignMask v =
      guard (all (testBit k) ones)
      return (fromIntegral (length zeros))
 
+baseAlignment ::
+  (1 <= w, IsSymInterface sym) =>
+  LLVMPtr sym w ->
+  MemImpl sym ->
+  Maybe Alignment
+baseAlignment ptr mem = do
+  n <- asNat (ptrBase ptr)
+  Mem.G.AllocInfo _ _ _ a _ <- Mem.G.possibleAllocInfo n (Mem.G.memAllocs (Mem.memImplHeap mem))
+  return a
+
 -- | Perform bitwise and on 'LLVMPtr' values
 --
 -- This is somewhat similar to 'doPtrAdd'.  This is a special case because many
@@ -597,11 +609,15 @@ isAlignMask v =
 -- FIXME: If we had the alignment of the pointer available, we could assert that
 -- the alignment is sufficient to safely just apply the mask to the offset.
 doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
-doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
+doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   let nw = M.addrWidthNatRepr w
       doPtrAlign amt isP isB v
         | amt == 0          = return v
         | amt == intValue nw = Mem.mkNullPointer sym nw
+        | Just abv <- baseAlignment v mem
+        , abv >= exponentToAlignment (fromIntegral amt) = do
+        newoff <- bvAndBits sym (asBits x) (asBits y)
+        return (Mem.LLVMPointer (ptrBase v) newoff)
         | Just 0 <- asNat (ptrBase v) = llvmPointer_bv sym =<<
                                         bvAndBits sym (asBits x) (asBits y)
 
@@ -637,6 +653,44 @@ doPtrAnd = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
                v2 <- doPtrToBits sym y
                llvmPointer_bv sym =<< bvAndBits sym v1 v2
 
+-- | Perform bitwise XOR on 'LLVMPtr' values
+--
+-- If both pointers are bitvectors, delegate to bvXorBits.
+-- If one pointer is a bitvector and the other pointer has a constant base,
+-- compare the number of bits needed to represent the bitvector with the
+-- alignment of the pointer's base. If the base's alignment is sufficiently
+-- large, perform bvXorBits on the offsets (keeping the base).
+-- Otherwise, give up and convert non-bitvector pointers to fresh bitvectors.
+doPtrXor :: PtrOp sym w (LLVMPtr sym w)
+doPtrXor = ptrOp $ \sym mem _w xPtr xBits yPtr yBits x y -> do
+  both_bits <- andPred sym xBits yBits
+  ptr_bits  <- andPred sym xPtr  yBits
+  bits_ptr  <- andPred sym xBits yPtr
+
+  xToBits <- doPtrToBits sym x
+  yToBits <- doPtrToBits sym y
+
+  let ptrBaseAligned cond v u = case (baseAlignment v mem, requiredAlign u) of
+        (Just abv, Just au)
+          | abv >= au -> [cond ~> endCase =<< ptrXor sym v (asBits u)]
+        _ -> []
+
+  cases sym (binOpLabel "ptr_xor" x y) muxLLVMPtr Nothing $ mconcat
+    [ [both_bits ~> endCase =<< llvmPointer_bv sym =<< bvXorBits sym (asBits x) (asBits y)]
+    , ptrBaseAligned ptr_bits x y
+    , ptrBaseAligned bits_ptr y x
+    , [truePred sym ~> endCase =<< llvmPointer_bv sym =<< bvXorBits sym xToBits yToBits]
+    ]
+  where
+    requiredAlign ptr = do
+      let
+        off = asBits ptr
+        w = fromInteger (intValue (bvWidth off))
+      k <- BV.asUnsigned <$> asBV off
+      return $ exponentToAlignment $ fromIntegral $ length $ dropWhile (not . testBit k) [w, w-1 .. 0]
+    ptrXor sym x yoff = do
+      newoff <- bvXorBits sym (asBits x) yoff
+      return (Mem.LLVMPointer (ptrBase x) newoff)
 
 
 doPtrLt :: PtrOp sym w (RegValue sym BoolType)

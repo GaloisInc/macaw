@@ -476,6 +476,12 @@ data MacawStmtExtension (arch :: K.Type)
     -> !(f (BVPtr arch))
     -> MacawStmtExtension arch f (BVPtr arch)
 
+  PtrXor
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f (BVPtr arch))
+    -> !(f (BVPtr arch))
+    -> MacawStmtExtension arch f (BVPtr arch)
+
 instance TraversableFC (MacawArchStmtExtension arch)
       => FunctorFC (MacawStmtExtension arch) where
   fmapFC = fmapFCDefault
@@ -520,6 +526,7 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       PtrSub _ x y   -> sexpr "ptr_sub" [ f x, f y ]
 
       PtrAnd _ x y   -> sexpr "ptr_and" [ f x, f y ]
+      PtrXor _ x y   -> sexpr "ptr_xor" [ f x, f y ]
       PtrMux _ c x y -> sexpr "ptr_mux" [ f c, f x, f y ]
 
 
@@ -543,6 +550,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (PtrAdd w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (PtrAnd w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (PtrSub w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
+  appType (PtrXor w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (PtrMux w _ _ _) | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
 
 ------------------------------------------------------------------------
@@ -1021,8 +1029,15 @@ appToCrucible app = do
         Just Refl -> evalMacawStmt (PtrAnd aw xv yv)
         Nothing -> appBVAtom w =<< C.BVAnd w <$> toBits w xv <*> toBits w yv
 
+    M.BVXor w x y -> do
+      xv <- v2c x
+      yv <- v2c y
+      aw <- archAddrWidth
+      case testEquality w (M.addrWidthNatRepr aw) of
+        Just Refl -> evalMacawStmt (PtrXor aw xv yv)
+        Nothing -> appBVAtom w =<< C.BVXor w <$> toBits w xv <*> toBits w yv
+
     M.BVOr  w x y -> bitOp2 w (C.BVOr   w) x y
-    M.BVXor w x y -> bitOp2 w (C.BVXor  w) x y
     M.BVShl w x y -> bitOp2 w (C.BVShl  w) x y
     M.BVShr w x y -> bitOp2 w (C.BVLshr w) x y
     M.BVSar w x y -> bitOp2 w (C.BVAshr w) x y

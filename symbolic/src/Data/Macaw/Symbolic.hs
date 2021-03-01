@@ -1195,6 +1195,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
     PtrAdd w x y                -> doPtrAdd st mvar w x y
     PtrSub w x y                -> doPtrSub st mvar w x y
     PtrAnd w x y                -> doPtrAnd st mvar w x y
+    PtrXor w x y                -> doPtrXor st mvar w x y
 
 
 -- | Return macaw extension evaluation functions.
