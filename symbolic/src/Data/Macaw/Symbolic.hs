@@ -1251,7 +1251,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
                              C.emptyHandleMap
                 extImpl = macawExtensions archEval mvar globs lookupH toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
-               fnBindings extImpl MacawSimulatorState
+               (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
   let retType = macawStructRepr

@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 module Main (main) where
 
 import qualified Data.ByteString as BS
@@ -24,12 +25,16 @@ import qualified Test.Tasty.HUnit as TTH
 import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.Runners as TTR
 
+import qualified Language.ASL.Globals as ASL
+import qualified Data.Macaw.Architecture.Info as MAI
+
+import           Data.Macaw.AArch32.Symbolic ()
+import qualified Data.Macaw.ARM as MA
+import qualified Data.Macaw.ARM.ARMReg as MAR
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
-import qualified Data.Macaw.X86 as MX
-import           Data.Macaw.X86.Symbolic ()
 import qualified What4.Config as WC
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
@@ -83,13 +88,16 @@ hasTestPrefix (Some dfi) = do
     then return (bsname, Some dfi)
     else Nothing
 
--- | X86_64 functions with a single scalar return value return it in %rax
+-- | ARM functions with a single scalar return value return it in %r0
 --
 -- Since all test functions must return a value to assert as true, this is
 -- straightforward to extract
-x86ResultExtractor :: (CB.IsSymInterface sym) => MS.ArchVals MX.X86_64 -> MST.ResultExtractor sym MX.X86_64
-x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
-  let re = MS.lookupReg archVals regs MX.RAX
+armResultExtractor :: ( CB.IsSymInterface sym
+                      )
+                   => MS.ArchVals MA.ARM
+                   -> MST.ResultExtractor sym MA.ARM
+armResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
+  let re = MS.lookupReg archVals regs (MAR.ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
   k PC.knownRepr (CS.regValue re)
 
 mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
@@ -99,27 +107,38 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
     Right (Elf.SomeElf ehi) -> do
       case Elf.headerClass (Elf.header ehi) of
-        Elf.ELFCLASS32 -> TTH.assertFailure "32 bit x86 binaries are not supported"
-        Elf.ELFCLASS64 -> do
-          (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap MX.x86_64_linux_info
-          let testEntryPoints = mapMaybe hasTestPrefix funInfos
-          F.forM_ testEntryPoints $ \(name, Some dfi) -> do
-            step ("Testing " ++ BS8.unpack name)
-            writeMacawIR saveMacaw (BS8.unpack name) dfi
-            Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
-            CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
-              -- We are using the z3 backend to discharge proof obligations, so
-              -- we need to add its options to the backend configuration
-              let solver = WS.z3Adapter
-              let backendConf = WI.getConfiguration sym
-              WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
+        Elf.ELFCLASS32 ->
+          symExTestSized expected exePath saveSMT saveMacaw step ehi MA.arm_linux_info
+        Elf.ELFCLASS64 -> TTH.assertFailure "64 bit ARM is not supported"
 
-              execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
-              let Just archVals = MS.archVals (Proxy @MX.X86_64)
-              let extract = x86ResultExtractor archVals
-              logger <- makeGoalLogger saveSMT solver name exePath
-              simRes <- MST.simulateAndVerify solver logger sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
-              TTH.assertEqual "AssertionResult" expected simRes
+symExTestSized :: MST.SimulationResult
+               -> FilePath
+               -> SaveSMT
+               -> SaveMacaw
+               -> (String -> IO ())
+               -> Elf.ElfHeaderInfo 32
+               -> MAI.ArchitectureInfo MA.ARM
+               -> TTH.Assertion
+symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
+   (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
+   let testEntryPoints = mapMaybe hasTestPrefix funInfos
+   F.forM_ testEntryPoints $ \(name, Some dfi) -> do
+     step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
+     writeMacawIR saveMacaw (BS8.unpack name) dfi
+     Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
+     CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+       -- We are using the z3 backend to discharge proof obligations, so
+       -- we need to add its options to the backend configuration
+       let solver = WS.z3Adapter
+       let backendConf = WI.getConfiguration sym
+       WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
+
+       execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+       let Just archVals = MS.archVals (Proxy @MA.ARM)
+       let extract = armResultExtractor archVals
+       logger <- makeGoalLogger saveSMT solver name exePath
+       simRes <- MST.simulateAndVerify solver logger sym execFeatures archInfo archVals mem extract dfi
+       TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
 writeMacawIR (SaveMacaw sm) name dfi
@@ -142,7 +161,6 @@ makeGoalLogger (SaveSMT saveSMT) adapter funName p
   | otherwise = do
       hdl <- IO.openFile (toSavedSMTSessionPath adapter funName p) IO.WriteMode
       return (WS.defaultLogData { WS.logHandle = Just hdl })
-
 
 -- | Construct a path in /tmp to save the SMT session to
 --
