@@ -605,9 +605,6 @@ baseAlignment ptr mem = do
 --
 -- This is not ideal, as there are not many constraints we can express about
 -- this value being subtracted off.
---
--- FIXME: If we had the alignment of the pointer available, we could assert that
--- the alignment is sufficient to safely just apply the mask to the offset.
 doPtrAnd :: PtrOp sym w (LLVMPtr sym w)
 doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
   let nw = M.addrWidthNatRepr w
