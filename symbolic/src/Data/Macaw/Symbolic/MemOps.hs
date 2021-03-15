@@ -34,6 +34,9 @@ module Data.Macaw.Symbolic.MemOps
   , Regs
   , MacawSimulatorState(..)
   , LookupFunctionHandle(..)
+  , ptrOp
+  , isValidPtr
+  , mkUndefinedBool
   ) where
 
 import           Control.Exception (throwIO)
@@ -527,7 +530,7 @@ doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
 -- symbolically in the final case, as we can't know if it is true or not during
 -- simulation (without help from the SMT solver).
 doPtrSub :: PtrOp sym w (LLVMPtr sym w)
-doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
+doPtrSub = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      ptr_bits  <- andPred sym xPtr  yBits
      ptr_ptr   <- andPred sym xPtr  yPtr
@@ -540,12 +543,9 @@ doPtrSub = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
        , ptr_bits ~> endCase =<< ptrSub sym nw x (asBits y)
 
        , ptr_ptr ~>
-           do okP1 <- isValidPtr sym mem w x
-              okP2 <- isValidPtr sym mem w y
-              sameAlloc <- natEq sym (ptrBase x) (ptrBase y)
-              ok <- andPred sym sameAlloc =<< andPred sym okP1 okP2
+           do sameAlloc <- natEq sym (ptrBase x) (ptrBase y)
               r  <- llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
-              endCaseCheck ok "Pointers in different regions" r
+              endCaseCheck sameAlloc "Pointers in different regions" r
        ]
 
 isAlignMask :: (IsSymInterface sym) => LLVMPtr sym w -> Maybe Integer
@@ -719,7 +719,7 @@ doPtrLeq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
 
 
 doPtrEq :: PtrOp sym w (RegValue sym BoolType)
-doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
+doPtrEq = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      both_ptrs <- andPred sym xPtr  yPtr
      xNull <- isNullPtr sym w x
@@ -729,12 +729,7 @@ doPtrEq = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
      let nw = M.addrWidthNatRepr w
      cases sym (binOpLabel "ptr_eq" x y) itePred (Just undef)
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
-       , both_ptrs ~>
-            do okP1 <- isValidPtr sym mem w x
-               okP2 <- isValidPtr sym mem w y
-               ok <- andPred sym okP1 okP2
-               ps <- ptrEq sym nw x y
-               endCaseCheck ok "Comparing invalid pointers" ps
+       , both_ptrs ~> endCase =<< ptrEq sym nw x y
        , both_null ~> endCase (truePred sym)
        , xNull ~> endCase (falsePred sym)
        , yNull ~> endCase (falsePred sym)
