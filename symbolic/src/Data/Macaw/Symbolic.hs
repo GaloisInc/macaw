@@ -120,6 +120,10 @@ module Data.Macaw.Symbolic
     -- $simulationExample
   , SymArchConstraints
   , macawExtensions
+  , PtrOp
+  , ptrOp
+  , isValidPtr
+  , mkUndefinedBool
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
   , MO.MacawSimulatorState(..)
