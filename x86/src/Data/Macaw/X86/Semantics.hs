@@ -50,6 +50,7 @@ import qualified Data.Macaw.X86.Semantics.AVX as AVX
 import qualified Data.Macaw.X86.Semantics.BMI2 as BMI2
 import qualified Data.Macaw.X86.Semantics.ADX as ADX
 import qualified Data.Macaw.X86.Semantics.AESNI as AESNI
+import qualified Data.Macaw.X86.Semantics.SHA as SHA
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
@@ -3189,6 +3190,7 @@ all_instructions =
   ++ BMI2.all_instructions
   ++ ADX.all_instructions
   ++ AESNI.all_instructions
+  ++ SHA.all_instructions
 
 ------------------------------------------------------------------------
 -- execInstruction

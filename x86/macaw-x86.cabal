@@ -38,6 +38,7 @@ library
     Data.Macaw.X86.Semantics.AESNI
     Data.Macaw.X86.Semantics.AVX
     Data.Macaw.X86.Semantics.BMI2
+    Data.Macaw.X86.Semantics.SHA
     Data.Macaw.X86.SyscallInfo
     Data.Macaw.X86.SyscallInfo.FreeBSD
     Data.Macaw.X86.SyscallInfo.Linux

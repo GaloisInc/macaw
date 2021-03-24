@@ -205,28 +205,70 @@ data SymFuns s = SymFuns
   , fnClMul ::
       SymFn s (EmptyCtx ::> BaseBVType 64 ::> BaseBVType 64) (BaseBVType 128)
     -- ^ Carryless multiplication
+
+  , fnShasigma0 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 sigma0
+
+  , fnShasigma1 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 sigma1
+
+  , fnShaSigma0 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Sigma0
+
+  , fnShaSigma1 ::
+      SymFn s (EmptyCtx ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Sigma1
+
+  , fnShaCh ::
+      SymFn s (EmptyCtx ::> BaseBVType 32 ::> BaseBVType 32 ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Ch
+
+  , fnShaMaj ::
+      SymFn s (EmptyCtx ::> BaseBVType 32 ::> BaseBVType 32 ::> BaseBVType 32) (BaseBVType 32)
+    -- ^ SHA256 Maj
   }
 
 
 -- | Generate uninterpreted functions for some of the more complex instructions.
 newSymFuns :: forall sym. IsSymInterface sym => sym -> IO (SymFuns sym)
 newSymFuns s =
-  do fnAesEnc     <- bin "aesEnc"
+  do fnAesEnc <- bin "aesEnc"
      fnAesEncLast <- bin "aesEncLast"
      fnAesDec <- bin "aesDecLast"
      fnAesDecLast <- bin "aesDecLast"
      fnAesKeyGenAssist <- bin "aesKeyGenAssist"
-     fnClMul      <- bin "clMul"
-     fnAesIMC <- freshTotalUninterpFn s (safeSymbol "aesIMC") (extend empty knownRepr) knownRepr
+     fnClMul <- bin "clMul"
+     fnAesIMC <- un "aesIMC"
+     fnShasigma0 <- un "sigma0"
+     fnShasigma1 <- un "sigma1"
+     fnShaSigma0 <- un "Sigma0"
+     fnShaSigma1 <- un "Sigma1"
+     fnShaCh <- tern "Ch"
+     fnShaMaj <- tern "Maj"
      return SymFuns { .. }
 
   where
+  un :: ( KnownRepr BaseTypeRepr a
+        , KnownRepr BaseTypeRepr b
+        ) =>
+        String -> IO (SymFn sym (EmptyCtx ::> a) b)
+  un name = freshTotalUninterpFn s (safeSymbol name) (extend empty knownRepr) knownRepr
   bin :: ( KnownRepr BaseTypeRepr a
          , KnownRepr BaseTypeRepr b
          , KnownRepr BaseTypeRepr c
          ) =>
          String -> IO (SymFn sym (EmptyCtx ::> a ::> b) c)
   bin name = freshTotalUninterpFn s (safeSymbol name) (extend (extend empty knownRepr) knownRepr) knownRepr
+  tern :: ( KnownRepr BaseTypeRepr a
+          , KnownRepr BaseTypeRepr b
+          , KnownRepr BaseTypeRepr c
+          , KnownRepr BaseTypeRepr d
+          ) =>
+         String -> IO (SymFn sym (EmptyCtx ::> a ::> b ::> c) d)
+  tern name = freshTotalUninterpFn s (safeSymbol name) (extend (extend (extend empty knownRepr) knownRepr) knownRepr) knownRepr
 
 -- | Use @Sym sym@ to to evaluate an app.
 evalApp' :: forall sym f t .
@@ -242,19 +284,32 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
   evalExt _ y  = case y of {}
 
-pureSemAESNI
-  :: forall sym. IsSymInterface sym
+pureSemSymUn
+  :: forall sym n. IsSymInterface sym
   => Sym sym
-  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType 128 ::> BaseBVType 128) (BaseBVType 128))
-  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
-  -> (AtomWrapper (RegEntry sym) (M.BVType 128))
-  -> IO (RegValue sym (ToCrucibleType (M.BVType 128)))
-pureSemAESNI sym proj x y =
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n) (BaseBVType n))
+  -> (AtomWrapper (RegEntry sym) (M.BVType n))
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymUn sym proj x =
   do let f = proj (symFuns sym)
          s = symIface sym
-     state <- toValBV s x
-     key <- toValBV s y
-     let ps = extend (extend empty state) key
+     src1 <- toValBV s x
+     let ps = extend empty src1
+     llvmPointer_bv s =<< applySymFn s f ps
+
+pureSemSymBin
+  :: forall sym n. IsSymInterface sym
+  => Sym sym
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n ::> BaseBVType n) (BaseBVType n))
+  -> (AtomWrapper (RegEntry sym) (M.BVType n))
+  -> (AtomWrapper (RegEntry sym) (M.BVType n))
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymBin sym proj x y =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     src1 <- toValBV s x
+     src2 <- toValBV s y
+     let ps = extend (extend empty src1) src2
      llvmPointer_bv s =<< applySymFn s f ps
 
 -- | Semantics for operations that do not affect Crucible's state directly.
@@ -477,10 +532,10 @@ pureSem sym fn = do
          let ps = extend (extend empty src1) src2
          llvmPointer_bv s =<< applySymFn s f ps
 
-    M.AESNI_AESEnc x y -> pureSemAESNI sym fnAesEnc x y
-    M.AESNI_AESEncLast x y -> pureSemAESNI sym fnAesEncLast x y
-    M.AESNI_AESDec x y -> pureSemAESNI sym fnAesDec x y
-    M.AESNI_AESDecLast x y -> pureSemAESNI sym fnAesDecLast x y
+    M.AESNI_AESEnc x y -> pureSemSymBin sym fnAesEnc x y
+    M.AESNI_AESEncLast x y -> pureSemSymBin sym fnAesEncLast x y
+    M.AESNI_AESDec x y -> pureSemSymBin sym fnAesDec x y
+    M.AESNI_AESDecLast x y -> pureSemSymBin sym fnAesDecLast x y
     M.AESNI_AESKeyGenAssist x i ->
       do let f = fnAesKeyGenAssist (symFuns sym)
              s = symIface sym
@@ -493,6 +548,27 @@ pureSem sym fn = do
              s = symIface sym
          src <- toValBV s x
          let ps = extend empty src
+         llvmPointer_bv s =<< applySymFn s f ps
+
+    M.SHA_sigma0 x -> pureSemSymUn sym fnShasigma0 x
+    M.SHA_sigma1 x -> pureSemSymUn sym fnShasigma1 x
+    M.SHA_Sigma0 x -> pureSemSymUn sym fnShaSigma0 x
+    M.SHA_Sigma1 x -> pureSemSymUn sym fnShaSigma1 x
+    M.SHA_Ch x y z ->
+      do let f = fnShaCh (symFuns sym)
+             s = symIface sym
+         src1 <- toValBV s x
+         src2 <- toValBV s y
+         src3 <- toValBV s z
+         let ps = extend (extend (extend empty src1) src2) src3
+         llvmPointer_bv s =<< applySymFn s f ps
+    M.SHA_Maj x y z ->
+      do let f = fnShaMaj (symFuns sym)
+             s = symIface sym
+         src1 <- toValBV s x
+         src2 <- toValBV s y
+         src3 <- toValBV s z
+         let ps = extend (extend (extend empty src1) src2) src3
          llvmPointer_bv s =<< applySymFn s f ps
 
 semPointwise :: (1 <= w) =>
