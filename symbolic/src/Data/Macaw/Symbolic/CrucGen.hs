@@ -911,6 +911,15 @@ appToCrucible app = do
         M.TupleTypeRepr _ -> fail "XXX: Mux on tuples not yet done."
         M.VecTypeRepr{} -> fail "XXX: Mux on vectors not yet done."
 
+    -- Booleans
+
+    M.AndApp x y  -> appAtom =<< C.And     <$> v2c x <*> v2c y
+    M.OrApp  x y  -> appAtom =<< C.Or      <$> v2c x <*> v2c y
+    M.NotApp x    -> appAtom =<< C.Not     <$> v2c x
+    M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
+
+    -- Tuples
+
     M.MkTuple macawTypes macawFields -> do
       let crucTypes = typeListToCrucible macawTypes
       crucFields <- macawListToCrucibleM v2c macawFields
@@ -922,12 +931,19 @@ appToCrucible app = do
       let i' = macawListIndexToCrucible sz i
       appAtom $ C.GetStruct x' i' tp'
 
-    -- Booleans
+    -- Vectors
 
-    M.AndApp x y  -> appAtom =<< C.And     <$> v2c x <*> v2c y
-    M.OrApp  x y  -> appAtom =<< C.Or      <$> v2c x <*> v2c y
-    M.NotApp x    -> appAtom =<< C.Not     <$> v2c x
-    M.XorApp x y  -> appAtom =<< C.BoolXor <$> v2c x <*> v2c y
+    M.ExtractElement macawEltType macawVec macawIdx -> do
+      let crucEltType = typeToCrucible macawEltType
+      crucVec <- v2c macawVec
+      crucIdx <- crucibleValue (C.NatLit (fromIntegral macawIdx))
+      appAtom (C.VectorGetEntry crucEltType crucVec crucIdx)
+    M.InsertElement (M.VecTypeRepr _n macawEltType) macawVec macawIdx macawVal -> do
+      let crucEltType = typeToCrucible macawEltType
+      crucVec <- v2c macawVec
+      crucIdx <- crucibleValue (C.NatLit (fromIntegral macawIdx))
+      crucVal <- v2c macawVal
+      appAtom (C.VectorSetEntry crucEltType crucVec crucIdx crucVal)
 
     -- Extension operations
     M.Trunc x w -> do
