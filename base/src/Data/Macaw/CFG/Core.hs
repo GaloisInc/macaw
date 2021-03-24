@@ -93,7 +93,6 @@ module Data.Macaw.CFG.Core
   ) where
 
 import           Control.Lens
-import           Control.Monad.Identity
 import           Control.Monad.State.Strict
 import           Data.Bits
 import           Data.Int (Int64)
