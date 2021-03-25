@@ -27,6 +27,7 @@ module Data.Macaw.CFG.App
   , widthEqProofCompare
   , widthEqSource
   , widthEqTarget
+  , widthEqSym
   ) where
 
 import           Control.Monad.Identity
@@ -82,6 +83,16 @@ data WidthEqProof (in_tp :: Type) (out_tp :: Type) where
 
   -- | Allows transitivity composing proofs.
   WidthEqTrans :: !(WidthEqProof x y) -> !(WidthEqProof y z) -> WidthEqProof x z
+
+-- | Apply symmetry to a width equality proof.
+widthEqSym :: WidthEqProof x y -> WidthEqProof y x
+widthEqSym (PackBits n w) = UnpackBits n w
+widthEqSym (UnpackBits n w) = PackBits n w
+widthEqSym (FromFloat r) = ToFloat r
+widthEqSym (ToFloat r) = FromFloat r
+widthEqSym (VecEqCongruence n p) = VecEqCongruence n (widthEqSym p)
+widthEqSym (WidthEqRefl tp) = WidthEqRefl tp
+widthEqSym (WidthEqTrans x y) = WidthEqTrans (widthEqSym y) (widthEqSym x)
 
 -- | Return the input type of the width equality proof
 widthEqSource :: WidthEqProof i o -> TypeRepr i
@@ -145,6 +156,16 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
 
   Mux :: !(TypeRepr tp) -> !(f BoolType) -> !(f tp) -> !(f tp) -> App f tp
 
+  ----------------------------------------------------------------------
+  -- Boolean operations
+
+  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  NotApp :: !(f BoolType) -> App f BoolType
+  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+
+  ----------------------------------------------------------------------
+  -- Tuples
 
   -- | Create a tuple from a list of fields
   MkTuple :: !(P.List TypeRepr flds)
@@ -155,12 +176,14 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   TupleField :: !(P.List TypeRepr l) -> !(f (TupleType l)) -> !(P.Index l r) -> App f r
 
   ----------------------------------------------------------------------
-  -- Boolean operations
+  -- Vector
 
-  AndApp :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  OrApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
-  NotApp :: !(f BoolType) -> App f BoolType
-  XorApp  :: !(f BoolType) -> !(f BoolType) -> App f BoolType
+  -- | Extracts an element at given constant index from vector
+  ExtractElement :: !(TypeRepr tp) -> !(f (VecType n tp)) -> !Int -> App f tp
+
+  -- | Sets an element at given constant in vector.
+  InsertElement :: !(TypeRepr (VecType n tp))
+                -> !(f (VecType n tp)) -> !Int -> !(f tp) -> App f (VecType n tp)
 
   ----------------------------------------------------------------------
   -- Operations related to concatenating and extending bitvectors.
@@ -421,12 +444,14 @@ rendAppA pp a0 =
   case a0 of
     Eq x y      -> (,) "eq" [ pp x, pp y ]
     Mux _ c x y -> (,) "mux" [ pp c, pp x, pp y ]
-    MkTuple _ flds -> (,) "tuple" (toListFC pp flds)
-    TupleField _ x i -> (,) "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
     AndApp x y -> (,) "and" [ pp x, pp y ]
     OrApp  x y -> (,) "or"  [ pp x, pp y ]
     NotApp x   -> (,) "not" [ pp x ]
     XorApp  x y -> (,) "xor"  [ pp x, pp y ]
+    MkTuple _ flds -> (,) "tuple" (toListFC pp flds)
+    TupleField _ x i -> (,) "tuple_field" [ pp x, prettyPure (P.indexValue i) ]
+    ExtractElement _ v i -> (,) "extract_element" [ pp v, prettyPure i ]
+    InsertElement _ s i v -> (,) "extract_element" [ pp s, prettyPure i, pp v ]
     Trunc x w -> (,) "trunc" [ pp x, ppNat w ]
     SExt x w -> (,) "sext" [ pp x, ppNat w ]
     UExt x w -> (,) "uext" [ pp x, ppNat w ]
@@ -480,18 +505,22 @@ instance HasRepr (App f) TypeRepr where
     case a of
       Eq _ _       -> knownRepr
       Mux tp _ _ _ -> tp
-      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
-      TupleField f _ i -> f P.!! i
-
-      Trunc _ w -> BVTypeRepr w
-      SExt  _ w -> BVTypeRepr w
-      UExt  _ w -> BVTypeRepr w
-      Bitcast _ p -> widthEqTarget p
 
       AndApp{} -> knownRepr
       OrApp{}  -> knownRepr
       NotApp{} -> knownRepr
       XorApp{} -> knownRepr
+
+      MkTuple fieldTypes _ -> TupleTypeRepr fieldTypes
+      TupleField f _ i -> f P.!! i
+
+      ExtractElement tp _ _ -> tp
+      InsertElement tp _ _ _ -> tp
+
+      Trunc _ w -> BVTypeRepr w
+      SExt  _ w -> BVTypeRepr w
+      UExt  _ w -> BVTypeRepr w
+      Bitcast _ p -> widthEqTarget p
 
       BVAdd w _ _   -> BVTypeRepr w
       BVAdc w _ _ _ -> BVTypeRepr w
