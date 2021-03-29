@@ -288,7 +288,7 @@ pureSemSymUn
   :: forall sym n. IsSymInterface sym
   => Sym sym
   -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n) (BaseBVType n))
-  -> (AtomWrapper (RegEntry sym) (M.BVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
   -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
 pureSemSymUn sym proj x =
   do let f = proj (symFuns sym)
@@ -301,8 +301,8 @@ pureSemSymBin
   :: forall sym n. IsSymInterface sym
   => Sym sym
   -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n ::> BaseBVType n) (BaseBVType n))
-  -> (AtomWrapper (RegEntry sym) (M.BVType n))
-  -> (AtomWrapper (RegEntry sym) (M.BVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
   -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
 pureSemSymBin sym proj x y =
   do let f = proj (symFuns sym)
@@ -310,6 +310,23 @@ pureSemSymBin sym proj x y =
      src1 <- toValBV s x
      src2 <- toValBV s y
      let ps = extend (extend empty src1) src2
+     llvmPointer_bv s =<< applySymFn s f ps
+
+pureSemSymTern
+  :: forall sym n. IsSymInterface sym
+  => Sym sym
+  -> (SymFuns sym -> SymFn sym (EmptyCtx ::> BaseBVType n ::> BaseBVType n ::> BaseBVType n) (BaseBVType n))
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> AtomWrapper (RegEntry sym) (M.BVType n)
+  -> IO (RegValue sym (ToCrucibleType (M.BVType n)))
+pureSemSymTern sym proj x y z =
+  do let f = proj (symFuns sym)
+         s = symIface sym
+     src1 <- toValBV s x
+     src2 <- toValBV s y
+     src3 <- toValBV s z
+     let ps = extend (extend (extend empty src1) src2) src3
      llvmPointer_bv s =<< applySymFn s f ps
 
 -- | Semantics for operations that do not affect Crucible's state directly.
@@ -554,22 +571,8 @@ pureSem sym fn = do
     M.SHA_sigma1 x -> pureSemSymUn sym fnShasigma1 x
     M.SHA_Sigma0 x -> pureSemSymUn sym fnShaSigma0 x
     M.SHA_Sigma1 x -> pureSemSymUn sym fnShaSigma1 x
-    M.SHA_Ch x y z ->
-      do let f = fnShaCh (symFuns sym)
-             s = symIface sym
-         src1 <- toValBV s x
-         src2 <- toValBV s y
-         src3 <- toValBV s z
-         let ps = extend (extend (extend empty src1) src2) src3
-         llvmPointer_bv s =<< applySymFn s f ps
-    M.SHA_Maj x y z ->
-      do let f = fnShaMaj (symFuns sym)
-             s = symIface sym
-         src1 <- toValBV s x
-         src2 <- toValBV s y
-         src3 <- toValBV s z
-         let ps = extend (extend (extend empty src1) src2) src3
-         llvmPointer_bv s =<< applySymFn s f ps
+    M.SHA_Ch x y z -> pureSemSymTern sym fnShaCh x y z
+    M.SHA_Maj x y z -> pureSemSymTern sym fnShaMaj x y z
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
