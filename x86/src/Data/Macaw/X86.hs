@@ -387,6 +387,12 @@ transferAbsValue r f =
     AESNI_AESDecLast{} -> TopV
     AESNI_AESKeyGenAssist{} -> TopV
     AESNI_AESIMC{} -> TopV
+    SHA_sigma0{} -> TopV
+    SHA_sigma1{} -> TopV
+    SHA_Sigma0{} -> TopV
+    SHA_Sigma1{} -> TopV
+    SHA_Ch{} -> TopV
+    SHA_Maj{} -> TopV
 
     -- XXX: Is 'TopV' the right thing for the AVX instruction below?
     VOp1 {} -> TopV

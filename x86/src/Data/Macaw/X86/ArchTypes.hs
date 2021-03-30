@@ -714,6 +714,7 @@ data X86PrimFn f tp where
     -> !(f (BVType 64))
     -> X86PrimFn f (BVType 128)
 
+  -- | Operations used by AESNI instructions.
   AESNI_AESEnc
     :: !(f (BVType 128))
     -> !(f (BVType 128))
@@ -737,6 +738,32 @@ data X86PrimFn f tp where
   AESNI_AESIMC
     :: !(f (BVType 128))
     -> X86PrimFn f (BVType 128)
+
+  -- | Operations used by SHA256 instructions.
+  -- (See SHA256RNDS2, SHA256MSG1, and SHA256MSG2 in the ISA manual).
+  -- For concise definitions, see: https://web.archive.org/web/20130526224224/http://csrc.nist.gov/groups/STM/cavp/documents/shs/sha256-384-512.pdf
+  SHA_sigma0
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_sigma1
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Sigma0
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Sigma1
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Ch
+    :: !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Maj
+    :: !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
 
 
 instance HasRepr (X86PrimFn f) TypeRepr where
@@ -788,6 +815,12 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       AESNI_AESDecLast{} -> knownRepr
       AESNI_AESKeyGenAssist{} -> knownRepr
       AESNI_AESIMC{} -> knownRepr
+      SHA_sigma0{} -> knownRepr
+      SHA_sigma1{} -> knownRepr
+      SHA_Sigma0{} -> knownRepr
+      SHA_Sigma1{} -> knownRepr
+      SHA_Ch{} -> knownRepr
+      SHA_Maj{} -> knownRepr
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -850,6 +883,12 @@ instance TraversableFC X86PrimFn where
       AESNI_AESDecLast x y -> AESNI_AESDecLast <$> go x <*> go y
       AESNI_AESKeyGenAssist x i -> AESNI_AESKeyGenAssist <$> go x <*> pure i
       AESNI_AESIMC x -> AESNI_AESIMC <$> go x
+      SHA_sigma0 x -> SHA_sigma0 <$> go x
+      SHA_sigma1 x -> SHA_sigma1 <$> go x
+      SHA_Sigma0 x -> SHA_Sigma0 <$> go x
+      SHA_Sigma1 x -> SHA_Sigma1 <$> go x
+      SHA_Ch x y z -> SHA_Ch <$> go x <*> go y <*> go z
+      SHA_Maj x y z -> SHA_Maj <$> go x <*> go y <*> go z
 
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc ann
@@ -917,6 +956,12 @@ instance IsArchFn X86PrimFn where
       AESNI_AESDecLast x y -> sexprA "aesdeclast" [pp x, pp y]
       AESNI_AESKeyGenAssist x i -> sexprA "aeskeygenassist" [pp x, ppShow i]
       AESNI_AESIMC x -> sexprA "aesimc" [pp x]
+      SHA_sigma0 x -> sexprA "sha_sigma0" [pp x]
+      SHA_sigma1 x -> sexprA "sha_sigma1" [pp x]
+      SHA_Sigma0 x -> sexprA "sha_Sigma0" [pp x]
+      SHA_Sigma1 x -> sexprA "sha_Sigma1" [pp x]
+      SHA_Ch x y z -> sexprA "sha_Ch" [pp x, pp y, pp z]
+      SHA_Maj x y z -> sexprA "sha_Maj" [pp x, pp y, pp z]
 
 
 -- | This returns true if evaluating the primitive function implicitly
@@ -971,6 +1016,12 @@ x86PrimFnHasSideEffects f =
     AESNI_AESDecLast{} -> False
     AESNI_AESKeyGenAssist{} -> False
     AESNI_AESIMC{} -> False
+    SHA_sigma0{} -> False
+    SHA_sigma1{} -> False
+    SHA_Sigma0{} -> False
+    SHA_Sigma1{} -> False
+    SHA_Ch{} -> False
+    SHA_Maj{} -> False
 
 ------------------------------------------------------------------------
 -- X86Stmt
