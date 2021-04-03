@@ -62,7 +62,7 @@
 --         . ( CB.IsSymInterface sym
 --           , MS.SymArchConstraints arch
 --           , 16 <= MC.ArchAddrWidth arch
---           , Ord (WI.SymExpr sym WI.BaseNatType)
+--           , Ord (WI.SymExpr sym WI.BaseIntegerType)
 --           , KnownNat (MC.ArchAddrWidth arch)
 --           )
 --        => CFH.HandleAllocator
