@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -326,7 +327,7 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
   let initialRegsEntry = CS.RegEntry regsRepr initialRegs
   let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
 
-  memVar <- CLM.mkMemVar halloc
+  memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   let initGlobals = CSG.insertGlobal memVar mem2 CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regsWithStack)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)

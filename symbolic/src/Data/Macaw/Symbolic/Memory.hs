@@ -38,6 +38,7 @@
 -- >>> :set -XFlexibleContexts
 -- >>> :set -XGADTs
 -- >>> :set -XImplicitParams
+-- >>> :set -XOverloadedStrings
 -- >>> :set -XScopedTypeVariables
 -- >>> :set -XTypeApplications
 -- >>> :set -XTypeOperators
@@ -84,7 +85,7 @@
 --   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---     memModelVar <- CLM.mkMemVar hdlAlloc
+--     memModelVar <- CLM.mkMemVar "macaw:llvm_memory" hdlAlloc
 --     (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
 --     let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
 --     let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred

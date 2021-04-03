@@ -1245,7 +1245,7 @@ runCodeBlock
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
 runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
-  mvar <- MM.mkMemVar halloc
+  mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
 
@@ -1340,6 +1340,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --
 -- >>> :set -XFlexibleContexts
 -- >>> :set -XImplicitParams
+-- >>> :set -XOverloadedStrings
 -- >>> :set -XScopedTypeVariables
 -- >>> import           Data.IORef
 -- >>> import qualified Data.Macaw.CFG as MC
@@ -1376,7 +1377,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---     memModelVar <- CLM.mkMemVar hdlAlloc
+--     memModelVar <- CLM.mkMemVar "macaw:llvm_memory" hdlAlloc
 --     -- For demonstration purposes, do not enforce any pointer validity constraints
 --     -- See Data.Macaw.Symbolic.Memory for an example of a more sophisticated approach.
 --     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
