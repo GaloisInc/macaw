@@ -481,7 +481,7 @@ initializeSimulator :: forall m sym arch blocks ids tp
                             (MS.MacawExt arch)
                             (C.RegEntry sym tp))
 initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval archVals sym $ \archEvalFns -> do
-  memVar <- liftIO $ LLVM.mkMemVar halloc
+  memVar <- liftIO $ LLVM.mkMemVar "macaw-refinement:llvm_memory" halloc
   let end = MS.toCrucibleEndian (binaryEndianness ctx)
   (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) sym end MS.ConcreteMutable (binaryMemory ctx)
   (memory1, initSPVal) <- initializeMemory (Proxy @arch) sym memory0
