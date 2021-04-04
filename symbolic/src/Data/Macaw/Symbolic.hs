@@ -1383,7 +1383,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --     let mkValidityPred :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
 --         mkValidityPred _ _ _ _ = return Nothing
 --     let extImpl = MS.macawExtensions archEvalFns memModelVar globalMap lfh mkValidityPred
---     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr (CS.FnBindings CFH.emptyHandleMap) extImpl MS.MacawSimulatorState
 --     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
 --     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
 --     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
