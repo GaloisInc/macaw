@@ -11,5 +11,6 @@
 /dist-newstyle/
 /TAGS
 /**/tests/samples/*.last-actual
-/**/tests/samples/*.s_darcs
+/**/tests/samples/*.s
+_darcs
 .boring
