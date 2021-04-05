@@ -56,7 +56,7 @@ import qualified Data.Macaw.Symbolic.MemOps as MO
 --  is given a specific instance in the architecture-specific module,
 --  so this cannot be expressed directly as a `C.EvalStmtFunc`.
 
-type MacawEvalStmtFunc f p sym exts ext =
+type MacawEvalStmtFunc f p sym ext =
   forall rtp blocks r ctx tp'.
     f (C.RegEntry sym) tp'
     -> C.CrucibleState p sym ext rtp blocks r ctx
