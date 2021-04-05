@@ -94,7 +94,7 @@ x ~> y = (x,y)
 asBits :: LLVMPtr sym w -> RegValue sym (BVType w)
 asBits = snd . llvmPointerView
 
--- | The base part of a point.
+-- | The base part of a pointer.
 ptrBase :: LLVMPtr sym w -> RegValue sym NatType
 ptrBase = fst . llvmPointerView
 
