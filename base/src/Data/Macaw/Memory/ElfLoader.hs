@@ -1464,14 +1464,18 @@ memoryForElf' opt elf isRelevant = elfHeaderConstraints elf $ do
       _ ->
         memoryForElfSegments opt elf
   -- Get dynamic symbol table entries
-  -- Resolve ellf symbol table information
+  -- Resolve elf symbol table information
   let (symErrs, funcSymbols) = resolveElfFuncSymbols mem shdrs secMap isRelevant elf
   pure (mem, funcSymbols, warnings, symErrs)
 
--- | Load allocated Elf sections into memory.
+-- | Load allocated Elf sections into memory, using the section table
+-- information map.
 --
 -- Normally, Elf uses segments for loading, but the section
 -- information tends to be more precise.
+--
+-- The return value includes a list of all function symbols (STT_FUNC
+-- Symbol table entry types).
 memoryForElf :: LoadOptions
              -> Elf.ElfHeaderInfo w
              -> Either String ( Memory w
@@ -1483,10 +1487,14 @@ memoryForElf opt elf =
   let isRelevant ste = Elf.steType ste == Elf.STT_FUNC
    in memoryForElf' opt elf isRelevant
 
--- | Load allocated Elf sections into memory.
+-- | Load allocated Elf sections into memory, using the section table
+-- information map.
 --
--- Normally, Elf uses segments for loading, but the segment
+-- Normally, Elf uses segments for loading, but the section
 -- information tends to be more precise.
+--
+-- The return value includes a list of *all* symbols, whether they
+-- are functions or not.
 memoryForElfAllSymbols :: LoadOptions
                        -> Elf.ElfHeaderInfo w
                        -> Either String ( Memory w
@@ -1658,8 +1666,11 @@ getElfEntry loadOpts mem hdr =  addrWidthClass (memAddrWidth mem) $ do
 -- | This interprets the Elf file to construct the initial memory,
 -- entry points, and functions symbols.
 --
--- If it encounters a fatal error it returns the error message in the left value,
--- and otherwise it returns the information interred as a 4-tuple.
+-- If it encounters a fatal error it returns the error message in the
+-- left value, and otherwise it returns the interpreted information as
+-- a 4-tuple of: warnings, the initial memory image, possible entry
+-- points (e.g. for an executable or shared library), and function
+-- symbols.
 resolveElfContents :: LoadOptions
                         -- ^ Options for loading contents
                    -> Elf.ElfHeaderInfo w
