@@ -38,6 +38,7 @@
 -- >>> :set -XFlexibleContexts
 -- >>> :set -XGADTs
 -- >>> :set -XImplicitParams
+-- >>> :set -XOverloadedStrings
 -- >>> :set -XScopedTypeVariables
 -- >>> :set -XTypeApplications
 -- >>> :set -XTypeOperators
@@ -62,7 +63,7 @@
 --         . ( CB.IsSymInterface sym
 --           , MS.SymArchConstraints arch
 --           , 16 <= MC.ArchAddrWidth arch
---           , Ord (WI.SymExpr sym WI.BaseNatType)
+--           , Ord (WI.SymExpr sym WI.BaseIntegerType)
 --           , KnownNat (MC.ArchAddrWidth arch)
 --           )
 --        => CFH.HandleAllocator
@@ -84,11 +85,11 @@
 --   let ?recordLLVMAnnotation = \_ _ -> (pure () :: IO ())
 --   in MS.withArchEval avals sym $ \archEvalFns -> do
 --     let rep = CFH.handleReturnType (CC.cfgHandle cfg)
---     memModelVar <- CLM.mkMemVar hdlAlloc
+--     memModelVar <- CLM.mkMemVar "macaw:llvm_memory" hdlAlloc
 --     (initialMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym LDL.LittleEndian MSM.SymbolicMutable mem
 --     let mkValidityPred = MSM.mkGlobalPointerValidityPred memPtrTbl
 --     let extImpl = MS.macawExtensions archEvalFns memModelVar (MSM.mapRegionPointers memPtrTbl) lfh mkValidityPred
---     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr CFH.emptyHandleMap extImpl MS.MacawSimulatorState
+--     let simCtx = CS.initSimContext sym CLI.llvmIntrinsicTypes hdlAlloc IO.stderr (CS.FnBindings CFH.emptyHandleMap) extImpl MS.MacawSimulatorState
 --     let simGlobalState = CSG.insertGlobal memModelVar initialMem CS.emptyGlobals
 --     let simulation = CS.regValue <$> CS.callCFG cfg initialRegs
 --     let initialState = CS.InitialState simCtx simGlobalState CS.defaultAbortHandler rep (CS.runOverrideSim rep simulation)
