@@ -129,7 +129,7 @@ runDiscovery :: (MC.ArchAddrWidth arch ~ w)
              -- ^ A function to turn discovered symbols into (address, name)
              -- mappings; the addresses are used as test entry points
              --
-             -- A good default is 'toAddrySymMap'
+             -- A good default is 'toAddrSymMap'
              -> MAI.ArchitectureInfo arch
              -> IO (MM.Memory w, [Some (MD.DiscoveryFunInfo arch)])
 runDiscovery ehi toEntryPoints archInfo = do
