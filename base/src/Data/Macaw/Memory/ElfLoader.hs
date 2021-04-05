@@ -1696,6 +1696,6 @@ resolveElfContents loadOpts elf = do
       let (entryWarn, mentry) = getElfEntry loadOpts mem hdr
       pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
     Elf.ET_CORE ->
-      Left  "Reopt does not support loading core files."
+      Left "No support for loading core files (Macaw)."
     tp ->
-      Left $ "Reopt does not support loading elf files with type " ++ show tp ++ "."
+      Left $ "No support for loading ELF files with type " ++ show tp ++ " (Macaw)."
