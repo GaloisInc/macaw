@@ -86,15 +86,15 @@ import qualified Data.Macaw.X86.ArchTypes as M
 import           Prelude
 
 
-type S sym rtp bs r ctx =
-  CrucibleState (MacawSimulatorState sym) sym (MacawExt M.X86_64) rtp bs r ctx
+type S p sym rtp bs r ctx =
+  CrucibleState p sym (MacawExt M.X86_64) rtp bs r ctx
 
 funcSemantics
   :: (IsSymInterface sym, ToCrucibleType mt ~ t)
   => SymFuns sym
   -> M.X86PrimFn (AtomWrapper (RegEntry sym)) mt
-  -> S sym rtp bs r ctx
-  -> IO (RegValue sym t, S sym rtp bs r ctx)
+  -> S p sym rtp bs r ctx
+  -> IO (RegValue sym t, S p sym rtp bs r ctx)
 funcSemantics fs x s =
   withBackend (s^.stateContext) $ \bak ->
     do let sym = Sym
@@ -108,12 +108,12 @@ funcSemantics fs x s =
 
 withConcreteCountAndDir
   :: (IsSymInterface sym, 1 <= w)
-  => S sym rtp bs r ctx
+  => S p sym rtp bs r ctx
   -> M.RepValSize w
   -> (AtomWrapper (RegEntry sym) (M.BVType 64))
   -> (AtomWrapper (RegEntry sym) M.BoolType)
-  -> (S sym rtp bs r ctx -> (SymBV sym 64) -> IO (S sym rtp bs r ctx))
-  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+  -> (S p sym rtp bs r ctx -> (SymBV sym 64) -> IO (S p sym rtp bs r ctx))
+  -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
 withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func =
   withBackend (state^.stateContext) $ \bak -> do
   let sym = backendGetSym bak
@@ -135,8 +135,8 @@ stmtSemantics
   -> C.GlobalVar Mem
   -> GlobalMap sym Mem (M.ArchAddrWidth M.X86_64)
   -> M.X86Stmt (AtomWrapper (RegEntry sym))
-  -> S sym rtp bs r ctx
-  -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+  -> S p sym rtp bs r ctx
+  -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
 stmtSemantics _sym_funs global_var_mem globals stmt state =
   withBackend (state^.stateContext) $ \bak ->
   let sym = backendGetSym bak in
@@ -180,8 +180,8 @@ stmtSemantics _sym_funs global_var_mem globals stmt state =
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
               -> M.X86TermStmt (AtomWrapper (RegEntry sym))
-              -> S sym rtp bs r ctx
-              -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
 termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
                                 show (MC.ppArchTermStmt (error "Can't print RegEntry") x))
 

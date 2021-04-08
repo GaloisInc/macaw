@@ -75,7 +75,7 @@ aarch32RegName r = WS.safeSymbol ("r!" ++ show (MC.prettyF r))
 aarch32MacawEvalFn :: (CB.IsSymInterface sym)
                    => AF.SymFuns sym
                    -> MS.MacawArchStmtExtensionOverride SA.AArch32
-                   -> MS.MacawArchEvalFn sym mem SA.AArch32
+                   -> MS.MacawArchEvalFn p sym mem SA.AArch32
 aarch32MacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
   MSB.MacawArchEvalFn $ \_ _ xt s -> do
     mRes <- override xt s
