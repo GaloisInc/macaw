@@ -57,7 +57,7 @@ newSymFuns _sym = do
   r <- IOR.newIORef Map.empty
   return SymFuns { symFuns = r }
 
-type S sym rtp bs r ctx = CS.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt SA.AArch32) rtp bs r ctx
+type S p sym rtp bs r ctx = CS.CrucibleState p sym (MS.MacawExt SA.AArch32) rtp bs r ctx
 
 -- | Semantics for ARM-specific block terminators
 --
@@ -72,8 +72,8 @@ type S sym rtp bs r ctx = CS.CrucibleState (MS.MacawSimulatorState sym) sym (MS.
 termSemantics :: (CB.IsSymInterface sym)
               => SymFuns sym
               -> MAA.ARMTermStmt ids
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym CT.UnitType, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (CS.RegValue sym CT.UnitType, S p sym rtp bs r ctx)
 termSemantics _sfns tstmt _st0 =
   case tstmt of
     MAA.ARMSyscall _payload ->
@@ -89,8 +89,8 @@ termSemantics _sfns tstmt _st0 =
 stmtSemantics :: (CB.IsSymInterface sym)
               => SymFuns sym
               -> MAA.ARMStmt (AA.AtomWrapper (CS.RegEntry sym))
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym CT.UnitType, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (CS.RegValue sym CT.UnitType, S p sym rtp bs r ctx)
 stmtSemantics _sfns stmt _st0 =
   case stmt of
     MAA.UninterpretedA32Opcode opc _ops ->
@@ -101,8 +101,8 @@ stmtSemantics _sfns stmt _st0 =
 funcSemantics :: (CB.IsSymInterface sym, MS.ToCrucibleType mt ~ t)
               => SymFuns sym
               -> MAA.ARMPrimFn (AA.AtomWrapper (CS.RegEntry sym)) mt
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym t, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (CS.RegValue sym t, S p sym rtp bs r ctx)
 funcSemantics sfns fn st0 =
   case fn of
     MAA.SDiv _rep lhs rhs -> withSym st0 $ \sym -> do
@@ -161,9 +161,9 @@ funcSemantics sfns fn st0 =
     MAA.FPRoundInt {} -> X.throwIO (MissingSemanticsForFunction "FPRoundInt")
 
 withSym :: (CB.IsSymInterface sym)
-        => S sym rtp bs r ctx
+        => S p sym rtp bs r ctx
         -> (sym -> IO a)
-        -> IO (a, S sym rtp bs r ctx)
+        -> IO (a, S p sym rtp bs r ctx)
 withSym s action = do
   let sym = s ^. CSET.stateSymInterface
   val <- action sym

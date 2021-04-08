@@ -331,11 +331,11 @@ type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
 -- constructing the CFG of the callee on the fly) and register them with the
 -- simulator.
 data LookupFunctionHandle sym arch = LookupFunctionHandle
-     (forall rtp blocks r ctx
-   . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+     (forall rtp blocks r ctx p
+   . CrucibleState p sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
-  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
+  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState p sym (MacawExt arch) rtp blocks r ctx))
 
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)
