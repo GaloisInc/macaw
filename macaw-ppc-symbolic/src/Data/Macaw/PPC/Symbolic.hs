@@ -120,7 +120,7 @@ ppcMacawEvalFn :: ( C.IsSymInterface sym
                   )
                => F.SymFuns sym
                -> MS.MacawArchStmtExtensionOverride (SP.AnyPPC v)
-               -> MS.MacawArchEvalFn sym mem (SP.AnyPPC v)
+               -> MS.MacawArchEvalFn p sym mem (SP.AnyPPC v)
 ppcMacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
   MSB.MacawArchEvalFn $ \_ _ xt s -> do
     mRes <- override xt s

@@ -267,11 +267,11 @@ data GenArchVals mem arch = GenArchVals
   -- ^ This is the set of functions used by the translator, and is passed as the
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
-      :: forall a m sym
+      :: forall a m p sym
        . ( IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m
          , ?memOpts :: MM.MemOptions )
       => sym
-      -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
+      -> (SB.MacawArchEvalFn p sym (MemModelType mem arch) arch -> m a)
       -> m a
   -- ^ This function provides a context with a callback that gives access to the
   -- set of architecture-specific function evaluators ('MacawArchEvalFn'), which
@@ -1174,9 +1174,9 @@ unsupportedSyscalls compName =
 
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
-  :: forall sym arch
+  :: forall p sym arch
   . (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
-  => SB.MacawArchEvalFn sym MM.Mem arch
+  => SB.MacawArchEvalFn p sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The distinguished global variable holding the current state of the memory model
@@ -1190,7 +1190,7 @@ execMacawStmtExtension
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
+  -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) p sym (MacawExt arch)
 execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   C.withBackend (st^.C.stateContext) $ \bak ->
   let sym = backendGetSym bak in
@@ -1274,7 +1274,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
 -- | Return macaw extension evaluation functions.
 macawExtensions
   :: (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
-  => SB.MacawArchEvalFn sym MM.Mem arch
+  => SB.MacawArchEvalFn personality sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The Crucible global variable containing the current state of the memory
@@ -1289,7 +1289,7 @@ macawExtensions
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
+  -> C.ExtensionImpl personality sym (MacawExt arch)
 macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
   C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
@@ -1304,7 +1304,7 @@ runCodeBlock
   => bak
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
-  -> SB.MacawArchEvalFn sym MM.Mem arch
+  -> SB.MacawArchEvalFn (MacawSimulatorState sym) sym MM.Mem arch
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch

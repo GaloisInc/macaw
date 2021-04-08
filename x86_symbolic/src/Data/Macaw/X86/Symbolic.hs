@@ -348,7 +348,7 @@ x86_64MacawEvalFn
   :: (C.IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SymFuns sym
   -> MacawArchStmtExtensionOverride M.X86_64
-  -> MacawArchEvalFn sym MM.Mem M.X86_64
+  -> MacawArchEvalFn p sym MM.Mem M.X86_64
 x86_64MacawEvalFn fs (MacawArchStmtExtensionOverride override) =
   MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state -> do
     mRes <- override ext_stmt crux_state
