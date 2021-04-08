@@ -1,7 +1,4 @@
 {- |
-Copyright        : (c) Galois, Inc 2015-2019
-Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.com>
-
 This module discovers the Functions and their internal Block CFG in
 target binaries.
 -}
@@ -34,6 +31,7 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.markAddrAsFunction
        , Data.Macaw.Discovery.markAddrsAsFunction
        , State.FunctionExploreReason(..)
+       , State.ppFunReason
        , State.BlockExploreReason(..)
        , Data.Macaw.Discovery.analyzeFunction
        , Data.Macaw.Discovery.exploreMemPointers
@@ -41,10 +39,11 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.addDiscoveredFunctionBlockTargets
          -- * Top level utilities
        , Data.Macaw.Discovery.completeDiscoveryState
+       , Data.Macaw.Discovery.incCompleteDiscovery
        , DiscoveryOptions(..)
        , defaultDiscoveryOptions
        , DiscoveryEvent(..)
-       , discoveryLogFn
+       , logDiscoveryEvent
          -- * DiscoveryFunInfo
        , State.DiscoveryFunInfo
        , State.discoveredFunAddr
@@ -69,11 +68,12 @@ module Data.Macaw.Discovery
        , eliminateDeadStmts
        ) where
 
-import           Control.Applicative
+import           Control.Applicative ( Alternative((<|>), empty), liftA )
 import           Control.Lens
 import qualified Control.Monad.Fail as Fail
 import           Control.Monad.Reader
-import           Control.Monad.ST
+import qualified Control.Monad.ST.Lazy as STL
+import qualified Control.Monad.ST.Strict as STS
 import           Control.Monad.State.Strict
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
@@ -96,7 +96,6 @@ import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified Data.Vector as V
 import           Data.Word
-import           GHC.IO (ioToST)
 import           Numeric
 import           Numeric.Natural
 import           Prettyprinter (pretty)
@@ -120,6 +119,7 @@ import           Data.Macaw.Discovery.AbsEval
 import           Data.Macaw.Discovery.State as State
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
+import           Data.Macaw.Utils.IncComp
 
 ------------------------------------------------------------------------
 -- Utilities
@@ -329,7 +329,7 @@ foundReasonL = lens foundReason (\old new -> old { foundReason = new })
 -- | The state for the function exploration monad (funM)
 data FunState arch s ids
    = FunState { funReason :: !(FunctionExploreReason (ArchAddrWidth arch))
-              , funNonceGen  :: !(NonceGenerator (ST s) ids)
+              , funNonceGen  :: !(NonceGenerator (STS.ST s) ids)
               , curFunAddr   :: !(ArchSegmentOff arch)
                 -- ^ Address of the function
               , _curFunCtx   :: !(DiscoveryState arch)
@@ -405,15 +405,15 @@ frontier = lens _frontier (\s v -> s { _frontier = v })
 -- FunM
 
 -- | A newtype around a function
-newtype FunM arch s ids a = FunM { unFunM :: StateT (FunState arch s ids) (ST s) a }
+newtype FunM arch s ids a = FunM { unFunM :: StateT (FunState arch s ids) (STL.ST s) a }
   deriving (Functor, Applicative, Monad)
 
 instance MonadState (FunState arch s ids) (FunM arch s ids) where
   get = FunM $ get
   put s = FunM $ put s
 
-liftST :: ST s a -> FunM arch s ids a
-liftST = FunM . lift
+liftST :: STS.ST s a -> FunM arch s ids a
+liftST = FunM . lift . STL.strictToLazyST
 
 ------------------------------------------------------------------------
 -- Transfer functions
@@ -1465,6 +1465,9 @@ parseBlock ctx initRegs b sz absBlockState blockBnds = do
                          , newFunctionAddrs = []
                          }
 
+funMSTStrict :: STS.ST s a -> FunM arch s ids a
+funMSTStrict = liftST
+
 -- | This evaluates the statements in a block to expand the
 -- information known about control flow targets of this block.
 addBlock :: ArchConstraints arch
@@ -1487,7 +1490,7 @@ addBlock src finfo pr = do
         case Map.lookupGT src prev_block_map of
           Just (next,_) | Just o <- diffSegmentOff next src -> fromInteger o
           _ -> fromInteger (segoffBytesLeft src)
-  (b0, sz) <- liftST $ disassembleFn ainfo nonceGen src initRegs maxSize
+  (b0, sz) <- funMSTStrict $ disassembleFn ainfo nonceGen src initRegs maxSize
   -- Rewrite returned blocks to simplify expressions
 #ifdef USE_REWRITER
   (_,b) <- do
@@ -1496,7 +1499,7 @@ addBlock src finfo pr = do
     let secAddrMap = memSectionIndexMap mem
     let rw = \_ -> pure
     termStmt <- pure rw <*> pure src
-    liftST $ do
+    funMSTStrict $ do
       ctx <- mkRewriteContext nonceGen (rewriteArchFn ainfo) archStmt termStmt secAddrMap
       rewriteBlock ainfo ctx b0
 #else
@@ -1561,21 +1564,27 @@ transfer addr = do
 ------------------------------------------------------------------------
 -- Main loop
 
+
+
 -- | Loop that repeatedly explore blocks until we have explored blocks
 -- on the frontier.
-analyzeBlocks :: (ArchSegmentOff arch -> ST s ())
-                 -- ^ Logging function to call when analyzing a new block.
-              -> FunState arch s ids
-              -> ST s (FunState arch s ids)
-analyzeBlocks logBlock st =
-  case Set.minView (st^.frontier) of
-    Nothing -> return st
-    Just (addr, next_roots) -> do
-      logBlock addr
-      st' <- execStateT (unFunM (transfer addr)) (st & frontier .~ next_roots)
-      analyzeBlocks logBlock st'
+analyzeBlocks :: ArchSegmentOff arch
+                    -- ^ The address to explore
+               -> FunState arch s ids
+               -> STL.ST s (IncComp (ArchSegmentOff arch) (DiscoveryState arch, Some (DiscoveryFunInfo arch)))
+analyzeBlocks faddr fs =
+  case Set.minView (fs^.frontier) of
+    Nothing -> do
+      let finfo = mkFunInfo fs
+      let s' = (fs^.curFunCtx)
+             & funInfo             %~ Map.insert faddr (Some finfo)
+             & unexploredFunctions %~ Map.delete faddr
+      pure $ IncCompDone (s', Some finfo)
+    Just (baddr, next_roots) ->
+      IncCompLog baddr <$> do
+        analyzeBlocks faddr =<< execStateT (unFunM (transfer baddr)) (fs & frontier .~ next_roots)
 
-mkFunState :: NonceGenerator (ST s) ids
+mkFunState :: NonceGenerator (STS.ST s) ids
            -> DiscoveryState arch
            -> FunctionExploreReason (ArchAddrWidth arch)
               -- ^ Reason to provide for why we are analyzing this function
@@ -1612,44 +1621,7 @@ mkFunInfo fs =
                        , discoveredClassifyFailureResolutions = classifyFailureResolutions fs
                        }
 
--- | This analyzes the function at a given address, possibly
--- discovering new candidates.
---
--- This returns the updated state and the discovered control flow
--- graph for this function.
-analyzeFunction :: (ArchSegmentOff arch -> ST s ())
-                 -- ^ Logging function to call when analyzing a new block.
-                -> ArchSegmentOff arch
-                   -- ^ The address to explore
-                -> FunctionExploreReason (ArchAddrWidth arch)
-                -- ^ Reason to provide for why we are analyzing this function
-                --
-                -- This can be used to figure out why we decided a
-                -- given address identified a code location.
-                -> DiscoveryState arch
-                -- ^ The current binary information.
-                -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-analyzeFunction logFn addr rsn s =
-  case Map.lookup addr (s^.funInfo) of
-    Just finfo -> pure (s, finfo)
-    Nothing -> runFunctionAnalysis logFn addr rsn s []
-
--- | Analyze addresses that we have marked as functions, but not yet analyzed to
--- identify basic blocks, and discover new function candidates until we have
--- analyzed all function entry points.
---
--- If an exploreFnPred function exists in the DiscoveryState, then do not
--- analyze unexploredFunctions at addresses that do not satisfy this predicate.
-analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
-analyzeDiscoveredFunctions info =
-  case Map.lookupMin (info^.unexploredFunctions) of
-    Nothing -> info
-    Just (addr, rsn) ->
-      analyzeDiscoveredFunctions $! fst (runST ((analyzeFunction (\_ -> pure ()) addr rsn info)))
-
-runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
-                    -- ^ Logging function to call when analyzing a new block.
-                    -> ArchSegmentOff arch
+runFunctionAnalysis :: ArchSegmentOff arch
                     -- ^ The address to explore
                     -> FunctionExploreReason (ArchAddrWidth arch)
                     -- ^ Reason to provide for why we are analyzing this function
@@ -1662,17 +1634,46 @@ runFunctionAnalysis :: (ArchSegmentOff arch -> ST s ())
                     -- ^ Additional identified intraprocedural jump targets
                     --
                     -- The pairs are: (address of the block jumped from, jump targets)
-                    -> ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-runFunctionAnalysis logFn addr rsn s extraIntraTargets = do
-  Some gen <- newSTNonceGenerator
+                    -> IncComp (ArchSegmentOff arch) (DiscoveryState arch, Some (DiscoveryFunInfo arch))
+runFunctionAnalysis addr rsn s extraIntraTargets = STL.runST $ do
+  Some gen <- STL.strictToLazyST newSTNonceGenerator
   let fs0 = mkFunState gen s rsn addr extraIntraTargets
-  fs <- analyzeBlocks logFn fs0
-  let finfo = mkFunInfo fs
-  let s' = (fs^.curFunCtx)
-           & funInfo             %~ Map.insert addr (Some finfo)
-           & unexploredFunctions %~ Map.delete addr
-  seq finfo $ seq s $ pure (s', Some finfo)
+  analyzeBlocks addr fs0
 
+-- | This analyzes the function at a given address, possibly
+-- discovering new candidates.
+--
+-- This returns the updated state and the discovered control flow
+-- graph for this function.
+analyzeFunction :: (ArchSegmentOff arch -> STL.ST s ())
+                 -- ^ Logging function to call when analyzing a new block.
+                -> ArchSegmentOff arch
+                   -- ^ The address to explore
+                -> FunctionExploreReason (ArchAddrWidth arch)
+                -- ^ Reason to provide for why we are analyzing this function
+                --
+                -- This can be used to figure out why we decided a
+                -- given address identified a code location.
+                -> DiscoveryState arch
+                -- ^ The current binary information.
+                -> STL.ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
+analyzeFunction logFn addr rsn s =
+  case Map.lookup addr (s^.funInfo) of
+    Just finfo -> pure (s, finfo)
+    Nothing -> processIncCompLogs logFn (runFunctionAnalysis addr rsn s [])
+
+-- | Analyze addresses that we have marked as functions, but not yet analyzed to
+-- identify basic blocks, and discover new function candidates until we have
+-- analyzed all function entry points.
+--
+-- If an exploreFnPred function exists in the DiscoveryState, then do not
+-- analyze unexploredFunctions at addresses that do not satisfy this predicate.
+analyzeDiscoveredFunctions :: DiscoveryState arch -> DiscoveryState arch
+analyzeDiscoveredFunctions info =
+  case Map.lookupMin (info^.unexploredFunctions) of
+    Nothing -> info
+    Just (addr, rsn) ->
+      analyzeDiscoveredFunctions $! fst (STL.runST (analyzeFunction (\_ -> pure ()) addr rsn info))
 
 -- | Extend the analysis of a previously analyzed function with new
 -- information about the transfers for a block in that function.  The
@@ -1690,8 +1691,7 @@ addDiscoveredFunctionBlockTargets :: DiscoveryState arch
 addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
   let rsn = discoveredFunReason origFunInfo
       funAddr = discoveredFunAddr origFunInfo
-      logBlock _ = pure ()
-  in fst $ runST $ runFunctionAnalysis logBlock funAddr rsn initState resolvedTargets
+  in fst $ incCompResult $ runFunctionAnalysis funAddr rsn initState resolvedTargets
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
@@ -1757,32 +1757,7 @@ cfgFromAddrs ainfo mem addrSymMap =
   cfgFromAddrsAndState (emptyDiscoveryState mem addrSymMap ainfo)
 
 ------------------------------------------------------------------------
--- Resolve functions with logging
-
-resolveFuns :: DiscoveryOptions
-               -- ^ Options controlling discovery
-            -> DiscoveryState arch
-            -> IO (DiscoveryState arch)
-resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
-  case Map.minViewWithKey (info^.unexploredFunctions) of
-    Nothing -> pure info
-    Just ((addr, rsn), _) -> do
-      let symMap = symbolNames info
-      when (logAtAnalyzeFunction disOpts) $ do
-        hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap ++ ppFunReason rsn
-        hFlush stderr
-      if Map.member addr (info^.funInfo) then
-        resolveFuns disOpts info
-       else do
-        let analyzeBlock baddr = ioToST $ do
-              when (logAtAnalyzeBlock disOpts) $ do
-                hPutStrLn stderr $ "  Analyzing block: " ++ show baddr
-                hFlush stderr
-        (info', _) <- stToIO $ runFunctionAnalysis analyzeBlock addr rsn info []
-        resolveFuns disOpts info'
-
-------------------------------------------------------------------------
--- Top-level discovery
+-- DiscoveryOptions
 
 -- | Options controlling 'completeDiscoveryState'.
 data DiscoveryOptions
@@ -1817,53 +1792,65 @@ defaultDiscoveryOptions =
                    , logAtAnalyzeBlock      = False
                    }
 
-ppSymbol :: MemWidth w => MemSegmentOff w -> AddrSymMap w -> String
-ppSymbol addr sym_map =
-  case Map.lookup addr sym_map of
-    Just fnName -> show addr ++ " (" ++ BSC.unpack fnName ++ ")"
-    Nothing  -> show addr
+------------------------------------------------------------------------
+-- Resolve functions with logging
 
--- | Event for logging function
 data DiscoveryEvent w
-   = AnalyzeFunction !(MemSegmentOff w)
-   | AnalyzeBlock !(MemSegmentOff w)
+   = ReportAnalyzeFunction !(MemSegmentOff w) !(FunctionExploreReason w)
+   | ReportAnalyzeBlock !(MemSegmentOff w)
 
-{-# DEPRECATED discoveryLogFn "02/17/2018 Stop using this" #-}
 
--- | Print out discovery event using options and address to symbol map.
-discoveryLogFn :: MemWidth w
-               => DiscoveryOptions
-               -> AddrSymMap w
-               -> DiscoveryEvent w
-               -> ST RealWorld ()
-discoveryLogFn disOpt symMap (AnalyzeFunction addr) = ioToST $ do
-  when (logAtAnalyzeFunction disOpt) $ do
-    hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol addr symMap
-    hFlush stderr
-discoveryLogFn disOpt _ (AnalyzeBlock addr) = ioToST $ do
-  when (logAtAnalyzeBlock disOpt) $ do
-    hPutStrLn stderr $ "  Analyzing block: " ++ show addr
-    hFlush stderr
+ppSymbol :: MemWidth w => Maybe BSC.ByteString -> MemSegmentOff w -> String
+ppSymbol (Just fnName) addr = show addr ++ " (" ++ BSC.unpack fnName ++ ")"
+ppSymbol Nothing addr = show addr
 
-ppFunReason :: MemWidth w => FunctionExploreReason w -> String
-ppFunReason rsn =
-  case rsn of
-    InitAddr -> ""
-    UserRequest -> ""
-    PossibleWriteEntry a -> " (written at " ++ show a ++ ")"
-    CallTarget a -> " (called at " ++ show a ++ ")"
-    CodePointerInMem a -> " (in initial memory at " ++ show a ++ ")"
+logDiscoveryEvent :: MemWidth w
+                  => AddrSymMap w
+                  -> DiscoveryEvent w
+                  -> IO ()
+logDiscoveryEvent symMap p =
+  case p of
+    ReportAnalyzeFunction addr rsn -> do
+      hPutStrLn stderr $ "Analyzing function: " ++ ppSymbol (Map.lookup addr symMap) addr ++ ppFunReason rsn
+      hFlush stderr
+    ReportAnalyzeBlock baddr -> do
+      hPutStrLn stderr $ "  Analyzing block: " ++ show baddr
+      hFlush stderr
+
+resolveFuns :: DiscoveryOptions
+               -- ^ Options controlling discovery
+            -> DiscoveryState arch
+            -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
+  case Map.minViewWithKey (info^.unexploredFunctions) of
+    Nothing -> pure info
+    Just ((addr, rsn), _) -> do
+      when (logAtAnalyzeFunction disOpts) $ do
+        incCompLog (ReportAnalyzeFunction addr rsn)
+      if Map.member addr (info^.funInfo) then
+        resolveFuns disOpts info
+       else do
+        let act = runFunctionAnalysis addr rsn info []
+        (info',_) <-
+          if logAtAnalyzeBlock disOpts then
+            liftIncComp ReportAnalyzeBlock  act
+           else
+            pure $ incCompResult act
+        resolveFuns disOpts info'
+
+------------------------------------------------------------------------
+-- Top-level discovery
 
 -- | Explore until we have found all functions we can.
 --
--- This function is intended to make it easy to explore functions, and
--- can be controlled via 'DiscoveryOptions'.
-completeDiscoveryState :: forall arch
-                       .  DiscoveryState arch
-                       -> DiscoveryOptions
-                          -- ^ Options controlling discovery
-                       -> IO (DiscoveryState arch)
-completeDiscoveryState initState disOpt = do
+-- This function is a version of completeDiscoveryState that uses the
+-- new incremental computation monad rather than IO.
+incCompleteDiscovery :: forall arch r
+                     .  DiscoveryState arch
+                     -> DiscoveryOptions
+                        -- ^ Options controlling discovery
+                     -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+incCompleteDiscovery initState disOpt = do
  let ainfo = archInfo initState
  let mem = memory initState
  let symMap = symbolNames initState
@@ -1878,7 +1865,23 @@ completeDiscoveryState initState disOpt = do
   -- Discovery functions from memory
   if exploreCodeAddrInMem disOpt then do
     -- Execute hack of just searching for pointers in memory.
-    let mem_contents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
-    resolveFuns disOpt $ postPhase1Discovery & exploreMemPointers mem_contents
+    let memContents = withArchConstraints ainfo $ memAsAddrPairs mem LittleEndian
+    resolveFuns disOpt $ postPhase1Discovery & exploreMemPointers memContents
    else
     return postPhase1Discovery
+
+-- | Explore until we have found all functions we can.
+--
+-- This function is intended to make it easy to explore functions, and
+-- can be controlled via 'DiscoveryOptions'.
+completeDiscoveryState :: forall arch
+                       .  DiscoveryState arch
+                       -> DiscoveryOptions
+                          -- ^ Options controlling discovery
+                       -> IO (DiscoveryState arch)
+completeDiscoveryState initState disOpt = do
+  let ainfo = archInfo initState
+  let symMap = symbolNames initState
+  withArchConstraints ainfo $
+    processIncCompLogs (logDiscoveryEvent symMap) $ runIncCompM $
+      incCompleteDiscovery initState disOpt
