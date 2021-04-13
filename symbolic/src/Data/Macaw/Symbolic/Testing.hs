@@ -34,7 +34,6 @@ module Data.Macaw.Symbolic.Testing (
 
 import qualified Control.Exception as X
 import qualified Control.Lens as L
-import qualified Control.Monad.ST as ST
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
@@ -86,9 +85,6 @@ data TestingException = ELFResolutionError String
   deriving (Show)
 
 instance X.Exception TestingException
-
-nullDiscoveryLogger :: (Monad m) => a -> m ()
-nullDiscoveryLogger _ = return ()
 
 posFn :: (MM.MemWidth w) => MM.MemSegmentOff w -> WPL.Position
 posFn = WPL.OtherPos . Text.pack . show
@@ -142,7 +138,7 @@ runDiscovery ehi toEntryPoints archInfo = do
     --
     -- NOTE: If we extend this to support function calls, we will probably want
     -- to just turn this into a fold/use the main discovery entry point.
-    (_ds1, dfi) <- ST.stToIO (MD.analyzeFunction nullDiscoveryLogger entryPoint MD.UserRequest ds0)
+    let (_ds1, dfi) = MD.analyzeFunction entryPoint MD.UserRequest ds0
     return dfi
   return (mem, fns)
 

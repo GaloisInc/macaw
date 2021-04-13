@@ -1,4 +1,4 @@
-{- |
+{-|
 This module discovers the Functions and their internal Block CFG in
 target binaries.
 -}
@@ -161,10 +161,6 @@ cameFromUnsoundReason found_map rsn = do
     InitAddr -> False
     CodePointerInMem{} -> True
 -}
-
-------------------------------------------------------------------------
---
-
 
 ------------------------------------------------------------------------
 -- Eliminate dead code in blocks
@@ -1564,26 +1560,6 @@ transfer addr = do
 ------------------------------------------------------------------------
 -- Main loop
 
-
-
--- | Loop that repeatedly explore blocks until we have explored blocks
--- on the frontier.
-analyzeBlocks :: ArchSegmentOff arch
-                    -- ^ The address to explore
-               -> FunState arch s ids
-               -> STL.ST s (IncComp (ArchSegmentOff arch) (DiscoveryState arch, Some (DiscoveryFunInfo arch)))
-analyzeBlocks faddr fs =
-  case Set.minView (fs^.frontier) of
-    Nothing -> do
-      let finfo = mkFunInfo fs
-      let s' = (fs^.curFunCtx)
-             & funInfo             %~ Map.insert faddr (Some finfo)
-             & unexploredFunctions %~ Map.delete faddr
-      pure $ IncCompDone (s', Some finfo)
-    Just (baddr, next_roots) ->
-      IncCompLog baddr <$> do
-        analyzeBlocks faddr =<< execStateT (unFunM (transfer baddr)) (fs & frontier .~ next_roots)
-
 mkFunState :: NonceGenerator (STS.ST s) ids
            -> DiscoveryState arch
            -> FunctionExploreReason (ArchAddrWidth arch)
@@ -1621,7 +1597,27 @@ mkFunInfo fs =
                        , discoveredClassifyFailureResolutions = classifyFailureResolutions fs
                        }
 
-runFunctionAnalysis :: ArchSegmentOff arch
+-- | Loop that repeatedly explore blocks until we have explored blocks
+-- on the frontier.
+
+analyzeBlocks :: ArchSegmentOff arch
+                    -- ^ The address to explore
+               -> FunState arch s ids
+               -> STL.ST s (IncComp (ArchSegmentOff arch) (DiscoveryState arch, Some (DiscoveryFunInfo arch)))
+analyzeBlocks faddr fs =
+  case Set.minView (fs^.frontier) of
+    Nothing -> do
+      let finfo = mkFunInfo fs
+      let s' = (fs^.curFunCtx)
+             & funInfo             %~ Map.insert faddr (Some finfo)
+             & unexploredFunctions %~ Map.delete faddr
+      pure $ IncCompDone (s', Some finfo)
+    Just (baddr, next_roots) ->
+      IncCompLog baddr <$> do
+        analyzeBlocks faddr =<< execStateT (unFunM (transfer baddr)) (fs & frontier .~ next_roots)
+
+-- | Run tfunction discovery to explore blocks.
+discoverFunction :: ArchSegmentOff arch
                     -- ^ The address to explore
                     -> FunctionExploreReason (ArchAddrWidth arch)
                     -- ^ Reason to provide for why we are analyzing this function
@@ -1635,7 +1631,7 @@ runFunctionAnalysis :: ArchSegmentOff arch
                     --
                     -- The pairs are: (address of the block jumped from, jump targets)
                     -> IncComp (ArchSegmentOff arch) (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-runFunctionAnalysis addr rsn s extraIntraTargets = STL.runST $ do
+discoverFunction addr rsn s extraIntraTargets = STL.runST $ do
   Some gen <- STL.strictToLazyST newSTNonceGenerator
   let fs0 = mkFunState gen s rsn addr extraIntraTargets
   analyzeBlocks addr fs0
@@ -1645,9 +1641,7 @@ runFunctionAnalysis addr rsn s extraIntraTargets = STL.runST $ do
 --
 -- This returns the updated state and the discovered control flow
 -- graph for this function.
-analyzeFunction :: (ArchSegmentOff arch -> STL.ST s ())
-                 -- ^ Logging function to call when analyzing a new block.
-                -> ArchSegmentOff arch
+analyzeFunction :: ArchSegmentOff arch
                    -- ^ The address to explore
                 -> FunctionExploreReason (ArchAddrWidth arch)
                 -- ^ Reason to provide for why we are analyzing this function
@@ -1656,11 +1650,11 @@ analyzeFunction :: (ArchSegmentOff arch -> STL.ST s ())
                 -- given address identified a code location.
                 -> DiscoveryState arch
                 -- ^ The current binary information.
-                -> STL.ST s (DiscoveryState arch, Some (DiscoveryFunInfo arch))
-analyzeFunction logFn addr rsn s =
+                -> (DiscoveryState arch, Some (DiscoveryFunInfo arch))
+analyzeFunction addr rsn s =
   case Map.lookup addr (s^.funInfo) of
-    Just finfo -> pure (s, finfo)
-    Nothing -> processIncCompLogs logFn (runFunctionAnalysis addr rsn s [])
+    Just finfo -> (s, finfo)
+    Nothing -> incCompResult (discoverFunction addr rsn s [])
 
 -- | Analyze addresses that we have marked as functions, but not yet analyzed to
 -- identify basic blocks, and discover new function candidates until we have
@@ -1673,7 +1667,7 @@ analyzeDiscoveredFunctions info =
   case Map.lookupMin (info^.unexploredFunctions) of
     Nothing -> info
     Just (addr, rsn) ->
-      analyzeDiscoveredFunctions $! fst (STL.runST (analyzeFunction (\_ -> pure ()) addr rsn info))
+      analyzeDiscoveredFunctions $! fst (analyzeFunction addr rsn info)
 
 -- | Extend the analysis of a previously analyzed function with new
 -- information about the transfers for a block in that function.  The
@@ -1691,7 +1685,7 @@ addDiscoveredFunctionBlockTargets :: DiscoveryState arch
 addDiscoveredFunctionBlockTargets initState origFunInfo resolvedTargets =
   let rsn = discoveredFunReason origFunInfo
       funAddr = discoveredFunAddr origFunInfo
-  in fst $ incCompResult $ runFunctionAnalysis funAddr rsn initState resolvedTargets
+  in fst $ incCompResult $ discoverFunction funAddr rsn initState resolvedTargets
 
 -- | This returns true if the address is writable and value is executable.
 isDataCodePointer :: MemSegmentOff w -> MemSegmentOff w -> Bool
@@ -1830,7 +1824,7 @@ resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
       if Map.member addr (info^.funInfo) then
         resolveFuns disOpts info
        else do
-        let act = runFunctionAnalysis addr rsn info []
+        let act = discoverFunction addr rsn info []
         (info',_) <-
           if logAtAnalyzeBlock disOpts then
             liftIncComp ReportAnalyzeBlock  act
