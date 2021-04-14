@@ -614,6 +614,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ block_end_va
     let labelMapWithReturns = Map.union (lookupRetEdges blockAddr) labelMap
     (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
+      assignBlockEnd archFns block_end_var (termStmtToBlockEnd $ M.pblockTermStmt block)
       case S.member blockAddr termAddrs of
         True -> do
           -- NOTE: If the entry block is also a terminator, we'll just
@@ -625,8 +626,6 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ block_end_va
           -- preserves the existing register state, which is important when
           -- generating the Crucible return.
           let retTerm = termStmtToReturn (M.pblockTermStmt block)
-          let blockEnd = termStmtToBlockEnd (M.pblockTermStmt block)
-          assignBlockEnd archFns block_end_var blockEnd
           addMacawParsedTermStmt labelMapWithReturns [] blockAddr retTerm
         False -> addMacawParsedTermStmt labelMapWithReturns [] blockAddr (M.pblockTermStmt block)
     return (reverse (mainCrucBlock : auxCrucBlocks))
