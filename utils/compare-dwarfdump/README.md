@@ -9,6 +9,6 @@ Run `compare-dwarfdump` with the names of any executable files or
 directories to check.  Directories are checked recursively
 automatically.  Symbolic links in directories are not followed.
 
-If any inconsistencies are found, `compare-dwarfdump` will output
-return the output of LLVM's dwarfdump and Macaw's in `lldd` and `mcdd`
-in the current directory..
+If any inconsistencies are found, `compare-dwarfdump` will return
+the output of LLVM's dwarfdump and Macaw's in `lldd` and `mcdd`
+in the current directory.

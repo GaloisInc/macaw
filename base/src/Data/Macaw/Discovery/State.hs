@@ -1,7 +1,4 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2019
-Maintainer : jhendrix@galois.com
-
 This defines the data structures for storing information learned from
 code discovery.  The 'DiscoveryState' is the main data structure
 representing this information.
@@ -49,6 +46,7 @@ module Data.Macaw.Discovery.State
   , isReadOnlyBoundedMemArray
     -- * Reasons for exploring
   , FunctionExploreReason(..)
+  , ppFunReason
   , BlockExploreReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
@@ -97,6 +95,16 @@ data FunctionExploreReason w
     -- | The user requested that we analyze this address as a function.
   | UserRequest
   deriving (Eq, Show)
+
+-- | Print exploration reason.
+ppFunReason :: FunctionExploreReason w -> String
+ppFunReason rsn =
+  case rsn of
+    InitAddr -> ""
+    UserRequest -> ""
+    PossibleWriteEntry a -> " (written at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
+    CallTarget a -> " (called at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
+    CodePointerInMem a -> " (in initial memory at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
 
 ------------------------------------------------------------------------
 -- BlockExploreReason
