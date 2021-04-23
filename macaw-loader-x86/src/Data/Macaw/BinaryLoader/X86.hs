@@ -16,6 +16,7 @@ import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
+import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
@@ -50,19 +51,19 @@ x86EntryPoints :: (X.MonadThrow m)
                => BL.LoadedBinary MX.X86_64 (E.ElfHeaderInfo 64)
                -> m (NEL.NonEmpty (MM.MemSegmentOff 64))
 x86EntryPoints loadedBinary = do
-  case MM.asSegmentOff mem addr of
+  case BLE.resolveAbsoluteAddress mem addrWord of
     -- n.b. no guarantee of uniqueness, and in particular, entryPoint is probably in symbols somewhere
-    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (MM.asSegmentOff mem) symbols)
-    Nothing -> X.throwM (InvalidEntryPoint addr)
+    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbolWords)
+    Nothing -> X.throwM (InvalidEntryPoint addrWord)
   where
     mem = BL.memoryImage loadedBinary
-    addr = MM.absoluteAddr (MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
+    addrWord = MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    symbols = [ MM.absoluteAddr (MM.memWord (fromIntegral (E.steValue entry)))
-              | Just (Right st) <- [E.decodeHeaderSymtab elfData]
-              , entry <- F.toList (E.symtabEntries st)
-              , E.steType entry == E.STT_FUNC
-              ]
+    symbolWords = [ MM.memWord (fromIntegral (E.steValue entry))
+                  | Just (Right st) <- [E.decodeHeaderSymtab elfData]
+                  , entry <- F.toList (E.symtabEntries st)
+                  , E.steType entry == E.STT_FUNC
+                  ]
 
 loadX86Binary :: (X.MonadThrow m)
               => LC.LoadOptions
@@ -91,7 +92,7 @@ indexSymbols = F.foldl' doIndex Map.empty
       Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
 
 data X86LoadException = X86ElfLoadError String
-                      | InvalidEntryPoint (MM.MemAddr 64)
+                      | InvalidEntryPoint (MM.MemWord 64)
                       | MissingSymbolFor (MM.MemAddr 64)
 
 deriving instance Show X86LoadException
