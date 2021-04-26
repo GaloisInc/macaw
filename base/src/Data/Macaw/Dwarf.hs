@@ -681,9 +681,11 @@ data TypeApp
      -- ^ A 1-byte signed character.
 
    | ArrayType !TypeRef ![Subrange TypeRef]
-   | PointerType !Word64 !(Maybe TypeRef)
-     -- ^ A pointer with the given type (or 'Nothing') to indicate
-     -- this is a void pointer.  The word is the byte count.
+   | PointerType !(Maybe Word64) !(Maybe TypeRef)
+     -- ^ @PointerType mw mtp@ describes a pointer where @mtp@ is
+     -- the type that the pointer points to (or 'Nothing') to indicate
+     -- this is a void pointer.  @mw@ is the number of bytes the pointer
+     -- occupies or @Nothing@ to indicate that is omitted.
    | StructType !StructDecl
      -- ^ Denotes a C struct
    | UnionType !UnionDecl
@@ -724,7 +726,7 @@ parseBaseType _ = do
 parsePointerType :: TypeParser
 parsePointerType _ = do
   mtp <- getMaybeAttribute DW_AT_type attributeAsTypeRef
-  w   <- getSingleAttribute DW_AT_byte_size attributeAsUInt
+  w   <- getMaybeAttribute DW_AT_byte_size attributeAsUInt
   pure $! PointerType w mtp
 
 parseStructureType :: TypeParser
