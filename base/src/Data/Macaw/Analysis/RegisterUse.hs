@@ -1208,7 +1208,7 @@ data RegisterUseContext arch
     , callDemandFn    :: !(forall ids
                           .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either (RegisterUseError arch) (CallRegs arch ids))
+                          -> Either String (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1730,7 +1730,7 @@ mkBlockUsageSummary ctx cns sis blk = do
         ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
-            Left e -> throwError e
+            Left e -> throwError (UnresolvedFunctionTypeError insnAddr e)
         -- Demand argument registers
         traverse_ (\(Some v) -> demandValue v) (callArgValues ftr)
         -- Store call register type information
