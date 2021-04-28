@@ -32,10 +32,8 @@ incCompResult (IncCompLog _ r) = incCompResult r
 incCompResult (IncCompDone r) = r
 
 joinIncComp :: (l -> k) -> (a -> IncComp k b) -> IncComp l a -> IncComp k b
-joinIncComp f g m0 = do
-  case m0 of
-    IncCompLog l m -> IncCompLog (f l) (joinIncComp f g m)
-    IncCompDone r -> g r
+joinIncComp f g (IncCompLog l m) = IncCompLog (f l) (joinIncComp f g m)
+joinIncComp _ g (IncCompDone r) = g r
 
 processIncCompLogs :: Monad m => (l -> m ()) -> IncComp l r -> m r
 processIncCompLogs _ (IncCompDone r) = pure r
