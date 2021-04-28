@@ -22,6 +22,7 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElfAllSymbols
   , memoryForElfSections
   , memoryForElfSegments
+  , memoryForElfSegments'
   , MemLoadWarning(..)
   , resolveElfContents
   , elfAddrWidth
@@ -1177,17 +1178,17 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
           mlsIndexMap %= Map.insert elfIdx addr
         _ -> error "Unexpected shdr interval"
 
-
 -- | Load an elf file into memory by parsing segments.
-memoryForElfSegments
+memoryForElfSegments'
   :: forall w
-  .  LoadOptions
+  .  RegionIndex
+  -> Integer
   -> Elf.ElfHeaderInfo w
   -> Either String (Memory w -- Memory
                    , SectionIndexMap w -- Section index map
                    , [MemLoadWarning] -- Warnings from load
                    )
-memoryForElfSegments opt elf = do
+memoryForElfSegments' regIndex addrOff elf = do
   let hdr = Elf.header elf
   let cl = Elf.headerClass hdr
   let w =  elfAddrWidth cl
@@ -1205,11 +1206,23 @@ memoryForElfSegments opt elf = do
             , let shdr = Elf.shdrByIndex elf (idx-1)
             , let end = Elf.incOffset (Elf.shdrOff shdr) (Elf.shdrFileSize shdr)
             ]
-      let regIndex = adjustedLoadRegionIndex (Elf.headerType hdr) opt
-      let addrOff = loadRegionBaseOffset opt
       forM_ phdrs $ \p -> do
         when (Elf.phdrSegmentType p == Elf.PT_LOAD) $ do
           insertElfSegment regIndex addrOff intervals contents relocMap p
+
+-- | Load an elf file into memory by parsing segments.
+memoryForElfSegments
+  :: forall w
+  .  LoadOptions
+  -> Elf.ElfHeaderInfo w
+  -> Either String (Memory w -- Memory
+                   , SectionIndexMap w -- Section index map
+                   , [MemLoadWarning] -- Warnings from load
+                   )
+memoryForElfSegments opt elf = do
+  let regIndex = adjustedLoadRegionIndex (Elf.headerType (Elf.header elf)) opt
+  let addrOff = loadRegionBaseOffset opt
+  memoryForElfSegments' regIndex addrOff elf
 
 ------------------------------------------------------------------------
 -- Elf section loading
@@ -1386,6 +1399,7 @@ memoryForElfSections' hdr contents shdrMap symtab =
 ------------------------------------------------------------------------
 -- Index for elf
 
+-- | Return default region index to use when loading.
 adjustedLoadRegionIndex :: Elf.ElfType -> LoadOptions -> RegionIndex
 adjustedLoadRegionIndex tp loadOpts =
   case loadOffset loadOpts of
@@ -1647,11 +1661,11 @@ resolveElfFuncSymbols mem shdrs secMap p elf =
 -- | Return the segment offset of the elf file entry point or fail if undefined.
 getElfEntry ::  LoadOptions
             -> Memory w
+            -> RegionIndex
             -> Elf.ElfHeader w
             -> ([String], Maybe (MemSegmentOff w))
-getElfEntry loadOpts mem hdr =  addrWidthClass (memAddrWidth mem) $ do
+getElfEntry loadOpts mem regIdx hdr =  addrWidthClass (memAddrWidth mem) $ do
   Elf.elfClassInstances (Elf.headerClass hdr) $ do
-    let regIdx = adjustedLoadRegionIndex (Elf.headerType hdr) loadOpts
     let adjAddr =
           case loadOffset loadOpts of
             Nothing -> toInteger (Elf.headerEntry hdr)
@@ -1682,18 +1696,19 @@ resolveElfContents :: LoadOptions
                              )
 resolveElfContents loadOpts elf = do
   let hdr = Elf.header elf
+  let regIdx = adjustedLoadRegionIndex (Elf.headerType hdr) loadOpts
   case Elf.headerType hdr of
     Elf.ET_REL -> do
       (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
       pure (fmap show warnings ++ fmap show symErrs, mem, Nothing, funcSymbols)
     Elf.ET_EXEC -> do
       (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
-      let (entryWarn, mentry) = getElfEntry loadOpts mem hdr
+      let (entryWarn, mentry) = getElfEntry loadOpts mem regIdx hdr
       Right (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
     Elf.ET_DYN -> do
       -- This is a shared library or position-independent executable.
       (mem, funcSymbols, warnings, symErrs) <- memoryForElf loadOpts elf
-      let (entryWarn, mentry) = getElfEntry loadOpts mem hdr
+      let (entryWarn, mentry) = getElfEntry loadOpts mem regIdx hdr
       pure (fmap show warnings ++ fmap show symErrs ++ entryWarn, mem, mentry, funcSymbols)
     Elf.ET_CORE ->
       Left "No support for loading core files (Macaw)."

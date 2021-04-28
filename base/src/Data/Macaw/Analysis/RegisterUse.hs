@@ -15,6 +15,7 @@ task needed before deleting unused code.
 module Data.Macaw.Analysis.RegisterUse
   ( -- * Exports for function recovery
     registerUse
+  , BlockInvariantMap
   , RegisterUseError(..)
     -- ** Input information
   , RegisterUseContext(..)
@@ -1207,7 +1208,7 @@ data RegisterUseContext arch
     , callDemandFn    :: !(forall ids
                           .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either (RegisterUseError arch) (CallRegs arch ids))
+                          -> Either String (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1729,7 +1730,7 @@ mkBlockUsageSummary ctx cns sis blk = do
         ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
-            Left e -> throwError e
+            Left e -> throwError (UnresolvedFunctionTypeError insnAddr e)
         -- Demand argument registers
         traverse_ (\(Some v) -> demandValue v) (callArgValues ftr)
         -- Store call register type information
@@ -1931,17 +1932,20 @@ mkBlockInvariants predMap valueMap addr summary deps =
          , biCallFunType = blockCallFunType summary
          }
 
--- | This analyzes a function to determine which registers must b available to
+-- | Map from block starting addresses to the invariants inferred for that block.
+type BlockInvariantMap arch ids
+   = Map (ArchSegmentOff arch) (BlockInvariants arch ids)
+
+-- | This analyzes a function to determine which registers must be available to
 -- the highest index above sp0 that is read or written.
 registerUse :: forall arch ids
             .  ArchConstraints arch
             => RegisterUseContext arch
             -> DiscoveryFunInfo arch ids
-            -> FunPredMap (ArchAddrWidth arch)
-               -- ^ Predecessors for each block in function
             -> Except (RegisterUseError arch)
-                      (Map (ArchSegmentOff arch) (BlockInvariants arch ids))
-registerUse rctx fun predMap = do
+                      (BlockInvariantMap arch ids)
+registerUse rctx fun = do
+  let predMap = funBlockPreds fun
   let blockMap = fun^.parsedBlocks
   -- Infer start constraints
   cnsMap <- inferStartConstraints rctx blockMap (discoveredFunAddr fun)
