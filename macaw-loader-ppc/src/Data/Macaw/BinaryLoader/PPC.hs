@@ -138,6 +138,7 @@ loadPPCBinary binRep lopts e = do
                                               }
                                  , BL.loadDiagnostics = warnings
                                  , BL.binaryRepr = binRep
+                                 , BL.originalBinary = e
                                  }
 
 indexSymbols :: (Foldable t)

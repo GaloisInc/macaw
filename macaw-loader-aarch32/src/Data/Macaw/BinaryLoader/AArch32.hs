@@ -83,6 +83,7 @@ loadAArch32Binary lopts e =
                                                }
                               , MBL.loadDiagnostics = warnings
                               , MBL.binaryRepr = MBL.Elf32Repr
+                              , MBL.originalBinary = e
                               }
 
 indexSymbols :: [EL.MemSymbol 32] -> Map.Map (MM.MemAddr 32) BS.ByteString

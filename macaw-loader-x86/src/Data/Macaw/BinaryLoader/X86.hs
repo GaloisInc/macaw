@@ -83,6 +83,7 @@ loadX86Binary lopts e = do
                                           }
                              , BL.loadDiagnostics = warnings
                              , BL.binaryRepr = BL.Elf64Repr
+                             , BL.originalBinary = e
                              }
 
 indexSymbols :: [EL.MemSymbol 64] -> Map.Map (MM.MemAddr 64) BS.ByteString
