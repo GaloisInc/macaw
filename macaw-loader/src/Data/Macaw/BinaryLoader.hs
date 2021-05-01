@@ -39,6 +39,7 @@ data LoadedBinary arch binFmt =
                , binaryFormatData :: BinaryFormatData arch binFmt
                , loadDiagnostics :: [Diagnostic arch binFmt]
                , binaryRepr :: BinaryRepr binFmt
+               , originalBinary :: binFmt
                }
 
 -- | A class for architecture and binary container independent binary loading
