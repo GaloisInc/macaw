@@ -363,7 +363,7 @@ symbolWarning w = modify $ \l -> w:l
 data SymbolTable w
    = NoSymbolTable
    | StaticSymbolTable !(V.Vector (Elf.SymtabEntry BS.ByteString (Elf.ElfWordType w)))
-   | DynamicSymbolTable !(Elf.DynamicSection w)
+   | DynamicSymbolTable !(Elf.DynamicSection w) !(Elf.VirtAddrMap w) !Elf.VersionReqMap
 
 -- | Take a symbol entry and symbol version and return the identifier.
 resolveSymbolId :: Elf.SymtabEntry BS.ByteString wtp
@@ -419,10 +419,10 @@ resolveSymbol (StaticSymbolTable entries) symIdx = do
           pure (sym { Elf.steName = BSC.take i nm }, ver)
         Nothing -> do
           pure (sym, UnversionedSymbol)
-resolveSymbol (DynamicSymbolTable ds) symIdx = do
+resolveSymbol (DynamicSymbolTable ds virtMap verMap) symIdx = do
   when (symIdx == 0) $
     throwError RelocationZeroSymbol
-  case Elf.dynSymEntry ds symIdx of
+  case Elf.dynSymEntry ds virtMap verMap symIdx of
     Left e -> throwError (RelocationDynamicError e)
     Right (sym, mverId) -> do
       let ver = case mverId of
@@ -1073,19 +1073,19 @@ dynamicRelocationMap hdr phdrs contents = do
             pure Map.empty
           Just virtMap -> do
             let dynContents = slice (Elf.phdrFileRange dynPhdr) contents
-            -- Find th dynamic section from the contents.
+            -- Find the dynamic section from the contents.
             dynSection <- runDynamic $
-              Elf.dynamicEntries (Elf.headerData hdr) (Elf.headerClass hdr) virtMap dynContents
+              Elf.dynamicEntries (Elf.headerData hdr) (Elf.headerClass hdr) dynContents
             let dta = Elf.headerData hdr
             SomeRelocationResolver (resolver :: RelocationResolver tp) <- getRelocationResolver hdr
-            let symtab = DynamicSymbolTable dynSection
+            verMap <- runDynamic $ Elf.dynVersionReqMap dynSection virtMap
+            let symtab = DynamicSymbolTable dynSection virtMap verMap
             -- Parse relocations
-
-            mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection
+            mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection virtMap
             let rc0 = if isJust mRelaBuffer then 1 else 0
             relocs0 <- addElfRelaEntries Map.empty dta resolver symtab mRelaBuffer
 
-            mRelBuffer  <- runDynamic $ Elf.dynRelBuffer  dynSection
+            mRelBuffer  <- runDynamic $ Elf.dynRelBuffer  dynSection virtMap
             let rc1 = if isJust mRelBuffer then 1 else 0
             relocs1 <-addElfRelEntries  relocs0  dta resolver symtab mRelBuffer
 
@@ -1111,7 +1111,7 @@ dynamicRelocationMap hdr phdrs contents = do
             when (rc0 + rc1 + rc2 + rc3 > (1 :: Int)) $ do
               addWarning $ MultipleRelocationTables
 
-            case Elf.dynPLTRel dynSection of
+            case Elf.dynPLTRel dynSection virtMap of
               Left e -> do
                 addWarning $ RelocationParseFailure (show e)
                 pure $! relocs1
