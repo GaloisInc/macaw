@@ -6,6 +6,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV (
   -- * Macaw configurations
@@ -23,6 +24,7 @@ module Data.Macaw.RISCV (
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MD
 import qualified Data.Macaw.Architecture.Info as MI
+import Data.Parameterized ( type(<=) )
 import qualified GRIFT.Types as G
 
 import Data.Macaw.RISCV.Arch
@@ -37,7 +39,10 @@ riscvDemandContext = MD.DemandContext
   , MD.archFnHasSideEffects = riscvPrimFnHasSideEffects
   }
 
-riscv_info :: RISCVConstraints rv => G.RVRepr rv -> MI.ArchitectureInfo (RISCV rv)
+riscv_info ::
+  RISCVConstraints rv =>
+  (w ~ G.RVWidth rv, 32 <= w) =>
+  G.RVRepr rv -> MI.ArchitectureInfo (RISCV rv)
 riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   { MI.withArchConstraints = \x -> x
   , MI.archAddrWidth = riscvAddrWidth rvRepr

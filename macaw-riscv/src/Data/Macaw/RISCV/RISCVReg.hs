@@ -61,7 +61,6 @@ import           Data.Parameterized.TH.GADT ( structuralTypeEquality
                                             )
 import           Data.Functor.Const
 
-import qualified Data.BitVector.Sized as BV
 import qualified Data.Parameterized.Map as MapF
 import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics.Utils as G
@@ -72,9 +71,9 @@ data RISCVReg rv tp where
   PC  :: RISCVReg rv (MT.BVType (G.RVWidth rv))
   -- | General-purpose registers. GPR[0] is not really a register, so
   -- it should never be directly read from or written to.
-  GPR :: BV.BitVector 5 -> RISCVReg rv (MT.BVType (G.RVWidth rv))
+  GPR :: G.SizedBV 5 -> RISCVReg rv (MT.BVType (G.RVWidth rv))
   -- | Floating-point registers.
-  FPR :: BV.BitVector 5 -> RISCVReg rv (MT.BVType (G.RVFloatWidth rv))
+  FPR :: G.SizedBV 5 -> RISCVReg rv (MT.BVType (G.RVFloatWidth rv))
   -- | Control/status registers.
   CSR :: G.CSR -> RISCVReg rv (MT.BVType (G.RVWidth rv))
   -- | Current privilege level.

@@ -24,6 +24,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.List as L
+import qualified GRIFT.BitVector.BVApp as G
 import qualified GRIFT.InstructionSet as G
 import qualified GRIFT.InstructionSet.Known as G
 import qualified GRIFT.Decode as G
@@ -49,16 +50,13 @@ data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
                         | IllegalInstruction
   deriving Show
 
-readBytesLE :: [Word8] -> Some BV.BitVector
-readBytesLE [] = Some BV.bv0
+readBytesLE :: [Word8] -> Some G.SizedBV
+readBytesLE [] = Some (G.SizedBV (knownNat @0) (BV.zero (knownNat @0)))
 readBytesLE (byte:rstBytes) =
   case readBytesLE rstBytes of
-    Some rstBV ->
-      let byteBV = BV.bitVector (fromIntegral byte) :: BV.BitVector 8
-      in Some (rstBV BV.<:> byteBV)
-
-bvWidth :: BV.BitVector w -> NatRepr w
-bvWidth (BV.BitVector wRepr _) = wRepr
+    Some (G.SizedBV s rstBV) ->
+      let byteBV = G.mkBV' (fromIntegral byte) :: BV.BV 8
+      in Some (G.SizedBV (addNat s (knownNat @8)) (BV.concat s (knownNat @8) rstBV byteBV))
 
 -- | Read a single RISC-V instruction.
 readInstruction :: forall rv w . MM.MemWidth w
@@ -86,20 +84,21 @@ readInstruction rvRepr iset addr = do
                 -- decode 2 bytes. If that fails, decode 4 bytes.
                 G.RVRepr _ (G.ExtensionsRepr _ _ _ _ G.CYesRepr) -> do
                   cinstBV <- case readBytesLE (BS.unpack (BS.take 2 bs)) of
-                    Some cinstBV | NatCaseEQ <- testNatCases (bvWidth cinstBV) (knownNat @16) -> return cinstBV
+                    Some cinstBV@(G.SizedBV w _) | NatCaseEQ <- testNatCases w (knownNat @16) -> return cinstBV
                     _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
                   case G.decodeC rvRepr cinstBV of
-                    Just sinst -> return (BV.bvIntegerU cinstBV, sinst, 2)
+                    Just sinst -> return (G.asUnsignedSized cinstBV, sinst, 2)
                     Nothing -> do
                       instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
-                        Some instBV | NatCaseEQ <- testNatCases (bvWidth instBV) (knownNat @32) -> return instBV
+                        Some instBV
+                          | NatCaseEQ <- testNatCases (G.widthSized instBV) (knownNat @32) -> return instBV
                         _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
-                      return (BV.bvIntegerU instBV, G.decode iset instBV, 4)
+                      return (G.asUnsignedSized instBV, G.decode iset instBV, 4)
                 _ -> do
                   instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
-                    Some instBV | NatCaseEQ <- testNatCases (bvWidth instBV) (knownNat @32) -> return instBV
+                    Some instBV | NatCaseEQ <- testNatCases (G.widthSized instBV) (knownNat @32) -> return instBV
                     _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
-                  return (BV.bvIntegerU instBV, G.decode iset instBV, 4)
+                  return (G.asUnsignedSized instBV, G.decode iset instBV, 4)
               case inst of
                 (G.Inst G.Illegal _) -> E.throwError IllegalInstruction
                 _ -> return (instBV, Some inst, instBytes)
@@ -124,12 +123,12 @@ disLocApp locApp = case locApp of
     rid <- disInstExpr ridExpr
     case rid of
       MC.BVValue _w 0 -> return (MC.BVValue knownNat 0)
-      MC.BVValue _w ridVal -> getReg (GPR (BV.bitVector ridVal))
+      MC.BVValue _w ridVal -> getReg (GPR (G.sizedBVInteger ridVal))
       _ -> E.throwError (NonConstantGPR ridExpr)
   G.FPRApp _w ridExpr -> do
     rid <- disInstExpr ridExpr
     case rid of
-      MC.BVValue _w ridVal -> getReg (FPR (BV.bitVector ridVal))
+      MC.BVValue _w ridVal -> getReg (FPR (G.sizedBVInteger ridVal))
       _ -> E.throwError (NonConstantFPR ridExpr)
   G.MemApp bytes addrExpr -> do
     addr <- disInstExpr addrExpr
@@ -162,7 +161,7 @@ disBVApp bvApp = case bvApp of
   G.AbsApp _w _e -> error "TODO: Disassemble AbsApp"
   G.SignumApp _w _e -> error "TODO: Disassemble SignumApp"
   G.EqApp e1 e2 -> widthPos e1 $ binaryOpBool MC.Eq e1 e2
-  G.LtsApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
+  G.LtsApp _ e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
   G.LtuApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVUnsignedLt e1 e2
   -- In GRIFT, we use "ext" to truncate bitvectors, which is weird but
   -- true. So we have to check the widths fo the expressions involved
@@ -174,7 +173,7 @@ disBVApp bvApp = case bvApp of
       NatCaseGT LeqProof -> evalApp (MC.UExt eVal w)
       NatCaseEQ -> return eVal
       NatCaseLT LeqProof -> evalApp (MC.Trunc eVal w)
-  G.SExtApp w e -> widthPos e $ do
+  G.SExtApp _ w e -> widthPos e $ do
     eVal <- disInstExpr e
     case testNatCases w (G.exprWidth e) of
       NatCaseGT LeqProof -> evalApp (MC.SExt eVal w)
@@ -191,7 +190,7 @@ disBVApp bvApp = case bvApp of
       NatCaseLT LeqProof -> evalApp (MC.Trunc shiftedVal w)
       NatCaseEQ -> return shiftedVal
       _ -> E.throwError $ BadExprWidth e
-  G.ConcatApp w e1 e2 -> case (isZeroOrGT1 (G.exprWidth e1),
+  G.ConcatApp w1 w2 e1 e2 -> case (isZeroOrGT1 (G.exprWidth e1),
                                isZeroOrGT1 (G.exprWidth e2)) of
     (Right e1PosProof@LeqProof, Right e2PosProof@LeqProof) -> do
       e1Val <- disInstExpr e1
@@ -199,6 +198,7 @@ disBVApp bvApp = case bvApp of
       LeqProof <- return $ leqAdd2 (leqRefl e1) e2PosProof
       LeqProof <- return $ leqAdd2 e1PosProof (leqRefl e2)
       Refl <- return $ plusComm (knownNat @1) e2
+      let w = addNat w1 w2
       e1ExtVal <- evalApp (MC.UExt e1Val w)
       e2ExtVal <- evalApp (MC.UExt e2Val w)
       let shiftAmount = MC.BVValue w (intValue w - intValue (G.exprWidth e1))
@@ -234,18 +234,18 @@ disStateApp stateApp = case stateApp of
   G.AppExpr bvApp -> disBVApp bvApp
   G.FloatAppExpr _flApp -> error "TODO: Disassemble FloatAppExpr"
 
-instOperand :: G.OperandID fmt w -> G.Instruction rv fmt -> BV.BitVector w
+instOperand :: G.OperandID fmt w -> G.Instruction rv fmt -> G.SizedBV w
 instOperand (G.OperandID oix) (G.Inst _ (G.Operands _ operands)) = operands L.!! oix
 
 disInstExpr :: (1 <= w, G.KnownRV rv)
             => G.InstExpr fmt rv w
             -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids (MT.BVType w))
 disInstExpr instExpr = case instExpr of
-  G.InstLitBV (BV.BitVector w val) -> return (MC.BVValue w val)
+  G.InstLitBV w (BV.BV val) -> return (MC.BVValue w val)
   G.InstAbbrevApp abbrevApp -> disInstExpr (G.expandAbbrevApp abbrevApp)
   G.OperandExpr w oid -> do
     inst <- getDisInst
-    let BV.BitVector _ val = instOperand oid inst
+    let G.SizedBV _ (BV.BV val) = instOperand oid inst
     return (MC.BVValue w val)
   G.InstBytes w -> do
     instBytes <- getDisInstBytes
@@ -258,7 +258,10 @@ disInstExpr instExpr = case instExpr of
 data AssignStmt expr rv = forall w . AssignStmt !(G.LocApp (expr rv) rv w) !(expr rv w)
 
 -- | Convert a 'G.Stmt' into a list of assignment statements.
-collapseStmt :: G.KnownRV rv => G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
+collapseStmt ::
+  G.KnownRV rv =>
+  (w ~ G.RVWidth rv, 32 <= w) =>
+  G.Stmt (G.InstExpr fmt) rv -> [AssignStmt (G.InstExpr fmt) rv]
 collapseStmt stmt = case stmt of
   G.AssignStmt loc e -> [AssignStmt loc e]
   G.AbbrevStmt abbrevStmt -> mconcat (F.toList (collapseStmt <$> (G.expandAbbrevStmt abbrevStmt)))
@@ -281,13 +284,13 @@ disAssignStmt stmt = case stmt of
     case rid of
       MC.BVValue _ 0 -> return () -- it's ok to assign to x0; the value
                                   -- just gets thrown out
-      MC.BVValue _ ridVal -> setReg (GPR (BV.bitVector ridVal)) val
+      MC.BVValue _ ridVal -> setReg (GPR (G.sizedBVInteger ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
   AssignStmt (G.FPRApp _ ridExpr) valExpr -> do
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
-      MC.BVValue _ ridVal -> setReg (FPR (BV.bitVector ridVal)) val
+      MC.BVValue _ ridVal -> setReg (FPR (G.sizedBVInteger ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
   AssignStmt (G.MemApp bytes addrExpr) valExpr -> withLeqProof (leqMulPos (knownNat @8) bytes) $ do
     addr <- disInstExpr addrExpr
@@ -300,29 +303,35 @@ disAssignStmt stmt = case stmt of
     setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
-disStmt :: (RISCVConstraints rv, G.KnownRV rv) => G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
+disStmt ::
+  G.KnownRV rv =>
+  RISCVConstraints rv =>
+  (w ~ G.RVWidth rv, 32 <= w) =>
+  G.Stmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disStmt stmt = F.traverse_ disAssignStmt (collapseStmt stmt)
 
-disassembleBlock :: RISCVConstraints rv
-                 => G.RVRepr rv
-                 -- ^ The RISC-V configuration
-                 -> G.InstructionSet rv
-                 -- ^ The RISC-V instruction set for this particular
-                 -- RISC-V configuration
-                 -> Seq.Seq (MC.Stmt (RISCV rv) ids)
-                 -- ^ The statements disassembled thus far
-                 -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
-                 -- ^ The register state at this point of the block
-                 -> NonceGenerator (ST s) ids
-                 -- ^ The nonce generator used for block disassembly
-                 -> MC.ArchSegmentOff (RISCV rv)
-                 -- ^ The current program counter value
-                 -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
-                 -- ^ The current offset into the block
-                 -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
-                 -- ^ The maximum offset we should disassemble to
-                 -> ST s (MC.Block (RISCV rv) ids, MM.MemWord (MC.ArchAddrWidth (RISCV rv)))
-                 -- ^ Return the disassembled block and its size.
+disassembleBlock
+  :: RISCVConstraints rv
+  => (w ~ G.RVWidth rv, 32 <= w)
+  => G.RVRepr rv
+  -- ^ The RISC-V configuration
+  -> G.InstructionSet rv
+  -- ^ The RISC-V instruction set for this particular
+  -- RISC-V configuration
+  -> Seq.Seq (MC.Stmt (RISCV rv) ids)
+  -- ^ The statements disassembled thus far
+  -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
+  -- ^ The register state at this point of the block
+  -> NonceGenerator (ST s) ids
+  -- ^ The nonce generator used for block disassembly
+  -> MC.ArchSegmentOff (RISCV rv)
+  -- ^ The current program counter value
+  -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
+  -- ^ The current offset into the block
+  -> MM.MemWord (MC.ArchAddrWidth (RISCV rv))
+  -- ^ The maximum offset we should disassemble to
+  -> ST s (MC.Block (RISCV rv) ids, MM.MemWord (MC.ArchAddrWidth (RISCV rv)))
+  -- ^ Return the disassembled block and its size.
 disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffset = G.withRV rvRepr $ do
   case readInstruction rvRepr iset curIPAddr of
     Left err -> do
@@ -373,13 +382,15 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
         isBlockTerminator G.Mret = True
         isBlockTerminator _ = False
 
-riscvDisassembleFn :: RISCVConstraints rv
-                   => G.RVRepr rv
-                   -> NonceGenerator (ST s) ids
-                   -> MC.ArchSegmentOff (RISCV rv)
-                   -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
-                   -> Int
-                   -> ST s (MC.Block (RISCV rv) ids, Int)
+riscvDisassembleFn
+  :: RISCVConstraints rv
+  => (w ~ G.RVWidth rv, 32 <= w)
+  => G.RVRepr rv
+  -> NonceGenerator (ST s) ids
+  -> MC.ArchSegmentOff (RISCV rv)
+  -> MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
+  -> Int
+  -> ST s (MC.Block (RISCV rv) ids, Int)
 riscvDisassembleFn rvRepr ng startAddr regState maxSize = do
   (block, bytes) <- disassembleBlock rvRepr (G.knownISetWithRepr rvRepr) mempty regState ng startAddr 0 (fromIntegral maxSize)
   return (block, fromIntegral bytes)
