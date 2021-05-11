@@ -61,7 +61,7 @@ matchReturn :: RISCVConstraints rv
             -> MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
-  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVAnd _ addr (MC.BVValue _ mask)))) <- return ip
+  MC.BVAnd _ addr (MC.BVValue _ mask) <- MC.valueAsApp ip
   guard (mask == 0xfffffffffffffffe)
   case MA.transferValue absProcState addr of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)

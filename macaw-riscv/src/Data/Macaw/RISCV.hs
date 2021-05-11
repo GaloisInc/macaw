@@ -9,6 +9,10 @@
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV (
+  module Data.Macaw.RISCV.Disassemble,
+  module Data.Macaw.RISCV.Eval,
+  module Data.Macaw.RISCV.Identify,
+  module Data.Macaw.RISCV.RISCVReg,
   -- * Macaw configurations
   riscv_info,
   -- * Type-level tags

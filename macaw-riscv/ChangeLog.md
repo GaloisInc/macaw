@@ -1,4 +1,4 @@
-# Revision history for macaw-ppc
+# Revision history for macaw-riscv
 
 ## 0.1.0.0  -- YYYY-mm-dd
 

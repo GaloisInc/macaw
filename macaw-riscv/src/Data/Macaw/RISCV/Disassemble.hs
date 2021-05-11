@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NoStarIsType #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -40,7 +41,7 @@ import           Data.Parameterized (showF)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Nonce (NonceGenerator)
 import           Data.Parameterized.Some (Some(..))
-import           Data.Word (Word8)
+import           Text.Printf (printf)
 
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
@@ -50,13 +51,34 @@ data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
                         | IllegalInstruction
   deriving Show
 
-readBytesLE :: [Word8] -> Some G.SizedBV
-readBytesLE [] = Some (G.SizedBV (knownNat @0) (BV.zero (knownNat @0)))
-readBytesLE (byte:rstBytes) =
-  case readBytesLE rstBytes of
-    Some (G.SizedBV s rstBV) ->
-      let byteBV = G.mkBV' (fromIntegral byte) :: BV.BV 8
-      in Some (G.SizedBV (addNat s (knownNat @8)) (BV.concat s (knownNat @8) rstBV byteBV))
+emptySizedBV :: G.SizedBV 0
+emptySizedBV = G.SizedBV (knownNat @0) (BV.zero (knownNat @0))
+
+-- | Read exactly one byte, and return the rest of the bytestring.
+readByte
+  :: MM.MemSegmentOff w
+  -> BS.ByteString
+  -> Either (RISCVMemoryError w) (G.SizedBV 8, BS.ByteString)
+readByte addr bs =
+  case BS.uncons bs of
+    Nothing -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
+    Just (byte, rest) -> Right (G.sizedBVInteger (fromIntegral byte), rest)
+
+-- | Read exactly some given number of bytes or fail.
+readBytesEQ :: MM.MemSegmentOff w
+            -> NatRepr s
+            -> BS.ByteString
+            -> Either (RISCVMemoryError w) (G.SizedBV (s * 8))
+readBytesEQ addr s bs =
+  case isZeroNat s of
+    ZeroNat -> Right emptySizedBV
+    NonZeroNat ->
+      let s' = predNat s in
+      withAddMulDistribRight s' (knownNat @1) (knownNat @8) $
+      do
+        (byte, rest) <- readByte addr bs
+        bytes <- readBytesEQ addr s' rest
+        return (G.concatSized bytes byte)
 
 -- | Read a single RISC-V instruction.
 readInstruction :: forall rv w . MM.MemWidth w
@@ -83,21 +105,14 @@ readInstruction rvRepr iset addr = do
                 -- If the C extension is present, first attempt to
                 -- decode 2 bytes. If that fails, decode 4 bytes.
                 G.RVRepr _ (G.ExtensionsRepr _ _ _ _ G.CYesRepr) -> do
-                  cinstBV <- case readBytesLE (BS.unpack (BS.take 2 bs)) of
-                    Some cinstBV@(G.SizedBV w _) | NatCaseEQ <- testNatCases w (knownNat @16) -> return cinstBV
-                    _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
+                  cinstBV <- readBytesEQ addr (knownNat @2) bs
                   case G.decodeC rvRepr cinstBV of
                     Just sinst -> return (G.asUnsignedSized cinstBV, sinst, 2)
                     Nothing -> do
-                      instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
-                        Some instBV
-                          | NatCaseEQ <- testNatCases (G.widthSized instBV) (knownNat @32) -> return instBV
-                        _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
+                      instBV <- readBytesEQ addr (knownNat @4) bs
                       return (G.asUnsignedSized instBV, G.decode iset instBV, 4)
                 _ -> do
-                  instBV <- case readBytesLE (BS.unpack (BS.take 4 bs)) of
-                    Some instBV | NatCaseEQ <- testNatCases (G.widthSized instBV) (knownNat @32) -> return instBV
-                    _ -> E.throwError (RISCVMemoryError (MM.AccessViolation (MM.segoffAddr addr)))
+                  instBV <- readBytesEQ addr (knownNat @4) bs
                   return (G.asUnsignedSized instBV, G.decode iset instBV, 4)
               case inst of
                 (G.Inst G.Illegal _) -> E.throwError IllegalInstruction
@@ -164,7 +179,7 @@ disBVApp bvApp = case bvApp of
   G.LtsApp _ e1 e2 -> widthPos e1 $ binaryOpBool MC.BVSignedLt e1 e2
   G.LtuApp e1 e2 -> widthPos e1 $ binaryOpBool MC.BVUnsignedLt e1 e2
   -- In GRIFT, we use "ext" to truncate bitvectors, which is weird but
-  -- true. So we have to check the widths fo the expressions involved
+  -- true. So we have to check the widths of the expressions involved
   -- and emit either an extension, a truncation, or just return the
   -- expression back.
   G.ZExtApp w e -> widthPos e $ do
@@ -204,7 +219,7 @@ disBVApp bvApp = case bvApp of
       let shiftAmount = MC.BVValue w (intValue w - intValue (G.exprWidth e1))
       e1ShiftedVal <- evalApp (MC.BVShl w e1ExtVal shiftAmount)
       evalApp (MC.BVOr w e1ShiftedVal e2ExtVal)
-    _ -> error "FOO"
+    _ -> error "TODO: Disassemble concatenation where one side has size zero"
   G.IteApp w test e1 e2 -> do
     testVal <- disInstExpr test
     testValBool <- bvToBool testVal
@@ -346,8 +361,9 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
       let regUpdates = disInstRegUpdates disInstState
           blockState' = disInstState ^. disInstRegState
       -- TODO: Add instruction name and semantics description?
+      let blockComment = printf "%s: %s" (show curIPAddr) instWord
       let instStmts = (MC.InstructionStart blockOff (T.pack $ showF i) Seq.<|
-                       MC.Comment "" Seq.<|
+                       MC.Comment (T.pack blockComment) Seq.<|
                        instStmts') Seq.|>
                       MC.ArchState (MM.segoffAddr curIPAddr) regUpdates
       let blockStmts' = blockStmts <> instStmts
