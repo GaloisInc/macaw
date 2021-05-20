@@ -20,9 +20,9 @@ jobs:
         submodules: true
     - name: Copy cabal project files
       run: |
-        cp cabal.project.dist                                  cabal.project
-        cp cabal.project.werror                                cabal.project.local
-        cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
+        cp cabal.project.dist cabal.project
+        cp cabal.project.werror cabal.project.local
+        cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
     - name: Get GHC
       run: |
         ghcup install ghc ${{ matrix.ghc-ver }}
