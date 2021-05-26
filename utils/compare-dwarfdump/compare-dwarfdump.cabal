@@ -12,12 +12,14 @@ executable compare-dwarfdump
   build-depends:
     base >= 0,
     bytestring,
+    containers,
     directory,
     elf-edit >= 0.38,
     filepath,
-    galois-dwarf,
+    galois-dwarf >= 0.2.2.1,
     mtl,
     process,
+    vector,
     zlib
 
   hs-source-dirs: src
