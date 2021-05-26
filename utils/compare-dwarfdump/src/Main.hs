@@ -140,11 +140,7 @@ ppFDEs path f cie off = do
           3 -> 0
           _ -> off - Dwarf.fdeCiePointer fde + 4
       writeBuilder $ " pc="
-      let addr =
-            case Dwarf.cieVersion cie of
-              4 -> Dwarf.fdeStartAddress fde
-              3 -> Dwarf.fdeStartAddress fde
-              1 -> Dwarf.fdeStartAddress fde
+      let addr = Dwarf.fdeStartAddress fde
       let ppPC a =
             case Dwarf.cieAddressSize cie of
               Just w -> ppHex (fromIntegral w) a
@@ -179,17 +175,6 @@ ppBuffer b = unwords $ fmap ppByte $ BS.unpack b
 -- | This is hard-coded output to match the last CIE that dwarfdump emits
 ppLastCIE :: WriteMonad m => Word64 -> m ()
 ppLastCIE lastOff = writeLn $ ppHex 8 lastOff <> " ZERO terminator"
-{-
-ppLastCIE lastOff = do
-  writeLn $ ppHex 8 lastOff <> " 00000000 ffffffff CIE"
-  writeLn "  Version:               0"
-  writeLn "  Augmentation:          \"\""
-  writeLn "  Code alignment factor: 0"
-  writeLn "  Data alignment factor: 0"
-  writeLn "  Return address column: 0"
-  writeLn ""
-  writeLn ""
--}
 
 -- | Pretty print CIEs in file with
 ppCIEs :: WriteMonad m
@@ -245,14 +230,10 @@ ppCIEs path end f off = do
         Dwarf.FDEEnd lastOff -> do
           ppLastCIE lastOff
 
-shdrData :: Elf.ElfHeaderInfo w ->  Elf.Shdr nm Word64 -> BS.ByteString
-shdrData elfFile shdr =
-  Elf.slice (Elf.shdrFileRange shdr) (Elf.headerFileContents elfFile)
-
 withFrame ::
   WriteMonad m =>
   FilePath ->
-  Elf.ElfHeaderInfo w ->
+  Elf.ElfHeaderInfo 64 ->
   Map.Map BS.ByteString [Elf.Shdr BS.ByteString Word64] ->
   BS.ByteString ->
   (Elf.ElfWordType 64 -> BS.ByteString -> [Elf.RelaEntry Elf.X86_64_RelocationType] -> m ()) ->
@@ -262,14 +243,14 @@ withFrame path elfFile shdrMap s act = do
     frameSection : rest -> do
       when (not (null rest)) $ do
         reportError path $ "Multiple " <> BSC.unpack s <> " sections."
-      let dta = shdrData elfFile frameSection
+      let dta = Elf.shdrData elfFile frameSection
 
       relaEntries <-
         case Map.findWithDefault [] (".rela" <> s) shdrMap of
           relaSec:r -> do
             when (not (null r)) $ do
               reportError path $ "Multiple .rela" <> BSC.unpack s <> " sections."
-            let relaDta = shdrData elfFile frameSection
+            let relaDta = Elf.shdrData elfFile frameSection
             case Elf.decodeRelaEntries (Elf.headerData (Elf.header elfFile)) relaDta of
               Left msg -> reportError path $ "Error decoding rela entries: " <> msg
               Right l -> pure l
@@ -387,7 +368,12 @@ foreachFile act path = do
    else do
     dexist <- doesDirectoryExist path
     if dexist then do
-      mapM_ (\f -> foreachFile act (path </> f)) =<< listDirectory path
+      mentries <- try $ listDirectory path
+      case mentries of
+        Left (e :: IOException) -> do
+          pure ()
+        Right entries -> do
+          mapM_ (\f -> foreachFile act (path </> f)) entries
      else do
       fexist <- doesFileExist path
       when (fexist && not isLink) (act path)
@@ -397,8 +383,13 @@ compareArg :: FilePath -> FilePath -> IO ()
 compareArg dwarfDump path = do
   fexist <- doesFileExist path
 
-  if fexist then
-    compareElf dwarfDump path =<< BS.readFile path
+  if fexist then do
+    mbytes <- try $ BS.readFile path
+    case mbytes of
+      Left (e :: IOException) -> do
+        pure ()
+      Right bytes -> do
+        compareElf dwarfDump path bytes
    else do
     dexist <- doesDirectoryExist path
     if dexist then do
@@ -411,7 +402,12 @@ compareArg dwarfDump path = do
               Right bytes -> do
                 when (Elf.elfMagic `BS.isPrefixOf` bytes) $
                   compareElf dwarfDump fname bytes
-      mapM_ (\f -> foreachFile m (path </> f)) =<< listDirectory path
+      mentries <- try $ listDirectory path
+      case mentries of
+        Left (e :: IOException) -> do
+          pure ()
+        Right entries -> do
+          mapM_ (\f -> foreachFile m (path </> f)) entries
      else do
       reportError path "File not found"
 
