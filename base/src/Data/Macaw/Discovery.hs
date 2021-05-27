@@ -1627,10 +1627,10 @@ mkFunInfo s fs =
 
 reportAnalyzeBlock :: DiscoveryOptions
                       -- ^ Options controlling discovery
-                   -> MemSegmentOff w -- ^ Function address
-                   -> MemSegmentOff w -- ^ Block address
-                   -> IncComp (DiscoveryEvent w) a
-                   -> IncComp (DiscoveryEvent w) a
+                   -> ArchSegmentOff arch -- ^ Function address
+                   -> ArchSegmentOff arch -- ^ Block address
+                   -> IncComp (DiscoveryEvent arch) a
+                   -> IncComp (DiscoveryEvent arch) a
 reportAnalyzeBlock disOpts faddr baddr
   | logAtAnalyzeBlock disOpts = IncCompLog (ReportAnalyzeBlock faddr baddr)
   | otherwise = id
@@ -1641,7 +1641,7 @@ analyzeBlocks :: DiscoveryOptions
               -> ArchSegmentOff arch
                     -- ^ The address to explore
               -> FunState arch s ids
-              -> STL.ST s (IncComp (DiscoveryEvent (ArchAddrWidth arch))
+              -> STL.ST s (IncComp (DiscoveryEvent arch)
                                    (DiscoveryState arch, Some (DiscoveryFunInfo arch)))
 analyzeBlocks disOpts ds0 faddr fs =
   case Set.minView (fs^.frontier) of
@@ -1679,7 +1679,7 @@ discoverFunction :: DiscoveryOptions
                    -- ^ Additional identified intraprocedural jump targets
                    --
                    -- The pairs are: (address of the block jumped from, jump targets)
-                -> IncComp (DiscoveryEvent (ArchAddrWidth arch))
+                -> IncComp (DiscoveryEvent arch)
                            (DiscoveryState arch, Some (DiscoveryFunInfo arch))
 discoverFunction disOpts addr rsn s extraIntraTargets = STL.runST $ do
   Some gen <- STL.strictToLazyST newSTNonceGenerator
@@ -1830,20 +1830,32 @@ defaultDiscoveryOptions =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-data DiscoveryEvent w
-   = ReportAnalyzeFunction !(MemSegmentOff w)
-   | ReportAnalyzeFunctionDone !(MemSegmentOff w)
-   | ReportIdentifyFunction !(MemSegmentOff w) !(MemSegmentOff w) !(FunctionExploreReason w)
-   | ReportAnalyzeBlock !(MemSegmentOff w) !(MemSegmentOff w)
-
+-- | Events reported by discovery process.
+data DiscoveryEvent arch
+     -- | Report that discovery has now started analyzing the function at the given offset.
+   = ReportAnalyzeFunction !(ArchSegmentOff arch)
+     -- | @ReoptAnalyzeFunctionDone f@ we completed discovery and yielded function @f@.
+   | forall ids . ReportAnalyzeFunctionDone (DiscoveryFunInfo arch ids)
+     -- | @ReportIdentifyFunction src tgt rsn@ indicates Macaw identified a
+     -- candidate funciton entry point @tgt@ from analyzing @src@ for the
+     -- given reason @rsn@.
+   | ReportIdentifyFunction
+        !(ArchSegmentOff arch)
+        !(ArchSegmentOff arch)
+        !(FunctionExploreReason (ArchAddrWidth arch))
+      -- | @ReportAnalyzeBlock faddr baddr@ indicates discovery identified
+      -- a block at @baddr@ in @faddr@.
+      --
+      -- N.B. This event is only emitted when `logAtAnalyzeBlock` is true.
+   | ReportAnalyzeBlock !(ArchSegmentOff arch) !(ArchSegmentOff arch)
 
 ppSymbol :: MemWidth w => Maybe BSC.ByteString -> MemSegmentOff w -> String
 ppSymbol (Just fnName) addr = show addr ++ " (" ++ BSC.unpack fnName ++ ")"
 ppSymbol Nothing addr = show addr
 
-logDiscoveryEvent :: MemWidth w
-                  => AddrSymMap w
-                  -> DiscoveryEvent w
+logDiscoveryEvent :: MemWidth (ArchAddrWidth arch)
+                  => AddrSymMap (ArchAddrWidth arch)
+                  -> DiscoveryEvent arch
                   -> IO ()
 logDiscoveryEvent symMap p =
   case p of
@@ -1864,7 +1876,7 @@ logDiscoveryEvent symMap p =
 resolveFuns :: DiscoveryOptions
                -- ^ Options controlling discovery
             -> DiscoveryState arch
-            -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+            -> IncCompM (DiscoveryEvent arch) r (DiscoveryState arch)
 resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
   case Map.minViewWithKey (info^.unexploredFunctions) of
     Nothing -> pure info
@@ -1874,8 +1886,8 @@ resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
       if Map.member addr (info^.funInfo) then
         resolveFuns disOpts info
        else do
-        (info',_) <- liftIncComp id $ discoverFunction disOpts addr rsn info []
-        incCompLog $ ReportAnalyzeFunctionDone addr
+        (info', Some f) <- liftIncComp id $ discoverFunction disOpts addr rsn info []
+        incCompLog $ ReportAnalyzeFunctionDone f
         resolveFuns disOpts info'
 
 ------------------------------------------------------------------------
@@ -1889,7 +1901,7 @@ incCompleteDiscovery :: forall arch r
                      .  DiscoveryState arch
                      -> DiscoveryOptions
                         -- ^ Options controlling discovery
-                     -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+                     -> IncCompM (DiscoveryEvent arch) r (DiscoveryState arch)
 incCompleteDiscovery initState disOpt = do
  let ainfo = archInfo initState
  let mem = memory initState

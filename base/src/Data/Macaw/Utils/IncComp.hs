@@ -10,6 +10,7 @@ module Data.Macaw.Utils.IncComp
   , IncCompM(..)
   , runIncCompM
   , liftIncComp
+  , liftFoldIncComp
   , joinIncComp
   , incCompLog
   , incCompDone
@@ -31,9 +32,14 @@ incCompResult :: IncComp l r -> r
 incCompResult (IncCompLog _ r) = incCompResult r
 incCompResult (IncCompDone r) = r
 
+-- | Left fold over an incremental computation
+foldIncComp :: (l -> r -> r) -> (a -> r) -> IncComp l a -> r
+foldIncComp f g (IncCompLog l m) = f l (foldIncComp f g m)
+foldIncComp _ g (IncCompDone r) = g r
+
+
 joinIncComp :: (l -> k) -> (a -> IncComp k b) -> IncComp l a -> IncComp k b
-joinIncComp f g (IncCompLog l m) = IncCompLog (f l) (joinIncComp f g m)
-joinIncComp _ g (IncCompDone r) = g r
+joinIncComp f = foldIncComp (\l r -> IncCompLog (f l) r)
 
 processIncCompLogs :: Monad m => (l -> m ()) -> IncComp l r -> m r
 processIncCompLogs _ (IncCompDone r) = pure r
@@ -57,3 +63,8 @@ incCompDone e = IncCompTM $ cont $ \_ -> IncCompDone e
 -- | Lift a incremental computation to the monad with the given modification
 liftIncComp :: (l -> k) -> IncComp l a -> IncCompM k r a
 liftIncComp f m = IncCompTM $ cont $ \c -> joinIncComp f c m
+
+-- | Allows a incremental computation to be merged into an existing
+-- one by folding over events.
+liftFoldIncComp :: (l -> IncComp k r -> IncComp k r) -> IncComp l a -> IncCompM k r a
+liftFoldIncComp f m = IncCompTM $ cont $ \c -> foldIncComp f c m
