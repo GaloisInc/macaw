@@ -131,9 +131,9 @@ instance MemWidth (RegAddrWidth (ArchReg arch)) => Show (RegisterUseError arch) 
   show (UnresolvedFunctionTypeError addr msg) =
     show addr ++ ": "  ++ msg
   show (UnresolvedStackRead block idx) =
-    printf "Unresolved stack read in block {} index {}." (show block) (show idx)
+    printf "Unresolved stack read in block %s index %s." (show block) (show idx)
   show (UnsupportedCondStackRead block idx) =
-    printf "Conditional stack reads as in block {} index {} are not supported." (show block) (show idx)
+    printf "Conditional stack reads as in block %s index %s are not supported." (show block) (show idx)
 
 -------------------------------------------------------------------------------
 -- InitInferValue

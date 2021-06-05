@@ -65,6 +65,8 @@ module Data.Macaw.Discovery
        , State.jtlBackingSize
          -- * Simplification
        , eliminateDeadStmts
+         -- * Re-exports
+       , ArchAddrWidth
        ) where
 
 import           Control.Applicative ( Alternative((<|>), empty), liftA )
