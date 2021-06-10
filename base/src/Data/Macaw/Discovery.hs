@@ -256,8 +256,8 @@ sliceMemContents' stride prev c next
       Left e -> Left e
       Right (this, rest) -> sliceMemContents' stride (this:prev) (c-1) rest
 
--- | `sliceMemContents stride cnt contents` splits contents up into `cnt`
--- memory regions each with size `stride`.
+-- | @sliceMemContents stride cnt contents@ splits contents up into @cnt@
+-- memory regions each with size @stride@.
 sliceMemContents
   :: MemWidth w
   => Int -- ^ Number of bytes in each slice.
@@ -557,8 +557,8 @@ extractJumpTableSlices jmpBounds base stride ixVal tp = do
                     (V.fromList strideSlices)
   pure slices
 
--- | `matchBoundsMemArray mem aps bnds val` checks to try to interpret
--- `val` as a memory read where
+-- | @matchBoundedMemArray mem aps bnds val@ checks to try to interpret
+-- @val@ as a memory read where
 --
 -- * the address read has the form @base + stride * ixVal@,
 -- * @base@ is a valid `MemSegmentOff`,
@@ -606,8 +606,8 @@ matchAddr w
   | Just Refl <- testEquality w n64 = Just Addr64
   | otherwise = Nothing
 
--- | `matchExtension x` matches in `x` has the form `(uext y w)` or `(sext y w)` and returns
--- a description about the extension as well as the pattern `y`.
+-- | @matchExtension x@ matches in @x@ has the form @uext y w@ or @sext y w@ and returns
+-- a description about the extension as well as the pattern @y@.
 matchExtension :: forall arch ids
                .  ( MemWidth (ArchAddrWidth arch)
                   , HasRepr (ArchReg arch) TypeRepr)

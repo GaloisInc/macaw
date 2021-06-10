@@ -51,6 +51,9 @@ module Data.Macaw.Analysis.RegisterUse
   , biCallFunType
   , biAssignMap
   , LocList(..)
+  , StackAnalysis.LocMap(..)
+  , StackAnalysis.locMapToList
+  , StackAnalysis.BoundLoc(..)
   , MemAccessInfo(..)
   , InitInferValue(..)
     -- *** Mem Access info
@@ -78,7 +81,7 @@ import           GHC.Stack
 import           Prettyprinter
 import           Text.Printf
 
-import           Data.Macaw.AbsDomain.StackAnalysis
+import           Data.Macaw.AbsDomain.StackAnalysis as StackAnalysis
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
   ( DemandContext
@@ -95,8 +98,8 @@ import           Data.STRef
 -------------------------------------------------------------------------------
 -- funBlockPreds
 
--- | A map from each address `l` to the addresses of blocks that may
--- jump to `l`.
+-- | A map from each starting block address @l@ to the addresses of
+-- blocks that may jump to @l@.
 type FunPredMap w = Map (MemSegmentOff w) [MemSegmentOff w]
 
 -- | Return the FunPredMap for the discovered block function.
