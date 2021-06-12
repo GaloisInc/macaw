@@ -10,6 +10,7 @@ task needed before deleting unused code.
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Analysis.RegisterUse
@@ -17,6 +18,9 @@ module Data.Macaw.Analysis.RegisterUse
     registerUse
   , BlockInvariantMap
   , RegisterUseError(..)
+  , RegisterUseErrorReason(..)
+  , ppRegisterUseErrorReason
+  , RegisterUseErrorTag(..)
     -- ** Input information
   , RegisterUseContext(..)
   , ArchFunType
@@ -67,6 +71,7 @@ import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State.Strict
+import qualified Data.ByteString as BS
 import           Data.Foldable
 import           Data.Kind
 import           Data.Map.Strict (Map)
@@ -77,9 +82,9 @@ import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import           Data.Word (Word64)
 import           GHC.Stack
 import           Prettyprinter
-import           Text.Printf
 
 import           Data.Macaw.AbsDomain.StackAnalysis as StackAnalysis
 import           Data.Macaw.CFG
@@ -94,6 +99,8 @@ import           Data.Macaw.Utils.Changed
 import           Data.Macaw.AbsDomain.CallParams
 
 import           Data.STRef
+
+import           Data.Parameterized.TH.GADT
 
 -------------------------------------------------------------------------------
 -- funBlockPreds
@@ -117,26 +124,70 @@ funBlockPreds info = Map.fromListWith (++)
 -- RegisterUseError
 
 -- | Errors from register use
+--
+-- Tag parameter used for addition information in tag
+data RegisterUseErrorTag e where
+  -- | Could not resolve height of call stack at given block
+  CallStackHeightError :: RegisterUseErrorTag ()
+  -- | The value read at given block and statement index could not
+  -- be resolved.
+  UnresolvedStackRead :: RegisterUseErrorTag ()
+  -- | We do not have support for stack reads.
+  UnsupportedCondStackRead :: RegisterUseErrorTag ()
+  -- | Call with indirect target
+  IndirectCallTarget :: RegisterUseErrorTag ()
+  -- | Call target address was not a valid memory location.
+  InvalidCallTargetAddress :: RegisterUseErrorTag Word64
+  -- | Call target was not a known function.
+  CallTargetNotFunctionEntryPoint :: RegisterUseErrorTag Word64
+  -- | Could not determine arguments to call.
+  UnknownCallTargetArguments :: RegisterUseErrorTag BS.ByteString
+  -- | We could not resolve the arguments to a known var-args function.
+  ResolutonFailureCallToKnownVarArgsFunction :: RegisterUseErrorTag String
+  -- | We do not yet support the calling convention needed for this function.
+  UnsupportedCallTargetCallingConvention :: RegisterUseErrorTag BS.ByteString
+
+instance Show (RegisterUseErrorTag e) where
+  show CallStackHeightError = "Symbolic call stack height"
+  show UnresolvedStackRead = "Unresolved stack read"
+  show UnsupportedCondStackRead = "Conditional stack read"
+  show IndirectCallTarget = "Indirect call target"
+  show InvalidCallTargetAddress = "Invalid call target address"
+  show CallTargetNotFunctionEntryPoint = "Call target not function entry point"
+  show UnknownCallTargetArguments = "Unresolved call target arguments"
+  show ResolutonFailureCallToKnownVarArgsFunction = "Could not resolve varargs args"
+  show UnsupportedCallTargetCallingConvention = "Unsupported calling convention"
+
+$(pure [])
+
+instance TestEquality RegisterUseErrorTag where
+  testEquality = $(structuralTypeEquality [t|RegisterUseErrorTag|] [])
+
+instance OrdF RegisterUseErrorTag where
+  compareF = $(structuralTypeOrd [t|RegisterUseErrorTag|] [])
+
+data RegisterUseErrorReason = forall e . Reason !(RegisterUseErrorTag e) !e
+
+-- | Errors from register use
 data RegisterUseError arch
-   = CallStackHeightError !(MemAddr (ArchAddrWidth arch))
-   | UnresolvedFunctionTypeError !(ArchSegmentOff arch) !String
-     -- | The value read at given block and statement index could not
-     -- be resolved.
-   | UnresolvedStackRead !(ArchSegmentOff arch) !StmtIndex
-     -- | We do not have support for stack reads.
-   | UnsupportedCondStackRead !(ArchSegmentOff arch) !StmtIndex
+   = RegisterUseError {
+     ruBlock :: !(ArchSegmentOff arch),
+     ruStmt :: !StmtIndex,
+     ruReason :: !RegisterUseErrorReason
+   }
 
-
-instance MemWidth (RegAddrWidth (ArchReg arch)) => Show (RegisterUseError arch) where
-  show (CallStackHeightError addr) =
-    "Could not resolve concrete stack height for call at "
-      ++ show addr
-  show (UnresolvedFunctionTypeError addr msg) =
-    show addr ++ ": "  ++ msg
-  show (UnresolvedStackRead block idx) =
-    printf "Unresolved stack read in block %s index %s." (show block) (show idx)
-  show (UnsupportedCondStackRead block idx) =
-    printf "Conditional stack reads as in block %s index %s are not supported." (show block) (show idx)
+ppRegisterUseErrorReason :: RegisterUseErrorReason -> String
+ppRegisterUseErrorReason (Reason tag _v) =
+  case tag of
+    CallStackHeightError ->  "Could not resolve concrete stack height."
+    UnresolvedStackRead -> "Unresolved stack read."
+    UnsupportedCondStackRead -> "Unsupported conditional stack read."
+    IndirectCallTarget -> "Indirect call target."
+    InvalidCallTargetAddress -> "Invalid call target address."
+    CallTargetNotFunctionEntryPoint -> "Call target not function entry point."
+    UnknownCallTargetArguments -> "Unknown call target arguments."
+    ResolutonFailureCallToKnownVarArgsFunction -> "Could not resolve varargs args."
+    UnsupportedCallTargetCallingConvention -> "Unsupported calling convention."
 
 -------------------------------------------------------------------------------
 -- InitInferValue
@@ -657,10 +708,20 @@ checkReadWithinWrite wo wr ro rr
     Just (MemSlice d wr rr)
   | otherwise = Nothing
 
+
+throwRegError :: StmtIndex -> RegisterUseErrorTag e -> e -> StartInfer arch ids a
+throwRegError stmtIdx tag v = do
+  blockAddr <- asks sicAddr
+  throwError $
+    RegisterUseError
+      { ruBlock = blockAddr,
+        ruStmt = stmtIdx,
+        ruReason = Reason tag v
+      }
+
 unresolvedStackRead :: StmtIndex -> StartInfer arch ids as
 unresolvedStackRead stmtIdx = do
-  blockAddr <- asks sicAddr
-  throwError (UnresolvedStackRead blockAddr stmtIdx)
+  throwRegError stmtIdx UnresolvedStackRead ()
 
 -- | Infer constraints from a memory read
 inferReadMem ::
@@ -725,32 +786,9 @@ inferCondReadMem stmtIdx addr _repr = do
   case valueToStartExpr ctx s addr of
     -- Stack reads need to record the offset.
     FrameExpr _o -> do
-      blockAddr <- asks sicAddr
-      throwError (UnsupportedCondStackRead blockAddr stmtIdx)
+      throwRegError stmtIdx UnsupportedCondStackRead ()
     -- Non-stack reads are just equal to themselves.
     _ -> addMemAccessInfo stmtIdx NotFrameAccess
-
-{-
-      stk <- gets sisStack
-      case memMapLookup' o repr stk of
-        Nothing -> do
-          let d = RegEqualLoc (StackOffLoc o repr)
-          addMemAccessInfo (FrameReadInitAccess o d)
-        Just (writeOff, MemVal writeRepr sv) -> do
-          case checkReadWithinWrite writeOff writeRepr o repr of
-            -- Overlap reads just get recorded
-            Nothing ->
-              addMemAccessInfo (FrameReadOverlapAccess o)
-            -- Reads within writes get propagated.
-            Just _ ->
-              case sv of
-                ISVInitValue d ->
-                  addMemAccessInfo (FrameReadInitAccess o d)
-                ISVWrite writeIdx _v ->
-                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
-                ISVCondWrite writeIdx _ _ _ ->
-                  addMemAccessInfo (FrameReadWriteAccess writeIdx)
--}
 
 -- | Update start infer statement to reflect statement.
 processStmt :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
@@ -964,11 +1002,13 @@ postCallConstraints :: forall arch ids
                        -- ^ Context for block invariants inference.
                     -> InferState arch ids
                        -- ^ State for start inference
+                    -> Int
+                       -- ^ Index of term statement
                     -> RegState (ArchReg arch) (Value arch ids)
                        -- ^ Registers at time of call.
                     -> Either (RegisterUseError arch)
                               (PostValueMap arch ids, BlockStartConstraints arch)
-postCallConstraints params ctx s regs =
+postCallConstraints params ctx s tidx regs =
   runInferNextM $ do
     case valueToStartExpr ctx (sisAssignMap s) (regs^.boundValue sp_reg) of
       FrameExpr spOff -> do
@@ -1013,7 +1053,12 @@ postCallConstraints params ctx s regs =
                              , locMapStack = stk
                              }
         pure $ Right $ (postValMap, cns)
-      _ -> pure $ Left (CallStackHeightError (segoffAddr (sicAddr ctx)))
+      _ -> pure $ Left $
+            RegisterUseError
+            { ruBlock = sicAddr ctx,
+              ruStmt = tidx,
+              ruReason = Reason CallStackHeightError ()
+            }
 
 -------------------------------------------------------------------------------
 -- DependencySet
@@ -1198,6 +1243,7 @@ data CallRegs (arch :: Type) (ids :: Type) =
 type PostTermStmtInvariants arch ids =
   StartInferContext arch
   -> InferState arch ids
+  -> Int
   -> ArchTermStmt arch ids
   -> RegState (ArchReg arch) (Value arch ids)
   -> Either (RegisterUseError arch) (PostValueMap arch ids, BlockStartConstraints arch)
@@ -1235,12 +1281,12 @@ data RegisterUseContext arch
       -- | Callback function for summarizing register usage of terminal
       -- statements.
     , reguseTermFn :: !(forall ids . ArchTermStmtUsageFn arch ids)
-      -- | Given the address of a call instruction and regisdters, this returns the
+      -- | Given the address of a call instruction and registers, this returns the
       -- values read and returned.
     , callDemandFn    :: !(forall ids
                           .  ArchSegmentOff arch
                           -> RegState (ArchReg arch) (Value arch ids)
-                          -> Either String (CallRegs arch ids))
+                          -> Either RegisterUseErrorReason (CallRegs arch ids))
       -- | Information needed to demands of architecture-specific functions.
     , demandContext :: !(DemandContext arch)
     }
@@ -1296,6 +1342,7 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
                 }
   -- Get statements in block
   let stmts = pblockStmts b
+  let stmtCount = length stmts
   -- Get state from processing all statements
   s <- execStateT (runReaderT (zipWithM_ processStmt [0..] stmts) ctx) s0
   let lastFn a = if a == addr then Just (BSC cns) else siiCns <$> Map.lookup a lastMap
@@ -1314,7 +1361,7 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
       pure $ (m', frontierMap')
     ParsedCall regs (Just next) -> do
       (postValCns, nextCns) <-
-        case postCallConstraints (archCallParams rctx) ctx s regs of
+        case postCallConstraints (archCallParams rctx) ctx s stmtCount regs of
           Left e -> throwError e
           Right r -> pure r
       let m' = Map.insert addr (b, BSC cns, s,  Map.singleton next postValCns) lastMap
@@ -1331,7 +1378,7 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
       pure $ (m', frontierMap)
     ParsedArchTermStmt tstmt regs (Just next) -> do
-      case archPostTermStmtInvariants rctx ctx s tstmt regs of
+      case archPostTermStmtInvariants rctx ctx s stmtCount tstmt regs of
         Left e ->
           throwError e
         Right (postValCns, nextCns) -> do
@@ -1758,7 +1805,7 @@ mkBlockUsageSummary :: forall arch ids
                -> BlockStartConstraints arch
                   -- ^ Inferred state at start of block
                -> InferState arch ids
-                  -- ^ Information inferred from executng block.
+                  -- ^ Information inferred from executed block.
                -> ParsedBlock arch ids
                   -- ^ Block
                -> Except (RegisterUseError arch) (BlockUsageSummary arch ids)
@@ -1767,6 +1814,7 @@ mkBlockUsageSummary ctx cns sis blk = do
     let addr = pblockAddr blk
     -- Add demanded values for terminal
     zipWithM_ demandStmtValues [0..] (pblockStmts blk)
+    let tidx = length (pblockStmts blk)
     case pblockTermStmt blk of
       ParsedJump regs _tgt -> do
         recordRegMap (regStateMap regs)
@@ -1787,7 +1835,13 @@ mkBlockUsageSummary ctx cns sis blk = do
         ftr <-
           case callFn insnAddr regs of
             Right v -> pure v
-            Left e -> throwError (UnresolvedFunctionTypeError insnAddr e)
+            Left rsn -> do
+              throwError $
+                RegisterUseError
+                  { ruBlock = addr,
+                    ruStmt = tidx,
+                    ruReason = rsn
+                  }
         -- Demand argument registers
         do
           forM_ (callArgValues ftr) $ \(Some v) -> do
@@ -1820,7 +1874,6 @@ mkBlockUsageSummary ctx cns sis blk = do
       ParsedReturn regs -> do
         retRegs <- asks $ returnRegisters
         traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) retRegs
-
       ParsedArchTermStmt tstmt regs _mnext -> do
         summaryFn <- asks reguseTermFn
         s <- get
