@@ -135,8 +135,12 @@ identifyConcreteAddresses :: MemWidth w
                           -> AbsValue w (BVType w)
                           -> [MemSegmentOff w]
 identifyConcreteAddresses mem (FinSet s) =
-  mapMaybe (resolveAbsoluteAddr mem . fromInteger) (Set.toList s)
-identifyConcreteAddresses _ (CodePointers s _) = Set.toList s
+  let ins o r =
+        case resolveAbsoluteAddr mem (fromInteger o) of
+          Just a | isExecutableSegOff a -> a : r
+          _ -> r
+   in foldr ins [] s
+identifyConcreteAddresses _ (CodePointers s _) = filter isExecutableSegOff $ Set.toList s
 identifyConcreteAddresses _mem StridedInterval{} = []
 identifyConcreteAddresses _mem _ = []
 
@@ -798,7 +802,7 @@ recordWriteStmts ainfo mem absState writtenAddrs (stmt:stmts) =
               | Just Refl <- testEquality repr (addrMemRepr ainfo) ->
                 withArchConstraints ainfo $
                   let addrs = identifyConcreteAddresses mem (transferValue absState v)
-                   in filter isExecutableSegOff addrs ++ writtenAddrs
+                   in addrs ++ writtenAddrs
             _ ->
               writtenAddrs
     recordWriteStmts ainfo mem absState' writtenAddrs' stmts
