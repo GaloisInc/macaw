@@ -1,4 +1,5 @@
 {-# Language GADTs, RankNTypes, DataKinds, TypeOperators #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Macaw.X86.Semantics.AVX (all_instructions) where
 
 import Data.Word(Word8)
@@ -25,7 +26,7 @@ maxReg :: Word8
 maxReg = 15 -- or 7 in 32-bit mode
 
 -- | Either 0 extend a value, or truncate it.
-avxMov :: String -> InstructionDef
+avxMov :: Mnem -> InstructionDef
 avxMov m = defBinary m def
   where
   def :: unused -> F.Value -> F.Value -> X86Generator st ids ()
@@ -39,25 +40,25 @@ avxMov m = defBinary m def
          Nothing -> do vTrunc <- truncateBVValue lw (SomeBV v)
                        l .= vTrunc
 
-avx3 :: String ->
+avx3 :: Mnem ->
         (forall st ids.  F.Value -> F.Value -> F.Value ->
                                                   X86Generator st ids ()) ->
         InstructionDef
 avx3 m k = defInstruction m $ \ii ->
     case F.iiArgs ii of
       [(v1,_), (v2,_), (v3,_)] -> inAVX (k v1 v2 v3)
-      n -> fail $ "[avx3] " ++ m ++ " needs 3 arguments, but has " ++
+      n -> fail $ "[avx3] " ++ ppMnem m ++ " needs 3 arguments, but has " ++
                                                                show (length n)
 
-avx4 :: String ->
+avx4 :: Mnem ->
         (forall st ids.
             F.Value -> F.Value -> F.Value -> Word8 -> X86Generator st ids ()) ->
         InstructionDef
 avx4 m k = defInstruction m $ \ii ->
     case F.iiArgs ii of
       [(v1,_), (v2,_), (v3,_), (F.ByteImm v4, _) ]  -> inAVX (k v1 v2 v3 v4)
-      [_,_,_,_] -> fail $ "[avx4]: " ++ m ++ " expected operand 4 to be a byte"
-      n -> fail $ "[avx4] " ++ m ++ " needs 4 arguments but has " ++
+      [_,_,_,_] -> fail $ "[avx4]: " ++ ppMnem m ++ " expected operand 4 to be a byte"
+      n -> fail $ "[avx4] " ++ ppMnem m ++ " needs 4 arguments but has " ++
                                                                show (length n)
 
 (<~) :: F.Value -> X86PrimFn (Value X86_64 ids) (BVType n) ->
@@ -70,7 +71,7 @@ loc <~ f =
        Nothing   -> fail "Value and result sizes are different"
 
 
-avxOp1I :: String -> (Word8 -> AVXOp1) -> InstructionDef
+avxOp1I :: Mnem -> (Word8 -> AVXOp1) -> InstructionDef
 avxOp1I mnem op = avx3 mnem $ \arg1 arg2 arg3 ->
   do SomeBV vec <- getSomeBVValue arg2
      let vw = typeWidth vec
@@ -78,9 +79,9 @@ avxOp1I mnem op = avx3 mnem $ \arg1 arg2 arg3 ->
        F.ByteImm amt ->
           do v <- eval vec
              arg1 <~ VOp1 vw (op (fromIntegral amt)) v
-       _ -> fail ("[" ++ mnem ++ "]: Expected argument 3 to be immediate.")
+       _ -> fail ("[" ++ ppMnem mnem ++ "]: Expected argument 3 to be immediate.")
 
-avxOp2I :: String -> (Word8 -> AVXOp2) -> InstructionDef
+avxOp2I :: Mnem -> (Word8 -> AVXOp2) -> InstructionDef
 avxOp2I mnem op =
   avx4 mnem $ \dst src1 src2 amt ->
     do SomeBV e1 <- getSomeBVValue src1
@@ -92,13 +93,13 @@ avxOp2I mnem op =
             do v1 <- eval e1
                v2 <- eval e2
                dst <~ VOp2 e1w (op (fromIntegral amt)) v1 v2
-         _ -> fail ("[" ++ mnem ++ "]: Arguements of different widths")
+         _ -> fail ("[" ++ ppMnem mnem ++ "]: Arguements of different widths")
 
 
 
 
 
-avxOp2 :: String -> AVXOp2 -> InstructionDef
+avxOp2 :: Mnem -> AVXOp2 -> InstructionDef
 avxOp2 mnem op =
   avx3 mnem $ \arg1 arg2 arg3 ->
     do SomeBV vec1 <- getSomeBVValue arg2
@@ -110,9 +111,9 @@ avxOp2 mnem op =
            do v1 <- eval vec1
               v2 <- eval vec2
               arg1 <~ VOp2 v1w op v1 v2
-         _ -> fail ("[" ++ mnem ++ "] Invalid arguments")
+         _ -> fail ("[" ++ ppMnem mnem ++ "] Invalid arguments")
 
-avxPointwise2 :: (1 <= n) => String -> AVXPointWiseOp2 -> NatRepr n ->
+avxPointwise2 :: (1 <= n) => Mnem -> AVXPointWiseOp2 -> NatRepr n ->
                                                               InstructionDef
 avxPointwise2 mnem op sz =
   avx3 mnem $ \arg1 arg2 arg3 ->
@@ -126,9 +127,9 @@ avxPointwise2 mnem op sz =
               do v1 <- eval vec1
                  v2 <- eval vec2
                  arg1 <~ Pointwise2 elN sz op v1 v2
-           _ -> fail ("[" ++ mnem ++ "] Invalid arguments")
+           _ -> fail ("[" ++ ppMnem mnem ++ "] Invalid arguments")
 
-avxPointwiseShiftL :: (1 <= n) => String -> NatRepr n -> InstructionDef
+avxPointwiseShiftL :: (1 <= n) => Mnem -> NatRepr n -> InstructionDef
 avxPointwiseShiftL mnem sz =
   avx3 mnem $ \arg1 arg2 arg3 ->
       do SomeBV vec <- getSomeBVValue arg2
@@ -141,9 +142,9 @@ avxPointwiseShiftL mnem sz =
                do v <- eval vec
                   a <- eval amt
                   arg1 <~ PointwiseShiftL elN sz amtw v a
-             _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
+             _ -> fail ("[" ++ ppMnem mnem ++ "]: invalid arguments")
 
-avxPointwiseLogicalShiftR :: (1 <= n) => String -> NatRepr n -> InstructionDef
+avxPointwiseLogicalShiftR :: (1 <= n) => Mnem -> NatRepr n -> InstructionDef
 avxPointwiseLogicalShiftR mnem sz =
   avx3 mnem $ \arg1 arg2 arg3 ->
       do SomeBV vec <- getSomeBVValue arg2
@@ -156,9 +157,9 @@ avxPointwiseLogicalShiftR mnem sz =
                do v <- eval vec
                   a <- eval amt
                   arg1 <~ PointwiseLogicalShiftR elN sz amtw v a
-             _ -> fail ("[" ++ mnem ++ "]: invalid arguments")
+             _ -> fail ("[" ++ ppMnem mnem ++ "]: invalid arguments")
 
-avxInsert :: String -> InstructionDef
+avxInsert :: Mnem -> InstructionDef
 avxInsert mnem =
   avx4 mnem $ \arg1 arg2 arg3 arg4 ->
     do SomeBV vec <- getSomeBVValue arg2
@@ -185,7 +186,7 @@ avxInsert mnem =
             _ -> err "Invalid operands"
   where
   err :: String -> X86Generator st ids a
-  err msg = fail ("[" ++ mnem ++ "] " ++ show msg)
+  err msg = fail ("[" ++ ppMnem mnem ++ "] " ++ show msg)
 
 all_instructions :: [InstructionDef]
 all_instructions =

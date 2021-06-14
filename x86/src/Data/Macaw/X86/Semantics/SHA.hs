@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiWayIf, GADTs, RankNTypes, DataKinds, TypeApplications #-}
-
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Macaw.X86.Semantics.SHA (all_instructions) where
 
 import qualified Flexdis86 as F

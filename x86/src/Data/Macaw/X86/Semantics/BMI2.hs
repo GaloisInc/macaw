@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiWayIf, GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Data.Macaw.X86.Semantics.BMI2 (all_instructions) where
 

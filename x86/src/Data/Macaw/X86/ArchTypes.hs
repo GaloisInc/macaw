@@ -23,6 +23,8 @@ module Data.Macaw.X86.ArchTypes
   , AVXPointWiseOp2(..)
   , AVXOp1(..)
   , AVXOp2(..)
+  , Mnem
+  , ppMnem
   , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -40,6 +42,7 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
+import           Data.ByteString.Char8 as BSC
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -55,7 +58,12 @@ import qualified Flexdis86 as F
 import           Numeric.Natural
 import           Prettyprinter as PP
 
-import           Data.Macaw.X86.X86Reg
+import Data.Macaw.X86.X86Reg
+
+type Mnem = BSC.ByteString
+
+ppMnem :: Mnem -> String
+ppMnem = BSC.unpack
 
 ------------------------------------------------------------------------
 -- SIMDWidth
@@ -197,7 +205,7 @@ data SSE_Op
    | SSE_Max
 
 -- | Return the name of the mnemonic associated with the SSE op.
-sseOpName :: SSE_Op -> String
+sseOpName :: SSE_Op -> Mnem
 sseOpName f =
   case f of
     SSE_Add -> "add"
@@ -918,9 +926,9 @@ instance IsArchFn X86PrimFn where
       X86DivRem  w num1 num2 d ->
         sexprA "div"  [ pure (ppRepValSize w), pp num1, pp num2, pp d ]
       SSE_UnaryOp op tp x y ->
-        sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op) ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
-        sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op)) [ ppShow n, ppShow tp, pp x, pp y ]
       SSE_Sqrt ftp x ->
         sexprA "sse_sqrt" [ ppShow ftp, pp x ]
       SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]

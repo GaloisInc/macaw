@@ -1,4 +1,5 @@
 {-# LANGUAGE MultiWayIf, GADTs #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Data.Macaw.X86.Semantics.ADX (all_instructions) where
 
