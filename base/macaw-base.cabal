@@ -52,7 +52,6 @@ library
     Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
-    Data.Macaw.AbsDomain.StackAnalysis
     Data.Macaw.AbsDomain.StridedInterval
     Data.Macaw.Analysis.FunctionArgs
     Data.Macaw.Analysis.RegisterUse
@@ -79,6 +78,9 @@ library
     Data.Macaw.Utils.Changed
     Data.Macaw.Utils.IncComp
     Data.Macaw.Utils.Pretty
+
+  other-modules:
+    Data.Macaw.AbsDomain.StackAnalysis
 
   ghc-options: -Wall -Wcompat
   ghc-options: -fno-warn-unticked-promoted-constructors

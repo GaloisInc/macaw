@@ -65,6 +65,8 @@ module Data.Macaw.Discovery
        , State.jtlBackingSize
          -- * Simplification
        , eliminateDeadStmts
+         -- * Re-exports
+       , ArchAddrWidth
        ) where
 
 import           Control.Applicative ( Alternative((<|>), empty), liftA )
@@ -133,8 +135,12 @@ identifyConcreteAddresses :: MemWidth w
                           -> AbsValue w (BVType w)
                           -> [MemSegmentOff w]
 identifyConcreteAddresses mem (FinSet s) =
-  mapMaybe (resolveAbsoluteAddr mem . fromInteger) (Set.toList s)
-identifyConcreteAddresses _ (CodePointers s _) = Set.toList s
+  let ins o r =
+        case resolveAbsoluteAddr mem (fromInteger o) of
+          Just a | isExecutableSegOff a -> a : r
+          _ -> r
+   in foldr ins [] s
+identifyConcreteAddresses _ (CodePointers s _) = filter isExecutableSegOff $ Set.toList s
 identifyConcreteAddresses _mem StridedInterval{} = []
 identifyConcreteAddresses _mem _ = []
 
@@ -254,8 +260,8 @@ sliceMemContents' stride prev c next
       Left e -> Left e
       Right (this, rest) -> sliceMemContents' stride (this:prev) (c-1) rest
 
--- | `sliceMemContents stride cnt contents` splits contents up into `cnt`
--- memory regions each with size `stride`.
+-- | @sliceMemContents stride cnt contents@ splits contents up into @cnt@
+-- memory regions each with size @stride@.
 sliceMemContents
   :: MemWidth w
   => Int -- ^ Number of bytes in each slice.
@@ -555,8 +561,8 @@ extractJumpTableSlices jmpBounds base stride ixVal tp = do
                     (V.fromList strideSlices)
   pure slices
 
--- | `matchBoundsMemArray mem aps bnds val` checks to try to interpret
--- `val` as a memory read where
+-- | @matchBoundedMemArray mem aps bnds val@ checks to try to interpret
+-- @val@ as a memory read where
 --
 -- * the address read has the form @base + stride * ixVal@,
 -- * @base@ is a valid `MemSegmentOff`,
@@ -604,8 +610,8 @@ matchAddr w
   | Just Refl <- testEquality w n64 = Just Addr64
   | otherwise = Nothing
 
--- | `matchExtension x` matches in `x` has the form `(uext y w)` or `(sext y w)` and returns
--- a description about the extension as well as the pattern `y`.
+-- | @matchExtension x@ matches in @x@ has the form @uext y w@ or @sext y w@ and returns
+-- a description about the extension as well as the pattern @y@.
 matchExtension :: forall arch ids
                .  ( MemWidth (ArchAddrWidth arch)
                   , HasRepr (ArchReg arch) TypeRepr)
@@ -796,7 +802,7 @@ recordWriteStmts ainfo mem absState writtenAddrs (stmt:stmts) =
               | Just Refl <- testEquality repr (addrMemRepr ainfo) ->
                 withArchConstraints ainfo $
                   let addrs = identifyConcreteAddresses mem (transferValue absState v)
-                   in filter isExecutableSegOff addrs ++ writtenAddrs
+                   in addrs ++ writtenAddrs
             _ ->
               writtenAddrs
     recordWriteStmts ainfo mem absState' writtenAddrs' stmts
@@ -1627,10 +1633,10 @@ mkFunInfo s fs =
 
 reportAnalyzeBlock :: DiscoveryOptions
                       -- ^ Options controlling discovery
-                   -> MemSegmentOff w -- ^ Function address
-                   -> MemSegmentOff w -- ^ Block address
-                   -> IncComp (DiscoveryEvent w) a
-                   -> IncComp (DiscoveryEvent w) a
+                   -> ArchSegmentOff arch -- ^ Function address
+                   -> ArchSegmentOff arch -- ^ Block address
+                   -> IncComp (DiscoveryEvent arch) a
+                   -> IncComp (DiscoveryEvent arch) a
 reportAnalyzeBlock disOpts faddr baddr
   | logAtAnalyzeBlock disOpts = IncCompLog (ReportAnalyzeBlock faddr baddr)
   | otherwise = id
@@ -1641,7 +1647,7 @@ analyzeBlocks :: DiscoveryOptions
               -> ArchSegmentOff arch
                     -- ^ The address to explore
               -> FunState arch s ids
-              -> STL.ST s (IncComp (DiscoveryEvent (ArchAddrWidth arch))
+              -> STL.ST s (IncComp (DiscoveryEvent arch)
                                    (DiscoveryState arch, Some (DiscoveryFunInfo arch)))
 analyzeBlocks disOpts ds0 faddr fs =
   case Set.minView (fs^.frontier) of
@@ -1679,7 +1685,7 @@ discoverFunction :: DiscoveryOptions
                    -- ^ Additional identified intraprocedural jump targets
                    --
                    -- The pairs are: (address of the block jumped from, jump targets)
-                -> IncComp (DiscoveryEvent (ArchAddrWidth arch))
+                -> IncComp (DiscoveryEvent arch)
                            (DiscoveryState arch, Some (DiscoveryFunInfo arch))
 discoverFunction disOpts addr rsn s extraIntraTargets = STL.runST $ do
   Some gen <- STL.strictToLazyST newSTNonceGenerator
@@ -1830,20 +1836,32 @@ defaultDiscoveryOptions =
 ------------------------------------------------------------------------
 -- Resolve functions with logging
 
-data DiscoveryEvent w
-   = ReportAnalyzeFunction !(MemSegmentOff w)
-   | ReportAnalyzeFunctionDone !(MemSegmentOff w)
-   | ReportIdentifyFunction !(MemSegmentOff w) !(MemSegmentOff w) !(FunctionExploreReason w)
-   | ReportAnalyzeBlock !(MemSegmentOff w) !(MemSegmentOff w)
-
+-- | Events reported by discovery process.
+data DiscoveryEvent arch
+     -- | Report that discovery has now started analyzing the function at the given offset.
+   = ReportAnalyzeFunction !(ArchSegmentOff arch)
+     -- | @ReoptAnalyzeFunctionDone f@ we completed discovery and yielded function @f@.
+   | forall ids . ReportAnalyzeFunctionDone (DiscoveryFunInfo arch ids)
+     -- | @ReportIdentifyFunction src tgt rsn@ indicates Macaw identified a
+     -- candidate funciton entry point @tgt@ from analyzing @src@ for the
+     -- given reason @rsn@.
+   | ReportIdentifyFunction
+        !(ArchSegmentOff arch)
+        !(ArchSegmentOff arch)
+        !(FunctionExploreReason (ArchAddrWidth arch))
+      -- | @ReportAnalyzeBlock faddr baddr@ indicates discovery identified
+      -- a block at @baddr@ in @faddr@.
+      --
+      -- N.B. This event is only emitted when `logAtAnalyzeBlock` is true.
+   | ReportAnalyzeBlock !(ArchSegmentOff arch) !(ArchSegmentOff arch)
 
 ppSymbol :: MemWidth w => Maybe BSC.ByteString -> MemSegmentOff w -> String
 ppSymbol (Just fnName) addr = show addr ++ " (" ++ BSC.unpack fnName ++ ")"
 ppSymbol Nothing addr = show addr
 
-logDiscoveryEvent :: MemWidth w
-                  => AddrSymMap w
-                  -> DiscoveryEvent w
+logDiscoveryEvent :: MemWidth (ArchAddrWidth arch)
+                  => AddrSymMap (ArchAddrWidth arch)
+                  -> DiscoveryEvent arch
                   -> IO ()
 logDiscoveryEvent symMap p =
   case p of
@@ -1864,7 +1882,7 @@ logDiscoveryEvent symMap p =
 resolveFuns :: DiscoveryOptions
                -- ^ Options controlling discovery
             -> DiscoveryState arch
-            -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+            -> IncCompM (DiscoveryEvent arch) r (DiscoveryState arch)
 resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
   case Map.minViewWithKey (info^.unexploredFunctions) of
     Nothing -> pure info
@@ -1874,8 +1892,8 @@ resolveFuns disOpts info = seq info $ withArchConstraints (archInfo info) $ do
       if Map.member addr (info^.funInfo) then
         resolveFuns disOpts info
        else do
-        (info',_) <- liftIncComp id $ discoverFunction disOpts addr rsn info []
-        incCompLog $ ReportAnalyzeFunctionDone addr
+        (info', Some f) <- liftIncComp id $ discoverFunction disOpts addr rsn info []
+        incCompLog $ ReportAnalyzeFunctionDone f
         resolveFuns disOpts info'
 
 ------------------------------------------------------------------------
@@ -1889,7 +1907,7 @@ incCompleteDiscovery :: forall arch r
                      .  DiscoveryState arch
                      -> DiscoveryOptions
                         -- ^ Options controlling discovery
-                     -> IncCompM (DiscoveryEvent (ArchAddrWidth arch)) r (DiscoveryState arch)
+                     -> IncCompM (DiscoveryEvent arch) r (DiscoveryState arch)
 incCompleteDiscovery initState disOpt = do
  let ainfo = archInfo initState
  let mem = memory initState

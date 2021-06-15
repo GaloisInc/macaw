@@ -277,15 +277,6 @@ instance MemWidth w => MemIndex (MemInt w) where
     && toInteger (memIntValue i)
        <  toInteger (memIntValue b) + toInteger (memReprBytes r)
 
-instance MemWidth w => MemIndex (MemWord w) where
-  endOffset off sz | fromIntegral endI == end = Just endI
-                   | otherwise = Nothing
-    where end = fromIntegral off + sz
-          endI = fromIntegral end
-  memOverlap b r i
-    = memWordValue b <= memWordValue i
-    && fromIntegral (memWordValue i - memWordValue b) < memReprBytes r
-
 -- | Lookup value (if any) at given offset and representation.
 --
 -- This generalized @memMapLookup@ below to not require exact matches, but

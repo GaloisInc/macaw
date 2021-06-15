@@ -23,7 +23,10 @@ module Data.Macaw.Memory.ElfLoader
   , memoryForElfSections
   , memoryForElfSegments
   , memoryForElfSegments'
+  , SectionIndexMap
   , MemLoadWarning(..)
+  , RelocationError
+  , SectionName
   , resolveElfContents
   , elfAddrWidth
   , adjustedLoadRegionIndex
@@ -186,10 +189,7 @@ data MemLoadWarning
   | MultipleRelocationsAtAddr !Word64
     -- ^ Multiple relocations at the given offset
   | IgnoreRelocation !RelocationError
-    -- ^ @IgnoreRelocation idx tp err@ warns we ignored the location at index @idx@ due to @err@.
-    --
-    -- @tp@ is a string representing the type which we print, because usually errors come because
-    -- we don't support that type or only partially implement it.
+    -- ^ @IgnoreRelocation err@ warns we ignored a relocation.
 
 ppSymbol :: SymbolName -> String
 ppSymbol "" = "unnamed symbol"
