@@ -1293,7 +1293,7 @@ macawExtensions
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
 macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
-  C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
+  C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
                   , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
                   }
 

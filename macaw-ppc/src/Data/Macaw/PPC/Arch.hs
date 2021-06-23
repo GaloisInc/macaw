@@ -31,6 +31,7 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
+import           Data.Kind ( Type )
 import qualified Prettyprinter as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
@@ -109,7 +110,7 @@ rewriteTermStmt s =
     PPCTrap -> return PPCTrap
     PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
-data PPCStmt (v :: SP.Variant) (f :: MT.Type -> *) where
+data PPCStmt (v :: SP.Variant) (f :: MT.Type -> Type) where
   Attn :: PPCStmt v f
   Sync :: PPCStmt v f
   Isync :: PPCStmt v f

@@ -75,6 +75,37 @@ data ARMReg tp where
                 => ASL.GlobalRef s -> ARMReg tp
   ARMDummyReg :: ARMReg (MT.TupleType '[])
 
+$(return [])  -- allow template haskell below to see definitions above
+
+instance TestEquality ARMReg where
+    testEquality = $(PTH.structuralTypeEquality [t| ARMReg |]
+                      [ (PTH.ConType [t|ASL.GlobalRef|]
+                         `PTH.TypeApp` PTH.AnyType,
+                         [|testEquality|])
+                      ])
+
+instance OrdF ARMReg where
+  compareF = $(PTH.structuralTypeOrd [t| ARMReg |]
+                [ (PTH.ConType [t|ASL.GlobalRef|]
+                    `PTH.TypeApp` PTH.AnyType,
+                    [|compareF|])
+                ])
+
+-- | Translate a location from the semmc semantics into a location suitable for
+-- use in macaw
+locToRegTH :: SA.Location SA.AArch32 ctp
+           -> TH.Q TH.Exp
+locToRegTH (SA.Location globalRef) = do
+  let refName = T.unpack (PSR.symbolRepr (ASL.globalRefSymbol globalRef))
+  case ASL.globalRefRepr globalRef of
+    WT.BaseBoolRepr ->
+      [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
+    WT.BaseBVRepr _ ->
+      [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
+    WT.BaseStructRepr Ctx.Empty ->
+      [| ARMDummyReg |]
+    _tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ TH.LitE (TH.StringL refName)) |]
+
 -- | GPR14 is the link register for ARM
 arm_LR :: (w ~ MC.RegAddrWidth ARMReg, 1 <= w) => ARMReg (MT.BVType w)
 arm_LR = ARMGlobalBV (ASL.knownGlobalRef @"_R14")
@@ -94,27 +125,11 @@ instance ShowF ARMReg where
 instance MC.PrettyF ARMReg where
   prettyF = PP.pretty . showF
 
-$(return [])  -- allow template haskell below to see definitions above
-
-instance TestEquality ARMReg where
-    testEquality = $(PTH.structuralTypeEquality [t| ARMReg |]
-                      [ (PTH.ConType [t|ASL.GlobalRef|]
-                         `PTH.TypeApp` PTH.AnyType,
-                         [|testEquality|])
-                      ])
-
 instance EqF ARMReg where
   r1 `eqF` r2 = isJust (r1 `testEquality` r2)
 
 instance Eq (ARMReg tp) where
   r1 == r2 = r1 `eqF` r2
-
-instance OrdF ARMReg where
-  compareF = $(PTH.structuralTypeOrd [t| ARMReg |]
-                [ (PTH.ConType [t|ASL.GlobalRef|]
-                    `PTH.TypeApp` PTH.AnyType,
-                    [|compareF|])
-                ])
 
 instance Ord (ARMReg tp) where
   r1 `compare` r2 = toOrdering (r1 `compareF` r2)
@@ -183,21 +198,6 @@ linuxSystemCallPreservedRegisters =
   -- Currently, we are only considering the non-volatile GPRs.  There
   -- are also a set of non-volatile floating point registers.  I have
   -- to check on the vector registers.
-
--- | Translate a location from the semmc semantics into a location suitable for
--- use in macaw
-locToRegTH :: SA.Location SA.AArch32 ctp
-           -> TH.Q TH.Exp
-locToRegTH (SA.Location globalRef) = do
-  let refName = T.unpack (PSR.symbolRepr (ASL.globalRefSymbol globalRef))
-  case ASL.globalRefRepr globalRef of
-    WT.BaseBoolRepr ->
-      [| ARMGlobalBool (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
-    WT.BaseBVRepr _ ->
-      [| ARMGlobalBV (ASL.knownGlobalRef :: ASL.GlobalRef $(return (TH.LitT (TH.StrTyLit refName)))) |]
-    WT.BaseStructRepr Ctx.Empty ->
-      [| ARMDummyReg |]
-    _tp -> [| error $ "locToRegTH undefined for unrecognized location: " <> $(return $ TH.LitE (TH.StringL refName)) |]
 
 branchTakenReg :: ARMReg MT.BoolType
 branchTakenReg = ARMGlobalBool (ASL.knownGlobalRef @"__BranchTaken")

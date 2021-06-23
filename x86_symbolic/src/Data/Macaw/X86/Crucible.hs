@@ -287,7 +287,8 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   where
   logger _ _ = return ()
 
-  evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
+  evalExt :: (forall a. g a -> IO (RegValue sym a))
+          -> (forall a. EmptyExprExtension g a -> IO (RegValue sym a))
   evalExt _ y  = case y of {}
 
 pureSemSymUn

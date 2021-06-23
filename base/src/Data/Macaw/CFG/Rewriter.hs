@@ -692,7 +692,7 @@ rewriteAssignRhs rhs =
           def  <- rewriteValue def0
           evalRewrittenRhs (CondReadMem repr cond addr def)
     EvalArchFn archFn _repr -> do
-      f <- Rewriter $ gets $ rwctxArchFn . rwContext
+      f <- Rewriter $ gets $ \x -> rwctxArchFn (rwContext x)
       f archFn
 
 rewriteValue :: Value arch src tp -> Rewriter arch s src tgt (Value arch tgt tp)

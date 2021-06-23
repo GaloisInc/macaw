@@ -1827,7 +1827,7 @@ mkBlockUsageSummary ctx cns sis blk = do
         demandValue idx
         recordRegMap (regStateMap regs)
       ParsedCall regs _mret -> do
-        callFn <- asks callDemandFn
+        callFn <- asks $ \x -> callDemandFn x
         -- Get function type associated with function
         off <- gets blockCurOff
         let insnAddr =
@@ -1877,7 +1877,7 @@ mkBlockUsageSummary ctx cns sis blk = do
         retRegs <- asks $ returnRegisters
         traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) retRegs
       ParsedArchTermStmt tstmt regs _mnext -> do
-        summaryFn <- asks reguseTermFn
+        summaryFn <- asks $ \x -> reguseTermFn x
         s <- get
         case summaryFn tstmt regs s of
           Left emsg -> throwError emsg
