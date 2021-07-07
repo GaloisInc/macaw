@@ -2,6 +2,8 @@ module Data.Macaw.BinaryLoader.ELF (
   resolveAbsoluteAddress
   ) where
 
+import           Data.Maybe ( listToMaybe )
+
 import qualified Data.Macaw.Memory as MM
 
 -- | Resolve a 'MM.MemWord', interpreted as an absolute address, into a 'MM.MemSegmentOff'
@@ -23,4 +25,9 @@ resolveAbsoluteAddress
   => MM.Memory w
   -> MM.MemWord w
   -> Maybe (MM.MemSegmentOff w)
-resolveAbsoluteAddress mem addr = MM.resolveAbsoluteAddr mem addr
+resolveAbsoluteAddress mem addr =
+  listToMaybe [ segOff
+              | seg <- MM.memSegments mem
+              , let region = MM.segmentBase seg
+              , Just segOff <- return (MM.resolveRegionOff mem region addr)
+              ]

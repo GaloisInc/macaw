@@ -16,6 +16,7 @@ import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as DLN
 import qualified Data.Macaw.BinaryLoader as MBL
+import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
@@ -51,15 +52,15 @@ aarch32EntryPoints :: (X.MonadThrow m)
                    => MBL.LoadedBinary MA.ARM (EE.ElfHeaderInfo 32)
                    -> m (DLN.NonEmpty (MM.MemSegmentOff 32))
 aarch32EntryPoints loadedBinary =
-  case MM.asSegmentOff mem addr of
+  case BLE.resolveAbsoluteAddress mem addr of
     Nothing -> X.throwM (InvalidEntryPoint addr)
     Just entryPoint ->
-      return (entryPoint DLN.:| mapMaybe (MM.asSegmentOff mem) symbols)
+      return (entryPoint DLN.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
   where
     mem = MBL.memoryImage loadedBinary
-    addr = MM.absoluteAddr (MM.memWord (fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary))))))
+    addr = MM.memWord (fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
     elfData = elf (MBL.binaryFormatData loadedBinary)
-    symbols = [ MM.absoluteAddr (MM.memWord (fromIntegral (EE.steValue entry)))
+    symbols = [ MM.memWord (fromIntegral (EE.steValue entry))
               | Just (Right st) <- [EE.decodeHeaderSymtab elfData]
               , entry <- F.toList (EE.symtabEntries st)
               , EE.steType entry == EE.STT_FUNC
@@ -93,7 +94,7 @@ indexSymbols = F.foldl' doIndex Map.empty
       Map.insert (MM.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
 
 data AArch32LoadException = AArch32ElfLoadError String
-                          | InvalidEntryPoint (MM.MemAddr 32)
+                          | InvalidEntryPoint (MM.MemWord 32)
                           | MissingSymbolFor (MM.MemAddr 32)
 
 deriving instance Show AArch32LoadException
