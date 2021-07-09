@@ -1,7 +1,4 @@
 {-|
-Copyright  : (c) Galois, Inc 2016-2019
-Maintainer : jhendrix@galois.com
-
 This defines the data structures for storing information learned from
 code discovery.  The 'DiscoveryState' is the main data structure
 representing this information.
@@ -25,6 +22,7 @@ module Data.Macaw.Discovery.State
   , GlobalDataInfo(..)
   , globalDataMap
   , funInfo
+  , UnexploredFunctionMap
   , unexploredFunctions
   , NoReturnFunStatus(..)
   , trustedFunctionEntryPoints
@@ -49,6 +47,7 @@ module Data.Macaw.Discovery.State
   , isReadOnlyBoundedMemArray
     -- * Reasons for exploring
   , FunctionExploreReason(..)
+  , ppFunReason
   , BlockExploreReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
@@ -98,6 +97,16 @@ data FunctionExploreReason w
   | UserRequest
   deriving (Eq, Show)
 
+-- | Print exploration reason.
+ppFunReason :: FunctionExploreReason w -> String
+ppFunReason rsn =
+  case rsn of
+    InitAddr -> ""
+    UserRequest -> ""
+    PossibleWriteEntry a -> " (written at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
+    CallTarget a -> " (called at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
+    CodePointerInMem a -> " (in initial memory at " ++ showHex (memWordValue (addrOffset (segoffAddr a))) ")"
+
 ------------------------------------------------------------------------
 -- BlockExploreReason
 
@@ -139,8 +148,8 @@ instance (Integral w, Show w) => Show (GlobalDataInfo w) where
 
 -- | This describes a region of memory dereferenced in some array read.
 --
--- These regions may be be sparse, given an index `i`, the
--- the address given by 'arBase' + 'arIx'*'arStride'.
+-- These regions may be be sparse, given an index @i@, the
+-- the address given by @arBase@ + @arIx'*'arStride@.
 data BoundedMemArray arch tp = BoundedMemArray
   { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
     -- ^ The base address for array accesses.
@@ -197,19 +206,19 @@ data Extension w = Extension { _extIsSigned :: !Bool
 -- resulting addresses must be aligned. See the IPAlignment class.
 data JumpTableLayout arch
   = AbsoluteJumpTable !(BoundedMemArray arch (BVType (ArchAddrWidth arch)))
-  -- ^ `AbsoluteJumpTable r` describes a jump table where the jump
-  -- target is directly stored in the array read `r`.
+  -- ^ @AbsoluteJumpTable r@ describes a jump table where the jump
+  -- target is directly stored in the array read @r@.
   | forall w . RelativeJumpTable !(ArchSegmentOff arch)
                                  !(BoundedMemArray arch (BVType w))
                                  !(Extension w)
-  -- ^ `RelativeJumpTable base read ext` describes information about a
+  -- ^ @RelativeJumpTable base read ext@ describes information about a
   -- jump table where all jump targets are relative to a fixed base
   -- address.
   --
-  -- The value is computed as `baseVal + readVal` where
+  -- The value is computed as @baseVal + readVal@ where
   --
-  -- `baseVal = fromMaybe 0 base`, `readVal` is the value stored at
-  -- the memory read described by `read` with the sign of `ext`.
+  -- @baseVal = fromMaybe 0 base@, @readVal@ is the value stored at
+  -- the memory read described by @read@ with the sign of @ext@.
 
 deriving instance RegisterInfo (ArchReg arch) => Show (JumpTableLayout arch)
 
@@ -263,9 +272,9 @@ data ParsedTermStmt arch ids
   -- | A jump to an explicit address within a function.
   | ParsedJump !(RegState (ArchReg arch) (Value arch ids)) !(ArchSegmentOff arch)
   -- | @ParsedBranch regs cond trueAddr falseAddr@ represents a conditional
-  -- branch that jumps to `trueAddr` if `cond` is true and `falseAddr` otherwise.
+  -- branch that jumps to @trueAddr@ if @cond@ is true and @falseAddr@ otherwise.
   --
-  -- The value assigned to the IP in `regs` should reflect this if-then-else
+  -- The value assigned to the IP in @regs@ should reflect this if-then-else
   -- structure.
   | ParsedBranch !(RegState (ArchReg arch) (Value arch ids))
                  !(Value arch ids BoolType)

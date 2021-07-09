@@ -23,6 +23,8 @@ module Data.Macaw.X86.ArchTypes
   , AVXPointWiseOp2(..)
   , AVXOp1(..)
   , AVXOp2(..)
+  , Mnem
+  , ppMnem
   , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -40,6 +42,7 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
+import           Data.ByteString.Char8 as BSC
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -55,7 +58,12 @@ import qualified Flexdis86 as F
 import           Numeric.Natural
 import           Prettyprinter as PP
 
-import           Data.Macaw.X86.X86Reg
+import Data.Macaw.X86.X86Reg
+
+type Mnem = BSC.ByteString
+
+ppMnem :: Mnem -> String
+ppMnem = BSC.unpack
 
 ------------------------------------------------------------------------
 -- SIMDWidth
@@ -197,7 +205,7 @@ data SSE_Op
    | SSE_Max
 
 -- | Return the name of the mnemonic associated with the SSE op.
-sseOpName :: SSE_Op -> String
+sseOpName :: SSE_Op -> Mnem
 sseOpName f =
   case f of
     SSE_Add -> "add"
@@ -293,28 +301,35 @@ instance Show AVXPointWiseOp2 where
 -- | Defines primitive functions in the X86 format.
 data X86PrimFn f tp where
 
-  -- | Return true if the operand has an even number of bits set.
-  EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
+  -- | Operations used by AESNI instructions.
+  AESNI_AESDec
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESDecLast
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESEnc
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESEncLast
+    :: !(f (BVType 128))
+    -> !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESIMC
+    :: !(f (BVType 128))
+    -> X86PrimFn f (BVType 128)
+  AESNI_AESKeyGenAssist
+    :: !(f (BVType 128))
+    -> !Word8
+    -> X86PrimFn f (BVType 128)
 
-  -- | Read the 'FS' base address.
-  ReadFSBase :: X86PrimFn f (BVType 64)
-
-  -- | Read the 'GS' base address.
-  ReadGSBase :: X86PrimFn f (BVType 64)
-
-  -- | Retrieves the 16-bit segment selector associated with the segment register.
-  --
-  -- This corresponds to the "mov" instruction with a segment selector
-  -- as the source.  See the discussion in the Intel® 64 and IA-32
-  -- Architectures Software Developer’s Manual volume 2 for "mov" for
-  -- more details."
-  GetSegmentSelector :: !F.Segment
-                     -> X86PrimFn f (BVType 16)
-
-  -- | The CPUID instruction.
-  --
-  -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
-  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
+  CLMul
+    :: !(f (BVType 64))
+    -> !(f (BVType 64))
+    -> X86PrimFn f (BVType 128)
 
   -- | This implements the logic for the cmpxchg8b instruction
   --
@@ -338,30 +353,22 @@ data X86PrimFn f tp where
                -- Value in EDX
             -> X86PrimFn f (TupleType [BoolType, BVType 32, BVType 32])
 
-  -- | The RDTSC instruction.
+  -- | The CPUID instruction.
   --
-  -- This returns the current time stamp counter a 64-bit value that will
-  -- be stored in edx:eax
-  RDTSC :: X86PrimFn f (BVType 64)
+  -- Given value in eax register, this returns the concatenation of eax:ebx:ecx:edx.
+  CPUID :: !(f (BVType 32)) -> X86PrimFn f (BVType 128)
 
-  -- | The XGetBV instruction primitive
-  --
-  -- This returns the extended control register defined in the given value
-  -- as a 64-bit value that will be stored in edx:eax
-  XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
+  -- | Return true if the operand has an even number of bits set.
+  EvenParity :: !(f (BVType 8)) -> X86PrimFn f BoolType
 
-  -- | @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
-  -- based on indices defined in the corresponding bytes of @s@.
+  -- | Retrieves the 16-bit segment selector associated with the segment register.
   --
-  -- Let @w@ be the number of bytes, and let @l = log2(n)@.
-  -- Given a byte index @i@, the value of byte @res[i]@, is defined by
-  --   @res[i] = 0 if msb(s[i]) == 1@
-  --   @res[i] = x[j] where j = s[i](0..l)
-  -- where @msb(y)@ returns the most-significant bit in byte @y@.
-  PShufb :: !(SIMDByteCount w)
-         -> !(f (VecType w (BVType 8)))
-         -> !(f (VecType w (BVType 8)))
-         -> X86PrimFn f (VecType w (BVType 8))
+  -- This corresponds to the "mov" instruction with a segment selector
+  -- as the source.  See the discussion in the Intel® 64 and IA-32
+  -- Architectures Software Developer’s Manual volume 2 for "mov" for
+  -- more details."
+  GetSegmentSelector :: !F.Segment
+                     -> X86PrimFn f (BVType 16)
 
   -- | Compares two memory regions and return the number of bytes that were the same.
   --
@@ -381,6 +388,88 @@ data X86PrimFn f tp where
          -> !(f BoolType)
          -> X86PrimFn f (BVType 64)
 
+  -- | This returns a 80-bit value where the high 16-bits are all
+  -- 1s, and the low 64-bits are the given register.
+  MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
+
+  -- | Pointwise binary operation on vectors. Should not have side effects.
+  --
+  -- For the expression @Pointwise2 n w op vec1 vec2@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @op@ is the binary operation to perform on the vectors
+  -- * @vec1@ is the first vector
+  -- * @vec2@ is the second vector
+  Pointwise2 :: (1 <= elSize, 1 <= elNum)
+             => !(NatRepr elNum)
+             -> !(NatRepr elSize)
+             -> !AVXPointWiseOp2
+             -> !(f (BVType (elNum * elSize)))
+             -> !(f (BVType (elNum * elSize)))
+             -> X86PrimFn f (BVType (elNum * elSize))
+
+  -- | Shift left each element in the vector by the given amount.
+  -- The new ("shifted-in") bits are 0.
+  --
+  -- For the expression @PointwiseShiftL n w amtw vec amt@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @amtw@ is the size of the shift amount in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @amt@ is the shift amount in bits
+  PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
+                     !(NatRepr elNum)
+                  -> !(NatRepr elSize)
+                  -> !(NatRepr sz)
+                  -> !(f (BVType (elNum * elSize)))
+                  -> !(f (BVType sz))
+                  -> X86PrimFn f (BVType (elNum * elSize))
+
+  -- | Shift right each element in the vector by the given amount.
+  -- The new ("shifted-in") bits are 0.
+  --
+  -- For the expression @PointwiseShiftLogicalR n w amtw vec amt@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @amtw@ is the size of the shift amount in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @amt@ is the shift amount in bits
+  PointwiseLogicalShiftR :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
+                            !(NatRepr elNum)
+                         -> !(NatRepr elSize)
+                         -> !(NatRepr sz)
+                         -> !(f (BVType (elNum * elSize)))
+                         -> !(f (BVType sz))
+                         -> X86PrimFn f (BVType (elNum * elSize))
+
+  -- | @PShufb w x s@ returns a value @res@ generated from the bytes of @x@
+  -- based on indices defined in the corresponding bytes of @s@.
+  --
+  -- Let @w@ be the number of bytes, and let @l = log2(n)@.
+  -- Given a byte index @i@, the value of byte @res[i]@, is defined by
+  --   @res[i] = 0 if msb(s[i]) == 1@
+  --   @res[i] = x[j] where j = s[i](0..l)
+  -- where @msb(y)@ returns the most-significant bit in byte @y@.
+  PShufb :: !(SIMDByteCount w)
+         -> !(f (VecType w (BVType 8)))
+         -> !(f (VecType w (BVType 8)))
+         -> X86PrimFn f (VecType w (BVType 8))
+
+  -- | The RDTSC instruction.
+  --
+  -- This returns the current time stamp counter a 64-bit value that will
+  -- be stored in edx:eax
+  RDTSC :: X86PrimFn f (BVType 64)
+
+  -- | Read the 'FS' base address.
+  ReadFSBase :: X86PrimFn f (BVType 64)
+
+  -- | Read the 'GS' base address.
+  ReadGSBase :: X86PrimFn f (BVType 64)
+
   -- | `RepnzScas sz val base cnt` searchs through a buffer starting at
   -- `base` to find  an element `i` such that base[i] = val.
   -- Each step it increments `i` by 1 and decrements `cnt` by `1`.
@@ -391,9 +480,184 @@ data X86PrimFn f tp where
             -> !(f (BVType 64))
             -> X86PrimFn f (BVType 64)
 
-  -- | This returns a 80-bit value where the high 16-bits are all
-  -- 1s, and the low 64-bits are the given register.
-  MMXExtend :: !(f (BVType 64)) -> X86PrimFn f (BVType 80)
+
+  -- | Operations used by SHA256 instructions.
+  -- (See SHA256RNDS2, SHA256MSG1, and SHA256MSG2 in the ISA manual).
+  -- For concise definitions, see: https://web.archive.org/web/20130526224224/http://csrc.nist.gov/groups/STM/cavp/documents/shs/sha256-384-512.pdf
+  SHA_sigma0
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_sigma1
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Sigma0
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Sigma1
+    :: !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Ch
+    :: !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+  SHA_Maj
+    :: !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> !(f (BVType 32))
+    -> X86PrimFn f (BVType 32)
+
+  -- | This performs a comparison between the two instructions (as
+  -- needed by the CMPSD and CMPSS instructions.
+  --
+  -- This implicitly depends on the MXCSR register as it may throw
+  -- exceptions when given signaling NaNs or denormals when the
+  -- appropriate bits are set on the MXCSR register.
+  SSE_CMPSX :: !SSE_Cmp
+            -> !(SSE_FloatType tp)
+            -> !(f (FloatType tp))
+            -> !(f (FloatType tp))
+            -> X86PrimFn f BoolType
+
+  -- | This converts a double to a single precision number.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a exception based on the configuration of that
+  -- register.
+  SSE_CVTSD2SS :: !(f (FloatType DoubleFloat))
+               -> X86PrimFn f (FloatType SingleFloat)
+
+  -- | This converts a signed integer to a floating point value of
+  -- the given type  (the input width should be 32 or 64)
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a precision exception based on the configuration of that
+  -- register.
+  SSE_CVTSI2SX
+    :: (1 <= w)
+    => !(SSE_FloatType tp)
+    -> !(NatRepr w)
+    -> !(f (BVType w))
+    -> X86PrimFn f (FloatType tp)
+
+  -- | This converts a single to a double precision number.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal a exception based on the configuration of that
+  -- register.
+  SSE_CVTSS2SD :: !(f (FloatType SingleFloat))
+               -> X86PrimFn f (FloatType DoubleFloat)
+
+  -- | This converts a floating point value to a bitvector of the
+  -- given width (should be 32 or 64)
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions based on the configuration of that register.
+  SSE_CVTTSX2SI
+    :: (1 <= n)
+    => !(NatRepr n)
+    -> !(SSE_FloatType tp)
+    -> !(f (FloatType tp))
+    -> X86PrimFn f (BVType n)
+
+  -- | This computes the sqrt of the floating point value.
+  SSE_Sqrt :: !(SSE_FloatType tp)
+           -> !(f (FloatType tp))
+           -> X86PrimFn f (FloatType tp)
+
+  -- |  This performs a comparison of two floating point values and returns three flags:
+  --
+  --  * ZF is for the zero-flag and true if the arguments are equal or
+  --  * either argument is a NaN.
+  --
+  --  * PF records the unordered flag and is true if either value is a NaN.
+  --
+  --  * CF is the carry flag, and true if the first floating point
+  --    argument is less than second or either value is a NaN.
+  --
+  -- The order of the flags was chosen to be consistent with the Intel
+  -- documentation for UCOMISD and UCOMISS.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions based on the configuration of that register.
+  SSE_UCOMIS :: !(SSE_FloatType tp)
+             -> !(f (FloatType tp))
+             -> !(f (FloatType tp))
+             -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
+
+  -- | This applies the operation pairwise to floating point values.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions as noted in the documentation on SSE.
+  SSE_UnaryOp :: !SSE_Op
+             -> !(SSE_FloatType tp)
+             -> !(f (FloatType tp))
+             -> !(f (FloatType tp))
+             -> X86PrimFn f (FloatType tp)
+
+  -- | This applies the operation pairwise to two vectors of floating point values.
+  --
+  -- This function implicitly depends on the MXCSR register and may
+  -- signal exceptions as noted in the documentation on SSE.
+  SSE_VectorOp :: 1 <= n
+               => !SSE_Op
+               -> !(NatRepr n)
+               -> !(SSE_FloatType tp)
+               -> !(f (VecType n (FloatType tp)))
+               -> !(f (VecType n (FloatType tp)))
+               -> X86PrimFn f (VecType n (FloatType tp))
+
+  -- | Extract 128 bits from a 256 bit value, as described by the
+  -- control mask
+  VExtractF128
+    :: !(f (BVType 256))
+    -> !Word8
+    -> X86PrimFn f (BVType 128)
+
+  -- | Update an element of a vector.
+  --
+  -- For the expression @VInsert n w vec val idx@:
+  --
+  -- * @n@ is the number of elements in the vector
+  -- * @w@ is the size of each element in bits
+  -- * @vec@ is the vector to be inserted into
+  -- * @val@ is the value to be inserted
+  -- * @idx@ is the index to insert at
+  VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
+             !(NatRepr elNum)
+          -> !(NatRepr elSize)
+          -> !(f (BVType (elNum * elSize)))
+          -> !(f (BVType elSize))
+          -> !(NatRepr i)
+          -> X86PrimFn f (BVType (elNum * elSize))
+
+  -- | Unary operation on a vector.  Should have no side effects.
+  --
+  -- For the expression @VOp1 w op tgt@:
+  --
+  -- * @w@ is the width of the input/result vector
+  -- * @op@ is the operation to perform
+  -- * @tgt@ is the target vector of the operation
+  VOp1 :: (1 <= n)
+    =>  !(NatRepr n)
+    -> !AVXOp1
+    -> !(f (BVType n))
+    -> X86PrimFn f (BVType n)
+
+  -- | Binary operation on two vectors. Should not have side effects.
+  --
+  -- For the expression @VOp2 w op vec1 vec2@:
+  --
+  -- * @w@ is the width of the vectors
+  -- * @op@ is the binary operation to perform on the vectors
+  -- * @vec1@ is the first vector
+  -- * @vec2@ is the second vector
+  VOp2 :: (1 <= n)
+       => !(NatRepr n)
+       -> !AVXOp2
+       -> !(f (BVType n))
+       -> !(f (BVType n))
+       -> X86PrimFn f (BVType n)
 
   -- | This performs a unsigned quotient and remainder computation.
   --
@@ -426,106 +690,6 @@ data X86PrimFn f tp where
              -> !(f (BVType w))
              -> !(f (BVType w))
              -> X86PrimFn f (TupleType [BVType w, BVType w])
-
-  -- | This applies the operation pairwise to floating point values.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions as noted in the documentation on SSE.
-  SSE_UnaryOp :: !SSE_Op
-             -> !(SSE_FloatType tp)
-             -> !(f (FloatType tp))
-             -> !(f (FloatType tp))
-             -> X86PrimFn f (FloatType tp)
-
-  -- | This applies the operation pairwise to two vectors of floating point values.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions as noted in the documentation on SSE.
-  SSE_VectorOp :: 1 <= n
-               => !SSE_Op
-               -> !(NatRepr n)
-               -> !(SSE_FloatType tp)
-               -> !(f (VecType n (FloatType tp)))
-               -> !(f (VecType n (FloatType tp)))
-               -> X86PrimFn f (VecType n (FloatType tp))
-
-  -- | This computes the sqrt of the floating point value.
-  SSE_Sqrt :: !(SSE_FloatType tp)
-           -> !(f (FloatType tp))
-           -> X86PrimFn f (FloatType tp)
-
-  -- | This performs a comparison between the two instructions (as
-  -- needed by the CMPSD and CMPSS instructions.
-  --
-  -- This implicitly depends on the MXCSR register as it may throw
-  -- exceptions when given signaling NaNs or denormals when the
-  -- appropriate bits are set on the MXCSR register.
-  SSE_CMPSX :: !SSE_Cmp
-            -> !(SSE_FloatType tp)
-            -> !(f (FloatType tp))
-            -> !(f (FloatType tp))
-            -> X86PrimFn f BoolType
-
-  -- |  This performs a comparison of two floating point values and returns three flags:
-  --
-  --  * ZF is for the zero-flag and true if the arguments are equal or
-  --  * either argument is a NaN.
-  --
-  --  * PF records the unordered flag and is true if either value is a NaN.
-  --
-  --  * CF is the carry flag, and true if the first floating point
-  --    argument is less than second or either value is a NaN.
-  --
-  -- The order of the flags was chosen to be consistent with the Intel
-  -- documentation for UCOMISD and UCOMISS.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions based on the configuration of that register.
-  SSE_UCOMIS :: !(SSE_FloatType tp)
-             -> !(f (FloatType tp))
-             -> !(f (FloatType tp))
-             -> X86PrimFn f (TupleType [BoolType, BoolType, BoolType])
-
-  -- | This converts a single to a double precision number.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal a exception based on the configuration of that
-  -- register.
-  SSE_CVTSS2SD :: !(f (FloatType SingleFloat))
-               -> X86PrimFn f (FloatType DoubleFloat)
-
-  -- | This converts a double to a single precision number.
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal a exception based on the configuration of that
-  -- register.
-  SSE_CVTSD2SS :: !(f (FloatType DoubleFloat))
-               -> X86PrimFn f (FloatType SingleFloat)
-
-  -- | This converts a floating point value to a bitvector of the
-  -- given width (should be 32 or 64)
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal exceptions based on the configuration of that register.
-  SSE_CVTTSX2SI
-    :: (1 <= n)
-    => !(NatRepr n)
-    -> !(SSE_FloatType tp)
-    -> !(f (FloatType tp))
-    -> X86PrimFn f (BVType n)
-
-  -- | This converts a signed integer to a floating point value of
-  -- the given type  (the input width should be 32 or 64)
-  --
-  -- This function implicitly depends on the MXCSR register and may
-  -- signal a precision exception based on the configuration of that
-  -- register.
-  SSE_CVTSI2SX
-    :: (1 <= w)
-    => !(SSE_FloatType tp)
-    -> !(NatRepr w)
-    -> !(f (BVType w))
-    -> X86PrimFn f (FloatType tp)
 
   -- | Extends a single or double to 80-bit precision.
   -- Guaranteed to not throw exception or have side effects.
@@ -604,167 +768,11 @@ data X86PrimFn f tp where
           -> !(f (FloatType X86_80Float))
           -> X86PrimFn f (FloatType tp)
 
-  -- | Unary operation on a vector.  Should have no side effects.
+  -- | The XGetBV instruction primitive
   --
-  -- For the expression @VOp1 w op tgt@:
-  --
-  -- * @w@ is the width of the input/result vector
-  -- * @op@ is the operation to perform
-  -- * @tgt@ is the target vector of the operation
-  VOp1 :: (1 <= n)
-    =>  !(NatRepr n)
-    -> !AVXOp1
-    -> !(f (BVType n))
-    -> X86PrimFn f (BVType n)
-
-  -- | Binary operation on two vectors. Should not have side effects.
-  --
-  -- For the expression @VOp2 w op vec1 vec2@:
-  --
-  -- * @w@ is the width of the vectors
-  -- * @op@ is the binary operation to perform on the vectors
-  -- * @vec1@ is the first vector
-  -- * @vec2@ is the second vector
-  VOp2 :: (1 <= n)
-       => !(NatRepr n)
-       -> !AVXOp2
-       -> !(f (BVType n))
-       -> !(f (BVType n))
-       -> X86PrimFn f (BVType n)
-
-  -- | Update an element of a vector.
-  --
-  -- For the expression @VInsert n w vec val idx@:
-  --
-  -- * @n@ is the number of elements in the vector
-  -- * @w@ is the size of each element in bits
-  -- * @vec@ is the vector to be inserted into
-  -- * @val@ is the value to be inserted
-  -- * @idx@ is the index to insert at
-  VInsert :: (1 <= elSize, 1 <= elNum, (i + 1) <= elNum) =>
-             !(NatRepr elNum)
-          -> !(NatRepr elSize)
-          -> !(f (BVType (elNum * elSize)))
-          -> !(f (BVType elSize))
-          -> !(NatRepr i)
-          -> X86PrimFn f (BVType (elNum * elSize))
-
-  -- | Shift left each element in the vector by the given amount.
-  -- The new ("shifted-in") bits are 0.
-  --
-  -- For the expression @PointwiseShiftL n w amtw vec amt@:
-  --
-  -- * @n@ is the number of elements in the vector
-  -- * @w@ is the size of each element in bits
-  -- * @amtw@ is the size of the shift amount in bits
-  -- * @vec@ is the vector to be inserted into
-  -- * @amt@ is the shift amount in bits
-  PointwiseShiftL :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
-                     !(NatRepr elNum)
-                  -> !(NatRepr elSize)
-                  -> !(NatRepr sz)
-                  -> !(f (BVType (elNum * elSize)))
-                  -> !(f (BVType sz))
-                  -> X86PrimFn f (BVType (elNum * elSize))
-
-  -- | Shift right each element in the vector by the given amount.
-  -- The new ("shifted-in") bits are 0.
-  --
-  -- For the expression @PointwiseShiftLogicalR n w amtw vec amt@:
-  --
-  -- * @n@ is the number of elements in the vector
-  -- * @w@ is the size of each element in bits
-  -- * @amtw@ is the size of the shift amount in bits
-  -- * @vec@ is the vector to be inserted into
-  -- * @amt@ is the shift amount in bits
-  PointwiseLogicalShiftR :: (1 <= elSize, 1 <= elNum, 1 <= sz) =>
-                            !(NatRepr elNum)
-                         -> !(NatRepr elSize)
-                         -> !(NatRepr sz)
-                         -> !(f (BVType (elNum * elSize)))
-                         -> !(f (BVType sz))
-                         -> X86PrimFn f (BVType (elNum * elSize))
-
-  -- | Pointwise binary operation on vectors. Should not have side effects.
-  --
-  -- For the expression @Pointwise2 n w op vec1 vec2@:
-  --
-  -- * @n@ is the number of elements in the vector
-  -- * @w@ is the size of each element in bits
-  -- * @op@ is the binary operation to perform on the vectors
-  -- * @vec1@ is the first vector
-  -- * @vec2@ is the second vector
-  Pointwise2 :: (1 <= elSize, 1 <= elNum)
-             => !(NatRepr elNum)
-             -> !(NatRepr elSize)
-             -> !AVXPointWiseOp2
-             -> !(f (BVType (elNum * elSize)))
-             -> !(f (BVType (elNum * elSize)))
-             -> X86PrimFn f (BVType (elNum * elSize))
-
-  -- | Extract 128 bits from a 256 bit value, as described by the
-  -- control mask
-  VExtractF128
-    :: !(f (BVType 256))
-    -> !Word8
-    -> X86PrimFn f (BVType 128)
-
-  CLMul
-    :: !(f (BVType 64))
-    -> !(f (BVType 64))
-    -> X86PrimFn f (BVType 128)
-
-  -- | Operations used by AESNI instructions.
-  AESNI_AESEnc
-    :: !(f (BVType 128))
-    -> !(f (BVType 128))
-    -> X86PrimFn f (BVType 128)
-  AESNI_AESEncLast
-    :: !(f (BVType 128))
-    -> !(f (BVType 128))
-    -> X86PrimFn f (BVType 128)
-  AESNI_AESDec
-    :: !(f (BVType 128))
-    -> !(f (BVType 128))
-    -> X86PrimFn f (BVType 128)
-  AESNI_AESDecLast
-    :: !(f (BVType 128))
-    -> !(f (BVType 128))
-    -> X86PrimFn f (BVType 128)
-  AESNI_AESKeyGenAssist
-    :: !(f (BVType 128))
-    -> !Word8
-    -> X86PrimFn f (BVType 128)
-  AESNI_AESIMC
-    :: !(f (BVType 128))
-    -> X86PrimFn f (BVType 128)
-
-  -- | Operations used by SHA256 instructions.
-  -- (See SHA256RNDS2, SHA256MSG1, and SHA256MSG2 in the ISA manual).
-  -- For concise definitions, see: https://web.archive.org/web/20130526224224/http://csrc.nist.gov/groups/STM/cavp/documents/shs/sha256-384-512.pdf
-  SHA_sigma0
-    :: !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-  SHA_sigma1
-    :: !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-  SHA_Sigma0
-    :: !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-  SHA_Sigma1
-    :: !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-  SHA_Ch
-    :: !(f (BVType 32))
-    -> !(f (BVType 32))
-    -> !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-  SHA_Maj
-    :: !(f (BVType 32))
-    -> !(f (BVType 32))
-    -> !(f (BVType 32))
-    -> X86PrimFn f (BVType 32)
-
+  -- This returns the extended control register defined in the given value
+  -- as a 64-bit value that will be stored in edx:eax
+  XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
 
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
@@ -918,9 +926,9 @@ instance IsArchFn X86PrimFn where
       X86DivRem  w num1 num2 d ->
         sexprA "div"  [ pure (ppRepValSize w), pp num1, pp num2, pp d ]
       SSE_UnaryOp op tp x y ->
-        sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op) ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
-        sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op)) [ ppShow n, ppShow tp, pp x, pp y ]
       SSE_Sqrt ftp x ->
         sexprA "sse_sqrt" [ ppShow ftp, pp x ]
       SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]

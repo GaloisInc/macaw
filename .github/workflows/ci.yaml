@@ -20,14 +20,14 @@ jobs:
         submodules: true
     - name: Copy cabal project files
       run: |
-        cp cabal.project.dist                                  cabal.project
-        cp cabal.project.werror                                cabal.project.local
-        cp cabal.project.dist.ghc-${{ matrix.ghc-ver }}.freeze cabal.project.freeze
+        cp cabal.project.dist cabal.project
+        cp cabal.project.werror cabal.project.local
+        cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
     - name: Get GHC
       run: |
-        sudo apt-get install --no-install-recommends -y cabal-install-3.4 ghc-${{ matrix.ghc-ver }} llvm
-        echo "/opt/cabal/bin" >> $GITHUB_PATH
-        echo "/opt/ghc/${{ matrix.ghc-ver }}/bin" >> $GITHUB_PATH
+        ghcup install ghc ${{ matrix.ghc-ver }}
+        ghcup install cabal 3.4.0.0
+        ghcup set ghc ${{ matrix.ghc-ver }}
     - name: Cache
       uses: actions/cache@v1
       with:
@@ -44,7 +44,6 @@ jobs:
       run: |
         cabal build --only-dependencies macaw-base
         cabal build crucible-llvm
-
     - name: Install Solvers
       if: runner.os == 'Linux'
       run: .github/ci.sh install_system_deps
