@@ -218,6 +218,7 @@ integerToReg 11 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R11")
 integerToReg 12 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R12")
 integerToReg 13 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R13")
 integerToReg 14 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_R14")
+integerToReg 15 = Just $ ARMGlobalBV (ASL.knownGlobalRef @"_PC")
 integerToReg _  = Nothing
 
 integerToSIMDReg :: Integer -> Maybe (ARMReg (MT.BVType 128))
