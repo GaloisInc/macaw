@@ -71,6 +71,7 @@ import           Control.Lens
 import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Control.Monad.State.Strict
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import           Data.Foldable
 import           Data.Kind
@@ -85,6 +86,7 @@ import qualified Data.Set as Set
 import           Data.Word (Word64)
 import           GHC.Stack
 import           Prettyprinter
+import           Text.Printf (printf)
 
 import           Data.Macaw.AbsDomain.StackAnalysis as StackAnalysis
 import           Data.Macaw.CFG
@@ -177,7 +179,7 @@ data RegisterUseError arch
    }
 
 ppRegisterUseErrorReason :: RegisterUseErrorReason -> String
-ppRegisterUseErrorReason (Reason tag _v) =
+ppRegisterUseErrorReason (Reason tag v) =
   case tag of
     CallStackHeightError ->  "Could not resolve concrete stack height."
     UnresolvedStackRead -> "Unresolved stack read."
@@ -185,7 +187,7 @@ ppRegisterUseErrorReason (Reason tag _v) =
     IndirectCallTarget -> "Indirect call target."
     InvalidCallTargetAddress -> "Invalid call target address."
     CallTargetNotFunctionEntryPoint -> "Call target not function entry point."
-    UnknownCallTargetArguments -> "Unknown call target arguments."
+    UnknownCallTargetArguments -> printf "Unknown arguments to %s." (BSC.unpack v)
     ResolutonFailureCallToKnownVarArgsFunction -> "Could not resolve varargs args."
     UnsupportedCallTargetCallingConvention -> "Unsupported calling convention."
 
