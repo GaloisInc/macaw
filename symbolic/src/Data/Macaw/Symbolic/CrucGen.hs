@@ -1104,38 +1104,37 @@ appToCrucible app = do
 #endif
     M.ReverseBytes _w _x -> do
       error "Reverse bytes not yet defined."
-    M.Bsf w x -> countZeros w C.BVLshr x
-    M.Bsr w x -> countZeros w C.BVShl  x
+    M.Bsf w x -> do
+      -- scanBits w C.BVShl returns a bit index where the MSB is 0
+      -- Here we subtract that index from (w - 1) to obtain an index from the LSB
+      cbe <- scanBits w C.BVShl x
+      cwsub1 <- bvLit w (intValue w - 1)
+      fromBits w =<< appAtom (C.BVSub w cwsub1 cbe)
+    M.Bsr w x -> fromBits w =<< scanBits w C.BVLshr x
 
--- | Count how many zeros there are on one end or the other of a bitvector.
--- (Pass 'C.BVLshr' as the first argument to count zeros on the left, 'C.BVShl'
--- to count zeros on the right.)
---
--- Here's the plan: count how many times we have to shift the value by one bit
--- before we reach zero, and call this n. Call the width w. Then the number of
--- zeros on the side we're shifting away from (call it zc) is
---
---     zc = w - n
---
--- Okay, but we can't do a loop. No problem: we'll take all possible shift
--- sizes (0 through w-1), turn them into 1 if the shift result is nonzero (0
--- otherwise), and add them up. This gives n.
-countZeros :: (1 <= w) =>
+-- | Compute either:
+--   1) the index (MSB is 0) of the least significant set bit
+--      (if C.BVShl is passed as the first argument), or
+--   2) the index (LSB is 0) of the most significant set bit
+--      (if C.BVLshr is passed).
+scanBits :: (1 <= w) =>
   NatRepr w ->
   (NatRepr w -> CR.Atom s (C.BVType w) -> CR.Atom s (C.BVType w) -> C.App (MacawExt arch) (CR.Atom s) (C.BVType w)) ->
   M.Value arch ids (M.BVType w) ->
-  CrucGen arch ids s (CR.Atom s (MM.LLVMPointerType w))
-countZeros w f vx = do
+  CrucGen arch ids s (CR.Atom s (C.BVType w))
+scanBits w f vx = do
   cx <- v2c vx >>= toBits w
-  isZeros <- forM [0..intValue w-1] $ \i -> do
+  -- The index of the most (least) significant set bit is equal to the number of
+  -- right (left) shifts needed to "zero" x.
+  -- We compute this by by trying every possible shift, checking if the result
+  -- of each shift is nonzero (yielding 1 if so, 0 otherwise), and summing.
+  isZeros <- forM [1..intValue w-1] $ \i -> do
     shiftAmt <- bvLit w i
     shiftedx <- appAtom (f w cx shiftAmt)
     xIsNonzero <- appAtom (C.BVNonzero w shiftedx)
     appAtom (C.BoolToBV w xIsNonzero)
   czero <- bvLit w 0
-  cw <- bvLit w (intValue w)
-  cn <- foldM ((appAtom .) . C.BVAdd w) czero isZeros
-  appAtom (C.BVSub w cw cn) >>= fromBits w
+  foldM ((appAtom .) . C.BVAdd w) czero isZeros
 
 -- | Convert a Macaw 'M.Value' into a Crucible value ('CR.Atom')
 --
