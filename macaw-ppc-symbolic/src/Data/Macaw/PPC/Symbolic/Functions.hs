@@ -65,15 +65,15 @@ instance X.Exception SemanticsError
 termSemantics :: (C.IsSymInterface sym, 1 <= SP.AddrWidth v)
               => SymFuns sym
               -> MP.PPCTermStmt v ids
-              -> S v sym rtp bs r ctx
-              -> IO (C.RegValue sym C.UnitType, S v sym rtp bs r ctx)
+              -> S p v sym rtp bs r ctx
+              -> IO (C.RegValue sym C.UnitType, S p v sym rtp bs r ctx)
 termSemantics = error "PowerPC-specific terminator statement semantics not yet implemented"
 
 stmtSemantics :: (C.IsSymInterface sym, 1 <= SP.AddrWidth v)
               => SymFuns sym
               -> MP.PPCStmt v (A.AtomWrapper (C.RegEntry sym))
-              -> S v sym rtp bs r ctx
-              -> IO (C.RegValue sym C.UnitType, S v sym rtp bs r ctx)
+              -> S p v sym rtp bs r ctx
+              -> IO (C.RegValue sym C.UnitType, S p v sym rtp bs r ctx)
 stmtSemantics _sf stmt s =
   case stmt of
     MP.Attn -> do
@@ -114,8 +114,8 @@ stmtSemantics _sf stmt s =
 funcSemantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= SP.AddrWidth v)
               => SymFuns sym
               -> MP.PPCPrimFn v (A.AtomWrapper (C.RegEntry sym)) mt
-              -> S v sym rtp bs r ctx
-              -> IO (C.RegValue sym t, S v sym rtp bs r ctx)
+              -> S p v sym rtp bs r ctx
+              -> IO (C.RegValue sym t, S p v sym rtp bs r ctx)
 funcSemantics sf pf s =
   case pf of
     MP.UDiv _rep lhs rhs -> do
@@ -359,9 +359,9 @@ toValFloat _ (A.AtomWrapper x) = C.regValue x
 
 withSym
   :: (C.IsSymInterface sym)
-  => S v sym rtp bs r ctx
+  => S p v sym rtp bs r ctx
   -> (sym -> IO a)
-  -> IO (a, S v sym rtp bs r ctx)
+  -> IO (a, S p v sym rtp bs r ctx)
 withSym s action = do
   let sym = s ^. C.stateSymInterface
   val <- action sym
@@ -369,26 +369,26 @@ withSym s action = do
 
 withSymBVUnOp
   :: (C.IsSymInterface sym)
-  => S v sym rtp bs r ctx
+  => S p v sym rtp bs r ctx
   -> A.AtomWrapper (C.RegEntry sym) (MT.BVType w)
   -> (sym -> C.RegValue sym (C.BVType w) -> IO a)
-  -> IO (a, S v sym rtp bs r ctx)
+  -> IO (a, S p v sym rtp bs r ctx)
 withSymBVUnOp s x action = withSym s $ \sym -> action sym =<< toValBV sym x
 
 withSymFPUnOp
   :: (C.IsSymInterface sym)
-  => S v sym rtp bs r ctx
+  => S p v sym rtp bs r ctx
   -> A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)
   -> (  sym
      -> C.RegValue sym (MS.ToCrucibleType (MT.FloatType fi))
      -> IO a
      )
-  -> IO (a, S v sym rtp bs r ctx)
+  -> IO (a, S p v sym rtp bs r ctx)
 withSymFPUnOp s x action = withSym s $ \sym -> action sym $ toValFloat sym x
 
 withSymFPBinOp
   :: (C.IsSymInterface sym)
-  => S v sym rtp bs r ctx
+  => S p v sym rtp bs r ctx
   -> A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)
   -> A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)
   -> (  sym
@@ -396,7 +396,7 @@ withSymFPBinOp
      -> C.RegValue sym (MS.ToCrucibleType (MT.FloatType fi))
      -> IO a
      )
-  -> IO (a, S v sym rtp bs r ctx)
+  -> IO (a, S p v sym rtp bs r ctx)
 withSymFPBinOp s x y action = withSym s $ \sym -> do
   let x' = toValFloat sym x
   let y' = toValFloat sym y
@@ -412,4 +412,4 @@ withRounding sym r action = do
   r' <- toValBV sym r
   U.withRounding sym r' action
 
-type S v sym rtp bs r ctx = C.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt (SP.AnyPPC v)) rtp bs r ctx
+type S p v sym rtp bs r ctx = C.CrucibleState p sym (MS.MacawExt (SP.AnyPPC v)) rtp bs r ctx
