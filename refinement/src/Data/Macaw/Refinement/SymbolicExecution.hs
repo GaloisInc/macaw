@@ -63,7 +63,6 @@ import qualified What4.ProgramLoc as W
 import qualified What4.Protocol.Online as W
 import qualified What4.SatResult as W
 import qualified What4.BaseTypes as WT
-import qualified What4.LabeledPred as WLP
 
 import qualified Data.Macaw.Refinement.Logging as RL
 import qualified Data.Macaw.Refinement.Path as RP
@@ -203,7 +202,7 @@ smtSolveTransfer ctx slice
               exec_res <- liftIO $
                 C.executeCrucible executionFeatures initialState
 
-              assumptions <- F.toList . fmap (^. WLP.labeledPred) <$> liftIO (CB.collectAssumptions sym)
+              assumptions <- liftIO (CB.assumptionsPred sym =<< (CB.collectAssumptions sym))
 
               case exec_res of
                 C.FinishedResult _ res -> do
@@ -424,7 +423,7 @@ extractIPModels :: forall arch solver m sym t fp
                 => RefinementContext arch
                 -> sym
                 -> W.SolverProcess t solver
-                -> [W.Pred sym]
+                -> W.Pred sym
                 -> W.SymNat sym
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
@@ -443,7 +442,7 @@ extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = d
       basePred1 <- liftIO $ W.natEq sym natOne res_ip_base
       basePred <- liftIO $ W.orPred sym basePred0 basePred1
 
-      let assumptions = ipConstraint : basePred : initialAssumptions
+      let assumptions = [ipConstraint, basePred, initialAssumptions]
 
       genModels (Proxy @arch) sym solverProc assumptions res_ip_off modelMax
 

@@ -52,8 +52,6 @@ import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
 import qualified Data.Macaw.CFG as M
-import qualified Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Backend.Simple as S

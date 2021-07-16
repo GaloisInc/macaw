@@ -361,8 +361,7 @@ populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
         eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
         prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
         let desc = "Byte@" ++ show byteAddr
-        liftIO $ CB.addAssumption sym $
-          CB.LabeledPred eq_pred $ CB.AssumptionReason prog_loc desc
+        liftIO $ CB.addAssumption sym (CB.GenericAssumption prog_loc desc eq_pred)
       let symArray2 = symArray
 
       return (symArray2, IM.insert interval mut_flag ptrtable)
