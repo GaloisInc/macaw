@@ -278,7 +278,7 @@ readInstruction dmode addr = do
                                        T32 -> fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents
+              Nothing -> ET.throwError $ ARMInvalidInstruction dmode segRelAddr contents
   else ET.throwError $ ARMMemoryError (MM.PermissionsError segRelAddr)
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (ARMMemoryError w) a
@@ -289,7 +289,7 @@ liftMemError e =
 
 -- | A wrapper around the 'MM.MemoryError' that lets us add in information about
 -- invalid instructions.
-data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.MemChunk w]
+data ARMMemoryError w = ARMInvalidInstruction DecodeMode !(MM.MemAddr w) [MM.MemChunk w]
                       | ARMMemoryError !(MM.MemoryError w)
                       | ARMInvalidInstructionAddress !(MM.MemSegment w) !(MM.MemWord w)
                       deriving (Show)
