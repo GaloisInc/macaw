@@ -203,9 +203,7 @@ disassembleBlock dmode lookupSemantics gs curPCAddr blockOff maxOffset = do
           nextPCVal :: MC.Value ARM.AArch32 ids (MT.BVType 32) = MC.RelocatableValue (MM.addrWidthRepr curPCAddr) nextPC
       -- Note: In ARM, the IP is incremented *after* an instruction
       -- executes; pass in the physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curPCAddr) of
-                 Nothing -> failAt gs blockOff curPCAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (MC.BVValue (PN.knownNat @32) (fromIntegral addr))
+      let ipVal = MC.BVValue (PN.knownNat @32) (fromIntegral (MM.addrOffset (MM.segoffAddr curPCAddr)))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs blockOff curPCAddr (UnsupportedInstruction i)
         Just transformer -> do
@@ -278,7 +276,7 @@ readInstruction dmode addr = do
                                        T32 -> fmap (fmap T32I) $ ThumbD.disassembleInstruction (LBS.fromStrict bs)
             case minsn of
               Just insn -> return (insn, fromIntegral bytesRead)
-              Nothing -> ET.throwError $ ARMInvalidInstruction segRelAddr contents
+              Nothing -> ET.throwError $ ARMInvalidInstruction dmode segRelAddr contents
   else ET.throwError $ ARMMemoryError (MM.PermissionsError segRelAddr)
 
 liftMemError :: Either (MM.MemoryError w) a -> Either (ARMMemoryError w) a
@@ -289,7 +287,7 @@ liftMemError e =
 
 -- | A wrapper around the 'MM.MemoryError' that lets us add in information about
 -- invalid instructions.
-data ARMMemoryError w = ARMInvalidInstruction !(MM.MemAddr w) [MM.MemChunk w]
+data ARMMemoryError w = ARMInvalidInstruction DecodeMode !(MM.MemAddr w) [MM.MemChunk w]
                       | ARMMemoryError !(MM.MemoryError w)
                       | ARMInvalidInstructionAddress !(MM.MemSegment w) !(MM.MemWord w)
                       deriving (Show)
