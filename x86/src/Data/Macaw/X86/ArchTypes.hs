@@ -370,7 +370,8 @@ data X86PrimFn f tp where
   GetSegmentSelector :: !F.Segment
                      -> X86PrimFn f (BVType 16)
 
-  -- | Compares two memory regions and return the number of bytes that were the same.
+  -- | Compares two memory regions and returns the number of compared values that
+  -- were the same. E.g., used to implement instructions of the form 'repz cmps ...'.
   --
   -- In an expression @MemCmp bpv nv p1 p2 dir@:
   --
