@@ -130,9 +130,7 @@ repValSizeBitCount v = 8 * repValSizeByteCount v
 -- X86TermStmt
 
 data X86TermStmt ids
-   = X86Syscall
-     -- ^ A system call
-   | Hlt
+   = Hlt
      -- ^ The halt instruction.
      --
      -- In protected mode outside ring 0, this just raised a GP(0) exception.
@@ -140,7 +138,6 @@ data X86TermStmt ids
      -- ^ This raises a invalid opcode instruction.
 
 instance PrettyF X86TermStmt where
-  prettyF X86Syscall = "x86_syscall"
   prettyF Hlt        = "hlt"
   prettyF UD2        = "ud2"
 
@@ -1098,6 +1095,9 @@ data X86Stmt (v :: Type -> Kind.Type) where
   -- faster version from AMD 3D now.
   EMMS :: X86Stmt v
 
+  -- TODO: Comment
+  X86Syscall :: X86Stmt v
+
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
 
@@ -1114,6 +1114,7 @@ instance TraversableF X86Stmt where
       RepStos bc dest val cnt dir ->
         RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
       EMMS -> pure EMMS
+      X86Syscall -> pure X86Syscall
 
 instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
@@ -1128,6 +1129,7 @@ instance IsArchStmt X86Stmt where
           "repStos" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp val, pp cnt, pp dir]
       EMMS -> "emms"
+      X86Syscall -> "x86_syscall"
 
 ------------------------------------------------------------------------
 -- X86_64
@@ -1169,6 +1171,5 @@ rewriteX86Stmt f = do
 rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt tgt)
 rewriteX86TermStmt f =
   case f of
-    X86Syscall -> pure X86Syscall
     Hlt -> pure Hlt
     UD2 -> pure UD2

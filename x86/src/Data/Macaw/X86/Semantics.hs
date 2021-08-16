@@ -2895,7 +2895,7 @@ exec_palignr l v imm = do
 def_syscall :: InstructionDef
 def_syscall =
   defNullary "syscall" $
-    addArchTermStmt X86Syscall
+    addArchStmt X86Syscall
 
 def_cpuid :: InstructionDef
 def_cpuid =
