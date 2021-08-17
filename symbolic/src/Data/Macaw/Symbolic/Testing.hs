@@ -330,7 +330,7 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction validityCheck
+    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction lookupSyscall validityCheck
     let ctx = CS.initSimContext sym CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
@@ -389,6 +389,13 @@ data ResultExtractor sym arch where
 lookupFunction :: MS.LookupFunctionHandle sym arch
 lookupFunction = MS.LookupFunctionHandle $ \_s _mem _regs -> do
   error "Function calls are not supported in the macaw-symbolic test harness"
+
+-- | The test harness does not currently support making system calls from test cases.
+--
+-- It could be modified to do so.
+lookupSyscall :: MS.LookupSyscallHandle sym arch
+lookupSyscall = MS.LookupSyscallHandle $ \_s _regs -> do
+  error "System calls are not supported in the macaw-symbolic test harness"
 
 -- | The test suite does not currently generate global pointer well-formedness
 -- conditions (though it could be changed to do so).  This could become a

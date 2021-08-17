@@ -126,6 +126,7 @@ module Data.Macaw.Symbolic
   , mkUndefinedBool
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
+  , SB.LookupSyscallHandle(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -1123,10 +1124,13 @@ execMacawStmtExtension
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
+  -> SB.LookupSyscallHandle sym arch
+  -- ^ TODO: Better comment
+  -- For building syscall function handles.
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) lookupSyscall toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1187,7 +1191,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')
 
-    MacawArchStmtExtension s    -> archStmtFn mvar globs s st
+    MacawArchStmtExtension s    -> archStmtFn mvar globs lookupSyscall s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
 
@@ -1214,12 +1218,15 @@ macawExtensions
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
+  -> SB.LookupSyscallHandle sym arch
+  -- ^ TODO: Better comment
+  -- For building syscall function handles.
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH toMemPred =
+macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -1233,6 +1240,7 @@ runCodeBlock
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
+  -> SB.LookupSyscallHandle sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
@@ -1243,7 +1251,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1252,7 +1260,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH toMemPred
+                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state

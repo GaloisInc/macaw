@@ -559,6 +559,9 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                                  )
 postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
   case tstmt of
+    -- TODO: There was logic here about how to handle syscalls that I removed.
+    -- Does that still need to be present somewhere with syscalls as
+    -- statements?
     Hlt ->
       Nothing
     UD2 ->

@@ -14,6 +14,7 @@ module Data.Macaw.Symbolic.Backend (
   , PS.macawAssignToCrucM
   , CG.valueToCrucible
   , CG.evalArchStmt
+  , LookupSyscallHandle(..)
   , MacawArchEvalFn(..)
   , MacawEvalStmtFunc
     -- ** Simulator Operations
@@ -42,7 +43,10 @@ module Data.Macaw.Symbolic.Backend (
   , CG.MacawSymbolicArchFunctions(..)
   ) where
 
+import qualified Data.Parameterized.Context as Ctx
+
 import qualified Lang.Crucible.CFG.Core as C
+import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.Simulator as C
 import qualified Data.Macaw.CFG.Core as M
 
@@ -62,6 +66,17 @@ type MacawEvalStmtFunc f p sym ext =
     -> C.CrucibleState p sym ext rtp blocks r ctx
     -> IO (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)
 
+-- TODO: Might need to play around with this type a bit
+data LookupSyscallHandle sym arch = LookupSyscallHandle
+     (forall rtp blocks r ctx args
+   . C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx
+  -> Ctx.Assignment (C.RegValue' sym) (CG.MacawCrucibleRegTypes arch)
+  -> C.RegEntry
+       sym
+       (C.StructType (PS.CtxToCrucibleType (PS.ArchRegContext arch)))
+  -> IO (C.FnHandle args C.UnitType, C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx))
+
+
 -- | Function for evaluating an architecture-specific statements
 --
 -- The constructor is exposed to facilitate the construction of new
@@ -71,6 +86,7 @@ type MacawEvalStmtFunc f p sym ext =
 newtype MacawArchEvalFn sym mem arch =
   MacawArchEvalFn (C.GlobalVar mem
                   -> MO.GlobalMap sym mem (M.ArchAddrWidth arch)
+                  -> LookupSyscallHandle sym arch
                   -> MacawEvalStmtFunc (CG.MacawArchStmtExtension arch)
                                        (MO.MacawSimulatorState sym)
                                        sym
