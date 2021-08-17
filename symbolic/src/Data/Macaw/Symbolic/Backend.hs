@@ -1,5 +1,6 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeOperators #-}
 -- | This module exports additional definitions that are required to implement
 -- architecture-specific backends for macaw-symbolic.
 --
@@ -68,13 +69,12 @@ type MacawEvalStmtFunc f p sym ext =
 
 -- TODO: Might need to play around with this type a bit
 data LookupSyscallHandle sym arch = LookupSyscallHandle
-     (forall rtp blocks r ctx args
+     (forall rtp blocks r ctx
    . C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx
-  -> Ctx.Assignment (C.RegValue' sym) (CG.MacawCrucibleRegTypes arch)
   -> C.RegEntry
        sym
        (C.StructType (PS.CtxToCrucibleType (PS.ArchRegContext arch)))
-  -> IO (C.FnHandle args C.UnitType, C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx))
+  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> CG.ArchRegStruct arch) (CG.ArchRegStruct arch), C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx))
 
 
 -- | Function for evaluating an architecture-specific statements
