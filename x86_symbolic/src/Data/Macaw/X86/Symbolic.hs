@@ -244,7 +244,7 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
   X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
               -> X86StmtExtension f C.UnitType
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
-
+  X86PrimSyscall :: X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) (ArchRegStruct M.X86_64))
 
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
@@ -323,13 +323,11 @@ x86_64MacawEvalFn fs =
   MacawArchEvalFn $ \global_var_mem globals (LookupSyscallHandle lookupSyscall) ext_stmt crux_state ->
     case ext_stmt of
       X86PrimFn x -> funcSemantics fs x crux_state
-      X86PrimStmt stmt ->
-        case stmt of
-          M.X86Syscall -> do
-            (handle, st') <- lookupSyscall crux_state undefined -- TODO: extract register state and replace 'undefined'
-            return (C.HandleFnVal handle, st')
-          _ -> stmtSemantics fs global_var_mem globals stmt crux_state
+      X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
       X86PrimTerm term -> termSemantics fs term crux_state
+      X86PrimSyscall -> do
+        (handle, st') <- lookupSyscall crux_state undefined -- TODO: extract register state and replace 'undefined'
+        return (C.HandleFnVal handle, st')
 
 x86LookupReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)

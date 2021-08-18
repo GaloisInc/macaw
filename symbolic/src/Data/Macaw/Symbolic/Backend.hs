@@ -15,6 +15,7 @@ module Data.Macaw.Symbolic.Backend (
   , PS.macawAssignToCrucM
   , CG.valueToCrucible
   , CG.evalArchStmt
+  , CG.ArchRegStruct
   , LookupSyscallHandle(..)
   , MacawArchEvalFn(..)
   , MacawEvalStmtFunc
