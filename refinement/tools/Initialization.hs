@@ -71,7 +71,7 @@ withElf opts k = do
           withLoadedBinary k MX86.x86_64_linux_info bin
         (EE.ELFCLASS32, EE.EM_PPC) -> do
           bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
-          let archInfo = MP.ppc32_linux_info bin
+          let archInfo = MP.ppc32_linux_info
           withLoadedBinary k archInfo bin
         (_,m) -> X.throwM (UnsupportedArchitecture m)
     Left (_, s) -> do
