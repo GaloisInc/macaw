@@ -246,6 +246,8 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
   X86PrimSyscall :: X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) (ArchRegStruct M.X86_64))
 
+  -- TODO: Make these patterns exhaustive
+
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
@@ -256,6 +258,11 @@ instance C.TypeApp X86StmtExtension where
   appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
   appType (X86PrimStmt _) = C.UnitRepr
   appType (X86PrimTerm _) = C.UnitRepr
+  appType X86PrimSyscall =
+    C.FunctionHandleRepr
+      (Ctx.singleton (C.StructRepr (crucArchRegTypes x86_64MacawSymbolicFns)))
+      (C.StructRepr (crucArchRegTypes x86_64MacawSymbolicFns))
+
 
 instance FunctorFC X86StmtExtension where
   fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
