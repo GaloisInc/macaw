@@ -288,11 +288,14 @@ crucGenX86Fn fn = do
 crucGenX86Stmt :: forall ids s
                 . M.X86Stmt (M.Value M.X86_64 ids)
                -> CrucGen M.X86_64 ids s ()
-crucGenX86Stmt stmt = do
-  let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
-      f x = AtomWrapper <$> valueToCrucible x
-  stmt' <- traverseF f stmt
-  void (evalArchStmt (X86PrimStmt stmt'))
+crucGenX86Stmt stmt =
+  case stmt of
+    M.X86Syscall -> void (evalArchStmt X86PrimSyscall)
+    _ -> do
+      let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
+          f x = AtomWrapper <$> valueToCrucible x
+      stmt' <- traverseF f stmt
+      void (evalArchStmt (X86PrimStmt stmt'))
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
