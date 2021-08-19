@@ -19,15 +19,15 @@ import qualified Data.ElfEdit as E
 import qualified Data.Foldable as F
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Macaw.BinaryLoader as BL
+import qualified Data.Macaw.BinaryLoader.ELF as BLE
 import qualified Data.Macaw.BinaryLoader.PPC.ELF as BE
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
 import           Data.Maybe ( mapMaybe )
-import           Data.Typeable ( Typeable )
-import           GHC.TypeLits
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -45,22 +45,19 @@ data PPCElfData w = PPCElfData { elf :: E.ElfHeaderInfo w
 -- import it because it is in a package we can't depend on.  Anywhere we use
 -- this instance, the compiler will ensure that the assertion is actually true.
 instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => BL.BinaryLoader PPC32.PPC (E.ElfHeaderInfo 32) where
-  type ArchBinaryData PPC32.PPC (E.ElfHeaderInfo 32) = TOC.TOC 32
+  type ArchBinaryData PPC32.PPC (E.ElfHeaderInfo 32) = ()
   type BinaryFormatData PPC32.PPC (E.ElfHeaderInfo 32) = PPCElfData 32
   type Diagnostic PPC32.PPC (E.ElfHeaderInfo 32) = EL.MemLoadWarning
-  loadBinary = loadPPCBinary BL.Elf32Repr
-  entryPoints = ppcEntryPoints
+  loadBinary = loadPPC32Binary
+  entryPoints = ppc32EntryPoints
   symbolFor = ppcLookupSymbol
-
-instance (MC.ArchAddrWidth PPC32.PPC ~ 32) => HasTOC PPC32.PPC (E.ElfHeaderInfo 32) where
-  getTOC = BL.archBinaryData
 
 instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => BL.BinaryLoader PPC64.PPC (E.ElfHeaderInfo 64) where
   type ArchBinaryData PPC64.PPC (E.ElfHeaderInfo 64)  = TOC.TOC 64
   type BinaryFormatData PPC64.PPC (E.ElfHeaderInfo 64) = PPCElfData 64
   type Diagnostic PPC64.PPC (E.ElfHeaderInfo 64) = EL.MemLoadWarning
-  loadBinary = loadPPCBinary BL.Elf64Repr
-  entryPoints = ppcEntryPoints
+  loadBinary = loadPPC64Binary
+  entryPoints = ppc64EntryPoints
   symbolFor = ppcLookupSymbol
 
 instance (MC.ArchAddrWidth PPC64.PPC ~ 64) => HasTOC PPC64.PPC (E.ElfHeaderInfo 64) where
@@ -75,15 +72,10 @@ ppcLookupSymbol loadedBinary funcAddr =
     Nothing -> X.throwM (PPCNoFunctionAddressForTOCEntry funcAddr)
     Just sym -> return sym
 
-ppcEntryPoints :: (X.MonadThrow m,
-                   MC.MemWidth w,
-                   Integral (E.ElfWordType w),
-                   MC.ArchAddrWidth ppc ~ w,
-                   BL.ArchBinaryData ppc (E.ElfHeaderInfo w) ~ TOC.TOC w,
-                   BL.BinaryFormatData ppc (E.ElfHeaderInfo w) ~ PPCElfData w)
-               => BL.LoadedBinary ppc (E.ElfHeaderInfo w)
-               -> m (NEL.NonEmpty (MC.MemSegmentOff w))
-ppcEntryPoints loadedBinary = do
+ppc64EntryPoints :: (X.MonadThrow m, MC.ArchAddrWidth PPC64.PPC ~ 64)
+                 => BL.LoadedBinary PPC64.PPC (E.ElfHeaderInfo 64)
+                 -> m (NEL.NonEmpty (MC.MemSegmentOff 64))
+ppc64EntryPoints loadedBinary = do
   entryAddr <- liftMemErr PPCElfMemoryError
                (MC.readAddr mem (BL.memoryEndianness loadedBinary) tocEntryAbsAddr)
   absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem entryAddr)
@@ -108,20 +100,55 @@ liftMemErr exn a =
     Left err -> X.throwM (exn err)
     Right res -> return res
 
-loadPPCBinary :: (X.MonadThrow m,
-                  BL.ArchBinaryData ppc (E.ElfHeaderInfo w) ~ TOC.TOC w,
-                  BL.BinaryFormatData ppc (E.ElfHeaderInfo w) ~ PPCElfData w,
-                  MC.ArchAddrWidth ppc ~ w,
-                  Integral (E.ElfWordType w),
-                  BL.Diagnostic ppc (E.ElfHeaderInfo w) ~ EL.MemLoadWarning,
-                  MC.MemWidth w,
-                  Typeable w,
-                  KnownNat w)
-              => BL.BinaryRepr (E.ElfHeaderInfo w)
-              -> LC.LoadOptions
-              -> E.ElfHeaderInfo w
-              -> m (BL.LoadedBinary ppc (E.ElfHeaderInfo w))
-loadPPCBinary binRep lopts e = do
+ppc32EntryPoints
+  :: (X.MonadThrow m, MC.ArchAddrWidth PPC32.PPC ~ 32)
+  => BL.LoadedBinary PPC32.PPC (E.ElfHeaderInfo 32)
+  -> m (NEL.NonEmpty (MC.MemSegmentOff 32))
+ppc32EntryPoints loadedBinary =
+  case BLE.resolveAbsoluteAddress mem entryAddr of
+    Nothing -> X.throwM (InvalidEntryPoint entryAddr)
+    Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
+  where
+    mem = BL.memoryImage loadedBinary
+    entryAddr = MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
+    elfData = elf (BL.binaryFormatData loadedBinary)
+    symbols = [ MM.memWord (fromIntegral (E.steValue entry))
+              | Just (Right st) <- [E.decodeHeaderSymtab elfData]
+              , entry <- F.toList (E.symtabEntries st)
+              , E.steType entry == E.STT_FUNC
+              ]
+
+loadPPC32Binary
+  :: (X.MonadThrow m, MC.ArchAddrWidth PPC32.PPC ~ 32)
+  => LC.LoadOptions
+  -> E.ElfHeaderInfo 32
+  -> m (BL.LoadedBinary PPC32.PPC (E.ElfHeaderInfo 32))
+loadPPC32Binary lopts e =
+  case EL.memoryForElf lopts e of
+    Left err -> X.throwM (PPCElfLoadError err)
+    Right (mem, symbols, warnings, _) ->
+      return BL.LoadedBinary { BL.memoryImage = mem
+                             , BL.memoryEndianness = MC.BigEndian
+                             , BL.archBinaryData = ()
+                             , BL.binaryFormatData =
+                               PPCElfData { elf = e
+                                          , memSymbols = symbols
+                                          , symbolIndex = index32 symbols
+                                          }
+                             , BL.loadDiagnostics = warnings
+                             , BL.binaryRepr = BL.Elf32Repr
+                             , BL.originalBinary = e
+                             }
+  where
+    index32 = F.foldl' doIndex Map.empty
+    doIndex m memSym =
+      Map.insert (MC.segoffAddr (EL.memSymbolStart memSym)) (EL.memSymbolName memSym) m
+
+loadPPC64Binary :: (X.MonadThrow m, MC.ArchAddrWidth PPC64.PPC ~ 64)
+                => LC.LoadOptions
+                -> E.ElfHeaderInfo 64
+                -> m (BL.LoadedBinary PPC64.PPC (E.ElfHeaderInfo 64))
+loadPPC64Binary lopts e = do
   case EL.memoryForElf lopts e of
     Left err -> X.throwM (PPCElfLoadError err)
     Right (mem, symbols, warnings, _) ->
@@ -137,7 +164,7 @@ loadPPCBinary binRep lopts e = do
                                               , symbolIndex = indexSymbols toc symbols
                                               }
                                  , BL.loadDiagnostics = warnings
-                                 , BL.binaryRepr = binRep
+                                 , BL.binaryRepr = BL.Elf64Repr
                                  , BL.originalBinary = e
                                  }
 
@@ -157,6 +184,7 @@ data PPCLoadException = PPCElfLoadError String
                       | forall w . (MC.MemWidth w) => PPCElfMemoryError (MC.MemoryError w)
                       | forall w . (MC.MemWidth w) => PPCInvalidAbsoluteAddress (MC.MemAddr w)
                       | forall w . (MC.MemWidth w) => PPCNoFunctionAddressForTOCEntry (MC.MemAddr w)
+                      | forall w . InvalidEntryPoint (MM.MemWord w)
 
 deriving instance Show PPCLoadException
 
