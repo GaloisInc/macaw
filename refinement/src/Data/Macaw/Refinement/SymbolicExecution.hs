@@ -155,6 +155,7 @@ smtSolveTransfer
      , MU.MonadUnliftIO m
      , LJ.HasLog (RL.RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RefinementContext arch
   -> RP.CFGSlice arch ids
@@ -467,6 +468,7 @@ initializeSimulator :: forall m sym arch blocks ids tp
                        , CB.IsSymInterface sym
                        , LLVM.HasLLVMAnn sym
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
+                       , ?memOpts :: LLVM.MemOptions
                        )
                     => RefinementContext arch
                     -> sym

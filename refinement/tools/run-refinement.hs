@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -22,6 +23,7 @@ import           Data.Monoid
 import           Data.Parameterized.Some
 import qualified Data.Text.IO as TIO
 import           Data.Text.Prettyprint.Doc as PP
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Options.Applicative as O
 
 import           Prelude
@@ -93,6 +95,7 @@ doRefinement opts = do
     case unrefined opts of
       True -> showDiscoveryInfo opts unrefinedDI Nothing
       False ->
+        let ?memOpts = LLVM.defaultMemOptions in
         withRefinedDiscovery opts archInfo bin $ \refinedDI refinedInfo -> do
           showDiscoveryInfo opts unrefinedDI (Just (refinedDI, refinedInfo))
 

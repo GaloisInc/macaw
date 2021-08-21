@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -24,6 +25,7 @@ import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text.Prettyprint.Doc as PP
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lumberjack as LJ
 import qualified System.IO as IO
 import qualified System.Exit as IOE
@@ -119,6 +121,7 @@ withRefinedDiscovery :: forall arch binFmt a
                         , SymArchConstraints arch
                         , MBL.BinaryLoader arch binFmt
                         , ML.MemWidth (MC.ArchAddrWidth arch)
+                        , ?memOpts :: LLVM.MemOptions
                         )
                      => Options
                      -> AI.ArchitectureInfo arch

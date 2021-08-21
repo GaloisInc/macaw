@@ -875,7 +875,7 @@ hasPtrClass ptrWidth v =
         M.Addr64 -> v
 
 doReadMem ::
-  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -909,7 +909,7 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 --     arg6 : Address to read
 --     arg7 : Default answer if condition is false
 doCondReadMem ::
-  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->

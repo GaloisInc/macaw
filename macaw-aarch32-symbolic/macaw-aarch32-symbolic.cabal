@@ -52,6 +52,7 @@ test-suite macaw-aarch32-symbolic-tests
     bytestring,
     containers,
     crucible,
+    crucible-llvm,
     elf-edit,
     filepath,
     Glob >= 0.9 && < 0.11,

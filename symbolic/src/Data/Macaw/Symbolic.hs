@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NondecreasingIndentation #-}
@@ -235,7 +236,8 @@ data GenArchVals mem arch = GenArchVals
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
       :: forall a m sym
-       . (IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m)
+       . ( IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m
+         , ?memOpts :: MM.MemOptions )
       => sym
       -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
       -> m a
@@ -934,7 +936,7 @@ data MacawBlockEnd arch = MacawBlockEnd MacawBlockEndCase !(Maybe (M.ArchSegment
 type MacawBlockEndType arch = C.StructType (Ctx.EmptyCtx Ctx.::> C.BVType 3 Ctx.::> C.MaybeType (MM.LLVMPointerType (M.ArchAddrWidth arch)))
 
 blockEndAtom :: forall arch ids s
-              . MacawSymbolicArchFunctions arch 
+              . MacawSymbolicArchFunctions arch
              -> MacawBlockEnd arch
              -> CrucGen arch ids s (CR.Atom s (MacawBlockEndType arch))
 blockEndAtom archFns (MacawBlockEnd blendK mret) = crucGenArchConstraints archFns $ do
@@ -1113,7 +1115,7 @@ type MkGlobalPointerValidityAssertion sym w = sym
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
-  . (IsSymInterface sym, MM.HasLLVMAnn sym)
+  . (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1203,7 +1205,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
-  :: (IsSymInterface sym, MM.HasLLVMAnn sym)
+  :: (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1225,7 +1227,8 @@ macawExtensions f mvar globs lookupH toMemPred =
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
-   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym)
+   . ( C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym
+     , ?memOpts :: MM.MemOptions )
   => sym
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions

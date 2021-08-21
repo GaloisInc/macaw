@@ -13,6 +13,7 @@
 {-# Language PatternSynonyms #-}
 {-# Language RecordWildCards #-}
 {-# Language FlexibleContexts #-}
+{-# Language ImplicitParams #-}
 module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
     SymFuns(..), newSymFuns
@@ -64,6 +65,7 @@ import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.LLVM.MemModel
                    ( LLVMPointerType
                    , Mem
+                   , MemOptions
                    , HasLLVMAnn
                    , ptrAdd
                    , projectLLVM_bv
@@ -122,7 +124,7 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
 stmtSemantics
-  :: (IsSymInterface sym, HasLLVMAnn sym)
+  :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
   => SymFuns sym
   -> C.GlobalVar Mem
   -> GlobalMap sym Mem (M.ArchAddrWidth M.X86_64)

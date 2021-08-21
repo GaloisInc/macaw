@@ -12,6 +12,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
@@ -316,7 +317,7 @@ x86_64MacawSymbolicFns =
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn
-  :: (C.IsSymInterface sym, MM.HasLLVMAnn sym)
+  :: (C.IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SymFuns sym
   -> MacawArchEvalFn sym MM.Mem M.X86_64
 x86_64MacawEvalFn fs =
@@ -351,7 +352,7 @@ instance GenArchInfo LLVMMemory M.X86_64 where
     , withArchEval = \sym k -> do
         sfns <- liftIO $ newSymFuns sym
         k $ x86_64MacawEvalFn sfns
-    , withArchConstraints = \x -> x  
+    , withArchConstraints = \x -> x
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
     }
