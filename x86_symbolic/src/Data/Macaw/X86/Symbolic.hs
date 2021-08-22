@@ -244,7 +244,7 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
   X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
               -> X86StmtExtension f C.UnitType
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
-  X86PrimSyscall :: X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) (ArchRegStruct M.X86_64))
+  X86PrimSyscall :: X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) C.UnitType)
 
   -- TODO: Make these patterns exhaustive
 
@@ -261,7 +261,7 @@ instance C.TypeApp X86StmtExtension where
   appType X86PrimSyscall =
     C.FunctionHandleRepr
       (Ctx.singleton (C.StructRepr (crucArchRegTypes x86_64MacawSymbolicFns)))
-      (C.StructRepr (crucArchRegTypes x86_64MacawSymbolicFns))
+      C.UnitRepr
 
 
 instance FunctorFC X86StmtExtension where

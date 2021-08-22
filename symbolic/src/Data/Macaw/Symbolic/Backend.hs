@@ -75,7 +75,7 @@ data LookupSyscallHandle sym arch = LookupSyscallHandle
   -> C.RegEntry
        sym
        (C.StructType (PS.CtxToCrucibleType (PS.ArchRegContext arch)))
-  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> CG.ArchRegStruct arch) (CG.ArchRegStruct arch), C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx))
+  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> CG.ArchRegStruct arch) C.UnitType, C.CrucibleState (MO.MacawSimulatorState sym) sym (CG.MacawExt arch) rtp blocks r ctx))
 
 
 -- | Function for evaluating an architecture-specific statements
