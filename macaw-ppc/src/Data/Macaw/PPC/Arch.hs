@@ -225,7 +225,35 @@ instance MC.IPAlignment (SP.AnyPPC SP.V64) where
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
 instance MC.IPAlignment (SP.AnyPPC SP.V32) where
-  fromIPAligned _ = error "IP alignment rules are not yet implemented for PPC32"
+  fromIPAligned cleanAddr
+    | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
+    , MC.BVValue _ 2 <- two
+    , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
+    , Just (MC.Trunc addrDiv4' _) <- MC.valueAsApp smallAddrDiv4
+    , Just NR.Refl <- NR.testEquality (MT.typeWidth addrDiv4') (MT.knownNat :: NR.NatRepr 32)
+    , Just (MC.BVShr _ dirtyAddr two') <- MC.valueAsApp addrDiv4'
+    , MC.BVValue _ 2 <- two'
+    = Just dirtyAddr
+
+    | Just (MC.BVAnd _ dirtyAddr (MC.BVValue _ 0xfffffffc)) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
+    | Just (MC.BVAnd _ (MC.BVValue _ 0xfffffffc) dirtyAddr) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
+    | otherwise = Nothing
+    where
+      valueAsExtTwo :: MC.BVValue (SP.AnyPPC SP.V32) ids 32 -> Maybe (MC.BVValue (SP.AnyPPC SP.V32) ids 30)
+      valueAsExtTwo v
+        | Just (MC.SExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 30)
+        = Just v'
+
+        | Just (MC.UExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 30)
+        = Just v'
+
+        | otherwise = Nothing
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
 rewriteStmt :: PPCStmt v (MC.Value (SP.AnyPPC v) src) -> Rewriter (SP.AnyPPC v) s src tgt ()
