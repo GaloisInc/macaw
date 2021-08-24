@@ -55,6 +55,8 @@ import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
 import qualified Lang.Crucible.Simulator as C
+import qualified Lang.Crucible.Simulator.CallFrame as C
+import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
 
@@ -337,8 +339,17 @@ x86_64MacawEvalFn fs =
       X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
       X86PrimTerm term -> termSemantics fs term crux_state
       X86PrimSyscall -> do
-        (handle, st') <- lookupSyscall crux_state undefined -- TODO: extract register state and replace 'undefined'
-        return (C.HandleFnVal handle, st')
+        let frame = crux_state ^. C.stateTree . C.actFrame . C.gpValue
+        case frame of
+          C.MF cf ->
+            let map = C.regMap (cf ^. C.frameRegs) in
+            case map of
+              Ctx.Empty Ctx.:> regs -> do
+                (handle, st') <- lookupSyscall crux_state regs
+                return (C.HandleFnVal handle, st')
+              _ -> error $ "Unexpected register assignment size: " ++
+                           show (Ctx.size map)
+          _ -> undefined  -- TODO: Handle
 
 x86LookupReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)
