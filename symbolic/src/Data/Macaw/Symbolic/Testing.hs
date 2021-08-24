@@ -206,6 +206,7 @@ simulateAndVerify :: forall arch sym ids w t st fs
                      , 16 <= w
                      , MT.KnownNat w
                      , sym ~ WE.ExprBuilder t st fs
+                     , ?memOpts :: CLM.MemOptions
                      )
                   => WS.SolverAdapter st
                   -- ^ The solver adapter to use to discharge assertions
@@ -282,6 +283,7 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                     , MS.SymArchConstraints arch
                     , w ~ MC.ArchAddrWidth arch
                     , 16 <= w
+                    , ?memOpts :: CLM.MemOptions
                     )
                  => sym
                  -> [CS.GenericExecutionFeature sym]

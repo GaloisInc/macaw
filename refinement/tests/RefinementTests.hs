@@ -158,6 +158,7 @@ main = do
   concreteTestInputs <- getConcreteTestList datadir False
   symbolicTestInputs <- getSymbolicTestList datadir False
   -- let testNames = Set.fromList (map name testInputs)
+  let ?memOpts = CLM.defaultMemOptions
   let tests = concat [ map mkTest concreteTestInputs
                      , map mkSymbolicTest symbolicTestInputs
                      ]
@@ -221,7 +222,7 @@ testOptions verb file = Options { inputFile = file
 -- | Test that macaw-refinement can find all of the expected jump targets
 --
 -- Jump targets are provided in .expected files that are 'read' in.
-mkTest :: TestInput -> TT.TestTree
+mkTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
@@ -257,7 +258,7 @@ posFn _ = WPL.OtherPos . T.pack . show
 -- This test is fairly simple in that it isn't checking any interesting
 -- property, but only that the simulator does not error out due to unresolved
 -- control flow.
-mkSymbolicTest :: TestInput -> TT.TestTree
+mkSymbolicTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkSymbolicTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
