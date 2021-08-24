@@ -77,6 +77,7 @@ module Data.Macaw.Symbolic.CrucGen
   , archAddrWidth
   , evalAtom
   , crucibleValue
+  , createRegStruct
   ) where
 
 import           Control.Lens hiding (Empty, (:>))

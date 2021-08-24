@@ -246,7 +246,7 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
   X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
               -> X86StmtExtension f C.UnitType
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
-  X86PrimSyscall :: X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) C.UnitType)
+  X86PrimSyscall :: !(f (C.StructType (CtxToCrucibleType (ArchRegContext M.X86_64)))) -> X86StmtExtension f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) C.UnitType)
 
   -- TODO: Make these patterns exhaustive
 
@@ -260,7 +260,7 @@ instance C.TypeApp X86StmtExtension where
   appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
   appType (X86PrimStmt _) = C.UnitRepr
   appType (X86PrimTerm _) = C.UnitRepr
-  appType X86PrimSyscall =
+  appType (X86PrimSyscall _) =
     C.FunctionHandleRepr
       (Ctx.singleton (C.StructRepr (crucArchRegTypes x86_64MacawSymbolicFns)))
       C.UnitRepr
@@ -281,7 +281,7 @@ instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
   traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
   traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
-  traverseFC _f X86PrimSyscall = pure X86PrimSyscall
+  --traverseFC _f X86PrimSyscall = pure X86PrimSyscall
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
@@ -297,10 +297,13 @@ crucGenX86Fn fn = do
 
 crucGenX86Stmt :: forall ids s
                 . M.X86Stmt (M.Value M.X86_64 ids)
+               -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
                -> CrucGen M.X86_64 ids s ()
-crucGenX86Stmt stmt =
+crucGenX86Stmt stmt regs =
   case stmt of
-    M.X86Syscall -> void (evalArchStmt X86PrimSyscall)
+    M.X86Syscall -> do
+      regStruct <- createRegStruct regs
+      void (evalArchStmt (X86PrimSyscall regStruct)) -- TODO
     _ -> do
       let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
           f x = AtomWrapper <$> valueToCrucible x
@@ -322,7 +325,7 @@ x86_64MacawSymbolicFns =
   , crucGenRegStructType = x86RegStructType
   , crucGenArchRegName  = x86RegName
   , crucGenArchFn = crucGenX86Fn
-  , crucGenArchStmt = crucGenX86Stmt
+  , crucGenArchStmt = undefined --crucGenX86Stmt
   , crucGenArchTermStmt = crucGenX86TermStmt
   }
 
@@ -338,18 +341,9 @@ x86_64MacawEvalFn fs =
       X86PrimFn x -> funcSemantics fs x crux_state
       X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
       X86PrimTerm term -> termSemantics fs term crux_state
-      X86PrimSyscall -> do
-        let frame = crux_state ^. C.stateTree . C.actFrame . C.gpValue
-        case frame of
-          C.MF cf ->
-            let map = C.regMap (cf ^. C.frameRegs) in
-            case map of
-              Ctx.Empty Ctx.:> regs -> do
-                (handle, st') <- lookupSyscall crux_state regs
-                return (C.HandleFnVal handle, st')
-              _ -> error $ "Unexpected register assignment size: " ++
-                           show (Ctx.size map)
-          _ -> undefined  -- TODO: Handle
+      X86PrimSyscall regs -> do
+        (handle, st') <- lookupSyscall crux_state regs
+        return (C.HandleFnVal handle, st')
 
 x86LookupReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)

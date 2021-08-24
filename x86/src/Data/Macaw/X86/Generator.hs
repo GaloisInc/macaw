@@ -342,7 +342,7 @@ addStmt stmt = seq stmt $
   modGenState $ blockState . pBlockStmts %= (Seq.|> stmt)
 
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
-addArchStmt = addStmt . ExecArchStmt
+addArchStmt = addStmt . ExecArchStmt -- TODO: Attach regs to ExecArchStmt here?  Can get them with s0.blockState.pBlockState?  (See call chain of addArchTermStmt -> addTermStmt -> finishBlock)
 
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
