@@ -281,7 +281,7 @@ instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
   traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
   traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
-  --traverseFC _f X86PrimSyscall = pure X86PrimSyscall
+  --traverseFC f (X86PrimSyscall regs) = X86PrimSyscall <$> traverseFC f regs
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
@@ -297,18 +297,22 @@ crucGenX86Fn fn = do
 
 crucGenX86Stmt :: forall ids s
                 . M.X86Stmt (M.Value M.X86_64 ids)
-               -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
                -> CrucGen M.X86_64 ids s ()
-crucGenX86Stmt stmt regs =
+crucGenX86Stmt stmt =
   case stmt of
-    M.X86Syscall -> do
-      regStruct <- createRegStruct regs
-      void (evalArchStmt (X86PrimSyscall regStruct)) -- TODO
+    M.X86Syscall -> error "unexpected syscall" -- TODO: Remove case?
     _ -> do
       let f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
           f x = AtomWrapper <$> valueToCrucible x
       stmt' <- traverseF f stmt
       void (evalArchStmt (X86PrimStmt stmt'))
+
+crucGenX86Syscall :: forall ids s
+                   . M.RegState M.X86Reg (M.Value M.X86_64 ids)
+                  -> CrucGen M.X86_64 ids s ()
+crucGenX86Syscall regs = do
+  regStruct <- createRegStruct regs
+  void (evalArchStmt (X86PrimSyscall regStruct)) -- TODO
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
@@ -325,7 +329,8 @@ x86_64MacawSymbolicFns =
   , crucGenRegStructType = x86RegStructType
   , crucGenArchRegName  = x86RegName
   , crucGenArchFn = crucGenX86Fn
-  , crucGenArchStmt = undefined --crucGenX86Stmt
+  , crucGenArchStmt = crucGenX86Stmt
+  , crucGenArchSyscall = crucGenX86Syscall
   , crucGenArchTermStmt = crucGenX86TermStmt
   }
 

@@ -201,8 +201,13 @@ data MacawSymbolicArchFunctions arch
                          -> CrucGen arch ids s (CR.Atom s (ToCrucibleType tp)))
      -- ^ Generate crucible for architecture-specific function.
   , crucGenArchStmt
-    :: !(forall ids s . M.ArchStmt arch (M.Value arch ids) -> CrucGen arch ids s ())
+    :: !(forall ids s . M.ArchStmt arch (M.Value arch ids)
+                      -> CrucGen arch ids s ())
      -- ^ Generate crucible for architecture-specific statement.
+  , crucGenArchSyscall
+    :: !(forall ids s . M.RegState (M.ArchReg arch) (M.Value arch ids)
+                      -> CrucGen arch ids s ())
+     -- ^ Generate crucible for architecture-specific system call.
   , crucGenArchTermStmt :: !(forall ids s
                                . M.ArchTermStmt arch ids
                                -> M.RegState (M.ArchReg arch) (M.Value arch ids)
@@ -1236,6 +1241,9 @@ addMacawStmt baddr stmt =
     M.ExecArchStmt astmt -> do
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
+    M.ExecArchSyscall regs -> do
+      fns <- translateFns <$> get  -- TODO: Is this needed?
+      crucGenArchSyscall fns regs
     M.ArchState addr macawVals -> do
       m <- traverseF (fmap MacawCrucibleValue . valueToCrucible) macawVals
       let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType

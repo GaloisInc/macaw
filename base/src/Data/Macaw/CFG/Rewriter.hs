@@ -746,6 +746,9 @@ rewriteStmt s =
     ExecArchStmt astmt -> do
       f <- Rewriter $ gets $ rwctxArchStmt . rwContext
       f astmt
+    ExecArchSyscall regs -> do
+      tgtRegs <- traverseRegsWith (\_ v -> rewriteValue v) regs
+      appendRewrittenStmt $ ExecArchSyscall tgtRegs
     ArchState addr updates -> do
       tgtUpdates <- MapF.traverseWithKey (const rewriteValue) updates
       appendRewrittenStmt $ ArchState addr tgtUpdates

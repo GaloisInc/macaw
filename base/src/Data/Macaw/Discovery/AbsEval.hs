@@ -85,6 +85,9 @@ absEvalStmt info s stmt = withArchConstraints info $
       s
     ExecArchStmt astmt ->
       absEvalArchStmt info s astmt
+    ExecArchSyscall _ ->
+      -- TODO:  Is this right?
+      s
     ArchState{} ->
       s
 

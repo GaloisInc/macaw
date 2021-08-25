@@ -24,6 +24,7 @@ module Data.Macaw.X86.Generator
   , addStmt
   , addTermStmt
   , addArchStmt
+  , addArchSyscall
   , addArchTermStmt
   , asAtomicStateUpdate
   , evalArchFn
@@ -343,6 +344,12 @@ addStmt stmt = seq stmt $
 
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
 addArchStmt = addStmt . ExecArchStmt -- TODO: Attach regs to ExecArchStmt here?  Can get them with s0.blockState.pBlockState?  (See call chain of addArchTermStmt -> addTermStmt -> finishBlock)
+
+addArchSyscall :: X86Generator st_s ids ()
+addArchSyscall = do
+  st <- getState
+  let regs = st ^. blockState . pBlockState
+  addStmt (ExecArchSyscall regs)
 
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
