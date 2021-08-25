@@ -890,6 +890,7 @@ ppStmt ppOff stmt =
     InstructionStart off mnem -> "#" <+> ppOff off <+> pretty mnem
     Comment s -> "# " <> pretty s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
+    ExecArchSyscall _ -> "syscall"  -- TODO: More
     ArchState a m ->
         hang (length (show prefix)) (prefix PP.<> PP.encloseSep PP.lbrace PP.rbrace PP.semi (MapF.foldrWithKey ppUpdate [] m))
       where

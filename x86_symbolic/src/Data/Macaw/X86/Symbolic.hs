@@ -281,7 +281,7 @@ instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
   traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
   traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
-  --traverseFC f (X86PrimSyscall regs) = X86PrimSyscall <$> traverseFC f regs
+  traverseFC f (X86PrimSyscall regs) = X86PrimSyscall <$> (f regs)
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
