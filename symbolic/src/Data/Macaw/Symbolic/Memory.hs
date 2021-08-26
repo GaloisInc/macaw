@@ -479,6 +479,7 @@ mapRegionPointers :: ( MC.MemWidth w
                      , 16 <= w
                      , CB.IsSymInterface sym
                      , CL.HasLLVMAnn sym
+                     , ?memOpts :: CL.MemOptions
                      )
                   => MemPtrTable sym w
                   -> MS.GlobalMap sym CL.Mem w

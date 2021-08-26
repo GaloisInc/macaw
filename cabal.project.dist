@@ -26,6 +26,7 @@ packages: base/
           deps/dismantle/dismantle-thumb/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/
+          deps/crucible/crucible-symio/
           deps/what4/what4/
           deps/what4-serialize/
           deps/dwarf/
