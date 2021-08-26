@@ -309,10 +309,10 @@ crucGenX86Stmt stmt =
 
 crucGenX86Syscall :: forall ids s
                    . M.RegState M.X86Reg (M.Value M.X86_64 ids)
-                  -> CrucGen M.X86_64 ids s ()
+                  -> CrucGen M.X86_64 ids s (C.Atom s (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct M.X86_64) C.UnitType))
 crucGenX86Syscall regs = do
   regStruct <- createRegStruct regs
-  void (evalArchStmt (X86PrimSyscall regStruct)) -- TODO
+  evalArchStmt (X86PrimSyscall regStruct) -- TODO
 
 crucGenX86TermStmt :: M.X86TermStmt ids
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)

@@ -206,7 +206,7 @@ data MacawSymbolicArchFunctions arch
      -- ^ Generate crucible for architecture-specific statement.
   , crucGenArchSyscall
     :: !(forall ids s . M.RegState (M.ArchReg arch) (M.Value arch ids)
-                      -> CrucGen arch ids s ())
+                      -> CrucGen arch ids s (CR.Atom s (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) C.UnitType)))
      -- ^ Generate crucible for architecture-specific system call.
   , crucGenArchTermStmt :: !(forall ids s
                                . M.ArchTermStmt arch ids
@@ -1242,8 +1242,10 @@ addMacawStmt baddr stmt =
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
     M.ExecArchSyscall regs -> do
-      fns <- translateFns <$> get  -- TODO: Is this needed?
-      crucGenArchSyscall fns regs
+      fns <- translateFns <$> get
+      handle <- crucGenArchSyscall fns regs
+      -- handle is an 'Atom s (FunctionHandleType (EmptyCtx ::> ArchRegStruct arch) UnitType)'.  How can I call it?
+      pure ()  -- This line is just here for now to be able to build and run this
     M.ArchState addr macawVals -> do
       m <- traverseF (fmap MacawCrucibleValue . valueToCrucible) macawVals
       let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType
