@@ -1,6 +1,5 @@
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeOperators #-}
 -- | This module exports additional definitions that are required to implement
 -- architecture-specific backends for macaw-symbolic.
 --

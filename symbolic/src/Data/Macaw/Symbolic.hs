@@ -1126,8 +1126,8 @@ execMacawStmtExtension
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
   -> MO.LookupSyscallHandle sym arch
-  -- ^ TODO: Better comment
-  -- For building syscall function handles.
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
@@ -1226,8 +1226,8 @@ macawExtensions
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
   -> MO.LookupSyscallHandle sym arch
-  -- ^ TODO: Better comment
-  -- For building syscall function handles.
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
