@@ -125,7 +125,9 @@ module Data.Macaw.Symbolic
   , isValidPtr
   , mkUndefinedBool
   , MO.GlobalMap
+  , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
+  , unsupportedSyscalls
   , MO.LookupSyscallHandle(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
@@ -1110,6 +1112,32 @@ type MkGlobalPointerValidityAssertion sym w = sym
                                             -> C.RegEntry sym (MM.LLVMPointerType w)
                                             -- ^ The address written to or read from
                                             -> IO (Maybe (Assertion sym))
+
+-- | A default 'MO.LookupFunctionHandle' that raises an error if it is invoked
+--
+-- Some uses of the symbolic execution engine do not need to support function
+-- calls (e.g., some test suites or compositional verifiers). In those cases, it
+-- may be reasonable to use this default handler that raises an error if
+-- invoked.
+unsupportedFunctionCalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupFunctionHandle sym arch
+unsupportedFunctionCalls compName =
+  MO.LookupFunctionHandle $ \_ _ _ -> error ("Symbolically executing function calls is not supported in " ++ compName)
+
+-- | A default 'MO.LookupSyscallHandle' that raises an error if it is invoked
+--
+-- Most applications will not need to directly symbolically execute system call
+-- models, as they should probably prefer to provide overrides at a higher level
+-- (e.g., libc).  This is a reasonable handler that raises an error if it
+-- encounters a system call.
+unsupportedSyscalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupSyscallHandle sym arch
+unsupportedSyscalls compName =
+  MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
 
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension

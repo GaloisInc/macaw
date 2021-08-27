@@ -486,8 +486,8 @@ initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval arc
   (memory1, initSPVal) <- initializeMemory (Proxy @arch) sym memory0
   -- FIXME: Capture output somewhere besides stderr
   let globalMappingFn = MS.mapRegionPointers memPtrTable
-  let lookupHdl = MS.LookupFunctionHandle $ \_ _ _ -> error "Function calls not supported"
-  let lookupSyscall = MS.LookupSyscallHandle $ \_ _ -> error "System calls not supported"
+  let lookupHdl = MS.unsupportedFunctionCalls "macaw-refinement"
+  let lookupSyscall = MS.unsupportedSyscalls "macaw-refinement"
   let mkPtrPred = MS.mkGlobalPointerValidityPred memPtrTable
   let ext = MS.macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred
   let simCtx = C.initSimContext sym LLVM.llvmIntrinsicTypes halloc IO.stderr (C.FnBindings C.emptyHandleMap) ext MS.MacawSimulatorState

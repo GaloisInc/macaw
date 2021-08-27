@@ -387,15 +387,13 @@ data ResultExtractor sym arch where
 --
 -- It could be modified to do so.
 lookupFunction :: MS.LookupFunctionHandle sym arch
-lookupFunction = MS.LookupFunctionHandle $ \_s _mem _regs -> do
-  error "Function calls are not supported in the macaw-symbolic test harness"
+lookupFunction = MS.unsupportedFunctionCalls "macaw-symbolic-tests"
 
 -- | The test harness does not currently support making system calls from test cases.
 --
 -- It could be modified to do so.
 lookupSyscall :: MS.LookupSyscallHandle sym arch
-lookupSyscall = MS.LookupSyscallHandle $ \_s _regs -> do
-  error "System calls are not supported in the macaw-symbolic test harness"
+lookupSyscall = MS.unsupportedSyscalls "macaw-symbolic-tests"
 
 -- | The test suite does not currently generate global pointer well-formedness
 -- conditions (though it could be changed to do so).  This could become a

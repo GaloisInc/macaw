@@ -285,10 +285,8 @@ mkSymbolicTest testinp = do
               -- FIXME: We probably need to pull endianness from somewhere else
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl
-              let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
-                    error "Could not find function handle"
-              let lookupSC = MS.LookupSyscallHandle $ \_ _ _ ->
-                    error "System calls not supported"
+              let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
+              let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
               let validityCheck _ _ _ _ = return Nothing
               MS.withArchEval archVals sym $ \archEvalFns -> do
                 (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
