@@ -379,7 +379,7 @@ instance GenArchInfo LLVMMemory M.X86_64 where
 
 {- Note [Syscalls]
 
-While most of the system calls can be translated directly by embedding them in
+While most of the extension functions can be translated directly by embedding them in
 macaw symbolic wrappers (e.g., X86PrimFn), system calls are different. We cannot
 symbolically branch (and thus cannot invoke overrides) from extension
 statement/expression handlers, which is significantly limiting when modeling
