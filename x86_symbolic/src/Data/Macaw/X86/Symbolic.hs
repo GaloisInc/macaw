@@ -246,8 +246,6 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
               -> X86StmtExtension f C.UnitType
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
 
-  -- TODO: Make these patterns exhaustive
-
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
