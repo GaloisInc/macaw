@@ -287,9 +287,11 @@ mkSymbolicTest testinp = do
               let globalMap = MSM.mapRegionPointers memPtrTbl
               let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
                     error "Could not find function handle"
+              let lookupSC = MS.LookupSyscallHandle $ \_ _ _ ->
+                    error "System calls not supported"
               let validityCheck _ _ _ _ = return Nothing
               MS.withArchEval archVals sym $ \archEvalFns -> do
-                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn validityCheck cfg regs
+                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
                 case res of
                   CS.FinishedResult _ (CS.TotalRes _) -> return ()
                   CS.FinishedResult _ (CS.PartialRes {}) -> return ()
