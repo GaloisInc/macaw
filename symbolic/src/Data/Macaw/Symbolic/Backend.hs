@@ -14,6 +14,9 @@ module Data.Macaw.Symbolic.Backend (
   , PS.macawAssignToCrucM
   , CG.valueToCrucible
   , CG.evalArchStmt
+  , CG.evalAtom
+  , CG.evalMacawStmt
+  , CG.ArchRegStruct
   , MacawArchEvalFn(..)
   , MacawEvalStmtFunc
     -- ** Simulator Operations

@@ -402,6 +402,7 @@ transferAbsValue r f =
     PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
+    X86Syscall {} -> TopV
 
 -- | Extra constraints on block for disassembling.
 data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
@@ -557,20 +558,8 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                                  , AbsBlockState X86Reg
                                  , Jmp.InitJumpBounds X86_64
                                  )
-postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
+postX86TermStmtAbsState _preservePred _mem _s _bnds _regs tstmt =
   case tstmt of
-    X86Syscall ->
-      case regs^.curIP of
-        RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
-          let params = CallParams { postCallStackDelta = 0
-                                  , preserveReg = preservePred
-                                  , stackGrowsDown = True
-                                  }
-          Just ( nextIP
-               , absEvalCall params s regs nextIP
-               , Jmp.postCallBounds params bnds regs
-               )
-        _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing
     UD2 ->

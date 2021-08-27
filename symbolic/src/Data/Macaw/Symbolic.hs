@@ -126,7 +126,10 @@ module Data.Macaw.Symbolic
   , isValidPtr
   , mkUndefinedBool
   , MO.GlobalMap
+  , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
+  , unsupportedSyscalls
+  , MO.LookupSyscallHandle(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -1112,6 +1115,32 @@ type MkGlobalPointerValidityAssertion sym w = sym
                                             -- ^ The address written to or read from
                                             -> IO (Maybe (Assertion sym))
 
+-- | A default 'MO.LookupFunctionHandle' that raises an error if it is invoked
+--
+-- Some uses of the symbolic execution engine do not need to support function
+-- calls (e.g., some test suites or compositional verifiers). In those cases, it
+-- may be reasonable to use this default handler that raises an error if
+-- invoked.
+unsupportedFunctionCalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupFunctionHandle sym arch
+unsupportedFunctionCalls compName =
+  MO.LookupFunctionHandle $ \_ _ _ -> error ("Symbolically executing function calls is not supported in " ++ compName)
+
+-- | A default 'MO.LookupSyscallHandle' that raises an error if it is invoked
+--
+-- Most applications will not need to directly symbolically execute system call
+-- models, as they should probably prefer to provide overrides at a higher level
+-- (e.g., libc).  This is a reasonable handler that raises an error if it
+-- encounters a system call.
+unsupportedSyscalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupSyscallHandle sym arch
+unsupportedSyscalls compName =
+  MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
+
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
@@ -1125,10 +1154,13 @@ execMacawStmtExtension
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
+  -> MO.LookupSyscallHandle sym arch
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1189,6 +1221,12 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')
 
+    MacawLookupSyscallHandle argReprs retRepr argStruct -> do
+      -- Note that unlike 'MacawLookupFunctionHandle', the system call lookup
+      -- function does not require access to memory
+      (hv, st') <- lookupSyscall argReprs retRepr st argStruct
+      return (C.HandleFnVal hv, st')
+
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
@@ -1216,12 +1254,15 @@ macawExtensions
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
+  -> MO.LookupSyscallHandle sym arch
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH toMemPred =
+macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -1236,6 +1277,7 @@ runCodeBlock
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
+  -> MO.LookupSyscallHandle sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
@@ -1246,7 +1288,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1255,7 +1297,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH toMemPred
+                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state

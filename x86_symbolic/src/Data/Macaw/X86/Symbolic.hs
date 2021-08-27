@@ -55,6 +55,7 @@ import qualified What4.Symbol as C
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
+import qualified Lang.Crucible.CFG.Expr as CE
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
@@ -246,7 +247,6 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
               -> X86StmtExtension f C.UnitType
   X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
 
-
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
@@ -279,11 +279,32 @@ type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
 crucGenX86Fn :: forall ids s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
-crucGenX86Fn fn = do
-  let f ::  M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
-      f x = AtomWrapper <$> valueToCrucible x
-  r <- traverseFC f fn
-  evalArchStmt (X86PrimFn r)
+crucGenX86Fn fn =
+  case fn of
+    M.X86Syscall w v1 v2 v3 v4 v5 v6 v7 -> do
+      -- This is the key mechanism for our system call handling. See Note
+      -- [Syscalls] for details
+      a1 <- valueToCrucible v1
+      a2 <- valueToCrucible v2
+      a3 <- valueToCrucible v3
+      a4 <- valueToCrucible v4
+      a5 <- valueToCrucible v5
+      a6 <- valueToCrucible v6
+      a7 <- valueToCrucible v7
+
+      let syscallArgs = Ctx.Empty Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
+      let argTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
+      let retTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
+      let retRepr = C.StructRepr retTypes
+      syscallArgStructAtom <- evalAtom (C.EvalApp (CE.MkStruct argTypes syscallArgs))
+      let lookupHdlStmt = MacawLookupSyscallHandle argTypes retTypes syscallArgStructAtom
+      hdlAtom <- evalMacawStmt lookupHdlStmt
+      evalAtom $ C.Call hdlAtom syscallArgs retRepr
+    _ -> do
+      let f :: forall arch a . M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
+          f x = AtomWrapper <$> valueToCrucible x
+      r <- traverseFC f fn
+      evalArchStmt (X86PrimFn r)
 
 
 crucGenX86Stmt :: forall ids s
@@ -356,3 +377,33 @@ instance GenArchInfo LLVMMemory M.X86_64 where
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
     }
+
+{- Note [Syscalls]
+
+While most of the extension functions can be translated directly by embedding them in
+macaw symbolic wrappers (e.g., X86PrimFn), system calls are different. We cannot
+symbolically branch (and thus cannot invoke overrides) from extension
+statement/expression handlers, which is significantly limiting when modeling
+operating system behavior.
+
+To work around this, we translate the literal system call extension function
+into a sequence that gives us more flexibility:
+
+1. Inspect the machine state and return the function handle that corresponds to
+   the requested syscall
+2. Invoke the syscall
+
+Note that the ability of system calls to modify the register state (i.e., return
+values), the translation of the machine instruction must arrange for the
+returned values to flow back into the required registers. For example, it means
+that the two return registers (rax and rdi) have to be updated with the new
+values returned by the overrides on Linux/x86_64. macaw-x86 arranges for that to
+happen when it generates an 'X86Syscall' instruction.
+
+This subtle coupling is required because register identities are lost at this
+stage in the translation, and this code cannot force an update on a machine
+register.
+
+Note that after this stage, there are no more 'X86Syscall' expressions.
+
+-}
