@@ -347,12 +347,25 @@ addStmt stmt = seq stmt $
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
 addArchStmt = addStmt . ExecArchStmt -- TODO: Attach regs to ExecArchStmt here?  Can get them with s0.blockState.pBlockState?  (See call chain of addArchTermStmt -> addTermStmt -> finishBlock)
 
+-- | Generate our semantics for a system call
+--
+-- This reads all of the state that may be needed to determine the handler for
+-- the call and all of the actual arguments to the syscall.
+--
+-- It returns all of the state that the instruction /could/ update (besides
+-- memory, which is implicitly threaded through).
+--
+-- Note that the 'X86Syscall' extension is a /function/ to enable it to return
+-- updated values. We would ideally prefer system calls to act as block
+-- terminators. We get that behavior by forcing macaw to terminate the block
+-- when it encounters a syscall.
 addArchSyscall :: X86Generator st_s ids ()
 addArchSyscall = do
   sc <- X86Syscall (knownNat @64) <$> getRegValue RAX <*> getRegValue RDI <*> getRegValue RSI <*> getRegValue RDX <*> getRegValue R10 <*> getRegValue R8 <*> getRegValue R9
   res <- evalArchFn sc
   setReg RAX =<< eval (app (TupleField knownRepr res PL.index0))
   setReg RDX =<< eval (app (TupleField knownRepr res PL.index1))
+  addTermStmt FetchAndExecute
 
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
