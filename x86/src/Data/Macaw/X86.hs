@@ -402,6 +402,7 @@ transferAbsValue r f =
     PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
+    X86Syscall {} -> TopV
 
 -- | Extra constraints on block for disassembling.
 data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
@@ -557,11 +558,8 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                                  , AbsBlockState X86Reg
                                  , Jmp.InitJumpBounds X86_64
                                  )
-postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
+postX86TermStmtAbsState _preservePred _mem _s _bnds _regs tstmt =
   case tstmt of
-    -- TODO: There was logic here about how to handle syscalls that I removed.
-    -- Does that still need to be present somewhere with syscalls as
-    -- statements?
     Hlt ->
       Nothing
     UD2 ->

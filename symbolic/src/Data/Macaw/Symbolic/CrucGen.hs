@@ -204,10 +204,6 @@ data MacawSymbolicArchFunctions arch
     :: !(forall ids s . M.ArchStmt arch (M.Value arch ids)
                       -> CrucGen arch ids s ())
      -- ^ Generate crucible for architecture-specific statement.
-  , crucGenArchSyscall
-    :: !(forall ids s . M.RegState (M.ArchReg arch) (M.Value arch ids)
-                      -> CrucGen arch ids s (CR.Atom s (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) C.UnitType)))
-     -- ^ Generate crucible for architecture-specific system call.
   , crucGenArchTermStmt :: !(forall ids s
                                . M.ArchTermStmt arch ids
                                -> M.RegState (M.ArchReg arch) (M.Value arch ids)
@@ -401,6 +397,26 @@ data MacawStmtExtension (arch :: K.Type)
     -> MacawStmtExtension arch f (C.FunctionHandleType (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch)
                                  (ArchRegStruct arch))
 
+  -- | Look up a handle that models the effects of a system call
+  --
+  -- This is very similar to 'MacawLookupFunctionHandle', except that the
+  -- interpretation uses a different lookup function (based on the syscall table
+  -- for the OS/ABI).  The list of registers encodes the locations (besides
+  -- memory) that the system call can update. The architecture-specific backends
+  -- are responsible for ensuring that those updates are accounted for in the
+  -- translation. It is handled this way because the translations of system
+  -- calls are not really first-class in macaw, and thus they do not end blocks
+  -- in a way that lets us update registers in the same way that the call
+  -- sequence does.
+  --
+  -- Note that it is expected that the architecture-specific symbolic backends
+  -- are expected to use this in their translation of their syscall arch functions.
+  MacawLookupSyscallHandle
+    :: !(Assignment C.TypeRepr atps)
+    -> !(Assignment C.TypeRepr rtps)
+    -> !(f (C.StructType atps))
+    -> MacawStmtExtension arch f (C.FunctionHandleType atps (C.StructType rtps))
+
   -- | An architecture-specific machine instruction, for which an interpretation
   -- is required.  This interpretation must be provided by callers via the
   -- 'macawExtensions' function.
@@ -517,6 +533,7 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
 
       MacawFreshSymbolic r -> sexpr "macawFreshSymbolic" [ viaShow r ]
       MacawLookupFunctionHandle _ regs -> sexpr "macawLookupFunctionHandle" [ f regs ]
+      MacawLookupSyscallHandle _ _ regs -> sexpr "macawLookupSyscallHandle" [ f regs ]
       MacawArchStmtExtension a -> C.ppApp f a
       MacawArchStateUpdate addr m ->
         let prettyArchStateBinding :: forall tp . M.ArchReg arch tp -> MacawCrucibleValue f tp -> [Doc ann] -> [Doc ann]
@@ -547,6 +564,8 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawFreshSymbolic r) = typeToCrucible r
   appType (MacawLookupFunctionHandle regTypes _) =
     C.FunctionHandleRepr (Ctx.singleton (C.StructRepr regTypes)) (C.StructRepr regTypes)
+  appType (MacawLookupSyscallHandle argTypes retType _) =
+    C.FunctionHandleRepr argTypes (C.StructRepr retType)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
   appType MacawInstructionStart {} = C.knownRepr
@@ -1241,11 +1260,6 @@ addMacawStmt baddr stmt =
     M.ExecArchStmt astmt -> do
       fns <- translateFns <$> get
       crucGenArchStmt fns astmt
-    M.ExecArchSyscall regs -> do
-      fns <- translateFns <$> get
-      handle <- crucGenArchSyscall fns regs
-      -- handle is an 'Atom s (FunctionHandleType (EmptyCtx ::> ArchRegStruct arch) UnitType)'.  How can I call it?
-      pure ()  -- This line is just here for now to be able to build and run this
     M.ArchState addr macawVals -> do
       m <- traverseF (fmap MacawCrucibleValue . valueToCrucible) macawVals
       let crucStmt :: MacawStmtExtension arch (CR.Atom s) C.UnitType
@@ -1273,6 +1287,9 @@ createRegStruct regs = do
   updates <- createRegUpdates regs
   foldM addUpdate startingVals updates
 
+-- | Note that the list of updates is only meant to be used in 'createRegStruct'
+-- to populate the register struct being created in that function.  This
+-- function does not actually emit any Crucible statements itself.
 createRegUpdates :: forall arch ids s
                  .  M.RegState (M.ArchReg arch) (M.Value arch ids)
                  -> CrucGen arch ids s

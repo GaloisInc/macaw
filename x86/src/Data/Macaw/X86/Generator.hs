@@ -12,6 +12,7 @@ modeling X86 semantics.
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -80,6 +81,7 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as PL
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -347,9 +349,10 @@ addArchStmt = addStmt . ExecArchStmt -- TODO: Attach regs to ExecArchStmt here? 
 
 addArchSyscall :: X86Generator st_s ids ()
 addArchSyscall = do
-  st <- getState
-  let regs = st ^. blockState . pBlockState
-  addStmt (ExecArchSyscall regs)
+  sc <- X86Syscall (knownNat @64) <$> getRegValue RAX <*> getRegValue RDI <*> getRegValue RSI <*> getRegValue RDX <*> getRegValue R10 <*> getRegValue R8 <*> getRegValue R9
+  res <- evalArchFn sc
+  setReg RAX =<< eval (app (TupleField knownRepr res PL.index0))
+  setReg RDX =<< eval (app (TupleField knownRepr res PL.index1))
 
 -- | execute a primitive instruction.
 addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()

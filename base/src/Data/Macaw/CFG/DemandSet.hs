@@ -127,11 +127,6 @@ addStmtDemands s =
       ctx <- DemandComp $ gets $ demandContext
       demandConstraints ctx $
         traverseF_ addValueDemands astmt
-    ExecArchSyscall regs -> do
-      -- TODO: Is this right?
-      ctx <- DemandComp $ gets $ demandContext
-      demandConstraints ctx $
-        traverseF_ addValueDemands regs
     ArchState _a updates ->
       MapF.traverseWithKey_ (const addValueDemands) updates
 
@@ -148,5 +143,4 @@ stmtNeeded demandSet stmt =
     InstructionStart{} -> True
     Comment{} -> True
     ExecArchStmt{} -> True
-    ExecArchSyscall{} -> True
     ArchState{} -> True

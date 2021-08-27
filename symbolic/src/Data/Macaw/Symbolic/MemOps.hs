@@ -34,6 +34,7 @@ module Data.Macaw.Symbolic.MemOps
   , Regs
   , MacawSimulatorState(..)
   , LookupFunctionHandle(..)
+  , LookupSyscallHandle(..)
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
@@ -336,6 +337,33 @@ data LookupFunctionHandle sym arch = LookupFunctionHandle
   -> MemImpl sym
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
+
+-- | A function to inspect the machine state and translate it into a
+-- 'C.FnHandle' corresponding to the system call model that the simulator should
+-- call.
+--
+-- This function takes a subset of machine state determined by the ABI of the
+-- system being simulated. This could be an entire register state, but need not
+-- be. It could also include additional values (e.g., immediate operands to a
+-- syscall instruction).
+--
+-- Compared to 'LookupFunctionHandle', this function also takes a sequence of
+-- type reprs that indicate the return values that are returned by the syscall
+-- model.
+--
+-- Note that all of the arguments passed to this lookup function are also passed
+-- to the system call (reflected in the types of the function handle
+-- returned). Note that it is the responsibility of the architecture-specific
+-- backend (e.g., macaw-x86) to ensure that the returned values are placed in
+-- the appropriate machine registers.
+newtype LookupSyscallHandle sym arch =
+  LookupSyscallHandle (  forall rtp blocks r ctx atps rtps
+                      .  Ctx.Assignment TypeRepr atps
+                      -> Ctx.Assignment TypeRepr rtps
+                      -> CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+                      -> C.RegEntry sym (StructType atps)
+                      -> IO (C.FnHandle atps (StructType rtps), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx)
+                      )
 
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)

@@ -127,7 +127,7 @@ module Data.Macaw.Symbolic
   , mkUndefinedBool
   , MO.GlobalMap
   , MO.LookupFunctionHandle(..)
-  , SB.LookupSyscallHandle(..)
+  , MO.LookupSyscallHandle(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -1125,13 +1125,13 @@ execMacawStmtExtension
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
-  -> SB.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle sym arch
   -- ^ TODO: Better comment
   -- For building syscall function handles.
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) lookupSyscall toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1192,7 +1192,13 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')
 
-    MacawArchStmtExtension s    -> archStmtFn mvar globs lookupSyscall s st
+    MacawLookupSyscallHandle argReprs retRepr argStruct -> do
+      -- Note that unlike 'MacawLookupFunctionHandle', the system call lookup
+      -- function does not require access to memory
+      (hv, st') <- lookupSyscall argReprs retRepr st argStruct
+      return (C.HandleFnVal hv, st')
+
+    MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
 
@@ -1219,7 +1225,7 @@ macawExtensions
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
-  -> SB.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle sym arch
   -- ^ TODO: Better comment
   -- For building syscall function handles.
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
@@ -1241,7 +1247,7 @@ runCodeBlock
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
-  -> SB.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)

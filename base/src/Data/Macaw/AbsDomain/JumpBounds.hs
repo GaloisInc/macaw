@@ -273,7 +273,6 @@ execStatement bnds stmt =
     InstructionStart{} -> bnds
     Comment{} -> bnds
     ExecArchStmt{} -> discardMemBounds bnds
-    ExecArchSyscall{} -> discardMemBounds bnds -- TODO: Is this right?
     ArchState{} -> bnds
 
 -- | Create bounds for end of block.

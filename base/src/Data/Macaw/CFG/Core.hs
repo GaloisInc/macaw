@@ -866,9 +866,6 @@ data Stmt arch ids
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
      -- ^ Execute an architecture specific statement
-   | ExecArchSyscall !(RegState (ArchReg arch) (Value arch ids))
-   -- TODO: Coment
-   -- TODO: This created a few incomplete pattern matches to fill in
    | ArchState !(ArchMemAddr arch) !(MapF.MapF (ArchReg arch) (Value arch ids))
      -- ^ Address of an instruction and the *machine* registers that
      -- it updates (with their associated macaw values after the
@@ -890,7 +887,6 @@ ppStmt ppOff stmt =
     InstructionStart off mnem -> "#" <+> ppOff off <+> pretty mnem
     Comment s -> "# " <> pretty s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
-    ExecArchSyscall _ -> "syscall"  -- TODO: More
     ArchState a m ->
         hang (length (show prefix)) (prefix PP.<> PP.encloseSep PP.lbrace PP.rbrace PP.semi (MapF.foldrWithKey ppUpdate [] m))
       where

@@ -771,6 +771,38 @@ data X86PrimFn f tp where
   -- as a 64-bit value that will be stored in edx:eax
   XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
 
+  -- | Issue a system call
+  --
+  -- The arguments are all of the registers that *could* be system call
+  -- arguments under any x86_64 ABI. The return value is all of the registers
+  -- that *could* be return values under any x86_64 ABI.
+  --
+  -- The 'NatRepr' is the pointer width for the platform; this is 64 bits for
+  -- now, but when we add 32 bit support, we will want this
+  --
+  -- The return values are rax and rdx (because Linux can return two values for
+  -- some system calls; windows seems to just return one).
+  --
+  -- Note that the more desirable representation would be for this instruction
+  -- to take all registers (or even /implicitly/ take all registers) and be able
+  -- to update all registers. However, that poses challenges in macaw-symbolic,
+  -- where an implicit update of a machine register in the middle of a block is
+  -- very difficult, as machine register identity is erased at that point. Thus,
+  -- it is difficult to know what to update with the results of a system
+  -- call. By making the data flows explicit at translation time, we can avoid
+  -- that challenge at the expense of needing to over-approximate for all
+  -- possible syscall conventions for each platform.
+  X86Syscall :: (1 <= w)
+             => NatRepr w
+             -> !(f (BVType w)) -- rax (syscall #)
+             -> !(f (BVType w)) -- rdi
+             -> !(f (BVType w)) -- rsi
+             -> !(f (BVType w)) -- rdx
+             -> !(f (BVType w)) -- r10
+             -> !(f (BVType w)) -- r8
+             -> !(f (BVType w)) -- r9
+             -> X86PrimFn f (TupleType [BVType w, BVType w])
+
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
@@ -826,6 +858,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       SHA_Sigma1{} -> knownRepr
       SHA_Ch{} -> knownRepr
       SHA_Maj{} -> knownRepr
+      X86Syscall w _ _ _ _ _ _ _ -> TupleTypeRepr (BVTypeRepr w :< BVTypeRepr w :< Nil)
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -894,6 +927,9 @@ instance TraversableFC X86PrimFn where
       SHA_Sigma1 x -> SHA_Sigma1 <$> go x
       SHA_Ch x y z -> SHA_Ch <$> go x <*> go y <*> go z
       SHA_Maj x y z -> SHA_Maj <$> go x <*> go y <*> go z
+
+      X86Syscall w a1 a2 a3 a4 a5 a6 a7 ->
+        X86Syscall w <$> go a1 <*> go a2 <*> go a3 <*> go a4 <*> go a5 <*> go a6 <*> go a7
 
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc ann
@@ -967,6 +1003,8 @@ instance IsArchFn X86PrimFn where
       SHA_Sigma1 x -> sexprA "sha_Sigma1" [pp x]
       SHA_Ch x y z -> sexprA "sha_Ch" [pp x, pp y, pp z]
       SHA_Maj x y z -> sexprA "sha_Maj" [pp x, pp y, pp z]
+      X86Syscall _w a1 a2 a3 a4 a5 a6 a7 ->
+        sexprA "syscall" [pp a1, pp a2, pp a3, pp a4, pp a5, pp a6, pp a7]
 
 
 -- | This returns true if evaluating the primitive function implicitly
@@ -1027,6 +1065,8 @@ x86PrimFnHasSideEffects f =
     SHA_Sigma1{} -> False
     SHA_Ch{} -> False
     SHA_Maj{} -> False
+
+    X86Syscall {} -> True
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -1095,9 +1135,6 @@ data X86Stmt (v :: Type -> Kind.Type) where
   -- faster version from AMD 3D now.
   EMMS :: X86Stmt v
 
-  -- TODO: Comment
-  X86Syscall :: X86Stmt v
-
 instance FunctorF X86Stmt where
   fmapF = fmapFDefault
 
@@ -1114,7 +1151,6 @@ instance TraversableF X86Stmt where
       RepStos bc dest val cnt dir ->
         RepStos bc <$> go dest <*> go val <*> go cnt <*> go dir
       EMMS -> pure EMMS
-      X86Syscall -> pure X86Syscall
 
 instance IsArchStmt X86Stmt where
   ppArchStmt pp stmt =
@@ -1129,7 +1165,6 @@ instance IsArchStmt X86Stmt where
           "repStos" <+> parens (hcat $ punctuate comma args)
         where args = [ppRepValSize bc, pp dest, pp val, pp cnt, pp dir]
       EMMS -> "emms"
-      X86Syscall -> "x86_syscall"
 
 ------------------------------------------------------------------------
 -- X86_64

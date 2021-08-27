@@ -573,6 +573,7 @@ pureSem sym fn = do
     M.SHA_Sigma1 x -> pureSemSymUn sym fnShaSigma1 x
     M.SHA_Ch x y z -> pureSemSymTern sym fnShaCh x y z
     M.SHA_Maj x y z -> pureSemSymTern sym fnShaMaj x y z
+    M.X86Syscall {} -> error "X86Syscall should be eliminated and replaced by X86PrimSyscall to look up a function handle"
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
