@@ -91,7 +91,6 @@ module Data.Macaw.Symbolic
   , CG.crucGenRegAssignment
   , CG.crucGenArchRegName
   , CG.MemSegmentMap
-  , CG.createRegStruct
     -- * Inspecting and typing generated terms
   , CG.ArchRegStruct
   , CG.MacawCrucibleRegTypes
