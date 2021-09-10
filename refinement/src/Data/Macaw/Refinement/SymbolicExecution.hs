@@ -490,8 +490,9 @@ initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval arc
   let globalMappingFn = MS.mapRegionPointers memPtrTable
   let lookupHdl = MS.unsupportedFunctionCalls "macaw-refinement"
   let lookupSyscall = MS.unsupportedSyscalls "macaw-refinement"
+  let lookupSegmentBase = MS.unsupportedSegmentBasePointers "macaw-refinement"
   let mkPtrPred = MS.mkGlobalPointerValidityPred memPtrTable
-  let ext = MS.macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred
+  let ext = MS.macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred lookupSegmentBase
   let simCtx = C.initSimContext sym LLVM.llvmIntrinsicTypes halloc IO.stderr (C.FnBindings C.emptyHandleMap) ext MS.MacawSimulatorState
   let globalState = C.insertGlobal memVar memory1 C.emptyGlobals
   initRegs <- initialRegisterState sym archVals globalMappingFn memory1 entryBlock initSPVal

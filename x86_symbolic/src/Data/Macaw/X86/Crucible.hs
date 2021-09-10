@@ -93,13 +93,15 @@ funcSemantics
   => SymFuns sym
   -> M.X86PrimFn (AtomWrapper (RegEntry sym)) mt
   -> S sym rtp bs r ctx
+  -> LookupSegmentBasePointer sym M.X86_64
   -> IO (RegValue sym t, S sym rtp bs r ctx)
-funcSemantics fs x s = do let sym = Sym { symIface = s^.stateSymInterface
-                                        , symTys   = s^.stateIntrinsicTypes
-                                        , symFuns  = fs
-                                        }
-                          v <- pureSem sym x
-                          return (v,s)
+funcSemantics fs x s lookupSegmentBase = do
+  let sym = Sym { symIface = s^.stateSymInterface
+                , symTys   = s^.stateIntrinsicTypes
+                , symFuns  = fs
+                }
+  v <- pureSem sym x lookupSegmentBase
+  return (v,s)
 
 withConcreteCountAndDir
   :: (IsSymInterface sym, 1 <= w)
@@ -336,16 +338,18 @@ pureSem :: forall sym mt
         .  IsSymInterface sym
         => Sym sym   {- ^ Handle to the simulator -}
         -> M.X86PrimFn (AtomWrapper (RegEntry sym)) mt {- ^ Instruction -}
+        -> LookupSegmentBasePointer sym M.X86_64
+        -- ^ Handler for 'ReadFSBase' and 'ReadGSBase'
         -> IO (RegValue sym (ToCrucibleType mt)) -- ^ Resulting value
-pureSem sym fn = do
+pureSem sym fn (LookupSegmentBasePointer lookupSegmentBase) = do
   let symi = (symIface sym)
   case fn of
     M.EvenParity x0 ->
       do x <- getBitVal (symIface sym) x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
-    M.ReadFSBase    -> error " ReadFSBase"
-    M.ReadGSBase    -> error "ReadGSBase"
+    M.ReadFSBase    -> return (lookupSegmentBase fn)
+    M.ReadGSBase    -> return (lookupSegmentBase fn)
     M.GetSegmentSelector _ -> error "GetSegmentSelector"
     M.CPUID{}       -> error "CPUID"
     M.CMPXCHG8B{} -> error "CMPXCHG8B"

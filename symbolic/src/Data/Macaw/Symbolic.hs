@@ -130,6 +130,8 @@ module Data.Macaw.Symbolic
   , MO.LookupFunctionHandle(..)
   , unsupportedSyscalls
   , MO.LookupSyscallHandle(..)
+  , unsupportedSegmentBasePointers
+  , MO.LookupSegmentBasePointer(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -1141,6 +1143,19 @@ unsupportedSyscalls
 unsupportedSyscalls compName =
   MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
 
+-- | A default 'MO.LookupSegmentBasePointer' that raises an error if it is
+-- invoked
+--
+-- Some applications may not need to support segment base pointers (e.g., if
+-- the arctecture doesn't support them).  This is a reasonable handler that
+-- raises an error if it encounters an access to a segment base pointer.
+unsupportedSegmentBasePointers
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupSegmentBasePointer sym arch
+unsupportedSegmentBasePointers compName =
+  MO.LookupSegmentBasePointer $ \_ -> error ("Symbolically accessing segment base pointers is not supported in " ++ compName)
+
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
@@ -1159,8 +1174,10 @@ execMacawStmtExtension
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
+  -> MO.LookupSegmentBasePointer sym arch
+  -- ^ A function to return the appropriate segment base pointer when a segment base register is read.
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred lookupSegmentBase s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1227,7 +1244,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- lookupSyscall argReprs retRepr st argStruct
       return (C.HandleFnVal hv, st')
 
-    MacawArchStmtExtension s    -> archStmtFn mvar globs s st
+    MacawArchStmtExtension s    -> archStmtFn mvar globs lookupSegmentBase s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
 
@@ -1259,10 +1276,12 @@ macawExtensions
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
+  -> MO.LookupSegmentBasePointer sym arch
+  -- ^ A function to return the appropriate segment base pointer when a segment base register is read.
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
+macawExtensions f mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -1282,13 +1301,14 @@ runCodeBlock
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -- ^ Register assignment
+  -> MO.LookupSegmentBasePointer sym arch
   -> IO ( C.GlobalVar MM.Mem
         , C.ExecResult
           (MacawSimulatorState sym)
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct lookupSegmentBase = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1297,7 +1317,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall t
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
+                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state

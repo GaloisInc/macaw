@@ -342,9 +342,9 @@ x86_64MacawEvalFn
   => SymFuns sym
   -> MacawArchEvalFn sym MM.Mem M.X86_64
 x86_64MacawEvalFn fs =
-  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state ->
+  MacawArchEvalFn $ \global_var_mem globals lookupSegmentBase ext_stmt crux_state ->
     case ext_stmt of
-      X86PrimFn x -> funcSemantics fs x crux_state
+      X86PrimFn x -> funcSemantics fs x crux_state lookupSegmentBase
       X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
       X86PrimTerm term -> termSemantics fs term crux_state
 

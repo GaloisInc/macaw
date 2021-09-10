@@ -74,6 +74,7 @@ type MacawEvalStmtFunc f p sym ext =
 newtype MacawArchEvalFn sym mem arch =
   MacawArchEvalFn (C.GlobalVar mem
                   -> MO.GlobalMap sym mem (M.ArchAddrWidth arch)
+                  -> MO.LookupSegmentBasePointer sym arch
                   -> MacawEvalStmtFunc (CG.MacawArchStmtExtension arch)
                                        (MO.MacawSimulatorState sym)
                                        sym

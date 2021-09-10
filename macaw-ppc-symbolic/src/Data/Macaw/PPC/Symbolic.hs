@@ -120,7 +120,7 @@ ppcMacawEvalFn :: ( C.IsSymInterface sym
                   )
                => F.SymFuns sym
                -> MS.MacawArchEvalFn sym mem (SP.AnyPPC v)
-ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
+ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ _ xt s -> case xt of
   PPCPrimFn fn -> F.funcSemantics fs fn s
   PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
   PPCPrimTerm term -> F.termSemantics fs term s

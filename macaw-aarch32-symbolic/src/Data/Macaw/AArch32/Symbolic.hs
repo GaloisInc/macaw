@@ -68,7 +68,7 @@ aarch32RegName r = WS.safeSymbol ("r!" ++ show (MC.prettyF r))
 aarch32MacawEvalFn :: (CB.IsSymInterface sym)
                    => AF.SymFuns sym
                    -> MS.MacawArchEvalFn sym mem SA.AArch32
-aarch32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s ->
+aarch32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ _ xt s ->
   case xt of
     AArch32PrimFn p -> AF.funcSemantics fs p s
     AArch32PrimStmt p -> AF.stmtSemantics fs p s
