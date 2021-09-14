@@ -1377,7 +1377,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall t
 --           -> (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch) -> IO a)
 --           -> IO a
 -- translate dfi useCFG =
---   case MS.archVals (Proxy @arch) of
+--   case MS.archVals (Proxy @arch) Nothing of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
 --     Just avals -> do
 --       let archFns = MS.archFunctions avals

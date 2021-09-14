@@ -270,7 +270,7 @@ mkSymbolicTest testinp = do
         Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
     withElf opts $ \proxy archInfo bin _unrefinedDI -> do
       withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
-        let Just archVals = MS.archVals proxy
+        let Just archVals = MS.archVals proxy Nothing
         let archFns = MS.archFunctions archVals
         let mem = MBL.memoryImage bin
         F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
