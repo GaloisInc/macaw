@@ -35,7 +35,6 @@ module Data.Macaw.Symbolic.MemOps
   , MacawSimulatorState(..)
   , LookupFunctionHandle(..)
   , LookupSyscallHandle(..)
-  , LookupSegmentBasePointer(..)
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
@@ -365,17 +364,6 @@ newtype LookupSyscallHandle sym arch =
                       -> C.RegEntry sym (StructType atps)
                       -> IO (C.FnHandle atps (StructType rtps), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx)
                       )
-
--- | A function to inspect an ArchFn fetching a segment base pointer and return
--- the appropriate segment base pointer.
---
--- This can be used for architectures that emulate segmented memory through
--- special registers containing pointers to memory regions in the flat address
--- space (e.g., FSBASE and GSBASE in x86).
-newtype LookupSegmentBasePointer sym arch =
-  LookupSegmentBasePointer (  forall v tp
-                           .  M.ArchFn arch v tp
-                           -> LLVMPtr sym (M.ArchAddrWidth arch))
 
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)

@@ -119,30 +119,43 @@ ppcMacawEvalFn :: ( C.IsSymInterface sym
                   , 1 <= SP.AddrWidth v
                   )
                => F.SymFuns sym
+               -> MS.MacawArchStmtExtensionOverride (SP.AnyPPC v)
                -> MS.MacawArchEvalFn sym mem (SP.AnyPPC v)
-ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ _ xt s -> case xt of
-  PPCPrimFn fn -> F.funcSemantics fs fn s
-  PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
-  PPCPrimTerm term -> F.termSemantics fs term s
+ppcMacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
+  MSB.MacawArchEvalFn $ \_ _ xt s -> do
+    mRes <- override xt s
+    case mRes of
+      Nothing ->
+        case xt of
+          PPCPrimFn fn -> F.funcSemantics fs fn s
+          PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
+          PPCPrimTerm term -> F.termSemantics fs term s
+      Just res -> return res
 
 
 instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V64) where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
+        let override = case mOverride of
+                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k (ppcMacawEvalFn sfns override)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
     }
 
 instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V32) where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
+        let override = case mOverride of
+                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k (ppcMacawEvalFn sfns override)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg

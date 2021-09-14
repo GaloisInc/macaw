@@ -57,6 +57,8 @@ module Data.Macaw.Symbolic
   , IsMemoryModel(..)
   , LLVMMemory
   , SB.MacawArchEvalFn
+  , MacawArchStmtExtensionOverride(..)
+  , defaultMacawArchStmtExtensionOverride
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
     -- $translationExample
@@ -130,8 +132,6 @@ module Data.Macaw.Symbolic
   , MO.LookupFunctionHandle(..)
   , unsupportedSyscalls
   , MO.LookupSyscallHandle(..)
-  , unsupportedSegmentBasePointers
-  , MO.LookupSegmentBasePointer(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -213,16 +213,43 @@ import           Data.Macaw.Symbolic.MemOps as MO
 -- The 'mem' type parameter indicates the memory model to be used for translation.
 -- The type alias 'ArchInfo' specializes this class to the llvm memory model
 -- using the 'LLVMMemory' type tag.
+--
+-- The 'Maybe (MacawArchStmtExtensionOverride arch)' parameter allows client
+-- code to override the default handling of 'MacawArchStmtExtension's.  It is
+-- an optional parameter and supplying 'Nothing' will cause the backend to use
+-- the default translation for all 'MacawArchStmtExtension's.
 class GenArchInfo mem arch where
-  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+  genArchVals :: proxy mem
+              -> proxy' arch
+              -> Maybe (MacawArchStmtExtensionOverride arch)
+              -> Maybe (GenArchVals mem arch)
 
 type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+-- | A function to enable overriding of the default 'MacawArchStmtExtension'
+-- translation.  It takes a statement and a crucible state, and returns an
+-- optional tuple containing the value produced by the statement, as well as an
+-- updated state.  Returning 'Nothing' indicates that the backend should use
+-- its default handler for the statement.
+newtype MacawArchStmtExtensionOverride arch =
+  MacawArchStmtExtensionOverride (
+    forall p sym ext rtp blocks r ctx tp'
+    .  MacawArchStmtExtension arch (C.RegEntry sym) tp'
+    -> C.CrucibleState p sym ext rtp blocks r ctx
+    -> IO (Maybe (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)))
+
+-- | A 'MacawArchStmtExtensionOverride' that always returns 'Nothing', and
+-- therefore always uses the backend's default translation.
+defaultMacawArchStmtExtensionOverride :: MacawArchStmtExtensionOverride arch
+defaultMacawArchStmtExtensionOverride =
+  MacawArchStmtExtensionOverride (\_ _ -> return Nothing)
 
 archVals
   :: ArchInfo arch
   => proxy arch
+  -> Maybe (MacawArchStmtExtensionOverride arch)
   -> Maybe (ArchVals arch)
-archVals p = genArchVals (Proxy @LLVMMemory) p
+archVals p override = genArchVals (Proxy @LLVMMemory) p override
 
 data LLVMMemory
 
@@ -1143,19 +1170,6 @@ unsupportedSyscalls
 unsupportedSyscalls compName =
   MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
 
--- | A default 'MO.LookupSegmentBasePointer' that raises an error if it is
--- invoked
---
--- Some applications may not need to support segment base pointers (e.g., if
--- the arctecture doesn't support them).  This is a reasonable handler that
--- raises an error if it encounters an access to a segment base pointer.
-unsupportedSegmentBasePointers
-  :: String
-  -- ^ The name of the component providing the handler
-  -> MO.LookupSegmentBasePointer sym arch
-unsupportedSegmentBasePointers compName =
-  MO.LookupSegmentBasePointer $ \_ -> error ("Symbolically accessing segment base pointers is not supported in " ++ compName)
-
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
@@ -1174,10 +1188,8 @@ execMacawStmtExtension
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> MO.LookupSegmentBasePointer sym arch
-  -- ^ A function to return the appropriate segment base pointer when a segment base register is read.
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred lookupSegmentBase s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1244,7 +1256,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- lookupSyscall argReprs retRepr st argStruct
       return (C.HandleFnVal hv, st')
 
-    MacawArchStmtExtension s    -> archStmtFn mvar globs lookupSegmentBase s st
+    MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
 
@@ -1276,12 +1288,10 @@ macawExtensions
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
-  -> MO.LookupSegmentBasePointer sym arch
-  -- ^ A function to return the appropriate segment base pointer when a segment base register is read.
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase =
+macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
   C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -1301,14 +1311,13 @@ runCodeBlock
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -- ^ Register assignment
-  -> MO.LookupSegmentBasePointer sym arch
   -> IO ( C.GlobalVar MM.Mem
         , C.ExecResult
           (MacawSimulatorState sym)
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct lookupSegmentBase = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1317,7 +1326,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall t
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred lookupSegmentBase
+                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state

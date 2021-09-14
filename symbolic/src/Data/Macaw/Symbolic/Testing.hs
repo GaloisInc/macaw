@@ -332,7 +332,7 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction lookupSyscall validityCheck lookupSegmentBase
+    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction lookupSyscall validityCheck
     let ctx = CS.initSimContext sym CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
@@ -396,12 +396,6 @@ lookupFunction = MS.unsupportedFunctionCalls "macaw-symbolic-tests"
 -- It could be modified to do so.
 lookupSyscall :: MS.LookupSyscallHandle sym arch
 lookupSyscall = MS.unsupportedSyscalls "macaw-symbolic-tests"
-
--- | The test harness does not currently support accesses to segment base registers from test cases.
---
--- It could be modified to do so.
-lookupSegmentBase :: MS.LookupSegmentBasePointer sym arch
-lookupSegmentBase = MS.unsupportedSegmentBasePointers "macaw-symbolic-tests"
 
 -- | The test suite does not currently generate global pointer well-formedness
 -- conditions (though it could be changed to do so).  This could become a
