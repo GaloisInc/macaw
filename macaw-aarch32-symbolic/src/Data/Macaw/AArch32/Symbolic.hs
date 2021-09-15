@@ -67,19 +67,28 @@ aarch32RegName r = WS.safeSymbol ("r!" ++ show (MC.prettyF r))
 
 aarch32MacawEvalFn :: (CB.IsSymInterface sym)
                    => AF.SymFuns sym
+                   -> MS.MacawArchStmtExtensionOverride SA.AArch32
                    -> MS.MacawArchEvalFn sym mem SA.AArch32
-aarch32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s ->
-  case xt of
-    AArch32PrimFn p -> AF.funcSemantics fs p s
-    AArch32PrimStmt p -> AF.stmtSemantics fs p s
-    AArch32PrimTerm p -> AF.termSemantics fs p s
+aarch32MacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
+  MSB.MacawArchEvalFn $ \_ _ xt s -> do
+    mRes <- override xt s
+    case mRes of
+      Nothing ->
+        case xt of
+          AArch32PrimFn p -> AF.funcSemantics fs p s
+          AArch32PrimStmt p -> AF.stmtSemantics fs p s
+          AArch32PrimTerm p -> AF.termSemantics fs p s
+      Just res -> return res
 
 instance MS.GenArchInfo mem SA.AArch32 where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
                     { MS.archFunctions = aarch32MacawSymbolicFns
                     , MS.withArchEval = \sym k -> do
                         sfns <- liftIO $ AF.newSymFuns sym
-                        k (aarch32MacawEvalFn sfns)
+                        let override = case mOverride of
+                                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                                         Just ov -> ov
+                        k (aarch32MacawEvalFn sfns override)
                     , MS.withArchConstraints = \x -> x
                     , MS.lookupReg = aarch32LookupReg
                     , MS.updateReg = aarch32UpdateReg

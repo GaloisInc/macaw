@@ -19,7 +19,7 @@ translate :: forall arch ids
           => MD.DiscoveryFunInfo arch ids
           -> IO ()
 translate dfi =
-  case MS.archVals (Proxy @arch) of
+  case MS.archVals (Proxy @arch) Nothing of
     Nothing -> putStrLn "Architecture does not support symbolic reasoning"
     Just MS.ArchVals { MS.archFunctions = archFns } -> do
       hdlAlloc <- CFH.newHandleAllocator

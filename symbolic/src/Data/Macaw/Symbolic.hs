@@ -57,6 +57,8 @@ module Data.Macaw.Symbolic
   , IsMemoryModel(..)
   , LLVMMemory
   , SB.MacawArchEvalFn
+  , MacawArchStmtExtensionOverride(..)
+  , defaultMacawArchStmtExtensionOverride
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
     -- $translationExample
@@ -211,16 +213,43 @@ import           Data.Macaw.Symbolic.MemOps as MO
 -- The 'mem' type parameter indicates the memory model to be used for translation.
 -- The type alias 'ArchInfo' specializes this class to the llvm memory model
 -- using the 'LLVMMemory' type tag.
+--
+-- The 'Maybe (MacawArchStmtExtensionOverride arch)' parameter allows client
+-- code to override the default handling of 'MacawArchStmtExtension's.  It is
+-- an optional parameter and supplying 'Nothing' will cause the backend to use
+-- the default translation for all 'MacawArchStmtExtension's.
 class GenArchInfo mem arch where
-  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+  genArchVals :: proxy mem
+              -> proxy' arch
+              -> Maybe (MacawArchStmtExtensionOverride arch)
+              -> Maybe (GenArchVals mem arch)
 
 type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+-- | A function to enable overriding of the default 'MacawArchStmtExtension'
+-- translation.  It takes a statement and a crucible state, and returns an
+-- optional tuple containing the value produced by the statement, as well as an
+-- updated state.  Returning 'Nothing' indicates that the backend should use
+-- its default handler for the statement.
+newtype MacawArchStmtExtensionOverride arch =
+  MacawArchStmtExtensionOverride (
+    forall p sym ext rtp blocks r ctx tp'
+    .  MacawArchStmtExtension arch (C.RegEntry sym) tp'
+    -> C.CrucibleState p sym ext rtp blocks r ctx
+    -> IO (Maybe (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)))
+
+-- | A 'MacawArchStmtExtensionOverride' that always returns 'Nothing', and
+-- therefore always uses the backend's default translation.
+defaultMacawArchStmtExtensionOverride :: MacawArchStmtExtensionOverride arch
+defaultMacawArchStmtExtensionOverride =
+  MacawArchStmtExtensionOverride (\_ _ -> return Nothing)
 
 archVals
   :: ArchInfo arch
   => proxy arch
+  -> Maybe (MacawArchStmtExtensionOverride arch)
   -> Maybe (ArchVals arch)
-archVals p = genArchVals (Proxy @LLVMMemory) p
+archVals p override = genArchVals (Proxy @LLVMMemory) p override
 
 data LLVMMemory
 
@@ -1348,7 +1377,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall t
 --           -> (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch) -> IO a)
 --           -> IO a
 -- translate dfi useCFG =
---   case MS.archVals (Proxy @arch) of
+--   case MS.archVals (Proxy @arch) Nothing of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
 --     Just avals -> do
 --       let archFns = MS.archFunctions avals

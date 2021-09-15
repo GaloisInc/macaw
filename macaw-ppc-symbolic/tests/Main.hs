@@ -180,7 +180,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo
        WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
        execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
-       let Just archVals = MS.archVals (Proxy @(MP.AnyPPC v))
+       let Just archVals = MS.archVals (Proxy @(MP.AnyPPC v)) Nothing
        let extract = ppcResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions

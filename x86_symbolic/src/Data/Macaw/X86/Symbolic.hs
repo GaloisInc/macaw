@@ -18,6 +18,7 @@ module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
   , SymFuns(..), newSymFuns
+  , X86StmtExtension(..)
 
   , lookupX86Reg
   , updateX86Reg
@@ -340,13 +341,18 @@ x86_64MacawSymbolicFns =
 x86_64MacawEvalFn
   :: (C.IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SymFuns sym
+  -> MacawArchStmtExtensionOverride M.X86_64
   -> MacawArchEvalFn sym MM.Mem M.X86_64
-x86_64MacawEvalFn fs =
-  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state ->
-    case ext_stmt of
-      X86PrimFn x -> funcSemantics fs x crux_state
-      X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
-      X86PrimTerm term -> termSemantics fs term crux_state
+x86_64MacawEvalFn fs (MacawArchStmtExtensionOverride override) =
+  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state -> do
+    mRes <- override ext_stmt crux_state
+    case mRes of
+      Nothing ->
+        case ext_stmt of
+          X86PrimFn x -> funcSemantics fs x crux_state
+          X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
+          X86PrimTerm term -> termSemantics fs term crux_state
+      Just res -> return res
 
 x86LookupReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)
@@ -368,11 +374,14 @@ x86UpdateReg reg_struct_entry macaw_reg val =
     Nothing -> error $ "unexpected register: " ++ showF macaw_reg
 
 instance GenArchInfo LLVMMemory M.X86_64 where
-  genArchVals _ _ = Just $ GenArchVals
+  genArchVals _ _ mOverride = Just $ GenArchVals
     { archFunctions = x86_64MacawSymbolicFns
     , withArchEval = \sym k -> do
         sfns <- liftIO $ newSymFuns sym
-        k $ x86_64MacawEvalFn sfns
+        let override = case mOverride of
+                         Nothing -> defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k $ x86_64MacawEvalFn sfns override
     , withArchConstraints = \x -> x
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
