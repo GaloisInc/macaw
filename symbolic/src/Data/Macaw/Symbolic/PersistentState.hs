@@ -251,6 +251,11 @@ instance FoldableFC MacawCrucibleValue where
 instance TraversableFC MacawCrucibleValue where
   traverseFC f (MacawCrucibleValue v) = MacawCrucibleValue <$> f v
 
+instance ShowF f => ShowF (MacawCrucibleValue f)
+
+instance ShowF f => Show (MacawCrucibleValue f tp) where
+  showsPrec p (MacawCrucibleValue v) = showsPrecF p v
+
 ------------------------------------------------------------------------
 -- CrucPersistentState
 
