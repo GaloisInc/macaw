@@ -873,7 +873,8 @@ identifyCallTargets mem absState regs = do
 -- The read may appear before comment and @instructionStart@
 -- instructions, but otherwise must be at the end of the instructions
 -- in @prev@.
-stripPLTRead :: ArchConstraints arch
+stripPLTRead :: forall arch ids tp
+               . ArchConstraints arch
               => AssignId ids tp -- ^ Identifier of write to remove
               -> Seq (Stmt arch ids)
               -> Seq (Stmt arch ids)
@@ -885,7 +886,8 @@ stripPLTRead readId next rest =
       let cont = stripPLTRead readId prev (lastStmt Seq.<| rest)
       case lastStmt of
         AssignStmt (Assignment stmtId rhs)
-          | Just Refl <- testEquality readId stmtId -> Just (prev Seq.>< rest)
+          | Just Refl <- testEquality readId stmtId ->
+              Just (prev Seq.>< fmap (dropRefsTo stmtId) rest)
             -- Fail if the read to delete is used in later computations
           | Set.member (Some readId) (foldMapFC refsInValue rhs) ->
               Nothing
@@ -898,6 +900,27 @@ stripPLTRead readId next rest =
         ArchState{} -> cont
         Comment{} -> cont
         _ -> Nothing
+  where
+    -- It is possible for later ArchState updates to reference the AssignId of
+    -- the AssignStmt that is dropped, so make sure to prune such updates to
+    -- avoid referencing the now out-of-scope AssignId.
+    dropRefsTo :: AssignId ids tp -> Stmt arch ids -> Stmt arch ids
+    dropRefsTo stmtId stmt =
+      case stmt of
+        ArchState addr updates ->
+          ArchState addr $
+          MapF.filter (\v -> Some stmtId `Set.notMember` refsInValue v) updates
+
+        -- These Stmts don't contain any Values.
+        InstructionStart{} -> stmt
+        Comment{}          -> stmt
+
+        -- stripPLTRead will bail out if it encounters any of these forms of
+        -- Stmt, so we don't need to consider them.
+        AssignStmt{}   -> stmt
+        ExecArchStmt{} -> stmt
+        CondWriteMem{} -> stmt
+        WriteMem{}     -> stmt
 
 removeUnassignedRegs :: forall arch ids
                      .  RegisterInfo (ArchReg arch)
