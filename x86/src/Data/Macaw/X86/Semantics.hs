@@ -374,7 +374,7 @@ def_pop =
 
 def_push :: InstructionDef
 def_push =
-  defUnary "push" $ \_ii val -> do
+  defUnary "push" $ \ii val -> do
     Some (HasRepSize rep v) <-
       case val of
         F.SegmentValue _ ->
@@ -399,6 +399,22 @@ def_push =
           pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
         F.QWordImm (F.UImm64Concrete  w) ->
           pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+        -- See Note [Sign-extending immediate operands in push]
+        F.ByteSignedImm w ->
+          let bvW = bvLit n8 (toInteger w) in
+          pure $ if F.iiPrefixes ii ^. F.prOSO
+                 then Some $ HasRepSize WordRepVal  $ sext n16 bvW
+                 else Some $ HasRepSize QWordRepVal $ sext n64 bvW
+        F.WordSignedImm w ->
+          let bvW = bvLit n16 (toInteger w) in
+          pure $ if F.iiPrefixes ii ^. F.prOSO
+                 then Some $ HasRepSize WordRepVal bvW
+                 else Some $ HasRepSize QWordRepVal $ sext n64 bvW
+        F.DWordSignedImm w
+          |  F.iiPrefixes ii ^. F.prOSO
+          -> fail "push: Unexpected 32-bit immediate with 16-bit operand size"
+          |  otherwise
+          -> pure $ Some $ HasRepSize QWordRepVal $ sext n64 $ bvLit n32 (toInteger w)
         _ -> fail $ "Unexpected argument to push"
     let repr = repValSizeMemRepr rep
     old_sp <- get rsp
@@ -406,6 +422,30 @@ def_push =
         new_sp  = old_sp .- delta
     MemoryAddr new_sp repr .= v
     rsp     .= new_sp
+
+{-
+Note [Sign-extending immediate operands in push]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The `push` instruction is surprisingly nuaned with respect to how large
+immediate operands can be. The ISA manual
+(https://www.felixcloutier.com/x86/push) says this: "If the source operand is
+an immediate of size less than the operand size, a sign-extended value is
+pushed on the stack." So what is the operand size? In 64-bit mode, the default
+operand size for the `push` instruction is 64 bits (ignoring the REX prefix),
+and it can be changed to 16 bits if an operand-size override prefix is
+specified. The story is different for modes besides 64-bit mode, but for now,
+we assume the semantics of 64-bit mode. (If this causes issues for you, please
+file an issue.)
+
+In implementation terms, whenever we try to push a {Byte,Word,DWord}SignedImm,
+we first check if prOSO is set. If prOSO is set, we return a 16-bit operand,
+sign-extending if necessary. If prOSO is not set, we return a 64-bit operand
+instead, again sign-extending if necessary.
+
+Getting this right is important since we use the size of the sign-extended
+operand to determine how many bytes to decrement the stack pointer by. We don't
+want to use the size of the source immediate, which could be smaller.
+-}
 
 -- | Sign extend ax -> dx:ax, eax -> edx:eax, rax -> rdx:rax, resp.
 def_cwd :: InstructionDef
