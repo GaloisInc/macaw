@@ -331,7 +331,7 @@ type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
 -- 'CrucibleState' to allow the callback to lazily instantiate callees (e.g., by
 -- constructing the CFG of the callee on the fly) and register them with the
 -- simulator.
-data LookupFunctionHandle sym arch = LookupFunctionHandle
+newtype LookupFunctionHandle sym arch = LookupFunctionHandle
      (forall rtp blocks r ctx
    . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
