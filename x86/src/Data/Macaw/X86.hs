@@ -79,6 +79,7 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
@@ -596,6 +597,7 @@ x86_64_info preservePred =
                    , rewriteArchTermStmt = rewriteX86TermStmt
                    , archDemandContext = x86DemandContext
                    , postArchTermStmtAbsState = postX86TermStmtAbsState preservePred
+                   , archClassifier = defaultClassifier
                    }
 
 -- | Architecture information for X86_64 on FreeBSD.

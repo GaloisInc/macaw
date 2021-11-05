@@ -21,7 +21,6 @@ module Data.Macaw.ARM.Arch where
 import           Data.Bits ( (.&.) )
 import           Data.Kind ( Type )
 import           Data.Macaw.ARM.ARMReg ()
-import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
@@ -80,7 +79,7 @@ rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
 -- | The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.
-type instance MAI.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
+type instance MC.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
 
 -- | In order to know how to decode a block, we need to know the value of
 -- PSTATE_T (which is the Thumb/ARM mode) at the beginning of a block. We use

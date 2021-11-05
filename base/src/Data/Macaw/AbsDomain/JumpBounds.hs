@@ -32,6 +32,8 @@ module Data.Macaw.AbsDomain.JumpBounds
   , BranchBounds(..)
   , postBranchBounds
   , unsignedUpperBound
+  -- * Jump Targets
+  , IntraJumpTarget
   ) where
 
 import           Control.Monad.Reader
@@ -48,6 +50,7 @@ import           Data.Parameterized.Pair
 import           Numeric.Natural
 import           Prettyprinter
 
+import           Data.Macaw.AbsDomain.AbsState ( AbsBlockState )
 import           Data.Macaw.AbsDomain.CallParams
 import           Data.Macaw.AbsDomain.StackAnalysis
 import           Data.Macaw.CFG.App
@@ -846,3 +849,14 @@ postCallBounds params cns regs =
                      , initRngPredMap = locMapEmpty
                      , initAddrPredMap = Map.empty
                      }
+
+-- | This type is used to represent the location to return to *within a
+-- function* after executing an architecture-specific terminator instruction.
+--
+--  * The 'MemSegmentOff' is the address to jump to next (within the function)
+--  * The 'AbsBlockState' is the abstract state to use at the start of the block returned to (reflecting any changes made by the architecture-specific terminator)
+--  * The 'Jmp.InitJumpBounds' is a collection of relations between values in registers and on the stack that should hold (see 'Jmp.postCallBounds' for to construct this in the common case)
+--
+-- Note: This is defined here (despite not being used here) to avoid import cycles elsewhere
+type IntraJumpTarget arch =
+  (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), InitJumpBounds arch)

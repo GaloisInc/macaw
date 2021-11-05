@@ -87,6 +87,7 @@ module Data.Macaw.CFG.Core
     -- ** Synonyms
   , ArchAddrValue
   , ArchSegmentOff
+  , ArchBlockPrecond
   , Data.Parameterized.TraversableFC.FoldableFC(..)
   , module Data.Macaw.CFG.AssignRhs
   , module Data.Macaw.Utils.Pretty
@@ -120,6 +121,18 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.Pretty
 
+-- | This family maps architecture parameters to information needed to
+-- successfully translate machine code into Macaw CFGs.
+--
+-- This is currently used for registers values that are required to be
+-- known constants at translation time.  For example, on X86_64, due to
+-- aliasing between the FPU and MMX registers, we require that the
+-- floating point stack value is known at translation time so that
+-- we do not need to check which register is modified when pushing or
+-- poping from the x86 stack.
+--
+-- If no preconditions are needed, this can just be set to the unit type.
+type family ArchBlockPrecond (arch :: Kind.Type) :: Kind.Type
 
 -- | A pair containing a segment and valid offset within the segment.
 type ArchSegmentOff arch = MemSegmentOff (ArchAddrWidth arch)

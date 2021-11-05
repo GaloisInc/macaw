@@ -23,7 +23,6 @@ import           Control.Lens ( (&), (^.), (.~) )
 import qualified Data.Macaw.ARM.ARMReg as AR
 import qualified Data.Macaw.ARM.Arch as AA
 import qualified Data.Macaw.AbsDomain.AbsState as MA
-import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
 import qualified Data.Macaw.Memory as MM
@@ -78,7 +77,7 @@ initialBlockRegs addr preconds = MSG.initRegState addr &
 -- but it isn't worth the complexity until we encounter it in the wild.
 extractBlockPrecond :: MC.ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
-                    -> Either String (MI.ArchBlockPrecond ARM.AArch32)
+                    -> Either String (MC.ArchBlockPrecond ARM.AArch32)
 extractBlockPrecond _ absState =
   case absState ^. MA.absRegState . MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) of
     MA.FinSet (Set.toList -> [bi]) -> Right (MAA.ARMBlockPrecond { MAA.bpPSTATE_T = bi == 1 })

@@ -22,9 +22,9 @@ import           Data.Maybe ( isNothing )
 import           Data.Monoid
 import           Data.Parameterized.Some
 import qualified Data.Text.IO as TIO
-import           Data.Text.Prettyprint.Doc as PP
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Options.Applicative as O
+import           Prettyprinter as PP
 
 import           Prelude
 

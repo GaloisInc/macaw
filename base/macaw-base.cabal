@@ -66,6 +66,10 @@ library
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.AbsEval
+    Data.Macaw.Discovery.Classifier
+    Data.Macaw.Discovery.Classifier.JumpTable
+    Data.Macaw.Discovery.Classifier.PLT
+    Data.Macaw.Discovery.ParsedContents
     Data.Macaw.Discovery.State
     Data.Macaw.Dwarf
     Data.Macaw.Fold
