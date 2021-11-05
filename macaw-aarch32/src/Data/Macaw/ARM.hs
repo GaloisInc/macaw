@@ -22,6 +22,7 @@ import qualified Data.Macaw.CFG as MC
 import           Control.Lens ( (^.) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG.DemandSet as MDS
+import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 import qualified SemMC.Architecture.AArch32 as ARM
 
@@ -50,6 +51,7 @@ arm_linux_info =
                         , MI.rewriteArchTermStmt = rewriteTermStmt
                         , MI.archDemandContext = archDemandContext
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState preserveRegAcrossSyscall
+                        , MI.archClassifier = MD.defaultClassifier
                         }
 
 archDemandContext :: MDS.DemandContext ARM.AArch32

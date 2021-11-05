@@ -24,9 +24,9 @@ import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Proxy ( Proxy(..) )
-import qualified Data.Text.Prettyprint.Doc as PP
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lumberjack as LJ
+import qualified Prettyprinter as PP
 import qualified System.IO as IO
 import qualified System.Exit as IOE
 

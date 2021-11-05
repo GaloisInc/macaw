@@ -25,7 +25,6 @@ import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
-import qualified Data.Macaw.Architecture.Info as MI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
@@ -50,13 +49,13 @@ ppcCallParams preservePred =
 
 ppcInitialBlockRegs :: (PPCArchConstraints v)
                     => ArchSegmentOff (SP.AnyPPC v)
-                    -> MI.ArchBlockPrecond (SP.AnyPPC v)
+                    -> ArchBlockPrecond (SP.AnyPPC v)
                     -> RegState (PPCReg v) (Value (SP.AnyPPC v) ids)
 ppcInitialBlockRegs addr _preconds = MSG.initRegState addr
 
 ppcExtractBlockPrecond :: ArchSegmentOff (SP.AnyPPC v)
                        -> MA.AbsBlockState (PPCReg v)
-                       -> Either String (MI.ArchBlockPrecond (SP.AnyPPC v))
+                       -> Either String (ArchBlockPrecond (SP.AnyPPC v))
 ppcExtractBlockPrecond _ _ = Right ()
 
 preserveRegAcrossSyscall :: (1 <= RegAddrWidth (PPCReg v))

@@ -33,6 +33,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MDS
+import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 
 import qualified SemMC.Architecture.PPC as PPC
@@ -110,6 +111,7 @@ ppc64_linux_info binData =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
+                      , MI.archClassifier = MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V64
@@ -135,6 +137,7 @@ ppc32_linux_info =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
+                      , MI.archClassifier = MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V32

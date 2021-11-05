@@ -36,7 +36,6 @@ import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
-import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
@@ -60,7 +59,7 @@ instance MSS.SimplifierExtension (SP.AnyPPC v) where
 -- The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.  PowerPC doesn't need any
 -- additional information, so we use ()
-type instance MAI.ArchBlockPrecond (SP.AnyPPC v) = ()
+type instance MC.ArchBlockPrecond (SP.AnyPPC v) = ()
 
 data PPCTermStmt (v :: SP.Variant) ids where
   -- | A representation of the PowerPC @sc@ instruction
