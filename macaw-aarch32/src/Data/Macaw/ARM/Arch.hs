@@ -99,6 +99,7 @@ data ARMBlockPrecond =
 data ARMTermStmt ids where
   ARMSyscall :: WI.W 24 -> ARMTermStmt ids
   ThumbSyscall :: WI.W 8 -> ARMTermStmt ids
+  ConditionalReturn :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
 
 deriving instance Show (ARMTermStmt ids)
 
@@ -110,12 +111,14 @@ instance MC.PrettyF ARMTermStmt where
                in case ts of
                     ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
                     ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
+                    ConditionalReturn cond -> "return_if" PP.<+> MC.ppValue 0 cond
 
 rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
     case s of
       ARMSyscall imm -> pure $ ARMSyscall imm
       ThumbSyscall imm -> pure (ThumbSyscall imm)
+      ConditionalReturn cond -> ConditionalReturn <$> rewriteValue cond
 
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the
