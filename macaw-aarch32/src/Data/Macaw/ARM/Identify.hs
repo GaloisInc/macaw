@@ -37,6 +37,7 @@ import           Data.Macaw.ARM.Simplify ()
 
 import Prelude
 
+-- | Test if an address is in an executable segment
 isExecutableSegOff :: MC.MemSegmentOff w -> Bool
 isExecutableSegOff sa =
   MC.segmentFlags (MC.segoffSegment sa) `MMP.hasPerm` MMP.execute
@@ -107,6 +108,10 @@ asReturnAddrAndConstant mem absProcState mRet mConstant = do
     fail ("Conditional return successor is not executable: " ++ show memAddr)
   return segOff
 
+-- | Simplify nested muxes if possible
+--
+-- If the term is a mux and cannot be simplified, return it unchanged.  If the
+-- term is not a mux, return Nothing
 simplifiedMux
   :: MSS.SimplifierExtension arch
   => MC.Value arch ids tp
@@ -136,6 +141,15 @@ identifyConditionalReturn mem stmts s finalRegState
           return (c, nextIP, True, stmts)
   | otherwise = Nothing
 
+-- | Recognize ARM conditional returns and generate an appropriate arch-specific
+-- terminator
+--
+-- Conditional returns are not supported in core macaw, so we need to use an
+-- arch-specific terminator.  Unlike simple arch-terminators, this one requires
+-- analysis that can only happen in the context of a block classifier.
+--
+-- Note that there are two cases below that could be handled. It seems unlikely
+-- that these would be produced in practice, so they are unhandled for now.
 conditionalReturnClassifier :: MAI.BlockClassifier ARM.AArch32 ids
 conditionalReturnClassifier = do
   stmts <- CMR.asks MAI.classifierStmts
@@ -164,4 +178,6 @@ conditionalReturnClassifier = do
                                    , Parsed.newFunctionAddrs = []
                                    , Parsed.writtenCodeAddrs = writtenAddrs
                                    }
+    Jmp.TrueFeasibleBranch _ -> fail "Infeasible false branch"
+    Jmp.FalseFeasibleBranch _ -> fail "Infeasible true branch"
     Jmp.InfeasibleBranch -> fail "Branch targets are both infeasible"
