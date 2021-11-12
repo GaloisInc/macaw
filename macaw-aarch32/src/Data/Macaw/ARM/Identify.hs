@@ -129,6 +129,9 @@ simplifiedMux ipVal
       MSS.simplifyArchApp app <|> pure app
   | otherwise = Nothing
 
+data ReturnsOnBranch = ReturnsOnTrue | ReturnsOnFalse
+  deriving (Eq)
+
 identifyConditionalReturn
   :: MC.Memory 32
   -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
@@ -136,17 +139,17 @@ identifyConditionalReturn
   -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
   -> Maybe ( MC.Value ARM.AArch32 ids MT.BoolType
            , MC.ArchSegmentOff ARM.AArch32
-           , Bool
+           , ReturnsOnBranch
            , Seq.Seq (MC.Stmt ARM.AArch32 ids)
            )
 identifyConditionalReturn mem stmts s finalRegState
   | not (null stmts)
   , Just (MC.Mux _ c t f) <- simplifiedMux (s ^. MC.boundValue MC.ip_reg) =
       case asReturnAddrAndConstant mem finalRegState t f of
-        Just nextIP -> return (c, nextIP, False, stmts)
+        Just nextIP -> return (c, nextIP, ReturnsOnTrue, stmts)
         Nothing -> do
           nextIP <- asReturnAddrAndConstant mem finalRegState f t
-          return (c, nextIP, True, stmts)
+          return (c, nextIP, ReturnsOnFalse, stmts)
   | otherwise = Nothing
 
 -- | Recognize ARM conditional returns and generate an appropriate arch-specific
@@ -164,21 +167,21 @@ conditionalReturnClassifier = do
   mem <- CMR.asks (MAI.pctxMemory . MAI.classifierParseContext)
   regs <- CMR.asks MAI.classifierFinalRegState
   absState <- CMR.asks MAI.classifierAbsState
-  Just (cond, nextIP, fallthroughBranch, stmts') <- return (identifyConditionalReturn mem stmts regs absState)
-  let term = if fallthroughBranch then Arch.ReturnIfNot cond else Arch.ReturnIf cond
+  Just (cond, nextIP, returnBranch, stmts') <- return (identifyConditionalReturn mem stmts regs absState)
+  let term = if returnBranch == ReturnsOnTrue then Arch.ReturnIf cond else Arch.ReturnIfNot cond
   writtenAddrs <- CMR.asks MAI.classifierWrittenAddrs
 
   jmpBounds <- CMR.asks MAI.classifierJumpBounds
   ainfo <- CMR.asks (MAI.pctxArchInfo . MAI.classifierParseContext)
 
   case Jmp.postBranchBounds jmpBounds regs cond of
-    Jmp.BothFeasibleBranch trueJumpState falseJmpState -> do
+    Jmp.BothFeasibleBranch trueJumpState falseJumpState -> do
       -- Both branches are feasible, but we don't need the "true" case because
       -- it is actually a return
-      let abs' = MDC.branchBlockState ainfo absState stmts regs cond fallthroughBranch
+      let abs' = MDC.branchBlockState ainfo absState stmts regs cond (returnBranch == ReturnsOnFalse)
       let fallthroughTarget = ( nextIP
                               , abs'
-                              , if fallthroughBranch then trueJumpState else falseJmpState
+                              , if returnBranch == ReturnsOnTrue then falseJumpState else trueJumpState
                               )
       return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
                                    , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just nextIP)
