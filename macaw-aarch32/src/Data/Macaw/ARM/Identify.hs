@@ -132,6 +132,23 @@ simplifiedMux ipVal
 data ReturnsOnBranch = ReturnsOnTrue | ReturnsOnFalse
   deriving (Eq)
 
+-- | Inspect the IP register to determine if this statement causes a conditional return
+--
+-- We expect a mux where one of the IP values is the abstract return address and
+-- the other is an executable address.  Ideally we would be able to say that is
+-- the "next" instruction address, but we do not have a good way to determine
+-- the *current* instruction address. This just means that we have a more
+-- flexible recognizer for conditional returns, even though there are
+-- (probably?) no ARM instructions that could return that way.
+--
+-- The returned values are:
+--
+--  * The condition of the conditional return
+--  * The next IP
+--  * An indicator of which branch is the return branch
+--  * The statements to use as the statement list
+--
+-- Note that we currently don't modify the statement list, but could
 identifyConditionalReturn
   :: MC.Memory 32
   -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
