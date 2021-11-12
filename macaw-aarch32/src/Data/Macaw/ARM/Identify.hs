@@ -9,13 +9,24 @@ module Data.Macaw.ARM.Identify
     ( identifyCall
     , identifyReturn
     , isReturnValue
+    , conditionalReturnClassifier
     ) where
 
+import           Control.Applicative ( (<|>) )
 import           Control.Lens ( (^.) )
+import           Control.Monad ( when )
+import qualified Control.Monad.Reader as CMR
+import qualified Data.Foldable as F
 import qualified Data.Macaw.ARM.ARMReg as AR
+import qualified Data.Macaw.ARM.Arch as Arch
 import qualified Data.Macaw.AbsDomain.AbsState as MA
+import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
+import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Discovery.Classifier as MDC
+import qualified Data.Macaw.Discovery.ParsedContents as Parsed
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
 import qualified Data.Sequence as Seq
@@ -25,6 +36,10 @@ import qualified SemMC.Architecture.AArch32 as ARM
 import           Data.Macaw.ARM.Simplify ()
 
 import Prelude
+
+isExecutableSegOff :: MC.MemSegmentOff w -> Bool
+isExecutableSegOff sa =
+  MC.segmentFlags (MC.segoffSegment sa) `MMP.hasPerm` MMP.execute
 
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
@@ -74,3 +89,79 @@ isReturnValue absProcState val =
   case MA.transferValue absProcState val of
     MA.ReturnAddr -> True
     _ -> False
+
+-- | If one of the values is the abstract return address, return the other (if it is a constant)
+--
+-- If neither is the abstract return address (or the other value is not a constant), return 'Nothing'
+asReturnAddrAndConstant
+  :: MC.Memory 32
+  -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+  -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
+  -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
+  -> Maybe (MC.ArchSegmentOff ARM.AArch32)
+asReturnAddrAndConstant mem absProcState mRet mConstant = do
+  MA.ReturnAddr <- return (MA.transferValue absProcState mRet)
+  memAddr <- MC.valueAsMemAddr mConstant
+  segOff <- MC.asSegmentOff mem memAddr
+  when (not (isExecutableSegOff segOff)) $ do
+    fail ("Conditional return successor is not executable: " ++ show memAddr)
+  return segOff
+
+simplifiedMux
+  :: MSS.SimplifierExtension arch
+  => MC.Value arch ids tp
+  -> Maybe (MC.App (MC.Value arch ids) tp)
+simplifiedMux ipVal
+  | Just app@(MC.Mux {}) <- MC.valueAsApp ipVal =
+      MSS.simplifyArchApp app <|> pure app
+  | otherwise = Nothing
+
+identifyConditionalReturn
+  :: MC.Memory 32
+  -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
+  -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
+  -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+  -> Maybe ( MC.Value ARM.AArch32 ids MT.BoolType
+           , MC.ArchSegmentOff ARM.AArch32
+           , Bool
+           , Seq.Seq (MC.Stmt ARM.AArch32 ids)
+           )
+identifyConditionalReturn mem stmts s finalRegState
+  | not (null stmts)
+  , Just (MC.Mux _ c t f) <- simplifiedMux (s ^. MC.boundValue MC.ip_reg) =
+      case asReturnAddrAndConstant mem finalRegState t f of
+        Just nextIP -> return (c, nextIP, False, stmts)
+        Nothing -> do
+          nextIP <- asReturnAddrAndConstant mem finalRegState f t
+          return (c, nextIP, True, stmts)
+  | otherwise = Nothing
+
+conditionalReturnClassifier :: MAI.BlockClassifier ARM.AArch32 ids
+conditionalReturnClassifier = do
+  stmts <- CMR.asks MAI.classifierStmts
+  mem <- CMR.asks (MAI.pctxMemory . MAI.classifierParseContext)
+  regs <- CMR.asks MAI.classifierFinalRegState
+  absState <- CMR.asks MAI.classifierAbsState
+  Just (cond, nextIP, fallthroughBranch, stmts') <- return (identifyConditionalReturn mem stmts regs absState)
+  let term = if fallthroughBranch then Arch.ReturnIfNot cond else Arch.ReturnIf cond
+  writtenAddrs <- CMR.asks MAI.classifierWrittenAddrs
+
+  jmpBounds <- CMR.asks MAI.classifierJumpBounds
+  ainfo <- CMR.asks (MAI.pctxArchInfo . MAI.classifierParseContext)
+
+  case Jmp.postBranchBounds jmpBounds regs cond of
+    Jmp.BothFeasibleBranch trueJumpState falseJmpState -> do
+      -- Both branches are feasible, but we don't need the "true" case because
+      -- it is actually a return
+      let abs' = MDC.branchBlockState ainfo absState stmts regs cond fallthroughBranch
+      let fallthroughTarget = ( nextIP
+                              , abs'
+                              , if fallthroughBranch then trueJumpState else falseJmpState
+                              )
+      return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
+                                   , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just nextIP)
+                                   , Parsed.intraJumpTargets = [fallthroughTarget]
+                                   , Parsed.newFunctionAddrs = []
+                                   , Parsed.writtenCodeAddrs = writtenAddrs
+                                   }
+    Jmp.InfeasibleBranch -> fail "Branch targets are both infeasible"

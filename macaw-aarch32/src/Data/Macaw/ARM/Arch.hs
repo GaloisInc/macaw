@@ -99,7 +99,19 @@ data ARMBlockPrecond =
 data ARMTermStmt ids where
   ARMSyscall :: WI.W 24 -> ARMTermStmt ids
   ThumbSyscall :: WI.W 8 -> ARMTermStmt ids
-  ConditionalReturn :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
+  -- | Return if the condition is true; otherwise, fall through to the next instruction
+  ReturnIf :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
+  -- | Return if the condition is not true; otherwise, fall through to the next instruction
+  --
+  -- Note that it is unfortunate that we need this in addition to 'ReturnIf'. At
+  -- the part of the analysis where we are able to generate these block
+  -- terminators, we cannot generate new statements since we do not have the
+  -- right nonce generator. As a result, if we are returning when the condition
+  -- is false, we are not able to generate a negation (which would require
+  -- wrapping the original condition in an Assignment, which has an AssignId,
+  -- which requires a nonce). We work around this by just having an additional
+  -- block terminator.
+  ReturnIfNot :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
 
 deriving instance Show (ARMTermStmt ids)
 
@@ -111,14 +123,16 @@ instance MC.PrettyF ARMTermStmt where
                in case ts of
                     ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
                     ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
-                    ConditionalReturn cond -> "return_if" PP.<+> MC.ppValue 0 cond
+                    ReturnIf cond -> "return_if" PP.<+> MC.ppValue 0 cond
+                    ReturnIfNot cond -> "return_if_not" PP.<+> MC.ppValue 0 cond
 
 rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
 rewriteTermStmt s =
     case s of
       ARMSyscall imm -> pure $ ARMSyscall imm
       ThumbSyscall imm -> pure (ThumbSyscall imm)
-      ConditionalReturn cond -> ConditionalReturn <$> rewriteValue cond
+      ReturnIf cond -> ReturnIf <$> rewriteValue cond
+      ReturnIfNot cond -> ReturnIfNot <$> rewriteValue cond
 
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the
