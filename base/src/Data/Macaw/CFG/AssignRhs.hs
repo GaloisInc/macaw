@@ -83,7 +83,7 @@ type family ArchStmt (arch :: Kind.Type) = (stmt :: (Type -> Kind.Type) -> Kind.
 -- values, it may or may not return to the current function.  If it does return to the
 -- current function, it is assumed to be at most one location, and the block-translator
 -- must provide that value at translation time.
-type family ArchTermStmt (arch :: Kind.Type) :: Kind.Type -> Kind.Type
+type family ArchTermStmt (arch :: Kind.Type) :: (Type -> Kind.Type) -> Kind.Type
    -- NOTE: Not injective because PPC32 and PPC64 use the same type.
 
 -- | Number of bits in addreses for architecture.

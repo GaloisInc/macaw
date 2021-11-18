@@ -160,7 +160,7 @@ postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
                         -> MA.AbsProcessorState AR.ARMReg ids
                         -> MJ.IntraJumpBounds ARM.AArch32 ids
                         -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
-                        -> AA.ARMTermStmt ids
+                        -> AA.ARMTermStmt (MC.Value ARM.AArch32 ids)
                         -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of

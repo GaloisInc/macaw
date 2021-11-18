@@ -96,11 +96,11 @@ data ARMBlockPrecond =
 -- ARM terminal statements (which have instruction-specific effects on
 -- control-flow and register state).
 
-data ARMTermStmt ids where
-  ARMSyscall :: WI.W 24 -> ARMTermStmt ids
-  ThumbSyscall :: WI.W 8 -> ARMTermStmt ids
+data ARMTermStmt f where
+  ARMSyscall :: WI.W 24 -> ARMTermStmt f
+  ThumbSyscall :: WI.W 8 -> ARMTermStmt f
   -- | Return if the condition is true; otherwise, fall through to the next instruction
-  ReturnIf :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
+  ReturnIf :: f MT.BoolType -> ARMTermStmt f
   -- | Return if the condition is not true; otherwise, fall through to the next instruction
   --
   -- Note that it is unfortunate that we need this in addition to 'ReturnIf'. At
@@ -111,22 +111,38 @@ data ARMTermStmt ids where
   -- wrapping the original condition in an Assignment, which has an AssignId,
   -- which requires a nonce). We work around this by just having an additional
   -- block terminator.
-  ReturnIfNot :: MC.Value ARM.AArch32 ids MT.BoolType -> ARMTermStmt ids
+  ReturnIfNot :: f MT.BoolType -> ARMTermStmt f
 
-deriving instance Show (ARMTermStmt ids)
+instance Show (ARMTermStmt (MC.Value ARM.AArch32 ids)) where
+  show ts = show (MC.ppArchTermStmt PP.pretty ts)
 
 type instance MC.ArchTermStmt ARM.AArch32 = ARMTermStmt
 
-instance MC.PrettyF ARMTermStmt where
-  prettyF ts = let dpp2app :: forall a ann. HPP.Pretty a => a -> PP.Doc ann
-                   dpp2app = PP.viaShow . HPP.pPrint
-               in case ts of
-                    ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
-                    ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
-                    ReturnIf cond -> "return_if" PP.<+> MC.ppValue 0 cond
-                    ReturnIfNot cond -> "return_if_not" PP.<+> MC.ppValue 0 cond
+instance MC.IsArchTermStmt ARMTermStmt where
+  ppArchTermStmt ppValue ts =
+    let dpp2app :: forall a ann. HPP.Pretty a => a -> PP.Doc ann
+        dpp2app = PP.viaShow . HPP.pPrint
+    in case ts of
+         ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
+         ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
+         ReturnIf cond -> "return_if" PP.<+> ppValue cond
+         ReturnIfNot cond -> "return_if_not" PP.<+> ppValue cond
 
-rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
+instance TF.FoldableF ARMTermStmt where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.FunctorF ARMTermStmt where
+  fmapF = TF.fmapFDefault
+
+instance TF.TraversableF ARMTermStmt where
+  traverseF go tstmt =
+    case tstmt of
+      ARMSyscall imm -> pure (ARMSyscall imm)
+      ThumbSyscall imm -> pure (ThumbSyscall imm)
+      ReturnIf cond -> ReturnIf <$> go cond
+      ReturnIfNot cond -> ReturnIfNot <$> go cond
+
+rewriteTermStmt :: ARMTermStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt (MC.Value ARM.AArch32 tgt))
 rewriteTermStmt s =
     case s of
       ARMSyscall imm -> pure $ ARMSyscall imm

@@ -166,13 +166,17 @@ stmtSemantics _sym_funs global_var_mem globals stmt state = do
       "Symbolic execution semantics for x86 statement are not implemented yet: "
       <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
 
+-- | Dynamic semantics for x86-specific arch terminators
+--
+-- Note that we can't print out sub-terms that are RegEntry; however, since none
+-- of the x86 terminators contain nested dynamic values, we don't need to.
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
-              -> M.X86TermStmt ids
+              -> M.X86TermStmt (AtomWrapper (RegEntry sym))
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
 termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
-                               (show $ MC.prettyF x))
+                                show (MC.ppArchTermStmt (error "Can't print RegEntry") x))
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s

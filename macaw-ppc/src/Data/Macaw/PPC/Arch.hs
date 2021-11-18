@@ -61,33 +61,48 @@ instance MSS.SimplifierExtension (SP.AnyPPC v) where
 -- additional information, so we use ()
 type instance MC.ArchBlockPrecond (SP.AnyPPC v) = ()
 
-data PPCTermStmt (v :: SP.Variant) ids where
+data PPCTermStmt (v :: SP.Variant) f where
   -- | A representation of the PowerPC @sc@ instruction
   --
   -- That instruction technically takes an argument, but it must be zero so we
   -- don't preserve it.
-  PPCSyscall :: PPCTermStmt v ids
+  PPCSyscall :: PPCTermStmt v f
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
-  PPCTrap :: PPCTermStmt v ids
+  PPCTrap :: PPCTermStmt v f
   -- | A conditional trap
-  PPCTrapdword :: MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
-               -> MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
-               -> MC.Value (SP.AnyPPC v) ids (MT.BVType 5)
-               -> PPCTermStmt v ids
+  PPCTrapdword :: f (MT.BVType (SP.AddrWidth v))
+               -> f (MT.BVType (SP.AddrWidth v))
+               -> f (MT.BVType 5)
+               -> PPCTermStmt v f
 
-instance Show (PPCTermStmt v ids) where
-  show ts = show (MC.prettyF ts)
+instance Show (PPCTermStmt v (MC.Value (SP.AnyPPC v) ids)) where
+  show ts = show (MC.ppArchTermStmt PP.pretty ts)
 
 type instance MC.ArchTermStmt (SP.AnyPPC v) = PPCTermStmt v
 
-instance MC.PrettyF (PPCTermStmt v) where
-  prettyF ts =
+instance MC.IsArchTermStmt (PPCTermStmt v) where
+  ppArchTermStmt ppValue ts =
     case ts of
       PPCSyscall -> "ppc_syscall"
       PPCTrap -> "ppc_trap"
-      PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
+      PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> ppValue vb PP.<+> ppValue va PP.<+> ppValue vto
 
-rewriteTermStmt :: PPCTermStmt v src -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v tgt)
+instance TF.FoldableF (PPCTermStmt v) where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.FunctorF (PPCTermStmt v) where
+  fmapF = TF.fmapFDefault
+
+instance TF.TraversableF (PPCTermStmt v) where
+  traverseF go tstmt =
+    case tstmt of
+      PPCSyscall -> pure PPCSyscall
+      PPCTrap -> pure PPCTrap
+      PPCTrapdword v1 v2 v3 -> PPCTrapdword <$> go v1 <*> go v2 <*> go v3
+
+rewriteTermStmt
+  :: PPCTermStmt v (MC.Value (SP.AnyPPC v) src)
+  -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v (MC.Value (SP.AnyPPC v) tgt))
 rewriteTermStmt s =
   case s of
     PPCSyscall -> return PPCSyscall

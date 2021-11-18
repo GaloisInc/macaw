@@ -27,6 +27,7 @@ library
                        containers,
                        lens,
                        panic,
+                       text,
                        parameterized-utils,
                        asl-translator,
                        what4,

@@ -68,6 +68,7 @@ module Data.Macaw.Symbolic.CrucGen
   , addMacawParsedTermStmt
   , addStmt
   , addExtraBlock
+  , createRegStruct
   , appAtom
   , toBits
   , fromBits
@@ -77,6 +78,7 @@ module Data.Macaw.Symbolic.CrucGen
   , archAddrWidth
   , evalAtom
   , crucibleValue
+  , freshValueIndex
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
@@ -204,10 +206,18 @@ data MacawSymbolicArchFunctions arch
                       -> CrucGen arch ids s ())
      -- ^ Generate crucible for architecture-specific statement.
   , crucGenArchTermStmt :: !(forall ids s
-                               . M.ArchTermStmt arch ids
+                               . M.ArchTermStmt arch (M.Value arch ids)
+                               -- ^ The arch-specific terminator
                                -> M.RegState (M.ArchReg arch) (M.Value arch ids)
+                               -- ^ The register state at this statement
+                               -> Maybe (CR.Label s)
+                               -- ^ The fallthrough label, if any
                                -> CrucGen arch ids s ())
      -- ^ Generate crucible for architecture-specific terminal statement.
+     --
+     -- The fallthrough label is provided so that the translator from macaw into
+     -- crucible can use it if needed. If the translator does not end the block
+     -- by jumping to this address, the default handler will do so.
   }
 
 crucGenAddrWidth :: MacawSymbolicArchFunctions arch -> ArchAddrWidthRepr arch
@@ -1313,7 +1323,7 @@ addMacawTermStmt tstmt =
       addTermStmt (CR.Return s)
     M.ArchTermStmt ts regs -> do
       fns <- translateFns <$> get
-      crucGenArchTermStmt fns ts regs
+      crucGenArchTermStmt fns ts regs Nothing
     M.TranslateError _regs msg -> do
       cmsg <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt (CR.ErrorStmt cmsg)
@@ -1474,7 +1484,8 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       regValues <- createRegStruct regs
       addTermStmt $ CR.Return regValues
     M.ParsedArchTermStmt aterm regs mnextAddr -> do
-      crucGenArchTermStmt archFns aterm regs
+      let mnextLabel = fmap (parsedBlockLabel blockLabelMap) mnextAddr
+      crucGenArchTermStmt archFns aterm regs mnextLabel
       case mnextAddr of
         Just nextAddr -> addTermStmt $ CR.Jump (parsedBlockLabel blockLabelMap nextAddr)
         -- There won't be a next instruction if, for instance, this is

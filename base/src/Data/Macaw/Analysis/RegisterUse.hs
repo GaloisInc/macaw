@@ -1246,12 +1246,12 @@ type PostTermStmtInvariants arch ids =
   StartInferContext arch
   -> InferState arch ids
   -> Int
-  -> ArchTermStmt arch ids
+  -> ArchTermStmt arch (Value arch ids)
   -> RegState (ArchReg arch) (Value arch ids)
   -> Either (RegisterUseError arch) (PostValueMap arch ids, BlockStartConstraints arch)
 
 type ArchTermStmtUsageFn arch ids
-  = ArchTermStmt arch ids
+  = ArchTermStmt arch (Value arch ids)
   -> RegState (ArchReg arch) (Value arch ids)
   -> BlockUsageSummary arch ids
   -> Either (RegisterUseError arch) (RegDependencyMap arch ids)

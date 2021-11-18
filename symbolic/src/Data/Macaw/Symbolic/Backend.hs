@@ -16,6 +16,12 @@ module Data.Macaw.Symbolic.Backend (
   , CG.evalArchStmt
   , CG.evalAtom
   , CG.evalMacawStmt
+  , CG.appAtom
+  , CG.addTermStmt
+  , CG.createRegStruct
+  , CG.setMachineRegs
+  , CG.addExtraBlock
+  , CG.freshValueIndex
   , CG.ArchRegStruct
   , MacawArchEvalFn(..)
   , MacawEvalStmtFunc

@@ -74,6 +74,7 @@ module Data.Macaw.CFG.Core
   , PrettyRegValue(..)
   , IsArchFn(..)
   , IsArchStmt(..)
+  , IsArchTermStmt(..)
   , collectValueRep
   , ppValueAssignments'
   , DocF
@@ -736,6 +737,12 @@ class IsArchStmt (f :: (Type -> Kind.Type) -> Kind.Type)  where
              -> f v
              -> Doc ann
 
+class IsArchTermStmt (f :: (Type -> Kind.Type) -> Kind.Type) where
+  ppArchTermStmt :: (forall u . v u -> Doc ann)
+                 -- ^ Function to pretty print contained values
+                 -> f v
+                 -> Doc ann
+
 -- | Constructs expected by architectures type classes.
 type ArchConstraints arch
    = ( RegisterInfo (ArchReg arch)
@@ -743,7 +750,7 @@ type ArchConstraints arch
      , IsArchFn   (ArchFn arch)
      , IsArchStmt (ArchStmt arch)
      , FoldableF  (ArchStmt arch)
-     , PrettyF    (ArchTermStmt arch)
+     , IsArchTermStmt (ArchTermStmt arch)
      , IPAlignment arch
      )
 

@@ -129,7 +129,7 @@ repValSizeBitCount v = 8 * repValSizeByteCount v
 ------------------------------------------------------------------------
 -- X86TermStmt
 
-data X86TermStmt ids
+data X86TermStmt (f :: Type -> Kind.Type)
    = Hlt
      -- ^ The halt instruction.
      --
@@ -137,9 +137,21 @@ data X86TermStmt ids
    | UD2
      -- ^ This raises a invalid opcode instruction.
 
-instance PrettyF X86TermStmt where
-  prettyF Hlt        = "hlt"
-  prettyF UD2        = "ud2"
+instance IsArchTermStmt X86TermStmt where
+  ppArchTermStmt _f Hlt        = "hlt"
+  ppArchTermStmt _f UD2        = "ud2"
+
+instance FoldableF X86TermStmt where
+  foldMapF = foldMapFDefault
+
+instance FunctorF X86TermStmt where
+  fmapF = fmapFDefault
+
+instance TraversableF X86TermStmt where
+  traverseF _go tstmt =
+    case tstmt of
+      Hlt -> pure Hlt
+      UD2 -> pure UD2
 
 ------------------------------------------------------------------------
 -- SSE declarations
@@ -1204,7 +1216,7 @@ rewriteX86Stmt f = do
   s <- traverseF rewriteValue f
   appendRewrittenArchStmt s
 
-rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt tgt)
+rewriteX86TermStmt :: X86TermStmt (Value X86_64 src) -> Rewriter X86_64 s src tgt (X86TermStmt (Value X86_64 tgt))
 rewriteX86TermStmt f =
   case f of
     Hlt -> pure Hlt

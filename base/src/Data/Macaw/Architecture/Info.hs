@@ -317,8 +317,8 @@ data ArchitectureInfo arch
                            .  ArchStmt arch (Value arch src)
                            -> Rewriter arch s src tgt ())
        -- ^ This rewrites an architecture specific statement
-     , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch src
-                                             -> Rewriter arch s src tgt (ArchTermStmt arch tgt))
+     , rewriteArchTermStmt :: (forall s src tgt . ArchTermStmt arch (Value arch src)
+                                             -> Rewriter arch s src tgt (ArchTermStmt arch (Value arch tgt)))
        -- ^ This rewrites an architecture specific statement
      , archDemandContext :: !(DemandContext arch)
        -- ^ Provides architecture-specific information for computing which arguments must be
@@ -331,7 +331,7 @@ data ArchitectureInfo arch
                                      -> Jmp.IntraJumpBounds arch ids
                                      -> RegState (ArchReg arch) (Value arch ids)
                                         -- The architecture-specific statement
-                                     -> ArchTermStmt arch ids
+                                     -> ArchTermStmt arch (Value arch ids)
                                      -> Maybe (Jmp.IntraJumpTarget arch))
        -- ^ This takes an abstract state from before executing an abs
        -- state, and an architecture-specific terminal statement.

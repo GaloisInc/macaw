@@ -554,7 +554,7 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> AbsProcessorState X86Reg ids
                         -> Jmp.IntraJumpBounds X86_64 ids
                         -> RegState X86Reg (Value X86_64 ids)
-                        -> X86TermStmt ids
+                        -> X86TermStmt (Value X86_64 ids)
                         -> Maybe ( MemSegmentOff 64
                                  , AbsBlockState X86Reg
                                  , Jmp.InitJumpBounds X86_64
