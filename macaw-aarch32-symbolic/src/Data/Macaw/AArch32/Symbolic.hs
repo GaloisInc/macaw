@@ -32,7 +32,6 @@ import qualified Data.Parameterized.Map as MapF
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
-import qualified Data.Set as Set
 import qualified What4.BaseTypes as WT
 import qualified What4.ProgramLoc as WP
 import qualified What4.Utils.StringLiteral as WUS
@@ -219,13 +218,13 @@ aarch32GenTermStmt ts regs mfallthroughLabel =
           ft <- CR.Label <$> MSB.freshValueIndex
           errMsg <- MSB.evalAtom (CR.EvalApp (LCE.StringLit (WUS.UnicodeLiteral (T.pack "No fallthrough for conditional return"))))
           let err = CR.ErrorStmt errMsg
-          let eblock = CR.mkBlock (CR.LabelID ft) Set.empty mempty (WP.Posd WP.InternalPos err)
+          let eblock = CR.mkBlock (CR.LabelID ft) mempty mempty (WP.Posd WP.InternalPos err)
           MSB.addExtraBlock eblock
           return ft
 
       regValues <- MSB.createRegStruct regs
       let ret = CR.Return regValues
-      let rblock = CR.mkBlock (CR.LabelID tlbl) Set.empty mempty (WP.Posd WP.InternalPos ret)
+      let rblock = CR.mkBlock (CR.LabelID tlbl) mempty mempty (WP.Posd WP.InternalPos ret)
       MSB.addExtraBlock rblock
 
       MSB.addTermStmt $! CR.Br cond tlbl flbl

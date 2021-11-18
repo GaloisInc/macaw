@@ -78,6 +78,8 @@ type family ArchStmt (arch :: Kind.Type) = (stmt :: (Type -> Kind.Type) -> Kind.
 --
 -- An architecture-specific terminal statement may have side effects and change register
 -- values, it may or may not return to the current function.
+--
+-- Note that the meaning of the type parameter is identical to that of 'ArchStmt'
 type family ArchTermStmt (arch :: Kind.Type) :: (Type -> Kind.Type) -> Kind.Type
    -- NOTE: Not injective because PPC32 and PPC64 use the same type.
 

@@ -80,8 +80,8 @@ termSemantics _sfns tstmt _st0 =
       X.throwIO UnsupportedSyscall
     MAA.ThumbSyscall _payload ->
       X.throwIO UnsupportedSyscall
-    MAA.ReturnIf _cond -> error "ReturnIf should be translated away"
-    MAA.ReturnIfNot _cond -> error "ReturnIfNot should be translated away"
+    MAA.ReturnIf _cond -> AP.panic AP.AArch32 "termSemantics" ["ReturnIf should be translated away when lifting from macaw to crucible"]
+    MAA.ReturnIfNot _cond -> AP.panic AP.AArch32 "termSemantics" ["ReturnIfNot should be translated away when lifting from macaw to crucible"]
 
 -- | Semantics for statement syntax extensions
 --

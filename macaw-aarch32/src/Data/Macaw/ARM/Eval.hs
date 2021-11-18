@@ -37,6 +37,7 @@ import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
 
 import qualified Data.Macaw.ARM.Arch as MAA
+import qualified Data.Macaw.ARM.Panic as MAP
 import           Data.Macaw.ARM.Simplify ()
 
 callParams :: (forall tp . AR.ARMReg tp -> Bool)
@@ -193,7 +194,7 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
                                          , MA.stackGrowsDown = True
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIf could not interpret next PC: " ++ show (regState ^. MC.curIP)]
     AA.ReturnIfNot _ ->
       case simplifyValue (regState ^. MC.curIP) of
         Just (MC.RelocatableValue _ addr)
@@ -203,7 +204,7 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
                                          , MA.stackGrowsDown = True
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIfNot could not interpret next PC: " ++ show (regState ^. MC.curIP)]
 
 preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =

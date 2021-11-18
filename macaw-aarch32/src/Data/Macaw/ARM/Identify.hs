@@ -99,11 +99,11 @@ asReturnAddrAndConstant
   -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
   -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
   -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
-  -> Maybe (MC.ArchSegmentOff ARM.AArch32)
+  -> MAI.Classifier (MC.ArchSegmentOff ARM.AArch32)
 asReturnAddrAndConstant mem absProcState mRet mConstant = do
   MA.ReturnAddr <- return (MA.transferValue absProcState mRet)
-  memAddr <- MC.valueAsMemAddr mConstant
-  segOff <- MC.asSegmentOff mem memAddr
+  Just memAddr <- return (MC.valueAsMemAddr mConstant)
+  Just segOff <- return (MC.asSegmentOff mem memAddr)
   when (not (isExecutableSegOff segOff)) $ do
     fail ("Conditional return successor is not executable: " ++ show memAddr)
   return segOff
@@ -154,20 +154,20 @@ identifyConditionalReturn
   -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
   -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
   -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
-  -> Maybe ( MC.Value ARM.AArch32 ids MT.BoolType
-           , MC.ArchSegmentOff ARM.AArch32
-           , ReturnsOnBranch
-           , Seq.Seq (MC.Stmt ARM.AArch32 ids)
-           )
+  -> MAI.Classifier ( MC.Value ARM.AArch32 ids MT.BoolType
+                    , MC.ArchSegmentOff ARM.AArch32
+                    , ReturnsOnBranch
+                    , Seq.Seq (MC.Stmt ARM.AArch32 ids)
+                    )
 identifyConditionalReturn mem stmts s finalRegState
   | not (null stmts)
   , Just (MC.Mux _ c t f) <- simplifiedMux (s ^. MC.boundValue MC.ip_reg) =
       case asReturnAddrAndConstant mem finalRegState t f of
-        Just nextIP -> return (c, nextIP, ReturnsOnTrue, stmts)
-        Nothing -> do
+        MAI.ClassifySucceeded _ nextIP -> return (c, nextIP, ReturnsOnTrue, stmts)
+        MAI.ClassifyFailed _ -> do
           nextIP <- asReturnAddrAndConstant mem finalRegState f t
           return (c, nextIP, ReturnsOnFalse, stmts)
-  | otherwise = Nothing
+  | otherwise = fail "IP is not a mux"
 
 -- | Recognize ARM conditional returns and generate an appropriate arch-specific
 -- terminator
@@ -184,7 +184,7 @@ conditionalReturnClassifier = do
   mem <- CMR.asks (MAI.pctxMemory . MAI.classifierParseContext)
   regs <- CMR.asks MAI.classifierFinalRegState
   absState <- CMR.asks MAI.classifierAbsState
-  Just (cond, nextIP, returnBranch, stmts') <- return (identifyConditionalReturn mem stmts regs absState)
+  (cond, nextIP, returnBranch, stmts') <- MAI.liftClassifier (identifyConditionalReturn mem stmts regs absState)
   let term = if returnBranch == ReturnsOnTrue then Arch.ReturnIf cond else Arch.ReturnIfNot cond
   writtenAddrs <- CMR.asks MAI.classifierWrittenAddrs
 
