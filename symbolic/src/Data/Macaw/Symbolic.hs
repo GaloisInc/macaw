@@ -1044,15 +1044,16 @@ termStmtToBlockEnd tm0 =
 
 -- * Symbolic simulation
 
-evalMacawExprExtension :: forall sym arch f tp
+evalMacawExprExtension :: forall sym arch f tp rtp blocks r ctx
                        .  IsSymInterface sym
                        => sym
                        -> C.IntrinsicTypes sym
                        -> (Int -> String -> IO ())
+                       -> C.CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
                        -> (forall utp . f utp -> IO (C.RegValue sym utp))
                        -> MacawExprExtension arch f tp
                        -> IO (C.RegValue sym tp)
-evalMacawExprExtension sym _iTypes _logFn f e0 =
+evalMacawExprExtension sym _iTypes _logFn _state f e0 =
   case e0 of
 
     MacawOverflows op w xv yv cv -> do
