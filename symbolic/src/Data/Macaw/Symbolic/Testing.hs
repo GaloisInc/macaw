@@ -234,7 +234,7 @@ simulateAndVerify goalSolver logger sym execFeatures archInfo archVals mem (Resu
     CCC.SomeCFG g <- MS.mkFunCFG (MS.archFunctions archVals) halloc funName posFn dfi
 
     let endianness = toCrucibleEndian (MAI.archEndianness archInfo)
-    let ?recordLLVMAnnotation = \_ _ -> return ()
+    let ?recordLLVMAnnotation = \_ _ _ -> return ()
     (initMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym endianness MSM.ConcreteMutable mem
     let globalMap = MSM.mapRegionPointers memPtrTbl
     (memVar, stackPointer, execResult) <- simulateFunction sym execFeatures archVals halloc initMem globalMap g
