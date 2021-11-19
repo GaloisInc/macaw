@@ -282,7 +282,7 @@ mkSymbolicTest testinp = do
               printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
               CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
-              let ?recordLLVMAnnotation = \_ _ -> pure ()
+              let ?recordLLVMAnnotation = \_ _ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl

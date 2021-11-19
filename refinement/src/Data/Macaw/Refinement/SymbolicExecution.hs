@@ -184,7 +184,7 @@ smtSolveTransfer ctx slice
       case some_cfg of
         C.SomeCFG cfg -> do
           let executionFeatures = []
-          let ?recordLLVMAnnotation = \_ _ -> pure ()
+          let ?recordLLVMAnnotation = \_ _ _ -> pure ()
           initialState <- initializeSimulator ctx sym archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
