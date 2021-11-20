@@ -37,6 +37,7 @@ import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
 
 import qualified Data.Macaw.ARM.Arch as MAA
+import qualified Data.Macaw.ARM.Panic as MAP
 import           Data.Macaw.ARM.Simplify ()
 
 callParams :: (forall tp . AR.ARMReg tp -> Bool)
@@ -160,7 +161,7 @@ postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
                         -> MA.AbsProcessorState AR.ARMReg ids
                         -> MJ.IntraJumpBounds ARM.AArch32 ids
                         -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
-                        -> AA.ARMTermStmt ids
+                        -> AA.ARMTermStmt (MC.Value ARM.AArch32 ids)
                         -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
@@ -184,6 +185,26 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
         _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
+    AA.ReturnIf _ ->
+      case simplifyValue (regState ^. MC.curIP) of
+        Just (MC.RelocatableValue _ addr)
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
+                                         }
+              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIf could not interpret next PC: " ++ show (regState ^. MC.curIP)]
+    AA.ReturnIfNot _ ->
+      case simplifyValue (regState ^. MC.curIP) of
+        Just (MC.RelocatableValue _ addr)
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+              let params = MA.CallParams { MA.postCallStackDelta = 0
+                                         , MA.preserveReg = preservePred
+                                         , MA.stackGrowsDown = True
+                                         }
+              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIfNot could not interpret next PC: " ++ show (regState ^. MC.curIP)]
 
 preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =

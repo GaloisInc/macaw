@@ -285,7 +285,7 @@ data ArchTermStmtRegEffects arch
 --
 -- The second is the state of registers when it is executed.
 type ComputeArchTermStmtEffects arch ids
-   = ArchTermStmt arch ids
+   = ArchTermStmt arch (Value arch ids)
    -> RegState (ArchReg arch) (Value arch ids)
    -> ArchTermStmtRegEffects arch
 

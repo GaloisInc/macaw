@@ -246,13 +246,13 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
                                         X86StmtExtension f (ToCrucibleType t)
   X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
               -> X86StmtExtension f C.UnitType
-  X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
+  X86PrimTerm :: !(M.X86TermStmt (AtomWrapper f)) -> X86StmtExtension f C.UnitType
 
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
   ppApp ppSub (X86PrimStmt stmt) = M.ppArchStmt (liftAtomIn ppSub) stmt
-  ppApp _ppSub (X86PrimTerm term) = M.prettyF term
+  ppApp ppSub (X86PrimTerm term) = M.ppArchTermStmt (liftAtomIn ppSub) term
 
 instance C.TypeApp X86StmtExtension where
   appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
@@ -262,7 +262,7 @@ instance C.TypeApp X86StmtExtension where
 instance FunctorFC X86StmtExtension where
   fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
   fmapFC f (X86PrimStmt stmt) = X86PrimStmt (fmapF (liftAtomMap f) stmt)
-  fmapFC _f (X86PrimTerm term) = X86PrimTerm term
+  fmapFC f (X86PrimTerm term) = X86PrimTerm (fmapF (liftAtomMap f) term)
 
 instance FoldableFC X86StmtExtension where
   foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomIn f) x
@@ -273,7 +273,7 @@ instance FoldableFC X86StmtExtension where
 instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
   traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
-  traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
+  traverseFC f (X86PrimTerm term) = X86PrimTerm <$> traverseF (liftAtomTrav f) term
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
@@ -317,11 +317,17 @@ crucGenX86Stmt stmt = do
   stmt' <- traverseF f stmt
   void (evalArchStmt (X86PrimStmt stmt'))
 
-crucGenX86TermStmt :: M.X86TermStmt ids
+crucGenX86TermStmt :: forall ids s
+                    . M.X86TermStmt (M.Value M.X86_64 ids)
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
+                   -> Maybe (C.Label s)
                    -> CrucGen M.X86_64 ids s ()
-crucGenX86TermStmt tstmt _regs =
-  void (evalArchStmt (X86PrimTerm tstmt))
+crucGenX86TermStmt tstmt _regs _fallthrough = do
+  tstmt' <- traverseF f tstmt
+  void (evalArchStmt (X86PrimTerm tstmt'))
+  where
+    f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
+    f x = AtomWrapper <$> valueToCrucible x
 
 -- | X86_64 specific functions for translation Macaw into Crucible.
 x86_64MacawSymbolicFns :: MacawSymbolicArchFunctions M.X86_64

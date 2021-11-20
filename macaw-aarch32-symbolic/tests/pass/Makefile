@@ -11,3 +11,9 @@ all: $(unopt) $(opt)
 
 %.opt.exe : %.c
 	$(CC) $(CFLAGS) -O2 $< -o $@
+
+# We have to use -O1 for this case; -O0 won't generate a conditional return,
+# while -O2 generates some totally different code where the compiler just
+# conditionally performs a bunch of other operations instead
+test-conditional-return.opt.exe: test-conditional-return.c
+	$(CC) $(CFLAGS) -O1 $< -o $@

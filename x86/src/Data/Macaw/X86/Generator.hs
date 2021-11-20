@@ -368,7 +368,7 @@ addArchSyscall = do
   addTermStmt FetchAndExecute
 
 -- | execute a primitive instruction.
-addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
+addArchTermStmt :: X86TermStmt (Value X86_64 ids) -> X86Generator st ids ()
 addArchTermStmt ts = addTermStmt (ArchTermStmt ts)
 
 -- | Terminate the current block immediately

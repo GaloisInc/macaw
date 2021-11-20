@@ -14,6 +14,7 @@ module Data.Macaw.AArch32.Symbolic (
   , updateReg
   ) where
 
+import qualified Data.Text as T
 import           GHC.TypeLits
 
 import           Control.Lens ( (&), (%~) )
@@ -32,6 +33,8 @@ import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import qualified What4.BaseTypes as WT
+import qualified What4.ProgramLoc as WP
+import qualified What4.Utils.StringLiteral as WUS
 import qualified What4.Symbol as WS
 
 import qualified Language.ASL.Globals as LAG
@@ -41,6 +44,7 @@ import qualified Data.Macaw.ARM.ARMReg as MAR
 
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.CFG.Extension as CE
+import qualified Lang.Crucible.CFG.Expr as LCE
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.Simulator.RegMap as MCR
 import qualified Lang.Crucible.Simulator.RegValue as MCRV
@@ -97,29 +101,28 @@ instance MS.GenArchInfo mem SA.AArch32 where
 data AArch32StmtExtension (f :: CT.CrucibleType -> Type) (ctp :: CT.CrucibleType) where
   AArch32PrimFn :: MAA.ARMPrimFn (AA.AtomWrapper f) t -> AArch32StmtExtension f (MS.ToCrucibleType t)
   AArch32PrimStmt :: MAA.ARMStmt (AA.AtomWrapper f) -> AArch32StmtExtension f CT.UnitType
-  AArch32PrimTerm :: MAA.ARMTermStmt ids -> AArch32StmtExtension f CT.UnitType
+  AArch32PrimTerm :: MAA.ARMTermStmt (AA.AtomWrapper f) -> AArch32StmtExtension f CT.UnitType
 
 instance FC.FunctorFC AArch32StmtExtension where
   fmapFC f st =
     case st of
       AArch32PrimFn p -> AArch32PrimFn (FC.fmapFC (AA.liftAtomMap f) p)
       AArch32PrimStmt p -> AArch32PrimStmt (TF.fmapF (AA.liftAtomMap f) p)
-      AArch32PrimTerm p -> AArch32PrimTerm p
+      AArch32PrimTerm p -> AArch32PrimTerm (TF.fmapF (AA.liftAtomMap f) p)
 
 instance FC.FoldableFC AArch32StmtExtension where
   foldMapFC f st =
     case st of
       AArch32PrimFn p -> FC.foldMapFC (AA.liftAtomIn f) p
       AArch32PrimStmt p -> TF.foldMapF (AA.liftAtomIn f) p
-      -- There is no data in terminators for now, so we can have a trivial implementation
-      AArch32PrimTerm _p -> mempty
+      AArch32PrimTerm p -> TF.foldMapF (AA.liftAtomIn f) p
 
 instance FC.TraversableFC AArch32StmtExtension where
   traverseFC f st =
     case st of
       AArch32PrimFn p -> AArch32PrimFn <$> FC.traverseFC (AA.liftAtomTrav f) p
       AArch32PrimStmt p -> AArch32PrimStmt <$> TF.traverseF (AA.liftAtomTrav f) p
-      AArch32PrimTerm p -> pure (AArch32PrimTerm p)
+      AArch32PrimTerm p -> AArch32PrimTerm <$> TF.traverseF (AA.liftAtomTrav f) p
 
 instance CE.TypeApp AArch32StmtExtension where
   appType st =
@@ -135,7 +138,7 @@ instance CE.PrettyApp AArch32StmtExtension where
         I.runIdentity (MC.ppArchFn (I.Identity . AA.liftAtomIn ppSub) p)
       AArch32PrimStmt p ->
         MC.ppArchStmt (AA.liftAtomIn ppSub) p
-      AArch32PrimTerm p -> MC.prettyF p
+      AArch32PrimTerm p -> MC.ppArchTermStmt (AA.liftAtomIn ppSub) p
 
 type instance MSB.MacawArchStmtExtension SA.AArch32 =
   AArch32StmtExtension
@@ -191,11 +194,40 @@ aarch32GenStmt s = do
   s' <- TF.traverseF f s
   void (MSB.evalArchStmt (AArch32PrimStmt s'))
 
-aarch32GenTermStmt :: MAA.ARMTermStmt ids
+aarch32GenTermStmt :: MAA.ARMTermStmt (MC.Value SA.AArch32 ids)
                    -> MC.RegState MAR.ARMReg (MC.Value SA.AArch32 ids)
+                   -> Maybe (CR.Label s)
                    -> MSB.CrucGen SA.AArch32 ids s ()
-aarch32GenTermStmt ts _regs =
-  void (MSB.evalArchStmt (AArch32PrimTerm ts))
+aarch32GenTermStmt ts regs mfallthroughLabel =
+  case ts of
+    MAA.ReturnIf cond -> returnIf =<< MSB.valueToCrucible cond
+    MAA.ReturnIfNot cond -> do
+      notc <- MSB.appAtom =<< LCE.Not <$> MSB.valueToCrucible cond
+      returnIf notc
+    _ -> do
+      ts' <- TF.traverseF f ts
+      void (MSB.evalArchStmt (AArch32PrimTerm ts'))
+  where
+    f x = AA.AtomWrapper <$> MSB.valueToCrucible x
+    returnIf cond = do
+      MSB.setMachineRegs =<< MSB.createRegStruct regs
+      tlbl <- CR.Label <$> MSB.freshValueIndex
+      flbl <- case mfallthroughLabel of
+        Just ft -> return ft
+        Nothing -> do
+          ft <- CR.Label <$> MSB.freshValueIndex
+          errMsg <- MSB.evalAtom (CR.EvalApp (LCE.StringLit (WUS.UnicodeLiteral (T.pack "No fallthrough for conditional return"))))
+          let err = CR.ErrorStmt errMsg
+          let eblock = CR.mkBlock (CR.LabelID ft) mempty mempty (WP.Posd WP.InternalPos err)
+          MSB.addExtraBlock eblock
+          return ft
+
+      regValues <- MSB.createRegStruct regs
+      let ret = CR.Return regValues
+      let rblock = CR.mkBlock (CR.LabelID tlbl) mempty mempty (WP.Posd WP.InternalPos ret)
+      MSB.addExtraBlock rblock
+
+      MSB.addTermStmt $! CR.Br cond tlbl flbl
 
 regIndexMap :: MSB.RegIndexMap SA.AArch32
 regIndexMap = MSB.mkRegIndexMap asgn sz

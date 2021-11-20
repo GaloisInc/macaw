@@ -71,7 +71,7 @@ postPPCTermStmtAbsState :: forall var ids
                         -> AbsProcessorState (PPCReg var) ids
                         -> MJ.IntraJumpBounds (SP.AnyPPC var) ids
                         -> RegState (PPCReg var) (Value (SP.AnyPPC var) ids)
-                        -> PPCTermStmt var ids
+                        -> PPCTermStmt var (Value (SP.AnyPPC var) ids)
                         -> Maybe (MM.MemSegmentOff (SP.AddrWidth var), AbsBlockState (PPCReg var), MJ.InitJumpBounds (SP.AnyPPC var))
 postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of

@@ -216,7 +216,7 @@ data ParsedTermStmt arch ids
   | ParsedReturn !(RegState (ArchReg arch) (Value arch ids))
   -- | An architecture-specific statement with the registers prior to execution, and
   -- the given next control flow address.
-  | ParsedArchTermStmt !(ArchTermStmt arch ids)
+  | ParsedArchTermStmt !(ArchTermStmt arch (Value arch ids))
                        !(RegState (ArchReg arch) (Value arch ids))
                        !(Maybe (ArchSegmentOff arch))
   -- | An error occured in translating the block
@@ -262,7 +262,7 @@ ppTermStmt tstmt =
       , PP.indent 2 (PP.pretty s) ]
     ParsedArchTermStmt ts s maddr ->
       PP.vcat
-      [ prettyF ts <> addrDoc
+      [ ppArchTermStmt PP.pretty ts <> addrDoc
       , PP.indent 2 (PP.pretty s) ]
       where
           addrDoc = case maddr of
