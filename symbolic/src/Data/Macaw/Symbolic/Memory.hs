@@ -197,6 +197,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , CB.IsSymInterface sym
                    , CL.HasLLVMAnn sym
                    , MonadIO m
+                   , ?memOpts :: CL.MemOptions
                    )
                 => proxy arch
                 -- ^ A proxy to fix the architecture
