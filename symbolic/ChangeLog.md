@@ -19,3 +19,5 @@
    - `setMachineRegs`
    - `addExtraBlock`
    - `freshValueIndex`
+
+- `Data.Macaw.Symbolic.Memory.newGlobalMemory` now has a `?memOpts :: MemOptions` constraint.

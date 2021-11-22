@@ -508,6 +508,7 @@ initializeMemory :: forall arch sym m proxy
                     , CB.IsSymInterface sym
                     , LLVM.HasLLVMAnn sym
                     , MonadIO m
+                    , ?memOpts :: LLVM.MemOptions
                     )
                  => proxy arch
                  -> sym
