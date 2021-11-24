@@ -81,8 +81,6 @@ import qualified Language.ASL.Globals as ASL
 import           Text.Printf ( printf )
 
 import qualified SemMC.Architecture.AArch32 as ARM
--- We need this for an orphan instance
-import           Data.Macaw.ARM.Simplify ()
 
 data InstructionSet = A32I ARMD.Instruction | T32I ThumbD.Instruction
                       deriving (Eq, Show)

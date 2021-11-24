@@ -55,8 +55,6 @@ import qualified What4.Expr.Builder as WB
 
 import qualified Language.ASL.Globals as ASL
 
-import           Data.Macaw.ARM.Simplify ()
-
 loadSemantics :: CBS.SimpleBackend t fs -> IO (ARM.ASLSemantics (CBS.SimpleBackend t fs))
 loadSemantics sym = ARM.loadSemantics sym (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
