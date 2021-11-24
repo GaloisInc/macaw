@@ -33,8 +33,6 @@ import qualified Data.Sequence as Seq
 
 import qualified SemMC.Architecture.AArch32 as ARM
 
-import           Data.Macaw.ARM.Simplify ()
-
 import Prelude
 
 -- | Test if an address is in an executable segment

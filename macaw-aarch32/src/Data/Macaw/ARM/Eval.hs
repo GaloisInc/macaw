@@ -38,7 +38,6 @@ import qualified SemMC.Architecture.AArch32 as ARM
 
 import qualified Data.Macaw.ARM.Arch as MAA
 import qualified Data.Macaw.ARM.Panic as MAP
-import           Data.Macaw.ARM.Simplify ()
 
 callParams :: (forall tp . AR.ARMReg tp -> Bool)
            -> MA.CallParams AR.ARMReg
@@ -118,6 +117,7 @@ absEvalArchFn :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MA.AbsValue 32 tp
 absEvalArchFn _r f =
   case f of
+    AA.ARMSyscall {} -> MA.TopV
     AA.UDiv{} -> MA.TopV
     AA.SDiv{} -> MA.TopV
     AA.URem{} -> MA.TopV
@@ -165,26 +165,6 @@ postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
                         -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
-    AA.ARMSyscall _ ->
-      case simplifyValue (regState ^. MC.curIP) of
-        Just (MC.RelocatableValue _ addr)
-          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         , MA.stackGrowsDown = True
-                                         }
-              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
-    AA.ThumbSyscall _ ->
-      case simplifyValue (regState ^. MC.curIP) of
-        Just (MC.RelocatableValue _ addr)
-          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 2 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         , MA.stackGrowsDown = True
-                                         }
-              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
     AA.ReturnIf _ ->
       case simplifyValue (regState ^. MC.curIP) of
         Just (MC.RelocatableValue _ addr)
