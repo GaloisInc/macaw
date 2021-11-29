@@ -37,6 +37,7 @@ library
     galois-dwarf >= 0.2.2,
     IntervalMap >= 0.5,
     lens >= 4.7,
+    megaparsec >= 7 && < 10,
     mtl,
     parameterized-utils >= 2.1.0 && < 2.2,
     prettyprinter >= 1.7.0,
@@ -78,6 +79,9 @@ library
     Data.Macaw.Memory.LoadCommon
     Data.Macaw.Memory.Permissions
     Data.Macaw.Memory.Symbols
+    Data.Macaw.Syntax.Atom
+    Data.Macaw.Syntax.Parser
+    Data.Macaw.Syntax.SExpr
     Data.Macaw.Types
     Data.Macaw.Utils.Changed
     Data.Macaw.Utils.IncComp
