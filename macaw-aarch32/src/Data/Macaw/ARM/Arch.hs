@@ -178,10 +178,22 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
              -> f (MT.BVType 32) -- r7 (syscall number)
              -> ARMPrimFn f (MT.TupleType [MT.BVType 32, MT.BVType 32])
 
+  -- | Signed division at @w@ bits. Both operands are treated as signed. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- According to the manual (A8.8.165), the @SDIV@ instruction can either
+  -- generate an exception or return 0 if the divisor is zero, depending on the
+  -- processor mode.  Our semantics have this check encoded, so there is a
+  -- guarantee that this operation does not have 0 as the divisor.
   SDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
        -> ARMPrimFn f (MT.BVType w)
+
+  -- | Unsigned division at @w@ bits. Both operands are treated as unsigned. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- This has the same division by zero note as 'SDiv'.
   UDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
