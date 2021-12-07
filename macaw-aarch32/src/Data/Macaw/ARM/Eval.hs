@@ -148,10 +148,12 @@ absEvalArchFn r f =
       abstractDivision BVS.uquot BVS.asUnsigned wrep (t dividend) (t divisor)
     AA.SDiv wrep dividend divisor ->
       abstractDivision (BVS.squot wrep) (BVS.asSigned wrep) wrep (t dividend) (t divisor)
+    AA.URem wrep dividend divisor ->
+      abstractDivision BVS.urem BVS.asUnsigned wrep (t dividend) (t divisor)
+    AA.SRem wrep dividend divisor ->
+      abstractDivision (BVS.srem wrep) (BVS.asSigned wrep) wrep (t dividend) (t divisor)
 
     AA.ARMSyscall {} -> MA.TopV
-    AA.URem{} -> MA.TopV
-    AA.SRem{} -> MA.TopV
     AA.UnsignedRSqrtEstimate {} -> MA.TopV
     AA.FPSub {} -> MA.TopV
     AA.FPAdd {} -> MA.TopV
