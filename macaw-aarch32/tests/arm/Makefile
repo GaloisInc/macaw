@@ -3,10 +3,12 @@
 
 CCPROG != for X in arm-linux-gnueabi-gcc arm-none-eabi-gcc gcc ; do if type $$X > /dev/null 2>&1 ; then echo $$X; break; fi; done
 
+A32AS := arm-linux-gnueabi-as
+A32LD := arm-linux-gnueabi-ld
 A32CC := $(CCPROG)
 T32CC := $(CCPROG) -mthumb
 
-all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildcard *.c))
+all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildcard *.c)) syscall-a32.exe
 
 %-a32.exe: %-a32.s
 	$(A32CC) -fno-stack-protector -nostdlib $< -o $@
@@ -25,6 +27,12 @@ all: $(patsubst %.c,%-a32.exe,$(wildcard *.c)) $(patsubst %.c,%-t32.exe,$(wildca
 
 %-mixed.s: %-mixed.c
 	$(A32CC) -fno-stack-protector -S -c $< -o $@
+
+syscall.o: syscall.s
+	$(A32AS) $< -o $@
+
+syscall-a32.exe: syscall.o
+	$(A32LD) $< -o $@
 
 .PRECIOUS: %.s
 

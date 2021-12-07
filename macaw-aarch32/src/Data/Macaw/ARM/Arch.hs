@@ -20,6 +20,7 @@ module Data.Macaw.ARM.Arch where
 
 import           Control.Applicative ( (<|>) )
 import           Data.Bits ( (.&.) )
+import qualified Data.BitVector.Sized as BVS
 import           Data.Kind ( Type )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.CFG as MC
@@ -178,10 +179,22 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
              -> f (MT.BVType 32) -- r7 (syscall number)
              -> ARMPrimFn f (MT.TupleType [MT.BVType 32, MT.BVType 32])
 
+  -- | Signed division at @w@ bits. Both operands are treated as signed. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- According to the manual (A8.8.165), the @SDIV@ instruction can either
+  -- generate an exception or return 0 if the divisor is zero, depending on the
+  -- processor mode.  Our semantics have this check encoded, so there is a
+  -- guarantee that this operation does not have 0 as the divisor.
   SDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
        -> ARMPrimFn f (MT.BVType w)
+
+  -- | Unsigned division at @w@ bits. Both operands are treated as unsigned. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- This has the same division by zero note as 'SDiv'.
   UDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
@@ -705,15 +718,36 @@ instance MSS.SimplifierExtension ARM.AArch32 where
   simplifyArchApp = saturatingSimplify
   simplifyArchFn = armSimplifyArchFn
 
+doDivision
+  :: (BVS.BV w -> BVS.BV w -> BVS.BV w)
+  -> (BVS.BV w -> Integer)
+  -> NR.NatRepr w
+  -> Integer
+  -> Integer
+  -> Integer
+doDivision op extract wrep dividend divisor =
+  extract (op dividend' divisor')
+  where
+    dividend' = BVS.mkBV wrep dividend
+    divisor' = BVS.mkBV wrep divisor
+
 armSimplifyArchFn :: MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
                   -> MT.TypeRepr tp
                   -> Maybe (MC.Value ARM.AArch32 ids tp)
 armSimplifyArchFn af _rep =
   case af of
     SRem _ z@(MC.BVValue _ 0) _ -> return z
+    SRem wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision (BVS.srem wrep) (BVS.asSigned wrep) wrep dividend divisor))
     URem _ z@(MC.BVValue _ 0) _ -> return z
+    URem wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision BVS.urem BVS.asUnsigned wrep dividend divisor))
     SDiv _ z@(MC.BVValue _ 0) _ -> return z
+    SDiv wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision (BVS.squot wrep) (BVS.asSigned wrep) wrep dividend divisor))
     UDiv _ z@(MC.BVValue _ 0) _ -> return z
+    UDiv wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision BVS.uquot BVS.asUnsigned wrep dividend divisor))
     _ -> Nothing
 
 simplifyOnce :: MC.App (MC.Value ARM.AArch32 ids) tp
