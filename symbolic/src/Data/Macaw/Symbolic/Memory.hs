@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 -- | This module provides model implementations of 'MS.GlobalMap' and 'MS.MkGlobalPointerValidityPred'
@@ -104,6 +105,9 @@ module Data.Macaw.Symbolic.Memory (
   MemPtrTable,
   toCrucibleEndian,
   newGlobalMemory,
+  GlobalMemoryHooks(..),
+  defaultGlobalMemoryHooks,
+  newGlobalMemoryWith,
   MemoryModelContents(..),
   mkGlobalPointerValidityPred,
   mapRegionPointers
@@ -175,6 +179,78 @@ toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
 toCrucibleEndian MC.BigEndian    = CLD.BigEndian
 toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
 
+-- | Hooks to configure the initialization of global memory
+data GlobalMemoryHooks w =
+  GlobalMemoryHooks {
+  populateRelocation
+    :: forall sym
+       . (CB.IsSymInterface sym)
+    => sym
+    -> MC.Relocation w
+    -> IO [WI.SymExpr sym (WI.BaseBVType 8)]
+    -- ^ The symbolic bytes to represent a relocation with
+    --
+    -- They could be entirely unconstrained bytes, or could be distinguished
+    -- bytes used to implement linking of shared libraries (i.e., relocation
+    -- resolution)
+  }
+
+-- | A default set of hooks
+--
+-- These are used by 'newGlobalMemory', and may raise errors if they encounter
+-- constructs that they do not handle (because there is no sensible default behavior).
+defaultGlobalMemoryHooks :: GlobalMemoryHooks w
+defaultGlobalMemoryHooks =
+  GlobalMemoryHooks {
+    populateRelocation = \_ r -> return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
+    }
+
+-- | A version of 'newGlobalMemory' that enables some of the memory model
+-- initialization to be configured via 'GlobalMemoryHooks'.
+--
+-- This version enables callers to control behaviors for which there is no good
+-- default behavior (and that must be otherwise treated as an error).
+newGlobalMemoryWith
+ :: ( 16 <= MC.ArchAddrWidth arch
+    , MC.MemWidth (MC.ArchAddrWidth arch)
+    , KnownNat (MC.ArchAddrWidth arch)
+    , CB.IsSymInterface sym
+    , CL.HasLLVMAnn sym
+    , MonadIO m
+    , ?memOpts :: CL.MemOptions
+    )
+ => GlobalMemoryHooks (MC.ArchAddrWidth arch)
+ -- ^ Hooks customizing the memory setup
+ -> proxy arch
+ -- ^ A proxy to fix the architecture
+ -> sym
+ -- ^ The symbolic backend used to construct terms
+ -> CLD.EndianForm
+ -- ^ The endianness of values in memory
+ -> MemoryModelContents
+ -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
+ -> MC.Memory (MC.ArchAddrWidth arch)
+ -- ^ The macaw memory
+ -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
+newGlobalMemoryWith hooks proxy sym endian mmc mem = do
+  let ?ptrWidth = MC.memWidth mem
+
+  memImpl1 <- liftIO $ CL.emptyMem endian
+
+  let allocName = WS.safeSymbol "globalMemoryBytes"
+  symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
+  sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
+  (ptr, memImpl2) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable
+                         "Global memory for macaw-symbolic"
+                         memImpl1 sizeBV CLD.noAlignment
+
+  (symArray2, tbl) <- populateMemory proxy hooks sym mmc mem symArray1
+  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
+  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
+
+  return (memImpl3, ptrTable)
+
+
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the
 -- 'CL.MemImpl' are populated based on the 'MC.Memory' (macaw memory) passed in.
@@ -191,6 +267,10 @@ toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
 -- arrays do not have notions of mutable or immutable regions.  These notions
 -- are enforced via the 'MS.MkGlobalPointerValidityPred', which encodes valid
 -- uses of pointers.  See 'mkGlobalPointerValidityPred' for details.
+--
+-- Note that this default setup is not suitable for dynamically linked binaries
+-- with relocations in the data section, as it will call 'error' if it
+-- encounters one. To handle dynamically linked binaries, see 'newGlobalMemoryWith'.
 newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , MC.MemWidth (MC.ArchAddrWidth arch)
                    , KnownNat (MC.ArchAddrWidth arch)
@@ -210,23 +290,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                 -> MC.Memory (MC.ArchAddrWidth arch)
                 -- ^ The macaw memory
                 -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
-newGlobalMemory proxy sym endian mmc mem = do
-  let ?ptrWidth = MC.memWidth mem
-
-  memImpl1 <- liftIO $ CL.emptyMem endian
-
-  let allocName = WS.safeSymbol "globalMemoryBytes"
-  symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
-  sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
-  (ptr, memImpl2) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable
-                         "Global memory for macaw-symbolic"
-                         memImpl1 sizeBV CLD.noAlignment
-
-  (symArray2, tbl) <- populateMemory proxy sym mmc mem symArray1
-  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
-  let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
-
-  return (memImpl3, ptrTable)
+newGlobalMemory = newGlobalMemoryWith defaultGlobalMemoryHooks
 
 -- | Copy memory from the 'MC.Memory' into the LLVM memory model allocation as
 -- directed by the 'MemoryModelContents' selection
@@ -238,6 +302,8 @@ populateMemory :: ( CB.IsSymInterface sym
                   )
                => proxy arch
                -- ^ A proxy to fix the architecture
+               -> GlobalMemoryHooks (MC.ArchAddrWidth arch)
+               -- ^ Hooks controlling how memory should be initialized
                -> sym
                -- ^ The symbolic backend
                -> MemoryModelContents
@@ -248,12 +314,11 @@ populateMemory :: ( CB.IsSymInterface sym
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                     , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
                     )
-populateMemory proxy sym mmc mem symArray0 =
+populateMemory proxy hooks sym mmc mem symArray0 =
   pleatM (symArray0, IM.empty) (MC.memSegments mem) $ \allocs1 seg -> do
     pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
       concreteBytes <- case memChunk of
-        MC.RelocationRegion {} -> error $
-          "SymbolicRef SegmentRanges are not supported yet: " ++ show memChunk
+        MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks sym reloc
         MC.BSSRegion sz ->
           liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
         MC.ByteRegion bytes ->
