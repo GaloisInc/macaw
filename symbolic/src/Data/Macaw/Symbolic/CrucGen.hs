@@ -485,11 +485,15 @@ data MacawStmtExtension (arch :: K.Type)
     -> MacawStmtExtension arch f (BVPtr arch)
 
   -- | Add a pointer to a bit-vector, or two bit-vectors.
+  --
+  -- Note that this used to be restricted to only pointer-width operations.  It
+  -- has been generalized, as sometimes pointers are extended.
   PtrAdd
-    :: !(ArchAddrWidthRepr arch)
-    -> !(f (BVPtr arch))
-    -> !(f (BVPtr arch))
-    -> MacawStmtExtension arch f (BVPtr arch)
+    :: (1 <= w)
+    => !(NatRepr w)
+    -> !(f (MM.LLVMPointerType w))
+    -> !(f (MM.LLVMPointerType w))
+    -> MacawStmtExtension arch f (MM.LLVMPointerType w)
 
   -- | Subtract two pointers, two bit-vectors, or bit-vector from a pointer.
   PtrSub
@@ -512,6 +516,30 @@ data MacawStmtExtension (arch :: K.Type)
     -> !(f (BVPtr arch))
     -> !(f (BVPtr arch))
     -> MacawStmtExtension arch f (BVPtr arch)
+
+  -- | Pointer truncation
+  --
+  -- This is to support architectures that perform (pointer) arithmetic at
+  -- higher bit widths to detect overflow.  We would mostly expect to see this
+  -- truncating down to pointer width, but that is not an essential requirement.
+  --
+  -- Truncation affects just the LLVMPointer offset, leaving the base alone.
+  --
+  -- This could be modified to *only* support truncating *to* pointer width, but
+  -- that doesn't seem necessary
+  PtrTrunc
+    :: (1 <= r, (r + 1) <= w)
+    => !(NatRepr r)
+    -> !(f (MM.LLVMPointerType w))
+    -> MacawStmtExtension arch f (MM.LLVMPointerType r)
+
+  -- | Similar to 'PtrTrunc' - pointers may be extended to a larger size, so we
+  -- need to preserve their block id
+  PtrUExt
+    :: (1 <= w, (w + 1) <= r, 1 <= r)
+    => !(NatRepr r)
+    -> !(f (MM.LLVMPointerType w))
+    -> MacawStmtExtension arch f (MM.LLVMPointerType r)
 
 instance TraversableFC (MacawArchStmtExtension arch)
       => FunctorFC (MacawStmtExtension arch) where
@@ -556,6 +584,8 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
       PtrAdd _ x y   -> sexpr "ptr_add" [ f x, f y ]
       PtrSub _ x y   -> sexpr "ptr_sub" [ f x, f y ]
+      PtrTrunc w x   -> sexpr "ptr_trunc" [ viaShow w, f x ]
+      PtrUExt w x    -> sexpr "ptr_uext" [ viaShow w, f x ]
 
       PtrAnd _ x y   -> sexpr "ptr_and" [ f x, f y ]
       PtrXor _ x y   -> sexpr "ptr_xor" [ f x, f y ]
@@ -581,10 +611,12 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType PtrEq {}            = C.knownRepr
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
-  appType (PtrAdd w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
+  appType (PtrAdd w _ _)   = MM.LLVMPointerRepr w
   appType (PtrAnd w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (PtrSub w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
   appType (PtrXor w _ _)   | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
+  appType (PtrTrunc w _)   = MM.LLVMPointerRepr w
+  appType (PtrUExt w _)    = MM.LLVMPointerRepr w
   appType (PtrMux w _ _ _) | LeqProof <- addrWidthIsPos w = MM.LLVMPointerRepr (M.addrWidthNatRepr w)
 
 ------------------------------------------------------------------------
@@ -983,15 +1015,16 @@ appToCrucible app = do
     M.Trunc x w -> do
       let wx = M.typeWidth x
       LeqProof <- return (addLemma w wx)
-      appBVAtom w =<< C.BVTrunc w wx <$> v2c' wx x
+      x' <- v2c x
+      evalMacawStmt (PtrTrunc w x')
 
     M.SExt x w -> do
       let wx = M.typeWidth x
       appBVAtom w =<< C.BVSext w wx <$> v2c' wx x
 
     M.UExt x w -> do
-      let wx = M.typeWidth x
-      appBVAtom w =<< C.BVZext w wx <$> v2c' wx x
+      x' <- v2c x
+      evalMacawStmt (PtrUExt w x')
 
     M.Bitcast v p -> do
       crucValue <- v2c v
@@ -1001,10 +1034,7 @@ appToCrucible app = do
     M.BVAdd w x y -> do
       xv <- v2c x
       yv <- v2c y
-      aw <- archAddrWidth
-      case testEquality w (M.addrWidthNatRepr aw) of
-        Just Refl -> evalMacawStmt (PtrAdd aw xv yv)
-        Nothing -> appBVAtom w =<< C.BVAdd w <$> toBits w xv <*> toBits w yv
+      evalMacawStmt (PtrAdd w xv yv)
 
     -- Here we assume that this does not make sense for pointers.
     M.BVAdc w x y c -> do
