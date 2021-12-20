@@ -105,7 +105,6 @@ module Data.Macaw.Symbolic.Memory (
   MemPtrTable(..),
   toCrucibleEndian,
   newGlobalMemory,
-  InitialBytesArray,
   GlobalMemoryHooks(..),
   defaultGlobalMemoryHooks,
   newGlobalMemoryWith,
@@ -206,12 +205,6 @@ defaultGlobalMemoryHooks =
     populateRelocation = \_ r -> return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
     }
 
-type InitialBytesArray sym arch = 
-       WI.SymExpr sym
-                  (WI.BaseArrayType
-                     (CT.SingleCtx (WI.BaseBVType (MC.RegAddrWidth (MC.ArchReg arch))))
-                     (WI.BaseBVType 8))
-
 -- | A version of 'newGlobalMemory' that enables some of the memory model
 -- initialization to be configured via 'GlobalMemoryHooks'.
 --
@@ -238,7 +231,7 @@ newGlobalMemoryWith
  -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
  -> MC.Memory (MC.ArchAddrWidth arch)
  -- ^ The macaw memory
- -> m (CL.MemImpl sym, InitialBytesArray sym arch, MemPtrTable sym (MC.ArchAddrWidth arch))
+ -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newGlobalMemoryWith hooks proxy sym endian mmc mem = do
   let ?ptrWidth = MC.memWidth mem
 
@@ -255,7 +248,7 @@ newGlobalMemoryWith hooks proxy sym endian mmc mem = do
   memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
 
-  return (memImpl3, symArray1, ptrTable)
+  return (memImpl3, ptrTable)
 
 
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
@@ -298,8 +291,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                 -- ^ The macaw memory
                 -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newGlobalMemory proxy sym endian mmc mem =
-  do (mi,_,tbl) <- newGlobalMemoryWith defaultGlobalMemoryHooks proxy sym endian mmc mem
-     return (mi,tbl)
+  newGlobalMemoryWith defaultGlobalMemoryHooks proxy sym endian mmc mem
 
 -- | Copy memory from the 'MC.Memory' into the LLVM memory model allocation as
 -- directed by the 'MemoryModelContents' selection
