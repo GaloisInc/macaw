@@ -889,10 +889,6 @@ toValBV ::
   IO (RegValue sym (BVType w))
 toValBV sym (AtomWrapper x) = projectLLVM_bv sym (regValue x)
 
-type family FloatInfoFromSSEType (tp :: M.Type) :: FloatInfo where
-  FloatInfoFromSSEType (M.BVType 32) = SingleFloat
-  FloatInfoFromSSEType (M.BVType 64) = DoubleFloat
-
 floatInfoFromSSEType
   :: M.SSE_FloatType tp -> FloatInfoRepr (ToCrucibleFloatInfo tp)
 floatInfoFromSSEType = \case
