@@ -104,6 +104,7 @@ module Data.Macaw.Symbolic.Memory (
   -- * Memory Management
   MemPtrTable,
   toCrucibleEndian,
+  fromCrucibleEndian,
   newGlobalMemory,
   GlobalMemoryHooks(..),
   defaultGlobalMemoryHooks,
@@ -178,6 +179,11 @@ data MemPtrTable sym w =
 toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
 toCrucibleEndian MC.BigEndian    = CLD.BigEndian
 toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
+
+-- | Convert a Crucible LLVM 'CLD.EndianForm' to a Macaw 'MC.Endianness'.
+fromCrucibleEndian :: CLD.EndianForm -> MC.Endianness
+fromCrucibleEndian CLD.BigEndian    = MC.BigEndian
+fromCrucibleEndian CLD.LittleEndian = MC.LittleEndian
 
 -- | Hooks to configure the initialization of global memory
 data GlobalMemoryHooks w =
