@@ -174,7 +174,7 @@ data MemPtrTable sym w =
               -- ^ Pointer width representative
               }
 
--- | Convert a Macaw Endianness to a Crucible LLVM EndianForm
+-- | Convert a Macaw 'MC.Endianness' to a Crucible LLVM 'CLD.EndianForm'.
 toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
 toCrucibleEndian MC.BigEndian    = CLD.BigEndian
 toCrucibleEndian MC.LittleEndian = CLD.LittleEndian

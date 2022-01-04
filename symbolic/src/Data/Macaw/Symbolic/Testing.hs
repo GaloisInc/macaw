@@ -233,7 +233,7 @@ simulateAndVerify goalSolver logger sym execFeatures archInfo archVals mem (Resu
     halloc <- CFH.newHandleAllocator
     CCC.SomeCFG g <- MS.mkFunCFG (MS.archFunctions archVals) halloc funName posFn dfi
 
-    let endianness = toCrucibleEndian (MAI.archEndianness archInfo)
+    let endianness = MSM.toCrucibleEndian (MAI.archEndianness archInfo)
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
     (initMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym endianness MSM.ConcreteMutable mem
     let globalMap = MSM.mapRegionPointers memPtrTbl
@@ -402,10 +402,3 @@ lookupSyscall = MS.unsupportedSyscalls "macaw-symbolic-tests"
 -- parameter.
 validityCheck :: MS.MkGlobalPointerValidityAssertion sym w
 validityCheck _ _ _ _ = return Nothing
-
--- | Convert from macaw endianness to the LLVM memory model endianness
-toCrucibleEndian :: MEL.Endianness -> CLD.EndianForm
-toCrucibleEndian e =
-  case e of
-    MM.LittleEndian -> CLD.LittleEndian
-    MM.BigEndian -> CLD.BigEndian
