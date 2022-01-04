@@ -297,21 +297,12 @@ ptrOpNR k st mvar w x0 y0 =
      return (a,st)
 
 
-mkName :: String -> IO SolverSymbol
-mkName x = case userSymbol x of
-             Right v -> return v
-             Left err ->
-               fail $ unlines
-                        [ "[bug] " ++ show x ++ " is not a valid identifier?"
-                        , "*** " ++ show err
-                        ]
-
 mkUndefined ::
   (IsSymInterface sym) =>
   sym -> String -> BaseTypeRepr t -> IO (RegValue sym (BaseToType t))
 mkUndefined sym unm ty =
   do let name = "undefined_" ++ unm
-     nm <- mkName name
+         nm   = safeSymbol name
      freshConstant sym nm ty
 
 -- | A fresh bit-vector variable
@@ -325,7 +316,7 @@ mkUndefinedNat ::
   (IsSymInterface sym) => sym -> String -> IO (RegValue sym NatType)
 mkUndefinedNat sym unm =
   do let name = "undefined_" ++ unm
-     nm <- mkName name
+         nm   = safeSymbol name
      freshNat sym nm
 
 -- | A fresh boolean variable
@@ -741,7 +732,7 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
               do -- putStrLn ("ALIGNING TO " ++ show amt ++ " bits")
                  Just (Some n) <- return (someNat amt)
                  Just LeqProof <- return (testLeq (knownNat @1) n)
-                 nm <- mkName "align_amount"
+                 let nm = safeSymbol "align_amount"
                  least <- freshConstant sym nm (BaseBVRepr n)
 
                  Just LeqProof <- return (testLeq n nw)
