@@ -16,8 +16,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc-ver: ["8.6.5", "8.8.4", "8.10.7"]
-        cabal: [ '3.4.0.0' ]
+        ghc-ver: ["8.6.5", "8.8.4", "8.10.7", "9.0.2"]
+        cabal: [ '3.6.2.0' ]
         os: [self-hosted]
       # complete all jobs
       fail-fast: false
