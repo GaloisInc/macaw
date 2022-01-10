@@ -61,7 +61,7 @@ library
                , macaw-ppc-symbolic
                , mtl
                , parameterized-utils
-               , prettyprinter
+               , prettyprinter >= 1.7
                , text
                , what4 >= 0.4.0
                , scheduler >= 1.4 && < 1.6
