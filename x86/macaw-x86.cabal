@@ -10,7 +10,7 @@ tested-with: GHC == 8.0.2
 
 library
   build-depends:
-    base >= 4,
+    base >= 4.13,
     bytestring,
     containers,
     flexdis86 >= 0.1.5,
@@ -50,8 +50,7 @@ library
   ghc-options: -Wall -Wcompat
   ghc-options: -fno-warn-unticked-promoted-constructors
   ghc-prof-options: -O2 -fprof-auto-top
-  if impl(ghc >= 8.6)
-     default-extensions: NoStarIsType
+  default-extensions: NoStarIsType
 
 test-suite macaw-x86-tests
   type: exitcode-stdio-1.0

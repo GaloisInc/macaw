@@ -5,7 +5,6 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>
 This defines the core operations for mapping from Reopt to Crucible.
 -}
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE EmptyCase #-}
@@ -791,9 +790,6 @@ instance Applicative (CrucGen arch ids s) where
 instance Monad (CrucGen arch ids s) where
   {-# INLINE (>>=) #-}
   m >>= h = CrucGen $ \s0 cont -> unCrucGen m s0 $ \s1 r -> unCrucGen (h r) s1 cont
-#if !(MIN_VERSION_base(4,13,0))
-  fail = MF.fail
-#endif
 
 instance MF.MonadFail (CrucGen arch ids s) where
   fail e = CrucGen $ \_s _cont -> MF.fail e
@@ -1213,12 +1209,6 @@ appToCrucible app = do
         , Refl <- plusMinusCancel (knownNat @1) w ->
           -- LeqProof 1 0, but the pattern match checking is not clever enough
           case leqSub2 (LeqProof @(1 + n) @1) (LeqProof @1 @n) of
-#if !MIN_VERSION_base(4,12,0)
-            -- GHC 8.2.2 will error if we give an explicit pattern match, but also
-            -- complain of an incomplete pattern match if we do not, so we have
-            -- this case here.
-            _ -> error "CruccGen case with 1 <= 0"
-#endif
     M.ReverseBytes _w _x -> do
       error "Reverse bytes not yet defined."
     M.Bsf w x -> do

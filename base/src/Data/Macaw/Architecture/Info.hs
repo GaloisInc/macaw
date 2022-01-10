@@ -1,7 +1,6 @@
 {-|
 This defines the architecture-specific information needed for code discovery.
 -}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
@@ -113,9 +112,6 @@ instance Applicative Classifier where
 
 instance Monad Classifier where
   (>>=) = classifyBind
-#if !(MIN_VERSION_base(4,13,0))
-  fail = MF.fail
-#endif
 
 instance MF.MonadFail Classifier where
   fail = \m -> ClassifyFailed [m]
