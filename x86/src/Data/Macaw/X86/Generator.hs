@@ -5,7 +5,6 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.
 This defines the monad @X86Generator@, which provides operations for
 modeling X86 semantics.
 -}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -66,9 +65,6 @@ module Data.Macaw.X86.Generator
 import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
-#if __GLASGOW_HASKELL__ < 808
-import           Control.Monad.Fail
-#endif
 import           Control.Monad.Reader
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
@@ -283,9 +279,6 @@ instance Monad (X86Generator st_s ids) where
   return v = seq v $ X86G $ return v
   (X86G m) >>= h = X86G $ m >>= \v -> seq v (unX86G (h v))
   X86G m >> X86G n = X86G $ m >> n
-#if __GLASGOW_HASKELL__ < 808
-  fail = Control.Monad.Fail.fail
-#endif
 
 instance MonadFail (X86Generator st_s ids) where
   fail msg = seq t $ X86G $ ContT $ \_ -> throwError t

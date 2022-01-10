@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -292,9 +291,6 @@ instance Monad (Generator arch ids s) where
   return v = Generator (return v)
   Generator m >>= h = Generator (m >>= \v -> runG (h v))
   Generator m >> Generator n = Generator (m >> n)
-#if !(MIN_VERSION_base(4,13,0))
-  fail = MF.fail
-#endif
 
 instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
   get = Generator Rd.ask
