@@ -11,5 +11,5 @@ fi
 
 cabal update
 ghcup set ghc $1
-cabal freeze
+cabal freeze --enable-tests --enable-benchmarks
 mv cabal.project.freeze cabal.project.freeze.ghc-$1
