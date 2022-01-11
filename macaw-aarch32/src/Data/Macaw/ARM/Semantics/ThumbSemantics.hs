@@ -19,7 +19,7 @@ import           Data.Macaw.ARM.Arch ( t32InstructionMatcher )
 import           Data.Macaw.ARM.Semantics.TH ( armAppEvaluator, armNonceAppEval, loadSemantics, armTranslateType )
 import qualified Data.Macaw.CFG as MC
 import           Data.Macaw.SemMC.Generator ( Generator )
-import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction )
+import           Data.Macaw.SemMC.TH ( MacawTHConfig(..), genExecInstruction, MacawSemMC(..) )
 import qualified Data.Macaw.Types as MT
 import           Data.Parameterized.Classes ( showF )
 import qualified Data.Parameterized.Map as MapF
@@ -27,7 +27,7 @@ import qualified Data.Parameterized.Nonce as PN
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Proxy ( Proxy(..) )
 import           Dismantle.ARM.T32 -- as ThumbDis -- must be present to supply definitions for genExecInstruction output
-import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified What4.Expr.Builder as WEB
 import qualified Language.Haskell.TH as TH
 import qualified SemMC.Architecture.AArch32 as ARMSem
 import           SemMC.Architecture.ARM.Opcodes ( ASLSemantics(..), allT32OpcodeInfo )
@@ -39,7 +39,7 @@ execInstruction :: MC.Value ARMSem.AArch32 ids (MT.BVType 32)
                 -> Maybe (Generator ARMSem.AArch32 ids s ())
 execInstruction =
   $(do Some ng <- TH.runIO PN.newIONonceGenerator
-       sym <- TH.runIO (CBS.newSimpleBackend CBS.FloatIEEERepr ng)
+       sym <- TH.runIO (WEB.newExprBuilder WEB.FloatIEEERepr MacawSemMC ng)
        sem <- TH.runIO (loadSemantics sym)
        let
          aconv :: (MapF.Pair (Opcode Operand) x)

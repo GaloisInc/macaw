@@ -81,6 +81,7 @@ import qualified What4.ProgramLoc as WPL
 import qualified What4.BaseTypes as WT
 import qualified What4.FunctionName as WF
 import qualified What4.Interface as WI
+import qualified What4.Expr.Builder as WEB
 
 import           Prelude
 
@@ -251,6 +252,8 @@ mkTest testinp = do
 posFn :: (MC.MemWidth (MC.ArchAddrWidth arch)) => proxy arch -> MC.MemSegmentOff (MC.ArchAddrWidth arch) -> WPL.Position
 posFn _ = WPL.OtherPos . T.pack . show
 
+data MacawRefinementTestData t = MacawRefinementTestData
+
 -- | This test is similar to 'mkTest', but instead of checking the set of
 -- recovered blocks, it translates the function into Crucible using
 -- macaw-symbolic and symbolically executes it.
@@ -264,7 +267,8 @@ mkSymbolicTest testinp = do
     let opts = testOptions beVerbose (binaryFilePath testinp)
     halloc <- CFH.newHandleAllocator
     Some gen <- PN.newIONonceGenerator
-    sym <- CBS.newSimpleBackend CBS.FloatRealRepr gen
+    sym <- WEB.newExprBuilder WEB.FloatRealRepr MacawRefinementTestData gen
+    bak <- CBS.newSimpleBackend sym
     expectedInput <- readFile (expectedFilePath testinp)
     let symExecFuncAddrs :: Set.Set Word64
         Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
@@ -284,13 +288,13 @@ mkSymbolicTest testinp = do
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
               let ?recordLLVMAnnotation = \_ _ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
-              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
+              (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy bak CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl
               let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
               let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
               let validityCheck _ _ _ _ = return Nothing
               MS.withArchEval archVals sym $ \archEvalFns -> do
-                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
+                (_, res) <- MS.runCodeBlock bak archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
                 case res of
                   CS.FinishedResult _ (CS.TotalRes _) -> return ()
                   CS.FinishedResult _ (CS.PartialRes {}) -> return ()

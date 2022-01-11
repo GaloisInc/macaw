@@ -8,6 +8,8 @@ module Data.Macaw.SemMC.TH.Monad (
   BoundVarInterpretations(..),
   BoundExp(..),
   MacawQ,
+  MacawSemMC(..),
+  Sym,
   runMacawQ,
   liftQ,
   lookupElt,
@@ -54,14 +56,14 @@ import           Language.Haskell.TH
 import qualified Data.Macaw.CFG as M
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
-import qualified Lang.Crucible.Backend.Simple as S
 import qualified SemMC.Formula as SF
 import qualified What4.Expr.Builder as S
 import qualified What4.Interface as SI
 
 import qualified SemMC.Architecture.Location as L
 
-type Sym t fs = S.SimpleBackend t fs
+data MacawSemMC t = MacawSemMC 
+type Sym t fs = S.ExprBuilder t MacawSemMC fs 
 
 data BoundVarInterpretations arch t fs =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t fs)) (L.Location arch)

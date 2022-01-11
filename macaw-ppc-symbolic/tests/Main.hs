@@ -43,6 +43,7 @@ import qualified Data.Macaw.PPC as MP
 import           Data.Macaw.PPC.Symbolic ()
 import qualified SemMC.Architecture.PPC as SAP
 import qualified What4.Config as WC
+import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
 import qualified What4.Solver as WS
@@ -144,6 +145,8 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
           loadedBinary <- MBL.loadBinary MMEL.defaultLoadOptions ehi
           symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
 
+data MacawPPCSymbolicData t = MacawPPCSymbolicData
+
 symExTestSized :: forall v w arch
                 . ( w ~ SAP.AddrWidth v
                   , 16 <= w
@@ -172,19 +175,20 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
      writeMacawIR saveMacaw (BS8.unpack name) dfi
      Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
-     CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+     sym <- WEB.newExprBuilder WEB.FloatRealRepr MacawPPCSymbolicData gen
+     CBO.withYicesOnlineBackend sym CBO.NoUnsatFeatures WPF.noFeatures $ \bak -> do
        -- We are using the z3 backend to discharge proof obligations, so
        -- we need to add its options to the backend configuration
        let solver = WS.z3Adapter
        let backendConf = WI.getConfiguration sym
        WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
-       execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+       execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
        let Just archVals = MS.archVals (Proxy @(MP.AnyPPC v)) Nothing
        let extract = ppcResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger sym execFeatures archInfo archVals mem extract dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

@@ -47,7 +47,6 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Traversable as T
 import           GHC.TypeNats
 import qualified Lang.Crucible.Backend as CB
-import qualified Lang.Crucible.Backend.Simple as CBS
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.LLVM.DataLayout as LLVM
@@ -161,7 +160,12 @@ smtSolveTransfer
   -> RP.CFGSlice arch ids
   -> m (IPModels (M.ArchSegmentOff arch))
 smtSolveTransfer ctx slice
-  | Just archVals <- MS.archVals (Proxy @arch) Nothing = MRS.withNewBackend (solver (config ctx)) $ \(_proxy :: proxy solver) problemFeatures (sym :: CBS.SimpleBackend t fs) -> do
+  | Just archVals <- MS.archVals (Proxy @arch) Nothing =
+      MRS.withNewBackend (solver (config ctx)) $
+        \(_proxy :: proxy solver) problemFeatures bak -> do
+
+      let sym = CB.backendGetSym bak
+
       halloc <- liftIO $ C.newHandleAllocator
 
       let (entryBlock, body, targetBlock) = RP.sliceComponents slice
@@ -185,7 +189,7 @@ smtSolveTransfer ctx slice
         C.SomeCFG cfg -> do
           let executionFeatures = []
           let ?recordLLVMAnnotation = \_ _ _ -> pure ()
-          initialState <- initializeSimulator ctx sym archVals halloc cfg entryBlock
+          initialState <- initializeSimulator ctx bak archVals halloc cfg entryBlock
 
           -- Symbolically execute the relevant code in a fresh assumption
           -- environment so that we can avoid polluting the global solver state
@@ -203,7 +207,7 @@ smtSolveTransfer ctx slice
               exec_res <- liftIO $
                 C.executeCrucible executionFeatures initialState
 
-              assumptions <- liftIO (CB.assumptionsPred sym =<< (CB.collectAssumptions sym))
+              assumptions <- liftIO (CB.assumptionsPred sym =<< (CB.collectAssumptions bak))
 
               case exec_res of
                 C.FinishedResult _ res -> do
@@ -214,7 +218,7 @@ smtSolveTransfer ctx slice
                       solverProc :: W.SolverProcess t solver
                                  <- liftIO $ W.startSolverProcess problemFeatures hdl sym
                       solverTask <- liftIO $ A.async $ unlift $ do
-                        models <- extractIPModels ctx sym solverProc assumptions res_ip_base res_ip_off
+                        models <- extractIPModels ctx bak solverProc assumptions res_ip_base res_ip_off
                         _ <- liftIO $ W.shutdownSolverProcess solverProc
                         return models
                       timeoutTask <- liftIO $ A.async $ unlift $ do
@@ -257,13 +261,13 @@ instance X.Exception RefinementException
 -- * A fixed IP
 -- * A stack pointer (passed as an argument)
 -- * Any fixed register values learned through abstract interpretation
-initialRegisterState :: forall arch sym m ids
+initialRegisterState :: forall arch sym bak m ids
                       . ( MS.SymArchConstraints arch
-                        , CB.IsSymInterface sym
+                        , CB.IsSymBackend sym bak
                         , MonadIO m
                         , Show (W.SymExpr sym (WT.BaseBVType (M.ArchAddrWidth arch)))
                         )
-                     => sym
+                     => bak
                      -> MS.ArchVals arch
                      -> MS.GlobalMap sym LLVM.Mem (M.ArchAddrWidth arch)
                      -> LLVM.MemImpl sym
@@ -273,12 +277,13 @@ initialRegisterState :: forall arch sym m ids
                      -> C.RegValue sym (LLVM.LLVMPointerType (M.ArchAddrWidth arch))
                      -- ^ The stack pointer to use
                      -> m (C.RegMap sym (MS.MacawFunctionArgs arch))
-initialRegisterState sym archVals globalMappingFn memory entryBlock spVal = do
+initialRegisterState bak archVals globalMappingFn memory entryBlock spVal = do
+  let sym = CB.backendGetSym bak
   -- Build an IP value to populate the initial register state with
   let entryAddr = M.segoffAddr (M.pblockAddr entryBlock)
   ip_base <- liftIO $ W.natLit sym (fromIntegral (M.addrBase entryAddr))
   ip_off <- liftIO $ W.bvLit sym W.knownNat (BV.mkBV W.knownNat $ M.memWordToUnsigned (M.addrOffset entryAddr))
-  entryIPVal <- liftIO $ globalMappingFn sym memory ip_base ip_off
+  entryIPVal <- liftIO $ MS.applyGlobalMap globalMappingFn bak memory ip_base ip_off
 
   -- liftIO $ printf "Entry initial state"
   -- liftIO $ print (M.blockAbstractState entryBlock)
@@ -290,7 +295,7 @@ initialRegisterState sym archVals globalMappingFn memory entryBlock spVal = do
   let reg_struct2 = MS.updateReg archVals reg_struct1 M.sp_reg spVal
 
   let absRegs = M.blockAbstractState entryBlock ^. MAA.absRegState
-  reg_struct <- MapF.foldlMWithKey (addKnownRegValue sym archVals globalMappingFn memory) reg_struct2 (M.regStateMap absRegs)
+  reg_struct <- MapF.foldlMWithKey (addKnownRegValue bak archVals globalMappingFn memory) reg_struct2 (M.regStateMap absRegs)
 
   return $ C.RegMap $ Ctx.singleton reg_struct
 
@@ -300,12 +305,12 @@ initialRegisterState sym archVals globalMappingFn memory entryBlock spVal = do
 -- NOTE: This function could probably be extended to support non-singleton
 -- finsets by generating mux trees over all of the possible values (with fresh
 -- variables as predicates).
-addKnownRegValue :: forall arch sym m tp w
+addKnownRegValue :: forall arch sym bak m tp w
                   . ( MS.SymArchConstraints arch
-                    , CB.IsSymInterface sym
+                    , CB.IsSymBackend sym bak
                     , MonadIO m
                     )
-                 => sym
+                 => bak
                  -> MS.ArchVals arch
                  -> MS.GlobalMap sym LLVM.Mem (M.ArchAddrWidth arch)
                  -> LLVM.MemImpl sym
@@ -313,7 +318,8 @@ addKnownRegValue :: forall arch sym m tp w
                  -> M.ArchReg arch tp
                  -> MAA.AbsValue w tp
                  -> m (C.RegEntry sym (MS.ArchRegStruct arch))
-addKnownRegValue sym archVals globalMappingFn memory regsStruct reg val =
+addKnownRegValue bak archVals globalMappingFn memory regsStruct reg val =
+  let sym = CB.backendGetSym bak in
   case val of
     MAA.FinSet bvs
       | [singleBV] <- F.toList bvs -> do
@@ -325,7 +331,7 @@ addKnownRegValue sym archVals globalMappingFn memory regsStruct reg val =
               -- This is a value with the same width as a pointer.  We attempt
               -- to translate it into a pointer using the global map if possible
               off <- liftIO $ W.bvLit sym ptrWidthRepr (BV.mkBV ptrWidthRepr singleBV)
-              ptr <- liftIO $ globalMappingFn sym memory base off
+              ptr <- liftIO $ MS.applyGlobalMap globalMappingFn bak memory base off
               return (MS.updateReg archVals regsStruct reg ptr)
             Nothing ->
               case C.regType oldEntry of
@@ -384,12 +390,12 @@ genIPConstraint ctx sym ipVal = liftIO $ do
 
 -- | Probe the SMT solver for additional models of the given expression up to a maximum @count@
 genModels
-  :: forall t solver fs m arch sym w proxy
+  :: forall solver t st fs m arch sym w proxy
    . ( W.OnlineSolver solver
      , KnownNat w
      , 1 <= w
      , MonadIO m
-     , sym ~ CBS.SimpleBackend t fs
+     , sym ~ WE.ExprBuilder t st fs
      , LJ.HasLog (RL.RefinementLog arch) m
      )
   => proxy arch
@@ -413,25 +419,26 @@ genModels proxy sym solver_proc assumptions expr count
         _ -> return []
   | otherwise = return []
 
-extractIPModels :: forall arch solver m sym t fp
+extractIPModels :: forall arch solver m sym bak t st fs
                  . ( MS.SymArchConstraints arch
                    , W.OnlineSolver solver
                    , MU.MonadUnliftIO m
-                   , CB.IsSymInterface sym
-                   , sym ~ CBS.SimpleBackend t fp
+                   , CB.IsSymBackend sym bak
+                   , sym ~ WE.ExprBuilder t st fs
                    , LJ.HasLog (RL.RefinementLog arch) m
                    )
                 => RefinementContext arch
-                -> sym
+                -> bak
                 -> W.SolverProcess t solver
                 -> W.Pred sym
                 -> W.SymNat sym
                 -> WE.Expr t (WT.BaseBVType (M.ArchAddrWidth arch))
                 -> m (IPModels (MM.MemSegmentOff (M.ArchAddrWidth arch)))
-extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = do
+extractIPModels ctx bak solverProc initialAssumptions res_ip_base res_ip_off = do
+  let sym = CB.backendGetSym bak
   let modelMax = maximumModelCount (config ctx)
   MU.withRunInIO $ \unlift -> do
-    ip_off_ground_vals <- inFreshAssumptionFrame sym $ unlift $ do
+    ip_off_ground_vals <- inFreshAssumptionFrame bak $ unlift $ do
       -- Assert that the IP is in an executable segment
       ipConstraint <- genIPConstraint ctx sym res_ip_off
 
@@ -461,17 +468,17 @@ extractIPModels ctx sym solverProc initialAssumptions res_ip_base res_ip_off = d
       nModels | nModels == modelMax -> return SpuriousModels
               | otherwise -> return (Models resolved)
 
-initializeSimulator :: forall m sym arch blocks ids tp
+initializeSimulator :: forall m sym bak arch blocks ids tp
                      . ( MonadIO m
                        , 16 <= M.ArchAddrWidth arch
                        , MS.SymArchConstraints arch
-                       , CB.IsSymInterface sym
+                       , CB.IsSymBackend sym bak
                        , LLVM.HasLLVMAnn sym
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
                        , ?memOpts :: LLVM.MemOptions
                        )
                     => RefinementContext arch
-                    -> sym
+                    -> bak
                     -> MS.ArchVals arch
                     -> C.HandleAllocator
                     -> C.CFG (MS.MacawExt arch) blocks (C.EmptyCtx C.::> C.StructType (MS.CtxToCrucibleType (MS.ArchRegContext arch))) tp
@@ -481,20 +488,21 @@ initializeSimulator :: forall m sym arch blocks ids tp
                             sym
                             (MS.MacawExt arch)
                             (C.RegEntry sym tp))
-initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval archVals sym $ \archEvalFns -> do
+initializeSimulator ctx bak archVals halloc cfg entryBlock =
+  MS.withArchEval archVals (CB.backendGetSym bak) $ \archEvalFns -> do
   memVar <- liftIO $ LLVM.mkMemVar "macaw-refinement:llvm_memory" halloc
   let end = MS.toCrucibleEndian (binaryEndianness ctx)
-  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) sym end MS.ConcreteMutable (binaryMemory ctx)
-  (memory1, initSPVal) <- initializeMemory (Proxy @arch) sym memory0
+  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) bak end MS.ConcreteMutable (binaryMemory ctx)
+  (memory1, initSPVal) <- initializeMemory (Proxy @arch) bak memory0
   -- FIXME: Capture output somewhere besides stderr
   let globalMappingFn = MS.mapRegionPointers memPtrTable
   let lookupHdl = MS.unsupportedFunctionCalls "macaw-refinement"
   let lookupSyscall = MS.unsupportedSyscalls "macaw-refinement"
   let mkPtrPred = MS.mkGlobalPointerValidityPred memPtrTable
   let ext = MS.macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred
-  let simCtx = C.initSimContext sym LLVM.llvmIntrinsicTypes halloc IO.stderr (C.FnBindings C.emptyHandleMap) ext MS.MacawSimulatorState
+  let simCtx = C.initSimContext bak LLVM.llvmIntrinsicTypes halloc IO.stderr (C.FnBindings C.emptyHandleMap) ext MS.MacawSimulatorState
   let globalState = C.insertGlobal memVar memory1 C.emptyGlobals
-  initRegs <- initialRegisterState sym archVals globalMappingFn memory1 entryBlock initSPVal
+  initRegs <- initialRegisterState bak archVals globalMappingFn memory1 entryBlock initSPVal
   let simulation = C.regValue <$> C.callCFG cfg initRegs
   let retTy = C.handleReturnType (C.cfgHandle cfg)
   let initState = C.InitialState simCtx globalState C.defaultAbortHandler retTy (C.runOverrideSim retTy simulation)
@@ -502,33 +510,34 @@ initializeSimulator ctx sym archVals halloc cfg entryBlock = MS.withArchEval arc
 
 -- | Extend the base memory image (taken from the 'RefinementContext') with a
 -- stack (also returning the initial stack pointer value)
-initializeMemory :: forall arch sym m proxy
+initializeMemory :: forall arch sym bak m proxy
                   . ( MS.SymArchConstraints arch
                     , 16 <= M.ArchAddrWidth arch
-                    , CB.IsSymInterface sym
+                    , CB.IsSymBackend sym bak
                     , LLVM.HasLLVMAnn sym
                     , MonadIO m
                     , ?memOpts :: LLVM.MemOptions
                     )
                  => proxy arch
-                 -> sym
+                 -> bak
                  -> LLVM.MemImpl sym
                  -> m (LLVM.MemImpl sym, LLVM.LLVMPtr sym (M.ArchAddrWidth arch))
-initializeMemory _ sym mem = do
+initializeMemory _ bak mem = do
+  let sym = CB.backendGetSym bak
   let ?ptrWidth = W.knownNat
   let stackBytes = 2 * 1024 * 1024
   stackArray <- liftIO $ W.freshConstant sym (W.safeSymbol "stack") C.knownRepr
   stackSize <- liftIO $ W.bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth stackBytes)
   stackSizex2 <- liftIO $ W.bvLit sym ?ptrWidth (BV.mkBV ?ptrWidth (2 * stackBytes))
-  (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc sym LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSizex2 LLVM.noAlignment
-  mem2 <- liftIO $ LLVM.doArrayStore sym mem1 stackBasePtr LLVM.noAlignment stackArray stackSize
+  (stackBasePtr, mem1) <- liftIO $ LLVM.doMalloc bak LLVM.StackAlloc LLVM.Mutable "stack_alloc" mem stackSizex2 LLVM.noAlignment
+  mem2 <- liftIO $ LLVM.doArrayStore bak mem1 stackBasePtr LLVM.noAlignment stackArray stackSize
   initSPVal <- liftIO $ LLVM.ptrAdd sym C.knownRepr stackBasePtr stackSize
   return (mem2, initSPVal)
 
 
-inFreshAssumptionFrame :: (CB.IsBoolSolver sym) => sym -> IO a -> IO a
-inFreshAssumptionFrame sym e = do
-  fr <- CB.pushAssumptionFrame sym
+inFreshAssumptionFrame :: (CB.IsSymBackend sym bak) => bak -> IO a -> IO a
+inFreshAssumptionFrame bak e = do
+  fr <- CB.pushAssumptionFrame bak
   res <- e
-  _ <- CB.popAssumptionFrame sym fr
+  _ <- CB.popAssumptionFrame bak fr
   return res

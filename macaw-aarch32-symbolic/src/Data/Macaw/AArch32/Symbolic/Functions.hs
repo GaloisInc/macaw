@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 module Data.Macaw.AArch32.Symbolic.Functions (
   SymFuns
@@ -82,9 +83,9 @@ funcSemantics :: (CB.IsSymInterface sym, MS.ToCrucibleType mt ~ t)
               -> IO (CS.RegValue sym t, S sym rtp bs r ctx)
 funcSemantics sfns fn st0 =
    case fn of
-    MAA.SDiv _rep lhs rhs -> withSym st0 $ \sym -> do
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+    MAA.SDiv _rep lhs rhs -> withBackend st0 $ \sym bak -> do
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- NOTE: We are applying division directly here without checking the divisor for zero.
       --
       -- The ARM semantics explicitly check this and have different behaviors
@@ -92,23 +93,23 @@ funcSemantics sfns fn st0 =
       -- with a divisor of zero.  We could add an assertion to that effect here,
       -- but it might be difficult to prove.
       LL.llvmPointer_bv sym =<< WI.bvSdiv sym lhs' rhs'
-    MAA.UDiv _rep lhs rhs -> withSym st0 $ \sym -> do
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+    MAA.UDiv _rep lhs rhs -> withBackend st0 $ \sym bak -> do
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- NOTE: See the note in SDiv
       LL.llvmPointer_bv sym =<< WI.bvUdiv sym lhs' rhs'
-    MAA.URem _rep lhs rhs -> withSym st0 $ \sym -> do
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+    MAA.URem _rep lhs rhs -> withBackend st0 $ \sym bak -> do
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- NOTE: See the note in SDiv
       LL.llvmPointer_bv sym =<< WI.bvUrem sym lhs' rhs'
-    MAA.SRem _rep lhs rhs -> withSym st0 $ \sym -> do
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+    MAA.SRem _rep lhs rhs -> withBackend st0 $ \sym bak -> do
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- NOTE: See the note in SDiv
       LL.llvmPointer_bv sym =<< WI.bvSrem sym lhs' rhs'
-    MAA.UnsignedRSqrtEstimate _rep v -> withSym st0 $ \sym -> do
-      v' <- toValBV sym v
+    MAA.UnsignedRSqrtEstimate _rep v -> withBackend st0 $ \sym bak -> do
+      v' <- toValBV bak v
       let args = Ctx.empty Ctx.:> v'
       res <- lookupApplySymFun sym sfns "unsignedRSqrtEstimate" CT.knownRepr args CT.knownRepr
       LL.llvmPointer_bv sym res
@@ -139,22 +140,21 @@ funcSemantics sfns fn st0 =
     MAA.ARMSyscall {} ->
       AP.panic AP.AArch32 "funcSemantics" ["The ARM syscall primitive should be eliminated and replaced by a handle lookup"]
 
-withSym :: (CB.IsSymInterface sym)
-        => S sym rtp bs r ctx
-        -> (sym -> IO a)
-        -> IO (a, S sym rtp bs r ctx)
-withSym s action = do
-  let sym = s ^. CSET.stateSymInterface
-  val <- action sym
-  return (val, s)
-
+withBackend ::
+  S sym rtp bs r ctx ->
+  (forall bak. CB.IsSymBackend sym bak => sym -> bak -> IO a) ->
+  IO (a, S sym rtp bs r ctx)
+withBackend s action = do
+  CSET.withBackend (s^.CSET.stateContext) $ \bak ->
+    do val <- action (CB.backendGetSym bak) bak
+       return (val, s)
 
 -- | Assert that the wrapped value is a bitvector
-toValBV :: (CB.IsSymInterface sym)
-        => sym
+toValBV :: (CB.IsSymBackend sym bak)
+        => bak
         -> AA.AtomWrapper (CS.RegEntry sym) (MT.BVType w)
         -> IO (CS.RegValue sym (CT.BVType w))
-toValBV sym (AA.AtomWrapper x) = LL.projectLLVM_bv sym (CS.regValue x)
+toValBV bak (AA.AtomWrapper x) = LL.projectLLVM_bv bak (CS.regValue x)
 
 -- | Apply an uninterpreted function to the provided arguments
 --

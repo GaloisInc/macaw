@@ -127,7 +127,7 @@ module Data.Macaw.Symbolic
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
-  , MO.GlobalMap
+  , MO.GlobalMap(..)
   , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
   , unsupportedSyscalls
@@ -1044,16 +1044,17 @@ termStmtToBlockEnd tm0 =
 
 -- * Symbolic simulation
 
-evalMacawExprExtension :: forall sym arch f tp p rtp blocks r ctx ext
-                       .  IsSymInterface sym
-                       => sym
+evalMacawExprExtension :: forall sym bak arch f tp p rtp blocks r ctx ext
+                       .  (IsSymBackend sym bak)
+                       => bak
                        -> C.IntrinsicTypes sym
                        -> (Int -> String -> IO ())
                        -> C.CrucibleState p sym ext rtp blocks r ctx
                        -> (forall utp . f utp -> IO (C.RegValue sym utp))
                        -> MacawExprExtension arch f tp
                        -> IO (C.RegValue sym tp)
-evalMacawExprExtension sym _iTypes _logFn _cst f e0 =
+evalMacawExprExtension bak _iTypes _logFn _cst f e0 =
+  let sym = backendGetSym bak in
   case e0 of
 
     MacawOverflows op w xv yv cv -> do
@@ -1096,7 +1097,7 @@ evalMacawExprExtension sym _iTypes _logFn _cst f e0 =
     MacawNullPtr w | LeqProof <- addrWidthIsPos w -> MM.mkNullPointer sym (M.addrWidthNatRepr w)
     MacawBitcast xExpr eqPr -> do
       x <- f xExpr
-      doBitcast sym x eqPr
+      doBitcast bak x eqPr
 
 -- | A use of a pointer in a memory operation
 --
@@ -1191,48 +1192,46 @@ execMacawStmtExtension
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
 execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
+  C.withBackend (st^.C.stateContext) $ \bak ->
+  let sym = backendGetSym bak in
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
-      let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
       let puse = PointerUse (st ^. C.stateLocation) PointerRead
       mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
       case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
-      (,st) <$> doReadMem sym mem addrWidth memRep ptr
+      (,st) <$> doReadMem bak mem addrWidth memRep ptr
     MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
-      let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
       let puse = PointerUse (st ^. C.stateLocation) PointerRead
       mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
       case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
-      (,st) <$> doCondReadMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
+      (,st) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
     MacawWriteMem addrWidth memRep ptr0 v -> do
-      let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
       let puse = PointerUse (st ^. C.stateLocation) PointerWrite
       mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
       case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
-      mem1 <- doWriteMem sym mem addrWidth memRep ptr (C.regValue v)
+      mem1 <- doWriteMem bak mem addrWidth memRep ptr (C.regValue v)
       pure ((), setMem st mvar mem1)
     MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
-      let sym = st^.C.stateSymInterface
       mem <- getMem st mvar
-      ptr <- tryGlobPtr sym mem globs (C.regValue ptr0)
+      ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
       let puse = PointerUse (st ^. C.stateLocation) PointerWrite
       mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
       case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion sym globalPtrValid
+        Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
-      mem1 <- doCondWriteMem sym mem addrWidth memRep (C.regValue cond) ptr (C.regValue v)
+      mem1 <- doCondWriteMem bak mem addrWidth memRep (C.regValue cond) ptr (C.regValue v)
       pure ((), setMem st mvar mem1)
     MacawGlobalPtr w addr ->
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
@@ -1245,7 +1244,6 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
                M.BoolTypeRepr -> freshConstant sym nm C.BaseBoolRepr
                _ -> error ("MacawFreshSymbolic: XXX type " ++ show t)
          return (v,st)
-      where sym = st^.C.stateSymInterface
 
     MacawLookupFunctionHandle _ args -> do
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
@@ -1299,10 +1297,11 @@ macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
-  :: forall sym arch blocks
-   . ( C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym
-     , ?memOpts :: MM.MemOptions )
-  => sym
+  :: forall sym bak arch blocks
+   . ( C.IsSyntaxExtension (MacawExt arch)
+     , IsSymBackend sym bak
+     , MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions )
+  => bak
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
   -> SB.MacawArchEvalFn sym MM.Mem arch
@@ -1320,7 +1319,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
+runCodeBlock bak archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1330,7 +1329,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall t
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
                 extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
-            in C.initSimContext sym llvmIntrinsicTypes halloc stdout
+            in C.initSimContext bak llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state
   let initGlobals = C.insertGlobal mvar initMem C.emptyGlobals
