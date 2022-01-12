@@ -69,13 +69,13 @@ jobs:
       run: |
         cabal build --only-dependencies macaw-base
         cabal build crucible-llvm
-    - name: Install Solvers
-      if: runner.os == 'Linux'
-      run: .github/ci.sh install_system_deps
-      env:
-        Z3_VERSION: "4.8.8"
-        YICES_VERSION: "2.6.2"
-        CVC4_VERSION: "4.1.8"
+    # - name: Install Solvers
+    #   if: runner.os == 'Linux'
+    #   run: .github/ci.sh install_system_deps
+    #   env:
+    #     Z3_VERSION: "4.8.8"
+    #     YICES_VERSION: "2.6.2"
+    #     CVC4_VERSION: "4.1.8"
 
     - name: Build macaw-x86
       run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
