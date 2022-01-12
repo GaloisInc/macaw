@@ -8,7 +8,7 @@ EXT=""
 $IS_WIN && EXT=".exe"
 mkdir -p "$BIN"
 
-is_exe() { [[ -x "$1/$2$EXT" ]] || command -v "$2" > /dev/null 2>&1; }
+is_exe() { [[ -x "$1/$2$EXT" ]] || command -v "$2" }
 
 extract_exe() {
     exe="$(cabal v2-exec which "$1$EXT" | tail -1)"
