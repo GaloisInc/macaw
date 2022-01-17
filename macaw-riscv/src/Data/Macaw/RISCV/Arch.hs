@@ -55,7 +55,7 @@ instance MC.IsArchStmt (RISCVStmt rv) where
 type instance MC.ArchStmt (RISCV rv) = RISCVStmt rv
 
 -- | RISC-V block termination statements (none)
-data RISCVTermStmt (rv :: G.RV) ids
+data RISCVTermStmt (rv :: G.RV) (f :: MT.Type -> K.Type)
 
 instance MC.PrettyF (RISCVTermStmt rv) where
   prettyF = error "PrettyF undefined for RISCVTermStmt"
