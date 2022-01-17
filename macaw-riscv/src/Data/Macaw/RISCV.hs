@@ -24,6 +24,7 @@ module Data.Macaw.RISCV (
 
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MD
+import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Architecture.Info as MI
 import Data.Parameterized ( type(<=) )
 import qualified GRIFT.Types as G
@@ -41,7 +42,7 @@ riscvDemandContext = MD.DemandContext
   }
 
 riscv_info ::
-  RISCVConstraints rv =>
+  (RISCVConstraints rv, MC.IsArchTermStmt (RISCVTermStmt rv)) =>
   (w ~ G.RVWidth rv, 32 <= w) =>
   G.RVRepr rv -> MI.ArchitectureInfo (RISCV rv)
 riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
@@ -63,4 +64,5 @@ riscv_info rvRepr = G.withRV rvRepr $ MI.ArchitectureInfo
   , MI.rewriteArchTermStmt = \_ -> error $ "rewriteArchTermStmt unimplemented in riscv_info"
   , MI.archDemandContext = riscvDemandContext
   , MI.postArchTermStmtAbsState = \_ _ _ _ _ -> error $ "postArchTermStmtAbsState unimplemented in riscv_info"
+  , MI.archClassifier = defaultClassifier
   }
