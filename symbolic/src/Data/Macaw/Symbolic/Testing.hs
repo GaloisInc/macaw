@@ -206,6 +206,7 @@ simulateAndVerify :: forall arch sym ids w t st fs
                      , 16 <= w
                      , MT.KnownNat w
                      , sym ~ WE.ExprBuilder t st fs
+                     , ?memOpts :: CLM.MemOptions
                      )
                   => WS.SolverAdapter st
                   -- ^ The solver adapter to use to discharge assertions
@@ -232,8 +233,8 @@ simulateAndVerify goalSolver logger sym execFeatures archInfo archVals mem (Resu
     halloc <- CFH.newHandleAllocator
     CCC.SomeCFG g <- MS.mkFunCFG (MS.archFunctions archVals) halloc funName posFn dfi
 
-    let endianness = toCrucibleEndian (MAI.archEndianness archInfo)
-    let ?recordLLVMAnnotation = \_ _ -> return ()
+    let endianness = MSM.toCrucibleEndian (MAI.archEndianness archInfo)
+    let ?recordLLVMAnnotation = \_ _ _ -> return ()
     (initMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) sym endianness MSM.ConcreteMutable mem
     let globalMap = MSM.mapRegionPointers memPtrTbl
     (memVar, stackPointer, execResult) <- simulateFunction sym execFeatures archVals halloc initMem globalMap g
@@ -282,6 +283,7 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                     , MS.SymArchConstraints arch
                     , w ~ MC.ArchAddrWidth arch
                     , 16 <= w
+                    , ?memOpts :: CLM.MemOptions
                     )
                  => sym
                  -> [CS.GenericExecutionFeature sym]
@@ -330,7 +332,7 @@ simulateFunction sym execFeatures archVals halloc initMem globalMap g = do
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction validityCheck
+    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction lookupSyscall validityCheck
     let ctx = CS.initSimContext sym CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
@@ -387,18 +389,16 @@ data ResultExtractor sym arch where
 --
 -- It could be modified to do so.
 lookupFunction :: MS.LookupFunctionHandle sym arch
-lookupFunction = MS.LookupFunctionHandle $ \_s _mem _regs -> do
-  error "Function calls are not supported in the macaw-symbolic test harness"
+lookupFunction = MS.unsupportedFunctionCalls "macaw-symbolic-tests"
+
+-- | The test harness does not currently support making system calls from test cases.
+--
+-- It could be modified to do so.
+lookupSyscall :: MS.LookupSyscallHandle sym arch
+lookupSyscall = MS.unsupportedSyscalls "macaw-symbolic-tests"
 
 -- | The test suite does not currently generate global pointer well-formedness
 -- conditions (though it could be changed to do so).  This could become a
 -- parameter.
 validityCheck :: MS.MkGlobalPointerValidityAssertion sym w
 validityCheck _ _ _ _ = return Nothing
-
--- | Convert from macaw endianness to the LLVM memory model endianness
-toCrucibleEndian :: MEL.Endianness -> CLD.EndianForm
-toCrucibleEndian e =
-  case e of
-    MM.LittleEndian -> CLD.LittleEndian
-    MM.BigEndian -> CLD.BigEndian

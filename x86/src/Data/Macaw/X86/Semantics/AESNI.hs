@@ -1,5 +1,5 @@
 {-# LANGUAGE MultiWayIf, GADTs, RankNTypes, DataKinds, TypeApplications #-}
-
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Macaw.X86.Semantics.AESNI (all_instructions) where
 
 import qualified Flexdis86 as F
@@ -13,7 +13,7 @@ import Data.Macaw.X86.Getters
 import Data.Macaw.X86.Monad
 
 def_aesni
-  :: String
+  :: Mnem
   -> (forall f. (f (BVType 128)) -> (f (BVType 128)) -> X86PrimFn f (BVType 128))
   -> InstructionDef
 def_aesni n op =
@@ -26,7 +26,7 @@ def_aesni n op =
            k <- eval =<< get key
            res <- evalArchFn $ op s k
            state .= res
-       | otherwise -> fail $ n ++ ": State and key must be 128-bit"
+       | otherwise -> fail $ ppMnem n ++ ": State and key must be 128-bit"
 
 def_aeskeygenassist :: InstructionDef
 def_aeskeygenassist =

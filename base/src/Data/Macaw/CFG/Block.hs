@@ -41,7 +41,7 @@ data TermStmt arch ids
     --
     -- The registers include the state of registers just before the terminal statement
     -- executes.
-  | ArchTermStmt !(ArchTermStmt arch ids)
+  | ArchTermStmt !(ArchTermStmt arch (Value arch ids))
                  !(RegState (ArchReg arch) (Value arch ids))
 
 instance ArchConstraints arch
@@ -56,7 +56,7 @@ instance ArchConstraints arch
     , indent 2 (pretty s) ]
   pretty (ArchTermStmt ts regs) =
     vcat
-    [ prettyF ts
+    [ ppArchTermStmt pretty ts
     , indent 2 (pretty regs) ]
 
 ------------------------------------------------------------------------

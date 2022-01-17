@@ -25,7 +25,6 @@ import qualified Data.Set as S
 
 import           Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
-import qualified Data.Macaw.Architecture.Info as MI
 import           Data.Macaw.CFG
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Parameterized.Map as MapF
@@ -37,10 +36,8 @@ import qualified Dismantle.PPC as D
 
 import qualified Data.Macaw.SemMC.Generator as MSG
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
-import qualified Data.Macaw.BinaryLoader as BL
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
-import qualified Data.Macaw.BinaryLoader.PPC as BLP
 import qualified Data.Macaw.BinaryLoader.PPC.TOC as TOC
 
 ppcCallParams :: (forall tp . PPCReg v tp -> Bool) -> MA.CallParams (PPCReg v)
@@ -52,13 +49,13 @@ ppcCallParams preservePred =
 
 ppcInitialBlockRegs :: (PPCArchConstraints v)
                     => ArchSegmentOff (SP.AnyPPC v)
-                    -> MI.ArchBlockPrecond (SP.AnyPPC v)
+                    -> ArchBlockPrecond (SP.AnyPPC v)
                     -> RegState (PPCReg v) (Value (SP.AnyPPC v) ids)
 ppcInitialBlockRegs addr _preconds = MSG.initRegState addr
 
 ppcExtractBlockPrecond :: ArchSegmentOff (SP.AnyPPC v)
                        -> MA.AbsBlockState (PPCReg v)
-                       -> Either String (MI.ArchBlockPrecond (SP.AnyPPC v))
+                       -> Either String (ArchBlockPrecond (SP.AnyPPC v))
 ppcExtractBlockPrecond _ _ = Right ()
 
 preserveRegAcrossSyscall :: (1 <= RegAddrWidth (PPCReg v))
@@ -74,7 +71,7 @@ postPPCTermStmtAbsState :: forall var ids
                         -> AbsProcessorState (PPCReg var) ids
                         -> MJ.IntraJumpBounds (SP.AnyPPC var) ids
                         -> RegState (PPCReg var) (Value (SP.AnyPPC var) ids)
-                        -> PPCTermStmt var ids
+                        -> PPCTermStmt var (Value (SP.AnyPPC var) ids)
                         -> Maybe (MM.MemSegmentOff (SP.AddrWidth var), AbsBlockState (PPCReg var), MJ.InitJumpBounds (SP.AnyPPC var))
 postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
@@ -113,17 +110,18 @@ postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
 -- abstract return value.  When available, we also populate the abstract state
 -- with the Table of Contents pointer (in r2).
 mkInitialAbsState :: ( PPCArchConstraints var
-                     , BLP.HasTOC (SP.AnyPPC var) binFmt
                      )
                   => proxy var
-                  -> BL.LoadedBinary (SP.AnyPPC var) binFmt
+                  -> Maybe (TOC.TOC (SP.AddrWidth var))
                   -> MM.Memory (SP.AddrWidth var)
                   -> ArchSegmentOff (SP.AnyPPC var)
                   -> MA.AbsBlockState (PPCReg var)
-mkInitialAbsState _ binData _mem startAddr =
-  case TOC.lookupTOCAbs (BLP.getTOC binData) startAddr of
-    Just tocAddr -> s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
-    Nothing -> s0
+mkInitialAbsState _ mtoc _mem startAddr =
+  case mtoc of
+    Just toc
+      | Just tocAddr <- TOC.lookupTOCAbs toc startAddr ->
+        s0 & MA.absRegState . boundValue (PPC_GP (D.GPR 2)) .~ tocAddr
+    _ -> s0
   where
     initRegVals = MapF.fromList [ MapF.Pair PPC_LNK MA.ReturnAddr ]
     s0 = MA.fnStartAbsBlockState startAddr initRegVals []

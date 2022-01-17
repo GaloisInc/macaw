@@ -1,6 +1,7 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NondecreasingIndentation #-}
@@ -56,6 +57,8 @@ module Data.Macaw.Symbolic
   , IsMemoryModel(..)
   , LLVMMemory
   , SB.MacawArchEvalFn
+  , MacawArchStmtExtensionOverride(..)
+  , defaultMacawArchStmtExtensionOverride
     -- * Translation of Macaw IR into Crucible
     -- $translationNaming
     -- $translationExample
@@ -125,7 +128,10 @@ module Data.Macaw.Symbolic
   , isValidPtr
   , mkUndefinedBool
   , MO.GlobalMap
+  , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
+  , unsupportedSyscalls
+  , MO.LookupSyscallHandle(..)
   , MO.MacawSimulatorState(..)
   , MkGlobalPointerValidityAssertion
   , PointerUse(..)
@@ -207,16 +213,43 @@ import           Data.Macaw.Symbolic.MemOps as MO
 -- The 'mem' type parameter indicates the memory model to be used for translation.
 -- The type alias 'ArchInfo' specializes this class to the llvm memory model
 -- using the 'LLVMMemory' type tag.
+--
+-- The 'Maybe (MacawArchStmtExtensionOverride arch)' parameter allows client
+-- code to override the default handling of 'MacawArchStmtExtension's.  It is
+-- an optional parameter and supplying 'Nothing' will cause the backend to use
+-- the default translation for all 'MacawArchStmtExtension's.
 class GenArchInfo mem arch where
-  genArchVals :: proxy mem -> proxy' arch -> Maybe (GenArchVals mem arch)
+  genArchVals :: proxy mem
+              -> proxy' arch
+              -> Maybe (MacawArchStmtExtensionOverride arch)
+              -> Maybe (GenArchVals mem arch)
 
 type ArchInfo arch = GenArchInfo LLVMMemory arch
+
+-- | A function to enable overriding of the default 'MacawArchStmtExtension'
+-- translation.  It takes a statement and a crucible state, and returns an
+-- optional tuple containing the value produced by the statement, as well as an
+-- updated state.  Returning 'Nothing' indicates that the backend should use
+-- its default handler for the statement.
+newtype MacawArchStmtExtensionOverride arch =
+  MacawArchStmtExtensionOverride (
+    forall p sym ext rtp blocks r ctx tp'
+    .  MacawArchStmtExtension arch (C.RegEntry sym) tp'
+    -> C.CrucibleState p sym ext rtp blocks r ctx
+    -> IO (Maybe (C.RegValue sym tp', C.CrucibleState p sym ext rtp blocks r ctx)))
+
+-- | A 'MacawArchStmtExtensionOverride' that always returns 'Nothing', and
+-- therefore always uses the backend's default translation.
+defaultMacawArchStmtExtensionOverride :: MacawArchStmtExtensionOverride arch
+defaultMacawArchStmtExtensionOverride =
+  MacawArchStmtExtensionOverride (\_ _ -> return Nothing)
 
 archVals
   :: ArchInfo arch
   => proxy arch
+  -> Maybe (MacawArchStmtExtensionOverride arch)
   -> Maybe (ArchVals arch)
-archVals p = genArchVals (Proxy @LLVMMemory) p
+archVals p override = genArchVals (Proxy @LLVMMemory) p override
 
 data LLVMMemory
 
@@ -235,7 +268,8 @@ data GenArchVals mem arch = GenArchVals
   -- first argument to the translation functions (e.g., 'mkBlocksCFG').
   , withArchEval
       :: forall a m sym
-       . (IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m)
+       . ( IsSymInterface sym, IsMemoryModel mem, MemModelConstraint mem sym, MonadIO m
+         , ?memOpts :: MM.MemOptions )
       => sym
       -> (SB.MacawArchEvalFn sym (MemModelType mem arch) arch -> m a)
       -> m a
@@ -934,7 +968,7 @@ data MacawBlockEnd arch = MacawBlockEnd MacawBlockEndCase !(Maybe (M.ArchSegment
 type MacawBlockEndType arch = C.StructType (Ctx.EmptyCtx Ctx.::> C.BVType 3 Ctx.::> C.MaybeType (MM.LLVMPointerType (M.ArchAddrWidth arch)))
 
 blockEndAtom :: forall arch ids s
-              . MacawSymbolicArchFunctions arch 
+              . MacawSymbolicArchFunctions arch
              -> MacawBlockEnd arch
              -> CrucGen arch ids s (CR.Atom s (MacawBlockEndType arch))
 blockEndAtom archFns (MacawBlockEnd blendK mret) = crucGenArchConstraints archFns $ do
@@ -1010,15 +1044,16 @@ termStmtToBlockEnd tm0 =
 
 -- * Symbolic simulation
 
-evalMacawExprExtension :: forall sym arch f tp
+evalMacawExprExtension :: forall sym arch f tp p rtp blocks r ctx ext
                        .  IsSymInterface sym
                        => sym
                        -> C.IntrinsicTypes sym
                        -> (Int -> String -> IO ())
+                       -> C.CrucibleState p sym ext rtp blocks r ctx
                        -> (forall utp . f utp -> IO (C.RegValue sym utp))
                        -> MacawExprExtension arch f tp
                        -> IO (C.RegValue sym tp)
-evalMacawExprExtension sym _iTypes _logFn f e0 =
+evalMacawExprExtension sym _iTypes _logFn _cst f e0 =
   case e0 of
 
     MacawOverflows op w xv yv cv -> do
@@ -1110,10 +1145,36 @@ type MkGlobalPointerValidityAssertion sym w = sym
                                             -- ^ The address written to or read from
                                             -> IO (Maybe (Assertion sym))
 
+-- | A default 'MO.LookupFunctionHandle' that raises an error if it is invoked
+--
+-- Some uses of the symbolic execution engine do not need to support function
+-- calls (e.g., some test suites or compositional verifiers). In those cases, it
+-- may be reasonable to use this default handler that raises an error if
+-- invoked.
+unsupportedFunctionCalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupFunctionHandle sym arch
+unsupportedFunctionCalls compName =
+  MO.LookupFunctionHandle $ \_ _ _ -> error ("Symbolically executing function calls is not supported in " ++ compName)
+
+-- | A default 'MO.LookupSyscallHandle' that raises an error if it is invoked
+--
+-- Most applications will not need to directly symbolically execute system call
+-- models, as they should probably prefer to provide overrides at a higher level
+-- (e.g., libc).  This is a reasonable handler that raises an error if it
+-- encounters a system call.
+unsupportedSyscalls
+  :: String
+  -- ^ The name of the component providing the handler
+  -> MO.LookupSyscallHandle sym arch
+unsupportedSyscalls compName =
+  MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
+
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
   :: forall sym arch
-  . (IsSymInterface sym, MM.HasLLVMAnn sym)
+  . (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1123,10 +1184,13 @@ execMacawStmtExtension
   -> MO.LookupFunctionHandle sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
+  -> MO.LookupSyscallHandle sym arch
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) (MacawSimulatorState sym) sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   case s0 of
     MacawReadMem addrWidth memRep ptr0 -> do
       let sym = st^.C.stateSymInterface
@@ -1187,6 +1251,12 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (hv, st') <- doLookupFunctionHandle lookupH st mvar (C.regValue args)
       return (C.HandleFnVal hv, st')
 
+    MacawLookupSyscallHandle argReprs retRepr argStruct -> do
+      -- Note that unlike 'MacawLookupFunctionHandle', the system call lookup
+      -- function does not require access to memory
+      (hv, st') <- lookupSyscall argReprs retRepr st argStruct
+      return (C.HandleFnVal hv, st')
+
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
@@ -1199,11 +1269,13 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
     PtrSub w x y                -> doPtrSub st mvar w x y
     PtrAnd w x y                -> doPtrAnd st mvar w x y
     PtrXor w x y                -> doPtrXor st mvar w x y
+    PtrTrunc w x                -> doPtrTrunc st mvar x w
+    PtrUExt w x                 -> doPtrUExt st mvar x w
 
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
-  :: (IsSymInterface sym, MM.HasLLVMAnn sym)
+  :: (IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SB.MacawArchEvalFn sym MM.Mem arch
   -- ^ A set of interpretations for architecture-specific functions
   -> C.GlobalVar MM.Mem
@@ -1214,18 +1286,22 @@ macawExtensions
   -> LookupFunctionHandle sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
+  -> MO.LookupSyscallHandle sym arch
+  -- ^ A function to examine the machine state to determine which system call
+  -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl (MacawSimulatorState sym) sym (MacawExt arch)
-macawExtensions f mvar globs lookupH toMemPred =
-  C.ExtensionImpl { C.extensionEval = evalMacawExprExtension
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH toMemPred
+macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
+  C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
+                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
                   }
 
 -- | Run the simulator over a contiguous set of code.
 runCodeBlock
   :: forall sym arch blocks
-   . (C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym)
+   . ( C.IsSyntaxExtension (MacawExt arch), IsSymInterface sym, MM.HasLLVMAnn sym
+     , ?memOpts :: MM.MemOptions )
   => sym
   -> MacawSymbolicArchFunctions arch
   -- ^ Translation functions
@@ -1233,6 +1309,7 @@ runCodeBlock
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
   -> LookupFunctionHandle sym arch
+  -> MO.LookupSyscallHandle sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
@@ -1243,7 +1320,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g regStruct = do
+runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH lookupSyscall toMemPred g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1252,7 +1329,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs lookupH toMemPred
+                extImpl = macawExtensions archEval mvar globs lookupH lookupSyscall toMemPred
             in C.initSimContext sym llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state
@@ -1303,7 +1380,7 @@ runCodeBlock sym archFns archEval halloc (initMem,globs) lookupH toMemPred g reg
 --           -> (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch) -> IO a)
 --           -> IO a
 -- translate dfi useCFG =
---   case MS.archVals (Proxy @arch) of
+--   case MS.archVals (Proxy @arch) Nothing of
 --     Nothing -> fail "Architecture does not support symbolic reasoning"
 --     Just avals -> do
 --       let archFns = MS.archFunctions avals

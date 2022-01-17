@@ -31,12 +31,12 @@ import           GHC.TypeLits
 
 import           Control.Lens ( (^.) )
 import           Data.Bits
+import           Data.Kind ( Type )
 import qualified Prettyprinter as PP
 import           Data.Parameterized.Classes ( knownRepr )
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
-import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MC
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, evalRewrittenArchFn, appendRewrittenArchStmt )
@@ -60,42 +60,57 @@ instance MSS.SimplifierExtension (SP.AnyPPC v) where
 -- The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.  PowerPC doesn't need any
 -- additional information, so we use ()
-type instance MAI.ArchBlockPrecond (SP.AnyPPC v) = ()
+type instance MC.ArchBlockPrecond (SP.AnyPPC v) = ()
 
-data PPCTermStmt (v :: SP.Variant) ids where
+data PPCTermStmt (v :: SP.Variant) f where
   -- | A representation of the PowerPC @sc@ instruction
   --
   -- That instruction technically takes an argument, but it must be zero so we
   -- don't preserve it.
-  PPCSyscall :: PPCTermStmt v ids
+  PPCSyscall :: PPCTermStmt v f
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
-  PPCTrap :: PPCTermStmt v ids
+  PPCTrap :: PPCTermStmt v f
   -- | A conditional trap
-  PPCTrapdword :: MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
-               -> MC.Value (SP.AnyPPC v) ids (MT.BVType (SP.AddrWidth v))
-               -> MC.Value (SP.AnyPPC v) ids (MT.BVType 5)
-               -> PPCTermStmt v ids
+  PPCTrapdword :: f (MT.BVType (SP.AddrWidth v))
+               -> f (MT.BVType (SP.AddrWidth v))
+               -> f (MT.BVType 5)
+               -> PPCTermStmt v f
 
-instance Show (PPCTermStmt v ids) where
-  show ts = show (MC.prettyF ts)
+instance Show (PPCTermStmt v (MC.Value (SP.AnyPPC v) ids)) where
+  show ts = show (MC.ppArchTermStmt PP.pretty ts)
 
 type instance MC.ArchTermStmt (SP.AnyPPC v) = PPCTermStmt v
 
-instance MC.PrettyF (PPCTermStmt v) where
-  prettyF ts =
+instance MC.IsArchTermStmt (PPCTermStmt v) where
+  ppArchTermStmt ppValue ts =
     case ts of
       PPCSyscall -> "ppc_syscall"
       PPCTrap -> "ppc_trap"
-      PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> MC.ppValue 0 vb PP.<+> MC.ppValue 0 va PP.<+> MC.ppValue 0 vto
+      PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> ppValue vb PP.<+> ppValue va PP.<+> ppValue vto
 
-rewriteTermStmt :: PPCTermStmt v src -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v tgt)
+instance TF.FoldableF (PPCTermStmt v) where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.FunctorF (PPCTermStmt v) where
+  fmapF = TF.fmapFDefault
+
+instance TF.TraversableF (PPCTermStmt v) where
+  traverseF go tstmt =
+    case tstmt of
+      PPCSyscall -> pure PPCSyscall
+      PPCTrap -> pure PPCTrap
+      PPCTrapdword v1 v2 v3 -> PPCTrapdword <$> go v1 <*> go v2 <*> go v3
+
+rewriteTermStmt
+  :: PPCTermStmt v (MC.Value (SP.AnyPPC v) src)
+  -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v (MC.Value (SP.AnyPPC v) tgt))
 rewriteTermStmt s =
   case s of
     PPCSyscall -> return PPCSyscall
     PPCTrap -> return PPCTrap
     PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
-data PPCStmt (v :: SP.Variant) (f :: MT.Type -> *) where
+data PPCStmt (v :: SP.Variant) (f :: MT.Type -> Type) where
   Attn :: PPCStmt v f
   Sync :: PPCStmt v f
   Isync :: PPCStmt v f
@@ -225,7 +240,35 @@ instance MC.IPAlignment (SP.AnyPPC SP.V64) where
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
 instance MC.IPAlignment (SP.AnyPPC SP.V32) where
-  fromIPAligned _ = error "IP alignment rules are not yet implemented for PPC32"
+  fromIPAligned cleanAddr
+    | Just (MC.BVShl _ addrDiv4 two) <- MC.valueAsApp cleanAddr
+    , MC.BVValue _ 2 <- two
+    , Just smallAddrDiv4 <- valueAsExtTwo addrDiv4
+    , Just (MC.Trunc addrDiv4' _) <- MC.valueAsApp smallAddrDiv4
+    , Just NR.Refl <- NR.testEquality (MT.typeWidth addrDiv4') (MT.knownNat :: NR.NatRepr 32)
+    , Just (MC.BVShr _ dirtyAddr two') <- MC.valueAsApp addrDiv4'
+    , MC.BVValue _ 2 <- two'
+    = Just dirtyAddr
+
+    | Just (MC.BVAnd _ dirtyAddr (MC.BVValue _ 0xfffffffc)) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
+    | Just (MC.BVAnd _ (MC.BVValue _ 0xfffffffc) dirtyAddr) <- MC.valueAsApp cleanAddr
+    = Just dirtyAddr
+
+    | otherwise = Nothing
+    where
+      valueAsExtTwo :: MC.BVValue (SP.AnyPPC SP.V32) ids 32 -> Maybe (MC.BVValue (SP.AnyPPC SP.V32) ids 30)
+      valueAsExtTwo v
+        | Just (MC.SExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 30)
+        = Just v'
+
+        | Just (MC.UExt v' _) <- MC.valueAsApp v
+        , Just NR.Refl <- NR.testEquality (MT.typeWidth v') (MT.knownNat :: NR.NatRepr 30)
+        = Just v'
+
+        | otherwise = Nothing
   toIPAligned addr = addr { MM.addrOffset = MM.addrOffset addr .&. complement 0x3 }
 
 rewriteStmt :: PPCStmt v (MC.Value (SP.AnyPPC v) src) -> Rewriter (SP.AnyPPC v) s src tgt ()

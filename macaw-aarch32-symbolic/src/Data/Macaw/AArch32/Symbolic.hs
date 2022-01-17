@@ -14,6 +14,7 @@ module Data.Macaw.AArch32.Symbolic (
   , updateReg
   ) where
 
+import qualified Data.Text as T
 import           GHC.TypeLits
 
 import           Control.Lens ( (&), (%~) )
@@ -25,14 +26,18 @@ import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Backend as MSB
 import qualified Data.Macaw.Types as MT
+import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.CtxFuns as PC
 import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
 import qualified What4.BaseTypes as WT
+import qualified What4.ProgramLoc as WP
 import qualified What4.Symbol as WS
+import qualified What4.Utils.StringLiteral as WUS
 
 import qualified Language.ASL.Globals as LAG
 import qualified SemMC.Architecture.AArch32 as SA
@@ -41,7 +46,9 @@ import qualified Data.Macaw.ARM.ARMReg as MAR
 
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.CFG.Extension as CE
+import qualified Lang.Crucible.CFG.Expr as LCE
 import qualified Lang.Crucible.CFG.Reg as CR
+import qualified Lang.Crucible.LLVM.MemModel as LCLM
 import qualified Lang.Crucible.Simulator.RegMap as MCR
 import qualified Lang.Crucible.Simulator.RegValue as MCRV
 import qualified Lang.Crucible.Types as CT
@@ -67,19 +74,27 @@ aarch32RegName r = WS.safeSymbol ("r!" ++ show (MC.prettyF r))
 
 aarch32MacawEvalFn :: (CB.IsSymInterface sym)
                    => AF.SymFuns sym
+                   -> MS.MacawArchStmtExtensionOverride SA.AArch32
                    -> MS.MacawArchEvalFn sym mem SA.AArch32
-aarch32MacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s ->
-  case xt of
-    AArch32PrimFn p -> AF.funcSemantics fs p s
-    AArch32PrimStmt p -> AF.stmtSemantics fs p s
-    AArch32PrimTerm p -> AF.termSemantics fs p s
+aarch32MacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
+  MSB.MacawArchEvalFn $ \_ _ xt s -> do
+    mRes <- override xt s
+    case mRes of
+      Nothing ->
+        case xt of
+          AArch32PrimFn p -> AF.funcSemantics fs p s
+          AArch32PrimStmt p -> AF.stmtSemantics fs p s
+      Just res -> return res
 
 instance MS.GenArchInfo mem SA.AArch32 where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
                     { MS.archFunctions = aarch32MacawSymbolicFns
                     , MS.withArchEval = \sym k -> do
                         sfns <- liftIO $ AF.newSymFuns sym
-                        k (aarch32MacawEvalFn sfns)
+                        let override = case mOverride of
+                                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                                         Just ov -> ov
+                        k (aarch32MacawEvalFn sfns override)
                     , MS.withArchConstraints = \x -> x
                     , MS.lookupReg = aarch32LookupReg
                     , MS.updateReg = aarch32UpdateReg
@@ -88,36 +103,30 @@ instance MS.GenArchInfo mem SA.AArch32 where
 data AArch32StmtExtension (f :: CT.CrucibleType -> Type) (ctp :: CT.CrucibleType) where
   AArch32PrimFn :: MAA.ARMPrimFn (AA.AtomWrapper f) t -> AArch32StmtExtension f (MS.ToCrucibleType t)
   AArch32PrimStmt :: MAA.ARMStmt (AA.AtomWrapper f) -> AArch32StmtExtension f CT.UnitType
-  AArch32PrimTerm :: MAA.ARMTermStmt ids -> AArch32StmtExtension f CT.UnitType
 
 instance FC.FunctorFC AArch32StmtExtension where
   fmapFC f st =
     case st of
       AArch32PrimFn p -> AArch32PrimFn (FC.fmapFC (AA.liftAtomMap f) p)
       AArch32PrimStmt p -> AArch32PrimStmt (TF.fmapF (AA.liftAtomMap f) p)
-      AArch32PrimTerm p -> AArch32PrimTerm p
 
 instance FC.FoldableFC AArch32StmtExtension where
   foldMapFC f st =
     case st of
       AArch32PrimFn p -> FC.foldMapFC (AA.liftAtomIn f) p
       AArch32PrimStmt p -> TF.foldMapF (AA.liftAtomIn f) p
-      -- There is no data in terminators for now, so we can have a trivial implementation
-      AArch32PrimTerm _p -> mempty
 
 instance FC.TraversableFC AArch32StmtExtension where
   traverseFC f st =
     case st of
       AArch32PrimFn p -> AArch32PrimFn <$> FC.traverseFC (AA.liftAtomTrav f) p
       AArch32PrimStmt p -> AArch32PrimStmt <$> TF.traverseF (AA.liftAtomTrav f) p
-      AArch32PrimTerm p -> pure (AArch32PrimTerm p)
 
 instance CE.TypeApp AArch32StmtExtension where
   appType st =
     case st of
       AArch32PrimFn p -> MS.typeToCrucible (MT.typeRepr p)
       AArch32PrimStmt _p -> CT.UnitRepr
-      AArch32PrimTerm _p -> CT.UnitRepr
 
 instance CE.PrettyApp AArch32StmtExtension where
   ppApp ppSub st =
@@ -126,7 +135,6 @@ instance CE.PrettyApp AArch32StmtExtension where
         I.runIdentity (MC.ppArchFn (I.Identity . AA.liftAtomIn ppSub) p)
       AArch32PrimStmt p ->
         MC.ppArchStmt (AA.liftAtomIn ppSub) p
-      AArch32PrimTerm p -> MC.prettyF p
 
 type instance MSB.MacawArchStmtExtension SA.AArch32 =
   AArch32StmtExtension
@@ -170,10 +178,30 @@ aarch32RegStructType =
 
 aarch32GenFn :: MAA.ARMPrimFn (MC.Value SA.AArch32 ids) tp
              -> MSB.CrucGen SA.AArch32 ids s (CR.Atom s (MS.ToCrucibleType tp))
-aarch32GenFn fn = do
-  let f x = AA.AtomWrapper <$> MSB.valueToCrucible x
-  r <- FC.traverseFC f fn
-  MSB.evalArchStmt (AArch32PrimFn r)
+aarch32GenFn fn =
+  case fn of
+    MAA.ARMSyscall _imm v0 v1 v2 v3 v4 v5 v6 v7 -> do
+      a0 <- MSB.valueToCrucible v0
+      a1 <- MSB.valueToCrucible v1
+      a2 <- MSB.valueToCrucible v2
+      a3 <- MSB.valueToCrucible v3
+      a4 <- MSB.valueToCrucible v4
+      a5 <- MSB.valueToCrucible v5
+      a6 <- MSB.valueToCrucible v6
+      a7 <- MSB.valueToCrucible v7
+
+      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
+      let argTypes = PC.knownRepr
+      let retTypes = Ctx.Empty Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32) Ctx.:> LCLM.LLVMPointerRepr (PN.knownNat @32)
+      let retRepr = CT.StructRepr retTypes
+      syscallArgStructAtom <- MSB.evalAtom (CR.EvalApp (LCE.MkStruct argTypes syscallArgs))
+      let lookupHdlStmt = MS.MacawLookupSyscallHandle argTypes retTypes syscallArgStructAtom
+      hdlAtom <- MSB.evalMacawStmt lookupHdlStmt
+      MSB.evalAtom $! CR.Call hdlAtom syscallArgs retRepr
+    _ -> do
+      let f x = AA.AtomWrapper <$> MSB.valueToCrucible x
+      r <- FC.traverseFC f fn
+      MSB.evalArchStmt (AArch32PrimFn r)
 
 aarch32GenStmt :: MAA.ARMStmt (MC.Value SA.AArch32 ids)
                -> MSB.CrucGen SA.AArch32 ids s ()
@@ -182,11 +210,36 @@ aarch32GenStmt s = do
   s' <- TF.traverseF f s
   void (MSB.evalArchStmt (AArch32PrimStmt s'))
 
-aarch32GenTermStmt :: MAA.ARMTermStmt ids
+aarch32GenTermStmt :: MAA.ARMTermStmt (MC.Value SA.AArch32 ids)
                    -> MC.RegState MAR.ARMReg (MC.Value SA.AArch32 ids)
+                   -> Maybe (CR.Label s)
                    -> MSB.CrucGen SA.AArch32 ids s ()
-aarch32GenTermStmt ts _regs =
-  void (MSB.evalArchStmt (AArch32PrimTerm ts))
+aarch32GenTermStmt ts regs mfallthroughLabel =
+  case ts of
+    MAA.ReturnIf cond -> returnIf =<< MSB.valueToCrucible cond
+    MAA.ReturnIfNot cond -> do
+      notc <- MSB.appAtom =<< LCE.Not <$> MSB.valueToCrucible cond
+      returnIf notc
+  where
+    returnIf cond = do
+      MSB.setMachineRegs =<< MSB.createRegStruct regs
+      tlbl <- CR.Label <$> MSB.freshValueIndex
+      flbl <- case mfallthroughLabel of
+        Just ft -> return ft
+        Nothing -> do
+          ft <- CR.Label <$> MSB.freshValueIndex
+          errMsg <- MSB.evalAtom (CR.EvalApp (LCE.StringLit (WUS.UnicodeLiteral (T.pack "No fallthrough for conditional return"))))
+          let err = CR.ErrorStmt errMsg
+          let eblock = CR.mkBlock (CR.LabelID ft) mempty mempty (WP.Posd WP.InternalPos err)
+          MSB.addExtraBlock eblock
+          return ft
+
+      regValues <- MSB.createRegStruct regs
+      let ret = CR.Return regValues
+      let rblock = CR.mkBlock (CR.LabelID tlbl) mempty mempty (WP.Posd WP.InternalPos ret)
+      MSB.addExtraBlock rblock
+
+      MSB.addTermStmt $! CR.Br cond tlbl flbl
 
 regIndexMap :: MSB.RegIndexMap SA.AArch32
 regIndexMap = MSB.mkRegIndexMap asgn sz

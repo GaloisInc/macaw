@@ -18,18 +18,20 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.ARM.Arch where
 
+import           Control.Applicative ( (<|>) )
 import           Data.Bits ( (.&.) )
+import qualified Data.BitVector.Sized as BVS
 import           Data.Kind ( Type )
-import           Data.Macaw.ARM.ARMReg ()
-import qualified Data.Macaw.Architecture.Info as MAI
+import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
 import           Data.Macaw.CFG.Rewriter ( Rewriter, rewriteValue, appendRewrittenArchStmt
                                          , evalRewrittenArchFn )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as G
+import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
-import           Data.Parameterized.Classes ( showF )
+import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableF as TF
@@ -38,9 +40,9 @@ import qualified Data.Word.Indexed as WI
 import qualified Dismantle.ARM.A32 as ARMDis
 import qualified Dismantle.ARM.T32 as ThumbDis
 import           GHC.TypeLits
-import qualified SemMC.Architecture.AArch32 as ARM
+import qualified Language.ASL.Globals as ASL
 import qualified Prettyprinter as PP
-import qualified Text.PrettyPrint.HughesPJClass as HPP
+import qualified SemMC.Architecture.AArch32 as ARM
 
 -- ----------------------------------------------------------------------
 -- ARM-specific statement definitions
@@ -60,8 +62,8 @@ type instance MC.ArchStmt ARM.AArch32 = ARMStmt
 instance MC.IsArchStmt ARMStmt where
     ppArchStmt _pp stmt =
         case stmt of
-          UninterpretedA32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
-          UninterpretedT32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC showF ops)
+          UninterpretedA32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC PC.showF ops)
+          UninterpretedT32Opcode opc ops -> PP.viaShow opc PP.<+> PP.pretty (FCls.toListFC PC.showF ops)
 
 instance TF.FunctorF ARMStmt where
   fmapF = TF.fmapFDefault
@@ -80,7 +82,7 @@ rewriteStmt s = appendRewrittenArchStmt =<< TF.traverseF rewriteValue s
 
 -- | The ArchBlockPrecond type holds data required for an architecture to compute
 -- new abstract states at the beginning on a block.
-type instance MAI.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
+type instance MC.ArchBlockPrecond ARM.AArch32 = ARMBlockPrecond
 
 -- | In order to know how to decode a block, we need to know the value of
 -- PSTATE_T (which is the Thumb/ARM mode) at the beginning of a block. We use
@@ -97,37 +99,102 @@ data ARMBlockPrecond =
 -- ARM terminal statements (which have instruction-specific effects on
 -- control-flow and register state).
 
-data ARMTermStmt ids where
-  ARMSyscall :: WI.W 24 -> ARMTermStmt ids
-  ThumbSyscall :: WI.W 8 -> ARMTermStmt ids
+data ARMTermStmt f where
+  -- | Return if the condition is true; otherwise, fall through to the next instruction
+  ReturnIf :: f MT.BoolType -> ARMTermStmt f
+  -- | Return if the condition is not true; otherwise, fall through to the next instruction
+  --
+  -- Note that it is unfortunate that we need this in addition to 'ReturnIf'. At
+  -- the part of the analysis where we are able to generate these block
+  -- terminators, we cannot generate new statements since we do not have the
+  -- right nonce generator. As a result, if we are returning when the condition
+  -- is false, we are not able to generate a negation (which would require
+  -- wrapping the original condition in an Assignment, which has an AssignId,
+  -- which requires a nonce). We work around this by just having an additional
+  -- block terminator.
+  ReturnIfNot :: f MT.BoolType -> ARMTermStmt f
 
-deriving instance Show (ARMTermStmt ids)
+instance Show (ARMTermStmt (MC.Value ARM.AArch32 ids)) where
+  show ts = show (MC.ppArchTermStmt PP.pretty ts)
 
 type instance MC.ArchTermStmt ARM.AArch32 = ARMTermStmt
 
-instance MC.PrettyF ARMTermStmt where
-  prettyF ts = let dpp2app :: forall a ann. HPP.Pretty a => a -> PP.Doc ann
-                   dpp2app = PP.viaShow . HPP.pPrint
-               in case ts of
-                    ARMSyscall imm -> "arm_syscall" PP.<+> dpp2app imm
-                    ThumbSyscall imm -> "thumb_syscall" PP.<+> dpp2app imm
+instance MC.IsArchTermStmt ARMTermStmt where
+  ppArchTermStmt ppValue ts =
+    case ts of
+      ReturnIf cond -> "return_if" PP.<+> ppValue cond
+      ReturnIfNot cond -> "return_if_not" PP.<+> ppValue cond
 
-rewriteTermStmt :: ARMTermStmt src -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt tgt)
+instance TF.FoldableF ARMTermStmt where
+  foldMapF = TF.foldMapFDefault
+
+instance TF.FunctorF ARMTermStmt where
+  fmapF = TF.fmapFDefault
+
+instance TF.TraversableF ARMTermStmt where
+  traverseF go tstmt =
+    case tstmt of
+      ReturnIf cond -> ReturnIf <$> go cond
+      ReturnIfNot cond -> ReturnIfNot <$> go cond
+
+rewriteTermStmt :: ARMTermStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt (MC.Value ARM.AArch32 tgt))
 rewriteTermStmt s =
     case s of
-      ARMSyscall imm -> pure $ ARMSyscall imm
-      ThumbSyscall imm -> pure (ThumbSyscall imm)
+      ReturnIf cond -> ReturnIf <$> rewriteValue cond
+      ReturnIfNot cond -> ReturnIfNot <$> rewriteValue cond
 
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the
--- current state of the heap and the set of registeres defined so far
+-- current state of the heap and the set of registers defined so far
 -- and the result type, but should not affect the processor state.
 
+zeroExtend :: (KnownNat n2, n1 <= n2) => WI.W n1 -> NR.NatRepr n2 -> WI.W n2
+zeroExtend w _rep = WI.w (WI.unW w)
+
 data ARMPrimFn (f :: MT.Type -> Type) tp where
+  -- | Issue a system call
+  --
+  -- The intent is that the user provides a mapping from system call numbers to
+  -- handlers in macaw-aarch32-symbolic, enabling the translation to crucible to
+  -- replace this operation with a lookup + call to a function handle.  By
+  -- capturing all of the necessary registers as inputs and outputs here,
+  -- uniform treatment is possible.  See the x86 version for a more detailed
+  -- account of the translation strategy.
+  --
+  -- The 'WI.W' is the immediate operand embedded in the opcode
+  --
+  -- The rest of the arguments are all of the registers that participate in the
+  -- syscall protocol (at least on Linux). Arguments are passed in r0-r6, while
+  -- the syscall number is in r7.
+  --
+  -- The system call can return up to two values (in r0 and r1)
+  ARMSyscall :: WI.W 24
+             -> f (MT.BVType 32) -- r0
+             -> f (MT.BVType 32) -- r1
+             -> f (MT.BVType 32) -- r2
+             -> f (MT.BVType 32) -- r3
+             -> f (MT.BVType 32) -- r4
+             -> f (MT.BVType 32) -- r5
+             -> f (MT.BVType 32) -- r6
+             -> f (MT.BVType 32) -- r7 (syscall number)
+             -> ARMPrimFn f (MT.TupleType [MT.BVType 32, MT.BVType 32])
+
+  -- | Signed division at @w@ bits. Both operands are treated as signed. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- According to the manual (A8.8.165), the @SDIV@ instruction can either
+  -- generate an exception or return 0 if the divisor is zero, depending on the
+  -- processor mode.  Our semantics have this check encoded, so there is a
+  -- guarantee that this operation does not have 0 as the divisor.
   SDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
        -> ARMPrimFn f (MT.BVType w)
+
+  -- | Unsigned division at @w@ bits. Both operands are treated as unsigned. The
+  -- first is divided by the second, rounding towards zero.
+  --
+  -- This has the same division by zero note as 'SDiv'.
   UDiv :: 1 <= w => NR.NatRepr w
        -> f (MT.BVType w)
        -> f (MT.BVType w)
@@ -300,7 +367,10 @@ instance MC.IsArchFn ARMPrimFn where
         let ppUnary s v' = s PP.<+> v'
             ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
             ppTernary s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
+            ppSC s imm r0 r1 r2 r3 r4 r5 r6 r7 = s PP.<+> PP.viaShow imm PP.<+> r0 PP.<+> r1 PP.<+> r2 PP.<+> r3 PP.<+> r4 PP.<+> r5 PP.<+> r6 PP.<+> r7
         in case f of
+          ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 ->
+            ppSC "arm_syscall" imm <$> pp r0 <*> pp r1 <*> pp r2 <*> pp r3 <*> pp r4 <*> pp r5 <*> pp r6 <*> pp r7
           UDiv _ lhs rhs -> ppBinary "arm_udiv" <$> pp lhs <*> pp rhs
           SDiv _ lhs rhs -> ppBinary "arm_sdiv" <$> pp lhs <*> pp rhs
           URem _ lhs rhs -> ppBinary "arm_urem" <$> pp lhs <*> pp rhs
@@ -340,6 +410,8 @@ instance FCls.FoldableFC ARMPrimFn where
 instance FCls.TraversableFC ARMPrimFn where
   traverseFC go f =
     case f of
+      ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 ->
+        ARMSyscall imm <$> go r0 <*> go r1 <*> go r2 <*> go r3 <*> go r4 <*> go r5 <*> go r6 <*> go r7
       UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
       SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
       URem rep lhs rhs -> URem rep <$> go lhs <*> go rhs
@@ -376,6 +448,7 @@ type instance MC.ArchFn ARM.AArch32 = ARMPrimFn
 instance MT.HasRepr (ARMPrimFn f) MT.TypeRepr where
   typeRepr f =
     case f of
+      ARMSyscall {} -> PC.knownRepr
       UDiv rep _ _ -> MT.BVTypeRepr rep
       SDiv rep _ _ -> MT.BVTypeRepr rep
       URem rep _ _ -> MT.BVTypeRepr rep
@@ -468,6 +541,9 @@ rewritePrimFn :: ARMPrimFn (MC.Value ARM.AArch32 src) tp
               -> Rewriter ARM.AArch32 s src tgt (MC.Value ARM.AArch32 tgt tp)
 rewritePrimFn f =
   case f of
+    ARMSyscall imm r0 r1 r2 r3 r4 r5 r6 r7 -> do
+      tgtFn <- ARMSyscall imm <$> rewriteValue r0 <*> rewriteValue r1 <*> rewriteValue r2 <*> rewriteValue r3 <*> rewriteValue r4 <*> rewriteValue r5 <*> rewriteValue r6 <*> rewriteValue r7
+      evalRewrittenArchFn tgtFn
     UDiv rep lhs rhs -> do
       tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
       evalRewrittenArchFn tgtFn
@@ -535,6 +611,16 @@ rewritePrimFn f =
 
 -- FIXME: complete these instruction matchers when we know what we need for them
 
+evalAssignRhs :: MC.AssignRhs ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
+              -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+evalAssignRhs rhs =
+  G.ValueExpr . MC.AssignedValue <$> G.addAssignment rhs
+
+-- | Evaluate an architecture-specific function and return the resulting expr.
+evalArchFn :: ARMPrimFn (MC.Value ARM.AArch32 ids) tp
+           -> G.Generator ARM.AArch32 ids s (G.Expr ARM.AArch32 ids tp)
+evalArchFn f = evalAssignRhs (MC.EvalArchFn f (MT.typeRepr f))
+
 -- | Manually-provided semantics for A32 instructions whose full
 -- semantics cannot be expressed in our semantics format.
 --
@@ -547,7 +633,28 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
       ARMDis.SVC_A1 ->
         case operands of
           ARMDis.Bv4 _opPred ARMDis.:< ARMDis.Bv24 imm ARMDis.:< ARMDis.Nil -> Just $ do
-            G.finishWithTerminator (MCB.ArchTermStmt (ARMSyscall imm))
+            let r0 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R0")
+            let r1 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R1")
+            sc <- ARMSyscall imm <$> G.getRegVal r0
+                                 <*> G.getRegVal r1
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
+                                 <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+            res <- G.addExpr =<< evalArchFn sc
+            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+
+            -- Increment the PC; we don't get the normal PC increment from the
+            -- ASL semantics, since we are intercepting them to just add this statement
+            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+            pc_orig <- G.getRegVal pc
+            pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 4)))
+            G.setRegVal pc pc_next
+
+            G.finishWithTerminator MCB.FetchAndExecute
       _ | isUninterpretedOpcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedA32Opcode opc operands))
         | otherwise -> Nothing
@@ -572,8 +679,232 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
     case opc of
       ThumbDis.SVC_T1 ->
         case operands of
-          ThumbDis.Bv8 imm ThumbDis.:< ThumbDis.Nil -> Just $ do
-            G.finishWithTerminator (MCB.ArchTermStmt (ThumbSyscall imm))
+          ThumbDis.Bv8 imm8 ThumbDis.:< ThumbDis.Nil -> Just $ do
+            let r0 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R0")
+            let r1 = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R1")
+
+            -- Thumb uses an 8 bit immediate instead of the 24 used in ARM
+            -- syscalls. The kernel can't tell the difference between which
+            -- instruction was used to enter a syscall (it *could* but doesn't),
+            -- so we can just zero extend the immediate value and use the same
+            -- syscall representation in macaw
+            let imm24 = zeroExtend imm8 (NR.knownNat @24)
+            sc <- ARMSyscall imm24 <$> G.getRegVal r0
+                                   <*> G.getRegVal r1
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R2"))
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R3"))
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R4"))
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R5"))
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
+                                   <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
+            res <- G.addExpr =<< evalArchFn sc
+            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+
+            -- Increment the PC; we don't get the normal PC increment from the
+            -- ASL semantics, since we are intercepting them to just add this statement
+            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+            pc_orig <- G.getRegVal pc
+            pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 2)))
+            G.setRegVal pc pc_next
+
+            G.finishWithTerminator MCB.FetchAndExecute
+
       _ | isUninterpretedOpcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedT32Opcode opc operands))
         | otherwise -> Nothing
+
+instance MSS.SimplifierExtension ARM.AArch32 where
+  simplifyArchApp = saturatingSimplify
+  simplifyArchFn = armSimplifyArchFn
+
+doDivision
+  :: (BVS.BV w -> BVS.BV w -> BVS.BV w)
+  -> (BVS.BV w -> Integer)
+  -> NR.NatRepr w
+  -> Integer
+  -> Integer
+  -> Integer
+doDivision op extract wrep dividend divisor =
+  extract (op dividend' divisor')
+  where
+    dividend' = BVS.mkBV wrep dividend
+    divisor' = BVS.mkBV wrep divisor
+
+armSimplifyArchFn :: MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
+                  -> MT.TypeRepr tp
+                  -> Maybe (MC.Value ARM.AArch32 ids tp)
+armSimplifyArchFn af _rep =
+  case af of
+    SRem _ z@(MC.BVValue _ 0) _ -> return z
+    SRem wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision (BVS.srem wrep) (BVS.asSigned wrep) wrep dividend divisor))
+    URem _ z@(MC.BVValue _ 0) _ -> return z
+    URem wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision BVS.urem BVS.asUnsigned wrep dividend divisor))
+    SDiv _ z@(MC.BVValue _ 0) _ -> return z
+    SDiv wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision (BVS.squot wrep) (BVS.asSigned wrep) wrep dividend divisor))
+    UDiv _ z@(MC.BVValue _ 0) _ -> return z
+    UDiv wrep (MC.BVValue _ dividend) (MC.BVValue _ divisor)
+      | divisor /= 0 -> return (MC.BVValue wrep (doDivision BVS.uquot BVS.asUnsigned wrep dividend divisor))
+    _ -> Nothing
+
+simplifyOnce :: MC.App (MC.Value ARM.AArch32 ids) tp
+             -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyOnce a = simplifyTruncExt a
+              <|> simplifyTrivialTruncExt a
+              <|> coalesceAdditionByConstant a
+              <|> simplifyNestedMux a
+              <|> distributeAddOverConstantMux a
+              <|> doubleNegation a
+              <|> negatedTrivialMux a
+              <|> negatedMux a
+
+-- | Apply the simplification rules until nothing changes
+--
+-- Simplifications can trigger other simplifications, and there is no fixed
+-- order in which we can guarantee that everything will fire correctly.  Thus,
+-- we apply rules until we saturate them.
+saturatingSimplify :: MC.App (MC.Value ARM.AArch32 ids) tp
+                   -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+saturatingSimplify a0 =
+  case simplifyOnce a0 of
+    Nothing -> Nothing
+    Just a1 -> simplifyMany a1
+  where
+    simplifyMany a1 =
+      case simplifyOnce a1 of
+        Nothing -> Just a1
+        Just a2 -> simplifyMany a2
+
+-- | Simplify terms that extend a pointer, increment it, and then truncate it
+-- back to 32 bits.
+--
+-- These sequences interfere with the abstract interpretation of especially the
+-- stack pointer, which just sends any ext/trunc operations to Top.
+--
+-- > r1 := (uext val 65)
+-- > r2 := (bv_add r1 (constant :: [65]))
+-- > r3 := (trunc r2 32)
+--
+-- to (bv_add val (constant :: [32]))
+simplifyTruncExt :: MC.App (MC.Value ARM.AArch32 ids) tp
+                 -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyTruncExt r3 = do
+  MC.Trunc r2 rep3 <- return r3
+  let targetSize = NR.knownNat @32
+  PC.Refl <- PC.testEquality rep3 targetSize
+  MC.AssignedValue (MC.Assignment _r2_id (MC.EvalApp (MC.BVAdd _rep2 r1 constant))) <- return r2
+  MC.BVValue constantRepr constantVal <- return constant
+  PC.Refl <- PC.testEquality constantRepr (NR.knownNat @65)
+  MC.AssignedValue (MC.Assignment _r1_id (MC.EvalApp (MC.UExt val rep1))) <- return r1
+  PC.Refl <- PC.testEquality rep1 (NR.knownNat @65)
+  case MT.typeRepr val of
+    MT.BVTypeRepr valwidth ->
+      case PC.testEquality valwidth targetSize of
+        Nothing -> Nothing
+        Just PC.Refl -> do
+          let newConstant = MC.mkLit targetSize constantVal
+          return (MC.BVAdd targetSize val newConstant)
+
+simplifyTrivialTruncExt :: MC.App (MC.Value ARM.AArch32 ids) tp
+                        -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyTrivialTruncExt r3 = do
+  MC.Trunc r2 rep3 <- return r3
+  let targetSize = NR.knownNat @32
+  PC.Refl <- PC.testEquality rep3 targetSize
+  MC.AssignedValue (MC.Assignment _r1_id (MC.EvalApp (MC.UExt val rep1))) <- return r2
+  PC.Refl <- PC.testEquality rep1 (NR.knownNat @65)
+  case MT.typeRepr val of
+    MT.BVTypeRepr valwidth ->
+      case PC.testEquality valwidth targetSize of
+        Nothing -> Nothing
+        Just PC.Refl -> do
+          let newConstant = MC.BVValue targetSize (NR.toSigned targetSize 0)
+          return (MC.BVAdd targetSize val newConstant)
+
+-- | Coalesce adjacent additions by a constant
+--
+-- > r2 := (bv_add r1 (0xfffffffb :: [65]))
+-- > r3 := (bv_add r2 (0x1 :: [65]))
+coalesceAdditionByConstant :: MC.App (MC.Value ARM.AArch32 ids) tp
+                           -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+coalesceAdditionByConstant r3 = do
+  MC.BVAdd rep3 r2 (MC.BVValue _bvrep3 c3) <- return r3
+  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVAdd _rep2 r1 (MC.BVValue bvrep2 c2)))) <- return r2
+  let newConstant = MC.mkLit bvrep2 (c2 + c3)
+  return (MC.BVAdd rep3 r1 newConstant)
+
+-- | Around conditional branches, we generate nested muxes that have the same conditions.
+--
+-- This code eliminates the redundancy (and happens to make the resulting IP
+-- muxes match macaw's expectations to identify conditional branches)
+--
+-- > r1 := (mux _repr cond1 true1 false1)
+-- > r2 := (mux _repr cond2 true2 false2)
+-- > r3 := (mux repr cond3 r1 r2)
+--
+-- If the conditions are all equal, rewrite this into
+--
+-- > r3 := (mux repr cond3 true1 false2)
+simplifyNestedMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+                  -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyNestedMux app = do
+  MC.Mux repr3 cond3 r1 r2 <- return app
+  MC.Mux _repr2 cond2 _true2 false2 <- MC.valueAsApp r2
+  MC.Mux _repr1 cond1 true1 _false1 <- MC.valueAsApp r1
+  PC.Refl <- PC.testEquality cond1 cond3
+  PC.Refl <- PC.testEquality cond2 cond3
+  return (MC.Mux repr3 cond3 true1 false2)
+
+withConstantFirst :: MC.Value ARM.AArch32 ids tp
+                  -> MC.Value ARM.AArch32 ids tp
+                  -> Maybe (MC.Value ARM.AArch32 ids tp, Maybe (MC.App (MC.Value ARM.AArch32 ids) tp))
+withConstantFirst l r =
+  case (l, r) of
+    (MC.BVValue {}, _) -> Just (l, MC.valueAsApp r)
+    (_, MC.BVValue {}) -> Just (r, MC.valueAsApp l)
+    _ -> Nothing
+
+-- | Distribute an addition over a mux of constant addresses
+--
+-- There is a common pattern in conditional branches where the branch targets
+-- are hidden under a constant addition.  This pushes the addition down.
+distributeAddOverConstantMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+                             -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+distributeAddOverConstantMux app = do
+  MC.BVAdd rep l r <- return app
+  PC.Refl <- PC.testEquality rep (NR.knownNat @32)
+  (MC.BVValue crep c, Just (MC.Mux mrep cond t f)) <- withConstantFirst l r
+  MC.RelocatableValue trep taddr <- return t
+  MC.RelocatableValue frep faddr <- return f
+  let cval = NR.toSigned crep c
+  let taddr' = MC.incAddr cval taddr
+  let faddr' = MC.incAddr cval faddr
+  return (MC.Mux mrep cond (MC.RelocatableValue trep taddr') (MC.RelocatableValue frep faddr'))
+
+-- Eliminate nested logical negations
+doubleNegation :: MC.App (MC.Value ARM.AArch32 ids) tp
+               -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+doubleNegation app = do
+  MC.NotApp r1 <- return app
+  MC.NotApp r2 <- MC.valueAsApp r1
+  MC.valueAsApp r2
+
+
+negatedTrivialMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+                  -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+negatedTrivialMux app = case app of
+  MC.Mux _ cond (MC.BoolValue False) (MC.BoolValue True) ->
+    case MSS.simplifyArchApp (MC.NotApp cond) of
+      Just app' -> return app'
+      _ -> return $ MC.NotApp cond
+  _ -> Nothing
+
+negatedMux :: MC.App (MC.Value ARM.AArch32 ids) tp
+           -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+negatedMux app = do
+  MC.Mux rep c l r <- return app
+  MC.NotApp c' <- MC.valueAsApp c
+  return $ MC.Mux rep c' r l

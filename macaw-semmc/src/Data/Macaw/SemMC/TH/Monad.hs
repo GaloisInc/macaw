@@ -52,8 +52,6 @@ import qualified Data.Sequence as Seq
 import           Language.Haskell.TH
 
 import qualified Data.Macaw.CFG as M
-import qualified Data.Parameterized.Context as Ctx
-import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.Map as Map
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Lang.Crucible.Backend.Simple as S
@@ -207,7 +205,7 @@ liftQ q = MacawQ (lift q)
 
 withLocToReg :: ((L.Location arch tp -> Q Exp) -> MacawQ arch t fs a) -> MacawQ arch t fs a
 withLocToReg k = do
-  f <- St.gets locToReg
+  f <- St.gets $ \x -> locToReg x
   k f
 
 -- | Look up an 'S.Expr' in the cache
@@ -224,14 +222,14 @@ withNonceAppEvaluator :: forall tp arch t fs
                        . ((BoundVarInterpretations arch t fs -> S.NonceApp t (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)) -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp)))
                       -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp))
 withNonceAppEvaluator k = do
-  nae <- St.gets nonceAppEvaluator
+  nae <- St.gets $ \x -> nonceAppEvaluator x
   k nae
 
 withAppEvaluator :: forall tp arch t fs
                   . ((BoundVarInterpretations arch t fs -> S.App (S.Expr t) tp -> Maybe (MacawQ arch t fs Exp)) -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp)))
                  -> MacawQ arch t fs (Maybe (MacawQ arch t fs Exp))
 withAppEvaluator k = do
-  ae <- St.gets appEvaluator
+  ae <- St.gets $ \x -> appEvaluator x
   k ae
 
 -- | Append a statement that doesn't need to bind a new name

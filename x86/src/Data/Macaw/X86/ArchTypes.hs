@@ -23,6 +23,8 @@ module Data.Macaw.X86.ArchTypes
   , AVXPointWiseOp2(..)
   , AVXOp1(..)
   , AVXOp2(..)
+  , Mnem
+  , ppMnem
   , sseOpName
   , rewriteX86PrimFn
   , x86PrimFnHasSideEffects
@@ -40,6 +42,7 @@ module Data.Macaw.X86.ArchTypes
   ) where
 
 import           Data.Bits
+import           Data.ByteString.Char8 as BSC
 import qualified Data.Kind as Kind
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.Rewriter
@@ -55,7 +58,12 @@ import qualified Flexdis86 as F
 import           Numeric.Natural
 import           Prettyprinter as PP
 
-import           Data.Macaw.X86.X86Reg
+import Data.Macaw.X86.X86Reg
+
+type Mnem = BSC.ByteString
+
+ppMnem :: Mnem -> String
+ppMnem = BSC.unpack
 
 ------------------------------------------------------------------------
 -- SIMDWidth
@@ -121,20 +129,29 @@ repValSizeBitCount v = 8 * repValSizeByteCount v
 ------------------------------------------------------------------------
 -- X86TermStmt
 
-data X86TermStmt ids
-   = X86Syscall
-     -- ^ A system call
-   | Hlt
+data X86TermStmt (f :: Type -> Kind.Type)
+   = Hlt
      -- ^ The halt instruction.
      --
      -- In protected mode outside ring 0, this just raised a GP(0) exception.
    | UD2
      -- ^ This raises a invalid opcode instruction.
 
-instance PrettyF X86TermStmt where
-  prettyF X86Syscall = "x86_syscall"
-  prettyF Hlt        = "hlt"
-  prettyF UD2        = "ud2"
+instance IsArchTermStmt X86TermStmt where
+  ppArchTermStmt _f Hlt        = "hlt"
+  ppArchTermStmt _f UD2        = "ud2"
+
+instance FoldableF X86TermStmt where
+  foldMapF = foldMapFDefault
+
+instance FunctorF X86TermStmt where
+  fmapF = fmapFDefault
+
+instance TraversableF X86TermStmt where
+  traverseF _go tstmt =
+    case tstmt of
+      Hlt -> pure Hlt
+      UD2 -> pure UD2
 
 ------------------------------------------------------------------------
 -- SSE declarations
@@ -197,7 +214,7 @@ data SSE_Op
    | SSE_Max
 
 -- | Return the name of the mnemonic associated with the SSE op.
-sseOpName :: SSE_Op -> String
+sseOpName :: SSE_Op -> Mnem
 sseOpName f =
   case f of
     SSE_Add -> "add"
@@ -362,7 +379,8 @@ data X86PrimFn f tp where
   GetSegmentSelector :: !F.Segment
                      -> X86PrimFn f (BVType 16)
 
-  -- | Compares two memory regions and return the number of bytes that were the same.
+  -- | Compares two memory regions and returns the number of compared values that
+  -- were the same. E.g., used to implement instructions of the form 'repz cmps ...'.
   --
   -- In an expression @MemCmp bpv nv p1 p2 dir@:
   --
@@ -766,6 +784,38 @@ data X86PrimFn f tp where
   -- as a 64-bit value that will be stored in edx:eax
   XGetBV :: !(f (BVType 32)) -> X86PrimFn f (BVType 64)
 
+  -- | Issue a system call
+  --
+  -- The arguments are all of the registers that *could* be system call
+  -- arguments under any x86_64 ABI. The return value is all of the registers
+  -- that *could* be return values under any x86_64 ABI.
+  --
+  -- The 'NatRepr' is the pointer width for the platform; this is 64 bits for
+  -- now, but when we add 32 bit support, we will want this
+  --
+  -- The return values are rax and rdx (because Linux can return two values for
+  -- some system calls; windows seems to just return one).
+  --
+  -- Note that the more desirable representation would be for this instruction
+  -- to take all registers (or even /implicitly/ take all registers) and be able
+  -- to update all registers. However, that poses challenges in macaw-symbolic,
+  -- where an implicit update of a machine register in the middle of a block is
+  -- very difficult, as machine register identity is erased at that point. Thus,
+  -- it is difficult to know what to update with the results of a system
+  -- call. By making the data flows explicit at translation time, we can avoid
+  -- that challenge at the expense of needing to over-approximate for all
+  -- possible syscall conventions for each platform.
+  X86Syscall :: (1 <= w)
+             => NatRepr w
+             -> !(f (BVType w)) -- rax (syscall #)
+             -> !(f (BVType w)) -- rdi
+             -> !(f (BVType w)) -- rsi
+             -> !(f (BVType w)) -- rdx
+             -> !(f (BVType w)) -- r10
+             -> !(f (BVType w)) -- r8
+             -> !(f (BVType w)) -- r9
+             -> X86PrimFn f (TupleType [BVType w, BVType w])
+
 instance HasRepr (X86PrimFn f) TypeRepr where
   typeRepr f =
     case f of
@@ -821,6 +871,7 @@ instance HasRepr (X86PrimFn f) TypeRepr where
       SHA_Sigma1{} -> knownRepr
       SHA_Ch{} -> knownRepr
       SHA_Maj{} -> knownRepr
+      X86Syscall w _ _ _ _ _ _ _ -> TupleTypeRepr (BVTypeRepr w :< BVTypeRepr w :< Nil)
 
 packedAVX :: (1 <= n, 1 <= w) => NatRepr n -> NatRepr w ->
                                                   TypeRepr (BVType (n*w))
@@ -890,6 +941,9 @@ instance TraversableFC X86PrimFn where
       SHA_Ch x y z -> SHA_Ch <$> go x <*> go y <*> go z
       SHA_Maj x y z -> SHA_Maj <$> go x <*> go y <*> go z
 
+      X86Syscall w a1 a2 a3 a4 a5 a6 a7 ->
+        X86Syscall w <$> go a1 <*> go a2 <*> go a3 <*> go a4 <*> go a5 <*> go a6 <*> go a7
+
 -- | Pretty print a rep value size
 ppRepValSize :: RepValSize w -> Doc ann
 ppRepValSize = pretty . toInteger . repValSizeBitCount
@@ -918,9 +972,9 @@ instance IsArchFn X86PrimFn where
       X86DivRem  w num1 num2 d ->
         sexprA "div"  [ pure (ppRepValSize w), pp num1, pp num2, pp d ]
       SSE_UnaryOp op tp x y ->
-        sexprA ("sse_" ++ sseOpName op ++ "1") [ ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op) ++ "1") [ ppShow tp, pp x, pp y ]
       SSE_VectorOp op n tp x y ->
-        sexprA ("sse_" ++ sseOpName op) [ ppShow n, ppShow tp, pp x, pp y ]
+        sexprA ("sse_" ++ ppMnem (sseOpName op)) [ ppShow n, ppShow tp, pp x, pp y ]
       SSE_Sqrt ftp x ->
         sexprA "sse_sqrt" [ ppShow ftp, pp x ]
       SSE_CMPSX c tp  x y -> sexprA "sse_cmpsx" [ ppShow c, ppShow tp, pp x, pp y ]
@@ -962,6 +1016,8 @@ instance IsArchFn X86PrimFn where
       SHA_Sigma1 x -> sexprA "sha_Sigma1" [pp x]
       SHA_Ch x y z -> sexprA "sha_Ch" [pp x, pp y, pp z]
       SHA_Maj x y z -> sexprA "sha_Maj" [pp x, pp y, pp z]
+      X86Syscall _w a1 a2 a3 a4 a5 a6 a7 ->
+        sexprA "syscall" [pp a1, pp a2, pp a3, pp a4, pp a5, pp a6, pp a7]
 
 
 -- | This returns true if evaluating the primitive function implicitly
@@ -1022,6 +1078,8 @@ x86PrimFnHasSideEffects f =
     SHA_Sigma1{} -> False
     SHA_Ch{} -> False
     SHA_Maj{} -> False
+
+    X86Syscall {} -> True
 
 ------------------------------------------------------------------------
 -- X86Stmt
@@ -1158,9 +1216,8 @@ rewriteX86Stmt f = do
   s <- traverseF rewriteValue f
   appendRewrittenArchStmt s
 
-rewriteX86TermStmt :: X86TermStmt src -> Rewriter X86_64 s src tgt (X86TermStmt tgt)
+rewriteX86TermStmt :: X86TermStmt (Value X86_64 src) -> Rewriter X86_64 s src tgt (X86TermStmt (Value X86_64 tgt))
 rewriteX86TermStmt f =
   case f of
-    X86Syscall -> pure X86Syscall
     Hlt -> pure Hlt
     UD2 -> pure UD2

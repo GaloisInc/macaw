@@ -33,6 +33,7 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MDS
+import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 
 import qualified SemMC.Architecture.PPC as PPC
@@ -96,7 +97,7 @@ ppc64_linux_info binData =
                       , MI.archAddrWidth = MM.Addr64
                       , MI.archEndianness = MM.BigEndian
                       , MI.disassembleFn = disassembleFn proxy PPC64.execInstruction
-                      , MI.mkInitialAbsState = mkInitialAbsState proxy binData
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy (Just toc)
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
@@ -110,20 +111,19 @@ ppc64_linux_info binData =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
+                      , MI.archClassifier = MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V64
+    toc = BLP.getTOC binData
 
-ppc32_linux_info :: ( BLP.HasTOC PPC32.PPC binFmt
-                    ) =>
-                    BL.LoadedBinary PPC32.PPC binFmt
-                 -> MI.ArchitectureInfo PPC32.PPC
-ppc32_linux_info binData =
+ppc32_linux_info :: MI.ArchitectureInfo PPC32.PPC
+ppc32_linux_info =
   MI.ArchitectureInfo { MI.withArchConstraints = \x -> x
                       , MI.archAddrWidth = MM.Addr32
                       , MI.archEndianness = MM.BigEndian
                       , MI.disassembleFn = disassembleFn proxy PPC32.execInstruction
-                      , MI.mkInitialAbsState = mkInitialAbsState proxy binData
+                      , MI.mkInitialAbsState = mkInitialAbsState proxy Nothing
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
@@ -137,6 +137,7 @@ ppc32_linux_info binData =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
+                      , MI.archClassifier = MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V32

@@ -21,6 +21,8 @@ module Data.Macaw.Symbolic.MemOps
   , doPtrLeq
   , doPtrAnd
   , doPtrXor
+  , doPtrTrunc
+  , doPtrUExt
   , doReadMem
   , doCondReadMem
   , doWriteMem
@@ -34,6 +36,7 @@ module Data.Macaw.Symbolic.MemOps
   , Regs
   , MacawSimulatorState(..)
   , LookupFunctionHandle(..)
+  , LookupSyscallHandle(..)
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
@@ -252,21 +255,54 @@ ptrOp k st mvar w x0 y0 =
      a <- k sym mem w xPtr xBits yPtr yBits x y
      return (a,st)
 
-mkName :: String -> IO SolverSymbol
-mkName x = case userSymbol x of
-             Right v -> return v
-             Left err ->
-               fail $ unlines
-                        [ "[bug] " ++ show x ++ " is not a valid identifier?"
-                        , "*** " ++ show err
-                        ]
+type PtrOpNR sym w a =
+  forall s ext rtp blocks r ctx.
+  (IsSymInterface sym, 1 <= w) =>
+  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  GlobalVar Mem                            {- ^ Memory model      -} ->
+  NatRepr w                                {- ^ Width of pointer  -} ->
+  RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -} ->
+  RegEntry sym (LLVMPointerType w)         {- ^ Argument 2        -} ->
+  IO (a, CrucibleState s sym ext rtp blocks r ctx)
+
+
+-- 'ptrOp' in terms of a 'NatRepr' instead of an 'M.AddrWidthRepr'
+--
+-- The 'M.AddrWidthRepr' is too restrictive for some operations (e.g., larger
+-- than pointer-width ops)
+ptrOpNR ::
+  ( (1 <= w) =>
+    sym ->
+    RegValue sym Mem ->
+    NatRepr w ->
+    Pred sym -> Pred sym -> Pred sym -> Pred sym ->
+    LLVMPtr sym w -> LLVMPtr sym w -> IO a
+  ) ->
+  PtrOpNR sym w a
+ptrOpNR k st mvar w x0 y0 =
+  do mem <- getMem st mvar
+     let sym = st^.stateSymInterface
+         x   = regValue x0
+         y   = regValue y0
+
+     zero <- natLit sym 0
+
+     xBits <- natEq sym (ptrBase x) zero
+     xPtr <- notPred sym xBits
+
+     yBits <- natEq sym (ptrBase y) zero
+     yPtr <- notPred sym yBits
+
+     a <- k sym mem w xPtr xBits yPtr yBits x y
+     return (a,st)
+
 
 mkUndefined ::
   (IsSymInterface sym) =>
   sym -> String -> BaseTypeRepr t -> IO (RegValue sym (BaseToType t))
 mkUndefined sym unm ty =
   do let name = "undefined_" ++ unm
-     nm <- mkName name
+         nm   = safeSymbol name
      freshConstant sym nm ty
 
 -- | A fresh bit-vector variable
@@ -280,7 +316,7 @@ mkUndefinedNat ::
   (IsSymInterface sym) => sym -> String -> IO (RegValue sym NatType)
 mkUndefinedNat sym unm =
   do let name = "undefined_" ++ unm
-     nm <- mkName name
+         nm   = safeSymbol name
      freshNat sym nm
 
 -- | A fresh boolean variable
@@ -330,12 +366,39 @@ type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
 -- 'CrucibleState' to allow the callback to lazily instantiate callees (e.g., by
 -- constructing the CFG of the callee on the fly) and register them with the
 -- simulator.
-data LookupFunctionHandle sym arch = LookupFunctionHandle
+newtype LookupFunctionHandle sym arch = LookupFunctionHandle
      (forall rtp blocks r ctx
    . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
+
+-- | A function to inspect the machine state and translate it into a
+-- 'C.FnHandle' corresponding to the system call model that the simulator should
+-- call.
+--
+-- This function takes a subset of machine state determined by the ABI of the
+-- system being simulated. This could be an entire register state, but need not
+-- be. It could also include additional values (e.g., immediate operands to a
+-- syscall instruction).
+--
+-- Compared to 'LookupFunctionHandle', this function also takes a sequence of
+-- type reprs that indicate the return values that are returned by the syscall
+-- model.
+--
+-- Note that all of the arguments passed to this lookup function are also passed
+-- to the system call (reflected in the types of the function handle
+-- returned). Note that it is the responsibility of the architecture-specific
+-- backend (e.g., macaw-x86) to ensure that the returned values are placed in
+-- the appropriate machine registers.
+newtype LookupSyscallHandle sym arch =
+  LookupSyscallHandle (  forall rtp blocks r ctx atps rtps
+                      .  Ctx.Assignment TypeRepr atps
+                      -> Ctx.Assignment TypeRepr rtps
+                      -> CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+                      -> C.RegEntry sym (StructType atps)
+                      -> IO (C.FnHandle atps (StructType rtps), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx)
+                      )
 
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)
@@ -500,18 +563,17 @@ doPtrMux c = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
 --
 -- NOTE that the case of adding two pointers is not explicitly addressed in the
 -- 'cases' call below; 'cases' adds a fallthrough that asserts false.
-doPtrAdd :: PtrOp sym w (LLVMPtr sym w)
-doPtrAdd = ptrOp $ \sym _ w xPtr xBits yPtr yBits x y ->
+doPtrAdd :: PtrOpNR sym w (LLVMPtr sym w)
+doPtrAdd = ptrOpNR $ \sym _ w xPtr xBits yPtr yBits x y ->
   do both_bits <- andPred sym xBits yBits
      ptr_bits  <- andPred sym xPtr  yBits
      bits_ptr  <- andPred sym xBits yPtr
-     let nw = M.addrWidthNatRepr w
      a <- cases sym (binOpLabel "ptr_add" x y) muxLLVMPtr Nothing
        [ both_bits ~>
            endCase =<< llvmPointer_bv sym =<< bvAdd sym (asBits x) (asBits y)
 
-       , ptr_bits ~> endCase =<< ptrAdd sym nw x (asBits y)
-       , bits_ptr ~> endCase =<< ptrAdd sym nw y (asBits x)
+       , ptr_bits ~> endCase =<< ptrAdd sym w x (asBits y)
+       , bits_ptr ~> endCase =<< ptrAdd sym w y (asBits x)
        ]
      return a
 
@@ -547,6 +609,49 @@ doPtrSub = ptrOp $ \sym _mem w xPtr xBits yPtr yBits x y ->
               r  <- llvmPointer_bv sym =<< bvSub sym (asBits x) (asBits y)
               endCaseCheck sameAlloc "Pointers in different regions" r
        ]
+
+-- | Truncation of a pointer down to a smaller size
+--
+-- We need to handle this as not a plain bitvector operation to enable us to
+-- preserve the block id.  Some architectures do pointer operations (really, all
+-- bitvector operations) at a higher bit width to observe overflow. Without this
+-- special handling (to preserve the block id), it gets lost and corrupts
+-- pointers.
+--
+-- We don't want to do any special checking: just truncate the offset and
+-- preserve the block id.
+doPtrTrunc
+  :: ( IsSymInterface sym
+     , 1 <= w'
+     , (w' + 1) <= w
+     )
+  => CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -}
+  -> GlobalVar Mem                            {- ^ Memory model      -}
+  -> RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -}
+  -> NatRepr w'                               {- ^ New width         -}
+  -> IO (RegValue sym (LLVMPointerType w'), CrucibleState s sym ext rtp blocks r ctx)
+doPtrTrunc st _memVar ptrEntry width = do
+  let (Mem.LLVMPointer base offset) = regValue ptrEntry
+  let sym = st ^. stateSymInterface
+  ptr' <- Mem.LLVMPointer base <$> bvTrunc sym width offset
+  return (ptr', st)
+
+doPtrUExt
+  :: ( IsSymInterface sym
+     , 1 <= w
+     , (w + 1) <= w'
+     )
+  => CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -}
+  -> GlobalVar Mem                            {- ^ Memory model      -}
+  -> RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -}
+  -> NatRepr w'                               {- ^ New width         -}
+  -> IO (RegValue sym (LLVMPointerType w'), CrucibleState s sym ext rtp blocks r ctx)
+doPtrUExt st _memVar ptrEntry width = do
+  let (Mem.LLVMPointer base offset) = regValue ptrEntry
+  let sym = st ^. stateSymInterface
+  ptr' <- Mem.LLVMPointer base <$> bvZext sym width offset
+  return (ptr', st)
+
 
 isAlignMask :: (IsSymInterface sym) => LLVMPtr sym w -> Maybe Integer
 isAlignMask v =
@@ -627,7 +732,7 @@ doPtrAnd = ptrOp $ \sym mem w xPtr xBits yPtr yBits x y ->
               do -- putStrLn ("ALIGNING TO " ++ show amt ++ " bits")
                  Just (Some n) <- return (someNat amt)
                  Just LeqProof <- return (testLeq (knownNat @1) n)
-                 nm <- mkName "align_amount"
+                 let nm = safeSymbol "align_amount"
                  least <- freshConstant sym nm (BaseBVRepr n)
 
                  Just LeqProof <- return (testLeq n nw)
@@ -875,7 +980,7 @@ hasPtrClass ptrWidth v =
         M.Addr64 -> v
 
 doReadMem ::
-  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -909,7 +1014,7 @@ doReadMem sym mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
 --     arg6 : Address to read
 --     arg7 : Default answer if condition is false
 doCondReadMem ::
-  (IsSymInterface sym, Mem.HasLLVMAnn sym) =>
+  (IsSymInterface sym, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   sym ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->

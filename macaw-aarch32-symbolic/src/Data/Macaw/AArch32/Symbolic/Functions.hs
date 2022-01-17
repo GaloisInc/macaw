@@ -5,7 +5,6 @@ module Data.Macaw.AArch32.Symbolic.Functions (
   , newSymFuns
   , funcSemantics
   , stmtSemantics
-  , termSemantics
   -- * Exceptions
   , AArch32Exception(..)
   ) where
@@ -59,28 +58,6 @@ newSymFuns _sym = do
 
 type S sym rtp bs r ctx = CS.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt SA.AArch32) rtp bs r ctx
 
--- | Semantics for ARM-specific block terminators
---
--- Right now we only have one: system call.  This will eventually need to
--- inspect the current register state in order to determine what system call was
--- issued under the ABI.
---
--- It is not currently clear where that information might come from (it is
--- implicitly in 'S', but might be hard to dig out).  It would probably be
--- easier to just include the necessary register snapshot in the terminator (and
--- traverse them appropriately to translate into Crucible terms)
-termSemantics :: (CB.IsSymInterface sym)
-              => SymFuns sym
-              -> MAA.ARMTermStmt ids
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym CT.UnitType, S sym rtp bs r ctx)
-termSemantics _sfns tstmt _st0 =
-  case tstmt of
-    MAA.ARMSyscall _payload ->
-      X.throwIO UnsupportedSyscall
-    MAA.ThumbSyscall _payload ->
-      X.throwIO UnsupportedSyscall
-
 -- | Semantics for statement syntax extensions
 --
 -- Right now, there is only one statement, which represents instructions for which we lack semantics.
@@ -104,7 +81,7 @@ funcSemantics :: (CB.IsSymInterface sym, MS.ToCrucibleType mt ~ t)
               -> S sym rtp bs r ctx
               -> IO (CS.RegValue sym t, S sym rtp bs r ctx)
 funcSemantics sfns fn st0 =
-  case fn of
+   case fn of
     MAA.SDiv _rep lhs rhs -> withSym st0 $ \sym -> do
       lhs' <- toValBV sym lhs
       rhs' <- toValBV sym rhs
@@ -159,6 +136,8 @@ funcSemantics sfns fn st0 =
     MAA.FPConvert {} -> X.throwIO (MissingSemanticsForFunction "FPConvert")
     MAA.FPToFixedJS {} -> X.throwIO (MissingSemanticsForFunction "FPToFixedJS")
     MAA.FPRoundInt {} -> X.throwIO (MissingSemanticsForFunction "FPRoundInt")
+    MAA.ARMSyscall {} ->
+      AP.panic AP.AArch32 "funcSemantics" ["The ARM syscall primitive should be eliminated and replaced by a handle lookup"]
 
 withSym :: (CB.IsSymInterface sym)
         => S sym rtp bs r ctx

@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
@@ -38,6 +39,7 @@ import qualified What4.Solver as WS
 import qualified Lang.Crucible.Backend as CB
 import qualified Lang.Crucible.Backend.Online as CBO
 import qualified Lang.Crucible.Simulator as CS
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 
 -- | A Tasty option to tell us to save SMT queries and responses to /tmp for debugging purposes
 data SaveSMT = SaveSMT Bool
@@ -115,9 +117,10 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
               WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
               execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
-              let Just archVals = MS.archVals (Proxy @MX.X86_64)
+              let Just archVals = MS.archVals (Proxy @MX.X86_64) Nothing
               let extract = x86ResultExtractor archVals
               logger <- makeGoalLogger saveSMT solver name exePath
+              let ?memOpts = LLVM.defaultMemOptions
               simRes <- MST.simulateAndVerify solver logger sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
               TTH.assertEqual "AssertionResult" expected simRes
 

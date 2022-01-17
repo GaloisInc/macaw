@@ -12,11 +12,13 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
   , x86_64MacawEvalFn
   , SymFuns(..), newSymFuns
+  , X86StmtExtension(..)
 
   , lookupX86Reg
   , updateX86Reg
@@ -54,6 +56,7 @@ import qualified What4.Symbol as C
 import qualified Lang.Crucible.Backend as C
 import qualified Lang.Crucible.CFG.Extension as C
 import qualified Lang.Crucible.CFG.Reg as C
+import qualified Lang.Crucible.CFG.Expr as CE
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Types as C
 import qualified Lang.Crucible.LLVM.MemModel as MM
@@ -243,14 +246,13 @@ data X86StmtExtension (f :: C.CrucibleType -> Type) (ctp :: C.CrucibleType) wher
                                         X86StmtExtension f (ToCrucibleType t)
   X86PrimStmt :: !(M.X86Stmt (AtomWrapper f))
               -> X86StmtExtension f C.UnitType
-  X86PrimTerm :: !(M.X86TermStmt ids) -> X86StmtExtension f C.UnitType
-
+  X86PrimTerm :: !(M.X86TermStmt (AtomWrapper f)) -> X86StmtExtension f C.UnitType
 
 instance C.PrettyApp X86StmtExtension where
   ppApp ppSub (X86PrimFn x) = d
     where Identity d = M.ppArchFn (Identity . liftAtomIn ppSub) x
   ppApp ppSub (X86PrimStmt stmt) = M.ppArchStmt (liftAtomIn ppSub) stmt
-  ppApp _ppSub (X86PrimTerm term) = M.prettyF term
+  ppApp ppSub (X86PrimTerm term) = M.ppArchTermStmt (liftAtomIn ppSub) term
 
 instance C.TypeApp X86StmtExtension where
   appType (X86PrimFn x) = typeToCrucible (M.typeRepr x)
@@ -260,7 +262,7 @@ instance C.TypeApp X86StmtExtension where
 instance FunctorFC X86StmtExtension where
   fmapFC f (X86PrimFn x) = X86PrimFn (fmapFC (liftAtomMap f) x)
   fmapFC f (X86PrimStmt stmt) = X86PrimStmt (fmapF (liftAtomMap f) stmt)
-  fmapFC _f (X86PrimTerm term) = X86PrimTerm term
+  fmapFC f (X86PrimTerm term) = X86PrimTerm (fmapF (liftAtomMap f) term)
 
 instance FoldableFC X86StmtExtension where
   foldMapFC f (X86PrimFn x) = foldMapFC (liftAtomIn f) x
@@ -271,18 +273,39 @@ instance FoldableFC X86StmtExtension where
 instance TraversableFC X86StmtExtension where
   traverseFC f (X86PrimFn x) = X86PrimFn <$> traverseFC (liftAtomTrav f) x
   traverseFC f (X86PrimStmt stmt) = X86PrimStmt <$> traverseF (liftAtomTrav f) stmt
-  traverseFC _f (X86PrimTerm term) = pure (X86PrimTerm term)
+  traverseFC f (X86PrimTerm term) = X86PrimTerm <$> traverseF (liftAtomTrav f) term
 
 type instance MacawArchStmtExtension M.X86_64 = X86StmtExtension
 
 
 crucGenX86Fn :: forall ids s tp. M.X86PrimFn (M.Value M.X86_64 ids) tp
              -> CrucGen M.X86_64 ids s (C.Atom s (ToCrucibleType tp))
-crucGenX86Fn fn = do
-  let f ::  M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
-      f x = AtomWrapper <$> valueToCrucible x
-  r <- traverseFC f fn
-  evalArchStmt (X86PrimFn r)
+crucGenX86Fn fn =
+  case fn of
+    M.X86Syscall w v1 v2 v3 v4 v5 v6 v7 -> do
+      -- This is the key mechanism for our system call handling. See Note
+      -- [Syscalls] for details
+      a1 <- valueToCrucible v1
+      a2 <- valueToCrucible v2
+      a3 <- valueToCrucible v3
+      a4 <- valueToCrucible v4
+      a5 <- valueToCrucible v5
+      a6 <- valueToCrucible v6
+      a7 <- valueToCrucible v7
+
+      let syscallArgs = Ctx.Empty Ctx.:> a1 Ctx.:> a2 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7
+      let argTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
+      let retTypes = Ctx.Empty Ctx.:> MM.LLVMPointerRepr w Ctx.:> MM.LLVMPointerRepr w
+      let retRepr = C.StructRepr retTypes
+      syscallArgStructAtom <- evalAtom (C.EvalApp (CE.MkStruct argTypes syscallArgs))
+      let lookupHdlStmt = MacawLookupSyscallHandle argTypes retTypes syscallArgStructAtom
+      hdlAtom <- evalMacawStmt lookupHdlStmt
+      evalAtom $ C.Call hdlAtom syscallArgs retRepr
+    _ -> do
+      let f :: forall arch a . M.Value arch ids a -> CrucGen arch ids s (AtomWrapper (C.Atom s) a)
+          f x = AtomWrapper <$> valueToCrucible x
+      r <- traverseFC f fn
+      evalArchStmt (X86PrimFn r)
 
 
 crucGenX86Stmt :: forall ids s
@@ -294,11 +317,17 @@ crucGenX86Stmt stmt = do
   stmt' <- traverseF f stmt
   void (evalArchStmt (X86PrimStmt stmt'))
 
-crucGenX86TermStmt :: M.X86TermStmt ids
+crucGenX86TermStmt :: forall ids s
+                    . M.X86TermStmt (M.Value M.X86_64 ids)
                    -> M.RegState M.X86Reg (M.Value M.X86_64 ids)
+                   -> Maybe (C.Label s)
                    -> CrucGen M.X86_64 ids s ()
-crucGenX86TermStmt tstmt _regs =
-  void (evalArchStmt (X86PrimTerm tstmt))
+crucGenX86TermStmt tstmt _regs _fallthrough = do
+  tstmt' <- traverseF f tstmt
+  void (evalArchStmt (X86PrimTerm tstmt'))
+  where
+    f :: M.Value M.X86_64 ids a -> CrucGen M.X86_64 ids s (AtomWrapper (C.Atom s) a)
+    f x = AtomWrapper <$> valueToCrucible x
 
 -- | X86_64 specific functions for translation Macaw into Crucible.
 x86_64MacawSymbolicFns :: MacawSymbolicArchFunctions M.X86_64
@@ -316,15 +345,20 @@ x86_64MacawSymbolicFns =
 
 -- | X86_64 specific function for evaluating a Macaw X86_64 program in Crucible.
 x86_64MacawEvalFn
-  :: (C.IsSymInterface sym, MM.HasLLVMAnn sym)
+  :: (C.IsSymInterface sym, MM.HasLLVMAnn sym, ?memOpts :: MM.MemOptions)
   => SymFuns sym
+  -> MacawArchStmtExtensionOverride M.X86_64
   -> MacawArchEvalFn sym MM.Mem M.X86_64
-x86_64MacawEvalFn fs =
-  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state ->
-    case ext_stmt of
-      X86PrimFn x -> funcSemantics fs x crux_state
-      X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
-      X86PrimTerm term -> termSemantics fs term crux_state
+x86_64MacawEvalFn fs (MacawArchStmtExtensionOverride override) =
+  MacawArchEvalFn $ \global_var_mem globals ext_stmt crux_state -> do
+    mRes <- override ext_stmt crux_state
+    case mRes of
+      Nothing ->
+        case ext_stmt of
+          X86PrimFn x -> funcSemantics fs x crux_state
+          X86PrimStmt stmt -> stmtSemantics fs global_var_mem globals stmt crux_state
+          X86PrimTerm term -> termSemantics fs term crux_state
+      Just res -> return res
 
 x86LookupReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)
@@ -346,12 +380,45 @@ x86UpdateReg reg_struct_entry macaw_reg val =
     Nothing -> error $ "unexpected register: " ++ showF macaw_reg
 
 instance GenArchInfo LLVMMemory M.X86_64 where
-  genArchVals _ _ = Just $ GenArchVals
+  genArchVals _ _ mOverride = Just $ GenArchVals
     { archFunctions = x86_64MacawSymbolicFns
     , withArchEval = \sym k -> do
         sfns <- liftIO $ newSymFuns sym
-        k $ x86_64MacawEvalFn sfns
-    , withArchConstraints = \x -> x  
+        let override = case mOverride of
+                         Nothing -> defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k $ x86_64MacawEvalFn sfns override
+    , withArchConstraints = \x -> x
     , lookupReg = x86LookupReg
     , updateReg = x86UpdateReg
     }
+
+{- Note [Syscalls]
+
+While most of the extension functions can be translated directly by embedding them in
+macaw symbolic wrappers (e.g., X86PrimFn), system calls are different. We cannot
+symbolically branch (and thus cannot invoke overrides) from extension
+statement/expression handlers, which is significantly limiting when modeling
+operating system behavior.
+
+To work around this, we translate the literal system call extension function
+into a sequence that gives us more flexibility:
+
+1. Inspect the machine state and return the function handle that corresponds to
+   the requested syscall
+2. Invoke the syscall
+
+Note that the ability of system calls to modify the register state (i.e., return
+values), the translation of the machine instruction must arrange for the
+returned values to flow back into the required registers. For example, it means
+that the two return registers (rax and rdi) have to be updated with the new
+values returned by the overrides on Linux/x86_64. macaw-x86 arranges for that to
+happen when it generates an 'X86Syscall' instruction.
+
+This subtle coupling is required because register identities are lost at this
+stage in the translation, and this code cannot force an update on a machine
+register.
+
+Note that after this stage, there are no more 'X86Syscall' expressions.
+
+-}

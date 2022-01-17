@@ -119,30 +119,43 @@ ppcMacawEvalFn :: ( C.IsSymInterface sym
                   , 1 <= SP.AddrWidth v
                   )
                => F.SymFuns sym
+               -> MS.MacawArchStmtExtensionOverride (SP.AnyPPC v)
                -> MS.MacawArchEvalFn sym mem (SP.AnyPPC v)
-ppcMacawEvalFn fs = MSB.MacawArchEvalFn $ \_ _ xt s -> case xt of
-  PPCPrimFn fn -> F.funcSemantics fs fn s
-  PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
-  PPCPrimTerm term -> F.termSemantics fs term s
+ppcMacawEvalFn fs (MS.MacawArchStmtExtensionOverride override) =
+  MSB.MacawArchEvalFn $ \_ _ xt s -> do
+    mRes <- override xt s
+    case mRes of
+      Nothing ->
+        case xt of
+          PPCPrimFn fn -> F.funcSemantics fs fn s
+          PPCPrimStmt stmt -> F.stmtSemantics fs stmt s
+          PPCPrimTerm term -> F.termSemantics fs term s
+      Just res -> return res
 
 
 instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V64) where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
+        let override = case mOverride of
+                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k (ppcMacawEvalFn sfns override)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
     }
 
 instance MS.IsMemoryModel mem => MS.GenArchInfo mem (SP.AnyPPC SP.V32) where
-  genArchVals _ _ = Just $ MS.GenArchVals
+  genArchVals _ _ mOverride = Just $ MS.GenArchVals
     { MS.archFunctions = ppcMacawSymbolicFns
     , MS.withArchEval = \sym k -> do
         sfns <- liftIO $ F.newSymFuns sym
-        k (ppcMacawEvalFn sfns)
+        let override = case mOverride of
+                         Nothing -> MS.defaultMacawArchStmtExtensionOverride
+                         Just ov -> ov
+        k (ppcMacawEvalFn sfns override)
     , MS.withArchConstraints = \x -> x
     , MS.lookupReg = archLookupReg
     , MS.updateReg = archUpdateReg
@@ -256,11 +269,16 @@ ppcGenStmt s = do
 
 ppcGenTermStmt :: forall v ids s ppc
                 . ( ppc ~ MP.AnyPPC v )
-               => MP.PPCTermStmt v ids
+               => MP.PPCTermStmt v (MC.Value ppc ids)
                -> MC.RegState (MP.PPCReg v) (MC.Value ppc ids)
+               -> Maybe (C.Label s)
                -> MSB.CrucGen ppc ids s ()
-ppcGenTermStmt ts _rs =
-  void (MSB.evalArchStmt (PPCPrimTerm ts))
+ppcGenTermStmt ts _rs _fallthrough = do
+  ts' <- TF.traverseF f ts
+  void (MSB.evalArchStmt (PPCPrimTerm ts'))
+  where
+    f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
+    f x = A.AtomWrapper <$> MSB.valueToCrucible x
 
 data PPCStmtExtension ppc (f :: C.CrucibleType -> DK.Type) (ctp :: C.CrucibleType) where
   -- | Wrappers around the arch-specific functions in PowerPC; these are
@@ -273,24 +291,22 @@ data PPCStmtExtension ppc (f :: C.CrucibleType -> DK.Type) (ctp :: C.CrucibleTyp
               -> PPCStmtExtension ppc f C.UnitType
   -- | Wrappers around the arch-specific terminators in PowerPC; these are
   -- interpreted in 'termSemantics'
-  PPCPrimTerm :: MP.PPCTermStmt ppc ids -> PPCStmtExtension ppc f C.UnitType
+  PPCPrimTerm :: MP.PPCTermStmt ppc (A.AtomWrapper f) -> PPCStmtExtension ppc f C.UnitType
 
 instance FC.FunctorFC (PPCStmtExtension ppc) where
   fmapFC f (PPCPrimFn x) = PPCPrimFn (FC.fmapFC (A.liftAtomMap f) x)
   fmapFC f (PPCPrimStmt s) = PPCPrimStmt (TF.fmapF (A.liftAtomMap f) s)
-  fmapFC _f (PPCPrimTerm t) = PPCPrimTerm t
+  fmapFC f (PPCPrimTerm t) = PPCPrimTerm (TF.fmapF (A.liftAtomMap f) t)
 
 instance FC.FoldableFC (PPCStmtExtension ppc) where
   foldMapFC f (PPCPrimFn x) = FC.foldMapFC (A.liftAtomIn f) x
   foldMapFC f (PPCPrimStmt s) = TF.foldMapF (A.liftAtomIn f) s
-  -- There are no contents in any of the terminator statements for now, so there
-  -- is no traversal here
-  foldMapFC _f (PPCPrimTerm _t) = mempty
+  foldMapFC f (PPCPrimTerm t) = TF.foldMapF (A.liftAtomIn f) t
 
 instance FC.TraversableFC (PPCStmtExtension ppc) where
   traverseFC f (PPCPrimFn x) = PPCPrimFn <$> FC.traverseFC (A.liftAtomTrav f) x
   traverseFC f (PPCPrimStmt s) = PPCPrimStmt <$> TF.traverseF (A.liftAtomTrav f) s
-  traverseFC _f (PPCPrimTerm t) = pure (PPCPrimTerm t)
+  traverseFC f (PPCPrimTerm t) = PPCPrimTerm <$> TF.traverseF (A.liftAtomTrav f) t
 
 instance (1 <= SP.AddrWidth v) => C.TypeApp (PPCStmtExtension v) where
   appType (PPCPrimFn x) = MS.typeToCrucible (MT.typeRepr x)
@@ -302,7 +318,7 @@ instance C.PrettyApp (PPCStmtExtension v) where
     I.runIdentity (MC.ppArchFn (I.Identity . A.liftAtomIn ppSub) x)
   ppApp ppSub (PPCPrimStmt s) =
     MC.ppArchStmt (A.liftAtomIn ppSub) s
-  ppApp _ppSub (PPCPrimTerm t) = MC.prettyF t
+  ppApp ppSub (PPCPrimTerm t) = MC.ppArchTermStmt (A.liftAtomIn ppSub) t
 
 type instance MSB.MacawArchStmtExtension (MP.AnyPPC v) =
   PPCStmtExtension v

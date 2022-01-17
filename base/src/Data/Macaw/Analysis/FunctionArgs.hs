@@ -16,16 +16,20 @@ which registers are needed for function arguments.
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Analysis.FunctionArgs
   ( functionDemands
-  , KnownFunABI(..)
-  , DemandSet(..)
-  , RegSegmentOff
-  , RegisterSet
-  , FunctionSummaryFailureMap
-  , FunctionArgAnalysisFailure(..)
     -- * Callbacks for architecture-specific information
   , ArchDemandInfo(..)
   , ArchTermStmtRegEffects(..)
   , ComputeArchTermStmtEffects
+  , ResolveCallArgsFn
+    -- * Demands
+  , AddrDemandMap
+  , DemandSet(..)
+    -- * Errors
+  , FunctionSummaryFailureMap
+  , FunctionArgAnalysisFailure(..)
+    -- * Utilities
+  , RegSegmentOff
+  , RegisterSet
   ) where
 
 import           Control.Lens
@@ -97,7 +101,7 @@ predBlockMap finfo =
 --    arguments are required, and what extra result registers are
 --    demanded?
 
--- | A set of registrs
+-- | A set of registers
 type RegisterSet (r :: Type -> Kind.Type) = Set (Some r)
 
 -- | A memory segment offset compatible with the architecture registers.
@@ -281,7 +285,7 @@ data ArchTermStmtRegEffects arch
 --
 -- The second is the state of registers when it is executed.
 type ComputeArchTermStmtEffects arch ids
-   = ArchTermStmt arch ids
+   = ArchTermStmt arch (Value arch ids)
    -> RegState (ArchReg arch) (Value arch ids)
    -> ArchTermStmtRegEffects arch
 
@@ -302,15 +306,6 @@ data ArchDemandInfo arch = ArchDemandInfo
 
 ------------------------------------------------------------------------
 -- FunArgContext
-
--- | Information about a function whose registers have been resolved.
-data KnownFunABI (r :: Type -> Kind.Type) =
-  KnownFnABI { kfArguments :: ![Some r]
-             -- ^ For each argument, stores the register the argument is
-             -- read from.
-             , kfReturn    :: ![Some r]
-             -- ^ Registers that the function provides for return values.
-             }
 
 -- | Function for resolving arguments to call.
 --

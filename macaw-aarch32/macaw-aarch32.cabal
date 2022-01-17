@@ -20,10 +20,10 @@ library
                      , Data.Macaw.ARM.Disassemble
                      , Data.Macaw.ARM.Eval
                      , Data.Macaw.ARM.Identify
+                     , Data.Macaw.ARM.Panic
                      , Data.Macaw.ARM.Semantics.ARMSemantics
                      , Data.Macaw.ARM.Semantics.ThumbSemantics
                      , Data.Macaw.ARM.Semantics.TH
-                     , Data.Macaw.ARM.Simplify
   -- other-modules:       
   -- other-extensions:    
   build-depends:       base >=4.10 && <5
@@ -40,6 +40,7 @@ library
                      , macaw-base
                      , macaw-semmc
                      , mtl
+                     , panic
                      , parameterized-utils
                      , pretty
                      , prettyprinter >= 1.7.0

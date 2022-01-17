@@ -1,7 +1,4 @@
 {-|
-Copyright        : (c) Galois, Inc 2015-2017
-Maintainer       : Joe Hendrix <jhendrix@galois.com>
-
 This module provides definitions for x86 instructions.
 -}
 {-# LANGUAGE ConstraintKinds #-}
@@ -9,6 +6,7 @@ This module provides definitions for x86 instructions.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -23,6 +21,7 @@ module Data.Macaw.X86.Semantics
 import           Control.Lens ((^.))
 import           Control.Monad (when)
 import qualified Data.Bits as Bits
+import qualified Data.ByteString.Char8 as BSC
 import           Data.Foldable
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as M
@@ -54,6 +53,8 @@ import qualified Data.Macaw.X86.Semantics.SHA as SHA
 
 type Addr s = Expr s (BVType 64)
 type BVExpr ids w = Expr ids (BVType w)
+
+type MnemSuffix = BSC.ByteString
 
 ------------------------------------------------------------------------
 -- Casting operations
@@ -373,7 +374,7 @@ def_pop =
 
 def_push :: InstructionDef
 def_push =
-  defUnary "push" $ \_ii val -> do
+  defUnary "push" $ \ii val -> do
     Some (HasRepSize rep v) <-
       case val of
         F.SegmentValue _ ->
@@ -398,6 +399,22 @@ def_push =
           pure $ Some $ HasRepSize DWordRepVal $ getImm32 i
         F.QWordImm (F.UImm64Concrete  w) ->
           pure $ Some $ HasRepSize QWordRepVal $ bvLit n64 (toInteger w)
+        -- See Note [Sign-extending immediate operands in push]
+        F.ByteSignedImm w ->
+          let bvW = bvLit n8 (toInteger w) in
+          pure $ if F.iiPrefixes ii ^. F.prOSO
+                 then Some $ HasRepSize WordRepVal  $ sext n16 bvW
+                 else Some $ HasRepSize QWordRepVal $ sext n64 bvW
+        F.WordSignedImm w ->
+          let bvW = bvLit n16 (toInteger w) in
+          pure $ if F.iiPrefixes ii ^. F.prOSO
+                 then Some $ HasRepSize WordRepVal bvW
+                 else Some $ HasRepSize QWordRepVal $ sext n64 bvW
+        F.DWordSignedImm w
+          |  F.iiPrefixes ii ^. F.prOSO
+          -> fail "push: Unexpected 32-bit immediate with 16-bit operand size"
+          |  otherwise
+          -> pure $ Some $ HasRepSize QWordRepVal $ sext n64 $ bvLit n32 (toInteger w)
         _ -> fail $ "Unexpected argument to push"
     let repr = repValSizeMemRepr rep
     old_sp <- get rsp
@@ -405,6 +422,30 @@ def_push =
         new_sp  = old_sp .- delta
     MemoryAddr new_sp repr .= v
     rsp     .= new_sp
+
+{-
+Note [Sign-extending immediate operands in push]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The `push` instruction is surprisingly nuaned with respect to how large
+immediate operands can be. The ISA manual
+(https://www.felixcloutier.com/x86/push) says this: "If the source operand is
+an immediate of size less than the operand size, a sign-extended value is
+pushed on the stack." So what is the operand size? In 64-bit mode, the default
+operand size for the `push` instruction is 64 bits (ignoring the REX prefix),
+and it can be changed to 16 bits if an operand-size override prefix is
+specified. The story is different for modes besides 64-bit mode, but for now,
+we assume the semantics of 64-bit mode. (If this causes issues for you, please
+file an issue.)
+
+In implementation terms, whenever we try to push a {Byte,Word,DWord}SignedImm,
+we first check if prOSO is set. If prOSO is set, we return a 16-bit operand,
+sign-extending if necessary. If prOSO is not set, we return a 64-bit operand
+instead, again sign-extending if necessary.
+
+Getting this right is important since we use the size of the sign-extended
+operand to determine how many bytes to decrement the stack pointer by. We don't
+want to use the size of the source immediate, which could be smaller.
+-}
 
 -- | Sign extend ax -> dx:ax, eax -> edx:eax, rax -> rdx:rax, resp.
 def_cwd :: InstructionDef
@@ -1017,7 +1058,7 @@ exec_sh lw l val val_setter cf_setter of_setter = repValSizeAtLeastByte lw $ do
   modify pf_loc $ mux isNonzero p
   modify l      $ mux isNonzero res
 
-def_sh :: String
+def_sh :: Mnem
        -> (forall ids n . 1 <= n => BVExpr ids n -> BVExpr ids n -> BVExpr ids n)
           -- ^ Function for value
        -> (forall ids n . (1 <= n, 8 <= n) => NatRepr n -> BVExpr ids n -> BVExpr ids 8 -> Expr ids BoolType)
@@ -1059,7 +1100,7 @@ def_sar = def_sh "sar" bvSar set_cf set_of
 
 -- Like def_sh, but for shrd/shxd instructions which have 3 arguments
 -- instead of 2.
-def_shXd :: String
+def_shXd :: Mnem
          -> (forall ids n . 1 <= n => BVExpr ids n -> BVExpr ids n -> BVExpr ids n -> BVExpr ids n)
             -- ^ Function for value.  Takes the source value and the
             -- current value and returns the updated value.
@@ -1226,7 +1267,7 @@ set_bt_flags = do
 -- | Generic function for bt, btc, btr, and bts instructions.
 --
 -- The first argument is the mnemonic, and action to run.
-def_bt :: String
+def_bt :: Mnem
        -> (forall st ids n
            . 1 <= n
            => NatRepr n -- Width of instruction
@@ -1251,7 +1292,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
     (F.Mem16 base, _) -> do
       case idx of
         F.ByteImm i -> do
-          when (i >= 16) $ fail $ mnem ++ " given invalid index."
+          when (i >= 16) $ fail $ ppMnem mnem ++ " given invalid index."
           baseAddr <- getBVAddress base
           let loc = MemoryAddr baseAddr wordMemRepr
           act knownNat loc (bvLit knownNat (toInteger i))
@@ -1268,7 +1309,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
         _ -> error $ "bt given unexpected index."
       set_bt_flags
     (F.Mem32 base, F.ByteImm  i) -> do
-      when (i >= 32) $ fail $ mnem ++ " given invalid index."
+      when (i >= 32) $ fail $ ppMnem mnem ++ " given invalid index."
       loc <- getBV32Addr base
       let iv = bvLit knownNat (toInteger i)
       act knownNat loc iv
@@ -1282,7 +1323,7 @@ def_bt mnem act = defBinary mnem $ \_ base_loc idx -> do
       act knownNat loc iv
       set_bt_flags
     (F.Mem64 base, F.ByteImm  i) -> do
-      when (i >= 64) $ fail $ mnem ++ " given invalid index."
+      when (i >= 64) $ fail $ ppMnem mnem ++ " given invalid index."
       loc <- getBV64Addr base
       let iv = bvLit knownNat (toInteger i)
       act knownNat loc iv
@@ -1627,8 +1668,8 @@ def_lods = defBinary "lods" $ \ii loc loc' -> do
       exec_lods rep QWordRepVal
     _ -> error $ "lods given bad arguments " ++ show (loc, loc')
 
-def_lodsx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
-def_lodsx suf elsz = defNullaryPrefix ("lods" ++ suf) $ \pfx -> do
+def_lodsx :: (1 <= elsz) => MnemSuffix -> NatRepr elsz -> InstructionDef
+def_lodsx suf elsz = defNullaryPrefix ("lods" <> suf) $ \pfx -> do
   let rep = pfx == F.RepPrefix
   case intValue elsz of
     8  -> exec_lods rep ByteRepVal
@@ -1727,7 +1768,7 @@ def_fld = defUnary "fld" $ \_ val -> do
     _ -> error "fld given unexpected argument"
 
 -- | FST/FSTP Store floating-point value
-def_fstX :: String -> Bool -> InstructionDef
+def_fstX :: Mnem -> Bool -> InstructionDef
 def_fstX mnem doPop = defUnary mnem $ \_ val -> do
   v <- get (X87StackRegister 0)
   case val of
@@ -1788,7 +1829,7 @@ execX87BinOp op loc expr1 = do
   set_undefined c2_loc
   set_undefined c3_loc
 
-defX87BinaryInstruction :: String
+defX87BinaryInstruction :: Mnem
                         -> X87BinOp
                         -> InstructionDef
 defX87BinaryInstruction mnem op =
@@ -1808,9 +1849,9 @@ defX87BinaryInstruction mnem op =
         val <- get (X87StackRegister y)
         execX87BinOp op (X87StackRegister x) (bitcast toX87Float val)
       _ -> do
-        fail $ mnem ++ "had unexpected arguments: " ++ show vs
+        fail $ ppMnem mnem ++ "had unexpected arguments: " ++ show vs
 
-defX87PopInstruction :: String
+defX87PopInstruction :: Mnem
                      -> X87BinOp
                      -> InstructionDef
 defX87PopInstruction mnem op =
@@ -1821,7 +1862,7 @@ defX87PopInstruction mnem op =
         execX87BinOp op (X87StackRegister x) (bitcast toX87Float val)
         x87Pop
       _ -> do
-        fail $ mnem ++ "had unexpected arguments: " ++ show vs
+        fail $ ppMnem mnem ++ "had unexpected arguments: " ++ show vs
 
 -- | FADD Add floating-point
 def_fadd :: InstructionDef
@@ -1972,11 +2013,11 @@ exec_movd l v
 -- PACKUSWB Pack words into bytes with unsigned saturation
 
 def_punpck :: (1 <= o)
-           => String
+           => MnemSuffix
            -> (forall ids . ([BVExpr ids o], [BVExpr ids o]) -> [BVExpr ids o])
            -> NatRepr o
            -> InstructionDef
-def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
+def_punpck suf f pieceSize = defBinaryLV ("punpck" <> suf) $ \l v -> do
   v0 <- get l
   let splitHalf :: [a] -> ([a], [a])
       splitHalf xs = splitAt ((length xs + 1) `div` 2) xs
@@ -1989,7 +2030,7 @@ def_punpck suf f pieceSize = defBinaryLV ("punpck" ++ suf) $ \l v -> do
 
 -- | This is used by MMX and SSE instructions
 def_packed_binop :: (1 <= w)
-                 => String
+                 => Mnem
                  -> NatRepr w
                  -> (forall ids . Expr ids (BVType w) -> Expr ids (BVType w) -> Expr ids (BVType w))
                  -> InstructionDef
@@ -2014,7 +2055,7 @@ def_packed_binop mnem w f = defBinaryLV mnem $ \l v -> do
 -- ** MMX Comparison Instructions
 
 def_pcmp :: 1 <= o
-         => String
+         => Mnem
          -> (forall ids . BVExpr ids o -> BVExpr ids o -> Expr ids BoolType)
          -> NatRepr o
          -> InstructionDef
@@ -2050,8 +2091,8 @@ exec_pxor l v = do
 -- PSLLD Shift packed doublewords left logical
 -- PSLLQ Shift packed quadword left logical
 
-def_psllx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
-def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
+def_psllx :: (1 <= elsz) => MnemSuffix -> NatRepr elsz -> InstructionDef
+def_psllx suf elsz = defBinaryLVpoly ("psll" <> suf) $ \l count -> do
   lv <- get l
   let ls  = bvVectorize elsz lv
       -- This is somewhat tedious: we want to make sure that we don't
@@ -2072,8 +2113,8 @@ def_psllx suf elsz = defBinaryLVpoly ("psll" ++ suf) $ \l count -> do
 -- PSRLD Shift packed doublewords right logical
 -- PSRLQ Shift packed quadword right logical
 
-def_psrlx :: (1 <= elsz) => String -> NatRepr elsz -> InstructionDef
-def_psrlx suf elsz = defBinaryLVpoly ("psrl" ++ suf) $ \l count -> do
+def_psrlx :: (1 <= elsz) => MnemSuffix -> NatRepr elsz -> InstructionDef
+def_psrlx suf elsz = defBinaryLVpoly ("psrl" <> suf) $ \l count -> do
   lv <- get l
   let ls  = bvVectorize elsz lv
       -- This is somewhat tedious: we want to make sure that we don't
@@ -2214,7 +2255,7 @@ def_movlps = defBinary "movlps" $ \_ x y -> do
 -- and applies a function that updates the low 64-bits of the first argument.
 def_xmm_ss :: SSE_Op -> InstructionDef
 def_xmm_ss f =
-  defBinary (sseOpName f ++ "ss") $ \_ (F.XMMReg loc) val -> do
+  defBinary (sseOpName f <> "ss") $ \_ (F.XMMReg loc) val -> do
     x <- getXMMreg_float_low loc SSE_Single
     y <- getXMM_float_low    val SSE_Single
     res <- evalArchFn $ SSE_UnaryOp f SSE_Single x y
@@ -2240,7 +2281,7 @@ def_divss = def_xmm_ss SSE_Div
 -- and applies a function that updates the register.
 def_xmm_packed :: SSE_Op -> InstructionDef
 def_xmm_packed f =
-  defBinary (sseOpName f ++ "ps") $ \_ (F.XMMReg loc) val -> do
+  defBinary (sseOpName f <> "ps") $ \_ (F.XMMReg loc) val -> do
     x <- getXMMreg_sv loc
     y <- getXMM_sv val
     res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
@@ -2268,7 +2309,7 @@ def_divps = def_xmm_packed SSE_Div
 -- SQRTPS Compute square roots of packed single-precision floating-point values
 
 -- |SQRTSS Compute square root of scalar single-precision floating-point values
-def_sqrts :: String -> SSE_FloatType ftp -> InstructionDef
+def_sqrts :: Mnem -> SSE_FloatType ftp -> InstructionDef
 def_sqrts mnem ftp =
   defBinary mnem $ \_ (F.XMMReg loc) val -> do
     y <- getXMM_float_low    val ftp
@@ -2335,7 +2376,7 @@ def_ucomiss =
 
 def_bifpx :: forall elsz
           .  1 <= elsz
-           => String
+           => Mnem
            -> (forall ids . Expr ids (BVType elsz) -> Expr ids (BVType elsz) -> Expr ids (BVType elsz))
            -> NatRepr elsz
            -> InstructionDef
@@ -2409,7 +2450,7 @@ def_unpcklps = defBinaryKnown "unpcklps" exec
 -- *** SSE Conversion Instructions
 
 -- CVTSI2SS Convert doubleword integer to scalar single-precision floating-point value
-def_cvtsi2sX :: String -> SSE_FloatType tp -> InstructionDef
+def_cvtsi2sX :: Mnem -> SSE_FloatType tp -> InstructionDef
 def_cvtsi2sX mnem tp =
   defBinary mnem $ \_ (F.XMMReg loc) val -> do
     -- Loc is RG_XMM_reg
@@ -2437,7 +2478,7 @@ def_cvtsi2sX mnem tp =
 
 -- replace pairs with the left operand if `op` is true (e.g., bvUlt for min)
 def_pselect :: (1 <= o)
-            => String
+            => Mnem
             -> (forall ids . BVExpr ids o -> BVExpr ids o -> Expr ids BoolType)
             -> NatRepr o
             -> InstructionDef
@@ -2482,7 +2523,7 @@ def_pinsrw = defTernary "pinsrw" $ \_ loc val imm -> do
 -- PINSRD Insert doubleword
 -- PINSRQ Insert quadword
 def_pinsrx :: (1 <= w)
-          => String
+          => Mnem
           -> NatRepr w
           -> Word8
           -> InstructionDef
@@ -2493,24 +2534,24 @@ def_pinsrx mnem w mask = defTernary mnem $ \_ loc val imm -> do
     F.ByteImm off
       | Just Refl <- testEquality (typeWidth l) n128
         -> exec_pinsrx w n128 l v $ off Bits..&. mask
-      | otherwise -> fail $ mnem ++ ": Unknown bit width"
-    _ -> fail $ "Bad offset to " ++ mnem
+      | otherwise -> fail $ ppMnem mnem ++ ": Unknown bit width"
+    _ -> fail $ "Bad offset to " ++ ppMnem mnem
 
 -- PMAXUB Maximum of packed unsigned byte integers
 -- PMAXSW Maximum of packed signed word integers
 -- PMINUB Minimum of packed unsigned byte integers
 -- PMINSW Minimum of packed signed word integers
-def_pmaxu :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_pmaxu suf w = def_pselect ("pmaxu" ++ suf) (flip bvUlt) w
+def_pmaxu :: (1 <= w) => MnemSuffix -> NatRepr w -> InstructionDef
+def_pmaxu suf w = def_pselect ("pmaxu" <> suf) (flip bvUlt) w
 
-def_pmaxs :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_pmaxs suf w = def_pselect ("pmaxs" ++ suf) (flip bvSlt) w
+def_pmaxs :: (1 <= w) => MnemSuffix -> NatRepr w -> InstructionDef
+def_pmaxs suf w = def_pselect ("pmaxs" <> suf) (flip bvSlt) w
 
-def_pminu :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_pminu suf w = def_pselect ("pminu" ++ suf) bvUlt w
+def_pminu :: (1 <= w) => MnemSuffix -> NatRepr w -> InstructionDef
+def_pminu suf w = def_pselect ("pminu" <> suf) bvUlt w
 
-def_pmins :: (1 <= w) => String -> NatRepr w -> InstructionDef
-def_pmins suf w = def_pselect ("pmins" ++ suf) bvSlt w
+def_pmins :: (1 <= w) => MnemSuffix -> NatRepr w -> InstructionDef
+def_pmins suf w = def_pselect ("pmins" <> suf) bvSlt w
 
 exec_pmovmskb :: forall st ids n n'
               .  SupportedBVWidth n
@@ -2583,7 +2624,7 @@ def_xmm_sd :: SSE_Op
               -- ^ Binary operation
            -> InstructionDef
 def_xmm_sd f =
-  defBinary (sseOpName f ++ "sd") $ \_ (F.XMMReg loc) val -> do
+  defBinary (sseOpName f <> "sd") $ \_ (F.XMMReg loc) val -> do
     x <- getXMMreg_float_low loc SSE_Double
     y <- getXMM_float_low val SSE_Double
     res <- evalArchFn $ SSE_UnaryOp f SSE_Double x y
@@ -2642,13 +2683,13 @@ def_xorpd =
 
 -- CMPPD Compare packed double-precision floating-point values
 -- | CMPSD Compare scalar double-precision floating-point values
-def_cmpsX :: String -> SSE_FloatType tp -> InstructionDef
+def_cmpsX :: Mnem -> SSE_FloatType tp -> InstructionDef
 def_cmpsX mnem tp =
   defTernary mnem $ \_ (F.XMMReg loc) f_val (F.ByteImm imm) -> do
     f <-
       case lookupSSECmp imm of
         Just f -> pure f
-        Nothing -> fail $ mnem ++ " had unsupported operator type " ++ show imm ++ "."
+        Nothing -> fail $ ppMnem mnem ++ " had unsupported operator type " ++ show imm ++ "."
     lv <- getXMMreg_float_low loc tp
     v  <- getXMM_float_low f_val tp
     res <- evalArchFn $ SSE_CMPSX f tp lv v
@@ -2696,7 +2737,7 @@ def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ (F.XMMReg loc) val -> do
 
 -- CVTSD2SI  Convert scalar double-precision floating-point values to a doubleword integer
 
-def_cvttsX2si :: String -> SSE_FloatType tp -> InstructionDef
+def_cvttsX2si :: Mnem -> SSE_FloatType tp -> InstructionDef
 def_cvttsX2si mnem tp =
   defBinary mnem $ \_ loc val -> do
     v <- getXMM_float_low val tp
@@ -2894,7 +2935,7 @@ exec_palignr l v imm = do
 def_syscall :: InstructionDef
 def_syscall =
   defNullary "syscall" $
-    addArchTermStmt X86Syscall
+    addArchSyscall
 
 def_cpuid :: InstructionDef
 def_cpuid =
@@ -2925,19 +2966,8 @@ def_xgetbv =
 ------------------------------------------------------------------------
 -- AVX instructions
 
-
-
-
-
-
-
-
-
-
-
 ------------------------------------------------------------------------
 -- Instruction list
-
 
 all_instructions :: [InstructionDef]
 all_instructions =
@@ -3203,7 +3233,7 @@ mapNoDupFromList = foldlM ins M.empty
             Nothing -> Right (M.insert k v m)
 
 -- | A map from instruction mnemonics to their semantic definitions
-semanticsMap :: Map String InstructionSemantics
+semanticsMap :: Map Mnem InstructionSemantics
 semanticsMap =
   case mapNoDupFromList all_instructions of
     Right m -> m

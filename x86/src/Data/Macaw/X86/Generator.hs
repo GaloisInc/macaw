@@ -5,13 +5,13 @@ Maintainer       : Joe Hendrix <jhendrix@galois.com>, Simon Winwood <sjw@galois.
 This defines the monad @X86Generator@, which provides operations for
 modeling X86 semantics.
 -}
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
@@ -24,6 +24,7 @@ module Data.Macaw.X86.Generator
   , addStmt
   , addTermStmt
   , addArchStmt
+  , addArchSyscall
   , addArchTermStmt
   , asAtomicStateUpdate
   , evalArchFn
@@ -64,9 +65,6 @@ module Data.Macaw.X86.Generator
 import           Control.Lens
 import           Control.Monad.Cont
 import           Control.Monad.Except
-#if __GLASGOW_HASKELL__ < 808
-import           Control.Monad.Fail
-#endif
 import           Control.Monad.Reader
 import           Control.Monad.ST
 import           Control.Monad.State.Strict
@@ -79,6 +77,7 @@ import           Data.Macaw.Memory
 import           Data.Macaw.Types
 import           Data.Maybe
 import           Data.Parameterized.Classes
+import qualified Data.Parameterized.List as PL
 import           Data.Parameterized.Map (MapF)
 import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr
@@ -280,9 +279,6 @@ instance Monad (X86Generator st_s ids) where
   return v = seq v $ X86G $ return v
   (X86G m) >>= h = X86G $ m >>= \v -> seq v (unX86G (h v))
   X86G m >> X86G n = X86G $ m >> n
-#if __GLASGOW_HASKELL__ < 808
-  fail = Control.Monad.Fail.fail
-#endif
 
 instance MonadFail (X86Generator st_s ids) where
   fail msg = seq t $ X86G $ ContT $ \_ -> throwError t
@@ -344,8 +340,28 @@ addStmt stmt = seq stmt $
 addArchStmt :: X86Stmt (Value X86_64 ids) -> X86Generator st_s ids ()
 addArchStmt = addStmt . ExecArchStmt
 
+-- | Generate our semantics for a system call
+--
+-- This reads all of the state that may be needed to determine the handler for
+-- the call and all of the actual arguments to the syscall.
+--
+-- It returns all of the state that the instruction /could/ update (besides
+-- memory, which is implicitly threaded through).
+--
+-- Note that the 'X86Syscall' extension is a /function/ to enable it to return
+-- updated values. We would ideally prefer system calls to act as block
+-- terminators. We get that behavior by forcing macaw to terminate the block
+-- when it encounters a syscall.
+addArchSyscall :: X86Generator st_s ids ()
+addArchSyscall = do
+  sc <- X86Syscall (knownNat @64) <$> getRegValue RAX <*> getRegValue RDI <*> getRegValue RSI <*> getRegValue RDX <*> getRegValue R10 <*> getRegValue R8 <*> getRegValue R9
+  res <- evalArchFn sc
+  setReg RAX =<< eval (app (TupleField knownRepr res PL.index0))
+  setReg RDX =<< eval (app (TupleField knownRepr res PL.index1))
+  addTermStmt FetchAndExecute
+
 -- | execute a primitive instruction.
-addArchTermStmt :: X86TermStmt ids -> X86Generator st ids ()
+addArchTermStmt :: X86TermStmt (Value X86_64 ids) -> X86Generator st ids ()
 addArchTermStmt ts = addTermStmt (ArchTermStmt ts)
 
 -- | Terminate the current block immediately

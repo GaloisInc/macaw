@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -20,25 +21,26 @@ module Data.Macaw.ARM.Eval
     where
 
 import           Control.Lens ( (&), (^.), (.~) )
+import qualified Data.BitVector.Sized as BVS
 import qualified Data.Macaw.ARM.ARMReg as AR
 import qualified Data.Macaw.ARM.Arch as AA
 import qualified Data.Macaw.AbsDomain.AbsState as MA
-import qualified Data.Macaw.Architecture.Info as MI
-import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.AbsDomain.JumpBounds as MJ
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.SemMC.Generator as MSG
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
-import           Data.Parameterized.NatRepr (knownNat)
-import           Data.Parameterized.Some ( Some(..) )
+import qualified Data.Macaw.Types as MT
 import qualified Data.Parameterized.Map as MapF
+import           Data.Parameterized.NatRepr (knownNat, NatRepr)
+import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Set as Set
 
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
 
 import qualified Data.Macaw.ARM.Arch as MAA
-import           Data.Macaw.ARM.Simplify ()
+import qualified Data.Macaw.ARM.Panic as MAP
 
 callParams :: (forall tp . AR.ARMReg tp -> Bool)
            -> MA.CallParams AR.ARMReg
@@ -78,7 +80,7 @@ initialBlockRegs addr preconds = MSG.initRegState addr &
 -- but it isn't worth the complexity until we encounter it in the wild.
 extractBlockPrecond :: MC.ArchSegmentOff ARM.AArch32
                     -> MA.AbsBlockState (MC.ArchReg ARM.AArch32)
-                    -> Either String (MI.ArchBlockPrecond ARM.AArch32)
+                    -> Either String (MC.ArchBlockPrecond ARM.AArch32)
 extractBlockPrecond _ absState =
   case absState ^. MA.absRegState . MC.boundValue (AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")) of
     MA.FinSet (Set.toList -> [bi]) -> Right (MAA.ARMBlockPrecond { MAA.bpPSTATE_T = bi == 1 })
@@ -113,15 +115,45 @@ mkInitialAbsState _mem startAddr =
 lowBitSet :: MC.ArchSegmentOff ARM.AArch32 -> Bool
 lowBitSet addr = MC.clearSegmentOffLeastBit addr /= addr
 
-absEvalArchFn :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
+-- | Perform the given division operation if both the dividend and divisor are
+-- singleton abstract values (i.e., concrete)
+--
+-- NOTE: This could be extended to handle the case where both are 'MA.FinSet'
+-- values if we wanted to be fancier, but it doesn't seem necessary yet.
+--
+-- NOTE: The divisor is guaranteed by the ARM semantics to not be zero, but we
+-- guard against it here just in case, as the bv-sized operations *can* throw.
+abstractDivision
+  :: (BVS.BV w -> BVS.BV w -> BVS.BV w)
+  -> (BVS.BV w -> Integer)
+  -> NatRepr w
+  -> MA.AbsValue 32 (MT.BVType w)
+  -> MA.AbsValue 32 (MT.BVType w)
+  -> MA.AbsValue 32 (MT.BVType w)
+abstractDivision op extract wrep dividends divisors
+  | Just dividend <- BVS.mkBV wrep <$> MA.asConcreteSingleton dividends
+  , Just divisor <- BVS.mkBV wrep <$> MA.asConcreteSingleton divisors
+  , divisor /= BVS.zero wrep = MA.FinSet (Set.singleton (extract (op dividend divisor)))
+  | otherwise = MA.TopV
+
+absEvalArchFn :: forall ids tp
+               . MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MC.ArchFn ARM.AArch32 (MC.Value ARM.AArch32 ids) tp
               -> MA.AbsValue 32 tp
-absEvalArchFn _r f =
+absEvalArchFn r f =
   case f of
-    AA.UDiv{} -> MA.TopV
-    AA.SDiv{} -> MA.TopV
-    AA.URem{} -> MA.TopV
-    AA.SRem{} -> MA.TopV
+    AA.UDiv wrep dividend divisor ->
+      -- Note that we use the BVS quotient operations rather than division, as
+      -- ARM rounds towards zero rather than negative infinity
+      abstractDivision BVS.uquot BVS.asUnsigned wrep (t dividend) (t divisor)
+    AA.SDiv wrep dividend divisor ->
+      abstractDivision (BVS.squot wrep) (BVS.asSigned wrep) wrep (t dividend) (t divisor)
+    AA.URem wrep dividend divisor ->
+      abstractDivision BVS.urem BVS.asUnsigned wrep (t dividend) (t divisor)
+    AA.SRem wrep dividend divisor ->
+      abstractDivision (BVS.srem wrep) (BVS.asSigned wrep) wrep (t dividend) (t divisor)
+
+    AA.ARMSyscall {} -> MA.TopV
     AA.UnsignedRSqrtEstimate {} -> MA.TopV
     AA.FPSub {} -> MA.TopV
     AA.FPAdd {} -> MA.TopV
@@ -147,6 +179,9 @@ absEvalArchFn _r f =
     AA.FPConvert {} -> MA.TopV
     AA.FPToFixedJS {} -> MA.TopV
     AA.FPRoundInt {} -> MA.TopV
+  where
+    t :: forall tp' . MC.Value ARM.AArch32 ids tp' -> MA.AbsValue 32 tp'
+    t = MA.transferValue r
 
 -- For now, none of the architecture-specific statements have an effect on the
 -- abstract value.
@@ -161,11 +196,11 @@ postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
                         -> MA.AbsProcessorState AR.ARMReg ids
                         -> MJ.IntraJumpBounds ARM.AArch32 ids
                         -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
-                        -> AA.ARMTermStmt ids
+                        -> AA.ARMTermStmt (MC.Value ARM.AArch32 ids)
                         -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
-    AA.ARMSyscall _ ->
+    AA.ReturnIf _ ->
       case simplifyValue (regState ^. MC.curIP) of
         Just (MC.RelocatableValue _ addr)
           | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
@@ -174,17 +209,17 @@ postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
                                          , MA.stackGrowsDown = True
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
-    AA.ThumbSyscall _ ->
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIf could not interpret next PC: " ++ show (regState ^. MC.curIP)]
+    AA.ReturnIfNot _ ->
       case simplifyValue (regState ^. MC.curIP) of
         Just (MC.RelocatableValue _ addr)
-          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 2 addr) -> do
+          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
               let params = MA.CallParams { MA.postCallStackDelta = 0
                                          , MA.preserveReg = preservePred
                                          , MA.stackGrowsDown = True
                                          }
               Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next PC: " ++ show (regState ^. MC.curIP))
+        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIfNot could not interpret next PC: " ++ show (regState ^. MC.curIP)]
 
 preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =

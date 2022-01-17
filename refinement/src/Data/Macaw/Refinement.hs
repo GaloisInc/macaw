@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -35,6 +36,7 @@ import qualified Data.Macaw.Discovery as MD
 import           Data.Macaw.Discovery.State
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Symbolic as MS
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lumberjack as LJ
 
 import           Data.Macaw.Refinement.Logging ( RefinementLog(..) )
@@ -59,6 +61,7 @@ cfgFromAddrsAndState
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
@@ -79,6 +82,7 @@ cfgFromAddrsAndStateWith
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> MD.DiscoveryState arch
@@ -110,6 +114,7 @@ cfgFromAddrs
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> MA.ArchitectureInfo arch
@@ -136,6 +141,7 @@ cfgFromAddrsWith
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> MA.ArchitectureInfo arch
@@ -174,6 +180,7 @@ refineDiscovery
      , MU.MonadUnliftIO m
      , LJ.HasLog (RefinementLog arch) m
      , X.MonadThrow m
+     , ?memOpts :: LLVM.MemOptions
      )
   => RSE.RefinementContext arch
   -> RefinementFindings arch

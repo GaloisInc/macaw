@@ -1,0 +1,15 @@
+#!/bin/bash
+# Updates cabal.project freeze files
+set -e
+
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 <ghc-ver>"
+  echo ""
+  echo "  For example, \"$0 8.10.4\""
+  exit 1
+fi
+
+cabal update
+ghcup set ghc $1
+cabal freeze --enable-tests --enable-benchmarks
+mv cabal.project.freeze cabal.project.freeze.ghc-$1

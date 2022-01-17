@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -23,8 +24,9 @@ import qualified Data.ElfEdit as EE
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Proxy ( Proxy(..) )
-import qualified Data.Text.Prettyprint.Doc as PP
+import qualified Lang.Crucible.LLVM.MemModel as LLVM
 import qualified Lumberjack as LJ
+import qualified Prettyprinter as PP
 import qualified System.IO as IO
 import qualified System.Exit as IOE
 
@@ -71,7 +73,7 @@ withElf opts k = do
           withLoadedBinary k MX86.x86_64_linux_info bin
         (EE.ELFCLASS32, EE.EM_PPC) -> do
           bin <- MBL.loadBinary @PPC32.PPC ML.defaultLoadOptions elf
-          let archInfo = MP.ppc32_linux_info bin
+          let archInfo = MP.ppc32_linux_info
           withLoadedBinary k archInfo bin
         (_,m) -> X.throwM (UnsupportedArchitecture m)
     Left (_, s) -> do
@@ -119,6 +121,7 @@ withRefinedDiscovery :: forall arch binFmt a
                         , SymArchConstraints arch
                         , MBL.BinaryLoader arch binFmt
                         , ML.MemWidth (MC.ArchAddrWidth arch)
+                        , ?memOpts :: LLVM.MemOptions
                         )
                      => Options
                      -> AI.ArchitectureInfo arch

@@ -158,6 +158,7 @@ main = do
   concreteTestInputs <- getConcreteTestList datadir False
   symbolicTestInputs <- getSymbolicTestList datadir False
   -- let testNames = Set.fromList (map name testInputs)
+  let ?memOpts = CLM.defaultMemOptions
   let tests = concat [ map mkTest concreteTestInputs
                      , map mkSymbolicTest symbolicTestInputs
                      ]
@@ -221,7 +222,7 @@ testOptions verb file = Options { inputFile = file
 -- | Test that macaw-refinement can find all of the expected jump targets
 --
 -- Jump targets are provided in .expected files that are 'read' in.
-mkTest :: TestInput -> TT.TestTree
+mkTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
@@ -257,7 +258,7 @@ posFn _ = WPL.OtherPos . T.pack . show
 -- This test is fairly simple in that it isn't checking any interesting
 -- property, but only that the simulator does not error out due to unresolved
 -- control flow.
-mkSymbolicTest :: TestInput -> TT.TestTree
+mkSymbolicTest :: (?memOpts :: CLM.MemOptions) => TestInput -> TT.TestTree
 mkSymbolicTest testinp = do
   TT.askOption $ \(VerboseLogging beVerbose) -> TTH.testCase (binaryFilePath testinp) $ do
     let opts = testOptions beVerbose (binaryFilePath testinp)
@@ -269,7 +270,7 @@ mkSymbolicTest testinp = do
         Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
     withElf opts $ \proxy archInfo bin _unrefinedDI -> do
       withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
-        let Just archVals = MS.archVals proxy
+        let Just archVals = MS.archVals proxy Nothing
         let archFns = MS.archFunctions archVals
         let mem = MBL.memoryImage bin
         F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
@@ -281,15 +282,15 @@ mkSymbolicTest testinp = do
               printf "External resolutions of %s: %s\n" (show funcName) (show (MD.discoveredClassifyFailureResolutions dfi))
               CCC.SomeCFG cfg <- MS.mkFunCFG archFns halloc funcName (posFn proxy) dfi
               regs <- MS.macawAssignToCrucM (mkReg archFns sym) (MS.crucGenRegAssignment archFns)
-              let ?recordLLVMAnnotation = \_ _ -> pure ()
+              let ?recordLLVMAnnotation = \_ _ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy sym CLD.LittleEndian MSM.ConcreteMutable mem
               let globalMap = MSM.mapRegionPointers memPtrTbl
-              let lookupFn = MS.LookupFunctionHandle $ \_s _mem _regs ->
-                    error "Could not find function handle"
+              let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
+              let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
               let validityCheck _ _ _ _ = return Nothing
               MS.withArchEval archVals sym $ \archEvalFns -> do
-                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn validityCheck cfg regs
+                (_, res) <- MS.runCodeBlock sym archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
                 case res of
                   CS.FinishedResult _ (CS.TotalRes _) -> return ()
                   CS.FinishedResult _ (CS.PartialRes {}) -> return ()

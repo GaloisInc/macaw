@@ -13,6 +13,7 @@
 {-# Language PatternSynonyms #-}
 {-# Language RecordWildCards #-}
 {-# Language FlexibleContexts #-}
+{-# Language ImplicitParams #-}
 module Data.Macaw.X86.Crucible
   ( -- * Uninterpreted functions
     SymFuns(..), newSymFuns
@@ -64,6 +65,7 @@ import qualified Lang.Crucible.Vector as V
 import           Lang.Crucible.LLVM.MemModel
                    ( LLVMPointerType
                    , Mem
+                   , MemOptions
                    , HasLLVMAnn
                    , ptrAdd
                    , projectLLVM_bv
@@ -122,7 +124,7 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func = do
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
 stmtSemantics
-  :: (IsSymInterface sym, HasLLVMAnn sym)
+  :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
   => SymFuns sym
   -> C.GlobalVar Mem
   -> GlobalMap sym Mem (M.ArchAddrWidth M.X86_64)
@@ -164,13 +166,17 @@ stmtSemantics _sym_funs global_var_mem globals stmt state = do
       "Symbolic execution semantics for x86 statement are not implemented yet: "
       <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
 
+-- | Dynamic semantics for x86-specific arch terminators
+--
+-- Note that we can't print out sub-terms that are RegEntry; however, since none
+-- of the x86 terminators contain nested dynamic values, we don't need to.
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
-              -> M.X86TermStmt ids
+              -> M.X86TermStmt (AtomWrapper (RegEntry sym))
               -> S sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S sym rtp bs r ctx)
 termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
-                               (show $ MC.prettyF x))
+                                show (MC.ppArchTermStmt (error "Can't print RegEntry") x))
 
 data Sym s = Sym { symIface :: s
                  , symTys   :: IntrinsicTypes s
@@ -281,7 +287,8 @@ evalApp' sym ev = C.evalApp (symIface sym) (symTys sym) logger evalExt ev
   where
   logger _ _ = return ()
 
-  evalExt :: fun -> EmptyExprExtension g a -> IO (RegValue sym a)
+  evalExt :: (forall a. g a -> IO (RegValue sym a))
+          -> (forall a. EmptyExprExtension g a -> IO (RegValue sym a))
   evalExt _ y  = case y of {}
 
 pureSemSymUn
@@ -573,6 +580,7 @@ pureSem sym fn = do
     M.SHA_Sigma1 x -> pureSemSymUn sym fnShaSigma1 x
     M.SHA_Ch x y z -> pureSemSymTern sym fnShaCh x y z
     M.SHA_Maj x y z -> pureSemSymTern sym fnShaMaj x y z
+    M.X86Syscall {} -> error "X86Syscall should be eliminated and replaced by X86PrimSyscall to look up a function handle"
 
 semPointwise :: (1 <= w) =>
   M.AVXPointWiseOp2 -> NatRepr w ->
@@ -880,10 +888,6 @@ toValBV ::
   AtomWrapper (RegEntry sym) (M.BVType w) ->
   IO (RegValue sym (BVType w))
 toValBV sym (AtomWrapper x) = projectLLVM_bv sym (regValue x)
-
-type family FloatInfoFromSSEType (tp :: M.Type) :: FloatInfo where
-  FloatInfoFromSSEType (M.BVType 32) = SingleFloat
-  FloatInfoFromSSEType (M.BVType 64) = DoubleFloat
 
 floatInfoFromSSEType
   :: M.SSE_FloatType tp -> FloatInfoRepr (ToCrucibleFloatInfo tp)

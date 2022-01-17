@@ -79,6 +79,7 @@ import qualified Data.Macaw.AbsDomain.StridedInterval as SI
 import           Data.Macaw.Architecture.Info
 import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
+import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
@@ -402,6 +403,7 @@ transferAbsValue r f =
     PointwiseLogicalShiftR {} -> TopV
     VExtractF128 {} -> TopV
     VInsert {} -> TopV
+    X86Syscall {} -> TopV
 
 -- | Extra constraints on block for disassembling.
 data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
@@ -552,25 +554,13 @@ postX86TermStmtAbsState :: (forall tp . X86Reg tp -> Bool)
                         -> AbsProcessorState X86Reg ids
                         -> Jmp.IntraJumpBounds X86_64 ids
                         -> RegState X86Reg (Value X86_64 ids)
-                        -> X86TermStmt ids
+                        -> X86TermStmt (Value X86_64 ids)
                         -> Maybe ( MemSegmentOff 64
                                  , AbsBlockState X86Reg
                                  , Jmp.InitJumpBounds X86_64
                                  )
-postX86TermStmtAbsState preservePred mem s bnds regs tstmt =
+postX86TermStmtAbsState _preservePred _mem _s _bnds _regs tstmt =
   case tstmt of
-    X86Syscall ->
-      case regs^.curIP of
-        RelocatableValue _ addr | Just nextIP <- asSegmentOff mem addr -> do
-          let params = CallParams { postCallStackDelta = 0
-                                  , preserveReg = preservePred
-                                  , stackGrowsDown = True
-                                  }
-          Just ( nextIP
-               , absEvalCall params s regs nextIP
-               , Jmp.postCallBounds params bnds regs
-               )
-        _ -> error $ "Sycall could not interpret next IP"
     Hlt ->
       Nothing
     UD2 ->
@@ -607,6 +597,7 @@ x86_64_info preservePred =
                    , rewriteArchTermStmt = rewriteX86TermStmt
                    , archDemandContext = x86DemandContext
                    , postArchTermStmtAbsState = postX86TermStmtAbsState preservePred
+                   , archClassifier = defaultClassifier
                    }
 
 -- | Architecture information for X86_64 on FreeBSD.

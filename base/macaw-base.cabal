@@ -1,5 +1,5 @@
 name: macaw-base
-version: 0.3.15.5
+version: 0.3.15.6
 author: Galois, Inc.
 maintainer: jhendrix@galois.com
 build-type: Simple
@@ -28,7 +28,7 @@ description:
 
 library
   build-depends:
-    base >= 4,
+    base >= 4.13,
     binary,
     binary-symbols >= 0.1.3,
     bytestring,
@@ -52,7 +52,6 @@ library
     Data.Macaw.AbsDomain.CallParams
     Data.Macaw.AbsDomain.JumpBounds
     Data.Macaw.AbsDomain.Refine
-    Data.Macaw.AbsDomain.StackAnalysis
     Data.Macaw.AbsDomain.StridedInterval
     Data.Macaw.Analysis.FunctionArgs
     Data.Macaw.Analysis.RegisterUse
@@ -67,6 +66,10 @@ library
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
     Data.Macaw.Discovery.AbsEval
+    Data.Macaw.Discovery.Classifier
+    Data.Macaw.Discovery.Classifier.JumpTable
+    Data.Macaw.Discovery.Classifier.PLT
+    Data.Macaw.Discovery.ParsedContents
     Data.Macaw.Discovery.State
     Data.Macaw.Dwarf
     Data.Macaw.Fold
@@ -80,6 +83,9 @@ library
     Data.Macaw.Utils.IncComp
     Data.Macaw.Utils.Pretty
 
+  other-modules:
+    Data.Macaw.AbsDomain.StackAnalysis
+
   ghc-options: -Wall -Wcompat
   ghc-options: -fno-warn-unticked-promoted-constructors
   ghc-prof-options: -O2 -fprof-auto-top
@@ -87,8 +93,6 @@ library
 
   default-extensions:
     GADTs
+    NoStarIsType
     ScopedTypeVariables
     TypeOperators
-
-  if impl(ghc >= 8.6)
-    default-extensions: NoStarIsType

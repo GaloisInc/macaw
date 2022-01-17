@@ -68,7 +68,22 @@ simplifyApp a =
     BVShr _ l (BVValue _ 0)           -> Just l
     BVShr sz l r                      -> binopbv (\l' r' -> shiftR l' (fromIntegral r')) sz l r
     BVSar _ l (BVValue _ 0)           -> Just l
-    BVSar sz l r                      -> binopbv (\l' r' -> shiftR (toSigned sz l') (fromIntegral (toSigned sz r'))) sz l r
+    BVSar sz l r                      -> binopbv (\l' r' ->
+                                                   let l'' = toSigned sz l' in
+                                                   let r'' = fromIntegral (toSigned sz r') in
+                                                   -- Some code will attempt to right-shift by
+                                                   -- negative amounts. Prior to GHC 9.0,
+                                                   -- `shiftR x y` is always equivalent to
+                                                   -- `shiftL x (-y)`, even when `y` is
+                                                   -- negative. On GHC 9.0 or later, however,
+                                                   -- shifting by negative amounts results in
+                                                   -- an arithmetic overflow exception, so we
+                                                   -- manually convert negative shift amounts
+                                                   -- here to prevent this.
+                                                   if r'' >= 0
+                                                     then shiftR l'' r''
+                                                     else shiftL l'' (-r''))
+                                                 sz l r
     BVAdd _ l (BVValue _ 0)           -> Just l
     BVAdd _ (BVValue _ 0) r           -> Just r
     BVAdd rep l@(BVValue {}) r@(RelocatableValue {}) ->

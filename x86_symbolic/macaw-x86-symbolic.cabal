@@ -8,7 +8,7 @@ license:       BSD3
 license-file:  LICENSE
 
 library
-  build-depends: base >= 4,
+  build-depends: base >= 4.13,
                  bv-sized >= 1.0.0,
                  crucible >= 0.4,
                  crucible-llvm,
@@ -31,8 +31,7 @@ library
 
   ghc-options: -Wall -Wcompat
   ghc-prof-options: -O2 -fprof-auto-top
-  if impl(ghc >= 8.6)
-     default-extensions: NoStarIsType
+  default-extensions: NoStarIsType
 
 test-suite macaw-x86-symbolic-tests
   type: exitcode-stdio-1.0
