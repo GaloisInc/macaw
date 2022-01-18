@@ -366,12 +366,9 @@ populateSegmentChunk :: ( 16 <= w
                         , IM.IntervalMap (MC.MemWord w) CL.Mutability
                         )
 populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
-  -- We only support statically-linked binaries for now, so fail if we have a
-  -- segment-relative address (which should only occur for an object file or
-  -- shared library)
   let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
-  let Just abs_addr = MC.asAbsoluteAddr addr
+  let abs_addr = toAbsoluteAddr addr
   let size = length bytes
   let interval = IM.IntervalOC abs_addr (abs_addr + fromIntegral size)
   let (mut_flag, conc_flag) =
@@ -431,7 +428,7 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
       -- Instead, generate assertions for each byte in the array
       F.forM_ (zip [0.. size - 1] bytes) $ \(idx, byte) -> do
         let byteAddr = MC.incAddr (fromIntegral idx) addr
-        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        let absByteAddr = toAbsoluteAddr byteAddr
         index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (BV.mkBV (MC.memWidth mem) (toInteger absByteAddr))
         eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
         prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
@@ -441,6 +438,15 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
 
       return (symArray2, IM.insert interval mut_flag ptrtable)
 
+  where
+    toAbsoluteAddr a =
+      let segOff =
+            case MC.resolveRegionOff mem (MC.addrBase a) (MC.addrOffset a) of
+              Just offset -> offset
+              Nothing -> error $ "Could not find segment offset for the region "
+                              ++ show a
+      in
+      MC.segmentOffset seg + MC.segoffOffset segOff
 
 -- | The 'pleatM' function is 'foldM' with the arguments switched so
 -- that the function is last.

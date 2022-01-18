@@ -361,6 +361,9 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
   -- value is zero.
   Bsr :: (1 <= n) => !(NatRepr n) -> !(f (BVType n)) -> App f (BVType n)
 
+  -- | The identity function.
+  NoOp :: !(TypeRepr tp) -> !(f tp) -> App f tp
+
 -----------------------------------------------------------------------
 -- App utilities
 
@@ -498,6 +501,7 @@ rendApp a0 = do
     SsbbOverflows x y c -> app "ssbb_overflows" [ Val x, Val y, Val c ]
     Bsf _ x -> app "bsf" [ Val x ]
     Bsr _ x -> app "bsr" [ Val x ]
+    NoOp _ x -> app "noop" [ Val x ]
 
 -- | Pretty print an 'App' as an expression using the given function
 -- for printing arguments.
@@ -577,3 +581,4 @@ instance HasRepr (App f) TypeRepr where
           LeqProof -> BVTypeRepr (natMultiply (knownNat :: NatRepr 8) w)
       Bsf w _ -> BVTypeRepr w
       Bsr w _ -> BVTypeRepr w
+      NoOp tp _ -> tp

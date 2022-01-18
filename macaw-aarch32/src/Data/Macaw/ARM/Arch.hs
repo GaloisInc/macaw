@@ -19,7 +19,7 @@
 module Data.Macaw.ARM.Arch where
 
 import           Control.Applicative ( (<|>) )
-import           Data.Bits ( (.&.) )
+import           Data.Bits ( (.&.), shiftR )
 import qualified Data.BitVector.Sized as BVS
 import           Data.Kind ( Type )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
@@ -760,6 +760,7 @@ simplifyOnce a = simplifyTruncExt a
               <|> doubleNegation a
               <|> negatedTrivialMux a
               <|> negatedMux a
+              <|> simplifyShiftMul a
 
 -- | Apply the simplification rules until nothing changes
 --
@@ -908,3 +909,58 @@ negatedMux app = do
   MC.Mux rep c l r <- return app
   MC.NotApp c' <- MC.valueAsApp c
   return $ MC.Mux rep c' r l
+
+-- | Simplify terms that extend a pointer, shift it right by 2, multiply it by
+-- 4, then truncate it back to 32 bits.
+--
+-- This simplification ensures the pointer's base value is preserved after
+-- performing the shift and multiplication.
+--
+-- > r1 := (uext val 65)
+-- > r2 := (bv_sar r1 0x2 :: [65])
+-- > r3 := (bv_mul r2 0x4 :: [65])
+-- > r4 := (trunc r3 32)
+--
+-- Simplifies to
+--
+-- > r4 := (noop ((val `rshift` 2) * 4))
+simplifyShiftMul :: MC.App (MC.Value ARM.AArch32 ids) tp
+                 -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
+simplifyShiftMul r4 = do
+  -- r4 := (trunc r3 32)
+  MC.Trunc r3 rep4 <- return r4
+  let targetSize = NR.knownNat @32
+  PC.Refl <- PC.testEquality rep4 targetSize
+
+  -- r3 := (bv_mul r2 0x4 :: [65])
+  MC.AssignedValue (MC.Assignment _r3_id (MC.EvalApp (MC.BVMul _rep3 r2 four))) <- return r3
+  MC.BVValue fourRepr fourVal <- return four
+  PC.Refl <- PC.testEquality fourRepr (NR.knownNat @65)
+  True <- return $ fourVal == 4
+
+  -- r2 := (bv_sar r1 0x2 :: [65])
+  MC.AssignedValue (MC.Assignment _r2_id (MC.EvalApp (MC.BVSar _rep2 r1 two))) <- return r2
+  MC.BVValue twoRepr twoVal <- return two
+  PC.Refl <- PC.testEquality twoRepr (NR.knownNat @65)
+  True <- return $ twoVal == 2
+
+  -- r1 := (uext val 65)
+  MC.AssignedValue (MC.Assignment _r1_id (MC.EvalApp (MC.UExt val rep1))) <- return r1
+  MC.RelocatableValue w (MC.MemAddr base offset) <- return val
+  PC.Refl <- PC.testEquality rep1 (NR.knownNat @65)
+  case MT.typeRepr val of
+    MT.BVTypeRepr valWidth ->
+      case PC.testEquality valWidth targetSize of
+        Nothing -> Nothing
+        Just PC.Refl -> do
+          -- NOTE: Performing the shift and multiplication operations on the
+          -- offset of a relative address like this is only correct when the
+          -- base address is 4-byte aligned.  However, we expect this to always
+          -- be true because in practice relocatable addresses are used with
+          -- ALSR which must preserve page alignment at a larger power of 2 (at
+          -- least 4KB on Linux).  Thus, this simplification is safe for small
+          -- shift/multiply pairs (like 2 and 4 here) but shound not be
+          -- expanded to cover the general case.
+          let resOffset = (offset `shiftR` 2) * 4
+          let res = MC.RelocatableValue w (MC.MemAddr base resOffset)
+          return (MC.NoOp (MT.BVTypeRepr valWidth) res)
