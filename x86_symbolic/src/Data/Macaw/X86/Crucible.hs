@@ -72,6 +72,7 @@ import           Lang.Crucible.LLVM.MemModel
                    , pattern LLVMPointerRepr
                    , llvmPointer_bv
                    )
+import qualified Lang.Crucible.LLVM.MemModel.Pointer as Pointer
 
 import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.CFG.Core as MC
@@ -346,7 +347,9 @@ pureSem sym fn = do
   let symi = (symIface sym)
   case fn of
     M.EvenParity x0 ->
-      do x <- getBitVal (symIface sym) x0
+      -- See Note [EvenParity Semantics] for why this uses getPointerOffset
+      -- (rather than getBitVal)
+      do x <- getPointerOffset x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
     M.ReadFSBase    -> error " ReadFSBase"
@@ -869,6 +872,12 @@ unpack2 sym e w c v1 v2 k =
        v2' <- getBitVal sym v2
        k (V.fromBV e n c v1') (V.fromBV e n c v2')
 
+-- | Extract the offset from an LLVMPointer
+--
+-- Note that this version generates an /assertion/ that the block number is
+-- zero, and should be used carefully. See 'getPointerOffset' for a variant that
+-- does not generate proof obligations.
+--
 -- XXX: Do we want to be strict here (i.e., asserting that the thing is
 -- not a pointer, or should be lenent, i.e., return an undefined value?)
 getBitVal ::
@@ -881,6 +890,16 @@ getBitVal sym (AtomWrapper x) =
      case regType x of
        LLVMPointerRepr w -> return (ValBV w v)
        _ -> error "getBitVal: impossible"
+
+-- | Extract the offset from an LLVMPointer without checking whether or not the
+-- block number is zero
+getPointerOffset ::
+  AtomWrapper (RegEntry sym) (M.BVType w) ->
+  IO (E sym (BVType w))
+getPointerOffset (AtomWrapper x) =
+  case regType x of
+    LLVMPointerRepr w -> return (ValBV w (Pointer.llvmPointerOffset (regValue x)))
+    tp -> error ("getPointerOffset: unexpected type repr " ++ show tp)
 
 toValBV ::
   IsSymInterface sym =>
@@ -1008,3 +1027,41 @@ liftAtomTrav f (AtomWrapper x) = AtomWrapper <$> f x
 
 liftAtomIn :: (forall s. f s -> a) -> AtomWrapper f t -> a
 liftAtomIn f (AtomWrapper x) = f x
+
+{- Note [EvenParity Semantics]
+
+Originally, the implementation of the semantics of 'EvenParity' used
+'getBitVal'. This worked up until 'PtrAdd' was generalized to not be restricted
+to pointer-width operands. In turn, that change was motivated by some
+architectures extending pointers for certain operations. The previous
+implementation meant that extending pointers threw away their block number and
+treated them as bitvectors forever after.
+
+With that change, the pattern around 'EvenParity' in x86 broke:
+
+> %1 = trunc ptr 8
+> %2 = even_parity %1
+
+Note that in the original semantics, the truncation drops the block number
+unconditionally, which meant that applying llvmPointer_bv (in 'getBitVal') was
+fine: it produced a trivial proof obligation that the block number was zero
+(assert 0 == 0).
+
+However, after the generalization, the block number was preserved (and
+concretely not zero), so the generated proof obligation now failed.  The new
+implementation uses 'getPointerOffset', which extracts the offset without
+generating any side conditions.
+
+Is this safe? The original implementation implied that testing the parity of a
+pointer is unsafe because we don't formally know what the address is, so the
+question doesn't really make sense. We also don't know the alignment of the
+underlying allocation (if we did, we could compute the parity given the
+offset). Technically that is true, but even if we wanted to enforce that, the
+original implementation was not correct: the truncation unconditionally
+discarded the block number. The current implementation (using
+'getPointerOffset') is as safe as the original. In both cases, we essentially
+require that all allocations are aligned to at least a two byte boundary.
+
+See macaw#260 for the relevant discussion (summarized here).
+
+-}

@@ -34,6 +34,7 @@ module Data.Macaw.Symbolic.Testing (
 
 import qualified Control.Exception as X
 import qualified Control.Lens as L
+import           Control.Monad ( when )
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.ByteString as BS
 import qualified Data.ElfEdit as EE
@@ -75,6 +76,7 @@ import qualified What4.BaseTypes as WT
 import qualified What4.Expr as WE
 import qualified What4.FunctionName as WF
 import qualified What4.Interface as WI
+import qualified What4.LabeledPred as WL
 import qualified What4.ProgramLoc as WPL
 import qualified What4.Protocol.Online as WPO
 import qualified What4.SatResult as WSR
@@ -180,6 +182,44 @@ functionName dfi = maybe addrName fromByteString (MD.discoveredFunSymbol dfi)
     addrName = WF.functionNameFromText (Text.pack (show (MD.discoveredFunAddr dfi)))
     fromByteString = WF.functionNameFromText . Text.decodeUtf8With Text.lenientDecode
 
+proveOneGoal
+  :: ( CB.IsSymInterface sym
+     , sym ~ WE.ExprBuilder t st fs
+     )
+  => WS.SolverAdapter st
+  -> sym
+  -> CB.Assumptions sym
+  -> WL.LabeledPred (WI.Pred sym) CS.SimError
+  -> IO ()
+proveOneGoal goalSolver sym asmps lp = do
+  assumptions <- CB.assumptionsPred sym asmps
+  goal <- WI.notPred sym (lp L.^. WL.labeledPred)
+  WS.solver_adapter_check_sat goalSolver sym WS.defaultLogData [assumptions, goal] $ \satRes ->
+    case satRes of
+      WSR.Unsat {} -> return ()
+      WSR.Sat {} -> error ("Failed to prove goal: " ++ show (lp L.^. WL.labeledPredMsg))
+      WSR.Unknown {} -> error ("Failed to prove goal: " ++ show (lp L.^. WL.labeledPredMsg))
+  return ()
+
+proveGoals
+  :: ( CB.IsSymInterface sym
+     , sym ~ WE.ExprBuilder t st fs
+     )
+  => WS.SolverAdapter st
+  -> sym
+  -> Maybe (CB.Goals (CB.Assumptions sym) (CB.Assertion sym))
+  -> IO ()
+proveGoals goalSolver sym = mapM_ (go mempty)
+  where
+    go asmps gs =
+      case gs of
+        CB.Assuming as gs1 -> go (asmps <> as) gs1
+        CB.Prove lp -> proveOneGoal goalSolver sym asmps lp
+        CB.ProveConj g1 g2 -> do
+          go asmps g1
+          go asmps g2
+          return ()
+
 -- | Convert the given function into a Crucible CFG, symbolically execute it,
 -- and treat the return value as an assertion to be verified.
 --
@@ -198,6 +238,13 @@ functionName dfi = maybe addrName fromByteString (MD.discoveredFunSymbol dfi)
 -- *translation* of programs into Crucible, while 'MS.MacawArchEvalFn' is used
 -- during symbolic execution (to provide interpretations to
 -- architecture-specific primitives).
+--
+-- In addition to symbolically executing the function to produce a Sat/Unsat
+-- result, this function will attempt to verify all generate side conditions if
+-- the name of the function being simulated begins with @test_and_verify_@ (as
+-- opposed to just @test@).  This is necessary for testing aspects of the
+-- semantics that involve the generated side conditions, rather than just the
+-- final result.
 simulateAndVerify :: forall arch sym ids w t st fs
                    . ( CB.IsSymInterface sym
                      , CCE.IsSyntaxExtension (MS.MacawExt arch)
@@ -245,6 +292,10 @@ simulateAndVerify goalSolver logger sym execFeatures archInfo archVals mem (Resu
         case partialRes of
           CS.PartialRes {} -> return SimulationPartial
           CS.TotalRes gp -> do
+            when ("test_and_verify_" `Text.isPrefixOf` WF.functionName funName) $ do
+              goals <- CB.getProofObligations sym
+              proveGoals goalSolver sym goals
+
             let Just postMem = CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals)
             withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr val -> do
               -- The function is assumed to return a value that is intended to be
