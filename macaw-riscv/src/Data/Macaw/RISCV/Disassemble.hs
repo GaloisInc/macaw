@@ -361,7 +361,7 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
       let regUpdates = disInstRegUpdates disInstState
           blockState' = disInstState ^. disInstRegState
       -- TODO: Add instruction name and semantics description?
-      let blockComment = printf "%s: %s" (show curIPAddr) instWord
+      let blockComment = printf "%s: %s" (show curIPAddr) (show instWord)
       let instStmts = (MC.InstructionStart blockOff (T.pack $ showF i) Seq.<|
                        MC.Comment (T.pack blockComment) Seq.<|
                        instStmts') Seq.|>
