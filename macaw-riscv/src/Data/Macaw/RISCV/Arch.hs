@@ -73,6 +73,9 @@ instance MC.IPAlignment (RISCV rv) where
 
 type instance MC.ArchTermStmt (RISCV rv) = RISCVTermStmt rv
 
+instance MC.IsArchTermStmt (RISCVTermStmt rv) where
+  ppArchTermStmt _ _ = error "ppArchTermStmt undefined for RISCVTermStmt"
+
 type instance MC.ArchBlockPrecond (RISCV rv) = ()
 
 riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool

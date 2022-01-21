@@ -26,7 +26,6 @@ import qualified Data.Parameterized.Some as PU
 import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
-import           Debug.Trace
 import qualified GRIFT.Types as RISCV
 import           Shared
 import           System.FilePath ( dropExtension, replaceExtension )
@@ -120,17 +119,17 @@ getExpected expectedFilename = do
       in return (fileEntryPoint er, expectedEntries, ignoredBlocks)
 
 
-testDiscovery :: ExpectedResult -> E.Elf w -> IO ()
-testDiscovery expRes elf =
+testDiscovery :: ExpectedResult -> E.Elf w -> E.ElfHeaderInfo w -> IO ()
+testDiscovery expRes elf elfHeaderInfo =
     case E.elfClass elf of
-      E.ELFCLASS32 -> testDiscovery32 expRes elf
-      E.ELFCLASS64 -> testDiscovery64 expRes elf
+      E.ELFCLASS32 -> testDiscovery32 expRes elf elfHeaderInfo
+      E.ELFCLASS64 -> testDiscovery64 expRes elf elfHeaderInfo
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery32 :: ExpectedResult -> E.Elf 32 -> IO ()
-testDiscovery32 (mEntryPoint, funcblocks, ignored) elf =
-  withMemory MM.Addr32 elf $ \mem -> do
+testDiscovery32 :: ExpectedResult -> E.Elf 32 -> E.ElfHeaderInfo 32 -> IO ()
+testDiscovery32 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
+  withMemory MM.Addr32 elfHeaderInfo $ \mem -> do
     let Just entryPoint = case mEntryPoint of
           Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
           Nothing -> MM.asSegmentOff mem epinfo
@@ -161,7 +160,6 @@ testDiscovery32 (mEntryPoint, funcblocks, ignored) elf =
         do let actualEntry = fromIntegral $ getAbsFunAddr dfi
                actualBlockStarts = S.fromList [ (baddr, bsize)
                                               | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                              , trace ("Parsed Block: " ++ show pbr) True
                                               , let baddr = fromIntegral $ getAbsBlkAddr pbr
                                               , let bsize = fromIntegral (MD.blockSize pbr)
                                               ]
@@ -183,9 +181,9 @@ testDiscovery32 (mEntryPoint, funcblocks, ignored) elf =
 
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery64 :: ExpectedResult -> E.Elf 64 -> IO ()
-testDiscovery64 (mEntryPoint, funcblocks, ignored) elf =
-  withMemory MM.Addr64 elf $ \mem -> do
+testDiscovery64 :: ExpectedResult -> E.Elf 64 -> E.ElfHeaderInfo 64 -> IO ()
+testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
+  withMemory MM.Addr64 elfHeaderInfo $ \mem -> do
     let Just entryPoint = case mEntryPoint of
           Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
           Nothing -> MM.asSegmentOff mem epinfo
@@ -216,7 +214,6 @@ testDiscovery64 (mEntryPoint, funcblocks, ignored) elf =
         do let actualEntry = fromIntegral $ getAbsFunAddr dfi
                actualBlockStarts = S.fromList [ (baddr, bsize)
                                               | pbr <- M.elems (dfi ^. MD.parsedBlocks)
-                                              , trace ("Parsed Block: " ++ show pbr) True
                                               , let baddr = fromIntegral $ getAbsBlkAddr pbr
                                               , let bsize = fromIntegral (MD.blockSize pbr)
                                               ]

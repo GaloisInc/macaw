@@ -37,23 +37,24 @@ findEntryPoint elf mem =
 
 -- | Invokes the continuation with the parsed results of reading the
 -- specified file, or generates an error exception of type ElfException.
-withELF :: FilePath -> (forall w. E.Elf w -> IO ()) -> IO ()
+withELF :: FilePath
+        -> (forall w. E.Elf w -> E.ElfHeaderInfo w -> IO ())
+        -> IO ()
 withELF fp k = do
   bytes <- B.readFile fp
-  case E.parseElf bytes of
-    E.Elf32Res [] e32 -> k e32
-    E.Elf64Res [] e64 -> k e64
-    E.ElfHeaderError off msg -> C.throwM $ ElfHeaderParseError fp off msg
-    E.Elf32Res errs _ -> C.throwM $ ElfParseError fp $ intercalate "; " $ map show errs
-    E.Elf64Res errs _ -> C.throwM $ ElfParseError fp $ intercalate "; " $ map show errs
-
+  case E.decodeElfHeaderInfo bytes of
+    Left (offset, msg) -> C.throwM $ ElfHeaderParseError fp offset msg
+    Right (E.SomeElf elfHeaderInfo) ->
+      case E.getElf elfHeaderInfo of
+        ([], elf) -> k elf elfHeaderInfo
+        (errs, _) -> C.throwM $ ElfParseError fp $ intercalate "; " $ map show errs
 
 -- | Invokes the callback with a Macaw Memory representation of the
 -- indicated Elf object.
 withMemory :: forall w m a
             . (C.MonadThrow m, MM.MemWidth w, Integral (E.ElfWordType w))
            => MM.AddrWidthRepr w
-           -> E.Elf w
+           -> E.ElfHeaderInfo w
            -> (MM.Memory w -> m a)
            -> m a
 withMemory _ e k =
