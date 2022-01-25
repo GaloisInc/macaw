@@ -189,9 +189,9 @@ fromCrucibleEndian CLD.LittleEndian = MC.LittleEndian
 data GlobalMemoryHooks w =
   GlobalMemoryHooks {
   populateRelocation
-    :: forall sym
-       . (CB.IsSymInterface sym)
-    => sym
+    :: forall sym bak
+       . (CB.IsSymBackend sym bak)
+    => bak
     -> MC.Relocation w
     -> IO [WI.SymExpr sym (WI.BaseBVType 8)]
     -- ^ The symbolic bytes to represent a relocation with
@@ -220,7 +220,7 @@ newGlobalMemoryWith
  :: ( 16 <= MC.ArchAddrWidth arch
     , MC.MemWidth (MC.ArchAddrWidth arch)
     , KnownNat (MC.ArchAddrWidth arch)
-    , CB.IsSymInterface sym
+    , CB.IsSymBackend sym bak
     , CL.HasLLVMAnn sym
     , MonadIO m
     , ?memOpts :: CL.MemOptions
@@ -229,7 +229,7 @@ newGlobalMemoryWith
  -- ^ Hooks customizing the memory setup
  -> proxy arch
  -- ^ A proxy to fix the architecture
- -> sym
+ -> bak
  -- ^ The symbolic backend used to construct terms
  -> CLD.EndianForm
  -- ^ The endianness of values in memory
@@ -238,7 +238,8 @@ newGlobalMemoryWith
  -> MC.Memory (MC.ArchAddrWidth arch)
  -- ^ The macaw memory
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
-newGlobalMemoryWith hooks proxy sym endian mmc mem = do
+newGlobalMemoryWith hooks proxy bak endian mmc mem = do
+  let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
 
   memImpl1 <- liftIO $ CL.emptyMem endian
@@ -246,12 +247,12 @@ newGlobalMemoryWith hooks proxy sym endian mmc mem = do
   let allocName = WS.safeSymbol "globalMemoryBytes"
   symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
   sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
-  (ptr, memImpl2) <- liftIO $ CL.doMalloc sym CL.GlobalAlloc CL.Mutable
+  (ptr, memImpl2) <- liftIO $ CL.doMalloc bak CL.GlobalAlloc CL.Mutable
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  (symArray2, tbl) <- populateMemory proxy hooks sym mmc mem symArray1
-  memImpl3 <- liftIO $ CL.doArrayStore sym memImpl2 ptr CLD.noAlignment symArray2 sizeBV
+  (symArray2, tbl) <- populateMemory proxy hooks bak mmc mem symArray1
+  memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
 
   return (memImpl3, ptrTable)
@@ -280,14 +281,14 @@ newGlobalMemoryWith hooks proxy sym endian mmc mem = do
 newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , MC.MemWidth (MC.ArchAddrWidth arch)
                    , KnownNat (MC.ArchAddrWidth arch)
-                   , CB.IsSymInterface sym
+                   , CB.IsSymBackend sym bak
                    , CL.HasLLVMAnn sym
                    , MonadIO m
                    , ?memOpts :: CL.MemOptions
                    )
                 => proxy arch
                 -- ^ A proxy to fix the architecture
-                -> sym
+                -> bak
                 -- ^ The symbolic backend used to construct terms
                 -> CLD.EndianForm
                 -- ^ The endianness of values in memory
@@ -300,7 +301,7 @@ newGlobalMemory = newGlobalMemoryWith defaultGlobalMemoryHooks
 
 -- | Copy memory from the 'MC.Memory' into the LLVM memory model allocation as
 -- directed by the 'MemoryModelContents' selection
-populateMemory :: ( CB.IsSymInterface sym
+populateMemory :: ( CB.IsSymBackend sym bak
                   , 16 <= MC.ArchAddrWidth arch
                   , MC.MemWidth (MC.ArchAddrWidth arch)
                   , KnownNat (MC.ArchAddrWidth arch)
@@ -310,7 +311,7 @@ populateMemory :: ( CB.IsSymInterface sym
                -- ^ A proxy to fix the architecture
                -> GlobalMemoryHooks (MC.ArchAddrWidth arch)
                -- ^ Hooks controlling how memory should be initialized
-               -> sym
+               -> bak
                -- ^ The symbolic backend
                -> MemoryModelContents
                -- ^ A flag to indicate how to populate the memory model based on the memory image
@@ -320,16 +321,17 @@ populateMemory :: ( CB.IsSymInterface sym
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                     , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
                     )
-populateMemory proxy hooks sym mmc mem symArray0 =
+populateMemory proxy hooks bak mmc mem symArray0 =
+  let sym = CB.backendGetSym bak in
   pleatM (symArray0, IM.empty) (MC.memSegments mem) $ \allocs1 seg -> do
     pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
       concreteBytes <- case memChunk of
-        MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks sym reloc
+        MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks bak reloc
         MC.BSSRegion sz ->
           liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
         MC.ByteRegion bytes ->
           liftIO $ mapM (WI.bvLit sym PN.knownNat . BV.word8) $ BS.unpack bytes
-      populateSegmentChunk proxy sym mmc mem symArray seg addr concreteBytes allocs2
+      populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the
 -- 'MemAddr') as concrete, assert that the bytes from the symbolic array backing
@@ -341,12 +343,12 @@ populateMemory proxy hooks sym mmc mem symArray0 =
 populateSegmentChunk :: ( 16 <= w
                       , MC.MemWidth w
                       , KnownNat w
-                      , CB.IsSymInterface sym
+                      , CB.IsSymBackend sym bak
                       , MonadIO m
                       , MC.ArchAddrWidth arch ~ w
                       )
                    => proxy arch
-                   -> sym
+                   -> bak
                    -> MemoryModelContents
                    -- ^ The interpretation of mutable memory that we want to use
                    -> MC.Memory w
@@ -363,10 +365,11 @@ populateSegmentChunk :: ( 16 <= w
                    -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                         , IM.IntervalMap (MC.MemWord w) CL.Mutability
                         )
-populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
+populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
   -- We only support statically-linked binaries for now, so fail if we have a
   -- segment-relative address (which should only occur for an object file or
   -- shared library)
+  let sym = CB.backendGetSym bak
   let ?ptrWidth = MC.memWidth mem
   let Just abs_addr = MC.asAbsoluteAddr addr
   let size = length bytes
@@ -433,7 +436,7 @@ populateSegmentChunk _ sym mmc mem symArray seg addr bytes ptrtable = do
         eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
         prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
         let desc = "Byte@" ++ show byteAddr
-        liftIO $ CB.addAssumption sym (CB.GenericAssumption prog_loc desc eq_pred)
+        liftIO $ CB.addAssumption bak (CB.GenericAssumption prog_loc desc eq_pred)
       let symArray2 = symArray
 
       return (symArray2, IM.insert interval mut_flag ptrtable)
@@ -555,11 +558,12 @@ mapRegionPointers :: ( MC.MemWidth w
                      )
                   => MemPtrTable sym w
                   -> MS.GlobalMap sym CL.Mem w
-mapRegionPointers mpt = \sym mem regionNum offsetVal ->
+mapRegionPointers mpt = MS.GlobalMap $ \bak mem regionNum offsetVal ->
+  let sym = CB.backendGetSym bak in
   case WI.asNat regionNum of
     Just 0 -> do
       let ?ptrWidth = WI.bvWidth offsetVal
-      CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
+      CL.doPtrAddOffset bak mem (memPtr mpt) offsetVal
     Just _ ->
       -- This is the case where the region number is concrete and non-zero,
       -- meaning that it is already an LLVM pointer
@@ -583,5 +587,5 @@ mapRegionPointers mpt = \sym mem regionNum offsetVal ->
       zeroNat <- WI.natLit sym 0
       isZeroRegion <- WI.natEq sym zeroNat regionNum
       -- The pointer mapped to global memory (if the region number is zero)
-      globalPtr <- CL.doPtrAddOffset sym mem (memPtr mpt) offsetVal
+      globalPtr <- CL.doPtrAddOffset bak mem (memPtr mpt) offsetVal
       CL.muxLLVMPtr sym isZeroRegion globalPtr (CL.LLVMPointer regionNum offsetVal)

@@ -41,6 +41,9 @@ import qualified Lang.Crucible.Backend.Online as CBO
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.LLVM.MemModel as LLVM
 
+import qualified What4.FloatMode as W4
+import qualified What4.Expr.Builder as W4
+
 -- | A Tasty option to tell us to save SMT queries and responses to /tmp for debugging purposes
 data SaveSMT = SaveSMT Bool
   deriving (Eq, Show)
@@ -94,6 +97,8 @@ x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
   let re = MS.lookupReg archVals regs MX.RAX
   k PC.knownRepr (CS.regValue re)
 
+data MacawX86SymbolicTest t = MacawX86SymbolicTest
+
 mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
 mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
@@ -109,19 +114,20 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
             step ("Testing " ++ BS8.unpack name)
             writeMacawIR saveMacaw (BS8.unpack name) dfi
             Some (gen :: PN.NonceGenerator IO t) <- PN.newIONonceGenerator
-            CBO.withYicesOnlineBackend CBO.FloatRealRepr gen CBO.NoUnsatFeatures WPF.noFeatures $ \sym -> do
+            sym <- W4.newExprBuilder W4.FloatRealRepr MacawX86SymbolicTest gen
+            CBO.withYicesOnlineBackend sym CBO.NoUnsatFeatures WPF.noFeatures $ \bak -> do
               -- We are using the z3 backend to discharge proof obligations, so
               -- we need to add its options to the backend configuration
               let solver = WS.z3Adapter
               let backendConf = WI.getConfiguration sym
               WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
-              execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend sym)
+              execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
               let Just archVals = MS.archVals (Proxy @MX.X86_64) Nothing
               let extract = x86ResultExtractor archVals
               logger <- makeGoalLogger saveSMT solver name exePath
               let ?memOpts = LLVM.defaultMemOptions
-              simRes <- MST.simulateAndVerify solver logger sym execFeatures MX.x86_64_linux_info archVals mem extract dfi
+              simRes <- MST.simulateAndVerify solver logger bak execFeatures MX.x86_64_linux_info archVals mem extract dfi
               TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

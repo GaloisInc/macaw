@@ -24,6 +24,8 @@
 
 module Data.Macaw.SemMC.TH (
   MacawTHConfig(..),
+  MacawSemMC(..),
+  Sym,
   genExecInstruction,
   genExecInstructionLogStdErr,
   genExecInstructionLogging,
@@ -72,7 +74,7 @@ import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.Pair as Pair
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Parameterized.TraversableFC as FC
-import qualified Lang.Crucible.Backend.Simple as S
+
 import qualified What4.BaseTypes as CT
 import qualified What4.Expr.BoolMap as BooM
 import qualified What4.Expr.Builder as S
@@ -104,8 +106,6 @@ import qualified Data.Macaw.SemMC.Generator as G
 import qualified Data.Macaw.SemMC.Operands as O
 import qualified Data.Macaw.SemMC.Translations as TR
 import           Data.Macaw.SemMC.TH.Monad
-
-type Sym t fs = S.SimpleBackend t fs
 
 -- | Generate the top-level lambda with a case expression over an instruction
 -- (casing on opcode)
