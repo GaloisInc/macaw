@@ -5,16 +5,16 @@ branch-rv64gc.exe:     file format elf64-littleriscv
 Disassembly of section .text:
 
 000000000001010c <main>:
-   1010c:	1101                	addi	sp,sp,-32
-   1010e:	ec22                	sd	s0,24(sp)
-   10110:	1000                	addi	s0,sp,32
+   1010c:	1101                	c.addi	sp,-32
+   1010e:	ec22                	c.sdsp	s0,24(sp)
+   10110:	1000                	c.addi4spn	s0,sp,32
    10112:	fec42783          	lw	a5,-20(s0)
-   10116:	2781                	sext.w	a5,a5
-   10118:	e781                	bnez	a5,10120 <main+0x14>
-   1011a:	4785                	li	a5,1
+   10116:	2781                	c.addiw	a5,0
+   10118:	e781                	c.bnez	a5,10120 <main+0x14>
+   1011a:	4785                	c.li	a5,1
    1011c:	fef42623          	sw	a5,-20(s0)
    10120:	fec42783          	lw	a5,-20(s0)
-   10124:	853e                	mv	a0,a5
-   10126:	6462                	ld	s0,24(sp)
-   10128:	6105                	addi	sp,sp,32
-   1012a:	8082                	ret
+   10124:	853e                	c.mv	a0,a5
+   10126:	6462                	c.ldsp	s0,24(sp)
+   10128:	6105                	c.addi16sp	sp,32
+   1012a:	8082                	c.jr	ra

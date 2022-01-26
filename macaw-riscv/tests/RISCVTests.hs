@@ -143,7 +143,7 @@ testDiscovery32 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GRepr) mem mempty [entryPoint] []
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GCRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
@@ -198,7 +198,7 @@ testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
             chatty ""
 
     -- TODO: Rename test binaries that use G instead of GC
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GRepr) mem mempty [entryPoint] []
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GCRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
