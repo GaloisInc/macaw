@@ -36,6 +36,8 @@ import           Text.Read ( readMaybe )
 
 import           Prelude
 
+import Debug.Trace
+
 
 -- | Set to true to build with chatty output.
 isChatty :: Bool
@@ -121,7 +123,7 @@ getExpected expectedFilename = do
 
 testDiscovery :: ExpectedResult -> E.Elf w -> E.ElfHeaderInfo w -> IO ()
 testDiscovery expRes elf elfHeaderInfo =
-    case E.elfClass elf of
+    case traceShowId $ E.elfClass elf of
       E.ELFCLASS32 -> testDiscovery32 expRes elf elfHeaderInfo
       E.ELFCLASS64 -> testDiscovery64 expRes elf elfHeaderInfo
 
@@ -141,7 +143,7 @@ testDiscovery32 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GCRepr) mem mempty [entryPoint] []
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv32GRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
@@ -195,7 +197,8 @@ testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GCRepr) mem mempty [entryPoint] []
+    -- TODO: Rename test binaries that use G instead of GC
+    let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
     let getAbsBlkAddr = fromJust . MM.asAbsoluteAddr . MM.segoffAddr . MD.pblockAddr
