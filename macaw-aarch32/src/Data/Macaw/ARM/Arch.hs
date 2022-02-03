@@ -19,7 +19,7 @@
 module Data.Macaw.ARM.Arch where
 
 import           Control.Applicative ( (<|>) )
-import           Data.Bits ( (.&.), shiftR )
+import           Data.Bits ( (.&.), shiftL, shiftR )
 import qualified Data.BitVector.Sized as BVS
 import           Data.Kind ( Type )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
@@ -911,19 +911,20 @@ negatedMux app = do
   return $ MC.Mux rep c' r l
 
 -- | Simplify terms that extend a pointer, shift it right by 2, multiply it by
--- 4, then truncate it back to 32 bits.
---
--- This simplification ensures the pointer's base value is preserved after
--- performing the shift and multiplication.
+-- 4, then truncate it back to 32 bits.  This has the effect of zeroing lowest
+-- two bits of the pointer, which we express as a right shift of 2 bytes
+-- followed by a left shift of 2 bytes.  Specifically, this function simplifies
 --
 -- > r1 := (uext val 65)
 -- > r2 := (bv_sar r1 0x2 :: [65])
 -- > r3 := (bv_mul r2 0x4 :: [65])
 -- > r4 := (trunc r3 32)
 --
--- Simplifies to
+-- to
 --
--- > r4 := (noop ((val `rshift` 2) * 4))
+-- > r4 := (bv_add ((val >> 2) << 2))
+--
+-- This simplification ensures the pointer's base value is preserved.
 simplifyShiftMul :: MC.App (MC.Value ARM.AArch32 ids) tp
                  -> Maybe (MC.App (MC.Value ARM.AArch32 ids) tp)
 simplifyShiftMul r4 = do
@@ -953,14 +954,15 @@ simplifyShiftMul r4 = do
       case PC.testEquality valWidth targetSize of
         Nothing -> Nothing
         Just PC.Refl -> do
-          -- NOTE: Performing the shift and multiplication operations on the
-          -- offset of a relative address like this is only correct when the
-          -- base address is 4-byte aligned.  However, we expect this to always
-          -- be true because in practice relocatable addresses are used with
-          -- ALSR which must preserve page alignment at a larger power of 2 (at
-          -- least 4KB on Linux).  Thus, this simplification is safe for small
-          -- shift/multiply pairs (like 2 and 4 here) but shound not be
-          -- expanded to cover the general case.
-          let resOffset = (offset `shiftR` 2) * 4
+          -- NOTE: Performing the shift operations on the offset of a relative
+          -- address like this is only correct when the base address is 4-byte
+          -- aligned.  However, we expect this to always be true because in
+          -- practice relocatable addresses are used with ASLR which must
+          -- preserve page alignment at a larger power of 2 (at least 4KB on
+          -- Linux).  Thus, this simplification is safe for small shift values
+          -- (like 2 here) but should not be expanded to cover the general
+          -- case.
+          let resOffset = (offset `shiftR` 2) `shiftL` 2
           let res = MC.RelocatableValue w (MC.MemAddr base resOffset)
-          return (MC.NoOp (MT.BVTypeRepr valWidth) res)
+          let zero = MC.BVValue (NR.knownNat @32) 0
+          return (MC.BVAdd NR.knownNat res zero)

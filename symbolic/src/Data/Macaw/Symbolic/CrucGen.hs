@@ -1218,7 +1218,6 @@ appToCrucible app = do
       cwsub1 <- bvLit w (intValue w - 1)
       fromBits w =<< appAtom (C.BVSub w cwsub1 cbe)
     M.Bsr w x -> fromBits w =<< scanBits w C.BVLshr x
-    M.NoOp _ x -> v2c x
 
 -- | Compute either:
 --   1) the index (MSB is 0) of the least significant set bit
