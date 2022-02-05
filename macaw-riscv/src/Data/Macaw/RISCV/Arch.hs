@@ -3,27 +3,33 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV.Arch
   ( -- * RISC-V functions, statements, and terminators
-    -- | There are none at this time.
     RISCV
-  , RISCVPrimFn
+  , RISCVPrimFn(..)
   , RISCVStmt
   , RISCVTermStmt
   , riscvPrimFnHasSideEffects
+  , rewriteRISCVPrimFn
   , type RISCVConstraints
   ) where
 
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.CFG.Rewriter as MCR
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Parameterized.Classes as PC
+import           Data.Parameterized.NatRepr
 import qualified Data.Parameterized.TraversableF as F
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Macaw.Types as MT
 import qualified GRIFT.Types as G
+
+import qualified Prettyprinter as PP
 
 data RISCV (rv :: G.RV)
 
@@ -32,14 +38,44 @@ data RISCV (rv :: G.RV)
 type RISCVConstraints rv = ( MM.MemWidth (G.RVWidth rv)
                            )
 
--- | RISC-V architecture-specific functions (none)
-data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type)
+-- | RISC-V architecture-specific functions
+data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type) where
+
+  -- TODO: put reg values in here and check how many values are returned
+  -- TODO: Docs
+  RISCVEcall :: ( 1 <= w, MT.KnownNat w )
+             => NatRepr w
+             -> RISCVPrimFn rv expr (MT.BVType w)
+
+instance FC.FunctorFC (RISCVPrimFn v) where
+  fmapFC = FC.fmapFCDefault
 
 instance FC.FoldableFC (RISCVPrimFn rv) where
-  foldMapFC _ _ = error "foldMapFC undefined for RISCVPrimFn"
+  foldMapFC = FC.foldMapFCDefault
+
+instance FC.TraversableFC (RISCVPrimFn rv) where
+  traverseFC go f =
+    case f of
+      RISCVEcall w -> pure $ RISCVEcall w
 
 instance MC.IsArchFn (RISCVPrimFn rv) where
-  ppArchFn _ _ = error "ppArchFn undefined for RISCVPrimFn"
+  ppArchFn pp f =
+    case f of
+      RISCVEcall _ -> pure $ PP.pretty "riscv_ecall"
+
+instance MT.HasRepr (RISCVPrimFn rv expr) MT.TypeRepr where
+  typeRepr f =
+    case f of
+      RISCVEcall{} -> PC.knownRepr
+
+rewriteRISCVPrimFn
+  :: RISCVPrimFn rv (MC.Value (RISCV rv) src) tp
+  -> MCR.Rewriter (RISCV rv) s src tgt (MC.Value (RISCV rv) tgt tp)
+rewriteRISCVPrimFn f =
+  case f of
+    RISCVEcall w ->
+      -- TODO: Rewrite the arguments once they're in RISCVEcall
+      MCR.evalRewrittenArchFn (RISCVEcall w)
 
 type instance MC.ArchFn (RISCV rv) = RISCVPrimFn rv
 
@@ -79,4 +115,4 @@ instance MC.IsArchTermStmt (RISCVTermStmt rv) where
 type instance MC.ArchBlockPrecond (RISCV rv) = ()
 
 riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool
-riscvPrimFnHasSideEffects _ = error "riscvPrimFnHasSideEffects undefined for RISCVPrimFn"
+riscvPrimFnHasSideEffects = const False -- TODO: Is this right?

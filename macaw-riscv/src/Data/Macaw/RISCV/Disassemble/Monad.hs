@@ -14,7 +14,7 @@ module Data.Macaw.RISCV.Disassemble.Monad
   , DisInstError(..)
   , DisInstState, disInstRegState, disInstRegUpdates
   , getDisInst, getDisInstBytes, getDisInstWord
-  , getReg, readMem, evalApp
+  , getReg, readMem, evalApp, evalArchFn
   , setReg, writeMem
   ) where
 
@@ -128,6 +128,9 @@ addAssignment rhs = do
 evalApp :: MC.App (MC.Value (RISCV rv) ids) tp
         -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids tp)
 evalApp = addAssignment . MC.EvalApp
+
+-- TODO: Type signature
+evalArchFn f = addAssignment (MC.EvalArchFn f (MT.typeRepr f))
 
 readMem :: MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))
         -> MC.MemRepr tp
