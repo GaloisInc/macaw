@@ -31,6 +31,7 @@ import qualified GRIFT.InstructionSet.Known as G
 import qualified GRIFT.Decode as G
 import qualified GRIFT.Semantics as G
 import qualified GRIFT.Semantics.Expand as G
+import qualified GRIFT.Semantics.Utils as G
 import qualified GRIFT.Types as G
 import qualified Data.Sequence as Seq
 import qualified Data.Text as T
@@ -336,9 +337,30 @@ disStmt opcode stmt = do
       res <- evalArchFn ec
       -- TODO: Double check that RA is the right register to set
       setReg GPR_RA res
-      return ()
     _ -> return ()
   F.traverse_ disAssignStmt (collapseStmt stmt)
+
+-- TODO: Type signature
+semanticsFromOpcode
+  :: ( RISCVConstraints rv
+     , G.KnownRV rv )
+  => G.InstructionSet rv
+  -- ^ The RISC-V instruction set for this particular
+  -- RISC-V configuration
+  -> G.Opcode rv fmt
+  -> G.Semantics (G.InstExpr fmt) rv
+semanticsFromOpcode iset opcode =
+  let G.InstSemantics sem _ =
+        case opcode of
+          G.Ecall ->
+            -- Override GRIFT's treatment of ECALL as an exception (which
+            -- zeroes the program counter) and instead treat it like a noop.
+            -- In 'disStmt' we handle the register extraction into a
+            -- 'RISCVEcall' and properly set the return registers
+            G.instSemantics L.Nil G.incrPC
+          _ -> G.semanticsFromOpcode iset opcode
+  in
+  sem
 
 disassembleBlock
   :: RISCVConstraints rv
@@ -371,7 +393,7 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
       return (block, blockOff)
     Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
       -- traceM $ "  II[" <> show curIPAddr <> "]: " <> show opcode
-      let G.InstSemantics sem _ = G.semanticsFromOpcode iset opcode
+      let sem = semanticsFromOpcode iset opcode
       (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ (disStmt opcode) (sem ^. G.semStmts)
       let regUpdates = disInstRegUpdates disInstState
           blockState' = disInstState ^. disInstRegState
