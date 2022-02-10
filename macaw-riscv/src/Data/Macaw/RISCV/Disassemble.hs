@@ -24,6 +24,7 @@ import qualified Data.Macaw.CFG.Block as MC
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.Types as MT
+import           Data.Parameterized (knownRepr)
 import qualified Data.Parameterized.List as L
 import qualified GRIFT.BitVector.BVApp as G
 import qualified GRIFT.InstructionSet as G
@@ -335,12 +336,11 @@ disStmt opcode stmt = do
       -- TODO: Extract arg regs and put in RISCVEcall
       let ec = RISCVEcall (knownNat @w)
       res <- evalArchFn ec
-      -- TODO: Double check that RA is the right register to set
-      setReg GPR_RA res
+      setReg GPR_A0 =<< evalApp (MC.TupleField knownRepr res L.index0)
+      setReg GPR_A1 =<< evalApp (MC.TupleField knownRepr res L.index1)
     _ -> return ()
   F.traverse_ disAssignStmt (collapseStmt stmt)
 
--- TODO: Type signature
 semanticsFromOpcode
   :: ( RISCVConstraints rv
      , G.KnownRV rv )

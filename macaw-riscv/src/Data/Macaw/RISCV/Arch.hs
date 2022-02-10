@@ -41,11 +41,11 @@ type RISCVConstraints rv = ( MM.MemWidth (G.RVWidth rv)
 -- | RISC-V architecture-specific functions
 data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type) where
 
-  -- TODO: put reg values in here and check how many values are returned
+  -- TODO: put arg reg values in here
   -- TODO: Docs
   RISCVEcall :: ( 1 <= w, MT.KnownNat w )
              => NatRepr w
-             -> RISCVPrimFn rv expr (MT.BVType w)
+             -> RISCVPrimFn rv expr (MT.TupleType [MT.BVType w, MT.BVType w])
 
 instance FC.FunctorFC (RISCVPrimFn v) where
   fmapFC = FC.fmapFCDefault
