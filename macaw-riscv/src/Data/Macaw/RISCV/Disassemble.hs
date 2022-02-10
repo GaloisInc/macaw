@@ -332,9 +332,15 @@ disStmt ::
 disStmt opcode stmt = do
   case opcode of
     G.Ecall -> do
-      -- TODO: Make this a toplevel function
-      -- TODO: Extract arg regs and put in RISCVEcall
-      let ec = RISCVEcall (knownNat @w)
+      -- TODO: Make this a toplevel function?
+      ec <- RISCVEcall (knownNat @w) <$> getReg GPR_A0
+                                     <*> getReg GPR_A1
+                                     <*> getReg GPR_A2
+                                     <*> getReg GPR_A3
+                                     <*> getReg GPR_A4
+                                     <*> getReg GPR_A5
+                                     <*> getReg GPR_A6
+                                     <*> getReg GPR_A7
       res <- evalArchFn ec
       setReg GPR_A0 =<< evalApp (MC.TupleField knownRepr res L.index0)
       setReg GPR_A1 =<< evalApp (MC.TupleField knownRepr res L.index1)

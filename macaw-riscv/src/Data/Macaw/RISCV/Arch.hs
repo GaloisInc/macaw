@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -45,6 +46,14 @@ data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type) where
   -- TODO: Docs
   RISCVEcall :: ( 1 <= w, MT.KnownNat w )
              => NatRepr w
+             -> expr (MT.BVType w) -- a0
+             -> expr (MT.BVType w) -- a1
+             -> expr (MT.BVType w) -- a2
+             -> expr (MT.BVType w) -- a3
+             -> expr (MT.BVType w) -- a4
+             -> expr (MT.BVType w) -- a5
+             -> expr (MT.BVType w) -- a6
+             -> expr (MT.BVType w) -- a7 (syscall number)
              -> RISCVPrimFn rv expr (MT.TupleType [MT.BVType w, MT.BVType w])
 
 instance FC.FunctorFC (RISCVPrimFn v) where
@@ -56,12 +65,15 @@ instance FC.FoldableFC (RISCVPrimFn rv) where
 instance FC.TraversableFC (RISCVPrimFn rv) where
   traverseFC go f =
     case f of
-      RISCVEcall w -> pure $ RISCVEcall w
+      RISCVEcall w a0 a1 a2 a3 a4 a5 a6 a7 ->
+        RISCVEcall w <$> go a0 <*> go a1 <*> go a2 <*> go a3 <*> go a4 <*> go a5 <*> go a6 <*> go a7
 
 instance MC.IsArchFn (RISCVPrimFn rv) where
   ppArchFn pp f =
-    case f of
-      RISCVEcall _ -> pure $ PP.pretty "riscv_ecall"
+    let ppSC s w a0 a1 a2 a3 a4 a5 a6 a7 = s PP.<+> PP.viaShow w PP.<+> a0 PP.<+> a1 PP.<+> a2 PP.<+> a3 PP.<+> a4 PP.<+> a5 PP.<+> a6 PP.<+> a7
+    in case f of
+      RISCVEcall w a0 a1 a2 a3 a4 a5 a6 a7 ->
+        ppSC "riscv_ecall" w <$> pp a0 <*> pp a1 <*> pp a2 <*> pp a3 <*> pp a4 <*> pp a5 <*> pp a6 <*> pp a7
 
 instance MT.HasRepr (RISCVPrimFn rv expr) MT.TypeRepr where
   typeRepr f =
@@ -73,9 +85,9 @@ rewriteRISCVPrimFn
   -> MCR.Rewriter (RISCV rv) s src tgt (MC.Value (RISCV rv) tgt tp)
 rewriteRISCVPrimFn f =
   case f of
-    RISCVEcall w ->
-      -- TODO: Rewrite the arguments once they're in RISCVEcall
-      MCR.evalRewrittenArchFn (RISCVEcall w)
+    RISCVEcall w a0 a1 a2 a3 a4 a5 a6 a7 -> do
+      tgtFn <- RISCVEcall w <$> MCR.rewriteValue a0 <*> MCR.rewriteValue a1 <*> MCR.rewriteValue a2 <*> MCR.rewriteValue a3 <*> MCR.rewriteValue a4 <*> MCR.rewriteValue a5 <*> MCR.rewriteValue a6 <*> MCR.rewriteValue a7
+      MCR.evalRewrittenArchFn tgtFn
 
 type instance MC.ArchFn (RISCV rv) = RISCVPrimFn rv
 
