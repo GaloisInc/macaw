@@ -1567,8 +1567,18 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
         Nothing -> do
           msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral "Halting"))
           addTermStmt $ CR.ErrorStmt msgVal
-    M.PLTStub{} ->
-      error "Do not support translating PLT stubs"
+    M.PLTStub updatedRegs _target _verSymbol -> do
+      -- For now we treat these like function calls and pass the current
+      -- register state through a 'MacawLookupFunctionHandle'.  If the need
+      -- arises we may want to add a new 'MacawStmtExtension' (something like
+      -- MacawLookupPLTStubHandle) containing '_target' to allow macaw users to
+      -- have more flexibility when working with shared libraries.
+      unless (MapF.null updatedRegs) (error "Do not support updated regvals")
+      curRegs <- getRegs
+      let tps = typeCtxToCrucible $ fmapFC M.typeRepr $ crucGenRegAssignment archFns
+      fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
+      newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (C.StructRepr tps)
+      addTermStmt $ CR.Return newRegs
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt $ CR.ErrorStmt msgVal
