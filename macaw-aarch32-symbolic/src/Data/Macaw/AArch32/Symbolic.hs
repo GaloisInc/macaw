@@ -11,8 +11,10 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
   aarch32MacawSymbolicFns
+  , aarch32MacawEvalFn
   , lookupReg
   , updateReg
+  , AF.newSymFuns
   ) where
 
 import qualified Data.Text as T
