@@ -49,8 +49,6 @@ import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
 import           Data.Macaw.RISCV.Disassemble.Monad
 
-import Debug.Trace
-
 data RISCVMemoryError w = RISCVMemoryError !(MM.MemoryError w)
                         | IllegalInstruction
   deriving Show
@@ -90,7 +88,7 @@ readInstruction :: forall rv w . MM.MemWidth w
                 -> G.InstructionSet rv
                 -> MM.MemSegmentOff w
                 -> Either (RISCVMemoryError w) (Integer, Some (G.Instruction rv), Integer)
-readInstruction rvRepr iset addr = traceShowId $ do
+readInstruction rvRepr iset addr = do
   let seg = MM.segoffSegment addr
   case MM.segmentFlags seg `MMP.hasPerm` MMP.execute of
     False -> E.throwError (RISCVMemoryError (MM.PermissionsError (MM.segoffAddr addr)))
@@ -294,10 +292,10 @@ collapseStmt stmt = case stmt of
 
 disAssignStmt :: (RISCVConstraints rv, G.KnownRV rv) => AssignStmt (G.InstExpr fmt) rv -> DisInstM s ids rv fmt ()
 disAssignStmt stmt = case stmt of
-  AssignStmt (G.PCApp _) valExpr -> trace "PCApp" $ do
+  AssignStmt (G.PCApp _) valExpr -> do
     val <- disInstExpr valExpr
     setReg PC val
-  AssignStmt (G.GPRApp _ ridExpr) valExpr -> trace "GPRApp" $ do
+  AssignStmt (G.GPRApp _ ridExpr) valExpr -> do
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
@@ -305,21 +303,21 @@ disAssignStmt stmt = case stmt of
                                   -- just gets thrown out
       MC.BVValue _ ridVal -> setReg (GPR (G.sizedBVInteger ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
-  AssignStmt (G.FPRApp _ ridExpr) valExpr -> trace "FPRApp" $ do
+  AssignStmt (G.FPRApp _ ridExpr) valExpr -> do
     rid <- disInstExpr ridExpr
     val <- disInstExpr valExpr
     case rid of
       MC.BVValue _ ridVal -> setReg (FPR (G.sizedBVInteger ridVal)) val
       _ -> E.throwError (NonConstantGPR ridExpr)
-  AssignStmt (G.MemApp bytes addrExpr) valExpr -> withLeqProof (leqMulPos (knownNat @8) bytes) $ trace "MemApp" $ do
+  AssignStmt (G.MemApp bytes addrExpr) valExpr -> withLeqProof (leqMulPos (knownNat @8) bytes) $ do
     addr <- disInstExpr addrExpr
     val <- disInstExpr valExpr
     writeMem addr (MC.BVMemRepr bytes MC.LittleEndian) val
   AssignStmt (G.ResApp _addr) _valExpr -> error "TODO: Disassemble ResApp"
-  AssignStmt (G.CSRApp _w _rid) _valExpr -> trace "CSRApp" $ setReg EXC (MC.BoolValue True)
-  AssignStmt G.PrivApp valExpr -> trace "PrivApp" $ do
+  AssignStmt (G.CSRApp _w _rid) _valExpr -> setReg EXC (MC.BoolValue True)
+  AssignStmt G.PrivApp valExpr -> do
     val <- disInstExpr valExpr
-    setReg PrivLevel (traceShowId val)
+    setReg PrivLevel val
 
 -- | Translate a GRIFT assignment statement into Macaw statement(s).
 disStmt ::
@@ -332,7 +330,7 @@ disStmt ::
 disStmt opcode stmt = do
   case opcode of
     G.Ecall -> do
-      -- TODO: Make this a toplevel function?
+      -- Set return registers from 'ecall' instruction
       ec <- RISCVEcall (knownNat @w) <$> getReg GPR_A0
                                      <*> getReg GPR_A1
                                      <*> getReg GPR_A2
@@ -398,12 +396,10 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
                            }
       return (block, blockOff)
     Right (instWord, Some i@(G.Inst opcode _), bytesRead) -> do
-      -- traceM $ "  II[" <> show curIPAddr <> "]: " <> show opcode
       let sem = semanticsFromOpcode iset opcode
       (status, disInstState, instStmts') <- runDisInstM i bytesRead instWord ng blockState $ F.traverse_ (disStmt opcode) (sem ^. G.semStmts)
       let regUpdates = disInstRegUpdates disInstState
           blockState' = disInstState ^. disInstRegState
-      -- TODO: Add instruction name and semantics description?
       let blockComment = printf "%s: %s" (show curIPAddr) (show instWord)
       let instStmts = (MC.InstructionStart blockOff (T.pack $ showF i) Seq.<|
                        MC.Comment (T.pack blockComment) Seq.<|
@@ -423,8 +419,6 @@ disassembleBlock rvRepr iset blockStmts blockState ng curIPAddr blockOff maxOffs
           (False, False, Just nextIPAddr) ->
             disassembleBlock rvRepr iset blockStmts' blockState' ng nextIPAddr blockOff' maxOffset
           _ -> do
-            -- TODO: If `opcode` is an ECALL, then extract regvals and set
-            -- MC.blockTerm to a RISCVTermStmt for ECALL
             let block = MC.Block { MC.blockStmts = F.toList blockStmts'
                                  , MC.blockTerm = MC.FetchAndExecute blockState'
                                  }

@@ -42,8 +42,17 @@ type RISCVConstraints rv = ( MM.MemWidth (G.RVWidth rv)
 -- | RISC-V architecture-specific functions
 data RISCVPrimFn (rv :: G.RV) (expr :: MT.Type -> K.Type) (tp :: MT.Type) where
 
-  -- TODO: put arg reg values in here
-  -- TODO: Docs
+  -- | Issue an executive call (system call)
+  --
+  -- This captures all of the necessary registers as inputs and outputs to
+  -- enable translation to crucible.  See the x86 version for more information
+  -- on this translation.
+  --
+  -- The NatRepr is the register width.  The remaining arguments are all of the
+  -- registers that participate in the syscall protocol (on Linux).  Arguments
+  -- are passed in a0-a6, while the syscall number is in a7.
+  --
+  -- The system call can return up to two values (in a0 and a1)
   RISCVEcall :: ( 1 <= w, MT.KnownNat w )
              => NatRepr w
              -> expr (MT.BVType w) -- a0
@@ -126,5 +135,6 @@ instance MC.IsArchTermStmt (RISCVTermStmt rv) where
 
 type instance MC.ArchBlockPrecond (RISCV rv) = ()
 
+-- | The existing architecture specific functions have no side effects
 riscvPrimFnHasSideEffects :: RISCVPrimFn rv f tp -> Bool
-riscvPrimFnHasSideEffects = const False -- TODO: Is this right?
+riscvPrimFnHasSideEffects = const False

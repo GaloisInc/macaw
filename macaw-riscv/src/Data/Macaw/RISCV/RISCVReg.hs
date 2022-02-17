@@ -441,7 +441,6 @@ riscvRegs :: [Some (RISCVReg rv)]
 riscvRegs = [Some PC] ++
              ((Some . GPR) <$> [1..31]) ++
              ((Some . FPR) <$> [0..31]) ++
-             -- [Some (CSR MCause)] ++
              [Some PrivLevel, Some EXC]
 
 instance (G.KnownRV rv, RISCVConstraints rv) => MC.RegisterInfo (RISCVReg rv) where

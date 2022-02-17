@@ -194,7 +194,6 @@ testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
             -- putDoc $ getELFSymbols elf
             chatty ""
 
-    -- TODO: Rename test binaries that use G instead of GC
     let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GCRepr) mem mempty [entryPoint] []
     chatty $ "di = " <> (show $ MD.ppDiscoveryStateBlocks discoveryInfo) <> "\n"
 
