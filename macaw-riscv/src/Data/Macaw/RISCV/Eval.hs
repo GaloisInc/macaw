@@ -73,10 +73,9 @@ riscvAddrWidth rvRepr = case G.rvBaseArch rvRepr of
   G.RV64Repr -> MM.Addr64
   G.RV128Repr -> error "RV128 not supported"
 
--- TODO: Signature
 absEvalArchFn :: MA.AbsProcessorState (MC.ArchReg (RISCV rv)) ids
               -> MC.ArchFn (RISCV rv) (MC.Value (RISCV rv) ids) tp
               -> MA.AbsValue (G.RVWidth rv) tp
-absEvalArchFn r f =
+absEvalArchFn _ f =
   case f of
     RISCVEcall {} -> MA.TopV

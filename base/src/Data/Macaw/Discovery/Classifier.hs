@@ -50,8 +50,6 @@ import qualified Data.Macaw.Discovery.ParsedContents as Parsed
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 
-import Debug.Trace
-
 ------------------------------------------------------------------------
 -- Utilities
 
@@ -138,7 +136,7 @@ classifyDirectJump ctx nm v = do
     fail $ nm ++ " value " ++ show a ++ " refers to function start."
   when (a `Map.member` pctxKnownFnEntries ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " is a known function entry."
-  pure (traceShowId a)
+  pure a
 
 -- | The classifier for conditional and unconditional branches
 --

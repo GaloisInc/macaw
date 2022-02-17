@@ -51,7 +51,7 @@ instance TTO.IsOption SaveMacaw where
 
 -- | Set to true to build with chatty output.
 isChatty :: Bool
-isChatty = True
+isChatty = False
 
 -- | Used to generate output when chatty
 chatty :: String -> IO ()

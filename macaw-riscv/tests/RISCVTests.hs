@@ -36,12 +36,9 @@ import           Text.Read ( readMaybe )
 
 import           Prelude
 
-import Debug.Trace
-
-
 -- | Set to true to build with chatty output.
 isChatty :: Bool
-isChatty = True
+isChatty = False
 
 -- | Used to generate output when chatty
 chatty :: String -> IO ()
@@ -123,7 +120,7 @@ getExpected expectedFilename = do
 
 testDiscovery :: ExpectedResult -> E.Elf w -> E.ElfHeaderInfo w -> IO ()
 testDiscovery expRes elf elfHeaderInfo =
-    case traceShowId $ E.elfClass elf of
+    case E.elfClass elf of
       E.ELFCLASS32 -> testDiscovery32 expRes elf elfHeaderInfo
       E.ELFCLASS64 -> testDiscovery64 expRes elf elfHeaderInfo
 

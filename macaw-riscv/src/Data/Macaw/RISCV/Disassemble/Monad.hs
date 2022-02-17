@@ -129,7 +129,8 @@ evalApp :: MC.App (MC.Value (RISCV rv) ids) tp
         -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids tp)
 evalApp = addAssignment . MC.EvalApp
 
--- TODO: Type signature
+evalArchFn :: RISCVPrimFn rv (MC.Value (RISCV rv) ids) tp
+           -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids tp)
 evalArchFn f = addAssignment (MC.EvalArchFn f (MT.typeRepr f))
 
 readMem :: MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))

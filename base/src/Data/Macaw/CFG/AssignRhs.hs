@@ -4,7 +4,6 @@
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
@@ -60,7 +59,12 @@ type family ArchReg (arch :: Kind.Type) = (reg :: Type -> Kind.Type) | reg -> ar
 -- but they should not affect any of the architecture
 -- registers in @ArchReg arch@.
 --
--- One Furthermore, they can only return a value
+-- Architecture specific functions are required to implement
+-- `FoldableFC`, and the evaluation of an architecture specific
+-- function may only depend on the value stored in a general purpose
+-- register if it is given through the @fn@ parameter and provided
+-- when folding over values.  This is required for accurate def-use
+-- analysis of general purpose registers.
 type family ArchFn (arch :: Kind.Type) = (fn :: (Type -> Kind.Type) -> Type -> Kind.Type) | fn -> arch
 
 -- | A type family for defining architecture-specific statements.
