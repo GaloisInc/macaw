@@ -191,7 +191,6 @@ testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (getElfSections elf) <> "\n"
             chatty $ "symbols = "
-            -- putDoc $ getELFSymbols elf
             chatty ""
 
     let discoveryInfo = MD.cfgFromAddrs (RO.riscv_info RISCV.rv64GCRepr) mem mempty [entryPoint] []
