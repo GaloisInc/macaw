@@ -49,14 +49,16 @@ data DisInstEnv s ids rv fmt = DisInstEnv { _disInst :: G.Instruction rv fmt
                                           }
 makeLenses ''DisInstEnv
 
--- | The state we maintain during instruction disassembly is two
--- 'MC.RegState' maps. The first is complete for every register and is
--- passed in by the caller, representing the register state in the
--- context of the block in which this instruction is executing. The
--- second only records the updates this particular instruction is
--- making to the register state.
+-- | The state we maintain during instruction disassembly is three
+-- 'MC.RegState' maps. The first is complete for every register and is passed
+-- in by the caller, representing the register state in the context of the
+-- block in which this instruction is executing. The second is a copy of the
+-- first, but it is not updated by 'setReg' and always represents the register
+-- state prior to executing the instruction.  The third only records the
+-- updates this particular instruction is making to the register state.
 data DisInstState (rv :: G.RV) ids = DisInstState {
   _disInstRegState :: MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids),
+  _initialDisInstRegState :: MC.RegState (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids),
   disInstRegUpdates :: MapF.MapF (MC.ArchReg (RISCV rv)) (MC.Value (RISCV rv) ids)
   }
 makeLenses ''DisInstState
@@ -102,7 +104,7 @@ runDisInstM :: G.Instruction rv fmt
 runDisInstM inst instBytes instWord ng blockRegState action =
   RWS.runRWST (E.runExceptT (unDisInstM action)) env st
   where env = DisInstEnv inst instBytes instWord ng
-        st  = DisInstState blockRegState MapF.empty
+        st  = DisInstState blockRegState blockRegState MapF.empty
 
 getDisInst :: DisInstM s ids rv fmt (G.Instruction rv fmt)
 getDisInst = view disInst
@@ -138,12 +140,8 @@ readMem :: MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))
         -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids tp)
 readMem addr bytes = addAssignment $ MC.ReadMem addr bytes
 
--- FIXME: This is wrong. What we really want to do is reference the
--- value of the register before executing the instruction. See JALR as
--- an example -- if the link register is equal to the register
--- containing the jump address, then things are going to go bad
 getReg :: MC.ArchReg (RISCV rv) tp -> DisInstM s ids rv fmt (MC.Value (RISCV rv) ids tp)
-getReg r = use (disInstRegState . MC.boundValue r)
+getReg r = use (initialDisInstRegState . MC.boundValue r)
 
 setReg :: MC.ArchReg (RISCV rv) tp -> MC.Value (RISCV rv) ids tp -> DisInstM s ids rv fmt ()
 setReg r v = do
