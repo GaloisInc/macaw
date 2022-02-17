@@ -75,10 +75,11 @@ stmtSemantics :: (C.IsSymInterface sym, 1 <= SP.AddrWidth v)
               -> S v sym rtp bs r ctx
               -> IO (C.RegValue sym C.UnitType, S v sym rtp bs r ctx)
 stmtSemantics _sf stmt s =
+  C.withBackend (s ^. C.stateContext) $ \bak ->
   case stmt of
     MP.Attn -> do
       let reason = C.GenericSimError "ppc_attn"
-      C.addFailedAssertion (s ^. C.stateSymInterface) reason
+      C.addFailedAssertion bak reason
     -- These are cache hints that can't be observed in our current memory model
     -- (i.e., they require concurrency to be observed).
     --
@@ -117,69 +118,69 @@ funcSemantics :: (C.IsSymInterface sym, MS.ToCrucibleType mt ~ t, 1 <= SP.AddrWi
               -> S v sym rtp bs r ctx
               -> IO (C.RegValue sym t, S v sym rtp bs r ctx)
 funcSemantics sf pf s =
+  C.withBackend (s ^. C.stateContext) $ \bak ->
+  let sym = C.backendGetSym bak in
   case pf of
     MP.UDiv _rep lhs rhs -> do
-      let sym = s ^. C.stateSymInterface
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvUdiv sym lhs' rhs'
       return (v, s)
     MP.SDiv _rep lhs rhs -> do
-      let sym = s ^. C.stateSymInterface
-      lhs' <- toValBV sym lhs
-      rhs' <- toValBV sym rhs
+      lhs' <- toValBV bak lhs
+      rhs' <- toValBV bak rhs
       -- FIXME: Make sure that the semantics when rhs == 0 exactly match PowerPC.
       v <- LL.llvmPointer_bv sym =<< C.bvSdiv sym lhs' rhs'
       return (v, s)
-    MP.FPNeg (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \sym x' ->
+    MP.FPNeg (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \_sym x' ->
       C.iFloatNeg @_ @(MS.ToCrucibleFloatInfo fi) sym x'
-    MP.FPAbs (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \sym x' ->
+    MP.FPAbs (_ :: MT.FloatInfoRepr fi) x -> withSymFPUnOp s x $ \_sym x' ->
       C.iFloatAbs @_ @(MS.ToCrucibleFloatInfo fi) sym x'
     MP.FPSqrt (_ :: MT.FloatInfoRepr fi) r x ->
-      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+      withSymFPUnOp s x $ \_sym x' -> withRounding bak r $ \rm ->
         C.iFloatSqrt @_ @(MS.ToCrucibleFloatInfo fi) sym rm x'
     MP.FPAdd (_ :: MT.FloatInfoRepr fi) r x y ->
-      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+      withSymFPBinOp s x y $ \_sym x' y' -> withRounding bak r $ \rm ->
         C.iFloatAdd @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
     MP.FPSub (_ :: MT.FloatInfoRepr fi) r x y ->
-      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+      withSymFPBinOp s x y $ \_sym x' y' -> withRounding bak r $ \rm ->
         C.iFloatSub @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
     MP.FPMul (_ :: MT.FloatInfoRepr fi) r x y ->
-      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+      withSymFPBinOp s x y $ \_sym x' y' -> withRounding bak r $ \rm ->
         C.iFloatMul @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
     MP.FPDiv (_ :: MT.FloatInfoRepr fi) r x y ->
-      withSymFPBinOp s x y $ \sym x' y' -> withRounding sym r $ \rm ->
+      withSymFPBinOp s x y $ \_sym x' y' -> withRounding bak r $ \rm ->
         C.iFloatDiv @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y'
     MP.FPFMA (_ :: MT.FloatInfoRepr fi) r x y z ->
-      withSym s $ \sym -> withRounding sym r $ \rm -> do
+      withSym s $ \_sym -> withRounding bak r $ \rm -> do
         let x' = toValFloat sym x
         let y' = toValFloat sym y
         let z' = toValFloat sym z
         C.iFloatFMA @_ @(MS.ToCrucibleFloatInfo fi) sym rm x' y' z'
     MP.FPLt (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
+      withSymFPBinOp s x y $ \_sym x' y' ->
         C.iFloatLt @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
     MP.FPEq (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
+      withSymFPBinOp s x y $ \_sym x' y' ->
         C.iFloatFpEq @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
     MP.FPLe (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) y ->
-      withSymFPBinOp s x y $ \sym x' y' ->
+      withSymFPBinOp s x y $ \_sym x' y' ->
         C.iFloatLe @_ @(MS.ToCrucibleFloatInfo fi) sym x' y'
     MP.FPIsNaN (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
-      withSymFPUnOp s x $ \sym x' ->
+      withSymFPUnOp s x $ \_sym x' ->
         C.iFloatIsNaN @_ @(MS.ToCrucibleFloatInfo fi) sym x'
     MP.FPCast fi r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi')) ->
-      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+      withSymFPUnOp s x $ \_sym x' -> withRounding bak r $ \rm ->
         C.iFloatCast @_ @_ @(MS.ToCrucibleFloatInfo fi')
           sym
           (MS.floatInfoToCrucible fi)
           rm
           x'
     MP.FPRound (_ :: MT.FloatInfoRepr fi) r x ->
-      withSymFPUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+      withSymFPUnOp s x $ \_sym x' -> withRounding bak r $ \rm ->
         C.iFloatRound @_ @(MS.ToCrucibleFloatInfo fi) sym rm x'
-    MP.FPToBinary fi x -> withSymFPUnOp s x $ \sym x' -> case fi of
+    MP.FPToBinary fi x -> withSymFPUnOp s x $ \_sym x' -> case fi of
       MT.HalfFloatRepr ->
         LL.llvmPointer_bv sym
           =<< C.iFloatToBinary sym (MS.floatInfoToCrucible fi) x'
@@ -195,7 +196,7 @@ funcSemantics sf pf s =
       MT.X86_80FloatRepr ->
         LL.llvmPointer_bv sym
           =<< C.iFloatToBinary sym (MS.floatInfoToCrucible fi) x'
-    MP.FPFromBinary fi x -> withSymBVUnOp s x $ \sym x' -> case fi of
+    MP.FPFromBinary fi x -> withSymBVUnOp s x $ \_sym x' -> case fi of
       MT.HalfFloatRepr ->
         C.iFloatFromBinary sym (MS.floatInfoToCrucible fi) x'
       MT.SingleFloatRepr ->
@@ -207,23 +208,23 @@ funcSemantics sf pf s =
       MT.X86_80FloatRepr ->
         C.iFloatFromBinary sym (MS.floatInfoToCrucible fi) x'
     MP.FPToSBV w r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
-      withSymFPUnOp s x $ \sym x' -> do
-        bv_val <- withRounding sym r $ \rm ->
+      withSymFPUnOp s x $ \_sym x' -> do
+        bv_val <- withRounding bak r $ \rm ->
           C.iFloatToSBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w rm x'
         LL.llvmPointer_bv sym bv_val
     MP.FPToUBV w r (x :: A.AtomWrapper (C.RegEntry sym) (MT.FloatType fi)) ->
-      withSymFPUnOp s x $ \sym x' -> do
-        bv_val <- withRounding sym r $ \rm ->
+      withSymFPUnOp s x $ \_sym x' -> do
+        bv_val <- withRounding bak r $ \rm ->
           C.iFloatToBV @_ @_ @(MS.ToCrucibleFloatInfo fi) sym w rm x'
         LL.llvmPointer_bv sym bv_val
     MP.FPFromSBV fi r x ->
-      withSymBVUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+      withSymBVUnOp s x $ \_sym x' -> withRounding bak r $ \rm ->
         C.iSBVToFloat sym (MS.floatInfoToCrucible fi) rm x'
     MP.FPFromUBV fi r x ->
-      withSymBVUnOp s x $ \sym x' -> withRounding sym r $ \rm ->
+      withSymBVUnOp s x $ \_sym x' -> withRounding bak r $ \rm ->
         C.iBVToFloat sym (MS.floatInfoToCrucible fi) rm x'
     MP.FPCoerce (fi :: MT.FloatInfoRepr fi) (fi' :: MT.FloatInfoRepr fi') x ->
-      withSymFPUnOp s x $ \sym x' -> do
+      withSymFPUnOp s x $ \_sym x' -> do
         res <- C.iFloatCast @_ @_ @(MS.ToCrucibleFloatInfo fi')
           sym
           (MS.floatInfoToCrucible fi)
@@ -235,86 +236,80 @@ funcSemantics sf pf s =
                 (MS.floatInfoToCrucible fi')
                 C.RNE
                 res
-        C.assert sym cond $ C.GenericSimError $
+        C.assert bak cond $ C.GenericSimError $
           "float precision loss: coercing from "
           ++ show (MS.floatInfoToCrucible fi')
           ++ " to "
           ++ show (MS.floatInfoToCrucible fi)
         return res
-    MP.FPSCR1 name x fpscr -> withSym s $ \sym -> do
-      x' <- toValBV sym x
-      fpscr' <- toValBV sym fpscr
+    MP.FPSCR1 name x fpscr -> withSym s $ \_sym -> do
+      x' <- toValBV bak x
+      fpscr' <- toValBV bak fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf ("fpscr_" ++ name)
         C.knownRepr
         (Ctx.empty Ctx.:> x' Ctx.:> fpscr')
         C.knownRepr
-    MP.FPSCR2 name x y fpscr -> withSym s $ \sym -> do
-      x' <- toValBV sym x
-      y' <- toValBV sym y
-      fpscr' <- toValBV sym fpscr
+    MP.FPSCR2 name x y fpscr -> withSym s $ \_sym -> do
+      x' <- toValBV bak x
+      y' <- toValBV bak y
+      fpscr' <- toValBV bak fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf ("fpscr_" ++ name)
         C.knownRepr
         (Ctx.empty Ctx.:> x' Ctx.:> y' Ctx.:> fpscr')
         C.knownRepr
-    MP.FPSCR3 name x y z fpscr -> withSym s $ \sym -> do
-      x' <- toValBV sym x
-      y' <- toValBV sym y
-      z' <- toValBV sym z
-      fpscr' <- toValBV sym fpscr
+    MP.FPSCR3 name x y z fpscr -> withSym s $ \_sym -> do
+      x' <- toValBV bak x
+      y' <- toValBV bak y
+      z' <- toValBV bak z
+      fpscr' <- toValBV bak fpscr
       LL.llvmPointer_bv sym =<< lookupApplySymFun sym sf ("fpscr_" ++ name)
         C.knownRepr
         (Ctx.empty Ctx.:> x' Ctx.:> y' Ctx.:> z' Ctx.:> fpscr')
         C.knownRepr
     MP.FP1 name v fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v' <- toValBV sym v
-      fpscr' <- toValBV sym fpscr
+      v' <- toValBV bak v
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend Ctx.empty v') fpscr'
       fval <- lookupApplySymFun sym sf ("fp_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP2 name v1 v2 fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v1' <- toValBV sym v1
-      v2' <- toValBV sym v2
-      fpscr' <- toValBV sym fpscr
+      v1' <- toValBV bak v1
+      v2' <- toValBV bak v2
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') fpscr'
       fval <- lookupApplySymFun sym sf ("fp_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.FP3 name v1 v2 v3 fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v1' <- toValBV sym v1
-      v2' <- toValBV sym v2
-      v3' <- toValBV sym v3
-      fpscr' <- toValBV sym fpscr
+      v1' <- toValBV bak v1
+      v2' <- toValBV bak v2
+      v3' <- toValBV bak v3
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') v3') fpscr'
       fval <- lookupApplySymFun sym sf ("fp_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec1 name v fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v' <- toValBV sym v
-      fpscr' <- toValBV sym fpscr
+      v' <- toValBV bak v
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend Ctx.empty v') fpscr'
       fval <- lookupApplySymFun sym sf ("vec_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec2 name v1 v2 fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v1' <- toValBV sym v1
-      v2' <- toValBV sym v2
-      fpscr' <- toValBV sym fpscr
+      v1' <- toValBV bak v1
+      v2' <- toValBV bak v2
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') fpscr'
       fval <- lookupApplySymFun sym sf ("vec_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
     MP.Vec3 name v1 v2 v3 fpscr -> do
-      let sym = s ^. C.stateSymInterface
-      v1' <- toValBV sym v1
-      v2' <- toValBV sym v2
-      v3' <- toValBV sym v3
-      fpscr' <- toValBV sym fpscr
+      v1' <- toValBV bak v1
+      v2' <- toValBV bak v2
+      v3' <- toValBV bak v3
+      fpscr' <- toValBV bak fpscr
       let args = Ctx.extend (Ctx.extend (Ctx.extend (Ctx.extend Ctx.empty v1') v2') v3') fpscr'
       fval <- lookupApplySymFun sym sf ("vec_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
@@ -344,11 +339,11 @@ lookupApplySymFun sym sf name argReprs args retRepr = do
           IO.modifyIORef (symFuns sf) (M.insert name (SomeSymFun argReprs retRepr fn))
           C.applySymFn sym fn args
 
-toValBV :: (C.IsSymInterface sym)
-        => sym
+toValBV :: (C.IsSymBackend sym bak)
+        => bak
         -> A.AtomWrapper (C.RegEntry sym) (MT.BVType w)
         -> IO (C.RegValue sym (C.BVType w))
-toValBV sym (A.AtomWrapper x) = LL.projectLLVM_bv sym (C.regValue x)
+toValBV bak (A.AtomWrapper x) = LL.projectLLVM_bv bak (C.regValue x)
 
 toValFloat
   :: (C.IsSymInterface sym)
@@ -373,7 +368,10 @@ withSymBVUnOp
   -> A.AtomWrapper (C.RegEntry sym) (MT.BVType w)
   -> (sym -> C.RegValue sym (C.BVType w) -> IO a)
   -> IO (a, S v sym rtp bs r ctx)
-withSymBVUnOp s x action = withSym s $ \sym -> action sym =<< toValBV sym x
+withSymBVUnOp s x action =
+  C.withBackend (s^.C.stateContext) $ \bak ->
+    do val <- action (C.backendGetSym bak) =<< toValBV bak x
+       pure (val, s)
 
 withSymFPUnOp
   :: (C.IsSymInterface sym)
@@ -403,13 +401,13 @@ withSymFPBinOp s x y action = withSym s $ \sym -> do
   action sym x' y'
 
 withRounding
-  :: C.IsSymInterface sym
-  => sym
+  :: (C.IsSymBackend sym bak)
+  => bak
   -> A.AtomWrapper (C.RegEntry sym) (MT.BVType 2)
   -> (C.RoundingMode -> IO (C.SymExpr sym tp))
   -> IO (C.SymExpr sym tp)
-withRounding sym r action = do
-  r' <- toValBV sym r
-  U.withRounding sym r' action
+withRounding bak r action = do
+  r' <- toValBV bak r
+  U.withRounding (C.backendGetSym bak) r' action
 
 type S v sym rtp bs r ctx = C.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt (SP.AnyPPC v)) rtp bs r ctx

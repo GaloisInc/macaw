@@ -6,6 +6,9 @@
 
 ### API Changes
 
+- `Data.Macaw.Symbolic.MemOps.GlobalMap` has changed from a `type`
+  synonym to a `newtype`, and its type has changed somewhat.
+
 - The type of `crucGenArchTermStmt` has changed
 
   It gained a parameter of type `Maybe (Label c)` where `Label` comes from Crucible. This enables architecture-specific terminators to add custom control flow, including fallthrough behavior.

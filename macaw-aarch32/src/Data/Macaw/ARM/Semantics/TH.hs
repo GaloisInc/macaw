@@ -46,7 +46,7 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.NatRepr
 import           GHC.TypeLits as TL
-import qualified Lang.Crucible.Backend.Simple as CBS
+import qualified What4.Expr.Builder as WEB
 import           Language.Haskell.TH
 import qualified SemMC.Architecture.AArch32 as ARM
 import qualified SemMC.Architecture.ARM.Opcodes as ARM
@@ -55,7 +55,7 @@ import qualified What4.Expr.Builder as WB
 
 import qualified Language.ASL.Globals as ASL
 
-loadSemantics :: CBS.SimpleBackend t fs -> IO (ARM.ASLSemantics (CBS.SimpleBackend t fs))
+loadSemantics :: WEB.ExprBuilder t st fs -> IO (ARM.ASLSemantics (WEB.ExprBuilder t st fs))
 loadSemantics sym = ARM.loadSemantics sym (ARM.ASLSemanticsOpts { ARM.aslOptTrimRegs = True})
 
 -- n.b. although MacawQ is a monad and therefore has a fail

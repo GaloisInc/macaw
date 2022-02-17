@@ -536,11 +536,11 @@ data MacawSymbolicArchFunctions arch
      -- ^ Generate crucible for architecture-specific statement.
   , crucGenArchTermStmt :: !(forall ids s
                                . M.ArchTermStmt arch (M.Value arch ids)
-                               -- ^ The arch-specific terminator
+                               -- The arch-specific terminator
                                -> M.RegState (M.ArchReg arch) (M.Value arch ids)
-                               -- ^ The register state at this statement
+                               -- The register state at this statement
                                -> Maybe (CR.Label s)
-                               -- ^ The fallthrough label, if any
+                               -- The fallthrough label, if any
                                -> CrucGen arch ids s ())
      -- ^ Generate crucible for architecture-specific terminal statement.
      --
