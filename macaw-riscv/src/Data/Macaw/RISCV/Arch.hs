@@ -1,5 +1,6 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE EmptyCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -104,10 +105,10 @@ type instance MC.ArchFn (RISCV rv) = RISCVPrimFn rv
 data RISCVStmt (rv :: G.RV) (expr :: MT.Type -> K.Type)
 
 instance F.FoldableF (RISCVStmt rv) where
-  foldMapF _ _ = error "foldMapF undefined for RISCVStmt"
+  foldMapF _ s = case s of {}
 
 instance MC.IsArchStmt (RISCVStmt rv) where
-  ppArchStmt _ _ = error "ppArchStmt undefined for RISCVStmt"
+  ppArchStmt _ s = case s of {}
 
 type instance MC.ArchStmt (RISCV rv) = RISCVStmt rv
 
@@ -115,15 +116,13 @@ type instance MC.ArchStmt (RISCV rv) = RISCVStmt rv
 data RISCVTermStmt (rv :: G.RV) (f :: MT.Type -> K.Type)
 
 instance MC.PrettyF (RISCVTermStmt rv) where
-  prettyF = error "PrettyF undefined for RISCVTermStmt"
+  prettyF s = case s of {}
 
 -- The IPAlignment instance will likely need to take computations like
 -- this into account (for JAL):
 --   x[rd] := pc + zext(step) pc := pc +
 --   sext(imm20 << 0x1)
 -- But for now, we leave it as trivial.
--- | This is an orphan instance because we are reusing the 'G.RV' type
--- from GRIFT.
 instance MC.IPAlignment (RISCV rv) where
   fromIPAligned = Just
   toIPAligned = id
@@ -131,7 +130,7 @@ instance MC.IPAlignment (RISCV rv) where
 type instance MC.ArchTermStmt (RISCV rv) = RISCVTermStmt rv
 
 instance MC.IsArchTermStmt (RISCVTermStmt rv) where
-  ppArchTermStmt _ _ = error "ppArchTermStmt undefined for RISCVTermStmt"
+  ppArchTermStmt _ s = case s of {}
 
 type instance MC.ArchBlockPrecond (RISCV rv) = ()
 

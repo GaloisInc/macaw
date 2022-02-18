@@ -66,7 +66,7 @@ import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics.Utils as G
 
 newtype GPR = BuildGPR (G.SizedBV 5)
-  deriving (Enum, Eq, Num, Ord)
+  deriving (Enum, Eq, Ord)
 
 -- | Return address
 pattern RA :: GPR
