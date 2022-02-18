@@ -1575,10 +1575,9 @@ addMacawParsedTermStmt blockLabelMap externalResolutions thisAddr tstmt = do
       -- have more flexibility when working with shared libraries.
       unless (MapF.null updatedRegs) (error "Do not support updated regvals")
       curRegs <- getRegs
-      let tps = typeCtxToCrucible $ fmapFC M.typeRepr $ crucGenRegAssignment archFns
       fh <- evalMacawStmt (MacawLookupFunctionHandle (crucArchRegTypes archFns) curRegs)
-      newRegs <- evalAtom $ CR.Call fh (Ctx.singleton curRegs) (C.StructRepr tps)
-      addTermStmt $ CR.Return newRegs
+      let archRegStructRepr = C.StructRepr (crucArchRegTypes archFns)
+      addTermStmt $ CR.TailCall fh (Ctx.empty Ctx.:> archRegStructRepr) (Ctx.singleton curRegs)
     M.ParsedTranslateError msg -> do
       msgVal <- crucibleValue (C.StringLit (C.UnicodeLiteral msg))
       addTermStmt $ CR.ErrorStmt msgVal
