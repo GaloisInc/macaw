@@ -370,8 +370,8 @@ type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
 -- 'CrucibleState' to allow the callback to lazily instantiate callees (e.g., by
 -- constructing the CFG of the callee on the fly) and register them with the
 -- simulator.
-newtype LookupFunctionHandle sym arch = LookupFunctionHandle
-     (forall rtp blocks r ctx p
+newtype LookupFunctionHandle p sym arch = LookupFunctionHandle
+     (forall rtp blocks r ctx
    . CrucibleState p sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
@@ -395,8 +395,8 @@ newtype LookupFunctionHandle sym arch = LookupFunctionHandle
 -- returned). Note that it is the responsibility of the architecture-specific
 -- backend (e.g., macaw-x86) to ensure that the returned values are placed in
 -- the appropriate machine registers.
-newtype LookupSyscallHandle sym arch =
-  LookupSyscallHandle (  forall rtp blocks r ctx atps rtps p
+newtype LookupSyscallHandle p sym arch =
+  LookupSyscallHandle (  forall rtp blocks r ctx atps rtps
                       .  Ctx.Assignment TypeRepr atps
                       -> Ctx.Assignment TypeRepr rtps
                       -> CrucibleState p sym (MacawExt arch) rtp blocks r ctx
