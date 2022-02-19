@@ -1155,7 +1155,7 @@ type MkGlobalPointerValidityAssertion sym w = sym
 unsupportedFunctionCalls
   :: String
   -- ^ The name of the component providing the handler
-  -> MO.LookupFunctionHandle sym arch
+  -> MO.LookupFunctionHandle p sym arch
 unsupportedFunctionCalls compName =
   MO.LookupFunctionHandle $ \_ _ _ -> error ("Symbolically executing function calls is not supported in " ++ compName)
 
@@ -1168,7 +1168,7 @@ unsupportedFunctionCalls compName =
 unsupportedSyscalls
   :: String
   -- ^ The name of the component providing the handler
-  -> MO.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle p sym arch
 unsupportedSyscalls compName =
   MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
 
@@ -1182,10 +1182,10 @@ execMacawStmtExtension
   -- ^ The distinguished global variable holding the current state of the memory model
   -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ The translation from machine words to LLVM memory model pointers
-  -> MO.LookupFunctionHandle sym arch
+  -> MO.LookupFunctionHandle p sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
-  -> MO.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle p sym arch
   -- ^ A function to examine the machine state to determine which system call
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
@@ -1281,10 +1281,10 @@ macawExtensions
   -- model
   -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ A function that maps bitvectors to valid memory model pointers
-  -> LookupFunctionHandle sym arch
+  -> LookupFunctionHandle personality sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
-  -> MO.LookupSyscallHandle sym arch
+  -> MO.LookupSyscallHandle personality sym arch
   -- ^ A function to examine the machine state to determine which system call
   -- should be invoked; returns the function handle to invoke
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
@@ -1307,8 +1307,8 @@ runCodeBlock
   -> SB.MacawArchEvalFn (MacawSimulatorState sym) sym MM.Mem arch
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
-  -> LookupFunctionHandle sym arch
-  -> MO.LookupSyscallHandle sym arch
+  -> LookupFunctionHandle (MacawSimulatorState sym) sym arch
+  -> MO.LookupSyscallHandle (MacawSimulatorState sym) sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
