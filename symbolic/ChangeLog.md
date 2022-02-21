@@ -6,6 +6,15 @@
 
 ### API Changes
 
+- The types of various functions, such as `macawExtensions`, are now parametric
+  over the `personality` type variable instead of restricting it to
+  `MacawSimulatorState sym`. A consequence of this change is that the
+  `MacawArchEvalFn`, `LookupFunctionHandle`, and `LookupSyscallHandle` data
+  types now have an additional `personality` type variable. If you don't care
+  about this type variable, it is usually fine to leave it polymorphic.
+  Alternatively, one can instantiate it to `MacawSimulatorState sym` to
+  restore the old behavior.
+
 - `Data.Macaw.Symbolic.MemOps.GlobalMap` has changed from a `type`
   synonym to a `newtype`, and its type has changed somewhat.
 
