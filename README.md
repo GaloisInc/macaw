@@ -69,6 +69,7 @@ softfloat library.  If you are not building `macaw-riscv` you can skip this
 step.  To install softfloat on Linux or OSX, run:
 ```shell
 $ cd deps/softfloat-hs
+$ git submodule update --init --recursive
 $ make
 $ sudo make install
 ```
