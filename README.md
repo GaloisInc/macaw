@@ -35,6 +35,7 @@ The Macaw libraries are:
   learned semantics..
 * macaw-ppc-symbolic -- Enables macaw/crucible symbolic simulation for
   PPC architectures
+* macaw-riscv -- Enables macaw for RISC-V (RV64GC variant) binaries.
 * macaw-refinement -- Enables additional architecture-independent
   refinement of code discovery.  This can enable discovery of more
   functionality than is revealed by the analysis in macaw-base.
@@ -61,6 +62,19 @@ supported via Git submodules:
 
     $ git submodule update --init
 
+### Installing Softfloat for RISC-V Backend
+
+The RISC-V backend depends on softfloat-hs, which in turn depends on the
+softfloat library.  If you are not building `macaw-riscv` you can skip this
+step.  To install softfloat on Linux or OSX, run:
+```shell
+$ cd deps/softfloat-hs
+$ make
+$ sudo make install
+```
+
+The Makefile in `deps/softfloat-hs` should install the softfloat library and
+header files to the appropriate locations on both OSX and Linux.
 
 ## Building with Cabal
 
