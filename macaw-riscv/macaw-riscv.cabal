@@ -1,0 +1,65 @@
+name:                macaw-riscv
+version:             0.1.0.0
+-- synopsis:
+-- description:
+license:             BSD3
+license-file:        LICENSE
+author:              Ben Selfridge
+maintainer:          benselfridge@galois.com
+-- copyright:
+category:            Semantics
+build-type:          Simple
+extra-source-files:  ChangeLog.md
+cabal-version:       >=1.10
+
+library
+  exposed-modules:     Data.Macaw.RISCV
+  other-modules:       Data.Macaw.RISCV.Arch
+                       Data.Macaw.RISCV.Disassemble
+                       Data.Macaw.RISCV.Disassemble.Monad
+                       Data.Macaw.RISCV.Eval
+                       Data.Macaw.RISCV.Identify
+                       Data.Macaw.RISCV.RISCVReg
+  build-depends:       base >=4.9 && <5,
+                       ansi-wl-pprint,
+                       bv-sized,
+                       bytestring,
+                       containers,
+                       grift,
+                       lens,
+                       macaw-base,
+                       mtl,
+                       parameterized-utils,
+                       prettyprinter,
+                       text
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+  ghc-options:         -Wall -Wcompat
+
+test-suite macaw-riscv-tests
+  type: exitcode-stdio-1.0
+  default-language: Haskell2010
+  ghc-options: -Wall
+  main-is: Main.hs
+  other-modules: RISCVTests
+                 Shared
+  hs-source-dirs: tests
+  build-depends: base >=4.9 && <5,
+                 binary,
+                 bytestring,
+                 containers,
+                 elf-edit,
+                 exceptions,
+                 filemanip,
+                 filepath,
+                 grift,
+                 lens,
+                 macaw-base,
+                 macaw-riscv,
+                 macaw-loader,
+                 parameterized-utils,
+                 template-haskell,
+                 temporary,
+                 tasty,
+                 tasty-hunit,
+                 text
