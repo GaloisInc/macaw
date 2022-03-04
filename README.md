@@ -68,7 +68,7 @@ The RISC-V backend depends on softfloat-hs, which in turn depends on the
 softfloat library.  Macaw's build system will automatically build softfloat,
 but the softfloat-hs repo must be recursively cloned to enable this.  If you
 are not building `macaw-riscv` you can skip this step.  To recursively clone
-softfloat, run:
+softfloat-hs, run:
 ```shell
 $ cd deps/softfloat-hs
 $ git submodule update --init --recursive
