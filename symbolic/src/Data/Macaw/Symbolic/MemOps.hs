@@ -153,7 +153,7 @@ ptrBase = fst . llvmPointerView
 -- that allocation.
 newtype GlobalMap sym mem w =
   GlobalMap
-  { applyGlobalMap :: 
+  { applyGlobalMap ::
       forall bak. IsSymBackend sym bak =>
        bak                        {- The symbolic backend -} ->
        GetIntrinsic sym mem       {- The global handle to the memory model -} ->
@@ -370,12 +370,12 @@ type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
 -- 'CrucibleState' to allow the callback to lazily instantiate callees (e.g., by
 -- constructing the CFG of the callee on the fly) and register them with the
 -- simulator.
-newtype LookupFunctionHandle sym arch = LookupFunctionHandle
+newtype LookupFunctionHandle p sym arch = LookupFunctionHandle
      (forall rtp blocks r ctx
-   . CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+   . CrucibleState p sym (MacawExt arch) rtp blocks r ctx
   -> MemImpl sym
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
-  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx))
+  -> IO (C.FnHandle (Ctx.EmptyCtx Ctx.::> ArchRegStruct arch) (ArchRegStruct arch), CrucibleState p sym (MacawExt arch) rtp blocks r ctx))
 
 -- | A function to inspect the machine state and translate it into a
 -- 'C.FnHandle' corresponding to the system call model that the simulator should
@@ -395,13 +395,13 @@ newtype LookupFunctionHandle sym arch = LookupFunctionHandle
 -- returned). Note that it is the responsibility of the architecture-specific
 -- backend (e.g., macaw-x86) to ensure that the returned values are placed in
 -- the appropriate machine registers.
-newtype LookupSyscallHandle sym arch =
+newtype LookupSyscallHandle p sym arch =
   LookupSyscallHandle (  forall rtp blocks r ctx atps rtps
                       .  Ctx.Assignment TypeRepr atps
                       -> Ctx.Assignment TypeRepr rtps
-                      -> CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx
+                      -> CrucibleState p sym (MacawExt arch) rtp blocks r ctx
                       -> C.RegEntry sym (StructType atps)
-                      -> IO (C.FnHandle atps (StructType rtps), CrucibleState (MacawSimulatorState sym) sym (MacawExt arch) rtp blocks r ctx)
+                      -> IO (C.FnHandle atps (StructType rtps), CrucibleState p sym (MacawExt arch) rtp blocks r ctx)
                       )
 
 --------------------------------------------------------------------------------

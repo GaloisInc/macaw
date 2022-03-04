@@ -57,7 +57,7 @@ newSymFuns _sym = do
   r <- IOR.newIORef Map.empty
   return SymFuns { symFuns = r }
 
-type S sym rtp bs r ctx = CS.CrucibleState (MS.MacawSimulatorState sym) sym (MS.MacawExt SA.AArch32) rtp bs r ctx
+type S p sym rtp bs r ctx = CS.CrucibleState p sym (MS.MacawExt SA.AArch32) rtp bs r ctx
 
 -- | Semantics for statement syntax extensions
 --
@@ -67,8 +67,8 @@ type S sym rtp bs r ctx = CS.CrucibleState (MS.MacawSimulatorState sym) sym (MS.
 stmtSemantics :: (CB.IsSymInterface sym)
               => SymFuns sym
               -> MAA.ARMStmt (AA.AtomWrapper (CS.RegEntry sym))
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym CT.UnitType, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (CS.RegValue sym CT.UnitType, S p sym rtp bs r ctx)
 stmtSemantics _sfns stmt _st0 =
   case stmt of
     MAA.UninterpretedA32Opcode opc _ops ->
@@ -79,8 +79,8 @@ stmtSemantics _sfns stmt _st0 =
 funcSemantics :: (CB.IsSymInterface sym, MS.ToCrucibleType mt ~ t)
               => SymFuns sym
               -> MAA.ARMPrimFn (AA.AtomWrapper (CS.RegEntry sym)) mt
-              -> S sym rtp bs r ctx
-              -> IO (CS.RegValue sym t, S sym rtp bs r ctx)
+              -> S p sym rtp bs r ctx
+              -> IO (CS.RegValue sym t, S p sym rtp bs r ctx)
 funcSemantics sfns fn st0 =
    case fn of
     MAA.SDiv _rep lhs rhs -> withBackend st0 $ \sym bak -> do
@@ -141,9 +141,9 @@ funcSemantics sfns fn st0 =
       AP.panic AP.AArch32 "funcSemantics" ["The ARM syscall primitive should be eliminated and replaced by a handle lookup"]
 
 withBackend ::
-  S sym rtp bs r ctx ->
+  S p sym rtp bs r ctx ->
   (forall bak. CB.IsSymBackend sym bak => sym -> bak -> IO a) ->
-  IO (a, S sym rtp bs r ctx)
+  IO (a, S p sym rtp bs r ctx)
 withBackend s action = do
   CSET.withBackend (s^.CSET.stateContext) $ \bak ->
     do val <- action (CB.backendGetSym bak) bak
