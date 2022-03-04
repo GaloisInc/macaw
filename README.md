@@ -62,20 +62,17 @@ supported via Git submodules:
 
     $ git submodule update --init
 
-### Installing Softfloat for RISC-V Backend
+### Preparing Softfloat for RISC-V Backend
 
 The RISC-V backend depends on softfloat-hs, which in turn depends on the
-softfloat library.  If you are not building `macaw-riscv` you can skip this
-step.  To install softfloat on Linux or OSX, run:
+softfloat library.  Macaw's build system will automatically build softfloat,
+but the softfloat-hs repo must be recursively cloned to enable this.  If you
+are not building `macaw-riscv` you can skip this step.  To recursively clone
+softfloat-hs, run:
 ```shell
 $ cd deps/softfloat-hs
 $ git submodule update --init --recursive
-$ make
-$ sudo make install
 ```
-
-The Makefile in `deps/softfloat-hs` should install the softfloat library and
-header files to the appropriate locations on both OSX and Linux.
 
 ## Building with Cabal
 

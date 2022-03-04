@@ -54,11 +54,9 @@ jobs:
           language-pack-en-base language-pack-en
         sudo locale-gen en_US.UTF-8
         sudo update-locale LANG=$LANG LANGUAGE=$LANGUAGE
-        # Install softfloat
+        # Softfloat repo needs to be recursively cloned
         cd deps/softfloat-hs
         git submodule update --init --recursive
-        make
-        sudo make install
         cd ../..
 
     - name: Copy cabal project files
