@@ -109,6 +109,7 @@ module Data.Macaw.Symbolic.Memory (
   GlobalMemoryHooks(..),
   defaultGlobalMemoryHooks,
   newGlobalMemoryWith,
+  newMergedGlobalMemoryWith,
   MemoryModelContents(..),
   mkGlobalPointerValidityPred,
   mapRegionPointers
@@ -242,25 +243,68 @@ newGlobalMemoryWith
  -> MC.Memory (MC.ArchAddrWidth arch)
  -- ^ The macaw memory
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
-newGlobalMemoryWith hooks proxy bak endian mmc mem = do
+newGlobalMemoryWith hooks proxy bak endian mmc mem =
+  newMergedGlobalMemoryWith hooks proxy bak endian mmc [mem]
+
+-- | A version of 'newGlobalMemoryWith' that takes a list of memories and
+-- merges them into a flat addresses space.
+newMergedGlobalMemoryWith
+ :: ( 16 <= MC.ArchAddrWidth arch
+    , MC.MemWidth (MC.ArchAddrWidth arch)
+    , KnownNat (MC.ArchAddrWidth arch)
+    , CB.IsSymBackend sym bak
+    , CL.HasLLVMAnn sym
+    , MonadIO m
+    , sym ~ WEB.ExprBuilder t st fs
+    , ?memOpts :: CL.MemOptions
+    )
+ => GlobalMemoryHooks (MC.ArchAddrWidth arch)
+ -- ^ Hooks customizing the memory setup
+ -> proxy arch
+ -- ^ A proxy to fix the architecture
+ -> bak
+ -- ^ The symbolic backend used to construct terms
+ -> CLD.EndianForm
+ -- ^ The endianness of values in memory
+ -> MemoryModelContents
+ -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
+ -> [MC.Memory (MC.ArchAddrWidth arch)]
+ -- ^ The macaw memories
+ -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
+newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
   let sym = CB.backendGetSym bak
-  let ?ptrWidth = MC.memWidth mem
+
+  let ?ptrWidth =
+        case map MC.memWidth mems of
+          [] -> error "Cannot build merged global memory from empty list"
+          x : xs ->
+            -- Check that all memories have the same pointer width
+            if all (testNatEq x) xs
+            then x
+            else error "Provided macaw memories have different pointer widths"
 
   memImpl1 <- liftIO $ CL.emptyMem endian
 
   let allocName = WS.safeSymbol "globalMemoryBytes"
   symArray1 <- liftIO $ WI.freshConstant sym allocName CT.knownRepr
-  sizeBV <- liftIO $ WI.maxUnsignedBV sym (MC.memWidth mem)
+  sizeBV <- liftIO $ WI.maxUnsignedBV sym ?ptrWidth
   (ptr, memImpl2) <- liftIO $ CL.doMalloc bak CL.GlobalAlloc CL.Mutable
                          "Global memory for macaw-symbolic"
                          memImpl1 sizeBV CLD.noAlignment
 
-  (symArray2, tbl) <- populateMemory proxy hooks bak mmc mem symArray1
+  (symArray2, tbl) <- populateMemory proxy hooks bak mmc mems symArray1
   memImpl3 <- liftIO $ CL.doArrayStore bak memImpl2 ptr CLD.noAlignment symArray2 sizeBV
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
 
   return (memImpl3, ptrTable)
 
+  where
+    -- | Test that two 'PN.NatRepr's are equal
+    testNatEq :: PN.NatRepr m -> PN.NatRepr n -> Bool
+    testNatEq x y =
+      case PN.testNatCases x y of
+        PN.NatCaseEQ -> True
+        _ -> False
 
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the
@@ -321,23 +365,24 @@ populateMemory :: ( CB.IsSymBackend sym bak
                -- ^ The symbolic backend
                -> MemoryModelContents
                -- ^ A flag to indicate how to populate the memory model based on the memory image
-               -> MC.Memory (MC.ArchAddrWidth arch)
+               -> [MC.Memory (MC.ArchAddrWidth arch)]
                -- ^ The initial memory image for the binary, which contains static data to populate the memory model
                -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                     , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
                     )
-populateMemory proxy hooks bak mmc mem symArray0 =
+populateMemory proxy hooks bak mmc mems symArray0 =
   let sym = CB.backendGetSym bak in
-  pleatM (symArray0, IM.empty) (MC.memSegments mem) $ \allocs1 seg -> do
-    pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
-      concreteBytes <- case memChunk of
-        MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks bak reloc
-        MC.BSSRegion sz ->
-          liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
-        MC.ByteRegion bytes ->
-          liftIO $ mapM (WI.bvLit sym PN.knownNat . BV.word8) $ BS.unpack bytes
-      populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
+  pleatM (symArray0, IM.empty) mems $ \allocs0 mem ->
+    pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
+      pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
+        concreteBytes <- case memChunk of
+          MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks bak reloc
+          MC.BSSRegion sz ->
+            liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
+          MC.ByteRegion bytes ->
+            liftIO $ mapM (WI.bvLit sym PN.knownNat . BV.word8) $ BS.unpack bytes
+        populateSegmentChunk proxy bak mmc mem symArray seg addr concreteBytes allocs2
 
 -- | If we want to treat the contents of this chunk of memory (the bytes at the
 -- 'MemAddr') as concrete, assert that the bytes from the symbolic array backing
