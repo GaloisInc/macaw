@@ -134,6 +134,9 @@ import qualified Lang.Crucible.LLVM.MemModel as CL
 import qualified Lang.Crucible.Simulator as CS
 import qualified Lang.Crucible.Types as CT
 import           Text.Printf ( printf )
+import qualified What4.Expr.App as WEA
+import qualified What4.Expr.BoolMap as BoolMap
+import qualified What4.Expr.Builder as WEB
 import qualified What4.Interface as WI
 import qualified What4.Symbol as WS
 
@@ -223,6 +226,7 @@ newGlobalMemoryWith
     , CB.IsSymBackend sym bak
     , CL.HasLLVMAnn sym
     , MonadIO m
+    , sym ~ WEB.ExprBuilder t st fs
     , ?memOpts :: CL.MemOptions
     )
  => GlobalMemoryHooks (MC.ArchAddrWidth arch)
@@ -284,6 +288,7 @@ newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
                    , CB.IsSymBackend sym bak
                    , CL.HasLLVMAnn sym
                    , MonadIO m
+                   , sym ~ WEB.ExprBuilder t st fs
                    , ?memOpts :: CL.MemOptions
                    )
                 => proxy arch
@@ -306,6 +311,7 @@ populateMemory :: ( CB.IsSymBackend sym bak
                   , MC.MemWidth (MC.ArchAddrWidth arch)
                   , KnownNat (MC.ArchAddrWidth arch)
                   , MonadIO m
+                  , sym ~ WEB.ExprBuilder t st fs
                   )
                => proxy arch
                -- ^ A proxy to fix the architecture
@@ -346,6 +352,7 @@ populateSegmentChunk :: ( 16 <= w
                       , CB.IsSymBackend sym bak
                       , MonadIO m
                       , MC.ArchAddrWidth arch ~ w
+                      , sym ~ WEB.ExprBuilder t st fs
                       )
                    => proxy arch
                    -> bak
@@ -425,15 +432,29 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
       symArray2 <- liftIO $ WI.arrayUpdateAtIdxLits sym updates symArray
 -}
 
-      -- Instead, generate assertions for each byte in the array
-      F.forM_ (zip [0.. size - 1] bytes) $ \(idx, byte) -> do
+      -- We used to assert the equality of each byte separately.  This ended up
+      -- being very slow for large binaries, as it synchronizes the pipe to the
+      -- solver after each assertion. Instead, we now encode all of the initial
+      -- values as equalities and generate a large conjunction that asserts them
+      -- all at once.
+      --
+      -- The roundabout encoding below (using the low-level 'WEB.sbMakeExpr'
+      -- API) is used because the natural encoding (using 'WI.andPred') attempts
+      -- to apply an optimization called absorbtion (which attempts to discard
+      -- redundant conjuncts). That optimization is quadratic in cost, which
+      -- makes this encoding intractably expensive for large terms.  By using
+      -- 'WEB.sbMakeExpr', we avoid that optimization (which will never fire for
+      -- this term anyway, as there are no redundant conjuncts).
+      initVals <- pleatM [] (zip [0.. size - 1] bytes) $ \bmvals (idx, byte) -> do
         let byteAddr = MC.incAddr (fromIntegral idx) addr
         let absByteAddr = toAbsoluteAddr byteAddr
         index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (BV.mkBV (MC.memWidth mem) (toInteger absByteAddr))
         eq_pred <- liftIO $ WI.bvEq sym byte =<< WI.arrayLookup sym symArray (Ctx.singleton index_bv)
-        prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
-        let desc = "Byte@" ++ show byteAddr
-        liftIO $ CB.addAssumption bak (CB.GenericAssumption prog_loc desc eq_pred)
+        return (eq_pred : bmvals)
+      let desc = printf "Bytes@[addr=%s,nbytes=%s]" (show addr) (show bytes)
+      prog_loc <- liftIO $ WI.getCurrentProgramLoc sym
+      byteEqualityAssertion <- liftIO $ WEB.sbMakeExpr sym (WEA.ConjPred (BoolMap.fromVars [(e, BoolMap.Positive) | e <- initVals]))
+      liftIO $ CB.addAssumption bak (CB.GenericAssumption prog_loc desc byteEqualityAssertion)
       let symArray2 = symArray
 
       return (symArray2, IM.insert interval mut_flag ptrtable)

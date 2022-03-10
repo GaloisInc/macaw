@@ -6,6 +6,8 @@
 
 ### API Changes
 
+- The `newGlobalMemory` and `newGlobalMemoryWith` functions now requires that `sym ~ ExprBuilder` due to some optimizations in populating the initial memory contents of large binaries
+
 - The types of various functions, such as `macawExtensions`, are now parametric
   over the `personality` type variable instead of restricting it to
   `MacawSimulatorState sym`. A consequence of this change is that the
