@@ -468,13 +468,14 @@ extractIPModels ctx bak solverProc initialAssumptions res_ip_base res_ip_off = d
       nModels | nModels == modelMax -> return SpuriousModels
               | otherwise -> return (Models resolved)
 
-initializeSimulator :: forall m sym bak arch blocks ids tp
+initializeSimulator :: forall m sym bak arch blocks ids tp t st fs
                      . ( MonadIO m
                        , 16 <= M.ArchAddrWidth arch
                        , MS.SymArchConstraints arch
                        , CB.IsSymBackend sym bak
                        , LLVM.HasLLVMAnn sym
                        , Show (W.SymExpr sym (W.BaseBVType (M.ArchAddrWidth arch)))
+                       , sym ~ WE.ExprBuilder t st fs
                        , ?memOpts :: LLVM.MemOptions
                        )
                     => RefinementContext arch
