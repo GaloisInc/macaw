@@ -35,7 +35,7 @@ The Macaw libraries are:
   learned semantics..
 * macaw-ppc-symbolic -- Enables macaw/crucible symbolic simulation for
   PPC architectures
-* macaw-riscv -- Enables macaw for RISC-V (RV64GC variant) binaries.
+* macaw-riscv -- Enables macaw for RISC-V (RV32GC and RV64GC variants) binaries.
 * macaw-refinement -- Enables additional architecture-independent
   refinement of code discovery.  This can enable discovery of more
   functionality than is revealed by the analysis in macaw-base.

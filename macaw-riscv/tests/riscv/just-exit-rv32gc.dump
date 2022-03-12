@@ -1,0 +1,14 @@
+
+just-exit-rv32gc.exe:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010074 <main>:
+   10074:	1141                	c.addi	sp,-16
+   10076:	c622                	c.swsp	s0,12(sp)
+   10078:	0800                	c.addi4spn	s0,sp,16
+   1007a:	0001                	c.addi	zero,0
+   1007c:	4432                	c.lwsp	s0,12(sp)
+   1007e:	0141                	c.addi	sp,16
+   10080:	8082                	c.jr	ra

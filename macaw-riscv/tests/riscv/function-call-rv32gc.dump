@@ -1,0 +1,45 @@
+
+function-call-rv32gc.exe:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010074 <f2>:
+   10074:	1101                	c.addi	sp,-32
+   10076:	ce22                	c.swsp	s0,28(sp)
+   10078:	1000                	c.addi4spn	s0,sp,32
+   1007a:	fea42623          	sw	a0,-20(s0)
+   1007e:	fec42783          	lw	a5,-20(s0)
+   10082:	0785                	c.addi	a5,1
+   10084:	853e                	c.mv	a0,a5
+   10086:	4472                	c.lwsp	s0,28(sp)
+   10088:	6105                	c.addi16sp	sp,32
+   1008a:	8082                	c.jr	ra
+
+0001008c <f1>:
+   1008c:	1101                	c.addi	sp,-32
+   1008e:	ce06                	c.swsp	ra,28(sp)
+   10090:	cc22                	c.swsp	s0,24(sp)
+   10092:	1000                	c.addi4spn	s0,sp,32
+   10094:	478d                	c.li	a5,3
+   10096:	fef42623          	sw	a5,-20(s0)
+   1009a:	fec42503          	lw	a0,-20(s0)
+   1009e:	3fd9                	c.jal	10074 <f2>
+   100a0:	87aa                	c.mv	a5,a0
+   100a2:	853e                	c.mv	a0,a5
+   100a4:	40f2                	c.lwsp	ra,28(sp)
+   100a6:	4462                	c.lwsp	s0,24(sp)
+   100a8:	6105                	c.addi16sp	sp,32
+   100aa:	8082                	c.jr	ra
+
+000100ac <_start>:
+   100ac:	1141                	c.addi	sp,-16
+   100ae:	c606                	c.swsp	ra,12(sp)
+   100b0:	c422                	c.swsp	s0,8(sp)
+   100b2:	0800                	c.addi4spn	s0,sp,16
+   100b4:	3fe1                	c.jal	1008c <f1>
+   100b6:	0001                	c.addi	zero,0
+   100b8:	40b2                	c.lwsp	ra,12(sp)
+   100ba:	4422                	c.lwsp	s0,8(sp)
+   100bc:	0141                	c.addi	sp,16
+   100be:	8082                	c.jr	ra

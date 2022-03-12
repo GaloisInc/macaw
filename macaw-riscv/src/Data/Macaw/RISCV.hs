@@ -43,14 +43,20 @@ riscvDemandContext = MD.DemandContext
   , MD.archFnHasSideEffects = riscvPrimFnHasSideEffects
   }
 
-riscv_info ::
+riscv_info :: forall w rv.
   (RISCVConstraints rv, MC.IsArchTermStmt (RISCVTermStmt rv), HasCallStack) =>
   (w ~ G.RVWidth rv, 32 <= w) =>
   G.RVRepr rv -> MI.ArchitectureInfo (RISCV rv)
 riscv_info rvRepr =
   case rvRepr of
     G.RVRepr G.RV64Repr (G.ExtensionsRepr G.PrivMRepr G.MYesRepr G.AYesRepr G.FDYesRepr G.CYesRepr) ->
-      -- Only RV64GC mode is supported
+      archInfo
+    G.RVRepr G.RV32Repr (G.ExtensionsRepr G.PrivMRepr G.MYesRepr G.AYesRepr G.FDYesRepr G.CYesRepr) ->
+      archInfo
+    _ -> error "Only RV32GC and RV64GC modes are supported"
+  where
+    archInfo :: MI.ArchitectureInfo (RISCV rv)
+    archInfo =
       G.withRV rvRepr $ MI.ArchitectureInfo
         { MI.withArchConstraints = \x -> x
         , MI.archAddrWidth = riscvAddrWidth rvRepr
@@ -72,4 +78,3 @@ riscv_info rvRepr =
         , MI.postArchTermStmtAbsState = \_ _ _ _ _ -> error $ "postArchTermStmtAbsState unimplemented in riscv_info"
         , MI.archClassifier = defaultClassifier
         }
-    _ -> error "Only RV64GC mode is supported"

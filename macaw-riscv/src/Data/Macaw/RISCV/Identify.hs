@@ -62,7 +62,12 @@ matchReturn :: RISCVConstraints rv
             -> Maybe (Some (MA.AbsValue w))
 matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
   MC.BVAnd _ addr (MC.BVValue _ mask) <- MC.valueAsApp ip
-  guard (mask == 0xfffffffffffffffe)
+  let maskVal = case G.rvBaseArch rvRepr of
+                  G.RV64Repr -> 0xfffffffffffffffe
+                  G.RV32Repr -> 0xfffffffe
+                  _ -> error ( "Unsupported base architecture: "
+                            ++ (show (G.rvBaseArch rvRepr)))
+  guard (mask == maskVal)
   case MA.transferValue absProcState addr of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)
     _ -> Nothing
