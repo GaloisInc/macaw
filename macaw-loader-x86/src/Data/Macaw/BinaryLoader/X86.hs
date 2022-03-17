@@ -21,7 +21,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( mapMaybe )
+import           Data.Maybe ( fromMaybe, mapMaybe )
 
 import qualified Data.Macaw.X86 as MX
 
@@ -56,10 +56,11 @@ x86EntryPoints loadedBinary = do
     Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbolWords)
     Nothing -> X.throwM (InvalidEntryPoint addrWord)
   where
+    offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     mem = BL.memoryImage loadedBinary
-    addrWord = MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
+    addrWord = MM.memWord (offset + (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    symbolWords = [ MM.memWord (fromIntegral (E.steValue entry))
+    symbolWords = [ MM.memWord (fromIntegral (offset + (E.steValue entry)))
                   | Just (Right st) <- [E.decodeHeaderSymtab elfData]
                   , entry <- F.toList (E.symtabEntries st)
                   , E.steType entry == E.STT_FUNC
@@ -84,6 +85,7 @@ loadX86Binary lopts e = do
                              , BL.loadDiagnostics = warnings
                              , BL.binaryRepr = BL.Elf64Repr
                              , BL.originalBinary = e
+                             , BL.loadOptions = lopts
                              }
 
 indexSymbols :: [EL.MemSymbol 64] -> Map.Map (MM.MemAddr 64) BS.ByteString

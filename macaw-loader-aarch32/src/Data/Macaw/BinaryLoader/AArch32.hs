@@ -21,7 +21,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( mapMaybe )
+import           Data.Maybe ( fromMaybe, mapMaybe )
 
 import qualified Data.Macaw.ARM as MA
 
@@ -57,10 +57,11 @@ aarch32EntryPoints loadedBinary =
     Just entryPoint ->
       return (entryPoint DLN.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
   where
+    offset = fromMaybe 0 (LC.loadOffset (MBL.loadOptions loadedBinary))
     mem = MBL.memoryImage loadedBinary
-    addr = MM.memWord (fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
+    addr = MM.memWord (offset + fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
     elfData = elf (MBL.binaryFormatData loadedBinary)
-    symbols = [ MM.memWord (fromIntegral (EE.steValue entry))
+    symbols = [ MM.memWord (offset + (fromIntegral (EE.steValue entry)))
               | Just (Right st) <- [EE.decodeHeaderSymtab elfData]
               , entry <- F.toList (EE.symtabEntries st)
               , EE.steType entry == EE.STT_FUNC
@@ -85,6 +86,7 @@ loadAArch32Binary lopts e =
                               , MBL.loadDiagnostics = warnings
                               , MBL.binaryRepr = MBL.Elf32Repr
                               , MBL.originalBinary = e
+                              , MBL.loadOptions = lopts
                               }
 
 indexSymbols :: [EL.MemSymbol 32] -> Map.Map (MM.MemAddr 32) BS.ByteString

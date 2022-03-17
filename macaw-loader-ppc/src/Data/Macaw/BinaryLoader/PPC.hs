@@ -27,7 +27,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
-import           Data.Maybe ( mapMaybe )
+import           Data.Maybe ( fromMaybe, mapMaybe )
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -78,13 +78,14 @@ ppc64EntryPoints :: (X.MonadThrow m, MC.ArchAddrWidth PPC64.PPC ~ 64)
 ppc64EntryPoints loadedBinary = do
   entryAddr <- liftMemErr PPCElfMemoryError
                (MC.readAddr mem (BL.memoryEndianness loadedBinary) tocEntryAbsAddr)
-  absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem entryAddr)
-  let otherEntries = mapMaybe (MC.asSegmentOff mem) (TOC.entryPoints toc)
+  absEntryAddr <- liftMaybe (PPCInvalidAbsoluteAddress entryAddr) (MC.asSegmentOff mem (MC.incAddr (fromIntegral offset) entryAddr))
+  let otherEntries = mapMaybe (MC.asSegmentOff mem . MM.incAddr (fromIntegral offset)) (TOC.entryPoints toc)
   return (absEntryAddr NEL.:| otherEntries)
   where
+    offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     tocEntryAddr = E.headerEntry $ E.header (elf (BL.binaryFormatData loadedBinary))
     tocEntryAbsAddr :: EL.MemWidth w => MC.MemAddr w
-    tocEntryAbsAddr = MC.absoluteAddr (MC.memWord (fromIntegral tocEntryAddr))
+    tocEntryAbsAddr = MC.absoluteAddr (MC.memWord (fromIntegral (offset + tocEntryAddr)))
     toc = BL.archBinaryData loadedBinary
     mem = BL.memoryImage loadedBinary
 
@@ -109,10 +110,11 @@ ppc32EntryPoints loadedBinary =
     Nothing -> X.throwM (InvalidEntryPoint entryAddr)
     Just entryPoint -> return (entryPoint NEL.:| mapMaybe (BLE.resolveAbsoluteAddress mem) symbols)
   where
+    offset = fromMaybe 0 (LC.loadOffset (BL.loadOptions loadedBinary))
     mem = BL.memoryImage loadedBinary
-    entryAddr = MM.memWord (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
+    entryAddr = MM.memWord (offset + fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    symbols = [ MM.memWord (fromIntegral (E.steValue entry))
+    symbols = [ MM.memWord (offset + (fromIntegral (E.steValue entry)))
               | Just (Right st) <- [E.decodeHeaderSymtab elfData]
               , entry <- F.toList (E.symtabEntries st)
               , E.steType entry == E.STT_FUNC
@@ -138,6 +140,7 @@ loadPPC32Binary lopts e =
                              , BL.loadDiagnostics = warnings
                              , BL.binaryRepr = BL.Elf32Repr
                              , BL.originalBinary = e
+                             , BL.loadOptions = lopts
                              }
   where
     index32 = F.foldl' doIndex Map.empty
@@ -166,6 +169,7 @@ loadPPC64Binary lopts e = do
                                  , BL.loadDiagnostics = warnings
                                  , BL.binaryRepr = BL.Elf64Repr
                                  , BL.originalBinary = e
+                                 , BL.loadOptions = lopts
                                  }
 
 indexSymbols :: (Foldable t)

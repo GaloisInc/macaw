@@ -40,6 +40,7 @@ data LoadedBinary arch binFmt =
                , loadDiagnostics :: [Diagnostic arch binFmt]
                , binaryRepr :: BinaryRepr binFmt
                , originalBinary :: binFmt
+               , loadOptions :: LC.LoadOptions
                }
 
 -- | A class for architecture and binary container independent binary loading
