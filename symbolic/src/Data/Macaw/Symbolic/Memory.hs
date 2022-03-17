@@ -124,6 +124,7 @@ import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
 import qualified Data.IntervalMap.Strict as IM
+import qualified Data.List.NonEmpty as NEL
 
 import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.Context as Ctx
@@ -244,10 +245,15 @@ newGlobalMemoryWith
  -- ^ The macaw memory
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newGlobalMemoryWith hooks proxy bak endian mmc mem =
-  newMergedGlobalMemoryWith hooks proxy bak endian mmc [mem]
+  newMergedGlobalMemoryWith hooks proxy bak endian mmc (NEL.fromList [mem])
 
 -- | A version of 'newGlobalMemoryWith' that takes a list of memories and
--- merges them into a flat addresses space.
+-- merges them into a flat addresses space.  The address spaces of the input
+-- memories must not overlap.
+--
+-- In the future this function may be updated to support multiple merge
+-- strategies by adding additional configuration options to
+-- 'GlobalMemoryHooks'.
 newMergedGlobalMemoryWith
  :: ( 16 <= MC.ArchAddrWidth arch
     , MC.MemWidth (MC.ArchAddrWidth arch)
@@ -268,20 +274,12 @@ newMergedGlobalMemoryWith
  -- ^ The endianness of values in memory
  -> MemoryModelContents
  -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
- -> [MC.Memory (MC.ArchAddrWidth arch)]
+ -> NEL.NonEmpty (MC.Memory (MC.ArchAddrWidth arch))
  -- ^ The macaw memories
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
   let sym = CB.backendGetSym bak
-
-  let ?ptrWidth =
-        case map MC.memWidth mems of
-          [] -> error "Cannot build merged global memory from empty list"
-          x : xs ->
-            -- Check that all memories have the same pointer width
-            if all (testNatEq x) xs
-            then x
-            else error "Provided macaw memories have different pointer widths"
+  let ?ptrWidth = MC.memWidth (NEL.head mems)
 
   memImpl1 <- liftIO $ CL.emptyMem endian
 
@@ -297,14 +295,6 @@ newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
   let ptrTable = MemPtrTable { memPtrTable = tbl, memPtr = ptr, memRepr = ?ptrWidth }
 
   return (memImpl3, ptrTable)
-
-  where
-    -- | Test that two 'PN.NatRepr's are equal
-    testNatEq :: PN.NatRepr m -> PN.NatRepr n -> Bool
-    testNatEq x y =
-      case PN.testNatCases x y of
-        PN.NatCaseEQ -> True
-        _ -> False
 
 -- | Create a new LLVM memory model instance ('CL.MemImpl') and an index that
 -- enables pointer translation ('MemPtrTable').  The contents of the
@@ -356,6 +346,7 @@ populateMemory :: ( CB.IsSymBackend sym bak
                   , KnownNat (MC.ArchAddrWidth arch)
                   , MonadIO m
                   , sym ~ WEB.ExprBuilder t st fs
+                  , Foldable t'
                   )
                => proxy arch
                -- ^ A proxy to fix the architecture
@@ -365,8 +356,8 @@ populateMemory :: ( CB.IsSymBackend sym bak
                -- ^ The symbolic backend
                -> MemoryModelContents
                -- ^ A flag to indicate how to populate the memory model based on the memory image
-               -> [MC.Memory (MC.ArchAddrWidth arch)]
-               -- ^ The initial memory image for the binary, which contains static data to populate the memory model
+               -> t' (MC.Memory (MC.ArchAddrWidth arch))
+               -- ^ The initial memory images for the binaries, which contain static data to populate the memory model
                -> WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                -> m ( WI.SymArray sym (CT.SingleCtx (WI.BaseBVType (MC.ArchAddrWidth arch))) (WI.BaseBVType 8)
                     , IM.IntervalMap (MC.MemWord (MC.ArchAddrWidth arch)) CL.Mutability
