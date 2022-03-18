@@ -1,5 +1,9 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.RISCV.Identify where
 
@@ -12,8 +16,10 @@ import qualified Data.Sequence as Seq
 
 import           Control.Lens ((^.))
 import           Control.Monad (guard)
+import qualified Data.BitVector.Sized as BVS
 import           Data.Maybe (isJust)
 import           Data.Parameterized ( Some(..) )
+import qualified Data.Parameterized.NatRepr as PN
 
 import           Data.Macaw.RISCV.Arch
 import           Data.Macaw.RISCV.RISCVReg
@@ -53,21 +59,19 @@ riscvIdentifyReturn rvRepr stmts0 rs absState = G.withRV rvRepr $ do
   Some MA.ReturnAddr <- matchReturn rvRepr absState (rs ^. MC.boundValue MC.ip_reg)
   return stmts0
 
--- FIXME: Right now, this code only works for RV64GC. We're going to
--- have to write it based on the rvRepr argument.
-matchReturn :: RISCVConstraints rv
+matchReturn :: forall rv ids w w'
+             . (RISCVConstraints rv, w' ~ (G.RVWidth rv))
             => G.RVRepr rv
             -> MA.AbsProcessorState (MC.ArchReg (RISCV rv)) ids
             -> MC.Value (RISCV rv) ids (MT.BVType (MC.ArchAddrWidth (RISCV rv)))
             -> Maybe (Some (MA.AbsValue w))
 matchReturn rvRepr absProcState ip = G.withRV rvRepr $ do
   MC.BVAnd _ addr (MC.BVValue _ mask) <- MC.valueAsApp ip
-  let maskVal = case G.rvBaseArch rvRepr of
-                  G.RV64Repr -> 0xfffffffffffffffe
-                  G.RV32Repr -> 0xfffffffe
-                  _ -> error ( "Unsupported base architecture: "
-                            ++ (show (G.rvBaseArch rvRepr)))
-  guard (mask == maskVal)
+  -- Mask should be the width of a register and have the value @0xfff..fe@
+  let maskVal = BVS.sresize (PN.knownNat @8)
+                            (PN.knownNat @w')
+                            (BVS.mkBV (PN.knownNat @8) 0xfe)
+  guard ((BVS.mkBV (PN.knownNat @w') mask) == maskVal)
   case MA.transferValue absProcState addr of
     MA.ReturnAddr -> return (Some MA.ReturnAddr)
     _ -> Nothing
