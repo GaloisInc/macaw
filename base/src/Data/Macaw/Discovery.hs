@@ -36,6 +36,7 @@ module Data.Macaw.Discovery
        , Data.Macaw.Discovery.analyzeFunction
        , Data.Macaw.Discovery.analyzeDiscoveredFunctions
        , Data.Macaw.Discovery.addDiscoveredFunctionBlockTargets
+       , Data.Macaw.Discovery.discoverFunction
          -- * Top level utilities
        , Data.Macaw.Discovery.completeDiscoveryState
        , Data.Macaw.Discovery.incCompleteDiscovery
