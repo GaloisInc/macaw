@@ -1,0 +1,19 @@
+
+branch-rv32gc.exe:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00010074 <main>:
+   10074:	1101                	c.addi	sp,-32
+   10076:	ce22                	c.swsp	s0,28(sp)
+   10078:	1000                	c.addi4spn	s0,sp,32
+   1007a:	fec42783          	lw	a5,-20(s0)
+   1007e:	e781                	c.bnez	a5,10086 <main+0x12>
+   10080:	4785                	c.li	a5,1
+   10082:	fef42623          	sw	a5,-20(s0)
+   10086:	fec42783          	lw	a5,-20(s0)
+   1008a:	853e                	c.mv	a0,a5
+   1008c:	4472                	c.lwsp	s0,28(sp)
+   1008e:	6105                	c.addi16sp	sp,32
+   10090:	8082                	c.jr	ra
