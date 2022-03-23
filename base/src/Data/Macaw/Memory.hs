@@ -750,6 +750,11 @@ applyRelocsToBytes baseAddr msegIdx pre ioff ((addr,v):rest) buffer
   -- so we require the difference between the address and baseAddr is
   -- less than regionSize
   | addr < ioff = error "Encountered overlapping relocations."
+  -- The R_X86_64_COPY is currently only barely supported.  In
+  -- particular, it has 0 size (the actual size depends on the size of
+  -- the associated symbol), which causes all sorts of issues here (in
+  -- particular, we get multiple entries at the same address).
+  | relocEntrySize v == 0 = applyRelocsToBytes baseAddr msegIdx pre ioff rest buffer  
     -- Check start of relocation is in range.
   | toInteger (addr - ioff) < presymbolBytesLeft buffer  = do
 
