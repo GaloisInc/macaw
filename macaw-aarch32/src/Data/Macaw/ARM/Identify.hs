@@ -40,6 +40,34 @@ isExecutableSegOff :: MC.MemSegmentOff w -> Bool
 isExecutableSegOff sa =
   MC.segmentFlags (MC.segoffSegment sa) `MMP.hasPerm` MMP.execute
 
+-- | This is a helper for 'identifyCall'
+--
+-- The call classifier just wants to know that the return address is a known
+-- constant value, but doesn't really care what it is.  We could be more
+-- specific and require it to be the next instruction, but that isn't really
+-- necessary in practice.
+--
+-- In the most basic form, we would expect this to be a
+-- 'MC.RelocatableValue'. However, in Thumb mode, the semantics do a bit of
+-- extra work to force the low bit to be set. If the return address is not
+-- obviously syntactically a 'MC.RelocatableValue', we traverse the term
+-- expected form of the complex term to make sure it is what we expect for thumb
+-- (and bottoms out in a known value).
+isValidReturnAddress
+  :: MC.Value ARM.AArch32 ids (MT.BVType 32)
+  -> Maybe (MC.Value ARM.AArch32 ids (MT.BVType 32))
+isValidReturnAddress val0 =
+  case val0 of
+    MC.RelocatableValue {} -> return val0
+    _ -> do
+      MC.BVOr _ val1 _ <- MC.valueAsApp val0
+      MC.BVShl _ val2 _ <- MC.valueAsApp val1
+      MC.UExt val3 _ <- MC.valueAsApp val2
+      MC.Trunc val4 _ <- MC.valueAsApp val3
+      MC.BVAnd _ val5 _ <- MC.valueAsApp val4
+      MC.BVShr _ val6@(MC.RelocatableValue {}) _ <- MC.valueAsApp val5
+      return val6
+
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
 -- several instructions that can update R15 and effect a "call",
@@ -52,8 +80,7 @@ identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
              -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
 identifyCall mem stmts0 rs
   | not (null stmts0)
-  , MC.RelocatableValue {} <- rs ^. MC.boundValue AR.arm_LR
-  , Just retVal <- MSS.simplifyValue (rs ^. MC.boundValue AR.arm_LR)
+  , Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.arm_LR)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (stmts0, retAddr)
