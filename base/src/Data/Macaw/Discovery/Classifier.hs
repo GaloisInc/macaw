@@ -28,6 +28,7 @@ module Data.Macaw.Discovery.Classifier (
   , tailCallClassifier
   -- * Reusable helpers
   , branchBlockState
+  , classifierEndBlock
   ) where
 
 import           Control.Applicative ( Alternative(empty) )
