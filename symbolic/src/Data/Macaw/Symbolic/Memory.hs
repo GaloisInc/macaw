@@ -3,6 +3,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 -- | This module provides model implementations of 'MS.GlobalMap' and 'MS.MkGlobalPointerValidityPred'
@@ -123,8 +124,8 @@ import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.ByteString as BS
 import qualified Data.Foldable as F
+import           Data.Functor.Identity ( Identity(Identity) )
 import qualified Data.IntervalMap.Strict as IM
-import qualified Data.List.NonEmpty as NEL
 
 import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.Context as Ctx
@@ -245,17 +246,18 @@ newGlobalMemoryWith
  -- ^ The macaw memory
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newGlobalMemoryWith hooks proxy bak endian mmc mem =
-  newMergedGlobalMemoryWith hooks proxy bak endian mmc (NEL.fromList [mem])
+  newMergedGlobalMemoryWith hooks proxy bak endian mmc (Identity mem)
 
--- | A version of 'newGlobalMemoryWith' that takes a list of memories and
--- merges them into a flat addresses space.  The address spaces of the input
--- memories must not overlap.
+-- | A version of 'newGlobalMemoryWith' that takes a 'Foldable' collection of
+-- memories and merges them into a flat addresses space.  The address spaces of
+-- the input memories must not overlap.
 --
 -- In the future this function may be updated to support multiple merge
 -- strategies by adding additional configuration options to
 -- 'GlobalMemoryHooks'.
 newMergedGlobalMemoryWith
- :: ( 16 <= MC.ArchAddrWidth arch
+ :: forall arch sym bak m t st fs proxy t'
+  . ( 16 <= MC.ArchAddrWidth arch
     , MC.MemWidth (MC.ArchAddrWidth arch)
     , KnownNat (MC.ArchAddrWidth arch)
     , CB.IsSymBackend sym bak
@@ -263,6 +265,7 @@ newMergedGlobalMemoryWith
     , MonadIO m
     , sym ~ WEB.ExprBuilder t st fs
     , ?memOpts :: CL.MemOptions
+    , Foldable t'
     )
  => GlobalMemoryHooks (MC.ArchAddrWidth arch)
  -- ^ Hooks customizing the memory setup
@@ -274,12 +277,12 @@ newMergedGlobalMemoryWith
  -- ^ The endianness of values in memory
  -> MemoryModelContents
  -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
- -> NEL.NonEmpty (MC.Memory (MC.ArchAddrWidth arch))
+ -> t' (MC.Memory (MC.ArchAddrWidth arch))
  -- ^ The macaw memories
  -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
 newMergedGlobalMemoryWith hooks proxy bak endian mmc mems = do
   let sym = CB.backendGetSym bak
-  let ?ptrWidth = MC.memWidth (NEL.head mems)
+  let ?ptrWidth = MC.memWidthNatRepr @(MC.ArchAddrWidth arch)
 
   memImpl1 <- liftIO $ CL.emptyMem endian
 
