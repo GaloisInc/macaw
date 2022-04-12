@@ -172,13 +172,13 @@ smtSolveTransfer ctx slice
       let posFn = W.BinaryPos "" . maybe 0 fromIntegral . M.segoffAsAbsoluteAddr
       some_cfg <- liftIO $ MS.mkBlockSliceCFG
         (MS.archFunctions archVals)
+        MS.noSlicingFunctions
         halloc
         posFn
         entryBlock
         body
         [targetBlock]
         []
-        Nothing
 
       -- F.forM_ (entryBlock : targetBlock : body) $ \pb -> liftIO $ do
       --   printf "Block %s\n" (show (M.pblockAddr pb))
