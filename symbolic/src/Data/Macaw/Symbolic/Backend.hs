@@ -22,6 +22,8 @@ module Data.Macaw.Symbolic.Backend (
   , CG.setMachineRegs
   , CG.addExtraBlock
   , CG.freshValueIndex
+  , CG.addStmt
+  , CG.bvLit
   , CG.ArchRegStruct
   , MacawArchEvalFn(..)
   , MacawEvalStmtFunc
