@@ -12,6 +12,7 @@ jobs:
       LC_ALL: en_US.UTF-8
       TZ: America/Los_Angeles
       CI_TEST_LEVEL: "2"
+      CACHE_VERSION: 2
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -40,9 +41,9 @@ jobs:
       with:
         path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
         # Prefer previous SHA hash if it is still cached
-        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: System Dependencies
       run: |
