@@ -363,7 +363,7 @@ symbolWarning w = modify $ \l -> w:l
 data SymbolTable w
    = NoSymbolTable
    | StaticSymbolTable !(V.Vector (Elf.SymtabEntry BS.ByteString (Elf.ElfWordType w)))
-   | DynamicSymbolTable !(Elf.DynamicSection w) !(Elf.VirtAddrMap w) !Elf.VersionReqMap
+   | DynamicSymbolTable !(Elf.DynamicSection w) !(Elf.VirtAddrMap w) !Elf.VersionDefMap !Elf.VersionReqMap
 
 -- | Take a symbol entry and symbol version and return the identifier.
 resolveSymbolId :: Elf.SymtabEntry BS.ByteString wtp
@@ -419,10 +419,10 @@ resolveSymbol (StaticSymbolTable entries) symIdx = do
           pure (sym { Elf.steName = BSC.take i nm }, ver)
         Nothing -> do
           pure (sym, UnversionedSymbol)
-resolveSymbol (DynamicSymbolTable ds virtMap verMap) symIdx = do
+resolveSymbol (DynamicSymbolTable ds virtMap verDefMap verReqMap) symIdx = do
   when (symIdx == 0) $
     throwError RelocationZeroSymbol
-  case Elf.dynSymEntry ds virtMap verMap symIdx of
+  case Elf.dynSymEntry ds virtMap verDefMap verReqMap symIdx of
     Left e -> throwError (RelocationDynamicError e)
     Right (sym, mverId) -> do
       let ver = case mverId of
@@ -1078,8 +1078,9 @@ dynamicRelocationMap hdr phdrs contents = do
               Elf.dynamicEntries (Elf.headerData hdr) (Elf.headerClass hdr) dynContents
             let dta = Elf.headerData hdr
             SomeRelocationResolver (resolver :: RelocationResolver tp) <- getRelocationResolver hdr
-            verMap <- runDynamic $ Elf.dynVersionReqMap dynSection virtMap
-            let symtab = DynamicSymbolTable dynSection virtMap verMap
+            verDefMap <- runDynamic $ Elf.dynVersionDefMap dynSection virtMap
+            verReqMap <- runDynamic $ Elf.dynVersionReqMap dynSection virtMap
+            let symtab = DynamicSymbolTable dynSection virtMap verDefMap verReqMap
             -- Parse relocations
             mRelaBuffer <- runDynamic $ Elf.dynRelaBuffer dynSection virtMap
             let rc0 = if isJust mRelaBuffer then 1 else 0
