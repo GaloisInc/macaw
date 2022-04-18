@@ -18,3 +18,6 @@
 
   It is recommended that future references to these types be done through this module. They are re-exported from their original location (`Data.Macaw.Discovery.State`) for backwards compatibility. One day that is likely to change.
 
+- The `DynamicSymbolTable` constructor of `Data.Macaw.Memory.ElfLoader`'s
+  `SymbolTable` data type now has an additional `VersionDefMap` field, which is
+  needed for finding versioning information in some cases.
