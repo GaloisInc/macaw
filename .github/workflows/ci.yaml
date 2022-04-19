@@ -4,6 +4,15 @@ name: CI
 on:
   push:
 
+# The CACHE_VERSION can be updated to force the use of a new cache if
+# the current cache contents become corrupted/invalid.  This can
+# sometimes happen when (for example) the OS version is changed but
+# older .so files are cached, which can have various effects
+# (e.g. cabal complains it can't find a valid version of the "happy"
+# tool).
+env:
+  CACHE_VERSION: 1
+
 jobs:
   build-linux:
 
@@ -40,9 +49,9 @@ jobs:
       with:
         path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
         # Prefer previous SHA hash if it is still cached
-        key: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
         # otherwise just use most recent build.
-        restore-keys: linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: System Dependencies
       run: |
