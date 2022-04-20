@@ -79,13 +79,8 @@ module Data.Macaw.Symbolic
     -- * Translating slices of CFGs
   , mkBlockSliceRegCFG
   , mkBlockSliceCFG
-  , MacawBlockEndCase(..)
-  , MacawBlockEndType
-  , MacawBlockEnd(..)
-  , isBlockEndCase
-  , blockEndCase
-  , blockEndReturn
-  , initBlockEnd
+  , MacawSlicingFunctions(..)
+  , noSlicingFunctions
     -- ** Post-processing helpers
   , toCoreCFG
     -- ** Translation-related types
@@ -163,7 +158,6 @@ import qualified Data.Text as T
 
 import qualified What4.FunctionName as C
 import           What4.Interface
-import           What4.Partial
 import qualified What4.Utils.StringLiteral as C
 import qualified What4.ProgramLoc as WPL
 
@@ -178,8 +172,6 @@ import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
-
-import qualified Lang.Crucible.Utils.MuxTree as C
 
 import           System.IO (stdout)
 
@@ -566,9 +558,21 @@ parsedTermTargets t =
     M.ParsedTranslateError {} -> []
     M.ClassifyFailure {} -> []
 
+data MacawSlicingFunctions arch
+ = MacawSlicingFunctions
+   { sliceTermFn :: !(forall ids s. M.ParsedTermStmt arch ids -> CrucGen arch ids s ())
+     -- ^ action to run just prior to all terminal statements. Takes the original
+     -- terminal statement as an argument, before it is (potentially) rewritten into
+     -- a return.
+   }
+
+noSlicingFunctions :: MacawSlicingFunctions arch 
+noSlicingFunctions = MacawSlicingFunctions (\_ -> return ())
+
 -- | See the documentation for 'mkBlockSliceCFG'
 mkBlockSliceRegCFG :: forall arch ids
                     . MacawSymbolicArchFunctions arch
+                   -> MacawSlicingFunctions arch
                    -> C.HandleAllocator
                    -> (M.ArchSegmentOff arch -> WPL.Position)
                    -> M.ParsedBlock arch ids
@@ -579,10 +583,8 @@ mkBlockSliceRegCFG :: forall arch ids
                    -- ^ Terminal blocks
                    -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
                    -- ^ (Source, target) block address pairs to convert to returns
-                   -> Maybe (CR.GlobalVar (MacawBlockEndType arch))
-                   -- ^ variable to optionally retain how the block originally exited
                    -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ block_end_var = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
+mkBlockSliceRegCFG archFns sliceFns halloc posFn entry body0 terms retEdges_ = crucGenArchConstraints archFns $ mkCrucRegCFG archFns halloc "" $ do
   -- Build up some initial values needed to set up the entry point to the
   -- function (including the initial value of all registers)
   inputRegId <- mmFreshNonce
@@ -648,7 +650,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ block_end_va
     let labelMapWithReturns = Map.union (lookupRetEdges blockAddr) labelMap
     (mainCrucBlock, auxCrucBlocks) <- runCrucGen archFns (offPosFn blockAddr) label inputReg $ do
       mapM_ (addMacawStmt blockAddr) (M.pblockStmts block)
-      assignBlockEnd archFns block_end_var (termStmtToBlockEnd $ M.pblockTermStmt block)
+      sliceTermFn sliceFns (M.pblockTermStmt block)
       case S.member blockAddr termAddrs of
         True -> do
           -- NOTE: If the entry block is also a terminator, we'll just
@@ -748,6 +750,7 @@ mkBlockSliceRegCFG archFns halloc posFn entry body0 terms retEdges_ block_end_va
 -- after the fragment executes.
 mkBlockSliceCFG :: forall arch ids
                  . MacawSymbolicArchFunctions arch
+                -> MacawSlicingFunctions arch
                 -> C.HandleAllocator
                 -> (M.ArchSegmentOff arch -> WPL.Position)
                 -> M.ParsedBlock arch ids
@@ -758,11 +761,9 @@ mkBlockSliceCFG :: forall arch ids
                 -- ^ Terminal blocks
                 -> [(M.ArchSegmentOff arch, M.ArchSegmentOff arch)]
                 -- ^ (Source, target) block address pairs to convert to returns
-                -> Maybe (CR.GlobalVar (MacawBlockEndType arch))
-                -- ^ variable to optionally retain how the block originally exited
                 -> IO (C.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
-mkBlockSliceCFG archFns halloc posFn entry body terms retEdges block_end_var =
-  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns halloc posFn entry body terms retEdges block_end_var
+mkBlockSliceCFG archFns sliceFns halloc posFn entry body terms retEdges =
+  toCoreCFG archFns <$> mkBlockSliceRegCFG archFns sliceFns halloc posFn entry body terms retEdges
 
 mkBlockPathRegCFG
   :: forall arch ids
@@ -945,102 +946,6 @@ toCoreCFG :: MacawSymbolicArchFunctions arch
           -- ^ A registerized Crucible CFG
           -> C.SomeCFG (MacawExt arch) init ret
 toCoreCFG archFns (CR.SomeCFG cfg) = crucGenArchConstraints archFns $ C.toSSA cfg
-
--- * Retaining original macaw block endings when slicing CFG
-
--- | An enum corresponding to the kind of terminal statement that originally
--- appeared at the end of a block.
-data MacawBlockEndCase =
-    MacawBlockEndJump
-  | MacawBlockEndCall
-  | MacawBlockEndReturn
-  | MacawBlockEndBranch
-  | MacawBlockEndArch
-  | MacawBlockEndFail
-  deriving (Eq, Ord, Enum, Bounded)
-
--- | A summary of a 'M.ParsedTermStmt', representing how the block ended and
--- potentally the address to return to in the case of a function call.
-data MacawBlockEnd arch = MacawBlockEnd MacawBlockEndCase !(Maybe (M.ArchSegmentOff arch))
-
--- | A crucible encoding of 'MacawBlockEnd', where the 'MacawBlockEndCase' as a 3-bit bitvector
--- and the return address is a 'MM.LLVMPointerType'.
-type MacawBlockEndType arch = C.StructType (Ctx.EmptyCtx Ctx.::> C.BVType 3 Ctx.::> C.MaybeType (MM.LLVMPointerType (M.ArchAddrWidth arch)))
-
-blockEndAtom :: forall arch ids s
-              . MacawSymbolicArchFunctions arch
-             -> MacawBlockEnd arch
-             -> CrucGen arch ids s (CR.Atom s (MacawBlockEndType arch))
-blockEndAtom archFns (MacawBlockEnd blendK mret) = crucGenArchConstraints archFns $ do
-    blendK' <- CG.bvLit knownNat (toInteger $ fromEnum blendK)
-    let
-      memWidthNatRepr = M.memWidthNatRepr @(M.ArchAddrWidth arch)
-      ptrRepr = MM.LLVMPointerRepr memWidthNatRepr
-    mret' <- case mret of
-      Just addr -> do
-        ptr <- valueToCrucible $ M.RelocatableValue (M.addrWidthRepr (Proxy @(M.ArchAddrWidth arch))) (M.segoffAddr addr)
-        appAtom $ C.JustValue ptrRepr ptr
-      Nothing -> do
-        appAtom $ C.NothingValue ptrRepr
-    let repr = Ctx.empty Ctx.:> C.BVRepr knownNat Ctx.:> C.MaybeRepr ptrRepr
-    appAtom $ C.MkStruct repr (Ctx.empty Ctx.:> blendK' Ctx.:> mret')
-
-assignBlockEnd :: MacawSymbolicArchFunctions arch
-               -> Maybe (CR.GlobalVar (MacawBlockEndType arch))
-               -> MacawBlockEnd arch
-               -> CrucGen arch ids s ()
-assignBlockEnd _ Nothing _ = return ()
-assignBlockEnd archFns (Just blendVar) blend = do
-  blend' <- blockEndAtom archFns blend
-  addStmt $ CR.WriteGlobal blendVar blend'
-
-isBlockEndCase :: IsSymInterface sym
-               => Proxy arch
-               -> sym
-               -> C.RegValue sym (MacawBlockEndType arch)
-               -> MacawBlockEndCase
-               -> IO (Pred sym)
-isBlockEndCase _ sym (_ Ctx.:> C.RV blendC' Ctx.:> _) blendC = do
-  blendC'' <- bvLit sym knownNat (BV.mkBV knownNat (toInteger $ fromEnum blendC))
-  isEq sym blendC' blendC''
-
-blockEndCase :: IsSymInterface sym
-             => Proxy arch
-             -> sym
-             -> C.RegValue sym (MacawBlockEndType arch)
-             -> IO (C.MuxTree sym MacawBlockEndCase)
-blockEndCase arch sym blend = do
-  foldM addCase (C.toMuxTree sym MacawBlockEndFail) [minBound..maxBound]
-  where
-    addCase mt blendC = do
-      p <- isBlockEndCase arch sym blend blendC
-      C.mergeMuxTree sym p (C.toMuxTree sym blendC) mt
-
-blockEndReturn :: Proxy arch
-               -> C.RegValue sym (MacawBlockEndType arch)
-               -> (C.RegValue sym (C.MaybeType (MM.LLVMPointerType (M.ArchAddrWidth arch))))
-blockEndReturn _ (_ Ctx.:> _ Ctx.:> C.RV mret) = mret
-
-initBlockEnd :: IsSymInterface sym
-             => Proxy arch
-             -> sym
-             -> IO (C.RegValue sym (MacawBlockEndType arch))
-initBlockEnd _ sym = do
-  blendK <- bvLit sym (knownNat @3) (BV.mkBV (knownNat @3) (toInteger $ fromEnum MacawBlockEndReturn))
-  return $ (Ctx.empty Ctx.:> C.RV blendK Ctx.:> C.RV Unassigned)
-
-termStmtToBlockEnd :: forall arch ids. M.ParsedTermStmt arch ids -> MacawBlockEnd arch
-termStmtToBlockEnd tm0 =
-  case tm0 of
-    M.ParsedReturn {} -> MacawBlockEnd MacawBlockEndReturn Nothing
-    M.ParsedCall _ ret -> MacawBlockEnd MacawBlockEndCall ret
-    M.ParsedJump {} -> MacawBlockEnd MacawBlockEndJump Nothing
-    M.ParsedBranch {} -> MacawBlockEnd MacawBlockEndBranch Nothing
-    M.ParsedLookupTable {} -> MacawBlockEnd MacawBlockEndJump Nothing
-    M.ParsedArchTermStmt _ _ ret -> MacawBlockEnd MacawBlockEndArch ret
-    M.ClassifyFailure {} -> MacawBlockEnd MacawBlockEndFail Nothing
-    M.PLTStub {} -> MacawBlockEnd MacawBlockEndCall Nothing
-    M.ParsedTranslateError{} -> MacawBlockEnd MacawBlockEndFail Nothing
 
 -- * Symbolic simulation
 

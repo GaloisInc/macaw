@@ -78,7 +78,7 @@ import qualified Data.Macaw.CFG.Core as M
 import qualified Data.Macaw.CFG.Core as MC
 import qualified Data.Macaw.Memory as M
 import           Data.Macaw.Symbolic
-import           Data.Macaw.Symbolic.Backend
+import           Data.Macaw.Symbolic.Backend hiding (bvLit)
 import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
