@@ -340,8 +340,9 @@ disStmt opcode stmt = do
                                      <*> getReg GPR_A6
                                      <*> getReg GPR_A7
       res <- evalArchFn ec
-      setReg GPR_A0 =<< evalApp (MC.TupleField knownRepr res L.index0)
-      setReg GPR_A1 =<< evalApp (MC.TupleField knownRepr res L.index1)
+      -- res is a tuple of form (A1, A0)
+      setReg GPR_A1 =<< evalApp (MC.TupleField knownRepr res L.index0)
+      setReg GPR_A0 =<< evalApp (MC.TupleField knownRepr res L.index1)
     _ -> return ()
   F.traverse_ disAssignStmt (collapseStmt stmt)
 

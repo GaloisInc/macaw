@@ -356,8 +356,9 @@ addArchSyscall :: X86Generator st_s ids ()
 addArchSyscall = do
   sc <- X86Syscall (knownNat @64) <$> getRegValue RAX <*> getRegValue RDI <*> getRegValue RSI <*> getRegValue RDX <*> getRegValue R10 <*> getRegValue R8 <*> getRegValue R9
   res <- evalArchFn sc
-  setReg RAX =<< eval (app (TupleField knownRepr res PL.index0))
-  setReg RDX =<< eval (app (TupleField knownRepr res PL.index1))
+  -- res is a tuple of form (RDX, RAX)
+  setReg RDX =<< eval (app (TupleField knownRepr res PL.index0))
+  setReg RAX =<< eval (app (TupleField knownRepr res PL.index1))
   addTermStmt FetchAndExecute
 
 -- | execute a primitive instruction.
