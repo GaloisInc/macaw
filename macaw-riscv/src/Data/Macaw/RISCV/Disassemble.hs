@@ -340,7 +340,9 @@ disStmt opcode stmt = do
                                      <*> getReg GPR_A6
                                      <*> getReg GPR_A7
       res <- evalArchFn ec
-      -- res is a tuple of form (A1, A0)
+      -- res is a tuple of form (A1, A0).  This is reversed from the user
+      -- provided return Assignment of empty :> A0 :> A1 because the conversion
+      -- from Assignment to Tuple reversed the order.
       setReg GPR_A1 =<< evalApp (MC.TupleField knownRepr res L.index0)
       setReg GPR_A0 =<< evalApp (MC.TupleField knownRepr res L.index1)
     _ -> return ()
