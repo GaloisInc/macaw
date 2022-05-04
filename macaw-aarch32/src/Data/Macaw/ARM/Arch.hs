@@ -644,8 +644,11 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
                                  <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
                                  <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
             res <- G.addExpr =<< evalArchFn sc
-            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
-            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+            -- res is a tuple of form (R1, R0).  This is reversed from the
+            -- user provided return Assignment of empty :> R0 :> R1 because
+            -- the conversion from Assignment to Tuple reversed the order.
+            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement
@@ -698,8 +701,11 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
                                    <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R6"))
                                    <*> G.getRegVal (ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_R7"))
             res <- G.addExpr =<< evalArchFn sc
-            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
-            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
+            -- res is a tuple of form (R1, R0).  This is reversed from the
+            -- user provided return Assignment of empty :> R0 :> R1 because
+            -- the conversion from Assignment to Tuple reversed the order.
+            G.setRegVal r1 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index0))
+            G.setRegVal r0 =<< G.addExpr (G.AppExpr (MC.TupleField PC.knownRepr res PL.index1))
 
             -- Increment the PC; we don't get the normal PC increment from the
             -- ASL semantics, since we are intercepting them to just add this statement
