@@ -1,5 +1,6 @@
 {-# OPTIONS_GHC -ddump-splices -ddump-to-file #-}
 
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
@@ -143,9 +144,9 @@ instructionMatcher thConf lib formulas = do
   let instrCase = LetE [unimp] $ CaseE (VarE opcodeVar) allCases
   let lam = LamE [(VarP ipVarName), instrArg] $
          CaseE matcherRes
-                   [ Match (ConP 'Just [VarP actionVar])
+                   [ Match (conPCompat 'Just [VarP actionVar])
                                (NormalB $ AppE (ConE 'Just) (VarE actionVar)) []
-                   , Match (ConP 'Nothing [])
+                   , Match (conPCompat 'Nothing [])
                                (NormalB instrCase) []
                    ]
   return (lam, fullDefs)
@@ -576,7 +577,7 @@ translateFunction thConf fnName df ff = do
       translate tp = case archTranslateType thConf idsTy sTy tp of
         Just t -> t
         Nothing -> [t| M.Value $(archTypeQ thConf) $(idsTy) $(translateBaseType tp) |]
-         
+
       argHsTys = FC.toListFC translate (ffArgTypes ff)
       retHsTy = [t| G.Generator $(archTypeQ thConf) $(idsTy) $(sTy) $(translate (ffRetType ff)) |]
       ty = foldr (\a r -> [t| $(a) -> $(r) |]) retHsTy argHsTys
@@ -957,7 +958,7 @@ defaultAppEvaluator endianness elt interps = case elt of
               return $ [(y, BVS.asUnsigned mul)]
             one = case fl of
               SR.BVArithRepr -> 1
-              SR.BVBitsRepr -> SI.maxUnsigned w 
+              SR.BVBitsRepr -> SI.maxUnsigned w
             sval v = do
               bnd <- EagerBoundExp <$> liftQ [| M.BVValue $(natReprTH w) $(lift (BVS.asUnsigned v)) |]
               return $ [(bnd, one)]
@@ -1083,7 +1084,7 @@ allPreds vs = do
     mkApp b (a, False) = do
       notA <- G.addExpr $ G.AppExpr $ M.NotApp a
       G.addExpr $ G.AppExpr $ M.AndApp notA b
-  foldM mkApp (M.BoolValue True) vs 
+  foldM mkApp (M.BoolValue True) vs
 
 joinPreds :: ( MSS.SimplifierExtension arch
              , OrdF (M.ArchReg arch)
@@ -1101,7 +1102,7 @@ joinPreds vs = do
       a <- aF
       notA <- G.addExpr $ G.AppExpr $ M.NotApp a
       G.addExpr $ G.AppExpr $ M.AndApp notA b
-  foldM mkApp (M.BoolValue True) vs 
+  foldM mkApp (M.BoolValue True) vs
 
 
 
@@ -1116,3 +1117,10 @@ boolMapList f bm = case BooM.viewBoolMap bm of
   BooM.BoolMapTerms ts -> liftM NE.toList $ forM ts $ \(e, p) -> do
     eE <- f e
     return $ (eE, p == BooM.Positive)
+
+conPCompat :: Name -> [Pat] -> Pat
+conPCompat n pats = ConP n
+#if MIN_VERSION_template_haskell(2,18,0)
+                           []
+#endif
+                           pats
