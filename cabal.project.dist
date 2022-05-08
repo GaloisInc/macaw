@@ -28,4 +28,5 @@ packages:
     submodules/macaw/macaw-semmc
     submodules/crucible/crucible
     submodules/crucible/crucible-llvm
-
+    submodules/llvm-pretty
+    submodules/llvm-pretty-bc-parser

@@ -34,3 +34,9 @@
 [submodule "submodules/dwarf"]
 	path = submodules/dwarf
 	url = git@github.com:GaloisInc/dwarf.git
+[submodule "submodules/llvm-pretty"]
+	path = submodules/llvm-pretty
+	url = git@github.com:elliottt/llvm-pretty
+[submodule "submodules/llvm-pretty-bc-parser"]
+	path = submodules/llvm-pretty-bc-parser
+	url = git@github.com:GaloisInc/llvm-pretty-bc-parser
