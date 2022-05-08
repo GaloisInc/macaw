@@ -4,3 +4,4 @@
 **/dist-newstyle/
 **/_darcs/
 **/#*#
+/cabal.project
