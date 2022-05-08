@@ -111,9 +111,8 @@ import           Data.Parameterized.TraversableFC (FoldableFC(..))
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
-import           GHC.TypeLits
 import           Numeric (showHex)
-import           Numeric.Natural
+import           Numeric.Natural (Natural)
 import           Prettyprinter as PP
 
 import           Data.Macaw.CFG.App
