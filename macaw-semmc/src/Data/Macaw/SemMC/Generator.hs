@@ -288,9 +288,7 @@ newtype Generator arch ids s a =
 -- | The 'Monad' instance is manually-specified so that calls to 'fail' actually
 -- use our 'ET.ExceptT' 'ET.throwError' for nicer error behavior.
 instance Monad (Generator arch ids s) where
-  return v = Generator (return v)
   Generator m >>= h = Generator (m >>= \v -> runG (h v))
-  Generator m >> Generator n = Generator (m >> n)
 
 instance St.MonadState (GenState arch ids s) (Generator arch ids s) where
   get = Generator Rd.ask

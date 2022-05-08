@@ -276,9 +276,7 @@ newtype X86Generator st_s ids a =
 -- The main reason for this definition to be given explicitly is so that fail
 -- uses throwError instead of the underlying fail in ST
 instance Monad (X86Generator st_s ids) where
-  return v = seq v $ X86G $ return v
   (X86G m) >>= h = X86G $ m >>= \v -> seq v (unX86G (h v))
-  X86G m >> X86G n = X86G $ m >> n
 
 instance MonadFail (X86Generator st_s ids) where
   fail msg = seq t $ X86G $ ContT $ \_ -> throwError t

@@ -94,7 +94,6 @@ throwDecodeError e = do
   throwError $! (off, e)
 
 instance MemWidth w => Monad (MemoryByteReader w) where
-  return = MBR . return
   MBR m >>= f = MBR $ m >>= unMBR . f
 
 instance (MemWidth w) => MF.MonadFail (MemoryByteReader w) where
