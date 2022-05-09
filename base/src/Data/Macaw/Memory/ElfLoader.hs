@@ -1174,7 +1174,10 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
           when (phdrOffset > shdr_start) $ do
             error "Found section header that overlaps with program header."
           let sec_offset = fromIntegral $ shdr_start - phdrOffset
-          let Just addr = resolveSegmentOff seg sec_offset
+          addr <- case resolveSegmentOff seg sec_offset of
+                    Just addr -> pure addr
+                    Nothing -> error $ "insertElfSegment: Failed to resolve segment offset at "
+                                    ++ show sec_offset
           mlsMemory   %= memBindSectionIndex elfIdx addr
           mlsIndexMap %= Map.insert elfIdx addr
         _ -> error "Unexpected shdr interval"
@@ -1324,7 +1327,9 @@ insertAllocatedShdr hdr contents symtab shdrMap regIdx nm = do
         -- Load memory segment.
         loadMemSegment ("Section " ++ BSC.unpack nm) seg
         -- Add entry to map elf section index to start in segment.
-        let Just addr = resolveSegmentOff seg 0
+        addr <- case resolveSegmentOff seg 0 of
+                  Just addr -> pure addr
+                  Nothing -> error "insertAllocatedShdr: Failed to resolve starting segment offset"
         mlsMemory   %= memBindSectionIndex idx addr
         mlsIndexMap %= Map.insert idx addr
 

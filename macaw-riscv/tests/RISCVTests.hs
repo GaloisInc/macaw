@@ -129,10 +129,13 @@ testDiscovery expRes elf elfHeaderInfo =
 testDiscovery32 :: ExpectedResult -> E.Elf 32 -> E.ElfHeaderInfo 32 -> IO ()
 testDiscovery32 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
   withMemory MM.Addr32 elfHeaderInfo $ \mem -> do
-    let Just entryPoint = case mEntryPoint of
+    let epinfo = findEntryPoint elf mem
+    let mEntryPoint' = case mEntryPoint of
           Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
           Nothing -> MM.asSegmentOff mem epinfo
-        epinfo = findEntryPoint elf mem
+    entryPoint <- case mEntryPoint' of
+      Just entryPoint -> pure entryPoint
+      Nothing -> error "testDiscovery32: Could not resolve entry point segment offset"
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (getElfSections elf) <> "\n"
@@ -183,10 +186,13 @@ testDiscovery32 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
 testDiscovery64 :: ExpectedResult -> E.Elf 64 -> E.ElfHeaderInfo 64 -> IO ()
 testDiscovery64 (mEntryPoint, funcblocks, ignored) elf elfHeaderInfo =
   withMemory MM.Addr64 elfHeaderInfo $ \mem -> do
-    let Just entryPoint = case mEntryPoint of
+    let mEntryPoint' = case mEntryPoint of
           Just (Hex ep) -> MM.asSegmentOff mem $ MM.absoluteAddr $ MM.memWord $ ep
           Nothing -> MM.asSegmentOff mem epinfo
         epinfo = findEntryPoint elf mem
+    entryPoint <- case mEntryPoint' of
+      Just entryPoint -> pure entryPoint
+      Nothing -> error "testDiscovery64: Could not resolve entry point segment offset"
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (getElfSections elf) <> "\n"

@@ -1736,12 +1736,15 @@ def_leave = defNullary  "leave" $ do
 -- ** Miscellaneous Instructions
 
 def_lea :: InstructionDef
-def_lea = defBinary "lea" $ \_ loc (F.VoidMem ar) -> do
-  SomeBV l <- getSomeBVLocation loc
-  -- ensure that the location is at most 64 bits
-  Just LeqProof <- return $ testLeq (typeWidth l) n64
-  v <- getBVAddress ar
-  l .= bvTrunc (typeWidth l) v
+def_lea = defBinary "lea" $ \_ loc val ->
+  case val of
+    F.VoidMem ar -> do
+      SomeBV l <- getSomeBVLocation loc
+      -- ensure that the location is at most 64 bits
+      Just LeqProof <- return $ testLeq (typeWidth l) n64
+      v <- getBVAddress ar
+      l .= bvTrunc (typeWidth l) v
+    _ -> fail $ "Unexpected argument to lea: " ++ show val
 
 -- ** Random Number Generator Instructions
 -- ** BMI1, BMI2
@@ -2255,11 +2258,16 @@ def_movlps = defBinary "movlps" $ \_ x y -> do
 -- and applies a function that updates the low 64-bits of the first argument.
 def_xmm_ss :: SSE_Op -> InstructionDef
 def_xmm_ss f =
-  defBinary (sseOpName f <> "ss") $ \_ (F.XMMReg loc) val -> do
-    x <- getXMMreg_float_low loc SSE_Single
-    y <- getXMM_float_low    val SSE_Single
-    res <- evalArchFn $ SSE_UnaryOp f SSE_Single x y
-    setXMMreg_float_low loc SSE_Single res
+  defBinary mnem $ \_ l val ->
+    case l of
+      F.XMMReg loc -> do
+        x <- getXMMreg_float_low loc SSE_Single
+        y <- getXMM_float_low    val SSE_Single
+        res <- evalArchFn $ SSE_UnaryOp f SSE_Single x y
+        setXMMreg_float_low loc SSE_Single res
+      _ -> fail $ "Unexpected argument to " ++ ppMnem mnem ++ ": " ++ show l
+  where
+    mnem = sseOpName f <> "ss"
 
 -- ADDSS Add scalar single-precision floating-point values
 def_addss :: InstructionDef
@@ -2281,11 +2289,16 @@ def_divss = def_xmm_ss SSE_Div
 -- and applies a function that updates the register.
 def_xmm_packed :: SSE_Op -> InstructionDef
 def_xmm_packed f =
-  defBinary (sseOpName f <> "ps") $ \_ (F.XMMReg loc) val -> do
-    x <- getXMMreg_sv loc
-    y <- getXMM_sv val
-    res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
-    setXMMreg_sv loc res
+  defBinary mnem $ \_ l val ->
+    case l of
+      F.XMMReg loc -> do
+        x <- getXMMreg_sv loc
+        y <- getXMM_sv val
+        res <- evalArchFn $ SSE_VectorOp f n4 SSE_Single x y
+        setXMMreg_sv loc res
+      _ -> fail $ "Unexpected argument to " ++ ppMnem mnem ++ ": " ++ show l
+  where
+    mnem = sseOpName f <> "ps"
 
 -- | ADDPS Add packed single-precision floating-point values
 def_addps :: InstructionDef
@@ -2311,10 +2324,13 @@ def_divps = def_xmm_packed SSE_Div
 -- |SQRTSS Compute square root of scalar single-precision floating-point values
 def_sqrts :: Mnem -> SSE_FloatType ftp -> InstructionDef
 def_sqrts mnem ftp =
-  defBinary mnem $ \_ (F.XMMReg loc) val -> do
-    y <- getXMM_float_low    val ftp
-    res <- evalArchFn $ SSE_Sqrt ftp y
-    setXMMreg_float_low loc ftp res
+  defBinary mnem $ \_ l val ->
+    case l of
+      F.XMMReg loc -> do
+        y <- getXMM_float_low    val ftp
+        res <- evalArchFn $ SSE_Sqrt ftp y
+        setXMMreg_float_low loc ftp res
+      _ -> fail $ "Unexpected argument to " ++ ppMnem mnem ++ ": " ++ show l
 
 -- RSQRTPS Compute reciprocals of square roots of packed single-precision floating-point values
 -- RSQRTSS Compute reciprocal of square root of scalar single-precision floating-point values
@@ -2452,16 +2468,19 @@ def_unpcklps = defBinaryKnown "unpcklps" exec
 -- CVTSI2SS Convert doubleword integer to scalar single-precision floating-point value
 def_cvtsi2sX :: Mnem -> SSE_FloatType tp -> InstructionDef
 def_cvtsi2sX mnem tp =
-  defBinary mnem $ \_ (F.XMMReg loc) val -> do
-    -- Loc is RG_XMM_reg
-    -- val is "OpType ModRM_rm YSize"
-    ev <- getRM32_RM64 val
-    -- Read second argument value and coerce to single precision float.
-    r <-
-      case ev of
-        Left  v -> evalArchFn . SSE_CVTSI2SX tp n32 =<< eval =<< get v
-        Right v -> evalArchFn . SSE_CVTSI2SX tp n64 =<< eval =<< get v
-    setXMMreg_float_low loc tp r
+  defBinary mnem $ \_ l val ->
+    case l of
+      F.XMMReg loc -> do
+        -- Loc is RG_XMM_reg
+        -- val is "OpType ModRM_rm YSize"
+        ev <- getRM32_RM64 val
+        -- Read second argument value and coerce to single precision float.
+        r <-
+          case ev of
+            Left  v -> evalArchFn . SSE_CVTSI2SX tp n32 =<< eval =<< get v
+            Right v -> evalArchFn . SSE_CVTSI2SX tp n64 =<< eval =<< get v
+        setXMMreg_float_low loc tp r
+      _ -> fail $ "Unexpected argument to " ++ ppMnem mnem ++ ": " ++ show l
 
 -- CVTPI2PS Convert packed doubleword integers to packed single-precision floating-point values
 
@@ -2502,7 +2521,10 @@ exec_pinsrx :: (1 <= w, 1 <= c)
 exec_pinsrx w c l v off = do
   lv <- get l
   let ls = bvVectorize w lv
-      (lower, _ : upper) = splitAt (length ls - fromIntegral off - 1) ls
+      (lower, upper) =
+        case splitAt (length ls - fromIntegral off - 1) ls of
+          (lower', _ : upper') -> (lower', upper')
+          (_, []) -> error "exec_pinsrx internal error: bvVectorize returned empty list"
       ls' = lower ++ [v] ++ upper
   l .= bvUnvectorize c ls'
 
@@ -2624,11 +2646,16 @@ def_xmm_sd :: SSE_Op
               -- ^ Binary operation
            -> InstructionDef
 def_xmm_sd f =
-  defBinary (sseOpName f <> "sd") $ \_ (F.XMMReg loc) val -> do
-    x <- getXMMreg_float_low loc SSE_Double
-    y <- getXMM_float_low val SSE_Double
-    res <- evalArchFn $ SSE_UnaryOp f SSE_Double x y
-    setXMMreg_float_low loc SSE_Double res
+  defBinary mnem $ \_ l val ->
+    case l of
+      F.XMMReg loc -> do
+        x <- getXMMreg_float_low loc SSE_Double
+        y <- getXMM_float_low val SSE_Double
+        res <- evalArchFn $ SSE_UnaryOp f SSE_Double x y
+        setXMMreg_float_low loc SSE_Double res
+      _ -> fail $ "Unexpected argument to " ++ ppMnem mnem ++ ": " ++ show l
+  where
+    mnem = sseOpName f <> "sd"
 
 -- | ADDSD Add scalar double precision floating-point values
 def_addsd :: InstructionDef
@@ -2685,20 +2712,27 @@ def_xorpd =
 -- | CMPSD Compare scalar double-precision floating-point values
 def_cmpsX :: Mnem -> SSE_FloatType tp -> InstructionDef
 def_cmpsX mnem tp =
-  defTernary mnem $ \_ (F.XMMReg loc) f_val (F.ByteImm imm) -> do
-    f <-
-      case lookupSSECmp imm of
-        Just f -> pure f
-        Nothing -> fail $ ppMnem mnem ++ " had unsupported operator type " ++ show imm ++ "."
-    lv <- getXMMreg_float_low loc tp
-    v  <- getXMM_float_low f_val tp
-    res <- evalArchFn $ SSE_CMPSX f tp lv v
-    let w = floatInfoBits (typeRepr tp)
-    case testLeq n1 w of
-      Nothing ->
-        error "Unexpected width"
-      Just LeqProof ->
-        xmm_low loc tp .= mux res (bvLit w (-1)) (bvLit w 0)
+  defTernary mnem $ \_ l_val f_val i_val ->
+    case (l_val, i_val) of
+      (F.XMMReg loc, F.ByteImm imm) -> do
+        f <-
+          case lookupSSECmp imm of
+            Just f -> pure f
+            Nothing -> fail $ ppMnem mnem ++ " had unsupported operator type " ++ show imm ++ "."
+        lv <- getXMMreg_float_low loc tp
+        v  <- getXMM_float_low f_val tp
+        res <- evalArchFn $ SSE_CMPSX f tp lv v
+        let w = floatInfoBits (typeRepr tp)
+        case testLeq n1 w of
+          Nothing ->
+            error "Unexpected width"
+          Just LeqProof ->
+            xmm_low loc tp .= mux res (bvLit w (-1)) (bvLit w 0)
+      _ -> fail $ unlines
+             [ "Unexpected arguments to " ++ ppMnem mnem ++ ":"
+             , show l_val
+             , show i_val
+             ]
 
 -- COMISD Perform ordered comparison of scalar double-precision floating-point values and set flags in EFLAGS register
 
@@ -2724,16 +2758,22 @@ def_cmpsX mnem tp =
 -- | CVTSS2SD  Convert scalar single-precision floating-point values to
 -- scalar double-precision floating-point values
 def_cvtss2sd :: InstructionDef
-def_cvtss2sd = defBinary "cvtss2sd" $ \_ (F.XMMReg loc) val -> do
-  v <- getXMM_float_low val SSE_Single
-  setXMMreg_float_low loc SSE_Double =<< evalArchFn (SSE_CVTSS2SD v)
+def_cvtss2sd = defBinary "cvtss2sd" $ \_ l val ->
+  case l of
+    F.XMMReg loc -> do
+      v <- getXMM_float_low val SSE_Single
+      setXMMreg_float_low loc SSE_Double =<< evalArchFn (SSE_CVTSS2SD v)
+    _ -> fail $ "Unexpected argument to cvtss2sd: " ++ show l
 
 -- | CVTSD2SS Convert scalar double-precision floating-point values to
 -- scalar single-precision floating-point values
 def_cvtsd2ss :: InstructionDef
-def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ (F.XMMReg loc) val -> do
-  v <- getXMM_float_low val SSE_Double
-  setXMMreg_float_low loc SSE_Single =<< evalArchFn (SSE_CVTSD2SS v)
+def_cvtsd2ss = defBinary "cvtsd2ss" $ \_ l val ->
+  case l of
+    F.XMMReg loc -> do
+      v <- getXMM_float_low val SSE_Double
+      setXMMreg_float_low loc SSE_Single =<< evalArchFn (SSE_CVTSD2SS v)
+    _ -> fail $ "Unexpected argument to cvtsd2ss: " ++ show l
 
 -- CVTSD2SI  Convert scalar double-precision floating-point values to a doubleword integer
 

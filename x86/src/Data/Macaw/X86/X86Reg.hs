@@ -155,7 +155,9 @@ instance Show (X86Reg tp) where
   show (X86_GP r)      = show r
   show (X86_FlagReg r) = show r
   show (X87_StatusReg r) = nm
-    where Just nm = x87StatusNames V.!? r
+    where nm = case x87StatusNames V.!? r of
+                 Just nm' -> nm'
+                 Nothing  -> error $ "Unknown x87 status register: " ++ show r
   show X87_TopReg      = "x87top"
   show (X87_TagReg n)  = "tag" ++ show n
   show (X87_FPUReg r)  = show r

@@ -505,7 +505,10 @@ mkParsedBlockRegCFG archFns halloc posFn b = crucGenArchConstraints archFns $ do
     entryLabel <- CR.Label <$> mmFreshNonce
     let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
-          where Just r = M.incSegmentOff entryAddr (toInteger off)
+          where r = case M.incSegmentOff entryAddr (toInteger off) of
+                      Just r' -> r'
+                      Nothing -> error $ "mkParsedBlockRegCFG: Out-of-bounds offset: "
+                                      ++ show off
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
       runCrucGen archFns initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers
@@ -566,7 +569,7 @@ data MacawSlicingFunctions arch
      -- a return.
    }
 
-noSlicingFunctions :: MacawSlicingFunctions arch 
+noSlicingFunctions :: MacawSlicingFunctions arch
 noSlicingFunctions = MacawSlicingFunctions (\_ -> return ())
 
 -- | See the documentation for 'mkBlockSliceCFG'
@@ -906,7 +909,10 @@ mkFunRegCFG archFns halloc nm posFn fn = crucGenArchConstraints archFns $ do
     entryLabel <- CR.Label <$> mmFreshNonce
     let initPosFn :: M.ArchAddrWord arch -> WPL.Position
         initPosFn off = posFn r
-          where Just r = M.incSegmentOff entryAddr (toInteger off)
+          where r = case M.incSegmentOff entryAddr (toInteger off) of
+                      Just r' -> r'
+                      Nothing -> error $ "mkFunRegCFG: Out-of-bounds offset: "
+                                      ++ show off
     (initCrucibleBlock,initExtraCrucibleBlocks) <-
       runCrucGen archFns initPosFn entryLabel regReg $ do
         -- Initialize value in regReg with initial registers

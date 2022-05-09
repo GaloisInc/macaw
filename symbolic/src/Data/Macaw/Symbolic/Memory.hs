@@ -452,7 +452,10 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
         -- FIXME: We can probably properly handle all of the different segments
         -- here pretty easily when required... but we will need one array per
         -- segment.
-        let Just absByteAddr = MC.asAbsoluteAddr byteAddr
+        let absByteAddr = case MC.asAbsoluteAddr byteAddr of
+                            Just absByteAddr' -> absByteAddr'
+                            Nothing -> error $ "populateSegmentChunk: Could not make absolute address for: "
+                                    ++ show byteAddr
         index_bv <- liftIO $ WI.bvLit sym (MC.memWidth mem) (fromIntegral absByteAddr)
         liftIO $ WI.arrayUpdate sym arr (Ctx.singleton index_bv) byte
 -}
@@ -464,7 +467,10 @@ populateSegmentChunk _ bak mmc mem symArray seg addr bytes ptrtable = do
 
       let addUpdate m (idx, byte) =
             let byteAddr = MC.incAddr (fromIntegral idx) addr
-                Just absByteAddr = MC.asAbsoluteAddr byteAddr
+                absByteAddr = case MC.asAbsoluteAddr byteAddr of
+                                Just absByteAddr' -> absByteAddr'
+                                Nothing -> error $ "populateSegmentChunk: Could not make absolute address for: "
+                                        ++ show byteAddr
                 key = WI.BVIndexLit (MC.memWidth mem) (fromIntegral absByteAddr)
             in WUH.mapInsert (Ctx.singleton key) byte m
       let updates = F.foldl' addUpdate WUH.mapEmpty (zip [0..size - 1] bytes)

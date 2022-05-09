@@ -126,7 +126,9 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
               WC.extendConfig (WS.solver_adapter_config_options solver) backendConf
 
               execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
-              let Just archVals = MS.archVals (Proxy @MX.X86_64) Nothing
+              archVals <- case MS.archVals (Proxy @MX.X86_64) Nothing of
+                            Just archVals -> pure archVals
+                            Nothing -> error "mkSymExTest: impossible"
               let extract = x86ResultExtractor archVals
               logger <- makeGoalLogger saveSMT solver name exePath
               let ?memOpts = LLVM.defaultMemOptions

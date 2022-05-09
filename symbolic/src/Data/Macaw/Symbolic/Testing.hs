@@ -289,7 +289,10 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals mem (Resu
               goals <- CB.getProofObligations bak
               proveGoals goalSolver sym goals
 
-            let Just postMem = CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals)
+            postMem <- case CSG.lookupGlobal memVar (gp L.^. CS.gpGlobals) of
+                         Just postMem -> pure postMem
+                         Nothing -> error $ "simulateAndVerify: Could not find global variable: "
+                                         ++ Text.unpack (CS.globalName memVar)
             withResult (gp L.^. CS.gpValue) stackPointer postMem $ \resRepr val -> do
               -- The function is assumed to return a value that is intended to be
               -- True.  Try to prove that (by checking the negation for unsat)

@@ -29,7 +29,9 @@ findEntryPoint elf mem =
         endian = case E.elfData elf of
                    E.ELFDATA2LSB -> MM.LittleEndian
                    E.ELFDATA2MSB -> MM.BigEndian
-        Right derefEntry = MM.readAddr mem endian absEntry
+        derefEntry = case MM.readAddr mem endian absEntry of
+                       Left memErr -> error $ "findEntryPoint: " ++ show memErr
+                       Right derefEntry' -> derefEntry'
     in case E.elfMachine elf of
          E.EM_PPC -> derefEntry  -- PPC entrypoint is a table reference
          _        -> absEntry

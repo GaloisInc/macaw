@@ -2088,7 +2088,9 @@ registerUse rctx fun = do
 
   let providePair :: ArchSegmentOff arch -> (ArchSegmentOff arch, LocDependencyMap (ArchReg arch) ids)
       providePair prev = (prev, lm)
-        where Just usage = Map.lookup prev usageMap
+        where usage = case Map.lookup prev usageMap of
+                        Nothing -> error "registerUse: Could not find prev"
+                        Just usage' -> usage'
               cns = blockUsageStartConstraints usage
               cache = assignDeps usage
               lm = LocMap { locMapRegs = rdmMap (blockRegDependencies usage)

@@ -1643,7 +1643,10 @@ addIPSwitch blockLabelMap targets macaw_ip = do
           ptrAtom <- mkAtom ptrRepr
 
           let targetLbl = parsedBlockLabel blockLabelMap thenAddr
-          let Just bvAddr = M.segoffAsAbsoluteAddr thenAddr
+          bvAddr <- case M.segoffAsAbsoluteAddr thenAddr of
+                      Just bvAddr -> pure bvAddr
+                      Nothing -> error $ "addIPSwitch: Could not resolve absolute address for: "
+                                      ++ show thenAddr
           -- Make a Crucible instruction sequence that compares the current IP
           -- against a possible target taken from the input list.
           return ( [ CR.DefineAtom ptrBitsAtom $ CR.EvalApp $ C.BVLit width (BV.mkBV width (toInteger bvAddr))
@@ -1767,7 +1770,9 @@ addParsedBlock archFns blockLabelMap externalResolutions posFn regReg macawBlock
   let base = M.pblockAddr macawBlock
   let thisPosFn :: M.ArchAddrWord arch -> C.Position
       thisPosFn off = posFn r
-        where Just r = M.incSegmentOff base (toInteger off)
+        where r = case M.incSegmentOff base (toInteger off) of
+                    Just r' -> r'
+                    Nothing -> error $ "addParsedBlock: Out-of-bounds offset: " ++ show off
   let startAddr = M.pblockAddr macawBlock
   lbl <-
     case Map.lookup startAddr blockLabelMap of
