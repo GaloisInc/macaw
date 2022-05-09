@@ -501,10 +501,10 @@ defaultClassifier = branchClassifier
                 <|> noreturnCallClassifier
                 <|> callClassifier
                 <|> returnClassifier
-                <|> directJumpClassifier
                 <|> jumpTableClassifier
                 <|> pltStubClassifier
                 <|> tailCallClassifier
+                <|> directJumpClassifier
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
