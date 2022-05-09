@@ -271,14 +271,22 @@ mkSymbolicTest testinp = do
     bak <- CBS.newSimpleBackend sym
     expectedInput <- readFile (expectedFilePath testinp)
     let symExecFuncAddrs :: Set.Set Word64
-        Right symExecFuncAddrs = Set.fromList <$> readEither expectedInput
+        symExecFuncAddrs = case readEither expectedInput of
+          Left err -> error $ "mkSymbolicTest: Could not read expected input: "
+                           ++ show err
+          Right addrList -> Set.fromList addrList
     withElf opts $ \proxy archInfo bin _unrefinedDI -> do
       withRefinedDiscovery opts archInfo bin $ \refinedDI _refinedInfo -> do
-        let Just archVals = MS.archVals proxy Nothing
+        archVals <- case MS.archVals proxy Nothing of
+                      Just archVals -> pure archVals
+                      Nothing -> error "mkSymbolicTest: Unsupported architecture"
         let archFns = MS.archFunctions archVals
         let mem = MBL.memoryImage bin
         F.forM_ (MD.exploredFunctions refinedDI) $ \(Some dfi) -> do
-          let Just funcAddr = fromIntegral <$> MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi)
+          funcAddr <- case MM.segoffAsAbsoluteAddr (MD.discoveredFunAddr dfi) of
+            Just addr -> pure $ fromIntegral addr
+            Nothing   -> error $ "mkSymbolicTest: Could not resolve absolute address for: "
+                              ++ show (MD.discoveredFunAddr dfi)
           case Set.member funcAddr symExecFuncAddrs of
             False -> return ()
             True -> do

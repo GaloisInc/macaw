@@ -754,7 +754,7 @@ applyRelocsToBytes baseAddr msegIdx pre ioff ((addr,v):rest) buffer
   -- particular, it has 0 size (the actual size depends on the size of
   -- the associated symbol), which causes all sorts of issues here (in
   -- particular, we get multiple entries at the same address).
-  | relocEntrySize v == 0 = applyRelocsToBytes baseAddr msegIdx pre ioff rest buffer  
+  | relocEntrySize v == 0 = applyRelocsToBytes baseAddr msegIdx pre ioff rest buffer
     -- Check start of relocation is in range.
   | toInteger (addr - ioff) < presymbolBytesLeft buffer  = do
 
@@ -1195,7 +1195,9 @@ memAsAddrPairs mem end = addrWidthClass (memAddrWidth mem) $ do
         zip [contentsOffset,contentsOffset+fromIntegral sz..]
             (regularChunks sz bs)
       -- Attempt to read bytes as a valid segment offset.
-      let Just val = addrRead end w
+      let val = case addrRead end w of
+                  Just val' -> val'
+                  Nothing -> error "memAsAddrPairs internal error: regularChunks result too short."
       case resolveAbsoluteAddr mem val of
         Just segOffVal ->
           [(MemSegmentOff seg byteOff, segOffVal)]

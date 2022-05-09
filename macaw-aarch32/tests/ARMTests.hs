@@ -154,8 +154,10 @@ testDiscovery saveMacaw exeFile expRes elf =
 testDiscovery32 :: SaveMacaw -> String -> ExpectedResult -> E.ElfHeaderInfo 32 -> IO ()
 testDiscovery32 saveMacaw testName (funcblocks, ignored) ehdr =
   withMemory MM.Addr32 ehdr $ \mem -> do
-    let Just entryPoint = MM.asSegmentOff mem epinfo
-        epinfo = findEntryPoint ehdr mem
+    let epinfo = findEntryPoint ehdr mem
+    entryPoint <- case MM.asSegmentOff mem epinfo of
+      Just entryPoint' -> pure entryPoint'
+      Nothing -> error "testDiscovery32: Could not resolve entry point segment offset"
     when isChatty $
          do chatty $ "entryPoint: " <> show entryPoint
             chatty $ "sections = " <> show (ARMELF.getElfSections ehdr) <> "\n"

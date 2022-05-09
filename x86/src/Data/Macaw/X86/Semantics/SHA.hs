@@ -27,9 +27,9 @@ def_sha256rnds2 =
            exp1 <- get src1
            exp2 <- get src2
            x0 <- get xmm0
-           let [a, b, e, f] = bvVectorize (knownNat @32) exp2
-           let [c, d, g, h] = bvVectorize (knownNat @32) exp1
-           let [_, _, w1, w0] = bvVectorize (knownNat @32) x0
+           let (a, b, e, f) = bvVectorize4X32 exp2
+           let (c, d, g, h) = bvVectorize4X32 exp1
+           let (_, _, w1, w0) = bvVectorize4X32 x0
            r1 <- sha256rnd w0 (a, b, c, d, e, f, g, h)
            (a2, b2, _c2, _d2, e2, f2, _g2, _h2) <- sha256rnd w1 r1
            src1 .= bvUnvectorize (knownNat @128) [a2 , b2 , e2 , f2]
@@ -62,7 +62,7 @@ def_sha256msg1 =
            e1 <- get src1
            e2 <- get src2
            let w4 = bvTrunc (knownNat @32) e2
-           let [w3, w2, w1, w0] = bvVectorize (knownNat @32) e1
+           let (w3, w2, w1, w0) = bvVectorize4X32 e1
            res4 <- evalArchFn . SHA_sigma0 =<< eval w4
            res3 <- evalArchFn . SHA_sigma0 =<< eval w3
            res2 <- evalArchFn . SHA_sigma0 =<< eval w2
@@ -84,8 +84,8 @@ def_sha256msg2 =
        , Just Refl <- testEquality (typeWidth src2) (knownNat @128) -> do
            e1 <- get src1
            e2 <- get src2
-           let [w15, w14, _, _] = bvVectorize (knownNat @32) e2
-           let [s19, s18, s17, s16] = bvVectorize (knownNat @32) e1
+           let (w15, w14, _, _) = bvVectorize4X32 e2
+           let (s19, s18, s17, s16) = bvVectorize4X32 e1
            p14 <- evalArchFn . SHA_sigma1 =<< eval w14
            let w16 = s16 .+ p14
            p15 <- evalArchFn . SHA_sigma1 =<< eval w15
@@ -101,6 +101,15 @@ def_sha256msg2 =
              , w16
              ]
        | otherwise -> fail "sha256msg2: bad operand size"
+
+bvVectorize4X32 ::
+  Expr ids (BVType 128) ->
+  (Expr ids (BVType 32), Expr ids (BVType 32), Expr ids (BVType 32), Expr ids (BVType 32))
+bvVectorize4X32 bv =
+  case bvVectorize (knownNat @32) bv of
+    [a, b, c, d] -> (a, b, c, d)
+    ws -> error $ "bvVectorize4X32 internal error: Expected 4 words, received "
+               ++ show (length ws)
 
 all_instructions :: [InstructionDef]
 all_instructions =

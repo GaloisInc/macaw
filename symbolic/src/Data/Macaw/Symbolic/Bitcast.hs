@@ -59,7 +59,9 @@ doBitcast bak x eqPr =
       when (fromIntegral (V.length x) /= natValue n) $ do
         fail "bitcast: Incorrect input vector length"
       -- We should have at least one element due to constraint on n
-      let Just h = x V.!? 0
+      h <- case x V.!? 0 of
+             Just h -> pure h
+             Nothing -> error "doBitcast: impossible"
       let rest :: V.Vector (MM.LLVMPtr sym w)
           rest = V.tail x
       extH <- bvZext sym outW =<< MM.projectLLVM_bv bak h
