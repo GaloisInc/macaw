@@ -496,15 +496,25 @@ useExternalTargets bcc = do
 -- See 'Data.Macaw.Discovery.Classifier' for the primitives necessary to define
 -- new classifiers (e.g., classifiers that can produce architecture-specific
 -- terminators).
+--
+-- Note that the direct jump classifier is last; this is to give the other
+-- classifiers a chance to run and match code. In particular, tail calls and
+-- direct local jumps are very difficult to distinguish from each other. Since
+-- we have to choose some order between them, we put the tail call classifier
+-- first so that it at least *could* fire without being completely subsumed by
+-- direct jumps. This means that some control flow transfers that look like
+-- direct jumps could instead be classified as tail calls. It would take some
+-- higher-level heuristics (e.g., live registers at the call site, locality) to
+-- distinguish the cases.
 defaultClassifier :: BlockClassifier arch ids
 defaultClassifier = branchClassifier
                 <|> noreturnCallClassifier
                 <|> callClassifier
                 <|> returnClassifier
-                <|> directJumpClassifier
                 <|> jumpTableClassifier
                 <|> pltStubClassifier
                 <|> tailCallClassifier
+                <|> directJumpClassifier
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids

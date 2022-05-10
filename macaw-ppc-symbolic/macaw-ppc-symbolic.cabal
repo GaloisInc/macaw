@@ -55,6 +55,7 @@ test-suite macaw-ppc-symbolic-tests
     elf-edit,
     filepath,
     Glob >= 0.9 && < 0.11,
+    lens,
     dismantle-ppc,
     semmc-ppc,
     macaw-base,

@@ -8,10 +8,12 @@
 {-# LANGUAGE TypeOperators #-}
 module Main (main) where
 
+import           Control.Lens ( (^.) )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
 import qualified Data.Foldable as F
+import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Nonce as PN
@@ -125,7 +127,8 @@ symExTestSized :: MST.SimulationResult
                -> MAI.ArchitectureInfo MA.ARM
                -> TTH.Assertion
 symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
-   (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
+   (mem, discState) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
+   let funInfos = Map.elems (discState ^. M.funInfo)
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
@@ -144,7 +147,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
        let extract = armResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract discState dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

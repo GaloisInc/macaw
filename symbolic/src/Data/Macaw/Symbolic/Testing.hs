@@ -34,6 +34,7 @@ module Data.Macaw.Symbolic.Testing (
 
 import qualified Control.Exception as X
 import qualified Control.Lens as L
+import           Control.Lens ( (&), (%~) )
 import           Control.Monad ( when )
 import qualified Data.BitVector.Sized as BVS
 import qualified Data.ByteString as BS
@@ -48,6 +49,7 @@ import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map as Map
+import           Data.Maybe ( listToMaybe )
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as PN
@@ -56,7 +58,6 @@ import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Encoding.Error as Text
-import qualified Data.Traversable as T
 import           GHC.TypeNats ( type (<=) )
 import qualified Lang.Crucible.Analysis.Postdom as CAP
 import qualified Lang.Crucible.Backend as CB
@@ -129,20 +130,11 @@ runDiscovery :: (MC.ArchAddrWidth arch ~ w)
              --
              -- A good default is 'toAddrSymMap'
              -> MAI.ArchitectureInfo arch
-             -> IO (MM.Memory w, [Some (MD.DiscoveryFunInfo arch)])
+             -> IO (MM.Memory w, MD.DiscoveryState arch)
 runDiscovery ehi toEntryPoints archInfo = do
   (mem, nameAddrList) <- loadELF ehi
   let addrSymMap = toEntryPoints mem nameAddrList
-  let ds0 = MD.emptyDiscoveryState mem addrSymMap archInfo
-  fns <- T.forM (Map.keys addrSymMap) $ \entryPoint -> do
-    -- We are discovering each function in isolation for now, so we can throw
-    -- away the updated discovery state.
-    --
-    -- NOTE: If we extend this to support function calls, we will probably want
-    -- to just turn this into a fold/use the main discovery entry point.
-    let (_ds1, dfi) = MD.analyzeFunction entryPoint MD.UserRequest ds0
-    return dfi
-  return (mem, fns)
+  return (mem, MD.cfgFromAddrs archInfo mem addrSymMap (Map.keys addrSymMap) [])
 
 data SATResult = Unsat | Sat | Unknown
   deriving (Eq, Show)
@@ -269,10 +261,12 @@ simulateAndVerify :: forall arch sym bak ids w t st fs
                   -- ^ The initial contents of static memory
                   -> ResultExtractor sym arch
                   -- ^ A function to extract the return value of a function from its post-state
+                  -> MD.DiscoveryState arch
+                  -- ^ The rest of the discovery state, including other discovered functions
                   -> MD.DiscoveryFunInfo arch ids
                   -- ^ The function to simulate and verify
                   -> IO SimulationResult
-simulateAndVerify goalSolver logger bak execFeatures archInfo archVals mem (ResultExtractor withResult) dfi =
+simulateAndVerify goalSolver logger bak execFeatures archInfo archVals mem (ResultExtractor withResult) discState dfi =
   let sym = CB.backendGetSym bak in
   MS.withArchConstraints archVals $ do
     let funName = functionName dfi
@@ -283,7 +277,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals mem (Resu
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
     (initMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) bak endianness MSM.ConcreteMutable mem
     let globalMap = MSM.mapRegionPointers memPtrTbl
-    (memVar, stackPointer, execResult) <- simulateFunction bak execFeatures archVals halloc initMem globalMap g
+    (memVar, stackPointer, execResult) <- simulateFunction discState bak execFeatures archVals halloc initMem globalMap g
     case execResult of
       CS.TimeoutResult {} -> return SimulationTimeout
       CS.AbortedResult {} -> return SimulationAborted
@@ -335,7 +329,8 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                     , 16 <= w
                     , ?memOpts :: CLM.MemOptions
                     )
-                 => bak
+                 => MD.DiscoveryState arch
+                 -> bak
                  -> [CS.GenericExecutionFeature sym]
                  -> MS.ArchVals arch
                  -> CFH.HandleAllocator
@@ -346,7 +341,7 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                        , CLM.LLVMPtr sym w
                        , CS.ExecResult (MS.MacawSimulatorState sym) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction bak execFeatures archVals halloc initMem globalMap g = do
+simulateFunction discState bak execFeatures archVals halloc initMem globalMap g = do
   let sym = CB.backendGetSym bak
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
@@ -383,7 +378,7 @@ simulateFunction bak execFeatures archVals halloc initMem globalMap g = do
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap lookupFunction lookupSyscall validityCheck
+    let extImpl = MS.macawExtensions archEvalFn memVar globalMap (lookupFunction archVals discState) lookupSyscall validityCheck
     let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
@@ -437,11 +432,53 @@ data ResultExtractor sym arch where
                       -> IO a)
                   -> ResultExtractor sym arch
 
--- | The test harness does not currently support calling functions from test cases.
---
--- It could be modified to do so.
-lookupFunction :: MS.LookupFunctionHandle p sym arch
-lookupFunction = MS.unsupportedFunctionCalls "macaw-symbolic-tests"
+resolveAbsoluteAddress
+  :: (MM.MemWidth w)
+  => MM.Memory w
+  -> MM.MemWord w
+  -> Maybe (MM.MemSegmentOff w)
+resolveAbsoluteAddress mem addr =
+  listToMaybe [ segOff
+              | seg <- MM.memSegments mem
+              , let region = MM.segmentBase seg
+              , Just segOff <- return (MM.resolveRegionOff mem region addr)
+              ]
+
+addBinding
+  :: CFH.FnHandle args ret
+  -> CS.FnState p sym ext args ret
+  -> CS.FunctionBindings p sym ext
+  -> CS.FunctionBindings p sym ext
+addBinding hdl fstate (CS.FnBindings binds) =
+  CS.FnBindings (CFH.insertHandleMap hdl fstate binds)
+
+lookupFunction
+  :: ( MS.SymArchConstraints arch
+     , CB.IsSymInterface sym
+     )
+  => MS.ArchVals arch
+  -> MD.DiscoveryState arch
+  -> MS.LookupFunctionHandle p sym arch
+lookupFunction archVals discState = MS.LookupFunctionHandle $ \s0 _memImpl regs -> do
+  let regsEntry = CS.RegEntry regsRepr regs
+  let (_, ptrOffset) = CLM.llvmPointerView (CS.regValue (MS.lookupReg archVals regsEntry MC.ip_reg))
+  case WI.asBV ptrOffset of
+    Just bvOff
+      | Just segOff <- resolveAbsoluteAddress mem (fromIntegral (BVS.asUnsigned bvOff))
+      , Just (Some targetFn) <- Map.lookup segOff (discState L.^. MD.funInfo) -> do
+          let funName = functionName targetFn
+          halloc <- CFH.newHandleAllocator
+          CCC.SomeCFG g <- MS.mkFunCFG symArchFns halloc funName posFn targetFn
+          hdl <- CFH.mkHandle' halloc funName (Ctx.singleton regsRepr) regsRepr
+          let fstate = CS.UseCFG g (CAP.postdomInfo g)
+          let s1 = s0 & CS.stateContext . CS.functionBindings %~ addBinding hdl fstate
+          return (hdl, s1)
+    _ -> error ("Symbolic pointer offset in lookupFunction: " ++ show (WI.printSymExpr ptrOffset))
+  where
+    mem = MD.memory discState
+    symArchFns = MS.archFunctions archVals
+    crucRegTypes = MS.crucArchRegTypes symArchFns
+    regsRepr = CT.StructRepr crucRegTypes
 
 -- | The test harness does not currently support making system calls from test cases.
 --

@@ -57,6 +57,7 @@ test-suite macaw-aarch32-symbolic-tests
     elf-edit,
     filepath,
     Glob >= 0.9 && < 0.11,
+    lens,
     dismantle-arm-xml,
     asl-translator,
     semmc-aarch32,
