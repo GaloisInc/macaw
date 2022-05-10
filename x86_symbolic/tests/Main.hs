@@ -7,10 +7,12 @@
 {-# LANGUAGE TypeApplications #-}
 module Main (main) where
 
+import           Control.Lens ( (^.) )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
 import qualified Data.Foldable as F
+import qualified Data.Map as Map
 import           Data.Maybe ( mapMaybe )
 import qualified Data.Parameterized.Classes as PC
 import qualified Data.Parameterized.Nonce as PN
@@ -108,7 +110,8 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
       case Elf.headerClass (Elf.header ehi) of
         Elf.ELFCLASS32 -> TTH.assertFailure "32 bit x86 binaries are not supported"
         Elf.ELFCLASS64 -> do
-          (mem, funInfos) <- MST.runDiscovery ehi MST.toAddrSymMap MX.x86_64_linux_info
+          (mem, discState) <- MST.runDiscovery ehi MST.toAddrSymMap MX.x86_64_linux_info
+          let funInfos = Map.elems (discState ^. M.funInfo)
           let testEntryPoints = mapMaybe hasTestPrefix funInfos
           F.forM_ testEntryPoints $ \(name, Some dfi) -> do
             step ("Testing " ++ BS8.unpack name)
@@ -127,7 +130,7 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
               let extract = x86ResultExtractor archVals
               logger <- makeGoalLogger saveSMT solver name exePath
               let ?memOpts = LLVM.defaultMemOptions
-              simRes <- MST.simulateAndVerify solver logger bak execFeatures MX.x86_64_linux_info archVals mem extract dfi
+              simRes <- MST.simulateAndVerify solver logger bak execFeatures MX.x86_64_linux_info archVals mem extract discState dfi
               TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

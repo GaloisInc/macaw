@@ -8,6 +8,7 @@
 {-# LANGUAGE TypeOperators #-}
 module Main (main) where
 
+import           Control.Lens ( (^.) )
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
 import qualified Data.ElfEdit as Elf
@@ -169,7 +170,8 @@ symExTestSized :: forall v w arch
                -> MAI.ArchitectureInfo arch
                -> TTH.Assertion
 symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo = do
-   (mem, funInfos) <- MST.runDiscovery ehi (toPPCAddrNameMap loadedBinary) archInfo
+   (mem, discState) <- MST.runDiscovery ehi (toPPCAddrNameMap loadedBinary) archInfo
+   let funInfos = Map.elems (discState ^. M.funInfo)
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
@@ -188,7 +190,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo
        let extract = ppcResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract discState dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()
