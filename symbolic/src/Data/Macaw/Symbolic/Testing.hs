@@ -452,9 +452,6 @@ addBinding
 addBinding hdl fstate (CS.FnBindings binds) =
   CS.FnBindings (CFH.insertHandleMap hdl fstate binds)
 
--- | The test harness does not currently support calling functions from test cases.
---
--- It could be modified to do so.
 lookupFunction
   :: ( MS.SymArchConstraints arch
      , CB.IsSymInterface sym
