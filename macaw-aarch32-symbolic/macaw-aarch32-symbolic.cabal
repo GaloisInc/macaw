@@ -28,6 +28,7 @@ library
                        lens,
                        panic,
                        text,
+                       mtl,
                        parameterized-utils,
                        asl-translator,
                        what4,

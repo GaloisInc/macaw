@@ -1,11 +1,12 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.AArch32.Symbolic (
@@ -15,11 +16,13 @@ module Data.Macaw.AArch32.Symbolic (
   ) where
 
 import qualified Data.Text as T
+import           GHC.Stack ( HasCallStack )
 import           GHC.TypeLits
 
 import           Control.Lens ( (&), (%~) )
 import           Control.Monad ( void )
 import           Control.Monad.IO.Class ( liftIO )
+import qualified Control.Monad.State as CMS
 import qualified Data.Functor.Identity as I
 import           Data.Kind ( Type )
 import qualified Data.Macaw.CFG as MC
@@ -34,6 +37,7 @@ import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.TraversableF as TF
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Proxy ( Proxy(..) )
+import qualified Data.Sequence as Seq
 import qualified What4.BaseTypes as WT
 import qualified What4.ProgramLoc as WP
 import qualified What4.Symbol as WS
@@ -210,6 +214,40 @@ aarch32GenStmt s = do
   s' <- TF.traverseF f s
   void (MSB.evalArchStmt (AArch32PrimStmt s'))
 
+-- | Create labels for a conditional branch in a Crucible statement handler
+--
+-- Create two labels (returned in order): the True label (to take when a
+-- condition evaluates to true during symbolic execution) and the False label
+-- (to fall through to otherwise)
+--
+-- This function requires that the fallthrough label exists; if we don't have
+-- one at translation time, make a fresh block that ends in an error.
+--
+-- Note that this lets us fail lazily (i.e., during symbolic execution and not
+-- translation time), as this non-existence only matters if we reach this part
+-- of the program during symbolic execution.
+makeConditionalLabels
+  :: (FC.TraversableFC (MSB.MacawArchStmtExtension arch))
+  => Maybe (CR.Label s)
+  -- ^ The fallthrough label
+  -> String
+  -- ^ A message to embed in case there is no fallthrough label and the block is
+  -- reached during symbolic execution
+  -> MSB.CrucGen arch ids s (CR.Label s, CR.Label s)
+makeConditionalLabels mfallthroughLabel msg = do
+  tlbl <- CR.Label <$> MSB.freshValueIndex
+  flbl <- case mfallthroughLabel of
+    Just ft -> return ft
+    Nothing -> do
+      ft <- CR.Label <$> MSB.freshValueIndex
+      errMsg <- MSB.evalAtom (CR.EvalApp (LCE.StringLit (WUS.UnicodeLiteral (T.pack msg))))
+      let err = CR.ErrorStmt errMsg
+      let eblock = CR.mkBlock (CR.LabelID ft) mempty mempty (WP.Posd WP.InternalPos err)
+      MSB.addExtraBlock eblock
+      return ft
+  return (tlbl, flbl)
+
+
 aarch32GenTermStmt :: MAA.ARMTermStmt (MC.Value SA.AArch32 ids)
                    -> MC.RegState MAR.ARMReg (MC.Value SA.AArch32 ids)
                    -> Maybe (CR.Label s)
@@ -220,19 +258,21 @@ aarch32GenTermStmt ts regs mfallthroughLabel =
     MAA.ReturnIfNot cond -> do
       notc <- MSB.appAtom =<< LCE.Not <$> MSB.valueToCrucible cond
       returnIf notc
+    MAA.CallIf cond pc lr -> do
+      cond' <- MSB.valueToCrucible cond
+      pc' <- MSB.valueToCrucible pc
+      lr' <- MSB.valueToCrucible lr
+      callIf cond' pc' lr'
+    MAA.CallIfNot cond pc lr -> do
+      cond' <- MSB.valueToCrucible cond
+      pc' <- MSB.valueToCrucible pc
+      lr' <- MSB.valueToCrucible lr
+      notc <- MSB.appAtom (LCE.Not cond')
+      callIf notc pc' lr'
   where
     returnIf cond = do
       MSB.setMachineRegs =<< MSB.createRegStruct regs
-      tlbl <- CR.Label <$> MSB.freshValueIndex
-      flbl <- case mfallthroughLabel of
-        Just ft -> return ft
-        Nothing -> do
-          ft <- CR.Label <$> MSB.freshValueIndex
-          errMsg <- MSB.evalAtom (CR.EvalApp (LCE.StringLit (WUS.UnicodeLiteral (T.pack "No fallthrough for conditional return"))))
-          let err = CR.ErrorStmt errMsg
-          let eblock = CR.mkBlock (CR.LabelID ft) mempty mempty (WP.Posd WP.InternalPos err)
-          MSB.addExtraBlock eblock
-          return ft
+      (tlbl, flbl) <- makeConditionalLabels mfallthroughLabel "No fallthrough for conditional return"
 
       regValues <- MSB.createRegStruct regs
       let ret = CR.Return regValues
@@ -241,20 +281,84 @@ aarch32GenTermStmt ts regs mfallthroughLabel =
 
       MSB.addTermStmt $! CR.Br cond tlbl flbl
 
+    -- Implement the semantics of conditional calls in Crucible
+    --
+    -- Note that we avoid generating Crucible IR with the 'MSB.CrucGen' monad
+    -- here because that adds code to the *current* block. We need to create
+    -- extra blocks here to model the necessary control flow.
+    callIf cond pc lr = do
+
+      -- First, create two labels: the True label (to take when @cond@ is true
+      -- during symbolic execution) and the False label (to fall through to
+      -- otherwise)
+      (tlbl, flbl) <- makeConditionalLabels mfallthroughLabel "No fallthrough for conditional call"
+
+      archFns <- CMS.gets MSB.translateFns
+      regsReg <- CMS.gets MSB.crucRegisterReg
+      let tps = MS.typeCtxToCrucible $ FC.fmapFC MT.typeRepr $ MS.crucGenRegAssignment archFns
+      let regsType = CT.StructRepr tps
+
+      -- Next, make a block to issue the call. We need to snapshot the register
+      -- state, pass it to the function handle lookup, then pass the snapshot
+      -- state to the actual function call, and then finally put the state back.
+      --
+      -- Note that we need to poke in the actual PC and LR values that are
+      -- active when we take the conditional call.  In the natural register
+      -- state at this point, the PC and LR contain muxes, with the actual
+      -- values taken depending on what the condition evaluates to. They are
+      -- correct as muxes, but if we leave them as muxes, the function that
+      -- looks them up might not handle that well. Some clients do not handle
+      -- symbolic function pointers, even when they resolve to a trivially
+      -- concrete value under the path condition. To account for that, in the
+      -- case where the conditional call is taken, we poke in the resolved PC
+      -- and LR to strip off the mux. Note that they could still be symbolic.
+      fhAtom <- MSB.mkAtom (CT.FunctionHandleRepr (Ctx.singleton regsType) regsType)
+      initialRegsAtom <- MSB.mkAtom regsType
+      pcRegsAtom <- MSB.mkAtom regsType
+      lrRegsAtom <- MSB.mkAtom regsType
+      newRegsAtom <- MSB.mkAtom regsType
+
+      let pcIdx = MSB.crucibleIndex (indexForReg MC.ip_reg)
+      let lrIdx = MSB.crucibleIndex (indexForReg MAR.arm_LR)
+
+      let stmts = [ CR.DefineAtom initialRegsAtom $ CR.ReadReg regsReg
+                  , CR.DefineAtom pcRegsAtom $ CR.EvalApp $ LCE.SetStruct tps initialRegsAtom pcIdx pc
+                  , CR.DefineAtom lrRegsAtom $ CR.EvalApp $ LCE.SetStruct tps pcRegsAtom lrIdx lr
+                  , CR.DefineAtom fhAtom $ CR.EvalExt (MS.MacawLookupFunctionHandle (MS.crucArchRegTypes archFns) lrRegsAtom)
+                  , CR.DefineAtom newRegsAtom $ CR.Call fhAtom (Ctx.singleton lrRegsAtom) regsType
+                  , CR.SetReg regsReg newRegsAtom
+                  ]
+      let asInternal = WP.Posd WP.InternalPos
+      let callBlock = CR.mkBlock (CR.LabelID tlbl) mempty (Seq.fromList [ asInternal s | s <- stmts]) (WP.Posd WP.InternalPos (CR.Jump flbl))
+      MSB.addExtraBlock callBlock
+
+      -- Finally, jump to either the block with the call or the fallthrough
+      -- label to skip it
+      MSB.addTermStmt $! CR.Br cond tlbl flbl
+
+
 regIndexMap :: MSB.RegIndexMap SA.AArch32
 regIndexMap = MSB.mkRegIndexMap asgn sz
   where
     asgn = aarch32RegAssignment
     sz = Ctx.size (MS.typeCtxToCrucible (FC.fmapFC MT.typeRepr asgn))
 
-updateReg :: MAR.ARMReg tp
+indexForReg
+  :: (HasCallStack)
+  => MAR.ARMReg tp
+  -> MSB.IndexPair (MS.ArchRegContext SA.AArch32) tp
+indexForReg reg =
+  case MapF.lookup reg regIndexMap of
+    Nothing -> AP.panic AP.AArch32 "indexForReg" ["Missing register index mapping for register: " ++ show reg]
+    Just p -> p
+
+updateReg :: (HasCallStack)
+          => MAR.ARMReg tp
           -> (f (MS.ToCrucibleType tp) -> f (MS.ToCrucibleType tp))
           -> Ctx.Assignment f (MS.MacawCrucibleRegTypes SA.AArch32)
           -> Ctx.Assignment f (MS.MacawCrucibleRegTypes SA.AArch32)
 updateReg reg upd asgn =
-  case MapF.lookup reg regIndexMap of
-    Just pair -> asgn & MapF.ixF (MSB.crucibleIndex pair) %~ upd
-    Nothing -> AP.panic AP.AArch32 "updateReg" ["Missing reg entry for register: " ++ show reg]
+  asgn & MapF.ixF (MSB.crucibleIndex (indexForReg reg)) %~ upd
 
 aarch32UpdateReg :: MCR.RegEntry sym (MS.ArchRegStruct SA.AArch32)
                  -> MAR.ARMReg tp
@@ -263,13 +367,12 @@ aarch32UpdateReg :: MCR.RegEntry sym (MS.ArchRegStruct SA.AArch32)
 aarch32UpdateReg regs reg val =
   regs { MCR.regValue = updateReg reg (const (MCRV.RV val)) (MCR.regValue regs) }
 
-lookupReg :: MAR.ARMReg tp
+lookupReg :: (HasCallStack)
+          => MAR.ARMReg tp
           -> Ctx.Assignment f (MS.MacawCrucibleRegTypes SA.AArch32)
           -> f (MS.ToCrucibleType tp)
 lookupReg reg regs =
-  case MapF.lookup reg regIndexMap of
-    Just pair -> regs Ctx.! MSB.crucibleIndex pair
-    Nothing -> AP.panic AP.AArch32 "lookupReg" ["Missing reg entry for register: " ++ show reg]
+  regs Ctx.! MSB.crucibleIndex (indexForReg reg)
 
 aarch32LookupReg :: MCR.RegEntry sym (MS.ArchRegStruct SA.AArch32)
                  -> MAR.ARMReg tp

@@ -35,6 +35,7 @@ import qualified Data.Parameterized.Map as MapF
 import           Data.Parameterized.NatRepr (knownNat, NatRepr)
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Set as Set
+import           GHC.Stack ( HasCallStack )
 
 import qualified Language.ASL.Globals as ASL
 import qualified SemMC.Architecture.AArch32 as ARM
@@ -190,8 +191,35 @@ absEvalArchStmt :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
                 -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
 absEvalArchStmt s _ = s
 
+-- | Update the abstract state as if control flow had fallen through to the next
+-- instruction (i.e., if the conditional instruction is not taken). This is not
+-- semantically exact, but it is the right behavior to guide code discovery to
+-- the remaining code.
+--
+-- FIXME: This function uniformly increments the PC by 4 to compute the next
+-- PC. That is not necessarily correct for Thumb.
+abstractFallthrough
+  :: (HasCallStack)
+  => (forall tp . AR.ARMReg tp -> Bool)
+  -> MM.Memory 32
+  -> MA.AbsProcessorState AR.ARMReg ids
+  -> MJ.IntraJumpBounds ARM.AArch32 ids
+  -> MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
+  -> String
+  -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
+abstractFallthrough preservePred mem s0 jumpBounds regState stmtName =
+  case simplifyValue (regState ^. MC.curIP) of
+    Just (MC.RelocatableValue _ addr)
+      | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
+          let params = MA.CallParams { MA.postCallStackDelta = 0
+                                     , MA.preserveReg = preservePred
+                                     , MA.stackGrowsDown = True
+                                     }
+          Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
+    _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" [stmtName ++ " could not interpret next PC: " ++ show (regState ^. MC.curIP)]
 
-postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
+postARMTermStmtAbsState :: (HasCallStack)
+                        => (forall tp . AR.ARMReg tp -> Bool)
                         -> MM.Memory 32
                         -> MA.AbsProcessorState AR.ARMReg ids
                         -> MJ.IntraJumpBounds ARM.AArch32 ids
@@ -200,26 +228,10 @@ postARMTermStmtAbsState :: (forall tp . AR.ARMReg tp -> Bool)
                         -> Maybe (MM.MemSegmentOff 32, MA.AbsBlockState AR.ARMReg, MJ.InitJumpBounds ARM.AArch32)
 postARMTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
-    AA.ReturnIf _ ->
-      case simplifyValue (regState ^. MC.curIP) of
-        Just (MC.RelocatableValue _ addr)
-          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         , MA.stackGrowsDown = True
-                                         }
-              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIf could not interpret next PC: " ++ show (regState ^. MC.curIP)]
-    AA.ReturnIfNot _ ->
-      case simplifyValue (regState ^. MC.curIP) of
-        Just (MC.RelocatableValue _ addr)
-          | Just nextPC <- MM.asSegmentOff mem (MM.incAddr 4 addr) -> do
-              let params = MA.CallParams { MA.postCallStackDelta = 0
-                                         , MA.preserveReg = preservePred
-                                         , MA.stackGrowsDown = True
-                                         }
-              Just (nextPC, MA.absEvalCall params s0 regState nextPC, MJ.postCallBounds params jumpBounds regState)
-        _ -> MAP.panic MAP.AArch32Eval "postARMTermStmtAbsState" ["ReturnIfNot could not interpret next PC: " ++ show (regState ^. MC.curIP)]
+    AA.ReturnIf _ -> abstractFallthrough preservePred mem s0 jumpBounds regState "ReturnIf"
+    AA.ReturnIfNot _ -> abstractFallthrough preservePred mem s0 jumpBounds regState "ReturnIfNot"
+    AA.CallIf {} -> abstractFallthrough preservePred mem s0 jumpBounds regState "CallIf"
+    AA.CallIfNot {} -> abstractFallthrough preservePred mem s0 jumpBounds regState "CallIfNot"
 
 preserveRegAcrossSyscall :: MC.ArchReg ARM.AArch32 tp -> Bool
 preserveRegAcrossSyscall r =

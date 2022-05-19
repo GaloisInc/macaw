@@ -11,6 +11,9 @@ module Data.Macaw.Symbolic.Backend (
     -- $archBackend
     CG.MacawArchStmtExtension
   , CG.CrucGen
+  , CG.translateFns
+  , CG.crucRegisterReg
+  , CG.mkAtom
   , PS.macawAssignToCrucM
   , CG.valueToCrucible
   , CG.evalArchStmt
