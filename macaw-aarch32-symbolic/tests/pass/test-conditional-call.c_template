@@ -1,0 +1,46 @@
+#include "util.h"
+
+// Note that this file is not compiled by the test suite build system because we
+// can't easily convince the compiler to produce the machine code we need.  The
+// marked line below (the conditional call) shows morally what we want the code
+// to be, but we have to manually mangle the assembly to ensure we get the
+// conditional call.
+//
+// Compile with:
+//
+// >>> arm-linux-gnu-gcc -x C -S test-conditional-call.c_template -o test-conditional-call.s
+//
+// to generate an assembly file, then:
+//
+// 1. Insert `cmp r0, #0` before the call, and
+// 2. Change the call to `bleq`
+
+
+int g;
+
+void __attribute__((noinline)) callee(int x) {
+  if(x == 0)
+    g = 1;
+}
+
+int __attribute__((noinline)) test_conditional_call(int x) {
+  g = 100;
+  if(x == 0)
+    g = -5;
+
+  // This is the condition we want, but that we can't trust the compiler
+  // to turn into a predicated call instruction
+  //
+  // if(x == 0)
+    callee(x);
+
+  // We are modifying the call to be conditional (if x is 0), so this should
+  // always succeed if the conditional call semantics are correct.
+  return g > 0;
+}
+
+void _start() {
+  g = 0;
+  test_conditional_call(5);
+  EXIT();
+}

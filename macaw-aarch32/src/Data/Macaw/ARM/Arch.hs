@@ -113,6 +113,19 @@ data ARMTermStmt f where
   -- which requires a nonce). We work around this by just having an additional
   -- block terminator.
   ReturnIfNot :: f MT.BoolType -> ARMTermStmt f
+  -- | Conditional calls, with the same rationale as the conditional returns. The operands are:
+  --
+  --  * Condition
+  --
+  --  * Call target
+  --
+  --  * Return address
+  --
+  -- We need to extract the PC and LR values without the mux structure so that
+  -- we can poke it into the register state during symbolic execution
+  CallIf :: f MT.BoolType -> f (MT.BVType 32) -> f (MT.BVType 32) -> ARMTermStmt f
+  -- | Same as 'CallIf', but take the call if the condition is false instead
+  CallIfNot :: f MT.BoolType -> f (MT.BVType 32) -> f (MT.BVType 32) -> ARMTermStmt f
 
 instance Show (ARMTermStmt (MC.Value ARM.AArch32 ids)) where
   show ts = show (MC.ppArchTermStmt PP.pretty ts)
@@ -124,6 +137,8 @@ instance MC.IsArchTermStmt ARMTermStmt where
     case ts of
       ReturnIf cond -> "return_if" PP.<+> ppValue cond
       ReturnIfNot cond -> "return_if_not" PP.<+> ppValue cond
+      CallIf cond pc lr -> "call_if" PP.<+> ppValue cond PP.<+> "pc=" <> ppValue pc PP.<+> "lr=" <> ppValue lr
+      CallIfNot cond pc lr -> "call_if_not" PP.<+> ppValue cond PP.<+> "pc=" <> ppValue pc PP.<+> "lr=" <> ppValue lr
 
 instance TF.FoldableF ARMTermStmt where
   foldMapF = TF.foldMapFDefault
@@ -136,12 +151,16 @@ instance TF.TraversableF ARMTermStmt where
     case tstmt of
       ReturnIf cond -> ReturnIf <$> go cond
       ReturnIfNot cond -> ReturnIfNot <$> go cond
+      CallIf cond pc lr -> CallIf <$> go cond <*> go pc <*> go lr
+      CallIfNot cond pc lr -> CallIfNot <$> go cond <*> go pc <*> go lr
 
 rewriteTermStmt :: ARMTermStmt (MC.Value ARM.AArch32 src) -> Rewriter ARM.AArch32 s src tgt (ARMTermStmt (MC.Value ARM.AArch32 tgt))
 rewriteTermStmt s =
     case s of
       ReturnIf cond -> ReturnIf <$> rewriteValue cond
       ReturnIfNot cond -> ReturnIfNot <$> rewriteValue cond
+      CallIf cond pc lr -> CallIf <$> rewriteValue cond <*> rewriteValue pc <*> rewriteValue lr
+      CallIfNot cond pc lr -> CallIfNot <$> rewriteValue cond <*> rewriteValue pc <*> rewriteValue lr
 
 -- ----------------------------------------------------------------------
 -- ARM functions.  These may return a value, and may depend on the

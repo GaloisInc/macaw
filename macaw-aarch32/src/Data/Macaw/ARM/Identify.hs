@@ -10,6 +10,7 @@ module Data.Macaw.ARM.Identify
     , identifyReturn
     , isReturnValue
     , conditionalReturnClassifier
+    , conditionalCallClassifier
     ) where
 
 import           Control.Applicative ( (<|>) )
@@ -29,6 +30,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import qualified Data.Macaw.SemMC.Simplify as MSS
 import qualified Data.Macaw.Types as MT
+import           Data.Maybe ( maybeToList )
 import qualified Data.Sequence as Seq
 
 import qualified SemMC.Architecture.AArch32 as ARM
@@ -229,6 +231,119 @@ conditionalReturnClassifier = do
                                    , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just nextIP)
                                    , Parsed.intraJumpTargets = [fallthroughTarget]
                                    , Parsed.newFunctionAddrs = []
+                                   , Parsed.writtenCodeAddrs = writtenAddrs
+                                   }
+    Jmp.TrueFeasibleBranch _ -> fail "Infeasible false branch"
+    Jmp.FalseFeasibleBranch _ -> fail "Infeasible true branch"
+    Jmp.InfeasibleBranch -> fail "Branch targets are both infeasible"
+
+data CallsOnBranch = CallsOnTrue | CallsOnFalse
+  deriving (Eq)
+
+-- | Takes a conditionally-set PC and LR value pair and, if they are the same, returns the value
+--
+-- The observation backing this is that there are two cases for a conditional
+-- call. First, assume that the condition evaluates to true (i.e., the call is
+-- issued).  In that case, the fallthrough address (which would have been taken
+-- if the condition was false) and the value in the LR should be the same
+-- (modulo thumb mode switching).
+--
+-- The other case, assuming that the call is not taken, is symmetric.
+--
+-- As a result, the caller ('identifyConditionalCall') is expected to call this
+-- twice, once with @(pc_t, lr_f)@ and again with @(pc_f, lr_t)@.
+--
+-- Note that this classifier helper does not use the abstract transfer function
+-- because return addresses should be literals that don't need any interpretation.
+asConditionalCallReturnAddress
+  :: MC.Memory 32
+  -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
+  -- ^ The value of the PC at one condition polarity
+  -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
+  -- ^ The value of the LR at the other condition polarity
+  -> MAI.Classifier (MC.ArchSegmentOff ARM.AArch32)
+asConditionalCallReturnAddress mem pc_val lr_val = do
+  Just memAddr_pc <- return (MC.valueAsMemAddr pc_val)
+  Just memAddr_lr <- return (MC.valueAsMemAddr lr_val)
+  Just segOff_pc <- return (MC.asSegmentOff mem memAddr_pc)
+  Just segOff_lr <- return (MC.asSegmentOff mem memAddr_lr)
+  when (not (segOff_pc == segOff_lr) || not (isExecutableSegOff segOff_lr)) $ do
+    fail ("Conditional call return address is not executable: " ++ show (memAddr_lr))
+  return segOff_lr
+
+-- | This is a conditional call if the PC and LR are both muxes. Note that we
+-- don't really care what the call target is (and cannot validate it, since it
+-- could be a complex computed value). We primarily care that the conditional LR
+-- value is a valid return address *and* is equal to one of the possible next PC
+-- values.
+--
+-- Note that we return the condition on the PC and not the LR. Ideally they
+-- should be the same, but we aren't currently checking that.
+identifyConditionalCall
+  :: MC.Memory 32
+  -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
+  -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
+  -> MAI.Classifier ( MC.Value ARM.AArch32 ids MT.BoolType    -- Condition
+                    , MC.Value ARM.AArch32 ids (MT.BVType 32) -- Call target
+                    , MC.Value ARM.AArch32 ids (MT.BVType 32) -- Raw link register value
+                    , MC.ArchSegmentOff ARM.AArch32           -- Return address (also the fallthrough address) decoded into a segment offset
+                    , CallsOnBranch                           -- Which branch the call actually occurs on
+                    , Seq.Seq (MC.Stmt ARM.AArch32 ids)       -- The modified statement list
+                    )
+identifyConditionalCall mem stmts s
+  | not (null stmts)
+  , Just (MC.Mux _ pc_c pc_t pc_f) <- simplifiedMux (s ^. MC.boundValue MC.ip_reg)
+  , Just (MC.Mux _ _lr_c lr_t lr_f) <- simplifiedMux (s ^. MC.boundValue AR.arm_LR) =
+      case asConditionalCallReturnAddress mem pc_t lr_f of
+        MAI.ClassifySucceeded _ nextIP ->
+          return (pc_c, pc_f, lr_f, nextIP, CallsOnFalse, stmts)
+        MAI.ClassifyFailed _ -> do
+          nextIP <- asConditionalCallReturnAddress mem pc_f lr_t
+          return (pc_c, pc_t, lr_t, nextIP, CallsOnTrue, stmts)
+  | otherwise = fail "IP is not a mux"
+
+extractCallTargets
+  :: MC.Memory 32
+  -> MC.Value ARM.AArch32 ids (MT.BVType 32)
+  -> [MC.ArchSegmentOff ARM.AArch32]
+extractCallTargets mem val =
+  case val of
+    MC.BVValue _ x -> maybeToList $ MM.resolveAbsoluteAddr mem (fromInteger x)
+    MC.RelocatableValue _ a -> maybeToList $ MM.asSegmentOff mem a
+    MC.SymbolValue {} -> []
+    MC.AssignedValue {} -> []
+    MC.Initial {} -> []
+
+-- | Classify ARM-specific conditional calls
+--
+-- This has the same rationale as 'conditionalReturnClassifier'; core macaw does
+-- not have a representation of conditional calls, so we need to introduce
+-- architecture-specific terminators for them.
+conditionalCallClassifier :: MAI.BlockClassifier ARM.AArch32 ids
+conditionalCallClassifier = do
+  stmts <- CMR.asks MAI.classifierStmts
+  mem <- CMR.asks (MAI.pctxMemory . MAI.classifierParseContext)
+  regs <- CMR.asks MAI.classifierFinalRegState
+  absState <- CMR.asks MAI.classifierAbsState
+  (cond, callTarget, returnAddr, fallthroughIP, callBranch, stmts') <- MAI.liftClassifier (identifyConditionalCall mem stmts regs)
+  let term = if callBranch == CallsOnTrue
+             then Arch.CallIf cond callTarget returnAddr
+             else Arch.CallIfNot cond callTarget returnAddr
+  writtenAddrs <- CMR.asks MAI.classifierWrittenAddrs
+  jmpBounds <- CMR.asks MAI.classifierJumpBounds
+  ainfo <- CMR.asks (MAI.pctxArchInfo . MAI.classifierParseContext)
+
+  case Jmp.postBranchBounds jmpBounds regs cond of
+    Jmp.BothFeasibleBranch trueJumpState falseJumpState -> do
+      let abs' = MDC.branchBlockState ainfo absState stmts regs cond (callBranch == CallsOnFalse)
+      let fallthroughTarget = ( fallthroughIP
+                              , abs'
+                              , if callBranch == CallsOnTrue then falseJumpState else trueJumpState
+                              )
+      return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
+                                   , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just fallthroughIP)
+                                   , Parsed.intraJumpTargets = [fallthroughTarget]
+                                   , Parsed.newFunctionAddrs = extractCallTargets mem callTarget
                                    , Parsed.writtenCodeAddrs = writtenAddrs
                                    }
     Jmp.TrueFeasibleBranch _ -> fail "Infeasible false branch"

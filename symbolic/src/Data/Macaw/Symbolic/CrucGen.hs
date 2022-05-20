@@ -43,12 +43,15 @@ module Data.Macaw.Symbolic.CrucGen
   , MacawArchStmtExtension
     -- ** Operations for implementing new backends.
   , CrucGen
+  , translateFns
+  , crucRegisterReg
   , MacawMonad
   , runMacawMonad
   , addMacawBlock
   , mmFreshNonce
   , mmNonceGenerator
   , mmExecST
+  , mkAtom
   , BlockLabelMap
   , addParsedBlock
   , valueToCrucible
