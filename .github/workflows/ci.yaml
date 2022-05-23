@@ -11,7 +11,7 @@ on:
 # (e.g. cabal complains it can't find a valid version of the "happy"
 # tool).
 env:
-  CACHE_VERSION: 1
+  CACHE_VERSION: 3
 
 jobs:
   build-linux:
@@ -21,7 +21,6 @@ jobs:
       LC_ALL: en_US.UTF-8
       TZ: America/Los_Angeles
       CI_TEST_LEVEL: "2"
-      CACHE_VERSION: 2
 
     runs-on: ${{ matrix.os }}
     strategy:
@@ -81,8 +80,9 @@ jobs:
       # steps are less verbose and major dependency failures are separate.
     - name: Cabal dependencies
       run: |
-        cabal build --only-dependencies macaw-base
-        cabal build crucible-llvm
+        cabal configure --enable-tests all
+        cabal build -j --only-dependencies pkg:macaw-base
+        cabal build -j pkg:crucible-llvm pkg:dismantle-ppc pkg:dismantle-arm-xml
     - name: Install Solvers
       if: runner.os == 'Linux'
       run: .github/ci.sh install_system_deps
