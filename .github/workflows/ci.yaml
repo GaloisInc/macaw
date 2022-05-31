@@ -7,7 +7,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        ghc-ver: ["8.6.5", "8.8.4", "8.10.5"]
+        ghc-ver: ["8.6.5", "8.8.4", "8.10.7"]
+        cabal: ["3.4.0.0"]
       # complete all jobs
       fail-fast: false
     name: macaw-loader - GHC v${{ matrix.ghc-ver }} - ubuntu-latest
@@ -18,12 +19,13 @@ jobs:
         submodules: true
     - name: Copy cabal project files
       run: |
-        cp cabal.project.dist                                  cabal.project
-    - name: Get GHC
-      run: |
-        ghcup install ghc ${{ matrix.ghc-ver }}
-        ghcup install cabal 3.4.0.0
-        ghcup set ghc ${{ matrix.ghc-ver }}
+        cp cabal.project.dist cabal.project
+    - uses: haskell/actions/setup@v1
+      id: setup-haskell
+      name: Setup Haskell
+      with:
+        ghc-version: ${{ matrix.ghc-ver }}
+        cabal-version: ${{ matrix.cabal }}
     - name: Cache
       uses: actions/cache@v1
       with:
