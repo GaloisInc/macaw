@@ -76,6 +76,7 @@ test-suite macaw-ppc-tests
                  filemanip,
                  filepath,
                  lens,
+                 prettyprinter,
                  macaw-base,
                  macaw-semmc,
                  macaw-ppc,

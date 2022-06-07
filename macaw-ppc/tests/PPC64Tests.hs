@@ -1,42 +1,55 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 module PPC64Tests (
-  ppcAsmTests
+    SaveMacaw(..)
+  , ppcAsmTests
   ) where
 
 import           Control.Lens ( (^.) )
 import           Control.Monad ( unless )
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe ( fromJust )
 import qualified Data.Set as S
 import           Data.Word ( Word64 )
-import           System.FilePath ( dropExtension, replaceExtension )
+import qualified Prettyprinter as PP
+import           System.FilePath ( dropExtension, replaceExtension, takeFileName, (<.>), (</>) )
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
+import qualified Test.Tasty.Options as TTO
 import           Text.Printf ( PrintfArg, printf )
 import           Text.Read ( readMaybe )
 
 import qualified Data.ElfEdit as E
 
-import qualified Data.Parameterized.Some as PU
+import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.BinaryLoader as MBL
 import qualified Data.Macaw.BinaryLoader.PPC ()
-import qualified Data.Macaw.Memory as MM
-import qualified Data.Macaw.Memory.ElfLoader as MM
+import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as MD
-import qualified Data.Macaw.PPC as RO
+import qualified Data.Macaw.Memory as MM
+import qualified Data.Parameterized.Some as PU
 
 import           Shared
 
-ppcAsmTests :: [FilePath] -> T.TestTree
-ppcAsmTests = T.testGroup "PPC" . map mkTest
+data SaveMacaw = SaveMacaw Bool
+
+instance TTO.IsOption SaveMacaw where
+  defaultValue = SaveMacaw False
+  parseValue v = SaveMacaw <$> TTO.safeReadBool v
+  optionName = pure "save-macaw"
+  optionHelp = pure "Save Macaw IR for each test case to /tmp for debugging"
+
+ppcAsmTests :: String -> [FilePath] -> T.TestTree
+ppcAsmTests groupName = T.testGroup groupName . map mkTest
 
 newtype Hex a = Hex a
   deriving (Eq, Ord, Num, PrintfArg)
@@ -63,7 +76,7 @@ data ExpectedResult =
 
 -- | Read in a test case from disk and output a test tree.
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ withELF64 exeFilename (testDiscovery fp)
+mkTest fp = T.askOption $ \saveMacaw@(SaveMacaw _) -> T.testCase fp $ withPPCELF exeFilename (testDiscovery saveMacaw fp)
   where
     asmFilename = dropExtension fp
     exeFilename = replaceExtension asmFilename "exe"
@@ -90,19 +103,41 @@ isTranslateError ts =
     MD.ParsedTranslateError {} -> True
     _ -> False
 
+escapeSlash :: Char -> Char
+escapeSlash '/' = '_'
+escapeSlash c = c
+
+toSavedMacawPath :: String -> FilePath
+toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
+  where
+    name = fmap escapeSlash testName
+
+writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> MD.DiscoveryFunInfo arch ids -> IO ()
+writeMacawIR (SaveMacaw sm) name dfi
+  | not sm = return ()
+  | otherwise = writeFile (toSavedMacawPath name) (show (PP.pretty dfi))
+
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
-testDiscovery expectedFilename elf = do
-  let loadCfg = MM.defaultLoadOptions
-                  { MM.loadOffset = Just 0
-                  }
+testDiscovery
+  :: (MC.ArchAddrWidth arch ~ w, MBL.BinaryLoader arch (E.ElfHeaderInfo w), MM.MemWidth w, MC.ArchConstraints arch, Show (MC.ArchBlockPrecond arch))
+  => SaveMacaw
+  -> FilePath
+  -> MAI.ArchitectureInfo arch
+  -> MBL.LoadedBinary arch (E.ElfHeaderInfo w)
+  -> IO ()
+testDiscovery saveMacaw expectedFilename archInfo loadedBinary = do
+  let testName = takeFileName expectedFilename
 
-  loadedBinary <- MBL.loadBinary loadCfg elf
+
   entries <- MBL.entryPoints loadedBinary
-  let cfg = RO.ppc64_linux_info loadedBinary
   let mem = MBL.memoryImage loadedBinary
-  let di = MD.cfgFromAddrs cfg mem M.empty (F.toList entries) []
+  let di = MD.cfgFromAddrs archInfo mem M.empty (F.toList entries) []
+
+  F.forM_ (di ^. MD.funInfo) $ \(PU.Some dfi) -> do
+    let funcFileName = testName <.> BSC.unpack (MD.discoveredFunName dfi)
+    writeMacawIR saveMacaw funcFileName dfi
+
   expectedString <- readFile expectedFilename
   case readMaybe expectedString of
     -- Above: Read in the ExpectedResult from the contents of the file
@@ -143,7 +178,7 @@ testDiscovery expectedFilename elf = do
         F.forM_ blockAddrs $ \(blockAddr@(Hex addr), _) -> do
         T.assertBool ("Missing block address: " ++ show blockAddr) (S.member addr allFoundBlockAddrs)
 
-absoluteFromSegOff :: MM.MemSegmentOff 64 -> Hex Word64
+absoluteFromSegOff :: (MM.MemWidth w) => MM.MemSegmentOff w -> Hex Word64
 absoluteFromSegOff = fromIntegral . fromJust . MM.asAbsoluteAddr . MM.segoffAddr
 
 removeIgnored :: (Ord b, Ord a) => S.Set (a, b) -> S.Set a -> S.Set (a, b)
