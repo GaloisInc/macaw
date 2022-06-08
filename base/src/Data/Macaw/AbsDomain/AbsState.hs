@@ -35,7 +35,6 @@ module Data.Macaw.AbsDomain.AbsState
   , absTrue
   , absFalse
   , subValue
-  , concreteStackOffset
   , concretize
   , asConcreteSingleton
   , meet
