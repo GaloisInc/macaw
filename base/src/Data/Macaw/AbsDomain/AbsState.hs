@@ -98,11 +98,10 @@ import           Data.Macaw.Types
 -- value, so we need to be very careful when converting from bitvectors (encoded
 -- as 'Integer') to 'Int64'.
 addSignedOffset
-  :: NatRepr w
-  -> Int64   -- ^ The current offset of a 'StackOffsetAbsVal'
+  :: Int64   -- ^ The current offset of a 'StackOffsetAbsVal'
   -> Integer -- ^ The offset to add (to the current offset)
   -> Int64
-addSignedOffset _w curOff i =
+addSignedOffset curOff i =
   curOff + fromIntegral i
 
 -- | Add an offset represented as a bitvector to the current offset of a 'StackOffsetAbsVal'
@@ -656,9 +655,9 @@ bvinc w (FinSet s) o =
   FinSet $ Set.map (toUnsigned w . (+o)) s
 bvinc _ (CodePointers _  _) _ =
   TopV
-bvinc w (StackOffsetAbsVal a s) o =
+bvinc _w (StackOffsetAbsVal a s) o =
   assert (o < toInteger (maxBound :: Int64)) $
-    StackOffsetAbsVal a (addSignedOffset w s o)
+    StackOffsetAbsVal a (addSignedOffset s o)
 bvinc _ (SomeStackOffset a) _ =
   SomeStackOffset a
 -- Strided intervals
