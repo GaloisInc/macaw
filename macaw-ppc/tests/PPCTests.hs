@@ -7,7 +7,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
-module PPC64Tests (
+module PPCTests (
     SaveMacaw(..)
   , ppcAsmTests
   ) where

@@ -60,7 +60,7 @@ test-suite macaw-ppc-tests
   default-language: Haskell2010
   ghc-options: -Wall
   main-is: Main.hs
-  other-modules: PPC64Tests
+  other-modules: PPCTests
                  PPC64InstructionCoverage
                  Shared
   hs-source-dirs: tests

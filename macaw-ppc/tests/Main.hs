@@ -7,21 +7,21 @@ import qualified Test.Tasty as T
 import qualified Test.Tasty.Options as TTO
 import qualified Test.Tasty.Runners as TTR
 
-import qualified PPC64Tests as PPC64
+import qualified PPCTests as PPC
 import qualified PPC64InstructionCoverage as PPC64
 
 ingredients :: [TTR.Ingredient]
-ingredients = T.includingOptions [ TTO.Option (Proxy @PPC64.SaveMacaw)
+ingredients = T.includingOptions [ TTO.Option (Proxy @PPC.SaveMacaw)
                                  ] : T.defaultIngredients
 
 
 main :: IO ()
 main = do
-  testFiles64 <- namesMatching "tests/ppc/*.s.expected"
+  testFiles64 <- namesMatching "tests/ppc64/*.s.expected"
   testFiles32 <- namesMatching "tests/ppc32/*.s.expected"
-  bins <- namesMatching "tests/ppc/bin/*"
+  bins <- namesMatching "tests/ppc/bin64/*"
   T.defaultMainWithIngredients ingredients $ T.testGroup "PPCMacawTests" [
-    PPC64.ppcAsmTests "PPC64" testFiles64,
-    PPC64.ppcAsmTests "PPC32" testFiles32,
+    PPC.ppcAsmTests "PPC64" testFiles64,
+    PPC.ppcAsmTests "PPC32" testFiles32,
     PPC64.ppc64InstructionCoverageTests bins
     ]
