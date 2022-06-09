@@ -1073,7 +1073,7 @@ doCondReadMem bak mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
 --     arg5 : Address to write to
 --     arg6 : Value to write
 doWriteMem ::
-  (IsSymBackend sym bak, Mem.HasLLVMAnn sym) =>
+  (IsSymBackend sym bak, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   bak ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->
@@ -1104,7 +1104,7 @@ doWriteMem bak mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
 --     arg6 : Address to write to
 --     arg7 : Value to write
 doCondWriteMem ::
-  (IsSymBackend sym bak, Mem.HasLLVMAnn sym) =>
+  (IsSymBackend sym bak, Mem.HasLLVMAnn sym, ?memOpts :: Mem.MemOptions) =>
   bak ->
   MemImpl sym ->
   M.AddrWidthRepr ptrW ->

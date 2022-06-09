@@ -34,4 +34,6 @@
    - `addExtraBlock`
    - `freshValueIndex`
 
-- `Data.Macaw.Symbolic.Memory.newGlobalMemory` now has a `?memOpts :: MemOptions` constraint.
+- The following functions now have a `?memOpts :: MemOptions` constraint:
+  - `Data.Macaw.Symbolic.Memory.newGlobalMemory`
+  - `Data.Macaw.Symbolic.MemOps.{doWriteMem,doCondWriteMem}`
