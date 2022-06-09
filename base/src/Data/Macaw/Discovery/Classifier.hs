@@ -238,7 +238,7 @@ identifyCallTargets mem absState regs = do
 -- 'noreturnCallClassifier' should fire. As such, 'callClassifier' should always
 -- be attempted *after* 'noreturnCallClassifier'.
 callClassifier :: BlockClassifier arch ids
-callClassifier = do
+callClassifier = classifierName "Call" $ do
   bcc <- CMR.ask
   let ctx = classifierParseContext bcc
   let finalRegs = classifierFinalRegState bcc
@@ -246,7 +246,7 @@ callClassifier = do
   let mem = pctxMemory ctx
   ret <- case Info.identifyCall ainfo mem (classifierStmts bcc) finalRegs of
            Just (_prev_stmts, ret) -> pure ret
-           Nothing -> fail $ "Call classifer failed."
+           Nothing -> fail $ "Call classifier failed."
   Info.withArchConstraints ainfo $ do
     pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
                               , Parsed.parsedTerm  = Parsed.ParsedCall finalRegs (Just ret)
