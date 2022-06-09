@@ -19,7 +19,7 @@ main :: IO ()
 main = do
   testFiles64 <- namesMatching "tests/ppc64/*.s.expected"
   testFiles32 <- namesMatching "tests/ppc32/*.s.expected"
-  bins <- namesMatching "tests/ppc/bin64/*"
+  bins <- namesMatching "tests/ppc64/bin/*"
   T.defaultMainWithIngredients ingredients $ T.testGroup "PPCMacawTests" [
     PPC.ppcAsmTests "PPC64" testFiles64,
     PPC.ppcAsmTests "PPC32" testFiles32,
