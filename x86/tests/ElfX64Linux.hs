@@ -4,13 +4,15 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DataKinds #-}
 module ElfX64Linux (
-  elfX64LinuxTests
+    SaveMacaw(..)
+  , elfX64LinuxTests
   ) where
 
 import           Control.Lens ( (^.) )
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.Catch as C
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Foldable as F
 import qualified Data.Map as M
 import           Data.Maybe
@@ -18,19 +20,31 @@ import qualified Data.Set as S
 import           Data.Typeable ( Typeable )
 import           Data.Word ( Word64 )
 import           Numeric (showHex)
+import qualified Prettyprinter as PP
 import           System.FilePath
 import qualified Test.Tasty as T
 import qualified Test.Tasty.HUnit as T
+import qualified Test.Tasty.Options as TTO
 import           Text.Printf ( printf )
 import           Text.Read ( readMaybe )
 
 import qualified Data.ElfEdit as E
 
-import qualified Data.Parameterized.Some as PU
+import qualified Data.Macaw.CFG as MC
+import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader as MM
-import qualified Data.Macaw.Discovery as MD
 import qualified Data.Macaw.X86 as RO
+import qualified Data.Parameterized.Some as PU
+
+data SaveMacaw = SaveMacaw Bool
+
+instance TTO.IsOption SaveMacaw where
+  defaultValue = SaveMacaw False
+  parseValue v = SaveMacaw <$> TTO.safeReadBool v
+  optionName = pure "save-macaw"
+  optionHelp = pure "Save Macaw IR for each test case to /tmp for debugging"
+
 
 -- |
 elfX64LinuxTests :: [FilePath] -> T.TestTree
@@ -60,7 +74,7 @@ data ExpectedResult =
 
 -- | Given a path to an expected file, this
 mkTest :: FilePath -> T.TestTree
-mkTest fp = T.testCase fp $ withELF elfFilename (testDiscovery fp)
+mkTest fp = T.askOption $ \saveMacaw@(SaveMacaw _) -> T.testCase fp $ withELF elfFilename (testDiscovery saveMacaw fp)
   where
     elfFilename = dropExtension fp
 
@@ -81,10 +95,24 @@ toAddr segOff = do
       addr = MM.segoffAddr segOff
    in Addr (fromIntegral (MM.addrBase addr)) (fromIntegral (MM.addrOffset addr))
 
+escapeSlash :: Char -> Char
+escapeSlash '/' = '_'
+escapeSlash c = c
+
+toSavedMacawPath :: String -> FilePath
+toSavedMacawPath testName = "/tmp" </> name <.> "macaw"
+  where
+    name = fmap escapeSlash testName
+
+writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> MD.DiscoveryFunInfo arch ids -> IO ()
+writeMacawIR (SaveMacaw sm) name dfi
+  | not sm = return ()
+  | otherwise = writeFile (toSavedMacawPath name) (show (PP.pretty dfi))
+
 -- | Run a test over a given expected result filename and the ELF file
 -- associated with it
-testDiscovery :: FilePath -> E.ElfHeaderInfo 64 -> IO ()
-testDiscovery expectedFilename elf = do
+testDiscovery :: SaveMacaw -> FilePath -> E.ElfHeaderInfo 64 -> IO ()
+testDiscovery saveMacaw expectedFilename elf = do
   let opt = MM.defaultLoadOptions
   (warn, mem, mentry, syms) <-
     case MM.resolveElfContents opt elf of
@@ -98,6 +126,12 @@ testDiscovery expectedFilename elf = do
                               | sym <- syms
                               ]
   let di = MD.cfgFromAddrs RO.x86_64_linux_info mem addrSymMap entries []
+
+  let testName = takeFileName expectedFilename
+  F.forM_ (di ^. MD.funInfo) $ \(PU.Some dfi) -> do
+    let funcFileName = testName <.> BSC.unpack (MD.discoveredFunName dfi)
+    writeMacawIR saveMacaw funcFileName dfi
+
   expectedString <- readFile expectedFilename
   case readMaybe expectedString of
     Nothing -> T.assertFailure ("Invalid expected result: " ++ show expectedString)

@@ -70,6 +70,7 @@ test-suite macaw-x86-tests
     lens,
     macaw-base,
     parameterized-utils,
+    prettyprinter,
     macaw-x86,
     temporary,
     tasty,
