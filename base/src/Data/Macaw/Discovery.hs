@@ -497,15 +497,13 @@ useExternalTargets bcc = do
 -- new classifiers (e.g., classifiers that can produce architecture-specific
 -- terminators).
 --
--- Note that the direct jump classifier is last; this is to give the other
--- classifiers a chance to run and match code. In particular, tail calls and
--- direct local jumps are very difficult to distinguish from each other. Since
--- we have to choose some order between them, we put the tail call classifier
--- first so that it at least *could* fire without being completely subsumed by
--- direct jumps. This means that some control flow transfers that look like
--- direct jumps could instead be classified as tail calls. It would take some
--- higher-level heuristics (e.g., live registers at the call site, locality) to
--- distinguish the cases.
+-- Note that classifiers are an instance of 'Control.Monad.Alternative', so the
+-- order they are applied in matters.  While several are non-overlapping, at
+-- least the order that the direct jump and tail call classifiers are applied in
+-- matters, as they look substantially the same to the analysis. Being too eager
+-- to flag jumps as tail calls classifies the jump targets as known function
+-- entry points, which can interfere with other classifiers later in the
+-- function.
 defaultClassifier :: BlockClassifier arch ids
 defaultClassifier = branchClassifier
                 <|> noreturnCallClassifier
@@ -513,8 +511,8 @@ defaultClassifier = branchClassifier
                 <|> returnClassifier
                 <|> jumpTableClassifier
                 <|> pltStubClassifier
-                <|> tailCallClassifier
                 <|> directJumpClassifier
+                <|> tailCallClassifier
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
