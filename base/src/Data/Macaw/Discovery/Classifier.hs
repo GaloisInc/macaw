@@ -292,8 +292,21 @@ returnClassifier = classifierName "Return" $ do
                               }
 
 -- | Classifies jumps to concrete addresses as unconditional jumps.  Note that
--- this logic is substantially similar to the 'callClassifier'; as such, this
--- classifier should always be applied *after* the 'callClassifier'.
+-- this logic is substantially similar to the 'tailCallClassifier' in cases
+-- where the function does not establish a stack frame (i.e., leaf functions).
+--
+-- Note that known call targets are not eligible to be intra-procedural jump
+-- targets (see 'classifyDirectJump'). This means that we need to conservatively
+-- prefer to mis-classify terminators as jumps rather than tail calls. The
+-- downside of this choice is that code that could be considered a tail-called
+-- function may be duplicated in some cases (i.e., considered part of multiple
+-- functions).
+--
+-- The alternative interpretation (eagerly preferring tail calls) can cause a
+-- section of a function to be marked as a tail-called function, thereby
+-- blocking the 'directJumpClassifier' or the 'branchClassifier' from
+-- recognizing the "callee" as an intra-procedural jump. This results in
+-- classification failures that we don't have any mitigations for.
 directJumpClassifier :: BlockClassifier arch ids
 directJumpClassifier = classifierName "Jump" $ do
   bcc <- CMR.ask
@@ -380,6 +393,11 @@ noreturnCallClassifier = classifierName "no return call" $ do
 --
 -- The current heuristic is that the target looks like a call, except the stack
 -- height in the caller is 0.
+--
+-- Note that, in leaf functions (i.e., with no stack usage), tail calls and
+-- jumps look substantially similar. We typically apply the jump classifier
+-- first to prefer them, which means that we very rarely recognize tail calls in
+-- leaf functions.
 tailCallClassifier :: BlockClassifier arch ids
 tailCallClassifier = classifierName "Tail call" $ do
   bcc <- CMR.ask
