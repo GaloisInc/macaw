@@ -2,7 +2,7 @@ This document describes the high-level design of macaw with pointers to more det
 
 # Overview
 
- The macaw library provides binary code discovery (`macaw-base`) and symbolic execution (`macaw-symbolic`) for multiple Instruction Set Architectures (ISAs). See the [README](../README.md) for details on the currently-supported architectures. Each of the core pieces of functionality are implemented as a core architecture-independent library with architecture-specific libraries providing specializations (e.g., `macaw-base` and `macaw-x86`).
+The macaw library provides binary code discovery (`macaw-base`) and symbolic execution (`macaw-symbolic`) for multiple Instruction Set Architectures (ISAs). See the [README](../README.md) for details on the currently-supported architectures. Each of the core pieces of functionality are implemented as a core architecture-independent library with architecture-specific libraries providing specializations (e.g., `macaw-base` and `macaw-x86`).
 
 # Code Discovery
 
@@ -20,7 +20,7 @@ The intermediate representation (IR) used by macaw is a simple [three address co
 
 The IR has unlimited virtual registers with each intermediate value being assigned to a distinct virtual register. Note that unlike LLVM IR, macaw IR is not in SSA form. The operations in the IR are primarily bitvector operations, which are polymorphic over bitvector width but strongly typed to ensure that bitvectors of different widths are not mixed without proper extension or truncation.
 
-Note that the macaw IR does *not* have floating point operations; those are typically represented as architecture-specific extension statements. The macaw IR contains only the primitives necessary for recovering control flow. As a consequence, tricky hand-written assembly that used e.g., bit-precise IEEE operations to directly compute an instruction address cannot be resolved by macaw (e.g., `jmp sqrt(foo)`).
+Note that the macaw IR does *not* have floating point operations; those are typically represented as architecture-specific extension statements. The macaw IR contains only the primitives necessary for recovering control flow. As a consequence, tricky hand-written assembly that uses e.g., bit-precise IEEE operations to directly compute an instruction address cannot be resolved by macaw (e.g., `jmp sqrt(foo)`).
 
 ## Core Algorithm
 
@@ -65,7 +65,7 @@ Macaw discovers functions by decoding their blocks individually. The block decod
 
 1. Decodes an instruction using the low-level disassembly function
 2. Lifts the instruction into a semantic representation (i.e., a sequence of Macaw IR instructions that encode the semantics of the instruction)
-3. Decides if the instruction is a control flow instruction by inspecting the next value of the instruction pointer; if it is a control flow instruction, the decoder terminates the block (otherwise it continues decoding at (1)
+3. Decides if the instruction is a control flow instruction by inspecting the next value of the instruction pointer; if it is a control flow instruction, the decoder terminates the block (otherwise it continues decoding at (1))
 
 Each block produced at this stage is of type `Block arch ids`. A `Block` is a sequence of Macaw IR instructions that manipulate the machine state followed by a block terminator, which is one of:
 - `FetchAndExecute`, which indicates that the value of the instruction pointer must be interpreted to determine the target of a control flow transfer
