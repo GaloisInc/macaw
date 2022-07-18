@@ -1,7 +1,7 @@
 This is the main repository for the Macaw binary analysis framework with two key
 goals: binary code discovery and symbolic execution of machine code. This
 framework is implemented to offer extensible support for architectures (i.e.,
-library clients can add their own architectures and opt-in to the architecture
+library clients can add their own architectures and opt in to the architecture
 support they need).
 
 # Overview
