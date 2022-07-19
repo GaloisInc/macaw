@@ -60,7 +60,7 @@ import           Lang.Crucible.CFG.Common (GlobalVar)
 import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.Simulator.RegMap as C
 import           Lang.Crucible.Simulator.ExecutionTree
-          ( CrucibleState, stateSymInterface, stateContext
+          ( CrucibleState, SimState, stateSymInterface, stateContext
           , stateTree, actFrame, gpGlobals, withBackend
           )
 import           Lang.Crucible.Simulator.GlobalState (lookupGlobal,insertGlobal)
@@ -209,7 +209,7 @@ type PtrOp sym w a =
   IO (a, CrucibleState s sym ext rtp blocks r ctx)
 
 -- | Get the current model of the memory.
-getMem :: CrucibleState s sym ext rtp blocks r ctx ->
+getMem :: SimState s sym ext rtp f a ->
           GlobalVar (IntrinsicType nm args) ->
           IO (Intrinsic sym nm args)
 getMem st mvar =
@@ -217,10 +217,10 @@ getMem st mvar =
     Just mem -> return mem
     Nothing  -> fail ("Global heap value not initialized: " ++ show mvar)
 
-setMem :: CrucibleState s sym ext rtp blocks r ctx ->
+setMem :: SimState s sym ext rtp f a ->
           GlobalVar (IntrinsicType nm args) ->
           Intrinsic sym nm args ->
-          CrucibleState s sym ext rtp blocks r ctx
+          SimState s sym ext rtp f a
 setMem st mvar mem =
   st & stateTree . actFrame . gpGlobals %~ insertGlobal mvar mem
 
@@ -406,11 +406,11 @@ newtype LookupSyscallHandle p sym arch =
 
 --------------------------------------------------------------------------------
 doLookupFunctionHandle :: (IsSymInterface sym)
-                       => (CrucibleState s sym ext trp blocks r ctx -> MemImpl sym -> regs -> IO (a, CrucibleState s sym ext trp blocks r ctx))
-                       -> CrucibleState s sym ext trp blocks r ctx
+                       => (SimState s sym ext trp f args -> MemImpl sym -> regs -> IO (a, SimState s sym ext trp f args))
+                       -> SimState s sym ext trp f args
                        -> GlobalVar Mem
                        -> regs
-                       -> IO (a, CrucibleState s sym ext trp blocks r ctx)
+                       -> IO (a, SimState s sym ext trp f args)
 doLookupFunctionHandle k st mvar regs = do
   mem <- getMem st mvar
   k st mem regs
@@ -424,12 +424,12 @@ addrWidthAtLeast16 M.Addr64 = LeqProof
 
 doGetGlobal ::
   (IsSymInterface sym, M.MemWidth w) =>
-  CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -} ->
+  SimState s sym ext rtp f a               {- ^ Simulator state   -} ->
   GlobalVar (IntrinsicType nm args)        {- ^ Model of memory   -} ->
   GlobalMap sym (IntrinsicType nm args) w ->
   M.MemAddr w                              {- ^ Address identifier -} ->
   IO ( RegValue sym (LLVMPointerType w)
-     , CrucibleState s sym ext rtp blocks r ctx
+     , SimState s sym ext rtp f a
      )
 doGetGlobal st mvar globs addr =
   withBackend (st^.stateContext) $ \bak -> do
@@ -635,11 +635,11 @@ doPtrTrunc
      , 1 <= w'
      , (w' + 1) <= w
      )
-  => CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -}
+  => SimState s sym ext rtp f a               {- ^ Simulator state   -}
   -> GlobalVar Mem                            {- ^ Memory model      -}
   -> RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -}
   -> NatRepr w'                               {- ^ New width         -}
-  -> IO (RegValue sym (LLVMPointerType w'), CrucibleState s sym ext rtp blocks r ctx)
+  -> IO (RegValue sym (LLVMPointerType w'), SimState s sym ext rtp f a)
 doPtrTrunc st _memVar ptrEntry width = do
   let (Mem.LLVMPointer base offset) = regValue ptrEntry
   let sym = st ^. stateSymInterface
@@ -651,11 +651,11 @@ doPtrUExt
      , 1 <= w
      , (w + 1) <= w'
      )
-  => CrucibleState s sym ext rtp blocks r ctx {- ^ Simulator state   -}
+  => SimState s sym ext rtp f a               {- ^ Simulator state   -}
   -> GlobalVar Mem                            {- ^ Memory model      -}
   -> RegEntry sym (LLVMPointerType w)         {- ^ Argument 1        -}
   -> NatRepr w'                               {- ^ New width         -}
-  -> IO (RegValue sym (LLVMPointerType w'), CrucibleState s sym ext rtp blocks r ctx)
+  -> IO (RegValue sym (LLVMPointerType w'), SimState s sym ext rtp f a)
 doPtrUExt st _memVar ptrEntry width = do
   let (Mem.LLVMPointer base offset) = regValue ptrEntry
   let sym = st ^. stateSymInterface
