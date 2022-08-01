@@ -200,6 +200,43 @@ data MemPtrTable sym w =
               -- ^ The pointer to the allocation backing all of memory
               }
 
+-- | Convert a Macaw 'MC.Endianness' to a Crucible LLVM 'CLD.EndianForm'.
+toCrucibleEndian :: MC.Endianness -> CLD.EndianForm
+toCrucibleEndian MC.BigEndian    = CLD.BigEndian
+toCrucibleEndian MC.LittleEndian = CLD.LittleEndian
+
+-- | Convert a Crucible LLVM 'CLD.EndianForm' to a Macaw 'MC.Endianness'.
+fromCrucibleEndian :: CLD.EndianForm -> MC.Endianness
+fromCrucibleEndian CLD.BigEndian    = MC.BigEndian
+fromCrucibleEndian CLD.LittleEndian = MC.LittleEndian
+
+-- | Hooks to configure the initialization of global memory
+data GlobalMemoryHooks w =
+  GlobalMemoryHooks {
+  populateRelocation
+    :: forall sym
+       . (CB.IsSymInterface sym)
+    => sym
+    -> MC.Relocation w
+    -> IO [WI.SymExpr sym (WI.BaseBVType 8)]
+    -- ^ The symbolic bytes to represent a relocation with
+    --
+    -- They could be entirely unconstrained bytes, or could be distinguished
+    -- bytes used to implement linking of shared libraries (i.e., relocation
+    -- resolution)
+  }
+
+-- | A default set of hooks
+--
+-- These are used by 'newGlobalMemory', and may raise errors if they encounter
+-- constructs that they do not handle (because there is no sensible default behavior).
+defaultGlobalMemoryHooks :: GlobalMemoryHooks w
+defaultGlobalMemoryHooks =
+  GlobalMemoryHooks {
+    -- populateRelocation = \_ r -> return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
+    populateRelocation = \_ r -> pure []
+    }
+
 -- | A version of 'newGlobalMemory' that enables some of the memory model
 -- initialization to be configured via 'GlobalMemoryHooks'.
 --
