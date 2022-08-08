@@ -1005,11 +1005,6 @@ doReadMem ::
   IO (RegValue sym (ToCrucibleType ty))
 doReadMem bak mem ptrWidth memRep ptr = hasPtrClass ptrWidth $
   do let sym = backendGetSym bak
-     -- Check pointer is valid.
-     -- Note. I think we should check that pointer has at least "bytes" bytes available?
-     ok <- isValidPtr sym mem ptrWidth ptr
-     check bak ok "doReadMem" $
-       "Reading through an invalid pointer: " ++ show (Mem.ppPtr ptr)
      ty <- case memReprToStorageType (getEnd mem) memRep of
              Left msg -> throwIO $ userError msg
              Right tp -> pure tp
@@ -1042,11 +1037,6 @@ doCondReadMem ::
   IO (RegValue sym (ToCrucibleType ty))
 doCondReadMem bak mem ptrWidth memRep cond ptr def = hasPtrClass ptrWidth $
   do let sym = backendGetSym bak
-     -- Check pointer is valid.
-     -- Note. I think we should check that pointer has at least "bytes" bytes available?
-     ok  <- isValidPtr sym mem ptrWidth ptr
-     check bak ok "doCondReadMem" $
-       "Conditional read through an invalid pointer: " ++ show (Mem.ppPtr ptr)
 
      ty <- case memReprToStorageType (getEnd mem) memRep of
              Left msg -> throwIO $ userError msg
@@ -1082,11 +1072,7 @@ doWriteMem ::
   RegValue sym (ToCrucibleType ty) ->
   IO (MemImpl sym)
 doWriteMem bak mem ptrWidth memRep ptr val = hasPtrClass ptrWidth $
-  do let sym = backendGetSym bak
-     ok <- isValidPtr sym mem ptrWidth ptr
-     check bak ok "doWriteMem" $
-       "Write to an invalid location: " ++ show (Mem.ppPtr ptr)
-     ty <- case memReprToStorageType (getEnd mem) memRep of
+  do ty <- case memReprToStorageType (getEnd mem) memRep of
              Left msg -> throwIO $ userError msg
              Right tp -> pure tp
      let alignment = noAlignment -- default to byte alignment (FIXME)
@@ -1114,12 +1100,7 @@ doCondWriteMem ::
   RegValue sym (ToCrucibleType ty) ->
   IO (MemImpl sym)
 doCondWriteMem bak mem ptrWidth memRep cond ptr val = hasPtrClass ptrWidth $
-  do let sym = backendGetSym bak
-     ok <- isValidPtr sym mem ptrWidth ptr
-     condOk <- impliesPred sym cond ok
-     check bak condOk "doWriteMem" $
-       "Write to an invalid location: " ++ show (Mem.ppPtr ptr)
-     ty <- case memReprToStorageType (getEnd mem) memRep of
+  do ty <- case memReprToStorageType (getEnd mem) memRep of
              Left msg -> throwIO $ userError msg
              Right tp -> pure tp
      let alignment = noAlignment -- default to byte alignment (FIXME)

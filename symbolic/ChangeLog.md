@@ -37,3 +37,7 @@
 - The following functions now have a `?memOpts :: MemOptions` constraint:
   - `Data.Macaw.Symbolic.Memory.newGlobalMemory`
   - `Data.Macaw.Symbolic.MemOps.{doWriteMem,doCondWriteMem}`
+
+### Behavioral Changes
+
+- Redundant pointer validity checks have been removed from `doReadMem`, `doCondReadMem`, `doWriteMem`, and `doCondWriteMem`; this should be mostly invisible to library clients unless they rely on goal counts or goal numbers
