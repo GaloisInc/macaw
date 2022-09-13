@@ -198,6 +198,12 @@ data GlobalMemoryHooks w =
     :: forall sym bak
        . (CB.IsSymBackend sym bak)
     => bak
+    -> MC.Memory w
+    -- ^ The region of memory in which the relocation is defined
+    -> MC.MemSegment w
+    -- ^ The segment of memory in which the relocation is defined
+    -> MC.MemAddr w
+    -- ^ The address of the relocation
     -> MC.Relocation w
     -> IO [WI.SymExpr sym (WI.BaseBVType 8)]
     -- ^ The symbolic bytes to represent a relocation with
@@ -214,7 +220,8 @@ data GlobalMemoryHooks w =
 defaultGlobalMemoryHooks :: GlobalMemoryHooks w
 defaultGlobalMemoryHooks =
   GlobalMemoryHooks {
-    populateRelocation = \_ r -> return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
+    populateRelocation = \_ _ _ _ r ->
+      return (error ("SymbolicRef SegmentRanges are not supported yet: " ++ show r))
     }
 
 -- | A version of 'newGlobalMemory' that enables some of the memory model
@@ -371,7 +378,7 @@ populateMemory proxy hooks bak mmc mems symArray0 =
     pleatM allocs0 (MC.memSegments mem) $ \allocs1 seg -> do
       pleatM allocs1 (MC.relativeSegmentContents [seg]) $ \(symArray, allocs2) (addr, memChunk) -> do
         concreteBytes <- case memChunk of
-          MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks bak reloc
+          MC.RelocationRegion reloc -> liftIO $ populateRelocation hooks bak mem seg addr reloc
           MC.BSSRegion sz ->
             liftIO $ replicate (fromIntegral sz) <$> WI.bvLit sym PN.knownNat (BV.zero PN.knownNat)
           MC.ByteRegion bytes ->
