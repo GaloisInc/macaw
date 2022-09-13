@@ -579,7 +579,7 @@ relaTargetX86_64 _ symtab rel addend _isRel =
     Elf.R_X86_64_COPY -> do
       sym <- resolveRelocationSym symtab (Elf.relSym rel)
       when (addend /= 0) $ do
-        throwError$ RelocationUnsupportedType (show (Elf.relType rel))
+        throwError $ RelocationUnsupportedType (show (Elf.relType rel))
       pure $ Relocation { relocationSym        = sym
                         , relocationOffset     = 0
                         , relocationIsRel      = False
@@ -690,6 +690,18 @@ relaTargetARM32 end msegIndex symtab rel addend relFlag =
                          , relocationEndianness = end
                          , relocationJumpSlot   = True
                          }
+    Elf.R_ARM_COPY -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      when (addend /= 0) $ do
+        throwError $ RelocationUnsupportedType (show (Elf.relType rel))
+      pure $ Relocation { relocationSym        = sym
+                        , relocationOffset     = 0
+                        , relocationIsRel      = False
+                        , relocationSize       = 4
+                        , relocationIsSigned   = False
+                        , relocationEndianness = end
+                        , relocationJumpSlot   = False
+                        }
     tp -> do
       throwError $ RelocationUnsupportedType (show tp)
 
