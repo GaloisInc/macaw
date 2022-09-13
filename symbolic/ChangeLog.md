@@ -38,6 +38,10 @@
   - `Data.Macaw.Symbolic.Memory.newGlobalMemory`
   - `Data.Macaw.Symbolic.MemOps.{doWriteMem,doCondWriteMem}`
 
+- The type of `populateRelocation` has gained three additional arguments—the
+  `Memory`, `MemSegment`, and `MemAddr` corresponding to the relocation—to
+  more easily facilitate computing the address of the relocation.
+
 ### Behavioral Changes
 
 - Redundant pointer validity checks have been removed from `doReadMem`, `doCondReadMem`, `doWriteMem`, and `doCondWriteMem`; this should be mostly invisible to library clients unless they rely on goal counts or goal numbers
