@@ -71,6 +71,13 @@ isValidReturnAddress val0 =
       MC.BVAnd _ val5 _ <- MC.valueAsApp val4
       MC.BVShr _ val6@(MC.RelocatableValue {}) _ <- MC.valueAsApp val5
       return val6
+      <|> do
+      MC.BVOr _ val1 _ <- MC.valueAsApp val0
+      MC.BVShl _ val2 _ <- MC.valueAsApp val1
+      MC.UExt val3 _ <- MC.valueAsApp val2
+      MC.Trunc val4 _ <- MC.valueAsApp val3
+      MC.BVShr _ val5@(MC.RelocatableValue {}) _ <- MC.valueAsApp val4
+      return val5
 
     class2 = do
       MC.BVOr _ val1 _ <- MC.valueAsApp val0
@@ -91,8 +98,7 @@ identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
              -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
              -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
 identifyCall mem stmts0 rs
-  | not (null stmts0)
-  , Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.arm_LR)
+  | Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.arm_LR)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
       Just (stmts0, retAddr)
