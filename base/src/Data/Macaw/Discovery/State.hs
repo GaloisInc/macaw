@@ -51,6 +51,7 @@ module Data.Macaw.Discovery.State
   , Parsed.BlockExploreReason(..)
     -- * DiscoveryState utilities
   , RegConstraint
+  , setArchInfo
   )  where
 
 import           Control.Lens
@@ -208,6 +209,14 @@ data DiscoveryState arch
                       -- ^ This predicate decides whether to explore a
                       -- function at the given address or not.
                     }
+
+-- | modify the archInfo
+setArchInfo ::
+  ArchitectureInfo arch ->
+  DiscoveryState arch ->
+  DiscoveryState arch
+setArchInfo ainfo st = st { archInfo = ainfo }
+
 
 -- | Return list of all functions discovered so far.
 exploredFunctions :: DiscoveryState arch -> [Some (DiscoveryFunInfo arch)]
