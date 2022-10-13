@@ -22,6 +22,7 @@ import           Control.Applicative ( (<|>) )
 import           Data.Bits ( (.&.), shiftL, shiftR )
 import qualified Data.BitVector.Sized as BVS
 import           Data.Kind ( Type )
+import           Data.List ( isPrefixOf )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.Block as MCB
@@ -316,6 +317,14 @@ data ARMPrimFn (f :: MT.Type -> Type) tp where
            -> f (MT.BVType 32)
            -> ARMPrimFn f (MT.BVType w)
 
+  FPCompare :: (1 <= w)
+            => NR.NatRepr w
+            -> f (MT.BVType w)
+            -> f (MT.BVType w)
+            -> f MT.BoolType
+            -> f (MT.BVType 32)
+            -> ARMPrimFn f (MT.BVType 4)
+
   FPCompareGE :: (1 <= w)
               => NR.NatRepr w
               -> f (MT.BVType w)
@@ -409,6 +418,7 @@ instance MC.IsArchFn ARMPrimFn where
           FPMaxNum _ lhs rhs _fpscr -> ppBinary "arm_fpMaxNum" <$> pp lhs <*> pp rhs
           FPMinNum _ lhs rhs _fpscr -> ppBinary "arm_fpMinNum" <$> pp lhs <*> pp rhs
           FPMulAdd _ o1 o2 o3 _fpscr -> ppTernary "arm_fpMulAdd" <$> pp o1 <*> pp o2 <*> pp o3
+          FPCompare _ lhs rhs v _fpscr -> ppTernary "arm_fpCompare" <$> pp lhs <*> pp rhs <*> pp v
           FPCompareGE _ lhs rhs _fpscr -> ppBinary "arm_fpCompareGE" <$> pp lhs <*> pp rhs
           FPCompareGT _ lhs rhs _fpscr -> ppBinary "arm_fpCompareGT" <$> pp lhs <*> pp rhs
           FPCompareEQ _ lhs rhs _fpscr -> ppBinary "arm_fpCompareEQ" <$> pp lhs <*> pp rhs
@@ -450,6 +460,7 @@ instance FCls.TraversableFC ARMPrimFn where
       FPMaxNum rep lhs rhs fpscr -> FPMaxNum rep <$> go lhs <*> go rhs <*> go fpscr
       FPMinNum rep lhs rhs fpscr -> FPMinNum rep <$> go lhs <*> go rhs <*> go fpscr
       FPMulAdd rep a b c fpscr -> FPMulAdd rep <$> go a <*> go b <*> go c <*> go fpscr
+      FPCompare rep a b c fpscr -> FPCompare rep <$> go a <*> go b <*> go c <*> go fpscr
       FPCompareGE rep lhs rhs fpscr -> FPCompareGE rep <$> go lhs <*> go rhs <*> go fpscr
       FPCompareGT rep lhs rhs fpscr -> FPCompareGT rep <$> go lhs <*> go rhs <*> go fpscr
       FPCompareEQ rep lhs rhs fpscr -> FPCompareEQ rep <$> go lhs <*> go rhs <*> go fpscr
@@ -487,6 +498,7 @@ instance MT.HasRepr (ARMPrimFn f) MT.TypeRepr where
       FPMaxNum rep _ _ _ -> MT.BVTypeRepr rep
       FPMinNum rep _ _ _ -> MT.BVTypeRepr rep
       FPMulAdd rep _ _ _ _ -> MT.BVTypeRepr rep
+      FPCompare {} -> MT.BVTypeRepr (NR.knownNat @4)
       FPCompareGE {} -> MT.BoolTypeRepr
       FPCompareGT {} -> MT.BoolTypeRepr
       FPCompareEQ {} -> MT.BoolTypeRepr
@@ -605,6 +617,8 @@ rewritePrimFn f =
       evalRewrittenArchFn =<< (FPMinNum rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
     FPMulAdd rep a b c fpscr ->
       evalRewrittenArchFn =<< (FPMulAdd rep <$> rewriteValue a <*> rewriteValue b <*> rewriteValue c <*> rewriteValue fpscr)
+    FPCompare rep lhs rhs v fpscr ->
+      evalRewrittenArchFn =<< (FPCompare rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue v <*> rewriteValue fpscr)
     FPCompareGE rep lhs rhs fpscr ->
       evalRewrittenArchFn =<< (FPCompareGE rep <$> rewriteValue lhs <*> rewriteValue rhs <*> rewriteValue fpscr)
     FPCompareGT rep lhs rhs fpscr ->
@@ -677,16 +691,26 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
             G.setRegVal pc pc_next
 
             G.finishWithTerminator MCB.FetchAndExecute
-      _ | isUninterpretedOpcode opc -> Just $ do
+      _ | isUninterpretedA32Opcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedA32Opcode opc operands))
         | otherwise -> Nothing
 
 -- | This is a coarse heuristic to treat any instruction beginning with 'V' as a
 -- vector instruction that we want to leave uninterpreted, as translating all of
 -- the vector instructions faithfully is too much code (for now)
-isUninterpretedOpcode :: (Show a) => a -> Bool
-isUninterpretedOpcode opc =
+isUninterpretedA32Opcode :: (Show a) => a -> Bool
+isUninterpretedA32Opcode opc =
   case show opc of
+    'V':_ -> True
+    _ -> False
+
+isUninterpretedT32Opcode :: (Show a) => a -> Bool
+isUninterpretedT32Opcode opc =
+  case show opc of
+    s | isPrefixOf "VMOV" s -> False
+    s | isPrefixOf "VCVT_vi_T1" s  -> False
+    s | isPrefixOf "VCMPE" s -> False
+    s | isPrefixOf "VMRS" s -> False
     'V':_ -> True
     _ -> False
 
@@ -735,7 +759,7 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
 
             G.finishWithTerminator MCB.FetchAndExecute
 
-      _ | isUninterpretedOpcode opc -> Just $ do
+      _ | isUninterpretedT32Opcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedT32Opcode opc operands))
         | otherwise -> Nothing
 
