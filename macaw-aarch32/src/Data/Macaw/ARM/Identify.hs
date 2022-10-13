@@ -77,6 +77,7 @@ isValidReturnAddress val0 =
       MC.BVShr _ val5@(MC.RelocatableValue {}) _ <- MC.valueAsApp val4
       return val5
 
+
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
 -- several instructions that can update R15 and effect a "call",

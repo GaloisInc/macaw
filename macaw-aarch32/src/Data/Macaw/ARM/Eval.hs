@@ -170,6 +170,7 @@ absEvalArchFn r f =
     AA.FPMaxNum {} -> MA.TopV
     AA.FPMinNum {} -> MA.TopV
     AA.FPMulAdd {} -> MA.TopV
+    AA.FPCompare {} -> MA.TopV
     AA.FPCompareGE {} -> MA.TopV
     AA.FPCompareGT {} -> MA.TopV
     AA.FPCompareEQ {} -> MA.TopV

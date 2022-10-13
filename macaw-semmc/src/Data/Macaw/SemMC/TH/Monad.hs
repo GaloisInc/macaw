@@ -35,6 +35,7 @@ module Data.Macaw.SemMC.TH.Monad (
   joinOp1,
   joinOp2,
   joinOp3,
+  joinOp4,
   joinPure1,
   joinPure2,
   joinPure3,
@@ -373,6 +374,11 @@ joinOp3 :: ExpQ -> BoundExp -> BoundExp -> BoundExp -> Q Exp
 joinOp3 fun arg1 arg2 arg3 = case all isEager [arg1, arg2, arg3] of
   True -> [| $(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3)|]
   False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2) <*> $(refBinding arg3)) |]
+
+joinOp4 :: ExpQ -> BoundExp -> BoundExp -> BoundExp -> BoundExp -> Q Exp
+joinOp4 fun arg1 arg2 arg3 arg4 = case all isEager [arg1, arg2, arg3, arg4] of
+  True -> [| $(fun) $(refEager arg1) $(refEager arg2) $(refEager arg3) $(refEager arg4)|]
+  False -> [| join ($(fun) <$> $(refBinding arg1) <*> $(refBinding arg2) <*> $(refBinding arg3) <*> $(refBinding arg4)) |]
 
 joinPure1 :: ExpQ -> ExpQ -> BoundExp -> Q Exp
 joinPure1 mfun fun arg1 = case isEager arg1 of

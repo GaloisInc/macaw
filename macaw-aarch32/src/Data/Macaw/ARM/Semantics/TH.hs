@@ -271,6 +271,16 @@ armNonceAppEval bvi nonceApp =
                   liftQ [| G.addExpr =<< $(joinOp2 [| \e1E e2E -> addArchAssignment (FPSqrt knownNat e1E e2E) |] op1e fpcre) |]
                 _ -> fail "Invalid fpSqrt arguments"
 
+          _ | "uf_fpCompare" `isPrefixOf` fnName ->
+              case args of
+                Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> op3 Ctx.:> fpcr -> Just $ do
+                  op1e <- addEltTH M.LittleEndian bvi op1
+                  op2e <- addEltTH M.LittleEndian bvi op2
+                  op3e <- addEltTH M.LittleEndian bvi op3
+                  fpcre <- addEltTH M.LittleEndian bvi fpcr
+                  liftQ [| G.addExpr =<< $(joinOp4 [| \e1E e2E e3E e4E -> addArchAssignment (FPCompare knownNat e1E e2E e3E e4E) |] op1e op2e op3e fpcre) |]
+                _ -> fail "Invalid fpCompare arguments"
+
           _ | "uf_fpCompareGE" `isPrefixOf` fnName ->
               case args of
                 Ctx.Empty Ctx.:> op1 Ctx.:> op2 Ctx.:> fpcr -> Just $ do

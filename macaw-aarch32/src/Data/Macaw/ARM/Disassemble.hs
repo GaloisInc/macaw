@@ -139,7 +139,7 @@ thumbState :: MC.RegState AR.ARMReg (MC.Value ARM.AArch32 ids)
            -> DecodeMode
 thumbState regState =
   let pstate_t_val = regState ^. MC.boundValue pstate_t
-  in if pstate_t_val == MC.BVValue PN.knownNat 0 then A32 else T32
+  in if pstate_t_val == MC.BVValue PN.knownNat 1 then T32 else A32
   where
     pstate_t = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
 

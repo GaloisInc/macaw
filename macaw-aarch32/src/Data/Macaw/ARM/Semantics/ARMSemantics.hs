@@ -48,7 +48,8 @@ execInstruction =
          aconv (MapF.Pair o b) = MapF.Pair (ARMSem.A32Opcode o) b
 
        let notVecOpc :: forall tps . ARMSem.ARMOpcode ARMSem.ARMOperand tps -> Bool
-           notVecOpc opc = not ("V" `L.isPrefixOf` showF opc)
+           notVecOpc opc =
+             (not ("V" `L.isPrefixOf` showF opc))
        let notVecLib :: forall sym . Some (SF.FunctionFormula sym) -> Bool
            notVecLib (Some lf) =
              case lf of

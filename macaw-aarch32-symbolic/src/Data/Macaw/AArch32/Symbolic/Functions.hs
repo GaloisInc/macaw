@@ -127,6 +127,7 @@ funcSemantics sfns fn st0 =
     MAA.FPMaxNum {} -> X.throwIO (MissingSemanticsForFunction "FPMaxNum")
     MAA.FPMinNum {} -> X.throwIO (MissingSemanticsForFunction "FPMinNum")
     MAA.FPMulAdd {} -> X.throwIO (MissingSemanticsForFunction "FPMulAdd")
+    MAA.FPCompare {} -> X.throwIO (MissingSemanticsForFunction "FPCompare")
     MAA.FPCompareGE {} -> X.throwIO (MissingSemanticsForFunction "FPCompareGE")
     MAA.FPCompareGT {} -> X.throwIO (MissingSemanticsForFunction "FPCompareGT")
     MAA.FPCompareEQ {} -> X.throwIO (MissingSemanticsForFunction "FPCompareEQ")
