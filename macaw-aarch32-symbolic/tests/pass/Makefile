@@ -17,3 +17,9 @@ all: $(unopt) $(opt)
 # conditionally performs a bunch of other operations instead
 test-conditional-return.opt.exe: test-conditional-return.c
 	$(CC) $(CFLAGS) -O1 $< -o $@
+
+# We need to pass -mcpu=cortex-a7 here
+movt.unopt.exe: movt.c
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O0 $< -o $@
+movt.opt.exe: movt.c
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O2 $< -o $@
