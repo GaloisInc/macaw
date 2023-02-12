@@ -21,6 +21,7 @@ library
     mtl,
     parameterized-utils,
     prettyprinter >= 1.7.0,
+    split,
     text,
     vector,
     bytestring,

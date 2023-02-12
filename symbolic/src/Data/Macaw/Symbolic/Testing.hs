@@ -54,7 +54,6 @@ import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Some ( Some(..) )
-import           Data.Proxy ( Proxy(..) )
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.Encoding.Error as Text
@@ -275,7 +274,7 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals mem (Resu
 
     let endianness = MSM.toCrucibleEndian (MAI.archEndianness archInfo)
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
-    (initMem, memPtrTbl) <- MSM.newGlobalMemory (Proxy @arch) bak endianness MSM.ConcreteMutable mem
+    (initMem, memPtrTbl) <- MSM.newMemPtrTable MSM.defaultGlobalMemoryHooks bak endianness [mem]
     let globalMap = MSM.mapRegionPointers memPtrTbl
     (memVar, stackPointer, execResult) <- simulateFunction discState bak execFeatures archVals halloc initMem globalMap g
     case execResult of

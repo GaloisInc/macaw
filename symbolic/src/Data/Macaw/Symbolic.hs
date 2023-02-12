@@ -189,6 +189,7 @@ import qualified Data.Macaw.Symbolic.CrucGen as CG
 import           Data.Macaw.Symbolic.CrucGen hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
+import           Data.Macaw.Symbolic.Memory as Mem
 
 -- | A class to capture the architecture-specific information required to
 -- translate macaw IR into Crucible.
@@ -1010,53 +1011,6 @@ evalMacawExprExtension bak _iTypes _logFn _cst f e0 =
       x <- f xExpr
       doBitcast bak x eqPr
 
--- | A use of a pointer in a memory operation
---
--- Uses can be reads or writes (see 'PointerUseTag').  The location is used to
--- produce diagnostics where possible.
-data PointerUse = PointerUse (Maybe WPL.ProgramLoc) PointerUseTag
-
--- | Tag a use of a pointer ('PointerUse') as a read or a write
-data PointerUseTag = PointerRead | PointerWrite
-  deriving (Eq, Show)
-
--- | Extract a location from a 'PointerUse', defaulting to the initial location
--- if none was provided
-pointerUseLocation :: PointerUse -> WPL.ProgramLoc
-pointerUseLocation (PointerUse mloc _) =
-  case mloc of
-    Just loc -> loc
-    Nothing -> WPL.initializationLoc
-
--- | Extract the tag denoting a 'PointerUse' as a read or a write
-pointerUseTag :: PointerUse -> PointerUseTag
-pointerUseTag (PointerUse _ tag) = tag
-
--- | A function to construct validity predicates for pointer uses
---
--- This function creates an assertion that encodes the validity of a global
--- pointer.  One of the intended use cases is that this can be used to generate
--- assertions that memory accesses are limited to some mapped range of memory.
--- It could also be used to prohibit reads from or writes to distinguished
--- regions of the address space.
---
--- Note that macaw-symbolic is agnostic to the semantics of the produced
--- assertion.  A verification tool could simply use @return Nothing@ as the
--- implementation to elide extra memory safety checks, or if they are not
--- required for the desired memory model.
-type MkGlobalPointerValidityAssertion sym w = sym
-                                            -- ^ The symbolic backend in use
-                                            -> PointerUse
-                                            -- ^ A tag marking the pointer use as a read or a write
-                                            -> Maybe (C.RegEntry sym C.BoolType)
-                                            -- ^ If this is a conditional read or write, the predicate
-                                            -- determining whether or not the memory operation is executed.  If
-                                            -- generating safety assertions, they should account for the presence and
-                                            -- value of this predicate.
-                                            -> C.RegEntry sym (MM.LLVMPointerType w)
-                                            -- ^ The address written to or read from
-                                            -> IO (Maybe (Assertion sym))
-
 -- | A default 'MO.LookupFunctionHandle' that raises an error if it is invoked
 --
 -- Some uses of the symbolic execution engine do not need to support function
@@ -1093,6 +1047,8 @@ execMacawStmtExtension
   -- ^ The distinguished global variable holding the current state of the memory model
   -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ The translation from machine words to LLVM memory model pointers
+  -> MemPtrTable sym (M.ArchAddrWidth arch)
+  -- ^ TODO RGS: Docs
   -> MO.LookupFunctionHandle p sym arch
   -- ^ A function to turn machine addresses into Crucible function
   -- handles (which can also perform lazy CFG creation)
@@ -1102,7 +1058,7 @@ execMacawStmtExtension
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) p sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs mpt (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
   C.withBackend (st^.C.stateContext) $ \bak ->
   let sym = backendGetSym bak in
   case s0 of
@@ -1117,13 +1073,31 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs (MO.LookupFunc
       (,st) <$> doReadMem bak mem addrWidth memRep ptr
     MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
       mem <- getMem st mvar
-      ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
+      ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
+      case concreteImmutableGlobalRead memRep ptr1 mpt of
+        Just bytes -> do
+          readVal <- readBytesAsRegValue sym memRep bytes
+          readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
+          pure (readVal', st')
+        Nothing -> do
+          let w = M.memWidthNatRepr
+          memReprBytesBV <- bvLit sym w $ BV.mkBV w $
+                            toInteger $ M.memReprBytes memRep
+          st' <- lazilyPopulateGlobalMemArr bak mpt memReprBytesBV ptr1 st
+          let puse = PointerUse (st' ^. C.stateLocation) PointerRead
+          mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+          case mGlobalPtrValid of
+            Just globalPtrValid -> addAssertion bak globalPtrValid
+            Nothing -> return ()
+          (,st') <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr1 (C.regValue condFalseValue)
+      {-
       let puse = PointerUse (st ^. C.stateLocation) PointerRead
       mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
       case mGlobalPtrValid of
         Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
       (,st) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr (C.regValue condFalseValue)
+      -}
     MacawWriteMem addrWidth memRep ptr0 v -> do
       mem <- getMem st mvar
       ptr <- tryGlobPtr bak mem globs (C.regValue ptr0)
@@ -1192,6 +1166,8 @@ macawExtensions
   -- model
   -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ A function that maps bitvectors to valid memory model pointers
+  -> MemPtrTable sym (M.ArchAddrWidth arch)
+  -- ^ TODO RGS: Docs
   -> LookupFunctionHandle personality sym arch
   -- ^ A function to translate virtual addresses into function handles
   -- dynamically during symbolic execution
@@ -1201,9 +1177,9 @@ macawExtensions
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
   -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl personality sym (MacawExt arch)
-macawExtensions f mvar globs lookupH lookupSyscall toMemPred =
+macawExtensions f mvar globs mpt lookupH lookupSyscall toMemPred =
   C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
-                  , C.extensionExec = execMacawStmtExtension f mvar globs lookupH lookupSyscall toMemPred
+                  , C.extensionExec = execMacawStmtExtension f mvar globs mpt lookupH lookupSyscall toMemPred
                   }
 
 -- | Run the simulator over a contiguous set of code.
