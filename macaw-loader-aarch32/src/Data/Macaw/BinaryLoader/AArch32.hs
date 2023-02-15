@@ -22,6 +22,7 @@ import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
 import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Word ( Word32 )
 
 import qualified Data.Macaw.ARM as MA
 
@@ -61,11 +62,20 @@ aarch32EntryPoints loadedBinary =
     mem = MBL.memoryImage loadedBinary
     addr = MM.memWord (offset + fromIntegral (EE.headerEntry (EE.header (elf (MBL.binaryFormatData loadedBinary)))))
     elfData = elf (MBL.binaryFormatData loadedBinary)
-    symbols = [ MM.memWord (offset + (fromIntegral (EE.steValue entry)))
-              | Just (Right st) <- [EE.decodeHeaderSymtab elfData]
-              , entry <- F.toList (EE.symtabEntries st)
+    staticSyms = symtabEntriesList $ EE.decodeHeaderSymtab elfData
+    dynSyms = symtabEntriesList $ EE.decodeHeaderDynsym elfData
+    symbols = [ MM.memWord (offset + fromIntegral (EE.steValue entry))
+              | entry <- staticSyms ++ dynSyms
               , EE.steType entry == EE.STT_FUNC
               ]
+
+    symtabEntriesList :: Maybe (Either EE.SymtabError (EE.Symtab 32))
+                      -> [EE.SymtabEntry BS.ByteString Word32]
+    symtabEntriesList symtab =
+      case symtab of
+        Nothing -> []
+        Just (Left _) -> []
+        Just (Right st) -> F.toList (EE.symtabEntries st)
 
 loadAArch32Binary :: (X.MonadThrow m)
                   => LC.LoadOptions

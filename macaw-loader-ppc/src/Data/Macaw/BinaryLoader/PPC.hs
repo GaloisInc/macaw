@@ -28,6 +28,7 @@ import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
 import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Word ( Word32 )
 import qualified SemMC.Architecture.PPC32 as PPC32
 import qualified SemMC.Architecture.PPC64 as PPC64
 
@@ -114,11 +115,20 @@ ppc32EntryPoints loadedBinary =
     mem = BL.memoryImage loadedBinary
     entryAddr = MM.memWord (offset + fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary)))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    symbols = [ MM.memWord (offset + (fromIntegral (E.steValue entry)))
-              | Just (Right st) <- [E.decodeHeaderSymtab elfData]
-              , entry <- F.toList (E.symtabEntries st)
+    staticSyms = symtabEntriesList $ E.decodeHeaderSymtab elfData
+    dynSyms = symtabEntriesList $ E.decodeHeaderDynsym elfData
+    symbols = [ MM.memWord (offset + fromIntegral (E.steValue entry))
+              | entry <- staticSyms ++ dynSyms
               , E.steType entry == E.STT_FUNC
               ]
+
+    symtabEntriesList :: Maybe (Either E.SymtabError (E.Symtab 32))
+                      -> [E.SymtabEntry BS.ByteString Word32]
+    symtabEntriesList symtab =
+      case symtab of
+        Nothing -> []
+        Just (Left _) -> []
+        Just (Right st) -> F.toList (E.symtabEntries st)
 
 loadPPC32Binary
   :: (X.MonadThrow m, MC.ArchAddrWidth PPC32.PPC ~ 32)

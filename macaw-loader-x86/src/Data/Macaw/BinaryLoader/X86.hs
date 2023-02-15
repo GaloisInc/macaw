@@ -22,6 +22,7 @@ import qualified Data.Macaw.Memory.ElfLoader as EL
 import qualified Data.Macaw.Memory.LoadCommon as LC
 import qualified Data.Map.Strict as Map
 import           Data.Maybe ( fromMaybe, mapMaybe )
+import           Data.Word ( Word64 )
 
 import qualified Data.Macaw.X86 as MX
 
@@ -60,11 +61,20 @@ x86EntryPoints loadedBinary = do
     mem = BL.memoryImage loadedBinary
     addrWord = MM.memWord (offset + (fromIntegral (E.headerEntry (E.header (elf (BL.binaryFormatData loadedBinary))))))
     elfData = elf (BL.binaryFormatData loadedBinary)
-    symbolWords = [ MM.memWord (fromIntegral (offset + (E.steValue entry)))
-                  | Just (Right st) <- [E.decodeHeaderSymtab elfData]
-                  , entry <- F.toList (E.symtabEntries st)
+    staticSyms = symtabEntriesList $ E.decodeHeaderSymtab elfData
+    dynSyms = symtabEntriesList $ E.decodeHeaderDynsym elfData
+    symbolWords = [ MM.memWord (offset + E.steValue entry)
+                  | entry <- staticSyms ++ dynSyms
                   , E.steType entry == E.STT_FUNC
                   ]
+
+    symtabEntriesList :: Maybe (Either E.SymtabError (E.Symtab 64))
+                      -> [E.SymtabEntry BS.ByteString Word64]
+    symtabEntriesList symtab =
+      case symtab of
+        Nothing -> []
+        Just (Left _) -> []
+        Just (Right st) -> F.toList (E.symtabEntries st)
 
 loadX86Binary :: (X.MonadThrow m)
               => LC.LoadOptions
