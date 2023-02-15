@@ -58,6 +58,7 @@ import qualified Data.ElfEdit.Prim as Elf
 import           Data.Foldable
 import           Data.IntervalMap.Strict (Interval(..), IntervalMap)
 import qualified Data.IntervalMap.Strict as IMap
+import qualified Data.IntervalMap.Generic.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
@@ -1179,7 +1180,8 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     -- Add segment index to address mapping to memory object.
     mlsMemory %= memBindSegmentIndex segIdx seg
     -- Iterative through sections
-    let l = IMap.toList $ IMap.intersecting shdrMap (IntervalCO phdrOffset phdrEnd)
+    let interval = IntervalCO phdrOffset phdrEnd
+    let l = if IMap.isEmpty interval then [] else IMap.toList $ IMap.intersecting shdrMap interval
     forM_ l $ \(i, elfIdx) -> do
       case i of
         IntervalCO shdr_start _ -> do
