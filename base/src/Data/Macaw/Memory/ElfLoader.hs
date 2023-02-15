@@ -1345,24 +1345,25 @@ insertAllocatedShdr hdr contents symtab shdrMap regIdx nm = do
         mlsMemory   %= memBindSectionIndex idx addr
         mlsIndexMap %= Map.insert idx addr
 
--- | Find and get symbol table entries from binary.
+-- | Find and get static symbol table entries from an ELF binary.
 elfStaticSymbolTable :: Integral (ElfWordType w)
-                     => Elf.ElfHeader w
-                     -> BS.ByteString -- ^ File contents
-                     -> V.Vector (Elf.Shdr Word32 (ElfWordType w)) -- ^ Section header table
+                     => Elf.ElfHeaderInfo w
                      -> Maybe (V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w)))
-elfStaticSymbolTable hdr contents shdrs =
-  case V.toList (V.filter (\shdr -> Elf.SHT_SYMTAB == Elf.shdrType shdr) shdrs) of
-    [] -> Nothing
-    symtabShdr:_ -> do
-      let cl = Elf.headerClass hdr
-      let dta = Elf.headerData hdr
-      let symtabBuf = shdrData contents symtabShdr
-      let strtabShdr = shdrs V.! fromIntegral (Elf.shdrLink symtabShdr)
-      let strtab = shdrData contents strtabShdr
-      case Elf.decodeSymtab cl dta strtab symtabBuf of
-        Left _ -> Nothing
-        Right v -> Just v
+elfStaticSymbolTable elf = do
+  symtab <- Elf.decodeHeaderSymtab elf
+  case symtab of
+    Left _ -> Nothing
+    Right v -> Just (Elf.symtabEntries v)
+
+-- | Find and get static symbol table entries from an ELF binary.
+elfDynamicSymbolTable :: Integral (ElfWordType w)
+                      => Elf.ElfHeaderInfo w
+                      -> Maybe (V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w)))
+elfDynamicSymbolTable elf = do
+  symtab <- Elf.decodeHeaderDynsym elf
+  case symtab of
+    Left _ -> Nothing
+    Right v -> Just (Elf.symtabEntries v)
 
 -- | Load allocated Elf sections into memory.
 --
@@ -1387,7 +1388,7 @@ memoryForElfSections elf = reprConstraints (elfAddrWidth (Elf.headerClass (Elf.h
                     Map.insertWith (\new old -> old ++ new) nm [(fromIntegral idx, shdr)] m
 
   let symtab =
-        case elfStaticSymbolTable hdr contents shdrs of
+        case elfStaticSymbolTable elf of
           Nothing -> NoSymbolTable
           Just v -> StaticSymbolTable v
   -- Create memory for elf sections
@@ -1640,28 +1641,16 @@ resolveElfFuncSymbols
   -> ([SymbolResolutionError], [MemSymbol w])
 resolveElfFuncSymbols mem shdrs secMap p elf =
    let resolver = mkSymbolAddrResolver shdrs secMap
-       hdr = Elf.header elf
-       contents = Elf.headerFileContents elf
-
-       cl  = Elf.headerClass hdr
-       dta = Elf.headerData hdr
 
        staticEntries =
-         case elfStaticSymbolTable hdr contents shdrs of
+         case elfStaticSymbolTable elf of
            Nothing -> []
            Just v -> V.toList $ V.imap (\i s-> (i, s)) v
 
-       dynamicEntries
-         | Elf.headerType (Elf.header elf) == Elf.ET_DYN
-         ,  [symtab] <- V.toList $ V.filter (\s -> Elf.shdrType s == Elf.SHT_DYNSYM) shdrs
-         , strtabIdx <- Elf.shdrLink symtab
-         , Just strtab <- shdrs V.!? fromIntegral strtabIdx
-         , symtabData <- shdrData contents symtab
-         , strtabData <- shdrData contents strtab
-         , Right entries <-Elf.decodeSymtab cl dta strtabData symtabData =
-             V.toList $ V.imap (\i s -> (i, s)) entries
-         | otherwise =
-             []
+       dynamicEntries =
+         case elfDynamicSymbolTable elf of
+           Nothing -> []
+           Just v -> V.toList $ V.imap (\i s-> (i, s)) v
 
        allEntries :: [(Int, Elf.SymtabEntry BS.ByteString (ElfWordType w))]
        allEntries = staticEntries ++ dynamicEntries

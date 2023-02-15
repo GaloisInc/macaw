@@ -4,6 +4,11 @@
 
 ### Features
 
+- `resolveElfContents`, as well as related functions in
+  `Data.Macaw.Memory.ElfLoader`, now compute dynamic function symbols for
+  non–position-independent executables. These were previously omitted due to
+  an oversight in the implementation.
+
 ### API Changes
 
 - Architecture-specific block terminators can now contain macaw values
