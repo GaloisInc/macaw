@@ -1181,6 +1181,8 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     mlsMemory %= memBindSegmentIndex segIdx seg
     -- Iterative through sections
     let interval = IntervalCO phdrOffset phdrEnd
+    -- Workaround for https://github.com/bokesan/IntervalMap/issues/9, where 'IMap.intersecting' can return
+    -- nonempty results when given an empty interval.
     let l = if IMap.isEmpty interval then [] else IMap.toList $ IMap.intersecting shdrMap interval
     forM_ l $ \(i, elfIdx) -> do
       case i of
