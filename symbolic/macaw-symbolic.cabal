@@ -13,6 +13,7 @@ library
     bv-sized >= 1.0.0,
     containers,
     elf-edit,
+    filepath,
     IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,

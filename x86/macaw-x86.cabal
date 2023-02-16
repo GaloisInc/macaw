@@ -13,6 +13,7 @@ library
     base >= 4.13,
     bytestring,
     containers,
+    elf-edit,
     flexdis86 >= 0.1.5,
     lens >= 4.7,
     macaw-base >= 0.3.3,
