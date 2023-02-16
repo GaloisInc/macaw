@@ -78,8 +78,8 @@ main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
   -- the solver returns Unsat), while the assertions in the "fail" set are false
   -- (and the solver returns Sat).
-  passTestFilePaths <- SFG.glob "tests/pass/*.exe"
-  failTestFilePaths <- SFG.glob "tests/fail/*.exe"
+  passTestFilePaths <- SFG.glob "tests/pass/**/*.exe"
+  failTestFilePaths <- SFG.glob "tests/fail/**/*.exe"
   let passRes = MST.SimulationResult MST.Unsat
   let failRes = MST.SimulationResult MST.Sat
   let passTests = TT.testGroup "True assertions" (map (mkSymExTest passRes) passTestFilePaths)
@@ -127,8 +127,8 @@ symExTestSized :: MST.SimulationResult
                -> MAI.ArchitectureInfo MA.ARM
                -> TTH.Assertion
 symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
-   (mem, discState) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
-   let funInfos = Map.elems (discState ^. M.funInfo)
+   binfo <- MST.runDiscovery ehi exePath MST.toAddrSymMap archInfo MA.armPLTStubInfo
+   let funInfos = Map.elems (MST.binaryDiscState (MST.mainBinaryInfo binfo) ^. M.funInfo)
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
@@ -149,7 +149,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
        let extract = armResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract discState dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

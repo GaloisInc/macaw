@@ -42,6 +42,19 @@
   `Memory`, `MemSegment`, and `MemAddr` corresponding to the relocation—to
   more easily facilitate computing the address of the relocation.
 
+- `Data.Macaw.Symbolic.Testing` has made some API changes to support simulating
+   shared libraries:
+   - `runDiscovery` now returns a `BinariesInfo` value, which contains the code
+     discovery state for both a main binary as well as any shared libraries that
+     it depends on.
+   - `runDiscovery` now requires the `FilePath` of the main binary as an
+     argument, as well as a `PLTStubInfo` argument for determining where to look
+     for PLT stubs in dynamically linked binaries. (See
+     `Data.Macaw.Memory.ElfLoader.PLTStubs` in `macaw-base` for more information
+     about `PLTStubInfo`s.)
+   - `simulateAndVerify` has removed its `Memory` and `DiscoveryState` arguments
+     in favor of a single `BinariesInfo` argument.
+
 ### Behavioral Changes
 
 - Redundant pointer validity checks have been removed from `doReadMem`, `doCondReadMem`, `doWriteMem`, and `doCondWriteMem`; this should be mostly invisible to library clients unless they rely on goal counts or goal numbers
