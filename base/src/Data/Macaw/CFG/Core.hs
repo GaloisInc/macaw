@@ -239,6 +239,9 @@ instance TestEquality (CValue arch) where
     if x == y then Just Refl else Nothing
   testEquality _ _ = Nothing
 
+instance Eq (CValue arch tp) where
+  a == b = isJust (testEquality a b)
+
 instance OrdF (CValue arch) where
   compareF (BoolCValue x) (BoolCValue y) = fromOrdering (compare x y)
   compareF BoolCValue{} _ = LTF

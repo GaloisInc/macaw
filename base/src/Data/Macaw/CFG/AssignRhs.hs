@@ -1,10 +1,9 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -138,6 +137,9 @@ instance TestEquality MemRepr where
     Refl <- testEquality xe ye
     Just Refl
   testEquality _ _ = Nothing
+
+instance Eq (MemRepr tp) where
+  a == b = isJust (testEquality a b)
 
 instance Hashable (MemRepr tp) where
   hashWithSalt s mr =
