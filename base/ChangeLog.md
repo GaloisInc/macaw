@@ -21,3 +21,7 @@
 - The `DynamicSymbolTable` constructor of `Data.Macaw.Memory.ElfLoader`'s
   `SymbolTable` data type now has an additional `VersionDefMap` field, which is
   needed for finding versioning information in some cases.
+
+- The `Hashable` and `HashableF` instances for `App f` now require
+  `TestEquality f` constraints. (This is needed to support `hashable-1.4.*`,
+  which adds `Eq` as a superclass to `Hashable`.)
