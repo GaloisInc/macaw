@@ -385,7 +385,7 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
-instance HashableF f => Hashable (App f tp) where
+instance (HashableF f, TestEquality f) => Hashable (App f tp) where
   hashWithSalt = $(structuralHashWithSalt [t|App|]
                      [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
                      , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
@@ -398,7 +398,7 @@ instance HashableF f => Hashable (App f tp) where
                      ]
                   )
 
-instance HashableF f => HashableF (App f) where
+instance (HashableF f, TestEquality f) => HashableF (App f) where
   hashWithSaltF = hashWithSalt
 
 instance OrdF f => OrdF (App f) where

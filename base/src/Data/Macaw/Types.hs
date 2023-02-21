@@ -98,6 +98,8 @@ data FloatInfoRepr (fi :: FloatInfo) where
   QuadFloatRepr   :: FloatInfoRepr QuadFloat
   X86_80FloatRepr :: FloatInfoRepr X86_80Float
 
+deriving instance Eq (FloatInfoRepr fi)
+
 instance KnownRepr FloatInfoRepr HalfFloat where
   knownRepr = HalfFloatRepr
 instance KnownRepr FloatInfoRepr SingleFloat where
