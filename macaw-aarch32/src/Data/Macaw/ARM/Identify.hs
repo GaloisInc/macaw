@@ -83,7 +83,7 @@ isValidReturnAddress val0 =
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
 -- several instructions that can update R15 and effect a "call",
--- athough the predicate condition on those instructions can determine
+-- although the predicate condition on those instructions can determine
 -- if it is actually executed or not.  Also need to consider A32
 -- v.s. T32 mode.
 identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
