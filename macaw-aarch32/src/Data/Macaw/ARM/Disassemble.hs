@@ -222,6 +222,7 @@ disassembleBlock dmode lookupSemantics gs curPCAddr blockOff maxOffset = do
               case gs1 of
                 SG.UnfinishedPartialBlock preBlock ->
                   if | MC.CValue (MC.BoolCValue False) <- preBlock ^. (SG.pBlockState . MC.boundValue AR.branchTakenReg)
+                     , nextPCOffset < maxOffset
                      , Just nextPCSegAddr <- MM.incSegmentOff curPCAddr (fromIntegral bytesRead) -> do
                     -- If the branch taken flag is anything besides a
                     -- concrete False value, then we are at the end of a
