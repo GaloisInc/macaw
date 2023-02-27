@@ -32,6 +32,7 @@ library
   exposed-modules:
     Data.Macaw.Symbolic
     Data.Macaw.Symbolic.Backend
+    Data.Macaw.Symbolic.Concretize
     Data.Macaw.Symbolic.Memory
     Data.Macaw.Symbolic.MemOps
     Data.Macaw.Symbolic.Testing

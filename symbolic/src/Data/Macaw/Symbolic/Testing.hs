@@ -359,14 +359,16 @@ proveGoals goalSolver sym = mapM_ (go mempty)
 -- opposed to just @test@).  This is necessary for testing aspects of the
 -- semantics that involve the generated side conditions, rather than just the
 -- final result.
-simulateAndVerify :: forall arch sym bak ids w t st fs
+simulateAndVerify :: forall arch sym bak ids w solver scope st fs
                    . ( CB.IsSymBackend sym bak
                      , CCE.IsSyntaxExtension (MS.MacawExt arch)
                      , MM.MemWidth (MC.ArchAddrWidth arch)
                      , w ~ MC.ArchAddrWidth arch
                      , 16 <= w
                      , MT.KnownNat w
-                     , sym ~ WE.ExprBuilder t st fs
+                     , sym ~ WE.ExprBuilder scope st fs
+                     , bak ~ CBO.OnlineBackend solver scope st fs
+                     , WPO.OnlineSolver solver
                      , ?memOpts :: CLM.MemOptions
                      )
                   => WS.SolverAdapter st
@@ -460,6 +462,9 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                     , MS.SymArchConstraints arch
                     , w ~ MC.ArchAddrWidth arch
                     , 16 <= w
+                    , sym ~ WE.ExprBuilder scope st fs
+                    , bak ~ CBO.OnlineBackend solver scope st fs
+                    , WPO.OnlineSolver solver
                     , ?memOpts :: CLM.MemOptions
                     )
                  => BinariesInfo arch
@@ -505,13 +510,14 @@ simulateFunction binfo bak execFeatures archVals halloc initMem globalMap g = do
   let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
 
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
+  let mmConf = MS.defaultMemModelConfig { MS.resolvePointer = MS.resolvePointerOnline bak }
   let initGlobals = CSG.insertGlobal memVar mem2 CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regsWithStack)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap (lookupFunction archVals binfo) lookupSyscall validityCheck
+    let extImpl = MS.macawExtensions archEvalFn memVar globalMap mmConf (lookupFunction archVals binfo) lookupSyscall validityCheck
     let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
