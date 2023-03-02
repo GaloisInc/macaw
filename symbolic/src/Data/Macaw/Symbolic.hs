@@ -127,11 +127,15 @@ module Data.Macaw.Symbolic
   , MO.LookupFunctionHandle(..)
   , unsupportedSyscalls
   , MO.LookupSyscallHandle(..)
+  , ResolvePointer
+  , ConcreteImmutableGlobalRead
+  , LazilyPopulateGlobalMem
   , MO.MacawSimulatorState(..)
+  , MO.MacawLazySimulatorState(..)
+  , MO.emptyMacawLazySimulatorState
+  , MO.populatedMemChunks
   , MkGlobalPointerValidityAssertion
   , MemModelConfig(..)
-  , defaultMemModelConfig
-  , resolvePointerOnline
   , PointerUse(..)
   , PointerUseTag(..)
   , pointerUseLocation
@@ -159,16 +163,13 @@ import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
 
-import qualified What4.Expr as WE
 import qualified What4.FunctionName as C
 import           What4.Interface
-import qualified What4.Protocol.Online as WPO
 import qualified What4.Utils.StringLiteral as C
 import qualified What4.ProgramLoc as WPL
 
 import qualified Lang.Crucible.Analysis.Postdom as C
 import           Lang.Crucible.Backend
-import qualified Lang.Crucible.Backend.Online as CBO
 import qualified Lang.Crucible.CFG.Core as C
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as CR
@@ -191,7 +192,6 @@ import qualified Data.Macaw.Types as M
 
 import qualified Data.Macaw.Symbolic.Backend as SB
 import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
-import qualified Data.Macaw.Symbolic.Concretize as MSC
 import qualified Data.Macaw.Symbolic.CrucGen as CG
 import           Data.Macaw.Symbolic.CrucGen hiding (bvLit)
 import           Data.Macaw.Symbolic.PersistentState as PS
@@ -1090,40 +1090,63 @@ unsupportedSyscalls
 unsupportedSyscalls compName =
   MO.LookupSyscallHandle $ \_ _ _ _ -> error ("Symbolically executing system calls is not supported in " ++ compName)
 
+-- | Attempt to resolve a possibly symbolic pointer value as concrete,
+-- returning the original pointer unchanged if this cannot be done.
+type ResolvePointer sym w = MM.LLVMPtr sym w -> IO (MM.LLVMPtr sym w)
+
+-- | If reading a value of type @ty@ from a concrete and immutable (i.e.,
+-- read-only) section of the global address space, then returning @Just val@
+-- will bypass having to perform a full read from the underlying memory model.
+-- Bypassing a full read is likely to be more performant.
+type ConcreteImmutableGlobalRead sym w =
+     forall ty
+   . M.MemRepr ty
+  -> MM.LLVMPtr sym w
+  -> IO (Maybe (C.RegValue sym (PS.ToCrucibleType ty)))
+
+-- | Modify the simulator state just before a read or write based on the type
+-- @ty@ of the value being read of written.
+type LazilyPopulateGlobalMem p sym ext w =
+     forall ty rtp f args
+   . M.MemRepr ty
+  -> MM.LLVMPtr sym w
+  -> C.SimState p sym ext rtp f args
+  -> IO (C.SimState p sym ext rtp f args)
+
 -- | Configuration options for the @macaw-symbolic@ memory model.
-newtype MemModelConfig sym w = MemModelConfig
-  { resolvePointer :: MM.LLVMPtr sym w -> IO (MM.LLVMPtr sym w)
+data MemModelConfig p sym arch = MemModelConfig
+  { resolvePointer :: ResolvePointer sym (M.ArchAddrWidth arch)
     -- ^ Attempt to resolve a possibly symbolic pointer value as concrete,
     -- returning the original pointer unchanged if this cannot be done. This is
     -- used whenever the memory model performs a read or write. Concretizing
     -- pointers can often be beneficial for performance, so consider
     -- implementing this option using 'resolvePointerOnline' if you have access
     -- to an online SMT solver connection.
+  , concreteImmutableGlobalRead :: ConcreteImmutableGlobalRead sym (M.ArchAddrWidth arch)
+    -- ^ If reading a value of type @ty@ from a concrete and immutable (i.e.,
+    -- read-only) section of the global address space, you can return
+    -- @Just val@ here to bypass having to perform a full read from the
+    -- underlying memory model. Bypassing a full read is likely to be more
+    -- performant. For instance, the lazy memory model makes use of this
+    -- option—see @Note [Lazy memory model]@ in
+    -- "Data.Macaw.Symbolic.Memory.Lazy".
+    --
+    -- Note that it is always fine to return 'Nothing' as a default
+    -- implementation, even when reading from concrete, immutable sections of
+    -- the global address space. The only thing that will be impacted is
+    -- performance.
+  , lazilyPopulateGlobalMem :: LazilyPopulateGlobalMem p sym (MacawExt arch) (M.ArchAddrWidth arch)
+    -- ^ The memory model will call this function just before performing a full
+    -- read or write, which allows users to modify the simulator state based on
+    -- the type @ty@ of the value being read or written. For instance, the lazy
+    -- memory model uses this to incrementally update an SMT array used to back
+    -- global memory—see @Note [Lazy memory model]@ in
+    -- "Data.Macaw.Symbolic.Memory.Lazy".
+    --
+    -- If you have no need for lazy updating of simulator state, an acceptable
+    -- default implementation of this function is to return the 'C.SimState'
+    -- argument unchanged.
   }
-
--- | The default memory model configuration options:
---
--- * No attempt is made to to concretize pointers. That is, 'resolvePointer'
---   will simply return its pointer argument unchanged.
-defaultMemModelConfig :: MemModelConfig sym w
-defaultMemModelConfig = MemModelConfig
-  { resolvePointer = pure
-  }
-
--- | An implementation of 'resolvePointer' that uses an online SMT solver
--- connection to concretize pointers whenever possible. This usually results in
--- increased memory model performance at the expense of performing more SMT
--- queries.
-resolvePointerOnline ::
-     ( IsSymInterface sym
-     , sym ~ WE.ExprBuilder scope st fs
-     , WPO.OnlineSolver solver
-     , 1 <= w
-     )
-  => CBO.OnlineBackend solver scope st fs
-  -> MM.LLVMPtr sym w
-  -> IO (MM.LLVMPtr sym w)
-resolvePointerOnline = MSC.resolveLLVMPtr
 
 -- | This evaluates a Macaw statement extension in the simulator.
 execMacawStmtExtension
@@ -1135,7 +1158,7 @@ execMacawStmtExtension
   -- ^ The distinguished global variable holding the current state of the memory model
   -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ The translation from machine words to LLVM memory model pointers
-  -> MemModelConfig sym (M.ArchAddrWidth arch)
+  -> MemModelConfig p sym arch
   -- ^ Configuration options for the memory model.
   -> MO.LookupFunctionHandle p sym arch
   -- ^ A function to turn machine addresses into Crucible function
@@ -1154,44 +1177,58 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs mmConf (MO.Loo
       mem <- getMem st mvar
       ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
       ptr2 <- resolvePointer mmConf ptr1
-      let puse = PointerUse (st ^. C.stateLocation) PointerRead
-      mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion bak globalPtrValid
-        Nothing -> return ()
-      (,st) <$> doReadMem bak mem addrWidth memRep ptr2
+      mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+      case mbReadVal of
+        Just readVal -> pure (readVal, st)
+        Nothing -> do
+          st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
+          let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+          mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
+          case mGlobalPtrValid of
+            Just globalPtrValid -> addAssertion bak globalPtrValid
+            Nothing -> return ()
+          (,st1) <$> doReadMem bak mem addrWidth memRep ptr2
     MacawCondReadMem addrWidth memRep cond ptr0 condFalseValue -> do
       mem <- getMem st mvar
       ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
       ptr2 <- resolvePointer mmConf ptr1
-      let puse = PointerUse (st ^. C.stateLocation) PointerRead
-      mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
-      case mGlobalPtrValid of
-        Just globalPtrValid -> addAssertion bak globalPtrValid
-        Nothing -> return ()
-      (,st) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue condFalseValue)
+      mbReadVal <- concreteImmutableGlobalRead mmConf memRep ptr2
+      case mbReadVal of
+        Just readVal -> do
+          readVal' <- muxMemReprValue sym memRep (C.regValue cond) readVal (C.regValue condFalseValue)
+          pure (readVal', st)
+        Nothing -> do
+          st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
+          let puse = PointerUse (st1 ^. C.stateLocation) PointerRead
+          mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
+          case mGlobalPtrValid of
+            Just globalPtrValid -> addAssertion bak globalPtrValid
+            Nothing -> return ()
+          (,st1) <$> doCondReadMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue condFalseValue)
     MacawWriteMem addrWidth memRep ptr0 v -> do
       mem <- getMem st mvar
       ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
       ptr2 <- resolvePointer mmConf ptr1
-      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
+      st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
+      let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
       mGlobalPtrValid <- toMemPred sym puse Nothing ptr0
       case mGlobalPtrValid of
         Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
       mem1 <- doWriteMem bak mem addrWidth memRep ptr2 (C.regValue v)
-      pure ((), setMem st mvar mem1)
+      pure ((), setMem st1 mvar mem1)
     MacawCondWriteMem addrWidth memRep cond ptr0 v -> do
       mem <- getMem st mvar
       ptr1 <- tryGlobPtr bak mem globs (C.regValue ptr0)
       ptr2 <- resolvePointer mmConf ptr1
-      let puse = PointerUse (st ^. C.stateLocation) PointerWrite
+      st1 <- lazilyPopulateGlobalMem mmConf memRep ptr2 st
+      let puse = PointerUse (st1 ^. C.stateLocation) PointerWrite
       mGlobalPtrValid <- toMemPred sym puse (Just cond) ptr0
       case mGlobalPtrValid of
         Just globalPtrValid -> addAssertion bak globalPtrValid
         Nothing -> return ()
       mem1 <- doCondWriteMem bak mem addrWidth memRep (C.regValue cond) ptr2 (C.regValue v)
-      pure ((), setMem st mvar mem1)
+      pure ((), setMem st1 mvar mem1)
     MacawGlobalPtr w addr ->
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
@@ -1240,7 +1277,7 @@ macawExtensions
   -- model
   -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
   -- ^ A function that maps bitvectors to valid memory model pointers
-  -> MemModelConfig sym (M.ArchAddrWidth arch)
+  -> MemModelConfig personality sym arch
   -- ^ Configuration options for the memory model.
   -> LookupFunctionHandle personality sym arch
   -- ^ A function to translate virtual addresses into function handles
@@ -1268,7 +1305,7 @@ runCodeBlock
   -> SB.MacawArchEvalFn (MacawSimulatorState sym) sym MM.Mem arch
   -> C.HandleAllocator
   -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
-  -> MemModelConfig sym (M.ArchAddrWidth arch)
+  -> MemModelConfig (MacawSimulatorState sym) sym arch
   -> LookupFunctionHandle (MacawSimulatorState sym) sym arch
   -> MO.LookupSyscallHandle (MacawSimulatorState sym) sym arch
   -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)

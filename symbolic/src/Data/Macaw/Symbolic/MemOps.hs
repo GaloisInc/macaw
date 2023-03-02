@@ -35,17 +35,23 @@ module Data.Macaw.Symbolic.MemOps
   , tryGlobPtr
   , Regs
   , MacawSimulatorState(..)
+  , MacawLazySimulatorState(..)
+  , emptyMacawLazySimulatorState
+  , populatedMemChunks
   , LookupFunctionHandle(..)
   , LookupSyscallHandle(..)
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
+  , muxMemReprValue
   ) where
 
 import           Control.Exception (throwIO)
-import           Control.Lens ((^.),(&),(%~))
+import           Control.Lens (Lens',(^.),(&),(%~),lens)
 import           Control.Monad (guard, when)
 import           Data.Bits (testBit)
+import qualified Data.IntervalMap.Interval as IMI
+import qualified Data.IntervalSet as IS
 import qualified Data.Vector as V
 
 import qualified Data.BitVector.Sized as BV
@@ -349,11 +355,35 @@ doPtrToBits sym (Mem.LLVMPointer base off) =
      notPtr <- natEq sym base =<< natLit sym 0
      bvIte sym notPtr off undef
 
--- | The state extension for Crucible holding Macaw-specific state
+-- | The state extension for Crucible holding Macaw-specific state for
+-- @macaw-symbolic@'s default memory model.
 --
--- Currently, evaluation of Macaw doesn't require anything extra from the
+-- Currently, the default memory model doesn't require anything extra from the
 -- simulator.  We use a distinct type here for forward-compatibility.
 data MacawSimulatorState sym = MacawSimulatorState
+
+-- | The state extension for Crucible holding Macaw-specific state for
+-- @macaw-symbolic@'s lazy memory model. See @Note [Lazy memory model]@ in
+-- "Data.Macaw.Symbolic.Memory.Lazy".
+newtype MacawLazySimulatorState sym w = MacawLazySimulatorState
+  { _populatedMemChunks :: IS.IntervalSet (IMI.Interval (M.MemWord w))
+    -- ^ The regions of memory which we have populated with symbolic bytes in
+    -- the @MemPtrTable@ backing global memory.
+  }
+
+-- | The initial value of a 'MacawLazySimulatorState' before simulation begins,
+-- in which none of the regions of memory have been populated yet.
+-- See @Note [Lazy memory model]@ in "Data.Macaw.Symbolic.Memory.Lazy".
+emptyMacawLazySimulatorState :: MacawLazySimulatorState sym w
+emptyMacawLazySimulatorState = MacawLazySimulatorState
+  { _populatedMemChunks = IS.empty
+  }
+
+-- | A `Lens'` for '_populatedMemChunks'.
+populatedMemChunks :: Lens' (MacawLazySimulatorState sym w)
+                            (IS.IntervalSet (IMI.Interval (M.MemWord w)))
+populatedMemChunks = lens _populatedMemChunks
+                          (\s v -> s { _populatedMemChunks = v })
 
 type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
                                     (MacawCrucibleRegTypes arch)
