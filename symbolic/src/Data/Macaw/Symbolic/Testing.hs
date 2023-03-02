@@ -56,7 +56,7 @@ import qualified Data.Macaw.Memory.ElfLoader.DynamicDependencies as MELD
 import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MELP
 import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
-import qualified Data.Macaw.Symbolic.Memory as MSM
+import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe, listToMaybe )
@@ -402,14 +402,15 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo (Re
     CCC.SomeCFG g <-
       MS.mkFunCFG (MS.archFunctions archVals) halloc funName (posFn (binaryPath mainInfo)) dfi
 
-    let endianness = MSM.toCrucibleEndian (MAI.archEndianness archInfo)
+    let endianness = MSMLazy.toCrucibleEndian (MAI.archEndianness archInfo)
     let ?recordLLVMAnnotation = \_ _ _ -> return ()
     let mems = V.map (MD.memory . binaryDiscState) (V.cons mainInfo soInfos)
     (initMem, memPtrTbl) <-
-      MSM.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak endianness MSM.ConcreteMutable mems
-    let globalMap = MSM.mapRegionPointers memPtrTbl
+      MSMLazy.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
+        endianness MSMLazy.ConcreteMutable mems
+    let globalMap = MSMLazy.mapRegionPointers memPtrTbl
     (memVar, stackPointer, execResult) <-
-      simulateFunction binfo bak execFeatures archVals halloc initMem globalMap g
+      simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl globalMap g
     case execResult of
       CS.TimeoutResult {} -> return SimulationTimeout
       CS.AbortedResult {} -> return SimulationAborted
@@ -473,13 +474,14 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                  -> MS.ArchVals arch
                  -> CFH.HandleAllocator
                  -> CLM.MemImpl sym
+                 -> MSMLazy.MemPtrTable sym w
                  -> MS.GlobalMap sym CLM.Mem w
                  -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
                  -> IO ( CS.GlobalVar CLM.Mem
                        , CLM.LLVMPtr sym w
-                       , CS.ExecResult (MS.MacawSimulatorState sym) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
+                       , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction binfo bak execFeatures archVals halloc initMem globalMap g = do
+simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl globalMap g = do
   let sym = CB.backendGetSym bak
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
@@ -510,7 +512,8 @@ simulateFunction binfo bak execFeatures archVals halloc initMem globalMap g = do
   let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
 
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
-  let mmConf = MS.defaultMemModelConfig { MS.resolvePointer = MS.resolvePointerOnline bak }
+  let lazySimSt = MS.emptyMacawLazySimulatorState
+  let mmConf = MSMLazy.memModelConfig bak memPtrTbl
   let initGlobals = CSG.insertGlobal memVar mem2 CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regsWithStack)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
@@ -518,7 +521,7 @@ simulateFunction binfo bak execFeatures archVals halloc initMem globalMap g = do
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
     let extImpl = MS.macawExtensions archEvalFn memVar globalMap mmConf (lookupFunction archVals binfo) lookupSyscall validityCheck
-    let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl MS.MacawSimulatorState
+    let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0
     return (memVar, sp, res)
@@ -688,9 +691,9 @@ validityCheck _ _ _ _ = return Nothing
 -- Most test cases will be unaffected by this, provided that they do not use
 -- relocations in the test functions themselves.
 -- See @Note [Shared libraries] (Dynamic relocations)@.
-populateRelocation :: MSM.GlobalMemoryHooks w
-populateRelocation = MSM.GlobalMemoryHooks
-  { MSM.populateRelocation = \bak _ _ _ reloc ->
+populateRelocation :: MSMLazy.GlobalMemoryHooks w
+populateRelocation = MSMLazy.GlobalMemoryHooks
+  { MSMLazy.populateRelocation = \bak _ _ _ reloc ->
       symbolicRelocation (CB.backendGetSym bak) reloc
   }
   where

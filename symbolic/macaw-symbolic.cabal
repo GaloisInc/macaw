@@ -17,11 +17,13 @@ library
     IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,
+    indexed-traversable,
     lens,
     macaw-base,
     mtl,
     parameterized-utils,
     prettyprinter >= 1.7.0,
+    split,
     text,
     vector,
     bytestring,
@@ -34,11 +36,13 @@ library
     Data.Macaw.Symbolic.Backend
     Data.Macaw.Symbolic.Concretize
     Data.Macaw.Symbolic.Memory
+    Data.Macaw.Symbolic.Memory.Lazy
     Data.Macaw.Symbolic.MemOps
     Data.Macaw.Symbolic.Testing
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
+    Data.Macaw.Symbolic.Memory.Common
     Data.Macaw.Symbolic.PersistentState
 
   ghc-options: -Wall -Wcompat
