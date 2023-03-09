@@ -1114,14 +1114,25 @@ type LazilyPopulateGlobalMem p sym ext w =
   -> IO (C.SimState p sym ext rtp f args)
 
 -- | Configuration options for the @macaw-symbolic@ memory model.
-data MemModelConfig p sym arch = MemModelConfig
-  { resolvePointer :: ResolvePointer sym (M.ArchAddrWidth arch)
+data MemModelConfig p sym arch mem = MemModelConfig
+  { globalMemMap :: MO.GlobalMap sym mem (M.ArchAddrWidth arch)
+    -- ^ How to translate machine words to LLVM memory model pointers.
+  , lookupFunctionHandle :: MO.LookupFunctionHandle p sym arch
+    -- ^ Turn machine addresses into Crucible function handles (which can also
+    -- perform lazy CFG creation).
+  , lookupSyscallHandle :: MO.LookupSyscallHandle p sym arch
+    -- ^ Examine the machine state to determine which system call
+    -- should be invoked. Returns the function handle to invoke.
+  , resolvePointer :: ResolvePointer sym (M.ArchAddrWidth arch)
     -- ^ Attempt to resolve a possibly symbolic pointer value as concrete,
     -- returning the original pointer unchanged if this cannot be done. This is
     -- used whenever the memory model performs a read or write. Concretizing
     -- pointers can often be beneficial for performance, so consider
     -- implementing this option using 'resolvePointerOnline' if you have access
     -- to an online SMT solver connection.
+  , mkGlobalPointerValidityAssertion :: MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+    -- ^ A function to make memory validity predicates (see
+    -- 'MkGlobalPointerValidityAssertion' for details).
   , concreteImmutableGlobalRead :: ConcreteImmutableGlobalRead sym (M.ArchAddrWidth arch)
     -- ^ If reading a value of type @ty@ from a concrete and immutable (i.e.,
     -- read-only) section of the global address space, you can return
@@ -1156,20 +1167,10 @@ execMacawStmtExtension
   -- ^ Simulation-time interpretations of architecture-specific functions
   -> C.GlobalVar MM.Mem
   -- ^ The distinguished global variable holding the current state of the memory model
-  -> MO.GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
-  -- ^ The translation from machine words to LLVM memory model pointers
-  -> MemModelConfig p sym arch
+  -> MemModelConfig p sym arch MM.Mem
   -- ^ Configuration options for the memory model.
-  -> MO.LookupFunctionHandle p sym arch
-  -- ^ A function to turn machine addresses into Crucible function
-  -- handles (which can also perform lazy CFG creation)
-  -> MO.LookupSyscallHandle p sym arch
-  -- ^ A function to examine the machine state to determine which system call
-  -- should be invoked; returns the function handle to invoke
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
-  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> SB.MacawEvalStmtFunc (MacawStmtExtension arch) p sym (MacawExt arch)
-execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs mmConf (MO.LookupFunctionHandle lookupH) (MO.LookupSyscallHandle lookupSyscall) toMemPred s0 st =
+execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
   C.withBackend (st^.C.stateContext) $ \bak ->
   let sym = backendGetSym bak in
   case s0 of
@@ -1265,7 +1266,11 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar globs mmConf (MO.Loo
     PtrXor w x y                -> doPtrXor st mvar w x y
     PtrTrunc w x                -> doPtrTrunc st mvar x w
     PtrUExt w x                 -> doPtrUExt st mvar x w
-
+  where
+    globs = globalMemMap mmConf
+    MO.LookupFunctionHandle lookupH = lookupFunctionHandle mmConf
+    MO.LookupSyscallHandle lookupSyscall = lookupSyscallHandle mmConf
+    toMemPred = mkGlobalPointerValidityAssertion mmConf
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
@@ -1275,22 +1280,12 @@ macawExtensions
   -> C.GlobalVar MM.Mem
   -- ^ The Crucible global variable containing the current state of the memory
   -- model
-  -> GlobalMap sym MM.Mem (M.ArchAddrWidth arch)
-  -- ^ A function that maps bitvectors to valid memory model pointers
-  -> MemModelConfig personality sym arch
+  -> MemModelConfig personality sym arch MM.Mem
   -- ^ Configuration options for the memory model.
-  -> LookupFunctionHandle personality sym arch
-  -- ^ A function to translate virtual addresses into function handles
-  -- dynamically during symbolic execution
-  -> MO.LookupSyscallHandle personality sym arch
-  -- ^ A function to examine the machine state to determine which system call
-  -- should be invoked; returns the function handle to invoke
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
-  -- ^ A function to make memory validity predicates (see 'MkGlobalPointerValidityAssertion' for details)
   -> C.ExtensionImpl personality sym (MacawExt arch)
-macawExtensions f mvar globs mmConf lookupH lookupSyscall toMemPred =
+macawExtensions f mvar mmConf =
   C.ExtensionImpl { C.extensionEval = \sym iTypes logFn cst g -> evalMacawExprExtension sym iTypes logFn cst g
-                  , C.extensionExec = execMacawStmtExtension f mvar globs mmConf lookupH lookupSyscall toMemPred
+                  , C.extensionExec = execMacawStmtExtension f mvar mmConf
                   }
 
 -- | Run the simulator over a contiguous set of code.
@@ -1304,11 +1299,8 @@ runCodeBlock
   -- ^ Translation functions
   -> SB.MacawArchEvalFn (MacawSimulatorState sym) sym MM.Mem arch
   -> C.HandleAllocator
-  -> (MM.MemImpl sym, GlobalMap sym MM.Mem (M.ArchAddrWidth arch))
-  -> MemModelConfig (MacawSimulatorState sym) sym arch
-  -> LookupFunctionHandle (MacawSimulatorState sym) sym arch
-  -> MO.LookupSyscallHandle (MacawSimulatorState sym) sym arch
-  -> MkGlobalPointerValidityAssertion sym (M.ArchAddrWidth arch)
+  -> MM.MemImpl sym
+  -> MemModelConfig (MacawSimulatorState sym) sym arch MM.Mem
   -> C.CFG (MacawExt arch) blocks (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch)
   -> Ctx.Assignment (C.RegValue' sym) (MacawCrucibleRegTypes arch)
   -- ^ Register assignment
@@ -1318,7 +1310,7 @@ runCodeBlock
           sym
           (MacawExt arch)
           (C.RegEntry sym (ArchRegStruct arch)))
-runCodeBlock bak archFns archEval halloc (initMem,globs) mmConf lookupH lookupSyscall toMemPred g regStruct = do
+runCodeBlock bak archFns archEval halloc initMem mmConf g regStruct = do
   mvar <- MM.mkMemVar "macaw:codeblock_llvm_memory" halloc
   let crucRegTypes = crucArchRegTypes archFns
   let macawStructRepr = C.StructRepr crucRegTypes
@@ -1327,7 +1319,7 @@ runCodeBlock bak archFns archEval halloc (initMem,globs) mmConf lookupH lookupSy
       ctx = let fnBindings = C.insertHandleMap (C.cfgHandle g)
                              (C.UseCFG g (C.postdomInfo g)) $
                              C.emptyHandleMap
-                extImpl = macawExtensions archEval mvar globs mmConf lookupH lookupSyscall toMemPred
+                extImpl = macawExtensions archEval mvar mmConf
             in C.initSimContext bak llvmIntrinsicTypes halloc stdout
                (C.FnBindings fnBindings) extImpl MacawSimulatorState
   -- Create the symbolic simulator state

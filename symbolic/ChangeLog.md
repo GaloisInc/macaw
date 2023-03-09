@@ -55,6 +55,38 @@
    - `simulateAndVerify` has removed its `Memory` and `DiscoveryState` arguments
      in favor of a single `BinariesInfo` argument.
 
+- Many of `macawExtensions`' arguments have been consolidated into a single
+  `MemModelConfig` value, which provides a central location for memory
+  model–related options. Existing code that uses `macawExtensions` can be
+  migrated roughly as follows: convert this code:
+
+  ```hs
+  let ext = macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred
+  ```
+
+  Into this:
+
+  ```hs
+  let mmConf = (memModelConfig bak memPtrTable)
+                 { globalMemMap = globalMappingFn
+                 , lookupFunctionHandle = lookupHdl
+                 , lookupSyscallHandle = lookupSyscall
+                 , mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred
+                 }
+  let ext = macawExtensions archEvalFns memVar mmConf
+  ```
+
+  Where `memModelConfig` comes from `Data.Macaw.Symbolic.Memory`. Note that
+  `memModelConfig` provides default implementations of each of its
+  configuration options, so if you use one of the following:
+
+  * `globalMemMap = mapRegionPointers ...`
+  * `lookupFunctionHandle = unsupportedFunctionCalls ...`
+  * `lookupSyscallHandle = unsupportedSyscalls ...`
+  * `mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred ...`
+
+  Then you can simply use the implementation that `memModelConfig` provides.
+
 ### Behavioral Changes
 
 - Redundant pointer validity checks have been removed from `doReadMem`, `doCondReadMem`, `doWriteMem`, and `doCondWriteMem`; this should be mostly invisible to library clients unless they rely on goal counts or goal numbers

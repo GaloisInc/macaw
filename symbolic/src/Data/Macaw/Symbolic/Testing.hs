@@ -408,9 +408,8 @@ simulateAndVerify goalSolver logger bak execFeatures archInfo archVals binfo (Re
     (initMem, memPtrTbl) <-
       MSMLazy.newMergedGlobalMemoryWith populateRelocation (Proxy @arch) bak
         endianness MSMLazy.ConcreteMutable mems
-    let globalMap = MSMLazy.mapRegionPointers memPtrTbl
     (memVar, stackPointer, execResult) <-
-      simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl globalMap g
+      simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl g
     case execResult of
       CS.TimeoutResult {} -> return SimulationTimeout
       CS.AbortedResult {} -> return SimulationAborted
@@ -475,13 +474,12 @@ simulateFunction :: ( ext ~ MS.MacawExt arch
                  -> CFH.HandleAllocator
                  -> CLM.MemImpl sym
                  -> MSMLazy.MemPtrTable sym w
-                 -> MS.GlobalMap sym CLM.Mem w
                  -> CCC.CFG ext blocks (Ctx.EmptyCtx Ctx.::> MS.ArchRegStruct arch) (MS.ArchRegStruct arch)
                  -> IO ( CS.GlobalVar CLM.Mem
                        , CLM.LLVMPtr sym w
                        , CS.ExecResult (MS.MacawLazySimulatorState sym w) sym ext (CS.RegEntry sym (MS.ArchRegStruct arch))
                        )
-simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl globalMap g = do
+simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl g = do
   let sym = CB.backendGetSym bak
   let symArchFns = MS.archFunctions archVals
   let crucRegTypes = MS.crucArchRegTypes symArchFns
@@ -513,14 +511,18 @@ simulateFunction binfo bak execFeatures archVals halloc initMem memPtrTbl global
 
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   let lazySimSt = MS.emptyMacawLazySimulatorState
-  let mmConf = MSMLazy.memModelConfig bak memPtrTbl
+  let mmConf = (MSMLazy.memModelConfig bak memPtrTbl)
+                 { MS.lookupFunctionHandle = lookupFunction archVals binfo
+                 , MS.lookupSyscallHandle = lookupSyscall
+                 , MS.mkGlobalPointerValidityAssertion = validityCheck
+                 }
   let initGlobals = CSG.insertGlobal memVar mem2 CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regsWithStack)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
 
   let fnBindings = CFH.insertHandleMap (CCC.cfgHandle g) (CS.UseCFG g (CAP.postdomInfo g)) CFH.emptyHandleMap
   MS.withArchEval archVals sym $ \archEvalFn -> do
-    let extImpl = MS.macawExtensions archEvalFn memVar globalMap mmConf (lookupFunction archVals binfo) lookupSyscall validityCheck
+    let extImpl = MS.macawExtensions archEvalFn memVar mmConf
     let ctx = CS.initSimContext bak CLI.llvmIntrinsicTypes halloc IO.stdout (CS.FnBindings fnBindings) extImpl lazySimSt
     let s0 = CS.InitialState ctx initGlobals CS.defaultAbortHandler regsRepr simAction
     res <- CS.executeCrucible (fmap CS.genericToExecutionFeature execFeatures) s0

@@ -495,15 +495,15 @@ initializeSimulator ctx bak archVals halloc cfg entryBlock =
   let end = MS.toCrucibleEndian (binaryEndianness ctx)
   (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) bak end MS.ConcreteMutable (binaryMemory ctx)
   (memory1, initSPVal) <- initializeMemory (Proxy @arch) bak memory0
+  let mmConf = (MS.memModelConfig bak memPtrTable)
+                 { MS.lookupFunctionHandle = MS.unsupportedFunctionCalls "macaw-refinement"
+                 , MS.lookupSyscallHandle = MS.unsupportedSyscalls "macaw-refinement"
+                 }
+  let ext = MS.macawExtensions archEvalFns memVar mmConf
   -- FIXME: Capture output somewhere besides stderr
-  let globalMappingFn = MS.mapRegionPointers memPtrTable
-  let lookupHdl = MS.unsupportedFunctionCalls "macaw-refinement"
-  let lookupSyscall = MS.unsupportedSyscalls "macaw-refinement"
-  let mkPtrPred = MS.mkGlobalPointerValidityPred memPtrTable
-  let ext = MS.macawExtensions archEvalFns memVar globalMappingFn lookupHdl lookupSyscall mkPtrPred
   let simCtx = C.initSimContext bak LLVM.llvmIntrinsicTypes halloc IO.stderr (C.FnBindings C.emptyHandleMap) ext MS.MacawSimulatorState
   let globalState = C.insertGlobal memVar memory1 C.emptyGlobals
-  initRegs <- initialRegisterState bak archVals globalMappingFn memory1 entryBlock initSPVal
+  initRegs <- initialRegisterState bak archVals (MS.globalMemMap mmConf) memory1 entryBlock initSPVal
   let simulation = C.regValue <$> C.callCFG cfg initRegs
   let retTy = C.handleReturnType (C.cfgHandle cfg)
   let initState = C.InitialState simCtx globalState C.defaultAbortHandler retTy (C.runOverrideSim retTy simulation)
