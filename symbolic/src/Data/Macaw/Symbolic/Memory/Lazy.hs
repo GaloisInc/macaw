@@ -72,6 +72,15 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 
 -- | The configuration options for the lazy memory model:
 --
+-- * The supplied 'MemPtrTable' is used to translate machine words to LLVM
+--   memory model pointers.
+--
+-- * Function calls and system calls (i.e., 'MS.lookupFunctionHandle' and
+--   'MS.lookupSyscallHandle') are not supported.
+--
+-- * The supplied 'MemPtrTable' is used to check the validity of global
+--   pointers in 'MS.mkGlobalPointerValidityAssertion'.
+--
 -- * Before performing a read or write, 'MS.resolvePointer' will consult an
 --   online SMT solver connection in an effort to concretize the pointer being
 --   read from or written to.
@@ -82,26 +91,44 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 --
 -- * 'MS.lazilyPopulateGlobalMem' is used to incrementally populate the
 --   'memPtrArray' before reads and writes.
+--
+-- Note some key differences between this function and the @memModelConfig@
+-- function in "Data.Macaw.Symbolic.Memory":
+--
+-- * This function requires the personality type to be
+--   'MS.MacawLazySimulatorState', as it must track which sections of global
+--   memory have already been populated in the simulator state.
+--
+-- * This function requires an 'CBO.OnlineBackend' to make use of an online
+--   SMT solver connection.
 memModelConfig ::
      ( CB.IsSymBackend sym bak
      , w ~ MC.ArchAddrWidth arch
      , sym ~ WE.ExprBuilder scope st fs
      , bak ~ CBO.OnlineBackend solver scope st fs
      , WPO.OnlineSolver solver
-     , 1 <= w
      , MC.MemWidth w
+     , 1 <= w
+     , 16 <= w
+     , CL.HasLLVMAnn sym
+     , ?memOpts :: CL.MemOptions
      )
   => bak
   -> MemPtrTable sym w
-  -> MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch
+  -> MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CL.Mem
 memModelConfig bak mpt =
   MS.MemModelConfig
-    { MS.resolvePointer = MSC.resolveLLVMPtr bak
+    { MS.globalMemMap = mapRegionPointers mpt
+    , MS.lookupFunctionHandle = MS.unsupportedFunctionCalls origin
+    , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
+    , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
+    , MS.resolvePointer = MSC.resolveLLVMPtr bak
     , MS.concreteImmutableGlobalRead = concreteImmutableGlobalRead sym mpt
     , MS.lazilyPopulateGlobalMem = lazilyPopulateGlobalMemArr bak mpt
     }
   where
     sym = CB.backendGetSym bak
+    origin = "the lazy macaw-symbolic memory model"
 
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation.

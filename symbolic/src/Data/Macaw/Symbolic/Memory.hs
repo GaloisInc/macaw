@@ -149,6 +149,15 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 
 -- | The default memory model's configuration options:
 --
+-- * The supplied 'MemPtrTable' is used to translate machine words to LLVM
+--   memory model pointers.
+--
+-- * Function calls and system calls (i.e., 'MS.lookupFunctionHandle' and
+--   'MS.lookupSyscallHandle') are not supported.
+--
+-- * The supplied 'MemPtrTable' is used to check the validity of global
+--   pointers in 'MS.mkGlobalPointerValidityAssertion'.
+--
 -- * No attempt is made to to concretize pointers. That is, 'MS.resolvePointer'
 --   will simply return its pointer argument unchanged.
 --
@@ -158,12 +167,29 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 -- * The memory model does not perform incremental updates before reads or
 --   writes. That is, 'MS.lazilyPopulateGlobalMem' always returns its state
 --   unchanged.
-memModelConfig :: MS.MemModelConfig p sym arch
-memModelConfig = MS.MemModelConfig
-  { MS.resolvePointer = pure
-  , MS.concreteImmutableGlobalRead = \_ _ -> pure Nothing
-  , MS.lazilyPopulateGlobalMem = \_ _ -> pure
-  }
+memModelConfig ::
+     ( CB.IsSymBackend sym bak
+     , w ~ MC.ArchAddrWidth arch
+     , MC.MemWidth w
+     , 16 <= w
+     , CL.HasLLVMAnn sym
+     , ?memOpts :: CL.MemOptions
+     )
+  => bak
+  -> MemPtrTable sym w
+  -> MS.MemModelConfig p sym arch CL.Mem
+memModelConfig _ mpt =
+  MS.MemModelConfig
+    { MS.globalMemMap = mapRegionPointers mpt
+    , MS.lookupFunctionHandle = MS.unsupportedFunctionCalls origin
+    , MS.lookupSyscallHandle = MS.unsupportedSyscalls origin
+    , MS.mkGlobalPointerValidityAssertion = mkGlobalPointerValidityPred mpt
+    , MS.resolvePointer = pure
+    , MS.concreteImmutableGlobalRead = \_ _ -> pure Nothing
+    , MS.lazilyPopulateGlobalMem = \_ _ -> pure
+    }
+  where
+    origin = "the default macaw-symbolic memory model"
 
 -- | An index of all of the (statically) mapped memory in a program, suitable
 -- for pointer translation
