@@ -15,7 +15,9 @@
 -- at all, and it instead checks before each read and write to see if a certain
 -- part of the SMT array needs to be populated. This memory model also makes an
 -- effort to avoid reading from the SMT array if performing concrete reads from
--- read-only sections of memory. For the full details on how this works, see
+-- read-only sections of memory. The net result is that the lazy memory
+-- sacrifices some extra space in exchange for generally improved simulation
+-- times. For the full details on how this works, see
 -- @Note [Lazy memory model]@.
 --
 -- Because the API in this module clashes with the API in
@@ -728,9 +730,12 @@ an SMT array of symbolic bytes. One issue with this approach is that
 initializing the elements of this array is expensive. Despite our best efforts
 to optimize how SMT array initialization takes places (see `assumeMemArr`),
 filling in each byte of a large (i.e., several megabytes or more) binary
-upfront is usually enough eat up all the RAM on your machine. While it is not
-immediately obvious what causes this, some related work on the subject of SMT
-array performance can be found in these issues:
+upfront is usually enough eat up all the RAM on your machine. And even if you
+/do/ have enough RAM to handle the amount of space that an SMT solver would
+need for such a query, it takes a staggering amount of time for the solver to
+answer such a query. While it is not immediately obvious what causes this, some
+related work on the subject of SMT array performance can be found in these
+issues:
 
 * https://github.com/Z3Prover/z3/issues/1150
 * https://github.com/Z3Prover/z3/issues/5129
@@ -816,11 +821,11 @@ two important optimizations:
 
    If one of these critera are not met, we fall back on the SMT array approach.
 
-Fundamentally, the lazy memory model sacrifices more space (in the form of
-having to track each byte of the global address space in the `memPtrTable`) in
-exchange for fewer SMT array accesses at simulation time, which generally
-results in better performance as binary sizes increase. If SMT solvers improve
-their performance with respect to arrays in the future, however, it is possible
-that the default memory model could be a better choice. For this reason, we
-provide both memory models as options.
+Fundamentally, the lazy memory model sacrifices space (in the form of having to
+track each byte of the global address space in the `memPtrTable`) in exchange
+for fewer SMT array accesses at simulation time, which generally results in
+better simulation-time performance as binary sizes increase. If SMT solvers
+improve their performance with respect to arrays in the future, however, it is
+possible that the default memory model could be a better choice. For this
+reason, we provide both memory models as options.
 -}
