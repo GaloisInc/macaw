@@ -35,10 +35,10 @@
 -- as possible into the theory of arrays.  This formulation enables efficient
 -- handling of symbolic reads and writes when they are sufficiently constrained
 -- by predicates in the program. The downside to this approach is that
--- initializing the initial state of the SMT array can be expensive for large
--- binaries (i.e., megabytes or more in size). For these binaries, you may want
--- to consider the alternative memory model configuration provided in the
--- "Data.Macaw.Symbolic.Memory.Lazy" module.
+-- initializing the initial state of the SMT array can be prohibitively
+-- time-consuming for large binaries (i.e., megabytes or more in size). For
+-- these binaries, you may want to consider the alternative memory model
+-- configuration provided in the "Data.Macaw.Symbolic.Memory.Lazy" module.
 --
 -- Because the API in this module clashes with the API in
 -- "Data.Macaw.Symbolic.Memory", it is recommended that you import these modules
