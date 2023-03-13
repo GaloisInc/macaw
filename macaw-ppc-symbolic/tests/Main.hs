@@ -88,9 +88,14 @@ main = do
   failTestFilePaths <- SFG.glob "tests/fail/**/*.exe"
   let passRes = MST.SimulationResult MST.Unsat
   let failRes = MST.SimulationResult MST.Sat
-  let passTests = TT.testGroup "True assertions" (map (mkSymExTest passRes) passTestFilePaths)
-  let failTests = TT.testGroup "False assertions" (map (mkSymExTest failRes) failTestFilePaths)
-  TT.defaultMainWithIngredients ingredients (TT.testGroup "Binary Tests" [passTests, failTests])
+  let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
+  let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
+  TT.defaultMainWithIngredients ingredients $
+    TT.testGroup "Binary Tests" $
+    map (\mmPreset ->
+          TT.testGroup (MST.describeMemModelPreset mmPreset)
+                       [passTests mmPreset, failTests mmPreset])
+        [MST.DefaultMemModel, MST.LazyMemModel]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
@@ -135,8 +140,8 @@ toPPCAddrNameMap loadedBinary mem elfSyms =
   where
     toc = MBLP.getTOC loadedBinary
 
-mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
-mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest :: MST.SimulationResult -> MST.MemModelPreset -> FilePath -> TT.TestTree
+mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
@@ -145,7 +150,7 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
         Elf.ELFCLASS32 -> TTH.assertFailure "PPC32 is not supported yet due to ABI differences"
         Elf.ELFCLASS64 -> do
           loadedBinary <- MBL.loadBinary MMEL.defaultLoadOptions ehi
-          symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
+          symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi loadedBinary (MP.ppc64_linux_info loadedBinary)
 
 data MacawPPCSymbolicData t = MacawPPCSymbolicData
 
@@ -162,7 +167,8 @@ symExTestSized :: forall v w arch
                   , MS.ArchInfo arch
                   , MBLP.HasTOC (MP.AnyPPC v) (Elf.ElfHeaderInfo w)
                   )
-                => MST.SimulationResult
+               => MST.SimulationResult
+               -> MST.MemModelPreset
                -> FilePath
                -> SaveSMT
                -> SaveMacaw
@@ -171,7 +177,7 @@ symExTestSized :: forall v w arch
                -> MBL.LoadedBinary arch (Elf.ElfHeaderInfo w)
                -> MAI.ArchitectureInfo arch
                -> TTH.Assertion
-symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo = do
+symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi loadedBinary archInfo = do
    binfo <- MST.runDiscovery ehi exePath (toPPCAddrNameMap loadedBinary) archInfo
                              -- Test cases involving shared libraries are not
                              -- yet supported on the PowerPC backend. At a
@@ -199,7 +205,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi loadedBinary archInfo
        let extract = ppcResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo extract dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo mmPreset extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

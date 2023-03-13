@@ -87,6 +87,11 @@
 
   Then you can simply use the implementation that `memModelConfig` provides.
 
+- `Data.Macaw.Symbolic.Testing.simulateAndVerify` now takes an additional
+  `MemModelPreset` argument to allow test case authors to choose which preset
+  memory model configuration to use during testing. Currently, the only two
+  options are `DefaultMemModel` and `LazyMemModel`.
+
 ### Behavioral Changes
 
 - Redundant pointer validity checks have been removed from `doReadMem`, `doCondReadMem`, `doWriteMem`, and `doCondWriteMem`; this should be mostly invisible to library clients unless they rely on goal counts or goal numbers
