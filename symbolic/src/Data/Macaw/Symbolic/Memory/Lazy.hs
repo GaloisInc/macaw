@@ -31,6 +31,8 @@ module Data.Macaw.Symbolic.Memory.Lazy (
   MSMC.fromCrucibleEndian,
   MSMC.GlobalMemoryHooks(..),
   MSMC.defaultGlobalMemoryHooks,
+  newGlobalMemory,
+  newGlobalMemoryWith,
   newMergedGlobalMemoryWith,
   MSMC.MemoryModelContents(..),
   mkGlobalPointerValidityPred,
@@ -45,6 +47,7 @@ import           Control.Lens ((^.))
 import           Control.Monad.IO.Class ( MonadIO, liftIO )
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
+import           Data.Functor.Identity ( Identity(Identity) )
 import qualified Data.IntervalMap.Interval as IMI
 import qualified Data.IntervalMap.Strict as IM
 import qualified Data.IntervalSet as IS
@@ -439,6 +442,66 @@ concatBytes sym endianness byte bytes =
 -- "Data.Macaw.Symbolic.Memory", this function does /not/ populate the SMT array
 -- upfront, instead deferring that task to simulation time.
 -- (See @Note [Lazy memory model]@.)
+newGlobalMemory :: ( 16 <= MC.ArchAddrWidth arch
+                   , MC.MemWidth (MC.ArchAddrWidth arch)
+                   , KnownNat (MC.ArchAddrWidth arch)
+                   , CB.IsSymBackend sym bak
+                   , CL.HasLLVMAnn sym
+                   , MonadIO m
+                   , sym ~ WEB.ExprBuilder t st fs
+                   , ?memOpts :: CL.MemOptions
+                   )
+                => proxy arch
+                -- ^ A proxy to fix the architecture
+                -> bak
+                -- ^ The symbolic backend used to construct terms
+                -> CLD.EndianForm
+                -- ^ The endianness of values in memory
+                -> MSMC.MemoryModelContents
+                -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
+                -> MC.Memory (MC.ArchAddrWidth arch)
+                -- ^ The macaw memory
+                -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
+newGlobalMemory = newGlobalMemoryWith MSMC.defaultGlobalMemoryHooks
+
+-- | A version of 'newGlobalMemory' that enables some of the memory model
+-- initialization to be configured via 'GlobalMemoryHooks'.
+--
+-- This version enables callers to control behaviors for which there is no good
+-- default behavior (and that must be otherwise treated as an error).
+newGlobalMemoryWith
+ :: ( 16 <= MC.ArchAddrWidth arch
+    , MC.MemWidth (MC.ArchAddrWidth arch)
+    , KnownNat (MC.ArchAddrWidth arch)
+    , CB.IsSymBackend sym bak
+    , CL.HasLLVMAnn sym
+    , MonadIO m
+    , sym ~ WEB.ExprBuilder t st fs
+    , ?memOpts :: CL.MemOptions
+    )
+ => MSMC.GlobalMemoryHooks (MC.ArchAddrWidth arch)
+ -- ^ Hooks customizing the memory setup
+ -> proxy arch
+ -- ^ A proxy to fix the architecture
+ -> bak
+ -- ^ The symbolic backend used to construct terms
+ -> CLD.EndianForm
+ -- ^ The endianness of values in memory
+ -> MSMC.MemoryModelContents
+ -- ^ A configuration option controlling how mutable memory should be represented (concrete or symbolic)
+ -> MC.Memory (MC.ArchAddrWidth arch)
+ -- ^ The macaw memory
+ -> m (CL.MemImpl sym, MemPtrTable sym (MC.ArchAddrWidth arch))
+newGlobalMemoryWith hooks proxy bak endian mmc mem =
+  newMergedGlobalMemoryWith hooks proxy bak endian mmc (Identity mem)
+
+-- | A version of 'newGlobalMemoryWith' that takes a 'Foldable' collection of
+-- memories and merges them into a flat addresses space.  The address spaces of
+-- the input memories must not overlap.
+--
+-- In the future this function may be updated to support multiple merge
+-- strategies by adding additional configuration options to
+-- 'GlobalMemoryHooks'.
 newMergedGlobalMemoryWith
  :: forall arch sym bak m t st fs proxy t'
   . ( 16 <= MC.ArchAddrWidth arch
