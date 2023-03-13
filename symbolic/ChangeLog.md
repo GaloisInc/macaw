@@ -87,6 +87,13 @@
 
   Then you can simply use the implementation that `memModelConfig` provides.
 
+- In addition to the default memory model in `Data.Macaw.Symbolic.Memory`, there
+  is now a lazy memory model configuration in `Data.Macaw.Symbolic.Memory.Lazy`.
+  Both modules provide the same API, so it is recommended to import them
+  qualified. The lazy model sacrifies same space in exchange for generally
+  improved simulation-time performance and better scalabilty for large (i.e.,
+  megabytes or larger) binaries.
+
 - `Data.Macaw.Symbolic.Testing.simulateAndVerify` now takes an additional
   `MemModelPreset` argument to allow test case authors to choose which preset
   memory model configuration to use during testing. Currently, the only two
