@@ -27,7 +27,7 @@ library
     text,
     vector,
     bytestring,
-    what4 >= 1.1 && < 1.4
+    what4 >= 1.1 && < 1.5
 
   hs-source-dirs: src
 
