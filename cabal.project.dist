@@ -14,7 +14,6 @@ packages:
     submodules/asl-translator
     submodules/arm-asl-parser
     submodules/what4/what4
-    submodules/what4-serialize
     submodules/semmc/semmc
     submodules/semmc/semmc-synthesis
     submodules/semmc/semmc-learning

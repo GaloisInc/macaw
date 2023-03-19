@@ -16,9 +16,6 @@
 [submodule "submodules/what4"]
 	path = submodules/what4
 	url = git@github.com:GaloisInc/what4.git
-[submodule "submodules/what4-serialize"]
-	path = submodules/what4-serialize
-	url = git@github.com:GaloisInc/what4-serialize.git
 [submodule "submodules/semmc"]
 	path = submodules/semmc
 	url = git@github.com:GaloisInc/semmc.git
