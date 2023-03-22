@@ -49,16 +49,16 @@ execInstruction =
        let notVecOpc :: forall tps . ARMSem.ARMOpcode ARMSem.ARMOperand tps -> Bool
            notVecOpc opc =
              (not ("V" `L.isPrefixOf` showF opc))
-             || ("VMOV" `L.isPrefixOf` showF opc)
+             {- || ("VMOV" `L.isPrefixOf` showF opc)
              || ("VCVT_vi_T1" `L.isPrefixOf` showF opc)
              || ("VCMPE" `L.isPrefixOf` showF opc)
-             || ("VMRS" `L.isPrefixOf` showF opc)
+             || ("VMRS" `L.isPrefixOf` showF opc) -}
        let notVecLib :: forall sym . Some (SF.FunctionFormula sym) -> Bool
            notVecLib (Some lf) =
              case lf of
                SF.FunctionFormula { SF.ffName = nm } ->
                  (not ("df_V" `L.isInfixOf` nm))
-                 || (("df_VFPExpandImm" `L.isInfixOf` nm))
+                 -- || (("df_VFPExpandImm" `L.isInfixOf` nm))
 
        let thConf = MacawTHConfig { locationTranslator = locToRegTH
                                   , nonceAppTranslator = armNonceAppEval
