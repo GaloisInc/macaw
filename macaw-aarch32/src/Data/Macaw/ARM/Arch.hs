@@ -707,10 +707,10 @@ isUninterpretedA32Opcode opc =
 isUninterpretedT32Opcode :: (Show a) => a -> Bool
 isUninterpretedT32Opcode opc =
   case show opc of
-    s | isPrefixOf "VMOV" s -> False
+    {- s | isPrefixOf "VMOV" s -> False
     s | isPrefixOf "VCVT_vi_T1" s  -> False
     s | isPrefixOf "VCMPE" s -> False
-    s | isPrefixOf "VMRS" s -> False
+    s | isPrefixOf "VMRS" s -> False -}
     'V':_ -> True
     _ -> False
 
