@@ -52,6 +52,7 @@ import           Data.STRef
 import           Data.Macaw.CFG.App
 import           Data.Macaw.CFG.Core
 import           Data.Macaw.Memory
+import qualified Data.Macaw.Panic as P
 import           Data.Macaw.Types
 import           Data.Macaw.CFG.Block (TermStmt)
 
@@ -185,7 +186,8 @@ addBinding srcId val = Rewriter $ do
   lift $ do
     m <- readSTRef ref
     when (MapF.member srcId m) $ do
-      fail $ "Assignment " ++ show srcId ++ " is already bound."
+      P.panic P.Base "addBinding"
+        ["Assignment " ++ show srcId ++ " is already bound."]
     writeSTRef ref $! MapF.insert srcId val m
 
 -- | Return true if values are identical
@@ -716,7 +718,8 @@ rewriteValue v =
       srcMap <- lift $ readSTRef ref
       case MapF.lookup aid srcMap of
         Just tgtVal -> pure tgtVal
-        Nothing -> fail $ "Could not resolve source assignment " ++ show aid ++ "."
+        Nothing -> P.panic P.Base "rewriteValue"
+                     ["Could not resolve source assignment " ++ show aid ++ "."]
     Initial r -> pure (Initial r)
 
 -- | Apply optimizations to a statement.

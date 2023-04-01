@@ -15,6 +15,7 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 module Data.Macaw.Memory
   ( Memory
     -- * Inspecting memory
