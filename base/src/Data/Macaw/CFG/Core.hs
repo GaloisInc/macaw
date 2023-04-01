@@ -23,6 +23,7 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
