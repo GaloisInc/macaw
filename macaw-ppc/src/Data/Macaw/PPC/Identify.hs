@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Identify
   ( identifyCall
   , identifyReturn
