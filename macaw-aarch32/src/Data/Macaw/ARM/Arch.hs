@@ -693,6 +693,10 @@ a32InstructionMatcher (ARMDis.Instruction opc operands) =
             G.finishWithTerminator MCB.FetchAndExecute
       _ | isUninterpretedA32Opcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedA32Opcode opc operands))
+            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+            pc_orig <- G.getRegVal pc
+            pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 4)))
+            G.setRegVal pc pc_next
         | otherwise -> Nothing
 
 -- | This is a coarse heuristic to treat any instruction beginning with 'V' as a
@@ -761,6 +765,10 @@ t32InstructionMatcher (ThumbDis.Instruction opc operands) =
 
       _ | isUninterpretedT32Opcode opc -> Just $ do
             G.addStmt (MC.ExecArchStmt (UninterpretedT32Opcode opc operands))
+            let pc = ARMReg.ARMGlobalBV (ASL.knownGlobalRef @"_PC")
+            pc_orig <- G.getRegVal pc
+            pc_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat pc_orig (MC.BVValue NR.knownNat 4)))
+            G.setRegVal pc pc_next
         | otherwise -> Nothing
 
 instance MSS.SimplifierExtension ARM.AArch32 where
