@@ -27,9 +27,10 @@ data LoadStyle
   deriving (Eq)
 
 -- | This contains options for loading.
-newtype LoadOptions =
+data LoadOptions =
   LoadOptions { loadOffset :: Maybe Word64
                 -- ^ If set, the Elf file should be loaded at a specific offset.
+              , ignoreSegments :: [Int]
               }
 
 loadRegionIndex :: LoadOptions -> Maybe RegionIndex
@@ -45,4 +46,4 @@ loadRegionBaseOffset opts =
     Just o -> toInteger o
 
 defaultLoadOptions :: LoadOptions
-defaultLoadOptions = LoadOptions { loadOffset = Nothing }
+defaultLoadOptions = LoadOptions { loadOffset = Nothing, ignoreSegments = [] }
