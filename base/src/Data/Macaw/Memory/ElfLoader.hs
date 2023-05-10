@@ -1182,7 +1182,6 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
           mlsIndexMap %= Map.insert elfIdx addr
         _ -> error "Unexpected shdr interval"
 
--- | Load an elf file into memory by parsing segments.
 memoryForElfSegments'
   :: forall w
   .  RegionIndex
@@ -1192,7 +1191,20 @@ memoryForElfSegments'
                    , SectionIndexMap w -- Section index map
                    , [MemLoadWarning] -- Warnings from load
                    )
-memoryForElfSegments' regIndex addrOff elf = do
+memoryForElfSegments' regIndex addrOff elf = memoryForElfSegments'' [] regIndex addrOff elf
+
+-- | Load an elf file into memory by parsing segments.
+memoryForElfSegments''
+  :: forall w
+  .  [Int]
+  -> RegionIndex
+  -> Integer
+  -> Elf.ElfHeaderInfo w
+  -> Either String (Memory w -- Memory
+                   , SectionIndexMap w -- Section index map
+                   , [MemLoadWarning] -- Warnings from load
+                   )
+memoryForElfSegments'' ignored_segs regIndex addrOff elf = do
   let hdr = Elf.header elf
   let cl = Elf.headerClass hdr
   let w =  elfAddrWidth cl
@@ -1210,8 +1222,8 @@ memoryForElfSegments' regIndex addrOff elf = do
             , let shdr = Elf.shdrByIndex elf (idx-1)
             , let end = Elf.incOffset (Elf.shdrOff shdr) (Elf.shdrFileSize shdr)
             ]
-      forM_ phdrs $ \p -> do
-        when (Elf.phdrSegmentType p == Elf.PT_LOAD) $ do
+      forM_ (zip [0..] (toList phdrs)) $ \(i, p) -> do
+        when (Elf.phdrSegmentType p == Elf.PT_LOAD && (not $ elem i ignored_segs)) $ do
           insertElfSegment regIndex addrOff intervals contents relocMap p
 
 -- | Load an elf file into memory by parsing segments.
@@ -1226,7 +1238,7 @@ memoryForElfSegments
 memoryForElfSegments opt elf = do
   let regIndex = adjustedLoadRegionIndex (Elf.headerType (Elf.header elf)) opt
   let addrOff = loadRegionBaseOffset opt
-  memoryForElfSegments' regIndex addrOff elf
+  memoryForElfSegments'' (ignoreSegments opt) regIndex addrOff elf
 
 ------------------------------------------------------------------------
 -- Elf section loading
