@@ -22,6 +22,7 @@ import qualified SemMC.Architecture.PPC as SP
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch
 import           Data.Macaw.PPC.PPCReg
+import           Control.Applicative ((<|>))
 
 -- | Our current heuristic is that we are issuing a (potentially conditional)
 -- call if we see an address in the link register.
@@ -66,17 +67,35 @@ matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> Maybe (Some (MA.AbsValue w))
-matchReturn absProcState' ip = do
-  MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
-  guard (shiftAmt == 0x2)
-  Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
-  guard (shiftAmt' == 0x2)
-  case MA.transferValue absProcState' addr' of
-    MA.ReturnAddr -> return (Some MA.ReturnAddr)
-    _ -> case addr' of
+matchReturn absProcState' ip = matchRead ip <|> matchShift ip
+  where
+    {- example:
+      r15 := (bv_shr r13 (0x2 :: [32]))
+      r16 := (trunc r15 30)
+      r17 := (uext r16 32)
+      r18 := (bv_shl r17 (0x2 :: [32]))
+    -}
+    matchShift r = do
+      MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return r
+      guard (shiftAmt == 0x2)
+      Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
+      guard (shiftAmt' == 0x2)
+      case MA.transferValue absProcState' addr' of
+        MA.ReturnAddr -> return (Some MA.ReturnAddr)
+        _ -> case addr' of
+          MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
+            | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
+          _ -> Nothing
+    {- example:
+      r8 := (bv_add r1_0 (0x14 :: [32]))
+      r9 := read_mem r8 (bvbe4)
+    -}
+    matchRead r = case r of
       MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
         | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
       _ -> Nothing
+
+
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
