@@ -529,11 +529,11 @@ checkForReturnAddrX86 absState
 identifyX86Return :: Seq (Stmt X86_64 ids)
                   -> RegState X86Reg (Value X86_64 ids)
                   -> AbsProcessorState X86Reg ids
-                  -> Maybe (Seq (Stmt X86_64 ids))
+                  -> Classifier (Seq (Stmt X86_64 ids))
 identifyX86Return stmts s finalRegSt8 =
   case transferValue finalRegSt8 (s^.boundValue ip_reg) of
-    ReturnAddr -> Just stmts
-    _ -> Nothing
+    ReturnAddr -> return stmts
+    _ -> return mempty
 
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
@@ -590,7 +590,7 @@ x86_64_info preservePred =
                    , absEvalArchStmt = \s _ -> s
                    , identifyCall = identifyX86Call
                    , archCallParams = x86_64CallParams
-                   , checkForReturnAddr = \_ s -> checkForReturnAddrX86 s
+                   , checkForReturnAddr = \_ s -> return $ checkForReturnAddrX86 s
                    , identifyReturn = identifyX86Return
                    , rewriteArchFn = rewriteX86PrimFn
                    , rewriteArchStmt = rewriteX86Stmt

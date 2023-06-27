@@ -8,10 +8,10 @@ module Data.Macaw.PPC.Identify
 where
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( guard )
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
 
+import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery.AbsEval as DE
@@ -58,7 +58,7 @@ identifyReturn :: (PPCArchConstraints var)
                -> Seq.Seq (MC.Stmt (SP.AnyPPC var) ids)
                -> MC.RegState (PPCReg var) (MC.Value (SP.AnyPPC var) ids)
                -> MA.AbsProcessorState (PPCReg var) ids
-               -> Maybe (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
+               -> MI.Classifier (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
 identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
@@ -66,7 +66,7 @@ identifyReturn _ stmts regState absState = do
 matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
-            -> Maybe (Some (MA.AbsValue w))
+            -> MI.Classifier (Some (MA.AbsValue w))
 matchReturn absProcState' ip = matchRead ip <|> matchShift ip
   where
     {- example:
@@ -77,15 +77,16 @@ matchReturn absProcState' ip = matchRead ip <|> matchShift ip
     -}
     matchShift r = do
       MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return r
-      guard (shiftAmt == 0x2)
+      MI.classifierGuard "shiftAmt == 0x2" (shiftAmt == 0x2)
       Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
-      guard (shiftAmt' == 0x2)
+      MI.classifierGuard "shiftAmt' == 0x2" (shiftAmt' == 0x2)
       case MA.transferValue absProcState' addr' of
         MA.ReturnAddr -> return (Some MA.ReturnAddr)
         _ -> case addr' of
           MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
             | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-          _ -> Nothing
+          _ -> fail "matchShift failed"
+
     {- example:
       r8 := (bv_add r1_0 (0x14 :: [32]))
       r9 := read_mem r8 (bvbe4)
@@ -93,9 +94,7 @@ matchReturn absProcState' ip = matchRead ip <|> matchShift ip
     matchRead r = case r of
       MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
         | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-      _ -> Nothing
-
-
+      _ -> fail "matchRead failed"
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
