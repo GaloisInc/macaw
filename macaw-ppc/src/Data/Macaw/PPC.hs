@@ -27,7 +27,6 @@ module Data.Macaw.PPC (
   ) where
 
 import           Control.Lens ( (^.) )
-import           Data.Maybe
 import           Data.Proxy ( Proxy(..) )
 
 import qualified Data.Macaw.Architecture.Info as MI
@@ -101,7 +100,7 @@ ppc64_linux_info binData =
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
-                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
+                      , MI.checkForReturnAddr = \r s -> MI.tryClassifier $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt
@@ -127,7 +126,7 @@ ppc32_linux_info =
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
-                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
+                      , MI.checkForReturnAddr = \r s -> MI.tryClassifier $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt

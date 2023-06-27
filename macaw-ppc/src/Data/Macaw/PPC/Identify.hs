@@ -9,10 +9,10 @@ module Data.Macaw.PPC.Identify
 where
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( guard )
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
 
+import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery.AbsEval as DE

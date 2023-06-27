@@ -12,6 +12,7 @@ module Data.Macaw.ARM
     )
     where
 
+import           Control.Monad ( guard )
 import           Control.Applicative ( (<|>) )
 import qualified Data.ElfEdit as EE
 import           Data.Macaw.ARM.Arch
@@ -48,8 +49,8 @@ arm_linux_info =
                         , MI.absEvalArchStmt = absEvalArchStmt
                         , MI.identifyCall = identifyCall
                         , MI.archCallParams = callParams preserveRegAcrossSyscall
-                        , MI.checkForReturnAddr = \r s -> isReturnValue s (r ^. MC.boundValue ARMReg.arm_LR)
-                        , MI.identifyReturn = identifyReturn
+                        , MI.checkForReturnAddr = \r s -> (guard $ isReturnValue s (r ^. MC.boundValue ARMReg.arm_LR)) >> return True
+                        , MI.identifyReturn = \x y z -> MI.classifierLiftMaybe $ identifyReturn x y z
                         , MI.rewriteArchFn = rewritePrimFn
                         , MI.rewriteArchStmt = rewriteStmt
                         , MI.rewriteArchTermStmt = rewriteTermStmt

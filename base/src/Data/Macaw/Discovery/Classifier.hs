@@ -279,11 +279,10 @@ returnClassifier = classifierName "Return" $ do
   bcc <- CMR.ask
   let ainfo = pctxArchInfo (classifierParseContext bcc)
   Info.withArchConstraints ainfo $ do
-    Just prevStmts <-
-      pure $ Info.identifyReturn ainfo
-                            (classifierStmts bcc)
-                            (classifierFinalRegState bcc)
-                            (classifierAbsState bcc)
+    prevStmts <- liftClassifier $ Info.identifyReturn ainfo
+                                    (classifierStmts bcc)
+                                    (classifierFinalRegState bcc)
+                                    (classifierAbsState bcc)
     pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList prevStmts
                               , Parsed.parsedTerm = Parsed.ParsedReturn (classifierFinalRegState bcc)
                               , Parsed.writtenCodeAddrs = classifierWrittenAddrs bcc
@@ -416,5 +415,7 @@ tailCallClassifier = classifierName "Tail call" $ do
     unless (o == 0) $
       fail "Expected stack height of 0"
     -- Return address is pushed
-    unless (Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)) empty
+    isRet <- liftClassifier $ Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)
+    unless isRet empty
+
     pure $! noreturnCallParsedContents bcc
