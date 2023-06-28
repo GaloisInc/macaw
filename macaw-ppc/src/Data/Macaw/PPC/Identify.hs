@@ -10,6 +10,7 @@ module Data.Macaw.PPC.Identify
 where
 
 import           Control.Lens ( (^.) )
+import           Control.Monad ( when )
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
 
@@ -70,7 +71,7 @@ matchReturn :: forall ppc var ids w
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> MI.Classifier (Some (MA.AbsValue w))
-matchReturn absProcState' ip = matchRead "bare matchRead" ip <|> matchShift ip
+matchReturn absProcState' ip = matchRead True "bare matchRead" ip <|> matchShift ip
   where
     {- example:
       r15 := (bv_shr r13 (0x2 :: [32]))
@@ -85,17 +86,24 @@ matchReturn absProcState' ip = matchRead "bare matchRead" ip <|> matchShift ip
       MI.classifierGuard "shiftAmt' == 0x2" (shiftAmt' == 0x2)
       case MA.transferValue absProcState' addr' of
         MA.ReturnAddr -> return (Some MA.ReturnAddr)
-        _ -> matchRead "matchShift call" addr'
+        _ -> matchRead False "matchShift call" addr'
 
     {- example:
       r8 := (bv_add r1_0 (0x14 :: [32]))
       r9 := read_mem r8 (bvbe4)
     -}
-    matchRead :: forall w2. String -> MC.Value ppc ids (MT.BVType w2) -> MI.Classifier (Some (MA.AbsValue w))
-    matchRead msg r = case r of
-      MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
-        | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-      _ -> fail $ "matchRead failed for " <> msg
+    matchRead :: forall w2. Bool -> String -> MC.Value ppc ids (MT.BVType w2) -> MI.Classifier (Some (MA.AbsValue w))
+    matchRead strict token r = do
+      MI.classifierLog $ "matchRead(" <> token <> "): r is " <> (show $ MC.ppValueAssignments r)
+      MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep)) <- return r
+      MI.classifierLog $ "matchRead(" <> token <> "): " <> (show $ DE.absEvalReadMem absProcState' readAddr memRep)
+
+      () <- case DE.absEvalReadMem absProcState' readAddr memRep of
+          MA.ReturnAddr -> return ()
+          MA.TopV       -> when strict $ fail $ "matchRead(" <> token <> "): strict but no return addr"
+          _             -> fail $ "matchRead(" <> token <> "): unexpected abstract value"
+
+      return $ Some MA.ReturnAddr
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
