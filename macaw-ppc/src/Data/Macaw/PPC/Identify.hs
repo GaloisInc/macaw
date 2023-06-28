@@ -12,6 +12,7 @@ where
 import           Control.Lens ( (^.) )
 import           Control.Monad ( when )
 import           Data.Parameterized.Some ( Some(..) )
+import           Data.Foldable ( asum )
 import qualified Data.Sequence as Seq
 
 import qualified Data.Macaw.Architecture.Info as MI
@@ -71,8 +72,20 @@ matchReturn :: forall ppc var ids
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> MI.Classifier ()
-matchReturn absProcState' ip = matchRead True "bare matchRead" ip <|> matchShift ip
+matchReturn absProcState' ip =
+  asum cases
   where
+    cases = [ matchBareReturn ip
+            , matchRead True "bare matchRead" ip
+            , matchShift ip
+            ]
+
+    matchBareReturn :: forall w2. MC.Value ppc ids (MT.BVType w2) -> MI.Classifier ()
+    matchBareReturn r =
+      case MA.transferValue absProcState' r of
+        MA.ReturnAddr -> return ()
+        _ -> fail "matchBareReturn: not a ReturnAddr"
+
     {- example:
       r15 := (bv_shr r13 (0x2 :: [32]))
       r16 := (trunc r15 30)
@@ -84,9 +97,7 @@ matchReturn absProcState' ip = matchRead True "bare matchRead" ip <|> matchShift
       MI.classifierGuard "shiftAmt == 0x2" (shiftAmt == 0x2)
       Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
       MI.classifierGuard "shiftAmt' == 0x2" (shiftAmt' == 0x2)
-      case MA.transferValue absProcState' addr' of
-        MA.ReturnAddr -> return ()
-        _ -> matchRead False "matchShift call" addr'
+      matchBareReturn addr' <|> matchRead False "matchShift call" addr'
 
     {- example:
       r8 := (bv_add r1_0 (0x14 :: [32]))
