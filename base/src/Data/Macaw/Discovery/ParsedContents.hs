@@ -2,6 +2,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE RankNTypes #-}
+
 -- | Macaw AST elements used after block classification
 --
 -- There are two stages of code discovery:
@@ -28,6 +30,11 @@ module Data.Macaw.Discovery.ParsedContents (
   , isReadOnlyBoundedMemArray
   -- * Pretty Printing
   , ppTermStmt
+  , DiscoveryTrace
+  , DiscoveryTraceData(..)
+  , showSimpleTrace
+  , discoveryTrace
+  , emptyParsedContents
   ) where
 
 import qualified Control.Lens as CL
@@ -39,11 +46,12 @@ import           Data.Word ( Word64 )
 import qualified Prettyprinter as PP
 import           Prettyprinter ( (<+>) )
 
-import           Data.Macaw.AbsDomain.AbsState ( AbsBlockState )
+import           Data.Macaw.AbsDomain.AbsState ( AbsBlockState, ArchAbsValue, AbsValue )
 import           Data.Macaw.CFG
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
+import GHC.Stack
 
 ------------------------------------------------------------------------
 -- BlockExploreReason
@@ -294,6 +302,73 @@ parsedTermSucc ts = do
     ParsedTranslateError{} -> []
     ClassifyFailure{} -> []
 
+data DiscoveryTraceData arch ids s = 
+      ClassifierMonadFail String
+    | forall tp. MacawValue String (Value arch ids tp)
+    | forall w tp. MemWidth w => MacawAbsValue String (AbsValue w tp)
+    | NamedClassifier String
+    | FunctionAddress (ArchSegmentOff arch)
+    | BlockAddress (ArchSegmentOff arch)
+    | NestedTraceData (DiscoveryTraceData arch ids s) [DiscoveryTrace arch]
+
+ppDiscoveryTraceData :: ArchConstraints arch 
+                     => (DiscoveryTrace arch -> PP.Doc a) 
+                     -> DiscoveryTraceData arch ids s
+                     -> PP.Doc a
+ppDiscoveryTraceData printTrace traceData = case traceData of
+    ClassifierMonadFail msg -> "fail:" <> PP.indent 1 (PP.viaShow msg)
+    MacawValue msg v -> "Macaw Value:" <+> case null msg of
+      True -> PP.pretty v
+      False -> PP.viaShow msg <> PP.indent 1 (PP.pretty v)
+    MacawAbsValue msg v -> "Macaw Abstract Value:" <+> case null msg of
+      True -> PP.pretty v
+      False -> PP.viaShow msg <> PP.indent 1 (PP.pretty v)
+    NamedClassifier nm  -> "Classifier Failure:" <+> PP.viaShow nm
+    FunctionAddress addr -> "Function Address:" <+> PP.pretty addr
+    BlockAddress addr -> "Block Address:" <+> PP.pretty addr
+    -- as a special case: we print out all of the bindings for a macaw 'Value'
+    -- if it's being nested
+    -- this is so that we can establish the binding context for an expression once
+    -- and just print the identifier for each individual expression when
+    -- tracing a 'MacawValue'
+    NestedTraceData (MacawValue msg v) subTraces -> 
+      PP.viaShow msg <> PP.line 
+      <> ppValueAssignments v 
+      <> PP.indent 1 (PP.vsep (reverse $ map printTrace subTraces))
+    NestedTraceData traceData' subTraces -> 
+      ppDiscoveryTraceData printTrace traceData' 
+      -- NB: the head of the trace is the most recent tracing data, so we
+      -- reverse on display to give the natural ordering
+      <> PP.indent 1 (PP.vsep (reverse $ map printTrace subTraces))
+
+
+ppDiscoveryTrace :: ArchConstraints arch 
+                 => (forall ids s. DiscoveryTraceData arch ids s -> PP.Doc a)
+                 -> (CallStack -> Maybe (PP.Doc a))
+                 -> DiscoveryTrace arch
+                 -> PP.Doc a
+ppDiscoveryTrace printTraceData printCallStack tr@(DiscoveryTrace _ d) = 
+  case printCallStack (trCallStack tr) of
+    Nothing -> printTraceData d
+    Just ppstk -> PP.vsep [ppstk, printTraceData d]
+
+instance ArchConstraints arch => PP.Pretty (DiscoveryTraceData arch ids s) where
+  pretty td = ppDiscoveryTraceData PP.pretty td
+
+instance ArchConstraints arch => PP.Pretty (DiscoveryTrace arch) where
+    pretty tr = ppDiscoveryTrace PP.pretty (\stk -> Just (PP.viaShow stk)) tr
+
+data DiscoveryTrace arch = forall ids s. DiscoveryTrace
+  { trCallStack :: CallStack
+  , _trData :: DiscoveryTraceData arch ids s
+  }
+
+showSimpleTrace :: ArchConstraints arch => DiscoveryTrace arch -> String
+showSimpleTrace (DiscoveryTrace _ d) = show (PP.pretty d)
+
+discoveryTrace :: DiscoveryTraceData arch ids s -> DiscoveryTrace arch
+discoveryTrace d = DiscoveryTrace callStack d
+
 ------------------------------------------------------------------------
 -- ParsedBlock
 
@@ -348,4 +423,15 @@ data ParsedContents arch ids =
                    --
                    -- Note. In a binary, these could denote the non-executable
                    -- segments, so they are filtered before traversing.
+                 , parsedDiscoveryTraces :: ![DiscoveryTrace arch]
                  }
+
+emptyParsedContents :: ParsedContents arch ids
+emptyParsedContents = ParsedContents 
+  { parsedNonterm = []
+  , parsedTerm = ParsedTranslateError "Unexpected emptyParsedContents"
+  , writtenCodeAddrs = []
+  , intraJumpTargets = []
+  , newFunctionAddrs = []
+  , parsedDiscoveryTraces = []
+}

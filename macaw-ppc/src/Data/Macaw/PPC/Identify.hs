@@ -1,6 +1,8 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.PPC.Identify
   ( identifyCall
   , identifyReturn
@@ -16,6 +18,8 @@ import qualified Data.Sequence as Seq
 import qualified Data.Macaw.AbsDomain.AbsState as MA
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery.AbsEval as DE
+import qualified Data.Macaw.Discovery.DiscoveryM as DM
+import           Data.Macaw.Architecture.Info (Classifier, classifyThrow)
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Types as MT
 import qualified SemMC.Architecture.PPC as SP
@@ -37,15 +41,15 @@ identifyCall :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
              -> MM.Memory (MC.ArchAddrWidth ppc)
              -> Seq.Seq (MC.Stmt ppc ids)
              -> MC.RegState (PPCReg var) (MC.Value ppc ids)
-             -> Maybe (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
+             -> Classifier ppc (Seq.Seq (MC.Stmt ppc ids), MC.ArchSegmentOff ppc)
 identifyCall _ mem stmts0 rs
   | not (null stmts0)
   , MC.RelocatableValue {} <- rs ^. MC.boundValue PPC_LNK
   , Just retVal <- simplifyValue (rs ^. MC.boundValue PPC_LNK)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
-      Just (stmts0, retAddr)
-  | otherwise = Nothing
+      return $ (stmts0, retAddr)
+  | otherwise = fail "identifyCall"
 
 
 -- | Called to determine if the instruction sequence contains a return
@@ -59,16 +63,18 @@ identifyReturn :: (PPCArchConstraints var)
                -> Seq.Seq (MC.Stmt (SP.AnyPPC var) ids)
                -> MC.RegState (PPCReg var) (MC.Value (SP.AnyPPC var) ids)
                -> MA.AbsProcessorState (PPCReg var) ids
-               -> Maybe (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
+               -> Classifier (SP.AnyPPC var) (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
 identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
 
-matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+matchReturn :: forall ppc var ids w
+             . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
-            -> Maybe (Some (MA.AbsValue w))
-matchReturn absProcState' ip = matchRead ip <|> matchShift ip
+            -> Classifier ppc (Some (MA.AbsValue w))
+matchReturn absProcState' ip = DM.withDiscoveryTracing (DM.MacawValue "IP:" ip) $ 
+  matchRead ip <|> matchShift ip
   where
     {- example:
       r15 := (bv_shr r13 (0x2 :: [32]))
@@ -78,23 +84,32 @@ matchReturn absProcState' ip = matchRead ip <|> matchShift ip
     -}
     matchShift r = do
       MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return r
+      DM.traceValues [("addr", Some addr)]
       guard (shiftAmt == 0x2)
-      Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
+      Some stripped <- return $ stripExtTrunc addr
+      DM.traceValues [("stripped", Some stripped)]
+      (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return stripped
+      DM.traceValues [("addr'", Some addr')]
       guard (shiftAmt' == 0x2)
       case MA.transferValue absProcState' addr' of
         MA.ReturnAddr -> return (Some MA.ReturnAddr)
-        _ -> case addr' of
-          MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
-            | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-          _ -> Nothing
+        _ -> do
+          MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep)) <- return addr'
+          DM.traceValues [("readAddr'", Some readAddr)]
+          ret <- return $ DE.absEvalReadMem absProcState' readAddr memRep
+          () <- case ret of
+            MA.ReturnAddr -> return ()
+            _ -> classifyThrow $ (DM.MacawAbsValue "Not ReturnAddr" ret)
+          return (Some MA.ReturnAddr)
     {- example:
       r8 := (bv_add r1_0 (0x14 :: [32]))
       r9 := read_mem r8 (bvbe4)
     -}
+    matchRead :: forall w2. MC.Value ppc ids (MT.BVType w2) -> Classifier ppc (Some (MA.AbsValue w))
     matchRead r = case r of
       MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
         | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-      _ -> Nothing
+      _ -> classifyThrow $ (DM.MacawValue "Not ReturnAddr" r)
 
 
 

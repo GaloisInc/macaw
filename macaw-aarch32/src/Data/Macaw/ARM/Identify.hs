@@ -89,14 +89,14 @@ isValidReturnAddress val0 =
 identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)
              -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
              -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
-             -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
+             -> MAI.Classifier ARM.AArch32 (Seq.Seq (MC.Stmt ARM.AArch32 ids), MC.ArchSegmentOff ARM.AArch32)
 identifyCall mem stmts0 rs
   | not (null stmts0)
   , Just retVal <- isValidReturnAddress (rs ^. MC.boundValue AR.arm_LR)
   , Just retAddrVal <- MC.valueAsMemAddr retVal
   , Just retAddr <- MM.asSegmentOff mem retAddrVal =
-      Just (stmts0, retAddr)
-  | otherwise = Nothing
+      return (stmts0, retAddr)
+  | otherwise = fail "identifyCall"
 
 -- | Intended to identify a return statement.
 --
@@ -110,11 +110,10 @@ identifyCall mem stmts0 rs
 identifyReturn :: Seq.Seq (MC.Stmt ARM.AArch32 ids)
                -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
                -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
-               -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids))
-identifyReturn stmts s finalRegSt8 =
-  if isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
-  then Just stmts
-  else Nothing
+               -> MAI.Classifier ARM.AArch32 (Seq.Seq (MC.Stmt ARM.AArch32 ids))
+identifyReturn stmts s finalRegSt8 = do
+  isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
+  return stmts
 
 -- | Determines if the supplied value is the symbolic return address
 -- from Macaw, modulo any ARM semantics operations (lots of ite caused
@@ -122,8 +121,8 @@ identifyReturn stmts s finalRegSt8 =
 -- of the low bits (1 in T32 mode, 2 in A32 mode).
 isReturnValue :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MC.Value ARM.AArch32 ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.AArch32)))
-              -> Bool
-isReturnValue absProcState val =
+              -> MAI.Classifier ARM.AArch32 ()
+isReturnValue absProcState val = MAI.classifyLiftBool $
   case MA.transferValue absProcState val of
     MA.ReturnAddr -> True
     _ -> False
@@ -136,7 +135,7 @@ asReturnAddrAndConstant
   -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
   -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
   -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
-  -> MAI.Classifier (MC.ArchSegmentOff ARM.AArch32)
+  -> MAI.Classifier ARM.AArch32 (MC.ArchSegmentOff ARM.AArch32)
 asReturnAddrAndConstant mem absProcState mRet mConstant = do
   MA.ReturnAddr <- return (MA.transferValue absProcState mRet)
   Just memAddr <- return (MC.valueAsMemAddr mConstant)
@@ -191,7 +190,7 @@ identifyConditionalReturn
   -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
   -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
   -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
-  -> MAI.Classifier ( MC.Value ARM.AArch32 ids MT.BoolType
+  -> MAI.Classifier ARM.AArch32 ( MC.Value ARM.AArch32 ids MT.BoolType
                     , MC.ArchSegmentOff ARM.AArch32
                     , ReturnsOnBranch
                     , Seq.Seq (MC.Stmt ARM.AArch32 ids)
@@ -237,7 +236,7 @@ conditionalReturnClassifier = do
                               , abs'
                               , if returnBranch == ReturnsOnTrue then falseJumpState else trueJumpState
                               )
-      return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
+      return Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList stmts'
                                    , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just nextIP)
                                    , Parsed.intraJumpTargets = [fallthroughTarget]
                                    , Parsed.newFunctionAddrs = []
@@ -271,7 +270,7 @@ asConditionalCallReturnAddress
   -- ^ The value of the PC at one condition polarity
   -> MC.Value ARM.AArch32 ids (MT.BVType (MC.ArchAddrWidth ARM.AArch32))
   -- ^ The value of the LR at the other condition polarity
-  -> MAI.Classifier (MC.ArchSegmentOff ARM.AArch32)
+  -> MAI.Classifier ARM.AArch32 (MC.ArchSegmentOff ARM.AArch32)
 asConditionalCallReturnAddress mem pc_val lr_val = do
   Just memAddr_pc <- return (MC.valueAsMemAddr pc_val)
   Just memAddr_lr <- return (MC.valueAsMemAddr lr_val)
@@ -293,7 +292,7 @@ identifyConditionalCall
   :: MC.Memory 32
   -> Seq.Seq (MC.Stmt ARM.AArch32 ids)
   -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
-  -> MAI.Classifier ( MC.Value ARM.AArch32 ids MT.BoolType    -- Condition
+  -> MAI.Classifier ARM.AArch32 ( MC.Value ARM.AArch32 ids MT.BoolType    -- Condition
                     , MC.Value ARM.AArch32 ids (MT.BVType 32) -- Call target
                     , MC.Value ARM.AArch32 ids (MT.BVType 32) -- Raw link register value
                     , MC.ArchSegmentOff ARM.AArch32           -- Return address (also the fallthrough address) decoded into a segment offset
@@ -350,7 +349,7 @@ conditionalCallClassifier = do
                               , abs'
                               , if callBranch == CallsOnTrue then falseJumpState else trueJumpState
                               )
-      return Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts'
+      return Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList stmts'
                                    , Parsed.parsedTerm = Parsed.ParsedArchTermStmt term regs (Just fallthroughIP)
                                    , Parsed.intraJumpTargets = [fallthroughTarget]
                                    , Parsed.newFunctionAddrs = extractCallTargets mem callTarget

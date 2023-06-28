@@ -224,7 +224,7 @@ extractJumpTableSlices :: ArchConstraints arch
                        -> Natural -- ^ Stride
                        -> BVValue arch ids idxWidth
                        -> MemRepr tp -- ^ Type of values
-                       -> Info.Classifier (V.Vector [MemChunk (ArchAddrWidth arch)])
+                       -> Info.Classifier arch (V.Vector [MemChunk (ArchAddrWidth arch)])
 extractJumpTableSlices jmpBounds base stride ixVal tp = do
   cnt <-
     case Jmp.unsignedUpperBound jmpBounds ixVal of
@@ -262,7 +262,7 @@ matchBoundedMemArray
   -> Jmp.IntraJumpBounds arch ids
      -- ^ Bounds for jump table
   -> Value arch ids tp  -- ^ Value to interpret
-  -> Info.Classifier (Parsed.BoundedMemArray arch tp, ArchAddrValue arch ids)
+  -> Info.Classifier arch (Parsed.BoundedMemArray arch tp, ArchAddrValue arch ids)
 matchBoundedMemArray mem aps jmpBounds val = do
   AssignedValue (Assignment _ (ReadMem addr tp)) <- pure val
   Just (base, offset) <- pure $ valueAsMemOffset mem aps addr
@@ -306,7 +306,7 @@ matchAbsoluteJumpTable = Info.classifierName "Absolute jump table" $ do
       BVMemRepr _arByteCount e -> pure e
   let go :: Int
          -> [MemChunk (ArchAddrWidth arch)]
-         -> Info.Classifier (MemSegmentOff (ArchAddrWidth arch))
+         -> Info.Classifier arch (MemSegmentOff (ArchAddrWidth arch))
       go entryIndex contents = do
         addr <- case resolveAsAddr mem endianness contents of
                   Just a -> pure a
@@ -374,7 +374,7 @@ jumpTableClassifier = Info.classifierName "Jump table" $ do
     let nextBnds = Jmp.postJumpBounds jmpBounds (Info.classifierFinalRegState bcc)
     let term = Parsed.ParsedLookupTable layout (Info.classifierFinalRegState bcc) jumpIndex entries
     pure $ seq abst $
-      Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (Info.classifierStmts bcc)
+      Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList (Info.classifierStmts bcc)
                          , Parsed.parsedTerm = term
                          , Parsed.writtenCodeAddrs = Info.classifierWrittenAddrs bcc
                          , Parsed.intraJumpTargets =

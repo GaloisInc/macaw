@@ -70,6 +70,7 @@ library
     Data.Macaw.CFG.Rewriter
     Data.Macaw.DebugLogging
     Data.Macaw.Discovery
+    Data.Macaw.Discovery.DiscoveryM
     Data.Macaw.Discovery.AbsEval
     Data.Macaw.Discovery.Classifier
     Data.Macaw.Discovery.Classifier.JumpTable

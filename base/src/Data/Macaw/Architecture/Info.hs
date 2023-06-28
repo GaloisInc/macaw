@@ -6,6 +6,8 @@ This defines the architecture-specific information needed for code discovery.
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Data.Macaw.Architecture.Info
   ( ArchitectureInfo(..)
   , postCallAbsState
@@ -23,6 +25,10 @@ module Data.Macaw.Architecture.Info
     -- * Unclassified blocks
   , module Data.Macaw.CFG.Block
   , rewriteBlock
+  , classifyThrow
+  , classifyCatch
+  , classifyLiftMaybe
+  , classifyLiftBool
   ) where
 
 import           Control.Applicative ( Alternative(..), liftA )
@@ -43,6 +49,7 @@ import           Data.Macaw.CFG.Core
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.CFG.Rewriter
 import qualified Data.Macaw.Discovery.ParsedContents as Parsed
+import qualified Data.Macaw.Discovery.DiscoveryM as DM
 import           Data.Macaw.Memory
 
 
@@ -56,30 +63,56 @@ data NoReturnFunStatus
    | MayReturnFun
      -- ^ Function may retun
 
-type ClassificationError = String
+type ClassificationError arch = DM.DiscoveryTrace arch
 
 -- | The result of block classification, which collects information about all of
 -- the match failures to help diagnose shortcomings in the analysis
-data Classifier o = ClassifyFailed    [ClassificationError]
-                  | ClassifySucceeded [ClassificationError] o
+data Classifier arch o = ClassifyFailed    [DM.DiscoveryTrace arch]
+                       | ClassifySucceeded [DM.DiscoveryTrace arch] o
+
+instance DM.MonadDiscoveryTrace arch (Classifier arch) where
+  emitDiscoveryTraces tr = ClassifySucceeded tr ()
+  withDiscoveryTracing d f = case f of
+    ClassifyFailed l -> ClassifyFailed [DM.discoveryTrace $ DM.NestedTraceData d l]
+    ClassifySucceeded l a -> ClassifySucceeded [DM.discoveryTrace $ DM.NestedTraceData d l] a
+
+instance DM.MonadDiscoveryTrace arch (BlockClassifierM arch ids) where
+  emitDiscoveryTraces tr = BlockClassifier $ CMT.lift $ ClassifySucceeded tr ()
+  withDiscoveryTracing d (BlockClassifier (CMR.ReaderT m)) = BlockClassifier $ CMR.ReaderT $ \i ->
+    DM.withDiscoveryTracing d (m i) 
 
 -- | In the given context, set the name of the current classifier
 --
 -- This is used to improve the labels for each classifier failure
 classifierName :: String -> BlockClassifierM arch ids a -> BlockClassifierM arch ids a
-classifierName nm (BlockClassifier (CMR.ReaderT m)) = BlockClassifier $ CMR.ReaderT $ \i ->
-  case m i of
-    ClassifyFailed [] -> ClassifyFailed [nm ++ " classification failed."]
-    ClassifyFailed l  -> ClassifyFailed (fmap ((nm ++ ": ") ++)  l)
-    ClassifySucceeded l a -> ClassifySucceeded (fmap ((nm ++ ": ") ++)  l) a
+classifierName nm f = DM.withDiscoveryTracing (DM.NamedClassifier nm) f
 
-classifyFail :: Classifier a
+classifyThrow :: DM.DiscoveryTraceData arch ids s -> Classifier arch a
+classifyThrow d = ClassifyFailed [DM.discoveryTrace d]
+
+-- | Convert a given classifier into one that unconditionally succeeds, but returns a
+--   'Maybe' value, where 'Nothing' indicates that the given classifier failed.
+classifyCatch :: Classifier arch a -> Classifier arch (Maybe a)
+classifyCatch f = case f of
+  ClassifySucceeded l a -> ClassifySucceeded l (Just a)
+  ClassifyFailed tr -> ClassifySucceeded [DM.discoveryTrace $ DM.NestedTraceData (DM.ClassifierMonadFail "classifyCatch") tr] Nothing
+
+classifyLiftMaybe :: Maybe a -> Classifier arch a
+classifyLiftMaybe (Just a) = return a
+classifyLiftMaybe Nothing = fail "classifyLiftMaybe"
+
+
+classifyLiftBool :: Bool-> Classifier arch ()
+classifyLiftBool True = return ()
+classifyLiftBool False = fail "classifyLiftBool"
+
+classifyFail :: Classifier arch a
 classifyFail = ClassifyFailed []
 
-classifySuccess :: a -> Classifier a
+classifySuccess :: a -> Classifier arch a
 classifySuccess = \x -> ClassifySucceeded [] x
 
-classifyBind :: Classifier a -> (a -> Classifier b) -> Classifier b
+classifyBind :: Classifier arch a -> (a -> Classifier arch b) -> Classifier arch b
 classifyBind m f =
   case m of
     ClassifyFailed e -> ClassifyFailed e
@@ -89,7 +122,7 @@ classifyBind m f =
         ClassifyFailed    e   -> ClassifyFailed    (l++e)
         ClassifySucceeded e b -> ClassifySucceeded (l++e) b
 
-classifyAppend :: Classifier a -> Classifier a -> Classifier a
+classifyAppend :: Classifier arch a -> Classifier arch a -> Classifier arch a
 classifyAppend m n =
   case m of
     ClassifySucceeded e a -> ClassifySucceeded e a
@@ -99,22 +132,22 @@ classifyAppend m n =
         ClassifySucceeded f a -> ClassifySucceeded (e++f) a
         ClassifyFailed f      -> ClassifyFailed    (e++f)
 
-instance Alternative Classifier where
+instance Alternative (Classifier arch) where
   empty = classifyFail
   (<|>) = classifyAppend
 
-instance Functor Classifier where
+instance Functor (Classifier arch) where
   fmap = liftA
 
-instance Applicative Classifier where
+instance Applicative (Classifier arch) where
   pure = classifySuccess
   (<*>) = ap
 
-instance Monad Classifier where
+instance Monad (Classifier arch) where
   (>>=) = classifyBind
 
-instance MF.MonadFail Classifier where
-  fail = \m -> ClassifyFailed [m]
+instance MF.MonadFail (Classifier arch) where
+  fail = \m -> classifyThrow $ DM.ClassifierMonadFail m
 
 ------------------------------------------------------------------------
 -- ParseContext
@@ -182,7 +215,7 @@ type BlockClassifier arch ids = BlockClassifierM arch ids (Parsed.ParsedContents
 -- matching errors
 newtype BlockClassifierM arch ids a =
   BlockClassifier { unBlockClassifier :: CMR.ReaderT (BlockClassifierContext arch ids)
-                                                     Classifier
+                                                     (Classifier arch)
                                                      a
                   }
   deriving ( Functor
@@ -197,10 +230,10 @@ newtype BlockClassifierM arch ids a =
 runBlockClassifier
   :: BlockClassifier arch ids
   -> BlockClassifierContext arch ids
-  -> Classifier (Parsed.ParsedContents arch ids)
+  -> Classifier arch (Parsed.ParsedContents arch ids)
 runBlockClassifier cl = CMR.runReaderT (unBlockClassifier cl)
 
-liftClassifier :: Classifier a -> BlockClassifierM arch ids a
+liftClassifier :: Classifier arch a -> BlockClassifierM arch ids a
 liftClassifier c = BlockClassifier (CMT.lift c)
 
 ------------------------------------------------------------------------
@@ -269,7 +302,7 @@ data ArchitectureInfo arch
                     .  Memory (ArchAddrWidth arch)
                     -> Seq (Stmt arch ids)
                     -> RegState (ArchReg arch) (Value arch ids)
-                    -> Maybe (Seq (Stmt arch ids), ArchSegmentOff arch)
+                    -> Classifier arch (Seq (Stmt arch ids), ArchSegmentOff arch)
        -- ^ Function for recognizing call statements.
        --
        -- Given a memory state, list of statements, and final register
@@ -283,8 +316,8 @@ data ArchitectureInfo arch
      , checkForReturnAddr :: forall ids
                           .  RegState (ArchReg arch) (Value arch ids)
                           -> AbsProcessorState (ArchReg arch) ids
-                          -> Bool
-       -- ^ @checkForReturnAddr regs s@ returns true if the location
+                          -> Classifier arch ()
+       -- ^ @checkForReturnAddr regs s@ succeds if the location
        -- where the return address is normally stored in regs when
        -- calling a function does indeed contain the abstract value
        -- associated with return addresses.
@@ -298,7 +331,7 @@ data ArchitectureInfo arch
                       .  Seq (Stmt arch ids)
                       -> RegState (ArchReg arch) (Value arch ids)
                       -> AbsProcessorState (ArchReg arch) ids
-                      -> Maybe (Seq (Stmt arch ids))
+                      -> Classifier arch (Seq (Stmt arch ids))
        -- ^ Identify returns to the classifier.
        --
        -- Given a list of statements and the final state of the registers, this

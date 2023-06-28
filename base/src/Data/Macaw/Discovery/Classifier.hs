@@ -172,7 +172,7 @@ branchClassifier = classifierName "Branch" $ do
     let jmpBounds = classifierJumpBounds bcc
     case Jmp.postBranchBounds jmpBounds finalRegs c of
       Jmp.BothFeasibleBranch trueJmpState falseJmpState -> do
-        pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts
+        pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList stmts
                                   , Parsed.parsedTerm  =
                                     Parsed.ParsedBranch finalRegs c trueTgtAddr falseTgtAddr
                                   , Parsed.writtenCodeAddrs = writtenAddrs
@@ -181,10 +181,11 @@ branchClassifier = classifierName "Branch" $ do
                                     , (falseTgtAddr, falseAbsState, falseJmpState)
                                     ]
                                   , Parsed.newFunctionAddrs = []
+                                  , Parsed.parsedDiscoveryTraces = []
                                   }
       -- The false branch is impossible.
       Jmp.TrueFeasibleBranch trueJmpState -> do
-        pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts
+        pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList stmts
                                   , Parsed.parsedTerm  = Parsed.ParsedJump finalRegs trueTgtAddr
                                   , Parsed.writtenCodeAddrs = writtenAddrs
                                   , Parsed.intraJumpTargets =
@@ -193,7 +194,7 @@ branchClassifier = classifierName "Branch" $ do
                                   }
       -- The true branch is impossible.
       Jmp.FalseFeasibleBranch falseJmpState -> do
-        pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList stmts
+        pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList stmts
                                   , Parsed.parsedTerm  = Parsed.ParsedJump finalRegs falseTgtAddr
                                   , Parsed.writtenCodeAddrs = writtenAddrs
                                   , Parsed.intraJumpTargets =
@@ -244,11 +245,9 @@ callClassifier = classifierName "Call" $ do
   let finalRegs = classifierFinalRegState bcc
   let ainfo = pctxArchInfo ctx
   let mem = pctxMemory ctx
-  ret <- case Info.identifyCall ainfo mem (classifierStmts bcc) finalRegs of
-           Just (_prev_stmts, ret) -> pure ret
-           Nothing -> fail $ "Call classifier failed."
+  (_prev_stmts, ret) <- liftClassifier $ Info.identifyCall ainfo mem (classifierStmts bcc) finalRegs
   Info.withArchConstraints ainfo $ do
-    pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
+    pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
                               , Parsed.parsedTerm  = Parsed.ParsedCall finalRegs (Just ret)
                               -- The return address may be written to
                               -- stack, but is highly unlikely to be
@@ -279,12 +278,11 @@ returnClassifier = classifierName "Return" $ do
   bcc <- CMR.ask
   let ainfo = pctxArchInfo (classifierParseContext bcc)
   Info.withArchConstraints ainfo $ do
-    Just prevStmts <-
-      pure $ Info.identifyReturn ainfo
+    prevStmts <- liftClassifier $ Info.identifyReturn ainfo
                             (classifierStmts bcc)
                             (classifierFinalRegState bcc)
                             (classifierAbsState bcc)
-    pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList prevStmts
+    pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList prevStmts
                               , Parsed.parsedTerm = Parsed.ParsedReturn (classifierFinalRegState bcc)
                               , Parsed.writtenCodeAddrs = classifierWrittenAddrs bcc
                               , Parsed.intraJumpTargets = []
@@ -319,7 +317,7 @@ directJumpClassifier = classifierName "Jump" $ do
     let abst = finalAbsBlockState (classifierAbsState bcc) (classifierFinalRegState bcc)
     let abst' = abst & setAbsIP tgtMSeg
     let tgtBnds = Jmp.postJumpBounds (classifierJumpBounds bcc) (classifierFinalRegState bcc)
-    pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
+    pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
                               , Parsed.parsedTerm  = Parsed.ParsedJump (classifierFinalRegState bcc) tgtMSeg
                               , Parsed.writtenCodeAddrs = classifierWrittenAddrs bcc
                               , Parsed.intraJumpTargets = [(tgtMSeg, abst', tgtBnds)]
@@ -340,7 +338,7 @@ noreturnCallParsedContents bcc =
       regs = classifierFinalRegState bcc
       blockEnd = classifierEndBlock bcc
    in Info.withArchConstraints (pctxArchInfo ctx) $
-        Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
+        Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
                            , Parsed.parsedTerm  = Parsed.ParsedCall regs Nothing
                            , Parsed.writtenCodeAddrs =
                              filter (\a -> segoffAddr a /= blockEnd) $
@@ -416,5 +414,5 @@ tailCallClassifier = classifierName "Tail call" $ do
     unless (o == 0) $
       fail "Expected stack height of 0"
     -- Return address is pushed
-    unless (Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)) empty
+    liftClassifier $ Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)
     pure $! noreturnCallParsedContents bcc

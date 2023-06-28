@@ -64,6 +64,7 @@ import           Data.Macaw.PPC.Identify ( identifyCall
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
+import Control.Monad (void)
 
 -- | The constructor for type tags for PowerPC
 type AnyPPC = PPC.AnyPPC
@@ -101,7 +102,7 @@ ppc64_linux_info binData =
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
-                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
+                      , MI.checkForReturnAddr = \r s -> void $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt
@@ -127,7 +128,7 @@ ppc32_linux_info =
                       , MI.absEvalArchFn = absEvalArchFn proxy
                       , MI.absEvalArchStmt = absEvalArchStmt proxy
                       , MI.identifyCall = identifyCall proxy
-                      , MI.checkForReturnAddr = \r s -> isJust $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
+                      , MI.checkForReturnAddr = \r s -> void $ matchReturn s (r ^. MC.boundValue R.PPC_LNK)
                       , MI.identifyReturn = identifyReturn proxy
                       , MI.rewriteArchFn = rewritePrimFn
                       , MI.rewriteArchStmt = rewriteStmt

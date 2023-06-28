@@ -141,7 +141,7 @@ pltStubClassifier = Info.classifierName "PLT stub" $ do
     let strippedRegs = removeUnassignedRegs (Info.classifierInitRegState bcc) (Info.classifierFinalRegState bcc)
     when (containsAssignId valId strippedRegs) $ do
       fail $ "PLT IP must be assigned."
-    pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList strippedStmts
+    pure $ Parsed.emptyParsedContents { Parsed.parsedNonterm = F.toList strippedStmts
                               , Parsed.parsedTerm  = Parsed.PLTStub strippedRegs gotSegOff (VerSym sym symVer)
                               , Parsed.writtenCodeAddrs = Info.classifierWrittenAddrs bcc
                               , Parsed.intraJumpTargets = []

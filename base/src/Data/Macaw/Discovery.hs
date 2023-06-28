@@ -516,7 +516,7 @@ defaultClassifier = branchClassifier
 
 -- | This parses a block that ended with a fetch and execute instruction.
 parseFetchAndExecute :: forall arch ids
-                     .  (RegisterInfo (ArchReg arch))
+                     .  ArchConstraints arch
                      => ArchitectureInfo arch
                      -> BlockClassifierContext arch ids
                      -> [Stmt arch ids]
@@ -525,8 +525,8 @@ parseFetchAndExecute ainfo classCtx stmts = do
   case runBlockClassifier (archClassifier ainfo) classCtx of
     ClassifySucceeded _ m -> m
     ClassifyFailed rsns ->
-      ParsedContents { parsedNonterm = stmts
-                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) rsns
+      emptyParsedContents { parsedNonterm = stmts
+                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) (map showSimpleTrace rsns)
                      , writtenCodeAddrs = classifierWrittenAddrs classCtx
                      , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []
@@ -571,7 +571,7 @@ parseBlock ctx initRegs b sz absBlockState blockBnds = do
 
     -- Do nothing when this block ends in a translation error.
     TranslateError _ msg ->
-      ParsedContents { parsedNonterm = blockStmts b
+      emptyParsedContents { parsedNonterm = blockStmts b
                      , parsedTerm = ParsedTranslateError msg
                      , writtenCodeAddrs = writtenAddrs
                      , intraJumpTargets = []
@@ -579,7 +579,7 @@ parseBlock ctx initRegs b sz absBlockState blockBnds = do
                      }
     ArchTermStmt tstmt regs ->
       let r = postArchTermStmtAbsState ainfo mem absState jmpBounds regs tstmt
-       in ParsedContents { parsedNonterm = blockStmts b
+       in emptyParsedContents { parsedNonterm = blockStmts b
                          , parsedTerm  = ParsedArchTermStmt tstmt regs ((\(a,_,_) -> a) <$> r)
                          , writtenCodeAddrs = writtenAddrs
                          , intraJumpTargets = maybeToList r

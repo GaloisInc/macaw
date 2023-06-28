@@ -98,6 +98,7 @@ import           Data.Macaw.X86.SyscallInfo.Linux as Linux
 import           Data.Macaw.X86.X86Reg
 
 import           Data.Macaw.X86.Generator
+import qualified Data.Macaw.Architecture.Info as DM
 
 ------------------------------------------------------------------------
 -- ExploreLoc
@@ -485,8 +486,8 @@ translateBlockWithRegs gen addr initRegs maxSize = do
 identifyX86Call :: Memory 64
                 -> Seq (Stmt X86_64 ids)
                 -> RegState X86Reg (Value X86_64 ids)
-                -> Maybe (Seq (Stmt X86_64 ids), MemSegmentOff 64)
-identifyX86Call mem stmts0 s = go stmts0 Seq.empty
+                -> Classifier X86_64 (Seq (Stmt X86_64 ids), MemSegmentOff 64)
+identifyX86Call mem stmts0 s = DM.classifyLiftMaybe $ go stmts0 Seq.empty
   where -- Get value of stack pointer
         next_sp = s^.boundValue RSP
         -- Recurse on statements.
@@ -516,12 +517,10 @@ identifyX86Call mem stmts0 s = go stmts0 Seq.empty
 -- return address is on top of stack.
 checkForReturnAddrX86 :: forall ids
                       .  AbsProcessorState X86Reg ids
-                      -> Bool
-checkForReturnAddrX86 absState
-  | Just (StackEntry _ ReturnAddr) <- Map.lookup 0 (absState^.curAbsStack) =
-      True
-  | otherwise =
-      False
+                      -> Classifier X86_64 ()
+checkForReturnAddrX86 absState = case Map.lookup 0 (absState^.curAbsStack) of
+  Just (StackEntry _ ReturnAddr) -> return ()
+  _ -> fail "checkForReturnAddrX86"
 
 -- | Called to determine if the instruction sequence contains a return
 -- from the current function.
@@ -532,8 +531,8 @@ checkForReturnAddrX86 absState
 identifyX86Return :: Seq (Stmt X86_64 ids)
                   -> RegState X86Reg (Value X86_64 ids)
                   -> AbsProcessorState X86Reg ids
-                  -> Maybe (Seq (Stmt X86_64 ids))
-identifyX86Return stmts s finalRegSt8 =
+                  -> Classifier X86_64 (Seq (Stmt X86_64 ids))
+identifyX86Return stmts s finalRegSt8 = DM.classifyLiftMaybe $
   case transferValue finalRegSt8 (s^.boundValue ip_reg) of
     ReturnAddr -> Just stmts
     _ -> Nothing
