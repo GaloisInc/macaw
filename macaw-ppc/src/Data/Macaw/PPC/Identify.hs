@@ -1,5 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Data.Macaw.PPC.Identify
   ( identifyCall
   , identifyReturn
@@ -63,11 +65,12 @@ identifyReturn _ stmts regState absState = do
   Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
 
-matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
+matchReturn :: forall ppc var ids w
+             . (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
             -> MI.Classifier (Some (MA.AbsValue w))
-matchReturn absProcState' ip = matchRead ip <|> matchShift ip
+matchReturn absProcState' ip = matchRead "bare matchRead" ip <|> matchShift ip
   where
     {- example:
       r15 := (bv_shr r13 (0x2 :: [32]))
@@ -82,19 +85,17 @@ matchReturn absProcState' ip = matchRead ip <|> matchShift ip
       MI.classifierGuard "shiftAmt' == 0x2" (shiftAmt' == 0x2)
       case MA.transferValue absProcState' addr' of
         MA.ReturnAddr -> return (Some MA.ReturnAddr)
-        _ -> case addr' of
-          MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
-            | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-          _ -> fail "matchShift failed"
+        _ -> matchRead "matchShift call" addr'
 
     {- example:
       r8 := (bv_add r1_0 (0x14 :: [32]))
       r9 := read_mem r8 (bvbe4)
     -}
-    matchRead r = case r of
+    matchRead :: forall w2. String -> MC.Value ppc ids (MT.BVType w2) -> MI.Classifier (Some (MA.AbsValue w))
+    matchRead msg r = case r of
       MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
         | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-      _ -> fail "matchRead failed"
+      _ -> fail $ "matchRead failed for " <> msg
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
