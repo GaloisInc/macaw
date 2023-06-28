@@ -17,7 +17,6 @@ module Data.Macaw.Architecture.Info
   , BlockClassifierContext(..)
   , Classifier(..)
   , classifierLog
-  , tryClassifier
   , classifierGuard
   , classifierName
   , liftClassifier
@@ -71,13 +70,6 @@ data Classifier o = ClassifyFailed    [ClassificationError]
 -- classifier errors.
 classifierLog :: String -> Classifier ()
 classifierLog msg = ClassifySucceeded [msg] ()
-
--- | Given a Classifier, build a new unconditionally succeeding one that
--- indicates whether the given classifier failed, but also carries all
--- of its errors and tracing information.
-tryClassifier :: Classifier a -> Classifier Bool
-tryClassifier (ClassifyFailed msgs) = ClassifySucceeded msgs False
-tryClassifier (ClassifySucceeded msgs _) = ClassifySucceeded msgs True
 
 -- | A Classifier-specific version of 'guard' that emits a log message
 -- with the specified prefix if the guard expression is False (and also
@@ -308,7 +300,7 @@ data ArchitectureInfo arch
      , checkForReturnAddr :: forall ids
                           .  RegState (ArchReg arch) (Value arch ids)
                           -> AbsProcessorState (ArchReg arch) ids
-                          -> Classifier Bool
+                          -> Classifier ()
        -- ^ @checkForReturnAddr regs s@ returns true if the location
        -- where the return address is normally stored in regs when
        -- calling a function does indeed contain the abstract value

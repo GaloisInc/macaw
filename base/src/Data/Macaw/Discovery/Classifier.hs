@@ -31,7 +31,6 @@ module Data.Macaw.Discovery.Classifier (
   , classifierEndBlock
   ) where
 
-import           Control.Applicative ( Alternative(empty) )
 import           Control.Lens ( (^.), (&), (.~) )
 import           Control.Monad ( when, unless )
 import qualified Control.Monad.Reader as CMR
@@ -415,7 +414,6 @@ tailCallClassifier = classifierName "Tail call" $ do
     unless (o == 0) $
       fail "Expected stack height of 0"
     -- Return address is pushed
-    isRet <- liftClassifier $ Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)
-    unless isRet empty
+    liftClassifier $ Info.checkForReturnAddr ainfo (classifierFinalRegState bcc) (classifierAbsState bcc)
 
     pure $! noreturnCallParsedContents bcc
