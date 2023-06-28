@@ -8,6 +8,7 @@ module Data.Macaw.PPC.Identify
   )
 where
 
+import           Control.Monad ( guard )
 import           Control.Lens ( (^.) )
 import           Data.Parameterized.Some ( Some(..) )
 import qualified Data.Sequence as Seq
@@ -60,7 +61,7 @@ identifyReturn :: (PPCArchConstraints var)
                -> MA.AbsProcessorState (PPCReg var) ids
                -> Maybe (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
 identifyReturn _ stmts regState absState = do
-  Some MA.ReturnAddr <- matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
+  matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
 
 matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
