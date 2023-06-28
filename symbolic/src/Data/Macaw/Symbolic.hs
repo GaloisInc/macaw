@@ -147,6 +147,8 @@ module Data.Macaw.Symbolic
 import           GHC.TypeLits
 import           GHC.Exts
 
+import Unsafe.Coerce (unsafeCoerce)
+
 import           Control.Lens ((^.))
 import           Control.Monad
 import           Control.Monad.State
@@ -179,6 +181,7 @@ import qualified Lang.Crucible.FunctionHandle as C
 import qualified Lang.Crucible.Simulator as C
 import qualified Lang.Crucible.Simulator.ExecutionTree as C
 import qualified Lang.Crucible.Simulator.GlobalState as C
+import qualified Lang.Crucible.Backend as C
 
 import           System.IO (stdout)
 
@@ -1255,6 +1258,13 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
     MacawArchStmtExtension s    -> archStmtFn mvar globs s st
     MacawArchStateUpdate {}     -> return ((), st)
     MacawInstructionStart {}    -> return ((), st)
+
+    AssertCustom _ v msg f -> do
+      let c = if f $ unsafeCoerce $ C.regValue v
+            then truePred sym
+            else falsePred sym
+      liftIO $ C.assert bak c $ C.GenericSimError msg
+      return ((), st)
 
     PtrEq  w x y                -> doPtrEq st mvar w x y
     PtrLt  w x y                -> doPtrLt st mvar w x y

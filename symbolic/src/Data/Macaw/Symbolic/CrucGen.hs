@@ -122,8 +122,13 @@ import qualified What4.Utils.StringLiteral as C
 import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as CR
 import qualified Lang.Crucible.Types as C
+import qualified Lang.Crucible.Simulator.RegValue as C
 
 import qualified Lang.Crucible.LLVM.MemModel as MM
+
+import qualified What4.Expr as W4
+import qualified What4.Interface as W4
+import qualified What4.Expr.Builder as W4.B
 
 import           Data.Macaw.Symbolic.PersistentState
 
@@ -367,6 +372,13 @@ data MacawStmtExtension (arch :: K.Type)
                         -> !(M.ArchAddrWord arch)
                         -> !Text.Text
                         -> MacawStmtExtension arch f C.UnitType
+
+  AssertCustom
+    :: !(ArchAddrWidthRepr arch)
+    -> !(f C.BoolType)
+    -> String
+    -> !(forall t tp. W4.B.Expr t tp -> Bool)
+    -> MacawStmtExtension arch f C.UnitType
 
   -- NOTE: The Ptr* operations below are statements and not expressions
   -- because they need to read the memory variable, to determine if their
@@ -634,6 +646,7 @@ instance (C.PrettyApp (MacawArchStmtExtension arch),
         in sexpr "macawArchStateUpdate" [pretty addr, encloseSep lbrace rbrace semi (MapF.foldrWithKey prettyArchStateBinding [] m)]
       MacawInstructionStart baddr ioff t ->
         sexpr "macawInstructionStart" [ pretty baddr, pretty ioff, viaShow t ]
+      AssertCustom _ v _ _ -> sexpr "assert_custom" [ f v ]
       PtrEq _ x y    -> sexpr "ptr_eq" [ f x, f y ]
       PtrLt _ x y    -> sexpr "ptr_lt" [ f x, f y ]
       PtrLeq _ x y   -> sexpr "ptr_leq" [ f x, f y ]
@@ -663,6 +676,7 @@ instance C.TypeApp (MacawArchStmtExtension arch)
   appType (MacawArchStmtExtension f) = C.appType f
   appType MacawArchStateUpdate {} = C.knownRepr
   appType MacawInstructionStart {} = C.knownRepr
+  appType AssertCustom {} = C.knownRepr
   appType PtrEq {}            = C.knownRepr
   appType PtrLt {}            = C.knownRepr
   appType PtrLeq {}           = C.knownRepr
