@@ -224,7 +224,7 @@ extractJumpTableSlices :: ArchConstraints arch
                        -> Natural -- ^ Stride
                        -> BVValue arch ids idxWidth
                        -> MemRepr tp -- ^ Type of values
-                       -> Info.Classifier (V.Vector [MemChunk (ArchAddrWidth arch)])
+                       -> Info.Classifier arch (V.Vector [MemChunk (ArchAddrWidth arch)])
 extractJumpTableSlices jmpBounds base stride ixVal tp = do
   cnt <-
     case Jmp.unsignedUpperBound jmpBounds ixVal of
@@ -262,7 +262,7 @@ matchBoundedMemArray
   -> Jmp.IntraJumpBounds arch ids
      -- ^ Bounds for jump table
   -> Value arch ids tp  -- ^ Value to interpret
-  -> Info.Classifier (Parsed.BoundedMemArray arch tp, ArchAddrValue arch ids)
+  -> Info.Classifier arch (Parsed.BoundedMemArray arch tp, ArchAddrValue arch ids)
 matchBoundedMemArray mem aps jmpBounds val = do
   AssignedValue (Assignment _ (ReadMem addr tp)) <- pure val
   Just (base, offset) <- pure $ valueAsMemOffset mem aps addr

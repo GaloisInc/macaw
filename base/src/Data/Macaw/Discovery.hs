@@ -101,6 +101,7 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as Text
 import qualified System.IO as IO
+import qualified Prettyprinter as PP
 
 #define USE_REWRITER
 
@@ -119,6 +120,7 @@ import           Data.Macaw.Discovery.Classifier.JumpTable ( jumpTableClassifier
 import           Data.Macaw.Discovery.Classifier.PLT ( pltStubClassifier )
 import           Data.Macaw.Discovery.ParsedContents
 import           Data.Macaw.Discovery.State as State
+import qualified Data.Macaw.Discovery.Trace as Trace
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
 import           Data.Macaw.Utils.IncComp
@@ -526,7 +528,7 @@ parseFetchAndExecute ainfo classCtx stmts = do
     ClassifySucceeded _ m -> m
     ClassifyFailed rsns ->
       ParsedContents { parsedNonterm = stmts
-                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) rsns
+                     , parsedTerm  = ClassifyFailure (classifierFinalRegState classCtx) (map (show . PP.pretty) rsns)
                      , writtenCodeAddrs = classifierWrittenAddrs classCtx
                      , intraJumpTargets = fromMaybe [] (useExternalTargets classCtx)
                      , newFunctionAddrs = []

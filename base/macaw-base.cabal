@@ -71,6 +71,7 @@ library
     Data.Macaw.Discovery.Classifier.PLT
     Data.Macaw.Discovery.ParsedContents
     Data.Macaw.Discovery.State
+    Data.Macaw.Discovery.Trace
     Data.Macaw.Dwarf
     Data.Macaw.Fold
     Data.Macaw.Memory
