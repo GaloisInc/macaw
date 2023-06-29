@@ -533,7 +533,7 @@ identifyX86Return :: Seq (Stmt X86_64 ids)
 identifyX86Return stmts s finalRegSt8 =
   case transferValue finalRegSt8 (s^.boundValue ip_reg) of
     ReturnAddr -> return stmts
-    _ -> return mempty
+    _ -> fail "identifyX86Return: not a ReturnAddr"
 
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
