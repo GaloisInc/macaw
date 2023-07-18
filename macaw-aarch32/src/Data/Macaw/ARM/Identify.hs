@@ -110,11 +110,10 @@ identifyCall mem stmts0 rs
 identifyReturn :: Seq.Seq (MC.Stmt ARM.AArch32 ids)
                -> MC.RegState (MC.ArchReg ARM.AArch32) (MC.Value ARM.AArch32 ids)
                -> MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
-               -> Maybe (Seq.Seq (MC.Stmt ARM.AArch32 ids))
-identifyReturn stmts s finalRegSt8 =
-  if isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
-  then Just stmts
-  else Nothing
+               -> MAI.Classifier (Seq.Seq (MC.Stmt ARM.AArch32 ids))
+identifyReturn stmts s finalRegSt8 = do
+  isReturnValue finalRegSt8 (s^.MC.boundValue MC.ip_reg)
+  return stmts
 
 -- | Determines if the supplied value is the symbolic return address
 -- from Macaw, modulo any ARM semantics operations (lots of ite caused
@@ -122,11 +121,11 @@ identifyReturn stmts s finalRegSt8 =
 -- of the low bits (1 in T32 mode, 2 in A32 mode).
 isReturnValue :: MA.AbsProcessorState (MC.ArchReg ARM.AArch32) ids
               -> MC.Value ARM.AArch32 ids (MT.BVType (MC.RegAddrWidth (MC.ArchReg ARM.AArch32)))
-              -> Bool
+              -> MAI.Classifier ()
 isReturnValue absProcState val =
   case MA.transferValue absProcState val of
-    MA.ReturnAddr -> True
-    _ -> False
+    MA.ReturnAddr -> return ()
+    _ -> fail "isReturnValue: false"
 
 -- | If one of the values is the abstract return address, return the other (if it is a constant)
 --

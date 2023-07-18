@@ -59,7 +59,7 @@ identifyReturn :: (PPCArchConstraints var)
                -> Seq.Seq (MC.Stmt (SP.AnyPPC var) ids)
                -> MC.RegState (PPCReg var) (MC.Value (SP.AnyPPC var) ids)
                -> MA.AbsProcessorState (PPCReg var) ids
-               -> Maybe (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
+               -> MI.Classifier (Seq.Seq (MC.Stmt (SP.AnyPPC var) ids))
 identifyReturn _ stmts regState absState = do
   matchReturn absState (regState ^. MC.boundValue MC.ip_reg)
   return stmts
@@ -67,18 +67,18 @@ identifyReturn _ stmts regState absState = do
 matchReturn :: (ppc ~ SP.AnyPPC var, PPCArchConstraints var)
             => MA.AbsProcessorState (PPCReg var) ids
             -> MC.Value ppc ids (MT.BVType (SP.AddrWidth var))
-            -> Maybe (Some (MA.AbsValue w))
+            -> MI.Classifier ()
 matchReturn absProcState' ip = do
   MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShl _ addr (MC.BVValue _ shiftAmt)))) <- return ip
   guard (shiftAmt == 0x2)
   Some (MC.AssignedValue (MC.Assignment _ (MC.EvalApp (MC.BVShr _ addr' (MC.BVValue _ shiftAmt'))))) <- return (stripExtTrunc addr)
   guard (shiftAmt' == 0x2)
   case MA.transferValue absProcState' addr' of
-    MA.ReturnAddr -> return (Some MA.ReturnAddr)
+    MA.ReturnAddr -> return ()
     _ -> case addr' of
       MC.AssignedValue (MC.Assignment _ (MC.ReadMem readAddr memRep))
-        | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return (Some MA.ReturnAddr)
-      _ -> Nothing
+        | MA.ReturnAddr <- DE.absEvalReadMem absProcState' readAddr memRep -> return ()
+      _ -> fail "No return address found"
 
 -- | Look at a value; if it is a trunc, sext, or uext, strip that off and return
 -- the underlying value.  If it isn't, just return the value
