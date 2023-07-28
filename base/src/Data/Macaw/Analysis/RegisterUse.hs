@@ -4,7 +4,6 @@ task needed before deleting unused code.
 -}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE PolyKinds #-}
@@ -445,12 +444,12 @@ instance TestEquality (ArchReg arch) => TestEquality (BlockInferValue arch ids) 
   testEquality (IVAssignValue x) (IVAssignValue y) = testEquality x y
   testEquality (IVCValue x) (IVCValue y) = testEquality x y
   testEquality (IVCondWrite x xtp) (IVCondWrite y ytp) =
-    case x == y of
-      True ->
+    if x == y
+      then
         case testEquality xtp ytp of
           Just Refl -> Just Refl
           Nothing -> error "Equal conditional writes with inequal types."
-      False -> Nothing
+      else Nothing
   testEquality _ _ = Nothing
 
 -- Note. The @OrdF@ instance is a total order over @BlockInferValue@.
@@ -1014,7 +1013,7 @@ postCallConstraints params ctx s tidx regs =
   runInferNextM $ do
     case valueToStartExpr ctx (sisAssignMap s) (regs^.boundValue sp_reg) of
       FrameExpr spOff -> do
-        when (not (stackGrowsDown params)) $
+        unless (stackGrowsDown params) $
           error "Do not yet support architectures where stack grows up."
         when (postCallStackDelta params < 0) $
           error "Unexpected post call stack delta."
@@ -1054,7 +1053,7 @@ postCallConstraints params ctx s tidx regs =
         let cns = BSC LocMap { locMapRegs = regs'
                              , locMapStack = stk
                              }
-        pure $ Right $ (postValMap, cns)
+        pure $ Right (postValMap, cns)
       _ -> pure $ Left $
             RegisterUseError
             { ruBlock = sicAddr ctx,
@@ -1352,15 +1351,15 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
     ParsedJump regs next -> do
       let (pvm,frontierMap') = visitIntraJumpTarget lastFn ctx s regs (Map.empty, frontierMap) next
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
+      pure (m', frontierMap')
     ParsedBranch regs _cond t f -> do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) [t,f]
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
+      pure (m', frontierMap')
     ParsedLookupTable _layout regs _idx lbls -> do
       let (pvm, frontierMap') = foldl' (visitIntraJumpTarget lastFn ctx s regs) (Map.empty, frontierMap) lbls
       let m' = Map.insert addr (b, BSC cns, s, pvm) lastMap
-      pure $ (m', frontierMap')
+      pure (m', frontierMap')
     ParsedCall regs (Just next) -> do
       (postValCns, nextCns) <-
         case postCallConstraints (archCallParams rctx) ctx s stmtCount regs of
@@ -1371,14 +1370,14 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
     -- Tail call
     ParsedCall _ Nothing -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ParsedReturn _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     -- Works like a tail call.
     ParsedArchTermStmt _ _ Nothing -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ParsedArchTermStmt tstmt regs (Just next) -> do
       case archPostTermStmtInvariants rctx ctx s stmtCount tstmt regs of
         Left e ->
@@ -1388,15 +1387,15 @@ blockStartConstraints rctx blockMap addr (BSC cns) lastMap frontierMap = do
           pure (m', addNextConstraints lastFn next nextCns frontierMap)
     ParsedTranslateError _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     ClassifyFailure _ _ -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
     -- PLT stubs are essentiually tail calls with a non-standard
     -- calling convention.
     PLTStub{} -> do
       let m' = Map.insert addr (b, BSC cns, s, Map.empty) lastMap
-      pure $ (m', frontierMap)
+      pure (m', frontierMap)
 
 -- | Infer start constraints by recursively evaluating blocks
 propStartConstraints :: ArchConstraints arch
@@ -1874,7 +1873,7 @@ mkBlockUsageSummary ctx cns sis blk = do
         traverseF_ demandValue regs
         MapF.traverseWithKey_ (\r _ -> modify $ clearDependencySet r) regs
       ParsedReturn regs -> do
-        retRegs <- asks $ returnRegisters
+        retRegs <- asks returnRegisters
         traverse_ (\(Some r) -> demandValue (regs^.boundValue r)) retRegs
       ParsedArchTermStmt tstmt regs _mnext -> do
         summaryFn <- asks $ \x -> reguseTermFn x

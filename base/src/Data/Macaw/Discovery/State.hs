@@ -7,7 +7,6 @@ representing this information.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Discovery.State
   ( -- * DiscoveryState
@@ -240,8 +239,8 @@ emptyDiscoveryState mem addrSymMap info =
   , _globalDataMap       = Map.empty
   , _funInfo             = Map.empty
   , _unexploredFunctions = Map.empty
-  , _trustedFunctionEntryPoints = fmap (\_ -> Info.MayReturnFun) addrSymMap
-  , _exploreFnPred       = \_ -> True
+  , _trustedFunctionEntryPoints = Info.MayReturnFun <$ addrSymMap
+  , _exploreFnPred       = const True
   }
 
 -- | Map each jump table start to the address just after the end.

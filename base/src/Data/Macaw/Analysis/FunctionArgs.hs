@@ -6,14 +6,12 @@ which registers are needed for function arguments.
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Analysis.FunctionArgs
   ( functionDemands
     -- * Callbacks for architecture-specific information
@@ -398,7 +396,7 @@ valueUses (AssignedValue (Assignment a rhs)) = do
      Nothing -> do
        rhs' <- foldlMFC (\s v -> seq s $ Set.union s <$> valueUses v) Set.empty rhs
        seq rhs' $ modify' $ Map.insert (Some a) rhs'
-       pure $ rhs'
+       pure rhs'
 valueUses (Initial r) =
   pure $! Set.singleton (Some r)
 valueUses _ =
@@ -968,4 +966,4 @@ functionDemands archFns mem resolveCallFn entries = do
                 , resolveCallArgs = resolveCallFn
                 }
   let summaries = foldl' (summarizeFunction ctx) m0 entries
-  (calculateGlobalFixpoint summaries, (inferenceFails summaries))
+  (calculateGlobalFixpoint summaries, inferenceFails summaries)

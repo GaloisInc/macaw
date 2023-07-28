@@ -1,8 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TypeApplications #-}
 -- | Definitions supporting block classification during code discovery
 --
 -- This module defines data types and helpers to build block control flow
@@ -131,7 +129,7 @@ classifyDirectJump ctx nm v = do
          Nothing ->
            fail $ nm ++ " value " ++ show v ++ " is not a segment offset in " ++ show (pctxMemory ctx) ++ "."
          Just sa -> pure sa
-  when (not (segmentFlags (segoffSegment a) `Perm.hasPerm` Perm.execute)) $ do
+  unless (segmentFlags (segoffSegment a) `Perm.hasPerm` Perm.execute) $ do
     fail $ nm ++ " value " ++ show a ++ " is not executable."
   when (a == pctxFunAddr ctx) $ do
     fail $ nm ++ " value " ++ show a ++ " refers to function start."
@@ -202,7 +200,7 @@ branchClassifier = classifierName "Branch" $ do
                               }
       -- Both branches were deemed impossible
       Jmp.InfeasibleBranch -> do
-        fail $ "Branch targets are both unreachable."
+        fail "Branch targets are both unreachable."
 
 -- | Identify new potential function entry points by looking at IP.
 identifyCallTargets :: forall arch ids
@@ -246,14 +244,14 @@ callClassifier = classifierName "Call" $ do
   let mem = pctxMemory ctx
   ret <- case Info.identifyCall ainfo mem (classifierStmts bcc) finalRegs of
            Just (_prev_stmts, ret) -> pure ret
-           Nothing -> fail $ "Call classifier failed."
+           Nothing -> fail "Call classifier failed."
   Info.withArchConstraints ainfo $ do
     pure $ Parsed.ParsedContents { Parsed.parsedNonterm = F.toList (classifierStmts bcc)
                               , Parsed.parsedTerm  = Parsed.ParsedCall finalRegs (Just ret)
                               -- The return address may be written to
                               -- stack, but is highly unlikely to be
                               -- a function entry point.
-                              , Parsed.writtenCodeAddrs = filter (\a -> a /= ret) (classifierWrittenAddrs bcc)
+                              , Parsed.writtenCodeAddrs = filter (/= ret) (classifierWrittenAddrs bcc)
                               --Include return target
                               , Parsed.intraJumpTargets =
                                 [( ret
@@ -411,7 +409,7 @@ tailCallClassifier = classifierName "Tail call" $ do
     o <-
       case transferValue (classifierAbsState bcc) spVal of
         StackOffsetAbsVal _ o -> pure o
-        _ -> fail $ "Not a stack offset"
+        _ -> fail "Not a stack offset"
     -- Stack stack is back to height when function was called.
     unless (o == 0) $
       fail "Expected stack height of 0"
