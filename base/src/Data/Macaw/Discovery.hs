@@ -12,8 +12,6 @@ target binaries.
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE UndecidableInstances #-}
 module Data.Macaw.Discovery
        ( -- * DiscoveryInfo
@@ -83,7 +81,7 @@ module Data.Macaw.Discovery
 
 import           Control.Applicative ( Alternative((<|>)) )
 import           Control.Lens ( Lens', (&), (^.), (%~), (.~), (%=), use, lens, _Just, at )
-import           Control.Monad ( when )
+import           Control.Monad ( unless, when )
 import qualified Control.Monad.ST.Lazy as STL
 import qualified Control.Monad.ST.Strict as STS
 import qualified Control.Monad.State.Strict as CMS
@@ -387,7 +385,7 @@ newtype FunM arch s ids a = FunM { unFunM :: CMS.StateT (FunState arch s ids) (S
   deriving (Functor, Applicative, Monad)
 
 instance CMS.MonadState (FunState arch s ids) (FunM arch s ids) where
-  get = FunM $ CMS.get
+  get = FunM CMS.get
   put s = FunM $ CMS.put s
 
 ------------------------------------------------------------------------
@@ -403,7 +401,7 @@ mergeIntraJump  :: ArchitectureInfo arch
                 -> FunM arch s ids ()
 mergeIntraJump info src (tgt, ab, bnds) = do
   withArchConstraints info $ do
-   when (not (absStackHasReturnAddr ab)) $ do
+   unless (absStackHasReturnAddr ab) $ do
     debug DCFG ("WARNING: Missing return value in jump from " ++ show src ++ " to\n" ++ show ab) $
       pure ()
    -- Associate a new abstract state with the code region.
@@ -444,7 +442,7 @@ recordWriteStmts :: ArchitectureInfo arch
                     , [ArchSegmentOff arch]
                     )
 recordWriteStmts _archInfo _mem absState writtenAddrs [] =
-  seq absState $ (absState, writtenAddrs)
+  seq absState (absState, writtenAddrs)
 recordWriteStmts ainfo mem absState writtenAddrs (stmt:stmts) =
   seq absState $ do
     let absState' = absEvalStmt ainfo absState stmt
@@ -703,7 +701,7 @@ mkFunState :: PN.NonceGenerator (STS.ST s) ids
 mkFunState gen s rsn addr extraIntraTargets = do
   let faddr = FoundAddr { foundReason = FunctionEntryPoint
                         , foundAbstractState = mkInitialAbsState (archInfo s) (memory s) addr
-                        , foundJumpBounds    = withArchConstraints (archInfo s) $ Jmp.functionStartBounds
+                        , foundJumpBounds    = withArchConstraints (archInfo s) Jmp.functionStartBounds
                         }
    in FunState { funReason = rsn
                , funNonceGen = gen

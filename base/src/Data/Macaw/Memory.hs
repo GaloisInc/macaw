@@ -13,7 +13,6 @@ Declares 'Memory', a type for representing segmented memory with permissions.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 module Data.Macaw.Memory
@@ -421,10 +420,10 @@ memInt =
     Addr64 -> \x -> MemInt x
 
 instance Eq (MemInt w) where
-  (==) = \x y -> memIntValue x == memIntValue y
+  x == y = memIntValue x == memIntValue y
 
 instance Ord (MemInt w) where
-  compare = \x y -> compare (memIntValue x) (memIntValue y)
+  compare x y = compare (memIntValue x) (memIntValue y)
 
 instance Hashable (MemInt w) where
   hashWithSalt s (MemInt w) = s `hashWithSalt` w
@@ -446,9 +445,9 @@ instance MemWidth w => Bounded (MemInt w) where
       Addr64 -> MemInt maxBound
 
 instance MemWidth w => Num (MemInt w) where
-  (+) = \x y -> memInt $ memIntValue x + memIntValue y
-  (-) = \x y -> memInt $ memIntValue x - memIntValue y
-  (*) = \x y -> memInt $ memIntValue x * memIntValue y
+  x + y = memInt $ memIntValue x + memIntValue y
+  x - y = memInt $ memIntValue x - memIntValue y
+  x * y = memInt $ memIntValue x * memIntValue y
   abs = memInt . abs . memIntValue
   fromInteger = memInt . fromInteger
   negate = memInt . negate . memIntValue
@@ -847,7 +846,7 @@ memSegment :: forall m w
            -> m (MemSegment w)
 memSegment relocMap regionIndex regionOff msegIdx linkBaseOff flags bytes sz
       -- Return nothing if size is not positive
-    | not (sz > 0) = error $ "Memory segments must have a positive size."
+    | sz <= 0 = error "Memory segments must have a positive size."
       -- Make sure end of segment does not overflow.
     | regionOff + toInteger linkBaseOff + toInteger sz > toInteger (maxBound :: MemWord w) =
       error "Contents too large for base."
@@ -1311,7 +1310,7 @@ segoffContentsAfter mseg = do
       case Map.maxViewWithKey premap of
         -- This implies nothing starts before the segment offset, which should not be
         -- allowed
-        Nothing -> error $ "Memory.segoffContentsAfter invalid contents"
+        Nothing -> error "Memory.segoffContentsAfter invalid contents"
         -- If last segment is a byte region then we drop elements before offset.
         Just ((preOff, ByteRegion bs),_) -> do
           let v = ByteRegion (BS.drop (fromIntegral (off - preOff)) bs)
@@ -1396,7 +1395,7 @@ splitMemChunks' prev cnt (reg@(ByteRegion bs) : rest) = do
   if cnt < sz then do
     let taken   = ByteRegion (BS.take cnt bs):prev
     let dropped = ByteRegion (BS.drop cnt bs) : rest
-    pure $ (reverse taken, dropped)
+    pure (reverse taken, dropped)
    else do
     splitMemChunks' (reg:prev) (cnt - sz) rest
 splitMemChunks' prev cnt (reg@(RelocationRegion r):rest) = do
@@ -1409,7 +1408,7 @@ splitMemChunks' prev cnt (reg@(BSSRegion sz): rest) =
   if toInteger cnt < toInteger sz then do
     let taken   = BSSRegion (fromIntegral cnt):prev
     let dropped = BSSRegion (sz - fromIntegral cnt) : rest
-    pure $ (reverse taken, dropped)
+    pure (reverse taken, dropped)
    else
     splitMemChunks' (reg:prev) (cnt - fromIntegral sz) rest
 
@@ -1536,7 +1535,7 @@ readAddr mem end addr = addrWidthClass (memAddrWidth mem) $ do
   bs <- readByteString mem addr sz
   case addrRead end bs of
     Just val -> Right $ MemAddr 0 val
-    Nothing -> error $ "readAddr internal error: readByteString result too short."
+    Nothing -> error "readAddr internal error: readByteString result too short."
 
 -- | Read the given address as a reference to a memory segment offset, or report a
 -- memory read error.
@@ -1553,7 +1552,7 @@ readSegmentOff mem end addr = addrWidthClass (memAddrWidth mem) $ do
       case asSegmentOff mem addrInMem of
         Just res -> pure res
         Nothing -> Left (InvalidAddr addrInMem)
-    Nothing -> error $ "readSegmentOff internal error: readByteString result too short."
+    Nothing -> error "readSegmentOff internal error: readByteString result too short."
 
 -- | Read a single byte.
 readWord8 :: Memory w -> MemAddr w -> Either (MemoryError w) Word8
@@ -1650,7 +1649,7 @@ findByteStringMatches pat curIndex segs@((relOffset, chunk) : rest)
   | BS.length pat == 0 = []
   | otherwise =
     if matchPrefix pat (map snd segs) then
-      (currentAddr : findByteStringMatches pat nextIndex remainingElems)
+      currentAddr : findByteStringMatches pat nextIndex remainingElems
     else
       findByteStringMatches pat nextIndex remainingElems
   where
@@ -1674,7 +1673,7 @@ matchPrefix pat (rel@(RelocationRegion _r) : rest)
   -- When pattern is greater than size of the relocation, skip
   -- relocation bytes in the pattern and look for match in beginning
   -- of the next range.
-  | BS.length pat > (fromIntegral sz) = matchPrefix (BS.drop (fromIntegral sz) pat) rest
+  | BS.length pat > fromIntegral sz = matchPrefix (BS.drop (fromIntegral sz) pat) rest
   -- When length of pattern is less than or equal to the size of the relocation => match
   | otherwise = True
   where sz = chunkSize rel
@@ -1686,7 +1685,7 @@ matchPrefix pat (ByteRegion bs : rest)
     -- the elems that do exist match the pattern prefix and
     -- that a following regions contain the remaining search pattern.
     -- NOTE: Assumes the regions are adjacent to each other.
-  | otherwise = regionPrefix == (BS.take prefixLen pat) && matchPrefix (BS.drop prefixLen pat) rest
+  | otherwise = regionPrefix == BS.take prefixLen pat && matchPrefix (BS.drop prefixLen pat) rest
   where
     matchLen     = BS.length pat
     regionPrefix = BS.take matchLen bs

@@ -87,7 +87,7 @@ runDemandComp ctx comp = demandedAssignIds $ execState (unDemandComp comp) s
 -- values needed to compute it.
 addAssignmentDemands :: Assignment arch ids tp -> DemandComp arch ids ()
 addAssignmentDemands a = do
-  s <- DemandComp $ get
+  s <- DemandComp get
   let thisId = Some (assignId a)
   when (Set.notMember thisId (demandedAssignIds s)) $ do
     let s' = s { demandedAssignIds = Set.insert thisId (demandedAssignIds s) }
@@ -124,7 +124,7 @@ addStmtDemands s =
     Comment _ ->
       pure ()
     ExecArchStmt astmt -> do
-      ctx <- DemandComp $ gets $ demandContext
+      ctx <- DemandComp $ gets demandContext
       demandConstraints ctx $
         traverseF_ addValueDemands astmt
     ArchState _a updates ->
