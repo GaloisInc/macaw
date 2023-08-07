@@ -96,7 +96,8 @@ module Data.Macaw.CFG.Core
   ) where
 
 import           Control.Lens
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.State.Strict (MonadState(..), State, gets, modify, runState)
 import           Data.Bits
 import           Data.Int (Int64)
 import qualified Data.Kind as Kind

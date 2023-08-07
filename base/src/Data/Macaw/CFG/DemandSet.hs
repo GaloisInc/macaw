@@ -20,7 +20,8 @@ module Data.Macaw.CFG.DemandSet
   , stmtNeeded
   ) where
 
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.State.Strict (MonadState(..), State, execState, gets)
 import           Data.Parameterized.Some
 import           Data.Parameterized.TraversableF
 import           Data.Parameterized.TraversableFC

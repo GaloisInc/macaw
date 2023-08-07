@@ -51,9 +51,10 @@ module Data.Macaw.X86
        ) where
 
 import           Control.Lens
-import           Control.Monad.Cont
-import           Control.Monad.Except
+import           Control.Monad (when)
+import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT, withExceptT)
 import           Control.Monad.ST
+import           Control.Monad.Trans (MonadTrans(..))
 import qualified Data.ElfEdit as EE
 import           Data.Foldable
 import qualified Data.Map as Map
