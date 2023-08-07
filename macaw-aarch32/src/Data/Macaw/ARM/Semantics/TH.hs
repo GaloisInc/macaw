@@ -45,7 +45,7 @@ import           Data.Parameterized.Classes
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Parameterized.NatRepr
-import           GHC.TypeLits as TL
+import qualified GHC.TypeLits as TL
 import qualified What4.Expr.Builder as WEB
 import           Language.Haskell.TH
 import qualified SemMC.Architecture.AArch32 as ARM

@@ -34,8 +34,10 @@ module Data.Macaw.CFG.Rewriter
   ) where
 
 import           Control.Lens
+import           Control.Monad (when)
 import           Control.Monad.ST
-import           Control.Monad.State.Strict
+import           Control.Monad.State.Strict (StateT(..), gets)
+import           Control.Monad.Trans (MonadTrans(..))
 import           Data.BinarySymbols
 import           Data.Bits
 import           Data.List (find)

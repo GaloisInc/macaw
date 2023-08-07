@@ -67,9 +67,10 @@ module Data.Macaw.Analysis.RegisterUse
   ) where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Reader
-import           Control.Monad.State.Strict
+import           Control.Monad (unless, when, zipWithM_)
+import           Control.Monad.Except (MonadError(..), Except)
+import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
+import           Control.Monad.State.Strict (MonadState(..), State, StateT, execStateT, evalState, gets, modify)
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import           Data.Foldable

@@ -36,7 +36,7 @@ module Data.Macaw.AbsDomain.JumpBounds
   , IntraJumpTarget
   ) where
 
-import           Control.Monad.Reader
+import           Control.Monad (unless, when)
 import           Data.Bits
 import           Data.Foldable
 import           Data.Map.Strict (Map)

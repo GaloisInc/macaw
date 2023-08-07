@@ -105,8 +105,8 @@ module Data.Macaw.AbsDomain.StackAnalysis
   , MemVal(..)
   ) where
 
-import           Control.Monad.Reader
-import           Control.Monad.State
+import           Control.Monad (unless)
+import           Control.Monad.State (MonadState(..), State, evalState, gets)
 import           Data.Kind
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map

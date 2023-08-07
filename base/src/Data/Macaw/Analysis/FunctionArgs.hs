@@ -31,9 +31,10 @@ module Data.Macaw.Analysis.FunctionArgs
   ) where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.Reader
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.Except (Except, MonadError(..), runExcept)
+import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
+import           Control.Monad.State.Strict (State, StateT, evalStateT, gets, modify', runState)
 import           Data.Foldable
 import qualified Data.Kind as Kind
 import           Data.Map.Strict (Map)

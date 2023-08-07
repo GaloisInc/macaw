@@ -27,7 +27,7 @@ library
     text,
     vector,
     bytestring,
-    what4 >= 1.1 && < 1.5
+    what4 >= 1.1 && < 1.6
 
   hs-source-dirs: src
 
@@ -56,6 +56,6 @@ test-suite doctests
   hs-source-dirs: test
   main-is: doctest.hs
   ghc-options: -Wall -Wcompat -threaded
-  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.21
+  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.23
 
 

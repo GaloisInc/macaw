@@ -84,11 +84,14 @@ module Data.Macaw.Symbolic.CrucGen
   ) where
 
 import           Control.Lens hiding (Empty, (:>))
-import           Control.Monad.Except
+import           Control.Monad (foldM, forM, unless)
+import           Control.Monad.Except (MonadError(..), ExceptT, runExceptT)
 import qualified Control.Monad.Fail as MF
-import           Control.Monad.State.Strict
+import           Control.Monad.State.Strict (MonadState(..), StateT(..), gets, modify')
+import           Control.Monad.Trans (MonadTrans(..))
 import qualified Data.BitVector.Sized as BV
 import qualified Data.Foldable as F
+import           Data.Functor (void)
 import qualified Data.Kind as K
 import qualified Data.Macaw.CFG as M
 import qualified Data.Macaw.CFG.Block as M

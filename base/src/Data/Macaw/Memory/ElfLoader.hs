@@ -41,8 +41,9 @@ module Data.Macaw.Memory.ElfLoader
   ) where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.Except (Except, ExceptT, MonadError(..), runExcept, runExceptT)
+import           Control.Monad.State.Strict (State, StateT(..), execStateT, gets, modify, runState)
 import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC

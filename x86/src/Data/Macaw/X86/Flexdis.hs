@@ -15,9 +15,10 @@ module Data.Macaw.X86.Flexdis
   , RelocPos(..)
   ) where
 
-import           Control.Monad.Except
+import           Control.Monad (when)
+import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT)
 import qualified Control.Monad.Fail as MF
-import           Control.Monad.State.Strict
+import           Control.Monad.State.Strict (MonadState(..), State, gets, runState)
 import           Data.Bits
 import qualified Data.ByteString as BS
 import           Data.Int
