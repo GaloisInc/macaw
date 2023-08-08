@@ -62,8 +62,8 @@ import qualified What4.Interface as SI
 
 import qualified SemMC.Architecture.Location as L
 
-data MacawSemMC t = MacawSemMC 
-type Sym t fs = S.ExprBuilder t MacawSemMC fs 
+data MacawSemMC t = MacawSemMC
+type Sym t fs = S.ExprBuilder t MacawSemMC fs
 
 data BoundVarInterpretations arch t fs =
   BoundVarInterpretations { locVars :: Map.MapF (SI.BoundVar (Sym t fs)) (L.Location arch)
