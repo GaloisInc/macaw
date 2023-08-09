@@ -80,7 +80,7 @@ module Data.Macaw.Discovery
        ) where
 
 import           Control.Applicative ( Alternative((<|>)) )
-import           Control.Lens ( Lens', (&), (^.), (%~), (.~), (%=), use, lens, _Just, at )
+import           Control.Lens ( Lens', (&), (^.), (^?), (%~), (.~), (%=), use, lens, _Just, at )
 import           Control.Monad ( unless, when )
 import qualified Control.Monad.ST.Lazy as STL
 import qualified Control.Monad.ST.Strict as STS
@@ -732,10 +732,11 @@ reportAnalyzeBlock :: DiscoveryOptions
                       -- ^ Options controlling discovery
                    -> ArchSegmentOff arch -- ^ Function address
                    -> ArchSegmentOff arch -- ^ Block address
+                   -> Maybe (BlockExploreReason (ArchAddrWidth arch))
                    -> IncComp (DiscoveryEvent arch) a
                    -> IncComp (DiscoveryEvent arch) a
-reportAnalyzeBlock disOpts faddr baddr
-  | logAtAnalyzeBlock disOpts = IncCompLog (ReportAnalyzeBlock faddr baddr)
+reportAnalyzeBlock disOpts faddr baddr mReason
+  | logAtAnalyzeBlock disOpts = IncCompLog (ReportAnalyzeBlock faddr baddr mReason)
   | otherwise = id
 
 analyzeBlocks :: DiscoveryOptions
@@ -762,7 +763,8 @@ analyzeBlocks disOpts ds0 faddr fs =
             | otherwise = go ds r
       pure $ go ds1 (Map.toList (fs^.newEntries))
     Just (baddr, next_roots) ->
-      fmap (reportAnalyzeBlock disOpts faddr baddr) $ do
+      let mReason = fs^.foundAddrs.at baddr^?_Just.foundReasonL in
+      fmap (reportAnalyzeBlock disOpts faddr baddr mReason) $ do
         fs' <- transfer baddr (fs & frontier .~ next_roots)
         analyzeBlocks disOpts ds0 faddr fs'
 
@@ -946,11 +948,15 @@ data DiscoveryEvent arch
         !(ArchSegmentOff arch)
         !(ArchSegmentOff arch)
         !(FunctionExploreReason (ArchAddrWidth arch))
-      -- | @ReportAnalyzeBlock faddr baddr@ indicates discovery identified
-      -- a block at @baddr@ in @faddr@.
+      -- | @ReportAnalyzeBlock faddr baddr reason@ indicates discovery
+      -- identified a block at @baddr@ in @faddr@.  @reason@ is the reason why
+      -- this block is explored (or sometimes re-explored).
       --
       -- N.B. This event is only emitted when `logAtAnalyzeBlock` is true.
-   | ReportAnalyzeBlock !(ArchSegmentOff arch) !(ArchSegmentOff arch)
+   | ReportAnalyzeBlock
+      !(ArchSegmentOff arch)
+      !(ArchSegmentOff arch)
+      !(Maybe (BlockExploreReason (ArchAddrWidth arch)))
 
 ppSymbol :: MemWidth w => Maybe BSC.ByteString -> MemSegmentOff w -> String
 ppSymbol (Just fnName) addr = show addr ++ " (" ++ BSC.unpack fnName ++ ")"
@@ -972,7 +978,7 @@ logDiscoveryEvent symMap p =
                        ++ ppSymbol (Map.lookup tgt symMap) tgt
                        ++ " " ++ ppFunReason rsn
       IO.hFlush IO.stderr
-    ReportAnalyzeBlock _ baddr -> do
+    ReportAnalyzeBlock _ baddr _ -> do
       IO.hPutStrLn IO.stderr $ "  Analyzing block: " ++ show baddr
       IO.hFlush IO.stderr
 
