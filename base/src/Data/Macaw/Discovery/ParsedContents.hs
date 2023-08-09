@@ -65,6 +65,15 @@ data BlockExploreReason w
 
   deriving (Eq, Show)
 
+instance MemWidth w => PP.Pretty (BlockExploreReason w) where
+  pretty (NextIP b) = "next address after block " <> PP.pretty b
+  pretty FunctionEntryPoint = "function entry point"
+  pretty (SplitAt o prior) =
+    PP.vcat
+      [ "split at offset" PP.<+> PP.pretty o <> ", previously reachable from:"
+      , PP.indent 2 (PP.pretty prior)
+      ]
+
 -------------------------------------------------------------------------------
 -- BoundedMemArray
 
