@@ -3,7 +3,6 @@ This defines the architecture-specific information needed for code discovery.
 -}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.Architecture.Info
