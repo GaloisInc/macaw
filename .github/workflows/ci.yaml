@@ -44,15 +44,6 @@ jobs:
         ghc-version: ${{ matrix.ghc-ver }}
         cabal-version: ${{ matrix.cabal }}
 
-    - uses: actions/cache/restore@v3
-      name: Restore cabal store cache
-      with:
-        path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
-        # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
-        # otherwise just use most recent build.
-        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
-
     - name: System Dependencies
       run: |
         sudo apt update
@@ -73,6 +64,19 @@ jobs:
         cp cabal.project.dist cabal.project
         cp cabal.project.werror cabal.project.local
         cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
+
+    # WARNING: Make sure this step remains after the step that creates
+    # cabal.project.freeze, or the cache key will be incorrect!
+    - uses: actions/cache/restore@v3
+      name: Restore cabal store cache
+      with:
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
+        # Prefer previous SHA hash if it is still cached
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        # otherwise just use most recent build.
+        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: Cabal update
       run: cabal update
@@ -139,6 +143,8 @@ jobs:
       name: Save cabal store cache
       if: always()
       with:
-        path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
         # Prefer previous SHA hash if it is still cached
         key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
