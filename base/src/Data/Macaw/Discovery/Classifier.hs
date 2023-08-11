@@ -362,7 +362,7 @@ noreturnCallParsedContents bcc =
 --
 -- Note that this classifier should always be run before the 'callClassifier'.
 noreturnCallClassifier :: BlockClassifier arch ids
-noreturnCallClassifier = classifierName "no return call" $ do
+noreturnCallClassifier = classifierName "No return call" $ do
   bcc <- CMR.ask
   let ctx = classifierParseContext bcc
   -- Check for tail call when the calling convention seems to be satisfied.
