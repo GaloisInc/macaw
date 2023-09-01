@@ -4,6 +4,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Data.Macaw.ARM.Identify
     ( identifyCall
@@ -11,10 +12,11 @@ module Data.Macaw.ARM.Identify
     , isReturnValue
     , conditionalReturnClassifier
     , conditionalCallClassifier
+    , wrapClassifierForPstateT
     ) where
 
 import           Control.Applicative ( (<|>) )
-import           Control.Lens ( (^.) )
+import           Control.Lens ( (^.), (%~), (&) )
 import           Control.Monad ( when )
 import qualified Control.Monad.Reader as CMR
 import qualified Data.Foldable as F
@@ -36,6 +38,9 @@ import qualified Data.Sequence as Seq
 import qualified SemMC.Architecture.AArch32 as ARM
 
 import Prelude
+import qualified Language.ASL.Globals as ASL
+import qualified Data.Set as Set
+import Data.Macaw.AbsDomain.AbsState
 
 -- | Test if an address is in an executable segment
 isExecutableSegOff :: MC.MemSegmentOff w -> Bool
@@ -365,3 +370,66 @@ conditionalCallClassifier = do
     Jmp.TrueFeasibleBranch _ -> fail "Infeasible false branch"
     Jmp.FalseFeasibleBranch _ -> fail "Infeasible true branch"
     Jmp.InfeasibleBranch -> fail "Branch targets are both infeasible"
+
+-- | Set the least significant bit of a segment offset.
+setSegOffLeastBit :: MM.MemWidth w
+                  => MC.MemSegmentOff w
+                  -> MC.MemSegmentOff w
+setSegOffLeastBit addr = case MM.incSegmentOff (MM.clearSegmentOffLeastBit addr) 1 of
+  Just addr' -> addr'
+  Nothing -> error "PANIC: setSegOffLeastBit"
+
+{- | 
+  Wrap an existing 'MAI.BlockClassifier' to ensure that the value of the
+  PSTATE_T register is consistent, so that ARM/Thumb mode switching is
+  correctly followed. Specifically two changes to the resulting 'ParsedContents'
+  are made:
+
+  *   Override the post-state of any intra-jump targets to always restore
+    PSTATE_T to what it was at the *start* of the block, to ensure that all blocks within
+    the same function use the same decoder.
+      This is necessary because BLX sets PSTATE_T to 1 before jumping. The current 
+    register-preservation logic will therefore incorrectly consider the value of PSTATE_T to always be 1 
+    at the return point after a call to a thumb-mode function.
+      Instead, we overwrite the value of PSTATE_T to the value it had at the beginning of
+    the block. Since the only instructions that change PSTATE_T are block terminators,
+    we can assume that the value of PSTATE_T will be unchanged during a single block.
+  
+  *   Modify any new function addresses to ensure that the low bit agrees with the final
+    value of PSTATE_T. This is to avoid macaw producing duplicate blocks for functions
+    which are called from both ARM and Thumb mode.
+      When in thumb mode, calling a thumb-mode function does not require having the low
+    bit of its address set, since the value of PSTATE_T tells the processor to continue 
+    decoding in Thumb mode. If this function is called from both thumb and ARM mode, then
+    macaw will produce two duplicate blocks for it, one where the low bit is set and
+    one where it is not.
+      Instead, by forcing the function address to always agree with the value of PSTATE_T, we
+    ensure that the low bit of any function address necessarily determines whether or not
+    it is thumb vs. arm mode, regardless of how it is called.
+
+-}
+wrapClassifierForPstateT ::
+  MAI.BlockClassifier ARM.AArch32 ids -> MAI.BlockClassifier ARM.AArch32 ids
+wrapClassifierForPstateT f = do
+  bcc <- CMR.ask
+  let initRegs = MAI.classifierInitRegState bcc
+  let pstateT_reg = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
+  parsedContents <- f
+  -- restore PSTATE_T to its value at the start of the block
+  parsedContents' <- case initRegs ^. MC.boundValue pstateT_reg of
+    MC.BVValue _ init_pstateT -> do
+      let setPstateT (ret,absSt,bounds) = let
+            abs_pstateT = MA.FinSet (Set.singleton init_pstateT)
+            absSt' = absSt & MA.absRegState . MC.boundValue pstateT_reg %~ (\_ -> abs_pstateT)
+            in (ret, absSt',bounds)
+      let tgts' = map setPstateT (Parsed.intraJumpTargets parsedContents)
+      return $ parsedContents {Parsed.intraJumpTargets = tgts' }
+    _ -> return parsedContents
+  let final_pstateT = MAI.classifierFinalRegState bcc ^. MC.boundValue pstateT_reg
+  -- set the low bit of any discovered functions to agree with the final value of PSTATE_T
+  case transferValue (MAI.classifierAbsState bcc) final_pstateT  of
+    MA.FinSet (Set.toList -> [b]) -> do
+      let setBit addr = if b == 1 then setSegOffLeastBit addr else MM.clearSegmentOffLeastBit addr
+      let newFunctionAddrs' = map setBit (Parsed.newFunctionAddrs parsedContents')
+      return $ parsedContents' {Parsed.newFunctionAddrs = newFunctionAddrs' }
+    _ -> return parsedContents'
