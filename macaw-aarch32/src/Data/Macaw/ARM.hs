@@ -17,7 +17,7 @@ import qualified Data.ElfEdit as EE
 import           Data.Macaw.ARM.Arch
 import           Data.Macaw.ARM.Disassemble ( disassembleFn )
 import           Data.Macaw.ARM.Eval
-import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn, isReturnValue, conditionalReturnClassifier, conditionalCallClassifier )
+import           Data.Macaw.ARM.Identify ( identifyCall, identifyReturn, isReturnValue, conditionalReturnClassifier, conditionalCallClassifier, wrapClassifierForPstateT )
 import qualified Data.Macaw.ARM.ARMReg as ARMReg
 import qualified Data.Macaw.ARM.Semantics.ARMSemantics as ARMSem
 import qualified Data.Macaw.ARM.Semantics.ThumbSemantics as ThumbSem
@@ -55,7 +55,7 @@ arm_linux_info =
                         , MI.rewriteArchTermStmt = rewriteTermStmt
                         , MI.archDemandContext = archDemandContext
                         , MI.postArchTermStmtAbsState = postARMTermStmtAbsState preserveRegAcrossSyscall
-                        , MI.archClassifier = conditionalCallClassifier <|> conditionalReturnClassifier <|> MD.defaultClassifier
+                        , MI.archClassifier = wrapClassifierForPstateT (conditionalCallClassifier <|> conditionalReturnClassifier <|> MD.defaultClassifier)
                         }
 
 archDemandContext :: MDS.DemandContext ARM.AArch32
