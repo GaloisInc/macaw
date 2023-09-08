@@ -179,8 +179,12 @@ disassembleInstruction curIPAddr contents =
     Right r -> do
       pure r
 
--- | Translate block, returning blocks read, ending
--- PC, and an optional error.  and ending PC.
+-- | Translate one instruction, returning:
+-- * the parsed instruction,
+-- * an updated block, either unfinished or finished,
+-- * the size of the parsed instruction,
+-- * the next PC,
+-- * the rest of the instruction memory contents.
 translateStep :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
@@ -282,8 +286,9 @@ translateInstruction gen initRegs addr =
       (_i, res, instSize, _nextIP, _nextContents) <- translateStep gen pblock 0 addr contents
       pure $! (finishPartialBlock res, fromIntegral instSize)
 
--- | Translate block, returning block read, number of bytes in block,
--- remaining bytes to parse, and an optional error.
+-- | Translate one block, returning:
+-- * the read block,
+-- * the offset of the next instruction after this block.
 translateBlockImpl :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
