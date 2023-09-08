@@ -1956,30 +1956,32 @@ instance Semigroup (LocList r tp) where
 -- | This describes information about a block inferred by
 -- register-use.
 data BlockInvariants arch ids = BI
- { biUsedAssignSet :: !(Set (Some (AssignId ids)))
-  -- | Indices of write and cond-write statements that write to stack
-  -- and whose value is later needed to execute the program.
-     , biUsedWriteSet  :: !(Set StmtIndex)
-       -- | In-order list of memory accesses in block.
-     , biMemAccessList :: ![(StmtIndex, MemAccessInfo arch ids)]
-       -- | Map from locations to the non-representative locations that are
-       -- equal to them.
-     , biLocMap :: !(MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch)))
-       -- | Map predecessors for this block along with map from locations
-       -- to phi value
-     , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
-       -- | Locations from previous block used to initial phi variables.
-     , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
-       -- | Start constraints for block
-     , biStartConstraints :: !(BlockStartConstraints arch)
-       -- | If this block ends with a call, this has the type of the function called.
-       -- Otherwise, the value should be @Nothing@.
-     , biCallFunType :: !(Maybe (ArchFunType arch))
-      -- | Maps assignment identifiers to the associated value.
-      --
-      -- If an assignment id @aid@ is not in this map, then we assume it
-      -- is equal to @SAVEqualAssign aid@
-    , biAssignMap :: !(MapF (AssignId ids) (BlockInferValue arch ids))
+    -- | Subset of assignments that are actually needed to execute the block,
+    -- i.e. **not dead** assignments.
+  { biUsedAssignSet :: !(Set (Some (AssignId ids)))
+    -- | Indices of write and cond-write statements that write to stack
+    -- and whose value is later needed to execute the program.
+  , biUsedWriteSet  :: !(Set StmtIndex)
+    -- | In-order list of memory accesses in block.
+  , biMemAccessList :: ![(StmtIndex, MemAccessInfo arch ids)]
+    -- | Map from locations to the non-representative locations that are
+    -- equal to them.
+  , biLocMap :: !(MapF (BoundLoc (ArchReg arch)) (LocList (ArchReg arch)))
+    -- | Map predecessors for this block along with map from locations
+    -- to phi value
+  , biPredPostValues :: !(Map (ArchSegmentOff arch) (PostValueMap arch ids))
+    -- | Locations from previous block used to initial phi variables.
+  , biPhiLocs :: ![Some (BoundLoc (ArchReg arch))]
+    -- | Start constraints for block
+  , biStartConstraints :: !(BlockStartConstraints arch)
+    -- | If this block ends with a call, this has the type of the function called.
+    -- Otherwise, the value should be @Nothing@.
+  , biCallFunType :: !(Maybe (ArchFunType arch))
+    -- | Maps assignment identifiers to the associated value.
+    --
+    -- If an assignment id @aid@ is not in this map, then we assume it
+    -- is equal to @SAVEqualAssign aid@
+  , biAssignMap :: !(MapF (AssignId ids) (BlockInferValue arch ids))
   }
 
 -- | Return true if assignment is needed to execute block.
