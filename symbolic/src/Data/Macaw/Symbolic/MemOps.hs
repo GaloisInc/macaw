@@ -44,6 +44,10 @@ module Data.Macaw.Symbolic.MemOps
   , isValidPtr
   , mkUndefinedBool
   , muxMemReprValue
+  , cases
+  , endCase
+  , (~>)
+  , binOpLabel
   ) where
 
 import           Control.Exception (throwIO)

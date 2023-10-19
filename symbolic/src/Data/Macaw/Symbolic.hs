@@ -122,6 +122,10 @@ module Data.Macaw.Symbolic
   , ptrOp
   , isValidPtr
   , mkUndefinedBool
+  , cases
+  , endCase
+  , (~>)
+  , binOpLabel
   , MO.GlobalMap(..)
   , unsupportedFunctionCalls
   , MO.LookupFunctionHandle(..)
