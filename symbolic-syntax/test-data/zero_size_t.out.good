@@ -1,0 +1,14 @@
+(defun @zero_size_t () SizeT
+   (start start:
+      (let zero (bv-typed-literal SizeT 0))
+      (return zero)))
+
+zero_size_t
+%0
+  % 4:15
+  $0 = intLit(0)
+  % 4:15
+  $1 = integerToBV(64, $0)
+  % 5:5
+  return $1
+  % no postdom
