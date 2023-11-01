@@ -31,6 +31,9 @@ data LoadOptions =
   LoadOptions { loadOffset :: Maybe Word64
                 -- ^ If set, the Elf file should be loaded at a specific offset.
               , ignoreSegments :: [Int]
+                -- ^ skip these segments when reading ELF header
+              , readOnlySegments :: [Int]
+                -- ^ drop write permission for these segments when loading
               }
 
 loadRegionIndex :: LoadOptions -> Maybe RegionIndex
@@ -46,4 +49,4 @@ loadRegionBaseOffset opts =
     Just o -> toInteger o
 
 defaultLoadOptions :: LoadOptions
-defaultLoadOptions = LoadOptions { loadOffset = Nothing, ignoreSegments = [] }
+defaultLoadOptions = LoadOptions { loadOffset = Nothing, ignoreSegments = [], readOnlySegments = []}

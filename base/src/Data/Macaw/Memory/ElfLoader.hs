@@ -1148,9 +1148,11 @@ insertElfSegment :: RegionIndex
                     -- ^ Contents of elf file
                  -> Map (MemWord w) (RelocEntry (MemLoader w) w)
                     -- ^ Relocations to apply when inserting segment.
+                 -> Perm.Flags
+                    -- ^ drop these flags from the loaded segment
                  -> Elf.Phdr w
                  -> MemLoader w ()
-insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
+insertElfSegment regIdx addrOff shdrMap contents relocMap dropFlags phdr = do
   w <- uses mlsMemory memAddrWidth
   reprConstraints w $
    when (Elf.phdrMemSize phdr > 0) $ do
@@ -1158,6 +1160,7 @@ insertElfSegment regIdx addrOff shdrMap contents relocMap phdr = do
     seg <- do
       let linkBaseOff = fromIntegral (Elf.phdrSegmentVirtAddr phdr)
       let flags = flagsForSegmentFlags (Elf.phdrSegmentFlags phdr)
+            .&. (complement dropFlags)
       let dta = slice (Elf.phdrFileRange phdr) contents
       let sz = fromIntegral $ Elf.phdrMemSize phdr
       memSegment relocMap regIdx addrOff (Just segIdx) linkBaseOff flags dta sz
@@ -1191,12 +1194,12 @@ memoryForElfSegments'
                    , SectionIndexMap w -- Section index map
                    , [MemLoadWarning] -- Warnings from load
                    )
-memoryForElfSegments' regIndex addrOff elf = memoryForElfSegments'' [] regIndex addrOff elf
+memoryForElfSegments' regIndex addrOff elf = memoryForElfSegments'' defaultLoadOptions regIndex addrOff elf
 
 -- | Load an elf file into memory by parsing segments.
 memoryForElfSegments''
   :: forall w
-  .  [Int]
+  .  LoadOptions
   -> RegionIndex
   -> Integer
   -> Elf.ElfHeaderInfo w
@@ -1204,11 +1207,13 @@ memoryForElfSegments''
                    , SectionIndexMap w -- Section index map
                    , [MemLoadWarning] -- Warnings from load
                    )
-memoryForElfSegments'' ignored_segs regIndex addrOff elf = do
+memoryForElfSegments'' opts regIndex addrOff elf = do
   let hdr = Elf.header elf
   let cl = Elf.headerClass hdr
   let w =  elfAddrWidth cl
   let contents = Elf.headerFileContents elf
+  let ignored_segs = ignoreSegments opts
+  let readonly_segs = readOnlySegments opts
   let phdrs = V.generate (fromIntegral (Elf.phdrCount elf)) $ \i ->
                 Elf.phdrByIndex elf (fromIntegral i)
 
@@ -1224,7 +1229,8 @@ memoryForElfSegments'' ignored_segs regIndex addrOff elf = do
             ]
       forM_ (zip [0..] (toList phdrs)) $ \(i, p) -> do
         when (Elf.phdrSegmentType p == Elf.PT_LOAD && (not $ elem i ignored_segs)) $ do
-          insertElfSegment regIndex addrOff intervals contents relocMap p
+          let dropFlags = if elem i readonly_segs then Perm.write else Perm.none
+          insertElfSegment regIndex addrOff intervals contents relocMap dropFlags p
 
 -- | Load an elf file into memory by parsing segments.
 memoryForElfSegments
@@ -1238,7 +1244,7 @@ memoryForElfSegments
 memoryForElfSegments opt elf = do
   let regIndex = adjustedLoadRegionIndex (Elf.headerType (Elf.header elf)) opt
   let addrOff = loadRegionBaseOffset opt
-  memoryForElfSegments'' (ignoreSegments opt) regIndex addrOff elf
+  memoryForElfSegments'' opt regIndex addrOff elf
 
 ------------------------------------------------------------------------
 -- Elf section loading
