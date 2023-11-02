@@ -17,11 +17,13 @@ import Test.Tasty.Golden
 
 import Lang.Crucible.Syntax.Prog (doParseCheck)
 
+import Lang.Crucible.LLVM.Syntax.TypeAlias (typeAliasParserHooks, x86_64LinuxTypes)
+
 -- The syntax extension is not important, the choice of x86_64 is arbitrary
 import Data.Macaw.X86 (X86_64)
 import Data.Macaw.X86.Symbolic ()  -- TraversableFC instance
 
-import Data.Macaw.Symbolic.Syntax (machineCodeParserHooks, x86_64LinuxTypes)
+import Data.Macaw.Symbolic.Syntax (machineCodeParserHooks)
 
 main :: IO ()
 main = do
@@ -51,6 +53,7 @@ goldenFileTestCase input testAction =
 testParser :: FilePath -> FilePath -> IO ()
 testParser inFile outFile =
   do contents <- T.readFile inFile
-     let ?parserHooks = machineCodeParserHooks (Proxy @X86_64) x86_64LinuxTypes
+     let extraHooks = typeAliasParserHooks x86_64LinuxTypes
+     let ?parserHooks = machineCodeParserHooks (Proxy @X86_64) extraHooks
      withFile outFile WriteMode $ doParseCheck inFile contents True
 

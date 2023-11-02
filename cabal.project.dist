@@ -28,6 +28,7 @@ packages: base/
           deps/dismantle/dismantle-thumb/
           deps/crucible/crucible/
           deps/crucible/crucible-llvm/
+          deps/crucible/crucible-llvm-syntax/
           deps/crucible/crucible-symio/
           deps/crucible/crucible-syntax/
           deps/what4/what4/

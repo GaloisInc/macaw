@@ -15,19 +15,15 @@
 --
 -- https://github.com/GaloisInc/ambient-verifier/blob/eab04abb9750825a25ec0cbe0379add63f05f6c6/src/Ambient/FunctionOverride/Extension.hs#L863
 module Data.Macaw.Symbolic.Syntax (
-    TypeAlias(..)
-  , TypeLookup(..)
-  , x86_64LinuxTypes
-  , ExtensionParser
+    ExtensionParser
   , SomeExtensionWrapper(..)
   , extensionParser
-  , extensionTypeParser
   , machineCodeParserHooks
   ) where
 
 import Prelude
 
-import           Control.Applicative ( Alternative(empty) )
+import           Control.Applicative ( Alternative((<|>), empty) )
 import           Control.Monad.IO.Class ( MonadIO(..) )
 import           Control.Monad.State.Class ( MonadState )
 import           Control.Monad.Writer.Class ( MonadWriter )
@@ -51,31 +47,11 @@ import qualified Lang.Crucible.Syntax.Atoms as LCSA
 import qualified Lang.Crucible.Syntax.Concrete as LCSC
 import qualified Lang.Crucible.Syntax.ExprParse as LCSE
 import qualified Lang.Crucible.Types as LCT
+import qualified Lang.Crucible.LLVM.Syntax as LCLS
 
 import qualified What4.Interface as WI
 import qualified What4.ProgramLoc as WP
 
--- | The additional types beyond those built into crucible-syntax.
-data TypeAlias = Byte | Int | Long | PidT | Pointer | Short | SizeT | UidT
-  deriving (Show, Eq, Enum, Bounded)
-
--- | Lookup function from a 'TypeAlias' to the underlying crucible type it
--- represents.
-newtype TypeLookup = TypeLookup (TypeAlias -> (Some LCT.TypeRepr))
-
--- | A lookup function from 'TypeAlias' to types with the appropriate width
--- on X86_64 Linux.
-x86_64LinuxTypes :: TypeLookup
-x86_64LinuxTypes = TypeLookup $ \tp ->
-  case tp of
-    Byte -> Some (LCT.BVRepr (PN.knownNat @8))
-    Int -> Some (LCT.BVRepr (PN.knownNat @32))
-    Long -> Some (LCT.BVRepr (PN.knownNat @64))
-    PidT -> Some (LCT.BVRepr (PN.knownNat @32))
-    Pointer -> Some (LCLM.LLVMPointerRepr (PN.knownNat @64))
-    Short -> Some (LCT.BVRepr (PN.knownNat @16))
-    SizeT -> Some (LCT.BVRepr (PN.knownNat @64))
-    UidT -> Some (LCT.BVRepr (PN.knownNat @32))
 -- | The constraints on the abstract parser monad
 type ExtensionParser m ext s = ( LCSE.MonadSyntax LCSA.Atomic m
                                , MonadWriter [WP.Posd (LCCR.Stmt ext s)] m
@@ -104,23 +80,6 @@ data ExtensionWrapper arch args ret =
 
 data SomeExtensionWrapper arch =
   forall args ret. SomeExtensionWrapper (ExtensionWrapper arch args ret)
-
--- | A list of every type alias.
-allTypeAliases :: [TypeAlias]
-allTypeAliases = [minBound .. maxBound]
-
--- | Parser for type extensions to crucible syntax
-extensionTypeParser
-  :: (LCSE.MonadSyntax LCSA.Atomic m)
-  => Map.Map LCSA.AtomName (Some LCT.TypeRepr)
-  -- ^ A mapping from additional type names to the crucible types they
-  -- represent
-  -> m (Some LCT.TypeRepr)
-extensionTypeParser types = do
-  name <- LCSC.atomName
-  case Map.lookup name types of
-    Just someTypeRepr -> return someTypeRepr
-    Nothing -> empty
 
 -- | Check that a 'WI.NatRepr' containing a value in bits is a multiple of 8.
 -- If so, pass the result of the value divided by 8 (i.e., as bytes) to the
@@ -621,18 +580,26 @@ extensionWrappers = Map.fromList
   , (LCSA.AtomName "make-null", SomeExtensionWrapper wrapMakeNull)
   ]
 
+ptrTypeParser :: LCSE.MonadSyntax LCSA.Atomic m => m (Some LCT.TypeRepr)
+ptrTypeParser = LCSE.describe "Pointer type" $ do
+  LCSC.BoundedNat n <- LCLS.pointerTypeParser
+  pure (Some (LCLM.LLVMPointerRepr n))
+
 -- | All of the crucible syntax extensions to support machine code
 machineCodeParserHooks
   :: forall w arch proxy
    . (w ~ DMC.ArchAddrWidth arch, 1 <= w, KnownNat w, DMC.MemWidth w)
   => proxy arch
-  -> TypeLookup
-  -- ^ A lookup function from a 'TypeAlias' to the underlying Crucible type
-  -- it represents.
+  -- | Hooks with which to further extend this parser
   -> LCSC.ParserHooks (DMS.MacawExt arch)
-machineCodeParserHooks proxy typeLookup =
-  let TypeLookup lookupFn = typeLookup
-      types = Map.fromList [ (LCSA.AtomName (DT.pack (show t)), lookupFn t)
-                           | t <- allTypeAliases ] in
-  LCSC.ParserHooks (extensionTypeParser types)
-                   (extensionParser extensionWrappers (machineCodeParserHooks proxy typeLookup))
+  -> LCSC.ParserHooks (DMS.MacawExt arch)
+machineCodeParserHooks proxy hooks =
+  LCSC.ParserHooks
+  { LCSC.extensionTypeParser =
+      LCSE.describe "Macaw type" $
+        LCSE.call (ptrTypeParser <|> LCSC.extensionTypeParser hooks)
+  , LCSC.extensionParser =
+      LCSE.describe "Macaw operation" $ do
+        let extParser = extensionParser extensionWrappers (machineCodeParserHooks proxy hooks)
+        LCSE.call (extParser <|> LCSC.extensionParser hooks)
+  }
