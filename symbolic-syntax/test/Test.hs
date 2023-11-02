@@ -19,9 +19,10 @@ import Lang.Crucible.Syntax.Prog (doParseCheck)
 
 import Lang.Crucible.LLVM.Syntax.TypeAlias (typeAliasParserHooks, x86_64LinuxTypes)
 
--- The syntax extension is not important, the choice of x86_64 is arbitrary
+-- The choice of x86_64 is fairly arbitrary, though it does affect the
+-- denotation of types like SizeT
 import Data.Macaw.X86 (X86_64)
-import Data.Macaw.X86.Symbolic ()  -- TraversableFC instance
+import Data.Macaw.X86.Symbolic ()  -- TraversableFC instance for (MacawExt X86) statements and expressions
 
 import Data.Macaw.Symbolic.Syntax (machineCodeParserHooks)
 
