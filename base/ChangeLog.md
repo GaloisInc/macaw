@@ -4,6 +4,8 @@
 
 ### Features
 
+- Add support for PPC32 and PPC64 relocations in `Data.Macaw.Memory.ElfLoader`.
+
 ### API Changes
 
 - Architecture-specific block terminators can now contain macaw values
