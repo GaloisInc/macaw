@@ -796,6 +796,164 @@ relaTargetARM64 end msegIndex symtab rel addend relFlag =
     tp -> do
       throwError $ RelocationUnsupportedType (show tp)
 
+-- | Attempt to resolve a PPC32-specific symbol.
+relaTargetPPC32 :: Endianness
+                -- ^ Endianness of relocations
+                -> Maybe SegmentIndex
+                -- ^ Index of segment for dynamic relocations
+                -> SymbolTable 32 -- ^ Symbol table
+                -> Elf.RelEntry Elf.PPC32_RelocationType -- ^ Relocation entry
+                -> MemWord 32
+                -- ^ Addend of symbol
+                -> RelFlag
+                -> SymbolResolver (Relocation 32)
+relaTargetPPC32 end msegIndex symtab rel addend _relFlag =
+  case Elf.relType rel of
+    Elf.R_PPC_ADDR32 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC_GLOB_DAT -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC_RELATIVE -> do
+      -- This relocation has the value B + A where
+      -- - A is the addend for the relocation, and
+      -- - B resolves to the difference between the
+      --   address at which the segment defining the symbol was
+      --   loaded and the address at which it was linked.
+      --
+      -- Since the address at which it was linked is a constant, we
+      -- create a non-relative address but subtract the link address
+      -- from the offset.
+
+      -- Get the address at which it was linked so we can subtract from offset.
+      let linktimeAddr = Elf.relAddr rel
+
+      -- Resolve the symbol using the index in the relocation.
+      sym <-
+        if Elf.relSym rel == 0 then do
+          case msegIndex of
+            Nothing -> do
+              throwError $ RelocationZeroSymbol
+            Just idx ->
+              pure $! SegmentBaseAddr idx
+        else do
+          resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend - fromIntegral linktimeAddr
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC_JMP_SLOT -> do
+      -- This is a PLT relocation
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = True
+                         }
+    tp ->
+      throwError $ RelocationUnsupportedType (show tp)
+
+-- | Attempt to resolve a PPC64-specific symbol.
+relaTargetPPC64 :: Endianness
+                -- ^ Endianness of relocations
+                -> Maybe SegmentIndex
+                -- ^ Index of segment for dynamic relocations
+                -> SymbolTable 64 -- ^ Symbol table
+                -> Elf.RelEntry Elf.PPC64_RelocationType -- ^ Relocation entry
+                -> MemWord 64
+                -- ^ Addend of symbol
+                -> RelFlag
+                -> SymbolResolver (Relocation 64)
+relaTargetPPC64 end msegIndex symtab rel addend _relFlag =
+  case Elf.relType rel of
+    Elf.R_PPC64_ADDR64 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC64_GLOB_DAT -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC64_RELATIVE -> do
+      -- This relocation has the value B + A where
+      -- - A is the addend for the relocation, and
+      -- - B resolves to the difference between the
+      --   address at which the segment defining the symbol was
+      --   loaded and the address at which it was linked.
+      --
+      -- Since the address at which it was linked is a constant, we
+      -- create a non-relative address but subtract the link address
+      -- from the offset.
+
+      -- Get the address at which it was linked so we can subtract from offset.
+      let linktimeAddr = Elf.relAddr rel
+
+      -- Resolve the symbol using the index in the relocation.
+      sym <-
+        if Elf.relSym rel == 0 then do
+          case msegIndex of
+            Nothing -> do
+              throwError $ RelocationZeroSymbol
+            Just idx ->
+              pure $! SegmentBaseAddr idx
+        else do
+          resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend - fromIntegral linktimeAddr
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_PPC64_JMP_SLOT -> do
+      -- This is a PLT relocation
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = True
+                         }
+    tp ->
+      throwError $ RelocationUnsupportedType (show tp)
+
 toEndianness :: Elf.ElfData -> Endianness
 toEndianness Elf.ELFDATA2LSB = LittleEndian
 toEndianness Elf.ELFDATA2MSB = BigEndian
@@ -809,13 +967,17 @@ getRelocationResolver hdr =
   case (Elf.headerClass hdr, Elf.headerMachine hdr) of
     (Elf.ELFCLASS64, Elf.EM_X86_64) ->
       pure $ SomeRelocationResolver relaTargetX86_64
-    (Elf.ELFCLASS32, Elf.EM_ARM) -> do
-      let end = toEndianness (Elf.headerData hdr)
+    (Elf.ELFCLASS32, Elf.EM_ARM) ->
       pure $ SomeRelocationResolver $ relaTargetARM32 end
-    (Elf.ELFCLASS64, Elf.EM_AARCH64) -> do
-      let end = toEndianness (Elf.headerData hdr)
+    (Elf.ELFCLASS64, Elf.EM_AARCH64) ->
       pure $ SomeRelocationResolver $ relaTargetARM64 end
+    (Elf.ELFCLASS32, Elf.EM_PPC) ->
+      pure $ SomeRelocationResolver $ relaTargetPPC32 end
+    (Elf.ELFCLASS64, Elf.EM_PPC64) ->
+      pure $ SomeRelocationResolver $ relaTargetPPC64 end
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
+  where
+    end = toEndianness (Elf.headerData hdr)
 
 resolveRela :: ( MemWidth w
                , Elf.RelocationWidth tp ~ w
