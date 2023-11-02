@@ -362,7 +362,7 @@ wrapPointerDiff = ExtensionWrapper
 
 -- | Wrapper for 'DMS.MacawNullPtr' to construct a null pointer.
 --
--- > make-null
+-- > pointer-make-null
 wrapMakeNull
   :: ( w ~ DMC.ArchAddrWidth arch
      , 1 <= w
@@ -372,7 +372,7 @@ wrapMakeNull
                       Ctx.EmptyCtx
                       (LCLM.LLVMPointerType w)
 wrapMakeNull = ExtensionWrapper
-  { extName = LCSA.AtomName "make-null"
+  { extName = LCSA.AtomName "pointer-make-null"
   , extArgTypes = Ctx.empty
   , extWrapper = \_ ->
       let nullptr = DMS.MacawNullPtr (DMC.addrWidthRepr WI.knownNat) in
@@ -577,7 +577,7 @@ extensionWrappers = Map.fromList
   , (LCSA.AtomName "pointer-diff", SomeExtensionWrapper wrapPointerDiff)
   , (LCSA.AtomName "pointer-sub", SomeExtensionWrapper wrapPointerSub)
   , (LCSA.AtomName "pointer-eq", SomeExtensionWrapper wrapPointerEq)
-  , (LCSA.AtomName "make-null", SomeExtensionWrapper wrapMakeNull)
+  , (LCSA.AtomName "pointer-make-null", SomeExtensionWrapper wrapMakeNull)
   ]
 
 ptrTypeParser :: LCSE.MonadSyntax LCSA.Atomic m => m (Some LCT.TypeRepr)

@@ -29,7 +29,7 @@ The extra operations are:
 
 - `bv-typed-literal :: Type -> Integer -> Bitvector w` where the first argument is a `Bitvector` type alias (see the Types section), the second argument is the value the `Bitvector` should contain, and `w` is the number of bits in the returned `Bitvector` (will match the width of the `Type` argument).
 - `fresh-vec :: String Unicode -> forall (t :: Type) -> Nat -> Vector t`, where `(fresh-vec s t n)` generates a length-`n` vector where each element is a fresh constant of type `t` with the name `<s>_<i>` (for each `i` between `0` and `<n> - 1`). Note that `t` must be a scalar type (e.g., no nested `Vector`\ s), and `s` and `n` must both be concrete values.
-- `make-null :: Pointer` returns a null pointer.
+- `pointer-make-null :: Pointer` returns a null pointer.
 - `pointer-add :: Pointer -> Bitvector w -> Pointer` where `w` is the number of bits in a pointer (usually 32 or 64).
 - `pointer-diff :: Pointer -> Pointer -> Bitvector w` where `w` is the number of bits in a pointer (usually 32 or 64).
 - `pointer-sub :: Pointer -> Bitvector w -> Pointer` where `w` is the number of bits in a pointer (usually 32 or 64).
