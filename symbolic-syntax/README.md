@@ -9,19 +9,9 @@ This `ParserHooks` supports the following types and operations:
 
 The main type addition is for representing pointers:
 
-- `Pointer`
+- `(Ptr n)`
 
 Unlike C/C++, these pointers are untyped and essentially correspond to `uint8_t*`.
-
-There are a few wrappers around `Bitvector` types for portability and convenience:
-
-- `Byte` is an alias for `Bitvector 8`.
-- `Int` is an alias for `Bitvector 32`.
-- `Long` is an alias for `Bitvector 32` on Arm32 and `Bitvector 64` on X86_64.
-- `PidT` is an alias for `Bitvector 32`.
-- `Short` is an alias for `Bitvector 16`.
-- `SizeT` is an alias for `Bitvector 32` on Arm32 and `Bitvector 64` on X86_64.
-- `UidT` is an alias for `Bitvector 32`.
 
 **Operations**:
 
