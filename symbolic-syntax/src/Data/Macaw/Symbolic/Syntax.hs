@@ -31,10 +31,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Parameterized.Context as Ctx
 import qualified Data.Parameterized.NatRepr as PN
 import           Data.Parameterized.Some ( Some(..) )
-import qualified Data.Text as DT
-import qualified Data.Vector as DV
 import           GHC.TypeNats ( KnownNat, type (<=) )
-import           Numeric.Natural ( Natural )
 
 import qualified Data.Macaw.CFG as DMC
 import qualified Data.Macaw.Memory as DMM
@@ -207,15 +204,6 @@ extensionParser wrappers hooks =
             LCT.BVRepr{} ->
               go (SomeExtensionWrapper (buildBvTypedLitWrapper tp))
             _ -> empty
-      LCSA.AtomName "fresh-vec" -> do
-        -- Generating fresh vectors are a special case. We must parse the
-        -- name and length arguments separately due to their need to be
-        -- concrete, and we must parse the type argument separately before we
-        -- can know the return type.
-        LCSE.depCons LCSC.string $ \nmPrefix ->
-          LCSE.depCons LCSC.isType $ \(Some tp) ->
-            LCSE.depCons LCSC.nat $ \len ->
-            go (SomeExtensionWrapper (buildFreshVecWrapper nmPrefix tp len))
       _ ->
         case Map.lookup name wrappers of
           Nothing -> empty
@@ -517,56 +505,6 @@ bvTypedLit :: forall s ext w m
           -> LCCR.Atom s LCT.IntegerType
           -> m (LCCR.AtomValue ext s (LCT.BVType w))
 bvTypedLit (LCT.BVRepr w) val = return (LCCR.EvalApp (LCE.IntegerToBV w val))
-
--- | Wrapper for generating a vector of the given length, where each element is
--- a fresh constant of the supplied type whose name is derived from the given
--- string. This is a convenience for users who wish to quickly generate
--- symbolic data (e.g., for use with @write-bytes@).
---
--- > fresh-vec string type integer
-buildFreshVecWrapper ::
-     DT.Text
-  -> LCT.TypeRepr tp
-  -> Natural
-  -> ExtensionWrapper arch
-                      Ctx.EmptyCtx
-                      (LCT.VectorType tp)
-buildFreshVecWrapper nmPrefix tp len = ExtensionWrapper
-  { extName = LCSA.AtomName "fresh-vec"
-  , extArgTypes = Ctx.empty
-  , extWrapper = \_ -> freshVec nmPrefix tp len }
-
--- | Generate a vector of the given length, where each element is a fresh
--- constant of the supplied type whose name is derived from the given string.
-freshVec :: forall s ext tp m.
-            ExtensionParser m ext s
-         => DT.Text
-         -> LCT.TypeRepr tp
-         -> Natural
-         -> m (LCCR.AtomValue ext s (LCT.VectorType tp))
-freshVec nmPrefix tp len = do
-  case tp of
-    LCT.FloatRepr fi ->
-      mkVec (LCCR.FreshFloat fi)
-    LCT.NatRepr ->
-      mkVec LCCR.FreshNat
-    _ | LCT.AsBaseType bt <- LCT.asBaseType tp ->
-          mkVec (LCCR.FreshConstant bt)
-      | otherwise ->
-          empty
-  where
-    -- Construct an expression that looks roughly like:
-    --
-    --   (vector <tp> (fresh <s>_0) ... (fresh <s>_<n-1>))
-    --
-    -- Where the implementation of `fresh` is determined by the first argument.
-    mkVec :: (Maybe WI.SolverSymbol -> LCCR.AtomValue ext s tp)
-          -> m (LCCR.AtomValue ext s (LCT.VectorType tp))
-    mkVec mkFresh = do
-      vec <- DV.generateM (fromIntegral len) $ \i ->
-        LCSC.freshAtom WP.InternalPos $ mkFresh $ Just $ WI.safeSymbol $
-        DT.unpack nmPrefix ++ "_" ++ show i
-      pure $ LCCR.EvalApp $ LCE.VectorLit tp vec
 
 -- | Syntax extension wrappers
 extensionWrappers

@@ -2,7 +2,6 @@
 (defun @ops ((p Pointer) (q Pointer)) Unit
   (start start:
     (let b (bv-typed-literal SizeT 42))
-    (let v (fresh-vec "v" Short 7))
     (let n (pointer-make-null))
     (let d (pointer-diff p q))
     (let r (pointer-add p d))
