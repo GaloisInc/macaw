@@ -1,0 +1,33 @@
+(defun @short_id ((x Short)) Short (start start: (return x)))
+
+(defun @test_short_id () Unit
+   (start start:
+      (let input (fresh Short))
+      (let input_back (funcall @short_id input))
+      (assert! (equal? input input_back) "short_id test")
+      (return ())))
+
+short_id
+%0
+  % 4:5
+  return $0
+  % no postdom
+test_short_id
+%0
+  % 8:16
+  $0 = fresh BaseBVRepr 16 input
+  % 9:21
+  $1 = handleLit(short_id)
+  % 9:21
+  $2 = call $1($0);
+  % 10:14
+  $3 = baseIsEq(BaseBVRepr 16, $0, $2)
+  % 10:40
+  $4 = stringLit("short_id test")
+  % 10:5
+  assert($3, $4)
+  % 11:13
+  $5 = emptyApp()
+  % 11:5
+  return $5
+  % no postdom

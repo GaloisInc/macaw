@@ -95,6 +95,12 @@ jobs:
         YICES_VERSION: "2.6.2"
         CVC4_VERSION: "4.1.8"
 
+    - name: Build macaw-symbolic-syntax
+      run: cabal build pkg:macaw-symbolic-syntax
+
+    - name: Test macaw-symbolic-syntax
+      run: cabal test pkg:macaw-symbolic-syntax
+
     - name: Build macaw-x86
       run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
 
