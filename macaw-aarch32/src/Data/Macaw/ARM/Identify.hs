@@ -5,6 +5,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Data.Macaw.ARM.Identify
     ( identifyCall
@@ -406,16 +407,27 @@ wrapClassifierForPstateT f = do
   let initRegs = MAI.classifierInitRegState bcc
   let pstateT_reg = AR.ARMGlobalBV (ASL.knownGlobalRef @"PSTATE_T")
   parsedContents <- f
-  -- restore PSTATE_T to its value at the start of the block
+  -- rewrite the block terminator to drop low bits and restore the PSTATE_T
+  -- flag at the return point for function calls
   parsedContents' <- case initRegs ^. MC.boundValue pstateT_reg of
     MC.BVValue _ init_pstateT -> do
       let setPstateT (ret,absSt,bounds) = let
             abs_pstateT = MA.FinSet (Set.singleton init_pstateT)
-            absSt' = absSt & MA.absRegState . MC.boundValue pstateT_reg %~ (\_ -> abs_pstateT)
-            in (ret, absSt',bounds)
+            -- Branches can flip the processor state, but we assume that when a function
+            -- returns it restores the processor state appropriately
+            absSt' = case isFunctionCall (Parsed.parsedTerm parsedContents) of
+              True -> absSt & MA.absRegState . MC.boundValue pstateT_reg %~ (\_ -> abs_pstateT)
+              False -> absSt
+            -- The BX instruction sets the architecture based on the low bit, and then clears it.
+            -- Therefore intra-block jumps should never have the low bit set, and instead rely
+            -- on the final abstract domain to decide on the processor state.
+            -- We enforce this here by clearing this bit explicitly.
+            in (MM.clearSegmentOffLeastBit ret, absSt',bounds)
       let tgts' = map setPstateT (Parsed.intraJumpTargets parsedContents)
-      return $ parsedContents {Parsed.intraJumpTargets = tgts' }
-    _ -> return parsedContents
+      let term = mapTargetAddr MM.clearSegmentOffLeastBit (Parsed.parsedTerm parsedContents)
+      return $ parsedContents {Parsed.intraJumpTargets = tgts', Parsed.parsedTerm = term }
+    -- the initial register values for a block always set PSTATE_T explicitly
+    _ -> error "Unexpected initial PSTATE_T value"
   let final_pstateT = MAI.classifierFinalRegState bcc ^. MC.boundValue pstateT_reg
   -- set the low bit of any discovered functions to agree with the final value of PSTATE_T
   case transferValue (MAI.classifierAbsState bcc) final_pstateT  of
@@ -424,3 +436,33 @@ wrapClassifierForPstateT f = do
       let newFunctionAddrs' = map setBit (Parsed.newFunctionAddrs parsedContents')
       return $ parsedContents' {Parsed.newFunctionAddrs = newFunctionAddrs' }
     _ -> return parsedContents'
+
+
+isFunctionCall :: Parsed.ParsedTermStmt ARM.AArch32 ids -> Bool
+isFunctionCall = \case
+  Parsed.ParsedCall{} -> True
+  Parsed.PLTStub{} -> True
+  Parsed.ParsedJump{} -> False
+  Parsed.ParsedBranch{} -> False
+  Parsed.ParsedLookupTable{} -> False
+  Parsed.ParsedReturn{} -> False
+  Parsed.ParsedArchTermStmt stmt _ _ -> case stmt of
+    Arch.CallIf{} -> True
+    Arch.CallIfNot{} -> True
+    Arch.ReturnIf{} -> False
+    Arch.ReturnIfNot{} -> False
+  Parsed.ParsedTranslateError{} -> False
+  Parsed.ClassifyFailure{} -> False
+
+mapTargetAddr :: (MC.ArchSegmentOff arch -> MC.ArchSegmentOff arch) -> Parsed.ParsedTermStmt arch ids -> Parsed.ParsedTermStmt arch ids
+mapTargetAddr f = \case
+  Parsed.ParsedCall st ret -> Parsed.ParsedCall st (fmap f ret)
+  Parsed.PLTStub regs ret sym -> Parsed.PLTStub regs (f ret) sym
+  Parsed.ParsedJump regs nextPC -> Parsed.ParsedJump regs (f nextPC)
+  Parsed.ParsedBranch regs cond true_pc false_pc -> Parsed.ParsedBranch regs cond (f true_pc) (f false_pc)
+  Parsed.ParsedLookupTable layout regs idx targets ->
+                Parsed.ParsedLookupTable layout regs idx (fmap f targets)
+  Parsed.ParsedReturn regs -> Parsed.ParsedReturn regs
+  Parsed.ParsedArchTermStmt stmt st ret -> Parsed.ParsedArchTermStmt stmt st (fmap f ret)
+  Parsed.ParsedTranslateError err -> Parsed.ParsedTranslateError err
+  Parsed.ClassifyFailure regs rsns -> Parsed.ClassifyFailure regs rsns
