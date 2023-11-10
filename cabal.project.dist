@@ -44,3 +44,6 @@ packages: base/
           deps/bv-sized/
           deps/bv-sized-float/
           deps/softfloat-hs/
+
+constraints: IntervalMap >= 0.6.2.1
+allow-newer: IntervalMap
