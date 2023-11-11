@@ -1229,7 +1229,7 @@ memoryForElfSegments'' opts regIndex addrOff elf = do
             ]
       forM_ (zip [0..] (toList phdrs)) $ \(i, p) -> do
         when (Elf.phdrSegmentType p == Elf.PT_LOAD && (not $ elem i ignored_segs)) $ do
-          let dropFlags = if elem i readonly_segs then Perm.write else Perm.none
+          let dropFlags = if elem i readonly_segs then Perm.write else zeroBits
           insertElfSegment regIndex addrOff intervals contents relocMap dropFlags p
 
 -- | Load an elf file into memory by parsing segments.
