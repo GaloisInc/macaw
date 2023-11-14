@@ -252,7 +252,6 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
 data TranslationErrorReason w = InvalidNextIP Word64 Word64
                               | DecodeError (PPCMemoryError w)
                               | UnsupportedInstruction D.Instruction
-                              | InstructionAtUnmappedAddr D.Instruction
                               | GenerationError D.Instruction GeneratorError
                               deriving (Show)
 
