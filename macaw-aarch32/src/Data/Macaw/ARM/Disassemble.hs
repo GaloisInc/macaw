@@ -332,7 +332,6 @@ data TranslationError w = TranslationError { transErrorAddr :: MM.MemSegmentOff 
 data TranslationErrorReason w = InvalidNextPC (MM.MemAddr w) (MM.MemAddr w)
                               | DecodeError (ARMMemoryError w)
                               | UnsupportedInstruction InstructionSet
-                              | InstructionAtUnmappedAddr InstructionSet
                               | GenerationError InstructionSet SG.GeneratorError
                               deriving (Show)
 
