@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
@@ -34,6 +35,7 @@ import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.Permissions as MMP
 import           Data.Macaw.Types ( BVType )
 import qualified Data.Parameterized.Map as MapF
+import qualified Data.Parameterized.NatRepr as PN
 import qualified Data.Parameterized.Nonce as NC
 
 import qualified SemMC.Architecture.PPC as SP
@@ -127,9 +129,9 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
       -- Note: In PowerPC, the IP is incremented *after* an instruction
       -- executes, rather than before as in X86.  We have to pass in the
       -- physical address of the instruction here.
-      ipVal <- case MM.asAbsoluteAddr (MM.segoffAddr curIPAddr) of
-                 Nothing -> failAt gs blockOff curIPAddr (InstructionAtUnmappedAddr i)
-                 Just addr -> return (BVValue (SP.addrWidth SP.knownVariant) (fromIntegral addr))
+      let ipVal = MC.BVValue
+                    (PN.knownNat @(ArchAddrWidth ppc))
+                    (fromIntegral (MM.addrOffset (MM.segoffAddr curIPAddr)))
       case lookupSemantics ipVal i of
         Nothing -> failAt gs blockOff curIPAddr (UnsupportedInstruction i)
         Just transformer -> do
