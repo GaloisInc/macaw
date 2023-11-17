@@ -1,0 +1,18 @@
+// In Ubuntu 20.04, compiling this C code will result in the assembly code in
+// strd.s. Sadly, Ubuntu 22.04's version of gcc will produce slightly different
+// assembly that does not include the strd instruction, which is critical for
+// testing the issue in https://github.com/GaloisInc/macaw/issues/301. As such,
+// I've checked in the assembly code to ensure that we can continue testing code
+// involving strd, but I've also checked in the original C code as a reference.
+#include <stdint.h>
+
+uint64_t x = 0;
+
+int __attribute__((noinline)) test_strd() {
+  x = 42;
+  return x == 42;
+}
+
+void _start() {
+  test_strd();
+}

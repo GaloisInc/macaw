@@ -25,6 +25,12 @@ movt.unopt.exe: movt.c
 movt.opt.exe: movt.c
 	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O2 $< -o $@
 
+# We need to pass -mcpu=cortex-a7 here
+strd.unopt.exe: strd.s
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O0 $< -o $@
+strd.opt.exe: strd.s
+	$(CC) $(CFLAGS) -mcpu=cortex-a7 -O2 $< -o $@
+
 so/libfib.unopt.so: so/fib.c so/libgetone.unopt.so
 	$(CC) $(SO_CFLAGS) -O0 -Lso/ -Iso/ -shared $< -lgetone.unopt -o $@
 so/libfib.opt.so: so/fib.c so/libgetone.opt.so

@@ -162,9 +162,11 @@ import           Data.Parameterized.Some ( Some(Some) )
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Vector as V
 
 import qualified What4.FunctionName as C
 import           What4.Interface
+import           What4.InterpretedFloatingPoint (freshFloatConstant)
 import qualified What4.Utils.StringLiteral as C
 import qualified What4.ProgramLoc as WPL
 
@@ -1234,12 +1236,7 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
       M.addrWidthClass w $ doGetGlobal st mvar globs addr
 
     MacawFreshSymbolic t -> -- XXX: user freshValue
-      do nm <- case userSymbol "macawFresh" of
-                 Right a -> return a
-                 Left err -> fail (show err)
-         v <- case t of
-               M.BoolTypeRepr -> freshConstant sym nm C.BaseBoolRepr
-               _ -> error ("MacawFreshSymbolic: XXX type " ++ show t)
+      do v <- freshCrucibleConstant sym (safeSymbol "macawFresh") t
          return (v,st)
 
     MacawLookupFunctionHandle _ args -> do
@@ -1271,6 +1268,48 @@ execMacawStmtExtension (SB.MacawArchEvalFn archStmtFn) mvar mmConf s0 st =
     MO.LookupFunctionHandle lookupH = lookupFunctionHandle mmConf
     MO.LookupSyscallHandle lookupSyscall = lookupSyscallHandle mmConf
     toMemPred = mkGlobalPointerValidityAssertion mmConf
+
+-- | Create a fresh Crucible constant based on the supplied Macaw 'M.TypeRepr'.
+freshCrucibleConstant ::
+  forall sym tp.
+  IsSymInterface sym =>
+  sym ->
+  SolverSymbol ->
+  M.TypeRepr tp ->
+  IO (C.RegValue sym (ToCrucibleType tp))
+freshCrucibleConstant sym nm = go
+  where
+    go :: forall tp'.
+          M.TypeRepr tp' ->
+          IO (C.RegValue sym (ToCrucibleType tp'))
+    go M.BoolTypeRepr =
+      freshConstant sym nm C.BaseBoolRepr
+    go (M.BVTypeRepr w) = do
+      {-
+      We have a choice here of what block number to use. If we want something
+      that can possibly be a pointer, then we must use a symbolic block number.
+      On the other hand, symbolic pointers are often cumbersome in practice,
+      since any read or write to the pointer will possibly alias with any other
+      pointer.
+
+      For this reason, we choose to use block number 0 with a symbolic offset,
+      which gives us a symbolic bitvector that cannot possibly be a pointer.
+      For Macaw's needs, this is probably fine, since Macaw usually overwrites
+      these symbolic values without meaningfully using them. If this choice
+      ever becomes a problem in practice, I have included the code for creating
+      symboic pointers—see "Alternative implementation" below.
+      -}
+      off <- freshConstant sym nm (C.BaseBVRepr w)
+      MM.llvmPointer_bv sym off
+      {- Alternative implementation: -}
+      -- blk <- freshNat sym nm
+      -- off <- freshConstant sym nm (C.BaseBVRepr w)
+      -- pure $ MM.LLVMPointer blk off
+    go (M.FloatTypeRepr fi) =
+      freshFloatConstant sym nm (floatInfoToCrucible fi)
+    go (M.TupleTypeRepr l) = macawListToCrucibleM (fmap C.RV . go) l
+    go (M.VecTypeRepr n tp) =
+      V.replicateM (fromIntegral (natValue n)) (go tp)
 
 -- | Return macaw extension evaluation functions.
 macawExtensions
