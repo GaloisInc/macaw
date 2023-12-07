@@ -356,6 +356,7 @@ data FunctionArgAnalysisFailure w
      -- ^ Could not determine call arguments.
    | PLTStubNotSupported
      -- ^ PLT stub analysis not supported.
+  deriving (Show)
 
 -- | Monad that runs for computing the dependcies of each block.
 type FunctionArgsM arch ids =
