@@ -308,7 +308,7 @@ data ArchDemandInfo arch = ArchDemandInfo
 
 -- | Function for resolving arguments to call.
 --
--- Takes address if callsite and registers.
+-- Takes address of callsite and registers.
 type ResolveCallArgsFn arch
   = forall ids
   .  MemSegmentOff (ArchAddrWidth arch)
