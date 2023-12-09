@@ -133,6 +133,7 @@ module Data.Macaw.Symbolic
   , MO.MacawSimulatorState(..)
   , MO.MacawLazySimulatorState(..)
   , MO.emptyMacawLazySimulatorState
+  , MO.HasMacawLazySimulatorState(..)
   , MO.populatedMemChunks
   , MkGlobalPointerValidityAssertion
   , MemModelConfig(..)
