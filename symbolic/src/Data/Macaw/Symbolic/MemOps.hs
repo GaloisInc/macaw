@@ -3,6 +3,8 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# Language DataKinds #-}
 {-# Language FlexibleContexts #-}
+{-# Language FlexibleInstances #-}
+{-# Language FunctionalDependencies #-}
 {-# Language TypeOperators #-}
 {-# Language TypeFamilies #-}
 {-# Language ImplicitParams #-}
@@ -37,6 +39,7 @@ module Data.Macaw.Symbolic.MemOps
   , MacawSimulatorState(..)
   , MacawLazySimulatorState(..)
   , emptyMacawLazySimulatorState
+  , HasMacawLazySimulatorState(..)
   , populatedMemChunks
   , LookupFunctionHandle(..)
   , LookupSyscallHandle(..)
@@ -379,11 +382,25 @@ emptyMacawLazySimulatorState = MacawLazySimulatorState
   { _populatedMemChunks = IS.empty
   }
 
+-- | A class for Crucible personality types @p@ which contain a
+-- 'MacawLazySimulatorState'. The lazy memory model in
+-- "Data.Macaw.Symbolic.Memory" is polymorphic over 'HasMacawLazySimulatorState'
+-- instances so that downstream @macaw-symbolic@ users can supply their own
+-- personality types that extend 'MacawLazySimulatorState' further.
+-- See @Note [Lazy memory model]@ in "Data.Macaw.Symbolic.Memory.Lazy".
+class HasMacawLazySimulatorState p sym w | p -> sym w where
+  macawLazySimulatorState :: Lens' p (MacawLazySimulatorState sym w)
+instance HasMacawLazySimulatorState (MacawLazySimulatorState sym w) sym w where
+  macawLazySimulatorState = id
+
 -- | A `Lens'` for '_populatedMemChunks'.
-populatedMemChunks :: Lens' (MacawLazySimulatorState sym w)
-                            (IS.IntervalSet (IMI.Interval (M.MemWord w)))
-populatedMemChunks = lens _populatedMemChunks
-                          (\s v -> s { _populatedMemChunks = v })
+populatedMemChunks ::
+     HasMacawLazySimulatorState p sym w
+  => Lens' p (IS.IntervalSet (IMI.Interval (M.MemWord w)))
+populatedMemChunks =
+    macawLazySimulatorState
+  . lens _populatedMemChunks
+         (\s v -> s { _populatedMemChunks = v })
 
 type Regs sym arch = Ctx.Assignment (C.RegValue' sym)
                                     (MacawCrucibleRegTypes arch)

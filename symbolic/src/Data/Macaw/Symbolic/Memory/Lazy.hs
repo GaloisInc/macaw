@@ -100,8 +100,8 @@ import qualified Data.Macaw.Symbolic.Memory.Common as MSMC
 -- Note some key differences between this function and the @memModelConfig@
 -- function in "Data.Macaw.Symbolic.Memory":
 --
--- * This function requires the personality type to be
---   'MS.MacawLazySimulatorState', as it must track which sections of global
+-- * This function requires the personality type to be an instance of
+--   'MS.HasMacawLazySimulatorState', as it must track which sections of global
 --   memory have already been populated in the simulator state.
 --
 -- * This function requires an 'CBO.OnlineBackend' to make use of an online
@@ -112,6 +112,7 @@ memModelConfig ::
      , sym ~ WE.ExprBuilder scope st fs
      , bak ~ CBO.OnlineBackend solver scope st fs
      , WPO.OnlineSolver solver
+     , MS.HasMacawLazySimulatorState p sym w
      , MC.MemWidth w
      , 1 <= w
      , 16 <= w
@@ -120,7 +121,7 @@ memModelConfig ::
      )
   => bak
   -> MemPtrTable sym w
-  -> MS.MemModelConfig (MS.MacawLazySimulatorState sym w) sym arch CL.Mem
+  -> MS.MemModelConfig p sym arch CL.Mem
 memModelConfig bak mpt =
   MS.MemModelConfig
     { MS.globalMemMap = mapRegionPointers mpt
@@ -660,7 +661,7 @@ lazilyPopulateGlobalMemArr ::
   forall sym bak w t st fs p ext.
   ( CB.IsSymBackend sym bak
   , sym ~ WEB.ExprBuilder t st fs
-  , p ~ MS.MacawLazySimulatorState sym w
+  , MS.HasMacawLazySimulatorState p sym w
   , MC.MemWidth w
   ) =>
   bak ->
