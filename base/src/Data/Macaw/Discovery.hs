@@ -460,7 +460,7 @@ recordWriteStmts ainfo mem absState writtenAddrs (stmt:stmts) =
 
 -- | Get the memory representation associated with pointers in the
 -- given architecture.
-addrMemRepr :: ArchitectureInfo arch -> MemRepr (BVType (RegAddrWidth (ArchReg arch)))
+addrMemRepr :: ArchitectureInfo arch -> MemRepr (BVType (ArchAddrWidth arch))
 addrMemRepr arch_info =
   case archAddrWidth arch_info of
     Addr32 -> BVMemRepr n4 (archEndianness arch_info)

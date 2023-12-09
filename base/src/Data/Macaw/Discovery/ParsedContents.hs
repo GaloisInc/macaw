@@ -82,7 +82,7 @@ instance MemWidth w => PP.Pretty (BlockExploreReason w) where
 -- These regions may be be sparse, given an index @i@, the
 -- the address given by @arBase@ + @arIx'*'arStride@.
 data BoundedMemArray arch tp = BoundedMemArray
-  { arBase   :: !(MemSegmentOff (ArchAddrWidth arch))
+  { arBase   :: !(ArchSegmentOff arch)
     -- ^ The base address for array accesses.
   , arStride :: !Word64
     -- ^ Space between elements of the array.

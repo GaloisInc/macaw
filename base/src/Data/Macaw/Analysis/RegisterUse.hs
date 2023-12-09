@@ -511,7 +511,7 @@ data InferStackValue arch ids tp where
 -- | Read-only information needed to infer successor start
 -- constraints for a lbok.
 data StartInferContext arch =
-  SIC { sicAddr :: !(MemSegmentOff (ArchAddrWidth arch))
+  SIC { sicAddr :: !(ArchSegmentOff arch)
         -- ^ Address of block we are inferring state for.
       , sicRegs :: !(MapF (ArchReg arch) (InitInferValue arch))
         -- ^ Map rep register to rheir initial domain information.

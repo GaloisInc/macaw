@@ -120,7 +120,7 @@ classifyDirectJump :: RegisterInfo (ArchReg arch)
                    => ParseContext arch ids
                    -> String
                    -> Value arch ids (BVType (ArchAddrWidth arch))
-                   -> BlockClassifierM arch ids (MemSegmentOff (ArchAddrWidth arch))
+                   -> BlockClassifierM arch ids (ArchSegmentOff arch)
 classifyDirectJump ctx nm v = do
   ma <- case valueAsMemAddr v of
           Nothing ->  fail $ nm ++ " value " ++ show v ++ " is not a valid address."

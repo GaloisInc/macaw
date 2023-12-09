@@ -220,7 +220,7 @@ type JumpTableClassifier arch ids s =
 extractJumpTableSlices :: ArchConstraints arch
                        => Jmp.IntraJumpBounds arch ids
                        -- ^ Bounds for jump table
-                       -> MemSegmentOff (ArchAddrWidth arch) -- ^ Base address
+                       -> ArchSegmentOff arch -- ^ Base address
                        -> Natural -- ^ Stride
                        -> BVValue arch ids idxWidth
                        -> MemRepr tp -- ^ Type of values
@@ -306,7 +306,7 @@ matchAbsoluteJumpTable = Info.classifierName "Absolute jump table" $ do
       BVMemRepr _arByteCount e -> pure e
   let go :: Int
          -> [MemChunk (ArchAddrWidth arch)]
-         -> Info.Classifier (MemSegmentOff (ArchAddrWidth arch))
+         -> Info.Classifier (ArchSegmentOff arch)
       go entryIndex contents = do
         addr <- case resolveAsAddr mem endianness contents of
                   Just a -> pure a
