@@ -311,7 +311,7 @@ data ArchDemandInfo arch = ArchDemandInfo
 -- Takes address of callsite and registers.
 type ResolveCallArgsFn arch
   = forall ids
-  .  MemSegmentOff (ArchAddrWidth arch)
+  .  ArchSegmentOff arch
   -> RegState (ArchReg arch) (Value arch ids)
   -> Either String [Some (Value arch ids)]
 
@@ -607,7 +607,7 @@ summarizeCall blockAddr callOff finalRegs mReturnAddr = do
         pure mempty
 
 recordStmtsDemands :: OrdF (ArchReg arch)
-                   => MemSegmentOff (ArchAddrWidth arch) -- ^ Address of block
+                   => ArchSegmentOff arch -- ^ Address of block
                    -> ArchAddrWord arch -- ^ Offset from start of block of current instruction.
                    -> [Stmt arch ids]
                    -> FunctionArgsM arch ids (ArchAddrWord arch)

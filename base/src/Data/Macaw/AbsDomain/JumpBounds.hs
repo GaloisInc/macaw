@@ -859,4 +859,4 @@ postCallBounds params cns regs =
 --
 -- Note: This is defined here (despite not being used here) to avoid import cycles elsewhere
 type IntraJumpTarget arch =
-  (MemSegmentOff (ArchAddrWidth arch), AbsBlockState (ArchReg arch), InitJumpBounds arch)
+  (ArchSegmentOff arch, AbsBlockState (ArchReg arch), InitJumpBounds arch)

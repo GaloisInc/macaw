@@ -1180,7 +1180,7 @@ setAbsIP a b
 -- | The absolute value associated with a given architecture.
 --
 -- This is only a function of the address width.
-type ArchAbsValue arch = AbsValue (RegAddrWidth (ArchReg arch))
+type ArchAbsValue arch = AbsValue (ArchAddrWidth arch)
 
 -- | This stores the abstract state of the system which may be within
 -- a block.
@@ -1458,7 +1458,7 @@ absEvalCall :: forall arch ids
                  -> AbsProcessorState (ArchReg arch) ids
                     -- ^ State before call
                  -> RegState (ArchReg arch) (Value arch ids)
-                 -> MemSegmentOff (ArchAddrWidth arch)
+                 -> ArchSegmentOff arch
                     -- ^ Address we are jumping to
                  -> AbsBlockState (ArchReg arch)
 absEvalCall params ab0 regs addr =

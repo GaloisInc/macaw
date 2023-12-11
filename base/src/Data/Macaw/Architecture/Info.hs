@@ -231,7 +231,7 @@ data ArchitectureInfo arch
      { withArchConstraints :: forall a . (ArchConstraints arch => a) -> a
        -- ^ Provides the architecture constraints to any computation
        -- that needs it.
-     , archAddrWidth :: !(AddrWidthRepr (RegAddrWidth (ArchReg arch)))
+     , archAddrWidth :: !(AddrWidthRepr (ArchAddrWidth arch))
        -- ^ Architecture address width.
      , archEndianness :: !Endianness
        -- ^ The byte order values are stored in.
@@ -247,7 +247,7 @@ data ArchitectureInfo arch
        -- ^ Create initial registers from address and precondition.
      , disassembleFn :: !(DisassembleFn arch)
        -- ^ Function for disassembling a block.
-     , mkInitialAbsState :: !(Memory (RegAddrWidth (ArchReg arch))
+     , mkInitialAbsState :: !(Memory (ArchAddrWidth arch)
                          -> ArchSegmentOff arch
                          -> AbsBlockState (ArchReg arch))
        -- ^ Creates an abstract block state for representing the beginning of a
@@ -257,7 +257,7 @@ data ArchitectureInfo arch
      , absEvalArchFn :: !(forall ids tp
                           .  AbsProcessorState (ArchReg arch) ids
                           -> ArchFn arch (Value arch ids) tp
-                          -> AbsValue (RegAddrWidth (ArchReg arch)) tp)
+                          -> AbsValue (ArchAddrWidth arch) tp)
        -- ^ Evaluates an architecture-specific function
      , absEvalArchStmt :: !(forall ids
                             .  AbsProcessorState (ArchReg arch) ids
