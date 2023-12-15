@@ -75,6 +75,7 @@ module Data.Macaw.Discovery
        , jumpTableClassifier
          -- * Simplification
        , eliminateDeadStmts
+       , identifyCallTargets
          -- * Re-exports
        , ArchAddrWidth
        ) where
