@@ -29,6 +29,7 @@ module Data.Macaw.Discovery.Classifier (
   -- * Reusable helpers
   , branchBlockState
   , classifierEndBlock
+  , identifyCallTargets
   ) where
 
 import           Control.Lens ( (^.), (&), (.~) )

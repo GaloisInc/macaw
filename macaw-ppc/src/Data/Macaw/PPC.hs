@@ -10,6 +10,7 @@ module Data.Macaw.PPC (
   -- * Macaw configurations
   ppc32_linux_info,
   ppc64_linux_info,
+  ppcReadPCClassifier,
   -- * Type-level tags
   AnyPPC,
   Variant,
@@ -28,6 +29,7 @@ module Data.Macaw.PPC (
 
 import           Control.Lens ( (^.) )
 import           Data.Proxy ( Proxy(..) )
+import           Control.Applicative ( (<|>) )
 
 import qualified Data.Macaw.Architecture.Info as MI
 import qualified Data.Macaw.CFG as MC
@@ -63,6 +65,7 @@ import           Data.Macaw.PPC.Identify ( identifyCall
 import qualified Data.Macaw.PPC.PPCReg as R
 import qualified Data.Macaw.PPC.Semantics.PPC32 as PPC32
 import qualified Data.Macaw.PPC.Semantics.PPC64 as PPC64
+import qualified Control.Monad.Reader as CMR
 
 -- | The constructor for type tags for PowerPC
 type AnyPPC = PPC.AnyPPC
@@ -110,7 +113,7 @@ ppc64_linux_info binData =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
-                      , MI.archClassifier = MD.defaultClassifier
+                      , MI.archClassifier = ppcReadPCClassifier <|> MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V64
@@ -136,7 +139,44 @@ ppc32_linux_info =
                       , MI.initialBlockRegs = PPC.Eval.ppcInitialBlockRegs
                       , MI.archCallParams = PPC.Eval.ppcCallParams (preserveRegAcrossSyscall proxy)
                       , MI.extractBlockPrecond = PPC.Eval.ppcExtractBlockPrecond
-                      , MI.archClassifier = MD.defaultClassifier
+                      , MI.archClassifier = ppcReadPCClassifier <|> MD.defaultClassifier
                       }
   where
     proxy = Proxy @PPC.V32
+
+
+-- | This classifier handles a ppc-specific pattern used to read the pc
+--   in order to do pc-relative loads for relocatable code.
+--
+--   To do this, the pc is loaded into the link register by "calling" a
+--   function at the immediate next address, causing the LR and
+--   the pc to be equal. The original LR value 
+--   is then restored before the function return.
+--
+--  e.g.
+--  0x000018f8      mflr    r0
+--  0x000018fc      bdnzl   0x1900
+--  0x00001900      mflr    r30
+--  0x00001904      lwz     r9, -0x20(r30)
+--  ...
+--  0x00001bd4      mtlr    r0
+--  0x00001bd8      blr
+--
+--  This stashes the original LR in r0, and then the pc (i.e. 0x1900) in the
+--  LR, which is then used to do a pc-relative load into r9.
+--  Before the function returns, the original LR is restored from r0.
+
+ppcReadPCClassifier :: PPCArchConstraints v => MD.BlockClassifier (AnyPPC v) ids
+ppcReadPCClassifier = MI.classifierName "PPCReadPC" $ do
+  bcc <- CMR.ask
+  let ctx = MI.classifierParseContext bcc
+  let finalRegs = MI.classifierFinalRegState bcc
+  let ainfo = MI.pctxArchInfo ctx
+  let mem = MI.pctxMemory ctx
+  ret <- case MI.identifyCall ainfo mem (MI.classifierStmts bcc) finalRegs of
+           Just (_prev_stmts, ret) -> pure ret
+           Nothing -> fail "no call identified"
+  let targets = MD.identifyCallTargets mem (MI.classifierAbsState bcc) finalRegs
+  case targets of
+    [target] | target == ret -> MD.directJumpClassifier
+    _ -> fail $ ("call is not a pc read: " ++ show targets)
