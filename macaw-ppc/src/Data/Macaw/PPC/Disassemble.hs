@@ -43,6 +43,7 @@ import qualified SemMC.Architecture.PPC as SP
 import           Data.Macaw.SemMC.Generator
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
+import           Data.Macaw.PPC.PPCReg ( PPCReg(..) )
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
@@ -152,16 +153,20 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
                   , Just simplifiedIP <- simplifyValue v
                   , simplifiedIP == nextIPVal
                   , nextIPOffset < maxOffset
-                  , Just nextIPSegAddr <- MM.incSegmentOff curIPAddr (fromIntegral bytesRead) -> do
-                      let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
-                      let gs2 = GenState { assignIdGen = assignIdGen gs
-                                         , _blockState = preBlock'
-                                         , genAddr = nextIPSegAddr
-                                         , genRegUpdates = MapF.empty
-                                         , appCache = appCache gs
-                                         , _blockStateSnapshot = preBlock' ^. pBlockState
-                                         }
-                      disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
+                  , Just nextIPSegAddr <- MM.incSegmentOff curIPAddr (fromIntegral bytesRead) -> 
+                      case simplifyValue (preBlock ^. (pBlockState . boundValue PPC_LNK )) of
+                        Just simplifiedLNK | simplifiedLNK == simplifiedIP -> 
+                          return (nextIPOffset, finishBlock' preBlock FetchAndExecute)
+                        _ -> do
+                          let preBlock' = (pBlockState . curIP .~ simplifiedIP) preBlock
+                          let gs2 = GenState { assignIdGen = assignIdGen gs
+                                            , _blockState = preBlock'
+                                            , genAddr = nextIPSegAddr
+                                            , genRegUpdates = MapF.empty
+                                            , appCache = appCache gs
+                                            , _blockStateSnapshot = preBlock' ^. pBlockState
+                                            }
+                          disassembleBlock lookupSemantics gs2 nextIPSegAddr (blockOff + 4) maxOffset
 
                   | otherwise -> return (nextIPOffset, finishBlock' preBlock FetchAndExecute)
                 FinishedPartialBlock b -> return (nextIPOffset, b)
