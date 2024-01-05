@@ -1287,9 +1287,10 @@ instance MemWidth w => Show (MemoryError w) where
 ------------------------------------------------------------------------
 -- Reading contents
 
--- | Return list of contents from given word or an error if this we can't cleanly
--- partition a relocation
--- due to a relocation.
+-- | Return the memory contents from a given offset, that is, the 'MemChunk' at
+-- the given offset, then the following 'MemChunk's until the end of the
+-- segment.  Returns a 'MemoryError' if the requested offset falls within a
+-- relocation, which we cannot partition.
 segoffContentsAfter :: MemWidth w
                     => MemSegmentOff w
                     -> Either (MemoryError w) [MemChunk w]

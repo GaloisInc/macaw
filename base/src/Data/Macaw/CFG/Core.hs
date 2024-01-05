@@ -316,7 +316,7 @@ instance Show (CValue arch tp) where
 -- and are immutable within that context (i.e. their value would not
 -- change from a memory write).
 data Value arch ids tp where
-  -- | A constant vlaue
+  -- | A constant value
   CValue :: !(CValue arch tp) -> Value arch ids tp
   -- | Value from an assignment statement.
   AssignedValue :: !(Assignment arch ids tp)
