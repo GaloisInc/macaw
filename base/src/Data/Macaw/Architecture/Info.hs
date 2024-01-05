@@ -34,6 +34,7 @@ import           Data.Map ( Map )
 import           Data.Parameterized.Nonce
 import           Data.Parameterized.TraversableF
 import           Data.Sequence (Seq)
+import qualified Prettyprinter as PP
 
 import           Data.Macaw.AbsDomain.AbsState as AbsState
 import qualified Data.Macaw.AbsDomain.JumpBounds as Jmp
@@ -50,10 +51,14 @@ import           Data.Macaw.Memory
 
 -- | Flags whether a function is labeled no return or not.
 data NoReturnFunStatus
-   = NoReturnFun
-     -- ^ Function labeled no return
-   | MayReturnFun
-     -- ^ Function may retun
+  = NoReturnFun
+    -- ^ Function labeled no return
+  | MayReturnFun
+    -- ^ Function may retun
+  deriving (Show)
+
+instance PP.Pretty NoReturnFunStatus where
+  pretty = PP.viaShow
 
 type ClassificationError = String
 
