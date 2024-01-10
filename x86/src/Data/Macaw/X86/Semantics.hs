@@ -3252,6 +3252,12 @@ all_instructions =
   , def_fsubrp
   , defNullary "emms" $ addArchStmt EMMS
   , defNullary "femms" $ addArchStmt EMMS
+    -- prefetch instructions
+  , defUnary "prefetcht0" $ \_ _val -> return ()
+  , defUnary "prefetcht1" $ \_ _val -> return ()
+  , defUnary "prefetcht2" $ \_ _val -> return ()
+  , defUnary "prefetchnta" $ \_ _val -> return ()
+  , defUnary "prefetchw" $ \_ _val -> return ()
   ]
   ++ def_cmov_list
   ++ def_jcc_list
