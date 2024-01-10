@@ -10,6 +10,7 @@
 {-# Language PatternSynonyms #-}
 {-# Language TypeApplications #-}
 {-# Language PatternGuards #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Data.Macaw.Symbolic.MemOps
   ( PtrOp
   , GlobalMap(..)
@@ -855,6 +856,8 @@ doPtrLt = ptrOp $ \bak mem w xPtr xBits yPtr yBits x y ->
      undef <- mkUndefinedBool sym "ptr_lt"
      res <- bvUlt sym (asBits x) (asBits y)
      itePred sym ok res undef
+     -- assert bak ok "ptr_lt"
+     -- return res
 
 
 doPtrLeq :: PtrOp sym w (RegValue sym BoolType)
@@ -870,6 +873,8 @@ doPtrLeq = ptrOp $ \bak mem w xPtr xBits yPtr yBits x y ->
      undef <- mkUndefinedBool sym "ptr_leq"
      res <- bvUle sym (asBits x) (asBits y)
      itePred sym ok res undef
+     -- assert bak ok "ptr_leq"
+     -- return res
 
 
 doPtrEq :: PtrOp sym w (RegValue sym BoolType)
@@ -883,6 +888,7 @@ doPtrEq = ptrOp $ \bak _mem w xPtr xBits yPtr yBits x y ->
      undef <- mkUndefinedBool sym "ptr_eq"
      let nw = M.addrWidthNatRepr w
      cases bak (binOpLabel "ptr_eq" x y) itePred (Just undef)
+     -- cases bak (binOpLabel "ptr_eq" x y) itePred Nothing
        [ both_bits ~> endCase =<< bvEq sym (asBits x) (asBits y)
        , both_ptrs ~> endCase =<< ptrEq sym nw x y
        , both_null ~> endCase (truePred sym)
