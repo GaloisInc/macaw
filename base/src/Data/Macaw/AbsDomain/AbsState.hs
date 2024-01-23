@@ -1177,7 +1177,7 @@ setAbsIP a b
 ------------------------------------------------------------------------
 -- AbsProcessorState
 
--- | The absolute value associated with a given architecture.
+-- | The type of abstract values associated with a given architecture.
 --
 -- This is only a function of the address width.
 type ArchAbsValue arch = AbsValue (ArchAddrWidth arch)
