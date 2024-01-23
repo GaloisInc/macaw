@@ -134,6 +134,7 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func =
 data MissingSemantics
   = MissingStmtSemantics String
   | MissingTermSemantics String
+  | MissingPrimFnSemantics String
   deriving Show
 
 instance Exception MissingSemantics
@@ -373,13 +374,13 @@ pureSem sym fn = do
       do x <- getPointerOffset x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
-    M.ReadFSBase    -> error " ReadFSBase"
-    M.ReadGSBase    -> error "ReadGSBase"
-    M.GetSegmentSelector _ -> error "GetSegmentSelector"
-    M.CPUID{}       -> error "CPUID"
-    M.CMPXCHG8B{} -> error "CMPXCHG8B"
-    M.RDTSC{}       -> error "RDTSC"
-    M.XGetBV {} -> error "XGetBV"
+    M.ReadFSBase    -> throw (MissingPrimFnSemantics "ReadFSBase")
+    M.ReadGSBase    -> throw (MissingPrimFnSemantics "ReadGSBase")
+    M.GetSegmentSelector _ -> throw (MissingPrimFnSemantics "GetSegmentSelector")
+    M.CPUID{}       -> throw (MissingPrimFnSemantics "CPUID")
+    M.CMPXCHG8B{} -> throw (MissingPrimFnSemantics "CMPXCHG8B")
+    M.RDTSC{}       -> throw (MissingPrimFnSemantics "RDTSC")
+    M.XGetBV {} -> throw (MissingPrimFnSemantics "XGetBV")
     M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
       case sw of
         M.SIMDByteCount_XMM
@@ -390,9 +391,9 @@ pureSem sym fn = do
               let res = DV.fromList $ V.toList $ shuffleB xs ys
               mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
         _ -> error "PShufb is not implemented for 64-bit operands"
-    M.MemCmp{}      -> error "MemCmp"
-    M.RepnzScas{}   -> error "RepnzScas"
-    M.MMXExtend {} -> error "MMXExtend"
+    M.MemCmp{}      -> throw (MissingPrimFnSemantics "MemCmp")
+    M.RepnzScas{}   -> throw (MissingPrimFnSemantics "RepnzScas")
+    M.MMXExtend {} -> throw (MissingPrimFnSemantics "MMXExtend")
     M.X86IDivRem w num1 num2 d -> do
       sDivRem sym w num1 num2 d
     M.X86DivRem  w num1 num2 d -> do
@@ -465,11 +466,11 @@ pureSem sym fn = do
      iSBVToFloat symi (floatInfoFromSSEType tp) RNE
         =<< toValBV bak x
 
-    M.X87_Extend{} ->  error "X87_Extend"
-    M.X87_FAdd{} -> error "X87_FAdd"
-    M.X87_FSub{} -> error "X87_FSub"
-    M.X87_FMul{} -> error "X87_FMul"
-    M.X87_FST {} -> error "X87_FST"
+    M.X87_Extend{} ->  throw (MissingPrimFnSemantics "X87_Extend")
+    M.X87_FAdd{} -> throw (MissingPrimFnSemantics "X87_FAdd")
+    M.X87_FSub{} -> throw (MissingPrimFnSemantics "X87_FSub")
+    M.X87_FMul{} -> throw (MissingPrimFnSemantics "X87_FMul")
+    M.X87_FST {} -> throw (MissingPrimFnSemantics "X87_FST")
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -570,7 +571,7 @@ pureSem sym fn = do
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
 
-    M.VExtractF128 {} -> error "VExtractF128"
+    M.VExtractF128 {} -> throw (MissingPrimFnSemantics "VExtractF128")
 
     M.CLMul x y ->
       do let f = fnClMul (symFuns sym)
