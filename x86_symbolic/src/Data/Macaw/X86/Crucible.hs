@@ -19,6 +19,7 @@ module Data.Macaw.X86.Crucible
     SymFuns(..), newSymFuns
 
     -- * Instruction interpretation
+  , MissingSemantics(..)
   , funcSemantics
   , stmtSemantics
   , termSemantics
@@ -30,7 +31,7 @@ module Data.Macaw.X86.Crucible
   , liftAtomIn
   ) where
 
--- type SymInterpretedFloat sym fi = SymExpr sym (SymInterpretedFloatType sym fi)
+import           Control.Exception (Exception, throw)
 import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
@@ -41,7 +42,6 @@ import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
 import           Data.Parameterized.Utils.Endian (Endian(..))
 import qualified Data.Parameterized.Vector as PV
-import           Data.Semigroup
 import qualified Data.Vector as DV
 import           Data.Word (Word8)
 import           GHC.TypeLits (KnownNat)
@@ -129,6 +129,15 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func =
       return ((), res_crux_state)
     Nothing -> error $ "Unsupported symbolic count in rep stmt: "
 
+-- | An 'Exception' thrown when Crucible attempts to execute an instruction for
+-- which we have no semantics. The 'String' fields are human-readable messages.
+data MissingSemantics
+  = MissingStmtSemantics String
+  | MissingTermSemantics String
+  deriving Show
+
+instance Exception MissingSemantics
+
 stmtSemantics
   :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
   => SymFuns sym
@@ -169,9 +178,10 @@ stmtSemantics _sym_funs global_var_mem globals stmt state =
         afterWriteMem <- doWriteMem bak mem M.Addr64 mem_repr resolvedDestPtr (regValue val)
         -- Update the final state
         pure $! setMem acc_state global_var_mem afterWriteMem
-    _ -> error $
-      "Symbolic execution semantics for x86 statement are not implemented yet: "
-      <> (show $ MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
+    _ ->
+      let msg = "Symbolic execution semantics for x86 statement are not implemented yet: "
+                ++ show (MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
+      in throw (MissingStmtSemantics msg)
 
 -- | Dynamic semantics for x86-specific arch terminators
 --
@@ -182,8 +192,10 @@ termSemantics :: (IsSymInterface sym)
               -> M.X86TermStmt (AtomWrapper (RegEntry sym))
               -> S p sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
-termSemantics _fs x _s = error ("Symbolic execution semantics for x86 terminators are not implemented yet: " <>
-                                show (MC.ppArchTermStmt (error "Can't print RegEntry") x))
+termSemantics _fs x _s = 
+  let msg = "Symbolic execution semantics for x86 terminators are not implemented yet: "
+            ++ show (MC.ppArchTermStmt (error "Can't print RegEntry") x)
+  in throw (MissingTermSemantics msg)
 
 data Sym s bak =
   Sym { symBackend :: bak
