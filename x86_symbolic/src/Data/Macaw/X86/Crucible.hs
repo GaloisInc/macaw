@@ -20,6 +20,7 @@ module Data.Macaw.X86.Crucible
 
     -- * Instruction interpretation
   , MissingSemantics(..)
+  , missingSemanticsMessage
   , funcSemantics
   , stmtSemantics
   , termSemantics
@@ -138,6 +139,14 @@ data MissingSemantics
   deriving Show
 
 instance Exception MissingSemantics
+
+-- | Create a human-readable message from a 'MissingSemantics' exception.
+missingSemanticsMessage :: MissingSemantics -> String
+missingSemanticsMessage =
+  \case
+    MissingPrimFnSemantics msg -> msg
+    MissingStmtSemantics msg -> msg
+    MissingTermSemantics msg -> msg
 
 stmtSemantics
   :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
