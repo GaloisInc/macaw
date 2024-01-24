@@ -35,8 +35,9 @@ import           Control.Exception (Exception, throw)
 import           Control.Lens ((^.))
 import           Control.Monad
 import           Data.Bits hiding (xor)
-import           Data.Kind ( Type )
 import qualified Data.BitVector.Sized as BV
+import qualified Data.Functor.Identity as I
+import           Data.Kind ( Type )
 import qualified Data.Parameterized.Context as Ctx
 import           Data.Parameterized.Context.Unsafe (empty,extend)
 import           Data.Parameterized.NatRepr
@@ -84,7 +85,6 @@ import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
 
 import           Prelude
-import qualified Data.Functor.Identity as I
 
 
 type S p sym rtp bs r ctx =
