@@ -136,26 +136,26 @@ mkGlobalPointerValidityPredCommon tbl = \sym puse mcond ptr -> do
             IM.IntervalCO lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUle sym off hibv
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUlt sym off hibv
               WI.andPred sym lob hib
             IM.ClosedInterval lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUlt sym lobv off
-              hib <- WI.bvUlt sym off hibv
+              lob <- WI.bvUle sym lobv off
+              hib <- WI.bvUle sym off hibv
               WI.andPred sym lob hib
             IM.OpenInterval lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUle sym off hibv
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUlt sym off hibv
               WI.andPred sym lob hib
             IM.IntervalOC lo hi -> do
               lobv <- WI.bvLit sym w (BV.mkBV w (toInteger lo))
               hibv <- WI.bvLit sym w (BV.mkBV w (toInteger hi))
-              lob <- WI.bvUle sym lobv off
-              hib <- WI.bvUlt sym off hibv
+              lob <- WI.bvUlt sym lobv off
+              hib <- WI.bvUle sym off hibv
               WI.andPred sym lob hib
 
   let mkPred off = do
