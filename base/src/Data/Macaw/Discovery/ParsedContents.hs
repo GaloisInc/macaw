@@ -65,6 +65,15 @@ data BlockExploreReason w
 
   deriving (Eq, Show)
 
+instance MemWidth w => PP.Pretty (BlockExploreReason w) where
+  pretty (NextIP b) = "next address after block " <> PP.pretty b
+  pretty FunctionEntryPoint = "function entry point"
+  pretty (SplitAt o prior) =
+    PP.vcat
+      [ "split at offset" PP.<+> PP.pretty o <> ", previously reachable from:"
+      , PP.indent 2 (PP.pretty prior)
+      ]
+
 -------------------------------------------------------------------------------
 -- BoundedMemArray
 
@@ -315,7 +324,7 @@ data ParsedBlock arch ids
                    -- this region.
                  , blockJumpBounds :: !(Jmp.InitJumpBounds arch)
                    -- ^ Structure for computing bounds on jump tables.
-                 , pblockStmts :: !([Stmt arch ids])
+                 , pblockStmts :: ![Stmt arch ids]
                      -- ^ The non-terminal statements in the block
                  , pblockTermStmt  :: !(ParsedTermStmt arch ids)
                    -- ^ The terminal statement in the block.
@@ -336,7 +345,7 @@ instance ArchConstraints arch
 
 -- | Stores the main block features that may changes from parsing a block.
 data ParsedContents arch ids =
-  ParsedContents { parsedNonterm :: !([Stmt arch ids])
+  ParsedContents { parsedNonterm :: ![Stmt arch ids]
                    -- ^ The non-terminal statements in the block
                  , parsedTerm  :: !(ParsedTermStmt arch ids)
                    -- ^ The terminal statement in the block.

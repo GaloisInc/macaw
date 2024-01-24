@@ -61,7 +61,9 @@ isValidReturnAddress
 isValidReturnAddress val0 =
   case val0 of
     MC.RelocatableValue {} -> return val0
-    _ -> do
+    _ -> class1 <|> class2
+  where
+    class1 = do
       MC.BVOr _ val1 _ <- MC.valueAsApp val0
       MC.BVShl _ val2 _ <- MC.valueAsApp val1
       MC.UExt val3 _ <- MC.valueAsApp val2
@@ -70,10 +72,18 @@ isValidReturnAddress val0 =
       MC.BVShr _ val6@(MC.RelocatableValue {}) _ <- MC.valueAsApp val5
       return val6
 
+    class2 = do
+      MC.BVOr _ val1 _ <- MC.valueAsApp val0
+      MC.BVShl _ val2 _ <- MC.valueAsApp val1
+      MC.UExt val3 _ <- MC.valueAsApp val2
+      MC.Trunc val4 _ <- MC.valueAsApp val3
+      MC.BVShr _ val5@(MC.RelocatableValue {}) _ <- MC.valueAsApp val4
+      return val5
+
 -- | Identifies a call statement, *after* the corresponding statement
 -- has been performed.  This can be tricky with ARM because there are
 -- several instructions that can update R15 and effect a "call",
--- athough the predicate condition on those instructions can determine
+-- although the predicate condition on those instructions can determine
 -- if it is actually executed or not.  Also need to consider A32
 -- v.s. T32 mode.
 identifyCall :: MM.Memory (MC.ArchAddrWidth ARM.AArch32)

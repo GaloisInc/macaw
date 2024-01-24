@@ -2,6 +2,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators #-}
 module Data.Macaw.PPC.Identify
   ( identifyCall
   , identifyReturn
@@ -10,7 +11,7 @@ module Data.Macaw.PPC.Identify
 where
 
 import           Control.Lens ( (^.) )
-import           Control.Monad ( when )
+import           Control.Monad ( guard, when )
 import           Data.Parameterized.Some ( Some(..) )
 import           Data.Foldable ( asum )
 import qualified Data.Sequence as Seq

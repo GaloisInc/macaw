@@ -10,9 +10,7 @@ The type of machine words, including bit vectors and floating point
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PolyKinds #-}
@@ -97,6 +95,8 @@ data FloatInfoRepr (fi :: FloatInfo) where
   DoubleFloatRepr :: FloatInfoRepr DoubleFloat
   QuadFloatRepr   :: FloatInfoRepr QuadFloat
   X86_80FloatRepr :: FloatInfoRepr X86_80Float
+
+deriving instance Eq (FloatInfoRepr fi)
 
 instance KnownRepr FloatInfoRepr HalfFloat where
   knownRepr = HalfFloatRepr
@@ -236,7 +236,7 @@ instance Pretty (TypeRepr tp) where
   pretty (BVTypeRepr w) = parens ("bv" <+> viaShow w)
   pretty (FloatTypeRepr fi) = viaShow fi
   pretty (TupleTypeRepr z) =
-    parens (foldlFC (\l tp -> l <+> pretty tp) ("tuple") z)
+    parens (foldlFC (\l tp -> l <+> pretty tp) "tuple" z)
   pretty (VecTypeRepr c tp) = parens ("vec" <+> viaShow c <+> pretty tp)
 
 instance Show (TypeRepr tp) where

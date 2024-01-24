@@ -13,30 +13,36 @@ library
     bv-sized >= 1.0.0,
     containers,
     elf-edit,
+    filepath,
     IntervalMap >= 0.6 && < 0.7,
     crucible >= 0.4,
     crucible-llvm,
+    indexed-traversable,
     lens,
     macaw-base,
     mtl,
     parameterized-utils,
     prettyprinter >= 1.7.0,
+    split,
     text,
     vector,
     bytestring,
-    what4 >= 1.1 && < 1.4
+    what4 >= 1.1 && < 1.6
 
   hs-source-dirs: src
 
   exposed-modules:
     Data.Macaw.Symbolic
     Data.Macaw.Symbolic.Backend
+    Data.Macaw.Symbolic.Concretize
     Data.Macaw.Symbolic.Memory
+    Data.Macaw.Symbolic.Memory.Lazy
     Data.Macaw.Symbolic.MemOps
     Data.Macaw.Symbolic.Testing
   other-modules:
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
+    Data.Macaw.Symbolic.Memory.Common
     Data.Macaw.Symbolic.PersistentState
 
   ghc-options: -Wall -Wcompat
@@ -50,6 +56,6 @@ test-suite doctests
   hs-source-dirs: test
   main-is: doctest.hs
   ghc-options: -Wall -Wcompat -threaded
-  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.21
+  build-depends: base, macaw-base, macaw-symbolic, doctest >= 0.10 && < 0.23
 
 

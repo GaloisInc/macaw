@@ -1,0 +1,33 @@
+(defun @byte_id ((x Byte)) Byte (start start: (return x)))
+
+(defun @test_byte_id () Unit
+   (start start:
+      (let input (fresh Byte))
+      (let input_back (funcall @byte_id input))
+      (assert! (equal? input input_back) "byte_id test")
+      (return ())))
+
+byte_id
+%0
+  % 4:5
+  return $0
+  % no postdom
+test_byte_id
+%0
+  % 8:16
+  $0 = fresh BaseBVRepr 8 input
+  % 9:21
+  $1 = handleLit(byte_id)
+  % 9:21
+  $2 = call $1($0);
+  % 10:14
+  $3 = baseIsEq(BaseBVRepr 8, $0, $2)
+  % 10:40
+  $4 = stringLit("byte_id test")
+  % 10:5
+  assert($3, $4)
+  % 11:13
+  $5 = emptyApp()
+  % 11:5
+  return $5
+  % no postdom

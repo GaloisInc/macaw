@@ -75,13 +75,18 @@ main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
   -- the solver returns Unsat), while the assertions in the "fail" set are false
   -- (and the solver returns Sat).
-  passTestFilePaths <- SFG.glob "tests/pass/*.exe"
-  failTestFilePaths <- SFG.glob "tests/fail/*.exe"
+  passTestFilePaths <- SFG.glob "tests/pass/**/*.exe"
+  failTestFilePaths <- SFG.glob "tests/fail/**/*.exe"
   let passRes = MST.SimulationResult MST.Unsat
   let failRes = MST.SimulationResult MST.Sat
-  let passTests = TT.testGroup "True assertions" (map (mkSymExTest passRes) passTestFilePaths)
-  let failTests = TT.testGroup "False assertions" (map (mkSymExTest failRes) failTestFilePaths)
-  TT.defaultMainWithIngredients ingredients (TT.testGroup "Binary Tests" [passTests, failTests])
+  let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
+  let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
+  TT.defaultMainWithIngredients ingredients $
+    TT.testGroup "Binary Tests" $
+    map (\mmPreset ->
+          TT.testGroup (MST.describeMemModelPreset mmPreset)
+                       [passTests mmPreset, failTests mmPreset])
+        [MST.DefaultMemModel, MST.LazyMemModel]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
@@ -101,8 +106,8 @@ x86ResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
 
 data MacawX86SymbolicTest t = MacawX86SymbolicTest
 
-mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
-mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest :: MST.SimulationResult -> MST.MemModelPreset -> FilePath -> TT.TestTree
+mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
@@ -110,8 +115,8 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
       case Elf.headerClass (Elf.header ehi) of
         Elf.ELFCLASS32 -> TTH.assertFailure "32 bit x86 binaries are not supported"
         Elf.ELFCLASS64 -> do
-          (mem, discState) <- MST.runDiscovery ehi MST.toAddrSymMap MX.x86_64_linux_info
-          let funInfos = Map.elems (discState ^. M.funInfo)
+          binariesInfo <- MST.runDiscovery ehi exePath MST.toAddrSymMap MX.x86_64_linux_info MX.x86_64PLTStubInfo
+          let funInfos = Map.elems (MST.binaryDiscState (MST.mainBinaryInfo binariesInfo) ^. M.funInfo)
           let testEntryPoints = mapMaybe hasTestPrefix funInfos
           F.forM_ testEntryPoints $ \(name, Some dfi) -> do
             step ("Testing " ++ BS8.unpack name)
@@ -132,7 +137,7 @@ mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOpti
               let extract = x86ResultExtractor archVals
               logger <- makeGoalLogger saveSMT solver name exePath
               let ?memOpts = LLVM.defaultMemOptions
-              simRes <- MST.simulateAndVerify solver logger bak execFeatures MX.x86_64_linux_info archVals mem extract discState dfi
+              simRes <- MST.simulateAndVerify solver logger bak execFeatures MX.x86_64_linux_info archVals binariesInfo mmPreset extract dfi
               TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

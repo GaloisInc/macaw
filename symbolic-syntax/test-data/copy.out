@@ -1,0 +1,21 @@
+(defun @copy ((src Pointer) (dest Pointer)) Unit
+   (start start:
+      (let src-data (pointer-read Int le src))
+      (pointer-write Int le dest src-data)
+      (return ())))
+
+copy
+%0
+  % internal
+  $2 = (macawReadMem bvle4 $0)
+  % 4:19
+  $3 = extensionApp((ptr_to_bits_32 $2))
+  % internal
+  $4 = extensionApp((bits_to_ptr_32 $3))
+  % 5:5
+  $5 = (macawWriteMem bvle4 $1 $4)
+  % 6:13
+  $6 = emptyApp()
+  % 6:5
+  return $6
+  % no postdom

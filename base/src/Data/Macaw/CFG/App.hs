@@ -152,7 +152,7 @@ widthEqProofCompare :: WidthEqProof xi xo
                     -> OrderingF (WidthEqProof xi xo) (WidthEqProof yi yo)
 widthEqProofCompare p q =
   joinOrderingF (compareF (widthEqSource p) (widthEqSource q)) $
-    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q)) $
+    joinOrderingF (compareF (widthEqTarget p) (widthEqTarget q))
       EQF
 
 -- | This datatype defines operations used on multiple architectures.
@@ -368,7 +368,7 @@ data App (f :: Type -> Kind.Type) (tp :: Type) where
 $(pure [])
 
 instance TestEquality f => Eq (App f tp) where
-  (==) = \x y -> isJust (testEquality x y)
+  x == y = isJust (testEquality x y)
 
 instance TestEquality f => TestEquality (App f) where
   testEquality = $(structuralTypeEquality [t|App|]
@@ -385,20 +385,20 @@ instance TestEquality f => TestEquality (App f) where
                    ]
                   )
 
-instance HashableF f => Hashable (App f tp) where
+instance (HashableF f, TestEquality f) => Hashable (App f tp) where
   hashWithSalt = $(structuralHashWithSalt [t|App|]
                      [ (DataArg 0 `TypeApp` AnyType, [|hashWithSaltF|])
                      , (ConType [t|TypeRepr|] `TypeApp` AnyType, [|\s _c -> s|])
                      , (ConType [t|P.List|] `TypeApp` ConType [t|TypeRepr|] `TypeApp` AnyType
                        , [|\s _c -> s|])
                      , (ConType [t|P.List|] `TypeApp` DataArg 0 `TypeApp` AnyType
-                       , [|\s l -> foldlFC' hashWithSaltF s l |])
+                       , [|foldlFC' hashWithSaltF|])
                      , (ConType [t|WidthEqProof|] `TypeApp` AnyType `TypeApp` AnyType
                        , [|\s _c -> s|])
                      ]
                   )
 
-instance HashableF f => HashableF (App f) where
+instance (HashableF f, TestEquality f) => HashableF (App f) where
   hashWithSaltF = hashWithSalt
 
 instance OrdF f => OrdF (App f) where

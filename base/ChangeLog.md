@@ -4,6 +4,13 @@
 
 ### Features
 
+- `resolveElfContents`, as well as related functions in
+  `Data.Macaw.Memory.ElfLoader`, now compute dynamic function symbols for
+  non–position-independent executables. These were previously omitted due to
+  an oversight in the implementation.
+
+- Add support for PPC32 and PPC64 relocations in `Data.Macaw.Memory.ElfLoader`.
+
 ### API Changes
 
 - Architecture-specific block terminators can now contain macaw values
@@ -21,3 +28,7 @@
 - The `DynamicSymbolTable` constructor of `Data.Macaw.Memory.ElfLoader`'s
   `SymbolTable` data type now has an additional `VersionDefMap` field, which is
   needed for finding versioning information in some cases.
+
+- The `Hashable` and `HashableF` instances for `App f` now require
+  `TestEquality f` constraints. (This is needed to support `hashable-1.4.*`,
+  which adds `Eq` as a superclass to `Hashable`.)

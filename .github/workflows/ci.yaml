@@ -25,33 +25,24 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        ghc-ver: ["8.8.4", "8.10.7", "9.0.2", "9.2.2"]
-        cabal: [ '3.6.2.0' ]
+        ghc-ver: ["9.2.8", "9.4.5", "9.6.2"]
+        cabal: [ '3.10.1.0' ]
         os: [self-hosted]
       # complete all jobs
       fail-fast: false
     name: Macaw - GHC v${{ matrix.ghc-ver }}
     steps:
     - name: Checkout
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       with:
         submodules: true
 
-    - uses: haskell/actions/setup@v1
+    - uses: haskell/actions/setup@v2
       id: setup-haskell
       name: Setup Haskell
       with:
         ghc-version: ${{ matrix.ghc-ver }}
         cabal-version: ${{ matrix.cabal }}
-
-    - name: Cache
-      uses: actions/cache@v1
-      with:
-        path: /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
-        # Prefer previous SHA hash if it is still cached
-        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
-        # otherwise just use most recent build.
-        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
 
     - name: System Dependencies
       run: |
@@ -74,6 +65,19 @@ jobs:
         cp cabal.project.werror cabal.project.local
         cp cabal.project.freeze.ghc-${{ matrix.ghc-ver }} cabal.project.freeze
 
+    # WARNING: Make sure this step remains after the step that creates
+    # cabal.project.freeze, or the cache key will be incorrect!
+    - uses: actions/cache/restore@v3
+      name: Restore cabal store cache
+      with:
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
+        # Prefer previous SHA hash if it is still cached
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}
+        # otherwise just use most recent build.
+        restore-keys: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}
+
     - name: Cabal update
       run: cabal update
       # Build macaw-base dependencies and crucible separately just so later
@@ -90,6 +94,12 @@ jobs:
         Z3_VERSION: "4.8.8"
         YICES_VERSION: "2.6.2"
         CVC4_VERSION: "4.1.8"
+
+    - name: Build macaw-symbolic-syntax
+      run: cabal build pkg:macaw-symbolic-syntax
+
+    - name: Test macaw-symbolic-syntax
+      run: cabal test pkg:macaw-symbolic-syntax
 
     - name: Build macaw-x86
       run: cabal build pkg:macaw-x86 pkg:macaw-x86-symbolic
@@ -134,3 +144,13 @@ jobs:
 
     - name: Build compare-dwarfdump
       run: cabal build compare-dwarfdump
+
+    - uses: actions/cache/save@v3
+      name: Save cabal store cache
+      if: always()
+      with:
+        path: |
+          /home/runner/.cabal/store/ghc-${{ matrix.ghc-ver }}
+          dist-newstyle
+        # Prefer previous SHA hash if it is still cached
+        key: ${{ env.CACHE_VERSION }}-linux-${{ matrix.ghc-ver }}-${{ hashFiles('cabal.project.freeze') }}-${{ github.sha }}

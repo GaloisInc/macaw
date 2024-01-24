@@ -78,13 +78,18 @@ main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
   -- the solver returns Unsat), while the assertions in the "fail" set are false
   -- (and the solver returns Sat).
-  passTestFilePaths <- SFG.glob "tests/pass/*.exe"
-  failTestFilePaths <- SFG.glob "tests/fail/*.exe"
+  passTestFilePaths <- SFG.glob "tests/pass/**/*.exe"
+  failTestFilePaths <- SFG.glob "tests/fail/**/*.exe"
   let passRes = MST.SimulationResult MST.Unsat
   let failRes = MST.SimulationResult MST.Sat
-  let passTests = TT.testGroup "True assertions" (map (mkSymExTest passRes) passTestFilePaths)
-  let failTests = TT.testGroup "False assertions" (map (mkSymExTest failRes) failTestFilePaths)
-  TT.defaultMainWithIngredients ingredients (TT.testGroup "Binary Tests" [passTests, failTests])
+  let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
+  let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
+  TT.defaultMainWithIngredients ingredients $
+    TT.testGroup "Binary Tests" $
+    map (\mmPreset ->
+          TT.testGroup (MST.describeMemModelPreset mmPreset)
+                       [passTests mmPreset, failTests mmPreset])
+        [MST.DefaultMemModel, MST.LazyMemModel]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
@@ -105,20 +110,21 @@ armResultExtractor archVals = MST.ResultExtractor $ \regs _sp _mem k -> do
   let re = MS.lookupReg archVals regs (MAR.ARMGlobalBV (ASL.knownGlobalRef @"_R0"))
   k PC.knownRepr (CS.regValue re)
 
-mkSymExTest :: MST.SimulationResult -> FilePath -> TT.TestTree
-mkSymExTest expected exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
+mkSymExTest :: MST.SimulationResult -> MST.MemModelPreset -> FilePath -> TT.TestTree
+mkSymExTest expected mmPreset exePath = TT.askOption $ \saveSMT@(SaveSMT _) -> TT.askOption $ \saveMacaw@(SaveMacaw _) -> TTH.testCaseSteps exePath $ \step -> do
   bytes <- BS.readFile exePath
   case Elf.decodeElfHeaderInfo bytes of
     Left (_, msg) -> TTH.assertFailure ("Error parsing ELF header from file '" ++ show exePath ++ "': " ++ msg)
     Right (Elf.SomeElf ehi) -> do
       case Elf.headerClass (Elf.header ehi) of
         Elf.ELFCLASS32 ->
-          symExTestSized expected exePath saveSMT saveMacaw step ehi MA.arm_linux_info
+          symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi MA.arm_linux_info
         Elf.ELFCLASS64 -> TTH.assertFailure "64 bit ARM is not supported"
 
 data MacawAarch32TestData t = MacawAarch32TestData
 
 symExTestSized :: MST.SimulationResult
+               -> MST.MemModelPreset
                -> FilePath
                -> SaveSMT
                -> SaveMacaw
@@ -126,9 +132,9 @@ symExTestSized :: MST.SimulationResult
                -> Elf.ElfHeaderInfo 32
                -> MAI.ArchitectureInfo MA.ARM
                -> TTH.Assertion
-symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
-   (mem, discState) <- MST.runDiscovery ehi MST.toAddrSymMap archInfo
-   let funInfos = Map.elems (discState ^. M.funInfo)
+symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi archInfo = do
+   binfo <- MST.runDiscovery ehi exePath MST.toAddrSymMap archInfo MA.armPLTStubInfo
+   let funInfos = Map.elems (MST.binaryDiscState (MST.mainBinaryInfo binfo) ^. M.funInfo)
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
      step ("Testing " ++ BS8.unpack name ++ " at " ++ show (M.discoveredFunAddr dfi))
@@ -149,7 +155,7 @@ symExTestSized expected exePath saveSMT saveMacaw step ehi archInfo = do
        let extract = armResultExtractor archVals
        logger <- makeGoalLogger saveSMT solver name exePath
        let ?memOpts = LLVM.defaultMemOptions
-       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals mem extract discState dfi
+       simRes <- MST.simulateAndVerify solver logger bak execFeatures archInfo archVals binfo mmPreset extract dfi
        TTH.assertEqual "AssertionResult" expected simRes
 
 writeMacawIR :: (MC.ArchConstraints arch) => SaveMacaw -> String -> M.DiscoveryFunInfo arch ids -> IO ()

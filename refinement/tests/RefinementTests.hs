@@ -297,12 +297,16 @@ mkSymbolicTest testinp = do
               let ?recordLLVMAnnotation = \_ _ _ -> pure ()
               -- FIXME: We probably need to pull endianness from somewhere else
               (initMem, memPtrTbl) <- MSM.newGlobalMemory proxy bak CLD.LittleEndian MSM.ConcreteMutable mem
-              let globalMap = MSM.mapRegionPointers memPtrTbl
               let lookupFn = MS.unsupportedFunctionCalls "macaw-refinement-tests"
               let lookupSC = MS.unsupportedSyscalls "macaw-refinement-tests"
               let validityCheck _ _ _ _ = return Nothing
+              let mmConf = (MSM.memModelConfig bak memPtrTbl)
+                             { MS.lookupFunctionHandle = lookupFn
+                             , MS.lookupSyscallHandle = lookupSC
+                             , MS.mkGlobalPointerValidityAssertion = validityCheck
+                             }
               MS.withArchEval archVals sym $ \archEvalFns -> do
-                (_, res) <- MS.runCodeBlock bak archFns archEvalFns halloc (initMem, globalMap) lookupFn lookupSC validityCheck cfg regs
+                (_, res) <- MS.runCodeBlock bak archFns archEvalFns halloc initMem mmConf cfg regs
                 case res of
                   CS.FinishedResult _ (CS.TotalRes _) -> return ()
                   CS.FinishedResult _ (CS.PartialRes {}) -> return ()

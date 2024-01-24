@@ -9,9 +9,7 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.AbsDomain.AbsState
@@ -63,7 +61,8 @@ module Data.Macaw.AbsDomain.AbsState
 
 import           Control.Exception (assert)
 import           Control.Lens
-import           Control.Monad.State.Strict
+import           Control.Monad (guard)
+import           Control.Monad.State.Strict (MonadState(..), State, modify, runState)
 import           Data.Bits
 import           Data.Foldable
 import           Data.Int

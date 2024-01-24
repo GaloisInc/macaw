@@ -23,6 +23,7 @@ single CFG.
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
@@ -95,7 +96,8 @@ module Data.Macaw.CFG.Core
   ) where
 
 import           Control.Lens
-import           Control.Monad.State.Strict
+import           Control.Monad (when)
+import           Control.Monad.State.Strict (MonadState(..), State, gets, modify, runState)
 import           Data.Bits
 import           Data.Int (Int64)
 import qualified Data.Kind as Kind
@@ -238,6 +240,9 @@ instance TestEquality (CValue arch) where
   testEquality (SymbolCValue _ x) (SymbolCValue _ y) = do
     if x == y then Just Refl else Nothing
   testEquality _ _ = Nothing
+
+instance Eq (CValue arch tp) where
+  a == b = isJust (testEquality a b)
 
 instance OrdF (CValue arch) where
   compareF (BoolCValue x) (BoolCValue y) = fromOrdering (compare x y)

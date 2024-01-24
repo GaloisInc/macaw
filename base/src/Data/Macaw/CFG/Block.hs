@@ -65,7 +65,7 @@ instance ArchConstraints arch
 --
 -- The discovery process will attempt to map each block to a suitable ParsedBlock.
 data Block arch ids
-   = Block { blockStmts :: !([Stmt arch ids])
+   = Block { blockStmts :: ![Stmt arch ids]
              -- ^ List of statements in the block.
            , blockTerm :: !(TermStmt arch ids)
              -- ^ The last statement in the block.

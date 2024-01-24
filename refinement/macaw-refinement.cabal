@@ -152,7 +152,7 @@ test-suite test-refinements
                , crucible
                , crucible-llvm
                , what4
-               , optparse-applicative >= 0.13 && < 0.17
+               , optparse-applicative >= 0.13 && < 0.19
                , parameterized-utils
                , QuickCheck >= 2.7
                , semmc-ppc

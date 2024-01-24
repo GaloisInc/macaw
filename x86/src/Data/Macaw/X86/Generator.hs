@@ -63,11 +63,13 @@ module Data.Macaw.X86.Generator
   ) where
 
 import           Control.Lens
-import           Control.Monad.Cont
-import           Control.Monad.Except
-import           Control.Monad.Reader
+import           Control.Monad (liftM)
+import           Control.Monad.Cont (ContT(..))
+import           Control.Monad.Except (MonadError(..), ExceptT)
+import           Control.Monad.Reader (MonadReader(..), ReaderT(..))
 import           Control.Monad.ST
-import           Control.Monad.State.Strict
+import           Control.Monad.State.Strict (State, modify, runState)
+import           Control.Monad.Trans (MonadTrans(..))
 import           Data.Bits
 import           Data.Foldable
 import           Data.Macaw.CFG.App

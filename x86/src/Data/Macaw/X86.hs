@@ -9,23 +9,19 @@ x86_64 programs.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PatternGuards #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NondecreasingIndentation #-}
 module Data.Macaw.X86
        ( x86_64_info
        , x86_64_freeBSD_info
        , x86_64_linux_info
        , x86_64CallParams
+       , x86_64PLTStubInfo
        , freeBSD_syscallPersonality
        , linux_syscallPersonality
          -- * Low level exports
@@ -55,9 +51,11 @@ module Data.Macaw.X86
        ) where
 
 import           Control.Lens
-import           Control.Monad.Cont
-import           Control.Monad.Except
+import           Control.Monad (when, guard)
+import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT, withExceptT)
 import           Control.Monad.ST
+import           Control.Monad.Trans (MonadTrans(..))
+import qualified Data.ElfEdit as EE
 import           Data.Foldable
 import qualified Data.Map as Map
 import           Data.Parameterized.Classes
@@ -81,6 +79,7 @@ import           Data.Macaw.CFG
 import           Data.Macaw.CFG.DemandSet
 import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Memory as MM
+import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMEP
 import qualified Data.Macaw.Memory.Permissions as Perm
 import           Data.Macaw.Types
   ( n8
@@ -180,8 +179,12 @@ disassembleInstruction curIPAddr contents =
     Right r -> do
       pure r
 
--- | Translate block, returning blocks read, ending
--- PC, and an optional error.  and ending PC.
+-- | Translate one instruction, returning:
+-- * the parsed instruction,
+-- * an updated block, either unfinished or finished,
+-- * the size of the parsed instruction,
+-- * the next PC,
+-- * the rest of the instruction memory contents.
 translateStep :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
@@ -283,8 +286,9 @@ translateInstruction gen initRegs addr =
       (_i, res, instSize, _nextIP, _nextContents) <- translateStep gen pblock 0 addr contents
       pure $! (finishPartialBlock res, fromIntegral instSize)
 
--- | Translate block, returning block read, number of bytes in block,
--- remaining bytes to parse, and an optional error.
+-- | Translate one block, returning:
+-- * the read block,
+-- * the offset of the next instruction after this block.
 translateBlockImpl :: forall st_s ids
                      .  NonceGenerator (ST st_s) ids
                         -- ^ Generator for new assign ids
@@ -615,6 +619,13 @@ x86_64_linux_info :: ArchitectureInfo X86_64
 x86_64_linux_info = x86_64_info preserveFn
   where preserveFn r = Set.member (Some r) linuxSystemCallPreservedRegisters
 
+-- | PLT stub information for X86_64 relocation types.
+x86_64PLTStubInfo :: MMEP.PLTStubInfo EE.X86_64_RelocationType
+x86_64PLTStubInfo = MMEP.PLTStubInfo
+  { MMEP.pltFunSize     = 16
+  , MMEP.pltStubSize    = 16
+  , MMEP.pltGotStubSize = 8
+  }
 
 {-# DEPRECATED disassembleBlock "Use disassembleFn x86_64_info" #-}
 
