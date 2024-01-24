@@ -13,6 +13,7 @@ module Data.Macaw.AArch32.Symbolic (
   aarch32MacawSymbolicFns
   , lookupReg
   , updateReg
+  , AF.AArch32Exception(..)
   ) where
 
 import qualified Data.Text as T
