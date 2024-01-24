@@ -20,7 +20,6 @@ module Data.Macaw.X86.Crucible
 
     -- * Instruction interpretation
   , MissingSemantics(..)
-  , missingSemanticsMessage
   , funcSemantics
   , stmtSemantics
   , termSemantics
@@ -85,6 +84,7 @@ import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.ArchTypes as M
 
 import           Prelude
+import qualified Data.Functor.Identity as I
 
 
 type S p sym rtp bs r ctx =
@@ -132,21 +132,31 @@ withConcreteCountAndDir state val_size wrapped_count _wrapped_dir func =
 
 -- | An 'Exception' thrown when Crucible attempts to execute an instruction for
 -- which we have no semantics. The 'String' fields are human-readable messages.
-data MissingSemantics
-  = MissingStmtSemantics String
-  | MissingTermSemantics String
-  | MissingPrimFnSemantics String
-  deriving Show
+data MissingSemantics where
+  MissingPrimFnSemantics :: forall sym mt. M.X86PrimFn (AtomWrapper (RegEntry sym)) mt -> MissingSemantics
+  MissingStmtSemantics :: forall sym. M.X86Stmt (AtomWrapper (RegEntry sym)) -> MissingSemantics
+  MissingTermSemantics :: forall sym. M.X86TermStmt (AtomWrapper (RegEntry sym)) -> MissingSemantics
+
+instance Show MissingSemantics where
+  show = show . pretty
 
 instance Exception MissingSemantics
 
--- | Create a human-readable message from a 'MissingSemantics' exception.
-missingSemanticsMessage :: MissingSemantics -> String
-missingSemanticsMessage =
-  \case
-    MissingPrimFnSemantics msg -> msg
-    MissingStmtSemantics msg -> msg
-    MissingTermSemantics msg -> msg
+instance Pretty MissingSemantics where
+  pretty =
+    \case
+      MissingPrimFnSemantics fn ->
+        pretty "Symbolic execution semantics for x86 primitive function are not implemented yet:"
+          <+> I.runIdentity (MC.ppArchFn (I.Identity . liftAtomIn (pretty . regType)) fn)
+      MissingStmtSemantics stmt ->
+        pretty "Symbolic execution semantics for x86 statement are not implemented yet:"
+          <+> MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt
+      MissingTermSemantics term ->
+        pretty "Symbolic execution semantics for x86 terminators are not implemented yet:"
+          -- We can't print out sub-terms that are RegEntry; however, since
+          -- none of the x86 terminators contain nested dynamic values, we
+          -- don't need to.
+          <+> MC.ppArchTermStmt (error "Can't print RegEntry") term
 
 stmtSemantics
   :: (IsSymInterface sym, HasLLVMAnn sym, ?memOpts :: MemOptions)
@@ -188,24 +198,15 @@ stmtSemantics _sym_funs global_var_mem globals stmt state =
         afterWriteMem <- doWriteMem bak mem M.Addr64 mem_repr resolvedDestPtr (regValue val)
         -- Update the final state
         pure $! setMem acc_state global_var_mem afterWriteMem
-    _ ->
-      let msg = "Symbolic execution semantics for x86 statement are not implemented yet: "
-                ++ show (MC.ppArchStmt (liftAtomIn (pretty . regType)) stmt)
-      in throw (MissingStmtSemantics msg)
+    _ -> throw (MissingStmtSemantics stmt)
 
 -- | Dynamic semantics for x86-specific arch terminators
---
--- Note that we can't print out sub-terms that are RegEntry; however, since none
--- of the x86 terminators contain nested dynamic values, we don't need to.
 termSemantics :: (IsSymInterface sym)
               => SymFuns sym
               -> M.X86TermStmt (AtomWrapper (RegEntry sym))
               -> S p sym rtp bs r ctx
               -> IO (RegValue sym UnitType, S p sym rtp bs r ctx)
-termSemantics _fs x _s = 
-  let msg = "Symbolic execution semantics for x86 terminators are not implemented yet: "
-            ++ show (MC.ppArchTermStmt (error "Can't print RegEntry") x)
-  in throw (MissingTermSemantics msg)
+termSemantics _fs term _s = throw (MissingTermSemantics term)
 
 data Sym s bak =
   Sym { symBackend :: bak
@@ -383,13 +384,13 @@ pureSem sym fn = do
       do x <- getPointerOffset x0
          evalE sym $ app $ Not $ foldr1 xor [ bvTestBit x i | i <- [ 0 .. 7 ] ]
       where xor a b = app (BoolXor a b)
-    M.ReadFSBase    -> throw (MissingPrimFnSemantics "ReadFSBase")
-    M.ReadGSBase    -> throw (MissingPrimFnSemantics "ReadGSBase")
-    M.GetSegmentSelector _ -> throw (MissingPrimFnSemantics "GetSegmentSelector")
-    M.CPUID{}       -> throw (MissingPrimFnSemantics "CPUID")
-    M.CMPXCHG8B{} -> throw (MissingPrimFnSemantics "CMPXCHG8B")
-    M.RDTSC{}       -> throw (MissingPrimFnSemantics "RDTSC")
-    M.XGetBV {} -> throw (MissingPrimFnSemantics "XGetBV")
+    M.ReadFSBase    -> throw (MissingPrimFnSemantics fn)
+    M.ReadGSBase    -> throw (MissingPrimFnSemantics fn)
+    M.GetSegmentSelector _ -> throw (MissingPrimFnSemantics fn)
+    M.CPUID{}       -> throw (MissingPrimFnSemantics fn)
+    M.CMPXCHG8B{} -> throw (MissingPrimFnSemantics fn)
+    M.RDTSC{}       -> throw (MissingPrimFnSemantics fn)
+    M.XGetBV {} -> throw (MissingPrimFnSemantics fn)
     M.PShufb sw (AtomWrapper vxs) (AtomWrapper vys) ->
       case sw of
         M.SIMDByteCount_XMM
@@ -400,9 +401,9 @@ pureSem sym fn = do
               let res = DV.fromList $ V.toList $ shuffleB xs ys
               mapM (llvmPointer_bv (symIface sym) <=< evalE sym) res
         _ -> error "PShufb is not implemented for 64-bit operands"
-    M.MemCmp{}      -> throw (MissingPrimFnSemantics "MemCmp")
-    M.RepnzScas{}   -> throw (MissingPrimFnSemantics "RepnzScas")
-    M.MMXExtend {} -> throw (MissingPrimFnSemantics "MMXExtend")
+    M.MemCmp{}      -> throw (MissingPrimFnSemantics fn)
+    M.RepnzScas{}   -> throw (MissingPrimFnSemantics fn)
+    M.MMXExtend {} -> throw (MissingPrimFnSemantics fn)
     M.X86IDivRem w num1 num2 d -> do
       sDivRem sym w num1 num2 d
     M.X86DivRem  w num1 num2 d -> do
@@ -475,11 +476,11 @@ pureSem sym fn = do
      iSBVToFloat symi (floatInfoFromSSEType tp) RNE
         =<< toValBV bak x
 
-    M.X87_Extend{} ->  throw (MissingPrimFnSemantics "X87_Extend")
-    M.X87_FAdd{} -> throw (MissingPrimFnSemantics "X87_FAdd")
-    M.X87_FSub{} -> throw (MissingPrimFnSemantics "X87_FSub")
-    M.X87_FMul{} -> throw (MissingPrimFnSemantics "X87_FMul")
-    M.X87_FST {} -> throw (MissingPrimFnSemantics "X87_FST")
+    M.X87_Extend{} ->  throw (MissingPrimFnSemantics fn)
+    M.X87_FAdd{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FSub{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FMul{} -> throw (MissingPrimFnSemantics fn)
+    M.X87_FST {} -> throw (MissingPrimFnSemantics fn)
 
     M.VOp1 w op1 x ->
       case op1 of
@@ -580,7 +581,7 @@ pureSem sym fn = do
       vecOp2 sym LittleEndian (natMultiply elNum elSz) elSz v1 v2 $ \xs ys ->
         V.zipWith (semPointwise op elSz) xs ys
 
-    M.VExtractF128 {} -> throw (MissingPrimFnSemantics "VExtractF128")
+    M.VExtractF128 {} -> throw (MissingPrimFnSemantics fn)
 
     M.CLMul x y ->
       do let f = fnClMul (symFuns sym)
