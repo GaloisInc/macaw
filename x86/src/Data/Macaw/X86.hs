@@ -48,13 +48,19 @@ module Data.Macaw.X86
        , Data.Macaw.X86.X86Reg.x86CalleeSavedRegs
        , pattern Data.Macaw.X86.X86Reg.RAX
        , x86DemandContext
+       , weakReturnClassifier
        ) where
 
+import           Control.Applicative ( Alternative((<|>)) )
 import           Control.Lens
 import           Control.Monad (when, guard)
 import           Control.Monad.Except (ExceptT, MonadError(..), runExceptT, withExceptT)
 import           Control.Monad.ST
 import           Control.Monad.Trans (MonadTrans(..))
+import qualified Control.Monad.Reader as CMR
+import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BS8
+import           Data.Char (toLower)
 import qualified Data.ElfEdit as EE
 import           Data.Foldable
 import qualified Data.Map as Map
@@ -81,6 +87,7 @@ import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Memory as MM
 import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMEP
 import qualified Data.Macaw.Memory.Permissions as Perm
+import qualified Data.Macaw.Discovery.ParsedContents as Parsed
 import           Data.Macaw.Types
   ( n8
   , HasRepr(..)
@@ -531,14 +538,54 @@ checkForReturnAddrX86 absState
 -- An instruction executing a return from a function will place the
 -- ReturnAddr value (placed on the top of the stack by
 -- 'initialX86AbsState' above) into the instruction pointer.
-identifyX86Return :: Seq (Stmt X86_64 ids)
+--
+-- If the strictness flag is False, then the above check is relaxed and
+-- we look directly at the last instruction opcode in the statement
+-- list to determine if it is literally a return instruction. See the
+-- documentation for 'weakReturnClassifier' for more information on the
+-- motivation for this behavior. The default ArchitectureInfo should
+-- call this with the strictness flag set to True for its implementation
+-- of 'identifyReturn' which consequently affects the behavior of the
+-- return classifier used in 'defaultClassifier'.
+identifyX86Return :: Bool
+                  -- ^ Strictness flag
+                  -> Seq (Stmt X86_64 ids)
                   -> RegState X86Reg (Value X86_64 ids)
                   -> AbsProcessorState X86Reg ids
                   -> Classifier (Seq (Stmt X86_64 ids))
-identifyX86Return stmts s finalRegSt8 =
-  case transferValue finalRegSt8 (s^.boundValue ip_reg) of
+identifyX86Return strictReturn stmts s finalRegSt8 =
+  let invalidReturn = fail "identifyX86Return: not a ReturnAddr"
+
+      isInstruction :: Stmt X86_64 ids -> Bool
+      isInstruction (InstructionStart {}) = True
+      isInstruction _ = False
+
+      isReturn :: Stmt X86_64 ids -> Bool
+      isReturn (InstructionStart _ _ i) = isReturnOp $ F.iiOp i
+      isReturn _ = False
+
+      isReturnOp :: BS.ByteString -> Bool
+      isReturnOp opcode =
+          (toLower <$> BS8.unpack opcode) `elem` returnMnemonics
+
+      returnMnemonics :: [String]
+      returnMnemonics =
+          [ "ret"
+          , "retq"
+          ]
+
+  in case transferValue finalRegSt8 (s^.boundValue ip_reg) of
     ReturnAddr -> return stmts
-    _ -> fail "identifyX86Return: not a ReturnAddr"
+    _ ->
+        if strictReturn
+        then invalidReturn
+        else case Seq.findIndexR isInstruction stmts of
+            Just idx ->
+                let Just stmt = Seq.lookup idx stmts
+                in if isReturn stmt
+                   then return stmts
+                   else invalidReturn
+            _ -> invalidReturn
 
 freeBSD_syscallPersonality :: SyscallPersonality
 freeBSD_syscallPersonality =
@@ -596,7 +643,7 @@ x86_64_info preservePred =
                    , identifyCall = identifyX86Call
                    , archCallParams = x86_64CallParams
                    , checkForReturnAddr = \_ s -> guard $ checkForReturnAddrX86 s
-                   , identifyReturn = identifyX86Return
+                   , identifyReturn = identifyX86Return True
                    , rewriteArchFn = rewriteX86PrimFn
                    , rewriteArchStmt = rewriteX86Stmt
                    , rewriteArchTermStmt = rewriteX86TermStmt
@@ -604,6 +651,43 @@ x86_64_info preservePred =
                    , postArchTermStmtAbsState = postX86TermStmtAbsState preservePred
                    , archClassifier = defaultClassifier
                    }
+
+-- | Macaw's default classification strategy relies entirely on Macaw's
+-- abstract domain to track whether or not the address on top of the
+-- stack is the return address. But in practice the abstract domain can
+-- lose information required to determine that the top of the stack has
+-- the expected return address. In that case, we provide this "weaker"
+-- (but more permissive) return classifier; the default classifier
+-- results in a classification error, but if we're willing to inspect
+-- the instruction opcode for a set of know return instructions, we can
+-- use that to determine whether something is a return regardless of the
+-- abstract domain.
+--
+-- NB: it is possible for a block to be incorrectly classified as a
+-- return using this strategy in cases where the stack has an unexpected
+-- shape (i.e. a return instruction is popping an address from the stack
+-- that was pushed there that wasn't a function call). This should
+-- consequently not be used in a verification context.
+--
+-- Use with caution.
+--
+-- This is a modified copy of the default return classifier that uses
+-- our identifyX86Return function.
+weakReturnClassifier :: BlockClassifier X86_64 ids
+weakReturnClassifier = classifierName "Return" $ do
+  bcc <- CMR.ask
+  let ainfo = pctxArchInfo (classifierParseContext bcc)
+  withArchConstraints ainfo $ do
+    prevStmts <- liftClassifier $ identifyX86Return False
+                                    (classifierStmts bcc)
+                                    (classifierFinalRegState bcc)
+                                    (classifierAbsState bcc)
+    pure $ Parsed.ParsedContents { Parsed.parsedNonterm = toList prevStmts
+                                 , Parsed.parsedTerm = Parsed.ParsedReturn (classifierFinalRegState bcc)
+                                 , Parsed.writtenCodeAddrs = classifierWrittenAddrs bcc
+                                 , Parsed.intraJumpTargets = []
+                                 , Parsed.newFunctionAddrs = []
+                                 }
 
 -- | Architecture information for X86_64 on FreeBSD.
 x86_64_freeBSD_info :: ArchitectureInfo X86_64
