@@ -79,7 +79,7 @@ absEvalStmt info s stmt = withArchConstraints info $
       addMemWrite s addr memRepr v
     CondWriteMem cond addr memRepr v ->
       addCondMemWrite s cond addr memRepr v
-    InstructionStart _ _ ->
+    InstructionStart _ _ _ ->
       s
     Comment{} ->
       s

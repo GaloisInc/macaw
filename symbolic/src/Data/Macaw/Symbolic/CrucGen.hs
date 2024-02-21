@@ -1335,7 +1335,7 @@ addMacawStmt baddr stmt =
       cval  <- valueToCrucible val
       w     <- archAddrWidth
       void $ evalMacawStmt (MacawCondWriteMem w repr ccond caddr cval)
-    M.InstructionStart off t -> do
+    M.InstructionStart off t _ -> do
       -- Update the position
       modify' $ \s -> s { codeOff = off
                         , codePos = macawPositionFn s off

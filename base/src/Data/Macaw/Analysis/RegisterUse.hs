@@ -851,7 +851,7 @@ processStmt stmtIdx stmt = do
         _ -> do
           addMemAccessInfo stmtIdx NotFrameAccess
     -- Do nothing with instruction start/comment/register update
-    InstructionStart o _ ->
+    InstructionStart o _ _ ->
       sisCurrentInstructionOffsetLens .= o
     Comment _ -> pure ()
     ArchState{} -> pure ()
@@ -1781,7 +1781,7 @@ demandStmtValues stmtIdx stmt = do
                 addWriteDep stmtIdx $
                   valueDeps cns cache c <> valueDeps cns cache val
          blockWriteDependencyLens %= Map.insert stmtIdx valDeps
-   InstructionStart off _ -> do
+   InstructionStart off _ _ -> do
      modify $ \s -> s { blockCurOff = off }
     -- Comment statements have no specific value.
    Comment _ ->

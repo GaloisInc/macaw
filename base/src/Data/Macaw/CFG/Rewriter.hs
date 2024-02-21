@@ -746,8 +746,8 @@ rewriteStmt s =
       appendRewrittenStmt $ CondWriteMem tgtCond tgtAddr repr tgtVal
     Comment cmt ->
       appendRewrittenStmt $ Comment cmt
-    InstructionStart off mnem ->
-      appendRewrittenStmt $ InstructionStart off mnem
+    InstructionStart off mnem i ->
+      appendRewrittenStmt $ InstructionStart off mnem i
     ExecArchStmt astmt -> do
       f <- Rewriter $ gets $ rwctxArchStmt . rwContext
       f astmt

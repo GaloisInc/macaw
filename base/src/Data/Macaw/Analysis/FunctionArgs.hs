@@ -629,7 +629,7 @@ recordStmtsDemands blockAddr off (stmt:stmts) = do
       demandValue blockAddr addr
       demandValue blockAddr v
       recordStmtsDemands blockAddr off stmts
-    InstructionStart off' _ -> do
+    InstructionStart off' _ _ -> do
       recordStmtsDemands blockAddr off' stmts
     Comment _ -> do
       recordStmtsDemands blockAddr off stmts

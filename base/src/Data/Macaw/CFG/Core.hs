@@ -27,6 +27,7 @@ single CFG.
 module Data.Macaw.CFG.Core
   ( -- * Stmt level declarations
     Stmt(..)
+  , ArchInstruction
   , Assignment(..)
   , AssignId(..)
     -- * Value
@@ -864,6 +865,15 @@ instance ( RegisterInfo r
     | otherwise   = Just $ pretty (showF r) <+> "=" <+> pretty v
 
 ------------------------------------------------------------------------
+-- ArchInstruction
+--
+-- The type of architecture-specific instructions to be carried by
+-- Stmt below in InstructionStart. This is left uninterpreted by
+-- both macaw and macaw-symbolic and is intended only to be used in
+-- architecture-specific block classifiers.
+type family ArchInstruction (arch :: Kind.Type) :: Kind.Type
+
+------------------------------------------------------------------------
 -- Stmt
 
 -- | A statement in our control flow graph language.
@@ -880,12 +890,15 @@ data Stmt arch ids
                  !(Value arch ids tp)
      -- ^ This denotes a write to memory that only executes if the
      -- condition is true.
-   | InstructionStart !(ArchAddrWord arch) !Text
+   | InstructionStart !(ArchAddrWord arch) !Text !(ArchInstruction arch)
      -- ^ The start of an instruction
      --
      -- The information includes the offset relative to the start of
      -- the block and the disassembler output if available (or empty
      -- string if unavailable)
+     --
+     -- This constructor also includes the architecture-specific
+     -- instruction at the given offset.
    | Comment !Text
      -- ^ A user-level comment
    | ExecArchStmt !(ArchStmt arch (Value arch ids))
@@ -908,7 +921,7 @@ ppStmt ppOff stmt =
     CondWriteMem c a _ rhs ->
       "cond_write_mem" <+> prettyPrec 11 c <+> prettyPrec 11 a
         <+> ppValue 0 rhs
-    InstructionStart off mnem -> "#" <+> ppOff off <+> pretty mnem
+    InstructionStart off mnem _ -> "#" <+> ppOff off <+> pretty mnem
     Comment s -> "# " <> pretty s
     ExecArchStmt s -> ppArchStmt (ppValue 10) s
     ArchState a m ->

@@ -10,6 +10,7 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeFamilies #-}
 module Data.Macaw.PPC.Disassemble
   ( disassembleFn
   )
@@ -44,6 +45,8 @@ import           Data.Macaw.SemMC.Generator
 import           Data.Macaw.SemMC.Simplify ( simplifyValue )
 import           Data.Macaw.PPC.Arch ( PPCArchConstraints )
 import           Data.Macaw.PPC.PPCReg ( PPCReg(..) )
+
+type instance ArchInstruction (SP.AnyPPC var) = D.Instruction
 
 -- | Read one instruction from the 'MM.Memory' at the given segmented offset.
 --
@@ -141,7 +144,7 @@ disassembleBlock lookupSemantics gs curIPAddr blockOff maxOffset = do
           -- a result from the state of the 'Generator'.
           egs1 <- liftST $ ET.runExceptT (runGenerator unfinishedBlock gs $ do
             let lineStr = printf "%s: %s" (show curIPAddr) (show (D.ppInstruction i))
-            addStmt (InstructionStart blockOff (T.pack lineStr))
+            addStmt (InstructionStart blockOff (T.pack lineStr) i)
             addStmt (Comment (T.pack  lineStr))
             asAtomicStateUpdate (MM.segoffAddr curIPAddr) transformer)
           case egs1 of

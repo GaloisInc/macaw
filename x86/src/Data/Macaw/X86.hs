@@ -220,7 +220,7 @@ translateStep gen pblock blockOff curIPAddr contents = do
       res <-
         withExceptT transExcept $ runX86Generator gs $ do
           let line = Text.pack $ show $ F.ppInstruction i
-          addStmt $ InstructionStart blockOff line
+          addStmt $ InstructionStart blockOff line i
           asAtomicStateUpdate (MM.segoffAddr curIPAddr) exec
       pure $ (i, res, instSize, next_ip, nextContents)
 
@@ -418,6 +418,7 @@ data X86BlockPrecond = X86BlockPrecond { blockInitX87TopReg :: !Word8
                                        }
 
 type instance ArchBlockPrecond X86_64 = X86BlockPrecond
+type instance ArchInstruction X86_64 = F.InstructionInstance
 
 -- | Disassemble block, returning either an error, or a list of blocks
 -- and ending PC.
