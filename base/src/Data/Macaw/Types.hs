@@ -130,6 +130,8 @@ instance Show (FloatInfoRepr fi) where
   show QuadFloatRepr   = "quad"
   show X86_80FloatRepr = "x87_80"
 
+instance ShowF FloatInfoRepr where
+
 instance Pretty (FloatInfoRepr fi) where
   pretty = viaShow
 
