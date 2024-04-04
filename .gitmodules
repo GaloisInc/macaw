@@ -18,7 +18,7 @@
 	url = git@github.com:GaloisInc/semmc.git
 [submodule "submodules/dismantle"]
 	path = deps/dismantle
-	url = git@github.com:travitch/dismantle.git
+	url = git@github.com:GaloisInc/dismantle.git
 [submodule "submodules/macaw-loader"]
 	path = deps/macaw-loader
 	url = git@github.com:GaloisInc/macaw-loader.git
