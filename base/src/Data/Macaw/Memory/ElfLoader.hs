@@ -1518,7 +1518,7 @@ elfStaticSymbolTable elf = do
     Left _ -> Nothing
     Right v -> Just (Elf.symtabEntries v)
 
--- | Find and get static symbol table entries from an ELF binary.
+-- | Find and get dynamic symbol table entries from an ELF binary.
 elfDynamicSymbolTable :: Integral (ElfWordType w)
                       => Elf.ElfHeaderInfo w
                       -> Maybe (V.Vector (Elf.SymtabEntry BS.ByteString (ElfWordType w)))
