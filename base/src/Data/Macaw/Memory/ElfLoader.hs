@@ -1607,6 +1607,7 @@ data MemSymbol w = MemSymbol { memSymbolName :: !BS.ByteString
                              , memSymbolSize :: !(MemWord w)
                                -- ^ Size of symbol as defined in table.
                              }
+  deriving (Show)
 
 instance Eq (MemSymbol w) where
   x == y = memSymbolStart x == memSymbolStart y
