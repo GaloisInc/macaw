@@ -547,10 +547,23 @@ relaTargetX86_64 _ symtab rel addend _isRel =
                         , relocationJumpSlot = True
                         }
     Elf.R_X86_64_RELATIVE -> do
+      -- This relocation has the value B + A where
+      -- - A is the addend for the relocation, and
+      -- - B resolves to the difference between the
+      --   address at which the segment defining the symbol was
+      --   loaded and the address at which it was linked.
+      --
+      -- Since the address at which it was linked is a constant, we
+      -- create a non-relative address but subtract the link address
+      -- from the offset.
+
+      -- Get the address at which it was linked so we can subtract from offset.
+      let linktimeAddr = Elf.relAddr rel
+
       when (Elf.relSym rel /= 0) $ do
         throwError $ RelocationBadSymbolIndex (fromIntegral (Elf.relSym rel))
       pure $ Relocation { relocationSym        = LoadBaseAddr
-                        , relocationOffset     = addend
+                        , relocationOffset     = addend - fromIntegral linktimeAddr
                         , relocationIsRel      = False
                         , relocationSize       = 8
                         , relocationIsSigned   = False
