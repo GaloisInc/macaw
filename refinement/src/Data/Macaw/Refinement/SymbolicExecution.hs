@@ -68,6 +68,8 @@ import qualified Data.Macaw.Refinement.Path as RP
 import qualified Data.Macaw.Refinement.Solver as MRS
 
 import qualified What4.Expr as WE
+import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
+import qualified What4.Interface as WI
 
 data RefinementConfig =
   RefinementConfig { solver :: MRS.Solver
@@ -493,7 +495,7 @@ initializeSimulator ctx bak archVals halloc cfg entryBlock =
   MS.withArchEval archVals (CB.backendGetSym bak) $ \archEvalFns -> do
   memVar <- liftIO $ LLVM.mkMemVar "macaw-refinement:llvm_memory" halloc
   let end = MS.toCrucibleEndian (binaryEndianness ctx)
-  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemory (Proxy @arch) bak end MS.ConcreteMutable (binaryMemory ctx)
+  (memory0, memPtrTable) <- liftIO $ MS.newGlobalMemoryWith populateRelocation (Proxy @arch) bak end MSMLazy.ConcreteMutable (binaryMemory ctx)
   (memory1, initSPVal) <- initializeMemory (Proxy @arch) bak memory0
   let mmConf = (MS.memModelConfig bak memPtrTable)
                  { MS.lookupFunctionHandle = MS.unsupportedFunctionCalls "macaw-refinement"
@@ -508,6 +510,21 @@ initializeSimulator ctx bak archVals halloc cfg entryBlock =
   let retTy = C.handleReturnType (C.cfgHandle cfg)
   let initState = C.InitialState simCtx globalState C.defaultAbortHandler retTy (C.runOverrideSim retTy simulation)
   return initState
+
+-- | Refinement currently treats relocations as entirely symbolic data.
+-- See @Note [Shared libraries] (Dynamic relocations)@.
+populateRelocation :: MSMLazy.GlobalMemoryHooks w
+populateRelocation = MSMLazy.GlobalMemoryHooks
+  { MSMLazy.populateRelocation = \bak _ _ _ reloc ->
+      symbolicRelocation (CB.backendGetSym bak) reloc
+  }
+  where
+    symbolicRelocation sym reloc =
+      mapM (symbolicByte sym "reloc") [1 .. MM.relocationSize reloc]
+
+    symbolicByte sym name idx = do
+      let symbol = WI.safeSymbol $ name ++ "-byte" ++ show (idx-1)
+      WI.freshConstant sym symbol WI.knownRepr
 
 -- | Extend the base memory image (taken from the 'RefinementContext') with a
 -- stack (also returning the initial stack pointer value)
