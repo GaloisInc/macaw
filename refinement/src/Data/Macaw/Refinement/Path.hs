@@ -166,10 +166,13 @@ mkPartialCFG fi = computeBackEdges graph
           tgtId = case M.lookup (FBU.blockID tgtBlock) addrNodes of
                     Just tgtId' -> tgtId'
                     Nothing -> panic $ "Cannot find target ID: " ++ show (FBU.blockID tgtBlock)
+
+          -- Since `tgtId` and `srcId` are confirmed to be valid nodes in the cfg,
+          -- the `Nothing` case implies that the edge already exists, so we don't need to insert it.
+          -- This can occur with jump tables that have common targets (e.g. a `default` case in a switch).
           g = case G.insertLabeledEdge g0 srcId tgtId () of
                 Just (_e, g') -> g'
-                Nothing -> panic $ "Cannot find edge between "
-                                ++ show srcId ++ " and " ++ show tgtId
+                Nothing -> g0
       in g
     buildCFG gr (_addr, pb) =
       let nodeId = case M.lookup (FBU.blockID pb) (cfgAddrNodes gr) of
