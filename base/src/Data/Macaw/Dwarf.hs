@@ -630,7 +630,7 @@ data EnumDecl = EnumDecl
 
 data SubroutineTypeDecl = SubroutineTypeDecl
   { fntypePrototyped :: !(Maybe Bool),
-    fntypeFormals :: ![DIE],
+    fntypeFormals :: ![Variable],
     fntypeType :: !(Maybe TypeRef)
   }
   deriving (Show)
@@ -837,9 +837,9 @@ parseEnumerationType fileVec = do
 
 -- | Parse a subroutine type.
 parseSubroutineType :: TypeParser
-parseSubroutineType _ = do
+parseSubroutineType fileVec = do
   proto <- getMaybeAttribute DW_AT_prototyped attributeAsBool
-  formals <- parseChildrenList DW_TAG_formal_parameter pure
+  formals <- parseParameters fileVec
 
   tp <- getMaybeAttribute DW_AT_type attributeAsTypeRef
 
