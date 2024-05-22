@@ -32,3 +32,6 @@
 - The `Hashable` and `HashableF` instances for `App f` now require
   `TestEquality f` constraints. (This is needed to support `hashable-1.4.*`,
   which adds `Eq` as a superclass to `Hashable`.)
+
+- `SubroutineTypeDecl` now contains a parsed `Variable` (rather than an unparsed `DIE`) for its
+  formals.
