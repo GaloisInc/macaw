@@ -12,7 +12,7 @@
 	url = https://github.com/GaloisInc/crucible.git
 [submodule "deps/llvm-pretty"]
 	path = deps/llvm-pretty
-	url = https://github.com/elliottt/llvm-pretty.git
+	url = https://github.com/GaloisInc/llvm-pretty.git
 [submodule "submodules/semmc"]
 	path = deps/semmc
 	url = git@github.com:GaloisInc/semmc.git
