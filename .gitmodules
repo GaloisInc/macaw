@@ -24,7 +24,7 @@
 	url = git@github.com:GaloisInc/elf-edit.git
 [submodule "submodules/dismantle"]
 	path = submodules/dismantle
-	url = git@github.com:travitch/dismantle.git
+	url = git@github.com:GaloisInc/dismantle.git
 [submodule "submodules/flexdis86"]
 	path = submodules/flexdis86
 	url = git@github.com:GaloisInc/flexdis86.git
@@ -33,7 +33,7 @@
 	url = git@github.com:GaloisInc/dwarf.git
 [submodule "submodules/llvm-pretty"]
 	path = submodules/llvm-pretty
-	url = git@github.com:elliottt/llvm-pretty
+	url = git@github.com:GaloisInc/llvm-pretty
 [submodule "submodules/llvm-pretty-bc-parser"]
 	path = submodules/llvm-pretty-bc-parser
 	url = git@github.com:GaloisInc/llvm-pretty-bc-parser
