@@ -22,6 +22,7 @@ module Data.Macaw.PPC.Symbolic (
   getReg,
   lookupReg,
   updateReg,
+  F.SemanticsError(..),
   -- * Register names
   IP,
   LNK,
