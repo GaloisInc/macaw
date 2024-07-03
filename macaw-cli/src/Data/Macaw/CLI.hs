@@ -3,17 +3,20 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Macaw.CLI
   ( sim
+  , ppSimRes
   ) where
 
 import Control.Lens qualified as Lens
-import Control.Monad qualified as Monad
 import Data.ByteString.Char8 qualified as BS8
+import Data.List qualified as List
 import Data.Map qualified as Map 
 import Data.Text qualified as Text 
 import GHC.TypeLits (KnownNat)
@@ -41,6 +44,7 @@ import What4.Solver.Yices qualified as WSY
 
 data MacawCLI t = MacawCLI
 
+-- | Simulate a function using 'MST.simulateAndVerify'
 sim ::
   (1 PNat.<= MCFG.ArchAddrWidth arch) =>
   (16 PNat.<= MCFG.ArchAddrWidth arch) =>
@@ -55,7 +59,8 @@ sim ::
   (forall sym. CB.IsSymInterface sym => MST.ResultExtractor sym arch) ->
   Elf.ElfHeaderInfo (MD.ArchAddrWidth arch) ->
   MCO.Opts ->
-  IO ()
+  -- | 'Nothing' when the entrypoint couldn\'t be found
+  IO (Maybe MST.SimulationResult)
 sim archInfo archVals pltStubInfo extractor elfHeaderInfo opts = do
   let binPath = MCO.optsBinaryPath opts
   let entryFn = MCO.optsEntrypoint opts
@@ -64,23 +69,32 @@ sim archInfo archVals pltStubInfo extractor elfHeaderInfo opts = do
   let discState = MST.binaryDiscState (MST.mainBinaryInfo binfo)
   let funInfos = Map.elems (discState Lens.^. MD.funInfo)
   let entryFn8 = BS8.pack (Text.unpack entryFn)
-  Monad.forM_ funInfos $ \(Some.Some dfi) -> do
-    case MD.discoveredFunSymbol dfi of
-      Just funSymb | entryFn8 `BS8.isPrefixOf` funSymb -> do
-        let floatMode = WEB.FloatRealRepr -- TODO: make configurable via cli
-        sym <- WEB.newExprBuilder floatMode MacawCLI nonceGen
-        -- TODO: make solver configurable via cli
-        CBO.withYicesOnlineBackend sym CBO.NoUnsatFeatures WPF.noFeatures $ \bak -> do
-          let solver = WSY.yicesAdapter
-          execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
-          let ?memOpts = LLVM.defaultMemOptions
-          let mmPreset = MST.DefaultMemModel -- TODO: make configurable via cli
-          simRes <- MST.simulateAndVerify solver WS.defaultLogData bak execFeatures archInfo archVals binfo mmPreset extractor dfi
-          case simRes of
-            MST.SimulationAborted -> putStrLn "Aborted!"
-            MST.SimulationTimeout -> putStrLn "Timeout!"
-            MST.SimulationPartial -> putStrLn "Partial!"  -- TODO: ???
-            MST.SimulationResult MST.Unsat -> putStrLn "Always returns 0"
-            MST.SimulationResult MST.Sat -> putStrLn "May return non-zero"
-            MST.SimulationResult MST.Unknown -> putStrLn "Solver returned unknown!"
-      _ -> pure ()
+  let isEntry sdfi = 
+        case sdfi of
+          Some.Some dfi ->
+            case MD.discoveredFunSymbol dfi of
+              Just funSymb -> entryFn8 `BS8.isPrefixOf` funSymb
+              Nothing -> False
+  let mEntry = List.find isEntry funInfos
+  case mEntry of
+    Nothing -> pure Nothing
+    Just (Some.Some dfi) -> do
+      let floatMode = WEB.FloatRealRepr -- TODO: make configurable via cli
+      sym <- WEB.newExprBuilder floatMode MacawCLI nonceGen
+      -- TODO: make solver configurable via cli
+      CBO.withYicesOnlineBackend sym CBO.NoUnsatFeatures WPF.noFeatures $ \bak -> do
+        let solver = WSY.yicesAdapter
+        execFeatures <- MST.defaultExecFeatures (MST.SomeOnlineBackend bak)
+        let ?memOpts = LLVM.defaultMemOptions
+        let mmPreset = MST.DefaultMemModel -- TODO: make configurable via cli
+        Just <$> MST.simulateAndVerify solver WS.defaultLogData bak execFeatures archInfo archVals binfo mmPreset extractor dfi
+
+ppSimRes :: MST.SimulationResult -> Text.Text
+ppSimRes =
+  \case
+    MST.SimulationAborted -> "Aborted!"
+    MST.SimulationTimeout -> "Timeout!"
+    MST.SimulationPartial -> "Partial!"  -- TODO: What does this mean?
+    MST.SimulationResult MST.Unsat -> "Always returns 0"
+    MST.SimulationResult MST.Sat -> "May return non-zero"
+    MST.SimulationResult MST.Unknown -> "Solver returned unknown!"
