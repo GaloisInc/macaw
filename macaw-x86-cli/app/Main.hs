@@ -60,7 +60,6 @@ simFile opts = do
     Left _ ->
       bail ("User error: expected x86_64 ELF binary, but found non-ELF file at " List.++ binPath)
 
--- TODO: CLI
 main :: IO ()
 main = simFile =<< MCO.getOpts
  
