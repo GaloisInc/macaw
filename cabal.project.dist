@@ -1,10 +1,12 @@
 packages: base/
           macaw-aarch32/
           macaw-aarch32-symbolic/
+          macaw-cli/
           macaw-semmc/
           macaw-ppc/
           macaw-ppc-symbolic/
           macaw-riscv/
+          macaw-x86-cli/
           x86/
           symbolic/
           symbolic-syntax/

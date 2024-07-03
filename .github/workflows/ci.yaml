@@ -111,6 +111,12 @@ jobs:
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-x86-symbolic
 
+    - name: Build macaw-cli
+      run: cabal build pkg:macaw-cli
+
+    - name: Build macaw-x86-cli
+      run: cabal build pkg:macaw-x86-cli
+
     - name: Build macaw-aarch32
       run: cabal build pkg:macaw-aarch32 pkg:macaw-aarch32-symbolic
     - name: Test macaw-aarch32
