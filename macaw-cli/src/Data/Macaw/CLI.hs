@@ -15,7 +15,6 @@ import Control.Lens qualified as Lens
 import Control.Monad qualified as Monad
 import Data.ByteString.Char8 qualified as BS8
 import Data.Map qualified as Map 
-import Data.Text (Text)
 import Data.Text qualified as Text 
 import GHC.TypeLits (KnownNat)
 
@@ -23,6 +22,7 @@ import GHC.TypeLits (KnownNat)
 import Data.ElfEdit qualified as Elf
 import Data.Macaw.Architecture.Info qualified as MAI
 import Data.Macaw.CFG qualified as MCFG
+import Data.Macaw.CLI.Options qualified as MCO
 import Data.Macaw.Discovery qualified as MD
 import Data.Macaw.Memory.ElfLoader.PLTStubs qualified as MPLT
 import Data.Macaw.Symbolic qualified as MS
@@ -53,11 +53,12 @@ sim ::
   MS.GenArchVals MS.LLVMMemory arch ->
   MPLT.PLTStubInfo reloc ->
   (forall sym. CB.IsSymInterface sym => MST.ResultExtractor sym arch) ->
-  FilePath ->
   Elf.ElfHeaderInfo (MD.ArchAddrWidth arch) ->
-  Text ->
+  MCO.Opts ->
   IO ()
-sim archInfo archVals pltStubInfo extractor binPath elfHeaderInfo entryFn = do
+sim archInfo archVals pltStubInfo extractor elfHeaderInfo opts = do
+  let binPath = MCO.optsBinaryPath opts
+  let entryFn = MCO.optsEntrypoint opts
   Some.Some nonceGen <- PN.newIONonceGenerator
   binfo <- MST.runDiscovery elfHeaderInfo binPath MST.toAddrSymMap archInfo pltStubInfo
   let discState = MST.binaryDiscState (MST.mainBinaryInfo binfo)

@@ -90,6 +90,7 @@ library
     bytestring,
     containers,
     lens,
+    optparse-applicative,
     text,
 
     -- first-party (alphabetical)
@@ -103,3 +104,4 @@ library
     what4
   exposed-modules:
     Data.Macaw.CLI
+    Data.Macaw.CLI.Options
