@@ -17,8 +17,8 @@ module Data.Macaw.CLI
 import Control.Lens qualified as Lens
 import Data.ByteString.Char8 qualified as BS8
 import Data.List qualified as List
-import Data.Map qualified as Map 
-import Data.Text qualified as Text 
+import Data.Map qualified as Map
+import Data.Text qualified as Text
 import GHC.TypeLits (KnownNat)
 
 -- First-party
@@ -69,7 +69,7 @@ sim archInfo archVals pltStubInfo extractor elfHeaderInfo opts = do
   let discState = MST.binaryDiscState (MST.mainBinaryInfo binfo)
   let funInfos = Map.elems (discState Lens.^. MD.funInfo)
   let entryFn8 = BS8.pack (Text.unpack entryFn)
-  let isEntry sdfi = 
+  let isEntry sdfi =
         case sdfi of
           Some.Some dfi ->
             case MD.discoveredFunSymbol dfi of
@@ -95,6 +95,6 @@ ppSimRes =
     MST.SimulationAborted -> "Aborted!"
     MST.SimulationTimeout -> "Timeout!"
     MST.SimulationPartial -> "Partial!"  -- TODO: What does this mean?
-    MST.SimulationResult MST.Unsat -> "Always returns 0"
-    MST.SimulationResult MST.Sat -> "May return non-zero"
+    MST.SimulationResult MST.Unsat -> "May return non-zero"
+    MST.SimulationResult MST.Sat -> "Always returns 0"
     MST.SimulationResult MST.Unknown -> "Solver returned unknown!"
