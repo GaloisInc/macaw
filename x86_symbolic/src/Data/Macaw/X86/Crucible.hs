@@ -674,17 +674,24 @@ divNatReprClasses r x =
     M.DWordRepVal -> x
     M.QWordRepVal -> x
 
+-- | Construct a symbolic Macaw pair. Note that @'mkPair' sym x y@ returns the
+-- pair @(y, x)@ and /not/ @(x, y)@. This is because Macaw tuples have the order
+-- of their fields reversed when converted to a Crucible value (see
+-- 'macawListToCrucible' in "Data.Macaw.Symbolic.PersistentState" in
+-- @macaw-symbolic@), so we also reverse the order here to be consistent with
+-- this convention. (Not doing this can cause serious bugs, such as
+-- <https://github.com/GaloisInc/macaw/issues/393>).
 mkPair :: forall sym bak x y
        .  (IsSymBackend sym bak, KnownRepr TypeRepr x, KnownRepr TypeRepr y)
        => Sym sym bak
        -> RegValue sym x
        -> RegValue sym y
-       -> IO (RegValue sym (StructType (EmptyCtx ::> x ::> y)))
+       -> IO (RegValue sym (StructType (EmptyCtx ::> y ::> x)))
 mkPair sym q r = do
-  let pairType :: Ctx.Assignment TypeRepr (EmptyCtx ::> x ::> y)
+  let pairType :: Ctx.Assignment TypeRepr (EmptyCtx ::> y ::> x)
       pairType = Ctx.empty Ctx.:> knownRepr Ctx.:> knownRepr
-  let pairRes :: Ctx.Assignment (RegValue' sym) (EmptyCtx ::> x ::> y)
-      pairRes = Ctx.empty Ctx.:> RV q Ctx.:> RV r
+  let pairRes :: Ctx.Assignment (RegValue' sym) (EmptyCtx ::> y ::> x)
+      pairRes = Ctx.empty Ctx.:> RV r Ctx.:> RV q
   evalApp' sym (\v -> pure (unRV v)) $ MkStruct pairType pairRes
 
 
