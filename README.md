@@ -67,6 +67,22 @@ These Macaw core libraries depend on a number of different supporting libraries,
 * what4 -- Symbolic representation for the crucible backend
 * parameterized-utils -- utilities for working with parameterized types
 
+## Documentation
+
+A set of high-level design documents can be found in the [`doc`](doc)
+subdirectory. Documentation for individual API functions and data types can be
+found in the Haddock comments throughout the code.
+
+We have also written some other resources about Macaw:
+
+* [Macaw: A Machine Code Toolbox for the Busy Binary
+  Analyst](http://www.arxiv.org/abs/2407.06375): an unpublished paper about
+  Macaw, as well as binary analysis tools built on top of Macaw.
+* [Making a scalable, SMT-based machine code memory
+  model](https://galois.com/blog/2023/03/making-a-scalable-smt-based-machine-code-memory-model/):
+  a blog post about `macaw-symbolic`'s lazy memory model (implemented in
+  [`Data.Macaw.Symbolic.Memory.Lazy`](symbolic/src/Data/Macaw/Symbolic/Memory/Lazy.hs)
+
 # Building
 
 ## Preparation
