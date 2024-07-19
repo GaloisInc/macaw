@@ -34,7 +34,6 @@ import qualified Lang.Crucible.Simulator.RegMap as C
 import qualified Lang.Crucible.Simulator.SimError as C
 import qualified Lang.Crucible.Types as C
 import qualified What4.Interface as C
-import qualified What4.InterpretedFloatingPoint as C
 
 import qualified SemMC.Architecture.PPC as SP
 import qualified SemMC.Util as U
