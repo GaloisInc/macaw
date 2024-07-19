@@ -34,6 +34,7 @@ import           Data.Bits
 import           Data.Kind ( Type )
 import qualified Prettyprinter as PP
 import           Data.Parameterized.Classes ( knownRepr )
+import qualified Data.Parameterized.List as PL
 import qualified Data.Parameterized.NatRepr as NR
 import qualified Data.Parameterized.TraversableFC as FC
 import qualified Data.Parameterized.TraversableF as TF
@@ -63,11 +64,6 @@ instance MSS.SimplifierExtension (SP.AnyPPC v) where
 type instance MC.ArchBlockPrecond (SP.AnyPPC v) = ()
 
 data PPCTermStmt (v :: SP.Variant) f where
-  -- | A representation of the PowerPC @sc@ instruction
-  --
-  -- That instruction technically takes an argument, but it must be zero so we
-  -- don't preserve it.
-  PPCSyscall :: PPCTermStmt v f
   -- | A non-syscall trap initiated by the @td@, @tw@, @tdi@, or @twi@ instructions
   PPCTrap :: PPCTermStmt v f
   -- | A conditional trap
@@ -84,7 +80,6 @@ type instance MC.ArchTermStmt (SP.AnyPPC v) = PPCTermStmt v
 instance MC.IsArchTermStmt (PPCTermStmt v) where
   ppArchTermStmt ppValue ts =
     case ts of
-      PPCSyscall -> "ppc_syscall"
       PPCTrap -> "ppc_trap"
       PPCTrapdword vb va vto -> "ppc_trapdword" PP.<+> ppValue vb PP.<+> ppValue va PP.<+> ppValue vto
 
@@ -97,7 +92,6 @@ instance TF.FunctorF (PPCTermStmt v) where
 instance TF.TraversableF (PPCTermStmt v) where
   traverseF go tstmt =
     case tstmt of
-      PPCSyscall -> pure PPCSyscall
       PPCTrap -> pure PPCTrap
       PPCTrapdword v1 v2 v3 -> PPCTrapdword <$> go v1 <*> go v2 <*> go v3
 
@@ -106,7 +100,6 @@ rewriteTermStmt
   -> Rewriter (SP.AnyPPC v) s src tgt (PPCTermStmt v (MC.Value (SP.AnyPPC v) tgt))
 rewriteTermStmt s =
   case s of
-    PPCSyscall -> return PPCSyscall
     PPCTrap -> return PPCTrap
     PPCTrapdword vb va vto -> PPCTrapdword <$> rewriteValue vb <*> rewriteValue va <*> rewriteValue vto
 
@@ -277,6 +270,47 @@ rewriteStmt s = do
   appendRewrittenArchStmt s'
 
 data PPCPrimFn v f tp where
+  -- | Issue a system call.
+  --
+  -- The intent is that the user provides a mapping from system call numbers to
+  -- handlers in macaw-ppc-symbolic, enabling the translation to Crucible to
+  -- replace this operation with a lookup + call to a function handle. By
+  -- capturing all of the necessary registers as inputs and outputs here,
+  -- uniform treatment is possible. See the x86 version for a more detailed
+  -- account of the translation strategy.
+  --
+  -- The syscall number is in @r0@. Arguments are passed in the following
+  -- registers:
+  --
+  -- * @r3@-@r9@ (on PPC32)
+  -- * @r3@-@r8@ (on PPC64)
+  --
+  -- For the sake of convenience, we include all of the registers from
+  -- @r3@-@r9@, regardless of whether PPC32 or PPC64 is used. (The value of @r9@
+  -- is unused on PPC64.)
+  --
+  -- The system call can return both a value (in @r3@) and an error condition
+  -- (in @r0@ on PPC32, or in the @cr0.SO@ bit on PPC64). If the error condition
+  -- is false (i.e., if @r0@ is 0 on PPC32, or if @cr0.SO@ is clear on PPC64),
+  -- this indicates that the syscall did not error. If the error condition is
+  -- true (i.e., if @r0@ is -1 on PPC32, or if @cr0.SO@ is set on PPC64), this
+  -- indicates that the syscall failed and that @r3@ contains an error value,
+  -- which normally corresponds to @errno@. We always represent the error
+  -- condition as a full 32-bit register value, even though only the @cr0.SO@
+  -- bit of this value is used on PPC64.
+  PPCSyscall :: NR.NatRepr (SP.AddrWidth v)
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r0@ (syscall number)
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r3@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r4@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r5@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r6@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r7@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r8@
+             -> f (MT.BVType (SP.AddrWidth v)) -- ^ @r9@ (only used on PPC32)
+             -> PPCPrimFn v f (MT.TupleType [MT.BVType (SP.AddrWidth v), MT.BVType 32])
+                -- ^ A pair of the return value (@r3@) and the error condition
+                -- (@r0@ on PPC32, or @cr0.SO@ on PPC64).
+
   -- | Unsigned division
   --
   -- Division by zero does not have side effects, but instead produces an undefined value
@@ -464,6 +498,10 @@ data PPCPrimFn v f tp where
 
 instance (1 <= SP.AddrWidth v) => MT.HasRepr (PPCPrimFn v f) MT.TypeRepr where
   typeRepr = \case
+    PPCSyscall w _ _ _ _ _ _ _ _ ->
+      MT.TupleTypeRepr (MT.BVTypeRepr w
+                        D.:< MT.BVTypeRepr (MT.knownNat @32)
+                        D.:< D.Nil)
     UDiv rep _ _ -> MT.BVTypeRepr rep
     SDiv rep _ _ -> MT.BVTypeRepr rep
 
@@ -504,6 +542,7 @@ instance (1 <= SP.AddrWidth v) => MT.HasRepr (PPCPrimFn v f) MT.TypeRepr where
 -- probably change.
 ppcPrimFnHasSideEffects :: PPCPrimFn v f tp -> Bool
 ppcPrimFnHasSideEffects = \case
+  PPCSyscall{}   -> True
   UDiv{}         -> False
   SDiv{}         -> False
   FPNeg{}        -> False
@@ -542,6 +581,16 @@ rewritePrimFn :: ( PPCArchConstraints v
               => PPCPrimFn v (MC.Value (SP.AnyPPC v) src) tp
               -> Rewriter (SP.AnyPPC v) s src tgt (MC.Value (SP.AnyPPC v) tgt tp)
 rewritePrimFn = \case
+  PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 -> do
+    tgtFn <- PPCSyscall w <$> rewriteValue r0
+                          <*> rewriteValue r3
+                          <*> rewriteValue r4
+                          <*> rewriteValue r5
+                          <*> rewriteValue r6
+                          <*> rewriteValue r7
+                          <*> rewriteValue r8
+                          <*> rewriteValue r9
+    evalRewrittenArchFn tgtFn
   UDiv rep lhs rhs -> do
     tgtFn <- UDiv rep <$> rewriteValue lhs <*> rewriteValue rhs
     evalRewrittenArchFn tgtFn
@@ -617,6 +666,9 @@ rewritePrimFn = \case
 
 ppPrimFn :: (Applicative m) => (forall u . f u -> m (PP.Doc ann)) -> PPCPrimFn v f tp -> m (PP.Doc ann)
 ppPrimFn pp = \case
+  PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 ->
+    ppSC "ppc_syscall" w <$> pp r0 <*> pp r3 <*> pp r4 <*> pp r5
+                         <*> pp r6 <*> pp r7 <*> pp r8 <*> pp r9
   UDiv _ lhs rhs -> ppBinary "ppc_udiv" <$> pp lhs <*> pp rhs
   SDiv _ lhs rhs -> ppBinary "ppc_sdiv" <$> pp lhs <*> pp rhs
   FPNeg _fi x -> ppUnary "ppc_fp_neg" <$> pp x
@@ -654,6 +706,9 @@ ppPrimFn pp = \case
   ppBinary s v1' v2' = s PP.<+> v1' PP.<+> v2'
   pp3 s v1' v2' v3' = s PP.<+> v1' PP.<+> v2' PP.<+> v3'
   pp4 s v1' v2' v3' v4' = s PP.<+> v1' PP.<+> v2' PP.<+> v3' PP.<+> v4'
+  ppSC s w r0 r3 r4 r5 r6 r7 r8 r9 =
+    s PP.<+> PP.viaShow w PP.<+> r0 PP.<+> r3 PP.<+> r4 PP.<+> r5
+                          PP.<+> r6 PP.<+> r7 PP.<+> r8 PP.<+> r9
 
 instance MC.IsArchFn (PPCPrimFn v) where
   ppArchFn = ppPrimFn
@@ -666,6 +721,9 @@ instance FC.FoldableFC (PPCPrimFn v) where
 
 instance FC.TraversableFC (PPCPrimFn v) where
   traverseFC go = \case
+    PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9 ->
+      PPCSyscall w <$> go r0 <*> go r3 <*> go r4 <*> go r5
+                   <*> go r6 <*> go r7 <*> go r8 <*> go r9
     UDiv rep lhs rhs -> UDiv rep <$> go lhs <*> go rhs
     SDiv rep lhs rhs -> SDiv rep <$> go lhs <*> go rhs
     FPNeg  fi x -> FPNeg fi <$> go x
@@ -736,6 +794,18 @@ incrementIP = do
   e <- G.addExpr (G.AppExpr (MC.BVAdd ptrRepr ipVal (MC.BVValue ptrRepr 0x4)))
   G.setRegVal PPC_IP e
 
+evalAssignRhs :: PPCArchConstraints v
+              => MC.AssignRhs (SP.AnyPPC v) (MC.Value (SP.AnyPPC v) ids) tp
+              -> G.Generator (SP.AnyPPC v) ids s (G.Expr (SP.AnyPPC v) ids tp)
+evalAssignRhs rhs =
+  G.ValueExpr . MC.AssignedValue <$> G.addAssignment rhs
+
+-- | Evaluate an architecture-specific function and return the resulting expr.
+evalArchFn :: PPCArchConstraints v
+           => PPCPrimFn v (MC.Value (SP.AnyPPC v) ids) tp
+           -> G.Generator (SP.AnyPPC v) ids s (G.Expr (SP.AnyPPC v) ids tp)
+evalArchFn f = evalAssignRhs (MC.EvalArchFn f (MT.typeRepr f))
+
 -- | Manually-provided semantics for instructions whose full semantics cannot be
 -- expressed in our semantics format.
 --
@@ -755,7 +825,44 @@ ppcInstructionMatcher :: forall var ids s n
                       -> Maybe (G.Generator (SP.AnyPPC var) ids s ())
 ppcInstructionMatcher (D.Instruction opc operands) =
   case opc of
-    D.SC -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCSyscall)
+    D.SC -> Just $ do
+      regs <- G.getRegs
+      let w = SP.addrWidth (SP.knownVariant @var)
+      let r0 = regs ^. MC.boundValue (PPC_GP (D.GPR 0))
+      let r3 = regs ^. MC.boundValue (PPC_GP (D.GPR 3))
+      let r4 = regs ^. MC.boundValue (PPC_GP (D.GPR 4))
+      let r5 = regs ^. MC.boundValue (PPC_GP (D.GPR 5))
+      let r6 = regs ^. MC.boundValue (PPC_GP (D.GPR 6))
+      let r7 = regs ^. MC.boundValue (PPC_GP (D.GPR 7))
+      let r8 = regs ^. MC.boundValue (PPC_GP (D.GPR 8))
+      let r9 = regs ^. MC.boundValue (PPC_GP (D.GPR 9))
+      let sc = PPCSyscall w r0 r3 r4 r5 r6 r7 r8 r9
+      res <- G.addExpr =<< evalArchFn sc
+
+      resVal       <- G.addExpr (G.AppExpr (MC.TupleField knownRepr res PL.index0))
+      errorCondVal <- G.addExpr (G.AppExpr (MC.TupleField knownRepr res PL.index1))
+
+      G.setRegVal (PPC_GP (D.GPR 3)) resVal
+      -- We need to use an explicit type signature here to prevent GHC's type
+      -- inference from becoming confused by the GADT pattern match on
+      -- `knownVariant`.
+      let setErrorCond ::
+            MC.Value (SP.AnyPPC var) ids (MT.BVType 32) ->
+            G.Generator (SP.AnyPPC var) ids s ()
+          setErrorCond errorCond =
+            case SP.knownVariant @var of
+              SP.V32Repr -> G.setRegVal (PPC_GP (D.GPR 0)) errorCond
+              SP.V64Repr -> G.setRegVal PPC_CR errorCond
+      setErrorCond errorCondVal
+
+      -- Increment the IP; we don't get the normal IP increment from the
+      -- PPC semantics, since we are intercepting them to just add this statement
+      let ip = PPC_IP
+      let ip_orig = regs ^. MC.boundValue ip
+      ip_next <- G.addExpr (G.AppExpr (MC.BVAdd NR.knownNat ip_orig (MC.BVValue NR.knownNat 4)))
+      G.setRegVal ip ip_next
+
+      G.finishWithTerminator MC.FetchAndExecute
     D.TRAP -> Just $ G.finishWithTerminator (MC.ArchTermStmt PPCTrap)
     D.TD ->
       case operands of

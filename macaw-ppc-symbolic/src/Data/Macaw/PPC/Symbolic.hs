@@ -53,8 +53,9 @@ import qualified Data.Parameterized.TraversableFC as FC
 import           Data.Typeable ( Typeable )
 import qualified Dismantle.PPC as D
 import qualified Lang.Crucible.Backend as C
-import qualified Lang.Crucible.CFG.Extension as C
+import qualified Lang.Crucible.CFG.Expr as C
 import qualified Lang.Crucible.CFG.Reg as C
+import qualified Lang.Crucible.LLVM.MemModel as Mem
 import qualified Lang.Crucible.Types as C
 import qualified What4.Interface as C
 import qualified What4.Symbol as C
@@ -256,14 +257,51 @@ archUpdateReg regEntry reg val =
 
 
 ppcGenFn :: forall ids s tp v ppc
-          . ( ppc ~ MP.AnyPPC v )
+          . ( ppc ~ MP.AnyPPC v
+            , 1 <= SP.AddrWidth v
+            )
          => MP.PPCPrimFn v (MC.Value ppc ids) tp
          -> MSB.CrucGen ppc ids s (C.Atom s (MS.ToCrucibleType tp))
-ppcGenFn fn = do
-  let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
-      f x = A.AtomWrapper <$> MSB.valueToCrucible x
-  r <- FC.traverseFC f fn
-  MSB.evalArchStmt (PPCPrimFn r)
+ppcGenFn fn =
+  case fn of
+    MP.PPCSyscall w v0 v3 v4 v5 v6 v7 v8 v9 -> do
+      a0 <- MSB.valueToCrucible v0
+      a3 <- MSB.valueToCrucible v3
+      a4 <- MSB.valueToCrucible v4
+      a5 <- MSB.valueToCrucible v5
+      a6 <- MSB.valueToCrucible v6
+      a7 <- MSB.valueToCrucible v7
+      a8 <- MSB.valueToCrucible v8
+      a9 <- MSB.valueToCrucible v9
+
+      let syscallArgs = Ctx.Empty Ctx.:> a0 Ctx.:> a3 Ctx.:> a4 Ctx.:> a5 Ctx.:> a6 Ctx.:> a7 Ctx.:> a8 Ctx.:> a9
+      let argTypes = Ctx.Empty Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+                               Ctx.:> Mem.LLVMPointerRepr w
+      -- `retTypes` is a tuple of form (R0, R3) [on PPC32] or (CR, R3) [on PPC64].
+      -- Note that this is reversed from the return type of PPCSyscall, which
+      -- uses the opposite order. This is because Macaw tuples have the order
+      -- of their fields reversed when converted to a Crucible value (see
+      -- 'macawListToCrucible' in "Data.Macaw.Symbolic.PersistentState" in
+      -- @macaw-symbolic@), so we also reverse the order here to be consistent
+      -- with this convention.
+      let retTypes = Ctx.Empty Ctx.:> Mem.LLVMPointerRepr (MT.knownNat @32)
+                               Ctx.:> Mem.LLVMPointerRepr w
+      let retRepr = C.StructRepr retTypes
+      syscallArgStructAtom <- MSB.evalAtom (C.EvalApp (C.MkStruct argTypes syscallArgs))
+      let lookupHdlStmt = MS.MacawLookupSyscallHandle argTypes retTypes syscallArgStructAtom
+      hdlAtom <- MSB.evalMacawStmt lookupHdlStmt
+      MSB.evalAtom $! C.Call hdlAtom syscallArgs retRepr
+    _ -> do
+      let f :: MC.Value ppc ids a -> MSB.CrucGen ppc ids s (A.AtomWrapper (C.Atom s) a)
+          f x = A.AtomWrapper <$> MSB.valueToCrucible x
+      r <- FC.traverseFC f fn
+      MSB.evalArchStmt (PPCPrimFn r)
 
 ppcGenStmt :: forall v ids s ppc
             . ( ppc ~ MP.AnyPPC v )
