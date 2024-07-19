@@ -75,22 +75,6 @@ postPPCTermStmtAbsState :: forall var ids
                         -> Maybe (MM.MemSegmentOff (SP.AddrWidth var), AbsBlockState (PPCReg var), MJ.InitJumpBounds (SP.AnyPPC var))
 postPPCTermStmtAbsState preservePred mem s0 jumpBounds regState stmt =
   case stmt of
-    PPCSyscall ->
-      -- We treat syscalls as closely to a no-op as we can. The call transfer
-      -- function ('MA.absEvalCall') is a bit too aggressive and breaks the
-      -- abstract value propagation for the link register, which prevents
-      -- returns from being recognized.
-      --
-      -- This version just calls the standard abstract transfer function on
-      -- every register, which is safe.
-      --
-      -- Note that this complexity will be reduced when we change system calls
-      -- to be statements instead of terminators.
-      case simplifyValue (regState ^. curIP) of
-        Just (RelocatableValue _ addr)
-          | Just nextIP <- MM.asSegmentOff mem (MM.incAddr 4 addr) ->
-              Just (nextIP, MA.finalAbsBlockState s0 regState, MJ.postCallBounds params jumpBounds regState)
-        _ -> error ("Syscall could not interpret next IP: " ++ show (pretty $ regState ^. curIP))
     PPCTrap ->
       case simplifyValue (regState ^. curIP) of
         Just (RelocatableValue _ addr)
@@ -142,6 +126,7 @@ absEvalArchFn :: (PPCArchConstraints var)
               -> PPCPrimFn var (Value (SP.AnyPPC var) ids) tp
               -> AbsValue (SP.AddrWidth var) tp
 absEvalArchFn _ _r = \case
+  PPCSyscall{}   -> MA.TopV
   SDiv{}         -> MA.TopV
   UDiv{}         -> MA.TopV
   FPNeg{}        -> MA.TopV

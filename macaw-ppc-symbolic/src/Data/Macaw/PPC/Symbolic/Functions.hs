@@ -42,6 +42,7 @@ import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.PPC as MP
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
+import qualified Data.Macaw.PPC.Symbolic.Panic as P
 
 data SomeSymFun sym where
   SomeSymFun :: Ctx.Assignment C.BaseTypeRepr ps -> C.BaseTypeRepr r -> C.SymFn sym ps r -> SomeSymFun sym
@@ -315,6 +316,8 @@ funcSemantics sf pf s =
       fval <- lookupApplySymFun sym sf ("vec_" ++ name) C.knownRepr args C.knownRepr
       ptrVal <- LL.llvmPointer_bv sym fval
       return (ptrVal, s)
+    MP.PPCSyscall {} ->
+      P.panic P.PPC "funcSemantics" ["The PPC syscall primitive should be eliminated and replaced by a handle lookup"]
 
 
 lookupApplySymFun :: (C.IsSymInterface sym)
