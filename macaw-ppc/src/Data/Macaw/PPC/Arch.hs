@@ -842,6 +842,8 @@ ppcInstructionMatcher (D.Instruction opc operands) =
       resVal       <- G.addExpr (G.AppExpr (MC.TupleField knownRepr res PL.index0))
       errorCondVal <- G.addExpr (G.AppExpr (MC.TupleField knownRepr res PL.index1))
 
+      -- See the documentation on 'PPCSyscall' for a description of the
+      -- registers used to return values from syscalls.
       G.setRegVal (PPC_GP (D.GPR 3)) resVal
       -- We need to use an explicit type signature here to prevent GHC's type
       -- inference from becoming confused by the GADT pattern match on
