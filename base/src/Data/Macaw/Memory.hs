@@ -64,6 +64,7 @@ module Data.Macaw.Memory
   , addrRead
     -- * MemInt
   , MemInt
+  , memInt
   , memIntValue
     -- * Addresses
   , MemAddr(..)
