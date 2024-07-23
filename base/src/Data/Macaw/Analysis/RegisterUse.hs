@@ -71,6 +71,7 @@ import           Control.Monad (unless, when, zipWithM_)
 import           Control.Monad.Except (MonadError(..), Except)
 import           Control.Monad.Reader (MonadReader(..), ReaderT(..), asks)
 import           Control.Monad.State.Strict (MonadState(..), State, StateT, execStateT, evalState, gets, modify)
+import qualified Data.Bits as Bits
 import qualified Data.ByteString.Char8 as BSC
 import qualified Data.ByteString as BS
 import           Data.Foldable
@@ -664,6 +665,9 @@ addMemAccessInfo :: StmtIndex -> MemAccessInfo arch ids -> StartInfer arch ids (
 addMemAccessInfo idx i = seq idx $ seq i $ do
   modify $ \s -> s { sisMemAccessStack = (idx,i) : sisMemAccessStack s }
 
+-- | @processApp aid app@ computes the effect of a program assignment @aid <- app@.  When `app` is
+-- a computation over a stack offset expression (a `FrameExpr`), we attempt to simplify it, as we
+-- require a concrete stack offset when computing `postCallConstraints`.
 processApp :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
            => AssignId ids tp
            -> App (Value arch ids) tp
@@ -671,6 +675,11 @@ processApp :: (OrdF (ArchReg arch), MemWidth (ArchAddrWidth arch))
 processApp aid app = do
   ctx <- ask
   am <- gets sisAssignMap
+  -- This inspects the `app` term to detect cases where the abstract expression can be simplified
+  -- down to a `FrameExpr` expression.  In such cases, the simplified expression is registered as
+  -- the value for this assignment.  Otherwise, the value for the assignment remains abstract.
+  -- This may not be exhaustive, so if you encounter the `CallStackHeightError` in
+  -- `postCallConstraints`, you may need to extend the patterns recognized here.
   case fmapFC (valueToStartExpr ctx am) app of
     BVAdd _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
       setAssignVal aid (FrameExpr (o+fromInteger c))
@@ -678,6 +687,10 @@ processApp aid app = do
       setAssignVal aid (FrameExpr (o+fromInteger c))
     BVSub _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
       setAssignVal aid (FrameExpr (o-fromInteger c))
+    BVAnd _ (FrameExpr o) (IVCValue (BVCValue _ c)) ->
+      setAssignVal aid (FrameExpr (o Bits..&. fromInteger c))
+    BVAnd _ (IVCValue (BVCValue _ c)) (FrameExpr o) ->
+      setAssignVal aid (FrameExpr (o Bits..&. fromInteger c))
     appExpr -> do
       c <- gets sisAppCache
       -- Check to see if we have seen an app equivalent to
