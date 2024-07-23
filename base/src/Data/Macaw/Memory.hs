@@ -465,6 +465,20 @@ instance MemWidth w => Integral (MemInt w) where
     where (q,r) = memIntValue x `quotRem` memIntValue y
   toInteger = toInteger . memIntValue
 
+instance MemWidth w => Bits (MemInt w) where
+  MemInt x .&. MemInt y = memInt (x .&. y)
+  MemInt x .|. MemInt y = memInt (x .|. y)
+  MemInt x `xor` MemInt y = memInt (x `xor` y)
+  complement (MemInt x) = memInt (complement x)
+  MemInt x `shift` i = memInt (x `shift` i)
+  MemInt x `rotate` i = memInt (x `rotate` i)
+  bitSize = addrBitSize
+  bitSizeMaybe x = Just (addrBitSize x)
+  isSigned _ = True
+  MemInt x `testBit` i = x `testBit` i
+  bit i = memInt (bit i)
+  popCount (MemInt x) = popCount x
+
 ------------------------------------------------------------------------
 -- Relocation
 
