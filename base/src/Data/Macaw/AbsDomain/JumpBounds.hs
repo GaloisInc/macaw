@@ -386,8 +386,21 @@ exprRangePred info e = do
             -- Compare the range constraint with the output number of bits.
             -- If the bound on r covers at most the truncated number
             -- of bits, then we just pass it through.
-          , Just LeqProof <- testLeq (rangeWidth r) w ->
-            SomeRangePred r
+          -> case testLeq (rangeWidth r) w of
+              Just LeqProof -> SomeRangePred r
+
+              -- Otherwise, we need to rewrite the constraints to be on w bits.
+              -- We can do that by clamping the lower/upper bounds if they're
+              -- outside of the range [0, 2^w-1].
+              Nothing ->
+                let
+                  truncUnsigned :: Natural -> Natural
+                  truncUnsigned = fromInteger . unsignedClamp w . toInteger
+
+                  lowerBound = truncUnsigned $ rangeLowerBound r
+                  upperBound = truncUnsigned $ rangeUpperBound r
+                in
+                  SomeRangePred (mkRangeBound w lowerBound upperBound) 
         _ -> NoRangePred
 
 -- | This returns a natural number with a computed upper bound for the
