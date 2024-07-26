@@ -19,11 +19,13 @@ library
   exposed-modules: Data.Macaw.PPC.Symbolic
   other-modules:   Data.Macaw.PPC.Symbolic.AtomWrapper
                    Data.Macaw.PPC.Symbolic.Functions
+                   Data.Macaw.PPC.Symbolic.Panic
                    Data.Macaw.PPC.Symbolic.Repeat
   -- other-extensions:
   build-depends:       base >=4.10 && <5,
                        containers,
                        lens,
+                       panic,
                        exceptions,
                        text,
                        parameterized-utils,

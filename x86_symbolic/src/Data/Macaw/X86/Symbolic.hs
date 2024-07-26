@@ -47,6 +47,7 @@ import qualified Data.Macaw.Types as M
 import qualified Data.Macaw.X86 as M
 import qualified Data.Macaw.X86.X86Reg as M
 import           Data.Macaw.X86.Crucible
+import qualified Data.Macaw.X86.Symbolic.Panic as P
 import qualified Flexdis86.Register as F
 
 import qualified What4.Interface as WI
@@ -367,7 +368,10 @@ x86LookupReg
 x86LookupReg reg_struct_entry macaw_reg =
   case lookupX86Reg macaw_reg (C.regValue reg_struct_entry) of
     Just (C.RV val) -> C.RegEntry (typeToCrucible $ M.typeRepr macaw_reg) val
-    Nothing -> error $ "unexpected register: " ++ showF macaw_reg
+    Nothing -> P.panic
+                 P.X86_64
+                 "x86LookupReg"
+                 ["unexpected register: " ++ showF macaw_reg]
 
 x86UpdateReg
   :: C.RegEntry sym (ArchRegStruct M.X86_64)
@@ -377,7 +381,10 @@ x86UpdateReg
 x86UpdateReg reg_struct_entry macaw_reg val =
   case updateX86Reg macaw_reg (\_ -> C.RV val) (C.regValue reg_struct_entry) of
     Just res_reg_struct -> reg_struct_entry { C.regValue = res_reg_struct }
-    Nothing -> error $ "unexpected register: " ++ showF macaw_reg
+    Nothing -> P.panic
+                 P.X86_64
+                 "x86UpdateReg"
+                 ["unexpected register: " ++ showF macaw_reg]
 
 instance GenArchInfo LLVMMemory M.X86_64 where
   genArchVals _ _ mOverride = Just $ GenArchVals

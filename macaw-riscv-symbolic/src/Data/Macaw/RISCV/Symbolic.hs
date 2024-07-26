@@ -60,6 +60,7 @@ import qualified Data.Macaw.Symbolic.Backend as MSB
 -- macaw-riscv-symbolic
 import qualified Data.Macaw.RISCV.Symbolic.AtomWrapper as RA
 import qualified Data.Macaw.RISCV.Symbolic.Functions as RF
+import qualified Data.Macaw.RISCV.Symbolic.Panic as RP
 import qualified Data.Macaw.RISCV.Symbolic.Repeat as RR
 
 riscvMacawSymbolicFns ::
@@ -178,7 +179,10 @@ archLookupReg :: (G.KnownRV rv, Typeable rv)
 archLookupReg regEntry reg =
   case lookupReg reg (C.regValue regEntry) of
     Just (C.RV val) -> C.RegEntry (MS.typeToCrucible $ MT.typeRepr reg) val
-    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+    Nothing -> RP.panic
+                 RP.RISCV
+                 "archLookupReg"
+                 ["unexpected register: " ++ show (MC.prettyF reg)]
 
 updateReg :: forall rv m f tp
            . (G.KnownRV rv, Typeable rv, X.MonadThrow m)
@@ -199,7 +203,10 @@ archUpdateReg :: (G.KnownRV rv, Typeable rv)
 archUpdateReg regEntry reg val =
   case updateReg reg (const $ C.RV val) (C.regValue regEntry) of
     Just r -> regEntry { C.regValue = r }
-    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+    Nothing -> RP.panic
+                 RP.RISCV
+                 "archUpdateReg"
+                 ["unexpected register: " ++ show (MC.prettyF reg)]
 
 newtype RISCVSymbolicException rv = MissingRegisterInState (Some (MR.RISCVReg rv))
   deriving Show
