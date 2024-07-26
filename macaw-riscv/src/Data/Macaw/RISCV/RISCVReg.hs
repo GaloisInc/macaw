@@ -15,6 +15,7 @@
 module Data.Macaw.RISCV.RISCVReg
   ( -- * RISC-V macaw register state
     RISCVReg(..)
+  , GPR(..)
     -- ** Patterns for GPRs
   , pattern GPR
   , pattern GPR_RA
@@ -61,6 +62,8 @@ import           Data.Parameterized.NatRepr (knownNat)
 import           Data.Parameterized.TH.GADT ( structuralTypeEquality
                                             , structuralTypeOrd
                                             )
+
+import qualified Prettyprinter as PP
 
 import qualified GRIFT.Types as G
 import qualified GRIFT.Semantics.Utils as G
@@ -411,7 +414,7 @@ pattern GPR_T6 = GPR 31
 instance Show (RISCVReg rv tp) where
   show PC = "pc"
   show (RISCV_GPR gpr) = show gpr
-  show (FPR rid) = "fpr[" <> show rid <> "]"
+  show (FPR rid) = "f" <> show (G.asUnsignedSized rid)
   show (CSR csr) = show csr
   show PrivLevel = "priv"
   show EXC = "exc"
@@ -425,6 +428,9 @@ instance OrdF (RISCVReg rv) where
   compareF = $(structuralTypeOrd [t|RISCVReg|] [])
 
 instance ShowF (RISCVReg rv)
+
+instance MC.PrettyF (RISCVReg rv) where
+  prettyF = PP.pretty . showF
 
 instance G.KnownRV rv => MT.HasRepr (RISCVReg rv) MT.TypeRepr where
   typeRepr PC = MT.BVTypeRepr knownNat

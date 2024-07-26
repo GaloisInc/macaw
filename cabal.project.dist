@@ -5,6 +5,7 @@ packages: base/
           macaw-ppc/
           macaw-ppc-symbolic/
           macaw-riscv/
+          macaw-riscv-symbolic/
           x86/
           symbolic/
           symbolic-syntax/
