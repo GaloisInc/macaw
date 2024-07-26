@@ -69,6 +69,7 @@ import qualified SemMC.Architecture.PPC as SP
 
 import qualified Data.Macaw.PPC.Symbolic.AtomWrapper as A
 import qualified Data.Macaw.PPC.Symbolic.Functions as F
+import qualified Data.Macaw.PPC.Symbolic.Panic as P
 import qualified Data.Macaw.PPC.Symbolic.Repeat as R
 
 ppcMacawSymbolicFns :: ( SP.KnownVariant v
@@ -219,7 +220,10 @@ archLookupReg :: ( MP.KnownVariant v
 archLookupReg regEntry reg =
   case lookupReg reg (MCR.regValue regEntry) of
     Just (MCRV.RV val) -> MCR.RegEntry (MS.typeToCrucible $ MT.typeRepr reg) val
-    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+    Nothing -> P.panic
+                 P.PPC
+                 "archLookupReg"
+                 ["unexpected register: " ++ show (MC.prettyF reg)]
 
 updateReg :: forall v ppc m f tp
            . (MP.KnownVariant v,
@@ -244,7 +248,10 @@ archUpdateReg :: ( MP.KnownVariant v
 archUpdateReg regEntry reg val =
   case updateReg reg (const $ MCRV.RV val) (MCR.regValue regEntry) of
     Just r -> regEntry { MCR.regValue = r }
-    Nothing -> error $ "unexpected register: " ++ show (MC.prettyF reg)
+    Nothing -> P.panic
+                 P.PPC
+                 "archUpdateReg"
+                 ["unexpected register: " ++ show (MC.prettyF reg)]
 
 
 ppcGenFn :: forall ids s tp v ppc
