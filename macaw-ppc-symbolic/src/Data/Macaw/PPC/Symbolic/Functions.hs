@@ -62,6 +62,8 @@ data SemanticsError = NonUserSymbol String
 
 instance X.Exception SemanticsError
 
+type S p v sym rtp bs r ctx = C.CrucibleState p sym (MS.MacawExt (SP.AnyPPC v)) rtp bs r ctx
+
 termSemantics :: (C.IsSymInterface sym, 1 <= SP.AddrWidth v)
               => SymFuns sym
               -> MP.PPCTermStmt v ids
@@ -409,5 +411,3 @@ withRounding
 withRounding bak r action = do
   r' <- toValBV bak r
   U.withRounding (C.backendGetSym bak) r' action
-
-type S p v sym rtp bs r ctx = C.CrucibleState p sym (MS.MacawExt (SP.AnyPPC v)) rtp bs r ctx
