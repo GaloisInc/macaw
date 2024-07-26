@@ -104,8 +104,14 @@ type instance MC.ArchFn (RISCV rv) = RISCVPrimFn rv
 -- | RISC-V architecture-specific statements (none)
 data RISCVStmt (rv :: G.RV) (expr :: MT.Type -> K.Type)
 
+instance F.FunctorF (RISCVStmt rv) where
+  fmapF _ s = case s of {}
+
 instance F.FoldableF (RISCVStmt rv) where
   foldMapF _ s = case s of {}
+
+instance F.TraversableF (RISCVStmt rv) where
+  traverseF _ s = pure (case s of {})
 
 instance MC.IsArchStmt (RISCVStmt rv) where
   ppArchStmt _ s = case s of {}
@@ -114,6 +120,15 @@ type instance MC.ArchStmt (RISCV rv) = RISCVStmt rv
 
 -- | RISC-V block termination statements (none)
 data RISCVTermStmt (rv :: G.RV) (f :: MT.Type -> K.Type)
+
+instance F.FunctorF (RISCVTermStmt rv) where
+  fmapF _ s = case s of {}
+
+instance F.FoldableF (RISCVTermStmt rv) where
+  foldMapF _ s = case s of {}
+
+instance F.TraversableF (RISCVTermStmt rv) where
+  traverseF _ s = pure (case s of {})
 
 instance MC.PrettyF (RISCVTermStmt rv) where
   prettyF s = case s of {}

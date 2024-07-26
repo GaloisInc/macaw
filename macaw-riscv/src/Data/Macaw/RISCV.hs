@@ -15,11 +15,12 @@ module Data.Macaw.RISCV (
   -- * Type-level tags
   G.RV(..),
   G.RVRepr(..),
+  RISCV,
+  RISCVConstraints,
   -- * RISC-V Types
-  RISCVReg(..),
   RISCVTermStmt,
   RISCVStmt,
-  RISCVPrimFn
+  RISCVPrimFn(..)
   ) where
 
 import GHC.Stack (HasCallStack)
