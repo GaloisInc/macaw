@@ -1,39 +1,39 @@
 [submodule "submodules/macaw"]
 	path = submodules/macaw
-	url = git@github.com:GaloisInc/macaw.git
+	url = https://github.com/GaloisInc/macaw.git
 [submodule "submodules/crucible"]
 	path = submodules/crucible
-	url = git@github.com:GaloisInc/crucible.git
+	url = https://github.com/GaloisInc/crucible.git
 [submodule "submodules/parameterized-utils"]
 	path = submodules/parameterized-utils
-	url = git@github.com:GaloisInc/parameterized-utils.git
+	url = https://github.com/GaloisInc/parameterized-utils.git
 [submodule "submodules/arm-asl-parser"]
 	path = submodules/arm-asl-parser
-	url = git@github.com:GaloisInc/arm-asl-parser.git
+	url = https://github.com/GaloisInc/arm-asl-parser.git
 [submodule "submodules/asl-translator"]
 	path = submodules/asl-translator
-	url = git@github.com:GaloisInc/asl-translator.git
+	url = https://github.com/GaloisInc/asl-translator.git
 [submodule "submodules/what4"]
 	path = submodules/what4
-	url = git@github.com:GaloisInc/what4.git
+	url = https://github.com/GaloisInc/what4.git
 [submodule "submodules/semmc"]
 	path = submodules/semmc
-	url = git@github.com:GaloisInc/semmc.git
+	url = https://github.com/GaloisInc/semmc.git
 [submodule "submodules/elf-edit"]
 	path = submodules/elf-edit
-	url = git@github.com:GaloisInc/elf-edit.git
+	url = https://github.com/GaloisInc/elf-edit.git
 [submodule "submodules/dismantle"]
 	path = submodules/dismantle
-	url = git@github.com:GaloisInc/dismantle.git
+	url = https://github.com/GaloisInc/dismantle.git
 [submodule "submodules/flexdis86"]
 	path = submodules/flexdis86
-	url = git@github.com:GaloisInc/flexdis86.git
+	url = https://github.com/GaloisInc/flexdis86.git
 [submodule "submodules/dwarf"]
 	path = submodules/dwarf
-	url = git@github.com:GaloisInc/dwarf.git
+	url = https://github.com/GaloisInc/dwarf.git
 [submodule "submodules/llvm-pretty"]
 	path = submodules/llvm-pretty
-	url = git@github.com:GaloisInc/llvm-pretty
+	url = https://github.com/GaloisInc/llvm-pretty
 [submodule "submodules/llvm-pretty-bc-parser"]
 	path = submodules/llvm-pretty-bc-parser
-	url = git@github.com:GaloisInc/llvm-pretty-bc-parser
+	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
