@@ -37,3 +37,15 @@
 [submodule "submodules/llvm-pretty-bc-parser"]
 	path = submodules/llvm-pretty-bc-parser
 	url = https://github.com/GaloisInc/llvm-pretty-bc-parser
+[submodule "submodules/grift"]
+	path = submodules/grift
+	url = https://github.com/GaloisInc/grift.git
+[submodule "submodules/bv-sized"]
+	path = submodules/bv-sized
+	url = https://github.com/GaloisInc/bv-sized.git
+[submodule "submodules/bv-sized-float"]
+	path = submodules/bv-sized-float
+	url = https://github.com/GaloisInc/bv-sized-float.git
+[submodule "submodules/softfloat-hs"]
+	path = submodules/softfloat-hs
+	url = https://github.com/GaloisInc/softfloat-hs.git
