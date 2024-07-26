@@ -27,6 +27,8 @@ import qualified Data.Macaw.RISCV.Symbolic.Panic as RP
 
 data SymFuns sym = SymFuns
 
+type S p rv sym rtp bs r ctx = C.CrucibleState p sym (MS.MacawExt (MR.RISCV rv)) rtp bs r ctx
+
 funcSemantics :: SymFuns sym
               -> MR.RISCVPrimFn rv (RA.AtomWrapper f) mt
               -> S p rv sym rtp bs r ctx
@@ -50,5 +52,3 @@ termSemantics :: SymFuns sym
               -> S p rv sym rtp bs r ctx
               -> IO (C.RegValue sym C.UnitType, S p rv sym rtp bs r ctx)
 termSemantics _fs term _s = case term of {}
-
-type S p rv sym rtp bs r ctx = C.CrucibleState p sym (MS.MacawExt (MR.RISCV rv)) rtp bs r ctx
