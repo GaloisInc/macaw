@@ -12,6 +12,7 @@ module Data.Macaw.RISCV (
   module Data.Macaw.RISCV.RISCVReg,
   -- * Macaw configurations
   riscv_info,
+  riscvPLTStubInfo,
   -- * Type-level tags
   G.RV(..),
   G.RVRepr(..),
@@ -25,10 +26,12 @@ module Data.Macaw.RISCV (
 
 import GHC.Stack (HasCallStack)
 
+import qualified Data.ElfEdit as EE
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.CFG.DemandSet as MD
 import           Data.Macaw.Discovery ( defaultClassifier )
 import qualified Data.Macaw.Architecture.Info as MI
+import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMEP
 import Data.Parameterized ( type(<=) )
 import qualified GRIFT.Types as G
 
@@ -79,3 +82,11 @@ riscv_info rvRepr =
         , MI.postArchTermStmtAbsState = \_ _ _ _ _ -> error $ "postArchTermStmtAbsState unimplemented in riscv_info"
         , MI.archClassifier = defaultClassifier
         }
+
+-- | PLT stub information for ARM32 relocation types.
+riscvPLTStubInfo :: MMEP.PLTStubInfo (EE.RISCV_RelocationType w)
+riscvPLTStubInfo = MMEP.PLTStubInfo
+  { MMEP.pltFunSize     = 32
+  , MMEP.pltStubSize    = 16
+  , MMEP.pltGotStubSize = error "Unexpected .plt.got section in RISC-V binary"
+  }

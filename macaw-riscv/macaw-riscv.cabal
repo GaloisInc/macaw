@@ -25,6 +25,7 @@ library
                        bv-sized,
                        bytestring,
                        containers,
+                       elf-edit,
                        grift,
                        lens,
                        macaw-base,
