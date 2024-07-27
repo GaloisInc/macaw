@@ -14,6 +14,7 @@ Operations for creating a view of memory from an elf file.
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE ViewPatterns #-}
 module Data.Macaw.Memory.ElfLoader
@@ -48,7 +49,8 @@ import           Data.Bits
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import           Data.ElfEdit.Prim
-  ( ElfWordType
+  ( ElfWidthConstraints
+  , ElfWordType
   , ElfClass(..)
 
   , ElfSectionIndex(..)
@@ -62,10 +64,12 @@ import qualified Data.IntervalMap.Strict as IMap
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
+import           Data.Proxy (Proxy(..))
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Vector as V
 import           Data.Word
+import           GHC.TypeLits (KnownNat, natVal)
 import           Numeric (showHex)
 
 import           Data.Macaw.Memory
@@ -967,6 +971,89 @@ relaTargetPPC64 end msegIndex symtab rel addend _relFlag =
     tp ->
       throwError $ RelocationUnsupportedType (show tp)
 
+-- | Attempt to resolve a RISC-V–specific symbol.
+relaTargetRISCV :: forall w
+                 . (ElfWidthConstraints w, KnownNat w, MemWidth w)
+                => Endianness
+                -- ^ Endianness of relocations
+                -> Maybe SegmentIndex
+                -- ^ Index of segment for dynamic relocations
+                -> SymbolTable w -- ^ Symbol table
+                -> Elf.RelEntry (Elf.RISCV_RelocationType w) -- ^ Relocation entry
+                -> MemWord w
+                -- ^ Addend of symbol
+                -> RelFlag
+                -> SymbolResolver (Relocation w)
+relaTargetRISCV end msegIndex symtab rel addend _relFlag =
+  let wordSize :: Int
+      wordSize = fromInteger $ natVal (Proxy @w) `div` 8 in
+  case Elf.relType rel of
+    Elf.R_RISCV_32 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 4
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_RISCV_64 -> do
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = 8
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_RISCV_RELATIVE -> do
+      -- This relocation has the value B + A where
+      -- - A is the addend for the relocation, and
+      -- - B resolves to the difference between the
+      --   address at which the segment defining the symbol was
+      --   loaded and the address at which it was linked.
+      --
+      -- Since the address at which it was linked is a constant, we
+      -- create a non-relative address but subtract the link address
+      -- from the offset.
+
+      -- Get the address at which it was linked so we can subtract from offset.
+      let linktimeAddr = Elf.relAddr rel
+
+      -- Resolve the symbol using the index in the relocation.
+      sym <-
+        if Elf.relSym rel == 0 then do
+          case msegIndex of
+            Nothing -> do
+              throwError $ RelocationZeroSymbol
+            Just idx ->
+              pure $! SegmentBaseAddr idx
+        else do
+          resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend - fromIntegral linktimeAddr
+                         , relocationIsRel      = False
+                         , relocationSize       = wordSize
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = False
+                         }
+    Elf.R_RISCV_JUMP_SLOT -> do
+      -- This is a PLT relocation
+      sym <- resolveRelocationSym symtab (Elf.relSym rel)
+      pure $! Relocation { relocationSym        = sym
+                         , relocationOffset     = addend
+                         , relocationIsRel      = False
+                         , relocationSize       = wordSize
+                         , relocationIsSigned   = False
+                         , relocationEndianness = end
+                         , relocationJumpSlot   = True
+                         }
+    tp ->
+      throwError $ RelocationUnsupportedType (show tp)
+
 toEndianness :: Elf.ElfData -> Endianness
 toEndianness Elf.ELFDATA2LSB = LittleEndian
 toEndianness Elf.ELFDATA2MSB = BigEndian
@@ -988,6 +1075,10 @@ getRelocationResolver hdr =
       pure $ SomeRelocationResolver $ relaTargetPPC32 end
     (Elf.ELFCLASS64, Elf.EM_PPC64) ->
       pure $ SomeRelocationResolver $ relaTargetPPC64 end
+    (Elf.ELFCLASS32, Elf.EM_RISCV) ->
+      pure $ SomeRelocationResolver $ relaTargetRISCV end
+    (Elf.ELFCLASS64, Elf.EM_RISCV) ->
+      pure $ SomeRelocationResolver $ relaTargetRISCV end
     (_,mach) -> throwError $ UnsupportedArchitecture (show mach)
   where
     end = toEndianness (Elf.headerData hdr)
