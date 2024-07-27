@@ -32,7 +32,6 @@ import qualified Test.Tasty.Runners as TTR
 import qualified Data.Macaw.Architecture.Info as MAI
 import qualified Data.Macaw.CFG as MC
 import qualified Data.Macaw.Discovery as M
-import qualified Data.Macaw.Memory.ElfLoader.PLTStubs as MMELP
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified Data.Macaw.RISCV as MR
@@ -133,8 +132,8 @@ symExTestSized :: forall rv w arch
                   , 16 <= w
                   , MC.ArchConstraints arch
                   , arch ~ MR.RISCV rv
+                  , Elf.ElfWidthConstraints w
                   , KnownNat w
-                  , Show (Elf.ElfWordType w)
                   , MS.ArchInfo arch
                   )
                => MST.SimulationResult
@@ -147,12 +146,7 @@ symExTestSized :: forall rv w arch
                -> MAI.ArchitectureInfo arch
                -> TTH.Assertion
 symExTestSized expected mmPreset exePath saveSMT saveMacaw step ehi archInfo = do
-   binfo <- MST.runDiscovery ehi exePath MST.toAddrSymMap archInfo
-                             -- Test cases involving shared libraries are not
-                             -- yet supported on the RISC-V backend. At a
-                             -- minimum, this is blocked on
-                             -- https://github.com/GaloisInc/elf-edit/issues/36.
-                             (MMELP.noPLTStubInfo "RISC-V")
+   binfo <- MST.runDiscovery ehi exePath MST.toAddrSymMap archInfo MR.riscvPLTStubInfo
    let funInfos = Map.elems (MST.binaryDiscState (MST.mainBinaryInfo binfo) ^. M.funInfo)
    let testEntryPoints = mapMaybe hasTestPrefix funInfos
    F.forM_ testEntryPoints $ \(name, Some dfi) -> do
