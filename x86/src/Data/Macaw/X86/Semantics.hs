@@ -2625,7 +2625,9 @@ def_movhpd = defBinaryLVpoly "movhpd" $ \l v -> do
   v0 <- get l
   let dstPieces = bvVectorize n64 v0
       srcPieces = bvVectorize n64 v
-      rPieces = [head srcPieces] ++ (drop 1 dstPieces)
+      -- NB: bvVectorize always returns a non-empty list of values, so calling
+      -- `take 1` and `drop 1` on them will always yield strictly smaller lists.
+      rPieces = take 1 srcPieces ++ drop 1 dstPieces
   l .= bvUnvectorize (typeWidth l) rPieces
 
 def_movlpd :: InstructionDef
