@@ -16,6 +16,7 @@ x86_64 programs.
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE NondecreasingIndentation #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Data.Macaw.X86
        ( x86_64_info
        , x86_64_freeBSD_info
