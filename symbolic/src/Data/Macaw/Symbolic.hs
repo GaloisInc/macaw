@@ -197,6 +197,7 @@ import qualified Data.Macaw.Symbolic.Backend as SB
 import           Data.Macaw.Symbolic.Bitcast ( doBitcast )
 import qualified Data.Macaw.Symbolic.CrucGen as CG
 import           Data.Macaw.Symbolic.CrucGen hiding (bvLit)
+import qualified Data.Macaw.Symbolic.Panic as P
 import           Data.Macaw.Symbolic.PersistentState as PS
 import           Data.Macaw.Symbolic.MemOps as MO
 
@@ -791,12 +792,19 @@ mkBlockPathRegCFG
   -> IO (CR.SomeCFG (MacawExt arch) (EmptyCtx ::> ArchRegStruct arch) (ArchRegStruct arch))
 mkBlockPathRegCFG arch_fns halloc pos_fn blocks =
   crucGenArchConstraints arch_fns $ mkCrucRegCFG arch_fns halloc "" $ do
-    let entry_addr = M.pblockAddr $ head blocks
+    let (blocksHead, blocksTail) =
+          case blocks of
+            blk:blks -> (blk, blks)
+            [] -> P.panic
+                    P.Symbolic
+                    "mkBlockPathRegCFG"
+                    ["Empty list of blocks"]
+    let entry_addr = M.pblockAddr blocksHead
     let first_blocks = zipWith
           (\block next_block ->
             block { M.pblockTermStmt = termStmtToJump (M.pblockTermStmt block) (M.pblockAddr next_block) })
           (take (length blocks - 1) blocks)
-          (tail blocks)
+          blocksTail
     let last_block = (last blocks) { M.pblockTermStmt = termStmtToReturn (M.pblockTermStmt (last blocks)) }
     let block_path = first_blocks ++ [last_block]
 

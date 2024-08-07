@@ -21,6 +21,7 @@ library
     lens,
     macaw-base,
     mtl,
+    panic,
     parameterized-utils,
     prettyprinter >= 1.7.0,
     split,
@@ -43,6 +44,7 @@ library
     Data.Macaw.Symbolic.Bitcast
     Data.Macaw.Symbolic.CrucGen
     Data.Macaw.Symbolic.Memory.Common
+    Data.Macaw.Symbolic.Panic
     Data.Macaw.Symbolic.PersistentState
 
   ghc-options: -Wall -Wcompat
