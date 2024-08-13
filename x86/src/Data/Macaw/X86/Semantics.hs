@@ -1376,11 +1376,16 @@ def_set_list =
 
 def_call :: InstructionDef
 def_call = defUnary "call" $ \_ v -> do
+  -- Get the address to branch to. Make sure to do this *before* pushing the
+  -- value of the next instruction. If the call target is the stack pointer,
+  -- then pushing a value will change the underlying value of the stack, so we
+  -- want to ensure that we get the call target before the stack is modified.
+  -- (See the T420 test case in macaw-x86-symbolic's test suite.)
+  tgt <- getCallTarget v
   -- Push value of next instruction
   old_pc <- getReg R.X86_IP
   push addrRepr old_pc
   -- Set IP
-  tgt <- getCallTarget v
   rip .= tgt
 
 -- | Conditional jumps
