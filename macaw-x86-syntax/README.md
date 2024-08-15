@@ -12,6 +12,8 @@ This `ParserHooks` supports the following types and operations:
 
 **Operations**:
 
-(none so far)
+- `get-reg :: X86Reg -> X86Regs -> t`: extract an x86 register
+- Registers:
+  - `rip :: X86Reg`: instruction pointer
 
 [syn]: https://github.com/GaloisInc/crucible/tree/master/crucible-syntax
