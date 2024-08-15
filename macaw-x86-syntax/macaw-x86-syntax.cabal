@@ -95,13 +95,16 @@ library
     base >= 4.13,
     containers,
     crucible,
+    crucible-llvm,
     crucible-syntax,
     macaw-base,
     macaw-symbolic,
     macaw-x86,
     macaw-x86-symbolic,
+    mtl,
     parameterized-utils,
     text,
+    what4,
 
   hs-source-dirs: src
 
