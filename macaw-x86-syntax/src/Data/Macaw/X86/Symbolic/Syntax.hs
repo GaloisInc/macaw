@@ -33,7 +33,6 @@ import Data.Parameterized.Some (Some(..))
 import Lang.Crucible.CFG.Expr as Expr
 import Lang.Crucible.CFG.Reg (Atom, Stmt)
 import Lang.Crucible.CFG.Reg qualified as Reg
-import Lang.Crucible.LLVM.MemModel.Pointer qualified as Mem
 import Lang.Crucible.Syntax.Atoms qualified as LCSA
 import Lang.Crucible.Syntax.Concrete qualified as LCSC
 import Lang.Crucible.Syntax.Monad qualified as LCSM
@@ -95,12 +94,8 @@ parseReg =
   LCSM.describe "an x86_64 register" $ do
     name <- LCSC.atomName
     case name of
-      LCSA.AtomName "rip" ->
-        pure (Some ripIndex)
+      LCSA.AtomName "rip" -> pure (Some X86.ip)
       LCSA.AtomName _ -> empty
-
-ripIndex :: Ctx.Index (DMS.MacawCrucibleRegTypes X86.X86_64) (Mem.LLVMPointerType 64)
-ripIndex = Ctx.extendIndex @(Ctx.EmptyCtx Ctx.::> Mem.LLVMPointerType 64) @(DMS.MacawCrucibleRegTypes X86.X86_64) Ctx.baseIndex
 
 x86AtomParser ::
   ( LCSM.MonadSyntax LCSA.Atomic m

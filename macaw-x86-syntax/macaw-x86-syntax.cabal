@@ -95,7 +95,6 @@ library
     base >= 4.13,
     containers,
     crucible,
-    crucible-llvm,
     crucible-syntax,
     macaw-base,
     macaw-symbolic,
