@@ -33,6 +33,7 @@ import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Testing as MST
 import qualified Data.Macaw.X86 as MX
 import           Data.Macaw.X86.Symbolic ()
+import qualified Data.Macaw.X86.Symbolic as MXS
 import qualified What4.Config as WC
 import qualified What4.Interface as WI
 import qualified What4.ProblemFeatures as WPF
@@ -45,6 +46,7 @@ import qualified Lang.Crucible.LLVM.MemModel as LLVM
 
 import qualified What4.FloatMode as W4
 import qualified What4.Expr.Builder as W4
+import qualified Data.Parameterized.Context as Ctx
 
 -- | A Tasty option to tell us to save SMT queries and responses to /tmp for debugging purposes
 data SaveSMT = SaveSMT Bool
@@ -70,6 +72,17 @@ ingredients = TT.includingOptions [ TTO.Option (Proxy @SaveSMT)
                                   , TTO.Option (Proxy @SaveMacaw)
                                   ] : TT.defaultIngredients
 
+getRegName ::
+  Ctx.Index (MS.MacawCrucibleRegTypes MX.X86_64) t ->
+  String
+getRegName reg =
+  case Ctx.intIndex (Ctx.indexVal reg) (Ctx.size MXS.x86RegAssignment) of
+    Just (Some i) ->
+      let r = MXS.x86RegAssignment Ctx.! i
+          rName = MS.crucGenArchRegName MXS.x86_64MacawSymbolicFns r
+      in show rName
+    Nothing -> error "impossible"
+
 main :: IO ()
 main = do
   -- These are pass/fail in that the assertions in the "pass" set are true (and
@@ -82,11 +95,20 @@ main = do
   let passTests mmPreset = TT.testGroup "True assertions" (map (mkSymExTest passRes mmPreset) passTestFilePaths)
   let failTests mmPreset = TT.testGroup "False assertions" (map (mkSymExTest failRes mmPreset) failTestFilePaths)
   TT.defaultMainWithIngredients ingredients $
-    TT.testGroup "Binary Tests" $
-    map (\mmPreset ->
-          TT.testGroup (MST.describeMemModelPreset mmPreset)
-                       [passTests mmPreset, failTests mmPreset])
-        [MST.DefaultMemModel, MST.LazyMemModel]
+    TT.testGroup "macaw-x86-symbolic tests"
+      [ TT.testGroup "Unit tests" 
+          [ TTH.testCase "ip" $ getRegName MXS.ip TTH.@?= "r!ip"
+          , TTH.testCase "rax" $ getRegName MXS.rax TTH.@?= "r!rax"
+          , TTH.testCase "rbx" $ getRegName MXS.rbx TTH.@?= "r!rbx"
+          , TTH.testCase "rcx" $ getRegName MXS.rcx TTH.@?= "r!rcx"
+          , TTH.testCase "rdx" $ getRegName MXS.rdx TTH.@?= "r!rdx"
+          ]
+      , TT.testGroup "Binary tests" $
+          map (\mmPreset ->
+                TT.testGroup (MST.describeMemModelPreset mmPreset)
+                             [passTests mmPreset, failTests mmPreset])
+              [MST.DefaultMemModel, MST.LazyMemModel]
+      ]
 
 hasTestPrefix :: Some (M.DiscoveryFunInfo arch) -> Maybe (BS8.ByteString, Some (M.DiscoveryFunInfo arch))
 hasTestPrefix (Some dfi) = do
