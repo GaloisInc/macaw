@@ -19,11 +19,17 @@ module Data.Macaw.X86.Symbolic
   , SymFuns(..), newSymFuns
   , X86StmtExtension(..)
 
+  , x86RegAssignment
   , lookupX86Reg
   , updateX86Reg
   , freshX86Reg
 
   , RegAssign
+  , ip
+  , rax
+  , rbx
+  , rcx
+  , rdx
   , getReg
   , IP, GP, Flag, X87Status, X87Top, X87Tag, FPReg, YMM
   ) where
@@ -103,13 +109,28 @@ type X87Tag n    = 39 + n   -- 8
 type FPReg n     = 47 + n   -- 8
 type YMM n       = 55 + n   -- 16
 
+ip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
+ip = Ctx.extendIndex (Ctx.nextIndex zeroSize)
+
+rax :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
+rax = Ctx.extendIndex (Ctx.nextIndex (Ctx.size1 @(MM.LLVMPointerType 64)))
+
+rcx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
+rcx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size2 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+
+rdx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
+rdx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size3 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+
+rbx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
+rbx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size4 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+
 getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
 getReg x = x ^. (field @n)
 
 x86RegName' :: M.X86Reg tp -> String
 x86RegName' M.X86_IP     = "ip"
-x86RegName' (M.X86_GP r) = show $ F.reg64No r
+x86RegName' (M.X86_GP r) = show r
 x86RegName' (M.X86_FlagReg r) = show r
 x86RegName' (M.X87_StatusReg r) = show r
 x86RegName' M.X87_TopReg = "x87Top"
