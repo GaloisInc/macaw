@@ -1,0 +1,8 @@
+(defun @id ((regs X86Regs)) X86Regs
+   (start start: (return regs)))
+
+id
+%0
+  % 3:5
+  return $0
+  % no postdom
