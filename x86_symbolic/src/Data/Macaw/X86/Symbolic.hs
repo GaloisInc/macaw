@@ -1,18 +1,17 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
-{-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Data.Macaw.X86.Symbolic
   ( x86_64MacawSymbolicFns
@@ -124,7 +123,7 @@ x86RegName r = C.systemSymbol $ "r!" ++ x86RegName' r
 gpReg :: Int -> M.X86Reg (M.BVType 64)
 gpReg = M.X86_GP . F.Reg64 . fromIntegral
 
--- | The x86 flag registers that are directly supported by Macw.
+-- | The x86 flag registers that are directly supported by Macaw.
 flagRegs :: Assignment M.X86Reg (CtxRepeat 9 M.BoolType)
 flagRegs =
   Empty :> M.CF :> M.PF :> M.AF :> M.ZF :> M.SF :> M.TF :> M.IF :> M.DF :> M.OF
