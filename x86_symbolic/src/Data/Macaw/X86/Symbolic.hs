@@ -126,55 +126,55 @@ type YMM n       = 55 + n   -- 16
 -- x86RegAssignment (below).
 
 rip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rip = Ctx.extendIndex (Ctx.nextIndex zeroSize)
+rip = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 0 (MM.LLVMPointerType 64))))
 
 rax :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rax = Ctx.extendIndex (Ctx.nextIndex (Ctx.size1 @(MM.LLVMPointerType 64)))
+rax = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 1 (MM.LLVMPointerType 64))))
 
 rcx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rcx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size2 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+rcx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 2 (MM.LLVMPointerType 64))))
 
 rdx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size3 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+rdx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 3 (MM.LLVMPointerType 64))))
 
 rbx :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbx = Ctx.extendIndex (Ctx.nextIndex (Ctx.size4 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+rbx = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 4 (MM.LLVMPointerType 64))))
 
 rsp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsp = Ctx.extendIndex (Ctx.nextIndex (Ctx.size5 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+rsp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 5 (MM.LLVMPointerType 64))))
 
 rbp :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rbp = Ctx.extendIndex (Ctx.nextIndex (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))
+rbp = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 6 (MM.LLVMPointerType 64))))
 
 rsi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rsi = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64))))
+rsi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 7 (MM.LLVMPointerType 64))))
 
 rdi :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-rdi = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))))
+rdi = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 8 (MM.LLVMPointerType 64))))
 
 r8 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r8 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64))))))
+r8 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 9 (MM.LLVMPointerType 64))))
 
 r9 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r9 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))))))
+r9 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 10 (MM.LLVMPointerType 64))))
 
 r10 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r10 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64))))))))
+r10 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 11 (MM.LLVMPointerType 64))))
 
 r11 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r11 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))))))))
+r11 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 12 (MM.LLVMPointerType 64))))
 
 r12 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r12 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64))))))))))
+r12 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 13 (MM.LLVMPointerType 64))))
 
 r13 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r13 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))))))))))
+r13 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 14 (MM.LLVMPointerType 64))))
 
 r14 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r14 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64))))))))))))
+r14 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 15 (MM.LLVMPointerType 64))))
 
 r15 :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
-r15 = Ctx.extendIndex (Ctx.nextIndex (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.incSize @_ @(MM.LLVMPointerType 64) (Ctx.size6 @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64) @(MM.LLVMPointerType 64)))))))))))))
+r15 = Ctx.extendIndex (Ctx.nextIndex (knownSize @_ @(CtxRepeat 16 (MM.LLVMPointerType 64))))
 
 getReg ::
   forall n t f. (Idx n (ArchRegContext M.X86_64) t) => RegAssign f -> f t
