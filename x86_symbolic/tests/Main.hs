@@ -97,11 +97,23 @@ main = do
   TT.defaultMainWithIngredients ingredients $
     TT.testGroup "macaw-x86-symbolic tests"
       [ TT.testGroup "Unit tests" 
-          [ TTH.testCase "ip" $ getRegName MXS.ip TTH.@?= "r!ip"
+          [ TTH.testCase "ip" $ getRegName MXS.rip TTH.@?= "r!ip"
           , TTH.testCase "rax" $ getRegName MXS.rax TTH.@?= "r!rax"
           , TTH.testCase "rbx" $ getRegName MXS.rbx TTH.@?= "r!rbx"
           , TTH.testCase "rcx" $ getRegName MXS.rcx TTH.@?= "r!rcx"
           , TTH.testCase "rdx" $ getRegName MXS.rdx TTH.@?= "r!rdx"
+          , TTH.testCase "rsp" $ getRegName MXS.rsp TTH.@?= "r!rsp"
+          , TTH.testCase "rbp" $ getRegName MXS.rbp TTH.@?= "r!rbp"
+          , TTH.testCase "rsi" $ getRegName MXS.rsi TTH.@?= "r!rsi"
+          , TTH.testCase "rdi" $ getRegName MXS.rdi TTH.@?= "r!rdi"
+          , TTH.testCase "r8" $ getRegName MXS.r8 TTH.@?= "r!r8"
+          , TTH.testCase "r9" $ getRegName MXS.r9 TTH.@?= "r!r9"
+          , TTH.testCase "r10" $ getRegName MXS.r10 TTH.@?= "r!r10"
+          , TTH.testCase "r11" $ getRegName MXS.r11 TTH.@?= "r!r11"
+          , TTH.testCase "r12" $ getRegName MXS.r12 TTH.@?= "r!r12"
+          , TTH.testCase "r13" $ getRegName MXS.r13 TTH.@?= "r!r13"
+          , TTH.testCase "r14" $ getRegName MXS.r14 TTH.@?= "r!r14"
+          , TTH.testCase "r15" $ getRegName MXS.r15 TTH.@?= "r!r15"
           ]
       , TT.testGroup "Binary tests" $
           map (\mmPreset ->
