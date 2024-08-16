@@ -6,6 +6,7 @@ packages: base/
           macaw-ppc-symbolic/
           macaw-riscv/
           macaw-riscv-symbolic/
+          macaw-x86-cli/
           macaw-x86-syntax/
           x86/
           symbolic/
@@ -29,6 +30,7 @@ packages: base/
           deps/dismantle/dismantle-arm-xml/
           deps/dismantle/dismantle-thumb/
           deps/crucible/crucible/
+          deps/crucible/crucible-cli/
           deps/crucible/crucible-llvm/
           deps/crucible/crucible-llvm-syntax/
           deps/crucible/crucible-symio/
