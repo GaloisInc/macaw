@@ -121,6 +121,10 @@ type X87Tag n    = 39 + n   -- 8
 type FPReg n     = 47 + n   -- 8
 type YMM n       = 55 + n   -- 16
 
+-- The following definitions are tightly coupled to that of ArchRegContext for
+-- X86_64. Unit tests in the test suite ensure that they are consistent with
+-- x86RegAssignment (below).
+
 rip :: Ctx.Index (MacawCrucibleRegTypes M.X86_64) (MM.LLVMPointerType 64)
 rip = Ctx.extendIndex (Ctx.nextIndex zeroSize)
 
