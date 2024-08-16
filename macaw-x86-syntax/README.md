@@ -15,5 +15,21 @@ This `ParserHooks` supports the following types and operations:
 - `get-reg :: X86Reg -> X86Regs -> t`: extract an x86 register
 - Registers:
   - `rip :: X86Reg`: instruction pointer
+  - `rax :: X86Reg`: SysV return value register
+  - `rbx :: X86Reg`: general-purpose register
+  - `rcx :: X86Reg`: general-purpose register
+  - `rdx :: X86Reg`: general-purpose register
+  - `rsp :: X86Reg`: stack pointer
+  - `rbp :: X86Reg`: base pointer
+  - `rsi :: X86Reg`: general-purpose register
+  - `rdi :: X86Reg`: general-purpose register
+  - `r8 :: X86Reg`: general-purpose register
+  - `r9 :: X86Reg`: general-purpose register
+  - `r10 :: X86Reg`: general-purpose register
+  - `r11 :: X86Reg`: general-purpose register
+  - `r12 :: X86Reg`: general-purpose register
+  - `r13 :: X86Reg`: general-purpose register
+  - `r14 :: X86Reg`: general-purpose register
+  - `r15 :: X86Reg`: general-purpose register
 
 [syn]: https://github.com/GaloisInc/crucible/tree/master/crucible-syntax
