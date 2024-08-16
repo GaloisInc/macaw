@@ -13,6 +13,7 @@ This `ParserHooks` supports the following types and operations:
 **Operations**:
 
 - `get-reg :: X86Reg -> X86Regs -> t`: extract an x86 register
+- `set-reg :: X86Reg -> t -> X86Regs -> X86Regs`: set an x86 register
 - Registers:
   - `rip :: X86Reg`: instruction pointer
   - `rax :: X86Reg`: SysV return value register

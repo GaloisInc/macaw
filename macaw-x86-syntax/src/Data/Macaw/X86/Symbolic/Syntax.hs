@@ -1,11 +1,10 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE TypeOperators #-}
 
 -- | 'LCSC.ParserHooks' for parsing macaw-x86-symbolic CFGs.
 module Data.Macaw.X86.Symbolic.Syntax
@@ -130,4 +129,12 @@ x86AtomParser =
         (Some reg, regs) <- LCSM.cons parseReg parseRegs
         let regTy = x86RegTypes Ctx.! reg
         Some <$> LCSC.freshAtom loc (Reg.EvalApp (Expr.GetStruct regs reg regTy))
+      LCSA.AtomName "set-reg" -> do
+        loc <- LCSM.position
+        LCSM.depCons parseReg $ \(Some reg) -> do
+          let regTy = x86RegTypes Ctx.! reg
+          assign <- LCSC.operands (Ctx.Empty Ctx.:> regTy Ctx.:> x86RegStructType)
+          let (rest, regs) = Ctx.decompose assign
+          let (Ctx.Empty, val) = Ctx.decompose rest
+          Some <$> LCSC.freshAtom loc (Reg.EvalApp (Expr.SetStruct x86RegTypes regs reg val))
       LCSA.AtomName _ -> empty
