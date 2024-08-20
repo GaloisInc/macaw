@@ -119,7 +119,7 @@ jobs:
     - name: Build macaw-x86-cli
       run: cabal build pkg:macaw-x86-cli
 
-    - name: Test macaw-x86-syntax
+    - name: Test macaw-x86-cli
       run: cabal test pkg:macaw-x86-cli
 
     - name: Build macaw-aarch32
