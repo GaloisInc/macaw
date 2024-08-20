@@ -120,18 +120,19 @@ test-suite macaw-x86-syntax-tests
     base,
     containers,
     crucible >= 0.1,
-    crucible-syntax,
-    crucible-llvm-syntax,
+    crucible-cli,
     filepath,
     macaw-symbolic,
     macaw-symbolic-syntax,
     macaw-x86,
+    macaw-x86-cli,
     macaw-x86-symbolic,
     macaw-x86-syntax,
     parameterized-utils >= 0.1.7,
     tasty,
     tasty-golden,
     text,
+    what4,
 
 executable macaw-x86
   import: shared
