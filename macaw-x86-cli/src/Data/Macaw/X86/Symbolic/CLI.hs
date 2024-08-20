@@ -35,8 +35,8 @@ import Data.Macaw.X86 (X86_64)
 import Data.Macaw.X86.Symbolic (newSymFuns, x86_64MacawEvalFn)
 import Data.Macaw.X86.Symbolic.Syntax (x86ParserHooks)
 
- -- | Small helper for providing LLVM language-specific hooks, e.g., for use with
--- 'Lang.Crucible.CLI.execCommand'.
+ -- | Small helper for providing X86_64 language-specific hooks, e.g., for use
+-- with 'Lang.Crucible.CLI.execCommand'.
 withX86Hooks ::
   ((?parserHooks :: ParserHooks (DMS.MacawExt X86_64)) =>
    (forall sym bak t st fs. 
