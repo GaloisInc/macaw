@@ -71,7 +71,8 @@ withX86Hooks k = do
             LittleEndian
             DMS.ConcreteMutable
             elfMem
-        -- TOOD?
+        -- TODO: We should write this variable, but can't here. See Macaw#423
+        -- and Crucible#1240 for details.
         -- C.writeGlobal mvar initMem
         let mmConf = DMS.memModelConfig bak ptrTable
         pure (DMS.macawExtensions eFn mvar mmConf)
