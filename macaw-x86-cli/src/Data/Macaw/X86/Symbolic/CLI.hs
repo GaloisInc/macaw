@@ -50,7 +50,7 @@ withX86Hooks ::
   IO a
 withX86Hooks k = do
   ha <- newHandleAllocator
-  mvar <- Mem.mkMemVar "llvm_memory" ha
+  mvar <- Mem.mkMemVar "macaw-x86:llvm_memory" ha
   let ?ptrWidth = knownNat @64
   let ?memOpts = Mem.defaultMemOptions
   let ext ::
