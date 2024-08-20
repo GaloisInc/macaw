@@ -107,6 +107,12 @@ jobs:
     - name: Test macaw-x86
       run: cabal test pkg:macaw-x86
 
+    - name: Build macaw-x86-syntax
+      run: cabal build pkg:macaw-x86-syntax
+
+    - name: Test macaw-x86-syntax
+      run: cabal test pkg:macaw-x86-syntax
+
     - name: Test macaw-x86-symbolic
       if: runner.os == 'Linux'
       run: cabal test pkg:macaw-x86-symbolic
