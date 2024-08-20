@@ -93,19 +93,18 @@ library
 
   build-depends:
     base >= 4.13,
-    containers,
     crucible,
     crucible-cli,
+    crucible-llvm,
     crucible-syntax,
-    -- macaw-base,
-    -- macaw-symbolic,
+    macaw-base,
+    macaw-symbolic,
+    macaw-symbolic-syntax,
     macaw-x86,
     macaw-x86-symbolic,
     macaw-x86-syntax,
-    -- mtl,
     parameterized-utils,
-    -- text,
-    -- what4,
+    what4,
 
   hs-source-dirs: src
 
@@ -140,14 +139,5 @@ executable macaw-x86
   main-is: Main.hs
   build-depends:
     base >= 4.13,
-    crucible,
     crucible-cli,
-    crucible-llvm,
-    macaw-base,
     macaw-x86-cli,
-    macaw-symbolic,
-    macaw-symbolic-syntax,
-    macaw-x86,
-    macaw-x86-symbolic,
-    macaw-x86-syntax,
-    parameterized-utils,
