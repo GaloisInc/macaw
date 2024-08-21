@@ -11,6 +11,7 @@ known equivalent values.
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
@@ -719,6 +720,48 @@ addWithinRangePred cns w l x u
   | otherwise =
     addRangePred cns (intraStackValueExpr cns x) $! mkRangeBound w (fromInteger l) (fromInteger u)
 
+-- | @addExcludeRangePred cns w x l u@ adds a @(x < l) or (u < x)@ constraint over the
+-- `w`-bit-truncated values.  Fails when the bound excludes all possible values.
+addExcludeRangePred ::
+  RegisterInfo (ArchReg arch) =>
+  BlockIntraStackConstraints arch ids -> NatRepr n -> Value arch ids (BVType n) -> Integer -> Integer ->
+  Either String (BranchConstraints arch ids)
+addExcludeRangePred cns w x l u = do
+  let lowerBoundTooLow = l <= 0              -- (l - 1) would be negative
+  let upperBoundTooHigh = u >= maxUnsigned w -- (u + 1) would overflow
+  if
+    | lowerBoundTooLow && upperBoundTooHigh -> Left "Excluded range excludes all possible values"
+    | lowerBoundTooLow -> addLowerBoundPred cns w (u + 1) x
+    | upperBoundTooHigh -> addUpperBoundPred cns w x (l - 1)
+    | otherwise ->
+      -- compiles it to @(x <= l - 1) or (u + 1 <= x)@
+      disjoinBranchConstraints
+        <$> addUpperBoundPred cns w x (l - 1)
+        <*> addLowerBoundPred cns w (u + 1) x
+
+-- | @assertEqPred cns x w c isTrue@ asserts equality @x = BVValue c w@ is either true or false,
+-- based on `isTrue`.
+assertEqPred ::
+  RegisterInfo (ArchReg arch) =>
+  -- | Constraints that let us evaluate `x`
+  BlockIntraStackConstraints arch ids ->
+  -- | Bitwidth the comparison should apply to
+  NatRepr w ->
+  -- | Value to be constrained
+  Value arch ids (BVType w) ->
+  -- | Numeric constant x should be equal/different to
+  Integer ->
+  -- | `True` if we should assert equality, `False` if we should assert non-equality
+  Bool ->
+  Either String (BranchConstraints arch ids)
+assertEqPred cns w x c isTrue
+  | isTrue =
+    -- x == c becomes c <= x <= c
+    addWithinRangePred cns w c x c
+  | otherwise =
+    -- !(x == c) is handled via !(c <= x <= c) and becomes (x <= c - 1) or (c + 1 <= x)
+    addExcludeRangePred cns w x c c
+
 -- | Assert a predicate is true/false and update bounds.
 --
 -- If it returns a new upper bounds, then that may be used.
@@ -732,12 +775,8 @@ assertPred :: RegisterInfo (ArchReg arch)
 assertPred bnds (AssignedValue a) isTrue = do
   let cns = intraStackConstraints bnds
   case assignRhs a of
-    EvalApp (Eq x (BVValue w c)) ->
-      -- x == c becomes c <= x <= c
-      addWithinRangePred cns w c x c
-    EvalApp (Eq (BVValue w c) x) ->
-      -- x == c becomes c <= x <= c
-      addWithinRangePred cns w c x c
+    EvalApp (Eq x (BVValue w c)) -> assertEqPred cns w x c isTrue
+    EvalApp (Eq (BVValue w c) x) -> assertEqPred cns w x c isTrue
     EvalApp (BVUnsignedLt x (BVValue w c))
       | isTrue ->
         -- x < c becomes x <= c - 1
