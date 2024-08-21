@@ -400,7 +400,7 @@ exprRangePred info e = do
                   lowerBound = truncUnsigned $ rangeLowerBound r
                   upperBound = truncUnsigned $ rangeUpperBound r
                 in
-                  SomeRangePred (mkRangeBound w lowerBound upperBound) 
+                  SomeRangePred (mkRangeBound w lowerBound upperBound)
         _ -> NoRangePred
 
 -- | This returns a natural number with a computed upper bound for the
@@ -674,16 +674,57 @@ addRangePred cns v p =
         _ ->
           Right $ branchAssignRangePred n p
 
+-- | @addLowerBoundPred cns w l x@ adds a @l <= x@ constraint over the `w`-bit-truncated values.
+-- Fails when the bound excludes all possible values (lower bound greater than the maximum `w`-bit
+-- value).
+-- Note: The arguments are ordered so that it reads more naturally, as the difference of type
+-- between `l` and `x` prevents mistakes.
+addLowerBoundPred ::
+  RegisterInfo (ArchReg arch) =>
+  BlockIntraStackConstraints arch ids -> NatRepr n -> Integer -> Value arch ids (BVType n) ->
+  Either String (BranchConstraints arch ids)
+addLowerBoundPred cns w l x
+  | l > maxUnsigned w = Left "Lower bound excludes all possible values"
+  | otherwise = addRangePred cns (intraStackValueExpr cns x) $! mkLowerBound w (fromInteger l)
+
+-- | @addUpperBoundPred cns w x u@ adds a @x <= u@ constraint over the `w`-bit-truncated values.
+-- Fails when the bound excludes all possible values (`u` < 0).
+addUpperBoundPred ::
+  RegisterInfo (ArchReg arch) =>
+  BlockIntraStackConstraints arch ids -> NatRepr n -> Value arch ids (BVType n) -> Integer ->
+  Either String (BranchConstraints arch ids)
+addUpperBoundPred cns w x u
+  | u < 0 = Left "Upper bound excludes all possible values"
+  | otherwise = addRangePred cns (intraStackValueExpr cns x) $! mkUpperBound w (fromInteger u)
+
+clamp :: NatRepr w -> Integer -> Integer
+clamp w x
+  | x < 0 = 0
+  | x > maxUnsigned w = maxUnsigned w
+  | otherwise = x
+
+-- | @addWithinRangePred cns w l x u@ adds a @l <= x <= u@ constraint over the `w`-bit-truncated values.
+-- Fails when the bound excludes all possible values.
+-- Note: The arguments are ordered so that it reads more naturally.
+addWithinRangePred ::
+  RegisterInfo (ArchReg arch) =>
+  BlockIntraStackConstraints arch ids -> NatRepr n -> Integer -> Value arch ids (BVType n) -> Integer ->
+  Either String (BranchConstraints arch ids)
+addWithinRangePred cns w l x u
+  -- Note: we could avoid this duplication by instead producing a conjunction of `addLowerBoundPred`
+  -- and `addUpperBoundPred`, but this produces a single range instead.
+  | l > maxUnsigned w = Left "Lower bound excludes all possible values"
+  | u < 0 = Left "Upper bound excludes all possible values"
+  | clamp w u < clamp w l = Left "Empty range excludes all possible values"
+  | otherwise =
+    addRangePred cns (intraStackValueExpr cns x) $! mkRangeBound w (fromInteger l) (fromInteger u)
+
 -- | Assert a predicate is true/false and update bounds.
 --
 -- If it returns a new upper bounds, then that may be used.
 -- Otherwise, it detects an inconsistency and returns a message
 -- explaing why.
-assertPred :: ( OrdF (ArchReg arch)
-              , HasRepr (ArchReg arch) TypeRepr
-              , MemWidth (ArchAddrWidth arch)
-              , ShowF (ArchReg arch)
-              )
+assertPred :: RegisterInfo (ArchReg arch)
            => IntraJumpBounds arch ids
            -> Value arch ids BoolType -- ^ Value representing predicate
            -> Bool -- ^ Controls whether predicate is true or false
@@ -691,72 +732,63 @@ assertPred :: ( OrdF (ArchReg arch)
 assertPred bnds (AssignedValue a) isTrue = do
   let cns = intraStackConstraints bnds
   case assignRhs a of
-    EvalApp (Eq x (BVValue w c)) -> do
-      addRangePred cns (intraStackValueExpr cns x)
-                       (mkRangeBound w (fromInteger c) (fromInteger c))
-    EvalApp (Eq (BVValue w c) x) -> do
-      addRangePred cns (intraStackValueExpr cns x)
-                   (mkRangeBound w (fromInteger c) (fromInteger c))
-    -- Given x < c), assert x <= c-1
-    EvalApp (BVUnsignedLt x (BVValue _ c)) -> do
-      if isTrue then do
-        when (c == 0) $ Left "x < 0 must be false."
-        addRangePred cns (intraStackValueExpr cns x)  $!
-          mkUpperBound (typeWidth x) (fromInteger (c-1))
-       else do
-        addRangePred cns (intraStackValueExpr cns x)  $!
-          mkLowerBound (typeWidth x) (fromInteger c)
-    -- Given not (c < y), assert y <= c
-    EvalApp (BVUnsignedLt (BVValue w c) y) -> do
-      p <-
-        if isTrue then do
-          when (c >= maxUnsigned w) $  Left "x <= max_unsigned must be true"
-          pure $! mkLowerBound w (fromInteger (c+1))
-         else do
-          pure $! mkUpperBound w (fromInteger c)
-      addRangePred cns (intraStackValueExpr cns y) p
-    -- Given x <= c, assert x <= c
-    EvalApp (BVUnsignedLe x (BVValue w c)) -> do
-      p <-
-        if isTrue then
-          pure $! mkUpperBound w (fromInteger c)
-         else do
-          when (c >= maxUnsigned w) $  Left "x <= max_unsigned must be true"
-          pure $! mkLowerBound w (fromInteger (c+1))
-      addRangePred cns (intraStackValueExpr cns x) p
-    -- Given not (c <= y), assert y <= (c-1)
-    EvalApp (BVUnsignedLe (BVValue _ c) y)
-      | isTrue -> do
-          addRangePred cns (intraStackValueExpr cns y)
-                       (mkLowerBound (typeWidth y) (fromInteger c))
-      | otherwise -> do
-          when (c == 0) $ Left "0 <= x cannot be false"
-          addRangePred cns
-            (intraStackValueExpr cns y)
-            (mkUpperBound (typeWidth y) (fromInteger (c-1)))
-    EvalApp (AndApp l r) ->
-      if isTrue then
+    EvalApp (Eq x (BVValue w c)) ->
+      -- x == c becomes c <= x <= c
+      addWithinRangePred cns w c x c
+    EvalApp (Eq (BVValue w c) x) ->
+      -- x == c becomes c <= x <= c
+      addWithinRangePred cns w c x c
+    EvalApp (BVUnsignedLt x (BVValue w c))
+      | isTrue ->
+        -- x < c becomes x <= c - 1
+        addUpperBoundPred cns w x (c - 1)
+      | otherwise ->
+        -- !(x < c) becomes c <= x
+        addLowerBoundPred cns w c x
+    EvalApp (BVUnsignedLt (BVValue w c) y)
+      | isTrue ->
+        -- c < y becomes c + 1 <= y
+        addLowerBoundPred cns w (c + 1) y
+      | otherwise ->
+        -- !(c < y) becomes y <= c
+        addUpperBoundPred cns w y c
+    EvalApp (BVUnsignedLe x (BVValue w c))
+      | isTrue ->
+        -- x <= c
+        addUpperBoundPred cns w x c
+      | otherwise ->
+        -- !(x <= c) becomes c + 1 <= x
+        addLowerBoundPred cns w (c + 1) x
+    EvalApp (BVUnsignedLe (BVValue w c) y)
+      | isTrue ->
+        -- c <= y
+        addLowerBoundPred cns w c y
+      | otherwise ->
+        -- !(c <= y) becomes y <= c - 1
+        addUpperBoundPred cns w y (c - 1)
+    EvalApp (AndApp l r)
+      | isTrue ->
+        -- l && r
         conjoinBranchConstraints
           <$> assertPred bnds l True
           <*> assertPred bnds r True
-      else
+      | otherwise ->
+        -- !(l && r) becomes !l || !r
         disjoinBranchConstraints
           <$> assertPred bnds l False
           <*> assertPred bnds r False
-    -- Given not (x || y), assert not x, then assert not y
-    EvalApp (OrApp  l r) ->
-      if isTrue then
-        -- Assert l | r
+    EvalApp (OrApp  l r)
+      | isTrue ->
+        -- l || r
         disjoinBranchConstraints
           <$> assertPred bnds l True
           <*> assertPred bnds r True
-      else
-        -- Assert not l && not r
+      | otherwise ->
+        -- !(l || r) becomes !l && !r
         conjoinBranchConstraints
           <$> assertPred bnds l False
           <*> assertPred bnds r False
-    EvalApp (NotApp p) ->
-      assertPred bnds p (not isTrue)
+    EvalApp (NotApp p) -> assertPred bnds p (not isTrue)
     _ -> Right emptyBranchConstraints
 assertPred _ _ _ =
   Right emptyBranchConstraints
