@@ -39,6 +39,7 @@ library
     Data.Macaw.Symbolic.Memory
     Data.Macaw.Symbolic.Memory.Lazy
     Data.Macaw.Symbolic.MemOps
+    Data.Macaw.Symbolic.Stack
     Data.Macaw.Symbolic.Testing
   other-modules:
     Data.Macaw.Symbolic.Bitcast
