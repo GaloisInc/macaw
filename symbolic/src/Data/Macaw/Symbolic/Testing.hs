@@ -62,6 +62,7 @@ import qualified Data.Macaw.Memory.LoadCommon as MML
 import qualified Data.Macaw.Symbolic as MS
 import qualified Data.Macaw.Symbolic.Memory as MSM
 import qualified Data.Macaw.Symbolic.Memory.Lazy as MSMLazy
+import qualified Data.Macaw.Symbolic.Stack as MSS
 import qualified Data.Macaw.Types as MT
 import qualified Data.Map as Map
 import           Data.Maybe ( fromMaybe, listToMaybe )
@@ -83,7 +84,6 @@ import qualified Lang.Crucible.Backend.Prove as Prove
 import qualified Lang.Crucible.CFG.Core as CCC
 import qualified Lang.Crucible.CFG.Extension as CCE
 import qualified Lang.Crucible.FunctionHandle as CFH
-import qualified Lang.Crucible.LLVM.DataLayout as CLD
 import qualified Lang.Crucible.LLVM.Intrinsics as CLI
 import qualified Lang.Crucible.LLVM.MemModel as CLM
 import qualified Lang.Crucible.Simulator as CS
@@ -103,7 +103,6 @@ import qualified What4.ProgramLoc as WPL
 import qualified What4.Protocol.Online as WPO
 import qualified What4.SatResult as WSR
 import qualified What4.Solver as WS
-import qualified What4.Symbol as WSym
 
 data TestingException = ELFResolutionError String
   deriving (Show)
@@ -498,12 +497,6 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   -- This includes both global static memory (taken from the data segment
   -- initial contents) and a totally symbolic stack
 
-  -- Allocate a stack and insert it into memory
-  --
-  -- The stack allocation uses the SMT array backed memory model (rather than
-  -- the Haskell-level memory model)
-  stackArrayStorage <- WI.freshConstant sym (WSym.safeSymbol "stack_array") WI.knownRepr
-  stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * 1024 * 1024))
   let ?ptrWidth = WI.knownRepr
   (initMem, mmConf) <-
     case mmPreset of
@@ -527,21 +520,29 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
                        , MS.mkGlobalPointerValidityAssertion = validityCheck
                        }
         pure (initMem, mmConf)
-  (stackBasePtr, mem1) <- CLM.doMalloc bak CLM.StackAlloc CLM.Mutable "stack_alloc" initMem stackSize CLD.noAlignment
-  mem2 <- CLM.doArrayStore bak mem1 stackBasePtr CLD.noAlignment stackArrayStorage stackSize
+
+  -- Allocate a stack and insert it into memory
+  --
+  -- The stack allocation uses the SMT array backed memory model (rather than
+  -- the Haskell-level memory model)
+  let kib = 1024
+  let mib = 1024 * kib
+  stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * mib))
+  (MSS.ArrayStack stackBasePtr _stackArrayStorage, mem1) <-
+    MSS.createArrayStack bak initMem stackSize
 
   -- Make initial registers, including setting up a stack pointer (which points
   -- into the middle of the stack allocation, to allow accesses into the caller
   -- frame if needed (though it generally should not be)
   initialRegs <- MS.macawAssignToCrucM (mkInitialRegVal symArchFns sym) (MS.crucGenRegAssignment symArchFns)
-  stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (1024 * 1024))
+  stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr mib)
   sp <- CLM.ptrAdd sym WI.knownRepr stackBasePtr stackInitialOffset
   let initialRegsEntry = CS.RegEntry regsRepr initialRegs
   let regsWithStack = MS.updateReg archVals initialRegsEntry MC.sp_reg sp
 
   memVar <- CLM.mkMemVar "macaw-symbolic:test-harness:llvm_memory" halloc
   let lazySimSt = MS.emptyMacawLazySimulatorState
-  let initGlobals = CSG.insertGlobal memVar mem2 CS.emptyGlobals
+  let initGlobals = CSG.insertGlobal memVar mem1 CS.emptyGlobals
   let arguments = CS.RegMap (Ctx.singleton regsWithStack)
   let simAction = CS.runOverrideSim regsRepr (CS.regValue <$> CS.callCFG g arguments)
 
