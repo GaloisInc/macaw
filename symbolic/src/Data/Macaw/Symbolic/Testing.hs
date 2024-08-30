@@ -528,12 +528,23 @@ simulateFunction binfo bak execFeatures archInfo archVals halloc mmPreset g = do
   let kib = 1024
   let mib = 1024 * kib
   stackSize <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr (2 * mib))
-  (MSS.ArrayStack stackBasePtr _stackArrayStorage, mem1) <-
+  (MSS.ArrayStack stackBasePtr _stackTopPtr _stackArrayStorage, mem1) <-
     MSS.createArrayStack bak initMem stackSize
 
-  -- Make initial registers, including setting up a stack pointer (which points
-  -- into the middle of the stack allocation, to allow accesses into the caller
-  -- frame if needed (though it generally should not be)
+  -- Make initial registers, including setting up a stack pointer.
+  --
+  -- The stack pointer points to the middle of the stack allocation. This is a
+  -- hack. We do this because each architecture has some expected stack layout
+  -- (e.g., x86_64 expects a return address just above the stack pointer;
+  -- PPC expects a "back chain"; and AArch32, PPC, and x86_64 all expect
+  -- stack-spilled arguments above everything else). Setting the stack pointer
+  -- to the middle of the allocation allows reads of fully symbolic data from
+  -- above the stack pointer, and this seems to be good enough to make our tests
+  -- pass.
+  --
+  -- The functions in the test-suite do not (and should not) rely on accessing
+  -- data in their caller's stack frames, even though that wouldn't cause test
+  -- failures with this setup.
   initialRegs <- MS.macawAssignToCrucM (mkInitialRegVal symArchFns sym) (MS.crucGenRegAssignment symArchFns)
   stackInitialOffset <- WI.bvLit sym WI.knownRepr (BVS.mkBV WI.knownRepr mib)
   sp <- CLM.ptrAdd sym WI.knownRepr stackBasePtr stackInitialOffset
