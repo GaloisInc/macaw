@@ -15,11 +15,8 @@ module Data.Macaw.Symbolic.Stack
   ) where
 
 import Data.BitVector.Sized qualified as BVS
-import Data.Macaw.CFG qualified as MC
-import Data.Macaw.Symbolic qualified as MS
 import Data.Parameterized.Context as Ctx
 import Lang.Crucible.Backend qualified as C
-import Lang.Crucible.Simulator qualified as C
 import Lang.Crucible.LLVM.DataLayout qualified as CLD
 import Lang.Crucible.LLVM.MemModel qualified as CLM
 import What4.Interface qualified as WI
@@ -116,14 +113,3 @@ createArrayStack bak mem slots sz = do
   top <- CLM.ptrSub sym ?ptrWidth end slotsBytesBv
 
   pure (ArrayStack base top arr, mem2)
-
--- | Set the stack pointer register.
-_setStackPointerReg ::
-  1 WI.<= MC.ArchAddrWidth arch =>
-  MS.SymArchConstraints arch =>
-  C.IsSymInterface sym =>
-  MS.ArchVals arch ->
-  C.RegEntry sym (MS.ArchRegStruct arch) ->
-  CLM.LLVMPtr sym (MC.ArchAddrWidth arch) ->
-  C.RegEntry sym (MS.ArchRegStruct arch)
-_setStackPointerReg archVals regs = MS.updateReg archVals regs MC.sp_reg
